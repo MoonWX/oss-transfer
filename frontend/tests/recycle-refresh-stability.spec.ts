@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { mockApi } from "./fixtures";
+import { advanceUntilVisible, installPausedClock } from "./clock";
 
 const emptyResult = {
   success: true,
@@ -14,7 +15,7 @@ test("empty recycle content stays mounted and keeps its geometry during backgrou
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 640 });
   await mockApi(page);
-  await page.clock.install();
+  await installPausedClock(page);
   await page.addInitScript(() =>
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
   );
@@ -23,8 +24,8 @@ test("empty recycle content stays mounted and keeps its geometry during backgrou
   );
   await page.goto("/tools?tab=recycle");
   const empty = page.getByText("暂无已删除任务", { exact: true });
+  await advanceUntilVisible(page, empty);
   await expect(empty).toBeVisible();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
   const handle = await empty.elementHandle();
   await empty.scrollIntoViewIfNeeded();
   const before = await empty.boundingBox();

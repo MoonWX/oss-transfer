@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { mockApi, tasks } from "./fixtures";
+import { advanceUntilVisible, installPausedClock } from "./clock";
 
 const zip = Buffer.from("UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==", "base64");
 const reportTasks = tasks.map((task) =>
@@ -40,13 +41,17 @@ async function prepareReports(page: Page) {
   await page.goto("/tasks");
 }
 
-async function openReport(page: Page, taskId: number) {
-  await page
-    .getByRole("button", {
-      name: `#${taskId}`,
-      exact: true,
-    })
-    .click();
+async function openReport(page: Page, taskId: number, paused = false) {
+  const task = page.getByRole("button", { name: `#${taskId}`, exact: true });
+  if (paused) await advanceUntilVisible(page, task);
+  await task.click();
+  if (paused) {
+    await advanceUntilVisible(
+      page,
+      page.getByRole("heading", { name: `迁移任务 #${taskId}` }),
+    );
+    await page.clock.runFor(400);
+  }
   await expect(
     page.getByRole("heading", { name: `迁移任务 #${taskId}` }),
   ).toBeVisible();
@@ -366,8 +371,8 @@ test("an expired POST ticket reports the download error without replacing the pa
 test("download notice expires on its original deadline despite blur, hover and identical repeats", async ({
   page,
 }) => {
+  await installPausedClock(page);
   await prepareReports(page);
-  await page.clock.install();
   await page.route("**/api/master/task-reports/1048/download-ticket", (route) =>
     route.fulfill({
       json: { success: true, data: { ticket: "qa-notice-ticket" } },
@@ -382,8 +387,7 @@ test("download notice expires on its original deadline despite blur, hover and i
       body: zip,
     }),
   );
-  await openReport(page, 1048);
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await openReport(page, 1048, true);
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出任务报告", exact: true }).click();
   await download;
@@ -407,14 +411,13 @@ test("download notice expires on its original deadline despite blur, hover and i
 test("a different download error replaces the notice and receives its own bounded deadline", async ({
   page,
 }) => {
+  await installPausedClock(page);
   await prepareReports(page);
-  await page.clock.install();
   let message = "报告服务暂不可用";
   await page.route("**/api/master/task-reports/1048/download-ticket", (route) =>
     route.fulfill({ status: 503, json: { success: false, message } }),
   );
-  await openReport(page, 1048);
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await openReport(page, 1048, true);
   await page.getByRole("button", { name: "导出任务报告", exact: true }).click();
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   await page.clock.runFor(8000);

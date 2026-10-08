@@ -148,6 +148,8 @@ test("every task state and direction intersects with participating-node filters 
 test("pagination and all-results selection cannot leak hidden task IDs into an action after filtering", async ({
   page,
 }) => {
+  // Pagination, page size, filtering and confirmation share this total budget.
+  test.setTimeout(60_000);
   const requests = await mockApi(page);
   const matrix = Array.from({ length: 27 }, (_, i) => ({
     ...tasks[1],

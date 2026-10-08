@@ -1,8 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
+import { advanceUntilVisible, installPausedClock } from "./clock";
 
-async function detail(page: Page, id: number) {
+async function detail(page: Page, id: number, paused = false) {
   await page.goto(`/tasks?taskId=${id}`);
+  if (paused) {
+    await advanceUntilVisible(
+      page,
+      page.getByRole("heading", { name: `迁移任务 #${id}` }),
+    );
+    await page.clock.runFor(400);
+  }
   await expect(
     page.getByRole("heading", { name: `迁移任务 #${id}` }),
   ).toBeVisible();
@@ -29,6 +37,8 @@ const upload = {
 test("creation opens the accepted task directly and preserves the shared layout", async ({
   page,
 }) => {
+  // Creation, direct details, reload and browser history share this total budget.
+  test.setTimeout(60_000);
   await mockApi(page);
   await page.route("**/api/master/add-buckets", (route) =>
     route.fulfill({ json: { success: true, addedCount: 1, taskIds: [1047] } }),
@@ -778,9 +788,8 @@ test("closing detail retains its content through exit and stops detail polling",
   await page.addInitScript(() =>
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
   );
-  await page.clock.install();
-  await detail(page, 1046);
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await installPausedClock(page);
+  await detail(page, 1046, true);
   const panel = page
     .locator(".MuiDrawer-paper")
     .filter({ has: page.getByRole("heading", { name: "迁移任务 #1046" }) });

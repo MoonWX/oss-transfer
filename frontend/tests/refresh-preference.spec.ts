@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
+import { advanceUntilVisible, installPausedClock } from "./clock";
 
 const storageKey = "oss-transfer-refresh-seconds";
 const refreshChoice = (page: Page) =>
@@ -10,14 +11,6 @@ async function chooseRefresh(page: Page, option: string, clock = false) {
   await page.getByRole("option", { name: option, exact: true }).click();
   if (clock) await page.clock.runFor(400);
   await expect(page.locator(".MuiPopover-root")).toHaveCount(0);
-}
-
-async function prepareClock(page: Page) {
-  await page.clock.install({ time: new Date("2026-09-22T12:00:00Z") });
-}
-
-async function pauseClock(page: Page) {
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
 }
 
 test("refresh frequency persists across overview, tasks, nodes and reload with custom mobile controls", async ({
@@ -89,13 +82,15 @@ test("refresh frequency persists across overview, tasks, nodes and reload with c
 test("changing cadence retains task data and in-flight work without overlapping polls", async ({
   page,
 }) => {
-  await prepareClock(page);
+  // In-flight, paused and resumed polling share this total clock/interaction budget.
+  test.setTimeout(60_000);
+  await installPausedClock(page);
   const requests = await mockApi(page);
   await page.goto("/tasks");
   const task = page.getByRole("button", { name: "#1048", exact: true });
+  await advanceUntilVisible(page, task);
   await expect(task).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新任务" })).toBeEnabled();
-  await pauseClock(page);
   const taskElement = await task.elementHandle();
   let calls = 0;
   let hold = true;
@@ -170,13 +165,16 @@ test("changing cadence retains task data and in-flight work without overlapping 
 test("node polling uses one preference for all feeds, pauses in background and keeps manual refresh", async ({
   page,
 }) => {
-  await prepareClock(page);
+  await installPausedClock(page);
   const requests = await mockApi(page);
   await page.goto("/nodes");
+  await advanceUntilVisible(
+    page,
+    page.getByRole("button", { name: "刷新", exact: true }),
+  );
   await expect(
     page.getByRole("button", { name: "刷新", exact: true }),
   ).toBeEnabled();
-  await pauseClock(page);
   const paths = [
     "/api/master/worker-status",
     "/api/master/nodes",

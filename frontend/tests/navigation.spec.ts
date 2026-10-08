@@ -82,12 +82,11 @@ test("unknown routes show their own title and return to overview within the shel
   expect(await toolbar!.evaluate((element) => element.isConnected)).toBe(true);
 });
 
-test("each clean page path supports direct opening and browser refresh", async ({
-  page,
-}) => {
-  test.setTimeout(90_000);
-  await mockApi(page);
-  for (const destination of pages) {
+for (const destination of pages) {
+  test(`clean page ${destination.path} supports direct opening and browser refresh`, async ({
+    page,
+  }) => {
+    await mockApi(page);
     const response = await page.goto(destination.path);
     expect(response?.status()).toBe(200);
     await expect(
@@ -107,8 +106,8 @@ test("each clean page path supports direct opening and browser refresh", async (
     await expect(page).toHaveURL(destination.path);
     await expect(page.locator("iframe")).toHaveCount(0);
     expect(new URL(page.url()).hash).toBe("");
-  }
-});
+  });
+}
 
 test("browser back and forward restore pages and query parameters without replacing the shell", async ({
   page,

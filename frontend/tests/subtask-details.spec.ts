@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { advanceUntilVisible, installPausedClock } from "./clock";
 import { mockApi, tasks } from "./fixtures";
 
 type Direction = "OSS_TO_OSS" | "OSS_TO_LOCAL" | "LOCAL_TO_OSS";
@@ -396,11 +397,15 @@ test("closing child details retains the child through the exit animation", async
   page,
 }) => {
   await arrange(page, "OSS_TO_LOCAL");
-  await page.clock.install();
+  await installPausedClock(page);
   await page.goto("/tasks?taskId=821&childTaskId=821-2&childNode=10.0.1.13");
+  await advanceUntilVisible(
+    page,
+    page.getByRole("heading", { name: "子任务 #821-2", exact: true }),
+  );
+  await page.clock.runFor(400);
   const child = await expectChild(page);
   await expect(child.getByText(/^37\s*\/\s*37 MiB$/)).toBeVisible();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   const childTitle = page.getByRole("heading", {
     name: "子任务 #821-2",
     exact: true,

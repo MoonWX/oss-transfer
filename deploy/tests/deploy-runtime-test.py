@@ -31,6 +31,8 @@ class DeploymentRuntimeTest(unittest.TestCase):
 function [() {
     if [[ "$#" == 3 && ( "$1" == -f || "$1" == -x ) && "$2" == /usr/bin/java ]]; then
         [[ "${TEST_DEFAULT_JAVA:-missing}" != missing ]]
+    elif [[ "$#" == 4 && "$1" == ! && ( "$2" == -f || "$2" == -x ) && "$3" == /usr/bin/java ]]; then
+        [[ "${TEST_DEFAULT_JAVA:-missing}" == missing ]]
     else
         builtin [ "$@"
     fi

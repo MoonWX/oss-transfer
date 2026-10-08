@@ -20,7 +20,8 @@ TRANSFER_ROLE=master OSS_TRANSFER_PORT=18085 bash "$fixture/entrypoint.sh" > "$f
 [[ "$(cat "$fixture/server-address")" == 0.0.0.0 ]]
 grep -q -- '--transfer.role=master' "$fixture/java-arguments"
 grep -q -- '--server.port=18085' "$fixture/java-arguments"
-[[ "$(stat -f '%Lp' "$fixture/data/secrets/admin_password" 2>/dev/null || stat -c '%a' "$fixture/data/secrets/admin_password")" == 600 ]]
+permissions="$(stat -c '%a' "$fixture/data/secrets/admin_password" 2>/dev/null)" || permissions="$(stat -f '%Lp' "$fixture/data/secrets/admin_password")"
+[[ "$permissions" == 600 ]]
 before="$(openssl dgst -sha256 "$fixture/data/secrets/internal_token")"
 password_before="$(openssl dgst -sha256 "$fixture/data/secrets/admin_password")"
 TRANSFER_ROLE=master bash "$fixture/entrypoint.sh" > "$fixture/log"

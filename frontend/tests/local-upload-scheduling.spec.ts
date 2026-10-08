@@ -289,7 +289,7 @@ test("local batch examples use computed upload scheduling", async ({
 
 test("automatic upload scheduling fits desktop and mobile with no redundant selector", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   await configureUpload(page, 2);
   for (const width of [390, 1440]) {
@@ -309,7 +309,7 @@ test("automatic upload scheduling fits desktop and mobile with no redundant sele
       ),
     ).toBeLessThanOrEqual(1);
     await page.screenshot({
-      path: `/private/tmp/local-upload-auto-mode-${width}.png`,
+      path: testInfo.outputPath(`local-upload-auto-mode-${width}.png`),
       animations: "disabled",
     });
   }

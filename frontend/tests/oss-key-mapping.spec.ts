@@ -461,7 +461,7 @@ test("task details and failure records show distinct source and destination keys
 
 test("mapping controls fit desktop light dark and mobile layouts", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   await page.setViewportSize({ width: 1440, height: 1080 });
   await configure(page);
@@ -475,14 +475,14 @@ test("mapping controls fit desktop light dark and mobile layouts", async ({
     .fill("archive/");
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
-    path: "/private/tmp/oss-key-mapping/desktop-light.png",
+    path: testInfo.outputPath("desktop-light.png"),
     fullPage: true,
     animations: "disabled",
   });
   await page.getByRole("button", { name: "切换主题" }).click();
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await page.screenshot({
-    path: "/private/tmp/oss-key-mapping/desktop-dark.png",
+    path: testInfo.outputPath("desktop-dark.png"),
     fullPage: true,
     animations: "disabled",
   });
@@ -494,7 +494,7 @@ test("mapping controls fit desktop light dark and mobile layouts", async ({
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
     .toBeLessThanOrEqual(390);
   await page.screenshot({
-    path: "/private/tmp/oss-key-mapping/mobile-dark.png",
+    path: testInfo.outputPath("mobile-dark.png"),
     fullPage: true,
     animations: "disabled",
   });

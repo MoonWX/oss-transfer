@@ -245,7 +245,7 @@ test("refresh preserves an unavailable selected node and blocks submission until
 
 test("execution node selection fits mobile and desktop without horizontal overflow", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   await configureOss(page);
   for (const width of [390, 1440]) {
@@ -259,7 +259,7 @@ test("execution node selection fits mobile and desktop without horizontal overfl
       ),
     ).toBeLessThanOrEqual(1);
     await page.screenshot({
-      path: `/private/tmp/subtask-node-selection-${width}.png`,
+      path: testInfo.outputPath(`subtask-node-selection-${width}.png`),
       animations: "disabled",
     });
   }

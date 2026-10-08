@@ -3,7 +3,7 @@ import { mockApi } from "./fixtures";
 
 test("desktop sidebar controls live inside the sidebar and its rail animates with the workspace without moving icons", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/tasks");
@@ -64,7 +64,7 @@ test("desktop sidebar controls live inside the sidebar and its rail animates wit
   await page.mouse.move(600, 50);
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.screenshot({
-    path: "/private/tmp/oss-v4-sidebar-rail-light.png",
+    path: testInfo.outputPath("sidebar-rail-light.png"),
     animations: "disabled",
   });
   await nav
@@ -80,14 +80,14 @@ test("desktop sidebar controls live inside the sidebar and its rail animates wit
   ).toBe(12);
   expect((await link.boundingBox())!.x).toBe(8);
   await page.screenshot({
-    path: "/private/tmp/oss-v4-sidebar-expanded-light.png",
+    path: testInfo.outputPath("sidebar-expanded-light.png"),
     animations: "disabled",
   });
 });
 
 test("resize handle is visible at rest and follows pointer without animation or repeated storage writes", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   await page.addInitScript(() => {
     const original = Storage.prototype.setItem;
@@ -154,13 +154,13 @@ test("resize handle is visible at rest and follows pointer without animation or 
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await handle.hover();
   await page.screenshot({
-    path: "/private/tmp/oss-v4-sidebar-expanded-dark.png",
+    path: testInfo.outputPath("sidebar-expanded-dark.png"),
   });
 });
 
 test("reduced motion changes width immediately and mobile retains its own full drawer and header menu", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/tasks");
@@ -184,7 +184,7 @@ test("reduced motion changes width immediately and mobile retains its own full d
   const link = page.getByRole("link", { name: "存储连接", exact: true });
   const paper = page.locator(".MuiDrawer-paper").filter({ has: link });
   await expect(paper).toHaveCSS("width", "264px");
-  await page.screenshot({ path: "/private/tmp/oss-v4-sidebar-mobile.png" });
+  await page.screenshot({ path: testInfo.outputPath("sidebar-mobile.png") });
   await page.keyboard.press("Escape");
   await expect(menu).toBeFocused();
   await expect(paper).toHaveCount(0);

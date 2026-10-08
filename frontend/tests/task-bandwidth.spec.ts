@@ -360,7 +360,7 @@ test("delayed and failed settings never become an unlimited label, retry can rec
 
 test("bandwidth controls fit desktop light dark and mobile views and failed save retains editable input", async ({
   page,
-}) => {
+}, testInfo) => {
   await mockApi(page);
   let failSave = true;
   await page.route(detailPath, async (route) => {
@@ -378,7 +378,7 @@ test("bandwidth controls fit desktop light dark and mobile views and failed save
   await page.getByRole("button", { name: "调整", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.screenshot({
-    path: "/private/tmp/task-bandwidth-desktop-light.png",
+    path: testInfo.outputPath("task-bandwidth-desktop-light.png"),
     animations: "disabled",
   });
   await page.getByRole("button", { name: "取消", exact: true }).click();
@@ -388,7 +388,7 @@ test("bandwidth controls fit desktop light dark and mobile views and failed save
   await page.getByRole("button", { name: "调整", exact: true }).click();
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await page.screenshot({
-    path: "/private/tmp/task-bandwidth-desktop-dark.png",
+    path: testInfo.outputPath("task-bandwidth-desktop-dark.png"),
     animations: "disabled",
   });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -399,7 +399,7 @@ test("bandwidth controls fit desktop light dark and mobile views and failed save
   );
   await expect(limitField(page)).toHaveValue("123.5");
   await page.screenshot({
-    path: "/private/tmp/task-bandwidth-mobile-dark.png",
+    path: testInfo.outputPath("task-bandwidth-mobile-dark.png"),
     animations: "disabled",
   });
   expect(

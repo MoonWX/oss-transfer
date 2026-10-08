@@ -306,7 +306,10 @@ test("runtime error boundary reload recovers the current route after correcting 
   ).toHaveCount(0);
   const readsBefore = statusReads;
   valid = true;
-  await page.getByRole("button", { name: "重新加载", exact: true }).click();
+  await Promise.all([
+    page.waitForEvent("domcontentloaded"),
+    page.getByRole("button", { name: "重新加载", exact: true }).click(),
+  ]);
   await expect(
     page.getByRole("heading", { name: "迁移任务", exact: true }),
   ).toBeVisible();

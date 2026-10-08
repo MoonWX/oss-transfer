@@ -122,6 +122,8 @@ test("sidebar keeps session controls usable with malformed or unwritable local p
 test("stopped and ended tasks allow report export while active tasks issue no ticket", async ({
   page,
 }) => {
+  // Multiple routes/actions share this total budget; assertions keep their own deadline.
+  test.setTimeout(120_000);
   const requests = await mockApi(page);
   const states = [
     "PENDING",

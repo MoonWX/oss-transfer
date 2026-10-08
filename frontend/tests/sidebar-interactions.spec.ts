@@ -22,21 +22,31 @@ test("desktop sidebar controls live inside the sidebar and its rail animates wit
     const nav = button.closest("nav")!;
     const paper = button.closest(".MuiDrawer-paper")!;
     const header = document.querySelector("header")!;
-    (button as HTMLElement).click();
+    const targets = [nav, paper, header];
     return new Promise<{ width: number; paper: number; header: number }[]>(
       (resolve) => {
-        const frames: { width: number; paper: number; header: number }[] = [];
-        const start = performance.now();
-        const sample = () => {
-          frames.push({
-            width: nav.getBoundingClientRect().width,
-            paper: paper.getBoundingClientRect().width,
-            header: header.getBoundingClientRect().left,
+        const sampleTransition = (event: Event) => {
+          if (!targets.includes(event.target as Element)) return;
+          const animations = targets.flatMap((target) =>
+            target.getAnimations(),
+          );
+          if (!animations.length) return;
+          document.removeEventListener("transitionrun", sampleTransition);
+          // Seek the real CSS transitions so a slow renderer cannot skip the midpoint.
+          animations.forEach((animation) => animation.pause());
+          const frames = [0, 60, 120, 180, 240].map((time) => {
+            animations.forEach((animation) => (animation.currentTime = time));
+            return {
+              width: nav.getBoundingClientRect().width,
+              paper: paper.getBoundingClientRect().width,
+              header: header.getBoundingClientRect().left,
+            };
           });
-          if (performance.now() - start >= 360) resolve(frames);
-          else requestAnimationFrame(sample);
+          animations.forEach((animation) => animation.finish());
+          resolve(frames);
         };
-        requestAnimationFrame(sample);
+        document.addEventListener("transitionrun", sampleTransition);
+        (button as HTMLElement).click();
       },
     );
   });

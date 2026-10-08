@@ -58,6 +58,8 @@ test("creation opens the accepted task directly and preserves the shared layout"
 test("asynchronous OSS creation waits for its own IDs and exposes every generated task", async ({
   page,
 }) => {
+  // Multiple routes/actions share this total budget; assertions keep their own deadline.
+  test.setTimeout(60_000);
   await mockApi(page);
   await page.route("**/api/master/add-buckets", (route) =>
     route.fulfill({
@@ -778,6 +780,7 @@ test("closing detail retains its content through exit and stops detail polling",
   );
   await page.clock.install();
   await detail(page, 1046);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   const panel = page
     .locator(".MuiDrawer-paper")
     .filter({ has: page.getByRole("heading", { name: "迁移任务 #1046" }) });
@@ -796,6 +799,8 @@ test("closing detail retains its content through exit and stops detail polling",
     record();
   });
   await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await page.clock.runFor(400);
   await expect
     .poll(() => handle!.evaluate((element) => element.isConnected))
     .toBe(false);

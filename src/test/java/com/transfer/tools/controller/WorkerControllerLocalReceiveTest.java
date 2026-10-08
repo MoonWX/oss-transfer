@@ -87,7 +87,7 @@ public class WorkerControllerLocalReceiveTest {
         fixture.localFiles = mock(LocalFileService.class);
         fixture.queues = mock(BufferQueueManager.class);
         DistributedConfig config = mock(DistributedConfig.class);
-        when(config.getLocalIp()).thenReturn("10.1.0.43");
+        when(config.getLocalIp()).thenReturn("192.0.2.10");
         ReflectionTestUtils.setField(fixture.controller, "objectMapper", fixture.objectMapper);
         ReflectionTestUtils.setField(fixture.controller, "subTaskManagerService", fixture.taskManager);
         ReflectionTestUtils.setField(fixture.controller, "localFileService", fixture.localFiles);
@@ -104,8 +104,8 @@ public class WorkerControllerLocalReceiveTest {
         task.setDirection(TransferDirection.OSS_TO_LOCAL);
         task.setSourceBucket("source-bucket");
         task.setLocalPath("/data/downloads");
-        task.setExecutionNodeIp("10.1.0.43");
-        task.setEligibleWorkerNodes(Collections.singletonList("10.1.0.43"));
+        task.setExecutionNodeIp("192.0.2.10");
+        task.setEligibleWorkerNodes(Collections.singletonList("192.0.2.10"));
         return task;
     }
 

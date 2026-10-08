@@ -123,6 +123,8 @@ test("automatically queued OSS migrations can be stopped without exposing a manu
 test("asynchronous creation opens its public task ID instead of any child ID", async ({
   page,
 }) => {
+  // Multiple routes/actions share this total budget; assertions keep their own deadline.
+  test.setTimeout(60_000);
   const requests = await mockApi(page);
   const group = ossGroup();
   await status(page, [group]);
@@ -168,6 +170,8 @@ test("asynchronous creation opens its public task ID instead of any child ID", a
 test("OSS group start stop resume and delete submit only the stable public ID", async ({
   page,
 }) => {
+  // Multiple routes/actions share this total budget; assertions keep their own deadline.
+  test.setTimeout(90_000);
   await mockApi(page);
   let group = ossGroup(8000, { status: "PENDING", scanComplete: false });
   await page.route("**/api/master/status", (route) =>

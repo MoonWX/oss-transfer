@@ -361,6 +361,8 @@ test("delayed and failed settings never become an unlimited label, retry can rec
 test("bandwidth controls fit desktop light dark and mobile views and failed save retains editable input", async ({
   page,
 }, testInfo) => {
+  // Multiple routes/actions share this total budget; assertions keep their own deadline.
+  test.setTimeout(60_000);
   await mockApi(page);
   let failSave = true;
   await page.route(detailPath, async (route) => {

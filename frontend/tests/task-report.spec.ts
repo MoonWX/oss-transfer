@@ -383,9 +383,11 @@ test("download notice expires on its original deadline despite blur, hover and i
     }),
   );
   await openReport(page, 1048);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出任务报告", exact: true }).click();
   await download;
+  await page.clock.runFor(400);
   const notice = page
     .getByRole("alert", { includeHidden: true })
     .filter({ hasText: "报告下载已请求" });
@@ -412,6 +414,7 @@ test("a different download error replaces the notice and receives its own bounde
     route.fulfill({ status: 503, json: { success: false, message } }),
   );
   await openReport(page, 1048);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await page.getByRole("button", { name: "导出任务报告", exact: true }).click();
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   await page.clock.runFor(8000);

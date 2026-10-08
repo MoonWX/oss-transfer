@@ -47,11 +47,15 @@ import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 @Service
 public class ObjectMigrationService {
     private final ThreadLocal<RateLimitRequest> rateRequestScope = new ThreadLocal<>();
+    private final ThreadLocal<MultipartAttempt> multipartAttemptScope = new ThreadLocal<>();
+    private long partSettleTimeoutMillis = 5000;
+    private static final class MultipartAttempt { volatile boolean aborting; }
 
     /** User-facing request evidence identifies the parent; cancellation targets the executing shard. */
     private static class RateRequestContext extends RateLimitRequest {
@@ -759,6 +763,8 @@ public class ObjectMigrationService {
     }
 
     private void checkScopedRunning() {
+        MultipartAttempt multipart = multipartAttemptScope.get();
+        if (multipart != null && multipart.aborting) throw new TaskCancelledException("multipart upload is aborting");
         RateLimitRequest scope = rateRequestScope.get();
         Integer executionId = executionTaskId(scope);
         if (executionId != null && localTaskControlService != null) {
@@ -1108,13 +1114,14 @@ public class ObjectMigrationService {
                 ? 4 : destBucketConfig.getMultipart().getMaxInFlightPartsPerObject();
         int window = Math.max(1, Math.min(configuredWindow, partThreadCount));
         CompletionService<PartUploadResult> completion = new ExecutorCompletionService<>(partUploadExecutor);
+        MultipartAttempt attempt = new MultipartAttempt();
         List<Future<PartUploadResult>> inFlight = new ArrayList<>(window);
         int nextPart = 1;
         int completed = 0;
         try {
             while (nextPart <= totalParts && inFlight.size() < window) {
                 inFlight.add(submitPart(completion, key, objectSize, partSize, nextPart++,
-                        sourceBucket, destBucket, uploadId, srcS3Alias, dstS3Alias));
+                        sourceBucket, destBucket, uploadId, srcS3Alias, dstS3Alias, attempt));
             }
             while (completed < totalParts) {
                 Future<PartUploadResult> finished = completion.take();
@@ -1129,14 +1136,16 @@ public class ObjectMigrationService {
                         key, completed, totalParts, result.partNumber);
                 if (nextPart <= totalParts) {
                     inFlight.add(submitPart(completion, key, objectSize, partSize, nextPart++,
-                            sourceBucket, destBucket, uploadId, srcS3Alias, dstS3Alias));
+                            sourceBucket, destBucket, uploadId, srcS3Alias, dstS3Alias, attempt));
                 }
             }
         } catch (InterruptedException e) {
+            attempt.aborting = true;
+            settleFutures(inFlight, key);
             Thread.currentThread().interrupt();
-            cancelFutures(inFlight);
             throw new RuntimeException("分片上传被中断: " + key, e);
         } catch (Exception e) {
+            attempt.aborting = true;
             settleFutures(inFlight, key);
             throw new RuntimeException("sdk分片上传失败: " + key, e);
         }
@@ -1147,18 +1156,32 @@ public class ObjectMigrationService {
                                                 int partNumber, String sourceBucket,
                                                 String destBucket, String uploadId,
                                                 String srcS3Alias, String dstS3Alias) {
+        return submitPart(completion, key, objectSize, partSize, partNumber, sourceBucket, destBucket,
+                uploadId, srcS3Alias, dstS3Alias, null);
+    }
+
+    private Future<PartUploadResult> submitPart(CompletionService<PartUploadResult> completion,
+                                                String key, long objectSize, long partSize,
+                                                int partNumber, String sourceBucket,
+                                                String destBucket, String uploadId,
+                                                String srcS3Alias, String dstS3Alias, MultipartAttempt attempt) {
         long bytePosition = (long) (partNumber - 1) * partSize;
         long lastByte = Math.min(bytePosition + partSize - 1, objectSize - 1);
         RateLimitRequest scope = rateRequestScope.get();
         return completion.submit(() -> {
             RateLimitRequest previous = rateRequestScope.get();
+            MultipartAttempt previousAttempt = multipartAttemptScope.get();
             if (scope == null) rateRequestScope.remove(); else rateRequestScope.set(scope);
+            if (attempt == null) multipartAttemptScope.remove(); else multipartAttemptScope.set(attempt);
             Integer executionId = executionTaskId(scope);
             try (LocalTaskControlService.Operation ignored = executionId != null && localTaskControlService != null
                     ? localTaskControlService.begin(executionId) : null) {
                 return uploadPart(key, sourceBucket, destBucket, uploadId,
                         partNumber, bytePosition, lastByte, srcS3Alias, dstS3Alias);
-            } finally { restoreRateRequestScope(previous); }
+            } finally {
+                restoreRateRequestScope(previous);
+                if (previousAttempt == null) multipartAttemptScope.remove(); else multipartAttemptScope.set(previousAttempt);
+            }
         });
     }
 
@@ -1169,17 +1192,24 @@ public class ObjectMigrationService {
     }
 
     private void settleFutures(List<? extends Future<?>> futures, String key) {
-        for (Future<?> future : futures) {
-            try {
-                future.get();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                cancelFutures(futures);
-                return;
-            } catch (Exception e) {
-                log.debug("等待同一uploadId的在途分片结束: key={}, result={}", key, e.getMessage());
+        // Future.cancel() reports completion before a running callable closes its I/O/Operation.
+        // First allow cooperative cancellation to finish; a stalled SDK must not block stop forever.
+        boolean interrupted = Thread.interrupted();
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(1, partSettleTimeoutMillis));
+        try {
+            for (Future<?> future : futures) {
+                while (true) {
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0) { cancelFutures(futures); return; }
+                    try { future.get(remaining, TimeUnit.NANOSECONDS); break; }
+                    catch (InterruptedException e) { interrupted = true; }
+                    catch (TimeoutException e) { cancelFutures(futures); return; }
+                    catch (Exception e) {
+                        log.debug("等待同一uploadId的在途分片结束: key={}, result={}", key, e.getMessage()); break;
+                    }
+                }
             }
-        }
+        } finally { if (interrupted) Thread.currentThread().interrupt(); }
     }
 
     long effectivePartSize(long objectSize) {
@@ -1324,8 +1354,9 @@ public class ObjectMigrationService {
                     }
 
                     operation = "UPLOAD_PART";
+                    checkScopedRunning();
                     UploadPartResult uploadResult = uploadPartWithTaskBandwidth(dstS3Client, uploadRequest, taskBandwidthMessage());
-
+                    checkScopedRunning();
                     return new PartUploadResult(partNumber, uploadResult.getPartETag());
                 }
             } catch (Exception e) {

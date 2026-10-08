@@ -30,6 +30,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -223,6 +224,78 @@ public class ObjectMigrationReplayTest {
         verify(target, never()).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
         verify(source, never()).generatePresignedUrl(anyString(), anyString(), any(Date.class));
         assertEquals("known.bin", message.getKey()); assertFalse(control.isActive(94));
+    }
+
+    @Test public void stoppedMultipartWaitsForItsPartOperationToExitBeforeAborting() throws Exception {
+        AmazonS3 target = mock(AmazonS3.class);
+        S3ClientManager clients = (S3ClientManager) ReflectionTestUtils.getField(migration, "s3ClientManager");
+        when(clients.getClient("target")).thenReturn(target);
+        ObjectListMessage message = mappedMessage(96, "known.bin", "EXACT_KEY", null, null, "stopped/target.bin");
+        DestBucketConfig config = (DestBucketConfig) ReflectionTestUtils.getField(migration, "destBucketConfig");
+        config.getMultipart().setThreshold(1L); ReflectionTestUtils.setField(migration, "partThreadCount", 1); migration.init();
+        when(source.getObjectMetadata("source", "known.bin")).thenReturn(object(new ByteArrayInputStream(payload), payload.length).getObjectMetadata());
+        InitiateMultipartUploadResult initiated = new InitiateMultipartUploadResult(); initiated.setUploadId("stopped-upload");
+        when(target.initiateMultipartUpload(any(InitiateMultipartUploadRequest.class))).thenReturn(initiated);
+        CountDownLatch stopped = new CountDownLatch(1), partMayExit = new CountDownLatch(1);
+        when(source.getObject(any(GetObjectRequest.class))).thenAnswer(call -> {
+            control.stop(96); Thread.interrupted(); stopped.countDown();
+            assertTrue("The test must release the running part", partMayExit.await(3, TimeUnit.SECONDS));
+            throw new TaskCancelledException("stopped fixture");
+        });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> transfer = executor.submit(() -> migration.migrate(message));
+            assertTrue(stopped.await(2, TimeUnit.SECONDS));
+            try { transfer.get(100, TimeUnit.MILLISECONDS); fail("The part still owns active I/O"); }
+            catch (TimeoutException expected) { }
+            assertTrue(control.isActive(96));
+            verify(target, never()).abortMultipartUpload(any(AbortMultipartUploadRequest.class));
+            partMayExit.countDown();
+            try { transfer.get(2, TimeUnit.SECONDS); fail("The stopped transfer must not succeed"); }
+            catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof TaskCancelledException); }
+            assertFalse(control.isActive(96));
+            ArgumentCaptor<AbortMultipartUploadRequest> aborted = ArgumentCaptor.forClass(AbortMultipartUploadRequest.class);
+            verify(target).abortMultipartUpload(aborted.capture());
+            assertEquals("stopped/target.bin", aborted.getValue().getKey());
+            verify(target, never()).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
+            verify(source, never()).generatePresignedUrl(anyString(), anyString(), any(Date.class));
+        } finally { partMayExit.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test public void stalledMultipartHasABoundedStopAndCannotUploadAfterAbortEvenIfIoIgnoresInterruption() throws Exception {
+        AmazonS3 target = mock(AmazonS3.class);
+        S3ClientManager clients = (S3ClientManager) ReflectionTestUtils.getField(migration, "s3ClientManager");
+        when(clients.getClient("target")).thenReturn(target);
+        ReflectionTestUtils.setField(migration, "partThreadCount", 1);
+        ReflectionTestUtils.setField(migration, "partSettleTimeoutMillis", 50L); migration.init();
+        when(source.getObjectMetadata("source", "known.bin")).thenReturn(object(new ByteArrayInputStream(payload), payload.length).getObjectMetadata());
+        InitiateMultipartUploadResult initiated = new InitiateMultipartUploadResult(); initiated.setUploadId("stalled-upload");
+        when(target.initiateMultipartUpload(any(InitiateMultipartUploadRequest.class))).thenReturn(initiated);
+        CountDownLatch partStarted = new CountDownLatch(1), releaseIo = new CountDownLatch(1), objectClosed = new CountDownLatch(1);
+        S3Object lateObject = spy(object(nonRepeatable(payload), payload.length));
+        doAnswer(call -> { try { return call.callRealMethod(); } finally { objectClosed.countDown(); } }).when(lateObject).close();
+        when(source.getObject(any(GetObjectRequest.class))).thenAnswer(call -> {
+            partStarted.countDown();
+            // Some blocking clients ignore or clear interruption before returning their response.
+            while (releaseIo.getCount() != 0) try { releaseIo.await(); } catch (InterruptedException ignored) { }
+            return lateObject;
+        });
+        AtomicReference<Thread> migrationThread = new AtomicReference<>();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> transfer = executor.submit(() -> {
+                migrationThread.set(Thread.currentThread());
+                ReflectionTestUtils.invokeMethod(migration, "migrateWithMultipart", "known.bin", (long) payload.length,
+                        "source", "target", "source", "target");
+            });
+            assertTrue(partStarted.await(2, TimeUnit.SECONDS)); migrationThread.get().interrupt();
+            try { transfer.get(2, TimeUnit.SECONDS); fail("Stalled I/O must not make stop unbounded"); }
+            catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof RuntimeException); }
+            verify(target).abortMultipartUpload(any(AbortMultipartUploadRequest.class));
+            releaseIo.countDown(); assertTrue(objectClosed.await(2, TimeUnit.SECONDS));
+            verify(target, never()).uploadPart(any(UploadPartRequest.class));
+            verify(target, never()).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
+        } finally { releaseIo.countDown(); executor.shutdownNow(); }
     }
 
     @Test public void mapped503EvidenceUsesTheRequestSideKeyAndKeepsTheSourceIdentity() {

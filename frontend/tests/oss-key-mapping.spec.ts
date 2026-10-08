@@ -139,6 +139,8 @@ for (const scenario of cases) {
 test("mapping draft survives reload and switching scope clears hidden source and target values", async ({
   page,
 }) => {
+  // Multiple routes/actions share this total budget; assertions keep their own deadline.
+  test.setTimeout(60_000);
   const requests = await mockApi(page);
   await configure(page);
   await select(page, "迁移范围", "单个对象");

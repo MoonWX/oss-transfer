@@ -23,6 +23,8 @@ async function pauseClock(page: Page) {
 test("refresh frequency persists across overview, tasks, nodes and reload with custom mobile controls", async ({
   page,
 }, testInfo) => {
+  // This case covers three routes, reloads and desktop/mobile controls.
+  test.setTimeout(60_000);
   await mockApi(page);
   await page.goto("/tasks");
   await expect(refreshChoice(page)).toHaveText("10 秒");
@@ -67,6 +69,7 @@ test("refresh frequency persists across overview, tasks, nodes and reload with c
   await input.fill("23");
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await expect(refreshChoice(page)).toHaveText("自定义（17 秒）");
+  await expect(dialog).toBeHidden();
 
   await page.setViewportSize({ width: 360, height: 800 });
   await chooseRefresh(page, "1 秒");
@@ -113,13 +116,13 @@ test("changing cadence retains task data and in-flight work without overlapping 
   );
   await page.clock.runFor(30_000);
   await expect.poll(() => calls).toBe(1);
-  await page.clock.runFor(60_000);
+  await page.clock.fastForward(60_000);
   expect(calls).toBe(1);
   await chooseRefresh(page, "1 秒", true);
   expect(await taskElement!.evaluate((element) => element.isConnected)).toBe(
     true,
   );
-  await page.clock.runFor(20_000);
+  await page.clock.fastForward(20_000);
   expect(calls).toBe(1);
   await expect(task).toBeVisible();
 
@@ -139,7 +142,7 @@ test("changing cadence retains task data and in-flight work without overlapping 
       request.path,
     ),
   ).length;
-  await page.clock.runFor(60_000);
+  await page.clock.fastForward(60_000);
   expect(calls).toBe(pausedCalls);
   expect(
     requests.filter((request) =>
@@ -158,7 +161,7 @@ test("changing cadence retains task data and in-flight work without overlapping 
       () => requests.filter((request) => request.path === detailPath).length,
     )
     .toBe(1);
-  await page.clock.runFor(60_000);
+  await page.clock.fastForward(60_000);
   expect(
     requests.filter((request) => request.path === detailPath),
   ).toHaveLength(1);
@@ -185,7 +188,7 @@ test("node polling uses one preference for all feeds, pauses in background and k
     );
   await chooseRefresh(page, "暂停", true);
   const paused = counts();
-  await page.clock.runFor(60_000);
+  await page.clock.fastForward(60_000);
   expect(counts()).toEqual(paused);
   await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect.poll(counts).toEqual(paused.map((count) => count + 1));
@@ -200,7 +203,7 @@ test("node polling uses one preference for all feeds, pauses in background and k
     });
   });
   const hidden = counts();
-  await page.clock.runFor(20_000);
+  await page.clock.fastForward(20_000);
   expect(counts()).toEqual(hidden);
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", {

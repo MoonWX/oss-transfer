@@ -1,0 +1,37 @@
+#!/bin/bash
+# Compatibility entry point: all commands are handled by the unified Go CLI.
+set -euo pipefail
+
+launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+launcher_os="$(uname -s)"
+if [[ "$launcher_os" != Linux ]]; then
+    echo "此入口使用 Linux CLI；请在 Linux 节点构建或安装发布包。" >&2
+    exit 126
+fi
+
+launcher_arch="$(uname -m)"
+case "$launcher_arch" in
+    x86_64|amd64) launcher_binary=oss-transfer-cli-amd64 ;;
+    aarch64|arm64) launcher_binary=oss-transfer-cli-arm64 ;;
+    *)
+        echo "不支持的 CLI 架构: ${launcher_arch}；请为当前平台构建并安装 CLI。" >&2
+        exit 126
+        ;;
+esac
+
+# Check only explicit local locations. Looking up the same command on PATH
+# could recurse into this launcher or find a stale implementation.
+launcher_release_dir="${OSS_TRANSFER_OUTPUT_DIR:-$launcher_dir/../output}/oss-transfer"
+for launcher_candidate in \
+    "$launcher_dir/$launcher_binary" \
+    "$launcher_dir/../$launcher_binary" \
+    "$launcher_release_dir/$launcher_binary" \
+    "$launcher_dir/../cli-go/$launcher_binary" \
+    "$launcher_dir/cli-go/$launcher_binary"; do
+    if [[ -f "$launcher_candidate" && -x "$launcher_candidate" && ! "$launcher_candidate" -ef "${BASH_SOURCE[0]}" ]]; then
+        exec "$launcher_candidate" "$@"
+    fi
+done
+
+echo "未找到可执行的 ${launcher_binary}；请先运行 build.sh 构建或安装发布包中的 CLI。" >&2
+exit 127

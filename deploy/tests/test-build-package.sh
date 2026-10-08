@@ -1,0 +1,236 @@
+#!/bin/bash
+set -euo pipefail
+shopt -s nullglob
+source_root="$(cd "$(dirname "$0")/../.." && pwd)"
+test_root="$(mktemp -d "${TMPDIR:-/tmp}/oss-build-test.XXXXXX")"
+test_root="$(cd "$test_root" && pwd)"
+trap 'rm -rf "$test_root"' EXIT
+fixture="$test_root/source with spaces"
+mkdir -p "$fixture/frontend" "$fixture/cli-go" "$fixture/deploy/docker" "$fixture/docs" "$test_root/bin"
+cp "$source_root/build.sh" "$fixture/build.sh"
+printf '    <version>4.0.0</version>\n' > "$fixture/pom.xml"
+for file in deploy.sh oss-transfer-cli.completion; do
+    printf 'fixture\n' > "$fixture/deploy/$file"
+done
+for file in preflight-node.sh wait-node-ready.sh install.sh install-master.sh install-agent.sh runtime.sh; do
+    cp "$source_root/deploy/$file" "$fixture/deploy/$file"
+done
+cp "$source_root/Dockerfile" "$source_root/.dockerignore" "$fixture/"
+cp -R "$source_root/deploy/docker/." "$fixture/deploy/docker/"
+printf 'guide\n' > "$fixture/docs/deployment-and-user-guide.md"
+printf 'readme\n' > "$fixture/README.md"
+printf 'readme\n' > "$fixture/README.zh-CN.md"
+cat > "$test_root/bin/npm" <<'TOOL'
+#!/bin/bash
+exit 0
+TOOL
+cat > "$test_root/bin/mvn" <<'TOOL'
+#!/bin/bash
+[ "${MOCK_BUILD_FAIL:-}" != mvn ] || exit 7
+mkdir -p target
+printf 'new jar\n' > target/oss-transfer.jar
+TOOL
+cat > "$test_root/bin/go" <<'TOOL'
+#!/bin/bash
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then printf 'new cli\n' > "$2"; exit 0; fi
+    shift
+done
+exit 1
+TOOL
+cat > "$test_root/bin/git" <<'TOOL'
+#!/bin/bash
+if [ "$1" = rev-parse ] && [ "$2" = --short ]; then printf 'abcdef1\n'
+elif [ "$1" = rev-parse ]; then printf 'transfer-wx\n'
+else printf 'fixture\n'; fi
+TOOL
+real_mv="$(command -v mv)"
+export REAL_MV="$real_mv"
+cat > "$test_root/bin/mv" <<'TOOL'
+#!/bin/bash
+set -euo pipefail
+if [ -z "${MOCK_MV_STATE:-}" ]; then exec "$REAL_MV" "$@"; fi
+call=0
+[ ! -f "$MOCK_MV_STATE" ] || read -r call < "$MOCK_MV_STATE"
+call=$((call+1))
+printf '%s\n' "$call" > "$MOCK_MV_STATE"
+if [ "$call" = "${MOCK_MV_FAIL_CALL:-}" ]; then exit 71; fi
+# build.sh always uses mv -- source destination.
+if [ -n "${MOCK_MV_RESTORE_FAIL_NAME:-}" ] && [[ "$2" = */package-backups/*/"$MOCK_MV_RESTORE_FAIL_NAME" ]]; then exit 72; fi
+"$REAL_MV" "$@"
+if [ "$call" = "${MOCK_MV_PAUSE_CALL:-}" ]; then
+    touch "$MOCK_MV_STATE.ready"
+    for ((attempt=0; attempt<500; attempt++)); do
+        [ ! -f "$MOCK_MV_STATE.continue" ] || exit 0
+        sleep 0.02
+    done
+    exit 73
+fi
+TOOL
+chmod +x "$test_root/bin/"*
+export PATH="$test_root/bin:$PATH"
+
+run_build() {
+    OSS_TRANSFER_OUTPUT_DIR="$output" bash "$fixture/build.sh"
+}
+expect_failure() {
+    local expected_status="$1" actual_status
+    shift
+    if "$@" > "$test_root/failure.log" 2>&1; then
+        cat "$test_root/failure.log" >&2
+        echo 'Expected build failure' >&2; exit 1
+    else
+        actual_status=$?
+    fi
+    if [ "$actual_status" -ne "$expected_status" ]; then
+        cat "$test_root/failure.log" >&2
+        echo "Expected exit $expected_status, got $actual_status" >&2; exit 1
+    fi
+}
+seed_release() {
+    mkdir -p "$output/oss-transfer" "$output/qa-evidence"
+    printf 'old package\n' > "$output/oss-transfer.tar.gz"
+    printf 'old hash\n' > "$output/oss-transfer.tar.gz.sha256"
+    printf 'old jar\n' > "$output/oss-transfer/oss-transfer.jar"
+    printf 'local config\n' > "$output/oss-transfer/application.yml"
+    printf 'evidence\n' > "$output/qa-evidence/keep.txt"
+}
+assert_original_release() {
+    [ "$(cat "$output/oss-transfer.tar.gz")" = 'old package' ]
+    [ "$(cat "$output/oss-transfer.tar.gz.sha256")" = 'old hash' ]
+    [ "$(cat "$output/oss-transfer/oss-transfer.jar")" = 'old jar' ]
+    [ "$(cat "$output/oss-transfer/application.yml")" = 'local config' ]
+    [ "$(cat "$output/qa-evidence/keep.txt")" = evidence ]
+}
+assert_no_staging() {
+    local staging
+    for staging in "$output"/.build.*; do [ ! -e "$staging" ]; done
+}
+assert_clean() {
+    assert_no_staging
+    [ ! -e "$output/.publish.lock" ]
+}
+
+output="$test_root/release output"
+seed_release
+MOCK_BUILD_FAIL=mvn expect_failure 7 run_build
+assert_original_release
+assert_clean
+run_build > "$test_root/build.log" 2>&1
+[ "$(cat "$output/oss-transfer/oss-transfer.jar")" = 'new jar' ]
+[ "$(cat "$output/qa-evidence/keep.txt")" = evidence ]
+cmp "$source_root/Dockerfile" "$output/oss-transfer/Dockerfile"
+cmp "$source_root/.dockerignore" "$output/oss-transfer/.dockerignore"
+for file in preflight-node.sh wait-node-ready.sh; do
+    cmp "$source_root/deploy/$file" "$output/oss-transfer/deploy/$file"
+    [ -x "$output/oss-transfer/deploy/$file" ]
+done
+for file in docker-defaults.yml entrypoint.sh healthcheck.sh cli.sh compose.yml compose.env.example; do
+    cmp "$source_root/deploy/docker/$file" "$output/oss-transfer/deploy/docker/$file"
+done
+[ -x "$output/oss-transfer/oss-transfer-cli-arm64" ]
+[ -x "$output/oss-transfer/oss-transfer-cli-amd64" ]
+[ "$(sed -n 's/^Commit: //p' "$output/oss-transfer/VERSION")" = abcdef1 ]
+tar -tzf "$output/oss-transfer.tar.gz" > "$test_root/archive-files"
+grep -q 'oss-transfer/deploy/docker/entrypoint.sh' "$test_root/archive-files"
+grep -q 'oss-transfer/deploy/preflight-node.sh' "$test_root/archive-files"
+grep -q 'oss-transfer/deploy/wait-node-ready.sh' "$test_root/archive-files"
+grep -q 'oss-transfer/agent-bundle.tar.gz' "$test_root/archive-files"
+tar -tzf "$output/oss-transfer/agent-bundle.tar.gz" > "$test_root/bundle-files"
+grep -q './deploy/install-agent.sh' "$test_root/bundle-files"
+grep -q './deploy/wait-node-ready.sh' "$test_root/bundle-files"
+! grep -Eq 'application\.yml|secrets|frontend|README|test-results' "$test_root/bundle-files"
+(cd "$output/oss-transfer" && shasum -a 256 -c agent-bundle.tar.gz.sha256)
+(cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
+backup_count=0
+for backup in "$output/package-backups/"*; do
+    [ "$(cat "$backup/oss-transfer.tar.gz")" = 'old package' ]
+    [ "$(cat "$backup/oss-transfer/oss-transfer.jar")" = 'old jar' ]
+    [ "$(cat "$backup/oss-transfer/application.yml")" = 'local config' ]
+    [ "$(cat "$backup/oss-transfer.tar.gz.sha256")" = 'old hash' ]
+    backup_count=$((backup_count+1))
+done
+[ "$backup_count" -eq 1 ]
+assert_clean
+
+# Fail each old-file backup and each replacement move independently.
+for call in 1 2 3 4 5 6; do
+    output="$test_root/rollback $call"
+    seed_release
+    MOCK_MV_STATE="$test_root/moves-$call" MOCK_MV_FAIL_CALL="$call" expect_failure 71 run_build
+    assert_original_release
+    assert_clean
+done
+
+# A first release must remove all new entries after a partial publication.
+for call in 1 2 3; do
+    output="$test_root/fresh rollback $call"
+    MOCK_MV_STATE="$test_root/fresh-moves-$call" MOCK_MV_FAIL_CALL="$call" expect_failure 71 run_build
+    [ ! -e "$output/oss-transfer" ]
+    [ ! -e "$output/oss-transfer.tar.gz" ]
+    [ ! -e "$output/oss-transfer.tar.gz.sha256" ]
+    assert_clean
+done
+
+# Existing partial releases and symlinks are restored without following them.
+output="$test_root/partial release"
+seed_release
+rm "$output/oss-transfer.tar.gz"
+MOCK_MV_STATE="$test_root/partial-moves" MOCK_MV_FAIL_CALL=5 expect_failure 71 run_build
+[ ! -e "$output/oss-transfer.tar.gz" ]
+[ "$(cat "$output/oss-transfer/oss-transfer.jar")" = 'old jar' ]
+[ "$(cat "$output/oss-transfer.tar.gz.sha256")" = 'old hash' ]
+[ "$(cat "$output/qa-evidence/keep.txt")" = evidence ]
+assert_clean
+output="$test_root/symlink release"
+mkdir -p "$output" "$test_root/external package"
+printf 'external data\n' > "$test_root/external package/keep.txt"
+ln -s "$test_root/external package" "$output/oss-transfer"
+ln -s "$test_root/missing archive" "$output/oss-transfer.tar.gz"
+MOCK_MV_STATE="$test_root/symlink-moves" MOCK_MV_FAIL_CALL=4 expect_failure 71 run_build
+[ "$(readlink "$output/oss-transfer")" = "$test_root/external package" ]
+[ "$(readlink "$output/oss-transfer.tar.gz")" = "$test_root/missing archive" ]
+[ "$(cat "$test_root/external package/keep.txt")" = 'external data' ]
+assert_clean
+
+# A restoration failure preserves its backup, restores other files, and blocks
+# a new publication until the incomplete rollback is explicitly recovered.
+output="$test_root/restore failure"
+seed_release
+MOCK_MV_STATE="$test_root/restore-moves" MOCK_MV_FAIL_CALL=4 MOCK_MV_RESTORE_FAIL_NAME=oss-transfer expect_failure 71 run_build
+[ ! -e "$output/oss-transfer" ]
+[ "$(cat "$output/oss-transfer.tar.gz")" = 'old package' ]
+[ "$(cat "$output/oss-transfer.tar.gz.sha256")" = 'old hash' ]
+[ "$(cat "$output/qa-evidence/keep.txt")" = evidence ]
+for backup in "$output/package-backups/"*; do
+    [ "$(cat "$backup/oss-transfer/oss-transfer.jar")" = 'old jar' ]
+done
+grep -Fq "$output/package-backups/" "$test_root/failure.log"
+[ -d "$output/.publish.lock" ]
+assert_no_staging
+expect_failure 1 run_build
+[ -d "$output/.publish.lock" ]
+assert_no_staging
+
+# Hold the first publisher after moving its old directory. Another completed
+# build must neither replace its files nor release its lock.
+output="$test_root/concurrent release"
+seed_release
+MOCK_MV_STATE="$test_root/paused-moves" MOCK_MV_PAUSE_CALL=1 run_build > "$test_root/concurrent.log" 2>&1 &
+publisher_pid=$!
+for ((attempt=0; attempt<500; attempt++)); do
+    [ ! -f "$test_root/paused-moves.ready" ] || break
+    sleep 0.02
+done
+[ -f "$test_root/paused-moves.ready" ]
+expect_failure 1 run_build
+[ -d "$output/.publish.lock" ]
+[ ! -e "$output/oss-transfer" ]
+[ "$(cat "$output/oss-transfer.tar.gz")" = 'old package' ]
+touch "$test_root/paused-moves.continue"
+wait "$publisher_pid"
+[ "$(cat "$output/oss-transfer/oss-transfer.jar")" = 'new jar' ]
+[ "$(cat "$output/qa-evidence/keep.txt")" = evidence ]
+(cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
+assert_clean
+printf 'Build packaging checks passed (Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'

@@ -1,0 +1,1934 @@
+import { useWorkerStatus } from "../lib/workerStatus";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
+import {
+  Alert,
+  Avatar,
+  Box,
+  Button,
+  ButtonBase,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Drawer,
+  IconButton,
+  InputAdornment,
+  LinearProgress,
+  MenuItem,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TablePagination,
+  TableRow,
+  TextField,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import {
+  AddRounded,
+  ArrowForwardRounded,
+  CheckCircleOutlineRounded,
+  CloseRounded,
+  CloudSyncRounded,
+  DeleteOutlineRounded,
+  DownloadRounded,
+  EastRounded,
+  FolderOutlined,
+  PauseRounded,
+  PlayArrowRounded,
+  SearchRounded,
+  StorageRounded,
+  WarningAmberRounded,
+} from "@mui/icons-material";
+import { api, saveFile, useApi, useNotify } from "../lib/api";
+import { numberSubtasks } from "../lib/subtasks";
+import { downloadTaskReport } from "../lib/taskReport";
+import {
+  keyMappingLabels,
+  mappingExample,
+  type OssKeyMappingMode,
+} from "../lib/ossKeyMapping";
+import {
+  refreshDescription,
+  useRefreshPreference,
+} from "../lib/refreshPreference";
+import RefreshControls from "../components/RefreshControls";
+import TaskBandwidth from "../components/TaskBandwidth";
+import SubtaskDetails from "../components/SubtaskDetails";
+import {
+  EmptyState,
+  ErrorAlert,
+  formatBytes,
+  formatNumber,
+  LoadingState,
+  PageHeader,
+  StatusChip,
+  statusLabels,
+} from "../components/Common";
+
+type Task = Record<string, any> & { taskIndex: number; status: string };
+const isLocal = (task: Task) =>
+  !!task.direction && task.direction !== "OSS_TO_OSS";
+const isExploring = (task: Task) =>
+  task.ossTaskGroup === true &&
+  ["QUEUED", "RUNNING"].includes(task.creationStatus);
+const groupIncomplete = (task: Task) =>
+  isExploring(task) || (task.ossTaskGroup === true && task.partial === true);
+const reportAvailable = (task: Task) =>
+  !groupIncomplete(task) &&
+  ["STOPPED", "COMPLETED", "FAILED", "PARTIAL_FAILED"].includes(task.status);
+function TaskStatus({ task }: { task: Task }) {
+  return isExploring(task) ? (
+    <Chip size="small" variant="outlined" color="info" label="扫描中" />
+  ) : (
+    <StatusChip status={task.status} />
+  );
+}
+const directionLabel = (task: Task) =>
+  task.direction === "OSS_TO_LOCAL"
+    ? "OSS → 本地"
+    : task.direction === "LOCAL_TO_OSS"
+      ? "本地 → OSS"
+      : "OSS → OSS";
+const workers = (task: Task) =>
+  (task.participatingWorkerNodes?.length
+    ? task.participatingWorkerNodes
+    : task.eligibleWorkerNodes?.length
+      ? task.eligibleWorkerNodes
+      : [task.executionNodeIp || task.workerNode]
+  )
+    .filter(Boolean)
+    .join(", ") || "等待分配";
+function endpoint(task: Task, source: boolean) {
+  const value = source ? task.sourceEndpoint : task.destinationEndpoint;
+  if (
+    value?.type === "LOCAL" ||
+    (isLocal(task) && source === (task.direction === "LOCAL_TO_OSS"))
+  )
+    return (
+      value?.localPath ||
+      value?.nodeBindings?.[0]?.localPath ||
+      task.localPath ||
+      "本地文件系统"
+    );
+  return (
+    [
+      source ? task.sourceS3Alias : task.destS3Alias,
+      source ? task.sourceBucket : task.destBucket,
+    ]
+      .filter(Boolean)
+      .join("/") ||
+    [value?.s3Alias, value?.bucket].filter(Boolean).join("/") ||
+    "—"
+  );
+}
+const subtaskNode = (task: Task) =>
+  task.executionNodeIp || task.workerNode || "";
+const subtaskIdentity = (task: Task) =>
+  JSON.stringify([task.taskIndex, task.shardId, subtaskNode(task)]);
+function subtaskEndpoint(task: Task, source: boolean) {
+  const value = source ? task.sourceEndpoint : task.destinationEndpoint;
+  if (
+    value?.type === "LOCAL" ||
+    (isLocal(task) && source === (task.direction === "LOCAL_TO_OSS"))
+  ) {
+    const binding = (value?.nodeBindings || task.nodeBindings || []).find(
+      (item: any) => item.executionNodeIp === subtaskNode(task),
+    );
+    return (
+      task.localPath || binding?.localPath || value?.localPath || "本地文件系统"
+    );
+  }
+  return endpoint(task, source);
+}
+function progress(task: Task) {
+  const total = Number(task.listObjectCount || 0);
+  return total
+    ? Math.min(
+        100,
+        ((Number(task.putObjectCount || 0) +
+          Number(task.skippedObjectCount || 0)) /
+          total) *
+          100,
+      )
+    : task.status === "COMPLETED"
+      ? 100
+      : 0;
+}
+const scanFinished = (task: Task) =>
+  !groupIncomplete(task) &&
+  (typeof task.scanComplete === "boolean"
+    ? task.scanComplete
+    : ["LIST_DONE", "COMPLETED"].includes(task.status));
+const canStartTask = (task: Task) =>
+  !isLocal(task) &&
+  task.autoStart !== true &&
+  task.status === "PENDING" &&
+  !isExploring(task);
+const canStopTask = (task: Task) =>
+  isExploring(task) ||
+  ["RUNNING", "LIST_DONE", "PENDING"].includes(task.status);
+const canResumeTask = (task: Task) =>
+  !isExploring(task) &&
+  ["FAILED", "PARTIAL_FAILED", "STOPPED"].includes(task.status);
+const canDeleteTask = (task: Task) =>
+  !["RUNNING", "LIST_DONE", "STOPPING"].includes(task.status);
+function Metrics({ data }: { data: any }) {
+  const cards = [
+    {
+      label: "迁移任务",
+      value: formatNumber(data?.totalTasks),
+      detail: `${formatNumber(data?.pendingTasks)} 个待执行`,
+      icon: <CloudSyncRounded />,
+      color: "primary.main",
+    },
+    {
+      label: "执行中任务",
+      value: formatNumber(
+        (data?.runningTasks || 0) + (data?.listDoneTasks || 0),
+      ),
+      detail: "含运行中和扫描完成的任务",
+      icon: <PlayArrowRounded />,
+      color: "info.main",
+    },
+    {
+      label: "已迁移数据",
+      value: formatBytes(data?.totalPutObjectSize),
+      detail: `${formatNumber(data?.totalPutObjectCount)} 个对象已传输`,
+      icon: <CheckCircleOutlineRounded />,
+      color: "success.main",
+    },
+    {
+      label: "失败对象",
+      value: formatNumber(data?.totalFailedObjectCount),
+      detail: `${formatNumber((data?.failedTasks || 0) + (data?.partialFailedTasks || 0))} 个失败或部分失败任务`,
+      icon: <WarningAmberRounded />,
+      color: "warning.main",
+    },
+  ];
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: {
+          xs: "repeat(2, minmax(0, 1fr))",
+          lg: "repeat(4, minmax(0, 1fr))",
+        },
+        gap: { xs: 1.5, md: 2 },
+        mb: 3,
+      }}
+    >
+      {cards.map((card) => (
+        <Paper
+          variant="outlined"
+          key={card.label}
+          sx={{ p: { xs: 2, md: 2.5 }, borderRadius: "18px" }}
+        >
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+          >
+            <Typography color="text.secondary" variant="body2">
+              {card.label}
+            </Typography>
+            <Box
+              sx={{
+                color: card.color,
+                display: "flex",
+                "& svg": { fontSize: 21 },
+              }}
+            >
+              {card.icon}
+            </Box>
+          </Stack>
+          <Typography
+            sx={{
+              fontSize: { xs: 26, md: 32 },
+              fontWeight: 500,
+              letterSpacing: "-.8px",
+              my: 1.5,
+            }}
+          >
+            {data ? card.value : "—"}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {data ? card.detail : "等待服务响应"}
+          </Typography>
+        </Paper>
+      ))}
+    </Box>
+  );
+}
+function TaskDetail({
+  task,
+  taskId,
+  loading,
+  busy,
+  onAction,
+  relatedTaskIds,
+  onSelectTask,
+  onRefresh,
+  operationError,
+  creationWarning,
+  childId: requestedChildId,
+  childNode: requestedChildNode,
+  onSelectChild,
+  loadError,
+  loadPartial,
+  onClose,
+}: {
+  task: Task | undefined;
+  taskId: number | undefined;
+  loading: boolean;
+  busy: boolean;
+  onAction: (task: Task, operation: string) => void;
+  relatedTaskIds: number[];
+  onSelectTask: (id: number) => void;
+  onRefresh: () => void;
+  operationError: string;
+  creationWarning?: string;
+  childId?: string;
+  childNode?: string;
+  onSelectChild: (id?: string, node?: string) => void;
+  loadError?: string | null;
+  loadPartial: boolean;
+  onClose: () => void;
+}) {
+  const notify = useNotify();
+  const [exporting, setExporting] = useState(false);
+  const local = task && isLocal(task);
+  const { refreshMs } = useRefreshPreference();
+  const detail = useApi(
+    local
+      ? `/api/master/local-transfers/status?taskId=${task.taskIndex}`
+      : null,
+    refreshMs,
+  );
+  const extended = detail.data?.data?.tasks?.find(
+    (t: any) => t.taskIndex === task?.taskIndex,
+  );
+  const lastView = useRef<
+    | {
+        taskId: number;
+        childId?: string;
+        childNode?: string;
+        current: Task | undefined;
+        shards: any[];
+        shardsLoading: boolean;
+        shardsComplete: boolean;
+        loading: boolean;
+        relatedTaskIds: number[];
+        operationError: string;
+        creationWarning?: string;
+        error: string | null;
+        partial: boolean;
+      }
+    | undefined
+  >(undefined);
+  if (taskId) {
+    lastView.current = {
+      taskId,
+      childId: requestedChildId,
+      childNode: requestedChildNode,
+      current: task ? { ...extended, ...task } : undefined,
+      shards: task?.ossTaskGroup
+        ? task.shards || []
+        : extended
+          ? detail.data?.data?.shards || []
+          : [],
+      shardsLoading:
+        !!local &&
+        !extended &&
+        (detail.loading || (!detail.data && !detail.error)),
+      shardsComplete: task?.ossTaskGroup
+        ? !groupIncomplete(task)
+        : !!extended && !detail.error && !detail.data?.data?.partial,
+      loading,
+      relatedTaskIds,
+      operationError,
+      creationWarning,
+      error: local
+        ? lastView.current?.taskId === taskId
+          ? detail.error
+          : null
+        : loadError || null,
+      partial:
+        loadPartial ||
+        (task?.ossTaskGroup
+          ? !!task.partial
+          : !!extended && !!detail.data?.data?.partial),
+    };
+  }
+  // Polling follows the live task above; only presentation survives the exit.
+  const view = lastView.current;
+  const current = view?.current;
+  const childId = view?.childId;
+  const childNode = view?.childNode;
+  const sourceObjectKey =
+    current?.objectKey || current?.sourceEndpoint?.objectKey;
+  const sourcePrefix =
+    current?.prefix ||
+    (current?.sourceEndpoint?.prefixFilterEnabled === true
+      ? current.sourceEndpoint.prefix
+      : current?.keyMapping?.mode === "REPLACE_PREFIX"
+        ? current.keyMapping.sourcePrefix
+        : undefined);
+  const shards = numberSubtasks(
+    (view?.shards || []).filter(
+      (shard) =>
+        shard.taskIndex !== current?.taskIndex || shard.shardId !== "discovery",
+    ),
+    current?.childTaskIds,
+  );
+  const paperRef = useRef<HTMLDivElement>(null);
+  const parentScroll = useRef(0);
+  const previousScreen = useRef({ taskId, childId, childNode });
+  const selectedIdentity = useRef<{ key: string; identity?: string }>({
+    key: "",
+  });
+  const selectionKey = JSON.stringify([view?.taskId, childId, childNode]);
+  if (selectedIdentity.current.key !== selectionKey)
+    selectedIdentity.current = { key: selectionKey };
+  const matches = shards.filter(
+    (shard: Task) =>
+      childId === `${current?.taskIndex}-${shard.subtaskNumber}` &&
+      (!childNode || subtaskNode(shard) === childNode),
+  );
+  const selectedChild = selectedIdentity.current.identity
+    ? matches.find(
+        (shard: Task) =>
+          subtaskIdentity(shard) === selectedIdentity.current.identity,
+      )
+    : matches.length === 1
+      ? matches[0]
+      : undefined;
+  if (selectedChild)
+    selectedIdentity.current.identity = subtaskIdentity(selectedChild);
+  useLayoutEffect(() => {
+    if (!taskId) return;
+    const paper = paperRef.current;
+    const previous = previousScreen.current;
+    if (paper) {
+      if (previous.taskId !== taskId) parentScroll.current = 0;
+      if (childId) {
+        paper.scrollTop = 0;
+        paper
+          .querySelector<HTMLElement>("[data-subtask-heading]")
+          ?.focus({ preventScroll: true });
+      } else if (previous.childId) {
+        paper.scrollTop = parentScroll.current;
+        Array.from(paper.querySelectorAll<HTMLButtonElement>("[data-child-id]"))
+          .find(
+            (button) =>
+              button.dataset.childId === previous.childId &&
+              (!previous.childNode ||
+                button.dataset.childNode === previous.childNode),
+          )
+          ?.focus({ preventScroll: true });
+      }
+    }
+    previousScreen.current = { taskId, childId, childNode };
+  }, [taskId, childId, childNode]);
+  const exportReport = async () => {
+    if (!current || !reportAvailable(current)) return;
+    const taskId = current.taskIndex;
+    setExporting(true);
+    try {
+      await downloadTaskReport(taskId, (message) =>
+        notify(`任务 #${taskId}：${message}`, "error"),
+      );
+      notify("报告下载已请求，请查看浏览器下载列表。", "info");
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "报告下载失败，请重试。",
+        "error",
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
+  return (
+    <Drawer
+      anchor="right"
+      open={!!taskId}
+      onClose={onClose}
+      slotProps={{
+        paper: {
+          ref: paperRef,
+          onScroll: (event: UIEvent<HTMLDivElement>) => {
+            if (!childId) parentScroll.current = event.currentTarget.scrollTop;
+          },
+        },
+        transition: {
+          onExited: () => {
+            lastView.current = undefined;
+          },
+        },
+      }}
+      sx={{
+        "& .MuiDrawer-paper": {
+          width: { xs: "100%", sm: 560 },
+          p: { xs: 2.5, sm: 3.5 },
+        },
+      }}
+    >
+      {childId && (
+        <SubtaskDetails
+          childId={childId}
+          task={selectedChild}
+          direction={selectedChild ? directionLabel(selectedChild as Task) : ""}
+          source={
+            selectedChild ? subtaskEndpoint(selectedChild as Task, true) : ""
+          }
+          destination={
+            selectedChild ? subtaskEndpoint(selectedChild as Task, false) : ""
+          }
+          loading={!!view?.loading || !!view?.shardsLoading}
+          partial={!!view?.partial}
+          error={view?.error}
+          onBack={() => onSelectChild()}
+          onClose={onClose}
+          onRefresh={() => {
+            onRefresh();
+            void detail.refresh();
+          }}
+        />
+      )}
+      {!current && !childId && (
+        <>
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems="center"
+            sx={{ mb: 3 }}
+          >
+            <Typography variant="h5">迁移任务 #{view?.taskId}</Typography>
+            <IconButton onClick={onClose} aria-label="关闭详情">
+              <CloseRounded />
+            </IconButton>
+          </Stack>
+          {view?.loading ? (
+            <LoadingState />
+          ) : (
+            <Alert
+              severity="info"
+              action={
+                <Button onClick={onRefresh} size="small" color="inherit">
+                  刷新
+                </Button>
+              }
+            >
+              当前列表中未找到此任务，请刷新任务状态。
+            </Alert>
+          )}
+        </>
+      )}
+      {current && (
+        <Box sx={{ display: childId ? "none" : "block" }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{ mb: 3 }}
+          >
+            <Box>
+              <Typography variant="overline" color="text.secondary">
+                任务详情
+              </Typography>
+              <Typography variant="h5">
+                迁移任务 #{current.taskIndex}
+              </Typography>
+            </Box>
+            <IconButton onClick={onClose} aria-label="关闭详情">
+              <CloseRounded />
+            </IconButton>
+          </Stack>
+          <Stack direction="row" gap={1} sx={{ mb: 3 }}>
+            <TaskStatus task={current} />
+            <Chip
+              variant="outlined"
+              size="small"
+              label={directionLabel(current)}
+            />
+          </Stack>
+          {!current.ossTaskGroup && (view?.relatedTaskIds.length || 0) > 1 && (
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="caption" color="text.secondary">
+                本次创建的任务
+              </Typography>
+              <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 0.5 }}>
+                {view?.relatedTaskIds.map((id) => (
+                  <Button
+                    key={id}
+                    size="small"
+                    variant={id === taskId ? "contained" : "outlined"}
+                    onClick={() => onSelectTask(id)}
+                  >
+                    #{id}
+                  </Button>
+                ))}
+              </Stack>
+            </Box>
+          )}
+          {(canStopTask(current) ||
+            canResumeTask(current) ||
+            canDeleteTask(current)) && (
+            <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mb: 3 }}>
+              {canStartTask(current) && (
+                <Button
+                  variant="contained"
+                  startIcon={<PlayArrowRounded />}
+                  disabled={busy}
+                  onClick={() => onAction(current, "启动")}
+                >
+                  启动任务
+                </Button>
+              )}
+              {canStopTask(current) && (
+                <Button
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<PauseRounded />}
+                  disabled={busy}
+                  onClick={() => onAction(current, "停止")}
+                >
+                  停止任务
+                </Button>
+              )}
+              {canResumeTask(current) && (
+                <Button
+                  variant="contained"
+                  startIcon={<PlayArrowRounded />}
+                  disabled={busy}
+                  onClick={() => onAction(current, "继续传输")}
+                >
+                  继续传输
+                </Button>
+              )}
+              {canDeleteTask(current) && (
+                <Button
+                  variant="text"
+                  color="error"
+                  startIcon={<DeleteOutlineRounded />}
+                  disabled={busy}
+                  onClick={() => onAction(current, "删除")}
+                >
+                  删除任务
+                </Button>
+              )}
+            </Stack>
+          )}
+          {view?.operationError && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {view.operationError}
+            </Alert>
+          )}
+          <TaskBandwidth
+            completed={current.status === "COMPLETED"}
+            key={current.taskIndex}
+            taskId={current.taskIndex}
+            active={!!taskId}
+            refreshMs={refreshMs}
+          />
+          {view?.creationWarning && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {view.creationWarning}
+            </Alert>
+          )}
+          <ErrorAlert error={view?.error || null} onRetry={detail.refresh} />
+          {view?.partial && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              部分执行节点不可达，当前信息可能不完整。
+            </Alert>
+          )}
+          {current.errorMessage && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {current.errorMessage}
+            </Alert>
+          )}
+          <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
+            <Typography variant="caption" color="text.secondary">
+              来源
+            </Typography>
+            <Typography sx={{ overflowWrap: "anywhere", mt: 0.5 }}>
+              {endpoint(current, true)}
+            </Typography>
+            <EastRounded sx={{ my: 1.5, color: "text.secondary" }} />
+            <Typography
+              variant="caption"
+              display="block"
+              color="text.secondary"
+            >
+              目标
+            </Typography>
+            <Typography sx={{ overflowWrap: "anywhere", mt: 0.5 }}>
+              {endpoint(current, false)}
+            </Typography>
+          </Paper>
+          <Typography variant="h6" sx={{ mb: 2 }}>
+            传输统计
+          </Typography>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 2.5,
+              mb: 3,
+            }}
+          >
+            {[
+              ["已扫描", current.listObjectCount, current.listObjectSize],
+              ["已迁移", current.putObjectCount, current.putObjectSize],
+              ["已跳过", current.skippedObjectCount, current.skippedObjectSize],
+              ["失败对象", current.failedObjectCount, current.failedObjectSize],
+            ].map(([label, count, bytes]) => (
+              <Box key={label}>
+                <Typography variant="caption" color="text.secondary">
+                  {label}
+                </Typography>
+                <Typography sx={{ fontWeight: 500 }}>
+                  {formatNumber(count)}{" "}
+                  <Box
+                    component="span"
+                    sx={{ fontSize: 12, color: "text.secondary" }}
+                  >
+                    / {formatBytes(bytes)}
+                  </Box>
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+          <Box sx={{ mb: 3 }}>
+            <Button
+              variant="outlined"
+              startIcon={
+                exporting ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : (
+                  <DownloadRounded />
+                )
+              }
+              disabled={exporting || !reportAvailable(current)}
+              onClick={() => void exportReport()}
+            >
+              {exporting ? "正在准备下载" : "导出任务报告"}
+            </Button>
+            {!reportAvailable(current) && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 1 }}
+              >
+                {current.ossTaskGroup && current.partial
+                  ? "节点状态恢复后可导出报告。"
+                  : "停止或结束后可导出报告。"}
+              </Typography>
+            )}
+          </Box>
+          {(current.failedObjectCount > 0 ||
+            ["FAILED", "PARTIAL_FAILED"].includes(current.status)) && (
+            <Button
+              component={RouterLink}
+              to={`/exceptions?taskId=${current.taskIndex}&type=${local ? "local" : "oss"}`}
+              onClick={onClose}
+              color="warning"
+              variant="outlined"
+              endIcon={<ArrowForwardRounded />}
+              sx={{ mb: 3 }}
+            >
+              {current.failedObjectCount > 0 ? "查看失败对象" : "查看异常记录"}
+            </Button>
+          )}
+          <Divider sx={{ mb: 3 }} />
+          <Typography variant="h6" sx={{ mb: 2 }}>
+            执行信息
+          </Typography>
+          <Stack gap={2}>
+            {[
+              ["执行节点", workers(current)],
+              [
+                "节点分发方式",
+                current.distributionMode === "balanced"
+                  ? "均衡分发"
+                  : "亲和分发",
+              ],
+              ["共享存储 ID", current.storageId],
+              [
+                "当前速度",
+                current.currentSpeedBytesPerSecond == null
+                  ? null
+                  : `${formatBytes(current.currentSpeedBytesPerSecond)}/s`,
+              ],
+              [
+                "平均速度",
+                current.averageSpeedBytesPerSecond == null
+                  ? null
+                  : `${formatBytes(current.averageSpeedBytesPerSecond)}/s`,
+              ],
+              ["创建时间", current.createTime],
+              ["开始时间", current.startTime],
+              ["结束时间", current.endTime],
+              ["耗时", current.duration],
+              ["起始 Key", current.startKey],
+              ["结束 Key", current.endKey],
+              ["源对象 Key", !local ? sourceObjectKey : null],
+              ["源前缀", !local ? sourcePrefix : null],
+              [
+                "目标命名",
+                !local
+                  ? keyMappingLabels[
+                      (current.keyMapping?.mode ||
+                        "PRESERVE") as OssKeyMappingMode
+                    ] || current.keyMapping?.mode
+                  : null,
+              ],
+              [
+                "目标前缀",
+                !local && current.keyMapping?.targetPrefix != null
+                  ? JSON.stringify(current.keyMapping.targetPrefix)
+                  : null,
+              ],
+              ["目标对象 Key", !local ? current.keyMapping?.targetKey : null],
+              [
+                sourceObjectKey ? "Key 映射" : "Key 示例",
+                !local && current.keyMapping
+                  ? mappingExample(
+                      sourceObjectKey
+                        ? "object"
+                        : sourcePrefix
+                          ? "prefix"
+                          : "all",
+                      sourceObjectKey || sourcePrefix || "",
+                      current.keyMapping,
+                    )
+                  : null,
+              ],
+              ["修改时间晚于", current.dateAfter],
+              ["修改时间早于", current.dateBefore],
+              [
+                "冲突策略",
+                current.conflictPolicy ||
+                  (current.overwrite ? "OVERWRITE" : "SKIP"),
+              ],
+            ]
+              .filter(([, value]) => value != null && value !== "")
+              .map(([label, value]) => (
+                <Box
+                  key={label}
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "105px minmax(0, 1fr)",
+                    gap: 2,
+                  }}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    {label}
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}
+                  >
+                    {typeof value === "number" && String(label).includes("时间")
+                      ? new Date(value).toLocaleString("zh-CN")
+                      : String(value)}
+                  </Typography>
+                </Box>
+              ))}
+          </Stack>
+          {(local || current.ossTaskGroup) && (
+            <>
+              <Divider sx={{ my: 3 }} />
+              <Typography variant="h6" sx={{ mb: 2 }}>
+                子任务{" "}
+                {!view?.shardsLoading &&
+                  (shards.length > 0 || view?.shardsComplete) && (
+                    <Typography
+                      component="span"
+                      variant="body2"
+                      color="text.secondary"
+                    >
+                      ({shards.length})
+                    </Typography>
+                  )}
+              </Typography>
+              {view?.shardsLoading ? (
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  gap={1}
+                  role="status"
+                >
+                  <CircularProgress size={16} />
+                  <Typography variant="body2" color="text.secondary">
+                    正在加载子任务…
+                  </Typography>
+                </Stack>
+              ) : shards.length === 0 ? (
+                view?.shardsComplete ? (
+                  <Typography variant="body2" color="text.secondary">
+                    尚未生成子任务
+                  </Typography>
+                ) : null
+              ) : (
+                <Stack gap={1.5}>
+                  {shards.map((shard: any, index: number) => (
+                    <Paper
+                      variant="outlined"
+                      key={`${shard.shardId || shard.taskIndex}-${index}`}
+                      sx={{ overflow: "hidden" }}
+                    >
+                      <ButtonBase
+                        aria-label={`查看子任务 ${current.taskIndex}-${shard.subtaskNumber}`}
+                        data-child-id={`${current.taskIndex}-${shard.subtaskNumber}`}
+                        data-child-node={subtaskNode(shard)}
+                        onClick={() =>
+                          onSelectChild(
+                            `${current.taskIndex}-${shard.subtaskNumber}`,
+                            subtaskNode(shard),
+                          )
+                        }
+                        sx={{
+                          p: 2,
+                          width: "100%",
+                          textAlign: "left",
+                          display: "flex",
+                          gap: 1.5,
+                          justifyContent: "space-between",
+                          "&:hover": { bgcolor: "action.hover" },
+                          "&.Mui-focusVisible": {
+                            bgcolor: "action.focus",
+                            outline: "2px solid",
+                            outlineColor: "primary.main",
+                            outlineOffset: -2,
+                          },
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Stack
+                            direction="row"
+                            justifyContent="space-between"
+                            gap={1}
+                          >
+                            <Typography
+                              variant="body2"
+                              sx={{ overflowWrap: "anywhere" }}
+                            >
+                              子任务 #{current.taskIndex}-{shard.subtaskNumber}{" "}
+                              · {shard.executionNodeIp || shard.workerNode}
+                            </Typography>
+                            <StatusChip status={shard.status} />
+                          </Stack>
+                          <Typography variant="caption" color="text.secondary">
+                            已迁移 {formatNumber(shard.putObjectCount)} · 失败{" "}
+                            {formatNumber(shard.failedObjectCount)}
+                          </Typography>
+                        </Box>
+                        <ArrowForwardRounded
+                          sx={{ fontSize: 18, color: "text.secondary" }}
+                        />
+                      </ButtonBase>
+                    </Paper>
+                  ))}
+                </Stack>
+              )}
+            </>
+          )}
+        </Box>
+      )}
+    </Drawer>
+  );
+}
+export default function TasksPage({
+  overview = false,
+}: {
+  overview?: boolean;
+}) {
+  const notify = useNotify();
+  const { refreshMs, refreshSeconds } = useRefreshPreference();
+  const { data, loading, error, refresh } = useApi(
+    "/api/master/status",
+    refreshMs,
+  );
+  const health = useWorkerStatus();
+  const nodeHealth = useApi("/api/master/local-nodes", refreshMs);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
+  const [direction, setDirection] = useState("");
+  const [worker, setWorker] = useState("");
+  const [selected, setSelected] = useState<number[]>([]);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const childId = searchParams.get("childTaskId") || undefined;
+  const childNode = searchParams.get("childNode") || undefined;
+  const setChildId = (id?: string, node?: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (id) next.set("childTaskId", id);
+      else next.delete("childTaskId");
+      if (id && node) next.set("childNode", node);
+      else next.delete("childNode");
+      return next;
+    });
+  };
+  const creationId = searchParams.get("creationId");
+  const [pollCreation, setPollCreation] = useState(true);
+  const creation = useApi(
+    creationId
+      ? `/api/master/task-creations/${encodeURIComponent(creationId)}`
+      : null,
+    pollCreation ? 1000 : 0,
+  );
+  const activeCreation =
+    creation.data?.creation?.id === creationId
+      ? creation.data.creation
+      : undefined;
+  const publicTaskId = Number(activeCreation?.publicTaskId);
+  const creationTaskIds: number[] =
+    Number.isSafeInteger(publicTaskId) && publicTaskId > 0
+      ? [publicTaskId]
+      : Array.isArray(activeCreation?.taskIds)
+        ? activeCreation.taskIds
+            .map(Number)
+            .filter((id: number) => Number.isSafeInteger(id) && id > 0)
+        : [];
+  useEffect(() => {
+    setPollCreation(true);
+  }, [creationId]);
+  useEffect(() => {
+    if (["COMPLETED", "FAILED"].includes(activeCreation?.status))
+      setPollCreation(false);
+  }, [activeCreation]);
+  const requestedId = Number(searchParams.get("taskId"));
+  const linkedTask =
+    data?.tasks?.find((task: Task) => task.taskIndex === requestedId) ||
+    data?.tasks?.find(
+      (task: Task) =>
+        task.ossTaskGroup && task.childTaskIds?.includes(requestedId),
+    );
+  const detailId =
+    Number.isSafeInteger(requestedId) && requestedId > 0
+      ? (linkedTask?.taskIndex ?? requestedId)
+      : undefined;
+  useEffect(() => {
+    if (detailId === undefined || detailId === requestedId) return;
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.set("taskId", String(detailId));
+        return next;
+      },
+      { replace: true },
+    );
+  }, [detailId, requestedId, setSearchParams]);
+  const setDetailId = (id: number | undefined) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("childTaskId");
+      next.delete("childNode");
+      if (id === undefined) {
+        next.delete("taskId");
+        next.delete("creationId");
+      } else next.set("taskId", String(id));
+      return next;
+    });
+  };
+  useEffect(() => {
+    if (creationId && !detailId && creationTaskIds.length) {
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("taskId", String(creationTaskIds[0]));
+          return next;
+        },
+        { replace: true },
+      );
+      void refresh();
+    }
+  }, [creationId, detailId, creationTaskIds.join(",")]);
+  const [operation, setOperation] = useState("");
+  const [operationIds, setOperationIds] = useState<number[] | null>(null);
+  const [operationOpen, setOperationOpen] = useState(false);
+  const [confirmationTasks, setConfirmationTasks] = useState<Task[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [actionResult, setActionResult] = useState("");
+  const tasks: Task[] = data?.tasks || [];
+  const filtered = useMemo(
+    () =>
+      tasks
+        .filter(
+          (t) =>
+            (!status || t.status === status) &&
+            (!direction || (t.direction || "OSS_TO_OSS") === direction) &&
+            (!worker || workers(t).includes(worker)) &&
+            (!query ||
+              `${t.taskIndex} ${endpoint(t, true)} ${endpoint(t, false)} ${workers(t)} ${t.storageId || ""}`
+                .toLowerCase()
+                .includes(query.toLowerCase())),
+        )
+        .sort((a, b) => b.taskIndex - a.taskIndex),
+    [data, query, status, direction, worker],
+  );
+  useEffect(() => {
+    setPage(0);
+    setSelected([]);
+  }, [query, status, direction, worker]);
+  useEffect(() => {
+    if (data) {
+      setSelected((s) =>
+        s.filter((id) => data.tasks.some((t: Task) => t.taskIndex === id)),
+      );
+      setPage((p) =>
+        Math.min(p, Math.max(0, Math.ceil(filtered.length / pageSize) - 1)),
+      );
+    }
+  }, [data, filtered.length, pageSize]);
+  const shown = overview
+    ? filtered.slice(0, 5)
+    : filtered.slice(page * pageSize, (page + 1) * pageSize);
+  const chosen = tasks.filter((t) => selected.includes(t.taskIndex));
+  const actionTasks =
+    operationIds === null
+      ? chosen
+      : tasks.filter((t) => operationIds.includes(t.taskIndex));
+  const openOperation = (next: string, ids: number[] | null) => {
+    setOperationIds(ids);
+    setConfirmationTasks(
+      ids === null
+        ? chosen
+        : tasks.filter((task) => ids.includes(task.taskIndex)),
+    );
+    setOperation(next);
+    setOperationOpen(true);
+  };
+  const canStart = chosen.length > 0 && chosen.every(canStartTask);
+  const canStop = chosen.length > 0 && chosen.every(canStopTask);
+  const canResume = chosen.length > 0 && chosen.every(canResumeTask);
+  const canDelete = chosen.length > 0 && chosen.every(canDeleteTask);
+  const offline = Object.values(health.data?.workers || {}).filter(
+    (w: any) => w.success === false || w.error || w.reachable === false,
+  );
+  const missingNodes = (nodeHealth.data?.data?.nodes || []).some(
+    (n: any) =>
+      !n.reachable ||
+      (health.data && !health.data.workers?.[n.executionNodeIp]),
+  );
+  const toggle = (id: number) =>
+    setSelected((s) =>
+      s.includes(id) ? s.filter((i) => i !== id) : [...s, id],
+    );
+  async function execute() {
+    if (!actionTasks.length) return;
+    setBusy(true);
+    setActionResult("");
+    const ids = (local: boolean) =>
+      actionTasks.filter((t) => isLocal(t) === local).map((t) => t.taskIndex);
+    const requests: [string, number[]][] =
+      operation === "启动"
+        ? [["/start", ids(false)]]
+        : operation === "停止"
+          ? [
+              ["/stop", ids(false)],
+              ["/local-transfers/stop", ids(true)],
+            ]
+          : operation === "继续传输"
+            ? [
+                ["/resume", ids(false)],
+                ["/local-transfers/resume", ids(true)],
+              ]
+            : [["/clear", actionTasks.map((task) => task.taskIndex)]];
+    const issues: string[] = [];
+    const summaries: string[] = [];
+    for (const [path, taskIds] of requests) {
+      if (!taskIds.length) continue;
+      try {
+        const result = await api(`/api/master${path}`, {
+          method: "POST",
+          body: { taskIds },
+        });
+        const detail = result.data || result;
+        const unavailable = [
+          ...new Set([
+            ...(detail.unreachableWorkers || []),
+            ...(detail.failedWorkers || []),
+          ]),
+        ];
+        const operationSummary = Number.isFinite(detail.accepted)
+          ? `${path.startsWith("/local-transfers/") ? "本地执行项" : "执行项"}已受理 ${detail.accepted}，忽略 ${detail.ignored ?? 0}，失败 ${detail.failed ?? 0}${unavailable.length ? `；未响应节点：${unavailable.join("、")}` : ""}`
+          : "";
+        if (
+          detail.partial ||
+          detail.failed?.length ||
+          Number(detail.failed) > 0 ||
+          unavailable.length
+        )
+          issues.push(
+            operationSummary || detail.message || JSON.stringify(detail),
+          );
+        else if (operationSummary) summaries.push(operationSummary);
+        const workerResults = result.details
+          ? Array.isArray(result.details)
+            ? result.details
+            : Object.values(result.details)
+          : [];
+        for (const item of workerResults) {
+          if (
+            typeof item === "object" &&
+            item &&
+            ((item as any).success === false || (item as any).error)
+          )
+            issues.push((item as any).message || JSON.stringify(item));
+          if (
+            typeof item === "string" &&
+            /失败|错误|拒绝|异常|不支持/.test(item)
+          )
+            issues.push(item);
+        }
+        if (/失败[:：]\s*[1-9]/.test(result.message || ""))
+          issues.push(result.message);
+      } catch (e) {
+        issues.push((e as Error).message);
+      }
+    }
+    setOperationOpen(false);
+    if (
+      !issues.length &&
+      operation === "删除" &&
+      actionTasks.some((task) => task.taskIndex === detailId)
+    )
+      setDetailId(undefined);
+    await refresh();
+    setBusy(false);
+    if (issues.length) {
+      setActionResult(`部分请求未完成：${issues.join("；")}`);
+      notify("部分操作未完成，详见列表上方的结果。", "warning");
+    } else {
+      notify(
+        `${operation}请求已提交${summaries.length ? `，${summaries.join("；")}` : ""}。请以刷新后的任务状态为准。`,
+        "info",
+      );
+      setSelected([]);
+    }
+  }
+  const rowRoute = (task: Task) => (
+    <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+      <Typography
+        variant="body2"
+        sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+      >
+        {endpoint(task, true)}
+      </Typography>
+      <Stack direction="row" gap={0.7} alignItems="center">
+        <EastRounded sx={{ fontSize: 14, color: "text.secondary" }} />
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ overflowWrap: "anywhere" }}
+        >
+          {endpoint(task, false)}
+        </Typography>
+      </Stack>
+    </Stack>
+  );
+  const rowProgress = (task: Task) => {
+    const scanned = Number(task.listObjectCount || 0);
+    const handled =
+      Number(task.putObjectCount || 0) + Number(task.skippedObjectCount || 0);
+    const countsCurrent = handled <= scanned;
+    const complete = scanFinished(task) && countsCurrent;
+    const scanning = ["RUNNING", "LIST_DONE"].includes(task.status);
+    return (
+      <Box sx={{ minWidth: 120 }}>
+        <Stack direction="row" justifyContent="space-between" gap={1}>
+          <Typography variant="caption" color="text.secondary">
+            {countsCurrent
+              ? `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`
+              : `${formatNumber(task.putObjectCount)} 已迁移`}
+          </Typography>
+          <Typography variant="caption">
+            {complete
+              ? `${Math.floor(progress(task))}%`
+              : !countsCurrent
+                ? "统计更新中"
+                : task.status === "PENDING"
+                  ? "待扫描"
+                  : scanning
+                    ? "扫描中"
+                    : "扫描未完成"}
+          </Typography>
+        </Stack>
+        <LinearProgress
+          variant={!complete && scanning ? "indeterminate" : "determinate"}
+          value={complete ? progress(task) : 0}
+          color={
+            task.failedObjectCount > 0
+              ? "warning"
+              : task.status === "COMPLETED"
+                ? "success"
+                : "primary"
+          }
+          sx={{ height: 4, borderRadius: 2, mt: 0.7, bgcolor: "action.hover" }}
+        />
+      </Box>
+    );
+  };
+  return (
+    <>
+      <PageHeader
+        title={overview ? "迁移概览" : "迁移任务"}
+        description={
+          overview
+            ? "任务统计与近期传输状态。"
+            : "查看传输进度，启动、停止或继续任务。"
+        }
+        action={
+          <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+            <RefreshControls
+              refreshLabel="刷新任务"
+              onRefresh={() =>
+                Promise.all([refresh(), health.refresh(), nodeHealth.refresh()])
+              }
+              loading={loading || health.loading || nodeHealth.loading}
+            />
+            <Button
+              component={RouterLink}
+              to="/create"
+              variant="contained"
+              startIcon={<AddRounded />}
+            >
+              创建迁移
+            </Button>
+          </Stack>
+        }
+      />
+      <ErrorAlert error={error} onRetry={refresh} />
+      {creationId && !detailId && (
+        <Box sx={{ mb: 2 }}>
+          <ErrorAlert error={creation.error} onRetry={creation.refresh} />
+          {!creation.error && (
+            <Alert
+              severity={activeCreation?.status === "FAILED" ? "error" : "info"}
+            >
+              {activeCreation?.status === "FAILED"
+                ? activeCreation.message ||
+                  "任务生成失败，请检查存储连接和节点状态。"
+                : activeCreation?.status === "COMPLETED" &&
+                    !creation.loading &&
+                    creationTaskIds.length === 0
+                  ? "本次创建未生成可执行任务。"
+                  : creationTaskIds.length > 0
+                    ? "正在打开任务详情。"
+                    : "正在生成任务，完成后将自动打开详情。"}
+            </Alert>
+          )}
+        </Box>
+      )}
+      {(health.error ||
+        nodeHealth.error ||
+        offline.length > 0 ||
+        missingNodes) && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          部分节点状态不可用，任务统计可能不完整。
+          <Button component={RouterLink} to="/nodes" size="small">
+            查看节点
+          </Button>
+        </Alert>
+      )}
+      <Metrics data={data} />
+      {overview && (
+        <Paper
+          variant="outlined"
+          sx={{
+            p: { xs: 2.5, md: 3 },
+            mb: 3,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 3,
+          }}
+        >
+          <Stack direction="row" alignItems="center" gap={2}>
+            <Avatar
+              sx={{
+                width: 48,
+                height: 48,
+                bgcolor: "action.selected",
+                color: "primary.main",
+                borderRadius: "16px",
+              }}
+            >
+              <StorageRounded />
+            </Avatar>
+            <Box>
+              <Typography variant="h6">存储连接</Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 0.5 }}
+              >
+                管理对象存储的访问地址和凭证。
+              </Typography>
+            </Box>
+          </Stack>
+          <Button
+            component={RouterLink}
+            to="/storage"
+            endIcon={<ArrowForwardRounded />}
+          >
+            管理存储连接
+          </Button>
+        </Paper>
+      )}
+      {actionResult && (
+        <Alert
+          severity="warning"
+          onClose={() => setActionResult("")}
+          sx={{ mb: 2 }}
+        >
+          {actionResult}
+        </Alert>
+      )}
+      <Paper
+        variant="outlined"
+        sx={{ overflow: "hidden", borderRadius: "20px" }}
+      >
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}
+        >
+          <Stack direction="row" alignItems="center" gap={1.5}>
+            <Typography variant="h6">
+              {overview ? "最近任务" : "全部任务"}
+            </Typography>
+            <Chip
+              size="small"
+              label={formatNumber(filtered.length)}
+              sx={{ height: 22, fontSize: 12 }}
+            />
+          </Stack>
+          {overview && (
+            <Button
+              component={RouterLink}
+              to="/tasks"
+              size="small"
+              endIcon={<ArrowForwardRounded />}
+            >
+              查看全部
+            </Button>
+          )}
+        </Stack>
+        {!overview && (
+          <>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr 1fr",
+                  sm: "repeat(2, minmax(0, 1fr))",
+                  lg: "minmax(200px, 1.6fr) 1fr 1fr 1fr",
+                },
+                gap: 1.5,
+                px: { xs: 2, md: 3 },
+                pb: 2.5,
+              }}
+            >
+              <TextField
+                placeholder="搜索任务、存储桶或路径"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}
+                slotProps={{
+                  htmlInput: { "aria-label": "搜索任务" },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchRounded fontSize="small" />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+              <TextField
+                select
+                label="任务状态"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+              >
+                <MenuItem value="">全部状态</MenuItem>
+                {Object.entries(statusLabels).map(([key, label]) => (
+                  <MenuItem key={key} value={key}>
+                    {label}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                select
+                label="传输方向"
+                value={direction}
+                onChange={(e) => setDirection(e.target.value)}
+              >
+                <MenuItem value="">全部方向</MenuItem>
+                <MenuItem value="OSS_TO_OSS">OSS → OSS</MenuItem>
+                <MenuItem value="OSS_TO_LOCAL">OSS → 本地</MenuItem>
+                <MenuItem value="LOCAL_TO_OSS">本地 → OSS</MenuItem>
+              </TextField>
+              <TextField
+                label="执行节点"
+                placeholder="IP 地址"
+                value={worker}
+                onChange={(e) => setWorker(e.target.value)}
+                sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}
+              />
+            </Box>
+            {selected.length > 0 && (
+              <Stack
+                direction="row"
+                gap={1}
+                flexWrap="wrap"
+                alignItems="center"
+                sx={{ p: 2, bgcolor: "action.selected" }}
+              >
+                <Typography variant="body2" sx={{ mr: 1 }}>
+                  已选 {selected.length} 项
+                </Typography>
+                {filtered.some(
+                  (task) => !selected.includes(task.taskIndex),
+                ) && (
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      setSelected(filtered.map((task) => task.taskIndex))
+                    }
+                  >
+                    选择全部 {filtered.length} 个结果
+                  </Button>
+                )}
+                {[
+                  ["启动", canStart, <PlayArrowRounded />],
+                  ["停止", canStop, <PauseRounded />],
+                  ["继续传输", canResume, <PlayArrowRounded />],
+                  ["删除", canDelete, <DeleteOutlineRounded />],
+                ].map(([label, enabled, icon]) => (
+                  <Tooltip
+                    key={String(label)}
+                    title={
+                      enabled
+                        ? `${label}选中任务`
+                        : label === "启动"
+                          ? "请选择待启动的 OSS→OSS 任务"
+                          : label === "停止"
+                            ? "请选择待启动或运行中的任务"
+                            : label === "继续传输"
+                              ? "请选择已停止或失败的任务"
+                              : "请选择未在运行的任务"
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        startIcon={icon as any}
+                        disabled={!enabled || busy}
+                        onClick={() => openOperation(String(label), null)}
+                      >
+                        {String(label)}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ))}
+                <Button
+                  size="small"
+                  startIcon={<DownloadRounded />}
+                  onClick={() =>
+                    saveFile(
+                      JSON.stringify(chosen, null, 2),
+                      "transfer-tasks.json",
+                    )
+                  }
+                >
+                  导出 JSON
+                </Button>
+                <Button size="small" onClick={() => setSelected([])}>
+                  取消选择
+                </Button>
+              </Stack>
+            )}
+          </>
+        )}
+        {loading && !data ? (
+          <LoadingState />
+        ) : !shown.length ? (
+          <EmptyState
+            title={
+              query || status || direction || worker
+                ? "没有匹配的任务"
+                : error
+                  ? "任务加载失败"
+                  : "暂无迁移任务"
+            }
+            description={
+              query || status || direction || worker
+                ? "请调整筛选条件或搜索关键词。"
+                : error
+                  ? "请检查连接后重试。"
+                  : "配置存储连接后创建迁移任务。"
+            }
+            action={
+              !query && !status && !direction && !worker && !error ? (
+                <Button
+                  component={RouterLink}
+                  to="/create"
+                  variant="contained"
+                  startIcon={<AddRounded />}
+                >
+                  创建迁移任务
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <>
+            <TableContainer sx={{ display: { xs: "none", md: "block" } }}>
+              <Table
+                size="small"
+                sx={{ tableLayout: "fixed", minWidth: 1080 }}
+                aria-label="迁移任务列表"
+              >
+                <TableHead>
+                  <TableRow>
+                    {!overview && (
+                      <TableCell padding="checkbox" sx={{ width: 48 }}>
+                        <Checkbox
+                          size="small"
+                          checked={
+                            shown.length > 0 &&
+                            shown.every((t) => selected.includes(t.taskIndex))
+                          }
+                          indeterminate={
+                            shown.some((t) => selected.includes(t.taskIndex)) &&
+                            !shown.every((t) => selected.includes(t.taskIndex))
+                          }
+                          slotProps={{
+                            input: { "aria-label": "选择当前页任务" },
+                          }}
+                          onChange={(_, checked) =>
+                            setSelected((s) =>
+                              checked
+                                ? [
+                                    ...new Set([
+                                      ...s,
+                                      ...shown.map((t) => t.taskIndex),
+                                    ]),
+                                  ]
+                                : s.filter(
+                                    (id) =>
+                                      !shown.some((t) => t.taskIndex === id),
+                                  ),
+                            )
+                          }
+                        />
+                      </TableCell>
+                    )}
+                    <TableCell sx={{ width: 100 }}>任务</TableCell>
+                    <TableCell sx={{ width: "30%" }}>来源 / 目标</TableCell>
+                    <TableCell sx={{ width: "21%" }}>已迁移 / 已扫描</TableCell>
+                    <TableCell sx={{ width: 112 }}>状态</TableCell>
+                    <TableCell sx={{ width: 128 }}>执行节点</TableCell>
+                    <TableCell align="right" sx={{ width: 75 }}>
+                      失败
+                    </TableCell>
+                    <TableCell sx={{ width: 65 }} />
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {shown.map((task) => (
+                    <TableRow
+                      key={task.taskIndex}
+                      hover
+                      selected={selected.includes(task.taskIndex)}
+                    >
+                      {!overview && (
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            size="small"
+                            checked={selected.includes(task.taskIndex)}
+                            onChange={() => toggle(task.taskIndex)}
+                            slotProps={{
+                              input: {
+                                "aria-label": `选择任务 ${task.taskIndex}`,
+                              },
+                            }}
+                          />
+                        </TableCell>
+                      )}
+                      <TableCell>
+                        <Button
+                          size="small"
+                          onClick={() => setDetailId(task.taskIndex)}
+                          sx={{ minWidth: 0, px: 0 }}
+                        >
+                          #{task.taskIndex}
+                        </Button>
+                        <Typography
+                          variant="caption"
+                          display="block"
+                          color="text.secondary"
+                          sx={{ fontSize: 10, whiteSpace: "nowrap" }}
+                        >
+                          {directionLabel(task)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>{rowRoute(task)}</TableCell>
+                      <TableCell>{rowProgress(task)}</TableCell>
+                      <TableCell>
+                        <TaskStatus task={task} />
+                      </TableCell>
+                      <TableCell>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            overflowWrap: "anywhere",
+                            fontFamily: "monospace",
+                          }}
+                        >
+                          {workers(task)}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          display="block"
+                          color="text.secondary"
+                        >
+                          {task.duration || "—"}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        {task.failedObjectCount > 0 ? (
+                          <Button
+                            size="small"
+                            color="warning"
+                            component={RouterLink}
+                            to={`/exceptions?taskId=${task.taskIndex}&type=${isLocal(task) ? "local" : "oss"}`}
+                            sx={{ px: 0, minWidth: 0 }}
+                          >
+                            {formatNumber(task.failedObjectCount)}
+                          </Button>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            0
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip title="查看详情">
+                          <IconButton
+                            size="small"
+                            aria-label={`查看任务 ${task.taskIndex}`}
+                            onClick={() => setDetailId(task.taskIndex)}
+                          >
+                            <ArrowForwardRounded sx={{ fontSize: 18 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            <Stack
+              sx={{ display: { xs: "flex", md: "none" } }}
+              divider={<Divider />}
+            >
+              {shown.map((task) => (
+                <Box key={task.taskIndex} sx={{ p: 2 }}>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    sx={{ mb: 1.5 }}
+                  >
+                    <Stack direction="row" alignItems="center">
+                      {!overview && (
+                        <Checkbox
+                          checked={selected.includes(task.taskIndex)}
+                          onChange={() => toggle(task.taskIndex)}
+                          slotProps={{
+                            input: {
+                              "aria-label": `选择任务 ${task.taskIndex}`,
+                            },
+                          }}
+                          size="small"
+                          sx={{ ml: -1 }}
+                        />
+                      )}
+                      <Button
+                        size="small"
+                        onClick={() => setDetailId(task.taskIndex)}
+                      >
+                        #{task.taskIndex}
+                      </Button>
+                      <Typography variant="caption" color="text.secondary">
+                        {directionLabel(task)}
+                      </Typography>
+                    </Stack>
+                    <TaskStatus task={task} />
+                  </Stack>
+                  {rowRoute(task)}
+                  <Box sx={{ my: 2 }}>{rowProgress(task)}</Box>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      {workers(task)} · {task.duration || "—"}
+                    </Typography>
+                    <Button
+                      size="small"
+                      onClick={() => setDetailId(task.taskIndex)}
+                    >
+                      查看详情
+                    </Button>
+                  </Stack>
+                </Box>
+              ))}
+            </Stack>
+          </>
+        )}
+        {!overview && filtered.length > 0 && (
+          <TablePagination
+            component="div"
+            count={filtered.length}
+            page={page}
+            onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={pageSize}
+            onRowsPerPageChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(0);
+            }}
+            rowsPerPageOptions={[10, 25, 50]}
+            labelRowsPerPage="每页"
+            labelDisplayedRows={({ from, to, count }) =>
+              `${from}–${to} / ${count}`
+            }
+            getItemAriaLabel={(type) => (type === "next" ? "下一页" : "上一页")}
+            sx={{
+              borderTop: "1px solid",
+              borderColor: "divider",
+              ".MuiTablePagination-toolbar": {
+                flexWrap: "wrap",
+                justifyContent: "flex-end",
+              },
+            }}
+          />
+        )}
+      </Paper>
+      <Stack
+        direction="row"
+        justifyContent="space-between"
+        sx={{ mt: 2, px: 0.5 }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          {overview
+            ? "最近创建的 5 个任务"
+            : `共 ${formatNumber(filtered.length)} 个任务`}{" "}
+          · {refreshDescription(refreshSeconds)}
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: { xs: "none", sm: "block" } }}
+        >
+          进度包含成功与跳过对象；扫描中总量可能变化
+        </Typography>
+      </Stack>
+      <TaskDetail
+        task={tasks.find((t) => t.taskIndex === detailId)}
+        taskId={detailId}
+        childId={childId}
+        childNode={childNode}
+        onSelectChild={setChildId}
+        loadError={error}
+        loadPartial={!!data?.partial}
+        loading={loading}
+        busy={busy}
+        relatedTaskIds={creationTaskIds}
+        onSelectTask={setDetailId}
+        onRefresh={() => void refresh()}
+        operationError={actionResult}
+        creationWarning={
+          activeCreation?.status === "FAILED"
+            ? activeCreation.message || "本次仅生成了部分任务。"
+            : undefined
+        }
+        onAction={(task, next) => openOperation(next, [task.taskIndex])}
+        onClose={() => setDetailId(undefined)}
+      />
+      <Dialog
+        open={operationOpen}
+        onClose={() => !busy && setOperationOpen(false)}
+        slotProps={{
+          transition: {
+            onExited: () => {
+              setOperation("");
+              setOperationIds(null);
+              setConfirmationTasks([]);
+            },
+          },
+        }}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>
+          {operation} {confirmationTasks.length} 个任务？
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            {operation === "删除"
+              ? "任务记录将移至回收站，不会删除源或目标存储中的对象。"
+              : operation === "停止"
+                ? "停止扫描和传输，保留已完成的对象与进度。"
+                : operation === "继续传输"
+                  ? "继续扫描和处理未完成的对象，保留已有传输进度。"
+                  : "任务将开始传输，请确认来源和目标配置。"}
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 2 }}>
+            任务：
+            {confirmationTasks.map((task) => `#${task.taskIndex}`).join("、")}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 3 }}>
+          <Button onClick={() => setOperationOpen(false)} disabled={busy}>
+            取消
+          </Button>
+          <Button
+            variant="contained"
+            color={operation === "删除" ? "error" : "primary"}
+            onClick={execute}
+            disabled={busy}
+          >
+            {busy ? "提交中…" : `确认${operation}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}

@@ -1,0 +1,136 @@
+# Bash completion for OSS Transfer CLI. Completion never contacts the cluster.
+_oss_transfer_cli_completion() {
+    local cur prev words cword
+    _init_completion -n = || return
+    local globals="--host --json --verbose --watch --help --version"
+    local commands="task node storage limit exceptions object login logout whoami change-password \
+        list-task status show-task stop resume start retry delete-task clear list-deleted permanent-delete export-report \
+        add-task import-tasks list-worker worker-status list-s3-config remove-s3-config \
+        list-rate-limit rate-limit list-rate-limit-history rate-limit-history set-rate-limit \
+        list-failed-objs failed list-fallback-objs fallback delete-failed-objs clear-failed \
+        delete-fallback-objs clear-fallback diff-objects import-inventory count-lines help"
+    local create_flags="--node --binding --prefix --object-key --mapping --target-prefix --target-key \
+        --target-relative-path --conflict --distribution --date-after --date-before --bandwidth-mbps \
+        --overwrite --balanced --validate-only"
+    local storage_flags="--endpoint --access-key-env --access-key-file --secret-key-env --secret-key-file \
+        --validate --v2-signer --path-style"
+    local exception_flags="--task-id --source-bucket --dest-bucket --worker --limit --offset --direction --endpoint --storage-id"
+    local flags="" choices="" command="" action="" i skip=0 word
+    local -a positional=()
+
+    # Discover the command even when global options precede it. Ignore option values.
+    for ((i=1; i<cword; i++)); do
+        word=${words[i]}
+        if ((skip)); then skip=0; continue; fi
+        case "$word" in
+            --*=*) continue ;;
+            --host|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
+                skip=1; continue ;;
+            -*) continue ;;
+        esac
+        positional+=("$word")
+    done
+    command=${positional[0]}
+    action=${positional[1]}
+
+    case "$prev" in
+        --file|--output|--password-file|--old-password-file|--new-password-file|--access-key-file|--secret-key-file)
+            _filedir; return ;;
+        --password-env|--old-password-env|--new-password-env|--access-key-env|--secret-key-env)
+            COMPREPLY=($(compgen -A variable -- "$cur")); return ;;
+        --watch) choices="1 5s 10s 30s 60s" ;;
+        --distribution) choices="affinity balanced" ;;
+        --conflict) choices="skip overwrite" ;;
+        --mapping) choices="preserve add-prefix replace-prefix exact-key" ;;
+        --format) choices="json csv" ;;
+        --mode) choices="sort-merge bloom" ;;
+        --unit) choices="bps Kbps Mbps Gbps" ;;
+        --validate) choices="true false" ;;
+        --v2-signer|--path-style) choices="true false inherit" ;;
+        --status) choices="PENDING RUNNING LIST_DONE STOPPING STOPPED COMPLETED PARTIAL_FAILED FAILED" ;;
+        --direction)
+            if [[ $command == exceptions ]]; then choices="OSS_TO_LOCAL LOCAL_TO_OSS";
+            else choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
+        --host|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--limit|--event-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
+            return ;;
+    esac
+    if [[ -n $choices ]]; then
+        COMPREPLY=($(compgen -W "$choices" -- "$cur")); return
+    fi
+
+    case "$command" in
+        "") choices="$commands" ;;
+        help) choices="$commands" ;;
+        task)
+            case "$action" in
+                "") choices="list show children creation create import stop resume start retry delete trash purge bandwidth report" ;;
+                list) flags="--status --source --dest --worker --direction --search --all" ;;
+                show|children) flags="--child --node" ;;
+                create)
+                    flags="$create_flags"
+                    if ((${#positional[@]} == 2)); then choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
+                import)
+                    flags="--file --format --balanced --validate-only"
+                    if ((${#positional[@]} == 2)); then choices="buckets tasks local";
+                    elif [[ $cur != -* ]]; then _filedir; return; fi ;;
+                purge) flags="--yes" ;;
+                report) flags="--output" ;;
+                bandwidth) if ((${#positional[@]} == 3)); then choices="unlimited"; fi ;;
+            esac ;;
+        node)
+            case "$action" in
+                "") choices="list add update remove" ;;
+                add) flags="--label" ;;
+                update) flags="--label --address" ;;
+                remove) flags="--yes" ;;
+            esac ;;
+        storage)
+            case "$action" in
+                "") choices="list add update remove test buckets" ;;
+                add|update) flags="$storage_flags" ;;
+                remove) flags="--yes" ;;
+            esac ;;
+        limit)
+            case "$action" in
+                "") choices="list set history adjustment" ;;
+                set)
+                    flags="--worker --all --unit"
+                    if ((${#positional[@]} == 2)); then choices="list put head bandwidth";
+                    elif ((${#positional[@]} == 3)); then choices="unlimited"; fi ;;
+                history) flags="--limit" ;;
+                adjustment) flags="--worker --event-id --cursor" ;;
+            esac ;;
+        exceptions)
+            case "$action" in
+                "") choices="list export clear" ;;
+                list|export)
+                    flags="$exception_flags"
+                    [[ $action == export ]] && flags="$flags --output"
+                    if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
+                clear)
+                    flags="--all --yes"
+                    if ((${#positional[@]} == 2)); then choices="failed fallback"; fi ;;
+            esac ;;
+        object)
+            if [[ -z $action ]]; then choices="compare";
+            else flags="--source-bucket --source-key --dest-bucket --dest-key"; fi ;;
+        login) flags="--username --password-stdin --password-env --password-file" ;;
+        change-password) flags="--old-password-env --old-password-file --new-password-env --new-password-file" ;;
+        add-task) flags="$create_flags --dateAfter --dateBefore" ;;
+        import-tasks) flags="--file --format --balanced"; if [[ $cur != -* ]]; then _filedir; return; fi ;;
+        list-task|status) flags="--status --source --dest --worker --direction --search --all" ;;
+        show-task) flags="--child --node" ;;
+        permanent-delete|remove-s3-config|delete-failed-objs|clear-failed|delete-fallback-objs|clear-fallback) flags="--yes" ;;
+        export-report) flags="--output" ;;
+        list-rate-limit-history|rate-limit-history) flags="--limit" ;;
+        set-rate-limit) if ((${#positional[@]} == 1)); then choices="list put head bandwidth"; fi ;;
+        list-failed-objs|failed|list-fallback-objs|fallback) flags="--task-id --taskIndex --source-bucket --dest-bucket --worker --limit" ;;
+        diff-objects) flags="--mode --false-positive"; if [[ $cur != -* ]]; then _filedir; return; fi ;;
+        count-lines) _filedir -d; return ;;
+        import-inventory) flags="--overwrite" ;;
+    esac
+    if [[ $cur == -* ]]; then choices="$globals $flags"; fi
+    COMPREPLY=($(compgen -W "$choices" -- "$cur"))
+}
+
+complete -F _oss_transfer_cli_completion oss-transfer-cli

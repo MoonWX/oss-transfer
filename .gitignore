@@ -1,0 +1,38 @@
+# 构建产物
+target/
+*.class
+*.jar
+
+# 运行时数据
+data/
+logs/
+
+# 输出/打包目录
+output/
+
+# 编译好的二进制
+cli-go/oss-transfer-cli-amd64
+cli-go/oss-transfer-cli-arm64
+
+# 前端依赖与测试产物
+frontend/node_modules/
+frontend/.vite/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/dist/
+src/main/resources/static/assets/
+src/main/resources/static/index.html
+
+# 全量测试清单保留在本地及验收包，Git 保存核验摘要
+docs/test-evidence-*/full-*.jsonl.gz
+
+# 系统文件
+.DS_Store
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+application.local.yml

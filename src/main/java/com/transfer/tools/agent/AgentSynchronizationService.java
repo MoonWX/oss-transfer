@@ -18,16 +18,22 @@ public class AgentSynchronizationService {
         Thread thread = new Thread(runnable, "agent-storage-sync"); thread.setDaemon(true); return thread;
     });
     public void connected(String address) {
-        registry.touch(address);
-        if (!registry.needsSynchronization(address) || !pending.add(address)) return;
+        connected(registry.currentSession(address));
+    }
+    public void connected(AgentRegistryService.Session session) {
+        if (!registry.touch(session)) return;
+        String address = session.getAddress();
+        String enrollment = address + ":" + session.getEnrollmentId();
+        if (!registry.needsSynchronization(address) || !pending.add(enrollment)) return;
         executor.execute(() -> {
             long version = registry.storageVersion();
             try {
-                nodes.synchronizeAgentStorage(address); registry.markSynchronized(address, version);
-                if (registry.online(address) && localTransfers != null) localTransfers.retryDeferredParents();
+                nodes.synchronizeAgentStorage(address);
+                if (registry.markSynchronized(session, version) && registry.online(session) && localTransfers != null)
+                    localTransfers.retryDeferredParents();
             }
             catch (RuntimeException ignored) { /* Retry on a later heartbeat; credentials are never logged. */ }
-            finally { pending.remove(address); }
+            finally { pending.remove(enrollment); }
         });
     }
     @PreDestroy public void stop() { executor.shutdownNow(); }

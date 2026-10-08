@@ -65,6 +65,8 @@ The traditional command downloads a checksum-verified bundle from the master and
 
 Each agent receives its own credential and retains it across restarts. Do not copy the master's internal token to agents. Keep invitations private. Agents must be able to reach the master's URL; use HTTPS when traffic crosses an untrusted network.
 
+Removing a node revokes its credential. To enroll it again, use a new invitation and a fresh agent data directory or volume.
+
 For local-file tasks across several agents, mount the same shared filesystem at the same path. A node's local disk is not shared with other nodes.
 
 ## Use the tool

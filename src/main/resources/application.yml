@@ -25,8 +25,8 @@ auth.token.expire: 86400000
 
 # 分布式协同模式的主节点IP
 transfer.master-ip: 127.0.0.1
-# Worker网页跳转到此固定公开地址（仅 http(s) origin，不含路径/参数）。
-# 每台节点配置同一地址；留空时使用 http://transfer.master-ip:实际服务端口。
+# 浏览器和 Agent 可访问的 Master 地址（仅 http(s) origin，不含路径/参数）。
+# Master 安装时设置；Agent 通过加入指令获取。
 # transfer.master-web-url: https://transfer.example.com
 
 # 分布式协同模式的工作节点IP
@@ -36,8 +36,8 @@ transfer.worker-ips:
 # 当前节点IP
 transfer.local-ip: 127.0.0.1
 transfer.port: ${OSS_TRANSFER_PORT:1685}
-# 节点间共享密钥（内部调用认证）：主节点调用 worker 接口时附加 X-Internal-Token 头
-# 各节点必须一致；部署时由 deploy.sh 自动生成，本地开发可自行指定
+# 本机执行接口的内部密钥；安装时随机生成。
+# Agent 使用独立的加入凭据连接 Master，不复制 Master 的内部密钥。
 transfer.internal-token: ${OSS_TRANSFER_INTERNAL_TOKEN:}
 # 仅用于节点能力展示，可在“执行节点→编辑节点”持久修改。不是文件访问白名单；
 # 未声明不代表禁止本地迁移。当前版本没有 local.allowed-roots 配置，实际可访问范围

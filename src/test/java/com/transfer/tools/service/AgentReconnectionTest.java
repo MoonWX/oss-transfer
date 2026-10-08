@@ -19,6 +19,7 @@ import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.*;
 
 /** Exercises durable enrollment and real Master configuration publication without contacting S3. */
 public class AgentReconnectionTest {
@@ -142,6 +143,28 @@ public class AgentReconnectionTest {
 
         reconnectAndWait();
         assertEquals(new HashSet<>(Arrays.asList("first", "second")), remote.connections.keySet());
+    }
+
+    @Test public void oldSynchronizationCannotMarkAReplacementEnrollmentReady() throws Exception {
+        add("archive", "https://archive.example.com");
+        MasterLocalTransferService localTransfers = mock(MasterLocalTransferService.class);
+        ReflectionTestUtils.setField(synchronization, "localTransfers", localTransfers);
+        String originalEnrollment = registry.currentEnrollment(AGENT);
+        remote.blockNextMutation = true; synchronization.connected(AGENT);
+        assertTrue(remote.mutationStarted.await(3, TimeUnit.SECONDS));
+        try {
+            nodes.withMembershipWriteLock(() -> {
+                registry.revokeMembership(AGENT, Collections.singletonList(MASTER), Collections.emptyMap()); return null;
+            });
+            identity = enroll(AGENT);
+            assertNotEquals(originalEnrollment, registry.currentEnrollment(AGENT));
+        } finally { remote.releaseMutation.countDown(); }
+        awaitSynchronizationFinished();
+        assertFalse("The replacement must acknowledge its own synchronization", registry.online(AGENT));
+        assertTrue(registry.needsSynchronization(AGENT));
+        verify(localTransfers, never()).retryDeferredParents();
+        reconnectAndWait(); assertTrue(registry.online(AGENT));
+        verify(localTransfers, times(1)).retryDeferredParents();
     }
 
     @Test public void failedSynchronizationKeepsAgentUnavailableAndRetriesOnHeartbeat() throws Exception {

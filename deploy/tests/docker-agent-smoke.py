@@ -100,6 +100,10 @@ def main():
         run("docker", "restart", agent)
         until(connected)
         run("docker", "restart", master)
+        # Docker can assign a new host port when an ephemeral binding restarts.
+        detail = json.loads(run("docker", "inspect", master))[0]
+        port = detail["NetworkSettings"]["Ports"]["1685/tcp"][0]["HostPort"]
+        origin = "http://127.0.0.1:" + port
         until(lambda: request(origin, "/api/auth/current") is not None)
         token = request(origin, "/api/auth/login", body={"username": "admin", "password": password})["token"]
         until(connected)

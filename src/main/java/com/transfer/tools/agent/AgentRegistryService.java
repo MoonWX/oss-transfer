@@ -5,6 +5,7 @@ import com.transfer.tools.service.NodeConfigService;
 import com.transfer.tools.storage.RocksDBService;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import javax.annotation.PostConstruct;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +22,7 @@ public class AgentRegistryService {
     @Autowired private RocksDBService db;
     @Autowired private NodeConfigService nodes;
     @Autowired private DistributedConfig config;
+    @Autowired @Lazy private AgentBroker broker;
     private final Map<String, AgentRecord> agents = new ConcurrentHashMap<>();
     private final Map<String, String> keys = new ConcurrentHashMap<>();
     private long storageVersion;
@@ -30,7 +32,7 @@ public class AgentRegistryService {
         private boolean consumed;
     }
     @Data public static class AgentRecord {
-        private String instanceId, address, label, credentialHash;
+        private String instanceId, enrollmentId, address, label, credentialHash;
         private long joinedAt;
         private volatile long lastSeen;
         private volatile boolean enabled = true;
@@ -39,10 +41,22 @@ public class AgentRegistryService {
     @Data public static class InviteRequest { private String address, label; }
     @Data public static class JoinRequest { private String token, instanceId, address, label, credential; }
 
+    /** Master-owned enrollment identity; an address may be reused after revocation. */
+    public static final class Session {
+        private final String address, enrollmentId;
+        private Session(String address, String enrollmentId) { this.address = address; this.enrollmentId = enrollmentId; }
+        public String getAddress() { return address; }
+        public String getEnrollmentId() { return enrollmentId; }
+    }
+
     @PostConstruct public void init() {
         Long savedVersion = db.get("agent:storage-version", Long.class);
         storageVersion = savedVersion == null ? 0 : savedVersion;
         for (AgentRecord record : db.scanByPrefix("agent:member:", AgentRecord.class)) {
+            if (record.enrollmentId == null || record.enrollmentId.isEmpty()) {
+                record.enrollmentId = UUID.randomUUID().toString();
+                db.putSync("agent:member:" + record.address, record);
+            }
             record.lastSeen = 0; record.synchronizedStorage = false;
             agents.put(record.address, record);
             if (record.enabled) keys.put(record.credentialHash, record.address);
@@ -109,6 +123,7 @@ public class AgentRegistryService {
         if (keys.containsKey(credentialHash)) throw new IllegalArgumentException("Agent credential is already registered");
         AgentRecord record = new AgentRecord();
         record.address = address; record.instanceId = request.instanceId;
+        record.enrollmentId = UUID.randomUUID().toString();
         record.label = invitation.label; record.credentialHash = credentialHash;
         record.joinedAt = System.currentTimeMillis();
         invitation.consumed = true; invitation.instanceId = request.instanceId;
@@ -124,12 +139,34 @@ public class AgentRegistryService {
         result.put("masterUrl", config.getMasterWebUrl()); result.put("instanceId", record.instanceId);
         return result;
     }
-    public String authenticatedAddress(String credential) {
+    public synchronized Session authenticatedSession(String credential) {
         if (credential == null || credential.length() > 128 || credential.length() < 43) return null;
         String credentialHash = hash(credential);
         String address = keys.get(credentialHash);
         AgentRecord record = address == null ? null : agents.get(address);
-        return record != null && record.enabled && credentialHash.equals(record.credentialHash) ? address : null;
+        return record != null && record.enabled && credentialHash.equals(record.credentialHash)
+                ? new Session(address, record.enrollmentId) : null;
+    }
+    public String authenticatedAddress(String credential) {
+        Session session = authenticatedSession(credential);
+        return session == null ? null : session.address;
+    }
+    public synchronized boolean isSessionValid(String credential, Session session) {
+        Session current = authenticatedSession(credential);
+        return session != null && current != null && session.address.equals(current.address)
+                && Objects.equals(session.enrollmentId, current.enrollmentId);
+    }
+    public synchronized String currentEnrollment(String address) {
+        AgentRecord record = agents.get(address);
+        return record != null && record.enabled ? record.enrollmentId : null;
+    }
+    public synchronized Session currentSession(String address) {
+        AgentRecord record = agents.get(address);
+        return record != null && record.enabled ? new Session(address, record.enrollmentId) : null;
+    }
+    private boolean active(Session session) {
+        AgentRecord record = session == null ? null : agents.get(session.address);
+        return record != null && record.enabled && Objects.equals(session.enrollmentId, record.enrollmentId);
     }
     public boolean isAgent(String address) { return agents.containsKey(address); }
     /** A control connection can synchronize storage before the node becomes schedulable. */
@@ -143,24 +180,37 @@ public class AgentRegistryService {
         AgentRecord record = agents.get(address);
         return record != null && record.synchronizedStorage && connected(address);
     }
+    public synchronized boolean online(Session session) { return active(session) && online(session.address); }
     public long lastSeen(String address) { AgentRecord value = agents.get(address); return value == null ? 0 : value.lastSeen; }
     public synchronized void touch(String address) {
-        AgentRecord record = agents.get(address);
-        if (record != null && record.enabled) {
+        touch(currentSession(address));
+    }
+    public synchronized boolean touch(Session session) {
+        if (active(session)) {
+            AgentRecord record = agents.get(session.address);
             long now = System.currentTimeMillis();
             if (record.lastSeen == 0 || now - record.lastSeen > 45000) record.synchronizedStorage = false;
             record.lastSeen = now;
+            return true;
         }
+        return false;
     }
     public boolean isMaster() { return config.isMaster(); }
     public synchronized void markSynchronized(String address) {
         markSynchronized(address, storageVersion);
     }
     public synchronized void markSynchronized(String address, long expectedVersion) {
-        AgentRecord record = agents.get(address);
-        if (expectedVersion == storageVersion && record != null && record.enabled && !record.synchronizedStorage) {
-            record.synchronizedStorage = true; db.putSync("agent:member:" + address, record);
+        markSynchronized(currentSession(address), expectedVersion);
+    }
+    public synchronized boolean markSynchronized(Session session, long expectedVersion) {
+        if (expectedVersion != storageVersion || !active(session)) return false;
+        AgentRecord record = agents.get(session.address);
+        if (!record.synchronizedStorage) {
+            record.synchronizedStorage = true;
+            try { db.putSync("agent:member:" + session.address, record); }
+            catch (RuntimeException failure) { record.synchronizedStorage = false; throw failure; }
         }
+        return true;
     }
     public synchronized long storageVersion() { return storageVersion; }
     public synchronized void storageChanged() {
@@ -178,18 +228,29 @@ public class AgentRegistryService {
     }
     public synchronized void revoke(String address) {
         AgentRecord record = agents.get(address);
-        if (record != null) { record.enabled = false; keys.remove(record.credentialHash); db.putSync("agent:member:" + address, record); }
+        if (record != null) {
+            AgentRecord disabled = disabled(record);
+            db.putSync("agent:member:" + address, disabled);
+            agents.put(address, disabled); keys.remove(record.credentialHash);
+            if (broker != null) broker.invalidate(address, record.enrollmentId);
+        }
     }
     /** Called with the membership write lock already held: removal and revocation are atomic. */
     public synchronized void revokeMembership(String address, List<String> workers, Map<String, String> labels) {
         AgentRecord current = agents.get(address);
         if (current == null) throw new IllegalArgumentException("Agent is not registered");
-        AgentRecord disabled = new AgentRecord();
-        disabled.instanceId = current.instanceId; disabled.address = current.address; disabled.label = current.label;
-        disabled.credentialHash = current.credentialHash; disabled.joinedAt = current.joinedAt;
-        disabled.lastSeen = current.lastSeen; disabled.enabled = false;
+        AgentRecord disabled = disabled(current);
         nodes.replaceMembershipWithChanges(workers, labels, Collections.singletonMap("agent:member:" + address, disabled));
         agents.put(address, disabled); keys.remove(current.credentialHash);
+        if (broker != null) broker.invalidate(address, current.enrollmentId);
+    }
+    private AgentRecord disabled(AgentRecord current) {
+        AgentRecord disabled = new AgentRecord();
+        disabled.instanceId = current.instanceId; disabled.enrollmentId = current.enrollmentId;
+        disabled.address = current.address; disabled.label = current.label;
+        disabled.credentialHash = current.credentialHash; disabled.joinedAt = current.joinedAt;
+        disabled.lastSeen = current.lastSeen; disabled.enabled = false;
+        return disabled;
     }
     public synchronized Invitation validInvitation(String token) {
         requireMaster();

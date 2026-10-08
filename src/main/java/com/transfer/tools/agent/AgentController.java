@@ -28,8 +28,11 @@ public class AgentController {
     public Map<String, Object> join(@RequestBody AgentRegistryService.JoinRequest request) { return registry.join(request); }
     @GetMapping("/api/agents/poll")
     public ResponseEntity<RpcCommand> poll(@RequestHeader(value = "X-Agent-Key", required = false) String credential) throws InterruptedException {
-        String address = authenticate(credential); synchronization.connected(address);
-        RpcCommand command = broker.poll(address, 25000);
+        AgentRegistryService.Session session = authenticateSession(credential);
+        String address = session.getAddress(); synchronization.connected(session);
+        RpcCommand command = broker.poll(address, session.getEnrollmentId(), 25000);
+        // A long poll may span removal and a new enrollment at the same address.
+        if (!registry.isSessionValid(credential, session)) throw new AgentUnauthorizedException();
         String ready = Boolean.toString(registry.online(address));
         return command == null ? ResponseEntity.noContent().header("X-Agent-Ready", ready).build()
                 : ResponseEntity.ok().header("X-Agent-Ready", ready).body(command);
@@ -37,7 +40,10 @@ public class AgentController {
     @PostMapping("/api/agents/result")
     public ResponseEntity<Void> result(@RequestHeader(value = "X-Agent-Key", required = false) String credential,
                                        @RequestBody RpcResult result) {
-        String address = authenticate(credential); registry.touch(address); broker.complete(address, result);
+        AgentRegistryService.Session session = authenticateSession(credential);
+        if (!registry.touch(session)) throw new AgentUnauthorizedException();
+        broker.complete(session.getAddress(), session.getEnrollmentId(), result);
+        if (!registry.isSessionValid(credential, session)) throw new AgentUnauthorizedException();
         return ResponseEntity.noContent().build();
     }
     @PostMapping("/api/agents/relay")
@@ -87,10 +93,13 @@ public class AgentController {
         return path;
     }
     private String authenticate(String credential) {
+        return authenticateSession(credential).getAddress();
+    }
+    private AgentRegistryService.Session authenticateSession(String credential) {
         if (!config.isMaster()) throw new AgentUnauthorizedException();
-        String address = registry.authenticatedAddress(credential);
-        if (address == null) throw new AgentUnauthorizedException();
-        return address;
+        AgentRegistryService.Session session = registry.authenticatedSession(credential);
+        if (session == null) throw new AgentUnauthorizedException();
+        return session;
     }
     static class AgentUnauthorizedException extends RuntimeException { }
     @ExceptionHandler(AgentUnauthorizedException.class)

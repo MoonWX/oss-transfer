@@ -71,29 +71,29 @@ const states = [
   },
 ];
 
-test("every task state and direction intersects with participating-node filters and action eligibility", async ({
-  page,
-}) => {
-  test.setTimeout(90_000);
-  const requests = await mockApi(page);
-  const matrix = states.flatMap((state, i) =>
-    directions.map((direction, j) => ({
-      ...tasks[0],
-      taskIndex: 2000 + i * 3 + j,
-      status: state.value,
-      direction: direction.value,
-      participatingWorkerNodes:
-        j === 0 ? ["10.0.1.12"] : ["10.0.1.12", "10.0.1.13"],
-    })),
-  );
-  await page.route("**/api/master/status", (route) =>
-    route.fulfill({ json: { totalTasks: matrix.length, tasks: matrix } }),
-  );
-  await page.goto("/tasks");
-  const table = page.getByRole("table", { name: "迁移任务列表" });
-  for (const [i, state] of states.entries()) {
-    await select(page, "任务状态", state.label);
-    for (const [j, direction] of directions.entries()) {
+// Each combination has its own time budget and can run in a separate CI shard.
+for (const [i, state] of states.entries()) {
+  for (const [j, direction] of directions.entries()) {
+    test(`task ${state.value} ${direction.value} filters participating nodes and preserves action eligibility`, async ({
+      page,
+    }) => {
+      const requests = await mockApi(page);
+      const matrix = states.flatMap((state, i) =>
+        directions.map((direction, j) => ({
+          ...tasks[0],
+          taskIndex: 2000 + i * 3 + j,
+          status: state.value,
+          direction: direction.value,
+          participatingWorkerNodes:
+            j === 0 ? ["10.0.1.12"] : ["10.0.1.12", "10.0.1.13"],
+        })),
+      );
+      await page.route("**/api/master/status", (route) =>
+        route.fulfill({ json: { totalTasks: matrix.length, tasks: matrix } }),
+      );
+      await page.goto("/tasks");
+      const table = page.getByRole("table", { name: "迁移任务列表" });
+      await select(page, "任务状态", state.label);
       await select(page, "传输方向", direction.label);
       await page
         .getByRole("textbox", { name: "执行节点", exact: true })
@@ -132,18 +132,20 @@ test("every task state and direction intersects with participating-node filters 
         await expect(
           table.getByRole("button", { name: `#${id}`, exact: true }),
         ).toBeVisible();
-    }
+      await select(page, "任务状态", "全部状态");
+      await select(page, "传输方向", "全部方向");
+      await page
+        .getByRole("textbox", { name: "执行节点", exact: true })
+        .fill("not-a-node");
+      await expect(
+        page.getByText("没有匹配的任务", { exact: true }),
+      ).toBeVisible();
+      expect(
+        requests.filter((request) => request.method !== "GET"),
+      ).toHaveLength(0);
+    });
   }
-  await select(page, "任务状态", "全部状态");
-  await select(page, "传输方向", "全部方向");
-  await page
-    .getByRole("textbox", { name: "执行节点", exact: true })
-    .fill("not-a-node");
-  await expect(page.getByText("没有匹配的任务", { exact: true })).toBeVisible();
-  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(
-    0,
-  );
-});
+}
 
 test("pagination and all-results selection cannot leak hidden task IDs into an action after filtering", async ({
   page,

@@ -88,3 +88,4 @@ jobs:
           bash deploy/tests/test-docker-entrypoint.sh
           python3 deploy/tests/test-publish-oss.py
           python3 deploy/tests/test-install-version.py
+          python3 deploy/tests/test-setup-release-runner.py

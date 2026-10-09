@@ -143,7 +143,7 @@ Building requires JDK 8+, Maven, Node.js 22.12+ and Go 1.22+.
 
 Outputs are `output/oss-transfer.tar.gz`, its SHA-256 file, and `output/oss-transfer/`. Build metadata contains the Git commit and build time; the WebUI uses it for the version display.
 
-GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on pull requests and pushes to `main`. Pushing a matching version tag, such as `vX.Y.Z`, runs those checks and publishes to GitHub Releases, Docker Hub, JD Cloud OSS, and JD Cloud JCR.
+GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on GitHub-hosted runners for pull requests and pushes to `main`. Pushing a matching version tag, such as `vX.Y.Z`, runs those checks, then `jdcloud_publish` builds one release package on a dedicated runner in China, tests its Docker image, and publishes to JD Cloud JCR and OSS. It uploads only the package archive and SHA-256 file to GitHub. The hosted `docker_hub` job verifies and extracts the same archive to publish Docker Hub images; the GitHub Release is created after both jobs succeed.
 
 Configure these repository secrets:
 
@@ -153,11 +153,29 @@ Configure these repository secrets:
 | JD Cloud OSS | `JDOSS_AK`, `JDOSS_SK` |
 | JD Cloud JCR | `JCR_USERNAME`, `JCR_PASSWD` |
 
+### Dedicated release runner
+
+Prepare a dedicated Ubuntu/Debian Linux x64 host in China with systemd and at least 10 GiB free for the workspace and Docker storage. From a trusted checkout, prepare its dependencies first:
+
+```sh
+sudo bash deploy/setup-release-runner.sh --prepare-only
+```
+
+The script prepares Docker/Buildx, Maven, Python, jq and AWS CLI v2, and enables ARM64 emulation; the workflow selects Java, Node.js and Go. After preparation finishes, obtain a short-lived [repository registration token](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository) for `MoonWX/oss-transfer` on an administrator's workstation, then register on the host and enter the token at the hidden prompt:
+
+```sh
+sudo bash deploy/setup-release-runner.sh --register-only
+```
+
+Keep PATs and publishing secrets out of the host's configuration. The Runner service uses the `oss-release` account and `/opt/oss-transfer-release-runner` directory. Confirm that it is online before publishing a tag.
+
+The workflow requires `[self-hosted, linux, x64, jdcloud-publish]`. To use a different custom label, set `RUNNER_LABEL` when running `--register-only` and set the repository Actions variable `JD_PUBLISH_RUNNER_LABEL` to the same value. Reserve this host for trusted release tags; pull-request tests stay on GitHub-hosted runners. The domestic job has a 45-minute limit, with 15 minutes for the JCR image build and upload and 10 minutes each for OSS uploads and the package artifact; the Docker Hub job has a 30-minute limit.
+
 OSS stores `oss-transfer.tar.gz`, its SHA-256 file, and `VERSION` under `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`. Pre-releases only update their version directory.
 
 Images support Linux `amd64` and `arm64` at `moonwx/osstransfer` and `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`. Stable releases publish `X.Y.Z`, `X.Y`, and `latest` tags; pre-releases publish their version tag only. The GitHub Release is published after both registries and OSS succeed. Pre-releases are marked accordingly and do not become GitHub's latest release.
 
-`pom.xml` is the only project version source. The build supplies this version to the JAR, CLI and release metadata. Docker, Compose and agent invitations default to `latest`. The installer uses a local package when present; otherwise it downloads the latest stable release. Use `--version` or `OSS_TRANSFER_IMAGE` to select a specific release.
+`pom.xml` is the only project version source. The build supplies this version to the JAR, CLI and release metadata; no version changes are needed in frontend metadata, installers, Compose or agent invitation code. Docker, Compose and agent invitations default to `latest`. The installer uses a local package when present; otherwise it downloads the latest stable release. Use `--version` or `OSS_TRANSFER_IMAGE` to select a specific release.
 
 To publish a version, change only the project `<version>` in `pom.xml`, test and commit it. Then derive the tag from that value:
 

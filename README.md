@@ -143,7 +143,7 @@ Building requires JDK 8+, Maven, Node.js 22.12+ and Go 1.22+.
 
 Outputs are `output/oss-transfer.tar.gz`, its SHA-256 file, and `output/oss-transfer/`. Build metadata contains the Git commit and build time; the WebUI uses it for the version display.
 
-GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on GitHub-hosted runners for pull requests and pushes to `main`. Pushing a matching version tag, such as `vX.Y.Z`, runs those checks, then `jdcloud_publish` builds one release package on a dedicated runner in China, tests its Docker image, and publishes to JD Cloud JCR and OSS. It uploads only the package archive and SHA-256 file to GitHub. The hosted `docker_hub` job verifies and extracts the same archive to publish Docker Hub images; the GitHub Release is created after both jobs succeed.
+GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on GitHub-hosted runners for pull requests and pushes to `main`. A matching version tag, such as `vX.Y.Z`, runs the checks, builds the release package and a multi-platform image on GitHub-hosted runners, and stores them as Actions artifacts. Docker Hub publishes that image on a hosted runner. The dedicated runner in China downloads and verifies the same artifacts, then uploads them to JD Cloud JCR and OSS. It does not compile source or build images. GitHub Release is created after all destinations succeed.
 
 Configure these repository secrets:
 
@@ -155,13 +155,13 @@ Configure these repository secrets:
 
 ### Dedicated release runner
 
-Prepare a dedicated Ubuntu/Debian Linux x64 host in China with systemd and at least 10 GiB free for the workspace and Docker storage. From a trusted checkout, prepare its dependencies first:
+Prepare a dedicated Ubuntu/Debian Linux x64 host in China with systemd and at least 10 GiB free for the workspace. From a trusted checkout, prepare its dependencies first:
 
 ```sh
 sudo bash deploy/setup-release-runner.sh --prepare-only
 ```
 
-The script prepares Docker/Buildx, Maven, Python, jq and AWS CLI v2, and enables ARM64 emulation; the workflow selects Java, Node.js and Go. After preparation finishes, obtain a short-lived [repository registration token](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository) for `MoonWX/oss-transfer` on an administrator's workstation, then register on the host and enter the token at the hidden prompt:
+The script prepares Skopeo, Python, jq and AWS CLI v2. The publishing runner does not need Java, Maven, Node.js, Go, Docker or ARM64 emulation. After preparation finishes, obtain a short-lived [repository registration token](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository) for `MoonWX/oss-transfer` on an administrator's workstation, then register on the host and enter the token at the hidden prompt:
 
 ```sh
 sudo bash deploy/setup-release-runner.sh --register-only
@@ -169,7 +169,7 @@ sudo bash deploy/setup-release-runner.sh --register-only
 
 Keep PATs and publishing secrets out of the host's configuration. The Runner service uses the `oss-release` account and `/opt/oss-transfer-release-runner` directory. Confirm that it is online before publishing a tag.
 
-The workflow requires `[self-hosted, linux, x64, jdcloud-publish]`. To use a different custom label, set `RUNNER_LABEL` when running `--register-only` and set the repository Actions variable `JD_PUBLISH_RUNNER_LABEL` to the same value. Reserve this host for trusted release tags; pull-request tests stay on GitHub-hosted runners. The domestic job has a 45-minute limit, with 15 minutes for the JCR image build and upload and 10 minutes each for OSS uploads and the package artifact; the Docker Hub job has a 30-minute limit.
+The workflow requires `[self-hosted, linux, x64, jdcloud-publish]`; the current publishing runner is `pkx2`. To use a different custom label, set `RUNNER_LABEL` when running `--register-only` and set the repository Actions variable `JD_PUBLISH_RUNNER_LABEL` to the same value. Reserve this host for trusted release tags; pull-request tests stay on GitHub-hosted runners. The workflow sets time limits for builds, artifact downloads and uploads. JD Cloud uploads bypass the runner's HTTP proxy; GitHub downloads can use it.
 
 OSS stores `oss-transfer.tar.gz`, its SHA-256 file, and `VERSION` under `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`. Pre-releases only update their version directory.
 

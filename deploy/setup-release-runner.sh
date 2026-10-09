@@ -1,7 +1,8 @@
 #!/bin/bash
 # Repository-scoped release runner. Run on a dedicated Ubuntu/Debian Linux x64 host.
-# Official sources: github.com/actions/runner, docs.docker.com/engine/install,
+# Official sources: github.com/actions/runner, github.com/containers/skopeo,
 # docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html.
+# This host transfers prebuilt artifacts only; no build toolchain or Docker daemon.
 set +x
 set -euo pipefail
 
@@ -45,36 +46,6 @@ prepare_account() {
         [[ "$(getent passwd "$runner_user" | cut -d: -f6)" == "$runner_home" ]] || fail 'Existing service account has a different home directory.'
     else
         useradd --system --create-home --home-dir "$runner_home" --shell /bin/bash "$runner_user"
-    fi
-    usermod -aG docker "$runner_user"
-}
-
-prepare_docker() {
-    if ! command -v docker >/dev/null 2>&1; then
-        # Do not uninstall conflicting packages or touch an existing daemon/configuration.
-        if dpkg-query -W -f='${Status}\n' docker.io podman-docker containerd runc 2>/dev/null | grep -q 'install ok installed'; then
-            fail 'Conflicting Docker packages exist. Install Docker deliberately before rerunning; nothing was removed.'
-        fi
-        install -d -m 0755 /etc/apt/keyrings
-        download "https://download.docker.com/linux/$os_id/gpg" "$work_dir/docker.asc"
-        install -m 0644 "$work_dir/docker.asc" /etc/apt/keyrings/oss-release-docker.asc
-        local source=/etc/apt/sources.list.d/oss-release-docker.sources
-        [[ ! -e "$source" ]] || fail 'A Docker source from an earlier partial setup exists; inspect it before retrying.'
-        printf 'Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/oss-release-docker.asc\n' "$os_id" "$os_codename" > "$source"
-        apt-get -o Acquire::AllowInsecureRepositories=false update
-        apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin
-        systemctl enable --now docker
-    fi
-    timeout 15 docker info >/dev/null || fail 'Docker daemon is unavailable; an existing daemon was not restarted.'
-    if ! timeout 15 docker buildx version >/dev/null 2>&1; then
-        local buildx_package
-        for buildx_package in docker-buildx-plugin docker-buildx; do
-            if apt-cache policy "$buildx_package" | grep 'Candidate:' | grep -v '(none)' >/dev/null; then
-                apt_install "$buildx_package"
-                break
-            fi
-        done
-        timeout 15 docker buildx version >/dev/null || fail 'System buildx is unavailable; install a compatible plugin. No existing Docker installation was replaced.'
     fi
 }
 
@@ -158,20 +129,14 @@ prepare_runner() {
 }
 
 preflight() {
-    for dependency in bash git curl tar sha256sum openssl python3 mvn jq aws docker runuser timeout df; do
+    for dependency in bash git curl tar sha256sum openssl python3 jq aws skopeo runuser timeout df; do
         command -v "$dependency" >/dev/null || fail "Missing dependency: $dependency"
     done
     aws --version 2>&1 | grep -q '^aws-cli/2\.' || fail 'AWS CLI v2 is required.'
-    runner_command timeout 15 docker info >/dev/null || fail 'Docker daemon is unavailable to the service account.'
-    runner_command timeout 15 docker buildx version >/dev/null || fail 'System Docker buildx plugin is unavailable to the service account.'
-    [[ -r /proc/sys/fs/binfmt_misc/qemu-aarch64 ]] && grep -q '^enabled$' /proc/sys/fs/binfmt_misc/qemu-aarch64 && grep -q '^flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64 || fail 'The qemu-aarch64 binfmt handler must be enabled with flag F.'
-    local available docker_root location
-    docker_root="$(runner_command timeout 15 docker info --format '{{.DockerRootDir}}')"
-    [[ "$docker_root" == /* && -d "$docker_root" ]] || fail 'Docker must use a local data directory.'
-    for location in "$runner_dir" "$docker_root"; do
-        available="$(df -Pk "$location" | awk 'NR==2 {print $4}')"
-        [[ "$available" =~ ^[0-9]+$ ]] && (( available >= 10 * 1024 * 1024 )) || fail "At least 10 GiB free disk is required at $location."
-    done
+    runner_command timeout 15 skopeo --version >/dev/null || fail 'Skopeo is unavailable to the service account.'
+    local available
+    available="$(df -Pk "$runner_dir" | awk 'END {print $4}')"
+    [[ "$available" =~ ^[0-9]+$ ]] && (( available >= 5 * 1024 * 1024 )) || fail "At least 5 GiB free disk is required at $runner_dir."
 }
 
 configure_runner() {
@@ -245,9 +210,8 @@ main() {
     if [[ "$mode" != --register-only ]]; then
         printf 'Preparing release dependencies and the verified official Runner.\n'
         apt-get -o Acquire::AllowInsecureRepositories=false update
-        apt_install ca-certificates curl git jq python3 maven unzip gnupg openssl tar util-linux coreutils qemu-user-static binfmt-support groff less
-        prepare_docker; prepare_account; prepare_aws
-        update-binfmts --enable qemu-aarch64
+        apt_install ca-certificates curl git jq python3 skopeo unzip gnupg openssl tar util-linux coreutils groff less
+        prepare_account; prepare_aws
         prepare_runner
     else
         [[ -f "$runner_dir/.oss-transfer-prepared" && -x "$runner_dir/config.sh" ]] || fail 'Run --prepare-only first.'

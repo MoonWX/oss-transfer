@@ -143,7 +143,7 @@ Docker 拉取新版本并使用原有卷和挂载重建容器。传统部署解�
 
 输出为 `output/oss-transfer.tar.gz`、SHA-256 校验文件及 `output/oss-transfer/`。构建元数据包含 Git 提交和构建时间，WebUI 据此显示版本信息。
 
-GitHub Actions 在 Pull Request 和推送 `main` 时使用 GitHub 托管 Runner 检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `vX.Y.Z`，通过检查后，`jdcloud_publish` 在国内专用 Runner 构建一份安装包，验证 Docker 镜像并发布到京东云 JCR 和 OSS，再仅将 tar 包及 SHA-256 文件上传到 GitHub。托管的 `docker_hub` job 校验并解压同一安装包后发布 Docker Hub 镜像；两个 job 均成功后才发布 GitHub Release。
+GitHub Actions 在 Pull Request 和推送 `main` 时使用 GitHub 托管 Runner 检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `vX.Y.Z`，通过检查后，由官方 Runner 构建安装包和多架构镜像，保存为 Actions 产物。Docker Hub 在官方 Runner 发布；国内专用 Runner 下载并校验同一批产物，再上传京东云 JCR 和 OSS，不编译源码或构建镜像。全部发布目标成功后才创建 GitHub Release。
 
 仓库需配置以下 Secret：
 
@@ -155,13 +155,13 @@ GitHub Actions 在 Pull Request 和推送 `main` 时使用 GitHub 托管 Runner 
 
 ### 国内专用发布 Runner
 
-准备一台国内 Ubuntu/Debian Linux x64 专用主机，提供 systemd，工作目录和 Docker 存储各有至少 10 GiB 可用空间。在可信仓库源码目录先准备依赖：
+准备一台国内 Ubuntu/Debian Linux x64 专用主机，提供 systemd，工作目录至少有 10 GiB 可用空间。在可信仓库源码目录先准备依赖：
 
 ```sh
 sudo bash deploy/setup-release-runner.sh --prepare-only
 ```
 
-脚本准备 Docker/Buildx、Maven、Python、jq 和 AWS CLI v2，并启用 ARM64 模拟环境；Java、Node.js 和 Go 版本由工作流选择。准备完成后，在管理员工作站通过官方 API 为 `MoonWX/oss-transfer` 获取[仓库短时注册 token](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository)，再到主机执行注册，按隐藏输入提示提供 token：
+脚本准备 Skopeo、Python、jq 和 AWS CLI v2。发布 Runner 无需 Java、Maven、Node.js、Go、Docker 或 ARM64 模拟环境。准备完成后，在管理员工作站通过官方 API 为 `MoonWX/oss-transfer` 获取[仓库短时注册 token](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository)，再到主机执行注册，按隐藏输入提示提供 token：
 
 ```sh
 sudo bash deploy/setup-release-runner.sh --register-only
@@ -169,7 +169,7 @@ sudo bash deploy/setup-release-runner.sh --register-only
 
 主机配置中不保存 PAT 或发布 Secret。Runner 服务使用 `oss-release` 账户和 `/opt/oss-transfer-release-runner` 目录。发布标签前，确认 Runner 已在线。
 
-工作流要求 `[self-hosted, linux, x64, jdcloud-publish]` 标签。如需自定义最后一个标签，执行 `--register-only` 时设置 `RUNNER_LABEL`，并将仓库 Actions 变量 `JD_PUBLISH_RUNNER_LABEL` 设为相同值。该主机仅用于可信发布标签，PR 测试保持在 GitHub 托管 Runner。国内 job 最长 45 分钟，其中 JCR 镜像构建及上传限 15 分钟，OSS 上传及安装包 artifact 各限 10 分钟；Docker Hub job 限 30 分钟。
+工作流要求 `[self-hosted, linux, x64, jdcloud-publish]` 标签，当前发布 Runner 为 `pkx2`。如需自定义最后一个标签，执行 `--register-only` 时设置 `RUNNER_LABEL`，并将仓库 Actions 变量 `JD_PUBLISH_RUNNER_LABEL` 设为相同值。该主机仅用于可信发布标签，PR 测试保持在 GitHub 托管 Runner。构建、产物下载及上传步骤均设有超时；京东云上传绕过 Runner 的 HTTP 代理，GitHub 下载可继续使用代理。
 
 OSS 将 `oss-transfer.tar.gz`、SHA-256 校验文件和 `VERSION` 存放在 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`。正式版本同时更新 `osstransfer/latest/`；预发布版本只更新版本目录。
 

@@ -288,32 +288,33 @@ start_service
 """)
         self.assert_failure(result, "within 90 seconds")
 
-    def preflight_body(self, docker_free_kib):
+    def preflight_body(self, free_kib):
         self.runner.mkdir()
-        docker_root = self.root / "docker-data"
-        docker_root.mkdir()
         return f"""
 command() {{ if [[ "$1" == -v ]]; then return 0; else builtin command "$@"; fi; }}
 aws() {{ printf 'aws-cli/2.99.1 offline\\n'; }}
-runner_command() {{ if [[ "$*" == *--format* ]]; then printf '%s\\n' {shlex.quote(str(docker_root))}; fi; }}
-df() {{
-  printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n'
-  if [[ "$*" == *docker-data* ]]; then printf 'fixture 30000000 0 {docker_free_kib} 0%% /\\n';
-  else printf 'fixture 30000000 0 20000000 0%% /\\n'; fi
-}}
+runner_command() {{ [[ "$*" == 'timeout 15 skopeo --version' ]]; }}
+df() {{ printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nfixture 30000000 0 {free_kib} 0%% /\\n'; }}
 preflight
 """
 
-    def test_both_workspace_and_docker_data_need_ten_gib_free(self):
-        self.assert_failure(self.run_shell(self.preflight_body(5000000)), "10 GiB free disk")
+    def test_transfer_workspace_needs_five_gib_free(self):
+        self.assert_failure(self.run_shell(self.preflight_body(5000000)), "5 GiB free disk")
 
-    def test_arm64_emulation_requires_the_fix_binary_flag(self):
-        self.binfmt.write_text("enabled\nflags: POC\n")
-        self.assert_failure(self.run_shell(self.preflight_body(20000000)), "flag F")
-
-    def test_preflight_accepts_ready_storage_and_arm64_handler(self):
-        result = self.run_shell(self.preflight_body(20000000))
+    def test_preflight_accepts_storage_without_docker_or_emulation(self):
+        self.binfmt.unlink()
+        result = self.run_shell(self.preflight_body(6000000))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_transfer_only_preparation_has_no_build_toolchain(self):
+        script = SCRIPT.read_text()
+        self.assertNotIn('prepare_docker', script)
+        self.assertNotIn('usermod -aG docker', script)
+        self.assertNotIn('qemu', script)
+        packages = next(line for line in script.splitlines() if line.strip().startswith('apt_install ca-certificates'))
+        self.assertIn('skopeo', packages)
+        for package in ('maven', 'qemu-user-static', 'binfmt-support', 'docker-ce', 'nodejs', 'golang'):
+            self.assertNotIn(package, packages)
 
 
 if __name__ == "__main__":

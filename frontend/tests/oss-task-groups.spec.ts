@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
+import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 
 function ossGroup(id = 8000, overrides: Record<string, unknown> = {}) {
   const shards = Array.from({ length: 128 }, (_, index) => ({
@@ -30,8 +31,23 @@ function ossGroup(id = 8000, overrides: Record<string, unknown> = {}) {
 }
 
 async function status(page: Page, groups: ReturnType<typeof ossGroup>[]) {
+  await mockTaskChildren(page, (id) => {
+    const group = groups.find((item) => item.taskIndex === id)!;
+    return {
+      parentTaskId: id,
+      items: group?.shards || [],
+      childTaskIds: group?.childTaskIds,
+      totalCount: group?.shardCount,
+      partial: group?.partial,
+    };
+  });
   await page.route("**/api/master/status", (route) =>
-    route.fulfill({ json: { totalTasks: groups.length, tasks: groups } }),
+    route.fulfill({
+      json: {
+        totalTasks: groups.length,
+        tasks: groups.map(({ shards, ...summary }) => summary),
+      },
+    }),
   );
 }
 
@@ -63,10 +79,11 @@ test("one OSS migration with 128 execution shards occupies one row and opens agg
   await expect(page.locator("tbody tr")).toContainText("16,384 / 16,384");
   await expect(page.locator("tbody tr")).toContainText("10.0.1.12, 10.0.1.13");
   await page.getByRole("button", { name: "#8000", exact: true }).click();
+  await revealChildren(page);
   await expect(
-    drawer(page).getByRole("heading", { name: "子任务 (128)" }),
+    drawer(page).getByRole("heading", { name: "子任务", exact: true }),
   ).toBeVisible();
-  await expect(drawer(page).getByText(/^子任务 #/)).toHaveCount(128);
+  await expect(drawer(page).getByText(/^子任务 #/)).toHaveCount(25);
   await expect(drawer(page).getByText("本次创建的任务")).toHaveCount(0);
   await expect(drawer(page).getByRole("button", { name: /^#10/ })).toHaveCount(
     0,
@@ -259,11 +276,12 @@ test("missing worker shards retain a warning and cannot produce a complete group
   ]);
   await page.goto("/tasks?taskId=8000");
   await expect(
-    drawer(page).getByText("部分执行节点不可达，当前信息可能不完整。"),
+    drawer(page).getByText("任务信息不完整，请刷新或检查执行节点。"),
   ).toBeVisible();
   await expect(
     drawer(page).getByRole("button", { name: "导出任务报告", exact: true }),
   ).toBeDisabled();
+  await revealChildren(page);
   await expect(drawer(page).getByText("尚未生成子任务")).toHaveCount(0);
 });
 

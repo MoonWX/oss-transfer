@@ -1,4 +1,3 @@
-import { useWorkerStatus } from "../lib/workerStatus";
 import { useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
@@ -36,6 +35,7 @@ import {
   TravelExploreRounded,
 } from "@mui/icons-material";
 import { api, ApiError, useApi, useNotify } from "../lib/api";
+import type { NodeRegistry } from "../lib/nodeRegistry";
 import {
   EmptyState,
   PageHeader,
@@ -186,8 +186,15 @@ export default function ToolsPage() {
     partial?: boolean;
     failedWorkers?: string[];
     unreachableWorkers?: string[];
+    queriedWorkers?: string[];
   }>(tab === 1 ? "/api/master/deleted-tasks" : null);
-  const nodes = useWorkerStatus();
+  // Recycle completeness belongs to this snapshot, not the live status poll.
+  const nodes = useApi<{ data: NodeRegistry }>(
+    tab === 1 ? "/api/master/nodes" : null,
+  );
+  const hasMembershipSnapshot = Array.isArray(recycle.data?.queriedWorkers);
+  const nodeDiscoveryFailed = !hasMembershipSnapshot && !!nodes.error;
+  const membershipKnown = hasMembershipSnapshot || !!nodes.data?.data?.nodes;
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -217,9 +224,11 @@ export default function ToolsPage() {
   const activeSelection = selectedIds.filter((id) => uniqueIds.includes(id));
   const missingNodes = [
     ...new Set([
-      ...Object.keys(nodes.data?.workers ?? {}).filter(
-        (ip) => !Array.isArray(recycle.data?.deletedTasks?.[ip]),
-      ),
+      ...(
+        recycle.data?.queriedWorkers ??
+        nodes.data?.data?.nodes.map((node) => node.address) ??
+        []
+      ).filter((ip) => !Array.isArray(recycle.data?.deletedTasks?.[ip])),
       ...(recycle.data?.failedWorkers || []),
       ...(recycle.data?.unreachableWorkers || []),
     ]),
@@ -757,7 +766,7 @@ export default function ToolsPage() {
           </Alert>
           {recycle.error && <Alert severity="error">{recycle.error}</Alert>}
           {deleteError && <Alert severity="warning">{deleteError}</Alert>}
-          {nodes.error && (
+          {nodeDiscoveryFailed && (
             <Alert severity="warning">
               节点清单读取失败，无法确认回收站是否覆盖全部节点。
             </Alert>
@@ -976,8 +985,8 @@ export default function ToolsPage() {
               !!recycle.data &&
               !recycle.data.partial &&
               recycle.data.complete !== false &&
-              !nodes.error &&
-              !!nodes.data &&
+              !nodeDiscoveryFailed &&
+              membershipKnown &&
               missingNodes.length === 0 && (
                 <EmptyState
                   title="暂无已删除任务"

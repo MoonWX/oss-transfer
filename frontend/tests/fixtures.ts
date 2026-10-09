@@ -154,7 +154,22 @@ export async function mockApi(
         totalFailedObjectCount: 18,
         tasks: options.empty ? [] : tasks,
       };
-    else if (/^\/api\/master\/tasks\/\d+\/bandwidth-limit$/.test(path))
+    else if (/^\/api\/master\/tasks\/\d+\/children(?:\/\d+)?$/.test(path)) {
+      const parts = path.split("/");
+      result = {
+        success: true,
+        data: {
+          parentTaskId: Number(parts[4]),
+          offset: parts[6]
+            ? Number(parts[6]) - 1
+            : Number(url.searchParams.get("offset") || 0),
+          limit: parts[6] ? 1 : Number(url.searchParams.get("limit") || 25),
+          items: [],
+          totalCount: 0,
+          partial: false,
+        },
+      };
+    } else if (/^\/api\/master\/tasks\/\d+\/bandwidth-limit$/.test(path))
       result = {
         success: true,
         data: {
@@ -163,6 +178,23 @@ export async function mockApi(
           sharedTaskCount: 1,
           canEdit: true,
           nodes: [],
+        },
+      };
+    else if (path === "/api/master/nodes" && request.method() === "GET")
+      result = {
+        success: true,
+        data: {
+          nodes: [
+            { address: "10.0.1.12", label: "master", master: true },
+            {
+              address: "10.0.1.13",
+              label: "agent",
+              master: false,
+              agent: true,
+            },
+          ],
+          port: 1685,
+          masterWebUrl: "http://10.0.1.12:1685",
         },
       };
     else if (path === "/api/master/worker-status")

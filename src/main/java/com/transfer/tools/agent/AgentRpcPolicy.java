@@ -14,7 +14,7 @@ public final class AgentRpcPolicy {
             "node-info", "node-config", "worker-status", "task-status", "pending-tasks",
             "failed-tasks", "status", "deleted-tasks", "rate-limit", "rate-limit/adjustment",
             "rate-limit/history", "s3-config", "local-capabilities", "local-transfers/status",
-            "local-transfers/failures", "task-bandwidth-policy"));
+            "local-transfers/failures", "task-bandwidth-policy", "task-children"));
     private static final Set<String> POST = new HashSet<>(Arrays.asList(
             "start", "stop", "resume", "clear", "permanent-delete", "retry-task", "tasks",
             "failed", "failed/clear", "fallback", "fallback/clear", "s3-config",

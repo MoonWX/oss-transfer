@@ -1,3 +1,4 @@
+import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
 import { numberSubtasks } from "../src/lib/subtasks";
@@ -58,7 +59,12 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
       })),
     }));
     await page.route("**/api/master/status", (route) =>
-      route.fulfill({ json: { totalTasks: 2, tasks: parents } }),
+      route.fulfill({
+        json: {
+          totalTasks: 2,
+          tasks: parents.map(({ shards, ...summary }) => summary),
+        },
+      }),
     );
     await page.route("**/api/master/local-transfers/status?*", (route) => {
       const id = Number(
@@ -72,8 +78,13 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
         },
       });
     });
+    await mockTaskChildren(page, (id) => ({
+      parentTaskId: id,
+      items: parents.find((row) => row.taskIndex === id)!.shards,
+    }));
     for (const id of [222, 223]) {
       await page.goto(`/tasks?taskId=${id}`);
+      await revealChildren(page);
       const drawer = page.locator(".MuiDrawer-paper").filter({
         has: page.getByRole("heading", {
           name: `迁移任务 #${id}`,
@@ -81,7 +92,11 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
         }),
       });
       await expect(
-        drawer.getByRole("heading", { name: "子任务 (2)", exact: true }),
+        drawer.getByRole("heading", {
+          name: "子任务",
+          exact: true,
+          exact: true,
+        }),
       ).toBeVisible();
       await expect(drawer.getByText(/^子任务 #/)).toHaveText([
         `子任务 #${id}-1 · 10.0.1.12`,

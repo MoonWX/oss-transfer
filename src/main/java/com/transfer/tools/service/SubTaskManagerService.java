@@ -72,6 +72,13 @@ public class SubTaskManagerService {
         return thread;
     });
 
+    private final java.util.concurrent.atomic.AtomicLong identitySequence = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.ConcurrentMap<Integer, Long> taskIdentityVersions = new java.util.concurrent.ConcurrentHashMap<>();
+    public long taskIdentityVersion(Integer taskId) { return taskIdentityVersions.getOrDefault(taskId, 0L); }
+    private void changedTaskIdentities(java.util.Collection<Integer> ids) {
+        for (Integer id : ids) taskIdentityVersions.put(id, identitySequence.incrementAndGet());
+    }
+
     private static final String TASK_KEY_PREFIX = "task:";
     private static final String TASK_ID_SEQUENCE_KEY = "task:id:sequence";
     private static final String TASK_ID_LIST_KEY = "task:id:list";
@@ -121,6 +128,7 @@ public class SubTaskManagerService {
         }
         taskIdList.add(taskId);
         rocksDBService.put(TASK_ID_LIST_KEY, taskIdList);
+        changedTaskIdentities(java.util.Collections.singletonList(taskId));
     }
 
     @SuppressWarnings("unchecked")
@@ -129,6 +137,7 @@ public class SubTaskManagerService {
         if (taskIdList != null) {
             taskIdList.remove(taskId);
             rocksDBService.put(TASK_ID_LIST_KEY, taskIdList);
+            taskIdentityVersions.remove(taskId);
         }
     }
 
@@ -187,6 +196,7 @@ public class SubTaskManagerService {
         }
         taskIdList.addAll(newTaskIds);
         rocksDBService.put(TASK_ID_LIST_KEY, taskIdList);
+        changedTaskIdentities(newTaskIds);
 
         log.info("已保存 {} 个子任务，任务ID范围: {} - {}", subTasks.size(), startIndex, endIndex);
     }
@@ -208,6 +218,7 @@ public class SubTaskManagerService {
         values.put(TASK_KEY_PREFIX + task.getTaskIndex(), task);
         values.put(TASK_ID_LIST_KEY, ids);
         rocksDBService.putBatchSync(values);
+        changedTaskIdentities(java.util.Collections.singletonList(task.getTaskIndex()));
     }
 
     public synchronized void updateTaskStatus(SubTaskStatus status) {
@@ -281,11 +292,12 @@ public class SubTaskManagerService {
             saved.put(localShardAssignmentKey(task.getParentTaskId(), task.getShardId()), taskId);
         }
         rocksDBService.putBatchSync(saved);
+        changedTaskIdentities(java.util.Collections.singletonList(taskId));
     }
 
     public synchronized void ensureTaskIndexed(Integer taskId) {
         List<Integer> ids = getTaskIdList();
-        if (!ids.contains(taskId)) { ids.add(taskId); rocksDBService.putSync(TASK_ID_LIST_KEY, ids); }
+        if (!ids.contains(taskId)) { ids.add(taskId); rocksDBService.putSync(TASK_ID_LIST_KEY, ids); changedTaskIdentities(java.util.Collections.singletonList(taskId)); }
     }
 
     public int preferredLocalShardTaskId(TransferDirection direction, Integer parentTaskId, String shardId) {
@@ -788,6 +800,7 @@ public class SubTaskManagerService {
         toPutDeleted.put(TASK_ID_LIST_KEY, newTaskIdList);
         toPutDeleted.put(DELETED_TASK_ID_LIST_KEY, deletedIdList);
         rocksDBService.putBatchWithDeletes(toPutDeleted, deleteKeys);
+        for (Integer id : toDeleteTaskIds) taskIdentityVersions.remove(id);
         if (permanent) permanentDeleteTasks(toDeleteTaskIds);
 
         if (!toDeleteTaskIds.isEmpty()) {
@@ -913,6 +926,7 @@ public class SubTaskManagerService {
             Map<String,Object> fences = new LinkedHashMap<>();
             for (Integer id : selected.keySet()) fences.put("task:purged:" + id, true);
             rocksDBService.putBatchSync(fences);
+            for (Integer id : selected.keySet()) taskIdentityVersions.remove(id);
             if (taskProgressCache != null) taskProgressCache.clearTaskProgressBatch(new ArrayList<>(selected.keySet()));
             return selected.size();
         }
@@ -1461,6 +1475,7 @@ public class SubTaskManagerService {
         taskIdList.addAll(newTaskIds);
         batchData.put(TASK_ID_LIST_KEY, taskIdList);
         rocksDBService.putBatchSync(batchData);
+        changedTaskIdentities(newTaskIds);
 
         log.info("已导入 {} 个任务，任务ID范围: {} - {}", taskImports.size(), startIndex, endIndex);
     }
@@ -1581,6 +1596,7 @@ public class SubTaskManagerService {
         }
         batchData.put(TASK_ID_LIST_KEY, taskIdList);
         rocksDBService.putBatchSync(batchData);
+        changedTaskIdentities(newTaskIds);
 
         if (!newTaskIds.isEmpty()) {
             Integer minTaskId = newTaskIds.get(0);

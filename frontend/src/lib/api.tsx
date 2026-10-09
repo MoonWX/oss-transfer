@@ -27,9 +27,14 @@ export class ApiError extends Error {
     super(message);
   }
 }
-type Options = { method?: string; body?: unknown; signal?: AbortSignal };
+type Options = {
+  method?: string;
+  body?: unknown;
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+};
 async function request(path: string, options: Options = {}) {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...options.headers };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -101,8 +106,13 @@ export function saveFile(
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export function useApi<T = any>(path: string | null, refreshMs = 0) {
+export function useApi<T = any>(
+  path: string | null,
+  refreshMs = 0,
+  summary = false,
+) {
   const [data, setData] = useState<T>();
+  const [dataPath, setDataPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
   const sequence = useRef(0);
@@ -117,6 +127,7 @@ export function useApi<T = any>(path: string | null, refreshMs = 0) {
     setLoading(true);
     try {
       const next = await api<T>(path, {
+        headers: summary ? { "X-Task-View": "summary" } : undefined,
         signal: AbortSignal.any([
           controller.current.signal,
           AbortSignal.timeout(120000),
@@ -124,6 +135,7 @@ export function useApi<T = any>(path: string | null, refreshMs = 0) {
       });
       if (id === sequence.current) {
         setData(next);
+        setDataPath(path);
         setError(null);
       }
     } catch (e) {
@@ -138,7 +150,7 @@ export function useApi<T = any>(path: string | null, refreshMs = 0) {
         inFlight.current = false;
       }
     }
-  }, [path]);
+  }, [path, summary]);
   useEffect(() => {
     setData(undefined);
     setError(null);
@@ -156,7 +168,12 @@ export function useApi<T = any>(path: string | null, refreshMs = 0) {
     }, refreshMs);
     return () => clearInterval(timer);
   }, [path, refresh, refreshMs]);
-  return { data, error, loading, refresh };
+  return {
+    data: dataPath === path ? data : undefined,
+    error,
+    loading,
+    refresh,
+  };
 }
 type Severity = "success" | "error" | "info" | "warning";
 const NotifyContext = createContext<

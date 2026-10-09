@@ -10,6 +10,66 @@ const emptyResult = {
   partial: false,
 };
 
+test("live worker poll failures and membership changes cannot unmount a recycle snapshot", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  await page.route("**/api/master/deleted-tasks", (route) =>
+    route.fulfill({
+      json: {
+        ...emptyResult,
+        queriedWorkers: ["10.0.1.12", "10.0.1.13"],
+      },
+    }),
+  );
+  await page.goto("/tools?tab=recycle");
+  const empty = page.getByText("暂无已删除任务", { exact: true });
+  await advanceUntilVisible(page, empty);
+  const handle = await empty.elementHandle();
+  const geometry = await empty.boundingBox();
+  let failed = true;
+  let calls = 0;
+  await page.route("**/api/master/worker-status", (route) => {
+    calls++;
+    return failed
+      ? route.fulfill({
+          status: 503,
+          json: { success: false, message: "节点暂时不可用" },
+        })
+      : route.fulfill({
+          json: {
+            success: true,
+            workers: {
+              "10.0.1.12": { success: true },
+              "10.0.1.13": { success: true },
+              "10.0.1.99": { success: true },
+            },
+          },
+        });
+  });
+  await page.clock.runFor(1000);
+  await expect.poll(() => calls).toBeGreaterThan(0);
+  await expect(empty).toBeVisible();
+  expect(await handle!.evaluate((element) => element.isConnected)).toBe(true);
+  expect(await empty.boundingBox()).toEqual(geometry);
+  await expect(
+    page.getByText("节点清单读取失败", { exact: false }),
+  ).toHaveCount(0);
+  failed = false;
+  const previousCalls = calls;
+  await page.clock.runFor(1000);
+  await expect.poll(() => calls).toBeGreaterThan(previousCalls);
+  expect(await handle!.evaluate((element) => element.isConnected)).toBe(true);
+  expect(await empty.boundingBox()).toEqual(geometry);
+  await expect(
+    page.getByText("以下节点未返回回收站数据", { exact: false }),
+  ).toHaveCount(0);
+});
+
 test("empty recycle content stays mounted and keeps its geometry during background and manual refresh", async ({
   page,
 }, testInfo) => {

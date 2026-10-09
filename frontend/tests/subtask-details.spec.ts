@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { advanceUntilVisible, installPausedClock } from "./clock";
 import { mockApi, tasks } from "./fixtures";
+import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 
 type Direction = "OSS_TO_OSS" | "OSS_TO_LOCAL" | "LOCAL_TO_OSS";
 type TaskRecord = Record<string, any>;
@@ -77,7 +78,7 @@ async function arrange(page: Page, direction: Direction, parentId = 821) {
         tasks: [
           {
             ...data.parent,
-            shards: [...data.children].reverse(),
+            shards: undefined,
             partial: data.partial,
           },
         ],
@@ -101,6 +102,13 @@ async function arrange(page: Page, direction: Direction, parentId = 821) {
           },
     });
   });
+  await mockTaskChildren(page, () => ({
+    parentTaskId: data.parent.taskIndex,
+    items: data.children,
+    childTaskIds: data.parent.childTaskIds,
+    partial: data.partial,
+    error: data.error,
+  }));
   return { data, requests };
 }
 
@@ -147,6 +155,7 @@ for (const direction of [
   }) => {
     const { requests } = await arrange(page, direction);
     await page.goto("/tasks?taskId=821");
+    await revealChildren(page);
     const card = page.getByRole("button", { name: "查看子任务 821-2" });
     await expect(card).toBeVisible();
     await card.click();
@@ -196,6 +205,7 @@ test("child navigation supports keyboard, history, reload and returning to the p
 }) => {
   await arrange(page, "OSS_TO_LOCAL");
   await page.goto("/tasks?taskId=821");
+  await revealChildren(page);
   const card = page.getByRole("button", { name: "查看子任务 821-2" });
   await card.scrollIntoViewIfNeeded();
   const parentScroll = await drawer(page).evaluate(
@@ -290,6 +300,7 @@ test("polling cannot silently replace an opened legacy child with another child"
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
   );
   await page.goto("/tasks?taskId=821");
+  await revealChildren(page);
   const card = page.getByRole("button", { name: "查看子任务 821-1" });
   await card.click();
   const child = await expectChild(page, "821-1");
@@ -348,7 +359,9 @@ test("a child deep link whose parent is absent finishes loading with an unavaila
   });
   await page.goto("/tasks?taskId=821&childTaskId=821-2&childNode=10.0.1.13");
   const child = await expectChild(page);
-  await expect(child.getByText("正在加载…", { exact: true })).toBeVisible();
+  await expect(
+    child.getByText("未找到此子任务。", { exact: true }),
+  ).toBeVisible();
   release();
   await expect(
     child.getByText("未找到此子任务。", { exact: true }),
@@ -370,6 +383,7 @@ test("same-number children select the requested worker and return focus to its c
   data.children[1].shardIndex = data.children[0].shardIndex;
   data.parent.childTaskIds = [data.children[0].taskIndex];
   await page.goto("/tasks?taskId=821");
+  await revealChildren(page);
   for (const [node, transferred] of [
     ["10.0.1.12", 42],
     ["10.0.1.13", 37],

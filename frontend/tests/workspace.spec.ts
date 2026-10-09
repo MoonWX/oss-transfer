@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
+import { revealChildren } from "./task-children-fixture";
 
 test("login, persistent theme, logout and authenticated requests", async ({
   page,
@@ -60,6 +61,14 @@ test("tasks filter, scoped start, partial failure and local detail", async ({
   await expect(
     page.getByText("/mnt/datasets", { exact: true }).last(),
   ).toBeVisible();
+  expect(requests.some((r) => r.path.includes("/tasks/1046/children"))).toBe(
+    false,
+  );
+  const childrenRequest = page.waitForRequest(
+    "**/api/master/tasks/1046/children?offset=0&limit=25",
+  );
+  await revealChildren(page);
+  await childrenRequest;
   await page.getByRole("button", { name: "关闭详情" }).click();
   await page.getByRole("textbox", { name: "搜索任务" }).fill("analytics");
   await expect(
@@ -70,9 +79,14 @@ test("tasks filter, scoped start, partial failure and local detail", async ({
   ).toHaveCount(0);
   expect(
     requests.some((r) =>
-      r.path.includes("/local-transfers/status?taskId=1046"),
+      r.path.includes("/tasks/1046/children?offset=0&limit=25"),
     ),
   ).toBeTruthy();
+  expect(
+    requests.some((r) =>
+      r.path.includes("/local-transfers/status?taskId=1046"),
+    ),
+  ).toBe(false);
 });
 
 test("stopping a local parent with completed shards is not reported as a partial failure", async ({

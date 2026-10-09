@@ -40,6 +40,56 @@ public class TaskMetadataPurgeTest {
     }
     @After public void close() { tasks.shutdownCompletionWriter(); db.destroy(); }
 
+    @Test public void deletedIdentitiesAreEvictedAndReusedIdsRefreshCachedChildMembership() {
+        WorkerTaskChildrenService children = new WorkerTaskChildrenService();
+        ReflectionTestUtils.setField(children, "tasks", tasks);
+        tasks.saveAssignedTask(-101, assigned(7, "7-local-0"));
+        long original = tasks.taskIdentityVersion(-101);
+        assertTrue(original > 0);
+        assertEquals(1, ((List<?>) children.query(7, 0, 25, null).get("items")).size());
+        SubTaskStatus first = tasks.getTaskStatus(-101);
+        first.setStatus(SubTaskStatus.TaskStatus.STOPPED);
+        tasks.updateTaskStatus(first);
+        assertEquals(1, tasks.clearTasks(null, null, Collections.singletonList(-101), false));
+        assertEquals(0L, tasks.taskIdentityVersion(-101));
+        assertTrue(identityVersions().isEmpty());
+
+        // Reuse happens between child queries, so the cache cannot rely on observing an empty index.
+        tasks.saveAssignedTask(-101, assigned(8, "8-local-3"));
+        assertTrue(tasks.taskIdentityVersion(-101) > original);
+        assertTrue(((List<?>) children.query(7, 0, 25, null).get("items")).isEmpty());
+        List<?> page = (List<?>) children.query(8, 0, 25, null).get("items");
+        assertEquals(1, page.size());
+        assertEquals(4, ((Map<?, ?>) page.get(0)).get("subtaskNumber"));
+        assertEquals(1, tasks.clearTasks(null, null, Collections.singletonList(-101), true));
+        assertEquals(0L, tasks.taskIdentityVersion(-101));
+        assertTrue(identityVersions().isEmpty());
+        assertTrue(children.query(8, 0, 25, null).get("items") instanceof List);
+        assertTrue(((List<?>) children.query(8, 0, 25, null).get("items")).isEmpty());
+    }
+
+    @Test public void removingActiveIndexEvictsOnlyItsIdentityAndReindexingGetsANewerVersion() {
+        tasks.saveAssignedTask(-102, assigned(9, "9-local-0"));
+        tasks.saveAssignedTask(-103, assigned(9, "9-local-1"));
+        long original = tasks.taskIdentityVersion(-102), retained = tasks.taskIdentityVersion(-103);
+        tasks.removeFromTaskIdList(-102);
+        assertEquals(0L, tasks.taskIdentityVersion(-102));
+        assertEquals(Collections.singleton(-103), identityVersions().keySet());
+        tasks.ensureTaskIndexed(-102);
+        assertTrue(tasks.taskIdentityVersion(-102) > original);
+        assertEquals(retained, tasks.taskIdentityVersion(-103));
+    }
+
+    @SuppressWarnings("unchecked") private Map<Integer, Long> identityVersions() {
+        return (Map<Integer, Long>) ReflectionTestUtils.getField(tasks, "taskIdentityVersions");
+    }
+    private ListSubTask assigned(int parent, String shard) {
+        ListSubTask task = new ListSubTask();
+        task.setParentTaskId(parent); task.setShardId(shard); task.setDirection(TransferDirection.OSS_TO_LOCAL);
+        task.setSourceBucket("source"); task.setDestBucket("destination");
+        return task;
+    }
+
     @Test public void removesOnlySelectedMetadataIncludingLargePrefixesAndLeavesRealFilesUntouched() throws Exception {
         SubTaskStatus one = task(1, null), ten = task(10, null);
         one.setInventoryManifestId("manifest-1");

@@ -2,6 +2,7 @@ type ExecutionSubtask = Record<string, any> & {
   taskIndex?: number;
   shardIndex?: number | null;
   shardId?: string;
+  subtaskNumber?: number;
 };
 
 // Keep the worker identity unchanged; the displayed number belongs to its parent.
@@ -10,6 +11,8 @@ export function numberSubtasks<T extends ExecutionSubtask>(
   childTaskIds: number[] | null = [],
 ): Array<T & { subtaskNumber: number }> {
   const indexOf = (task: T): number | undefined => {
+    if (Number.isInteger(task.subtaskNumber) && task.subtaskNumber! >= 1)
+      return task.subtaskNumber! - 1;
     if (Number.isInteger(task.shardIndex) && task.shardIndex! >= 0)
       return task.shardIndex!;
     const legacyIndex = task.shardId?.match(

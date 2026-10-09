@@ -63,11 +63,12 @@ public class TaskLifecycleService {
             throw new IllegalStateException(response == null ? "节点未响应" : String.valueOf(response.get("message")));
     }
     public Map<String,Object> deletedTasks() {
+        List<String> queriedWorkers = new ArrayList<>(workers());
         Map<String,Object> grouped = new LinkedHashMap<>();
         Set<String> successfulWorkers = new LinkedHashSet<>();
         List<String> failed = new ArrayList<>();
         int count = 0;
-        for (String worker : workers()) {
+        for (String worker : queriedWorkers) {
             try {
                 List<SubTaskStatus> rows = new ArrayList<>();
                 for (SubTaskStatus task : read(worker, true)) if (task.getParentTaskId() == null) rows.add(task);
@@ -97,6 +98,8 @@ public class TaskLifecycleService {
         }
         Map<String,Object> result = result(true, failed, "");
         result.put("deletedTasks", grouped); result.put("totalCount", count);
+        result.put("queriedWorkers", queriedWorkers);
+        result.put("successfulWorkers", new ArrayList<>(successfulWorkers));
         result.put("complete", failed.isEmpty());
         return result;
     }

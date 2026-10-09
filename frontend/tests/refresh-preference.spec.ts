@@ -150,7 +150,9 @@ test("changing cadence retains task data and in-flight work without overlapping 
   await expect(
     page.getByRole("heading", { name: "迁移任务 #1046" }),
   ).toBeVisible();
-  const detailPath = "/api/master/local-transfers/status?taskId=1046";
+  await page.clock.runFor(400);
+  await page.getByTestId("task-children-region").scrollIntoViewIfNeeded();
+  const detailPath = "/api/master/tasks/1046/children?offset=0&limit=25";
   await expect
     .poll(
       () => requests.filter((request) => request.path === detailPath).length,

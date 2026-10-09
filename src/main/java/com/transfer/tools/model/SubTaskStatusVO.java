@@ -64,12 +64,17 @@ public class SubTaskStatusVO {
     private String taskBandwidthScopeId;
     private OssKeyMapping keyMapping;
     private String objectKey;
+    private String targetRelativePath;
+    private String errorCode;
+    private String errorMessage;
 
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
     public static SubTaskStatusVO from(SubTaskStatus status) {
         SubTaskStatusVO vo = new SubTaskStatusVO();
         vo.setTaskIndex(status.getTaskIndex());
+        vo.setTargetRelativePath(status.getTargetRelativePath());
+        vo.setErrorCode(status.getErrorCode()); vo.setErrorMessage(status.getErrorMessage());
         vo.setSourceBucket(status.getSourceBucket());
         vo.setDestBucket(status.getDestBucket());
         vo.setSourceS3Alias(status.getSourceS3Alias());

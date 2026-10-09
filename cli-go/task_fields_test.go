@@ -81,7 +81,7 @@ func TestTaskFieldsParentWorkersUseCompleteMembership(t *testing.T) {
 func TestTaskShowSelectsChildByActualNode(t *testing.T) {
 	client := creationTestClient(t,
 		creationExchange{method: "GET", path: "/status", response: `{"tasks":[{"taskIndex":42,"parentTaskId":42,"direction":"LOCAL_TO_OSS","eligibleWorkerNodes":["10.0.0.1","10.0.0.2"]}]}`},
-		creationExchange{method: "GET", path: "/local-transfers/status", response: `{"success":true,"data":{"tasks":[],"shards":[{"taskIndex":9,"parentTaskId":42,"shardId":"local-1","shardIndex":1,"direction":"LOCAL_TO_OSS","executionNodeIp":"10.0.0.2","eligibleWorkerNodes":["10.0.0.1","10.0.0.2"],"sourceEndpoint":{"type":"LOCAL","nodeBindings":[{"executionNodeIp":"10.0.0.1","localPath":"/first"},{"executionNodeIp":"10.0.0.2","localPath":"/second"}]}}]}}`},
+		creationExchange{method: "GET", path: "/tasks/42/children/2", response: `{"success":true,"data":{"items":[{"taskIndex":9,"parentTaskId":42,"childTaskId":"42-2","shardId":"local-1","shardIndex":1,"direction":"LOCAL_TO_OSS","executionNodeIp":"10.0.0.2","eligibleWorkerNodes":["10.0.0.1","10.0.0.2"],"sourceEndpoint":{"type":"LOCAL","nodeBindings":[{"executionNodeIp":"10.0.0.1","localPath":"/first"},{"executionNodeIp":"10.0.0.2","localPath":"/second"}]}}]}}`},
 	)
 	result, err := taskShow(client, []string{"42", "--child", "42-2", "--node", "10.0.0.2"}, false)
 	if err != nil {

@@ -67,6 +67,8 @@ public class TaskLifecycleServiceTest {
         assertEquals(Collections.emptyList(),rows.get("worker-b"));
         assertEquals(0,result.get("totalCount")); assertEquals(true,result.get("complete"));
         assertEquals(false,result.get("partial")); assertEquals(Collections.emptyList(),result.get("failedWorkers"));
+        assertEquals(Arrays.asList("worker-a","worker-b"),result.get("queriedWorkers"));
+        assertEquals(Arrays.asList("worker-a","worker-b"),result.get("successfulWorkers"));
     }
     @Test public void recycleBinGroupingRetainsAnEmptySiblingWorker() {
         installOssGroup();
@@ -89,6 +91,8 @@ public class TaskLifecycleServiceTest {
         assertEquals(Collections.emptyList(),rows.get("worker-a"));
         assertEquals(false,result.get("complete")); assertEquals(true,result.get("partial"));
         assertEquals(Collections.singletonList("worker-b"),result.get("failedWorkers"));
+        assertEquals(Arrays.asList("worker-a","worker-b"),result.get("queriedWorkers"));
+        assertEquals(Collections.singletonList("worker-a"),result.get("successfulWorkers"));
     }
     @Test public void unavailableLocalWorkerIsNotMaskedByAnEmptyParentList() {
         installOssGroup();

@@ -84,7 +84,13 @@ The CLI uses the same master API:
 oss-transfer-cli --help
 oss-transfer-cli worker-status
 oss-transfer-cli task list
+oss-transfer-cli task show 123
+oss-transfer-cli task children 123 --offset 25 --limit 25
+oss-transfer-cli task show 123 --child 123-26 --node 10.0.0.2
+oss-transfer-cli task trash --direction oss-to-local
 ```
+
+Child tasks load in pages of 25. In the WebUI, scroll to the child-task section to load the first page; select a child to view its details. CLI output gives the command for the next page. Use `--json` for structured output.
 
 For Docker, prefix commands with `docker exec oss-transfer-master`. Use `--host` to target another master. Keep credentials out of command history; use the login prompt or a protected configuration file.
 

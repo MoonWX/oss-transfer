@@ -1,5 +1,31 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { mockApi } from "./fixtures";
+
+const worker = {
+  success: true,
+  rateLimit: {
+    list: { limitQps: 100, manualLimitQps: 100, currentQps: 24 },
+    put: { limitQps: 1400, manualLimitQps: 1400, currentQps: 216 },
+    head: { limitQps: 2800, manualLimitQps: 2800, currentQps: 198 },
+    bandwidth: {
+      limitBps: 2_000_000_000,
+      manualLimitBps: 2_000_000_000,
+      currentBps: 648_000_000,
+    },
+  },
+  queueStatus: {
+    listQueueSize: 24,
+    listQueueCapacity: 10000,
+    putQueueSize: 642,
+    putQueueCapacity: 1000000,
+    progressQueueSize: 12,
+    progressQueueCapacity: 10000,
+    failedKeyQueueSize: 0,
+    failedKeyQueueCapacity: 10000,
+    fallbackQueueSize: 0,
+    fallbackQueueCapacity: 10000,
+  },
+};
 
 const executionTaskStats = {
   scope: "CURRENT_EXECUTION_SUBTASKS",
@@ -14,22 +40,46 @@ const executionTaskStats = {
   unknownTasks: 0,
 };
 
-test("nodes distinguish current execution subtasks from legacy records and main task counts", async ({
+async function expectNoExecutionCounters(region: Locator) {
+  await expect(
+    region.getByText(
+      /子任务执行统计|节点记录（旧版统计）|进行中子任务|待执行子任务|已完成子任务|执行中记录|待执行记录|已完成记录|当前保留|旧版记录，非主任务完成数/,
+    ),
+  ).toHaveCount(0);
+  await expect(
+    region.getByRole("button", { name: /查看.*统计口径/ }),
+  ).toHaveCount(0);
+}
+
+test("nodes show rates and queue load without current or legacy subtask counters", async ({
   page,
 }, testInfo) => {
   await mockApi(page);
+  await page.route("**/api/master/nodes", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          nodes: [
+            { address: "10.0.1.12", master: true },
+            { address: "10.0.1.13", agent: true, online: true },
+          ],
+        },
+      },
+    }),
+  );
   await page.route("**/api/master/worker-status", (route) =>
     route.fulfill({
       json: {
         success: true,
         workers: {
           "10.0.1.12": {
-            success: true,
+            ...worker,
             taskStats: { completedTasks: 99 },
             executionTaskStats,
           },
           "10.0.1.13": {
-            success: true,
+            ...worker,
             taskStats: { pendingTasks: 2, runningTasks: 4, completedTasks: 8 },
           },
         },
@@ -37,95 +87,79 @@ test("nodes distinguish current execution subtasks from legacy records and main 
     }),
   );
   await page.goto("/nodes");
-  const current = page.getByRole("region", {
+  for (const ip of ["10.0.1.12", "10.0.1.13"]) {
+    const region = page.getByRole("region", {
+      name: `执行节点 ${ip}`,
+      exact: true,
+    });
+    await expect(region.getByText("在线", { exact: true })).toBeVisible();
+    await expectNoExecutionCounters(region);
+    for (const type of ["list", "put", "head", "bandwidth"])
+      await expect(region.getByTestId(`rate-${ip}-${type}`)).toBeVisible();
+    await expect(region.getByText("队列占用", { exact: true })).toBeVisible();
+    await expect(
+      region.getByText("642 / 1,000,000", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      region.getByRole("progressbar", { name: "对象传输队列占用" }),
+    ).toBeVisible();
+  }
+  const first = page.getByRole("region", {
     name: "执行节点 10.0.1.12",
     exact: true,
   });
-  await expect(
-    current.getByText("子任务执行统计", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    current.getByText("已完成子任务", { exact: true }).locator(".."),
-  ).toContainText("3");
-  await expect(
-    current.getByText("进行中子任务", { exact: true }).locator(".."),
-  ).toContainText("3");
-  await expect(
-    current.getByText("当前保留 10 个子任务", { exact: false }),
-  ).toBeVisible();
-  await expect(current.getByText("99", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
-  const currentInfo = current.getByRole("button", {
-    name: "查看子任务统计口径",
-  });
-  await currentInfo.focus();
-  await expect(page.getByRole("tooltip")).toBeVisible();
-  await expect(page.getByRole("tooltip")).toContainText("移入回收站后不再计数");
-  await expect(page.getByRole("tooltip")).toContainText(
-    "已完成不是主任务累计完成数",
-  );
-  await currentInfo.evaluate((element) => (element as HTMLElement).blur());
-  await expect(page.getByRole("tooltip")).toBeHidden();
-  const statistics = current
-    .getByText("子任务执行统计", { exact: true })
-    .locator("../..");
-  await statistics.screenshot({
-    path: testInfo.outputPath("node-execution-statistics-desktop.png"),
-    scale: "css",
-  });
-  const legacy = page.getByRole("region", {
-    name: "执行节点 10.0.1.13",
-    exact: true,
-  });
-  await expect(
-    legacy.getByText("节点记录（旧版统计）", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    legacy.getByText("已完成记录", { exact: true }).locator(".."),
-  ).toContainText("8");
-  await expect(legacy.getByText("已完成子任务", { exact: true })).toHaveCount(
-    0,
-  );
-  await expect(legacy.getByText("旧版记录，非主任务完成数")).toBeVisible();
-  const legacyInfo = legacy.getByRole("button", { name: "查看旧版统计口径" });
-  await legacyInfo.hover();
-  await expect(page.getByRole("tooltip")).toContainText(
-    "不能据此判断主任务完成数量",
-  );
-  await page.mouse.move(0, 0);
-  await expect(page.getByRole("tooltip")).toBeHidden();
+  await first
+    .getByRole("button", { name: "调整 10.0.1.12 的 传输带宽 限速" })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("带宽上限（Mbps）")).toHaveValue("2000");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await statistics.scrollIntoViewIfNeeded();
-  await statistics.screenshot({
-    path: testInfo.outputPath("node-execution-statistics-mobile.png"),
+  await first.scrollIntoViewIfNeeded();
+  await expectNoExecutionCounters(first);
+  await first.screenshot({
+    path: testInfo.outputPath("node-load-mobile.png"),
     scale: "css",
   });
-  await currentInfo.hover();
-  await expect(page.getByRole("tooltip")).toBeVisible();
-  await expect(page.getByRole("tooltip")).toContainText(
-    "不含主任务及扫描调度记录",
-  );
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "迁移概览" })).toBeVisible();
+  await expect(page.getByText("执行中任务", { exact: true })).toBeVisible();
+  await expect(page.getByText("已迁移数据", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("失败对象", { exact: true }).first(),
+  ).toBeVisible();
 });
 
-test("removing retained completed executions updates current counts without implying a lifetime total", async ({
+test("node refresh updates rates and queues without bringing back completed counters", async ({
   page,
 }) => {
   await mockApi(page);
-  let completed = 3;
+  let refreshed = false;
   await page.route("**/api/master/worker-status", (route) =>
     route.fulfill({
       json: {
         success: true,
         workers: {
           "10.0.1.12": {
-            success: true,
+            ...worker,
             executionTaskStats: {
               ...executionTaskStats,
-              completedTasks: completed,
-              totalTasks: 7 + completed,
+              completedTasks: refreshed ? 0 : 3,
+            },
+            rateLimit: {
+              ...worker.rateLimit,
+              bandwidth: {
+                ...worker.rateLimit.bandwidth,
+                currentBps: refreshed ? 720_000_000 : 648_000_000,
+              },
+            },
+            queueStatus: {
+              ...worker.queueStatus,
+              putQueueSize: refreshed ? 321 : 642,
             },
           },
         },
@@ -133,14 +167,18 @@ test("removing retained completed executions updates current counts without impl
     }),
   );
   await page.goto("/nodes");
-  const completedMetric = page
-    .getByText("已完成子任务", { exact: true })
-    .locator("..");
-  await expect(completedMetric).toContainText("3");
-  completed = 0;
+  const region = page.getByRole("region", {
+    name: "执行节点 10.0.1.12",
+    exact: true,
+  });
+  const bandwidth = region.getByTestId("rate-10.0.1.12-bandwidth");
+  await expect(bandwidth.getByText("648 Mbps", { exact: true })).toBeVisible();
+  await expectNoExecutionCounters(region);
+  refreshed = true;
   await page.getByRole("button", { name: "刷新", exact: true }).click();
-  await expect(completedMetric).toContainText("0");
+  await expect(bandwidth.getByText("720 Mbps", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("当前保留 7 个子任务", { exact: false }),
+    region.getByText("321 / 1,000,000", { exact: true }),
   ).toBeVisible();
+  await expectNoExecutionCounters(region);
 });

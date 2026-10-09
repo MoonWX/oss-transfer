@@ -91,6 +91,7 @@ private NodeConfigService nodeConfigService;
         result.put("masterIp", distributedConfig.getMasterIp());
         result.put("masterPort", distributedConfig.getPort());
         result.put("localIp", distributedConfig.getLocalIp());
+        result.put("taskChildren", true);
         return result;
     }
 

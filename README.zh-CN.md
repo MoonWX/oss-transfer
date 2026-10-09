@@ -84,7 +84,13 @@ CLI 使用同一 Master API：
 oss-transfer-cli --help
 oss-transfer-cli worker-status
 oss-transfer-cli task list
+oss-transfer-cli task show 123
+oss-transfer-cli task children 123 --offset 25 --limit 25
+oss-transfer-cli task show 123 --child 123-26 --node 10.0.0.2
+oss-transfer-cli task trash --direction oss-to-local
 ```
+
+子任务按每页 25 个加载。WebUI 滚动到子任务区域后加载首页，点击子任务查看详情。CLI 会给出下一页命令，使用 `--json` 可获取结构化结果。
 
 Docker 中在命令前加 `docker exec oss-transfer-master`。使用 `--host` 连接其他 Master。通过登录提示或受保护的配置文件提供凭据，避免将密码写入命令历史。
 

@@ -3,7 +3,7 @@ _oss_transfer_cli_completion() {
     local cur prev words cword
     _init_completion -n = || return
     local globals="--host --json --verbose --watch --help --version"
-    local commands="task node storage limit exceptions object login logout whoami change-password \
+    local commands="task node agent storage limit exceptions object login logout whoami change-password \
         list-task status show-task stop resume start retry delete-task clear list-deleted permanent-delete export-report \
         add-task import-tasks list-worker worker-status list-s3-config remove-s3-config \
         list-rate-limit rate-limit list-rate-limit-history rate-limit-history set-rate-limit \
@@ -65,7 +65,9 @@ _oss_transfer_cli_completion() {
             case "$action" in
                 "") choices="list show children creation create import stop resume start retry delete trash purge bandwidth report" ;;
                 list) flags="--status --source --dest --worker --direction --search --all" ;;
-                show|children) flags="--child --node" ;;
+                show) flags="--child --node --offset --limit" ;;
+                children) flags="--offset --limit" ;;
+                trash) flags="--task-id --worker --direction --search" ;;
                 create)
                     flags="$create_flags"
                     if ((${#positional[@]} == 2)); then choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
@@ -79,10 +81,16 @@ _oss_transfer_cli_completion() {
             esac ;;
         node)
             case "$action" in
-                "") choices="list add update remove" ;;
+                "") choices="list add invite update remove" ;;
                 add) flags="--label" ;;
+                invite) flags="--label --address" ;;
                 update) flags="--label --address" ;;
                 remove) flags="--yes" ;;
+            esac ;;
+        agent)
+            case "$action" in
+                "") choices="invite" ;;
+                invite) flags="--label --address" ;;
             esac ;;
         storage)
             case "$action" in
@@ -119,7 +127,8 @@ _oss_transfer_cli_completion() {
         add-task) flags="$create_flags --dateAfter --dateBefore" ;;
         import-tasks) flags="--file --format --balanced"; if [[ $cur != -* ]]; then _filedir; return; fi ;;
         list-task|status) flags="--status --source --dest --worker --direction --search --all" ;;
-        show-task) flags="--child --node" ;;
+        show-task) flags="--child --node --offset --limit" ;;
+        list-deleted) flags="--task-id --worker --direction --search" ;;
         permanent-delete|remove-s3-config|delete-failed-objs|clear-failed|delete-fallback-objs|clear-fallback) flags="--yes" ;;
         export-report) flags="--output" ;;
         list-rate-limit-history|rate-limit-history) flags="--limit" ;;

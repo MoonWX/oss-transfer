@@ -522,7 +522,7 @@ func formatSize(bytes int64) string {
 		return "0 B"
 	}
 
-	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
 	size := float64(bytes)
 	unitIndex := 0
 
@@ -531,7 +531,7 @@ func formatSize(bytes int64) string {
 		unitIndex++
 	}
 
-	return fmt.Sprintf("%.2f %s", size, units[unitIndex])
+	return strconv.FormatFloat(math.Round(size*10)/10, 'f', -1, 64) + " " + units[unitIndex]
 }
 
 func cmdWorkerStatus(client *ApiClient) (map[string]interface{}, error) {
@@ -557,10 +557,10 @@ func printWorkerStatusTable(result map[string]interface{}) {
 
 	fmt.Println()
 	fmt.Print(colorYellow)
-	fmt.Printf(" %-16s %8s %8s %8s %8s %8s %10s %10s %10s %10s %10s",
-		"WorkerIP", "Pending", "Running", "ListDone", "Complete", "Failed", "ListQ", "PutQ", "ProgressQ", "FailQ", "FallbackQ")
+	fmt.Printf(" %-16s %-12s %10s %10s %10s %10s %10s",
+		"WorkerIP", "State", "ListQ", "PutQ", "ProgressQ", "FailQ", "FallbackQ")
 	fmt.Println(colorReset)
-	fmt.Println(" " + strings.Repeat("-", 122))
+	fmt.Println(" " + strings.Repeat("-", 88))
 
 	ips := make([]string, 0, len(workers))
 	for ip := range workers {
@@ -575,21 +575,14 @@ func printWorkerStatusTable(result map[string]interface{}) {
 			continue
 		}
 
-		taskStats, _ := worker["taskStats"].(map[string]interface{})
 		queueStatus, _ := worker["queueStatus"].(map[string]interface{})
 		success, _ := worker["success"].(bool)
-
-		pending := getIntFromMap(taskStats, "pendingTasks")
-		running := getIntFromMap(taskStats, "runningTasks")
-		listDone := getIntFromMap(taskStats, "listDoneTasks")
-		completed := getIntFromMap(taskStats, "completedTasks")
-		failed := getIntFromMap(taskStats, "failedTasks")
-
-		listQ := getIntFromMap(queueStatus, "listQueueSize")
-		putQ := getIntFromMap(queueStatus, "putQueueSize")
-		progressQ := getIntFromMap(queueStatus, "progressQueueSize")
-		failQ := getIntFromMap(queueStatus, "failedKeyQueueSize")
-		fallbackQ := getIntFromMap(queueStatus, "fallbackQueueSize")
+		queue := func(key string) string {
+			if !success {
+				return "—"
+			}
+			return cliTaskCount(queueStatus, key)
+		}
 
 		color := colorGreen
 		if !success {
@@ -597,12 +590,16 @@ func printWorkerStatusTable(result map[string]interface{}) {
 		}
 
 		fmt.Print(color)
-		fmt.Printf(" %-16s %8d %8d %8d %8d %8d %10d %10d %10d %10d %10d",
-			ip, pending, running, listDone, completed, failed, listQ, putQ, progressQ, failQ, fallbackQ)
+		state := "online"
+		if !success {
+			state = "unavailable"
+		}
+		fmt.Printf(" %-16s %-12s %10s %10s %10s %10s %10s",
+			ip, state, queue("listQueueSize"), queue("putQueueSize"), queue("progressQueueSize"), queue("failedKeyQueueSize"), queue("fallbackQueueSize"))
 		fmt.Println(colorReset)
 	}
 
-	fmt.Println(" " + strings.Repeat("-", 122))
+	fmt.Println(" " + strings.Repeat("-", 88))
 }
 
 func getIntFromMap(m map[string]interface{}, key string) int {

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
+import { revealChildren } from "./task-children-fixture";
 import { advanceUntilVisible, installPausedClock } from "./clock";
 
 async function detail(page: Page, id: number, paused = false) {
@@ -236,18 +237,22 @@ test("local task details exclude the parent discovery record from execution shar
     route.fulfill({ json: { totalTasks: 1, tasks: [parent] } }),
   );
   await page.route(
-    "**/api/master/local-transfers/status?taskId=1050",
+    "**/api/master/tasks/1050/children?offset=0&limit=25",
     (route) =>
       route.fulfill({
         json: {
           success: true,
           data: {
-            tasks: [parent],
-            shards: [
+            parentTaskId: 1050,
+            offset: 0,
+            limit: 25,
+            totalCount: 1,
+            items: [
               {
                 ...parent,
                 taskIndex: -1224295820,
                 parentTaskId: 1050,
+                subtaskNumber: 1,
                 shardId: "batch-0",
                 executionNodeIp: "10.0.1.12",
               },
@@ -267,11 +272,12 @@ test("local task details exclude the parent discovery record from execution shar
       }),
   );
   await detail(page, 1050);
+  await revealChildren(page);
   const drawer = page
     .locator(".MuiDrawer-paper")
     .filter({ has: page.getByRole("heading", { name: "迁移任务 #1050" }) });
   await expect(
-    drawer.getByRole("heading", { name: "子任务 (1)" }),
+    drawer.getByRole("heading", { name: "子任务", exact: true }),
   ).toBeVisible();
   await expect(drawer.getByText("子任务 #1050-1 · 10.0.1.12")).toBeVisible();
   await expect(drawer.getByText(/子任务 #-/)).toHaveCount(0);
@@ -288,21 +294,29 @@ test("local task details retain a legacy execution record with the parent task I
     route.fulfill({ json: { totalTasks: 1, tasks: [parent] } }),
   );
   await page.route(
-    "**/api/master/local-transfers/status?taskId=1050",
+    "**/api/master/tasks/1050/children?offset=0&limit=25",
     (route) =>
       route.fulfill({
         json: {
           success: true,
           data: {
-            tasks: [parent],
-            shards: [{ ...parent, executionNodeIp: "10.0.1.12" }],
+            parentTaskId: 1050,
+            offset: 0,
+            limit: 25,
+            totalCount: 1,
+            items: [
+              { ...parent, subtaskNumber: 1, executionNodeIp: "10.0.1.12" },
+            ],
             partial: false,
           },
         },
       }),
   );
   await detail(page, 1050);
-  await expect(page.getByRole("heading", { name: "子任务 (1)" })).toBeVisible();
+  await revealChildren(page);
+  await expect(
+    page.getByRole("heading", { name: "子任务", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("子任务 #1050-1 · 10.0.1.12")).toBeVisible();
 });
 
@@ -319,7 +333,7 @@ for (const result of ["populated", "empty", "partial", "failed"] as const) {
       release = resolve;
     });
     await page.route(
-      "**/api/master/local-transfers/status?taskId=1050",
+      "**/api/master/tasks/1050/children?offset=0&limit=25",
       async (route) => {
         await responseReady;
         await route.fulfill({
@@ -330,14 +344,18 @@ for (const result of ["populated", "empty", "partial", "failed"] as const) {
               : {
                   success: true,
                   data: {
-                    tasks: [upload],
-                    shards:
+                    parentTaskId: 1050,
+                    offset: 0,
+                    limit: 25,
+                    totalCount: result === "populated" ? 1 : 0,
+                    items:
                       result === "populated"
                         ? [
                             {
                               ...upload,
                               taskIndex: -105001,
                               parentTaskId: 1050,
+                              subtaskNumber: 1,
                               shardId: "batch-0",
                               executionNodeIp: "10.0.1.12",
                             },
@@ -350,6 +368,7 @@ for (const result of ["populated", "empty", "partial", "failed"] as const) {
       },
     );
     await detail(page, 1050);
+    await revealChildren(page);
     const drawer = page.locator(".MuiDrawer-paper").filter({
       has: page.getByRole("heading", { name: "迁移任务 #1050" }),
     });
@@ -362,21 +381,21 @@ for (const result of ["populated", "empty", "partial", "failed"] as const) {
     await expect(drawer.getByText("正在加载子任务…")).toHaveCount(0);
     if (result === "populated") {
       await expect(
-        drawer.getByRole("heading", { name: "子任务 (1)" }),
+        drawer.getByRole("heading", { name: "子任务", exact: true }),
       ).toBeVisible();
       await expect(
         drawer.getByText("子任务 #1050-1 · 10.0.1.12"),
       ).toBeVisible();
     } else if (result === "empty") {
       await expect(
-        drawer.getByRole("heading", { name: "子任务 (0)" }),
+        drawer.getByRole("heading", { name: "子任务", exact: true }),
       ).toBeVisible();
       await expect(drawer.getByText("尚未生成子任务")).toBeVisible();
     } else {
       await expect(
         drawer.getByText(
           result === "partial"
-            ? "部分执行节点不可达，当前信息可能不完整。"
+            ? "任务信息不完整，请刷新或检查执行节点。"
             : "子任务读取失败，请稍后重试。",
         ),
       ).toBeVisible();
@@ -824,9 +843,8 @@ test("closing detail retains its content through exit and stops detail polling",
     ),
   ).toBe(true);
   const detailReads = () =>
-    requests.filter((request) =>
-      request.path.includes("/local-transfers/status?taskId=1046"),
-    ).length;
+    requests.filter((request) => request.path.includes("/tasks/1046/children"))
+      .length;
   const closedReads = detailReads();
   await page.clock.fastForward(3000);
   expect(detailReads()).toBe(closedReads);

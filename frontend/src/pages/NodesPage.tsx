@@ -54,7 +54,6 @@ import {
   useRefreshPreference,
 } from "../lib/refreshPreference";
 import RefreshControls from "../components/RefreshControls";
-import NodeExecutionStats from "../components/NodeExecutionStats";
 import AgentInvitationDialog from "../components/AgentInvitationDialog";
 import { EmptyState, PageHeader, formatNumber } from "../components/Common";
 import {
@@ -234,7 +233,7 @@ export default function NodesPage() {
     <Stack spacing={3}>
       <PageHeader
         title="执行节点"
-        description="查看节点任务、队列和速率。"
+        description="查看节点状态、队列和速率。"
         action={
           <Stack
             direction="row"
@@ -461,7 +460,6 @@ export default function NodesPage() {
                     </Alert>
                   ) : (
                     <>
-                      <NodeExecutionStats worker={worker} />
                       <Divider />
                       <Box sx={{ p: 2.5 }}>
                         <NodeRateLimits

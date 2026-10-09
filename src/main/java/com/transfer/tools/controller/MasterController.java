@@ -141,10 +141,22 @@ public class MasterController {
     }
 
     @GetMapping("/status")
-    public Map<String, Object> status(@RequestParam(required = false) String sourceBucket,
+    public Map<String, Object> statusView(@RequestParam(required = false) String sourceBucket,
                                       @RequestParam(required = false) String destBucket,
                                       @RequestParam(required = false) String status,
-                                      @RequestParam(required = false) String workerNode) {
+                                      @RequestParam(required = false) String workerNode,
+                                      @RequestParam(defaultValue = "true") boolean includeSubtasks,
+                                      @RequestHeader(value = "X-Task-View", required = false) String view) {
+        Map<String, Object> result = status(sourceBucket, destBucket, status, workerNode);
+        if (!includeSubtasks || "summary".equals(view)) {
+            Object tasks = result.get("tasks");
+            if (tasks instanceof Collection) for (Object task : (Collection<?>) tasks)
+                if (task instanceof Map) ((Map<?, ?>) task).remove("shards");
+        }
+        return result;
+    }
+
+    public Map<String, Object> status(String sourceBucket, String destBucket, String status, String workerNode) {
         try {
             List<String> workers = distributedConfig.getWorkerIps();
             Map<String, Object> result = new HashMap<>();

@@ -317,7 +317,7 @@ test("recycle refresh reads tasks and nodes while paging and deletion preserve e
   let taskReads = 0,
     nodeReads = 0;
   const deletions: number[][] = [];
-  await page.route("**/api/master/worker-status", async (route) => {
+  await page.route("**/api/master/nodes", async (route) => {
     nodeReads++;
     await route.fallback();
   });

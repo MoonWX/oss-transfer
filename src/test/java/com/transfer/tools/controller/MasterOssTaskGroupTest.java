@@ -62,6 +62,16 @@ public class MasterOssTaskGroupTest {
         row.put("direction","OSS_TO_OSS"); row.put("sourceBucket","source"); row.put("destBucket","dest");
         row.put("workerNode","127.0.0.1"); row.put("scanComplete","COMPLETED".equals(state)); return row;
     }
+    @Test public void summaryOmitsChildrenWithoutChangingCountersOrCompletenessAndLegacyDefaultKeepsThem() {
+        Map<String,Object> summary=controller.statusView(null,null,null,null,false,null);
+        Map group=(Map)((List)summary.get("tasks")).stream().filter(row -> ((Map)row).get("taskIndex").equals(101)).findFirst().get();
+        assertFalse(group.containsKey("shards")); assertEquals(true,group.get("snapshotComplete"));
+        assertEquals(Arrays.asList(101,102),group.get("childTaskIds"));
+        Map full=controller.status(null,null,null,null);
+        Map legacy=(Map)((List)full.get("tasks")).stream().filter(row -> ((Map)row).get("taskIndex").equals(101)).findFirst().get();
+        assertEquals(2,((List)legacy.get("shards")).size());
+        assertEquals(summary.get("totalPutObjectCount"),full.get("totalPutObjectCount"));
+    }
     @Test public void onePublicStartStartsEveryPendingRangeAndNoOtherCreation() {
         assertEquals(true,controller.start(selected).get("success"));
         assertEquals(Arrays.asList(101,102),writes.get("/api/worker/start"));

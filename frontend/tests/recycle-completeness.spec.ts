@@ -87,7 +87,7 @@ for (const scenario of [
   });
 }
 
-test("empty recycle results wait for worker discovery before claiming completeness", async ({
+test("legacy empty recycle results wait for node membership before claiming completeness", async ({
   page,
 }) => {
   await mockApi(page);
@@ -95,7 +95,7 @@ test("empty recycle results wait for worker discovery before claiming completene
   const workerReady = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/master/worker-status", async (route) => {
+  await page.route("**/api/master/nodes", async (route) => {
     await workerReady;
     await route.fallback();
   });
@@ -119,11 +119,11 @@ test("empty recycle results wait for worker discovery before claiming completene
   await expect(page.getByText(emptyState, { exact: true })).toBeVisible();
 });
 
-test("worker discovery failure does not turn an empty partial response into a complete empty state", async ({
+test("legacy node discovery failure does not claim a complete empty recycle bin", async ({
   page,
 }) => {
   await mockApi(page);
-  await page.route("**/api/master/worker-status", (route) =>
+  await page.route("**/api/master/nodes", (route) =>
     route.fulfill({
       status: 503,
       json: { success: false, message: "节点清单不可用" },
@@ -146,5 +146,61 @@ test("worker discovery failure does not turn an empty partial response into a co
       exact: true,
     }),
   ).toBeVisible();
+  await expect(page.getByText(emptyState, { exact: true })).toHaveCount(0);
+});
+
+test("an authoritative recycle snapshot does not depend on a separate node request", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.route("**/api/master/nodes", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { success: false, message: "节点清单不可用" },
+    }),
+  );
+  await page.route("**/api/master/deleted-tasks", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        deletedTasks: emptyNodes,
+        totalCount: 0,
+        complete: true,
+        queriedWorkers: Object.keys(emptyNodes),
+        failedWorkers: [],
+      },
+    }),
+  );
+  await page.goto("/tools?tab=recycle");
+  await expect(page.getByText(emptyState, { exact: true })).toBeVisible();
+  await expect(page.locator(".MuiAlert-standardWarning")).toHaveCount(0);
+});
+
+test("snapshot membership still detects an omitted node when live discovery is unavailable", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.route("**/api/master/nodes", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { success: false, message: "节点清单不可用" },
+    }),
+  );
+  await page.route("**/api/master/deleted-tasks", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        deletedTasks: emptyNodes,
+        totalCount: 0,
+        complete: true,
+        queriedWorkers: [...Object.keys(emptyNodes), "10.0.1.99"],
+        failedWorkers: [],
+      },
+    }),
+  );
+  await page.goto("/tools?tab=recycle");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "以下节点未返回回收站数据" }),
+  ).toContainText("10.0.1.99");
   await expect(page.getByText(emptyState, { exact: true })).toHaveCount(0);
 });

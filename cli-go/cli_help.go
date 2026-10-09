@@ -7,13 +7,13 @@ const cliHelp = `OSS Transfer CLI V4
 
 任务
   task list                      查看三种方向的主任务、状态与进度
-  task show <ID>                 查看主任务及子任务
-  task children <ID>             查看子任务，编号从 ID-1 开始
+  task show <ID>                 查看主任务及首批子任务
+  task children <ID>             分页查看子任务，编号从 ID-1 开始
   task create <方向> ...         创建 OSS 间迁移、下载或上传任务
   task import <类型> <文件>      批量导入任务
   task stop|resume|start|retry <ID...>
   task delete <ID...>            将任务记录移入回收站
-  task trash                     查看回收站
+  task trash                     查看及筛选回收站任务
   task purge <ID...> --yes        永久删除回收站内指定记录
   task bandwidth <ID> [Mbps|unlimited]
   task report <ID> [--output 文件.zip]
@@ -74,10 +74,11 @@ const cliTaskHelp = `任务管理
   list [--status 状态] [--source 源Bucket] [--dest 目标Bucket]
        [--worker IP] [--direction oss-to-oss|oss-to-local|local-to-oss]
        [--search 关键词]
-  show <ID> [--child ID-序号] [--node IP]
-  children <ID>
+  show <ID> [--offset 0] [--limit 25]
+  show <ID> --child ID-序号 [--node IP]
+  children <ID> [--offset 0] [--limit 25]
   creation <创建记录ID>
-  trash
+  trash [--task-id ID] [--worker IP] [--direction 方向] [--search 关键词]
 
 操作
   stop <ID...>                    停止传输并保留进度
@@ -100,14 +101,18 @@ const cliTaskHelp = `任务管理
 示例
   oss-transfer-cli task list --direction oss-to-local --status FAILED
   oss-transfer-cli task show 224 --child 224-1 --node 10.0.0.2
+  oss-transfer-cli task children 224 --offset 25 --limit 25
   oss-transfer-cli task stop 224,225
   oss-transfer-cli task resume 224-226
   oss-transfer-cli task bandwidth 224 200
   oss-transfer-cli task bandwidth 224 unlimited
   oss-transfer-cli task report 224 --output ./task-224.zip
+  oss-transfer-cli task trash --direction oss-to-local --worker 10.0.0.2
 
 状态：PENDING、RUNNING、LIST_DONE、STOPPING、STOPPED、COMPLETED、PARTIAL_FAILED、FAILED。
 操作只接受主任务 ID；子任务编号用于详情查询。节点状态不完整时不执行任务控制操作。
+子任务默认读取 25 个编号，--limit 为 1–200；--offset 跳过指定数量的编号，不重新编号。
+--child 按编号直接读取详情，不加载其他子任务；同编号在多个节点存在时须用 --node。
 --watch 仅支持 list/show/children/creation/trash 及不带新值的 bandwidth 查询。
 删除操作只处理迁移记录，源端和目标端的数据对象不受影响。
 `
@@ -189,7 +194,7 @@ JSON 使用 WebUI 对应 API 的请求字段，例如 buckets：
 const cliNodeHelp = `执行节点
 用法：oss-transfer-cli node <子命令> [参数]
 
-  list                            查看节点配置、连接及当前子任务统计
+  list                            查看节点配置及连接状态
   add <IPv4> [--label 名称]        生成指定地址的 Agent 加入指令
   invite [--address IPv4] [--label 名称]
   update <IPv4> [--address 新IPv4] [--label 名称]
@@ -204,9 +209,6 @@ const cliNodeHelp = `执行节点
 新增节点请执行返回的 Docker 或传统部署指令，Agent 自动加入集群。
 节点地址使用纯 IPv4；不指定时由 Agent 自动识别。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
-当前子任务统计不含主任务及扫描调度记录；移入回收站后不再计数。
-已完成表示当前保留的已完成子任务，不是累计完成的主任务数。
-进行中包含扫描完成后仍在传输的子任务；旧节点明确标为“旧版记录”。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `
 

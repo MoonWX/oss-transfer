@@ -29,14 +29,7 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 	case "stop", "resume", "start", "retry", "delete":
 		return taskControl(client, action, args)
 	case "trash":
-		opts, err := parseCommandOptions(args, nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		if len(opts.Positionals) > 0 {
-			return nil, fmt.Errorf("task trash 不接受额外参数")
-		}
-		return client.Get("/deleted-tasks")
+		return taskTrash(client, args)
 	case "purge":
 		opts, err := parseCommandOptions(args, nil, []string{"yes"})
 		if err != nil {
@@ -67,6 +60,89 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return nil, fmt.Errorf("未知 task 子命令 %q", action)
 	}
 }
+
+func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error) {
+	opts, err := adminOptions(args, []string{"task-id", "worker", "direction", "search"}, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	var selectedID int
+	if opts.Has("task-id") {
+		selectedID, err = taskID(opts.Value("task-id"))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if opts.Has("worker") {
+		if err := adminIPv4(opts.Value("worker")); err != nil {
+			return nil, err
+		}
+	}
+	direction := strings.ToUpper(strings.ReplaceAll(opts.Value("direction"), "-", "_"))
+	if direction != "" && direction != "OSS_TO_OSS" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
+		return nil, fmt.Errorf("无效迁移方向 %q", opts.Value("direction"))
+	}
+	result, err := client.Get("/deleted-tasks")
+	if err != nil {
+		return result, err
+	}
+	data := responseData(result)
+	groups, ok := data["deletedTasks"].(map[string]interface{})
+	if !ok {
+		return result, fmt.Errorf("服务未返回有效的回收站任务列表")
+	}
+	rows := []map[string]interface{}{}
+	invalidWorkers := []string{}
+	for worker, raw := range groups {
+		workerRows, valid := cliObjectRows(raw)
+		if !valid {
+			invalidWorkers = append(invalidWorkers, worker)
+		}
+		for _, original := range workerRows {
+			row := map[string]interface{}{}
+			for key, value := range original {
+				row[key] = value
+			}
+			row["recycleNode"] = worker
+			if getString(row, "workerNode") == "" {
+				row["workerNode"] = worker
+			}
+			if selectedID > 0 && getInt(row, "taskIndex") != selectedID || direction != "" && taskDirection(row) != direction {
+				continue
+			}
+			if opts.Has("worker") && worker != opts.Value("worker") && !cliTaskHasWorker(row, opts.Value("worker")) {
+				continue
+			}
+			if query := strings.ToLower(opts.Value("search")); query != "" && !strings.Contains(strings.ToLower(fmt.Sprint(row["taskIndex"], " ", taskEndpoint(row, true), " ", taskEndpoint(row, false), " ", taskWorkers(row))), query) {
+				continue
+			}
+			rows = append(rows, row)
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if getInt(rows[i], "taskIndex") != getInt(rows[j], "taskIndex") {
+			return getInt(rows[i], "taskIndex") > getInt(rows[j], "taskIndex")
+		}
+		return getString(rows[i], "recycleNode") < getString(rows[j], "recycleNode")
+	})
+	// Keep the original envelope and node groups for JSON consumers and partial-result diagnostics.
+	data["recycledTasks"], data["filteredCount"] = rows, len(rows)
+	if len(invalidWorkers) > 0 {
+		sort.Strings(invalidWorkers)
+		data["invalidWorkers"], data["partial"], data["complete"] = invalidWorkers, true, false
+		data["warning"] = "部分节点未返回有效的回收站记录"
+	}
+	return result, nil
+}
+
+func cliTaskHasWorker(task map[string]interface{}, worker string) bool {
+	for _, address := range strings.Split(taskWorkers(task), ",") {
+		if strings.TrimSpace(address) == worker {
+			return true
+		}
+	}
+	return false
+}
 func taskList(client *ApiClient, args []string) (map[string]interface{}, error) {
 	opts, err := parseCommandOptions(args, []string{"status", "source", "dest", "worker", "direction", "search"}, []string{"all", "a"})
 	if err != nil {
@@ -76,6 +152,7 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 		return nil, fmt.Errorf("task list 不接受位置参数")
 	}
 	query := url.Values{}
+	query.Set("includeSubtasks", "false")
 	for flag, param := range map[string]string{"source": "sourceBucket", "dest": "destBucket", "worker": "workerNode"} {
 		if opts.Has(flag) {
 			query.Set(param, opts.Value(flag))
@@ -132,7 +209,7 @@ func taskWorkerNode(task map[string]interface{}) string {
 	return ""
 }
 func taskIsChild(task map[string]interface{}) bool {
-	return getString(task, "shardId") != "" || (getInt(task, "parentTaskId") > 0 && getInt(task, "parentTaskId") != getInt(task, "taskIndex"))
+	return getString(task, "childTaskId") != "" || getString(task, "shardId") != "" || (getInt(task, "parentTaskId") > 0 && getInt(task, "parentTaskId") != getInt(task, "taskIndex"))
 }
 func taskBindings(task, endpoint map[string]interface{}) []map[string]interface{} {
 	if bindings := objectList(endpoint["nodeBindings"]); len(bindings) > 0 {
@@ -257,7 +334,7 @@ func taskEndpoint(task map[string]interface{}, source bool) string {
 	return "—"
 }
 func taskSnapshot(client *ApiClient) (map[string]interface{}, map[int]map[string]interface{}, error) {
-	result, err := client.Get("/status")
+	result, err := client.Get("/status?includeSubtasks=false")
 	if err != nil {
 		return result, nil, err
 	}
@@ -268,16 +345,41 @@ func taskSnapshot(client *ApiClient) (map[string]interface{}, map[int]map[string
 	return result, tasks, nil
 }
 func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, []string{"child", "node"}, nil)
+	opts, err := adminOptions(args, []string{"child", "node", "offset", "limit"}, nil, 1)
 	if err != nil {
 		return nil, err
-	}
-	if len(opts.Positionals) != 1 {
-		return nil, fmt.Errorf("用法: task show <ID> [--child ID-序号] [--node IP]")
 	}
 	id, err := taskID(opts.Positionals[0])
 	if err != nil {
 		return nil, err
+	}
+	limit, err := adminInteger(opts, "limit", 25, 1, 200)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := adminInteger(opts, "offset", 0, 0, math.MaxInt32-limit)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Has("node") {
+		if !opts.Has("child") {
+			return nil, fmt.Errorf("--node 仅用于选择 --child 对应节点")
+		}
+		if err := adminIPv4(opts.Value("node")); err != nil {
+			return nil, err
+		}
+	}
+	var childNumber int
+	if opts.Has("child") {
+		if childrenOnly || opts.Has("offset") || opts.Has("limit") {
+			return nil, fmt.Errorf("--child 仅用于 task show，且不能与分页选项同时使用")
+		}
+		parentText, childText, hasNumber := strings.Cut(strings.TrimPrefix(opts.Value("child"), "#"), "-")
+		parentID, parentErr := taskID(parentText)
+		childNumber, err = taskID(childText)
+		if !hasNumber || parentErr != nil || err != nil || parentID != id {
+			return nil, fmt.Errorf("子任务编号应为 %d-序号，序号从 1 开始", id)
+		}
 	}
 	snapshot, tasks, err := taskSnapshot(client)
 	if err != nil {
@@ -287,34 +389,27 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 	if task == nil {
 		return snapshot, fmt.Errorf("未找到主任务 #%d；节点未响应时列表可能不完整", id)
 	}
-	children := objectList(task["shards"])
-	if localTask(task) {
-		detail, err := client.Get(fmt.Sprintf("/local-transfers/status?taskId=%d", id))
-		if err != nil {
-			return detail, err
-		}
-		data := responseData(detail)
-		for _, extended := range objectList(data["tasks"]) {
-			if getInt(extended, "taskIndex") == id {
-				merged := map[string]interface{}{}
-				for k, v := range extended {
-					merged[k] = v
-				}
-				for k, v := range task {
-					merged[k] = v
-				}
-				task = merged
-				break
-			}
-		}
-		children = objectList(data["shards"])
-		if incompleteResult(detail) {
-			snapshot["partial"] = true
-			snapshot["localDetails"] = detail
+	path := fmt.Sprintf("/tasks/%d/children?offset=%d&limit=%d", id, offset, limit)
+	if childNumber > 0 {
+		path = fmt.Sprintf("/tasks/%d/children/%d", id, childNumber)
+		if opts.Has("node") {
+			path += "?executionNodeIp=" + url.QueryEscape(opts.Value("node"))
 		}
 	}
-	children = numberCLIChildren(id, children, task["childTaskIds"])
-	result := map[string]interface{}{"task": task, "children": children, "partial": incompleteResult(snapshot) || incompleteResult(task), "unreachableWorkers": snapshot["unreachableWorkers"]}
+	page, err := client.Get(path)
+	result := map[string]interface{}{"task": task, "partial": incompleteResult(snapshot) || incompleteResult(task) || incompleteResult(page), "unreachableWorkers": snapshot["unreachableWorkers"]}
+	if err != nil {
+		result["subtaskPage"] = page
+		return result, err
+	}
+	data := responseData(page)
+	children, valid := cliObjectRows(data["items"])
+	if !valid {
+		result["partial"] = true
+		return result, fmt.Errorf("服务未返回有效的子任务列表")
+	}
+	result["children"] = children
+	result["subtaskPage"] = data
 	for _, key := range []string{"snapshotComplete", "missingTaskIds"} {
 		if value, ok := task[key]; ok {
 			result[key] = value
@@ -325,18 +420,10 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 			result[key] = value
 		}
 	}
-	if detail, ok := snapshot["localDetails"].(map[string]interface{}); ok {
-		result["localDetails"] = map[string]interface{}{}
-		for _, key := range []string{"unreachableWorkers", "unavailableWorkers", "failedWorkers", "errors"} {
-			if value, ok := responseData(detail)[key]; ok {
-				result["localDetails"].(map[string]interface{})[key] = value
-			}
-		}
-	}
 	if opts.Has("child") {
 		matches := []map[string]interface{}{}
 		for _, child := range children {
-			if getString(child, "childTaskId") == opts.Value("child") && (!opts.Has("node") || taskWorkers(child) == opts.Value("node")) {
+			if getString(child, "childTaskId") == fmt.Sprintf("%d-%d", id, childNumber) && (!opts.Has("node") || taskWorkerNode(child) == opts.Value("node")) {
 				matches = append(matches, child)
 			}
 		}
@@ -345,14 +432,29 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 		}
 		result["child"] = matches[0]
 		delete(result, "children")
-	} else if opts.Has("node") {
-		return nil, fmt.Errorf("--node 仅用于选择 --child 对应节点")
 	}
 	if childrenOnly {
 		delete(result, "task")
 		result["parentTaskId"] = id
 	}
 	return result, nil
+}
+
+func cliObjectRows(value interface{}) ([]map[string]interface{}, bool) {
+	rows := objectList(value)
+	switch raw := value.(type) {
+	case []interface{}:
+		return rows, len(rows) == len(raw)
+	case []map[string]interface{}:
+		for _, row := range raw {
+			if row == nil {
+				return rows, false
+			}
+		}
+		return rows, true
+	default:
+		return rows, false
+	}
 }
 
 var legacyChildIndex = regexp.MustCompile(`(?:-oss-|-local-|batch-|^oss-.+-)([0-9]+)$`)

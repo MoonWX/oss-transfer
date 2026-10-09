@@ -143,12 +143,12 @@ func incompleteResult(result map[string]interface{}) bool {
 			return true
 		}
 	}
-	for _, key := range []string{"data", "task", "child", "localDetails"} {
+	for _, key := range []string{"data", "task", "child", "localDetails", "subtaskPage"} {
 		if nested, ok := result[key].(map[string]interface{}); ok && incompleteResult(nested) {
 			return true
 		}
 	}
-	for _, key := range []string{"tasks", "children", "shards"} {
+	for _, key := range []string{"tasks", "children", "shards", "items", "recycledTasks"} {
 		for _, task := range objectList(result[key]) {
 			if incompleteResult(task) {
 				return true

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/url"
 	"os"
 	"os/signal"
@@ -363,6 +362,12 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	if renderAdminTable(out, result, data) {
 		return
 	}
+	if rows, ok := data["recycledTasks"]; ok {
+		renderTaskRows(out, objectList(rows), false)
+		fmt.Fprintf(out, "显示 %d 条回收站记录\n", len(objectList(rows)))
+		renderCLIAdminMessage(out, result)
+		return
+	}
 	if value, ok := data["tasks"]; ok {
 		renderTaskRows(out, objectList(value), false)
 		fmt.Fprintf(out, "显示 %d 个主任务\n", len(objectList(value)))
@@ -381,12 +386,14 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 			if children, ok := result["children"]; ok {
 				fmt.Fprintln(out, "子任务")
 				renderTaskRows(out, objectList(children), true)
+				renderSubtaskPage(out, result)
 			}
 		}
 		return
 	}
 	if children, ok := result["children"]; ok {
 		renderTaskRows(out, objectList(children), true)
+		renderSubtaskPage(out, result)
 		return
 	}
 	// Keep envelope fields such as submissionStatus and node status. Unwrapping
@@ -443,8 +450,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		}
 		workers, _ := result["workers"].(map[string]interface{})
 		w := newCLITable(out)
-		fmt.Fprintln(w, "节点地址\t名称\t角色\t连接状态\t统计口径\t进行中\t待执行\t已完成")
-		hasCurrent, hasLegacy := false, false
+		fmt.Fprintln(w, "节点地址\t名称\t角色\t连接状态")
 		for _, node := range nodes {
 			address := getString(node, "address")
 			worker, _ := workers[address].(map[string]interface{})
@@ -466,19 +472,10 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			if node["master"] == true {
 				role = "主节点 / 执行节点"
 			}
-			scope, running, pending, completed := cliNodeTaskCounts(worker)
-			hasCurrent = hasCurrent || scope == "当前子任务"
-			hasLegacy = hasLegacy || scope == "旧版记录"
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(address), safeCLIText(getString(node, "label")), role, state, scope, running, pending, completed)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", safeCLIText(address), safeCLIText(getString(node, "label")), role, state)
 		}
 		w.Flush()
 		fmt.Fprintf(out, "共 %d 个执行节点\n", len(nodes))
-		if hasCurrent {
-			fmt.Fprintln(out, "按节点当前保留的子任务计数；进行中包含扫描后传输。详细口径见 node --help。")
-		}
-		if hasLegacy {
-			fmt.Fprintln(out, "旧版记录沿用旧统计口径，升级节点后可统一。")
-		}
 		for _, node := range nodes {
 			address := getString(node, "address")
 			worker, _ := workers[address].(map[string]interface{})
@@ -548,35 +545,6 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 	return false
 }
 
-func cliNodeTaskCounts(worker map[string]interface{}) (scope, running, pending, completed string) {
-	if worker["success"] != true {
-		return "—", "—", "—", "—"
-	}
-	stats, _ := worker["executionTaskStats"].(map[string]interface{})
-	current := getString(stats, "scope") == "CURRENT_EXECUTION_SUBTASKS"
-	scope = "当前子任务"
-	if !current {
-		scope = "旧版记录"
-		stats, _ = worker["taskStats"].(map[string]interface{})
-	}
-	count := func(keys ...string) string {
-		total := float64(0)
-		for _, key := range keys {
-			value, ok := cliNumeric(stats[key])
-			if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || math.Trunc(value) != value {
-				return "—"
-			}
-			total += value
-		}
-		return strconv.FormatFloat(total, 'f', 0, 64)
-	}
-	running = count("runningTasks")
-	if current {
-		running = count("runningTasks", "listDoneTasks")
-	}
-	return scope, running, count("pendingTasks"), count("completedTasks")
-}
-
 func cliNumeric(value interface{}) (float64, bool) {
 	switch number := value.(type) {
 	case float64:
@@ -621,7 +589,7 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 		if task["creationStatus"] == "QUEUED" || task["creationStatus"] == "RUNNING" {
 			status += " (扫描中)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d/%d\t%d\t%d\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true)), safeCLIText(taskEndpoint(task, false)), getInt64(task, "putObjectCount"), getInt64(task, "listObjectCount"), getInt64(task, "skippedObjectCount"), getInt64(task, "failedObjectCount"), safeCLIText(taskWorkers(task)))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true)), safeCLIText(taskEndpoint(task, false)), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkers(task)))
 	}
 	w.Flush()
 }
@@ -637,7 +605,17 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
 		bandwidth = fmt.Sprint(value, " Mbps")
 	}
-	fields := [][2]string{{"方向", taskDirection(task)}, {"状态", getString(task, "status")}, {"来源", taskEndpoint(task, true)}, {"目标", taskEndpoint(task, false)}, {"执行节点", taskWorkers(task)}, {"冲突策略", policy}, {"分发方式", getString(task, "distributionMode")}, {"任务带宽", bandwidth}, {"已扫描", fmt.Sprintf("%d / %s", getInt64(task, "listObjectCount"), formatSize(getInt64(task, "listObjectSize")))}, {"已迁移", fmt.Sprintf("%d / %s", getInt64(task, "putObjectCount"), formatSize(getInt64(task, "putObjectSize")))}, {"已跳过", fmt.Sprint(getInt64(task, "skippedObjectCount"))}, {"失败", fmt.Sprint(getInt64(task, "failedObjectCount"))}, {"当前速度", formatSize(getInt64(task, "currentSpeedBytesPerSecond")) + "/s"}, {"平均速度", formatSize(getInt64(task, "averageSpeedBytesPerSecond")) + "/s"}, {"耗时", getString(task, "duration")}, {"创建时间", getString(task, "createTime")}, {"开始时间", getString(task, "startTime")}, {"结束时间", getString(task, "endTime")}, {"起始 Key", getString(task, "startKey")}, {"结束 Key", getString(task, "endKey")}}
+	fields := [][2]string{{"方向", taskDirection(task)}, {"状态", getString(task, "status")}, {"来源", taskEndpoint(task, true)}, {"目标", taskEndpoint(task, false)}, {"执行节点", taskWorkers(task)}, {"冲突策略", policy}, {"分发方式", getString(task, "distributionMode")}, {"任务带宽", bandwidth}, {"已扫描", cliTaskMetric(task, "listObject")}, {"已迁移", cliTaskMetric(task, "putObject")}, {"已跳过", cliTaskMetric(task, "skippedObject")}, {"失败", cliTaskMetric(task, "failedObject")}, {"当前速度", cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {"平均速度", cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {"耗时", getString(task, "duration")}, {"创建时间", cliTaskTimestamp(task["createTime"])}, {"开始时间", cliTaskTimestamp(task["startTime"])}, {"结束时间", cliTaskTimestamp(task["endTime"])}, {"起始 Key", getString(task, "startKey")}, {"结束 Key", getString(task, "endKey")}}
+	fields = append(fields, cliTaskScopeFields(task)...)
+	for _, key := range []string{"errorCode", "errorMessage"} {
+		if value := getString(task, key); value != "" {
+			label := "错误代码"
+			if key == "errorMessage" {
+				label = "失败原因"
+			}
+			fields = append(fields, [2]string{label, value})
+		}
+	}
 	w := newCLITable(out)
 	for _, field := range fields {
 		if field[1] != "" {
@@ -719,7 +697,7 @@ func renderIncomplete(out io.Writer, result map[string]interface{}) {
 		if message := getString(current, "warning"); message != "" {
 			write(context, "提示", message)
 		}
-		for _, key := range []string{"data", "task", "child", "localDetails"} {
+		for _, key := range []string{"data", "task", "child", "localDetails", "subtaskPage"} {
 			if nested, ok := current[key].(map[string]interface{}); ok {
 				next := context
 				if key == "localDetails" {
@@ -728,7 +706,7 @@ func renderIncomplete(out io.Writer, result map[string]interface{}) {
 				visit(nested, next)
 			}
 		}
-		for _, key := range []string{"tasks", "children", "shards"} {
+		for _, key := range []string{"tasks", "children", "shards", "items", "recycledTasks"} {
 			for _, task := range objectList(current[key]) {
 				visit(task, context)
 			}

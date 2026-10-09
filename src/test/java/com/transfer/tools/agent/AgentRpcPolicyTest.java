@@ -13,6 +13,12 @@ public class AgentRpcPolicyTest {
         AgentRpcPolicy.requireAllowed("PUT", "/api/worker/task-bandwidth-policy?scopeId=local%3A1");
     }
 
+    @Test public void pagedChildQueriesAreReadOnly() {
+        AgentRpcPolicy.requireAllowed("GET", "/api/worker/task-children?parentTaskId=224&offset=25&limit=25");
+        try { AgentRpcPolicy.requireAllowed("POST", "/api/worker/task-children"); fail(); }
+        catch (IllegalArgumentException expected) { }
+    }
+
     @Test public void rejectArbitraryUrlsTraversalAndNonWorkerApis() {
         for (String path : Arrays.asList("https://example.com/api/worker/status", "//example.com/api/worker/status",
                 "/api/master/nodes", "/api/worker/../auth/login", "/api/worker/%2e%2e/auth/login",

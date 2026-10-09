@@ -1,5 +1,6 @@
 import { useWorkerStatus } from "../lib/workerStatus";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -315,15 +316,83 @@ function TaskDetail({
   const [exporting, setExporting] = useState(false);
   const local = task && isLocal(task);
   const { refreshMs } = useRefreshPreference();
-  const detail = useApi(
-    local
-      ? `/api/master/local-transfers/status?taskId=${task.taskIndex}`
+  const childNumber = Number(requestedChildId?.split("-")[1]);
+  const [pageWindow, setPageWindow] = useState({
+    parentId: taskId,
+    offset:
+      Number.isInteger(childNumber) && childNumber > 0
+        ? Math.floor((childNumber - 1) / 25) * 25
+        : 0,
+  });
+  const offset =
+    pageWindow.parentId === taskId
+      ? pageWindow.offset
+      : Number.isInteger(childNumber) && childNumber > 0
+        ? Math.floor((childNumber - 1) / 25) * 25
+        : 0;
+  const [visibility, setVisibility] = useState({
+    parentId: taskId,
+    visible: false,
+  });
+  const pageVisible = visibility.parentId === taskId && visibility.visible;
+  const childrenRegion = useRef<HTMLDivElement>(null);
+  const regionObserver = useRef<IntersectionObserver | undefined>(undefined);
+  const attachChildrenRegion = useCallback(
+    (region: HTMLDivElement | null) => {
+      childrenRegion.current = region;
+      regionObserver.current?.disconnect();
+      setVisibility({ parentId: taskId, visible: false });
+      if (region) {
+        regionObserver.current = new IntersectionObserver(([entry]) =>
+          setVisibility({ parentId: taskId, visible: entry.isIntersecting }),
+        );
+        regionObserver.current.observe(region);
+      }
+    },
+    [taskId],
+  );
+  const children = useApi(
+    taskId && !requestedChildId && pageVisible
+      ? `/api/master/tasks/${taskId}/children?offset=${offset}&limit=25`
+      : null,
+    pageVisible ? refreshMs : 0,
+  );
+  const validChild =
+    !!taskId &&
+    requestedChildId === `${taskId}-${childNumber}` &&
+    Number.isInteger(childNumber) &&
+    childNumber > 0;
+  const child = useApi(
+    validChild
+      ? `/api/master/tasks/${taskId}/children/${childNumber}${requestedChildNode ? `?executionNodeIp=${encodeURIComponent(requestedChildNode)}` : ""}`
       : null,
     refreshMs,
   );
-  const extended = detail.data?.data?.tasks?.find(
-    (t: any) => t.taskIndex === task?.taskIndex,
-  );
+  const cachedPage = useRef<
+    { parentId: number; offset: number; data: any } | undefined
+  >(undefined);
+  if (
+    taskId != null &&
+    children.data?.data?.parentTaskId === taskId &&
+    children.data.data.offset === offset
+  )
+    cachedPage.current = {
+      parentId: taskId!,
+      offset,
+      data: children.data.data,
+    };
+  const pageData =
+    cachedPage.current &&
+    cachedPage.current.parentId === taskId &&
+    cachedPage.current.offset === offset
+      ? cachedPage.current.data
+      : undefined;
+  const childData =
+    taskId != null &&
+    child.data?.data?.parentTaskId === taskId &&
+    child.data.data.offset === childNumber - 1
+      ? child.data.data
+      : undefined;
   const lastView = useRef<
     | {
         taskId: number;
@@ -333,6 +402,13 @@ function TaskDetail({
         shards: any[];
         shardsLoading: boolean;
         shardsComplete: boolean;
+        childrenTotal: number;
+        childrenOffset: number;
+        snapshotAt?: string;
+        childShards: any[];
+        childLoading: boolean;
+        childPartial: boolean;
+        childError?: string | null;
         loading: boolean;
         relatedTaskIds: number[];
         operationError: string;
@@ -347,33 +423,23 @@ function TaskDetail({
       taskId,
       childId: requestedChildId,
       childNode: requestedChildNode,
-      current: task ? { ...extended, ...task } : undefined,
-      shards: task?.ossTaskGroup
-        ? task.shards || []
-        : extended
-          ? detail.data?.data?.shards || []
-          : [],
-      shardsLoading:
-        !!local &&
-        !extended &&
-        (detail.loading || (!detail.data && !detail.error)),
-      shardsComplete: task?.ossTaskGroup
-        ? !groupIncomplete(task)
-        : !!extended && !detail.error && !detail.data?.data?.partial,
+      current: task,
+      shards: pageData?.items || [],
+      shardsLoading: !pageData && !children.error,
+      shardsComplete: !!pageData && !children.error && !pageData.partial,
+      childrenTotal: pageData?.totalCount || 0,
+      childrenOffset: offset,
+      snapshotAt: pageData?.cached ? pageData.snapshotAt : undefined,
+      childShards: childData?.items || [],
+      childLoading: validChild && !childData && !child.error,
+      childPartial: !!childData?.partial,
+      childError: child.error,
       loading,
       relatedTaskIds,
       operationError,
       creationWarning,
-      error: local
-        ? lastView.current?.taskId === taskId
-          ? detail.error
-          : null
-        : loadError || null,
-      partial:
-        loadPartial ||
-        (task?.ossTaskGroup
-          ? !!task.partial
-          : !!extended && !!detail.data?.data?.partial),
+      error: children.error || loadError || null,
+      partial: loadPartial || !!task?.partial || !!pageData?.partial,
     };
   }
   // Polling follows the live task above; only presentation survives the exit.
@@ -400,15 +466,18 @@ function TaskDetail({
   const paperRef = useRef<HTMLDivElement>(null);
   const parentScroll = useRef(0);
   const previousScreen = useRef({ taskId, childId, childNode });
+  const parentFocus = useRef<{ id: string; node?: string } | undefined>(
+    undefined,
+  );
   const selectedIdentity = useRef<{ key: string; identity?: string }>({
     key: "",
   });
   const selectionKey = JSON.stringify([view?.taskId, childId, childNode]);
   if (selectedIdentity.current.key !== selectionKey)
     selectedIdentity.current = { key: selectionKey };
-  const matches = shards.filter(
+  const matches = numberSubtasks(view?.childShards || []).filter(
     (shard: Task) =>
-      childId === `${current?.taskIndex}-${shard.subtaskNumber}` &&
+      childId === `${view?.taskId}-${shard.subtaskNumber}` &&
       (!childNode || subtaskNode(shard) === childNode),
   );
   const selectedChild = selectedIdentity.current.identity
@@ -422,7 +491,10 @@ function TaskDetail({
   if (selectedChild)
     selectedIdentity.current.identity = subtaskIdentity(selectedChild);
   useLayoutEffect(() => {
-    if (!taskId) return;
+    if (!taskId) {
+      parentFocus.current = undefined;
+      return;
+    }
     const paper = paperRef.current;
     const previous = previousScreen.current;
     if (paper) {
@@ -433,19 +505,32 @@ function TaskDetail({
           .querySelector<HTMLElement>("[data-subtask-heading]")
           ?.focus({ preventScroll: true });
       } else if (previous.childId) {
+        parentFocus.current = {
+          id: previous.childId,
+          node: previous.childNode,
+        };
         paper.scrollTop = parentScroll.current;
-        Array.from(paper.querySelectorAll<HTMLButtonElement>("[data-child-id]"))
-          .find(
-            (button) =>
-              button.dataset.childId === previous.childId &&
-              (!previous.childNode ||
-                button.dataset.childNode === previous.childNode),
-          )
-          ?.focus({ preventScroll: true });
+        if (!pageData)
+          childrenRegion.current?.scrollIntoView({ block: "start" });
+      }
+      if (!childId && parentFocus.current) {
+        const target = parentFocus.current;
+        const button = Array.from(
+          paper.querySelectorAll<HTMLButtonElement>("[data-child-id]"),
+        ).find(
+          (button) =>
+            button.dataset.childId === target.id &&
+            (!target.node || button.dataset.childNode === target.node),
+        );
+        if (button) {
+          button.scrollIntoView({ block: "nearest" });
+          button.focus({ preventScroll: true });
+          parentFocus.current = undefined;
+        }
       }
     }
     previousScreen.current = { taskId, childId, childNode };
-  }, [taskId, childId, childNode]);
+  }, [taskId, childId, childNode, pageData]);
   const exportReport = async () => {
     if (!current || !reportAvailable(current)) return;
     const taskId = current.taskIndex;
@@ -500,14 +585,14 @@ function TaskDetail({
           destination={
             selectedChild ? subtaskEndpoint(selectedChild as Task, false) : ""
           }
-          loading={!!view?.loading || !!view?.shardsLoading}
-          partial={!!view?.partial}
-          error={view?.error}
+          loading={!!view?.childLoading}
+          partial={!!view?.childPartial}
+          error={view?.childError}
           onBack={() => onSelectChild()}
           onClose={onClose}
           onRefresh={() => {
             onRefresh();
-            void detail.refresh();
+            void child.refresh();
           }}
         />
       )}
@@ -652,10 +737,10 @@ function TaskDetail({
               {view.creationWarning}
             </Alert>
           )}
-          <ErrorAlert error={view?.error || null} onRetry={detail.refresh} />
+          <ErrorAlert error={view?.error || null} onRetry={children.refresh} />
           {view?.partial && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              部分执行节点不可达，当前信息可能不完整。
+              任务信息不完整，请刷新或检查执行节点。
             </Alert>
           )}
           {current.errorMessage && (
@@ -855,99 +940,132 @@ function TaskDetail({
           {(local || current.ossTaskGroup) && (
             <>
               <Divider sx={{ my: 3 }} />
-              <Typography variant="h6" sx={{ mb: 2 }}>
-                子任务{" "}
-                {!view?.shardsLoading &&
-                  (shards.length > 0 || view?.shardsComplete) && (
-                    <Typography
-                      component="span"
-                      variant="body2"
-                      color="text.secondary"
-                    >
-                      ({shards.length})
+              <Box
+                ref={attachChildrenRegion}
+                data-testid="task-children-region"
+              >
+                <Typography variant="h6" sx={{ mb: 2 }}>
+                  子任务
+                </Typography>
+                {view?.shardsLoading ? (
+                  <Stack
+                    direction="row"
+                    alignItems="center"
+                    gap={1}
+                    role="status"
+                  >
+                    <CircularProgress size={16} />
+                    <Typography variant="body2" color="text.secondary">
+                      正在加载子任务…
                     </Typography>
-                  )}
-              </Typography>
-              {view?.shardsLoading ? (
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  gap={1}
-                  role="status"
-                >
-                  <CircularProgress size={16} />
-                  <Typography variant="body2" color="text.secondary">
-                    正在加载子任务…
-                  </Typography>
-                </Stack>
-              ) : shards.length === 0 ? (
-                view?.shardsComplete ? (
-                  <Typography variant="body2" color="text.secondary">
-                    尚未生成子任务
-                  </Typography>
-                ) : null
-              ) : (
-                <Stack gap={1.5}>
-                  {shards.map((shard: any, index: number) => (
-                    <Paper
-                      variant="outlined"
-                      key={`${shard.shardId || shard.taskIndex}-${index}`}
-                      sx={{ overflow: "hidden" }}
-                    >
-                      <ButtonBase
-                        aria-label={`查看子任务 ${current.taskIndex}-${shard.subtaskNumber}`}
-                        data-child-id={`${current.taskIndex}-${shard.subtaskNumber}`}
-                        data-child-node={subtaskNode(shard)}
-                        onClick={() =>
-                          onSelectChild(
-                            `${current.taskIndex}-${shard.subtaskNumber}`,
-                            subtaskNode(shard),
-                          )
-                        }
-                        sx={{
-                          p: 2,
-                          width: "100%",
-                          textAlign: "left",
-                          display: "flex",
-                          gap: 1.5,
-                          justifyContent: "space-between",
-                          "&:hover": { bgcolor: "action.hover" },
-                          "&.Mui-focusVisible": {
-                            bgcolor: "action.focus",
-                            outline: "2px solid",
-                            outlineColor: "primary.main",
-                            outlineOffset: -2,
-                          },
-                        }}
+                  </Stack>
+                ) : shards.length === 0 ? (
+                  view?.shardsComplete ? (
+                    <Typography variant="body2" color="text.secondary">
+                      {view?.childrenTotal
+                        ? "此范围暂无子任务"
+                        : "尚未生成子任务"}
+                    </Typography>
+                  ) : null
+                ) : (
+                  <Stack gap={1.5}>
+                    {shards.map((shard: any, index: number) => (
+                      <Paper
+                        variant="outlined"
+                        key={`${shard.shardId || shard.taskIndex}-${index}`}
+                        sx={{ overflow: "hidden" }}
                       >
-                        <Box sx={{ minWidth: 0, flex: 1 }}>
-                          <Stack
-                            direction="row"
-                            justifyContent="space-between"
-                            gap={1}
-                          >
-                            <Typography
-                              variant="body2"
-                              sx={{ overflowWrap: "anywhere" }}
+                        <ButtonBase
+                          aria-label={`查看子任务 ${current.taskIndex}-${shard.subtaskNumber}`}
+                          data-child-id={`${current.taskIndex}-${shard.subtaskNumber}`}
+                          data-child-node={subtaskNode(shard)}
+                          onClick={() =>
+                            onSelectChild(
+                              `${current.taskIndex}-${shard.subtaskNumber}`,
+                              subtaskNode(shard),
+                            )
+                          }
+                          sx={{
+                            p: 2,
+                            width: "100%",
+                            textAlign: "left",
+                            display: "flex",
+                            gap: 1.5,
+                            justifyContent: "space-between",
+                            "&:hover": { bgcolor: "action.hover" },
+                            "&.Mui-focusVisible": {
+                              bgcolor: "action.focus",
+                              outline: "2px solid",
+                              outlineColor: "primary.main",
+                              outlineOffset: -2,
+                            },
+                          }}
+                        >
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Stack
+                              direction="row"
+                              justifyContent="space-between"
+                              gap={1}
                             >
-                              子任务 #{current.taskIndex}-{shard.subtaskNumber}{" "}
-                              · {shard.executionNodeIp || shard.workerNode}
+                              <Typography
+                                variant="body2"
+                                sx={{ overflowWrap: "anywhere" }}
+                              >
+                                子任务 #{current.taskIndex}-
+                                {shard.subtaskNumber} ·{" "}
+                                {shard.executionNodeIp || shard.workerNode}
+                              </Typography>
+                              <StatusChip status={shard.status} />
+                            </Stack>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              已迁移 {formatNumber(shard.putObjectCount)} · 失败{" "}
+                              {formatNumber(shard.failedObjectCount)}
                             </Typography>
-                            <StatusChip status={shard.status} />
-                          </Stack>
-                          <Typography variant="caption" color="text.secondary">
-                            已迁移 {formatNumber(shard.putObjectCount)} · 失败{" "}
-                            {formatNumber(shard.failedObjectCount)}
-                          </Typography>
-                        </Box>
-                        <ArrowForwardRounded
-                          sx={{ fontSize: 18, color: "text.secondary" }}
-                        />
-                      </ButtonBase>
-                    </Paper>
-                  ))}
-                </Stack>
-              )}
+                          </Box>
+                          <ArrowForwardRounded
+                            sx={{ fontSize: 18, color: "text.secondary" }}
+                          />
+                        </ButtonBase>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+                {!!view?.snapshotAt && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", mt: 1 }}
+                  >
+                    快照 {new Date(view.snapshotAt).toLocaleTimeString("zh-CN")}
+                  </Typography>
+                )}
+                {((view?.childrenTotal || 0) > 25 ||
+                  (view?.childrenOffset || 0) > 0) && (
+                  <TablePagination
+                    component="div"
+                    count={view?.childrenTotal || 0}
+                    page={Math.floor((view?.childrenOffset || 0) / 25)}
+                    rowsPerPage={25}
+                    rowsPerPageOptions={[]}
+                    labelDisplayedRows={({ from, to, count }) =>
+                      `${from}–${to} / ${count}`
+                    }
+                    getItemAriaLabel={(type) =>
+                      type === "next" ? "下一页子任务" : "上一页子任务"
+                    }
+                    onPageChange={(_, page) =>
+                      setPageWindow({ parentId: taskId, offset: page * 25 })
+                    }
+                    sx={{
+                      ".MuiTablePagination-toolbar": { px: 0 },
+                      ".MuiTablePagination-spacer": { flex: 1 },
+                    }}
+                  />
+                )}
+              </Box>
             </>
           )}
         </Box>
@@ -965,6 +1083,7 @@ export default function TasksPage({
   const { data, loading, error, refresh } = useApi(
     "/api/master/status",
     refreshMs,
+    true,
   );
   const health = useWorkerStatus();
   const nodeHealth = useApi("/api/master/local-nodes", refreshMs);

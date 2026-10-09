@@ -293,10 +293,14 @@ func TestTaskShowPreservesGroupAndLocalDetailIncompleteness(t *testing.T) {
 					adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{row}, "partial": false})
 					return
 				}
-				if !local || r.URL.Path != "/api/master/local-transfers/status" || r.URL.Query().Get("taskId") != "224" {
+				if r.URL.Path != "/api/master/tasks/224/children" || r.URL.Query().Get("limit") != "25" || r.URL.Query().Get("offset") != "0" {
 					t.Fatalf("unexpected detail request: %s", r.URL)
 				}
-				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_LOCAL", "STOPPED")}, "shards": []interface{}{}, "partial": true, "unreachableWorkers": []string{"10.0.0.3"}}})
+				page := map[string]interface{}{"parentTaskId": 224, "items": []interface{}{}, "totalCount": 0, "offset": 0, "limit": 25, "hasMore": false, "partial": false}
+				if local {
+					page["partial"], page["unreachableWorkers"] = true, []string{"10.0.0.3"}
+				}
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": page})
 			})
 			result, err := runTaskCommand(client, []string{"show", "224"})
 			if err != nil {
@@ -328,9 +332,13 @@ func TestTaskChildSelectionUsesExecutingNode(t *testing.T) {
 		child := taskTestRow(225, "OSS_TO_LOCAL", "STOPPED")
 		child["parentTaskId"] = 224
 		child["shardIndex"] = 0
+		child["childTaskId"] = "224-1"
 		child["executionNodeIp"] = "10.0.0.2"
 		child["eligibleWorkerNodes"] = []string{"10.0.0.2", "10.0.0.3"}
-		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"tasks": []interface{}{row}, "shards": []interface{}{child}}})
+		if r.URL.Path != "/api/master/tasks/224/children/1" || r.URL.Query().Get("executionNodeIp") != "10.0.0.2" {
+			t.Fatalf("child lookup loaded unrelated tasks: %s", r.URL)
+		}
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"items": []interface{}{child}}})
 	})
 	result, err := runTaskCommand(client, []string{"show", "224", "--child", "224-1", "--node", "10.0.0.2"})
 	if err != nil {
@@ -374,7 +382,7 @@ func TestAdminTablesAndEnvelopeMetadataRemainVisible(t *testing.T) {
 			var out bytes.Buffer
 			renderCLIResult(&out, result)
 			text := out.String()
-			wants := map[string][]string{"node": {"10.0.0.2", "迁移节点", "在线", "3"}, "storage": {"source", "已配置", "https://oss.example"}, "limit": {"200 Mbps", "100 Mbps", "0 Mbps", "已降速"}, "envelope": {"validated", "尚未创建任务", "请求数量"}}[name]
+			wants := map[string][]string{"node": {"10.0.0.2", "迁移节点", "在线", "主节点 / 执行节点", "连接状态"}, "storage": {"source", "已配置", "https://oss.example"}, "limit": {"200 Mbps", "100 Mbps", "0 Mbps", "已降速"}, "envelope": {"validated", "尚未创建任务", "请求数量"}}[name]
 			for _, want := range wants {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %q: %s", want, text)

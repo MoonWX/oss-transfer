@@ -134,7 +134,7 @@ export default function SubtaskDetails({
       )}
       {partial && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          部分执行节点不可达，当前信息可能不完整。
+          子任务信息不完整，请刷新或检查执行节点。
         </Alert>
       )}
       {!task ? (

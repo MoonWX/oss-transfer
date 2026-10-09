@@ -74,6 +74,10 @@ jobs:
       - name: CLI tests
         working-directory: cli-go
         run: go test ./...
+      - name: Workflow checks
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
       - name: Deployment and package checks
         run: |
           find deploy -name '*.sh' -print0 | xargs -0 -n1 bash -n
@@ -82,3 +86,4 @@ jobs:
           bash deploy/tests/deploy-ssh-port-test.sh
           python3 deploy/tests/deploy-runtime-test.py
           bash deploy/tests/test-docker-entrypoint.sh
+          python3 deploy/tests/test-publish-oss.py

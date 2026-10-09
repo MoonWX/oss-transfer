@@ -110,4 +110,16 @@ Building requires JDK 8+, Maven, Node.js 22.12+ and Go 1.22+.
 
 Outputs are `output/oss-transfer.tar.gz`, its SHA-256 file, and `output/oss-transfer/`. Build metadata contains the Git commit and build time; the WebUI uses it for the version display.
 
-GitHub Actions checks the server, frontend, CLI, and deployment scripts on pull requests and pushes to `main`. Pushing a matching version tag, such as `v4.0.0`, runs those checks, publishes the release archive, and uploads Docker images for both architectures. Configure repository secrets `DOCKER_USERNAME` and `DOCKER_PAT`; the image name is `moonwx/osstransfer`.
+GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on pull requests and pushes to `main`. Pushing a matching version tag, such as `v4.0.0`, runs those checks and publishes to GitHub Releases, Docker Hub, JD Cloud OSS, and JD Cloud JCR.
+
+Configure these repository secrets:
+
+| Destination | Secrets |
+| --- | --- |
+| Docker Hub | `DOCKER_USERNAME`, `DOCKER_PAT` |
+| JD Cloud OSS | `JDOSS_AK`, `JDOSS_SK` |
+| JD Cloud JCR | `JCR_USERNAME`, `JCR_PASSWD` |
+
+OSS stores `oss-transfer.tar.gz`, its SHA-256 file, and `VERSION` under `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`. Pre-releases only update their version directory.
+
+Images support Linux `amd64` and `arm64` at `moonwx/osstransfer` and `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`. Stable releases publish `X.Y.Z`, `X.Y`, and `latest` tags; pre-releases publish their version tag only. The GitHub Release is published after both registries and OSS succeed. Pre-releases are marked accordingly and do not become GitHub's latest release.

@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+TEST_BUILD=0
+case "${1:-}" in
+    '') [ "$#" -eq 0 ] || { echo 'Usage: build.sh [--test]' >&2; exit 2; } ;;
+    --test) [ "$#" -eq 1 ] || { echo 'Usage: build.sh [--test]' >&2; exit 2; }; TEST_BUILD=1 ;;
+    --help|-h) [ "$#" -eq 1 ] || { echo 'Usage: build.sh [--test]' >&2; exit 2; }
+        printf 'Usage: build.sh [--test]\n  --test  Run server and CLI tests, then package those build outputs.\n'
+        exit 0 ;;
+    *) echo 'Usage: build.sh [--test]' >&2; exit 2 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT_DIR="${OSS_TRANSFER_OUTPUT_DIR:-$SCRIPT_DIR/output}"
 mkdir -p "$OUTPUT_DIR"
@@ -74,10 +84,17 @@ BUILD_TIME=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
 echo "[1/6] Building console..."
 (cd "$SCRIPT_DIR/frontend" && npm ci && npm run build)
 echo "[2/6] Building server..."
-mvn clean package -q -DskipTests
+if [ "$TEST_BUILD" -eq 1 ]; then
+    mvn clean verify -q
+else
+    mvn clean package -q -DskipTests
+fi
 cp "target/oss-transfer.jar" "$PACKAGE_DIR/"
 
 echo "[3/6] Building CLI..."
+if [ "$TEST_BUILD" -eq 1 ]; then
+    (cd "$SCRIPT_DIR/cli-go" && go test ./...)
+fi
 LDFLAGS="-X main.version=$VERSION -X main.branch=$BRANCH -X main.commit=$COMMIT -X main.buildTime=$BUILD_TIME"
 for architecture in amd64 arm64; do
     (cd "$SCRIPT_DIR/cli-go" && CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -ldflags="$LDFLAGS" -o "$PACKAGE_DIR/oss-transfer-cli-$architecture" .)

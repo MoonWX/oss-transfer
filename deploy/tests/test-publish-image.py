@@ -77,6 +77,7 @@ class PublishImageTests(unittest.TestCase):
         (self.repo / 'deploy').mkdir(parents=True)
         for name in ('verify-release-image.sh', 'publish-image.sh'):
             shutil.copy2(SCRIPTS / name, self.repo / 'deploy' / name)
+        (self.repo / 'pom.xml').write_text('    <version>4.0.3</version>\n')
         self.git('init', '-q')
         self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                  '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'fixture')
@@ -115,6 +116,11 @@ class PublishImageTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
+    def verify(self, *args, tag='v4.0.3', **env):
+        return subprocess.run(['bash', str(self.repo / 'deploy/verify-release-image.sh'), tag,
+                               str(self.artifacts), *args], text=True, capture_output=True,
+                              env={**self.env, **env}, timeout=20)
+
     def assert_cleaned(self):
         self.assertFalse(list(self.root.glob('oss-image-*')))
         for call in self.calls():
@@ -122,13 +128,13 @@ class PublishImageTests(unittest.TestCase):
                 self.assertFalse(Path(call['authfile']).exists())
 
     def test_archive_export_names_only_one_version_without_implicit_latest(self):
-        workflow = (SCRIPTS.parent / '.github/workflows/release.yml').read_text()
+        workflow = (SCRIPTS.parent / '.github/workflows/ci.yml').read_text()
         metadata = re.search(r'      - name: Image metadata\n(.*?)      - name: Build both image architectures once',
                              workflow, re.S)
         self.assertIsNotNone(metadata)
         self.assertIn('flavor: latest=false', metadata.group(1))
         self.assertEqual(metadata.group(1).count('type='), 1)
-        self.assertIn('tags: type=semver,pattern={{version}}', metadata.group(1))
+        self.assertIn('tags: type=raw,value=${{ steps.version.outputs.version }}', metadata.group(1))
         self.assertIn('provenance: false', workflow)
         self.assertIn('sbom: false', workflow)
 
@@ -156,9 +162,54 @@ class PublishImageTests(unittest.TestCase):
 
     def test_prerelease_does_not_update_stable_aliases(self):
         self.git('tag', 'v4.0.3-rc.1')
+        (self.repo / 'pom.xml').write_text('    <version>4.0.3-rc.1</version>\n')
         result = self.publish('v4.0.3-rc.1', IMAGE_STUB_VERSION='4.0.3-rc.1')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(sum(c['command'] == 'copy' for c in self.calls()), 3)
+        self.assert_cleaned()
+
+    def test_ci_archive_is_verified_before_a_release_tag_exists(self):
+        self.git('tag', '-d', 'v4.0.3')
+        result = self.verify('--ci-build')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        inspected_arches = [c['args'][c['args'].index('--override-arch') + 1]
+                            for c in self.calls() if '--config' in c['args']]
+        self.assertEqual(inspected_arches, ['amd64', 'arm64'])
+        self.assertFalse(any(c['command'] in ('login', 'copy') for c in self.calls()))
+        self.assert_cleaned()
+        self.log.unlink()
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('release tag is unavailable', result.stderr)
+        self.assertFalse(self.calls())
+
+    def test_ci_mode_still_checks_project_version_architectures_commit_and_checksum(self):
+        for env in ({'IMAGE_STUB_BAD_MANIFEST': '1'}, {'IMAGE_STUB_BAD_CONFIG': '1'},
+                    {'IMAGE_STUB_VERSION': '4.0.2'}):
+            with self.subTest(env=env):
+                self.log.unlink(missing_ok=True)
+                result = self.verify('--ci-build', **env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c['command'] in ('login', 'copy') for c in self.calls()))
+                self.assert_cleaned()
+        self.log.unlink(missing_ok=True)
+        result = self.verify('--ci-build', tag='v4.0.4', IMAGE_STUB_VERSION='4.0.4')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('project version', result.stderr)
+        self.assertFalse(self.calls())
+        self.archive.write_bytes(b'corrupted archive')
+        result = self.verify('--ci-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('SHA-256', result.stderr)
+        self.assertFalse(self.calls())
+
+    def test_release_tag_must_still_point_to_checked_out_commit(self):
+        self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                 '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'next commit')
+        result = self.publish(IMAGE_STUB_COMMIT=self.git('rev-parse', 'HEAD').strip())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('does not point to this checkout', result.stderr)
+        self.assertFalse(self.calls())
         self.assert_cleaned()
 
     def test_bad_input_stops_before_login_and_cleans_snapshot(self):

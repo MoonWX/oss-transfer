@@ -4,39 +4,26 @@ on:
     tags: ['v*']
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  verify:
-    uses: ./.github/workflows/ci.yml
-  build:
-    name: Build release on GitHub
-    needs: verify
+  artifacts:
+    name: Select verified CI artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 70
+    outputs:
+      ci_run_id: ${{ steps.select.outputs.ci_run_id }}
+      package_artifact_id: ${{ steps.select.outputs.package_artifact_id }}
+      image_artifact_id: ${{ steps.select.outputs.image_artifact_id }}
     env:
       RELEASE_TAG: ${{ github.ref_name }}
-      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '8'
-          cache: maven
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.25.x'
-          cache-dependency-path: cli-go/go.sum
       - name: Check release version
         run: |
           project_version="$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)"
@@ -47,82 +34,14 @@ jobs:
             for identifier in "${identifiers[@]}"; do [[ ! "$identifier" =~ ^0[0-9]+$ ]]; done
           fi
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-      - name: Build release package
-        run: ./build.sh
-      - name: Install image transfer tool
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
-        with:
-          platforms: arm64
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-        id: buildx
-        with:
-          cleanup: true
-          keep-state: false
-      - name: Image metadata
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        id: metadata
-        with:
-          images: moonwx/osstransfer
-          flavor: latest=false
-          tags: type=semver,pattern={{version}}
-      - name: Build both image architectures once
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          builder: ${{ steps.buildx.outputs.name }}
-          platforms: linux/amd64,linux/arm64
-          outputs: type=oci,dest=output/oss-transfer-image.tar,oci-mediatypes=false
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
-      - name: Verify image and create its checksum
-        run: |
-          (cd output && sha256sum oss-transfer-image.tar > oss-transfer-image.tar.sha256)
-          bash deploy/verify-release-image.sh "$RELEASE_TAG" output
-      - name: Docker master and agent smoke test
-        timeout-minutes: 10
-        run: |
-          # docker load avoids Skopeo's dependency on the daemon API version.
-          skopeo --command-timeout 3m --override-os linux --override-arch amd64 copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/smoke-amd64.tar:oss-transfer:release-smoke"
-          docker load --input "$RUNNER_TEMP/smoke-amd64.tar"
-          rm -f -- "$RUNNER_TEMP/smoke-amd64.tar"
-          python3 deploy/tests/docker-agent-smoke.py --image oss-transfer:release-smoke
-          skopeo --command-timeout 3m --override-os linux --override-arch arm64 copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/smoke-arm64.tar:oss-transfer:release-arm64"
-          docker load --input "$RUNNER_TEMP/smoke-arm64.tar"
-          rm -f -- "$RUNNER_TEMP/smoke-arm64.tar"
-          docker run --rm --platform linux/arm64 --entrypoint /opt/oss-transfer/oss-transfer-cli \
-            oss-transfer:release-arm64 --version
-      - name: Upload release package
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-package
-          path: |
-            output/oss-transfer.tar.gz
-            output/oss-transfer.tar.gz.sha256
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
-      - name: Upload image archive
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-image
-          path: |
-            output/oss-transfer-image.tar
-            output/oss-transfer-image.tar.sha256
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
+      - name: Wait for CI and select its artifacts
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: GITHUB_SHA="$(git rev-parse HEAD)" python3 .github/scripts/resolve-ci-artifacts.py
   docker_hub:
     name: Publish Docker Hub
-    needs: build
+    needs: artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -133,7 +52,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 10
         with:
-          name: release-image
+          artifact-ids: ${{ needs.artifacts.outputs.image_artifact_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.artifacts.outputs.ci_run_id }}
+          merge-multiple: true
           path: output
       - name: Install image transfer tool
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
@@ -146,7 +68,7 @@ jobs:
         run: bash deploy/publish-image.sh "$RELEASE_TAG" docker-hub output
   jdcloud_publish:
     name: Publish JD Cloud from built artifacts
-    needs: build
+    needs: artifacts
     runs-on: [self-hosted, linux, x64, "${{ vars.JD_PUBLISH_RUNNER_LABEL || 'jdcloud-publish' }}"]
     timeout-minutes: 35
     env:
@@ -182,12 +104,18 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 10
         with:
-          name: release-package
+          artifact-ids: ${{ needs.artifacts.outputs.package_artifact_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.artifacts.outputs.ci_run_id }}
+          merge-multiple: true
           path: ${{ github.workspace }}/${{ env.RELEASE_CHECKOUT }}/output
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 10
         with:
-          name: release-image
+          artifact-ids: ${{ needs.artifacts.outputs.image_artifact_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.artifacts.outputs.ci_run_id }}
+          merge-multiple: true
           path: ${{ github.workspace }}/${{ env.RELEASE_CHECKOUT }}/output
       - name: Publish and verify JCR image
         timeout-minutes: 20
@@ -208,16 +136,20 @@ jobs:
         run: |
           rm -rf -- "${GITHUB_WORKSPACE:?}/${RELEASE_CHECKOUT:?}"
   release:
-    needs: [jdcloud_publish, docker_hub]
+    needs: [artifacts, jdcloud_publish, docker_hub]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 10
         with:
-          name: release-package
+          artifact-ids: ${{ needs.artifacts.outputs.package_artifact_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.artifacts.outputs.ci_run_id }}
+          merge-multiple: true
           path: output
       - name: Verify release checksum
         run: cd output && sha256sum --check oss-transfer.tar.gz.sha256

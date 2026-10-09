@@ -133,7 +133,7 @@ Docker 中在命令前加 `docker exec oss-transfer-master`。使用 `--host` �
 
 Docker 拉取新版本并使用原有卷和挂载重建容器。传统部署解压新版本后再次执行安装脚本。Agent 升级同样保留配置和数据，已加入的节点无需重新生成邀请。
 
-## 构建与发布
+## 本地构建
 
 构建需要 JDK 8+、Maven、Node.js 22.12+ 和 Go 1.22+。
 
@@ -143,47 +143,4 @@ Docker 拉取新版本并使用原有卷和挂载重建容器。传统部署解�
 
 输出为 `output/oss-transfer.tar.gz`、SHA-256 校验文件及 `output/oss-transfer/`。构建元数据包含 Git 提交和构建时间，WebUI 据此显示版本信息。
 
-GitHub Actions 在 Pull Request 和推送 `main` 时使用 GitHub 托管 Runner 检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `vX.Y.Z`，通过检查后，由官方 Runner 构建安装包和多架构镜像，保存为 Actions 产物。Docker Hub 在官方 Runner 发布；国内专用 Runner 下载并校验同一批产物，再上传京东云 JCR 和 OSS，不编译源码或构建镜像。全部发布目标成功后才创建 GitHub Release。
-
-仓库需配置以下 Secret：
-
-| 发布目标 | Secrets |
-| --- | --- |
-| Docker Hub | `DOCKER_USERNAME`、`DOCKER_PAT` |
-| 京东云 OSS | `JDOSS_AK`、`JDOSS_SK` |
-| 京东云 JCR | `JCR_USERNAME`、`JCR_PASSWD` |
-
-### 国内专用发布 Runner
-
-准备一台国内 Ubuntu/Debian Linux x64 专用主机，提供 systemd，工作目录至少有 10 GiB 可用空间。在可信仓库源码目录先准备依赖：
-
-```sh
-sudo bash deploy/setup-release-runner.sh --prepare-only
-```
-
-脚本准备 Skopeo、Python、jq 和 AWS CLI v2。发布 Runner 无需 Java、Maven、Node.js、Go、Docker 或 ARM64 模拟环境。准备完成后，在管理员工作站通过官方 API 为 `MoonWX/oss-transfer` 获取[仓库短时注册 token](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository)，再到主机执行注册，按隐藏输入提示提供 token：
-
-```sh
-sudo bash deploy/setup-release-runner.sh --register-only
-```
-
-主机配置中不保存 PAT 或发布 Secret。Runner 服务使用 `oss-release` 账户和 `/opt/oss-transfer-release-runner` 目录。发布标签前，确认 Runner 已在线。
-
-工作流要求 `[self-hosted, linux, x64, jdcloud-publish]` 标签，当前发布 Runner 为 `pkx2`。如需自定义最后一个标签，执行 `--register-only` 时设置 `RUNNER_LABEL`，并将仓库 Actions 变量 `JD_PUBLISH_RUNNER_LABEL` 设为相同值。该主机仅用于可信发布标签，PR 测试保持在 GitHub 托管 Runner。构建、产物下载及上传步骤均设有超时；京东云上传绕过 Runner 的 HTTP 代理，GitHub 下载可继续使用代理。
-
-OSS 将 `oss-transfer.tar.gz`、SHA-256 校验文件和 `VERSION` 存放在 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`。正式版本同时更新 `osstransfer/latest/`；预发布版本只更新版本目录。
-
-镜像支持 Linux `amd64` 和 `arm64`，地址为 `moonwx/osstransfer` 和 `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`。正式版本发布 `X.Y.Z`、`X.Y` 和 `latest` 标签，预发布版本只发布版本标签。两个镜像仓库及 OSS 上传均成功后才创建 GitHub Release。预发布会标记为 Pre-release，也不会成为 GitHub 的 latest。
-
-`pom.xml` 是唯一的工程版本来源。JAR、CLI 和安装包元数据在构建时自动继承该版本，无需手动同步前端元数据、安装脚本、Compose 或节点邀请代码。Docker、Compose 和节点邀请默认使用 `latest`。安装脚本优先使用本地安装包，没有本地包时下载最新正式版；需要固定版本时，使用 `--version` 或 `OSS_TRANSFER_IMAGE`。
-
-发布时，只修改 `pom.xml` 的工程 `<version>`，测试并提交，再从该值生成标签：
-
-```sh
-version=$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)
-git push origin main
-git tag -a "v$version" -m "OSS Transfer v$version"
-git push origin "refs/tags/v$version"
-```
-
-标签会触发完整检查及发布流程；只推送 `main` 不会发布新版本。
+[维护者发布指南](https://github.com/MoonWX/oss-transfer/blob/main/.github/RELEASING.md)。

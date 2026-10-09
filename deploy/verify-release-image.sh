@@ -3,7 +3,8 @@
 set +x
 set -euo pipefail
 fail() { printf 'Release image: %s\n' "$*" >&2; exit 1; }
-[[ $# == 2 ]] || fail 'usage: verify-release-image.sh <release-tag> <artifact-directory>'
+[[ $# == 2 || ( $# == 3 && "${3:-}" == --ci-build ) ]] || \
+    fail 'usage: verify-release-image.sh <release-tag> <artifact-directory> [--ci-build]'
 tag="$1"
 artifact_dir="$2"
 [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$ ]] || fail 'invalid release tag'
@@ -16,8 +17,12 @@ if [[ "$version" == *-* ]]; then
 fi
 source_dir="$(cd "$(dirname "$0")/.." && pwd)"
 commit="$(git -C "$source_dir" rev-parse --verify 'HEAD^{commit}')"
-tag_commit="$(git -C "$source_dir" rev-parse --verify "refs/tags/$tag^{commit}")" || fail 'release tag is unavailable'
-[[ "$commit" == "$tag_commit" ]] || fail 'release tag does not point to this checkout'
+project_version="$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' "$source_dir/pom.xml" | head -n 1)"
+[[ "$version" == "$project_version" ]] || fail 'image version does not match the project version'
+if [[ "${3:-}" != --ci-build ]]; then
+    tag_commit="$(git -C "$source_dir" rev-parse --verify "refs/tags/$tag^{commit}")" || fail 'release tag is unavailable'
+    [[ "$commit" == "$tag_commit" ]] || fail 'release tag does not point to this checkout'
+fi
 for tool in skopeo jq; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
 archive="$artifact_dir/oss-transfer-image.tar"
 checksum="$archive.sha256"
@@ -45,6 +50,6 @@ for arch in amd64 arm64; do
         '.os == "linux" and .architecture == $arch and
          .config.Labels["org.opencontainers.image.version"] == $version and
          .config.Labels["org.opencontainers.image.revision"] == $commit' \
-        "$state/config.json" >/dev/null || fail "image $arch version or commit does not match the tag"
+        "$state/config.json" >/dev/null || fail "image $arch version or commit does not match the checkout"
 done
 printf 'Verified release image: %s (%s)\n' "$tag" "$commit"

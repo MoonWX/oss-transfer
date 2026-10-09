@@ -23,16 +23,29 @@ printf 'readme\n' > "$fixture/README.md"
 printf 'readme\n' > "$fixture/README.zh-CN.md"
 cat > "$test_root/bin/npm" <<'TOOL'
 #!/bin/bash
+[ -z "${MOCK_BUILD_LOG:-}" ] || printf 'npm %s\n' "$*" >> "$MOCK_BUILD_LOG"
+[ "${MOCK_BUILD_FAIL:-}" != "npm-$1" ] || exit 6
 exit 0
 TOOL
 cat > "$test_root/bin/mvn" <<'TOOL'
 #!/bin/bash
+[ -z "${MOCK_BUILD_LOG:-}" ] || printf 'mvn %s\n' "$*" >> "$MOCK_BUILD_LOG"
 [ "${MOCK_BUILD_FAIL:-}" != mvn ] || exit 7
 mkdir -p target
-printf 'new jar\n' > target/oss-transfer.jar
+if [[ " $* " == *' verify '* ]]; then
+    printf 'tested jar\n' > target/oss-transfer.jar
+else
+    printf 'new jar\n' > target/oss-transfer.jar
+fi
 TOOL
 cat > "$test_root/bin/go" <<'TOOL'
 #!/bin/bash
+[ -z "${MOCK_BUILD_LOG:-}" ] || printf 'go[%s/%s] %s\n' "${GOOS:-host}" "${GOARCH:-host}" "$*" >> "$MOCK_BUILD_LOG"
+if [ "$1" = test ]; then
+    [ "${MOCK_BUILD_FAIL:-}" != go-test ] || exit 8
+    [ "$*" = 'test ./...' ] || exit 9
+    exit 0
+fi
 while [ "$#" -gt 0 ]; do
     if [ "$1" = -o ]; then printf 'new cli\n' > "$2"; exit 0; fi
     shift
@@ -72,7 +85,7 @@ chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
 
 run_build() {
-    OSS_TRANSFER_OUTPUT_DIR="$output" bash "$fixture/build.sh"
+    OSS_TRANSFER_OUTPUT_DIR="$output" bash "$fixture/build.sh" "$@"
 }
 expect_failure() {
     local expected_status="$1" actual_status
@@ -140,7 +153,9 @@ assert_package_version() {
         [ ! -e "$output/oss-transfer/deploy/docker/$old_file" ]
     done
     tar -tzf "$output/oss-transfer.tar.gz" > "$test_root/version-archive-files"
-    ! grep -Eq '^oss-transfer/deploy/docker/compose(\.yml|\.env\.example)$' "$test_root/version-archive-files"
+    if grep -Eq '^oss-transfer/deploy/docker/compose(\.yml|\.env\.example)$' "$test_root/version-archive-files"; then
+        echo 'Package contains superseded Compose files' >&2; exit 1
+    fi
 }
 
 output="$test_root/release output"
@@ -172,7 +187,9 @@ grep -q 'oss-transfer/agent-bundle.tar.gz' "$test_root/archive-files"
 tar -tzf "$output/oss-transfer/agent-bundle.tar.gz" > "$test_root/bundle-files"
 grep -q './deploy/install-agent.sh' "$test_root/bundle-files"
 grep -q './deploy/wait-node-ready.sh' "$test_root/bundle-files"
-! grep -Eq 'application\.yml|secrets|frontend|README|test-results' "$test_root/bundle-files"
+if grep -Eq 'application\.yml|secrets|frontend|README|test-results' "$test_root/bundle-files"; then
+    echo 'Agent bundle contains configuration or unrelated files' >&2; exit 1
+fi
 (cd "$output/oss-transfer" && shasum -a 256 -c agent-bundle.tar.gz.sha256)
 (cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
 backup_count=0
@@ -184,6 +201,44 @@ for backup in "$output/package-backups/"*; do
     backup_count=$((backup_count+1))
 done
 [ "$backup_count" -eq 1 ]
+assert_clean
+
+# CI tests and packages in one invocation. The JAR produced by verify is the
+# published JAR; a second build must not replace it with an untested artifact.
+output="$test_root/tested release"
+MOCK_BUILD_LOG="$test_root/tested-commands" run_build --test > "$test_root/tested-build.log" 2>&1
+[ "$(cat "$output/oss-transfer/oss-transfer.jar")" = 'tested jar' ]
+tar -xOzf "$output/oss-transfer.tar.gz" oss-transfer/oss-transfer.jar > "$test_root/tested-jar"
+[ "$(cat "$test_root/tested-jar")" = 'tested jar' ]
+[ "$(grep -c '^npm ' "$test_root/tested-commands")" -eq 2 ]
+[ "$(grep -c '^mvn ' "$test_root/tested-commands")" -eq 1 ]
+grep -Fxq 'mvn clean verify -q' "$test_root/tested-commands"
+grep -Fxq 'npm ci' "$test_root/tested-commands"
+grep -Fxq 'npm run build' "$test_root/tested-commands"
+[ "$(grep -c '] test ' "$test_root/tested-commands")" -eq 1 ]
+[ "$(grep -c '] build ' "$test_root/tested-commands")" -eq 2 ]
+grep -Fq 'go[linux/amd64] build ' "$test_root/tested-commands"
+grep -Fq 'go[linux/arm64] build ' "$test_root/tested-commands"
+if grep -Eq 'skipTests|maven.test.skip|clean package' "$test_root/tested-commands"; then
+    echo 'Tested build skipped tests or rebuilt the verified package' >&2; exit 1
+fi
+assert_clean
+
+# Every prerequisite failure must stop before publishing, even with a JAR
+# left in target by an earlier successful build.
+for phase in npm-ci npm-run mvn go-test; do
+    output="$test_root/tested failure $phase"
+    seed_release
+    case "$phase" in npm-*) expected_exit=6 ;; mvn) expected_exit=7 ;; go-test) expected_exit=8 ;; esac
+    MOCK_BUILD_FAIL="$phase" expect_failure "$expected_exit" run_build --test
+    assert_original_release
+    assert_clean
+done
+output="$test_root/invalid options"
+seed_release
+expect_failure 2 run_build --skip-build
+expect_failure 2 run_build --test extra
+assert_original_release
 assert_clean
 
 # Fail each old-file backup and each replacement move independently.
@@ -277,4 +332,4 @@ for fixture_version in 4.0.0 4.7.2; do
     (cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
     assert_clean
 done
-printf 'Build packaging checks passed (POM-derived versions, root Compose defaults to latest, Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'
+printf 'Build packaging checks passed (tested build reuse, test failure isolation, POM-derived versions, root Compose defaults to latest, Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'

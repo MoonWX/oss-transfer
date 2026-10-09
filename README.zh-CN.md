@@ -17,7 +17,7 @@ docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:4.0.0
+  moonwx/osstransfer:4.0.1
 ```
 
 将 URL 改为浏览器和 Agent 均能访问的 Master 地址。打开该地址，使用 `admin` 登录。初始密码随机生成，可通过以下命令读取：
@@ -110,7 +110,7 @@ Docker 拉取新版本并使用原有卷和挂载重建容器。传统部署解�
 
 输出为 `output/oss-transfer.tar.gz`、SHA-256 校验文件及 `output/oss-transfer/`。构建元数据包含 Git 提交和构建时间，WebUI 据此显示版本信息。
 
-GitHub Actions 在 Pull Request 和推送 `main` 时检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `v4.0.0`，会运行检查，并发布到 GitHub Releases、Docker Hub、京东云 OSS 和 JCR。
+GitHub Actions 在 Pull Request 和推送 `main` 时检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `v4.0.1`，会运行检查，并发布到 GitHub Releases、Docker Hub、京东云 OSS 和 JCR。
 
 仓库需配置以下 Secret：
 
@@ -123,3 +123,13 @@ GitHub Actions 在 Pull Request 和推送 `main` 时检查服务端、前端、C
 OSS 将 `oss-transfer.tar.gz`、SHA-256 校验文件和 `VERSION` 存放在 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`。正式版本同时更新 `osstransfer/latest/`；预发布版本只更新版本目录。
 
 镜像支持 Linux `amd64` 和 `arm64`，地址为 `moonwx/osstransfer` 和 `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`。正式版本发布 `X.Y.Z`、`X.Y` 和 `latest` 标签，预发布版本只发布版本标签。两个镜像仓库及 OSS 上传均成功后才创建 GitHub Release。预发布会标记为 Pre-release，也不会成为 GitHub 的 latest。
+
+手动发布时，先同步 `pom.xml`、`frontend/package*.json` 的工程版本、安装脚本及 Compose 的默认版本、节点邀请的兜底版本和 README 示例。测试并提交后，推送一个与 `pom.xml` 版本一致的新 annotated tag。例如，准备好 `4.0.2` 后：
+
+```sh
+git push origin main
+git tag -a v4.0.2 -m "OSS Transfer v4.0.2"
+git push origin refs/tags/v4.0.2
+```
+
+标签会触发完整检查及发布流程；只推送 `main` 不会发布新版本。

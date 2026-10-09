@@ -294,7 +294,7 @@ public class AgentRegistryService {
                 if (version.matches("[0-9]+\\.[0-9]+\\.[0-9]+([.-][A-Za-z0-9.-]+)?")) return version;
             }
         } catch (java.io.IOException ignored) { }
-        return "4.0.0";
+        return "4.0.1";
     }
     public static String randomSecret() {
         byte[] value = new byte[32]; new SecureRandom().nextBytes(value);

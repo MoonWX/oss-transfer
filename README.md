@@ -17,7 +17,7 @@ docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:4.0.0
+  moonwx/osstransfer:4.0.1
 ```
 
 Replace the URL with an address that your browser and agents can reach. Open that URL and log in as `admin`. Read the generated password:
@@ -110,7 +110,7 @@ Building requires JDK 8+, Maven, Node.js 22.12+ and Go 1.22+.
 
 Outputs are `output/oss-transfer.tar.gz`, its SHA-256 file, and `output/oss-transfer/`. Build metadata contains the Git commit and build time; the WebUI uses it for the version display.
 
-GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on pull requests and pushes to `main`. Pushing a matching version tag, such as `v4.0.0`, runs those checks and publishes to GitHub Releases, Docker Hub, JD Cloud OSS, and JD Cloud JCR.
+GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on pull requests and pushes to `main`. Pushing a matching version tag, such as `v4.0.1`, runs those checks and publishes to GitHub Releases, Docker Hub, JD Cloud OSS, and JD Cloud JCR.
 
 Configure these repository secrets:
 
@@ -123,3 +123,13 @@ Configure these repository secrets:
 OSS stores `oss-transfer.tar.gz`, its SHA-256 file, and `VERSION` under `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`. Pre-releases only update their version directory.
 
 Images support Linux `amd64` and `arm64` at `moonwx/osstransfer` and `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`. Stable releases publish `X.Y.Z`, `X.Y`, and `latest` tags; pre-releases publish their version tag only. The GitHub Release is published after both registries and OSS succeed. Pre-releases are marked accordingly and do not become GitHub's latest release.
+
+For a manual release, update the project versions in `pom.xml` and `frontend/package*.json`, the installer and Compose defaults, the agent invitation fallback version, and the README examples. Test and commit the changes, then push a new annotated tag matching the version in `pom.xml`. For example, after preparing version `4.0.2`:
+
+```sh
+git push origin main
+git tag -a v4.0.2 -m "OSS Transfer v4.0.2"
+git push origin refs/tags/v4.0.2
+```
+
+The tag starts the full checks and publication workflow; pushing `main` alone does not publish a release.

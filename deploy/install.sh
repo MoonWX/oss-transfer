@@ -7,7 +7,7 @@ usage() {
     cat <<'HELP'
 Usage: install.sh --role master|agent [options]
   --package-dir DIR     Extracted release or agent bundle (default: parent of this script)
-  --version VERSION     Release to download if no local package exists (default: 4.0.0)
+  --version VERSION     Release to download if no local package exists (default: 4.0.1)
   --package-url URL --checksum-url URL  Download a bundle from the master
   --master-url ORIGIN   Reachable master URL (required for agents)
   --join-token TOKEN    Single-use invitation (required for first agent installation)
@@ -22,7 +22,7 @@ Usage: install.sh --role master|agent [options]
 Existing configuration and data are preserved. Run as root on Linux with systemd.
 HELP
 }
-role='' version='4.0.0' package_dir='' package_url='' checksum_url=''
+role='' version='4.0.1' package_dir='' package_url='' checksum_url=''
 master_url='' join_token='' address='' label='' web_url='' port='1685'
 install_dir='/opt/oss-transfer' config_dir='' data_dir='' service_name='' java_override='' cli_path='/usr/local/bin/oss-transfer-cli' no_start=0
 while [[ $# -gt 0 ]]; do

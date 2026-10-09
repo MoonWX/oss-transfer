@@ -87,7 +87,7 @@ echo "[4/6] Preparing deployment files..."
 cp README.md "$PACKAGE_DIR/"
 cp README.zh-CN.md "$PACKAGE_DIR/"
 cp -R deploy "$PACKAGE_DIR/"
-cp Dockerfile .dockerignore "$PACKAGE_DIR/"
+cp Dockerfile .dockerignore docker-compose.yml .env.example "$PACKAGE_DIR/"
 cp LICENSE "$PACKAGE_DIR/" 2>/dev/null || true
 cat > "$PACKAGE_DIR/VERSION" <<VERSION
 Branch: $BRANCH

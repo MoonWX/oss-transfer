@@ -7,7 +7,7 @@ usage() {
     cat <<'HELP'
 Usage: install.sh --role master|agent [options]
   --package-dir DIR     Extracted release or agent bundle (default: parent of this script)
-  --version VERSION     Release to download if no local package exists (default: 4.0.1)
+  --version VERSION     Release to download if no local package exists (default: latest)
   --package-url URL --checksum-url URL  Download a bundle from the master
   --master-url ORIGIN   Reachable master URL (required for agents)
   --join-token TOKEN    Single-use invitation (required for first agent installation)
@@ -22,7 +22,8 @@ Usage: install.sh --role master|agent [options]
 Existing configuration and data are preserved. Run as root on Linux with systemd.
 HELP
 }
-role='' version='4.0.1' package_dir='' package_url='' checksum_url=''
+here="$(cd "$(dirname "$0")" && pwd)"
+role='' version='latest' package_dir='' package_url='' checksum_url=''
 master_url='' join_token='' address='' label='' web_url='' port='1685'
 install_dir='/opt/oss-transfer' config_dir='' data_dir='' service_name='' java_override='' cli_path='/usr/local/bin/oss-transfer-cli' no_start=0
 while [[ $# -gt 0 ]]; do
@@ -46,7 +47,7 @@ done
 [[ "$role" == master || "$role" == agent ]] || fail '--role must be master or agent'
 [[ "$(uname -s)" == Linux ]] || fail 'traditional deployment requires Linux'
 [[ "$(id -u)" == 0 ]] || fail 'run the installer as root'
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || fail 'invalid release version'
+[[ "$version" == latest || "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || fail 'invalid release version'
 [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || fail 'port must be between 1 and 65535'
 port="$((10#$port))"
 valid_origin() {
@@ -90,7 +91,6 @@ if [[ -n "$join_token" ]]; then [[ "$join_token" =~ ^[A-Za-z0-9_-]{32,}$ && ${#j
 for dependency in systemctl curl timeout ss tar openssl sha256sum; do
     command -v "$dependency" >/dev/null || fail "missing dependency: $dependency"
 done
-here="$(cd "$(dirname "$0")" && pwd)"
 # Detect the actual executable and verify its version before changing any service.
 runtime="$(bash "$here/preflight-node.sh" "$java_override")" || fail 'Java preflight failed'
 IFS=$'\t' read -r architecture java_bin java_major <<< "$runtime"
@@ -120,7 +120,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 if [[ -z "$package_dir" && -z "$package_url" && -f "$here/../oss-transfer.jar" ]]; then package_dir="$(cd "$here/.." && pwd)"; fi
 if [[ -z "$package_dir" ]]; then
-    package_url="${package_url:-https://github.com/MoonWX/oss-transfer/releases/download/v$version/oss-transfer.tar.gz}"
+    if [[ "$version" == latest ]]; then
+        default_package_url='https://github.com/MoonWX/oss-transfer/releases/latest/download/oss-transfer.tar.gz'
+    else
+        default_package_url="https://github.com/MoonWX/oss-transfer/releases/download/v$version/oss-transfer.tar.gz"
+    fi
+    package_url="${package_url:-$default_package_url}"
     checksum_url="${checksum_url:-${package_url}.sha256}"
     for url in "$package_url" "$checksum_url"; do
         [[ "$url" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[^[:space:]]+$ && "$url" != *$'\n'* ]] || fail 'invalid download URL'

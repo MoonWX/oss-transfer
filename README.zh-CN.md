@@ -17,7 +17,7 @@ docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:4.0.1
+  moonwx/osstransfer:latest
 ```
 
 将 URL 改为浏览器和 Agent 均能访问的 Master 地址。打开该地址，使用 `admin` 登录。初始密码随机生成，可通过以下命令读取：
@@ -30,7 +30,40 @@ docker exec oss-transfer-master cat /app/data/secrets/admin_password
 
 迁移本地文件时，还需挂载相应目录，例如 `-v /srv/transfer-files:/data`。容器以 UID/GID `10001` 运行，挂载目录必须赋予其相应读写权限。创建任务时使用容器内路径。
 
-Compose 示例位于 `deploy/docker/compose.yml`。
+### Docker Compose
+
+仓库和安装包根目录均包含 `docker-compose.yml` 和 `.env.example`，需要 Docker Compose v2。
+
+```sh
+cp .env.example .env
+```
+
+在 `.env` 中，将 `TRANSFER_MASTER_WEB_URL` 改为浏览器和 Agent 可访问的地址；`OSS_TRANSFER_FILES_DIR` 设置为迁移本地文件时使用的宿主机目录。按示例创建新目录并启动：
+
+```sh
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/transfer-files
+docker compose pull
+docker compose up -d
+```
+
+打开配置的地址，使用 `admin` 登录。读取初始密码、查看日志或使用 CLI：
+
+```sh
+docker compose exec master cat /app/data/secrets/admin_password
+docker compose logs -f master
+docker compose exec master oss-transfer-cli worker-status
+```
+
+默认镜像为 `moonwx/osstransfer:latest`。如需京东云镜像，在 `.env` 中设置 `OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest`。
+
+停止运行中的任务后，执行以下命令更新：
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+`master-data` 卷保存配置、凭据和任务断点。`docker compose down` 会保留该卷；加上 `-v` 会删除它。
 
 ### 传统部署
 
@@ -110,7 +143,7 @@ Docker 拉取新版本并使用原有卷和挂载重建容器。传统部署解�
 
 输出为 `output/oss-transfer.tar.gz`、SHA-256 校验文件及 `output/oss-transfer/`。构建元数据包含 Git 提交和构建时间，WebUI 据此显示版本信息。
 
-GitHub Actions 在 Pull Request 和推送 `main` 时检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `v4.0.1`，会运行检查，并发布到 GitHub Releases、Docker Hub、京东云 OSS 和 JCR。
+GitHub Actions 在 Pull Request 和推送 `main` 时检查服务端、前端、CLI、部署脚本和 workflow。推送与工程版本一致的标签，例如 `vX.Y.Z`，会运行检查，并发布到 GitHub Releases、Docker Hub、京东云 OSS 和 JCR。
 
 仓库需配置以下 Secret：
 
@@ -124,12 +157,15 @@ OSS 将 `oss-transfer.tar.gz`、SHA-256 校验文件和 `VERSION` 存放在 `htt
 
 镜像支持 Linux `amd64` 和 `arm64`，地址为 `moonwx/osstransfer` 和 `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`。正式版本发布 `X.Y.Z`、`X.Y` 和 `latest` 标签，预发布版本只发布版本标签。两个镜像仓库及 OSS 上传均成功后才创建 GitHub Release。预发布会标记为 Pre-release，也不会成为 GitHub 的 latest。
 
-手动发布时，先同步 `pom.xml`、`frontend/package*.json` 的工程版本、安装脚本及 Compose 的默认版本、节点邀请的兜底版本和 README 示例。测试并提交后，推送一个与 `pom.xml` 版本一致的新 annotated tag。例如，准备好 `4.0.2` 后：
+`pom.xml` 是唯一的工程版本来源。JAR、CLI 和安装包元数据在构建时自动继承该版本。Docker、Compose 和节点邀请默认使用 `latest`。安装脚本优先使用本地安装包，没有本地包时下载最新正式版；需要固定版本时，使用 `--version` 或 `OSS_TRANSFER_IMAGE`。
+
+发布时，只修改 `pom.xml` 的工程 `<version>`，测试并提交，再从该值生成标签：
 
 ```sh
+version=$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)
 git push origin main
-git tag -a v4.0.2 -m "OSS Transfer v4.0.2"
-git push origin refs/tags/v4.0.2
+git tag -a "v$version" -m "OSS Transfer v$version"
+git push origin "refs/tags/v$version"
 ```
 
 标签会触发完整检查及发布流程；只推送 `main` 不会发布新版本。

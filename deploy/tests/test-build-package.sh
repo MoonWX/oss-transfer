@@ -15,7 +15,8 @@ done
 for file in preflight-node.sh wait-node-ready.sh install.sh install-master.sh install-agent.sh runtime.sh; do
     cp "$source_root/deploy/$file" "$fixture/deploy/$file"
 done
-cp "$source_root/Dockerfile" "$source_root/.dockerignore" "$fixture/"
+cp "$source_root/Dockerfile" "$source_root/.dockerignore" \
+    "$source_root/docker-compose.yml" "$source_root/.env.example" "$fixture/"
 cp -R "$source_root/deploy/docker/." "$fixture/deploy/docker/"
 printf 'guide\n' > "$fixture/docs/deployment-and-user-guide.md"
 printf 'readme\n' > "$fixture/README.md"
@@ -110,6 +111,37 @@ assert_clean() {
     assert_no_staging
     [ ! -e "$output/.publish.lock" ]
 }
+assert_package_version() {
+    local expected_version="$1"
+    [ "$(sed -n 's/^Version: //p' "$output/oss-transfer/VERSION")" = "$expected_version" ]
+    cmp "$output/oss-transfer/VERSION" "$output/oss-transfer/CLI-VERSION"
+    cmp "$output/oss-transfer/VERSION" "$output/oss-transfer/APPLICATION-VERSION"
+    grep -Fxq '    image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}' \
+        "$output/oss-transfer/docker-compose.yml"
+    grep -Fxq 'OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest' \
+        "$output/oss-transfer/.env.example"
+    tar -xOzf "$output/oss-transfer.tar.gz" oss-transfer/docker-compose.yml | \
+        grep -Fx '    image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}' > /dev/null
+    tar -xOzf "$output/oss-transfer.tar.gz" oss-transfer/.env.example | \
+        grep -Fx 'OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest' > /dev/null
+    tar -xOzf "$output/oss-transfer/agent-bundle.tar.gz" ./VERSION > "$test_root/bundle-version"
+    cmp "$output/oss-transfer/VERSION" "$test_root/bundle-version"
+    # Compose stays on latest in source and every package, independently of
+    # the application version recorded in the package metadata.
+    grep -Fxq '    image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}' "$fixture/docker-compose.yml"
+    grep -Fxq 'OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest' "$fixture/.env.example"
+    cmp "$source_root/docker-compose.yml" "$fixture/docker-compose.yml"
+    cmp "$source_root/.env.example" "$fixture/.env.example"
+    cmp "$fixture/docker-compose.yml" "$output/oss-transfer/docker-compose.yml"
+    cmp "$fixture/.env.example" "$output/oss-transfer/.env.example"
+    for old_file in compose.yml compose.env.example; do
+        [ ! -e "$source_root/deploy/docker/$old_file" ]
+        [ ! -e "$fixture/deploy/docker/$old_file" ]
+        [ ! -e "$output/oss-transfer/deploy/docker/$old_file" ]
+    done
+    tar -tzf "$output/oss-transfer.tar.gz" > "$test_root/version-archive-files"
+    ! grep -Eq '^oss-transfer/deploy/docker/compose(\.yml|\.env\.example)$' "$test_root/version-archive-files"
+}
 
 output="$test_root/release output"
 seed_release
@@ -125,9 +157,10 @@ for file in preflight-node.sh wait-node-ready.sh; do
     cmp "$source_root/deploy/$file" "$output/oss-transfer/deploy/$file"
     [ -x "$output/oss-transfer/deploy/$file" ]
 done
-for file in docker-defaults.yml entrypoint.sh healthcheck.sh cli.sh compose.yml compose.env.example; do
+for file in docker-defaults.yml entrypoint.sh healthcheck.sh cli.sh; do
     cmp "$source_root/deploy/docker/$file" "$output/oss-transfer/deploy/docker/$file"
 done
+assert_package_version 4.0.0
 [ -x "$output/oss-transfer/oss-transfer-cli-arm64" ]
 [ -x "$output/oss-transfer/oss-transfer-cli-amd64" ]
 [ "$(sed -n 's/^Commit: //p' "$output/oss-transfer/VERSION")" = abcdef1 ]
@@ -233,4 +266,15 @@ wait "$publisher_pid"
 [ "$(cat "$output/qa-evidence/keep.txt")" = evidence ]
 (cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
 assert_clean
-printf 'Build packaging checks passed (Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'
+# Changing only the POM changes package metadata; Compose stays on latest
+# and installer scripts are copied without a manual version edit.
+for fixture_version in 4.0.0 4.7.2; do
+    printf '    <version>%s</version>\n' "$fixture_version" > "$fixture/pom.xml"
+    output="$test_root/project version $fixture_version"
+    run_build > "$test_root/version-$fixture_version.log" 2>&1
+    assert_package_version "$fixture_version"
+    cmp "$fixture/deploy/install.sh" "$output/oss-transfer/deploy/install.sh"
+    (cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
+    assert_clean
+done
+printf 'Build packaging checks passed (POM-derived versions, root Compose defaults to latest, Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'

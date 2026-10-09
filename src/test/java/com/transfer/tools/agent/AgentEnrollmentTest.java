@@ -71,6 +71,14 @@ public class AgentEnrollmentTest {
         request.setLabel("node\nroot");
         try { registry.invite(request); fail(); } catch (IllegalArgumentException expected) { }
     }
+    @Test public void dockerInvitationDefaultsToTheLatestPublishedImage() {
+        AgentRegistryService.InviteRequest request = new AgentRegistryService.InviteRequest();
+        String command = (String) registry.invite(request).get("dockerCommand");
+        assertTrue(command.endsWith("moonwx/osstransfer:latest"));
+        assertTrue(command.contains("TRANSFER_ROLE=agent"));
+        assertTrue(command.contains("TRANSFER_AGENT_MASTER_URL='https://transfer.example.com'"));
+        assertTrue(command.contains("TRANSFER_AGENT_JOIN_TOKEN="));
+    }
     @Test public void agentOriginAndAddressRejectCredentialsTraversalAndLoopback() {
         assertEquals("https://transfer.example.com", AgentIdentityStore.validateOrigin("https://transfer.example.com/"));
         for (String value : Arrays.asList("https://user:pass@host", "http://host/a", "file:///tmp", "http://host/?x=1")) {

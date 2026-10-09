@@ -81,7 +81,7 @@ public class AgentRegistryService {
                 + " -e TRANSFER_AGENT_JOIN_TOKEN=" + quote(token)
                 + " -e TRANSFER_AGENT_ADDRESS=" + (address.isEmpty() ? "\"" + identity + "\"" : quote(identity))
                 + " -e TRANSFER_AGENT_LABEL=" + quote(label)
-                + " -v oss-transfer-agent-data:/app/data moonwx/osstransfer:" + releaseVersion();
+                + " -v oss-transfer-agent-data:/app/data moonwx/osstransfer:latest";
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("success", true); response.put("id", invitation.id);
         response.put("expiresAt", Instant.ofEpochMilli(invitation.expiresAt).toString());
@@ -283,19 +283,6 @@ public class AgentRegistryService {
         return result;
     }
     public static String quote(String value) { return "'" + value.replace("'", "'\"'\"'") + "'"; }
-    private String releaseVersion() {
-        String manifestVersion = getClass().getPackage().getImplementationVersion();
-        if (manifestVersion != null && manifestVersion.matches("[0-9]+\\.[0-9]+\\.[0-9]+([.-][A-Za-z0-9.-]+)?"))
-            return manifestVersion;
-        try (java.io.InputStream input = getClass().getResourceAsStream("/META-INF/maven/com.transfer/oss-transfer/pom.properties")) {
-            if (input != null) {
-                Properties properties = new Properties(); properties.load(input);
-                String version = properties.getProperty("version", "");
-                if (version.matches("[0-9]+\\.[0-9]+\\.[0-9]+([.-][A-Za-z0-9.-]+)?")) return version;
-            }
-        } catch (java.io.IOException ignored) { }
-        return "4.0.1";
-    }
     public static String randomSecret() {
         byte[] value = new byte[32]; new SecureRandom().nextBytes(value);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(value);

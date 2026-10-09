@@ -1,7 +1,6 @@
 {
   "name": "oss-transfer-console",
   "private": true,
-  "version": "4.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

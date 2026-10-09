@@ -6,7 +6,7 @@
 
     <groupId>com.transfer</groupId>
     <artifactId>oss-transfer</artifactId>
-    <version>4.0.1</version>
+    <version>4.0.2</version>
     <packaging>jar</packaging>
 
     <name>OSS Transfer</name>

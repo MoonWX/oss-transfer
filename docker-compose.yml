@@ -1,6 +1,6 @@
 services:
   master:
-    image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:4.0.1}
+    image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 90s

@@ -17,7 +17,7 @@ docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:4.0.1
+  moonwx/osstransfer:latest
 ```
 
 Replace the URL with an address that your browser and agents can reach. Open that URL and log in as `admin`. Read the generated password:
@@ -30,7 +30,40 @@ Change the password after logging in. Application data, storage connections, nod
 
 For local-file transfers, also mount the relevant directory, for example `-v /srv/transfer-files:/data`. The container runs as UID/GID `10001`; mounted directories must grant it the necessary read/write permissions. The task uses the path inside the container.
 
-A Compose example is provided in `deploy/docker/compose.yml`.
+### Docker Compose
+
+The repository and release archive include `docker-compose.yml` and `.env.example` at the root. Docker Compose v2 is required.
+
+```sh
+cp .env.example .env
+```
+
+Edit `TRANSFER_MASTER_WEB_URL` in `.env` to an address reachable by browsers and agents. Set `OSS_TRANSFER_FILES_DIR` to the host directory used for local-file transfers. For a new directory using the example path:
+
+```sh
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/transfer-files
+docker compose pull
+docker compose up -d
+```
+
+Open the configured URL and log in as `admin`. Read the initial password, check logs, or run the CLI:
+
+```sh
+docker compose exec master cat /app/data/secrets/admin_password
+docker compose logs -f master
+docker compose exec master oss-transfer-cli worker-status
+```
+
+The default image is `moonwx/osstransfer:latest`. To use the JD Cloud mirror, set `OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest` in `.env`.
+
+After stopping active tasks, update with:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+The `master-data` volume preserves configuration, credentials and task checkpoints. `docker compose down` keeps this volume; adding `-v` deletes it.
 
 ### Traditional deployment
 
@@ -110,7 +143,7 @@ Building requires JDK 8+, Maven, Node.js 22.12+ and Go 1.22+.
 
 Outputs are `output/oss-transfer.tar.gz`, its SHA-256 file, and `output/oss-transfer/`. Build metadata contains the Git commit and build time; the WebUI uses it for the version display.
 
-GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on pull requests and pushes to `main`. Pushing a matching version tag, such as `v4.0.1`, runs those checks and publishes to GitHub Releases, Docker Hub, JD Cloud OSS, and JD Cloud JCR.
+GitHub Actions checks the server, frontend, CLI, deployment scripts, and workflows on pull requests and pushes to `main`. Pushing a matching version tag, such as `vX.Y.Z`, runs those checks and publishes to GitHub Releases, Docker Hub, JD Cloud OSS, and JD Cloud JCR.
 
 Configure these repository secrets:
 
@@ -124,12 +157,15 @@ OSS stores `oss-transfer.tar.gz`, its SHA-256 file, and `VERSION` under `https:/
 
 Images support Linux `amd64` and `arm64` at `moonwx/osstransfer` and `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer`. Stable releases publish `X.Y.Z`, `X.Y`, and `latest` tags; pre-releases publish their version tag only. The GitHub Release is published after both registries and OSS succeed. Pre-releases are marked accordingly and do not become GitHub's latest release.
 
-For a manual release, update the project versions in `pom.xml` and `frontend/package*.json`, the installer and Compose defaults, the agent invitation fallback version, and the README examples. Test and commit the changes, then push a new annotated tag matching the version in `pom.xml`. For example, after preparing version `4.0.2`:
+`pom.xml` is the only project version source. The build supplies this version to the JAR, CLI and release metadata. Docker, Compose and agent invitations default to `latest`. The installer uses a local package when present; otherwise it downloads the latest stable release. Use `--version` or `OSS_TRANSFER_IMAGE` to select a specific release.
+
+To publish a version, change only the project `<version>` in `pom.xml`, test and commit it. Then derive the tag from that value:
 
 ```sh
+version=$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)
 git push origin main
-git tag -a v4.0.2 -m "OSS Transfer v4.0.2"
-git push origin refs/tags/v4.0.2
+git tag -a "v$version" -m "OSS Transfer v$version"
+git push origin "refs/tags/v$version"
 ```
 
 The tag starts the full checks and publication workflow; pushing `main` alone does not publish a release.

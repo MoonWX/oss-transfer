@@ -260,6 +260,12 @@ public class NodeRegistryService {
     }
     private void synchronizeStorage(String address) { synchronizeStorage(address, false); }
     private void synchronizeStorage(String address, boolean masterAuthority) {
+        nodeConfig.withStorageSynchronizationLock(() -> {
+            synchronizeStorageLocked(address, masterAuthority);
+            return null;
+        });
+    }
+    private void synchronizeStorageLocked(String address, boolean masterAuthority) {
         if (address.equals(config.getLocalIp())) return;
         Map<String, Object> response = trusted(address, "/api/worker/s3-config", HttpMethod.GET, null);
         if (!(response.get("configs") instanceof Collection))
@@ -307,6 +313,18 @@ public class NodeRegistryService {
         }
     }
     public void synchronizeAgentStorage(String address) { synchronizeStorage(address, true); }
+    /** A successful user mutation is ready for immediate task creation on this Agent. */
+    public void confirmAgentStorageSynchronized(String address) {
+        if (agents == null || !agents.isAgent(address)) return;
+        nodeConfig.withStorageSynchronizationLock(() -> {
+            com.transfer.tools.agent.AgentRegistryService.Session session = agents.currentSession(address);
+            long version = agents.storageVersion();
+            synchronizeStorageLocked(address, true);
+            if (!agents.markSynchronized(session, version) || !agents.online(session))
+                throw error("NODE_STORAGE_SYNC_FAILED", "节点存储配置未完成同步：" + address);
+            return null;
+        });
+    }
     private Map<String, Object> trusted(String address, String path, HttpMethod method, Object body) {
         return exchange(address, path, method, body, true);
     }

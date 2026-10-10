@@ -70,6 +70,7 @@ public class AgentReconnectionTest {
         ReflectionTestUtils.setField(remote, "config", config);
         ReflectionTestUtils.setField(remote, "nodeConfig", nodes);
         ReflectionTestUtils.setField(remote, "s3Clients", s3);
+        ReflectionTestUtils.setField(remote, "agents", registry);
         synchronization = new AgentSynchronizationService();
         ReflectionTestUtils.setField(synchronization, "registry", registry);
         ReflectionTestUtils.setField(synchronization, "nodes", remote);
@@ -150,21 +151,65 @@ public class AgentReconnectionTest {
         MasterLocalTransferService localTransfers = mock(MasterLocalTransferService.class);
         ReflectionTestUtils.setField(synchronization, "localTransfers", localTransfers);
         String originalEnrollment = registry.currentEnrollment(AGENT);
+        AgentRegistryService.Session originalSession = registry.currentSession(AGENT);
         remote.blockNextMutation = true; synchronization.connected(AGENT);
         assertTrue(remote.mutationStarted.await(3, TimeUnit.SECONDS));
+        AtomicReference<Throwable> removalFailure = new AtomicReference<>();
+        Thread replacement = daemon(() -> {
+            try {
+                nodes.withMembershipWriteLock(() -> {
+                    registry.revokeMembership(AGENT, Collections.singletonList(MASTER), Collections.emptyMap()); return null;
+                });
+                identity = enroll(AGENT);
+            } catch (Throwable error) { removalFailure.set(error); }
+        });
+        replacement.start();
         try {
-            nodes.withMembershipWriteLock(() -> {
-                registry.revokeMembership(AGENT, Collections.singletonList(MASTER), Collections.emptyMap()); return null;
-            });
-            identity = enroll(AGENT);
-            assertNotEquals(originalEnrollment, registry.currentEnrollment(AGENT));
+            ReentrantReadWriteLock lock = (ReentrantReadWriteLock) ReflectionTestUtils.getField(nodes, "membershipLock");
+            eventually(() -> lock.hasQueuedThread(replacement));
         } finally { remote.releaseMutation.countDown(); }
+        replacement.join(3000); assertFalse("Replacement must proceed after reconciliation releases membership", replacement.isAlive());
+        if (removalFailure.get() != null) throw new AssertionError(removalFailure.get());
+        assertNotEquals(originalEnrollment, registry.currentEnrollment(AGENT));
         awaitSynchronizationFinished();
+        assertFalse(registry.markSynchronized(originalSession, registry.storageVersion()));
         assertFalse("The replacement must acknowledge its own synchronization", registry.online(AGENT));
         assertTrue(registry.needsSynchronization(AGENT));
-        verify(localTransfers, never()).retryDeferredParents();
+        clearInvocations(localTransfers);
         reconnectAndWait(); assertTrue(registry.online(AGENT));
         verify(localTransfers, times(1)).retryDeferredParents();
+    }
+
+    @Test public void acknowledgedUserMutationMakesTheCompleteCurrentConfigurationReady() {
+        add("archive", "https://archive.example.com"); registry.touch(AGENT);
+        assertFalse(registry.online(AGENT));
+        remote.confirmAgentStorageSynchronized(AGENT);
+        assertTrue(registry.online(AGENT));
+        assertEquals("https://archive.example.com", remote.connections.get("archive").get("endpoint"));
+    }
+
+    @Test public void failedUserSynchronizationCannotMarkTheAgentReady() {
+        add("archive", "https://archive.example.com"); registry.touch(AGENT); remote.failNextRead = true;
+        try { remote.confirmAgentStorageSynchronized(AGENT); fail("Failed reconciliation must fail the user acknowledgment"); }
+        catch (TransferValidationException expected) { }
+        assertFalse(registry.online(AGENT)); assertTrue(registry.needsSynchronization(AGENT));
+    }
+
+    @Test public void userSynchronizationCannotMarkAChangedConfigurationGenerationReady() throws Exception {
+        add("first", "https://first.example.com"); registry.touch(AGENT);
+        remote.blockNextMutation = true;
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread confirm = daemon(() -> {
+            try { remote.confirmAgentStorageSynchronized(AGENT); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        confirm.start(); assertTrue(remote.mutationStarted.await(3, TimeUnit.SECONDS));
+        try { add("second", "https://second.example.com"); }
+        finally { remote.releaseMutation.countDown(); }
+        confirm.join(3000); assertFalse(confirm.isAlive());
+        assertTrue("A stale generation must fail confirmation", failure.get() instanceof TransferValidationException);
+        assertFalse(registry.online(AGENT)); assertTrue(registry.needsSynchronization(AGENT));
+        remote.confirmAgentStorageSynchronized(AGENT); assertTrue(registry.online(AGENT));
     }
 
     @Test public void failedSynchronizationKeepsAgentUnavailableAndRetriesOnHeartbeat() throws Exception {

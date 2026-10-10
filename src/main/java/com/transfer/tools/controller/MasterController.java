@@ -87,6 +87,7 @@ public class MasterController {
     @Autowired private com.transfer.tools.service.OssTaskGroupService ossTaskGroups;
     @Autowired private TaskLifecycleService taskLifecycleService;
     @Autowired private com.transfer.tools.service.NodeConfigService nodeConfigService;
+    @Autowired private com.transfer.tools.service.NodeRegistryService nodeRegistryService;
 
     @GetMapping("/task-creations/{creationId}")
     public Map<String, Object> taskCreation(@PathVariable String creationId) {
@@ -1720,7 +1721,7 @@ public class MasterController {
 
     @PostMapping("/s3-config")
     public Map<String, Object> addS3Config(@RequestBody Map<String, Object> params) {
-        return nodeConfigService.withMembershipReadLock(() -> addS3ConfigLocked(params));
+        return nodeConfigService.withStorageSynchronizationLock(() -> addS3ConfigLocked(params));
     }
 
     private Map<String, Object> addS3ConfigLocked(Map<String, Object> params) {
@@ -1784,6 +1785,7 @@ public class MasterController {
 
                     String response = callRemoteApi(url, "POST", workerParams);
                     if (successfulSyncResponse(response)) {
+                        nodeRegistryService.confirmAgentStorageSynchronized(workerIp);
                         successCount++;
                         details.add(workerIp + ": 添加成功");
                     } else {
@@ -1829,7 +1831,7 @@ public class MasterController {
 
     @DeleteMapping("/s3-config/{alias}")
     public Map<String, Object> removeS3Config(@PathVariable String alias) {
-        return nodeConfigService.withMembershipReadLock(() -> removeS3ConfigLocked(alias));
+        return nodeConfigService.withStorageSynchronizationLock(() -> removeS3ConfigLocked(alias));
     }
 
     private Map<String, Object> removeS3ConfigLocked(String alias) {
@@ -1857,6 +1859,7 @@ public class MasterController {
                     String url = "http://" + workerIp + ":" + distributedConfig.getPort() + "/api/worker/s3-config/" + alias;
                     String response = callRemoteApi(url, "DELETE", null);
                     if (successfulSyncResponse(response)) {
+                        nodeRegistryService.confirmAgentStorageSynchronized(workerIp);
                         successCount++;
                         details.add(workerIp + ": 删除成功");
                     } else {
@@ -1887,7 +1890,7 @@ public class MasterController {
 
     @PutMapping("/s3-config/{alias}")
     public Map<String, Object> updateS3Config(@PathVariable String alias, @RequestBody Map<String, Object> params) {
-        return nodeConfigService.withMembershipReadLock(() -> updateS3ConfigLocked(alias, params));
+        return nodeConfigService.withStorageSynchronizationLock(() -> updateS3ConfigLocked(alias, params));
     }
 
     private Map<String, Object> updateS3ConfigLocked(String alias, Map<String, Object> params) {
@@ -1949,6 +1952,7 @@ public class MasterController {
 
                     String response = callRemoteApi(url, "PUT", workerParams);
                     if (successfulSyncResponse(response)) {
+                        nodeRegistryService.confirmAgentStorageSynchronized(workerIp);
                         successCount++;
                         details.add(workerIp + ": 更新成功");
                     } else {

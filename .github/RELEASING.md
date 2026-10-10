@@ -16,6 +16,8 @@ CI runs one acceptance chain using a real Master, two Agents, the packaged CLI, 
 
 The previous mock-based server, browser, CLI and publisher suites are not default CI gates. They remain available for focused development with `./build.sh --test`, `cd frontend && npm test`, and the individual deployment test scripts. There is no test-count target or path-based bypass. Acceptance failures preserve checks, independent manifests, task reports, logs and browser traces as `acceptance-evidence`; they prevent release artifact upload.
 
+The focused `StorageSynchronizationRaceTest` also runs in CI. It deterministically reproduces competing user and background configuration changes using real controllers, RocksDB and loopback HTTP, without waiting for a scheduling race to occur during a transfer.
+
 ## Publish a version
 
 Change the project `<version>` in `pom.xml`, test and commit it on `main`. This is the version source for the JAR, CLI and package metadata; installers and Compose default to `latest`.

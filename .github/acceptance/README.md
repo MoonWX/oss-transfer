@@ -2,6 +2,8 @@
 
 The test subject is the built release: its JAR, Linux CLI and embedded WebUI. Tests do not import application classes, replace HTTP responses, or seed successful task records. An independent S3 client prepares conflict fixtures and verifies results; Transfer itself must perform the main upload, copy and download.
 
+CI also runs `StorageSynchronizationRaceTest` before image acceptance. Four focused cases use real controllers, RocksDB and loopback HTTP, with latches controlling competing configuration requests. They cover duplicate synchronization during create/delete, stale updates and strict duplicate POST rejection. Only external S3 client construction is stubbed in these concurrency cases; the release acceptance below exercises actual S3 traffic.
+
 ## Required outcomes
 
 | Scenario | Pass condition |

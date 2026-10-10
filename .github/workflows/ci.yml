@@ -36,6 +36,8 @@ jobs:
           cache-dependency-path: cli-go/go.sum
       - name: Build installation package once
         run: ./build.sh
+      - name: Check concurrent storage configuration synchronization
+        run: mvn -q -Dtest=StorageSynchronizationRaceTest test
       - name: Check package identity and workflow syntax
         id: version
         run: |

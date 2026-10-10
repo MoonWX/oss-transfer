@@ -353,6 +353,8 @@ class Harness:
                            "useV2SignerType": False, "pathStyleEnable": True})
         if not result.get("success") or result.get("failedCount", 0) or result.get("partial"):
             raise AssertionError("S3 configuration failed to synchronize to every node: " + self.clean_text(json.dumps(result)))
+        if not self.connected():
+            raise AssertionError("S3 configuration reported success before every Agent was ready")
         self.record("real login, unauthorized API rejection and agent enrollment", {"agents": len(self.workers), "invalidS3SignatureRejected": True})
 
     def browser(self):

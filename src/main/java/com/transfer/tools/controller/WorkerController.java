@@ -806,6 +806,9 @@ private NodeConfigService nodeConfigService;
 
     @PostMapping("/s3-config")
     public Map<String, Object> addS3Config(@RequestBody Map<String, Object> params) {
+        return nodeConfigService.withStorageSynchronizationLock(() -> addS3ConfigLocked(params));
+    }
+    private Map<String, Object> addS3ConfigLocked(Map<String, Object> params) {
         Map<String, Object> result = new HashMap<>();
         try {
             String alias = (String) params.get("alias");
@@ -870,6 +873,9 @@ private NodeConfigService nodeConfigService;
 
     @DeleteMapping("/s3-config/{alias}")
     public Map<String, Object> removeS3Config(@PathVariable String alias) {
+        return nodeConfigService.withStorageSynchronizationLock(() -> removeS3ConfigLocked(alias));
+    }
+    private Map<String, Object> removeS3ConfigLocked(String alias) {
         Map<String, Object> result = new HashMap<>();
         try {
             boolean success = s3ClientManager.removeClient(alias);
@@ -891,6 +897,9 @@ private NodeConfigService nodeConfigService;
 
     @PutMapping("/s3-config/{alias}")
     public Map<String, Object> updateS3Config(@PathVariable String alias, @RequestBody Map<String, Object> params) {
+        return nodeConfigService.withStorageSynchronizationLock(() -> updateS3ConfigLocked(alias, params));
+    }
+    private Map<String, Object> updateS3ConfigLocked(String alias, Map<String, Object> params) {
         Map<String, Object> result = new HashMap<>();
         try {
             String endpoint = (String) params.get("endpoint");

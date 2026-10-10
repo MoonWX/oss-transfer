@@ -9,6 +9,7 @@ import javax.annotation.PostConstruct;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.Callable;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /** Durable membership. Scheduling holds the read lock through task persistence / RPC. */
@@ -17,6 +18,7 @@ public class NodeConfigService {
     private static final String KEY = "node_config";
     private volatile NodeConfig current;
     private final ReentrantReadWriteLock membershipLock = new ReentrantReadWriteLock(true);
+    private final ReentrantLock storageSynchronizationLock = new ReentrantLock(true);
     @Autowired private RocksDBService rocksDBService;
     @Autowired private DistributedConfig distributedConfig;
 
@@ -96,6 +98,19 @@ public class NodeConfigService {
     public <T> T withMembershipReadLock(Callable<T> work) {
         membershipLock.readLock().lock();
         try { return call(work); } finally { membershipLock.readLock().unlock(); }
+    }
+
+    /**
+     * Serialize a storage mutation and its worker acknowledgments with background
+     * reconciliation. Always acquire membership before storage, including when a
+     * caller already holds the reentrant membership write lock for node admission.
+     * Agent polls must only enqueue reconciliation, never acquire this lock.
+     */
+    public <T> T withStorageSynchronizationLock(Callable<T> work) {
+        return withMembershipReadLock(() -> {
+            storageSynchronizationLock.lock();
+            try { return call(work); } finally { storageSynchronizationLock.unlock(); }
+        });
     }
     public <T> T withMembershipWriteLock(Callable<T> work) {
         membershipLock.writeLock().lock();

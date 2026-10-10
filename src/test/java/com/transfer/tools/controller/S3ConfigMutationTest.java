@@ -31,7 +31,9 @@ public class S3ConfigMutationTest {
         ReflectionTestUtils.setField(master, "s3ClientManager", manager);
         ReflectionTestUtils.setField(master, "distributedConfig", config);
         ReflectionTestUtils.setField(master, "nodeConfigService", new com.transfer.tools.service.NodeConfigService());
+        ReflectionTestUtils.setField(master, "nodeRegistryService", new com.transfer.tools.service.NodeRegistryService());
         ReflectionTestUtils.setField(worker, "s3ClientManager", manager);
+        ReflectionTestUtils.setField(worker, "nodeConfigService", new com.transfer.tools.service.NodeConfigService());
         when(config.getLocalIp()).thenReturn("qa-node");
         when(config.getWorkerIps()).thenReturn(Collections.singletonList("qa-node"));
     }

@@ -3,20 +3,44 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full_tests:
+        description: Run the full regression suite
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 jobs:
+  scope:
+    name: Select checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      console: ${{ steps.scope.outputs.console }}
+      build: ${{ steps.scope.outputs.build }}
+      components: ${{ steps.scope.outputs.components }}
+      deployment: ${{ steps.scope.outputs.deployment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        run: python3 .github/scripts/ci-test-scope.py
   console:
-    name: Console (${{ matrix.shard }}/4)
+    name: Console (${{ inputs.full_tests && 'full' || 'core' }} ${{ matrix.shard }})
+    needs: scope
+    if: needs.scope.outputs.console == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(inputs.full_tests && '[1, 2, 3, 4]' || '[1]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,12 +50,19 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Console tests
+      - name: Prepare browser tests
         working-directory: frontend
         run: |
           npm ci
           npx playwright install --with-deps chrome
-          npm test -- --workers=2 --shard=${{ matrix.shard }}/4
+      - name: Core console tests
+        if: inputs.full_tests != true
+        working-directory: frontend
+        run: npm run test:smoke -- --workers=2
+      - name: Full console tests
+        if: inputs.full_tests == true
+        working-directory: frontend
+        run: npm test -- --workers=2 --shard=${{ matrix.shard }}/4
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
@@ -41,6 +72,10 @@ jobs:
           retention-days: 3
   server:
     name: Build and verify package
+    needs: scope
+    if: needs.scope.outputs.build == 'true'
+    env:
+      BUILD_TEST_COMPONENTS: ${{ needs.scope.outputs.components }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -61,8 +96,10 @@ jobs:
         with:
           go-version: '1.25.x'
           cache-dependency-path: cli-go/go.sum
-      - name: Build package with server and CLI tests
-        run: ./build.sh --test
+      - name: Build package with selected tests
+        env:
+          TEST_MODE: ${{ inputs.full_tests && '--test' || '--test=smoke' }}
+        run: ./build.sh "$TEST_MODE"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
@@ -71,22 +108,29 @@ jobs:
           path: target/surefire-reports/TEST-*.xml
           retention-days: 3
       - name: Workflow checks
+        if: needs.scope.outputs.deployment == 'true'
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" -color
-      - name: Deployment and package checks
+      - name: Release safety checks
+        if: needs.scope.outputs.deployment == 'true'
         run: |
+          bash -n build.sh
           find deploy -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          python3 deploy/tests/test-publish-oss.py
+          python3 deploy/tests/test-publish-image.py
+          python3 .github/tests/test-resolve-ci-artifacts.py
+          python3 .github/tests/test-ci-test-scope.py
+      - name: Full deployment regression
+        if: inputs.full_tests == true
+        run: |
           bash deploy/tests/test-build-package.sh
           bash deploy/tests/test-cli-launcher.sh
           bash deploy/tests/deploy-ssh-port-test.sh
           python3 deploy/tests/deploy-runtime-test.py
           bash deploy/tests/test-docker-entrypoint.sh
-          python3 deploy/tests/test-publish-oss.py
-          python3 deploy/tests/test-publish-image.py
           python3 deploy/tests/test-install-version.py
           python3 deploy/tests/test-setup-release-runner.py
-          python3 .github/tests/test-resolve-ci-artifacts.py
       - name: Upload release package
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         timeout-minutes: 10
@@ -103,7 +147,7 @@ jobs:
   image:
     name: Build and verify image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [console, server]
+    needs: server
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

@@ -1,17 +1,52 @@
 #!/bin/bash
 set -euo pipefail
 
-TEST_BUILD=0
+TEST_MODE=none
+usage() { echo 'Usage: build.sh [--test|--test=smoke]' >&2; }
 case "${1:-}" in
-    '') [ "$#" -eq 0 ] || { echo 'Usage: build.sh [--test]' >&2; exit 2; } ;;
-    --test) [ "$#" -eq 1 ] || { echo 'Usage: build.sh [--test]' >&2; exit 2; }; TEST_BUILD=1 ;;
-    --help|-h) [ "$#" -eq 1 ] || { echo 'Usage: build.sh [--test]' >&2; exit 2; }
-        printf 'Usage: build.sh [--test]\n  --test  Run server and CLI tests, then package those build outputs.\n'
+    '') [ "$#" -eq 0 ] || { usage; exit 2; } ;;
+    --test) [ "$#" -eq 1 ] || { usage; exit 2; }; TEST_MODE=full ;;
+    --test=smoke) [ "$#" -eq 1 ] || { usage; exit 2; }; TEST_MODE=smoke ;;
+    --help|-h) [ "$#" -eq 1 ] || { usage; exit 2; }
+        printf 'Usage: build.sh [--test|--test=smoke]\n  --test        Run all server and CLI tests before packaging.\n  --test=smoke  Run core server tests and CLI tests before packaging.\n  BUILD_TEST_COMPONENTS=server,cli|server|cli|none selects test components.\n'
         exit 0 ;;
-    *) echo 'Usage: build.sh [--test]' >&2; exit 2 ;;
+    *) usage; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TEST_SERVER=0
+TEST_CLI=0
+case "${BUILD_TEST_COMPONENTS-server,cli}" in
+    server,cli) TEST_SERVER=1; TEST_CLI=1 ;;
+    server) TEST_SERVER=1 ;;
+    cli) TEST_CLI=1 ;;
+    none) ;;
+    *) echo 'BUILD_TEST_COMPONENTS must be server,cli, server, cli, or none' >&2; exit 2 ;;
+esac
+SMOKE_TESTS=""
+if [ "$TEST_MODE" = smoke ] && [ "$TEST_SERVER" -eq 1 ]; then
+    smoke_file="$SCRIPT_DIR/.github/ci/server-smoke-tests.txt"
+    [ -r "$smoke_file" ] || { echo "Missing server smoke test list: $smoke_file" >&2; exit 2; }
+    smoke_classes=""
+    while IFS= read -r test_selection || [ -n "$test_selection" ]; do
+        case "$test_selection" in ''|'#'*) continue ;; esac
+        if [[ ! "$test_selection" =~ ^[[:alpha:]_][[:alnum:]_]*(\.[[:alpha:]_][[:alnum:]_]*)+#[[:alpha:]_][[:alnum:]_]*(\+[[:alpha:]_][[:alnum:]_]*)*$ ]]; then
+            echo "Invalid server smoke test selection: $test_selection" >&2; exit 2
+        fi
+        test_class="${test_selection%%#*}"
+        test_source="$SCRIPT_DIR/src/test/java/${test_class//.//}.java"
+        [ -f "$test_source" ] || { echo "Missing server smoke test class: $test_class" >&2; exit 2; }
+        case ",$smoke_classes," in *",$test_class,"*) echo "Duplicate server smoke test class: $test_class" >&2; exit 2 ;; esac
+        smoke_classes="${smoke_classes:+$smoke_classes,}$test_class"
+        IFS=+ read -r -a smoke_methods <<< "${test_selection#*#}"
+        for test_method in "${smoke_methods[@]}"; do
+            grep -Eq "public[[:space:]]+void[[:space:]]+${test_method}[[:space:]]*\(" "$test_source" || \
+                { echo "Missing server smoke test method: $test_class#$test_method" >&2; exit 2; }
+        done
+        SMOKE_TESTS="${SMOKE_TESTS:+$SMOKE_TESTS,}$test_selection"
+    done < "$smoke_file"
+    [ -n "$SMOKE_TESTS" ] || { echo 'Server smoke test list is empty' >&2; exit 2; }
+fi
 OUTPUT_DIR="${OSS_TRANSFER_OUTPUT_DIR:-$SCRIPT_DIR/output}"
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
@@ -84,15 +119,19 @@ BUILD_TIME=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
 echo "[1/6] Building console..."
 (cd "$SCRIPT_DIR/frontend" && npm ci && npm run build)
 echo "[2/6] Building server..."
-if [ "$TEST_BUILD" -eq 1 ]; then
-    mvn clean verify -q
+if [ "$TEST_MODE" != none ] && [ "$TEST_SERVER" -eq 1 ]; then
+    if [ "$TEST_MODE" = smoke ]; then
+        mvn clean verify -q "-Dtest=$SMOKE_TESTS" -Dsurefire.failIfNoSpecifiedTests=true
+    else
+        mvn clean verify -q
+    fi
 else
     mvn clean package -q -DskipTests
 fi
 cp "target/oss-transfer.jar" "$PACKAGE_DIR/"
 
 echo "[3/6] Building CLI..."
-if [ "$TEST_BUILD" -eq 1 ]; then
+if [ "$TEST_MODE" != none ] && [ "$TEST_CLI" -eq 1 ]; then
     (cd "$SCRIPT_DIR/cli-go" && go test ./...)
 fi
 LDFLAGS="-X main.version=$VERSION -X main.branch=$BRANCH -X main.commit=$COMMIT -X main.buildTime=$BUILD_TIME"

@@ -115,7 +115,7 @@ jobs:
           docker load --input "$RUNNER_TEMP/acceptance-arm64.tar"
           rm -f "$RUNNER_TEMP/acceptance-arm64.tar"
           "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
-            --image oss-transfer:acceptance-arm64 --quick --evidence output/acceptance/arm64
+            --image oss-transfer:acceptance-arm64 --quick --startup-timeout 240 --evidence output/acceptance/arm64
       - name: Save acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

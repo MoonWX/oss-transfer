@@ -39,6 +39,8 @@ python3 -m venv /tmp/oss-acceptance-venv
 
 Use `--quick` only for the documented second-architecture small-file check. It is not a replacement for the main chain. CI has explicit phase timeouts, no browser retries and no fallback to an older successful artifact. A failed recovery cannot be hidden by creating another task.
 
+Initial Master and Agent readiness each allow 120 seconds. CI uses `--startup-timeout 240` for ARM64 under QEMU because JVM cold startup can approach two minutes. Transfer and recovery deadlines are unchanged, and the entire ARM64 step remains limited to eight minutes.
+
 ## Evidence and limits
 
 `checks.json` records completed assertions and measured values; expected and actual manifests record independent content hashes. Reports, sanitized container logs, task snapshots and failed-browser traces are retained. A successful API response or a matching count alone is insufficient.

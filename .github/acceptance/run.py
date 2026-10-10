@@ -39,8 +39,9 @@ def sha256(path):
 
 
 class Harness:
-    def __init__(self, image, evidence, quick=False):
+    def __init__(self, image, evidence, quick=False, startup_timeout=120):
         self.quick = quick
+        self.startup_timeout = startup_timeout
         self.image = image
         self.evidence = Path(evidence).resolve()
         self.evidence.mkdir(parents=True, exist_ok=True)
@@ -329,7 +330,7 @@ class Harness:
         self.container(self.master, common(self.master) + ["--network-alias", "master", "-p", "127.0.0.1::1685",
                         "-e", "TRANSFER_MASTER_WEB_URL=http://master:1685", self.image])
         self.origin = "http://127.0.0.1:" + self.port(self.master, 1685)
-        self.wait(lambda: self.request("GET", "/api/auth/current", authenticated=False), "master readiness")
+        self.wait(lambda: self.request("GET", "/api/auth/current", authenticated=False), "master readiness", self.startup_timeout)
         self.password = self.docker("exec", self.master, "cat", "/app/data/secrets/admin_password")
         self.sensitive.append(self.password)
         self.login()
@@ -341,7 +342,7 @@ class Harness:
             self.container(self.agents[index], common(self.agents[index]) + ["-e", "TRANSFER_ROLE=agent",
                            "-e", "TRANSFER_AGENT_MASTER_URL=http://master:1685", "-e", "TRANSFER_AGENT_JOIN_TOKEN=" + join_token,
                            "-e", "TRANSFER_AGENT_ADDRESS=" + address, self.image])
-        self.wait(self.connected, "both enrolled agents return live status")
+        self.wait(self.connected, "configured agents return live status", self.startup_timeout)
         # Run the packaged CLI itself, not the wrapper that loads the internal token.
         self.container(self.cli_name, ["--entrypoint", "/bin/sleep", "-e", "XDG_CONFIG_HOME=/tmp/cli-config",
                                       "-v", str(self.data) + ":/data:ro", self.image], ["infinity"])
@@ -427,8 +428,11 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--evidence", default="output/acceptance")
     parser.add_argument("--quick", action="store_true", help="One-agent real file upload for the second architecture")
+    parser.add_argument("--startup-timeout", type=int, default=120, help="Seconds allowed for initial Master and Agent readiness")
     args = parser.parse_args()
-    h = Harness(args.image, args.evidence, args.quick)
+    if args.startup_timeout <= 0:
+        parser.error("--startup-timeout must be positive")
+    h = Harness(args.image, args.evidence, args.quick, args.startup_timeout)
     try:
         h.setup()
         if args.quick:

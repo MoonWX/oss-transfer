@@ -4,7 +4,7 @@ The test subject is the built release: its JAR, Linux CLI and embedded WebUI. Te
 
 CI also runs `StorageSynchronizationRaceTest` before image acceptance. Four focused cases use real controllers, RocksDB and loopback HTTP, with latches controlling competing configuration requests. They cover duplicate synchronization during create/delete, stale updates and strict duplicate POST rejection. Only external S3 client construction is stubbed in these concurrency cases; the release acceptance below exercises actual S3 traffic.
 
-CI runs this entire suite in parallel on native Linux amd64 and ARM64 runners (`ubuntu-24.04` and `ubuntu-24.04-arm`). Both jobs download the same package and multi-architecture image archive by immutable artifact ID and verify their SHA-256 against the build job. Each checks its host, image and container architecture before testing. QEMU is used only to build the multi-architecture archive, not to run acceptance.
+CI runs this entire suite in parallel on native Linux amd64 and ARM64 runners (`ubuntu-latest` and `ubuntu-26.04-arm`). Both jobs download the same package and multi-architecture image archive by immutable artifact ID and verify their SHA-256 against the build job. Each checks its host, image and container architecture before testing. QEMU is used only to build the multi-architecture archive, not to run acceptance.
 
 ## Required outcomes
 

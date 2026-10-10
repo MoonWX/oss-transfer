@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build:
     name: Build release artifacts
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
       package_id: ${{ steps.package.outputs.artifact-id }}
@@ -143,10 +143,10 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-latest
             machine: x86_64
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             machine: aarch64
     env:
       ACCEPTANCE_ARCH: ${{ matrix.arch }}

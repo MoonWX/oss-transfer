@@ -10,10 +10,15 @@ concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 jobs:
-  acceptance:
-    name: Build and test release artifacts
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      package_id: ${{ steps.package.outputs.artifact-id }}
+      image_id: ${{ steps.image.outputs.artifact-id }}
+      package_sha256: ${{ steps.identity.outputs.package_sha256 }}
+      image_sha256: ${{ steps.identity.outputs.image_sha256 }}
     env:
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
@@ -65,12 +70,6 @@ jobs:
           "$(go env GOPATH)/bin/actionlint"
           bash -n build.sh
           find output/oss-transfer/deploy "$RUNNER_TEMP/agent-bundle-under-test/deploy" -name '*.sh' -print0 | xargs -0 -n1 bash -n
-      - name: Prepare independent acceptance clients
-        run: |
-          python3 -m venv "$RUNNER_TEMP/acceptance-venv"
-          "$RUNNER_TEMP/acceptance-venv/bin/pip" install -r .github/acceptance/requirements.txt
-          cd frontend
-          npx playwright install --with-deps chrome
       - name: Install image archive tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
@@ -100,36 +99,15 @@ jobs:
         run: |
           (cd output && sha256sum oss-transfer-image.tar > oss-transfer-image.tar.sha256)
           bash deploy/verify-release-image.sh "v$BUILD_VERSION" output --ci-build
-      - name: Test real transfers, UI, CLI and recovery on amd64
-        timeout-minutes: 12
+      - name: Record artifact identity
+        id: identity
         run: |
-          skopeo --command-timeout 3m --override-os linux --override-arch amd64 copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/acceptance-amd64.tar:oss-transfer:acceptance-amd64"
-          docker load --input "$RUNNER_TEMP/acceptance-amd64.tar"
-          rm -f "$RUNNER_TEMP/acceptance-amd64.tar"
-          "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
-            --image oss-transfer:acceptance-amd64 --evidence output/acceptance/amd64
-      - name: Test an actual file transfer on arm64
-        timeout-minutes: 8
-        run: |
-          skopeo --command-timeout 3m --override-os linux --override-arch arm64 copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/acceptance-arm64.tar:oss-transfer:acceptance-arm64"
-          docker load --input "$RUNNER_TEMP/acceptance-arm64.tar"
-          rm -f "$RUNNER_TEMP/acceptance-arm64.tar"
-          "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
-            --image oss-transfer:acceptance-arm64 --quick --startup-timeout 240 --evidence output/acceptance/arm64
-      - name: Save acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: acceptance-evidence
-          path: output/acceptance/
-          overwrite: true
-          if-no-files-found: ignore
-          retention-days: 7
-      # Release selects these immutable artifacts only after this entire run passes.
-      - name: Upload verified installation package
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+          printf 'package_sha256=%s\n' "$(sha256sum output/oss-transfer.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'image_sha256=%s\n' "$(sha256sum output/oss-transfer-image.tar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      # These are candidates until BOTH native acceptance jobs pass.
+      # Release also requires successful push/main CI for this exact commit.
+      - name: Upload installation package for acceptance
+        id: package
         timeout-minutes: 10
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -141,8 +119,8 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-      - name: Upload verified image archive
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Upload image archive for acceptance
+        id: image
         timeout-minutes: 10
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -153,4 +131,87 @@ jobs:
           overwrite: true
           compression-level: 0
           if-no-files-found: error
+          retention-days: 7
+  acceptance:
+    name: Full acceptance (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            machine: x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+    env:
+      ACCEPTANCE_ARCH: ${{ matrix.arch }}
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      PACKAGE_SHA256: ${{ needs.build.outputs.package_sha256 }}
+      IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        timeout-minutes: 10
+        with:
+          artifact-ids: ${{ needs.build.outputs.package_id }},${{ needs.build.outputs.image_id }}
+          merge-multiple: true
+          path: output
+      - name: Verify and unpack the build artifacts
+        run: |
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          (cd output && sha256sum --check oss-transfer.tar.gz.sha256 && sha256sum --check oss-transfer-image.tar.sha256)
+          printf '%s  %s\n' "$PACKAGE_SHA256" output/oss-transfer.tar.gz "$IMAGE_SHA256" output/oss-transfer-image.tar | sha256sum --check
+          tar -xzf output/oss-transfer.tar.gz -C output
+          test "$(sed -n 's/^Commit: //p' output/oss-transfer/VERSION)" = "$(git rev-parse --short HEAD)"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Prepare independent acceptance clients
+        run: |
+          python3 -m venv "$RUNNER_TEMP/acceptance-venv"
+          "$RUNNER_TEMP/acceptance-venv/bin/pip" install -r .github/acceptance/requirements.txt
+          cd frontend
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Load the native image from the verified archive
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          skopeo --command-timeout 3m --override-os linux --override-arch "$ACCEPTANCE_ARCH" copy \
+            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/acceptance.tar:oss-transfer:acceptance"
+          docker load --input "$RUNNER_TEMP/acceptance.tar"
+          rm -f "$RUNNER_TEMP/acceptance.tar"
+          test "$(docker image inspect oss-transfer:acceptance --format '{{.Architecture}}')" = "$ACCEPTANCE_ARCH"
+          test "$(docker image inspect oss-transfer:acceptance --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker run --rm --entrypoint uname oss-transfer:acceptance -m)" = "$EXPECTED_MACHINE"
+          mkdir -p "output/acceptance/$ACCEPTANCE_ARCH"
+          python3 - <<'PYTHON'
+          import json, os, platform
+          from pathlib import Path
+          evidence = {"machine": platform.machine(), "architecture": os.environ["ACCEPTANCE_ARCH"],
+                      "commit": os.environ["GITHUB_SHA"], "packageSha256": os.environ["PACKAGE_SHA256"],
+                      "imageSha256": os.environ["IMAGE_SHA256"]}
+          Path("output/acceptance/" + os.environ["ACCEPTANCE_ARCH"] + "/artifact-identity.json").write_text(json.dumps(evidence, indent=2))
+          PYTHON
+      - name: Test real transfers, UI, CLI and recovery
+        timeout-minutes: 12
+        run: |
+          "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
+            --image oss-transfer:acceptance --evidence "output/acceptance/$ACCEPTANCE_ARCH"
+      - name: Save acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: acceptance-evidence-${{ matrix.arch }}
+          path: output/acceptance/
+          overwrite: true
+          if-no-files-found: ignore
           retention-days: 7

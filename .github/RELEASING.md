@@ -3,7 +3,8 @@
 ## Workflow
 
 - CI builds the installation archive once, then builds Linux `amd64`/`arm64` images from that archive.
-- Pull requests, pushes to `main` and manual runs exercise those artifacts against a real, isolated S3 service. Only successful pushes to `main` upload release artifacts; CI does not publish a release.
+- Pull requests, pushes to `main` and manual runs test those same artifacts in parallel on native `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (ARM64) runners. Both run the full acceptance suite against an isolated S3 service. CI does not publish a release.
+- The build job uploads candidate artifacts for the two test jobs to download by immutable ID and verify against the build SHA-256. Release can use them only after the entire `push`/`main` CI run succeeds; an uploaded artifact alone is not a passed release.
 - Pushing a version tag starts Release. It waits for successful `push`/`main` CI for that exact commit, then downloads its artifacts by their fixed IDs. It does not compile or build again.
 - Docker Hub publication runs on a GitHub-hosted runner. JCR and OSS publication runs on the existing runner in China, which downloads, verifies and uploads the same artifacts.
 - GitHub Release is published after Docker Hub, JCR and OSS succeed.
@@ -12,9 +13,9 @@ If CI fails or its artifacts are missing or expired, rerun the `main` CI run for
 
 ## Tests
 
-CI runs one acceptance chain using a real Master, two Agents, the packaged CLI, the packaged WebUI in Chrome, and a pinned official SeaweedFS S3 service. It uploads local files, copies them between buckets, downloads them, and independently compares every key, size and SHA-256. The same chain checks two-agent execution, task bandwidth, stop/resume, process termination and recovery, reports, and SKIP/OVERWRITE. An ARM64 check performs a small real upload as well. See [the acceptance contract](acceptance/README.md) for exact assertions and limits.
+Each architecture runs the same acceptance chain using a real Master, two Agents, the packaged CLI, the packaged WebUI in Chromium, and a pinned official SeaweedFS S3 service. It uploads local files, copies them between buckets, downloads them, and independently compares every key, size and SHA-256. The same chain checks two-agent execution, task bandwidth, stop/resume, process termination and recovery, reports, and SKIP/OVERWRITE. See [the acceptance contract](acceptance/README.md) for exact assertions and limits.
 
-The previous mock-based server, browser, CLI and publisher suites are not default CI gates. They remain available for focused development with `./build.sh --test`, `cd frontend && npm test`, and the individual deployment test scripts. There is no test-count target or path-based bypass. Acceptance failures preserve checks, independent manifests, task reports, logs and browser traces as `acceptance-evidence`; they prevent release artifact upload.
+The previous mock-based server, browser, CLI and publisher suites are not default CI gates. They remain available for focused development with `./build.sh --test`, `cd frontend && npm test`, and the individual deployment test scripts. There is no test-count target or path-based bypass. Acceptance failures preserve checks, independent manifests, task reports, logs and browser traces as `acceptance-evidence-amd64` and `acceptance-evidence-arm64`; either failure blocks release. One failed architecture does not cancel the other, so both results remain available.
 
 The focused `StorageSynchronizationRaceTest` also runs in CI. It deterministically reproduces competing user and background configuration changes using real controllers, RocksDB and loopback HTTP, without waiting for a scheduling race to occur during a transfer.
 

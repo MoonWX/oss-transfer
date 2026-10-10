@@ -10,7 +10,7 @@ export default defineConfig({
   outputDir: process.env.ACCEPTANCE_EVIDENCE || "./test-results/acceptance",
   use: {
     baseURL: process.env.ACCEPTANCE_BASE_URL,
-    channel: "chrome",
+    browserName: "chromium",
     viewport: { width: 1440, height: 1000 },
     actionTimeout: 15_000,
     navigationTimeout: 30_000,

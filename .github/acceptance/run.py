@@ -39,8 +39,7 @@ def sha256(path):
 
 
 class Harness:
-    def __init__(self, image, evidence, quick=False, startup_timeout=120):
-        self.quick = quick
+    def __init__(self, image, evidence, startup_timeout=120):
         self.startup_timeout = startup_timeout
         self.image = image
         self.evidence = Path(evidence).resolve()
@@ -61,9 +60,6 @@ class Harness:
         self.agents = [self.prefix + "-agent-1", self.prefix + "-agent-2"]
         self.cli_name = self.prefix + "-cli"
         self.workers = ["198.51.100.20", "198.51.100.21"]
-        if quick:
-            self.workers = self.workers[:1]
-            self.agents = self.agents[:1]
         self.names, self.volumes, self.events = [], [], []
         self.access_key = "acceptance-" + secrets.token_hex(8)
         self.secret_key = secrets.token_urlsafe(32)
@@ -204,8 +200,6 @@ class Harness:
         # OSS balanced dispatch splits at 128 objects. Put equal payload on both
         # sides of that real boundary instead of merely declaring two workers.
         lengths.update({"10-medium-2.bin-padding-{:03d}".format(i): 1024 for i in range(122)})
-        if self.quick:
-            lengths = {"arm64-probe.bin": 65536}
         self.source_manifest = {}
         for name, length in lengths.items():
             path = self.source_dir / name
@@ -429,24 +423,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--evidence", default="output/acceptance")
-    parser.add_argument("--quick", action="store_true", help="One-agent real file upload for the second architecture")
     parser.add_argument("--startup-timeout", type=int, default=120, help="Seconds allowed for initial Master and Agent readiness")
     args = parser.parse_args()
     if args.startup_timeout <= 0:
         parser.error("--startup-timeout must be positive")
-    h = Harness(args.image, args.evidence, args.quick, args.startup_timeout)
+    h = Harness(args.image, args.evidence, args.startup_timeout)
     try:
         h.setup()
-        if args.quick:
-            response = h.cli("task", "create", "local-to-oss", "ci/" + h.source_bucket,
-                             "--binding", h.workers[0] + "=/data/source")
-            data = response.get("data", response)
-            if data.get("acceptedCount") != 1 or data.get("rejectedCount", 0) or len(data.get("parentTaskIds", [])) != 1:
-                raise AssertionError("Second-architecture task was not uniquely accepted")
-            h.wait_task(data["parentTaskIds"][0])
-            h.assert_bucket(h.source_bucket)
-            h.record("second-architecture actual file transfer complete")
-            return
         upload(h)
         task_id, started, completed = h.browser()
         validate_browser_copy(h, task_id, started, completed)

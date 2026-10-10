@@ -22,6 +22,8 @@ S3 is the [official SeaweedFS image](https://github.com/seaweedfs/seaweedfs), re
 
 The browser uses no Vite development server and no intercepted responses. The CLI is the binary inside the release image, called directly rather than through the wrapper that supplies an internal token. It has an isolated user session.
 
+On Linux, downloaded files retain the Agent's private permissions. When the host cannot read them, the independent verifier reads their bytes through a read-only container mount. It does not change output permissions; hashes are still computed outside Transfer, and inode/mtime checks use the actual shared files.
+
 ## Run locally
 
 Requires Docker, Node.js and Python 3.9 or newer. Build the release with `./build.sh`, then build an image for the test host architecture; for an amd64 host:

@@ -248,12 +248,28 @@ class Harness:
         actual = {}
         for path in self.download_dir.rglob("*"):
             if path.is_file():
-                actual[path.relative_to(self.download_dir).as_posix()] = {"size": path.stat().st_size, "sha256": sha256(path)}
+                actual[path.relative_to(self.download_dir).as_posix()] = {"size": path.stat().st_size, "sha256": hashlib.sha256(self.read_file(path)).hexdigest()}
         expected = {"browser/" + key: value for key, value in self.source_manifest.items()}
         (self.evidence / "download-actual.json").write_text(json.dumps(actual, ensure_ascii=False, indent=2))
         if actual != expected:
             raise AssertionError("Download contains missing, extra, partial or corrupted files")
         self.record("independent downloaded file verification", {"files": len(actual)})
+
+    def read_file(self, path):
+        path = Path(path)
+        relative = path.relative_to(self.data)
+        try:
+            return path.read_bytes()
+        except PermissionError:
+            # Linux preserves the Agent's UID and private file permissions. The
+            # independent helper has a read-only data mount; do not chmod output
+            # or change the identity/permissions of the application under test.
+            result = subprocess.run(["docker", "exec", "--user", "0", self.cli_name,
+                                     "cat", "/data/" + relative.as_posix()],
+                                    capture_output=True, timeout=30)
+            if result.returncode:
+                raise AssertionError("Cannot read acceptance file: " + self.clean_text(result.stderr.decode(errors="replace")))
+            return result.stdout
 
     def setup(self):
         self.manifest()
@@ -327,7 +343,8 @@ class Harness:
                            "-e", "TRANSFER_AGENT_ADDRESS=" + address, self.image])
         self.wait(self.connected, "both enrolled agents return live status")
         # Run the packaged CLI itself, not the wrapper that loads the internal token.
-        self.container(self.cli_name, ["--entrypoint", "/bin/sleep", "-e", "XDG_CONFIG_HOME=/tmp/cli-config", self.image], ["infinity"])
+        self.container(self.cli_name, ["--entrypoint", "/bin/sleep", "-e", "XDG_CONFIG_HOME=/tmp/cli-config",
+                                      "-v", str(self.data) + ":/data:ro", self.image], ["infinity"])
         self.login()
         self.cli("whoami")
         result = self.api("POST", "/api/master/s3-config", {"alias": "ci", "endpoint": "http://s3:8333",

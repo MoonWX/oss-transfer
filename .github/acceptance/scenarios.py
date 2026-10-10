@@ -159,12 +159,9 @@ def validate_browser_copy(h, task_id, started_at, completed_at):
                               "reportComplete": metadata["complete"]})
 
 
-def _fingerprint(path):
+def _fingerprint(h, path):
     stat = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
+    digest = hashlib.sha256(h.read_file(path))
     return {"inode": stat.st_ino, "mtimeNs": stat.st_mtime_ns,
             "size": stat.st_size, "sha256": digest.hexdigest()}
 
@@ -197,7 +194,7 @@ def download_recovery(h):
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     sentinel.write_bytes(b"Existing destination must survive an interrupted overwrite.\n")
     sentinel.chmod(0o666)
-    original = _fingerprint(sentinel)
+    original = _fingerprint(h, sentinel)
     checkpoint = final_root / "00-small.txt"
     task_id = _created(h, h.cli("task", "create", "oss-to-local", "ci/" + h.target_bucket,
                               "--binding", h.workers[0] + "=/data/download", "--prefix", "browser/",
@@ -209,7 +206,7 @@ def download_recovery(h):
                  "Task ended before interruption could be exercised: " + str(task))
         if not checkpoint.exists():
             return False
-        if _fingerprint(checkpoint)["sha256"] != h.source_manifest["00-small.txt"]["sha256"]:
+        if _fingerprint(h, checkpoint)["sha256"] != h.source_manifest["00-small.txt"]["sha256"]:
             return False
         for part in _parts(root):
             try:
@@ -217,7 +214,7 @@ def download_recovery(h):
                 # Filenames identify temporary ownership, not the source key.
                 # Only the unique largest source can yield a partial this large.
                 if max_other_size < part_size < large_size:
-                    _require(_fingerprint(sentinel) == original, "Large destination replaced before interruption")
+                    _require(_fingerprint(h, sentinel) == original, "Large destination replaced before interruption")
                     return {"partialBytes": part_size, "sourceBytes": large_size,
                             "largestOtherSourceBytes": max_other_size}
             except FileNotFoundError:
@@ -234,17 +231,17 @@ def download_recovery(h):
         return task.get("status") == "STOPPED" and not _parts(root)
 
     _until(stopped, "stopped task and closed temporary files")
-    checkpoint_before = _fingerprint(checkpoint)
-    _require(_fingerprint(sentinel) == original, "Stop overwrote the previous destination")
-    stable = {str(path.relative_to(root)): _fingerprint(path)
+    checkpoint_before = _fingerprint(h, checkpoint)
+    _require(_fingerprint(h, sentinel) == original, "Stop overwrote the previous destination")
+    stable = {str(path.relative_to(root)): _fingerprint(h, path)
               for path in root.rglob("*") if path.is_file()}
     time.sleep(1)
-    _require(stable == {str(path.relative_to(root)): _fingerprint(path)
+    _require(stable == {str(path.relative_to(root)): _fingerprint(h, path)
                         for path in root.rglob("*") if path.is_file()}, "Files changed after stop settled")
 
     h.restart_master(kill=True)
     _require(h.task(task_id).get("status") == "STOPPED", "Master restart forgot the durable stop")
-    _require(_fingerprint(sentinel) == original, "Stopped task wrote data during master restart")
+    _require(_fingerprint(h, sentinel) == original, "Stopped task wrote data during master restart")
     h.record("download-stop-persisted", {"taskId": task_id, "stateAfterMasterRestart": "STOPPED",
                                           "partialFilesAfterStop": 0, "previousDestinationPreserved": True,
                                           "beforeStop": stop_observation})
@@ -252,7 +249,7 @@ def download_recovery(h):
     kill_observation = _until(in_flight, "resumed partial large download before SIGKILL", timeout=90)
     h.stop_agent(0, kill=True)
     # The agent process is gone: a partial target must not have become a final file.
-    _require(_fingerprint(sentinel) == original, "Agent termination replaced the existing destination")
+    _require(_fingerprint(h, sentinel) == original, "Agent termination replaced the existing destination")
     partials_after_kill = len(_parts(root))
     _require(partials_after_kill > 0, "SIGKILL did not interrupt a real partial download")
     h.record("download-agent-killed", {"taskId": task_id, "partialFilesAfterKill": partials_after_kill,
@@ -266,7 +263,7 @@ def download_recovery(h):
     _completed(h, task_id)
     h.assert_download()
     _require(not _parts(root), "Recovery left owned partial files behind")
-    _require(_fingerprint(checkpoint) == checkpoint_before,
+    _require(_fingerprint(h, checkpoint) == checkpoint_before,
              "An already completed checkpoint file was rewritten during resume")
     metadata = _report(h, task_id, {"browser/" + key for key in h.source_manifest}, {"SUCCESS", "SKIPPED"})
     h.record("download-recovery", {"taskId": task_id, "sameTaskIdThroughout": True,

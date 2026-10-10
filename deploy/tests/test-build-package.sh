@@ -8,15 +8,6 @@ trap 'rm -rf "$test_root"' EXIT
 fixture="$test_root/source with spaces"
 mkdir -p "$fixture/frontend" "$fixture/cli-go" "$fixture/deploy/docker" "$fixture/docs" "$test_root/bin"
 cp "$source_root/build.sh" "$fixture/build.sh"
-mkdir -p "$fixture/.github/ci"
-cp "$source_root/.github/ci/server-smoke-tests.txt" "$fixture/.github/ci/"
-while IFS= read -r test_selection || [ -n "$test_selection" ]; do
-    case "$test_selection" in ''|'#'*) continue ;; esac
-    test_class="${test_selection%%#*}"
-    test_source="$fixture/src/test/java/${test_class//.//}.java"
-    mkdir -p "$(dirname "$test_source")"
-    cp "$source_root/src/test/java/${test_class//.//}.java" "$test_source"
-done < "$fixture/.github/ci/server-smoke-tests.txt"
 printf '    <version>4.0.0</version>\n' > "$fixture/pom.xml"
 for file in deploy.sh oss-transfer-cli.completion; do
     printf 'fixture\n' > "$fixture/deploy/$file"
@@ -233,86 +224,20 @@ if grep -Eq 'skipTests|maven.test.skip|clean package' "$test_root/tested-command
 fi
 assert_clean
 
-# The daily core suite uses an explicit list, keeps CLI coverage, and packages
-# the same tested JAR without a second production compilation.
-output="$test_root/smoke release"
-MOCK_BUILD_LOG="$test_root/smoke-commands" run_build --test=smoke > "$test_root/smoke-build.log" 2>&1
-[ "$(cat "$output/oss-transfer/oss-transfer.jar")" = 'tested jar' ]
-[ "$(grep -c '^npm ' "$test_root/smoke-commands")" -eq 2 ]
-[ "$(grep -c '^mvn ' "$test_root/smoke-commands")" -eq 1 ]
-smoke_classes="$(sed '/^#/d; /^$/d' "$fixture/.github/ci/server-smoke-tests.txt" | paste -sd, -)"
-grep -Fxq "mvn clean verify -q -Dtest=$smoke_classes -Dsurefire.failIfNoSpecifiedTests=true" "$test_root/smoke-commands"
-[ "$(grep -c '] test ' "$test_root/smoke-commands")" -eq 1 ]
-[ "$(grep -c '] build ' "$test_root/smoke-commands")" -eq 2 ]
-assert_clean
-
-# Change-based CI may omit unaffected component tests, but both production
-# components must still be compiled and included in every release package.
-for mode in --test --test=smoke; do
-    for components in server cli none; do
-        output="$test_root/component $mode $components"
-        command_log="$test_root/components-$mode-$components"
-        BUILD_TEST_COMPONENTS="$components" MOCK_BUILD_LOG="$command_log" run_build "$mode" > "$test_root/component-build.log" 2>&1
-        [ "$(grep -c '^mvn ' "$command_log")" -eq 1 ]
-        [ "$(grep -c '] build ' "$command_log")" -eq 2 ]
-        if [ "$components" = server ]; then
-            grep -q '^mvn clean verify -q' "$command_log"
-        else
-            grep -Fxq 'mvn clean package -q -DskipTests' "$command_log"
-        fi
-        if [ "$components" = cli ]; then
-            [ "$(grep -c '] test ' "$command_log")" -eq 1 ]
-        elif grep -q '] test ' "$command_log"; then
-            echo 'Ran tests for an unselected component' >&2; exit 1
-        fi
-        assert_clean
-    done
-done
-
 # Every prerequisite failure must stop before publishing, even with a JAR
 # left in target by an earlier successful build.
-for mode in --test --test=smoke; do
-    for phase in npm-ci npm-run mvn go-test; do
-        output="$test_root/tested failure $mode $phase"
-        seed_release
-        case "$phase" in npm-*) expected_exit=6 ;; mvn) expected_exit=7 ;; go-test) expected_exit=8 ;; esac
-        MOCK_BUILD_FAIL="$phase" expect_failure "$expected_exit" run_build "$mode"
-        assert_original_release
-        assert_clean
-    done
-done
-
-# A missing, empty, or stale suite must fail before compiling, not fall back
-# to all tests (or silently produce an untested package).
-output="$test_root/invalid suite"
-seed_release
-cp "$fixture/.github/ci/server-smoke-tests.txt" "$test_root/original-smoke-list"
-for invalid_list in missing empty unknown duplicate wildcard whole-class unknown-method wildcard-method; do
-    case "$invalid_list" in
-        missing) rm "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        empty) printf '# Empty suite\n' > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        unknown) printf 'com.transfer.tools.DoesNotExistTest#missingMethod\n' > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        duplicate) cat "$test_root/original-smoke-list" "$test_root/original-smoke-list" > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        wildcard) printf '*Test\n' > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        whole-class) printf 'com.transfer.tools.service.TaskStopResumeTest\n' > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        unknown-method) printf 'com.transfer.tools.service.TaskStopResumeTest#doesNotExist\n' > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-        wildcard-method) printf 'com.transfer.tools.service.TaskStopResumeTest#stop*\n' > "$fixture/.github/ci/server-smoke-tests.txt" ;;
-    esac
-    MOCK_BUILD_LOG="$test_root/invalid-suite-commands" expect_failure 2 run_build --test=smoke
-    [ ! -e "$test_root/invalid-suite-commands" ]
+for phase in npm-ci npm-run mvn go-test; do
+    output="$test_root/tested failure $phase"
+    seed_release
+    case "$phase" in npm-*) expected_exit=6 ;; mvn) expected_exit=7 ;; go-test) expected_exit=8 ;; esac
+    MOCK_BUILD_FAIL="$phase" expect_failure "$expected_exit" run_build --test
     assert_original_release
     assert_clean
 done
-cp "$test_root/original-smoke-list" "$fixture/.github/ci/server-smoke-tests.txt"
 output="$test_root/invalid options"
 seed_release
 expect_failure 2 run_build --skip-build
 expect_failure 2 run_build --test extra
-expect_failure 2 run_build --test=smoke extra
-expect_failure 2 run_build --test=unknown
-for components in '' frontend 'server,' 'cli,server' 'none,server'; do
-    BUILD_TEST_COMPONENTS="$components" expect_failure 2 run_build --test=smoke
-done
 assert_original_release
 assert_clean
 
@@ -407,4 +332,4 @@ for fixture_version in 4.0.0 4.7.2; do
     (cd "$output" && shasum -a 256 -c oss-transfer.tar.gz.sha256)
     assert_clean
 done
-printf 'Build packaging checks passed (full/core test selection, component selection, tested build reuse, test failure isolation, POM-derived versions, root Compose defaults to latest, Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'
+printf 'Build packaging checks passed (tested build reuse, test failure isolation, POM-derived versions, root Compose defaults to latest, Docker materials, checksum, backups, QA evidence, rollback at every move, partial releases, symlinks, restore failure, concurrent publishing)\n'

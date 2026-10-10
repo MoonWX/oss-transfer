@@ -2,8 +2,8 @@
 
 ## Workflow
 
-- Pull requests run the core checks for affected components. Documentation-only PRs skip builds and tests.
-- Pushes to `main` run the small core suite and build the installation archive and Linux `amd64`/`arm64` image once. CI stores them as Actions artifacts; it does not publish a release.
+- CI builds the installation archive once, then builds Linux `amd64`/`arm64` images from that archive.
+- Pull requests, pushes to `main` and manual runs exercise those artifacts against a real, isolated S3 service. Only successful pushes to `main` upload release artifacts; CI does not publish a release.
 - Pushing a version tag starts Release. It waits for successful `push`/`main` CI for that exact commit, then downloads its artifacts by their fixed IDs. It does not compile or build again.
 - Docker Hub publication runs on a GitHub-hosted runner. JCR and OSS publication runs on the existing runner in China, which downloads, verifies and uploads the same artifacts.
 - GitHub Release is published after Docker Hub, JCR and OSS succeed.
@@ -12,9 +12,9 @@ If CI fails or its artifacts are missing or expired, rerun the `main` CI run for
 
 ## Tests
 
-Daily CI runs 10 core server cases, 4 browser cases, the fast CLI suite and release artifact checks. These cover file integrity, stop/resume, shared limits, agent access and requests sent by essential browser actions. The image job reuses the package and checks real master/agent startup and restart recovery; it does not wait for browser tests. Release still requires the entire CI run to succeed.
+CI runs one acceptance chain using a real Master, two Agents, the packaged CLI, the packaged WebUI in Chrome, and a pinned official SeaweedFS S3 service. It uploads local files, copies them between buckets, downloads them, and independently compares every key, size and SHA-256. The same chain checks two-agent execution, task bandwidth, stop/resume, process termination and recovery, reports, and SKIP/OVERWRITE. An ARM64 check performs a small real upload as well. See [the acceptance contract](acceptance/README.md) for exact assertions and limits.
 
-Layout, theme, detailed page regressions and legacy deployment/runner setup checks are excluded from daily CI. The full regression suite remains available through **Actions → CI → Run workflow → full_tests**. Manual runs do not upload release artifacts. Locally use `./build.sh --test=smoke` and `cd frontend && npm run test:smoke` for core tests; `./build.sh --test` and `npm test` run the full suites.
+The previous mock-based server, browser, CLI and publisher suites are not default CI gates. They remain available for focused development with `./build.sh --test`, `cd frontend && npm test`, and the individual deployment test scripts. There is no test-count target or path-based bypass. Acceptance failures preserve checks, independent manifests, task reports, logs and browser traces as `acceptance-evidence`; they prevent release artifact upload.
 
 ## Publish a version
 

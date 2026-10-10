@@ -4,80 +4,18 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      full_tests:
-        description: Run the full regression suite
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 jobs:
-  scope:
-    name: Select checks
+  acceptance:
+    name: Build and test release artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 3
-    outputs:
-      console: ${{ steps.scope.outputs.console }}
-      build: ${{ steps.scope.outputs.build }}
-      components: ${{ steps.scope.outputs.components }}
-      deployment: ${{ steps.scope.outputs.deployment }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: scope
-        run: python3 .github/scripts/ci-test-scope.py
-  console:
-    name: Console (${{ inputs.full_tests && 'full' || 'core' }} ${{ matrix.shard }})
-    needs: scope
-    if: needs.scope.outputs.console == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(inputs.full_tests && '[1, 2, 3, 4]' || '[1]') }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Prepare browser tests
-        working-directory: frontend
-        run: |
-          npm ci
-          npx playwright install --with-deps chrome
-      - name: Core console tests
-        if: inputs.full_tests != true
-        working-directory: frontend
-        run: npm run test:smoke -- --workers=2
-      - name: Full console tests
-        if: inputs.full_tests == true
-        working-directory: frontend
-        run: npm test -- --workers=2 --shard=${{ matrix.shard }}/4
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with:
-          name: console-results-${{ matrix.shard }}
-          overwrite: true
-          path: frontend/test-results/
-          retention-days: 3
-  server:
-    name: Build and verify package
-    needs: scope
-    if: needs.scope.outputs.build == 'true'
+    timeout-minutes: 35
     env:
-      BUILD_TEST_COMPONENTS: ${{ needs.scope.outputs.components }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,141 +34,121 @@ jobs:
         with:
           go-version: '1.25.x'
           cache-dependency-path: cli-go/go.sum
-      - name: Build package with selected tests
-        env:
-          TEST_MODE: ${{ inputs.full_tests && '--test' || '--test=smoke' }}
-        run: ./build.sh "$TEST_MODE"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with:
-          name: server-test-results
-          overwrite: true
-          path: target/surefire-reports/TEST-*.xml
-          retention-days: 3
-      - name: Workflow checks
-        if: needs.scope.outputs.deployment == 'true'
-        run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          "$(go env GOPATH)/bin/actionlint" -color
-      - name: Release safety checks
-        if: needs.scope.outputs.deployment == 'true'
-        run: |
-          bash -n build.sh
-          find deploy -name '*.sh' -print0 | xargs -0 -n1 bash -n
-          python3 deploy/tests/test-publish-oss.py
-          python3 deploy/tests/test-publish-image.py
-          python3 .github/tests/test-resolve-ci-artifacts.py
-          python3 .github/tests/test-ci-test-scope.py
-      - name: Full deployment regression
-        if: inputs.full_tests == true
-        run: |
-          bash deploy/tests/test-build-package.sh
-          bash deploy/tests/test-cli-launcher.sh
-          bash deploy/tests/deploy-ssh-port-test.sh
-          python3 deploy/tests/deploy-runtime-test.py
-          bash deploy/tests/test-docker-entrypoint.sh
-          python3 deploy/tests/test-install-version.py
-          python3 deploy/tests/test-setup-release-runner.py
-      - name: Upload release package
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-package
-          overwrite: true
-          path: |
-            output/oss-transfer.tar.gz
-            output/oss-transfer.tar.gz.sha256
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
-  image:
-    name: Build and verify image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: server
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      DOCKER_BUILD_RECORD_UPLOAD: 'false'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        timeout-minutes: 10
-        with:
-          name: release-package
-          path: output
-      - name: Read package version and checksum
+      - name: Build installation package once
+        run: ./build.sh
+      - name: Check package identity and workflow syntax
         id: version
         run: |
           (cd output && sha256sum --check oss-transfer.tar.gz.sha256)
-          tar -xzf output/oss-transfer.tar.gz -C output
+          mkdir "$RUNNER_TEMP/package-under-test"
+          tar -xzf output/oss-transfer.tar.gz -C "$RUNNER_TEMP/package-under-test"
+          # Test the bytes shipped in the tar, not a separate build directory.
+          rm -rf output/oss-transfer
+          mv "$RUNNER_TEMP/package-under-test/oss-transfer" output/oss-transfer
+          test -s output/oss-transfer/oss-transfer.jar
+          test -s output/oss-transfer/agent-bundle.tar.gz
+          test -x output/oss-transfer/oss-transfer-cli-amd64
+          test -x output/oss-transfer/oss-transfer-cli-arm64
+          (cd output/oss-transfer && sha256sum --check agent-bundle.tar.gz.sha256)
+          mkdir "$RUNNER_TEMP/agent-bundle-under-test"
+          tar -xzf output/oss-transfer/agent-bundle.tar.gz -C "$RUNNER_TEMP/agent-bundle-under-test"
+          for file in oss-transfer.jar oss-transfer-cli-amd64 oss-transfer-cli-arm64 VERSION; do
+            cmp "output/oss-transfer/$file" "$RUNNER_TEMP/agent-bundle-under-test/$file"
+          done
           version="$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)"
           test "$(sed -n 's/^Version: //p' output/oss-transfer/VERSION)" = "$version"
-          package_commit="$(sed -n 's/^Commit: //p' output/oss-transfer/VERSION)"
-          test "$package_commit" = "$(git rev-parse --short HEAD)"
+          test "$(sed -n 's/^Commit: //p' output/oss-transfer/VERSION)" = "$(git rev-parse --short HEAD)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-      - name: Install image transfer tool
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint"
+          bash -n build.sh
+          find output/oss-transfer/deploy "$RUNNER_TEMP/agent-bundle-under-test/deploy" -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Prepare independent acceptance clients
+        run: |
+          python3 -m venv "$RUNNER_TEMP/acceptance-venv"
+          "$RUNNER_TEMP/acceptance-venv/bin/pip" install -r .github/acceptance/requirements.txt
+          cd frontend
+          npx playwright install --with-deps chrome
+      - name: Install image archive tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
         with:
           platforms: arm64
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
-        with:
-          cleanup: true
-          keep-state: false
-      - name: Image metadata
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        id: metadata
-        with:
-          images: moonwx/osstransfer
-          flavor: latest=false
-          tags: type=raw,value=${{ steps.version.outputs.version }}
-      - name: Build both image architectures once
+      - name: Build both image architectures from the same package
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           builder: ${{ steps.buildx.outputs.name }}
           platforms: linux/amd64,linux/arm64
           outputs: type=oci,dest=output/oss-transfer-image.tar,oci-mediatypes=false
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
+          tags: moonwx/osstransfer:${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
-      - name: Verify image and create its checksum
+      - name: Verify the actual image archive
         env:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           (cd output && sha256sum oss-transfer-image.tar > oss-transfer-image.tar.sha256)
           bash deploy/verify-release-image.sh "v$BUILD_VERSION" output --ci-build
-      - name: Docker master and agent smoke test
-        timeout-minutes: 10
+      - name: Test real transfers, UI, CLI and recovery on amd64
+        timeout-minutes: 12
         run: |
-          # docker load avoids Skopeo's dependency on the daemon API version.
           skopeo --command-timeout 3m --override-os linux --override-arch amd64 copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/smoke-amd64.tar:oss-transfer:release-smoke"
-          docker load --input "$RUNNER_TEMP/smoke-amd64.tar"
-          rm -f -- "$RUNNER_TEMP/smoke-amd64.tar"
-          python3 deploy/tests/docker-agent-smoke.py --image oss-transfer:release-smoke
+            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/acceptance-amd64.tar:oss-transfer:acceptance-amd64"
+          docker load --input "$RUNNER_TEMP/acceptance-amd64.tar"
+          rm -f "$RUNNER_TEMP/acceptance-amd64.tar"
+          "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
+            --image oss-transfer:acceptance-amd64 --evidence output/acceptance/amd64
+      - name: Test an actual file transfer on arm64
+        timeout-minutes: 8
+        run: |
           skopeo --command-timeout 3m --override-os linux --override-arch arm64 copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/smoke-arm64.tar:oss-transfer:release-arm64"
-          docker load --input "$RUNNER_TEMP/smoke-arm64.tar"
-          rm -f -- "$RUNNER_TEMP/smoke-arm64.tar"
-          docker run --rm --platform linux/arm64 --entrypoint /opt/oss-transfer/oss-transfer-cli \
-            oss-transfer:release-arm64 --version
-      - name: Upload image archive
+            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/acceptance-arm64.tar:oss-transfer:acceptance-arm64"
+          docker load --input "$RUNNER_TEMP/acceptance-arm64.tar"
+          rm -f "$RUNNER_TEMP/acceptance-arm64.tar"
+          "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
+            --image oss-transfer:acceptance-arm64 --quick --evidence output/acceptance/arm64
+      - name: Save acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: acceptance-evidence
+          path: output/acceptance/
+          overwrite: true
+          if-no-files-found: ignore
+          retention-days: 7
+      # Release selects these immutable artifacts only after this entire run passes.
+      - name: Upload verified installation package
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-package
+          path: |
+            output/oss-transfer.tar.gz
+            output/oss-transfer.tar.gz.sha256
+          overwrite: true
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload verified image archive
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         timeout-minutes: 10
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-image
-          overwrite: true
           path: |
             output/oss-transfer-image.tar
             output/oss-transfer-image.tar.sha256
+          overwrite: true
           compression-level: 0
           if-no-files-found: error
           retention-days: 7

@@ -65,42 +65,17 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           REGISTRY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.DOCKER_PAT }}
-        run: bash deploy/publish-image.sh "$RELEASE_TAG" docker-hub output
-  jdcloud_publish:
-    name: Publish JD Cloud from built artifacts
+        run: bash deploy/publish-image.sh "$RELEASE_TAG" output
+  oss:
+    name: Publish JD Cloud OSS
     needs: artifacts
-    runs-on: [self-hosted, linux, x64, "${{ vars.JD_PUBLISH_RUNNER_LABEL || 'jdcloud-publish' }}"]
-    timeout-minutes: 35
-    env:
-      RELEASE_TAG: ${{ github.ref_name }}
-      RELEASE_CHECKOUT: release-${{ github.run_id }}-${{ github.run_attempt }}
-    defaults:
-      run:
-        shell: bash
-        working-directory: ${{ github.workspace }}/release-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-          path: ${{ env.RELEASE_CHECKOUT }}
-      - name: Check publishing runner
-        timeout-minutes: 2
-        run: |
-          for tool in bash git tar sha256sum openssl python3 jq aws skopeo df; do
-            command -v "$tool" >/dev/null || { echo "Missing runner tool: $tool" >&2; exit 1; }
-          done
-          [[ "$(uname -s)" = Linux && "$(uname -m)" = x86_64 ]]
-          aws --version 2>&1 | grep -q '^aws-cli/2\.'
-          skopeo --version
-          available_kb="$(df -Pk "$PWD" | awk 'END { print $4 }')"
-          test "$available_kb" -ge 5242880
-          # Keep the runner proxy for GitHub while domestic uploads use direct routes.
-          current_no_proxy="${NO_PROXY:-${no_proxy:-}}"
-          direct_hosts="${current_no_proxy}${current_no_proxy:+,}localhost,127.0.0.1,::1,.jdcloud.com,.jdcloud-oss.com"
-          printf 'NO_PROXY=%s\nno_proxy=%s\n' "$direct_hosts" "$direct_hosts" >> "$GITHUB_ENV"
-          # Downloads and credentials are scoped to this job; no shared Docker state.
-          rm -rf -- output
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 10
         with:
@@ -108,35 +83,22 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ needs.artifacts.outputs.ci_run_id }}
           merge-multiple: true
-          path: ${{ github.workspace }}/${{ env.RELEASE_CHECKOUT }}/output
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        timeout-minutes: 10
-        with:
-          artifact-ids: ${{ needs.artifacts.outputs.image_artifact_id }}
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.artifacts.outputs.ci_run_id }}
-          merge-multiple: true
-          path: ${{ github.workspace }}/${{ env.RELEASE_CHECKOUT }}/output
-      - name: Publish and verify JCR image
-        timeout-minutes: 20
-        env:
-          REGISTRY_USERNAME: ${{ secrets.JCR_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.JCR_PASSWD }}
-        run: bash deploy/publish-image.sh "$RELEASE_TAG" jcr output
+          path: output
+      - name: Check publishing tools
+        run: |
+          for tool in aws git tar openssl; do
+            command -v "$tool" >/dev/null || { echo "Missing publishing tool: $tool" >&2; exit 1; }
+          done
+          aws --version 2>&1 | grep -q '^aws-cli/2\.'
       - name: Publish JD Cloud OSS artifacts
         timeout-minutes: 10
         env:
+          RELEASE_TAG: ${{ github.ref_name }}
           AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.JDOSS_SK }}
         run: bash deploy/publish-oss.sh "$RELEASE_TAG"
-      - name: Clean publishing workspace
-        if: always()
-        timeout-minutes: 2
-        working-directory: ${{ github.workspace }}
-        run: |
-          rm -rf -- "${GITHUB_WORKSPACE:?}/${RELEASE_CHECKOUT:?}"
   release:
-    needs: [artifacts, jdcloud_publish, docker_hub]
+    needs: [artifacts, oss, docker_hub]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

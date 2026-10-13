@@ -108,9 +108,9 @@ class PublishImageTests(unittest.TestCase):
         digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         self.archive.with_suffix('.tar.sha256').write_text(digest + '  oss-transfer-image.tar\n')
 
-    def publish(self, tag='v4.0.3', destination='jcr', **env):
-        return subprocess.run(['bash', str(self.repo / 'deploy/publish-image.sh'), tag, destination,
-                               str(self.artifacts)], text=True, capture_output=True,
+    def publish(self, tag='v4.0.3', *args, **env):
+        return subprocess.run(['bash', str(self.repo / 'deploy/publish-image.sh'), tag,
+                               str(self.artifacts), *args], text=True, capture_output=True,
                               env={**self.env, **env}, timeout=20)
 
     def calls(self):
@@ -129,36 +129,35 @@ class PublishImageTests(unittest.TestCase):
 
     def test_archive_export_names_only_one_version_without_implicit_latest(self):
         workflow = (SCRIPTS.parent / '.github/workflows/ci.yml').read_text()
-        metadata = re.search(r'      - name: Image metadata\n(.*?)      - name: Build both image architectures once',
-                             workflow, re.S)
-        self.assertIsNotNone(metadata)
-        self.assertIn('flavor: latest=false', metadata.group(1))
-        self.assertEqual(metadata.group(1).count('type='), 1)
-        self.assertIn('tags: type=raw,value=${{ steps.version.outputs.version }}', metadata.group(1))
+        image_build = re.search(r'      - name: Build both image architectures[^\n]*\n'
+                                r'(.*?)      - name: Verify the actual image archive', workflow, re.S)
+        self.assertIsNotNone(image_build)
+        self.assertEqual(re.findall(r'^          tags: (.+)$', image_build.group(1), re.M),
+                         ['moonwx/osstransfer:${{ steps.version.outputs.version }}'])
         self.assertIn('provenance: false', workflow)
         self.assertIn('sbom: false', workflow)
 
-    def test_both_registries_publish_all_architectures_then_verify_real_pulls_then_aliases(self):
-        for destination, image in [('jcr', 'moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer'),
-                                   ('docker-hub', 'docker.io/moonwx/osstransfer')]:
-            with self.subTest(destination=destination):
-                self.log.unlink(missing_ok=True)
-                result = self.publish(destination=destination)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                copies = [c['args'] for c in self.calls() if c['command'] == 'copy']
-                self.assertEqual(len(copies), 5)
-                self.assertIn('--all', copies[0])
-                self.assertEqual(copies[0][copies[0].index('--format') + 1], 'v2s2')
-                self.assertNotIn('--preserve-digests', copies[0])
-                self.assertEqual(copies[0][-1], 'docker://' + image + ':4.0.3')
-                self.assertEqual([c[c.index('--override-arch') + 1] for c in copies[1:3]], ['amd64', 'arm64'])
-                for args, alias in zip(copies[3:], ('4.0', 'latest')):
-                    self.assertIn('--all', args)
-                    self.assertIn('--preserve-digests', args)
-                    self.assertTrue(args[-2].startswith('docker://' + image + '@sha256:'))
-                    self.assertEqual(args[-1], 'docker://' + image + ':' + alias)
-                self.assertNotIn('offline-registry-secret', result.stdout + result.stderr)
-                self.assert_cleaned()
+    def test_docker_hub_publishes_all_architectures_then_verifies_real_pulls_then_aliases(self):
+        image = 'docker.io/moonwx/osstransfer'
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        logins = [c['args'] for c in self.calls() if c['command'] == 'login']
+        self.assertEqual(len(logins), 1)
+        self.assertEqual(logins[0][-1], 'docker.io')
+        copies = [c['args'] for c in self.calls() if c['command'] == 'copy']
+        self.assertEqual(len(copies), 5)
+        self.assertIn('--all', copies[0])
+        self.assertEqual(copies[0][copies[0].index('--format') + 1], 'v2s2')
+        self.assertNotIn('--preserve-digests', copies[0])
+        self.assertEqual(copies[0][-1], 'docker://' + image + ':4.0.3')
+        self.assertEqual([c[c.index('--override-arch') + 1] for c in copies[1:3]], ['amd64', 'arm64'])
+        for args, alias in zip(copies[3:], ('4.0', 'latest')):
+            self.assertIn('--all', args)
+            self.assertIn('--preserve-digests', args)
+            self.assertTrue(args[-2].startswith('docker://' + image + '@sha256:'))
+            self.assertEqual(args[-1], 'docker://' + image + ':' + alias)
+        self.assertNotIn('offline-registry-secret', result.stdout + result.stderr)
+        self.assert_cleaned()
 
     def test_prerelease_does_not_update_stable_aliases(self):
         self.git('tag', 'v4.0.3-rc.1')
@@ -227,11 +226,11 @@ class PublishImageTests(unittest.TestCase):
         self.assertFalse(self.calls())
         self.assert_cleaned()
 
-    def test_wrong_tag_or_destination_never_uses_credentials(self):
-        for tag, destination in [('v4.0.4', 'jcr'), ('v4.0.3-01', 'jcr'), ('v04.0.3', 'jcr'),
-                                 ('v4.0.3', 'arbitrary.invalid/repository')]:
-            with self.subTest(tag=tag, destination=destination):
-                result = self.publish(tag, destination)
+    def test_wrong_tag_or_extra_argument_never_uses_credentials(self):
+        for args in [('v4.0.4',), ('v4.0.3-01',), ('v04.0.3',),
+                     ('v4.0.3', 'arbitrary.invalid/repository')]:
+            with self.subTest(args=args):
+                result = self.publish(*args)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.calls())
                 self.assert_cleaned()

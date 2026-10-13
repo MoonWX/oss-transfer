@@ -1,17 +1,14 @@
 #!/bin/bash
-# Copy one hosted build to a registry; never build on the publishing runner.
+# Copy one hosted build to Docker Hub; never build on the publishing runner.
 # Credentials must be supplied as REGISTRY_USERNAME and REGISTRY_PASSWORD.
 set +x
 set -euo pipefail
 fail() { printf 'Image publish: %s\n' "$*" >&2; exit 1; }
-[[ $# == 3 ]] || fail 'usage: publish-image.sh <release-tag> <docker-hub|jcr> <artifact-directory>'
+[[ $# == 2 ]] || fail 'usage: publish-image.sh <release-tag> <artifact-directory>'
 tag="$1"
-case "$2" in
-    docker-hub) registry=docker.io; image=docker.io/moonwx/osstransfer ;;
-    jcr) registry=moonwx-cn-north-1.jcr.service.jdcloud.com; image="$registry/osstransfer" ;;
-    *) fail 'unsupported registry destination' ;;
-esac
-artifact_dir="$3"
+registry=docker.io
+image=docker.io/moonwx/osstransfer
+artifact_dir="$2"
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 umask 077
 state="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/oss-image-publish.XXXXXX")"

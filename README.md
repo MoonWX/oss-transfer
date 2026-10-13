@@ -10,28 +10,14 @@ Supported directions: object storage to object storage, object storage to local 
 
 ### Docker
 
-Docker includes Java. Both registries provide Linux `amd64` and `arm64` images:
-
-| Registry | Image |
-| --- | --- |
-| Docker Hub | `moonwx/osstransfer:latest` |
-| JD Cloud JCR | `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest` |
-
-For JCR, log in with credentials that have pull access. Docker prompts for the username and password/token:
+The Docker Hub image `moonwx/osstransfer:latest` includes Java and supports Linux `amd64` and `arm64`. Start the master:
 
 ```sh
-docker login moonwx-cn-north-1.jcr.service.jdcloud.com
-```
-
-Set `OSS_TRANSFER_IMAGE` to either image above, then start the master:
-
-```sh
-OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest
 docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  "$OSS_TRANSFER_IMAGE"
+  moonwx/osstransfer:latest
 ```
 
 `latest` follows stable releases. To pin a release, replace `latest` with its version, such as `4.0.4` (without `v`).
@@ -54,11 +40,7 @@ The repository and release archive include `docker-compose.yml` and `.env.exampl
 cp .env.example .env
 ```
 
-Edit `TRANSFER_MASTER_WEB_URL` in `.env` to an address reachable by browsers and agents. Set `OSS_TRANSFER_FILES_DIR` to the host directory used for local-file transfers. To use JCR, also set this line in `.env` and log in as shown above:
-
-```dotenv
-OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest
-```
+Edit `TRANSFER_MASTER_WEB_URL` in `.env` to an address reachable by browsers and agents. Set `OSS_TRANSFER_FILES_DIR` to the host directory used for local-file transfers.
 
 For a new directory using the example path:
 
@@ -128,8 +110,6 @@ Use `--port` to change the service port or `--java-bin` to select a Java executa
 Deploy the master first. In **Execution nodes**, choose **Add node**. The master creates a temporary, single-use invitation and shows Docker and traditional installation commands. Run the selected command on the new node. The agent joins automatically; no SSH access from the master is required.
 
 The Docker command uses the same image with `TRANSFER_ROLE=agent`. It requires a persistent `/app/data` volume and no published ports. Mount any local or shared storage that the agent will access.
-
-To use JCR, log in on the agent host and replace the final `moonwx/osstransfer:latest` in the generated command with `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest`. Keep the invitation and other arguments unchanged. The master's Compose image setting does not change the generated agent command.
 
 The traditional command downloads a checksum-verified bundle from the master and installs the `oss-transfer-agent` service. It uses `/etc/oss-transfer-agent/application.yml` and `/var/lib/oss-transfer-agent`. Install Java first.
 

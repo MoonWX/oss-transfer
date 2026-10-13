@@ -6,8 +6,8 @@
 - Pull requests, pushes to `main` and manual runs test those same artifacts in parallel on native `ubuntu-latest` (amd64) and `ubuntu-26.04-arm` (ARM64) runners. Both run the full acceptance suite against an isolated S3 service. CI does not publish a release.
 - The build job uploads candidate artifacts for the two test jobs to download by immutable ID and verify against the build SHA-256. Release can use them only after the entire `push`/`main` CI run succeeds; an uploaded artifact alone is not a passed release.
 - Pushing a version tag starts Release. It waits for successful `push`/`main` CI for that exact commit, then downloads its artifacts by their fixed IDs. It does not compile or build again.
-- Docker Hub publication runs on a GitHub-hosted runner. JCR and OSS publication runs on the existing runner in China, which downloads, verifies and uploads the same artifacts.
-- GitHub Release is published after Docker Hub, JCR and OSS succeed.
+- Docker Hub and JD Cloud OSS publish in parallel on GitHub-hosted `ubuntu-latest` runners. Each downloads only the artifacts it needs; neither rebuilds them.
+- GitHub Release is published after Docker Hub and OSS succeed.
 
 If CI fails or its artifacts are missing or expired, rerun the `main` CI run for the tagged commit, then rerun Release. Do not use artifacts from a different commit or the latest `main` build.
 
@@ -43,7 +43,6 @@ OSS stores `oss-transfer.tar.gz`, its SHA-256 file and `VERSION` under `osstrans
 | Destination | Address | Secrets |
 | --- | --- | --- |
 | Docker Hub | `moonwx/osstransfer` | `DOCKER_USERNAME`, `DOCKER_PAT` |
-| JD Cloud JCR | `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer` | `JCR_USERNAME`, `JCR_PASSWD` |
 | JD Cloud OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/` | `JDOSS_AK`, `JDOSS_SK` |
 
-JD Cloud jobs use runner labels `[self-hosted, linux, x64, jdcloud-publish]`. Set the Actions variable `JD_PUBLISH_RUNNER_LABEL` to override the last label. Pull-request jobs never use this runner or publishing secrets.
+Publishing secrets are used only by the release workflow triggered by version tags. Pull-request CI does not use them.

@@ -103,6 +103,7 @@ done
 echo "[4/6] Preparing deployment files..."
 cp README.md "$PACKAGE_DIR/"
 cp README.zh-CN.md "$PACKAGE_DIR/"
+install -m 0755 install.sh "$PACKAGE_DIR/install.sh"
 cp -R deploy "$PACKAGE_DIR/"
 cp Dockerfile .dockerignore docker-compose.yml .env.example "$PACKAGE_DIR/"
 cp LICENSE "$PACKAGE_DIR/" 2>/dev/null || true

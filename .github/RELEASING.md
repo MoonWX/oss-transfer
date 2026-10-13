@@ -36,7 +36,7 @@ The tag must match the POM version. Use a new version and tag for each release; 
 
 Stable releases publish image tags `X.Y.Z`, `X.Y` and `latest`. Pre-releases publish only their version tag and are marked as pre-releases on GitHub.
 
-OSS stores `oss-transfer.tar.gz`, its SHA-256 file and `VERSION` under `osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`; pre-releases only update their version directory.
+OSS stores `oss-transfer.tar.gz`, `install.sh`, their SHA-256 files and `VERSION` under `osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`; pre-releases only update their version directory. GitHub Release includes the same archive and installer. The standalone installer is extracted from the verified CI package.
 
 ## Repository configuration
 

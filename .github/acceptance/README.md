@@ -10,6 +10,7 @@ CI runs this entire suite in parallel on native Linux amd64 and ARM64 runners (`
 
 | Scenario | Pass condition |
 | --- | --- |
+| One-click installation | Declining confirmation causes no downloads or installation. A downloaded archive with an incorrect checksum is rejected before files or services are installed. The shipped installer starts a real systemd Master and a Compose Master; their generated passwords must authenticate. Reinstalling an existing native deployment must preserve its password, configuration and running process. Compose and native Agents must consume real invitations and return live status to the native Master. The native Agent downloads its bundle and checksum from that Master; its installed JAR must match the shipped JAR. |
 | Startup and access | A real Master accepts login, rejects an unauthenticated task request, and receives live status from both enrolled Agents. The packaged CLI logs in using its own user session. |
 | CLI upload | Both Agents transfer real payload. Independently enumerated S3 keys, lengths and SHA-256 match the source manifest. The report is complete and contains exactly those source keys. |
 | Browser copy | Chromium loads the JAR's actual UI and creates one task through the form. The selected Agents, mapping and limit reach the real API; “View task” opens that task. Both Agents transfer payload and independent destination hashes match. |
@@ -21,7 +22,7 @@ The main dataset is 130 files, about 36 MiB: empty, small, Unicode/space names, 
 
 ## Dependencies and isolation
 
-S3 is the [official SeaweedFS image](https://github.com/seaweedfs/seaweedfs), release 4.48, fixed to the multi-architecture digest in `run.py`. It handles actual signed HTTP requests and stores actual object bytes; setup also verifies that an invalid signature is rejected. Credentials, Docker network, container names, volumes and data directories are created for each run. Agents share the transfer directory but have separate databases. Cleanup names only resources created by that run.
+S3 is the [official SeaweedFS image](https://github.com/seaweedfs/seaweedfs), release 4.48, fixed to the multi-architecture digest in `run.py`. It handles actual signed HTTP requests and stores actual object bytes; setup also verifies that an invalid signature is rejected. The installer checks use uniquely named systemd services, Compose projects, temporary directories and unused ports. They clean up only their own services and containers. An HTTP server on localhost serves the actual release archive for the checksum rejection case. Credentials, Docker network, container names, volumes and data directories are created for each run. Agents share the transfer directory but have separate databases. Cleanup names only resources created by that run.
 
 The browser uses no Vite development server and no intercepted responses. The CLI is the binary inside the release image, called directly rather than through the wrapper that supplies an internal token. It has an isolated user session.
 
@@ -42,10 +43,10 @@ python3 -m venv /tmp/oss-acceptance-venv
 
 On an ARM64 host, use `--platform linux/arm64 --build-arg TARGETARCH=arm64` instead; the acceptance command is identical. There is no reduced architecture-specific suite. CI has explicit phase timeouts, no browser retries and no fallback to an older successful artifact. A failed recovery cannot be hidden by creating another task.
 
-Initial Master and Agent readiness each allow 120 seconds on both architectures. Each full acceptance step has a 12-minute deadline. The jobs run independently: a failure in one does not cancel the other, but both must pass before Release can select the artifacts.
+CI runs `quick-install.py` against the extracted release package before the transfer suite, with an 8-minute step limit. It requires a Linux host with systemd, Java 8+, Docker Compose and passwordless sudo (or root). Initial Master and Agent readiness each allow 120 seconds on both architectures. Each full acceptance step has a 12-minute deadline. The jobs run independently: a failure in one does not cancel the other, but both must pass before Release can select the artifacts.
 
 ## Evidence and limits
 
-`artifact-identity.json` records the native runner architecture, commit and build artifact hashes. `checks.json` records completed assertions and measured values; expected and actual manifests record independent content hashes. Reports, sanitized container logs, task snapshots and failed-browser traces are retained. A successful API response or a matching count alone is insufficient.
+`installer-checks.json` records installation, preservation and enrollment assertions; `installer.log` retains sanitized command and service output. `artifact-identity.json` records the native runner architecture, commit and build artifact hashes. `checks.json` records completed assertions and measured values; expected and actual manifests record independent content hashes. Reports, sanitized container logs, task snapshots and failed-browser traces are retained. A successful API response or a matching count alone is insufficient.
 
-The bandwidth assertion catches large regressions such as losing a shared quota, but scheduling delays can mask smaller overspeed; it is not a precision network benchmark. SeaweedFS is not JD Cloud OSS: provider-specific signing, permissions, throttling and WAN failures require separate provider acceptance. This chain does not certify changing-source incremental consistency, power-loss durability, PB-scale performance, all key shapes, or traditional SSH/systemd installer behavior.
+The bandwidth assertion catches large regressions such as losing a shared quota, but scheduling delays can mask smaller overspeed; it is not a precision network benchmark. SeaweedFS is not JD Cloud OSS: provider-specific signing, permissions, throttling and WAN failures require separate provider acceptance. This chain does not certify changing-source incremental consistency, power-loss durability, PB-scale performance, all key shapes, automatic dependency installation on every Linux distribution, or SSH batch deployment.

@@ -201,6 +201,11 @@ jobs:
                       "imageSha256": os.environ["IMAGE_SHA256"]}
           Path("output/acceptance/" + os.environ["ACCEPTANCE_ARCH"] + "/artifact-identity.json").write_text(json.dumps(evidence, indent=2))
           PYTHON
+      - name: Test one-click native and Compose installation
+        timeout-minutes: 8
+        run: |
+          python3 .github/acceptance/quick-install.py --package output/oss-transfer \
+            --image oss-transfer:acceptance --evidence "output/acceptance/$ACCEPTANCE_ARCH"
       - name: Test real transfers, UI, CLI and recovery
         timeout-minutes: 12
         run: |

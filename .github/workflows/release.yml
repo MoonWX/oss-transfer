@@ -114,7 +114,13 @@ jobs:
           merge-multiple: true
           path: output
       - name: Verify release checksum
-        run: cd output && sha256sum --check oss-transfer.tar.gz.sha256
+        run: |
+          cd output
+          sha256sum --check oss-transfer.tar.gz.sha256
+          tar -xOzf oss-transfer.tar.gz oss-transfer/install.sh > install.sh
+          test -s install.sh
+          bash -n install.sh
+          sha256sum install.sh > install.sh.sha256
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,9 +130,9 @@ jobs:
           release_flags=()
           if [[ "$RELEASE_TAG" = *-* ]]; then release_flags=(--prerelease --latest=false); fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" output/oss-transfer.tar.gz output/oss-transfer.tar.gz.sha256 --clobber
+            gh release upload "$RELEASE_TAG" output/oss-transfer.tar.gz output/oss-transfer.tar.gz.sha256 output/install.sh output/install.sh.sha256 --clobber
             if [[ "$RELEASE_TAG" = *-* ]]; then gh release edit "$RELEASE_TAG" "${release_flags[@]}"; fi
           else
-            gh release create "$RELEASE_TAG" output/oss-transfer.tar.gz output/oss-transfer.tar.gz.sha256 \
+            gh release create "$RELEASE_TAG" output/oss-transfer.tar.gz output/oss-transfer.tar.gz.sha256 output/install.sh output/install.sh.sha256 \
               --verify-tag --title "OSS Transfer $RELEASE_TAG" --generate-notes "${release_flags[@]}"
           fi

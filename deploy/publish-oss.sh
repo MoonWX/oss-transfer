@@ -60,6 +60,13 @@ PACKAGE_COMMIT="$(sed -n 's/^Commit: //p' "$STAGE_DIR/VERSION")"
 [[ "$PACKAGE_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || fail "invalid package commit"
 PACKAGE_COMMIT_FULL="$(git -C "$SOURCE_DIR" rev-parse --verify "$PACKAGE_COMMIT^{commit}")" || fail "package commit is unavailable or ambiguous"
 [[ "$HEAD_COMMIT" = "$PACKAGE_COMMIT_FULL" ]] || fail "package commit does not match the release tag"
+tar -xOzf "$STAGE_DIR/$ARCHIVE" oss-transfer/install.sh > "$STAGE_DIR/install.sh" || fail "package is missing the interactive installer"
+[[ -s "$STAGE_DIR/install.sh" ]] && bash -n "$STAGE_DIR/install.sh" || fail "invalid interactive installer"
+if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$STAGE_DIR" && sha256sum install.sh > install.sh.sha256)
+else
+    (cd "$STAGE_DIR" && shasum -a 256 install.sh > install.sh.sha256)
+fi
 
 # JD OSS documents SigV4 and virtual-hosted requests for PutObject:
 # https://docs.jdcloud.com/cn/object-storage-service/api/user-signature-authentication-s3
@@ -94,7 +101,9 @@ publish_directory() {
     echo "Publishing s3://moonwx/osstransfer/$prefix/"
     upload "$prefix" "$ARCHIVE" application/gzip
     upload "$prefix" "$CHECKSUM" 'text/plain; charset=utf-8'
-    # VERSION is written only after both payloads succeed. Multiple objects
+    upload "$prefix" install.sh 'text/plain; charset=utf-8'
+    upload "$prefix" install.sh.sha256 'text/plain; charset=utf-8'
+    # VERSION is written only after all payloads succeed. Multiple objects
     # are not updated atomically; a failed upload can leave partial payloads.
     upload "$prefix" VERSION 'text/plain; charset=utf-8'
 }

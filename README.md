@@ -6,6 +6,23 @@ OSS Transfer V4 migrates data between S3-compatible object storage and local fil
 
 Supported directions: object storage to object storage, object storage to local files, and local files to object storage. Tasks support node selection, bandwidth limits, stop/resume, and per-file reports.
 
+## Guided installation
+
+On the Linux node to install, download and run the installer:
+
+```sh
+curl -fSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh &&
+sudo bash install.sh --lang en
+```
+
+Choose **Master** or **Agent**, then **Docker Compose** or **systemd**. Enter the requested settings and confirm the summary to install. On Debian and Ubuntu, missing dependencies are installed automatically; other Linux distributions require them to be installed first. Supported architectures are `amd64` and `arm64`.
+
+Master packages are downloaded from JD Cloud OSS. For an extracted local package, add `--method native --package-dir /path/to/oss-transfer`. A native Agent downloads its package from the master to match its version.
+
+For an Agent, first create an invitation in the master's **Execution nodes → Add node**, then paste its join URL into the installer on the new node. Keep the URL private.
+
+The wizard is for new installations and refuses to overwrite an existing deployment. For manual installation or upgrades, use the steps below.
+
 ## Deploy the master
 
 ### Docker
@@ -20,7 +37,7 @@ docker run -d --name oss-transfer-master --restart unless-stopped \
   moonwx/osstransfer:latest
 ```
 
-`latest` follows stable releases. To pin a release, replace `latest` with its version, such as `4.0.4` (without `v`).
+`latest` follows stable releases. To pin a release, replace `latest` with its version, such as `4.0.5` (without `v`).
 
 Replace the URL with an address that your browser and agents can reach. Open that URL and log in as `admin`. Read the generated password:
 
@@ -84,7 +101,7 @@ sha256sum -c oss-transfer.tar.gz.sha256 &&
 tar -xzf oss-transfer.tar.gz
 ```
 
-For a specific release, set `OSS_TRANSFER_RELEASE=v4.0.4`, for example. OSS version directories include `v`; image tags do not. Pre-releases do not update `latest`. You can also download the same archive and checksum from [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases).
+For a specific release, set `OSS_TRANSFER_RELEASE=v4.0.5`, for example. OSS version directories include `v`; image tags do not. Pre-releases do not update `latest`. You can also download the same archive and checksum from [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases).
 
 After successful verification and extraction, install the master:
 

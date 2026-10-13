@@ -6,6 +6,23 @@ OSS Transfer V4 用于 S3 兼容对象存储与本地文件系统之间的数据
 
 支持对象存储到对象存储、对象存储到本地、本地到对象存储。任务支持选择节点、限速、停止和续传，以及文件级报告。
 
+## 一键安装
+
+在要部署的 Linux 节点上下载并运行安装脚本：
+
+```sh
+curl -fSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh &&
+sudo bash install.sh --lang zh
+```
+
+选择 **Master** 或 **Agent**，再选择 **Docker Compose** 或 **systemd**。按提示填写配置，确认摘要后开始安装。Debian、Ubuntu 会自动安装缺少的依赖；其他 Linux 发行版需提前安装依赖。支持 `amd64` 和 `arm64`。
+
+Master 安装包从京东云 OSS 下载。使用已解压的本地安装包时，添加 `--method native --package-dir /path/to/oss-transfer`。传统部署的 Agent 从 Master 下载安装包，以保持版本一致。
+
+安装 Agent 前，先在 Master 的**执行节点 → 添加节点**中生成邀请，再在新节点的安装脚本中粘贴加入链接。请妥善保管该链接。
+
+此向导用于初次安装，不会覆盖已有部署。手动安装或升级请使用下方步骤。
+
 ## 部署 Master
 
 ### Docker
@@ -20,7 +37,7 @@ docker run -d --name oss-transfer-master --restart unless-stopped \
   moonwx/osstransfer:latest
 ```
 
-`latest` 跟随稳定版本。固定版本时，将 `latest` 替换为具体版本号，例如 `4.0.4`，不带 `v`。
+`latest` 跟随稳定版本。固定版本时，将 `latest` 替换为具体版本号，例如 `4.0.5`，不带 `v`。
 
 将 URL 改为浏览器和 Agent 均能访问的 Master 地址。打开该地址，使用 `admin` 登录。初始密码随机生成，可通过以下命令读取：
 
@@ -84,7 +101,7 @@ sha256sum -c oss-transfer.tar.gz.sha256 &&
 tar -xzf oss-transfer.tar.gz
 ```
 
-固定版本时，例如设置 `OSS_TRANSFER_RELEASE=v4.0.4`。OSS 版本目录带 `v`，镜像标签不带。预发布版本不会更新 `latest`。也可从 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) 下载相同的安装包及校验文件。
+固定版本时，例如设置 `OSS_TRANSFER_RELEASE=v4.0.5`。OSS 版本目录带 `v`，镜像标签不带。预发布版本不会更新 `latest`。也可从 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) 下载相同的安装包及校验文件。
 
 校验和解压成功后，安装 Master：
 

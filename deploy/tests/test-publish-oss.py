@@ -100,13 +100,18 @@ class PublishTests(unittest.TestCase):
                                        stderr=subprocess.DEVNULL,
                                        env=dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull))
 
-    def package(self, version="4.0.0", commit=None, extra_version="", member="oss-transfer/VERSION"):
+    def package(self, version="4.0.0", commit=None, extra_version="", member="oss-transfer/VERSION", installer=b"#!/bin/bash\necho installer\n"):
         self.version_data = (f"Branch: fixture\nCommit: {commit or self.commit[:7]}\n"
                              f"Version: {version}\nBuildTime: fixture\n{extra_version}").encode()
         with tarfile.open(self.output / "oss-transfer.tar.gz", "w:gz") as archive:
             info = tarfile.TarInfo(member)
             info.size = len(self.version_data)
             archive.addfile(info, io.BytesIO(self.version_data))
+            self.installer = installer
+            if installer is not None:
+                info = tarfile.TarInfo("oss-transfer/install.sh")
+                info.size = len(installer)
+                archive.addfile(info, io.BytesIO(installer))
         self.checksum()
 
     def checksum(self):
@@ -126,7 +131,14 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(self.calls(), [])
 
     def assert_uploaded(self, call, name):
-        expected = self.version_data if name == "VERSION" else (self.output / name).read_bytes()
+        if name == "VERSION":
+            expected = self.version_data
+        elif name == "install.sh":
+            expected = self.installer
+        elif name == "install.sh.sha256":
+            expected = (hashlib.sha256(self.installer).hexdigest() + "  install.sh\n").encode()
+        else:
+            expected = (self.output / name).read_bytes()
         self.assertEqual(base64.b64decode(call["body"]), expected)
         self.assertEqual(call["cache_control"], "no-cache")
         content_type = "application/gzip" if name.endswith(".tar.gz") else "text/plain; charset=utf-8"
@@ -136,7 +148,7 @@ class PublishTests(unittest.TestCase):
     def test_stable_uploads_version_then_latest(self):
         result = self.publish()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        names = ["oss-transfer.tar.gz", "oss-transfer.tar.gz.sha256", "VERSION"]
+        names = ["oss-transfer.tar.gz", "oss-transfer.tar.gz.sha256", "install.sh", "install.sh.sha256", "VERSION"]
         expected = [f"osstransfer/{prefix}/{name}" for prefix in ("v4.0.0", "latest") for name in names]
         self.assertEqual([c["key"] for c in self.calls()], expected)
         for call, name in zip(self.calls(), names * 2):
@@ -152,7 +164,7 @@ class PublishTests(unittest.TestCase):
         latest.write_bytes(b"previous stable")
         result = self.publish("v4.0.0-rc.1")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(self.calls()), 3)
+        self.assertEqual(len(self.calls()), 5)
         self.assertTrue(all(c["key"].startswith("osstransfer/v4.0.0-rc.1/") for c in self.calls()))
         self.assertEqual(latest.read_bytes(), b"previous stable")
 
@@ -162,7 +174,7 @@ class PublishTests(unittest.TestCase):
         result = self.publish(env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(base64.b64decode(self.calls()[0]["body"]), original_archive)
-        self.assertEqual(base64.b64decode(self.calls()[3]["body"]), original_archive)
+        self.assertEqual(base64.b64decode(self.calls()[5]["body"]), original_archive)
         self.assertNotEqual((self.output / "oss-transfer.tar.gz").read_bytes(), original_archive)
 
     def test_annotated_tag_and_full_commit(self):
@@ -172,10 +184,10 @@ class PublishTests(unittest.TestCase):
         self.package(commit=self.commit)
         result = self.publish()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(self.calls()), 6)
+        self.assertEqual(len(self.calls()), 10)
 
     def test_upload_failure_stops_at_every_object(self):
-        for failure in range(1, 7):
+        for failure in range(1, 11):
             with self.subTest(failure=failure):
                 self.log.unlink(missing_ok=True)
                 env = dict(self.env, AWS_STUB_FAIL_CALL=str(failure))
@@ -183,9 +195,9 @@ class PublishTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
                 self.assertEqual(len(self.calls()), failure)
                 self.assertNotIn("OSS publish completed", result.stdout)
-                if failure <= 3:
+                if failure <= 5:
                     self.assertFalse(any("/latest/" in c["key"] for c in self.calls()))
-                if failure < 6:
+                if failure < 10:
                     self.assertFalse(any(c["key"] == "osstransfer/latest/VERSION" for c in self.calls()))
                 self.assertFalse(Path(self.calls()[0]["config_path"]).exists())
 
@@ -228,12 +240,18 @@ class PublishTests(unittest.TestCase):
                 (self.output / name).unlink()
                 self.assert_rejected(self.publish())
 
+    def test_missing_or_broken_installer_is_rejected_before_upload(self):
+        for installer in (None, b"", b"#!/bin/bash\nif then\n"):
+            with self.subTest(installer=installer):
+                self.package(installer=installer)
+                self.assert_rejected(self.publish())
+
     def test_default_artifact_directory(self):
         shutil.move(self.output, self.repo / "output")
         result = subprocess.run(["bash", str(self.repo / "deploy/publish-oss.sh"), "v4.0.0"],
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(self.calls()), 6)
+        self.assertEqual(len(self.calls()), 10)
 
 
 if __name__ == "__main__":

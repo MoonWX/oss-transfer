@@ -8,6 +8,7 @@ trap 'rm -rf "$test_root"' EXIT
 fixture="$test_root/source with spaces"
 mkdir -p "$fixture/frontend" "$fixture/cli-go" "$fixture/deploy/docker" "$fixture/docs" "$test_root/bin"
 cp "$source_root/build.sh" "$fixture/build.sh"
+cp "$source_root/install.sh" "$fixture/install.sh"
 printf '    <version>4.0.0</version>\n' > "$fixture/pom.xml"
 for file in deploy.sh oss-transfer-cli.completion; do
     printf 'fixture\n' > "$fixture/deploy/$file"
@@ -147,6 +148,8 @@ assert_package_version() {
     cmp "$source_root/.env.example" "$fixture/.env.example"
     cmp "$fixture/docker-compose.yml" "$output/oss-transfer/docker-compose.yml"
     cmp "$fixture/.env.example" "$output/oss-transfer/.env.example"
+    cmp "$fixture/install.sh" "$output/oss-transfer/install.sh"
+    [ -x "$output/oss-transfer/install.sh" ]
     for old_file in compose.yml compose.env.example; do
         [ ! -e "$source_root/deploy/docker/$old_file" ]
         [ ! -e "$fixture/deploy/docker/$old_file" ]

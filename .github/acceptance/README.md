@@ -1,36 +1,38 @@
 # Release acceptance
 
-The test subject is the built release: its JAR, Linux CLI and embedded WebUI. Tests do not import application classes, replace HTTP responses, or seed successful task records. An independent S3 client prepares conflict fixtures and verifies results; Transfer itself must perform the main upload, copy and download.
+The tests install the release package and exercise its JAR, Linux CLI and embedded WebUI. An S3 client prepares conflict fixtures and checks transferred content against the source files.
 
-CI also runs `StorageSynchronizationRaceTest` before image acceptance. Four focused cases use real controllers, RocksDB and loopback HTTP, with latches controlling competing configuration requests. They cover duplicate synchronization during create/delete, stale updates and strict duplicate POST rejection. Only external S3 client construction is stubbed in these concurrency cases; the release acceptance below exercises actual S3 traffic.
+CI runs the same suite in parallel on native amd64 (`ubuntu-latest`) and ARM64 (`ubuntu-26.04-arm`) runners. Each job downloads the package and image archive by artifact ID, checks their SHA-256 against the build outputs, and verifies the host and container architecture. Both jobs must pass before the release workflow can publish those artifacts.
 
-CI runs this entire suite in parallel on native Linux amd64 and ARM64 runners (`ubuntu-latest` and `ubuntu-26.04-arm`). Both jobs download the same package and multi-architecture image archive by immutable artifact ID and verify their SHA-256 against the build job. Each checks its host, image and container architecture before testing. QEMU is used only to build the multi-architecture archive, not to run acceptance.
+Before acceptance, `StorageSynchronizationRaceTest` checks four configuration races: duplicate synchronization during create/delete, stale updates, and duplicate POST rejection. It uses controllers, RocksDB and loopback HTTP, with latches to control request order. S3 client construction is stubbed in these tests.
 
-## Required outcomes
+## Checks
 
 | Scenario | Pass condition |
 | --- | --- |
-| One-click installation | Declining confirmation causes no downloads or installation. A downloaded archive with an incorrect checksum is rejected before files or services are installed. The shipped installer starts a real systemd Master and a Compose Master; their generated passwords must authenticate. Reinstalling an existing native deployment must preserve its password, configuration and running process. Compose and native Agents must consume real invitations and return live status to the native Master. The native Agent downloads its bundle and checksum from that Master; its installed JAR must match the shipped JAR. |
-| Startup and access | A real Master accepts login, rejects an unauthenticated task request, and receives live status from both enrolled Agents. The packaged CLI logs in using its own user session. |
-| CLI upload | Both Agents transfer real payload. Independently enumerated S3 keys, lengths and SHA-256 match the source manifest. The report is complete and contains exactly those source keys. |
-| Browser copy | Chromium loads the JAR's actual UI and creates one task through the form. The selected Agents, mapping and limit reach the real API; “View task” opens that task. Both Agents transfer payload and independent destination hashes match. |
-| Shared bandwidth | The two Agents each receive about 18 MiB. At 8 Mbps total, elapsed time from the real creation request to completion must be at least 80% of the payload's theoretical transfer time. |
-| Stop and recovery | During a real 12 MiB overwrite, wait for a 6–12 MiB temporary file before stopping. The previous destination survives. SIGKILL/restart the Master and verify the task remains stopped. Resume, wait for another partial large download, SIGKILL/restart the Agent, and finish the same task. Final hashes match; completed checkpoint files keep their inode and mtime; no owned partial files remain. |
-| Conflict policies | Two small real tasks encounter different existing destination bytes. SKIP preserves them; OVERWRITE replaces them with source bytes. Reports agree with the observed results. |
+| Installer cancellation and checksum | Declining confirmation causes no download or installation. An archive with an incorrect checksum is rejected before installation. |
+| Master installation | The installer starts systemd and Compose Masters, and their generated passwords authenticate. Reinstalling over the native deployment leaves its password, configuration and process unchanged. The Compose Master's local mount supports file writes. |
+| Agent installation | Native and Compose Agents enroll through invitations and report to the Master. The native Agent downloads its bundle and checksum from the Master; its installed JAR matches the release JAR. |
+| Startup and access | The Master accepts login, rejects unauthenticated task requests, and receives status from both Agents. The packaged CLI logs in with its own user session. |
+| CLI upload | Both Agents transfer files. Destination keys, lengths and SHA-256 match the source manifest. The report is complete and contains exactly the source keys. |
+| Browser copy | Chromium creates one task through the packaged WebUI. The selected Agents, mapping and limit reach the API; “View task” opens that task. Both Agents transfer files and destination hashes match. |
+| Shared bandwidth | Each Agent receives about 18 MiB. At an 8 Mbps task limit, elapsed time from creation to completion is at least 80% of the theoretical transfer time. |
+| Stop and recovery | Stop a 12 MiB overwrite after its temporary file reaches 6–12 MiB and verify the previous destination survives. Kill and restart the Master; the task stays stopped. Resume, kill and restart an Agent during another partial download, then finish the same task. Final hashes match, completed checkpoint files retain their inode and mtime, and temporary transfer files are removed. |
+| Conflict policies | SKIP preserves existing destination bytes; OVERWRITE replaces them with source bytes. Reports match the files. |
 
-The main dataset is 130 files, about 36 MiB: empty, small, Unicode/space names, four 6 MiB objects and one 12 MiB object. Padding keys deliberately cross the application's 128-object dispatch boundary with approximately equal bytes on each Agent. CI lowers the multipart threshold to 8 MiB and part size to 5 MiB, then checks the S3 service's multipart ETag as well as the resulting content hash. Small LIST pages exercise executor pagination; the explorer's separate 1,000-key page boundary is not covered.
+The dataset contains 130 files totaling about 36 MiB, including empty files, names with spaces and Unicode, four 6 MiB objects, and one 12 MiB object. It crosses the 128-object dispatch boundary and gives both Agents approximately equal byte counts. An 8 MiB multipart threshold and 5 MiB part size exercise multipart transfers; checks cover the resulting ETag and content hash. Small LIST pages exercise executor pagination. The explorer's 1,000-key page boundary is outside this suite.
 
-## Dependencies and isolation
+## Test environment
 
-S3 is the [official SeaweedFS image](https://github.com/seaweedfs/seaweedfs), release 4.48, fixed to the multi-architecture digest in `run.py`. It handles actual signed HTTP requests and stores actual object bytes; setup also verifies that an invalid signature is rejected. The installer checks use uniquely named systemd services, Compose projects, temporary directories and unused ports. They clean up only their own services and containers. An HTTP server on localhost serves the actual release archive for the checksum rejection case. Credentials, Docker network, container names, volumes and data directories are created for each run. Agents share the transfer directory but have separate databases. Cleanup names only resources created by that run.
+The S3 server uses the [official SeaweedFS image](https://github.com/seaweedfs/seaweedfs), version 4.48, pinned by digest in `run.py`. It stores the transferred objects and rejects an invalid request signature during setup. This covers S3 transfers against SeaweedFS. JD Cloud OSS signing, permissions and throttling still need tests against JD Cloud.
 
-The browser uses no Vite development server and no intercepted responses. The CLI is the binary inside the release image, called directly rather than through the wrapper that supplies an internal token. It has an isolated user session.
+Each run creates its own credentials, Docker resources and temporary directories. Installer tests use separate systemd services, Compose projects and ports; a localhost HTTP server serves the archive for the checksum test. Agents share a transfer directory and keep separate databases. Cleanup removes the resources created by the run.
 
-On Linux, downloaded files retain the Agent's private permissions. When the host cannot read them, the independent verifier reads their bytes through a read-only container mount. It does not change output permissions; hashes are still computed outside Transfer, and inode/mtime checks use the actual shared files.
+Chromium loads the WebUI from the JAR. The CLI runs directly from the release image with an isolated user session. When downloaded-file permissions prevent host access, the verifier reads through a read-only container mount. It computes hashes separately from Transfer and checks inode and mtime on the shared files.
 
 ## Run locally
 
-Requires Docker, Node.js and Python 3.9 or newer. Build the release with `./build.sh`, then build an image for the test host architecture; for an amd64 host:
+Install Docker, Node.js and Python 3.9 or newer. Build the release with `./build.sh`, then build an image for the host architecture. On amd64:
 
 ```sh
 docker build --platform linux/amd64 --build-arg TARGETARCH=amd64 -t oss-transfer:acceptance .
@@ -41,12 +43,25 @@ python3 -m venv /tmp/oss-acceptance-venv
   --image oss-transfer:acceptance --evidence output/acceptance/local
 ```
 
-On an ARM64 host, use `--platform linux/arm64 --build-arg TARGETARCH=arm64` instead; the acceptance command is identical. There is no reduced architecture-specific suite. CI has explicit phase timeouts, no browser retries and no fallback to an older successful artifact. A failed recovery cannot be hidden by creating another task.
+On ARM64, change the build options to `--platform linux/arm64 --build-arg TARGETARCH=arm64`.
 
-CI runs `quick-install.py` against the extracted release package before the transfer suite, with an 8-minute step limit. It requires a Linux host with systemd, Java 8+, Docker Compose and passwordless sudo (or root). Initial Master and Agent readiness each allow 120 seconds on both architectures. Each full acceptance step has a 12-minute deadline. The jobs run independently: a failure in one does not cancel the other, but both must pass before Release can select the artifacts.
+The installer tests also require Linux with systemd, Java 8+, Docker Compose, and passwordless sudo or root:
 
-## Evidence and limits
+```sh
+python3 .github/acceptance/quick-install.py \
+  --package output/oss-transfer --image oss-transfer:acceptance \
+  --evidence output/acceptance/local
+```
 
-`installer-checks.json` records installation, preservation and enrollment assertions; `installer.log` retains sanitized command and service output. `artifact-identity.json` records the native runner architecture, commit and build artifact hashes. `checks.json` records completed assertions and measured values; expected and actual manifests record independent content hashes. Reports, sanitized container logs, task snapshots and failed-browser traces are retained. A successful API response or a matching count alone is insufficient.
+CI allows 8 minutes for installer tests and 12 minutes for transfer tests. Initial Master and Agent readiness each allow 120 seconds. An architecture failure does not cancel the other job.
 
-The bandwidth assertion catches large regressions such as losing a shared quota, but scheduling delays can mask smaller overspeed; it is not a precision network benchmark. SeaweedFS is not JD Cloud OSS: provider-specific signing, permissions, throttling and WAN failures require separate provider acceptance. This chain does not certify changing-source incremental consistency, power-loss durability, PB-scale performance, all key shapes, automatic dependency installation on every Linux distribution, or SSH batch deployment.
+## Results and scope
+
+The evidence directory contains:
+
+- `installer-checks.json` and `installer.log`: installation assertions and sanitized service output.
+- `artifact-identity.json`: runner architecture, commit and build artifact hashes.
+- `checks.json`, file manifests and reports: assertion results, timing and content hashes.
+- Container logs and task snapshots, plus traces for failed browser tests.
+
+The bandwidth check detects large regressions, such as losing the shared quota. Scheduling delays can hide smaller overruns. The suite does not cover changing-source incremental consistency, power-loss durability or large-scale performance.

@@ -17,7 +17,7 @@ Choose Master or Agent, then Docker Compose or systemd. Fill in the settings and
 
 For an Agent, create an invitation under **Execution nodes → Add node** in the WebUI, then paste its URL into the installer on the new node.
 
-To use an extracted local package, add `--method native --package-dir /path/to/oss-transfer`. The wizard handles new installations and stops if it finds an existing deployment. For updates, follow [Upgrade and back up](#upgrade-and-back-up).
+To use an extracted local package, add `--method native --package-dir /path/to/oss-transfer`. For an existing native deployment, the wizard offers an in-place upgrade. See [Upgrade and back up](#upgrade-and-back-up).
 
 ## Deploy the master
 
@@ -154,7 +154,17 @@ For Docker, prefix CLI commands with `docker exec oss-transfer-master`; for Comp
 
 Stop active tasks before upgrading. Stop the service before copying its configuration and data directories, or take a consistent filesystem snapshot. Copying a live RocksDB directory can produce an unusable backup.
 
-For Docker, pull the new version and recreate the container with the existing volume and storage mounts. For traditional deployment, extract the new release and run `sudo ./deploy/install-master.sh` on the Master or `sudo ./deploy/install-agent.sh` on an Agent. Pass the directory and service-name options used by the current deployment. These installers preserve configuration and data, including the Agent's enrollment credential.
+For Docker, pull the new version and recreate the container with the existing volume and storage mounts.
+
+For a native installation, run the wizard again and choose upgrade, or use:
+
+```sh
+sudo bash install.sh --upgrade
+```
+
+The installer recognizes the current native services and the old `oss-transfer-tool` Master. It keeps the existing configuration, login password and database paths, backs up the stopped service to `/var/backups/oss-transfer/`, then replaces the program and CLI. If startup fails, it restores the backup. Existing Agents retain their enrollment credentials; legacy Workers need to join as Agents through a new invitation.
+
+Use `--service-name NAME` to select a custom service and `--cli-path PATH` if its CLI is installed elsewhere. For an extracted package, add `--package-dir /path/to/oss-transfer`. Use the existing Compose file for container upgrades; the native upgrade does not convert a deployment to Docker.
 
 ## Build locally
 

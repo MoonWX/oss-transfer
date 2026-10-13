@@ -17,7 +17,7 @@ sudo bash install.sh --lang zh
 
 安装 Agent 时，先在 WebUI 的**执行节点 → 添加节点**中生成邀请，再将 URL 粘贴到新节点的安装脚本中。
 
-使用已解压的本地安装包时，添加 `--method native --package-dir /path/to/oss-transfer`。向导用于新装，检测到已有部署会停止。更新版本请参照[升级与备份](#升级与备份)。
+使用已解压的本地安装包时，添加 `--method native --package-dir /path/to/oss-transfer`。检测到已有原生部署时，向导会提供原位升级选项。详见[升级与备份](#升级与备份)。
 
 ## 部署 Master
 
@@ -154,7 +154,17 @@ Docker 中在 CLI 命令前加 `docker exec oss-transfer-master`；Compose 中�
 
 升级前停止运行中的任务。停止服务后再复制配置和数据目录，或使用一致性文件系统快照。直接复制正在使用的 RocksDB 目录可能得到无法恢复的备份。
 
-Docker 拉取新版本，使用原有卷和挂载重建容器。传统部署解压新版本后，在 Master 上执行 `sudo ./deploy/install-master.sh`，在 Agent 上执行 `sudo ./deploy/install-agent.sh`。目录和服务名参数须与当前部署一致。安装脚本会保留配置和数据，包括 Agent 的加入凭据。
+Docker 拉取新版本，使用原有卷和挂载重建容器。
+
+原生部署重新运行向导，选择升级，也可执行：
+
+```sh
+sudo bash install.sh --lang zh --upgrade
+```
+
+脚本支持当前原生服务和旧版 `oss-transfer-tool` 主节点。沿用原配置、登录密码和数据库路径，停服备份到 `/var/backups/oss-transfer/` 后更新程序和 CLI；启动失败时恢复备份。现有 Agent 保留加入凭据，旧版 Worker 则需通过新邀请加入为 Agent。
+
+自定义服务名使用 `--service-name NAME`，自定义 CLI 路径使用 `--cli-path PATH`。使用已解压的安装包时，添加 `--package-dir /path/to/oss-transfer`。容器升级沿用原 Compose 文件，原生升级不会转换为 Docker 部署。
 
 ## 本地构建
 

@@ -12,6 +12,7 @@ Before acceptance, `StorageSynchronizationRaceTest` checks four configuration ra
 | --- | --- |
 | Installer cancellation and checksum | Declining confirmation causes no download or installation. An archive with an incorrect checksum is rejected before installation. |
 | Master installation | The installer starts systemd and Compose Masters, and their generated passwords authenticate. Reinstalling over the native deployment leaves its password, configuration and process unchanged. The Compose Master's local mount supports file writes. |
+| Native upgrade | The existing password, database records, configuration and CLI remain usable. An unbootable replacement triggers rollback and the old service accepts its original login. The same checks run against the legacy directory layout. |
 | Agent installation | Native and Compose Agents enroll through invitations and report to the Master. The native Agent downloads its bundle and checksum from the Master; its installed JAR matches the release JAR. |
 | Startup and access | The Master accepts login, rejects unauthenticated task requests, and receives status from both Agents. The packaged CLI logs in with its own user session. |
 | CLI upload | Both Agents transfer files. Destination keys, lengths and SHA-256 match the source manifest. The report is complete and contains exactly the source keys. |
@@ -51,7 +52,11 @@ The installer tests also require Linux with systemd, Java 8+, Docker Compose, an
 python3 .github/acceptance/quick-install.py \
   --package output/oss-transfer --image oss-transfer:acceptance \
   --evidence output/acceptance/local
+python3 .github/acceptance/native-upgrade.py \
+  --package output/oss-transfer --evidence output/acceptance/local
 ```
+
+The legacy upgrade fixture uses the current JAR in the old directory layout. Add `--legacy-jar /path/to/old.jar` to check a historical binary against a fresh test database.
 
 CI allows 8 minutes for installer tests and 12 minutes for transfer tests. Initial Master and Agent readiness each allow 120 seconds. An architecture failure does not cancel the other job.
 
@@ -60,6 +65,7 @@ CI allows 8 minutes for installer tests and 12 minutes for transfer tests. Initi
 The evidence directory contains:
 
 - `installer-checks.json` and `installer.log`: installation assertions and sanitized service output.
+- `native-upgrade-checks.json` and `native-upgrade.log`: upgrade preservation and rollback results.
 - `artifact-identity.json`: runner architecture, commit and build artifact hashes.
 - `checks.json`, file manifests and reports: assertion results, timing and content hashes.
 - Container logs and task snapshots, plus traces for failed browser tests.

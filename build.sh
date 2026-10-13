@@ -123,7 +123,7 @@ chmod +x "$PACKAGE_DIR/oss-transfer-cli-amd64" "$PACKAGE_DIR/oss-transfer-cli-ar
 BUNDLE_STAGE="$(mktemp -d "$STAGE_DIR/agent-bundle.XXXXXX")"
 cp "$PACKAGE_DIR/oss-transfer.jar" "$PACKAGE_DIR/oss-transfer-cli-amd64" "$PACKAGE_DIR/oss-transfer-cli-arm64" "$PACKAGE_DIR/VERSION" "$BUNDLE_STAGE/"
 mkdir -p "$BUNDLE_STAGE/deploy"
-for file in install.sh install-master.sh install-agent.sh preflight-node.sh wait-node-ready.sh runtime.sh; do
+for file in install.sh install-master.sh install-agent.sh upgrade.sh preflight-node.sh wait-node-ready.sh runtime.sh; do
     cp "deploy/$file" "$BUNDLE_STAGE/deploy/"
 done
 (cd "$BUNDLE_STAGE" && tar -czf "$PACKAGE_DIR/agent-bundle.tar.gz" .)

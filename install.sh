@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Interactive, local deployment. Native upgrades remain in deploy/install.sh.
+# Interactive local installation and in-place native upgrades.
 set +x
 set -euo pipefail
 umask 077
@@ -10,15 +10,17 @@ service_name='' cli_path='/usr/local/bin/oss-transfer-cli' port='1685' web_url='
 join_url='' address='' files_dir='' image='' stage='' confirmed='' choice=''
 original_args=("$@")
 port_given=0 web_given=0 files_given=0 image_given=0
+upgrade=0 service_given=0 layout_given=0 auto_upgrade_service=0
 say() { if [[ "$lang" == zh ]]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'HELP'
-OSS Transfer installer (new deployments, Linux amd64/arm64)
+OSS Transfer installer (Linux amd64/arm64)
 Usage: sudo bash install.sh [options]
   --lang en|zh                  Prompt language
   --role master|agent           Deploy a master or join an existing master
   --method compose|native       Docker Compose (default) or Java/systemd
+  --upgrade                     Upgrade an existing native service in place
   --source oss                  Native master download source (default: oss)
   --version latest|VERSION      Release version (default: latest)
   --web-url URL                 Reachable master origin, e.g. http://192.0.2.10:1685
@@ -33,18 +35,20 @@ Usage: sudo bash install.sh [options]
   --package-url URL --checksum-url URL  Explicit native package download
   --config-dir DIR --cli-path PATH --service-name NAME
   --no-deps                     Require dependencies to be installed already
-  --yes                        Use defaults and skip prompts; --web-url or --join-url required
+  --yes                        Skip prompts; existing native services also require --upgrade
   -h, --help                    Show this help
 
 Automatic dependency installation supports Debian and Ubuntu. On other distributions,
 install Java 8+/systemd or Docker Compose and common utilities before running this script.
-Existing deployments are not overwritten. Use the regular installer or Compose to upgrade.
+Native upgrades keep the service configuration and data, with a stopped-service backup.
+For Compose, update the image using the existing docker-compose.yml.
 HELP
 }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0;;
         --yes) yes=1; shift;;
+        --upgrade) upgrade=1; shift;;
         --no-deps) no_deps=1; shift;;
         --lang|--role|--method|--mode|--source|--version|--package-dir|--package-url|--checksum-url|--install-dir|--deployment-dir|--config-dir|--data-dir|--service-name|--cli-path|--port|--web-url|--join-url|--address|--files-dir|--image)
             [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "$1 requires a value"
@@ -52,8 +56,8 @@ while [[ $# -gt 0 ]]; do
                 --lang) lang="$2";; --role) role="$2";; --method|--mode) method="$2";;
                 --source) source="$2";; --version) version="${2#v}";; --package-dir) package_dir="$2";;
                 --package-url) package_url="$2";; --checksum-url) checksum_url="$2";;
-                --install-dir|--deployment-dir) install_dir="$2";; --config-dir) config_dir="$2";;
-                --data-dir) data_dir="$2";; --service-name) service_name="$2";; --cli-path) cli_path="$2";;
+                --install-dir|--deployment-dir) install_dir="$2"; layout_given=1;; --config-dir) config_dir="$2"; layout_given=1;;
+                --data-dir) data_dir="$2"; layout_given=1;; --service-name) service_name="$2"; service_given=1;; --cli-path) cli_path="$2";;
                 --port) port="$2"; port_given=1;; --web-url) web_url="${2%/}"; web_given=1;; --join-url) join_url="$2";;
                 --address) address="$2";; --files-dir) files_dir="$2"; files_given=1;; --image) image="$2"; image_given=1;;
             esac
@@ -77,6 +81,8 @@ if [[ -z "$lang" ]]; then
 fi
 [[ "$lang" == en || "$lang" == zh ]] || fail '--lang must be en or zh'
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) fail 'only amd64 and arm64 are supported';; esac
+if [[ "$upgrade" == 1 && -z "$role" && "$service_given" == 0 ]]; then auto_upgrade_service=1; fi
+if [[ "$upgrade" == 1 ]]; then role="${role:-master}"; method="${method:-native}"; fi
 if [[ "$yes" == 0 ]]; then
     while [[ -z "$role" ]]; do
         prompt choice "$(say 'Role: 1 Master / 2 Agent' '节点类型：1 主节点 / 2 执行节点')" 1
@@ -96,7 +102,54 @@ install_dir="${install_dir:-/opt/oss-transfer$suffix}"
 config_dir="${config_dir:-/etc/oss-transfer$suffix}"
 service_name="${service_name:-oss-transfer$suffix}"
 if [[ "$method" == compose ]]; then data_dir="${data_dir:-$install_dir/data}"; else data_dir="${data_dir:-/var/lib/oss-transfer$suffix}"; fi
-if [[ "$yes" == 0 ]]; then
+[[ "$service_name" =~ ^[a-z0-9][a-z0-9_-]*$ && ${#service_name} -le 63 ]] || fail 'invalid service name'
+service_exists() {
+    local state
+    command -v systemctl >/dev/null || return 1
+    state="$(systemctl show --value --property=LoadState "$1.service" 2>/dev/null || true)"
+    [[ -n "$state" && "$state" != not-found ]]
+}
+if [[ "$method" == native ]]; then
+    existing_service=''
+    if [[ "$auto_upgrade_service" == 1 ]]; then
+        for candidate in oss-transfer oss-transfer-agent oss-transfer-tool; do
+            if service_exists "$candidate"; then
+                [[ -z "$existing_service" ]] || fail 'multiple native services found; select one with --service-name'
+                existing_service="$candidate"
+            fi
+        done
+    elif service_exists "$service_name"; then existing_service="$service_name"; fi
+    if [[ "$auto_upgrade_service" == 0 && "$service_given" == 0 && "$layout_given" == 0 ]] && service_exists oss-transfer-tool; then
+        [[ -z "$existing_service" ]] || fail 'multiple native services found; select one with --service-name'
+        existing_service=oss-transfer-tool
+    fi
+    if [[ -n "$existing_service" ]]; then
+        service_name="$existing_service"
+        if [[ "$upgrade" == 0 ]]; then
+            say "Existing service: $service_name" "检测到已有服务：$service_name"
+            [[ "$yes" == 0 ]] || fail 'existing deployment; use --upgrade to preserve and update it'
+            prompt choice "$(say 'Action: 1 Upgrade / 2 Exit' '操作：1 保留配置和数据升级 / 2 退出')" 2
+            case "$choice" in
+                1) upgrade=1;;
+                *) say 'Cancelled. No changes made.' '已取消，未修改系统。'; exit 0;;
+            esac
+        fi
+    elif [[ "$upgrade" == 1 ]]; then
+        fail 'no existing native service found; specify --service-name or install without --upgrade'
+    fi
+elif [[ "$upgrade" == 1 ]]; then
+    fail 'use docker compose pull and docker compose up -d with the existing Compose file'
+elif [[ "$service_given" == 0 && "$layout_given" == 0 ]]; then
+    for candidate in "$service_name" oss-transfer-tool; do
+        if service_exists "$candidate"; then
+            fail "existing native service: $candidate; choose native upgrade, or use separate paths and service name for a new Compose deployment"
+        fi
+    done
+fi
+if [[ "$upgrade" == 1 ]]; then
+    [[ "$layout_given" == 0 && "$port_given" == 0 && "$web_given" == 0 && "$files_given" == 0 && "$image_given" == 0 && -z "$address" && -z "$join_url" ]] || fail 'upgrades reuse the existing paths, port and node identity; remove new-install options'
+fi
+if [[ "$yes" == 0 && "$upgrade" == 0 ]]; then
     [[ "$port_given" == 1 ]] || prompt port "$(say 'Service port' '服务端口')" "$port"
     if [[ "$role" == master ]]; then
         detected="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
@@ -145,7 +198,9 @@ if [[ -n "$files_dir" ]]; then
             fail 'local-files mount overlaps container runtime paths; choose a dedicated directory such as /mnt/files';;
     esac
 fi
-if [[ "$role" == master ]]; then
+if [[ "$upgrade" == 1 ]]; then
+    : # Existing configuration and node identity are read by deploy/upgrade.sh.
+elif [[ "$role" == master ]]; then
     valid_origin "$web_url" || fail '--web-url must be a reachable http(s) origin, e.g. http://192.0.2.10:1685'
     [[ -z "$join_url" && -z "$address" ]] || fail 'agent options cannot be used for a master'
 else
@@ -163,6 +218,7 @@ image="${image:-moonwx/osstransfer:$version}"
 validate_package() {
     local required package_version bundle_expected bundle_actual
     local required_files=(oss-transfer.jar "oss-transfer-cli-$arch" VERSION deploy/install.sh deploy/preflight-node.sh deploy/runtime.sh deploy/wait-node-ready.sh)
+    [[ "$upgrade" != 1 ]] || required_files+=(deploy/upgrade.sh)
     [[ "$role" != master ]] || required_files+=(agent-bundle.tar.gz agent-bundle.tar.gz.sha256)
     for required in "${required_files[@]}"; do
         [[ -f "$package_dir/$required" && ! -L "$package_dir/$required" ]] || fail "package missing $required"
@@ -192,17 +248,19 @@ check_empty() {
         [[ -d "$path" && -z "$(find "$path" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "existing files at $path; use the regular installer or Compose to upgrade"
     fi
 }
-check_empty "$install_dir"
-check_empty "$data_dir"
-if [[ "$method" == native ]]; then
-    check_empty "$config_dir"
-    [[ ! -e "/etc/systemd/system/$service_name.service" ]] || fail 'systemd service already exists; use deploy/install.sh to upgrade'
-    if command -v systemctl >/dev/null; then
-        load_state="$(systemctl show --value --property=LoadState "$service_name.service" 2>/dev/null || true)"
-        [[ -z "$load_state" || "$load_state" == not-found ]] || fail 'systemd service already exists; choose another --service-name or use deploy/install.sh'
+if [[ "$upgrade" == 0 ]]; then
+    check_empty "$install_dir"
+    check_empty "$data_dir"
+    if [[ "$method" == native ]]; then
+        check_empty "$config_dir"
+        [[ ! -e "/etc/systemd/system/$service_name.service" ]] || fail 'systemd service already exists; use deploy/install.sh to upgrade'
+        if command -v systemctl >/dev/null; then
+            load_state="$(systemctl show --value --property=LoadState "$service_name.service" 2>/dev/null || true)"
+            [[ -z "$load_state" || "$load_state" == not-found ]] || fail 'systemd service already exists; choose another --service-name or use deploy/install.sh'
+        fi
+        [[ ! -e "$cli_path" ]] || fail "CLI path already exists: $cli_path; select the existing --service-name with --upgrade, or choose --cli-path for a separate installation"
+        [[ -d /run/systemd/system ]] || fail 'native deployment requires a running systemd host'
     fi
-    [[ ! -e "$cli_path" ]] || fail "CLI path already exists: $cli_path; choose --cli-path or use deploy/install.sh to upgrade"
-    [[ -d /run/systemd/system ]] || fail 'native deployment requires a running systemd host'
 fi
 java_supported() {
     command -v java >/dev/null || return 1
@@ -216,11 +274,12 @@ missing=()
 for tool in curl tar sha256sum openssl timeout ss; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 if [[ "$method" == native ]]; then
     command -v systemctl >/dev/null || fail 'systemctl is required'
-    java_supported || missing+=('Java 17')
+    [[ "$upgrade" == 1 ]] || java_supported || missing+=('Java 17')
 else
     command -v docker >/dev/null && docker compose version >/dev/null 2>&1 || missing+=('Docker / Compose')
 fi
 if ((${#missing[@]})); then
+    [[ "$upgrade" == 0 ]] || fail "install missing utilities before upgrading: ${missing[*]}"
     [[ "$no_deps" != 1 ]] || fail "missing dependencies: ${missing[*]}"
     [[ -r /etc/os-release ]] || fail 'cannot identify OS; install dependencies manually'
     # os-release is provided by the local operating system, not a downloaded file.
@@ -230,19 +289,26 @@ if ((${#missing[@]})); then
     [[ "${VERSION_CODENAME:-}" =~ ^[a-z]+$ ]] || fail 'OS codename unavailable; install dependencies manually'
 fi
 say '' ''
-say 'Installation summary' '安装确认'
-printf '  %s / %s / %s\n  %s\n  Data: %s\n' "$role" "$method" "$version" "$install_dir" "$data_dir"
-if [[ "$role" == master ]]; then printf '  Web: %s\n' "$web_url"; else printf '  Master: %s\n  Agent: %s\n' "$master_url" "$address"; fi
-if [[ "$method" == compose ]]; then
-    printf '  Image: %s\n' "$image"
-    [[ -z "$files_dir" ]] || printf '  Mount: %s -> %s (read/write, container UID 10001)\n' "$files_dir" "$files_dir"
-    say '  Docker must run; if needed, its service will be enabled and started.' '  需要运行 Docker；必要时将启用并启动 Docker 服务。'
+if [[ "$upgrade" == 1 ]]; then
+    say 'Upgrade confirmation' '升级确认'
+    printf '  Service: %s\n  Version: %s\n' "$service_name" "$version"
+    say '  Keep the current configuration and database. Back up before replacing programs.' '  沿用原配置和数据库，备份后替换程序。'
+    say '  Stop active transfer tasks before proceeding. The service will restart.' '  继续前请停止运行中的迁移任务。升级会重启服务。'
 else
-    printf '  Configuration: %s\n  CLI: %s\n' "$config_dir" "$cli_path"
+    say 'Installation summary' '安装确认'
+    printf '  %s / %s / %s\n  %s\n  Data: %s\n' "$role" "$method" "$version" "$install_dir" "$data_dir"
+    if [[ "$role" == master ]]; then printf '  Web: %s\n' "$web_url"; else printf '  Master: %s\n  Agent: %s\n' "$master_url" "$address"; fi
+    if [[ "$method" == compose ]]; then
+        printf '  Image: %s\n' "$image"
+        [[ -z "$files_dir" ]] || printf '  Mount: %s -> %s (read/write, container UID 10001)\n' "$files_dir" "$files_dir"
+        say '  Docker must run; if needed, its service will be enabled and started.' '  需要运行 Docker；必要时将启用并启动 Docker 服务。'
+    else
+        printf '  Configuration: %s\n  CLI: %s\n' "$config_dir" "$cli_path"
+    fi
 fi
 if ((${#missing[@]})); then printf '  Install dependencies: %s\n' "${missing[*]}"; fi
 if [[ "$yes" == 0 ]]; then
-    prompt confirmed "$(say 'Proceed? y / n' '继续安装？y / n')" n
+    prompt confirmed "$(say 'Proceed? y / n' '继续？y / n')" n
     [[ "$confirmed" == y || "$confirmed" == Y ]] || { say 'Cancelled. No changes made.' '已取消，未修改系统。'; exit 0; }
 fi
 [[ "$(id -u)" == 0 ]] || fail 'run with sudo: sudo bash install.sh (no changes made)'
@@ -284,7 +350,7 @@ REPO
         fi
     fi
 fi
-if [[ "$method" == native || "$role" == master ]]; then
+if [[ "$upgrade" == 0 && ( "$method" == native || "$role" == master ) ]]; then
     [[ -z "$(ss -H -ltn "sport = :$port")" ]] || fail "port $port is already in use"
 fi
 download() {
@@ -292,7 +358,7 @@ download() {
     [[ "$url" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[^[:space:]\"\\]+$ ]] || fail 'invalid download URL'
     [[ "$url" != http://* ]] || proto='=http,https'
     # Invitation downloads must not redirect credentials to a different origin.
-    if [[ "$role" == agent ]]; then
+    if [[ "$role" == agent && "$upgrade" == 0 ]]; then
         curl --fail --silent --show-error --proto "$proto" --connect-timeout 15 --max-time 600 "$url" -o "$dest" 2> "$stage/download-error" || fail 'download failed; check the master URL, invitation expiry and network'
     else
         curl --fail --silent --show-error --location --proto "$proto" --proto-redir '=https' --connect-timeout 15 --max-time 600 "$url" -o "$dest" || fail 'package download failed'
@@ -301,7 +367,7 @@ download() {
 if [[ "$method" == native ]]; then
     if [[ -z "$package_dir" ]]; then
         if [[ -z "$package_url" ]]; then
-            if [[ "$role" == agent ]]; then
+            if [[ "$role" == agent && "$upgrade" == 0 ]]; then
                 package_url="$master_url/api/agents/package/$join_token"; checksum_url="$package_url/sha256"
             else
                 release="$version"; [[ "$release" == latest ]] || release="v$release"
@@ -323,6 +389,11 @@ if [[ "$method" == native ]]; then
         package_dir="$stage/package"; [[ ! -d "$package_dir/oss-transfer" ]] || package_dir="$package_dir/oss-transfer"
     fi
     validate_package
+    if [[ "$upgrade" == 1 ]]; then
+        bash "$package_dir/deploy/upgrade.sh" --package-dir "$package_dir" --service-name "$service_name" --cli-path "$cli_path" --yes
+        say 'Upgrade complete. Use your existing login password.' '升级完成，请使用原登录密码。'
+        exit 0
+    fi
     java_supported || fail 'Java 8+ is required'
     args=(--role "$role" --package-dir "$package_dir" --install-dir "$install_dir" --config-dir "$config_dir" --data-dir "$data_dir" --service-name "$service_name" --cli-path "$cli_path" --port "$port")
     if [[ "$role" == master ]]; then args+=(--web-url "$web_url"); else args+=(--master-url "$master_url" --join-token "$join_token" --address "$address"); fi

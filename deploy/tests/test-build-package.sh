@@ -13,7 +13,7 @@ printf '    <version>4.0.0</version>\n' > "$fixture/pom.xml"
 for file in deploy.sh oss-transfer-cli.completion; do
     printf 'fixture\n' > "$fixture/deploy/$file"
 done
-for file in preflight-node.sh wait-node-ready.sh install.sh install-master.sh install-agent.sh runtime.sh; do
+for file in preflight-node.sh wait-node-ready.sh install.sh install-master.sh install-agent.sh upgrade.sh runtime.sh; do
     cp "$source_root/deploy/$file" "$fixture/deploy/$file"
 done
 cp "$source_root/Dockerfile" "$source_root/.dockerignore" \
@@ -189,6 +189,7 @@ grep -q 'oss-transfer/deploy/wait-node-ready.sh' "$test_root/archive-files"
 grep -q 'oss-transfer/agent-bundle.tar.gz' "$test_root/archive-files"
 tar -tzf "$output/oss-transfer/agent-bundle.tar.gz" > "$test_root/bundle-files"
 grep -q './deploy/install-agent.sh' "$test_root/bundle-files"
+grep -q './deploy/upgrade.sh' "$test_root/bundle-files"
 grep -q './deploy/wait-node-ready.sh' "$test_root/bundle-files"
 if grep -Eq 'application\.yml|secrets|frontend|README|test-results' "$test_root/bundle-files"; then
     echo 'Agent bundle contains configuration or unrelated files' >&2; exit 1

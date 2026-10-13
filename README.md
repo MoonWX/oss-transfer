@@ -10,15 +10,31 @@ Supported directions: object storage to object storage, object storage to local 
 
 ### Docker
 
-Docker includes Java. Linux `amd64` and `arm64` images are published as `moonwx/osstransfer`.
+Docker includes Java. Both registries provide Linux `amd64` and `arm64` images:
+
+| Registry | Image |
+| --- | --- |
+| Docker Hub | `moonwx/osstransfer:latest` |
+| JD Cloud JCR | `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest` |
+
+For JCR, log in with credentials that have pull access. Docker prompts for the username and password/token:
 
 ```sh
+docker login moonwx-cn-north-1.jcr.service.jdcloud.com
+```
+
+Set `OSS_TRANSFER_IMAGE` to either image above, then start the master:
+
+```sh
+OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest
 docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:latest
+  "$OSS_TRANSFER_IMAGE"
 ```
+
+`latest` follows stable releases. To pin a release, replace `latest` with its version, such as `4.0.4` (without `v`).
 
 Replace the URL with an address that your browser and agents can reach. Open that URL and log in as `admin`. Read the generated password:
 
@@ -32,13 +48,19 @@ For local-file transfers, also mount the relevant directory, for example `-v /sr
 
 ### Docker Compose
 
-The repository and release archive include `docker-compose.yml` and `.env.example` at the root. Docker Compose v2 is required.
+The repository and release archive include `docker-compose.yml` and `.env.example` at the root. Docker Compose v2 is required. If you have not cloned the repository, download and extract the [JD Cloud OSS archive](#traditional-deployment) below first, then run `cd oss-transfer`. Run the following commands from that directory or the repository root. Compose does not require Java on the host or the systemd installer.
 
 ```sh
 cp .env.example .env
 ```
 
-Edit `TRANSFER_MASTER_WEB_URL` in `.env` to an address reachable by browsers and agents. Set `OSS_TRANSFER_FILES_DIR` to the host directory used for local-file transfers. For a new directory using the example path:
+Edit `TRANSFER_MASTER_WEB_URL` in `.env` to an address reachable by browsers and agents. Set `OSS_TRANSFER_FILES_DIR` to the host directory used for local-file transfers. To use JCR, also set this line in `.env` and log in as shown above:
+
+```dotenv
+OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest
+```
+
+For a new directory using the example path:
 
 ```sh
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/transfer-files
@@ -54,7 +76,7 @@ docker compose logs -f master
 docker compose exec master oss-transfer-cli worker-status
 ```
 
-The default image is `moonwx/osstransfer:latest`. To use the JD Cloud mirror, set `OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest` in `.env`.
+Without an override, Compose uses `moonwx/osstransfer:latest` from Docker Hub.
 
 After stopping active tasks, update with:
 
@@ -67,16 +89,29 @@ The `master-data` volume preserves configuration, credentials and task checkpoin
 
 ### Traditional deployment
 
-Requires Linux with systemd, Java 8 or later, `curl`, `openssl`, `tar`, `timeout`, and `ss`. Java is not included in the archive. The installer checks Java before changing the service.
+Requires Linux with systemd, Java 8 or later, `curl`, `openssl`, `tar`, `sha256sum`, `timeout`, and `ss`. Java is not included in the archive. The installer checks Java before changing the service.
 
-Download `oss-transfer.tar.gz` and its checksum from [Releases](https://github.com/MoonWX/oss-transfer/releases). Private repositories require GitHub authentication to download release files.
+Download the latest stable release from JD Cloud OSS; no GitHub access or OSS credentials are needed:
 
 ```sh
-sha256sum -c oss-transfer.tar.gz.sha256
+OSS_TRANSFER_RELEASE=latest
+OSS_TRANSFER_DOWNLOAD_URL="https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/$OSS_TRANSFER_RELEASE"
+curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz" -o oss-transfer.tar.gz &&
+curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz.sha256" -o oss-transfer.tar.gz.sha256 &&
+sha256sum -c oss-transfer.tar.gz.sha256 &&
 tar -xzf oss-transfer.tar.gz
+```
+
+For a specific release, set `OSS_TRANSFER_RELEASE=v4.0.4`, for example. OSS version directories include `v`; image tags do not. Pre-releases do not update `latest`. You can also download the same archive and checksum from [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases).
+
+After successful verification and extraction, install the master:
+
+```sh
 cd oss-transfer
 sudo ./deploy/install-master.sh --web-url http://master.example.com:1685
 ```
+
+The extracted package installs locally without downloading from GitHub. For Compose, enter this directory and follow the [Docker Compose](#docker-compose) steps instead of running the installer.
 
 The service is `oss-transfer`. Configuration is `/etc/oss-transfer/application.yml`, the initial password is `/etc/oss-transfer/admin-password`, and data is `/var/lib/oss-transfer`. Existing configuration and data are preserved when the installer is run again.
 
@@ -93,6 +128,8 @@ Use `--port` to change the service port or `--java-bin` to select a Java executa
 Deploy the master first. In **Execution nodes**, choose **Add node**. The master creates a temporary, single-use invitation and shows Docker and traditional installation commands. Run the selected command on the new node. The agent joins automatically; no SSH access from the master is required.
 
 The Docker command uses the same image with `TRANSFER_ROLE=agent`. It requires a persistent `/app/data` volume and no published ports. Mount any local or shared storage that the agent will access.
+
+To use JCR, log in on the agent host and replace the final `moonwx/osstransfer:latest` in the generated command with `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest`. Keep the invitation and other arguments unchanged. The master's Compose image setting does not change the generated agent command.
 
 The traditional command downloads a checksum-verified bundle from the master and installs the `oss-transfer-agent` service. It uses `/etc/oss-transfer-agent/application.yml` and `/var/lib/oss-transfer-agent`. Install Java first.
 

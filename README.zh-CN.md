@@ -10,15 +10,31 @@ OSS Transfer V4 用于 S3 兼容对象存储与本地文件系统之间的数据
 
 ### Docker
 
-镜像内含 Java，支持 Linux `amd64` 和 `arm64`，名称为 `moonwx/osstransfer`。
+镜像内含 Java，以下两个仓库均提供 Linux `amd64` 和 `arm64` 镜像：
+
+| 仓库 | 镜像 |
+| --- | --- |
+| Docker Hub | `moonwx/osstransfer:latest` |
+| 京东云 JCR | `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest` |
+
+使用 JCR 时，先使用具有拉取权限的凭据登录。按提示输入用户名和密码或令牌：
 
 ```sh
+docker login moonwx-cn-north-1.jcr.service.jdcloud.com
+```
+
+将 `OSS_TRANSFER_IMAGE` 设置为上表中的镜像地址，再启动 Master：
+
+```sh
+OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest
 docker run -d --name oss-transfer-master --restart unless-stopped \
   -p 1685:1685 \
   -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
   -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:latest
+  "$OSS_TRANSFER_IMAGE"
 ```
+
+`latest` 跟随稳定版本。固定版本时，将 `latest` 替换为具体版本号，例如 `4.0.4`，不带 `v`。
 
 将 URL 改为浏览器和 Agent 均能访问的 Master 地址。打开该地址，使用 `admin` 登录。初始密码随机生成，可通过以下命令读取：
 
@@ -32,13 +48,19 @@ docker exec oss-transfer-master cat /app/data/secrets/admin_password
 
 ### Docker Compose
 
-仓库和安装包根目录均包含 `docker-compose.yml` 和 `.env.example`，需要 Docker Compose v2。
+仓库和安装包根目录均包含 `docker-compose.yml` 和 `.env.example`，需要 Docker Compose v2。如果没有克隆仓库，先按下方[传统部署](#传统部署)的步骤从京东云 OSS 下载并解压安装包，再执行 `cd oss-transfer`。以下命令均在该目录或仓库根目录中执行。Compose 无需宿主机安装 Java，也无需运行 systemd 安装脚本。
 
 ```sh
 cp .env.example .env
 ```
 
-在 `.env` 中，将 `TRANSFER_MASTER_WEB_URL` 改为浏览器和 Agent 可访问的地址；`OSS_TRANSFER_FILES_DIR` 设置为迁移本地文件时使用的宿主机目录。按示例创建新目录并启动：
+在 `.env` 中，将 `TRANSFER_MASTER_WEB_URL` 改为浏览器和 Agent 可访问的地址；`OSS_TRANSFER_FILES_DIR` 设置为迁移本地文件时使用的宿主机目录。使用 JCR 时，再修改以下配置，并按上文登录镜像仓库：
+
+```dotenv
+OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest
+```
+
+按示例创建新目录并启动：
 
 ```sh
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/transfer-files
@@ -54,7 +76,7 @@ docker compose logs -f master
 docker compose exec master oss-transfer-cli worker-status
 ```
 
-默认镜像为 `moonwx/osstransfer:latest`。如需京东云镜像，在 `.env` 中设置 `OSS_TRANSFER_IMAGE=moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest`。
+未修改镜像配置时，Compose 默认使用 Docker Hub 的 `moonwx/osstransfer:latest`。
 
 停止运行中的任务后，执行以下命令更新：
 
@@ -67,16 +89,29 @@ docker compose up -d
 
 ### 传统部署
 
-需要 Linux、systemd、Java 8 或更高版本，以及 `curl`、`openssl`、`tar`、`timeout`、`ss`。安装包不含 Java；安装脚本会先检查 Java，再修改服务。
+需要 Linux、systemd、Java 8 或更高版本，以及 `curl`、`openssl`、`tar`、`sha256sum`、`timeout`、`ss`。安装包不含 Java；安装脚本会先检查 Java，再修改服务。
 
-从 [Releases](https://github.com/MoonWX/oss-transfer/releases) 下载 `oss-transfer.tar.gz` 和校验文件。私有仓库的 Release 文件需要通过 GitHub 认证下载。
+从京东云 OSS 下载最新稳定版，无需访问 GitHub 或提供 OSS 凭据：
 
 ```sh
-sha256sum -c oss-transfer.tar.gz.sha256
+OSS_TRANSFER_RELEASE=latest
+OSS_TRANSFER_DOWNLOAD_URL="https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/$OSS_TRANSFER_RELEASE"
+curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz" -o oss-transfer.tar.gz &&
+curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz.sha256" -o oss-transfer.tar.gz.sha256 &&
+sha256sum -c oss-transfer.tar.gz.sha256 &&
 tar -xzf oss-transfer.tar.gz
+```
+
+固定版本时，例如设置 `OSS_TRANSFER_RELEASE=v4.0.4`。OSS 版本目录带 `v`，镜像标签不带。预发布版本不会更新 `latest`。也可从 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) 下载相同的安装包及校验文件。
+
+校验和解压成功后，安装 Master：
+
+```sh
 cd oss-transfer
 sudo ./deploy/install-master.sh --web-url http://master.example.com:1685
 ```
+
+解压后的安装包直接在本机安装，不会再从 GitHub 下载。使用 Compose 时，进入该目录后按 [Docker Compose](#docker-compose) 步骤操作，无需运行安装脚本。
 
 服务名为 `oss-transfer`。配置位于 `/etc/oss-transfer/application.yml`，初始密码位于 `/etc/oss-transfer/admin-password`，数据位于 `/var/lib/oss-transfer`。再次执行安装脚本会保留现有配置和数据。
 
@@ -93,6 +128,8 @@ sudo journalctl -u oss-transfer -f
 先部署 Master，在**执行节点**中选择**添加节点**。Master 会生成临时、一次性的加入链接，并提供 Docker 和传统部署指令。在新节点执行所选指令后，Agent 自动加入集群，Master 无需通过 SSH 访问该节点。
 
 Docker 使用同一镜像，设置 `TRANSFER_ROLE=agent`，挂载持久化的 `/app/data` 卷，无需发布端口。按需挂载 Agent 使用的本地或共享存储。
+
+使用 JCR 时，在 Agent 主机上登录镜像仓库，将生成指令末尾的 `moonwx/osstransfer:latest` 替换为 `moonwx-cn-north-1.jcr.service.jdcloud.com/osstransfer:latest`，保留加入令牌及其他参数。Master 的 Compose 镜像配置不会改变生成的 Agent 指令。
 
 传统指令从 Master 下载并校验安装包，安装 `oss-transfer-agent` 服务。配置位于 `/etc/oss-transfer-agent/application.yml`，数据位于 `/var/lib/oss-transfer-agent`。执行前先安装 Java。
 

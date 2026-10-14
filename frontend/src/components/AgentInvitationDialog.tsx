@@ -94,7 +94,6 @@ export default function AgentInvitationDialog({
     }
   }
   const methods = [
-    { label: "Docker", command: invitation?.dockerCommand },
     {
       label: invitation?.nativeAgent ? "Linux / macOS" : t("传统部署"),
       command: invitation?.traditionalCommand,
@@ -104,6 +103,7 @@ export default function AgentInvitationDialog({
       label: t("直接运行"),
       command: invitation?.nativeCommand,
     },
+    { label: "Docker", command: invitation?.dockerCommand },
   ].filter(
     (
       item,
@@ -175,6 +175,9 @@ export default function AgentInvitationDialog({
                 <Tabs
                   value={tab}
                   onChange={(_, next: number) => setTab(next)}
+                  variant="scrollable"
+                  scrollButtons="auto"
+                  allowScrollButtonsMobile
                   aria-label={t("Agent 部署方式")}
                   sx={{ mb: 2 }}
                 >
@@ -182,6 +185,15 @@ export default function AgentInvitationDialog({
                     <Tab key={method.label} label={method.label} />
                   ))}
                 </Tabs>
+                {methods[tab]?.label === "Docker" && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 2 }}
+                  >
+                    {t("访问本地文件前，请将所需目录挂载到容器。")}
+                  </Typography>
+                )}
                 <TextField
                   label={t("{method} 指令", {
                     method: methods[tab]?.label || t("加入"),

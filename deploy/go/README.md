@@ -1,6 +1,6 @@
 # Native deployment
 
-Install the Master and Agent as separate services. Linux uses systemd, macOS uses launchd, and Windows uses Windows Services. Each role has its own executable, configuration and database. A host can run both roles; only the Master exposes the WebUI port.
+Native deployment is the default for Master and Agents. Linux uses systemd, macOS uses launchd, and Windows uses Windows Services. Each role has its own executable, configuration and database. A host can run both roles; only the Master exposes the WebUI port. Agents access host directories and mounted filesystems using their service account’s permissions.
 
 ## Install
 
@@ -22,9 +22,28 @@ Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
 
 Open the Master URL and enter the setup token from its log. Create the administrator and set the public URL that browsers and Agents can reach. There is no default password. The installer prints the service, configuration, log and CLI paths.
 
-Add an Agent through **Execution nodes → Add node**, then run the generated native command on the execution host. Enrollment consumes the invitation and saves the Agent identity in `agent.db`. Later starts use that identity. An Agent has no HTTP administration listener.
-
 For a downloaded release directory, replace `--release-url URL` with `--package-dir DIR` (`-PackageDir DIR` on Windows). This directory must contain `manifest.tsv` and the named release files; a platform archive containing only binaries is not an installer directory. The installer validates the binary checksum before stopping or replacing a service.
+
+## Add an Agent
+
+The Master schedules tasks but does not transfer files. Install an Agent on every host that will perform transfers, including the Master host if needed.
+
+1. In **Execution nodes → Add node**, create a single-use invitation.
+2. Select the execution host’s operating system and copy its native command.
+3. Run it on that host: as root on Linux, with the appropriate launchd installation mode on macOS, or in Administrator PowerShell on Windows.
+4. Check that the Agent appears online, then select it when creating a task.
+
+Use these same steps to add nodes to an existing cluster. Agents connect outbound to the Master URL and need no inbound administration port. Enrollment consumes the invitation and saves the identity in `agent.db`; service restarts and upgrades reuse it. Keep Master and Agents on the same release.
+
+## Local directories
+
+Use absolute paths on the execution host, such as `/mnt/storage/import` or `D:\transfer\import`. A native Agent uses those paths directly. Its service account must be able to read upload sources and write download destinations. Mount network filesystems before starting local-file tasks and ensure the service can access them after a host restart.
+
+**Execution nodes → Edit node** lets you declare local roots. This records the paths shown in the console; it does not create a directory, mount storage or change filesystem permissions.
+
+When a local-file task uses multiple Agents, each selected Agent must see the same shared filesystem at the same absolute path. The tool checks shared access before distributing the task. Equal path names on separate local disks do not provide shared storage.
+
+For a containerized Master with native Agents, set its public URL to an address those hosts can reach. Only Agents need access to the transfer directories. The [optional Compose instructions](../../README.md#docker-compose-optional) cover container mounts when you also run the Agent in Docker.
 
 ## Paths and configuration
 

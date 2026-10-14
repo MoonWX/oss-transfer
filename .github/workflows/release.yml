@@ -92,7 +92,7 @@ jobs:
           done
           aws --version 2>&1 | grep -q '^aws-cli/2\.'
       - name: Publish JD Cloud OSS artifacts
-        timeout-minutes: 10
+        timeout-minutes: 18
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}

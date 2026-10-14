@@ -1042,6 +1042,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Agent installation method",
     ja: "Agent のインストール方法",
   },
+  "访问本地文件前，请将所需目录挂载到容器。": {
+    en: "Mount the required directories into the container before accessing local files.",
+    ja: "ローカルファイルにアクセスするには、必要なディレクトリをコンテナーにマウントしてください。",
+  },
   "{method} 指令": {
     en: "{method} command",
     ja: "{method} コマンド",

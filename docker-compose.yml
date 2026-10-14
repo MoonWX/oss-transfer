@@ -1,3 +1,4 @@
+# Optional container deployment. For native services, use install.sh (the default).
 services:
   master:
     image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}

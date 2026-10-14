@@ -4,7 +4,7 @@ V4.1.0 uses separate Go Master and Agent processes, plus a CLI. The Master handl
 
 ## New installation
 
-Use the [main deployment instructions](../README.md) for native services or Docker Compose. Linux, macOS and Windows have amd64 and arm64 packages. The Master embeds the WebUI; neither service requires Java.
+Use the [main deployment instructions](../README.md) to install native services. Docker Compose remains an optional deployment method. Linux, macOS and Windows have amd64 and arm64 packages. The Master embeds the WebUI; neither service requires Java.
 
 First setup uses a token from the Master log to create the administrator and public URL. There is no default password. Agents enroll through single-use invitations and retain their identities across restarts. Use the same version on Master and Agents. The [native guide](../deploy/go/README.md) covers custom ports, service registration, upgrades and rollback.
 

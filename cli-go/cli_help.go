@@ -243,7 +243,7 @@ const cliAgentHelp = `Agent 管理
   oss-transfer-cli agent update windows-node --local-root 'D:\data'
   oss-transfer-cli agent remove storage-node --yes
 
-邀请有效期为 30 分钟，仅可加入一次。执行端使用返回的令牌加入主节点。
+邀请有效期为 30 分钟，仅可加入一次。在执行节点运行对应系统的原生部署指令；Docker 为可选方式。
 --local-root 使用 Agent 所在系统的绝对路径；配置会替换该节点已有的根目录列表。
 `
 

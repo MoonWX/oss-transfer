@@ -403,7 +403,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   oss-transfer-cli agent update windows-node --local-root 'D:\data'
   oss-transfer-cli agent remove storage-node --yes
 
-Invitations expire after 30 minutes and can be used once. Join with the returned token.
+Invitations expire after 30 minutes and can be used once. Run the native installation command for the Agent OS; Docker is optional.
 --local-root uses absolute paths on the Agent OS and replaces the existing root list.
 `, `Agent 管理
 使い方: oss-transfer-cli agent <サブコマンド> [引数]
@@ -420,7 +420,7 @@ Invitations expire after 30 minutes and can be used once. Join with the returned
   oss-transfer-cli agent update windows-node --local-root 'D:\data'
   oss-transfer-cli agent remove storage-node --yes
 
-招待の有効期限は 30 分で、1 回のみ使用できます。返されたトークンで参加します。
+招待の有効期限は 30 分で、1 回のみ使用できます。Agent の OS に対応するネイティブインストールコマンドを実行してください。Docker は任意です。
 --local-root は Agent の OS 上の絶対パスです。既存のルート一覧を置き換えます。
 `},
 	cliSetupHelp: {`Initial setup

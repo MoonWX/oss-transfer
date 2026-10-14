@@ -1,7 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi } from "./fixtures";
+import type { AgentInvitation } from "../src/lib/nodeRegistry";
 
-async function setup(page: Page, useAgent = false) {
+async function setup(
+  page: Page,
+  useAgent = false,
+  installCommands: Partial<AgentInvitation> = {},
+) {
   await mockApi(page);
   let nodes = [
     { address: "10.0.1.12", label: "主节点", master: true },
@@ -41,6 +46,7 @@ async function setup(page: Page, useAgent = false) {
               "docker run --rm moonwx/osstransfer:4.0.0 agent --join https://transfer.example/agent/join/test-once",
             traditionalCommand:
               "curl -fsSL https://transfer.example/agent/install/test-once -o agent-install.sh && sh agent-install.sh",
+            ...installCommands,
           },
     });
   });
@@ -123,7 +129,7 @@ test("Agent address is immutable while its name remains editable", async ({
   });
 });
 
-test("node invitation contains both install commands without changing membership", async ({
+test("node invitation defaults to native installation and keeps Docker available without changing membership", async ({
   page,
 }) => {
   const state = await setup(page);
@@ -131,7 +137,7 @@ test("node invitation contains both install commands without changing membership
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
   await expect(dialog.getByRole("textbox")).toHaveCount(2);
   await dialog
-    .getByLabel("节点 IPv4 地址（可选）", { exact: true })
+    .getByLabel("节点标识（可选）", { exact: true })
     .fill("10.0.1.14");
   await dialog.getByLabel("节点名称", { exact: true }).fill("新增节点");
   await dialog
@@ -140,14 +146,20 @@ test("node invitation contains both install commands without changing membership
   await expect(dialog.getByLabel("加入链接", { exact: true })).toHaveValue(
     "https://transfer.example/agent/join/test-once",
   );
+  await expect(
+    dialog.getByRole("tab", { name: "传统部署", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(dialog.getByLabel("传统部署 指令", { exact: true })).toHaveValue(
+    /agent-install.sh/,
+  );
+  await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
   await expect(dialog.getByLabel("Docker 指令", { exact: true })).toHaveValue(
     /moonwx\/osstransfer/,
   );
-  await dialog.getByRole("tab", { name: "传统部署", exact: true }).click();
-  await expect(dialog.getByLabel("传统部署指令", { exact: true })).toHaveValue(
-    /agent-install.sh/,
-  );
-  await expect(dialog.getByText(/链接仅可加入一次/)).toBeVisible();
+  await expect(
+    dialog.getByText("访问本地文件前，请将所需目录挂载到容器。"),
+  ).toBeVisible();
+  await expect(dialog.getByText(/加入凭证仅可使用一次/)).toBeVisible();
   expect(state.invitations).toEqual([
     {
       body: { address: "10.0.1.14", label: "新增节点" },
@@ -163,6 +175,84 @@ test("node invitation contains both install commands without changing membership
   await expect(dialog.getByLabel("节点名称", { exact: true })).toHaveValue("");
   await expect(dialog.getByLabel("加入链接", { exact: true })).toHaveCount(0);
 });
+
+test("native Agent commands precede Docker and switching tabs preserves join credentials", async ({
+  page,
+}) => {
+  const windowsCommand =
+    "powershell -File Install.ps1 -JoinUrl https://transfer.example/agent/join/test-once";
+  const nativeCommand =
+    "./oss-transfer-agent --join-url https://transfer.example/agent/join/test-once";
+  const state = await setup(page, true, {
+    nativeAgent: { available: true },
+    windowsCommand,
+    nativeCommand,
+  });
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  await expect(dialog.getByRole("tab")).toHaveText([
+    "Linux / macOS",
+    "Windows",
+    "直接运行",
+    "Docker",
+  ]);
+  await expect(dialog.getByRole("tab").first()).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    dialog.getByLabel("Linux / macOS 指令", { exact: true }),
+  ).toHaveValue(/agent-install.sh/);
+  await dialog.getByRole("tab", { name: "Windows", exact: true }).click();
+  await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
+    windowsCommand,
+  );
+  await dialog.getByRole("tab", { name: "直接运行", exact: true }).click();
+  await expect(dialog.getByLabel("直接运行 指令", { exact: true })).toHaveValue(
+    nativeCommand,
+  );
+  await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Linux / macOS", exact: true }).click();
+  await expect(
+    dialog.getByLabel("Linux / macOS 指令", { exact: true }),
+  ).toHaveValue(/agent-install.sh/);
+  expect(state.invitations).toHaveLength(1);
+  expect(state.writes).toHaveLength(0);
+});
+
+for (const [method, commands] of [
+  ["Linux / macOS", { traditionalCommand: "native-install --token test-once" }],
+  ["Windows", { windowsCommand: "Install.ps1 -Token test-once" }],
+  ["直接运行", { nativeCommand: "./oss-transfer-agent --token test-once" }],
+] as const) {
+  test(`native-only invitation supports ${method} without a Docker command`, async ({
+    page,
+  }) => {
+    await setup(page, true, {
+      dockerCommand: undefined,
+      traditionalCommand: undefined,
+      nativeAgent: { available: true },
+      ...commands,
+    });
+    await page.getByRole("button", { name: "添加节点", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+    await dialog
+      .getByRole("button", { name: "生成加入指令", exact: true })
+      .click();
+    await expect(dialog.getByRole("tab")).toHaveText([method]);
+    await expect(dialog.getByRole("tab")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(
+      dialog.getByLabel(`${method} 指令`, { exact: true }),
+    ).toHaveValue(Object.values(commands)[0]);
+    await expect(dialog.getByRole("alert")).toHaveCount(0);
+  });
+}
 
 test("invitation generation supports automatic address and preserves errors", async ({
   page,
@@ -216,7 +306,7 @@ test("Agent invitation dialog fits mobile screens and copies using HTTP fallback
   await dialog.getByRole("button", { name: "复制指令", exact: true }).click();
   const copies = await page.evaluate(() => (window as any).copiedTexts);
   expect(copies[0]).toBe("https://transfer.example/agent/join/test-once");
-  expect(copies[1]).toContain("docker run");
+  expect(copies[1]).toContain("agent-install.sh");
   const bounds = await dialog.boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);

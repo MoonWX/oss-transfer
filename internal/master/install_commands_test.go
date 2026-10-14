@@ -42,6 +42,9 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		if response.StatusCode != 200 || response.Header.Get("Cache-Control") != "no-store" || !strings.Contains(string(body), "/v4.1.0/") || !strings.Contains(string(body), invite.Token) || strings.Contains(string(body), "/latest/") {
 			t.Fatal(response.StatusCode, string(body))
 		}
+		if suffix == "" && (!strings.Contains(string(body), "--method native") || !strings.Contains(string(body), "--token-stdin")) {
+			t.Fatal("bootstrap must explicitly use native installation and stdin enrollment")
+		}
 	}
 	credential, _ := cluster.Token()
 	if _, err = f.master.agents.registry.Join(cluster.JoinRequest{Token: invite.Token, InstanceID: "installed", Credential: credential}); err != nil {

@@ -4,6 +4,8 @@
 
 OSS Transfer copies data between S3-compatible buckets and local directories. The Master provides the WebUI, API and scheduling; Agents scan and transfer data. Master, Agent and CLI are separate Go executables for Linux, macOS and Windows, on amd64 and arm64. Java is not required to run them.
 
+Native services are the default deployment: Agents use host paths directly, including mounted filesystems. Docker Compose is available when you prefer to manage those paths as container mounts.
+
 ## Install the Master
 
 On Linux or macOS, download the installer from JD Cloud OSS:
@@ -11,10 +13,10 @@ On Linux or macOS, download the installer from JD Cloud OSS:
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
-sudo bash install.sh --lang en
+sudo bash install.sh --lang en --method native
 ```
 
-Choose Master and a deployment method. Linux supports a native systemd service or Docker Compose; macOS uses launchd. Native installation needs no language runtime. Use `--help` for custom paths and ports, or `--user` on macOS for a service owned by your logged-in user.
+Choose Master. The installer uses systemd on Linux and launchd on macOS. Use `--help` for custom paths and ports, or `--user` on macOS for a service owned by your logged-in user.
 
 On Windows, run PowerShell as Administrator:
 
@@ -32,56 +34,13 @@ sudo cat /var/lib/oss-transfer-go/master/logs/service.log
 
 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) provides the same binaries and checksums. See the [native deployment guide](deploy/go/README.md) for local release files, upgrades and rollback.
 
-## Docker Compose
-
-Copy `docker-compose.yml` and `.env.example` from the repository into a deployment directory:
-
-```sh
-cp .env.example .env
-```
-
-Compose uses `moonwx/osstransfer:latest`. Adjust the port and local directory in `.env` as needed:
-
-```dotenv
-OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest
-TRANSFER_PORT=1685
-TRANSFER_LOCAL_ROOT=./transfer-files
-```
-
-Start the Master and read its setup token:
-
-```sh
-docker compose pull master
-docker compose up -d master
-docker compose logs master
-```
-
-Complete setup in the browser. The `master-data` volume stores the Master's database. `docker compose down` keeps it; `docker compose down -v` deletes it.
-
-The Master does not transfer files itself. Add an Agent even for a single-host installation. You can use the console's generated command, or the optional `agent` profile in this Compose file. For the profile, create the host directory and grant container UID/GID `65532` access:
-
-```sh
-sudo install -d -o 65532 -g 65532 -m 0750 ./transfer-files
-```
-
-Create an invitation in **Execution nodes → Add node**. In Bash, enter its token and enroll the local Agent once:
-
-```bash
-read -r -s -p 'Invitation token: ' OSS_TRANSFER_JOIN_TOKEN; printf '\n'
-export OSS_TRANSFER_JOIN_TOKEN
-docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent \
-  oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
-unset OSS_TRANSFER_JOIN_TOKEN
-docker compose --profile agent up -d agent
-```
-
-The profile mounts `TRANSFER_LOCAL_ROOT` at `/files`; use `/files` in transfer tasks. Its identity and checkpoints live in the separate `agent-data` volume. To access more host directories, add bind mounts to the Agent service. A native Agent can access permitted host paths directly.
-
 ## Add execution nodes
 
-In **Execution nodes → Add node**, create a single-use invitation and run the generated native or Docker command on the new host. The Agent connects outbound to the Master and retains its identity across restarts. It needs no public administration port. Use the same release for Master and Agents.
+Install an Agent even when it shares a host with the Master; the Master does not transfer files itself. In **Execution nodes → Add node**, create a single-use invitation and run the generated native command on the execution host. Use the same steps to add more nodes later. The Agent connects outbound to the Master and retains its identity across restarts. It needs no public administration port. Use the same release for Master and Agents.
 
-For a shared local-file task, mount the same filesystem at the same path on every selected Agent. Configure the available roots in node settings. The tool verifies shared access before assigning that task to multiple Agents.
+Use the Agent host’s absolute paths in local-file tasks, such as `/mnt/storage/import`. The service account needs permission to read source files or write to the destination. Node settings let you declare local roots; this does not create directories or mount storage.
+
+For a shared local-file task, mount the same filesystem at the same path on every selected Agent. The tool verifies shared access before assigning that task to multiple Agents.
 
 Keep invitation links private. Removing a node revokes its credential. Rejoining a removed node requires a new invitation and a fresh Agent data directory.
 
@@ -117,11 +76,62 @@ Use `--help` for creation, connection and node commands; add `--json` for struct
 
 ## Upgrade and back up
 
-For an existing Go native installation, download the new version's installer and run it with the same paths and `--upgrade` (`-Upgrade` on Windows). It verifies the binaries, backs up the stopped database and service configuration, then checks the replacement service. Failed startup triggers rollback. The CLI is replaced only when owned by that installation or explicitly approved with `--replace-cli`.
+For an existing Go native installation, download the new version's installer and reuse its role, paths and service name:
 
-For Compose, stop active tasks, back up the stopped services' data volumes, then run `docker compose pull` and `docker compose up -d`. If you pinned an image version, update that tag first. Keep the existing volumes and Agent mounts. Application rollback does not undo files or objects already transferred.
+```sh
+sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --upgrade --yes
+```
+
+Use `--role agent` for an Agent, or `-Upgrade` with the Windows installer. The installer verifies the binaries, backs up the stopped database and service configuration, then checks the replacement service. Failed startup triggers rollback. The CLI is replaced only when owned by that installation or explicitly approved with `--replace-cli`. Stop active tasks before a planned upgrade and keep the backup; application rollback does not undo files or objects already transferred.
 
 V4.0.x databases require [offline export and conversion](docs/development/legacy-migration.md). Do not point Go at the old RocksDB directory. The [migration guide](docs/go-migration.md) describes preserved state and the first resume after conversion.
+
+## Docker Compose (optional)
+
+Docker deployment is supported on Linux. You can choose Docker Compose in the installer (`--method compose`), or copy `docker-compose.yml` and `.env.example` from the repository into a deployment directory:
+
+```sh
+cp .env.example .env
+```
+
+Compose uses `moonwx/osstransfer:latest`. Adjust the port and local directory in `.env` as needed:
+
+```dotenv
+OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest
+TRANSFER_PORT=1685
+TRANSFER_LOCAL_ROOT=./transfer-files
+```
+
+Start the Master and read its setup token:
+
+```sh
+docker compose pull master
+docker compose up -d master
+docker compose logs master
+```
+
+Complete setup in the browser. The `master-data` volume stores the Master's database. `docker compose down` keeps it; `docker compose down -v` deletes it.
+
+The Master can use either native or containerized Agents. For a containerized Agent, use the console's Docker command or the optional `agent` profile in this Compose file. For the profile, create the host directory and grant container UID/GID `65532` access:
+
+```sh
+sudo install -d -o 65532 -g 65532 -m 0750 ./transfer-files
+```
+
+Create an invitation in **Execution nodes → Add node**. In Bash, enter its token and enroll the local Agent once:
+
+```bash
+read -r -s -p 'Invitation token: ' OSS_TRANSFER_JOIN_TOKEN; printf '\n'
+export OSS_TRANSFER_JOIN_TOKEN
+docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent \
+  oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
+unset OSS_TRANSFER_JOIN_TOKEN
+docker compose --profile agent up -d agent
+```
+
+The profile mounts `TRANSFER_LOCAL_ROOT` at `/files`; use `/files` in transfer tasks. Its identity and checkpoints live in the separate `agent-data` volume. To access more host directories, add bind mounts to the Agent service. Task paths must match the container paths. Shared storage must be mounted on the host before starting the Agent.
+
+For Compose, stop active tasks, back up the stopped services' data volumes, then run `docker compose pull` and `docker compose up -d`. If you pinned an image version, update that tag first. Keep the existing volumes and Agent mounts. Application rollback does not undo files or objects already transferred.
 
 ## Build
 

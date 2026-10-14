@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Public installer: choose a deployment, then use version-pinned release files.
+# Public installer: default to native services; Compose is an explicit option.
 set +x
 set -euo pipefail
 umask 077
@@ -17,7 +17,7 @@ OSS Transfer installer
 Usage: bash install.sh [options]
   --lang en|zh                   Prompt language
   --role master|agent            Node role
-  --method native|compose        Native service or Docker Compose
+  --method native|compose        Native service (default) or Docker Compose
   --version latest|VERSION       Release version (default: latest)
   --release-url URL              Fixed release directory or latest
   --package-dir DIR              Local verified native release files
@@ -76,7 +76,7 @@ if ((yes == 0)); then
   fi
   if [[ -z "$method" ]]; then
     if [[ "$os" == Darwin ]]; then method=native; else
-      prompt method "$(say 'Deployment: 1 Native / 2 Docker Compose' '部署方式：1 原生服务 / 2 Docker Compose')" 1
+      prompt method "$(say 'Deployment: 1 Native (recommended) / 2 Docker Compose' '部署方式：1 原生服务（推荐） / 2 Docker Compose')" 1
       case "$method" in 1) method=native;; 2) method=compose;; esac
     fi
   fi

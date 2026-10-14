@@ -19,14 +19,14 @@ func taskFixture(t *testing.T) *preparationFixture {
 	delete(f.master, "task:10")
 	delete(f.master, "completed:10:a")
 	req := map[string]any{"sourceS3Alias": "storage", "destS3Alias": "storage", "sourceBucket": "source", "destBucket": "destination", "conflictPolicy": "OVERWRITE", "distributionMode": "balanced", "prefix": "logs/", "taskBandwidthLimitMbps": 100.0, "taskBandwidthScopeId": "creation:fixture"}
-	f.master["task_creation:fixture"] = map[string]any{"id": "fixture", "publicTaskId": 224, "taskIds": []int{224, 225}, "request": req, "scanComplete": true, "status": "COMPLETED", "createdAt": 1700000000000, "participatingWorkerNodes": []string{"master", "node"}}
+	f.master["task_creation:fixture"] = map[string]any{"id": "fixture", "publicTaskId": 224, "taskIds": []int{224, 225}, "request": req, "scanComplete": true, "status": "COMPLETED", "createdAt": int64(1700000000000), "participatingWorkerNodes": []string{"master", "node"}}
 	f.master["task:id:sequence"] = 1000
 	for i, entry := range []struct {
 		node   string
 		values map[string]any
 	}{{"master", f.master}, {"node", f.node}} {
 		id := 224 + i
-		entry.values["task:"+stringID(id)] = map[string]any{"taskIndex": id, "direction": "OSS_TO_OSS", "status": "COMPLETED", "scanComplete": true, "shardIndex": i, "shardId": "oss-fixture-" + stringID(i), "createTime": 1700000000000, "listObjectCount": 1, "listObjectSize": 3, "putObjectCount": 1, "putObjectSize": 3}
+		entry.values["task:"+stringID(id)] = map[string]any{"taskIndex": id, "direction": "OSS_TO_OSS", "status": "COMPLETED", "scanComplete": true, "shardIndex": i, "shardId": "oss-fixture-" + stringID(i), "createTime": int64(1700000000000), "listObjectCount": 1, "listObjectSize": 3, "putObjectCount": 1, "putObjectSize": 3}
 		key := base64.RawURLEncoding.EncodeToString([]byte("logs/" + stringID(i)))
 		entry.values["file-report:"+stringID(id)+":item:"+key] = map[string]any{"taskId": id, "reportTaskId": id, "logicalKey": "logs/" + stringID(i), "result": "SUCCESS", "size": 3}
 		entry.values["file-report:"+stringID(id)+":coverage"] = map[string]any{"ledgerCoverage": "TRACKED", "scanComplete": true}

@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Real native service install/upgrade/rollback in an isolated service namespace.
 
-Linux requires root + systemd; Windows requires Administrator; macOS defaults to
-an isolated user LaunchAgent. Never uses default service names or data paths.
+Linux requires root + systemd; FreeBSD requires root + rc.d; Windows requires
+Administrator; macOS uses an isolated user LaunchAgent. Never uses default names.
 """
 import argparse
 from contextlib import contextmanager
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import importlib.util
 import json
 import os
 from pathlib import Path
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -27,22 +29,61 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+PREPARE_SPEC = importlib.util.spec_from_file_location('prepare_go', Path(__file__).with_name('prepare-go.py'))
+PREPARE = importlib.util.module_from_spec(PREPARE_SPEC)
+PREPARE_SPEC.loader.exec_module(PREPARE)
+
+
 class Lifecycle:
     def __init__(self, args):
         self.args = args
         self.root = args.output.resolve()
-        self.root.mkdir(parents=True, exist_ok=False)
         self.system = platform.system()
         self.os_name = {'Linux':'linux','Darwin':'darwin','Windows':'windows','FreeBSD':'freebsd'}[self.system]
         machine = platform.machine().lower()
-        self.arch = {'x86_64':'amd64','amd64':'amd64','arm64':'arm64','aarch64':'arm64','armv7':'armv7','armv7l':'armv7','riscv64':'riscv64','loongarch64':'loong64','loong64':'loong64'}[machine]
+        host_arch = {'x86_64':'amd64','amd64':'amd64','arm64':'arm64','aarch64':'arm64','armv7':'armv7','armv7l':'armv7','riscv64':'riscv64','loongarch64':'loong64','loong64':'loong64'}[machine]
+        self.arch = host_arch
+        if args.target_platform:
+            target_os, self.arch = args.target_platform.split('/')
+            require(target_os == self.os_name, 'Target OS must match the service manager host')
+            require(self.arch == host_arch or self.system == 'Linux',
+                    'Cross-architecture service acceptance requires Linux binfmt support')
+        require(bool(args.failure_master_fixture) == bool(args.rollback_cli_fixture),
+                'Precompiled failure Master and rollback CLI fixtures must be supplied together')
+        # Reject a host binary mislabeled as the target before running it or
+        # creating any service files. The same check covers precompiled fixtures.
+        for source in (args.master, args.agent, args.cli, args.failure_master_fixture, args.rollback_cli_fixture):
+            if source is not None:
+                PREPARE.verify_binary(source.resolve(), self.os_name, self.arch)
+        self.root.mkdir(parents=True, exist_ok=False)
+        self.installer_env = dict(os.environ,
+                                  QA_REAL_MASTER=str(args.master.resolve()),
+                                  QA_REAL_CLI=str(args.cli.resolve()))
+        if self.arch != host_arch:
+            shim_dir = self.root/'installer-platform'
+            shim_dir.mkdir()
+            uname = shutil.which('uname')
+            require(uname is not None, 'Host uname is required')
+            machine_name = {'armv7':'armv7l','loong64':'loongarch64'}.get(self.arch,self.arch)
+            shim = shim_dir/'uname'
+            shim.write_text('#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "-m" ]; then\n'
+                            + "  printf '%s\\n' " + shlex.quote(machine_name) + '\nelse\n  exec '
+                            + shlex.quote(uname) + ' "$@"\nfi\n', encoding='utf-8')
+            shim.chmod(0o755)
+            # Only the installer sees this CPU selector. systemctl and the
+            # generated ExecStart remain real host services using target ELF.
+            self.installer_env['PATH'] = str(shim_dir)+os.pathsep+os.environ.get('PATH','')
         self.cli_path=self.root/'shared CLI'/('oss-transfer-cli.exe' if self.system=='Windows' else 'oss-transfer-cli')
         self.names = {role:'oss-go-qa-'+role+'-'+secrets.token_hex(5) for role in ('master','agent')}
         if self.system == 'FreeBSD': self.names = {role:name.replace('-','_') for role,name in self.names.items()}
         self.roles = []
         self.secrets = []
         self.token = None
-        self.evidence = {'platform':self.os_name+'/'+self.arch,'checks':[]}
+        self.evidence = {'platform':self.os_name+'/'+self.arch,
+                         'hostPlatform':self.os_name+'/'+host_arch,
+                         'crossArchitecture':self.arch != host_arch,'checks':[]}
+        if self.arch != host_arch:
+            self.evidence['limitations'] = ['Target CPU binaries execute through host Linux binfmt; kernel and systemd remain the host platform']
         self.release = self.root/'release'
         self.release.mkdir()
         rows = ['format\toss-transfer-go-v1']
@@ -178,7 +219,7 @@ class Lifecycle:
                 except Exception as error: observations.append('SCM observation unavailable: '+str(error))
         monitor=threading.Thread(target=monitor_scm,daemon=True) if self.system=='Windows' else None
         if monitor:monitor.start()
-        try: result=self.invoke(command,env=dict(os.environ,TRANSFER_JOIN_TOKEN=token or ''),timeout=timeout+100)
+        try: result=self.invoke(command,env=dict(self.installer_env,TRANSFER_JOIN_TOKEN=token or ''),timeout=timeout+100)
         finally:
             monitor_stop.set()
             if monitor:monitor.join(timeout=10)
@@ -359,19 +400,27 @@ func main(){
         target=next(directory.glob('oss-transfer-master-*'))
         # A deliberately failing service fixture delegates only the real binary's
         # preflight flags. This tests rollback after stop, not a checksum refusal.
-        original=str(self.args.master.resolve())
-        source=self.root/'injected-startup-failure.go'
-        source.write_text('//go:build ignore\n\npackage main\nimport("os";"os/exec";"fmt")\nfunc main(){\n'+
-                          'for _,a:=range os.Args[1:] {if a=="--version" || a=="--check-config" || a=="--backup-state" || a=="--restore-state" {'+
-                          'c:=exec.Command('+json.dumps(original)+',os.Args[1:]...);c.Stdout=os.Stdout;c.Stderr=os.Stderr;'+
-                          'if c.Run()!=nil {os.Exit(1)};return}}\nfmt.Fprintln(os.Stderr,"injected startup failure");os.Exit(17)\n}\n', encoding="utf-8")
-        result=self.invoke(['go','build','-o',target,source],timeout=180)
-        require(result.returncode==0,'Could not compile injected failure fixture')
         cli_target=next(directory.glob('oss-transfer-cli-*'))
-        cli_source=self.root/'injected-cli-candidate.go'
-        cli_source.write_text('//go:build ignore\n\npackage main\nimport("os";"os/exec")\nfunc main(){c:=exec.Command('+json.dumps(str(self.args.cli.resolve()))+',os.Args[1:]...);c.Stdout=os.Stdout;c.Stderr=os.Stderr;if c.Run()!=nil{os.Exit(1)}}\n',encoding='utf-8')
-        result=self.invoke(['go','build','-o',cli_target,cli_source],timeout=180)
-        require(result.returncode==0,'Could not compile distinct CLI rollback fixture')
+        fixture_sources = self.args.repo/'.github/acceptance/fixtures'
+        build_env = dict(os.environ, CGO_ENABLED='0', GOOS=self.os_name,
+                         GOARCH='arm' if self.arch == 'armv7' else self.arch)
+        if self.arch == 'armv7': build_env['GOARM']='7'
+        for kind, supplied, destination in (
+                ('failure-master', self.args.failure_master_fixture, target),
+                ('rollback-cli', self.args.rollback_cli_fixture, cli_target)):
+            if supplied:
+                shutil.copy2(supplied.resolve(), destination)
+            else:
+                result=self.invoke(['go','build','-o',destination,fixture_sources/(kind+'.go')],
+                                   env=build_env,timeout=180)
+                require(result.returncode==0,'Could not compile '+kind+' fixture: '+result.stdout)
+            destination.chmod(0o755)
+            PREPARE.verify_binary(destination, self.os_name, self.arch)
+        self.evidence['failureFixtures'] = {
+            'precompiled': bool(self.args.failure_master_fixture),
+            'masterSha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+            'cliSha256': hashlib.sha256(cli_target.read_bytes()).hexdigest()}
+        self.save()
         manifest=directory/'manifest.tsv'
         rows=[]
         for line in manifest.read_text(encoding='utf-8').splitlines():
@@ -552,9 +601,15 @@ def main():
     parser.add_argument('--cli',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--target-platform',choices=[o+'/'+a for o,a in PREPARE.TARGETS.PLATFORMS],
+                        help='Expected binary platform; foreign CPU execution requires Linux binfmt')
+    parser.add_argument('--failure-master-fixture',type=Path,help='Precompiled target-platform startup failure fixture')
+    parser.add_argument('--rollback-cli-fixture',type=Path,help='Precompiled target-platform replacement CLI fixture')
     parser.add_argument('--all-installed',action='store_true',help='Disposable CI hosts only: exercise unfiltered discovery of every installed role')
     parser.add_argument('--system',action='store_true',help='macOS: system LaunchDaemon (requires root)')
     args=parser.parse_args()
+    if bool(args.failure_master_fixture) != bool(args.rollback_cli_fixture):
+        parser.error('--failure-master-fixture and --rollback-cli-fixture must be supplied together')
     lifecycle=Lifecycle(args)
     try:lifecycle.run()
     finally:lifecycle.close()

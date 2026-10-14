@@ -15,9 +15,22 @@ CI builds the release archives once, then runs their Master, Agent and CLI again
 
 These six platforms run the same application and native installer scenarios in parallel. Linux also tests the Docker image and Compose installer on both architectures. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
 
-Linux ARMv7, riscv64 and loong64 run the packaged applications under QEMU, with a native amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 run in separate FreeBSD 14.4 VMs. These five jobs check setup, durable identity, node settings, three transfer directions and report contents; FreeBSD also checks rc.d installation, upgrade and rollback. They reuse the core transfer fixture rather than repeating the long bandwidth and multipart crash suites. QEMU coverage does not establish compatibility with a specific physical CPU or distribution.
+Linux ARMv7, riscv64 and loong64 execute the target binaries under QEMU, with an amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 run in FreeBSD 14.4 VMs. All five run the same Go/CLI tests and application scenarios as the six platforms above, including shared bandwidth, stop/restart, multipart cleanup, inventory recovery and installation rollback. Their test executables are cross-compiled with `CGO_ENABLED=0`; they do not run the race detector.
 
-All platform jobs run in parallel after the archives are built. Release waits for every job; added platforms increase runner usage, while elapsed time is determined by the slowest job. Builds and publication read the same [platform list](../../deploy/go/platforms.json).
+The Linux QEMU jobs install real systemd services on the Ubuntu runner. Only the installer's CPU detection is mapped to the target architecture; service management, executable files, PID checks and rollback remain real. This exercises target CPU code on the host Linux kernel. It does not establish compatibility with a particular physical CPU, distribution or kernel. FreeBSD uses rc.d inside its VM.
+
+## Scheduling
+
+Release archives are built once. A separate five-platform matrix compiles test executables and failure fixtures at the same time, without delaying the six native jobs. Test artifacts record the commit, target architecture and SHA-256 hashes and are not published in releases. The multipart crash test uses the target `agentservice` test executable, including its self-executed crash helper.
+
+Each additional platform has two parallel jobs on separate runners or VMs:
+
+- **Transfer:** setup and enrollment, three transfer directions, reports, shared bandwidth, stop/restart and multipart recovery.
+- **Management:** all Go/CLI test packages, CLI administration, inventory import and recovery, service installation, upgrade and rollback.
+
+Management runs at most two Go test packages at once. Bandwidth measurements have a separate runner so other tests do not compete with their transfer window. FreeBSD caches its Python environment and dependencies; changes to the requirements file invalidate that cache. It does not compile tests inside the VM.
+
+Release waits for every job. Builds and publication read the same [platform list](../../deploy/go/platforms.json).
 
 ## Coverage
 
@@ -55,9 +68,17 @@ python3 -m venv /tmp/oss-transfer-qa-venv
   --output output/go-cluster-local --scenario all --multipart-recovery
 ```
 
-Use a fresh output directory. On Windows, use `.exe` filenames and the Python executable from your environment. The multipart crash test also compiles an Agent test binary, so `--multipart-recovery` requires Go. The main scenarios execute the packaged binaries with an empty executable PATH.
+Use a fresh output directory. On Windows, use `.exe` filenames and the Python executable from your environment. By default, `--multipart-recovery` compiles an Agent test binary and requires Go. Pass `--multipart-test-binary` to use a verified executable from `go-test-binaries.py` instead. The main scenarios execute the packaged binaries with an empty executable PATH.
 
-For service installation tests, run `go-install.py` with `--master`, `--agent`, `--cli`, `--repo` and `--output`. Linux requires root and systemd; Windows requires Administrator. macOS uses a user LaunchAgent, or a system LaunchDaemon with `--system`. Tests use separate service names and directories and remove their registrations afterward.
+To prepare the additional platforms' test executables on a build host:
+
+```sh
+python3 .github/acceptance/go-test-binaries.py build --platform linux/armv7 --output /tmp/oss-transfer-tests
+```
+
+Copy that directory to the target environment and use `verify` or `run` with `--platform`, `--directory` and `--repo`. Verification checks the executable architecture, checksums and checkout before running anything. `run` also takes a fresh `--output` directory for logs and results. Linux emulation needs binfmt registered for both the initial process and the subprocesses created by recovery tests.
+
+For service installation tests, run `go-install.py` with `--master`, `--agent`, `--cli`, `--repo` and `--output`. Linux requires root and systemd; Windows requires Administrator. macOS uses a user LaunchAgent, or a system LaunchDaemon with `--system`. Tests use separate service names and directories and remove their registrations afterward. Only disposable CI machines use `--all-installed`, which exercises discovery and upgrade of every installed role.
 
 `go-docker.py` checks a prepared image. `go-setup.py` tests the public installer against a local release directory. [ci.yml](../workflows/ci.yml) contains their full commands.
 

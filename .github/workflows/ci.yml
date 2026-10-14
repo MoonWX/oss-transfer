@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/go-*.py', '.github/acceptance/prepare-go.py', '.github/tests/test-go-packaging.py', '.github/tests/test-resolve-ci-artifacts.py', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
+    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -39,6 +39,7 @@ jobs:
         run: |
           python3 .github/tests/test-go-packaging.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
+          python3 .github/tests/test-go-test-binaries.py -v
       - name: Build all candidate archives once
         env:
           GO_AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
@@ -66,6 +67,39 @@ jobs:
         with:
           name: go-release-assets
           path: output/go-release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+  test_binaries:
+    name: Build tests ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux/armv7, artifact: linux-armv7}
+          - {platform: linux/riscv64, artifact: linux-riscv64}
+          - {platform: linux/loong64, artifact: linux-loong64}
+          - {platform: freebsd/amd64, artifact: freebsd-amd64}
+          - {platform: freebsd/arm64, artifact: freebsd-arm64}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            cli-go/go.sum
+      - name: Cross-compile target tests and failure fixtures
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+        run: python3 .github/acceptance/go-test-binaries.py build --platform "$QA_PLATFORM" --output output/go-test-binaries
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: go-test-binaries-${{ matrix.artifact }}
+          path: output/go-test-binaries/
           if-no-files-found: error
           retention-days: 7
   image:
@@ -203,11 +237,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
   emulated:
-    name: Emulated Linux ${{ matrix.arch }}
-    needs: package
+    name: Linux ${{ matrix.arch }} / ${{ matrix.suite }}
+    needs: [package, test_binaries]
     strategy:
       fail-fast: false
       matrix:
+        arch: [armv7, riscv64, loong64]
+        suite: [transfer, management]
         include:
           - {arch: armv7, interpreter: arm}
           - {arch: riscv64, interpreter: riscv64}
@@ -222,16 +258,13 @@ jobs:
         with:
           name: go-migration-packages
           path: output/go-development
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: go-test-binaries-linux-${{ matrix.arch }}
+          path: output/go-test-binaries
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        if: matrix.arch == 'armv7'
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            cli-go/go.sum
       - name: Enable the target CPU interpreter
         env:
           QA_INTERPRETER: ${{ matrix.interpreter }}
@@ -241,42 +274,68 @@ jobs:
           sudo update-binfmts --enable "qemu-$QA_INTERPRETER"
           grep -q enabled "/proc/sys/fs/binfmt_misc/qemu-$QA_INTERPRETER"
           python -m pip install -r .github/acceptance/requirements.txt
-      - name: Exercise signed 32-bit task-number boundaries
-        if: matrix.arch == 'armv7'
-        env:
-          CGO_ENABLED: '0'
-          GOOS: linux
-          GOARCH: arm
-          GOARM: '7'
-        run: |
-          go test -count=1 -timeout=2m -v -run '^TestLegacyChildNumberUsesSameSigned32BitBoundsOnEveryArchitecture$' ./internal/task
-          (cd cli-go && go test -count=1 -timeout=2m -v -run '^TestTaskChildNumberingKeeps32BitBoundaryAndInvalidLegacyIndicesDistinct$' .)
-      - name: Verify the target package and prepare native S3 fixture
+      - name: Verify target application and test binaries
         env:
           QA_ARCH: ${{ matrix.arch }}
-        run: python .github/acceptance/prepare-go.py --platform "linux/$QA_ARCH" --fixture-platform linux/amd64 --directory "$RUNNER_TEMP/go-emulated-package"
-      - name: Check startup, durable identity and three transfer directions
         run: |
-          "$GO_QA_CLI" --version --json
-          python .github/acceptance/go-runtime-smoke.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --output output/go-smoke
-          python .github/acceptance/go-cluster.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --weed "$GO_QA_WEED" --output output/go-cluster --scenario core
+          python .github/acceptance/prepare-go.py --platform "linux/$QA_ARCH" --fixture-platform linux/amd64 --directory "$RUNNER_TEMP/go-emulated-package"
+          python .github/acceptance/go-test-binaries.py verify --platform "linux/$QA_ARCH" --directory output/go-test-binaries --repo "$GITHUB_WORKSPACE"
+      - name: Check setup, transfers, shared limits and crash recovery
+        if: matrix.suite == 'transfer'
+        run: |
+          python .github/acceptance/go-runtime-smoke.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --output output/go-smoke \
+            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
+            --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
+          python .github/acceptance/go-cluster.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --weed "$GO_QA_WEED" --output output/go-cluster \
+            --scenario all --multipart-recovery --multipart-test-binary "$GO_QA_MULTIPART_TEST_BINARY"
+      - name: Run target Go and CLI tests
+        if: matrix.suite == 'management'
+        env:
+          QA_ARCH: ${{ matrix.arch }}
+        run: python .github/acceptance/go-test-binaries.py run --platform "linux/$QA_ARCH" --directory output/go-test-binaries --repo "$GITHUB_WORKSPACE" --output output/go-unit --parallel 2
+      - name: Check CLI administration and inventory recovery
+        if: matrix.suite == 'management'
+        run: |
+          python .github/acceptance/go-cli.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output output/go-cli
+          python .github/acceptance/go-inventory.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --weed "$GO_QA_WEED" --output output/go-inventory
+      - name: Check real systemd installation, upgrade and rollback
+        if: matrix.suite == 'management'
+        env:
+          QA_ARCH: ${{ matrix.arch }}
+        run: |
+          python_path="$(python -c 'import sys; print(sys.executable)')"
+          sudo env "PATH=$PATH" "$python_path" .github/acceptance/go-install.py \
+            --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" \
+            --output "$GITHUB_WORKSPACE/output/go-install" --repo "$GITHUB_WORKSPACE" --all-installed \
+            --target-platform "linux/$QA_ARCH" --failure-master-fixture "$GO_QA_FAILURE_MASTER" --rollback-cli-fixture "$GO_QA_ROLLBACK_CLI"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: go-emulated-evidence-${{ matrix.arch }}
+          name: go-emulated-evidence-${{ matrix.arch }}-${{ matrix.suite }}
           path: |
             output/go-smoke/evidence.json
             output/go-smoke/*.log
             output/go-cluster/evidence.json
+            output/go-cluster/bandwidth-samples.json
             output/go-cluster/*.log
+            output/go-unit/evidence.json
+            output/go-unit/*.log
+            output/go-cli/evidence.json
+            output/go-cli/*.log
+            output/go-inventory/evidence.json
+            output/go-inventory/*.log
+            output/go-install/evidence.json
+            output/go-install/*-install-*.log
           if-no-files-found: ignore
           retention-days: 7
   freebsd:
-    name: FreeBSD ${{ matrix.arch }}
-    needs: package
+    name: FreeBSD ${{ matrix.arch }} / ${{ matrix.suite }}
+    needs: [package, test_binaries]
     strategy:
       fail-fast: false
       matrix:
+        arch: [amd64, arm64]
+        suite: [transfer, management]
         include:
           - {arch: amd64, vm_arch: x86_64}
           - {arch: arm64, vm_arch: aarch64}
@@ -290,45 +349,71 @@ jobs:
         with:
           name: go-migration-packages
           path: output/go-development
-      - name: Verify processes, transfers and rc.d service upgrades
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: go-test-binaries-freebsd-${{ matrix.arch }}
+          path: output/go-test-binaries
+      - name: Run target acceptance in FreeBSD
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         env:
           QA_ARCH: ${{ matrix.arch }}
+          QA_SUITE: ${{ matrix.suite }}
         with:
           cache-after-prepare: true
+          cache-after-prepare-key-suffix: ${{ hashFiles('.github/acceptance/requirements.txt') }}
           release: '14.4'
           arch: ${{ matrix.vm_arch }}
-          envs: QA_ARCH GITHUB_SHA
+          envs: QA_ARCH QA_SUITE GITHUB_SHA
           prepare: |
-            pkg install -y bash curl python311 go ca_root_nss
+            set -e
+            pkg install -y bash curl python311 ca_root_nss
+            python3.11 -m venv /opt/oss-transfer-ci-venv
+            /opt/oss-transfer-ci-venv/bin/python -m pip install -r .github/acceptance/requirements.txt
           run: |
             status=0
             sh -e <<'TESTS' || status=$?
-            python3.11 -m venv /tmp/oss-transfer-qa
-            py=/tmp/oss-transfer-qa/bin/python
-            "$py" -m pip install -r .github/acceptance/requirements.txt
+            py=/opt/oss-transfer-ci-venv/bin/python
             "$py" .github/acceptance/prepare-go.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package
+            "$py" .github/acceptance/go-test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/go-test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
+            . /tmp/oss-qa-tests.env
             bin=/tmp/oss-transfer-package
-            "$bin/oss-transfer-cli" --version --json
-            "$py" .github/acceptance/go-runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/go-smoke
-            "$py" .github/acceptance/go-cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/go-cluster --scenario core
-            "$py" .github/acceptance/go-install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --repo "$PWD" --output "$PWD/output/go-install" --all-installed
+            if [ "$QA_SUITE" = transfer ]; then
+              "$py" .github/acceptance/go-runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/go-smoke \
+                --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
+                --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
+              "$py" .github/acceptance/go-cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/go-cluster \
+                --scenario all --multipart-recovery --multipart-test-binary "$GO_QA_MULTIPART_TEST_BINARY"
+            else
+              "$py" .github/acceptance/go-test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/go-test-binaries --repo "$PWD" --output output/go-unit --parallel 2
+              "$py" .github/acceptance/go-cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/go-cli
+              "$py" .github/acceptance/go-inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/go-inventory
+              "$py" .github/acceptance/go-install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" \
+                --repo "$PWD" --output "$PWD/output/go-install" --all-installed \
+                --failure-master-fixture "$GO_QA_FAILURE_MASTER" --rollback-cli-fixture "$GO_QA_ROLLBACK_CLI"
+            fi
             TESTS
             mkdir -p output
             printf '%s\n' "$status" > output/freebsd-exit-code
-      # Let the VM action copy logs back before failing the job.
+      # Copy diagnostics back before enforcing the test result.
       - name: Require successful FreeBSD acceptance
         run: test "$(cat output/freebsd-exit-code)" = 0
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: go-freebsd-evidence-${{ matrix.arch }}
+          name: go-freebsd-evidence-${{ matrix.arch }}-${{ matrix.suite }}
           path: |
             output/freebsd-exit-code
             output/go-smoke/evidence.json
             output/go-smoke/*.log
             output/go-cluster/evidence.json
+            output/go-cluster/bandwidth-samples.json
             output/go-cluster/*.log
+            output/go-unit/evidence.json
+            output/go-unit/*.log
+            output/go-cli/evidence.json
+            output/go-cli/*.log
+            output/go-inventory/evidence.json
+            output/go-inventory/*.log
             output/go-install/evidence.json
             output/go-install/*-install-*.log
           if-no-files-found: ignore

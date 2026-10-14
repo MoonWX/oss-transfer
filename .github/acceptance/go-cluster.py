@@ -50,6 +50,24 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def multipart_test_platform(agent, test_binary):
+    """Check the test executable against the released Agent, not the host CPU."""
+    spec = importlib.util.spec_from_file_location("multipart_package_check", Path(__file__).with_name("prepare-go.py"))
+    package_check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_check)
+    matches = []
+    for operating_system, architecture in package_check.TARGETS.PLATFORMS:
+        try:
+            package_check.verify_binary(agent, operating_system, architecture)
+        except ValueError:
+            continue
+        matches.append((operating_system, architecture))
+    require(len(matches) == 1, "Cannot identify the packaged Agent platform for multipart recovery")
+    operating_system, architecture = matches[0]
+    package_check.verify_binary(test_binary, operating_system, architecture)
+    return operating_system + "/" + architecture
+
+
 def eventually(check, description, timeout=60):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -271,7 +289,21 @@ class Harness:
                            OSS_TRANSFER_STORE_QA_ENDPOINT=self.storage["endpoint"],
                            OSS_TRANSFER_STORE_QA_ACCESS_KEY=self.storage["accessKey"],
                            OSS_TRANSFER_STORE_QA_SECRET_KEY=self.storage["secretKey"])
-        result = subprocess.run(["go", "test", "./internal/agentservice", "-run", "^TestRealS3CrashRecovery$", "-count=1", "-v", "-timeout=180s"],
+        test_binary = self.args.multipart_test_binary
+        if test_binary:
+            test_binary = test_binary.resolve(strict=True)
+            target_platform = multipart_test_platform(self.args.agent, test_binary)
+            self.evidence["multipartRecovery"] = {
+                "mode": "precompiled-test", "path": str(test_binary), "sha256": sha256(test_binary),
+                "platform": target_platform, "platformSource": "executable header matched against the packaged Agent",
+                "scope": "internal/agentservice test executable; separate from the released Agent binary",
+            }
+            command = [str(test_binary), "-test.run=^TestRealS3CrashRecovery$", "-test.count=1", "-test.v", "-test.timeout=180s"]
+        else:
+            self.evidence["multipartRecovery"] = {"mode": "go-test", "package": "./internal/agentservice"}
+            command = ["go", "test", "./internal/agentservice", "-run", "^TestRealS3CrashRecovery$", "-count=1", "-v", "-timeout=180s"]
+        self.save()
+        result = subprocess.run(command,
                                 cwd=Path(__file__).resolve().parents[2], env=environment,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=240, encoding="utf-8")
         (self.root / "multipart-crash.log").write_text(self.scrub(result.stdout), encoding="utf-8")
@@ -711,8 +743,11 @@ def main():
     parser.add_argument("--scenario", choices=("core", "all"), default="all")
     parser.add_argument("--fixture", type=Path, help="Read an existing Java/Go shared fixture; never modify it")
     parser.add_argument("--multipart-recovery", action="store_true", help="Run the real S3 crash-recovery integration test using the current source")
+    parser.add_argument("--multipart-test-binary", type=Path, help="Use a precompiled target-platform Agent test executable; requires --multipart-recovery")
     parser.add_argument("--single-upload", action="store_true", help="Use one Agent for upload until shared-root validation is ready")
     args = parser.parse_args()
+    if args.multipart_test_binary and not args.multipart_recovery:
+        parser.error("--multipart-test-binary requires --multipart-recovery")
     h = Harness(args)
     try:
         h.start_s3()

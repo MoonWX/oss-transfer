@@ -77,7 +77,7 @@ import re
 import sys
 for name in ('README.md', 'README.zh-CN.md'):
     path = Path(sys.argv[1]) / name
-    text = re.sub(r'\]\(((?:docs|deploy|\.github)/[^)]+)\)',
+    text = re.sub(r'\]\(((?:docs|deploy|\.github)/[^)]+|docker-compose\.yml|\.env\.example)\)',
                   lambda match: '](https://github.com/MoonWX/oss-transfer/blob/' + sys.argv[2] + '/' + match[1] + ')',
                   path.read_text(encoding='utf-8'))
     path.write_text(text, encoding='utf-8')

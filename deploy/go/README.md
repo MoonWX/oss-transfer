@@ -1,10 +1,10 @@
 # Native deployment
 
-Native deployment is the default for Master and Agents. Linux uses systemd, macOS uses launchd, and Windows uses Windows Services. Each role has its own executable, configuration and database. A host can run both roles; only the Master exposes the WebUI port. Agents access host directories and mounted filesystems using their service account’s permissions.
+Install a Master for the WebUI and scheduling, then an Agent on each host that will transfer files. A single host can run both services with separate data directories. Linux uses systemd, macOS uses launchd, and Windows uses Windows Services.
 
 ## Install
 
-Download the latest stable installer from JD Cloud OSS:
+On Linux or macOS:
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
@@ -12,7 +12,9 @@ curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --yes
 ```
 
-Set `--port 1785` for a different Master port. On macOS, `--user` installs a LaunchAgent for the logged-in user instead of a system LaunchDaemon. Windows requires an Administrator PowerShell:
+The Master listens on port `1685`. Add `--port 1785` to change it. For a macOS user service, run the command without `sudo` and add `--user`.
+
+On Windows, open PowerShell as Administrator:
 
 ```powershell
 $ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
@@ -20,34 +22,34 @@ Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
 .\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Listen '0.0.0.0:1685' -Yes
 ```
 
-Open the Master URL and enter the setup token from its log. Create the administrator and set the public URL that browsers and Agents can reach. There is no default password. The installer prints the service, configuration, log and CLI paths.
+Open the Master URL and enter the setup token printed in its service log. Create an administrator and set the public URL that browsers and Agents will use. The installer prints the log and configuration paths.
 
-For a downloaded release directory, replace `--release-url URL` with `--package-dir DIR` (`-PackageDir DIR` on Windows). This directory must contain `manifest.tsv` and the named release files; a platform archive containing only binaries is not an installer directory. The installer validates the binary checksum before stopping or replacing a service.
+To install from downloaded files, use `--package-dir DIR`, or `-PackageDir DIR` on Windows, in place of the release URL. The directory must contain `manifest.tsv` and the release files it names. Use an assembled release directory as described below; the platform binary archive alone is insufficient.
 
 ## Add an Agent
 
-The Master schedules tasks but does not transfer files. Install an Agent on every host that will perform transfers, including the Master host if needed.
+1. Open **Execution nodes → Add node** on the Master and create an invitation.
+2. Copy the native command for the execution host's operating system.
+3. Run it on that host as root on Linux, through the chosen launchd mode on macOS, or in Administrator PowerShell on Windows.
+4. Confirm the Agent is online and select it when creating a task.
 
-1. In **Execution nodes → Add node**, create a single-use invitation.
-2. Select the execution host’s operating system and copy its native command.
-3. Run it on that host: as root on Linux, with the appropriate launchd installation mode on macOS, or in Administrator PowerShell on Windows.
-4. Check that the Agent appears online, then select it when creating a task.
+Repeat these steps when adding hosts to an existing cluster. If the Master host will transfer files, install an Agent there too.
 
-Use these same steps to add nodes to an existing cluster. Agents connect outbound to the Master URL and need no inbound administration port. Enrollment consumes the invitation and saves the identity in `agent.db`; service restarts and upgrades reuse it. Keep Master and Agents on the same release.
+Agents connect to the Master's public URL. Enrollment consumes the single-use invitation and saves the identity in `agent.db`; restarts and upgrades reuse it. Keep Master and Agents on the same release.
 
 ## Local directories
 
-Use absolute paths on the execution host, such as `/mnt/storage/import` or `D:\transfer\import`. A native Agent uses those paths directly. Its service account must be able to read upload sources and write download destinations. Mount network filesystems before starting local-file tasks and ensure the service can access them after a host restart.
+Enter absolute paths from the execution host, such as `/mnt/storage/import` or `D:\transfer\import`. The Agent's service account needs read permission for uploads and write permission for downloads. Configure network filesystems to mount after a restart, and check that the service account can access them before starting tasks.
 
-**Execution nodes → Edit node** lets you declare local roots. This records the paths shown in the console; it does not create a directory, mount storage or change filesystem permissions.
+**Execution nodes → Edit node** records local roots shown in the console. Create the directories and configure mounts and permissions on the host.
 
-When a local-file task uses multiple Agents, each selected Agent must see the same shared filesystem at the same absolute path. The tool checks shared access before distributing the task. Equal path names on separate local disks do not provide shared storage.
+For a local-file task with several Agents, every selected Agent must access the same shared filesystem at the same absolute path. The tool checks shared access before distributing work.
 
-For a containerized Master with native Agents, set its public URL to an address those hosts can reach. Only Agents need access to the transfer directories. The [optional Compose instructions](../../README.md#docker-compose-optional) cover container mounts when you also run the Agent in Docker.
+A containerized Master can use native Agents. Set its public URL to an address the Agent hosts can reach. If an Agent also runs in Docker, map its transfer directories as described in [Docker Compose](../../README.md#docker-compose-optional).
 
 ## Paths and configuration
 
-Default Linux locations:
+Linux defaults:
 
 | Item | Master | Agent |
 | --- | --- | --- |
@@ -57,25 +59,32 @@ Default Linux locations:
 | Data | `/var/lib/oss-transfer-go/master` | `/var/lib/oss-transfer-go/agent` |
 | Backups | `/var/backups/oss-transfer-go/master` | `/var/backups/oss-transfer-go/agent` |
 
-Use the paths printed by the installer on macOS and Windows. `--install-dir`, `--config-dir`, `--data-dir`, `--backup-dir`, `--service-name` and `--cli-path` override the Unix defaults. Windows has corresponding `-InstallDir`, `-ConfigDir`, `-DataDir`, `-BackupDir`, `-ServiceName` and `-CliPath` parameters.
+Use the paths printed by the installer on macOS and Windows. Override them with `--install-dir`, `--config-dir`, `--data-dir`, `--backup-dir`, `--service-name` and `--cli-path`. PowerShell uses `-InstallDir`, `-ConfigDir`, `-DataDir`, `-BackupDir`, `-ServiceName` and `-CliPath`.
 
-The public Unix installer places the Master CLI at `/usr/local/bin/oss-transfer-cli`, or `~/.local/bin/oss-transfer-cli` for a user installation. An Agent's CLI stays beside its binary. An unrelated existing CLI is rejected unless you choose another path or pass `--replace-cli` to back it up and replace it.
+The public Unix installer puts the Master's CLI at `/usr/local/bin/oss-transfer-cli`, or `~/.local/bin/oss-transfer-cli` for a user installation. An Agent's CLI stays beside its binary. If an unrelated CLI occupies the path, choose another location or pass `--replace-cli` to back up and replace it.
 
-Edit `service.json` and restart the service to change its listener or other startup settings. The installer uses `--listen` only during first installation. Agent roots and manual limits can be changed in the console. Release builds include a fixed Agent download location and image version; an independently hosted release can override `agentArtifactBase`, `agentArtifactVersion` and `agentDockerImage` in Master configuration.
+Edit `service.json` and restart the service to change its listener or other startup settings. `--listen` applies to first installation. Change local roots and manual limits in the console.
 
-On Linux:
+Master release builds include the Agent download location and Docker image version. To host release files elsewhere, set `agentArtifactBase`, `agentArtifactVersion` and `agentDockerImage` in Master configuration.
+
+On Linux, check the service and read its log with:
 
 ```sh
 sudo systemctl status oss-transfer-go-master
 sudo tail -f /var/lib/oss-transfer-go/master/logs/service.log
+```
+
+After editing configuration:
+
+```sh
 sudo systemctl restart oss-transfer-go-master
 ```
 
-CLI sessions belong to a particular Master URL. Include its actual port in `--host`; see the [login example](../../README.md#transfer-data).
+Include the Master's actual URL and port in CLI `--host`; see [CLI login](../../README.md#use-the-cli).
 
 ## Upgrade
 
-Download the new release's installer and reuse the original role, paths and service name:
+Download the new release's installer, then run it with the original role, paths and service name:
 
 ```sh
 sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --upgrade --yes
@@ -85,27 +94,29 @@ sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" 
 .\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Upgrade -Yes
 ```
 
-Use `agent` for an Agent upgrade. Saved settings, accounts and enrollment identity remain; a new invitation is not required. The upgrade verifies the downloaded binaries, stops the old service, then backs up its binary, configuration, service definition and database. Startup checks the managed process, release version and a fresh startup identifier. A failure restores the backup and restarts the previous service if it was running. The backup location is printed.
+Use `agent` for an Agent upgrade. Keep `--user` and omit `sudo` when upgrading a macOS user service. The installer verifies downloads, stops the service and backs up its binary, configuration, service definition and database. It retains accounts, settings and Agent identities. Startup checks the managed process, version and startup identifier; failure restores the backup and restarts the previous service if it was running.
 
-Stop active tasks before a planned upgrade if they must remain paused through rollback. A database backup does not undo objects or files already written by a transfer. For a manual backup, stop the service before copying its configuration and data directory, or use a consistent filesystem snapshot.
+Stop active tasks before an upgrade if they must remain paused during rollback. Restoring the database cannot undo files or objects already written by a transfer. For manual backups, stop the service before copying its configuration and data directory, or use a consistent filesystem snapshot.
 
 ## Adopt converted or manually created Go data
 
-`--adopt-config` registers a service for a stopped manual Go installation or finalized V4.0.x conversion. Its data directory and service name must match `service.json`; the program and configuration installation directories must be empty.
+Use `--adopt-config` to register a service for stopped Go data. For V4.0.x, complete [offline conversion](../../docs/development/legacy-migration.md) first.
+
+The service name and data directory must match the imported `service.json`. The program and configuration installation directories must be empty. This example matches the Master configuration produced by the converter:
 
 ```sh
 sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" \
   --adopt-config /srv/oss-transfer-import/master/service.json \
-  --service-name oss-transfer-go-master --data-dir /srv/oss-transfer-import/master --yes
+  --service-name oss-transfer-master --data-dir /srv/oss-transfer-import/master --yes
 ```
 
-Windows accepts `-AdoptConfig FILE`, `-ServiceName` and `-DataDir`. Use the Agent's own configuration to adopt an Agent. The installer verifies the database role and migration status, takes a snapshot and retains the existing identity. It rejects a running database, unfinished conversion or mismatched path; startup failure restores the snapshot.
+Windows accepts `-AdoptConfig FILE`, `-ServiceName` and `-DataDir`. For each Agent, use its generated configuration and copy its finalized data directory to the recorded absolute path on its execution host.
 
-V4.0.x RocksDB requires [offline conversion](../../docs/development/legacy-migration.md) first. Copy each finalized Agent directory to the recorded absolute path on its execution host before adoption. The installer must never use the original RocksDB directory as Go data.
+Adoption checks the stopped database, role and migration status, then takes a snapshot before starting the service. Existing accounts and Agent identities remain. If startup fails, the installer restores the snapshot.
 
 ## Prepare local release files
 
-From a clean source commit, build all platforms and assemble a new directory:
+From a clean source commit:
 
 ```sh
 ./build.sh --all
@@ -113,4 +124,4 @@ python3 deploy/go/release-assets.py --packages output/go-development \
   --output output/go-release --version "$(cat VERSION)" --commit "$(git rev-parse HEAD)"
 ```
 
-The assembler checks archive hashes, internal checksums, platform and a shared version/commit across all six packages. It takes installers and Compose from that commit and refuses an existing output directory. This produces the files required by `--package-dir`; it does not publish them. See [release steps](../../.github/RELEASING.md).
+Choose a new output directory for each run. The assembler checks all six packages' hashes, platforms, versions and commits, and includes installers from that commit. Use the resulting directory with `--package-dir`. Publication is covered in [release steps](../../.github/RELEASING.md).

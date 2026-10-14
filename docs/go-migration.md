@@ -1,40 +1,31 @@
-# Upgrade from V4.0.x to V4.1.0
+# Upgrade from V4.0.x to V4.1.x
 
-V4.1.0 uses separate Go Master and Agent processes, plus a CLI. The Master handles the console, accounts, storage configuration, scheduling and reports. Agents scan storage, transfer objects, apply limits and save progress. A single-host deployment therefore needs both a Master and an Agent, with separate data directories.
+V4.0.x data needs an offline conversion before it can be used by V4.1.x. The converter keeps accounts, storage connections, node limits, task history and the recycle bin. Unfinished tasks enter the new installation stopped.
 
-## New installation
+For a fresh installation, follow the [deployment instructions](../README.md). For an existing V4.1.x installation, use the [native upgrade command](../deploy/go/README.md#upgrade).
 
-Use the [main deployment instructions](../README.md) to install native services. Docker Compose remains an optional deployment method. Linux, macOS and Windows have amd64 and arm64 packages. The Master embeds the WebUI; neither service requires Java.
+## Convert an existing installation
 
-First setup uses a token from the Master log to create the administrator and public URL. There is no default password. Agents enroll through single-use invitations and retain their identities across restarts. Use the same version on Master and Agents. The [native guide](../deploy/go/README.md) covers custom ports, service registration, upgrades and rollback.
+1. Stop the old Master and all execution nodes. Back up each node's database and configuration, including environment and command-line overrides.
+2. Export every node's RocksDB data, including the old Master if it performed transfers.
+3. Create a migration plan with the node identities, effective limits, Master URL and final data paths.
+4. Prepare and finalize the conversion in a new directory.
+5. Install the native services with the generated `service.json` files. Confirm the Agents are online, then resume the tasks you want to continue.
 
-## Convert V4.0.x data
+The [conversion guide](development/legacy-migration.md) contains the commands and plan format. Preparation runs on Linux or macOS. Keep the original installation and backups until the new services and task results have been checked.
 
-Go uses its own databases and cannot open V4.0.x RocksDB directly. Follow the [offline conversion procedure](development/legacy-migration.md):
+V4.1.x separates scheduling from execution. Install a Master and an Agent on a single-host system; they use separate data directories. In a cluster, place each finalized Agent directory on its execution host at the absolute path recorded in its configuration.
 
-1. Stop the old Master and every execution node. Keep consistent copies of their databases and configuration.
-2. Export each node with the offline legacy tool, including the old Master if it also performed transfers.
-3. Inspect the exports and create an explicit migration plan with each node's effective settings and final data path.
-4. Prepare and finalize into a new directory. Adopt the resulting `service.json` files with the native installers.
+Existing Agents retain their identities when their private credentials match the Master snapshot. Directly addressed V4.0.x workers receive new identities through explicit entries in the migration plan. Sign in with the existing account password after conversion; old login sessions expire.
 
-The Java exporter is an offline conversion tool that uses the old JAR's RocksDB library. It is not a Go runtime dependency. Conversion preparation currently runs on Linux or macOS.
+## Resume unfinished tasks
 
-The conversion retains accounts, storage connections, matching Agent identities, limits, task history and recycle-bin state. Login sessions are invalidated. The plan requires explicit acceptance of Go retry, concurrency and multipart defaults; those settings are not silently copied from Java.
+The first resume scans the task's original scope with its saved ranges, inventory, filters and target naming. Before reusing an old successful result, the Agent reads the current source and destination, compares SHA-256 hashes and checks their identities for changes during the reads.
 
-Existing enrolled Agents retain their identity only when their private credential matches the Master snapshot. Old directly addressed workers need explicit identity mappings. Finalized Agent data must be placed at its recorded absolute path on the execution host. Do not overwrite or point Go at the original V4.0.x database.
+A missing source becomes a failed item. An unequal existing target follows the saved conflict policy: `SKIP` leaves it untouched; `OVERWRITE` permits another write. Historical time-filter exclusions stay excluded. Interrupted multipart objects restart at object level because the old database lacks the upload IDs and completed-part lists needed to continue them.
 
-## Resume after conversion
+Completed tasks retain their historical results and report coverage. New transfer attempts record their own results. Review the retry, concurrency and multipart defaults in the conversion guide before setting `acceptGoRuntimeDefaults` in the plan.
 
-Unfinished tasks remain stopped. Their first explicit resume scans the original task scope, preserving ranges, inventories, filters and target mapping. Old successful objects are reused only after complete source and destination reads produce matching SHA-256 values and stable identities. Missing sources become failures; unequal existing targets follow the saved conflict policy. Historical exclusions remain excluded.
+## Validation
 
-Completed historical tasks keep their recorded state and report coverage. They are not relabeled as freshly verified. Interrupted multipart objects restart because V4.0.x did not persist enough part state to continue them.
-
-For ordinary Go recovery, stop intent is durable before cancellation. Object results and counters commit together. A crash after writing a destination but before committing its result can cause that object to be handled again under the conflict policy. Temporary files and multipart uploads are cleaned only when their recorded ownership can be verified.
-
-## Validation boundaries
-
-The migration fixture uses a real V4.0.6 RocksDB export and isolated SeaweedFS storage. After conversion, native services retained the old login, node identities and limits, resumed two interrupted tasks and independently verified all 520 resulting objects. This verifies that fixture; it does not establish provider compatibility or performance for every workload.
-
-The [acceptance inventory](go-migration-acceptance.md) tracks the broader migration requirements. Native CI exercises packaged binaries on all six platforms; container acceptance runs on both Linux architectures.
-
-On an isolated cloud host limited to two CPU cores, five paired downloads of 16 × 48 MiB objects from local SeaweedFS took a median 10.519 seconds with Java V4.0.x and 10.110 seconds with the optimized Go build. Every destination passed SHA-256 verification. These measurements cover that download workload; JD OSS, JPFS and other workloads require separate performance validation.
+The migration tests use a V4.0.6 RocksDB export and SeaweedFS. The recorded native-process run retained the account, Agent identity and node limit, resumed two interrupted tasks, and verified all 520 resulting source/target pairs with SHA-256. Test commands and fixture details are in the [conversion guide](development/legacy-migration.md#tests). The [acceptance inventory](go-migration-acceptance.md) lists the remaining verification scope.

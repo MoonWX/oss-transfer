@@ -1,10 +1,10 @@
-# Release acceptance
+# Acceptance tests
 
-CI builds the Go archives once, then runs their Master, Agent and CLI binaries against a real SeaweedFS 4.48 S3 service. Verification reads the destination data independently and compares every expected key, length and SHA-256. The release workflow uses those same checked archives and container image.
+CI builds the release archives once, then runs their Master, Agent and CLI against SeaweedFS 4.48. A separate S3 client reads destination objects and compares their keys, lengths and SHA-256 hashes with the source fixture. Release publishes the archives and image from that CI run.
 
 ## Platforms
 
-| Platform | Native runner |
+| Platform | Runner |
 | --- | --- |
 | Linux amd64 | `ubuntu-latest` |
 | Linux arm64 | `ubuntu-26.04-arm` |
@@ -13,29 +13,31 @@ CI builds the Go archives once, then runs their Master, Agent and CLI binaries a
 | Windows amd64 | `windows-latest` |
 | Windows arm64 | `windows-11-arm` |
 
-Each platform runs the same application and installer scenarios. Both Linux platforms also run the archived Docker image and Compose installer. Jobs run in parallel; one failure does not cancel the other platforms. Go tests use the race detector where supported; Windows arm64 runs without it. The Windows arm64 Master, Agent and CLI are native arm64 binaries; its SeaweedFS fixture uses the official x64 build under Windows emulation because that fixture has no Windows arm64 release.
+All six platforms run the same application and native installer scenarios in parallel. Linux also tests the Docker image and Compose installer on both architectures. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
 
-## Checks
+## Coverage
 
-| Check | What can make it fail |
+| Test | Assertions |
 | --- | --- |
-| Archive and image identity | A wrong checksum, missing or duplicate member, wrong CPU architecture, mixed version/commit, or image containing different binaries. |
-| State and request tests | Duplicate acceptance, stale-generation work after stop, inconsistent ledger/counters, cancellation races, invalid source identity, path escape or unsafe cleanup. Tests use local databases and controlled request order; protocol fakes cover error branches. |
-| Initial setup and CLI | Administration before setup, repeated setup, invalid login/session handling, incorrect generated Agent release URLs, or lost users, node settings and limits after restart. |
-| Three transfer directions | A missing, extra, corrupt or wrongly mapped target object; duplicate parent creation; wrong child totals; either selected Agent receiving no work. |
-| Shared task bandwidth | Two concurrent 8 Mbps tasks exceed their individual shared budget across two Agents. Target growth is sampled while they run. |
-| Stop and process recovery | Writes continue after stop acknowledgement, a restart clears stop intent, progress duplicates, an old destination is truncated, or final hashes/owned temporary-file cleanup fail after Agent SIGKILL. |
-| Multipart crash cleanup | Restart leaves an owned incomplete upload or spool, or removes an unrelated upload or the previous completed object. This checks cleanup and object retry, not reuse of uploaded parts. |
-| Reports | Rows, statuses, target mapping or totals differ from the verified file inventory. |
-| Inventory tasks | A lost finalize response creates a second parent, restart loses an unsealed list, changed input is accepted under the same request ID, unlisted keys are copied, or a missing selected key is hidden. |
-| Native installation | Wrong service PID/version, unexpected overwrite of an existing CLI, lost password or enrollment on upgrade, stopping a healthy service before rejecting bad checksums, failed rollback, or unsafe adoption of existing data. |
-| Docker and Compose | Wrong runtime architecture, broken nonroot setup/enrollment, inaccessible bind mounts, lost state after recreation, or transferred bytes differ. |
+| Package and image verification | Checksums, archive members, executable architecture, version and commit match. Image binaries match the native packages. |
+| State and request handling | Duplicate requests preserve one task; stale work cannot resume after stop; ledger entries and counters agree. Cancellation, source changes, path escapes and cleanup ownership are checked. |
+| Setup and CLI | Setup protects administration, credentials are enforced, generated Agent URLs match the release, and accounts, nodes and limits survive restart. |
+| Transfers | All three directions produce the expected keys and hashes. Both selected Agents receive work. Naming rules, SKIP, OVERWRITE and child totals match the fixture. |
+| Task bandwidth | Two concurrent 8 Mbps tasks each share their own limit across two Agents. The test samples destination growth during transfer. |
+| Stop and restart | Writes stop after acknowledgement; stop intent survives restart. Killing an Agent preserves completed progress and existing targets. Recovery finishes the remaining files and removes its temporary files. |
+| Multipart recovery | Restart cleans up the interrupted upload and spool while retaining unrelated uploads and the previous completed object. The interrupted object is retried from the beginning. |
+| Reports | Exported rows, statuses, destination keys and totals match the verified inventory. |
+| Inventory import | Lost responses and repeated submissions retain one parent task. Restart preserves unfinished imports. Changed input under the same request ID is rejected, and missing keys are reported. |
+| Native installation | Service PID and version are correct. Upgrade preserves passwords and enrollment. Bad checksums are rejected before stopping the service. Rollback and existing-data adoption are exercised. |
+| Docker and Compose | Setup, enrollment and bind-mounted transfers work without root in the container. Recreating containers preserves state. |
 
-The main transfer fixture contains 260 objects, including an empty object, a Unicode/space name, and two 17 MiB objects that exercise multipart upload. It crosses the 128-object dispatch boundary. Separate fixtures exercise shared bandwidth, stop/restart and inventory batches. SKIP and OVERWRITE are checked against existing destination data.
+The main fixture contains 260 objects, crossing the 128-object dispatch boundary. It includes an empty object, a name with Unicode and spaces, and two 17 MiB objects for multipart upload. Bandwidth, recovery and inventory tests use separate fixtures.
+
+SeaweedFS supplies the S3 service; the tests do not connect to JD Cloud OSS. Provider-specific signing, permissions and throttling need a run against that provider. Unit tests use HTTP simulators to reproduce protocol errors.
 
 ## Run locally
 
-Build the current platform with `./build.sh --test`. Install the Python dependencies and prepare the checked package plus pinned S3 binary. Change `linux/amd64` to your platform:
+Build a package for the current platform with `./build.sh --test`, then prepare the test environment. Replace `linux/amd64` below with your platform:
 
 ```sh
 python3 -m venv /tmp/oss-transfer-qa-venv
@@ -49,16 +51,14 @@ python3 -m venv /tmp/oss-transfer-qa-venv
   --output output/go-cluster-local --scenario all --multipart-recovery
 ```
 
-Use fresh output directories. On Windows, use `.exe` filenames and your Python environment's executable. `--multipart-recovery` also runs the source-level Agent crash test against that S3 service, so Go must be available. The main transfer scenarios run the packaged executables with an empty executable PATH.
+Use a fresh output directory. On Windows, use `.exe` filenames and the Python executable from your environment. The multipart crash test also compiles an Agent test binary, so `--multipart-recovery` requires Go. The main scenarios execute the packaged binaries with an empty executable PATH.
 
-Service lifecycle tests use `go-install.py` with `--master`, `--agent`, `--cli`, `--repo` and `--output`. Linux needs root and systemd; Windows needs Administrator. macOS uses a user LaunchAgent by default, or a system LaunchDaemon with `--system`. They create isolated service names and paths and remove their own service registrations afterward.
+For service installation tests, run `go-install.py` with `--master`, `--agent`, `--cli`, `--repo` and `--output`. Linux requires root and systemd; Windows requires Administrator. macOS uses a user LaunchAgent, or a system LaunchDaemon with `--system`. Tests use separate service names and directories and remove their registrations afterward.
 
-`go-docker.py` tests the prepared image; `go-setup.py` tests the public installer against a local release directory. The exact image preparation and invocation are recorded in [ci.yml](../workflows/ci.yml).
+`go-docker.py` checks a prepared image. `go-setup.py` tests the public installer against a local release directory. [ci.yml](../workflows/ci.yml) contains their full commands.
 
-## Evidence and scope
+## Results
 
-Each scenario records `evidence.json`, task or bandwidth samples, manifests where applicable and sanitized process logs. Package checks retain archive/version identity; image provenance links container executables to those archives. A failing assertion fails its CI job. Uploading diagnostic evidence does not make a failed run publishable.
+Scenarios write `evidence.json` and sanitized logs under their output directory. Bandwidth tests also save samples; package and image checks record artifact identities. CI retains the uploaded results for seven days.
 
-SeaweedFS is a real S3 fixture with pinned download hashes. These results are not JD Cloud OSS signing, permission or throttling acceptance. Source-level HTTP fakes are used for controlled protocol errors; they are not described as real storage transfers.
-
-CI does not establish power-loss durability, live-source incremental consistency or workload-wide performance parity. Performance comparison is separate: `go-compare.py` uses a fixed historical V4.0.x JAR package and Go package in the same fixture; `go-cloud-compare.py` adds cgroup limits and disk/OOM guards for an isolated Linux host. Keep the original V4.0.x artifacts and manifests when repeating those comparisons. The legacy exporter and real-V4.0.x fixture tools remain under `tools/legacy/`.
+Performance comparisons are separate from release acceptance. `go-compare.py` compares a historical V4.0.x JAR package with Go using the same fixture; `go-cloud-compare.py` adds resource limits for an isolated Linux host. See [the migration record](../../docs/go-migration-acceptance.md) for measurements and remaining checks.

@@ -949,10 +949,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "· Failed",
     ja: "· 失敗",
   },
-  快照: {
-    en: "Snapshot",
-    ja: "スナップショット",
-  },
   下一页子任务: {
     en: "Next subtasks",
     ja: "次の子タスク",
@@ -1870,10 +1866,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "已选 {count} 项（最多 128 项）": {
     en: "{count} selected (up to 128)",
     ja: "{count}件選択済み（最大128件）",
-  },
-  "快照 {time}": {
-    en: "Snapshot {time}",
-    ja: "スナップショット {time}",
   },
   "{count} 个可选": {
     en: "{count} available",

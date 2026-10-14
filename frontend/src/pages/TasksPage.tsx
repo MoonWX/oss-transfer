@@ -1,4 +1,4 @@
-import { t as tr, useI18n, getLocale, formatDate } from "../lib/i18n";
+import { t as tr, useI18n, formatDate } from "../lib/i18n";
 import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import { useWorkerStatus } from "../lib/workerStatus";
 import {
@@ -428,7 +428,6 @@ function TaskDetail({
         shardsComplete: boolean;
         childrenTotal: number;
         childrenOffset: number;
-        snapshotAt?: string;
         childShards: any[];
         childLoading: boolean;
         childPartial: boolean;
@@ -451,7 +450,6 @@ function TaskDetail({
       shardsComplete: !!pageData && !children.error && !pageData.partial,
       childrenTotal: pageData?.totalCount || 0,
       childrenOffset: offset,
-      snapshotAt: pageData?.cached ? pageData.snapshotAt : undefined,
       childShards: childData?.items || [],
       childLoading: validChild && !childData && !child.error,
       childPartial: !!childData?.partial,
@@ -1077,19 +1075,6 @@ function TaskDetail({
                       </Paper>
                     ))}
                   </Stack>
-                )}
-                {!!view?.snapshotAt && (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", mt: 1 }}
-                  >
-                    {tr("快照 {time}", {
-                      time: new Date(view.snapshotAt).toLocaleTimeString(
-                        getLocale(),
-                      ),
-                    })}
-                  </Typography>
                 )}
                 {((view?.childrenTotal || 0) > 25 ||
                   (view?.childrenOffset || 0) > 0) && (

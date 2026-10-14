@@ -19,6 +19,7 @@ import platform
 import re
 import secrets
 import subprocess
+import sys
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -143,10 +144,11 @@ class GrowthSampler:
         self.thread.start()
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, error_type, *_):
         self.stop_event.set()
         self.thread.join(timeout=10)
-        require(not self.thread.is_alive(), "Destination sampler did not stop")
+        if error_type is None:
+            require(not self.thread.is_alive(), "Destination sampler did not stop")
 
     def evaluate(self, rate, expected_bytes):
         require(len(self.samples) >= 30, "Bandwidth test produced too few physical-byte samples")
@@ -224,7 +226,7 @@ class Harness:
         self.streams.append(stream)
         return child, log
 
-    def api(self, path, body=None, method=None, key=None):
+    def api(self, path, body=None, method=None, key=None, *, timeout=40, max_bytes=None):
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
@@ -233,12 +235,17 @@ class Harness:
         request = Request(self.origin + path, data=None if body is None else json.dumps(body).encode(),
                           headers=headers, method=method or ("GET" if body is None else "POST"))
         try:
-            response = urlopen(request, timeout=40)
+            response = urlopen(request, timeout=timeout)
         except HTTPError as error:
             response = error
         with response:
             code = response.status
-            payload = json.load(response)
+            if max_bytes is None:
+                payload = json.load(response)
+            else:
+                encoded = response.read(max_bytes + 1)
+                require(len(encoded) <= max_bytes, "Diagnostic response exceeded its size limit")
+                payload = json.loads(encoded)
         require(code == 200, self.scrub(f"HTTP {code} {path}: {payload.get('message', '')}"))
         data = payload.get("data", payload)
         require(payload.get("success") is not False and data.get("success") is not False,
@@ -395,14 +402,55 @@ class Harness:
         return int(ids[0])
 
     def wait_task(self, task_id, timeout=180, wanted="COMPLETED"):
+        started, last_observed, last_task = time.monotonic(), None, None
         def done():
+            nonlocal last_observed, last_task
             current = self.task(task_id)
+            last_observed, last_task = time.monotonic(), current
             require(current is not None, "Created task disappeared")
             if current["status"] in TERMINAL:
                 require(current["status"] == wanted, f"Task {task_id} ended as {current['status']}: {current.get('errorMessage')}")
                 return current
             return None
-        return eventually(done, f"task {task_id} {wanted}", timeout)
+        try:
+            return eventually(done, f"task {task_id} {wanted}", timeout)
+        except Exception as error:
+            # Preserve the last successful poll instead of making another full
+            # status query after a timeout. Never log endpoint configuration,
+            # request headers or arbitrary error messages from task responses.
+            fields = ("taskIndex", "parentTaskId", "childTaskId", "status", "direction",
+                      "executionNodeIp", "attempt", "scanComplete", "childCount",
+                      "listObjectCount", "listObjectSize", "putObjectCount", "putObjectSize",
+                      "skippedObjectCount", "skippedObjectSize", "failedObjectCount", "failedObjectSize",
+                      "currentSpeedBytesPerSecond", "averageSpeedBytesPerSecond",
+                      "createTime", "startTime", "endTime", "errorCode", "creationStatus")
+            def summary(row):
+                if not isinstance(row, dict):
+                    return None
+                return {key: self.scrub(value)[:256] if isinstance(value, str) else value
+                        for key in fields if key in row
+                        for value in (row[key],) if value is None or type(value) in (str, int, float, bool)}
+            try:
+                diagnostic = {"taskId": task_id, "wanted": wanted, "timeoutSeconds": timeout,
+                              "elapsedSeconds": round(time.monotonic() - started, 3),
+                              "errorType": type(error).__name__, "task": summary(last_task),
+                              "lastObservationSeconds": None if last_observed is None else round(last_observed - started, 3)}
+                try:
+                    # One small page, no retries; diagnostic collection must
+                    # not turn a failed test into another long-running check.
+                    data = self.api(f"/api/master/tasks/{task_id}/children?offset=0&limit=20",
+                                    timeout=3, max_bytes=256 * 1024)
+                    diagnostic["children"] = [summary(row) for row in data["items"][:20]]
+                    total = data.get("totalCount")
+                    diagnostic["childTotalCount"] = total if type(total) is int else None
+                    diagnostic["childrenTruncated"] = type(total) is int and total > len(diagnostic["children"])
+                except Exception as diagnostic_error:
+                    diagnostic["childrenErrorType"] = type(diagnostic_error).__name__
+                self.evidence["taskWaitFailure"] = diagnostic
+                self.save()
+            except Exception:
+                pass  # Diagnostic failures must not replace the original failure.
+            raise
 
     def children_for(self, task_id):
         rows, offset = [], 0
@@ -639,15 +687,23 @@ class Harness:
     def bandwidth(self, manifest):
         destinations = [self.root / f"limited-{index}" for index in (1, 2)]
         started = time.monotonic()
-        with GrowthSampler(destinations) as sampler:
-            tasks = [self.create("/api/master/local-transfers", self.download_body(self.buckets["rate"], "rate/", directory, 8),
-                                 "bandwidth-" + str(index)) for index, directory in enumerate(destinations)]
-            self.task_report(tasks[0], expected_status=409)
-            for task_id in tasks:
-                self.wait_task(task_id, timeout=120)
+        sampler = GrowthSampler(destinations)
+        try:
+            with sampler:
+                tasks = [self.create("/api/master/local-transfers", self.download_body(self.buckets["rate"], "rate/", directory, 8),
+                                     "bandwidth-" + str(index)) for index, directory in enumerate(destinations)]
+                self.task_report(tasks[0], expected_status=409)
+                for task_id in tasks:
+                    self.wait_task(task_id, timeout=120)
+        finally:
+            preserving_error = sys.exc_info()[0] is not None
+            try:
+                (self.root / "bandwidth-samples.json").write_text(json.dumps(sampler.samples) + "\n", encoding="utf-8")
+            except Exception:
+                if not preserving_error:
+                    raise
         total = sum(row["size"] for row in manifest.values())
         result = sampler.evaluate(1_000_000, [total, total])
-        (self.root / "bandwidth-samples.json").write_text(json.dumps(sampler.samples) + "\n", encoding="utf-8")
         data = []
         for task_id, directory in zip(tasks, destinations):
             data.append(self.verify_task(task_id, manifest))

@@ -40,6 +40,7 @@ jobs:
           python3 .github/tests/test-go-packaging.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
           python3 .github/tests/test-go-test-binaries.py -v
+          python3 .github/tests/test-go-cluster-diagnostics.py -v
       - name: Build all candidate archives once
         env:
           GO_AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer

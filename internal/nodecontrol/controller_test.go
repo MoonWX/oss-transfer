@@ -349,15 +349,14 @@ func TestHTTPFailureMetadataIsUsefulWithoutLeakingCredentialsAndBodyIsReplayed(t
 func TestSDKMultipartRetrySpendsEveryActualAttempt(t *testing.T) {
 	f := newFixture(t, Options{PutQPS: 1000, HeadQPS: 1000, Threshold: 1, MinQPS: 10})
 	must(t, f.limits.ApplyParent(context.Background(), ratelimit.ParentLimit{ParentID: 7, Generation: 1, Revision: 1, PutQPS: 10}))
-	var attemptMu sync.Mutex
-	var attemptTimes []time.Time
+	parent := &recordingParentLimiter{Limiter: f.limits, admitted: map[requestAdmission]int{}}
+	f.controller.mu.Lock()
+	f.controller.bytes = parent
+	f.controller.mu.Unlock()
 	var attempts atomic.Int64
 	var failed atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
-		attemptMu.Lock()
-		attemptTimes = append(attemptTimes, time.Now())
-		attemptMu.Unlock()
 		io.Copy(io.Discard, r.Body)
 		q := r.URL.Query()
 		switch {
@@ -393,13 +392,14 @@ func TestSDKMultipartRetrySpendsEveryActualAttempt(t *testing.T) {
 		measured += sample.values[1]
 	}
 	f.controller.mu.Unlock()
-	attemptMu.Lock()
-	for i := 1; i < len(attemptTimes); i++ {
-		if spacing := attemptTimes[i].Sub(attemptTimes[i-1]); spacing < 85*time.Millisecond {
-			t.Errorf("SDK multipart/retry bypassed parent cap: interval=%s", spacing)
-		}
+	// Observe successful admission by the real limiter. Server arrival times
+	// can bunch after admission when a goroutine or network write is delayed.
+	// The limiter's rate and joint-budget atomicity have separate tests.
+	parent.mu.Lock()
+	if len(parent.admitted) != 1 || parent.admitted[requestAdmission{7, 1, "put"}] != int(attempts.Load()) {
+		t.Errorf("SDK multipart/retry bypassed parent admission: admitted=%v actual=%d", parent.admitted, attempts.Load())
 	}
-	attemptMu.Unlock()
+	parent.mu.Unlock()
 	if measured != attempts.Load() {
 		t.Fatalf("SDK retry bypassed node limiter: measured=%d actual=%d", measured, attempts.Load())
 	}
@@ -408,4 +408,26 @@ func TestSDKMultipartRetrySpendsEveryActualAttempt(t *testing.T) {
 	if len(history) != 2 || history[0].TriggerRequest.Operation != "UploadPart" {
 		t.Fatal("actual retry failure not recorded as multipart incident")
 	}
+}
+
+type requestAdmission struct {
+	parentID   int64
+	generation uint64
+	kind       string
+}
+
+type recordingParentLimiter struct {
+	*ratelimit.Limiter
+	mu       sync.Mutex
+	admitted map[requestAdmission]int
+}
+
+func (l *recordingParentLimiter) TryRequest(parentID int64, generation uint64, kind string, notBefore time.Time) (time.Duration, <-chan struct{}, error) {
+	delay, changed, err := l.Limiter.TryRequest(parentID, generation, kind, notBefore)
+	if err == nil && delay <= 0 {
+		l.mu.Lock()
+		l.admitted[requestAdmission{parentID, generation, kind}]++
+		l.mu.Unlock()
+	}
+	return delay, changed, err
 }

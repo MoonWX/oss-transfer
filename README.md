@@ -32,7 +32,7 @@ The installer prints the log path. With the default Linux paths, read it using:
 sudo cat /var/lib/oss-transfer-go/master/logs/service.log
 ```
 
-Custom paths, service commands and offline installation are covered in the [native deployment guide](deploy/go/README.md). Release files are also available on [GitHub](https://github.com/MoonWX/oss-transfer/releases).
+Custom paths, service commands and offline installation are covered in the [native deployment guide](deploy/go/README.md). Platform archives are also available on [GitHub](https://github.com/MoonWX/oss-transfer/releases).
 
 ## Add Agents
 

@@ -32,7 +32,7 @@ Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
 sudo cat /var/lib/oss-transfer-go/master/logs/service.log
 ```
 
-自定义路径、服务管理命令和离线安装见[原生部署文档](deploy/go/README.md)。安装文件也可从 [GitHub](https://github.com/MoonWX/oss-transfer/releases) 下载。
+自定义路径、服务管理命令和离线安装见[原生部署文档](deploy/go/README.md)。各平台压缩包也可从 [GitHub](https://github.com/MoonWX/oss-transfer/releases) 下载。
 
 ## 添加 Agent
 

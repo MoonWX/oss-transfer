@@ -23,7 +23,9 @@ The release workflow selects artifacts by commit and CI run ID. It accepts a suc
 
 ## Published files
 
-GitHub Release and OSS contain six native archives for Linux, macOS and Windows on amd64 and arm64. Each archive includes Master, Agent and CLI. Individual binaries, installers, Compose, version metadata and SHA-256 checksums are also published. The Docker image uses the tested Linux binaries.
+GitHub Release contains six archives for Linux, macOS and Windows on amd64 and arm64. Each archive includes Master, Agent, CLI, documentation and checksums.
+
+OSS stores these archives plus the binaries and metadata used by the installer and Agent enrollment. Installation scripts are maintained in the repository. The Docker image uses the tested Linux binaries.
 
 | Version | OSS location | GitHub | Docker Hub tags |
 | --- | --- | --- | --- |

@@ -130,7 +130,17 @@ jobs:
         run: |
           release_flags=()
           if [[ "$RELEASE_TAG" = *-* ]]; then release_flags=(--prerelease --latest=false); fi
-          assets=(output/*)
+          assets=(
+            output/oss-transfer-go-linux-amd64.tar.gz
+            output/oss-transfer-go-linux-arm64.tar.gz
+            output/oss-transfer-go-darwin-amd64.tar.gz
+            output/oss-transfer-go-darwin-arm64.tar.gz
+            output/oss-transfer-go-windows-amd64.zip
+            output/oss-transfer-go-windows-arm64.zip
+          )
+          for asset in "${assets[@]}"; do
+            [[ -f "$asset" && ! -L "$asset" ]] || { echo "Missing release archive: $asset" >&2; exit 1; }
+          done
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
             if [[ "$RELEASE_TAG" = *-* ]]; then gh release edit "$RELEASE_TAG" "${release_flags[@]}"; fi

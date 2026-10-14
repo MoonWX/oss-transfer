@@ -5,10 +5,12 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 import warnings
@@ -187,6 +189,59 @@ class Packaging(unittest.TestCase):
             DOCKER.create(self.source, self.output)
         self.assertFalse(self.output.exists())
         self.assertEqual({path.name for path in self.root.iterdir()}, {"packages"})
+
+    def github_publication(self, existing=False):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        step = workflow.split("      - name: Publish GitHub Release\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        calls = self.root / "github-calls.jsonl"
+        calls.unlink(missing_ok=True)
+        gh = bin_dir / "gh"
+        gh.write_text(r"""#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['GH_TEST_CALLS'], 'a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\n')
+if sys.argv[1:3] == ['release', 'view']:
+    sys.exit(0 if os.environ['GH_TEST_EXISTS'] == '1' else 1)
+""")
+        gh.chmod(0o755)
+        environment = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
+                           GH_TEST_CALLS=str(calls), GH_TEST_EXISTS="1" if existing else "0",
+                           RELEASE_TAG="v" + self.version)
+        result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=self.root,
+                                env=environment, text=True, capture_output=True)
+        commands = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+        return result, commands
+
+    def test_github_release_uploads_only_six_platform_archives(self):
+        self.assemble()
+        shutil.copytree(self.output, self.root / "output")
+        expected = {"output/oss-transfer-go-" + platform + extension
+                    for platform, extension in (
+                        ("linux-amd64", ".tar.gz"), ("linux-arm64", ".tar.gz"),
+                        ("darwin-amd64", ".tar.gz"), ("darwin-arm64", ".tar.gz"),
+                        ("windows-amd64", ".zip"), ("windows-arm64", ".zip"))}
+        for existing in (False, True):
+            with self.subTest(existing_release=existing):
+                result, commands = self.github_publication(existing)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                uploads = [command for command in commands if command[:2] in (["release", "create"], ["release", "upload"])]
+                self.assertEqual(len(uploads), 1)
+                assets = [value for value in uploads[0] if value.startswith("output/")]
+                self.assertEqual(len(assets), 6)
+                self.assertEqual(set(assets), expected)
+                self.assertEqual(uploads[0][1], "upload" if existing else "create")
+
+    def test_github_release_rejects_missing_archive_before_publishing(self):
+        self.assemble()
+        shutil.copytree(self.output, self.root / "output")
+        (self.root / "output/oss-transfer-go-windows-arm64.zip").unlink()
+        result, commands = self.github_publication()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing release archive", result.stderr)
+        self.assertEqual(commands, [])
 
     def test_publish_refuses_unlisted_or_changed_payloads(self):
         self.assemble()

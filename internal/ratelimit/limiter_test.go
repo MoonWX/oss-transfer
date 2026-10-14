@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
@@ -264,35 +265,48 @@ func TestNoInitialBurstAndEveryReadIsBounded(t *testing.T) {
 }
 
 func TestDynamicUnlimitedUpdateWakesBlockedRead(t *testing.T) {
-	f := newFixture(t)
-	apply(t, f.limiter, 0, 1)
-	r, err := f.limiter.Wrap(bg, 1, 1, io.NopCloser(bytes.NewReader([]byte("x"))), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	done := make(chan error, 1)
-	go func() { var one [1]byte; _, err := r.Read(one[:]); done <- err }()
-	select {
-	case err := <-done:
-		t.Fatalf("initial 1 byte/s read did not wait: %v", err)
-	case <-time.After(40 * time.Millisecond):
-	}
-	start := time.Now()
-	if err := f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 1, Revision: 2, BandwidthBytesPerSecond: 0}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-done:
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		apply(t, f.limiter, 0, 1)
+		payload := bytes.Repeat([]byte("x"), 64)
+		r, err := f.limiter.Wrap(bg, 1, 1, io.NopCloser(bytes.NewReader(payload)), int64(len(payload)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if time.Since(start) > 300*time.Millisecond {
-			t.Fatal("rate change did not wake budget wait")
+		defer r.Close()
+		type readResult struct {
+			n    int
+			data []byte
+			err  error
 		}
-	case <-time.After(time.Second):
-		t.Fatal("read remained blocked after unlimited update")
-	}
+		done := make(chan readResult, 1)
+		go func() {
+			data := make([]byte, len(payload))
+			n, err := io.ReadFull(r, data)
+			done <- readResult{n: n, data: data, err: err}
+		}()
+		// Wait until Read is blocked on its budget without advancing the clock.
+		synctest.Wait()
+		select {
+		case result := <-done:
+			t.Fatalf("initial 1 byte/s read did not wait: %+v", result)
+		default:
+		}
+		if err := f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 1, Revision: 2, BandwidthBytesPerSecond: 0}); err != nil {
+			t.Fatal(err)
+		}
+		// The notification must release the reader before its old timer fires.
+		// Real database commit and runner scheduling delays do not advance time.
+		synctest.Wait()
+		select {
+		case result := <-done:
+			if result.err != nil || result.n != len(payload) || !bytes.Equal(result.data, payload) {
+				t.Fatalf("read after unlimited update: %+v", result)
+			}
+		default:
+			t.Fatal("read remained blocked after unlimited update")
+		}
+	})
 }
 
 type shortHeldInput struct{ entered, release chan struct{} }

@@ -79,12 +79,17 @@ def eventually(check, description, timeout=60):
     raise AssertionError("Timed out: " + description)
 
 
-def create_fixture(directory, rate=False):
+def create_fixture(directory, rate=False, bandwidth=False):
     directory.mkdir()
     manifest = {}
-    for index in range(256 if rate else 260):
-        size = 128 * 1024 if rate else (17 * MIB if index in (64, 192) else 4096)
-        if not rate and index == 0:
+    for index in range(129 if bandwidth else 256 if rate else 260):
+        if bandwidth:
+            # Cross the real 128-object dispatch boundary with payload in both
+            # batches, without making the bandwidth check a small-file benchmark.
+            size = 4 * MIB if index in (0, 128) else 0
+        else:
+            size = 128 * 1024 if rate else (17 * MIB if index in (64, 192) else 4096)
+        if not bandwidth and not rate and index == 0:
             size = 0
         suffix = " unicode 空格.bin" if index == 2 else ".bin"
         key = f"{index:04d}" + suffix
@@ -152,6 +157,11 @@ class GrowthSampler:
 
     def evaluate(self, rate, expected_bytes):
         require(len(self.samples) >= 30, "Bandwidth test produced too few physical-byte samples")
+        # Each parent has two nonempty objects, one reader per Agent. At the
+        # fixture's 2 Mbps cap, each Agent can retain 64 KiB of earned credit
+        # plus one <=12.5 KB reserved read. Allow 256 KiB for those boundaries
+        # and sampling jitter; a slower CPU must not hide an unenforced cap.
+        allowance = 256 * 1024
         results = []
         for column, total in enumerate(expected_bytes, 1):
             windows = []
@@ -163,16 +173,13 @@ class GrowthSampler:
                 if end is None or end[column] >= total:
                     continue
                 elapsed, amount = end[0] - start[0], end[column] - start[column]
-                # Covers a read/write chunk already reserved at the boundary,
-                # sampling jitter and the two Agents' initial token allowance.
-                allowance = MIB
                 require(amount <= rate * elapsed + allowance,
                         f"Task {column} exceeded its cluster bandwidth: {amount} bytes/{elapsed:.2f}s")
                 windows.append({"seconds": elapsed, "bytes": amount, "bytesPerSecond": amount / elapsed})
             require(len(windows) >= 3, f"Task {column}: fewer than three useful 5-second bandwidth windows")
             require(max(row["bytesPerSecond"] for row in windows) > rate * 0.45,
                     "Bandwidth upper-bound check was vacuous: transfer made too little progress")
-            results.append({"limitBytesPerSecond": rate, "boundaryAllowanceBytes": MIB, "windows": windows})
+            results.append({"limitBytesPerSecond": rate, "boundaryAllowanceBytes": allowance, "windows": windows})
         concurrent = [row for row in self.samples if all(0 < row[i + 1] < value for i, value in enumerate(expected_bytes))]
         require(len(concurrent) >= 25 and concurrent[-1][0] - concurrent[0][0] >= 5,
                 "Two parent tasks were not concurrently writing payload for at least 5 seconds")
@@ -673,13 +680,14 @@ class Harness:
         self.record("page read APIs and Agent-backed S3 metadata comparison", getEndpoints=reads,
                     exceptionQueries=["failed", "fallback"], missingTarget="NOT_FOUND")
 
-    def rate_fixture(self):
-        directory = self.root / "rate-fixture"
-        manifest = create_fixture(directory, rate=True)
+    def rate_fixture(self, bandwidth=False):
+        directory = self.root / ("bandwidth-fixture" if bandwidth else "rate-fixture")
+        manifest = create_fixture(directory, rate=not bandwidth, bandwidth=bandwidth)
+        prefix = "bandwidth/" if bandwidth else "rate/"
         def put(item):
             key, _ = item
             with (directory / key).open("rb") as body:
-                self.s3.put_object(Bucket=self.buckets["rate"], Key="rate/" + key, Body=body)
+                self.s3.put_object(Bucket=self.buckets["rate"], Key=prefix + key, Body=body)
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(put, manifest.items()))
         return directory, manifest
@@ -690,7 +698,7 @@ class Harness:
         sampler = GrowthSampler(destinations)
         try:
             with sampler:
-                tasks = [self.create("/api/master/local-transfers", self.download_body(self.buckets["rate"], "rate/", directory, 8),
+                tasks = [self.create("/api/master/local-transfers", self.download_body(self.buckets["rate"], "bandwidth/", directory, 2),
                                      "bandwidth-" + str(index)) for index, directory in enumerate(destinations)]
                 self.task_report(tasks[0], expected_status=409)
                 for task_id in tasks:
@@ -703,12 +711,13 @@ class Harness:
                 if not preserving_error:
                     raise
         total = sum(row["size"] for row in manifest.values())
-        result = sampler.evaluate(1_000_000, [total, total])
+        result = sampler.evaluate(250_000, [total, total])
         data = []
         for task_id, directory in zip(tasks, destinations):
             data.append(self.verify_task(task_id, manifest))
-            self.verify_local(directory, "rate", manifest)
-        self.record("two concurrent 8 Mbps parents share each limit across two Agents", tasks=data,
+            self.verify_local(directory, "bandwidth", manifest)
+            self.verify_report(task_id, manifest, "OSS_TO_LOCAL", "bandwidth/", "bandwidth/", target_directory=directory)
+        self.record("two concurrent 2 Mbps parents share each limit across two Agents", tasks=data,
                     seconds=time.monotonic() - started, physicalByteWindows=result, runningReportHTTPStatus=409)
 
     def kill_restart(self, task_id):
@@ -819,8 +828,9 @@ def main():
         h.node_settings()
         h.core()
         if args.scenario == "all":
+            _, bandwidth_manifest = h.rate_fixture(bandwidth=True)
+            h.bandwidth(bandwidth_manifest)
             directory, manifest = h.rate_fixture()
-            h.bandwidth(manifest)
             h.recovery(directory, manifest)
         h.evidence["status"] = "PASSED"
         h.save()

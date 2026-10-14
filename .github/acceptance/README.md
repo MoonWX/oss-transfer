@@ -42,7 +42,7 @@ Release waits for every job. Builds and publication read the same [platform list
 | State and request handling | Duplicate requests preserve one task; stale work cannot resume after stop; ledger entries and counters agree. Cancellation, source changes, path escapes and cleanup ownership are checked. |
 | Setup and CLI | Setup protects administration, credentials are enforced, generated Agent URLs match the release, and accounts, nodes and limits survive restart. |
 | Transfers | All three directions produce the expected keys and hashes. Both selected Agents receive work. Naming rules, SKIP, OVERWRITE and child totals match the fixture. |
-| Task bandwidth | Two concurrent 8 Mbps tasks each share their own limit across two Agents. The test samples destination growth during transfer. |
+| Task bandwidth | Two concurrent 2 Mbps tasks each share their own limit across two Agents. The test samples destination growth during transfer and verifies the completed files and reports. |
 | Stop and restart | Writes stop after acknowledgement; stop intent survives restart. Killing an Agent preserves completed progress and existing targets. Recovery finishes the remaining files and removes its temporary files. |
 | Multipart recovery | Restart cleans up the interrupted upload and spool while retaining unrelated uploads and the previous completed object. The interrupted object is retried from the beginning. |
 | Reports | Exported rows, statuses, destination keys and totals match the verified inventory. |
@@ -50,7 +50,7 @@ Release waits for every job. Builds and publication read the same [platform list
 | Native installation | Service PID and version are correct. Upgrade preserves passwords and enrollment. Bad checksums are rejected before stopping the service. Rollback and existing-data adoption are exercised. |
 | Docker and Compose | Setup, enrollment and bind-mounted transfers work without root in the container. Recreating containers preserves state. |
 
-The main fixture contains 260 objects, crossing the 128-object dispatch boundary. It includes an empty object, a name with Unicode and spaces, and two 17 MiB objects for multipart upload. Bandwidth, recovery and inventory tests use separate fixtures.
+The main fixture contains 260 objects, crossing the 128-object dispatch boundary. It includes an empty object, a name with Unicode and spaces, and two 17 MiB objects for multipart upload. The bandwidth fixture has 129 objects: two 4 MiB files, one in each dispatch batch, and 127 empty files. At 2 Mbps, its 8 MiB payload takes about 34 seconds per task. Recovery keeps its separate 256-file fixture and 8 Mbps limit.
 
 SeaweedFS supplies the S3 service; the tests do not connect to JD Cloud OSS. Provider-specific signing, permissions and throttling need a run against that provider. Unit tests use HTTP simulators to reproduce protocol errors.
 

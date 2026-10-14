@@ -119,6 +119,24 @@ class DiagnosticsTest(unittest.TestCase):
         self.harness.api.assert_not_called()
         self.assertEqual(self.harness.evidence, {})
 
+    def test_two_mbps_sampling_rejects_independent_two_mbps_node_budgets(self):
+        total, rate = 8 * CLUSTER.MIB, 250_000
+        sampler = CLUSTER.GrowthSampler([])
+        normal = [[index / 5, min(total, index * rate // 5), min(total, index * rate // 5)]
+                  for index in range(180)]
+        sampler.samples = normal
+        result = sampler.evaluate(rate, [total, total])
+        self.assertTrue(all(len(task["windows"]) >= 3 for task in result))
+        # Two Agents independently spending the full 2 Mbps parent budget
+        # produce 2.5 MB in five seconds. Also reject 30% overspeed so a slow
+        # emulated CPU cannot hide a missing limiter inside boundary allowance.
+        for factor in (1.3, 2):
+            with self.subTest(factor=factor):
+                sampler.samples = [[stamp, min(total, int(first * factor)), min(total, int(second * factor))]
+                                   for stamp, first, second in normal]
+                with self.assertRaisesRegex(AssertionError, "exceeded its cluster bandwidth"):
+                    sampler.evaluate(rate, [total, total])
+
 
 if __name__ == "__main__":
     unittest.main()

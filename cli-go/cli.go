@@ -82,6 +82,9 @@ func parseGlobals(args []string) (globalOptions, error) {
 			o.args = append(o.args, arg)
 		}
 	}
+	if len(o.args) > 0 && o.args[0] == "config" {
+		return o, nil
+	}
 	parsed, err := url.Parse(o.host)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
 		return o, cliErrorf("--host 必须是服务 origin，例如 http://10.0.0.10:1685")
@@ -113,6 +116,9 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 	if len(options.args) == 0 || options.help || options.args[0] == "help" {
 		fmt.Fprint(output, helpForLocale(options.args, language))
 		return 0
+	}
+	if options.args[0] == "config" {
+		return runCLIConfig(options, output, errors)
 	}
 	normalized, err := normalizeCLICommand(options.args)
 	if err != nil {

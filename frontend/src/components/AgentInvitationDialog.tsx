@@ -95,7 +95,7 @@ export default function AgentInvitationDialog({
   }
   const methods = [
     {
-      label: invitation?.nativeAgent ? "Linux / macOS" : t("传统部署"),
+      label: invitation?.nativeAgent ? "Linux / macOS / FreeBSD" : t("传统部署"),
       command: invitation?.traditionalCommand,
     },
     { label: "Windows", command: invitation?.windowsCommand },

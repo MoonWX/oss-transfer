@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -542,14 +543,31 @@ func numberCLIChildren(parent int, children []map[string]interface{}, childIDs i
 	}
 	indexOf := func(task map[string]interface{}) int {
 		if v, ok := task["shardIndex"]; ok && v != nil {
-			n := getInt(task, "shardIndex")
-			if n >= 0 {
-				return n
+			var n int64
+			valid := true
+			switch value := v.(type) {
+			case int:
+				n = int64(value)
+			case int64:
+				n = value
+			case float64:
+				n = int64(value)
+				valid = value == float64(n)
+			case json.Number:
+				var err error
+				n, err = value.Int64()
+				valid = err == nil
+			default:
+				valid = false
+			}
+			if valid && n >= 0 && n < math.MaxInt32 {
+				return int(n)
 			}
 		}
 		if m := legacyChildIndex.FindStringSubmatch(getString(task, "shardId")); m != nil {
-			i, _ := strconv.Atoi(m[1])
-			return i
+			if i, err := strconv.Atoi(m[1]); err == nil && i < math.MaxInt32 {
+				return i
+			}
 		}
 		if i, ok := indices[getInt(task, "taskIndex")]; ok {
 			return i
@@ -588,14 +606,17 @@ func numberCLIChildren(parent int, children []map[string]interface{}, childIDs i
 	}
 	next := 1
 	for _, task := range result {
-		n := indexOf(task) + 1
-		if n == math.MaxInt32+1 {
+		index := indexOf(task)
+		var n int
+		if index == math.MaxInt32 {
 			for occupied[next] {
 				next++
 			}
 			n = next
 			occupied[n] = true
 			next++
+		} else {
+			n = index + 1
 		}
 		task["childTaskId"] = fmt.Sprintf("%d-%d", parent, n)
 	}

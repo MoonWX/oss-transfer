@@ -6,22 +6,31 @@ OSS Transfer copies objects between S3-compatible buckets and transfers files be
 
 ## Install the Master
 
-Native installation supports Linux, macOS and Windows on amd64 and arm64. On Linux or macOS, download the installer and run it:
+Prebuilt packages are available for:
+
+| System | Architectures |
+| --- | --- |
+| Linux | amd64, arm64, ARMv7, riscv64, loong64 |
+| macOS, Windows, FreeBSD | amd64, arm64 |
+
+On Linux or macOS, download the installer and run it:
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
-sudo bash install.sh --role master --method native --lang en
+sudo bash install.sh
 ```
 
-The installer asks for the listening port and registers a systemd service on Linux or a launchd service on macOS. For a macOS user service, run `bash install.sh --role master --method native --user` without `sudo`.
+The installer asks for the role and listening port and registers a systemd service on Linux or a launchd service on macOS. For a macOS user service, run `bash install.sh --role master --method native --user` without `sudo`.
+
+On FreeBSD, run `pkg install bash curl` as root, download the same script and run `bash install.sh`. Services are managed through rc.d. See [platform requirements](deploy/go/README.md#platform-requirements) for CPU and OS limits.
 
 On Windows, open PowerShell as Administrator:
 
 ```powershell
 $ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
 Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
-.\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Yes
+.\Install.ps1
 ```
 
 Open `http://HOST:1685`, or the port you chose. Enter the setup token from the service log, create an administrator account, and set the Master URL to an address your browser and Agent hosts can reach.
@@ -39,7 +48,7 @@ Custom paths, service commands and offline installation are covered in the [nati
 A single-host installation needs an Agent alongside the Master. To add one now or expand the cluster later:
 
 1. Open **Execution nodes → Add node** and create an invitation.
-2. Copy the **Linux / macOS** or **Windows** command and run it on the execution host with administrator privileges.
+2. Copy the **Linux / macOS / FreeBSD** or **Windows** command and run it on the execution host with administrator privileges.
 3. Wait for the node to appear online before assigning tasks to it.
 
 Agents connect to the Master URL and save their enrollment credentials locally. Keep Master and Agents on the same release.
@@ -79,19 +88,21 @@ oss-transfer-cli --host http://HOST:1685 task resume 123
 oss-transfer-cli --host http://HOST:1685 task report 123 --output task-123.zip
 ```
 
-Run `oss-transfer-cli --help` for task creation, storage connections and node management. Add `--json` for scripts, or choose a language with `--lang en`, `--lang zh` or `--lang ja`.
+Run `oss-transfer-cli --help` for task creation, storage connections and node management. Add `--json` for scripts.
+
+The CLI follows the system language, using English when it cannot match English, Chinese or Japanese. To save a preference, run `oss-transfer-cli config set language en` once. Use `auto` to follow the system again. `--lang` overrides the language for one command.
 
 ## Upgrade and back up
 
-Stop active tasks before upgrading. Download the latest installer and run it for each installed role, keeping any custom paths and service names:
+Stop active tasks, download the latest installer and run:
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
-sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --upgrade --yes
+sudo bash install.sh --upgrade
 ```
 
-Use `--role agent` for an Agent. For a macOS user service, keep `--user` and run without `sudo`. On Windows, download `Install.ps1` again and run it with `-Role master -ReleaseUrl $ReleaseUrl -Upgrade -Yes`, changing the role for an Agent.
+The installer finds the installed Master and Agents, lists them for confirmation, and reuses their paths and service settings. Add `--role agent` to upgrade only Agents. For a macOS user service, use `bash install.sh --upgrade --user`. On Windows, download `Install.ps1` again and run `.\Install.ps1 -Upgrade` in Administrator PowerShell.
 
 The installer backs up the stopped service and its database before replacement. If the new service fails its startup check, it restores that backup. For your own backups, stop the service and copy its configuration and data directories; use the paths printed by the installer.
 

@@ -113,7 +113,7 @@ func (r *Repository) ImportLegacy(input LegacyImport) error {
 			}
 			numbers := map[int]bool{}
 			for _, child := range row.Children {
-				if child.ParentID != p.ID || child.Number < 1 || child.Number > 1<<31 || numbers[child.Number] || child.Node == "" || child.Key == "" || len(child.Raw) == 0 || !json.Valid(child.Raw) || len(child.Raw) > 64<<20 {
+				if child.ParentID != p.ID || child.Number < 1 || child.Number > 1<<31-1 || numbers[child.Number] || child.Node == "" || child.Key == "" || len(child.Raw) == 0 || !json.Valid(child.Raw) || len(child.Raw) > 64<<20 {
 					return errors.New("invalid or ambiguous legacy child")
 				}
 				numbers[child.Number] = true

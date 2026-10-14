@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble versioned Go download assets from the tested six-platform archives."""
+"""Assemble versioned Go download assets from the tested native archives."""
 import argparse
 import hashlib
 import importlib.util

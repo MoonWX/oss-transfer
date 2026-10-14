@@ -33,10 +33,12 @@ class Lifecycle:
         self.root = args.output.resolve()
         self.root.mkdir(parents=True, exist_ok=False)
         self.system = platform.system()
-        self.os_name = {'Linux':'linux','Darwin':'darwin','Windows':'windows'}[self.system]
-        self.arch = 'arm64' if platform.machine().lower() in ('arm64','aarch64') else 'amd64'
+        self.os_name = {'Linux':'linux','Darwin':'darwin','Windows':'windows','FreeBSD':'freebsd'}[self.system]
+        machine = platform.machine().lower()
+        self.arch = {'x86_64':'amd64','amd64':'amd64','arm64':'arm64','aarch64':'arm64','armv7':'armv7','armv7l':'armv7','riscv64':'riscv64','loongarch64':'loong64','loong64':'loong64'}[machine]
         self.cli_path=self.root/'shared CLI'/('oss-transfer-cli.exe' if self.system=='Windows' else 'oss-transfer-cli')
         self.names = {role:'oss-go-qa-'+role+'-'+secrets.token_hex(5) for role in ('master','agent')}
+        if self.system == 'FreeBSD': self.names = {role:name.replace('-','_') for role,name in self.names.items()}
         self.roles = []
         self.secrets = []
         self.token = None
@@ -48,7 +50,7 @@ class Lifecycle:
         for role in ('master','agent','cli'):
             source = getattr(args,role).resolve()
             output = subprocess.check_output([str(source),'--version'],text=True, encoding="utf-8").strip()
-            current = re.search(r'^Version: (.+)$',output,re.MULTILINE)[1] if role=='cli' else output.split()[1]
+            current = json.loads(subprocess.check_output([str(source),'--version','--json'],text=True,encoding='utf-8'))['version'] if role=='cli' else output.split()[1]
             require(version is None or version == current,'Master and Agent versions differ')
             version = current
             self.evidence[role] = {'version':output,'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
@@ -93,7 +95,7 @@ class Lifecycle:
 
     @contextmanager
     def latest_release(self):
-        mirror=self.root/'http-release'
+        mirror=self.root/('http-release-'+secrets.token_hex(3))
         latest=mirror/'latest'
         version_name=self.version if self.version.startswith('v') else 'v'+self.version
         versioned=mirror/version_name
@@ -116,6 +118,7 @@ class Lifecycle:
             yield 'http://127.0.0.1:'+str(server.server_port)+'/latest'
             require('/latest/manifest.tsv' in requests and '/'+version_name+'/manifest.tsv' in requests,
                     'Latest installation did not resolve the fixed-version manifest')
+            require(requests.count('/latest/manifest.tsv') == 1, 'Latest was resolved separately for installed roles')
             require(not any(path.startswith('/latest/') and path!='/latest/manifest.tsv' for path in requests),
                     'Installer downloaded a mutable latest binary')
             self.record('latest_resolves_fixed_version_before_binary_download',requests=requests)
@@ -124,7 +127,7 @@ class Lifecycle:
             server.server_close()
             thread.join(timeout=5)
 
-    def install(self,role,upgrade=False,release=None,release_url=None,expect=0,token=None,timeout=120,adopt_config=None,replace_cli=False):
+    def install(self,role,upgrade=False,release=None,release_url=None,expect=0,token=None,timeout=120,adopt_config=None,replace_cli=False,discover=False,discover_all=False):
         directory=self.root/role
         paths={name:directory/name for name in ('bin','config','data','backups')}
         if role not in self.roles:
@@ -150,6 +153,19 @@ class Lifecycle:
             if replace_cli:command+=['--replace-cli']
             if role=='master':command+=['--listen','127.0.0.1:'+str(self.port)]
             else:command+=['--master-url',self.origin]
+        if discover:
+            require(upgrade, 'Discovery is an upgrade operation')
+            # A custom service-name filter isolates this test on shared runners.
+            # Role, all directories, CLI path and enrollment inputs are omitted.
+            if self.system == 'Windows':
+                command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',self.args.repo/'deploy/go/Install.ps1',
+                         '-Upgrade',('-ReleaseUrl' if release_url else '-PackageDir'),release_url or release or self.release,'-Yes','-StartupTimeout',str(timeout)]
+                if not discover_all: command+=['-ServiceName',self.names[role]]
+            else:
+                command=['bash',self.args.repo/'install.sh','--upgrade',('--release-url' if release_url else '--package-dir'),release_url or release or self.release,
+                         '--yes','--startup-timeout',str(timeout)]
+                if not discover_all: command+=['--service-name',self.names[role]]
+                if self.system == 'Darwin' and not self.args.system: command+=['--user']
         observations=[]
         monitor_stop=threading.Event()
         def monitor_scm():
@@ -316,6 +332,8 @@ func main(){
         name=self.names[role]
         if self.system=='Linux':
             return int(subprocess.check_output(['systemctl','show',name,'-p','MainPID','--value'],text=True, encoding="utf-8").strip())
+        if self.system=='FreeBSD':
+            return int((Path('/var/run')/(name+'.pid')).read_text().strip())
         if self.system=='Darwin':
             domain='system' if self.args.system else 'gui/'+str(os.getuid())
             output=subprocess.check_output(['launchctl','print',domain+'/'+name],text=True, encoding="utf-8")
@@ -409,22 +427,36 @@ func main(){
         require(len(nodes)==1 and nodes[0]['label']=='persisted Agent label','Agent enrollment did not persist')
         member_id=nodes[0]['id']
         self.record('fresh_agent_service_authenticated',pid=agent_before,nodeId=member_id)
-        self.install('master',upgrade=True)
+        agent_config=self.root/'agent/config/service.json'
+        agent_bytes=agent_config.read_bytes()
+        if self.args.all_installed:
+            with self.latest_release() as release_url:
+                self.install('master',upgrade=True,discover=True,discover_all=True,release_url=release_url)
+        else:
+            self.install('master',upgrade=True,discover=True)
         after=self.pid('master')
         require(after>0 and after!=before,'Master upgrade did not replace the service process')
         require(config.read_bytes()==config_bytes,'Upgrade modified configuration')
         self.login()
         nodes=self.api('/api/master/nodes')['nodes']
         require(len(nodes)==1 and nodes[0]['id']==member_id,'Master upgrade lost membership')
-        self.record('master_upgrade_preserves_configuration_password_and_membership',before=before,after=after)
-        agent_config=self.root/'agent/config/service.json'
-        agent_bytes=agent_config.read_bytes()
-        self.install('agent',upgrade=True)
+        self.record('discovered_master_upgrade_preserves_custom_paths_configuration_password_and_membership',before=before,after=after)
+        if not self.args.all_installed: self.install('agent',upgrade=True,discover=True)
         require(self.pid('agent')!=agent_before,'Agent was not restarted')
         require(agent_config.read_bytes()==agent_bytes,'Agent configuration changed')
         nodes=self.api('/api/master/nodes')['nodes']
         require(len(nodes)==1 and nodes[0]['id']==member_id,'Agent upgrade re-enrolled or lost identity')
-        self.record('agent_upgrade_preserves_identity_without_invitation')
+        self.record('discovered_agent_upgrade_preserves_custom_paths_and_identity_without_invitation')
+        for role in ('master','agent'):
+            installed=self.root/role/'bin'/('install.json' if self.system=='Windows' else 'install.tsv')
+            if self.system=='Windows': metadata=json.loads(installed.read_text(encoding='utf-8-sig'))
+            else: metadata=dict(line.split('\t',1) for line in installed.read_text(encoding='utf-8').splitlines())
+            expected_cli=self.cli_path if role=='master' else self.root/role/'bin'/'oss-transfer-cli'
+            if self.system=='Windows' and role=='agent': expected_cli=expected_cli.with_suffix('.exe')
+            require(metadata['cliPath']==str(expected_cli), 'Discovered upgrade changed the custom CLI location')
+            require(metadata['backupDir']==str(self.root/role/'backups'), 'Discovered upgrade changed the custom backup directory')
+            require(any((self.root/role/'backups').iterdir()), 'Upgrade did not retain a backup in the custom directory')
+        if self.args.all_installed: self.record('unfiltered_upgrade_discovers_both_roles_and_preserves_configuration_password_membership_and_cli_paths')
         tampered=self.root/'tampered'
         shutil.copytree(self.release,tampered)
         with next(tampered.glob('oss-transfer-master-*')).open('ab') as stream:stream.write(b'bad-checksum')
@@ -477,13 +509,18 @@ func main(){
     def remove_service(self,role):
         name=self.names[role]
         try: old_pid=self.pid(role)
-        except (ValueError,subprocess.CalledProcessError,TypeError): old_pid=0
+        except (ValueError,subprocess.CalledProcessError,TypeError,OSError): old_pid=0
         if self.system=='Linux':
             self.invoke(['systemctl','stop',name])
             self.invoke(['systemctl','disable',name])
             (Path('/etc/systemd/system')/(name+'.service')).unlink(missing_ok=True)
             self.invoke(['systemctl','daemon-reload'])
             self.invoke(['systemctl','reset-failed',name])
+        elif self.system=='FreeBSD':
+            unit=Path('/usr/local/etc/rc.d')/name
+            if unit.is_file():
+                self.invoke([unit,'onestop'])
+                unit.unlink()
         elif self.system=='Darwin':
             domain='system' if self.args.system else 'gui/'+str(os.getuid())
             self.invoke(['launchctl','bootout',domain+'/'+name])
@@ -515,6 +552,7 @@ def main():
     parser.add_argument('--cli',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--all-installed',action='store_true',help='Disposable CI hosts only: exercise unfiltered discovery of every installed role')
     parser.add_argument('--system',action='store_true',help='macOS: system LaunchDaemon (requires root)')
     args=parser.parse_args()
     lifecycle=Lifecycle(args)

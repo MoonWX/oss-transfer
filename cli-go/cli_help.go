@@ -37,6 +37,10 @@ const cliHelp = `OSS Transfer CLI
   whoami                         查看当前登录状态
   change-password --old-password-env OLD --new-password-env NEW
 
+本机设置
+  config get language            查看语言设置
+  config set language auto|zh|en|ja  保存语言，默认跟随系统
+
 清单工具
   diff-objects <源清单目录> <有序目标清单> <输出目录>
   count-lines <目录>
@@ -44,7 +48,7 @@ const cliHelp = `OSS Transfer CLI
 
 全局选项
   --host <http://IP:1685>         服务地址，默认 http://localhost:1685
-  --lang zh|en|ja                 界面语言，支持带地区的语言代码
+  --lang auto|zh|en|ja            临时指定语言
   --json                         输出结构化 JSON；持续刷新时每次一行
   --verbose                      将请求路径及 HTTP 状态写入标准错误
   --watch <秒|5s>                每隔 1–3600 整数秒刷新，只支持只读查询
@@ -65,11 +69,12 @@ const cliHelp = `OSS Transfer CLI
   删除节点、存储连接、永久删除任务及清空异常需要 --yes。
   查询不完整会保留节点错误；退出码 0=成功，1=操作失败，2=命令错误，3=结果不完整，130=用户中断。
   OSS_TRANSFER_MASTER_SERVER 可设置默认服务地址；密钥和密码请用环境变量或文件。
-  OSS_TRANSFER_CLI_CONFIG_DIR 可指定会话目录，须为绝对路径。
-  语言优先级：--lang > OSS_TRANSFER_LANG > LC_ALL > LC_MESSAGES > LANG；未设置时为中文，不支持的系统语言使用英文。
+  OSS_TRANSFER_CLI_CONFIG_DIR 可指定配置和会话目录，须为绝对路径。
+  默认跟随系统语言；无法识别时使用英文。config set language zh 可保存为中文，auto 恢复跟随系统。
+  --lang 和 OSS_TRANSFER_LANG 可临时覆盖已保存设置。
   JSON 字段名、枚举值和用户数据保持原样。
   帮助：help task、help task create、help task import、help node、help storage、
-        help agent、help setup、help limit、help exceptions、help object、help login、help tools。
+        help agent、help setup、help limit、help exceptions、help object、help login、help config、help tools。
 `
 
 const cliTaskHelp = `任务管理
@@ -405,6 +410,8 @@ func helpFor(args []string) string {
 		return cliHelp
 	}
 	switch strings.ToLower(args[0]) {
+	case "config":
+		return cliConfigHelp
 	case "task":
 		if len(args) > 1 {
 			switch args[1] {
@@ -443,3 +450,12 @@ func helpFor(args []string) string {
 		return cliHelp
 	}
 }
+
+const cliConfigHelp = `本机设置
+用法：
+  oss-transfer-cli config get language
+  oss-transfer-cli config set language auto|zh|en|ja
+
+默认跟随系统。保存一次语言后，后续命令直接使用；auto 恢复跟随系统。
+--lang 和 OSS_TRANSFER_LANG 只覆盖当前运行；auto 可临时使用系统语言。
+`

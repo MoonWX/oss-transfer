@@ -6,22 +6,31 @@ OSS Transfer 用于 S3 兼容存储与本地文件之间的数据迁移，也支
 
 ## 安装 Master
 
-原生部署支持 Linux、macOS 和 Windows 的 amd64、arm64。在 Linux 或 macOS 上下载安装器：
+预编译包支持以下平台：
+
+| 系统 | 架构 |
+| --- | --- |
+| Linux | amd64、arm64、ARMv7、riscv64、loong64 |
+| macOS、Windows、FreeBSD | amd64、arm64 |
+
+在 Linux 或 macOS 上下载安装器：
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
-sudo bash install.sh --role master --method native --lang zh
+sudo bash install.sh --lang zh
 ```
 
 按提示设置监听端口。安装器在 Linux 上注册 systemd 服务，在 macOS 上注册 launchd 服务。macOS 如需安装为当前用户的服务，执行 `bash install.sh --role master --method native --user`，不加 `sudo`。
+
+FreeBSD 以 root 执行 `pkg install bash curl`，然后下载同一脚本并运行 `bash install.sh`，服务由 rc.d 管理。CPU 和系统版本要求见[平台兼容性](deploy/go/README.md#platform-requirements)。
 
 Windows 使用管理员 PowerShell：
 
 ```powershell
 $ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
 Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
-.\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Yes
+.\Install.ps1
 ```
 
 打开 `http://主机地址:1685`，使用自定义端口时替换 `1685`。输入服务日志中的 setup token，创建管理员账号，并把 Master URL 设置为浏览器和 Agent 主机均可访问的地址。
@@ -39,7 +48,7 @@ sudo cat /var/lib/oss-transfer-go/master/logs/service.log
 单机部署也需要在同一台主机上安装 Agent。初次添加和后期扩容使用相同步骤：
 
 1. 在 **执行节点 → 添加节点** 创建邀请。
-2. 复制 **Linux / macOS** 或 **Windows** 命令，在执行主机上以管理员权限运行。
+2. 复制 **Linux / macOS / FreeBSD** 或 **Windows** 命令，在执行主机上以管理员权限运行。
 3. 等待节点显示在线，再为其分配任务。
 
 Agent 主动连接 Master URL，并在本地保存加入凭据。Master 和 Agent 保持相同版本。
@@ -79,19 +88,21 @@ oss-transfer-cli --host http://主机地址:1685 task resume 123
 oss-transfer-cli --host http://主机地址:1685 task report 123 --output task-123.zip
 ```
 
-创建任务、管理存储连接和节点的命令见 `oss-transfer-cli --help`。脚本中可加 `--json`，语言可通过 `--lang zh`、`--lang en` 或 `--lang ja` 指定。
+创建任务、管理存储连接和节点的命令见 `oss-transfer-cli --help`，脚本中可加 `--json`。
+
+CLI 默认跟随系统语言，支持中、英、日语，无法匹配时使用英文。执行一次 `oss-transfer-cli config set language zh` 即可固定为中文，设为 `auto` 则恢复跟随系统。`--lang` 仅覆盖当前命令。
 
 ## 升级与备份
 
-升级前停止正在运行的任务。下载最新安装器，按已安装的角色执行，并沿用自定义路径和服务名：
+升级前停止正在运行的任务，下载最新安装器后执行：
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
-sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --upgrade --yes
+sudo bash install.sh --upgrade
 ```
 
-Agent 使用 `--role agent`。macOS 用户服务沿用 `--user`，不加 `sudo`。Windows 重新下载 `Install.ps1`，使用 `-Role master -ReleaseUrl $ReleaseUrl -Upgrade -Yes`；升级 Agent 时替换角色。
+安装器会找到本机已安装的 Master 和 Agent，列出供确认后沿用原来的目录和服务设置升级。只升级 Agent 时加 `--role agent`。macOS 用户服务使用 `bash install.sh --upgrade --user`。Windows 重新下载 `Install.ps1`，在管理员 PowerShell 中执行 `.\Install.ps1 -Upgrade`。
 
 安装器会在替换前停止服务并备份程序、配置和数据库，新服务启动检查失败时恢复备份。自行备份时，先停止服务，再复制配置目录和数据目录，路径以安装器输出为准。
 

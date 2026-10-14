@@ -1,10 +1,10 @@
 # Native deployment
 
-Install a Master for the WebUI and scheduling, then an Agent on each host that will transfer files. A single host can run both services with separate data directories. Linux uses systemd, macOS uses launchd, and Windows uses Windows Services.
+Install a Master for the WebUI and scheduling, then an Agent on each host that will transfer files. A single host can run both services with separate data directories. Linux uses systemd, macOS uses launchd, Windows uses Windows Services, and FreeBSD uses rc.d.
 
 ## Install
 
-On Linux or macOS:
+On Linux, macOS or FreeBSD (install `bash` and `curl` first on FreeBSD):
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
@@ -84,17 +84,17 @@ Include the Master's actual URL and port in CLI `--host`; see [CLI login](../../
 
 ## Upgrade
 
-Download the new release's installer, then run it with the original role, paths and service name:
+Download the latest installer, then run:
 
 ```sh
-sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --upgrade --yes
+sudo bash install.sh --upgrade
 ```
 
 ```powershell
-.\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Upgrade -Yes
+.\Install.ps1 -Upgrade
 ```
 
-Use `agent` for an Agent upgrade. Keep `--user` and omit `sudo` when upgrading a macOS user service. The installer verifies downloads, stops the service and backs up its binary, configuration, service definition and database. It retains accounts, settings and Agent identities. Startup checks the managed process, version and startup identifier; failure restores the backup and restarts the previous service if it was running.
+The installer discovers existing services and reuses their installation, configuration, data and CLI paths. It lists all matching services before upgrading them. Use `--role agent` or `--service-name NAME` to limit the selection (`-Role` or `-ServiceName` on Windows). Keep `--user` and omit `sudo` for a macOS user service. An installation with no remaining service definition needs `--install-dir` (`-InstallDir` on Windows) once. Older installations that did not record a custom backup directory use the platform default backup directory. The installer verifies downloads, stops the service and backs up its binary, configuration, service definition and database. It retains accounts, settings and Agent identities. Startup checks the managed process, version and startup identifier; failure restores the backup and restarts the previous service if it was running.
 
 Stop active tasks before an upgrade if they must remain paused during rollback. Restoring the database cannot undo files or objects already written by a transfer. For manual backups, stop the service before copying its configuration and data directory, or use a consistent filesystem snapshot.
 
@@ -125,3 +125,11 @@ python3 deploy/go/release-assets.py --packages output/go-development \
 ```
 
 Choose a new output directory for each run. The assembler checks all six packages' hashes, platforms, versions and commits, and includes installers from that commit. Use the resulting directory with `--package-dir`. Publication is covered in [release steps](../../.github/RELEASING.md).
+
+## Platform requirements
+
+Packages use baseline CPU instructions (`amd64 v1`, `arm64 v8.0`, `ARMv7`, `riscv64 RVA20U64`) and `CGO_ENABLED=0`. Linux binaries do not require a particular glibc version. The Linux installer requires systemd; macOS requires 12 or later, and Windows requires Windows 10 or Server 2016 or later. FreeBSD service installation is tested on 14.4.
+
+For Chinese distributions such as Kylin and UOS, select the package by CPU architecture and check the kernel version. `loong64` targets LoongArch and requires Linux 5.19 or later; it does not run on older MIPS-based Loongson processors. Other Linux targets follow the [Go platform requirements](https://go.dev/wiki/MinimumRequirements), with a general kernel floor of 3.2 and architecture-specific requirements. These builds are not a vendor compatibility certification. Test an upload, download and interrupted-task recovery on the intended host and storage mount before production use.
+
+ARMv7 has a 32-bit address space. Its embedded metadata database has a roughly 2 GiB mapping limit; use a 64-bit Master for large task inventories. This limit concerns task metadata, not the size of transferred files. V4.0.x offline database conversion runs on Linux or macOS; FreeBSD can use data converted on a supported host.

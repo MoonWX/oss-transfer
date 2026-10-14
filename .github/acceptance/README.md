@@ -13,7 +13,11 @@ CI builds the release archives once, then runs their Master, Agent and CLI again
 | Windows amd64 | `windows-latest` |
 | Windows arm64 | `windows-11-arm` |
 
-All six platforms run the same application and native installer scenarios in parallel. Linux also tests the Docker image and Compose installer on both architectures. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
+These six platforms run the same application and native installer scenarios in parallel. Linux also tests the Docker image and Compose installer on both architectures. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
+
+Linux ARMv7, riscv64 and loong64 run the packaged applications under QEMU, with a native amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 run in separate FreeBSD 14.4 VMs. These five jobs check setup, durable identity, node settings, three transfer directions and report contents; FreeBSD also checks rc.d installation, upgrade and rollback. They reuse the core transfer fixture rather than repeating the long bandwidth and multipart crash suites. QEMU coverage does not establish compatibility with a specific physical CPU or distribution.
+
+All platform jobs run in parallel after the archives are built. Release waits for every job; added platforms increase runner usage, while elapsed time is determined by the slowest job. Builds and publication read the same [platform list](../../deploy/go/platforms.json).
 
 ## Coverage
 

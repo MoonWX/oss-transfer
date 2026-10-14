@@ -141,6 +141,8 @@ class Packaging(unittest.TestCase):
             DOCKER.create(self.source, self.output)
         self.assertNotEqual(ASSETS.sha256(archive), original_hash)
         provenance = json.loads((self.output / "provenance.json").read_text())
+        self.assertEqual({row["platform"] for row in provenance["binaries"]}, {"linux/amd64", "linux/arm64"})
+        self.assertEqual(len(provenance["binaries"]), 6)
         recorded = next(row["sha256"] for row in provenance["archives"] if row["name"] == archive.name)
         self.assertEqual(recorded, original_hash)
         self.assertEqual((self.output / "bin/linux/amd64/oss-transfer-master").read_bytes(), b"masterlinuxamd64")
@@ -194,6 +196,10 @@ class Packaging(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         step = workflow.split("      - name: Publish GitHub Release\n", 1)[1]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        platform_dir = self.root / "deploy/go"
+        platform_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("platforms.py", "platforms.json"):
+            shutil.copyfile(ROOT / "deploy/go" / name, platform_dir / name)
         bin_dir = self.root / "bin"
         bin_dir.mkdir(exist_ok=True)
         calls = self.root / "github-calls.jsonl"
@@ -215,14 +221,10 @@ if sys.argv[1:3] == ['release', 'view']:
         commands = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
         return result, commands
 
-    def test_github_release_uploads_only_six_platform_archives(self):
+    def test_github_release_uploads_only_supported_platform_archives(self):
         self.assemble()
         shutil.copytree(self.output, self.root / "output")
-        expected = {"output/oss-transfer-go-" + platform + extension
-                    for platform, extension in (
-                        ("linux-amd64", ".tar.gz"), ("linux-arm64", ".tar.gz"),
-                        ("darwin-amd64", ".tar.gz"), ("darwin-arm64", ".tar.gz"),
-                        ("windows-amd64", ".zip"), ("windows-arm64", ".zip"))}
+        expected = {"output/" + PACKAGE.TARGETS.archive_name(*platform) for platform in PACKAGE.PLATFORMS}
         for existing in (False, True):
             with self.subTest(existing_release=existing):
                 result, commands = self.github_publication(existing)
@@ -230,7 +232,7 @@ if sys.argv[1:3] == ['release', 'view']:
                 uploads = [command for command in commands if command[:2] in (["release", "create"], ["release", "upload"])]
                 self.assertEqual(len(uploads), 1)
                 assets = [value for value in uploads[0] if value.startswith("output/")]
-                self.assertEqual(len(assets), 6)
+                self.assertEqual(len(assets), len(expected))
                 self.assertEqual(set(assets), expected)
                 self.assertEqual(uploads[0][1], "upload" if existing else "create")
 

@@ -26,7 +26,7 @@ Usage: bash install.sh [options]
   --master-url URL --token-stdin  Agent enrollment without a link
   --files-dir DIR                Agent Docker bind mount (same path inside)
   --image IMAGE                  Docker image override
-  --upgrade                     Upgrade an existing native Go service
+  --upgrade                     Discover, back up and upgrade installed native services
   --cli-path PATH --replace-cli  CLI location and explicit backup/replacement
   --install-dir DIR --config-dir DIR --data-dir DIR --backup-dir DIR
   --service-name NAME --adopt-config FILE --listen HOST:PORT
@@ -55,7 +55,7 @@ while (($#)); do
 done
 [[ "$lang" == en || "$lang" == zh ]] || fail '--lang must be en or zh'
 os=$(uname -s)
-[[ "$os" == Linux || "$os" == Darwin ]] || fail 'Use Install.ps1 on Windows'
+[[ "$os" == Linux || "$os" == Darwin || "$os" == FreeBSD ]] || fail 'Use Install.ps1 on Windows'
 [[ "$os" == Darwin || "$user_service" == 0 ]] || fail '--user is macOS only'
 if ((user_service == 0)) && [[ $(id -u) != 0 ]]; then
   command -v sudo >/dev/null || fail 'Run as root or use --user on macOS'
@@ -70,19 +70,20 @@ prompt() {
 # Generated Agent commands and local package installs already chose native mode.
 if [[ -z "$method" && ( -n "$release_url" || -n "$package_dir" || "$upgrade" == 1 ) ]]; then method=native; fi
 if ((yes == 0)); then
-  if [[ -z "$role" ]]; then
+  if [[ -z "$role" && "$upgrade" == 0 ]]; then
     prompt role "$(say 'Role: 1 Master / 2 Agent' '节点类型：1 主节点 / 2 执行节点')" 1
     case "$role" in 1) role=master;; 2) role=agent;; esac
   fi
   if [[ -z "$method" ]]; then
-    if [[ "$os" == Darwin ]]; then method=native; else
+    if [[ "$os" != Linux ]]; then method=native; else
       prompt method "$(say 'Deployment: 1 Native (recommended) / 2 Docker Compose' '部署方式：1 原生服务（推荐） / 2 Docker Compose')" 1
       case "$method" in 1) method=native;; 2) method=compose;; esac
     fi
   fi
 fi
-role=${role:-master}; method=${method:-native}
-[[ "$role" == master || "$role" == agent ]] || fail 'Invalid role'
+if ((upgrade == 0)); then role=${role:-master}; fi
+method=${method:-native}
+[[ -z "$role" || "$role" == master || "$role" == agent ]] || fail 'Invalid role'
 [[ "$method" == native || "$method" == compose ]] || fail 'Invalid deployment method'
 if ((yes == 0)) && [[ "$role" == master && -z "$listen" && "$upgrade" == 0 && -z "$adopt_config" ]]; then
   prompt port "$(say 'Master port' '主节点端口')" "$port"
@@ -110,7 +111,7 @@ enrollment_input() {
 }
 stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-setup.XXXXXX")
 trap 'rm -rf -- "$stage"; unset TRANSFER_JOIN_TOKEN OSS_TRANSFER_JOIN_TOKEN join_url' EXIT
-sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; elif [[ -x /sbin/sha256 ]]; then /sbin/sha256 -q "$1"; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 fetch() {
   local name=$1 protocol=https
   if [[ -n "$package_dir" ]]; then
@@ -138,10 +139,23 @@ if [[ "$method" == native ]]; then
   [[ "$checksum" =~ ^[a-f0-9]{64}$ && "$size" =~ ^[0-9]+$ && "$asset" != *$'\n'* ]] || fail 'Native installer missing from manifest'
   fetch native-install.sh
   [[ $(sha256 "$stage/native-install.sh") == "$checksum" && $(wc -c < "$stage/native-install.sh" | tr -d ' ') == "$size" ]] || fail 'Native installer checksum mismatch'
+  if ((upgrade)); then
+    native_args+=(--upgrade)
+    if [[ -n "$package_dir" ]]; then native_args+=(--package-dir "$package_dir"); else native_args+=(--release-url "$release_url"); fi
+    for field in role install_dir data_dir cli_path service_name; do
+      value=${!field}
+      [[ -z "$value" ]] || native_args+=("--${field//_/-}" "$value")
+    done
+    ((user_service == 0)) || native_args+=(--user)
+    ((yes == 0)) || native_args+=(--yes)
+    bash "$stage/native-install.sh" "${native_args[@]}"
+    exit 0
+  fi
   # Match the native installer's default directory to recognize a managed
   # installation. The installer validates all metadata and paths again.
   if [[ -z "$install_dir" ]]; then
     if [[ "$os" == Linux ]]; then install_dir=/opt/oss-transfer-go/$role
+    elif [[ "$os" == FreeBSD ]]; then install_dir=/usr/local/lib/oss-transfer/$role
     elif ((user_service)); then install_dir="$HOME/Library/Application Support/OSS Transfer/$role/bin"
     else install_dir=/usr/local/lib/oss-transfer/$role; fi
   fi

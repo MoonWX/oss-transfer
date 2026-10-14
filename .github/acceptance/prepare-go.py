@@ -2,6 +2,7 @@
 """Verify packaged binaries and install the pinned S3 fixture for native acceptance."""
 import argparse
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -10,7 +11,13 @@ import tarfile
 from urllib.request import urlopen
 import zipfile
 
+SPEC = importlib.util.spec_from_file_location("release_platforms", Path(__file__).resolve().parents[2] / "deploy/go/platforms.py")
+TARGETS = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(TARGETS)
+
 WEED = {
+    "freebsd_amd64.tar.gz": "30cbba8347e333ae42ff494c0121c09e0a4a8c2bd77b4c8593ed76dc7b282bb2",
+    "freebsd_arm64.tar.gz": "670e896ec2ad4cca8223b582bed186b3df2cb2cbcdfb008a5950dffe0ca5044b",
     "darwin_amd64.tar.gz": "425ef61d2ee773d5d5175003f38bd6cc891070ae6319370354aaf5378c45d5b3",
     "darwin_arm64.tar.gz": "faa194e72a346755dc4404288b0561eb3c260351702901d8363024d5099bdd7d",
     "linux_amd64.tar.gz": "4a7d108384d044d95212d1342cdda9533fa55842c1c9b41f606ca3c8a9561124",
@@ -53,9 +60,12 @@ def verify_binary(path, operating_system, architecture):
             pe = stream.read(6)
             expected = 0xAA64 if architecture == "arm64" else 0x8664
             valid = pe[:4] == b"PE\0\0" and struct.unpack_from("<H", pe, 4)[0] == expected
-        elif operating_system == "linux":
-            expected = 183 if architecture == "arm64" else 62
-            valid = header[:6] == b"\x7fELF\x02\x01" and struct.unpack_from("<H", header, 18)[0] == expected
+        elif operating_system in ("linux", "freebsd"):
+            expected = {"amd64": 62, "arm64": 183, "armv7": 40, "riscv64": 243, "loong64": 258}[architecture]
+            elf_class = 1 if architecture == "armv7" else 2
+            valid = (header[:6] == b"\x7fELF" + bytes((elf_class, 1))
+                     and struct.unpack_from("<H", header, 18)[0] == expected
+                     and header[7] in ((9,) if operating_system == "freebsd" else (0, 3)))
         else:
             expected = 0x0100000C if architecture == "arm64" else 0x01000007
             valid = header[:4] == b"\xcf\xfa\xed\xfe" and struct.unpack_from("<I", header, 4)[0] == expected
@@ -65,7 +75,8 @@ def verify_binary(path, operating_system, architecture):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--platform", required=True)
+    parser.add_argument("--platform", required=True, choices=[o + "/" + a for o, a in TARGETS.PLATFORMS])
+    parser.add_argument("--fixture-platform", help="S3 fixture platform; application binaries always use --platform")
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--packages", type=Path, default=Path("output/go-development"))
     args = parser.parse_args()
@@ -99,7 +110,8 @@ def main():
         (directory / member).chmod(0o755)
     # The fixture has no Windows ARM64 release. Windows ARM runs its x64 S3
     # fixture under OS emulation; both tested transfer programs remain native ARM64.
-    weed_asset = "windows_amd64.zip" if extension else f"{operating_system}_{architecture}.tar.gz"
+    fixture_os, fixture_arch = (args.fixture_platform or args.platform).split("/")
+    weed_asset = "windows_amd64.zip" if fixture_os == "windows" else f"{fixture_os}_{fixture_arch}.tar.gz"
     weed_archive = directory / weed_asset
     with urlopen("https://github.com/seaweedfs/seaweedfs/releases/download/4.48/" + weed_asset, timeout=120) as source, weed_archive.open("wb") as target:
         shutil.copyfileobj(source, target)

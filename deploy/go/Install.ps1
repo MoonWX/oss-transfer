@@ -1,7 +1,7 @@
 # Native Go service installation. Run from an elevated PowerShell session.
 [CmdletBinding()]
 param(
-    [ValidateSet('master','agent')][string]$Role = 'master',
+    [ValidateSet('master','agent')][string]$Role,
     [string]$ReleaseUrl,
     [string]$PackageDir,
     [string]$AdoptConfig,
@@ -23,10 +23,89 @@ Set-StrictMode -Version Latest
 if ($env:OS -ne 'Windows_NT') { throw 'This installer requires Windows.' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run PowerShell as Administrator.' }
-if ((-not $ReleaseUrl -and -not $PackageDir) -or ($ReleaseUrl -and $PackageDir)) { throw 'Choose -ReleaseUrl or -PackageDir.' }
+if (-not $ReleaseUrl -and -not $PackageDir) { $ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest' }
+if ($ReleaseUrl -and $PackageDir) { throw 'Choose -ReleaseUrl or -PackageDir.' }
+if ($ReleaseUrl) { $ReleaseUrl = $ReleaseUrl.TrimEnd('/') }
 if ($AdoptConfig -and $Upgrade) { throw 'Choose -AdoptConfig or -Upgrade.' }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $arch = switch ($architecture) { 'x64' {'amd64'} 'arm64' {'arm64'} default {throw 'Unsupported CPU architecture.'} }
+if ($Upgrade) {
+    if (-not $InstallDir) {
+        $candidates = @{}
+        function Add-Installation([string]$Directory) {
+            $recordPath = Join-Path $Directory 'install.json'
+            if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return }
+            if ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
+            $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+            if ($record.role -notin @('master','agent') -or ($Role -and $record.role -ne $Role) -or ($ServiceName -and $record.serviceName -ne $ServiceName)) { return }
+            $candidates[$Directory] = $record
+        }
+        foreach ($installedRole in @('master','agent')) {
+            Add-Installation (Join-Path $env:ProgramFiles "OSS Transfer\$installedRole")
+        }
+        foreach ($installedService in @(Get-CimInstance Win32_Service)) {
+            if ($installedService.PathName -match '^"([^"]+\\oss-transfer-(?:master|agent)\.exe)"(?:\s|$)') {
+                Add-Installation (Split-Path $Matches[1] -Parent)
+            }
+        }
+        if ($candidates.Count -eq 0) { throw 'No managed installation found; use -InstallDir for an installation without a service definition.' }
+        Write-Host 'Upgrade installations:'
+        foreach ($directory in @($candidates.Keys | Sort-Object)) { Write-Host "  $($candidates[$directory].serviceName): $directory" }
+        if (-not $Yes -and (Read-Host 'Back up and upgrade these installations? [y/N]') -notmatch '^[yY]$') { return }
+        # Resolve latest before dispatching either role, then pass that fixed URL.
+        if ($ReleaseUrl -and $ReleaseUrl.EndsWith('/latest',[StringComparison]::Ordinal)) {
+            $uri = [Uri]$ReleaseUrl
+            if (-not $uri.IsAbsoluteUri -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and $uri.IsLoopback)) -or $uri.AbsolutePath -notmatch '^/[A-Za-z0-9._~/-]+$') { throw 'Release URL must use HTTPS.' }
+            $latestManifest = [IO.Path]::GetTempFileName()
+            $versionManifest = [IO.Path]::GetTempFileName()
+            try {
+                function Fetch-VersionManifest([string]$Url,[string]$Target) {
+                    $response = Invoke-WebRequest -UseBasicParsing -Uri "$Url/manifest.tsv" -OutFile $Target -PassThru -TimeoutSec 600
+                    if ($response.BaseResponse.PSObject.Properties['ResponseUri']) { $finalUri = $response.BaseResponse.ResponseUri } else { $finalUri = $response.BaseResponse.RequestMessage.RequestUri }
+                    if ($finalUri.Scheme -ne 'https' -and -not ($finalUri.Scheme -eq 'http' -and $finalUri.IsLoopback)) { throw 'Release manifest redirected to an insecure URL.' }
+                    if ((Get-Item -LiteralPath $Target).Length -ge 65536) { throw 'Manifest too large.' }
+                }
+                Fetch-VersionManifest $ReleaseUrl $latestManifest
+                $rows = @(Get-Content -LiteralPath $latestManifest)
+                if (@($rows | Where-Object { $_ -eq "format`toss-transfer-go-v1" }).Count -ne 1) { throw 'Unknown release format.' }
+                $versions = @($rows | Where-Object { $_.StartsWith("version`t") })
+                if ($versions.Count -ne 1) { throw 'Invalid version entry.' }
+                $pinnedVersion = ($versions[0] -split "`t")[1]
+                if ($pinnedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { throw 'Invalid latest release version.' }
+                $ReleaseUrl = $ReleaseUrl.Substring(0,$ReleaseUrl.Length-7) + '/v' + $pinnedVersion
+                Fetch-VersionManifest $ReleaseUrl $versionManifest
+                if ((Get-FileHash -LiteralPath $latestManifest -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $versionManifest -Algorithm SHA256).Hash) { throw 'Latest and versioned release manifests differ; retry after publication finishes.' }
+            } finally {
+                Remove-Item -LiteralPath $latestManifest,$versionManifest -Force -ErrorAction SilentlyContinue
+            }
+        }
+        foreach ($directory in @($candidates.Keys | Sort-Object)) {
+            $childArguments = @{}
+            foreach ($key in $PSBoundParameters.Keys) { $childArguments[$key] = $PSBoundParameters[$key] }
+            if ($ReleaseUrl) { $childArguments.ReleaseUrl = $ReleaseUrl }
+            $childArguments.InstallDir = $directory
+            $childArguments.Yes = $true
+            & $PSCommandPath @childArguments
+        }
+        return
+    }
+    $recordPath = Join-Path $InstallDir 'install.json'
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'No managed Go installation found in the selected directory.' }
+    $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+    if ($record.role -notin @('master','agent') -or ($Role -and $Role -ne $record.role)) { throw 'Installed role differs from -Role.' }
+    $Role = $record.role
+    if (-not $ServiceName) { $ServiceName = $record.serviceName }
+    if (-not $ConfigDir) { $ConfigDir = Split-Path $record.config -Parent }
+    if (-not $CliPath -and $record.PSObject.Properties['cliPath']) { $CliPath = $record.cliPath }
+    if (-not $BackupDir -and $record.PSObject.Properties['backupDir']) { $BackupDir = $record.backupDir }
+    if (-not $DataDir) {
+        if (-not (Test-Path -LiteralPath $record.config -PathType Leaf) -or ((Get-Item -LiteralPath $record.config -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installed configuration is missing or linked.' }
+        $savedConfig = Get-Content -LiteralPath $record.config -Raw | ConvertFrom-Json
+        $DataDir = $savedConfig.dataDirectory
+        if (-not $DataDir) { throw 'Installed data directory is missing.' }
+    }
+}
+if (-not $Role) { $Role = 'master' }
 if (-not $ServiceName) { $ServiceName = "OSSTransferGo$((Get-Culture).TextInfo.ToTitleCase($Role))" }
 if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid service name.' }
 $base = Join-Path $env:ProgramData "OSS Transfer\$Role"
@@ -262,7 +341,7 @@ try {
     Move-Item -LiteralPath ($CliPath+'.new') -Destination $CliPath -Force
     $cliChanged = $true
     if (-not $existing) { Copy-Item -LiteralPath $freshConfig -Destination $config }
-    Write-UTF8 $metadata (@{role=$Role; serviceName=$ServiceName; config=$config; version=$version; cliPath=$CliPath} | ConvertTo-Json)
+    Write-UTF8 $metadata (@{role=$Role; serviceName=$ServiceName; config=$config; version=$version; cliPath=$CliPath; backupDir=$BackupDir; dataDir=$DataDir} | ConvertTo-Json)
     if (-not $existing -and -not $AdoptConfig -and $Role -eq 'agent') { $env:OSS_TRANSFER_JOIN_TOKEN = $env:TRANSFER_JOIN_TOKEN; Invoke-Native $binary @('--config',$config,'--master-url',$MasterUrl,'--enroll-only') | Out-Null }
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue

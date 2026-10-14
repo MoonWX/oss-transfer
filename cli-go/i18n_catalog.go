@@ -2,6 +2,11 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"不支持的语言 %q；请使用 auto、zh、en 或 ja":                               {"Unsupported language %q; use auto, zh, en or ja", "未対応の言語 %q。auto、zh、en または ja を指定してください"},
+	"CLI 配置文件无效: %s":                                              {"Invalid CLI configuration file: %s", "CLI 設定ファイルが無効です: %s"},
+	"CLI 配置目录无效: %s":                                              {"Invalid CLI configuration directory: %s", "CLI 設定ディレクトリが無効です: %s"},
+	"用法: config get language 或 config set language auto|zh|en|ja": {"Usage: config get language or config set language auto|zh|en|ja", "使い方: config get language または config set language auto|zh|en|ja"},
+
 	"\n原生部署（Linux / macOS）":         {"\nNative installation (Linux / macOS)", "\nネイティブインストール（Linux / macOS）"},
 	"\n原生运行（Linux / macOS）":         {"\nNative binary (Linux / macOS)", "\nネイティブ実行（Linux / macOS）"},
 	"\n原生部署（Windows PowerShell）":    {"\nNative installation (Windows PowerShell)", "\nネイティブインストール（Windows PowerShell）"},

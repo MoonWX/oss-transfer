@@ -2,6 +2,7 @@
 """Extract verified native packages into one versioned installer release directory."""
 import argparse
 import hashlib
+import importlib.util
 import pathlib
 import re
 import shutil
@@ -16,7 +17,10 @@ INSTALLERS = {
     'Install.ps1': 'deploy/go/Install.ps1',
 }
 
-PLATFORMS = [(os, arch) for os in ('linux', 'darwin', 'windows') for arch in ('amd64', 'arm64')]
+SPEC = importlib.util.spec_from_file_location('native_platforms', pathlib.Path(__file__).with_name('platforms.py'))
+TARGETS = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(TARGETS)
+PLATFORMS = TARGETS.PLATFORMS
 
 def members(path):
     result = {}

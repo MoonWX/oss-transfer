@@ -5,12 +5,12 @@ cd "$root"
 run_tests=0
 while (($#)); do
   case "$1" in
-    --all) export GO_PLATFORMS='linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64';;
+    --all) GO_PLATFORMS="$(python3 deploy/go/platforms.py --list)"; export GO_PLATFORMS;;
     --test) run_tests=1;;
     --help|-h)
       cat <<'HELP'
 Usage: ./build.sh [--all] [--test]
-  --all   Build Linux, macOS and Windows archives for amd64 and arm64.
+  --all   Build every target listed in deploy/go/platforms.json.
           Without this flag, build for the current OS and architecture.
   --test  Run backend and CLI tests before packaging.
 Archives and checksums are written to output/go-development/.

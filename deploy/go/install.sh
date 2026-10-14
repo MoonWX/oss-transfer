@@ -2,7 +2,8 @@
 # Install or upgrade the Go Master or Agent as a native service.
 set -euo pipefail
 umask 077
-role=master
+role=
+original_args=("$@")
 release_url=
 package_dir=
 adopt_config=
@@ -24,7 +25,8 @@ user_service=0
 startup_timeout=120
 usage() {
   cat <<'EOF'
-Usage: bash install.sh --role master|agent --release-url HTTPS_VERSION_DIRECTORY [options]
+Usage: bash install.sh [--role master|agent] [--upgrade] [options]
+  --release-url URL    Release directory (default: public latest)
   --package-dir DIR    Install verified files from a local release directory
   --upgrade            Back up and upgrade an existing Go installation
   --adopt-config FILE   Install a service for stopped, existing Go data
@@ -55,19 +57,137 @@ while (($#)); do
     *) fail "Unknown option: $1";;
   esac
 done
-[[ "$role" == master || "$role" == agent ]] || fail 'Role must be master or agent'
+[[ -z "$role" || "$role" == master || "$role" == agent ]] || fail 'Role must be master or agent'
 [[ -z "$adopt_config" || "$upgrade" == 0 ]] || fail 'Choose --adopt-config or --upgrade'
 if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]] || ((startup_timeout < 10 || startup_timeout > 600)); then fail 'Invalid readiness timeout'; fi
+[[ -n "$release_url" || -n "$package_dir" ]] || release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
+release_url=${release_url%/}
 [[ -n "$release_url" && -z "$package_dir" || -z "$release_url" && -n "$package_dir" ]] || fail 'Choose --release-url or --package-dir'
 os=$(uname -s)
 case "$os" in
   Linux) platform=linux; ((user_service == 0)) || fail '--user is macOS only';;
   Darwin) platform=darwin;;
-  *) fail 'Supported platforms: Linux and macOS';;
+  FreeBSD) platform=freebsd; ((user_service == 0)) || fail '--user is macOS only';;
+  *) fail 'Supported platforms: Linux, macOS and FreeBSD';;
 esac
-case "$(uname -m)" in x86_64|amd64) arch=amd64;; arm64|aarch64) arch=arm64;; *) fail 'Unsupported CPU architecture';; esac
+case "$(uname -m)" in x86_64|amd64) arch=amd64;; arm64|aarch64) arch=arm64;; armv7l|armv7) arch=armv7;; riscv64) arch=riscv64;; loongarch64|loong64) arch=loong64;; *) fail 'Unsupported CPU architecture';; esac
 if ((user_service == 0)) && [[ $(id -u) != 0 ]]; then fail 'Run this installer as root'; fi
-service_name=${service_name:-oss-transfer-go-$role}
+safe_path() {
+  local value=$1 part=$1 target
+  [[ "$value" == /* && "$value" != / && "$value" != *'/../'* && "$value" != *'/./'* && "$value" != */ && "$value" != */. && "$value" != */.. && "$value" != *'//'* ]] || fail "Use a clean absolute path: $value"
+  [[ "$value" != *[$'\n\r\t"\\%$`']* ]] || fail 'Unsupported character in installation path'
+  while [[ "$part" != / ]]; do
+    if [[ -L "$part" ]]; then
+      target=$(readlink "$part")
+      if [[ "$platform" != darwin || ! "$part" =~ ^/(var|tmp|etc)$ || "$target" != "private$part" && "$target" != "/private$part" ]]; then fail "Symlink in installation path: $part"; fi
+    fi
+    [[ ! -e "$part" || -d "$part" ]] || fail "Not a directory: $part"
+    part=$(dirname "$part")
+  done
+}
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; elif [[ -x /sbin/sha256 ]]; then /sbin/sha256 -q "$1"; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+# Read existing service definitions without evaluating their contents. This also
+# discovers older installations with custom directories or service names.
+metadata_field() { awk -F '\t' -v key="$2" '$1==key {print $2}' "$1"; }
+if ((upgrade)); then
+  if [[ -z "$install_dir" ]]; then
+    candidates=()
+    add_candidate() {
+      local directory=$1 existing item_role item_name
+      [[ -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]] || return 0
+      item_role=$(metadata_field "$directory/install.tsv" role)
+      item_name=$(metadata_field "$directory/install.tsv" serviceName)
+      [[ "$item_role" == master || "$item_role" == agent ]] || return 0
+      [[ -z "$role" || "$role" == "$item_role" ]] || return 0
+      [[ -z "$service_name" || "$service_name" == "$item_name" ]] || return 0
+      for existing in "${candidates[@]:-}"; do [[ "$existing" != "$directory" ]] || return 0; done
+      candidates+=("$directory")
+    }
+    for item_role in master agent; do
+      if [[ "$platform" == linux ]]; then add_candidate "/opt/oss-transfer-go/$item_role"
+      elif [[ "$platform" == freebsd ]]; then add_candidate "/usr/local/lib/oss-transfer/$item_role"
+      elif ((user_service)); then add_candidate "$HOME/Library/Application Support/OSS Transfer/$item_role/bin"
+      else add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi
+    done
+    if [[ "$platform" == linux ]]; then
+      for definition in /etc/systemd/system/*.service; do
+        [[ -f "$definition" && ! -L "$definition" ]] || continue
+        installed_binary=$(sed -n 's/^ExecStart="\([^"]*\/oss-transfer-\(master\|agent\)\)" .*/\1/p' "$definition")
+        [[ -z "$installed_binary" ]] || add_candidate "$(dirname "$installed_binary")"
+      done
+    elif [[ "$platform" == freebsd ]]; then
+      for definition in /usr/local/etc/rc.d/*; do
+        [[ -f "$definition" && ! -L "$definition" ]] || continue
+        directory=$(sed -n 's/^# oss-transfer-install: //p' "$definition")
+        [[ -z "$directory" ]] || add_candidate "$directory"
+      done
+    else
+      if ((user_service)); then definitions="$HOME/Library/LaunchAgents"; else definitions=/Library/LaunchDaemons; fi
+      for definition in "$definitions"/*.plist; do
+        [[ -f "$definition" && ! -L "$definition" ]] || continue
+        installed_binary=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$definition" 2>/dev/null || true)
+        case "$installed_binary" in */oss-transfer-master|*/oss-transfer-agent) add_candidate "$(dirname "$installed_binary")";; esac
+      done
+    fi
+    ((${#candidates[@]})) || fail 'No managed installation found; use --install-dir for an installation without a service definition'
+    printf 'Upgrade installations:\n'
+    for directory in "${candidates[@]}"; do printf '  %s: %s\n' "$(metadata_field "$directory/install.tsv" serviceName)" "$directory"; done
+    if ((yes == 0)); then
+      read -r -p 'Back up and upgrade these installations? [y/N] ' answer </dev/tty
+      [[ "$answer" == y || "$answer" == Y ]] || exit 0
+    fi
+    # Resolve latest once so every installed role receives the same release.
+    if [[ "$release_url" == */latest ]]; then
+      [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]] || fail 'Release URL must use HTTPS'
+      pin_work=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-version.XXXXXX")
+      trap 'rm -rf -- "$pin_work"' EXIT
+      protocol=https; [[ "$release_url" != http://* ]] || protocol=http,https
+      curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/latest.tsv"
+      [[ $(wc -c < "$pin_work/latest.tsv") -lt 65536 && $(metadata_field "$pin_work/latest.tsv" format) == oss-transfer-go-v1 ]] || fail 'Invalid release manifest'
+      pinned_version=$(metadata_field "$pin_work/latest.tsv" version)
+      [[ "$pinned_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid latest release version'
+      release_url="${release_url%/latest}/v$pinned_version"
+      curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/versioned.tsv"
+      [[ $(sha256 "$pin_work/latest.tsv") == "$(sha256 "$pin_work/versioned.tsv")" ]] || fail 'Latest and versioned release manifests differ; retry after publication finishes'
+    fi
+    for directory in "${candidates[@]}"; do
+      if [[ -n "$release_url" ]]; then
+        bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" --release-url "$release_url" --yes
+      else
+        bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" --yes
+      fi
+    done
+    exit 0
+  fi
+  installed_metadata=$install_dir/install.tsv
+  [[ -f "$installed_metadata" && ! -L "$installed_metadata" ]] || fail 'No managed Go installation found in the selected directory'
+  saved_role=$(metadata_field "$installed_metadata" role)
+  [[ "$saved_role" == master || "$saved_role" == agent ]] || fail 'Invalid installed role'
+  [[ -z "$role" || "$role" == "$saved_role" ]] || fail 'Installed role differs from --role'
+  role=$saved_role
+  service_name=${service_name:-$(metadata_field "$installed_metadata" serviceName)}
+  [[ -n "$service_name" ]] || fail 'Missing installed service name'
+  saved_config=$(metadata_field "$installed_metadata" config)
+  [[ "$saved_config" == /*/service.json ]] || fail 'Invalid installed configuration path'
+  config_dir=${config_dir:-$(dirname "$saved_config")}
+  cli_path=${cli_path:-$(metadata_field "$installed_metadata" cliPath)}
+  backup_dir=${backup_dir:-$(metadata_field "$installed_metadata" backupDir)}
+  # Old metadata omitted the data path; use the binary's validated config output.
+  safe_path "$install_dir"
+  safe_path "$(dirname "$saved_config")"
+  installed_binary=$install_dir/oss-transfer-$role
+  [[ -f "$installed_binary" && ! -L "$installed_binary" && -f "$saved_config" && ! -L "$saved_config" ]] || fail 'Existing installation files are missing or symlinked'
+  saved_data=$("$installed_binary" --config "$saved_config" --check-config | awk -F '\t' '$1=="dataDirectory"{print $2}')
+  [[ -n "$saved_data" ]] || fail 'Installed data directory is missing'
+  data_dir=${data_dir:-$saved_data}
+fi
+role=${role:-master}
+if [[ "$platform" == freebsd ]]; then
+  service_name=${service_name:-oss_transfer_go_$role}
+  [[ "$service_name" =~ ^[A-Za-z][A-Za-z0-9_]{0,99}$ ]] || fail 'FreeBSD service names must start with a letter and contain only letters, digits and underscores'
+else
+  service_name=${service_name:-oss-transfer-go-$role}
+fi
 [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] || fail 'Invalid service name'
 if [[ "$platform" == linux ]]; then
   command -v systemctl >/dev/null || fail 'systemd is required'
@@ -76,6 +196,16 @@ if [[ "$platform" == linux ]]; then
   data_dir=${data_dir:-/var/lib/oss-transfer-go/$role}
   backup_dir=${backup_dir:-/var/backups/oss-transfer-go/$role}
   unit=/etc/systemd/system/$service_name.service
+elif [[ "$platform" == freebsd ]]; then
+  [[ -f /etc/rc.subr && -x /usr/sbin/daemon ]] || fail 'FreeBSD rc.d and daemon are required'
+  install_dir=${install_dir:-/usr/local/lib/oss-transfer/$role}
+  config_dir=${config_dir:-/usr/local/etc/oss-transfer/$role}
+  data_dir=${data_dir:-/var/db/oss-transfer/$role}
+  backup_dir=${backup_dir:-/var/backups/oss-transfer/$role}
+  unit=/usr/local/etc/rc.d/$service_name
+  rc_name=$service_name
+  supervisor_pidfile=/var/run/$service_name.supervisor.pid
+  child_pidfile=/var/run/$service_name.pid
 else
   command -v launchctl >/dev/null || fail 'launchd is required'
   if ((user_service)); then
@@ -93,19 +223,7 @@ else
   data_dir=${data_dir:-$base/data}
   backup_dir=${backup_dir:-$base/backups}
 fi
-safe_path() {
-  local value=$1 part=$1 target
-  [[ "$value" == /* && "$value" != / && "$value" != *'/../'* && "$value" != *'/./'* && "$value" != */ && "$value" != */. && "$value" != */.. && "$value" != *'//'* ]] || fail "Use a clean absolute path: $value"
-  [[ "$value" != *[$'\n\r\t"\\%$']* ]] || fail 'Unsupported character in installation path'
-  while [[ "$part" != / ]]; do
-    if [[ -L "$part" ]]; then
-      target=$(readlink "$part")
-      if [[ "$platform" != darwin || ! "$part" =~ ^/(var|tmp|etc)$ || "$target" != "private$part" && "$target" != "/private$part" ]]; then fail "Symlink in installation path: $part"; fi
-    fi
-    [[ ! -e "$part" || -d "$part" ]] || fail "Not a directory: $part"
-    part=$(dirname "$part")
-  done
-}
+
 for path in "$install_dir" "$config_dir" "$data_dir" "$backup_dir"; do safe_path "$path"; done
 for left in "$install_dir" "$config_dir" "$data_dir" "$backup_dir"; do
   for right in "$install_dir" "$config_dir" "$data_dir" "$backup_dir"; do
@@ -119,7 +237,7 @@ binary=$install_dir/oss-transfer-$role
 metadata=$install_dir/install.tsv
 cli_path=${cli_path:-$install_dir/oss-transfer-cli}
 safe_path "$(dirname "$cli_path")"
-[[ "$cli_path" != *[$'\n\r\t"\\%$']* && "$(basename "$cli_path")" == oss-transfer-cli ]] || fail 'CLI path must end in oss-transfer-cli'
+[[ "$cli_path" != *[$'\n\r\t"\\%$`']* && "$(basename "$cli_path")" == oss-transfer-cli ]] || fail 'CLI path must end in oss-transfer-cli'
 for path in "$config_dir" "$data_dir" "$backup_dir"; do
   [[ "$cli_path" != "$path" && "$cli_path" != "$path/"* ]] || fail 'CLI must be outside configuration, data and backup directories'
 done
@@ -152,7 +270,7 @@ fi
 if [[ "$platform" == linux ]]; then
   if ((existed == 0)) && [[ $(systemctl show "$service_name" -p LoadState --value) != not-found ]]; then fail 'An unmanaged service already exists'; fi
   if ((existed)) && [[ -n $(systemctl show "$service_name" -p DropInPaths --value) ]]; then fail 'Review and remove service overrides before upgrading'; fi
-else
+elif [[ "$platform" == darwin ]]; then
   if ((existed == 0)) && launchctl print "$domain/$service_name" >/dev/null 2>&1; then fail 'An unmanaged launchd service already exists'; fi
 fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-install.XXXXXX")
@@ -163,7 +281,6 @@ had_unit=0
 [[ ! -f "$unit" ]] || had_unit=1
 cleanup() { rm -rf -- "$work"; }
 trap cleanup EXIT
-sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 fetch() {
   local name=$1 protocol=https
   if [[ "$release_url" == http://* ]]; then protocol=http,https; fi
@@ -205,7 +322,7 @@ IFS=$'\t' read -r cli_listed cli_checksum cli_length <<< "$cli_record"
 fetch "$cli_filename"
 [[ $(wc -c < "$work/$cli_filename" | tr -d ' ') == "$cli_length" && $(sha256 "$work/$cli_filename") == "$cli_checksum" ]] || fail 'CLI checksum mismatch'
 chmod 700 "$work/$cli_filename"
-[[ $("$work/$cli_filename" --version | awk '/^Version: /{print $2}') == "$version" ]] || fail 'CLI version or platform check failed'
+[[ $("$work/$cli_filename" --version --json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') == "$version" ]] || fail 'CLI version or platform check failed'
 if ((existed)) || [[ -n "$adopt_config" ]]; then
   source_config=${adopt_config:-$config}
   [[ -f "$source_config" && ! -L "$source_config" ]] || fail 'Existing configuration must be a regular file'
@@ -246,7 +363,7 @@ fi
 if [[ -n "$adopt_config" ]]; then
   "$work/$filename" --config "$work/service.json" --backup-state "$work/database"
 fi
-active() { if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name"; else launchctl print "$domain/$service_name" >/dev/null 2>&1; fi; }
+active() { if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name"; elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1; else launchctl print "$domain/$service_name" >/dev/null 2>&1; fi; }
 stop_service() {
   local old_pid load_state deadline=$((SECONDS+50))
   old_pid=$(service_pid || true)
@@ -260,6 +377,8 @@ stop_service() {
     elif [[ "$old_pid" != 0 && -n "$old_pid" ]]; then
       return 1
     fi
+  elif [[ "$platform" == freebsd ]]; then
+    if [[ -f "$unit" ]] && active; then "$unit" onestop || return 1; fi
   else
     launchctl bootout "$domain/$service_name" 2>/dev/null || ! launchctl print "$domain/$service_name" >/dev/null 2>&1 || return 1
   fi
@@ -271,10 +390,10 @@ stop_service() {
   fi
 }
 start_service() {
-  if [[ "$platform" == linux ]]; then systemctl daemon-reload; systemctl start "$service_name"; else launchctl bootstrap "$domain" "$unit"; fi
+  if [[ "$platform" == linux ]]; then systemctl daemon-reload; systemctl start "$service_name"; elif [[ "$platform" == freebsd ]]; then "$unit" onestart; else launchctl bootstrap "$domain" "$unit"; fi
 }
 service_pid() {
-  if [[ "$platform" == linux ]]; then systemctl show "$service_name" -p MainPID --value; else launchctl print "$domain/$service_name" 2>/dev/null | awk '$1=="pid" && $2=="=" {print $3;exit}'; fi
+  if [[ "$platform" == linux ]]; then systemctl show "$service_name" -p MainPID --value; elif [[ "$platform" == freebsd ]]; then if [[ -f "$child_pidfile" && ! -L "$child_pidfile" ]]; then cat "$child_pidfile"; fi; else launchctl print "$domain/$service_name" 2>/dev/null | awk '$1=="pid" && $2=="=" {print $3;exit}'; fi
 }
 nonce() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
 prepare_start() { launch_id=$(nonce); mkdir -p "$data_dir/runtime"; chmod 700 "$data_dir/runtime"; printf '%s\n' "$launch_id" > "$ready_file.request"; chmod 600 "$ready_file.request"; }
@@ -376,7 +495,7 @@ mv -f "$cli_path.new" "$cli_path"
 cli_changed=1
 if ((existed == 0)); then cp "$work/service.json" "$config"; chmod 600 "$config"; fi
 printf 'role\t%s\nserviceName\t%s\nconfig\t%s\nunit\t%s\nversion\t%s\n' "$role" "$service_name" "$config" "$unit" "$version" > "$metadata"
-printf 'cliPath\t%s\n' "$cli_path" >> "$metadata"
+printf 'cliPath\t%s\nbackupDir\t%s\ndataDir\t%s\n' "$cli_path" "$backup_dir" "$data_dir" >> "$metadata"
 if [[ "$role" == agent && "$existed" == 0 && -z "$adopt_config" ]]; then
   OSS_TRANSFER_JOIN_TOKEN="$TRANSFER_JOIN_TOKEN" "$binary" --config "$config" --master-url "$master_url" --enroll-only
 fi
@@ -399,6 +518,24 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 EOF
+elif [[ "$platform" == freebsd ]]; then
+  cat > "$unit" <<EOF
+#!/bin/sh
+# PROVIDE: $rc_name
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+# oss-transfer-install: $install_dir
+. /etc/rc.subr
+name="$rc_name"
+rcvar="\${name}_enable"
+command="/usr/sbin/daemon"
+pidfile="$supervisor_pidfile"
+procname="/usr/sbin/daemon"
+command_args="-f -r -R 5 -P $supervisor_pidfile -p $child_pidfile -- \"$binary\" --config \"$config\""
+load_rc_config "\$name"
+: \${${rc_name}_enable:=YES}
+run_rc_command "\$1"
+EOF
 else
   xml() { printf '%s' "$1" | sed 's/\&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g'; }
   cat > "$unit" <<EOF
@@ -415,7 +552,7 @@ else
 EOF
   plutil -lint "$unit" >/dev/null
 fi
-chmod 644 "$unit"
+if [[ "$platform" == freebsd ]]; then chmod 755 "$unit"; else chmod 644 "$unit"; fi
 prepare_start
 start_service
 wait_ready

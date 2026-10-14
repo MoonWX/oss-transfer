@@ -24,13 +24,18 @@ func TestMain(m *testing.M) { os.Setenv("OSS_TRANSFER_LANG", "zh"); os.Exit(m.Ru
 
 func clearLocaleEnvironment(t *testing.T) {
 	t.Helper()
+	t.Setenv("OSS_TRANSFER_CLI_CONFIG_DIR", t.TempDir())
 	for _, name := range []string{"OSS_TRANSFER_LANG", "LC_ALL", "LC_MESSAGES", "LANG"} {
 		t.Setenv(name, "")
 	}
 }
 func TestCLILocaleSelection(t *testing.T) {
 	clearLocaleEnvironment(t)
-	if got, _ := resolveCLILocale(nil); got != localeZH {
+	wantFallback := localeEN
+	if language, ok := normalizeCLILocale(platformLocaleName()); ok {
+		wantFallback = language
+	}
+	if got, _ := resolveCLILocale(nil); got != wantFallback {
 		t.Fatal(got)
 	}
 	for _, test := range []struct {
@@ -70,7 +75,7 @@ func TestCLILocaleSelection(t *testing.T) {
 	}
 }
 func TestCLIHelpAllLanguagesAndAliases(t *testing.T) {
-	groups := [][]string{{}, {"task"}, {"task", "create"}, {"task", "import"}, {"node"}, {"agent"}, {"setup"}, {"storage"}, {"limit"}, {"exceptions"}, {"object"}, {"login"}, {"tools"}}
+	groups := [][]string{{}, {"config"}, {"task"}, {"task", "create"}, {"task", "import"}, {"node"}, {"agent"}, {"setup"}, {"storage"}, {"limit"}, {"exceptions"}, {"object"}, {"login"}, {"tools"}}
 	for _, group := range groups {
 		source := helpFor(group)
 		for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {

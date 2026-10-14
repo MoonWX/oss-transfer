@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a Docker context from the six checksummed native release archives."""
+"""Create a two-platform Docker context from checksummed native archives."""
 import argparse
 import hashlib
 import importlib.util
@@ -60,7 +60,7 @@ def create(source, output):
         (stage / "data" / ".keep").write_bytes(b"")
         binaries = []
         for row in lines:
-            if row[0] != "file" or row[1] != "linux":
+            if row[0] != "file" or row[1] != "linux" or row[2] not in ("amd64", "arm64"):
                 continue
             _, os_name, arch, role, filename, checksum, size = row
             directory = stage / "bin" / os_name / arch

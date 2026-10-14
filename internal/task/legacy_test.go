@@ -3,7 +3,9 @@ package task
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -163,5 +165,42 @@ func TestLegacyChildPaginationUsesRowsWhenHistoricalNumbersHaveGaps(t *testing.T
 	done, err := repo.LegacyChildrenPage(224, 2, 1)
 	if err != nil || len(done) != 0 {
 		t.Fatal(done, err)
+	}
+}
+
+func TestLegacyChildNumberUsesSameSigned32BitBoundsOnEveryArchitecture(t *testing.T) {
+	for _, number := range []int{0, -1, math.MaxInt32} {
+		t.Run(strconv.Itoa(number), func(t *testing.T) {
+			db, repo := openTest(t, filepath.Join(t.TempDir(), "db"))
+			defer db.Close()
+			pendingMigration(t, db)
+			row := legacyParent(224, "COMPLETED", false)
+			row.Children[0].Number = number
+			err := repo.ImportLegacy(LegacyImport{MigrationID: "fixture", Parents: []LegacyParentImport{row}})
+			if number <= 0 {
+				if err == nil {
+					t.Fatal("invalid child number imported")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			children, err := repo.LegacyChildrenPage(224, 0, 1)
+			if err != nil || len(children) != 1 || children[0].Number != number {
+				t.Fatal("boundary child number changed after import", children, err)
+			}
+		})
+	}
+	if strconv.IntSize == 64 {
+		db, repo := openTest(t, filepath.Join(t.TempDir(), "db"))
+		defer db.Close()
+		pendingMigration(t, db)
+		row := legacyParent(224, "COMPLETED", false)
+		overflow := int64(math.MaxInt32) + 1
+		row.Children[0].Number = int(overflow)
+		if err := repo.ImportLegacy(LegacyImport{MigrationID: "fixture", Parents: []LegacyParentImport{row}}); err == nil {
+			t.Fatal("child number outside the portable range imported")
+		}
 	}
 }

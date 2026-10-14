@@ -18,12 +18,15 @@ if ! git diff --quiet HEAD || test -n "$(git ls-files --others --exclude-standar
   revision="$revision-dirty"
   short_revision="$short_revision-dirty"
 fi
-platforms="${GO_PLATFORMS:-${GOOS:-$(go env GOOS)}/${GOARCH:-$(go env GOARCH)}}"
+host_os="${GOOS:-$(go env GOOS)}"
+host_arch="${GOARCH:-$(go env GOARCH)}"
+if [[ "$host_arch" == arm ]]; then
+  host_arm="${GOARM:-$(go env GOARM)}"
+  host_arch="armv${host_arm%%,*}"
+fi
+platforms="${GO_PLATFORMS:-$host_os/$host_arch}"
 for platform in $platforms; do
-  case "$platform" in
-    linux/amd64|linux/arm64|darwin/amd64|darwin/arm64|windows/amd64|windows/arm64) ;;
-    *) printf 'Unsupported platform: %s\n' "$platform" >&2; exit 1 ;;
-  esac
+  python3 deploy/go/platforms.py --go-env "$platform" >/dev/null
 done
 mkdir -p output/go-development
 lock="$root/output/.go-build-lock"
@@ -48,6 +51,7 @@ cp -R frontend/dist/. internal/webui/assets/
 for platform in $platforms; do
   target_os="${platform%/*}"
   target_arch="${platform#*/}"
+  IFS=$'\t' read -r target_os go_arch go_arm < <(python3 deploy/go/platforms.py --go-env "$platform")
   name="oss-transfer-go-$target_os-$target_arch"
   package="$stage/$name"
   mkdir -p "$package"
@@ -58,13 +62,13 @@ for platform in $platforms; do
     if [[ "$program" == master ]]; then
       link_flags+=" -X main.agentArtifactBase=$artifact_base -X main.agentArtifactVersion=$artifact_version -X main.agentDockerImage=$agent_image"
     fi
-    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -tags embedded -trimpath \
+    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$go_arch" GOARM="$go_arm" GOAMD64=v1 GOARM64=v8.0 GORISCV64=rva20u64 go build -tags embedded -trimpath \
       -ldflags "$link_flags" \
       -o "$package/oss-transfer-$program$extension" "./cmd/oss-transfer-$program"
   done
   (
     cd cli-go
-    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -trimpath \
+    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$go_arch" GOARM="$go_arm" GOAMD64=v1 GOARM64=v8.0 GORISCV64=rva20u64 go build -trimpath \
       -ldflags "-s -w -X main.version=$version -X main.branch=$branch -X main.commit=$short_revision -X main.buildTime=$build_time" \
       -o "$package/oss-transfer-cli$extension" .
   )

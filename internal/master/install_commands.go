@@ -60,7 +60,7 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 		link := masterURL + "/api/agents/bootstrap/" + invite.Token
 		data["joinUrl"] = link
 		data["nativeAgent"] = map[string]any{"available": true}
-		data["traditionalCommand"] = "(umask 077; join_script=$(mktemp) || exit; trap 'rm -f \"$join_script\"' EXIT; curl -fSL " + shellQuote(link) + " -o \"$join_script\" && sudo bash \"$join_script\")"
+		data["traditionalCommand"] = "(umask 077; join_script=$(mktemp) || exit; trap 'rm -f \"$join_script\"' EXIT; curl -fSL " + shellQuote(link) + " -o \"$join_script\" && { if [ \"$(id -u)\" -eq 0 ]; then bash \"$join_script\"; else sudo bash \"$join_script\"; fi; })"
 		data["windowsCommand"] = "$joinScript = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1'); try { Invoke-WebRequest -ErrorAction Stop -Uri " + psQuote(link+"?platform=windows") + " -OutFile $joinScript; & $joinScript } finally { Remove-Item $joinScript -ErrorAction SilentlyContinue }"
 	}
 	if s.options.AgentDockerImage != "" {

@@ -31,8 +31,8 @@ func normalizeCLILocale(value string) (cliLocale, bool) {
 	}
 	return "", false
 }
-func environmentCLILocale() cliLocale {
-	for _, name := range []string{"OSS_TRANSFER_LANG", "LC_ALL", "LC_MESSAGES", "LANG"} {
+func automaticCLILocale() cliLocale {
+	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			if language, ok := normalizeCLILocale(value); ok {
 				return language
@@ -40,7 +40,30 @@ func environmentCLILocale() cliLocale {
 			return localeEN
 		}
 	}
-	return localeZH
+	if language, ok := normalizeCLILocale(platformLocaleName()); ok {
+		return language
+	}
+	return localeEN
+}
+
+func environmentCLILocale() cliLocale {
+	if value := strings.TrimSpace(os.Getenv("OSS_TRANSFER_LANG")); value != "" {
+		if strings.EqualFold(value, "auto") {
+			return automaticCLILocale()
+		}
+		if language, ok := normalizeCLILocale(value); ok {
+			return language
+		}
+		return localeEN
+	}
+	// A damaged preference must not prevent access to help or config set, which
+	// can repair it. Config get reports the read error instead of hiding it.
+	if preference, err := loadCLIPreferences(); err == nil && preference.Language != "auto" {
+		if language, ok := normalizeCLILocale(preference.Language); ok {
+			return language
+		}
+	}
+	return automaticCLILocale()
 }
 
 // Discover --lang before normal argument validation so even argument errors use
@@ -62,11 +85,15 @@ func resolveCLILocale(args []string) (cliLocale, error) {
 			i++
 			value = args[i]
 		}
-		selected, ok := normalizeCLILocale(value)
-		if !ok || selected == localeEN && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "en") {
-			return language, cliErrorf("不支持的语言 %q；请使用 zh、en 或 ja", value)
+		preference, err := normalizeCLILanguagePreference(value)
+		if err != nil {
+			return language, err
 		}
-		language = selected
+		if preference == "auto" {
+			language = automaticCLILocale()
+		} else {
+			language = cliLocale(preference)
+		}
 	}
 	return language, nil
 }

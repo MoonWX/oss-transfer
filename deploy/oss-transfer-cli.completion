@@ -3,7 +3,7 @@ _oss_transfer_cli_completion() {
     local cur prev words cword
     _init_completion -n = || return
     local globals="--lang --host --json --verbose --watch --help --version"
-    local commands="task node agent setup storage limit exceptions object login logout whoami change-password \
+    local commands="config task node agent setup storage limit exceptions object login logout whoami change-password \
         list-task status show-task stop resume start retry delete-task clear list-deleted permanent-delete export-report \
         add-task import-tasks list-worker worker-status list-s3-config remove-s3-config \
         list-rate-limit rate-limit list-rate-limit-history rate-limit-history set-rate-limit \
@@ -34,7 +34,7 @@ _oss_transfer_cli_completion() {
     action=${positional[1]}
 
     case "$prev" in
-        --lang) COMPREPLY=( $(compgen -W "zh en ja" -- "$cur") ); return ;;
+        --lang) COMPREPLY=( $(compgen -W "auto zh en ja" -- "$cur") ); return ;;
         --file|--output|--setup-token-file|--password-file|--old-password-file|--new-password-file|--access-key-file|--secret-key-file)
             _filedir; return ;;
         --setup-token-env|--password-env|--old-password-env|--new-password-env|--access-key-env|--secret-key-env)
@@ -62,6 +62,13 @@ _oss_transfer_cli_completion() {
     case "$command" in
         "") choices="$commands" ;;
         help) choices="$commands" ;;
+        config)
+            case "$action" in
+                "") choices="get set" ;;
+                get|set)
+                    if ((${#positional[@]} == 2)); then choices="language";
+                    elif [[ $action == set ]] && ((${#positional[@]} == 3)); then choices="auto zh en ja"; fi ;;
+            esac ;;
         task)
             case "$action" in
                 "") choices="list show children creation create import stop resume start retry delete trash purge bandwidth report" ;;

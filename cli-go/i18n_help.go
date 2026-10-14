@@ -15,6 +15,21 @@ func helpForLocale(args []string, locale cliLocale) string {
 }
 
 var cliHelpTranslations = map[string][2]string{
+	cliConfigHelp: {`Local preferences
+Usage:
+  oss-transfer-cli config get language
+  oss-transfer-cli config set language auto|zh|en|ja
+
+The default follows the system locale. Save a language once for later commands; auto restores system selection.
+--lang and OSS_TRANSFER_LANG override it for the current invocation; auto temporarily uses the system language.
+`, `ローカル設定
+使い方:
+  oss-transfer-cli config get language
+  oss-transfer-cli config set language auto|zh|en|ja
+
+既定はシステム言語です。一度保存すると以降のコマンドで使用し、auto で自動選択に戻します。
+--lang と OSS_TRANSFER_LANG は今回の設定を上書きし、auto は一時的にシステム言語を使用します。
+`},
 	cliHelp: {`OSS Transfer CLI
 Usage: oss-transfer-cli [global options] <command> [arguments]
 
@@ -50,6 +65,10 @@ Account
   whoami                          Show login status
   change-password --old-password-env OLD --new-password-env NEW
 
+Local preferences
+  config get language             Show the saved language
+  config set language auto|zh|en|ja  Save a language; default: system locale
+
 Inventory tools
   diff-objects <source-dir> <sorted-target-manifest> <output-dir>
   count-lines <directory>
@@ -57,7 +76,7 @@ Inventory tools
 
 Global options
   --host <http://IP:1685>          Default: http://localhost:1685
-  --lang zh|en|ja                 Language; regional locales are accepted
+  --lang auto|zh|en|ja             Override language for this invocation
   --json                          Structured JSON; one line per --watch refresh
   --verbose                       Write request paths and HTTP status to stderr
   --watch <seconds|5s>            Refresh read-only queries every 1–3600 seconds
@@ -65,7 +84,7 @@ Global options
   --help                          Show help; also: help <command group>
 
 Examples
-  oss-transfer-cli --lang en task list --watch 5
+  oss-transfer-cli task list --watch 5
   oss-transfer-cli task show 224 --child 224-1
   oss-transfer-cli task resume 224,225
   oss-transfer-cli task bandwidth 224 200
@@ -77,10 +96,10 @@ New tasks start automatically. Acceptance or prechecks do not confirm completion
 Removing nodes/connections, purging tasks and clearing exceptions require --yes.
 Exit codes: 0 success, 1 operation failed, 2 command error, 3 incomplete, 130 interrupted.
 OSS_TRANSFER_MASTER_SERVER sets the address. Use files or environment variables for credentials.
-OSS_TRANSFER_CLI_CONFIG_DIR sets the session directory; use an absolute path.
-Language: --lang > OSS_TRANSFER_LANG > LC_ALL > LC_MESSAGES > LANG.
-An unset locale defaults to zh; unsupported system locales use en. JSON keys, enums and user data remain unchanged.
-Help groups: task, task create, task import, node, agent, setup, storage, limit, exceptions, object, login, tools.
+OSS_TRANSFER_CLI_CONFIG_DIR sets the configuration and session directory; use an absolute path.
+Language follows the system, with English as fallback. Save a preference with config set language en; auto restores system selection.
+--lang and OSS_TRANSFER_LANG override the saved preference. JSON keys, enums and user data remain unchanged.
+Help groups: task, task create, task import, node, agent, setup, storage, limit, exceptions, object, login, config, tools.
 `, `OSS Transfer CLI
 使い方: oss-transfer-cli [グローバルオプション] <コマンド> [引数]
 
@@ -116,6 +135,10 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
   whoami                          ログイン状態を表示
   change-password --old-password-env OLD --new-password-env NEW
 
+ローカル設定
+  config get language             保存した言語を表示
+  config set language auto|zh|en|ja  言語を保存（既定はシステム言語）
+
 マニフェスト
   diff-objects <転送元ディレクトリ> <ソート済み転送先マニフェスト> <出力ディレクトリ>
   count-lines <ディレクトリ>
@@ -123,7 +146,7 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
 
 グローバルオプション
   --host <http://IP:1685>          既定: http://localhost:1685
-  --lang zh|en|ja                 表示言語。地域付きの言語コードも使用可能
+  --lang auto|zh|en|ja             今回の表示言語を指定
   --json                          JSON で出力。--watch 時は更新ごとに 1 行
   --verbose                       リクエストパスと HTTP 状態を標準エラーに出力
   --watch <秒|5s>                 読み取り専用の照会を 1～3600 秒ごとに更新
@@ -131,7 +154,7 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
   --help                          ヘルプを表示。help <コマンドグループ> も使用可能
 
 例
-  oss-transfer-cli --lang ja task list --watch 5
+  oss-transfer-cli task list --watch 5
   oss-transfer-cli task show 224 --child 224-1
   oss-transfer-cli task resume 224,225
   oss-transfer-cli task bandwidth 224 200
@@ -143,10 +166,10 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
 ノード・接続の削除、タスクの完全削除、例外記録のクリアには --yes が必要です。
 終了コード: 0 成功、1 操作失敗、2 コマンドエラー、3 不完全な結果、130 中断。
 OSS_TRANSFER_MASTER_SERVER で接続先を設定します。認証情報はファイルか環境変数を使用します。
-OSS_TRANSFER_CLI_CONFIG_DIR はセッション保存先です。絶対パスで指定してください。
-言語の優先順位: --lang > OSS_TRANSFER_LANG > LC_ALL > LC_MESSAGES > LANG。
-未設定時は zh、未対応のシステム言語は en です。JSON のキー、列挙値、利用者のデータは変わりません。
-ヘルプ: task、task create、task import、node、agent、setup、storage、limit、exceptions、object、login、tools。
+OSS_TRANSFER_CLI_CONFIG_DIR は設定とセッションの保存先です。絶対パスで指定してください。
+既定はシステム言語で、判定できない場合は英語です。config set language ja で保存し、auto で自動選択に戻します。
+--lang と OSS_TRANSFER_LANG は保存した設定より優先されます。JSON のキー、列挙値、利用者のデータは変わりません。
+ヘルプ: task、task create、task import、node、agent、setup、storage、limit、exceptions、object、login、config、tools。
 `},
 	cliTaskHelp: {`Task management
 Usage: oss-transfer-cli task <subcommand> [arguments]

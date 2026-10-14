@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -274,6 +275,24 @@ func TestTaskChildIDsFollowWebUIOrderingWithoutMutatingInputs(t *testing.T) {
 	for _, row := range children {
 		if _, exists := row["childTaskId"]; exists {
 			t.Fatal("child numbering mutated API input")
+		}
+	}
+}
+
+func TestTaskChildNumberingKeeps32BitBoundaryAndInvalidLegacyIndicesDistinct(t *testing.T) {
+	children := []map[string]interface{}{
+		{"taskIndex": float64(11), "shardIndex": float64(math.MaxInt32 - 1)},
+		{"taskIndex": float64(12), "shardIndex": float64(math.MaxInt32)},
+		{"taskIndex": float64(13), "shardId": "legacy-local-9999999999999999999999999"},
+		{"taskIndex": float64(14), "shardIndex": float64(0)},
+		{"taskIndex": float64(15), "shardIndex": int64(1<<32 + 1)},
+	}
+	rows := numberCLIChildren(224, children, nil)
+	want := map[int]string{11: "224-2147483647", 12: "224-2", 13: "224-4", 14: "224-1", 15: "224-3"}
+	for _, row := range rows {
+		id := getInt(row, "taskIndex")
+		if row["childTaskId"] != want[id] {
+			t.Fatalf("child %d numbered as %v, want %s", id, row["childTaskId"], want[id])
 		}
 	}
 }

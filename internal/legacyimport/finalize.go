@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 
 	"github.com/MoonWX/oss-transfer/internal/agent"
 	"github.com/MoonWX/oss-transfer/internal/cluster"
@@ -18,10 +19,17 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
+var errUnsupportedPublication = errors.New("atomic migration publication is supported on Linux and macOS")
+
+func publicationSupported() bool { return runtime.GOOS == "linux" || runtime.GOOS == "darwin" }
+
 // Finalize publishes an offline conversion. It never resumes a task or accesses
 // source/target storage. A DB whose fence is cleared during publication still
 // refuses startup anywhere except its final destination, including staging.
 func (p *Prepared) Finalize(ctx context.Context) error {
+	if !publicationSupported() {
+		return errUnsupportedPublication
+	}
 	if p.closed {
 		return errors.New("migration preparation is closed")
 	}

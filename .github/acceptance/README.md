@@ -17,6 +17,8 @@ These six platforms run the same application and native installer scenarios in p
 
 Linux ARMv7, riscv64 and loong64 execute the target binaries under QEMU, with an amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 run in FreeBSD 14.4 VMs. All five run the same Go/CLI tests and application scenarios as the six platforms above, including shared bandwidth, stop/restart, multipart cleanup, inventory recovery and installation rollback. Their test executables are cross-compiled with `CGO_ENABLED=0`; they do not run the race detector.
 
+The old Java database converter supports Linux and macOS. Other platforms test that publication is rejected before changing migration state; FreeBSD also checks that staged data and the startup fence remain intact.
+
 The Linux QEMU jobs install real systemd services on the Ubuntu runner. Only the installer's CPU detection is mapped to the target architecture; service management, executable files, PID checks and rollback remain real. This exercises target CPU code on the host Linux kernel. It does not establish compatibility with a particular physical CPU, distribution or kernel. FreeBSD uses rc.d inside its VM.
 
 ## Scheduling

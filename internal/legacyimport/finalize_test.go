@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -37,6 +38,7 @@ func finalizedFixture(t *testing.T) *Prepared {
 	return p
 }
 func TestFinalizeAtomicPublicationPreservesRawAndAllowsOnlyFinalPath(t *testing.T) {
+	requirePublicationPlatform(t)
 	p := finalizedFixture(t)
 	stage := p.Directory
 	if err := p.Finalize(context.Background()); err != nil {
@@ -75,6 +77,7 @@ func TestFinalizeAtomicPublicationPreservesRawAndAllowsOnlyFinalPath(t *testing.
 	}
 }
 func TestFinalizeRetryAfterPartialFenceCommitAndDestinationCollision(t *testing.T) {
+	requirePublicationPlatform(t)
 	p := finalizedFixture(t)
 	directory := p.Directory
 	if err := p.Master.Update(func(tx *state.Tx) error {
@@ -118,6 +121,7 @@ func TestFinalizeRetryAfterPartialFenceCommitAndDestinationCollision(t *testing.
 }
 
 func TestFinalizeRequiresExplicitRuntimeAcceptance(t *testing.T) {
+	requirePublicationPlatform(t)
 	p := finalizedFixture(t)
 	if err := p.Master.Update(func(tx *state.Tx) error { return tx.Delete("migration-sections", "runtime-acceptance") }); err != nil {
 		t.Fatal(err)
@@ -141,5 +145,12 @@ func TestFinalizeRequiresExplicitRuntimeAcceptance(t *testing.T) {
 	}
 	if err := p.Finalize(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func requirePublicationPlatform(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("successful atomic migration publication requires Linux or macOS; unsupported-platform refusal is tested separately")
 	}
 }

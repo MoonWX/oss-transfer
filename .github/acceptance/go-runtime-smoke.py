@@ -60,6 +60,7 @@ def main():
     process_names = []
     secrets = []
     last_nodes = []
+    last_worker_status = None
     phase = "Master startup"
 
     def redact(text):
@@ -76,7 +77,8 @@ def main():
             code = process.poll()
             observed.append({"name": name, "pid": process.pid, "exitCode": code, "running": code is None})
         payload = {"result": "failed", "phase": phase, "error": str(error), "completedChecks": checks,
-                   "processes": observed, "lastNodesResponse": last_nodes, "logs": {}}
+                   "processes": observed, "lastNodesResponse": last_nodes,
+                   "lastWorkerStatusResponse": last_worker_status, "logs": {}}
         for log in root.glob("*.log"):
             try:
                 payload["logs"][log.name] = log.read_text(errors="replace", encoding="utf-8")
@@ -164,6 +166,22 @@ def main():
         nodes = eventually(nodes_online)
         identities = {node["address"]: node["id"] for node in nodes}
         checks.append("two separate native Agent processes enroll through outbound connections")
+        phase = "Initial Agent command readiness"
+
+        def agents_respond():
+            nonlocal last_worker_status
+            last_worker_status = api(origin, "/api/master/worker-status", token=token)
+            workers = last_worker_status.get("workers", {})
+            ready = (last_worker_status.get("complete") is True
+                     and last_worker_status.get("partial") is False
+                     and set(workers) == {"qa-node-1", "qa-node-2"}
+                     and all(worker.get("success") is True for worker in workers.values()))
+            return last_worker_status if ready else None
+
+        # The join handler marks an Agent online before its reply reaches the
+        # Agent. A command reply proves enrollment was saved and polling began.
+        initial_worker_status = eventually(agents_respond)
+        checks.append("both enrolled Agents return a successful worker-status command before crash recovery")
         phase = "Agent reconnection after forced Master restart"
         agents[0].kill()
         agents[0].wait(timeout=10)
@@ -186,7 +204,7 @@ def main():
         assert len(remaining) == 1 and remaining[0]["address"] == "qa-node-2"
         assert agents[1].poll() is None
         checks.append("revocation disconnects only the selected Agent")
-        evidence = {"scope": "Go process setup, enrollment, crash recovery and revocation; no transfer claims", "checks": checks, "masterSha256": hashlib.sha256(args.master.read_bytes()).hexdigest(), "agentSha256": hashlib.sha256(args.agent.read_bytes()).hexdigest(), "platform": os.name}
+        evidence = {"scope": "Go process setup, enrollment, crash recovery and revocation; no transfer claims", "checks": checks, "initialWorkerStatusResponse": initial_worker_status, "masterSha256": hashlib.sha256(args.master.read_bytes()).hexdigest(), "agentSha256": hashlib.sha256(args.agent.read_bytes()).hexdigest(), "platform": os.name}
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(evidence, indent=2))
     except Exception as error:

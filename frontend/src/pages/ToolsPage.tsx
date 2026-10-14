@@ -187,7 +187,47 @@ export default function ToolsPage() {
     failedWorkers?: string[];
     unreachableWorkers?: string[];
     queriedWorkers?: string[];
+    truncated?: boolean;
+    nextBeforeId?: number;
   }>(tab === 1 ? "/api/master/deleted-tasks" : null);
+  const [earlierRows, setEarlierRows] = useState<
+    (DeletedTask & { workerNode: string })[]
+  >([]);
+  const [earlierCursor, setEarlierCursor] = useState<number | null>();
+  const [earlierLoading, setEarlierLoading] = useState(false);
+  const [earlierError, setEarlierError] = useState<string | null>(null);
+  const earlierRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => earlierRequest.current?.abort(), []);
+  const nextEarlierCursor =
+    earlierCursor === undefined ? recycle.data?.nextBeforeId : earlierCursor;
+  async function loadEarlierRecords() {
+    if (!nextEarlierCursor || earlierRequest.current) return;
+    const controller = new AbortController();
+    earlierRequest.current = controller;
+    setEarlierLoading(true);
+    setEarlierError(null);
+    try {
+      const value = await api<{
+        deletedTasks: Record<string, DeletedTask[] | number>;
+        nextBeforeId?: number;
+      }>(`/api/master/deleted-tasks?beforeId=${nextEarlierCursor}&limit=1000`, {
+        signal: controller.signal,
+      });
+      const items = Object.entries(value.deletedTasks).flatMap(
+        ([worker, tasks]) =>
+          Array.isArray(tasks)
+            ? tasks.map((task) => ({ ...task, workerNode: worker }))
+            : [],
+      );
+      setEarlierRows((previous) => [...previous, ...items]);
+      setEarlierCursor(value.nextBeforeId ?? null);
+    } catch (cause) {
+      if (!controller.signal.aborted) setEarlierError(errorText(cause));
+    } finally {
+      earlierRequest.current = null;
+      if (!controller.signal.aborted) setEarlierLoading(false);
+    }
+  }
   // Recycle completeness belongs to this snapshot, not the live status poll.
   const nodes = useApi<{ data: NodeRegistry }>(
     tab === 1 ? "/api/master/nodes" : null,
@@ -203,24 +243,31 @@ export default function ToolsPage() {
   const [pageSize, setPageSize] = useState(25);
   const rows = useMemo(
     () =>
-      Object.entries(recycle.data?.deletedTasks ?? {})
-        .flatMap(([worker, tasks]) =>
-          Array.isArray(tasks)
-            ? tasks.map((task) => ({ ...task, workerNode: worker }))
-            : [],
-        )
-        .sort(
-          (left, right) =>
-            right.taskIndex - left.taskIndex ||
-            left.workerNode.localeCompare(right.workerNode),
-        ),
-    [recycle.data],
+      [
+        ...new Map(
+          [
+            ...earlierRows,
+            ...Object.entries(recycle.data?.deletedTasks ?? {}).flatMap(
+              ([worker, tasks]) =>
+                Array.isArray(tasks)
+                  ? tasks.map((task) => ({ ...task, workerNode: worker }))
+                  : [],
+            ),
+          ].map((task) => [`${task.taskIndex}:${task.workerNode}`, task]),
+        ).values(),
+      ].sort(
+        (left, right) =>
+          right.taskIndex - left.taskIndex ||
+          left.workerNode.localeCompare(right.workerNode),
+      ),
+    [recycle.data, earlierRows],
   );
   useEffect(() => {
     const lastPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
     if (page > lastPage) setPage(lastPage);
   }, [rows.length, page, pageSize]);
   const uniqueIds = [...new Set(rows.map((task) => task.taskIndex))];
+  const selectableIds = uniqueIds.slice(0, 128);
   const activeSelection = selectedIds.filter((id) => uniqueIds.includes(id));
   const missingNodes = [
     ...new Set([
@@ -334,6 +381,18 @@ export default function ToolsPage() {
       ];
       const partial =
         detail.partial || Number(detail.failed) > 0 || failedWorkers.length > 0;
+      const details = Array.isArray(detail.details) ? detail.details : [];
+      const removedIds = details
+        .filter((item: any) => item.success)
+        .map((item: any) => item.taskId);
+      setEarlierRows((previous) =>
+        previous.filter((task) => !removedIds.includes(task.taskIndex)),
+      );
+      const retained = [
+        ...new Set(
+          details.flatMap((item: any) => item.retainedAgentHistory ?? []),
+        ),
+      ];
       if (!partial) setSelectedIds([]);
       else
         setDeleteError(
@@ -343,7 +402,9 @@ export default function ToolsPage() {
       notify(
         partial
           ? `部分记录未删除${failedWorkers.length ? `，未响应节点：${failedWorkers.join("、")}` : "，请刷新后重试"}。`
-          : "永久删除请求已提交，正在刷新回收站。",
+          : retained.length
+            ? `任务记录已删除；已移除节点的本地历史保留：${retained.join("、")}。`
+            : "永久删除请求已提交，正在刷新回收站。",
         partial ? "warning" : "info",
       );
       await Promise.all([recycle.refresh(), nodes.refresh()]);
@@ -778,11 +839,28 @@ export default function ToolsPage() {
             </Alert>
           )}
           {(recycle.data?.partial || recycle.data?.complete === false) &&
+            !recycle.data?.truncated &&
             missingNodes.length === 0 && (
               <Alert severity="warning">
                 部分回收站记录未返回，当前列表可能不完整。
               </Alert>
             )}
+          {nextEarlierCursor && (
+            <Alert
+              severity="info"
+              action={
+                <Button
+                  disabled={earlierLoading}
+                  onClick={() => void loadEarlierRecords()}
+                >
+                  {earlierLoading ? "加载中" : "加载更早记录"}
+                </Button>
+              }
+            >
+              已加载 {formatNumber(rows.length)} 条记录。
+            </Alert>
+          )}
+          {earlierError && <Alert severity="error">{earlierError}</Alert>}
           <Paper variant="outlined" sx={{ overflow: "hidden" }}>
             <Stack
               direction={{ xs: "column", sm: "row" }}
@@ -795,7 +873,7 @@ export default function ToolsPage() {
                 <Typography variant="h6">已删除任务</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {recycle.data
-                    ? `${formatNumber(recycle.data.totalCount)} 条节点任务记录${activeSelection.length ? ` · 已选择 ${activeSelection.length} 个任务 ID` : ""}`
+                    ? `${formatNumber(rows.length)} 条节点任务记录${activeSelection.length ? ` · 已选择 ${activeSelection.length} 个任务 ID（最多 128 个）` : ""}`
                     : "正在读取回收站"}
                 </Typography>
               </Box>
@@ -804,6 +882,12 @@ export default function ToolsPage() {
                   startIcon={<RefreshRounded />}
                   disabled={recycle.loading}
                   onClick={() => {
+                    earlierRequest.current?.abort();
+                    earlierRequest.current = null;
+                    setEarlierLoading(false);
+                    setEarlierRows([]);
+                    setEarlierCursor(undefined);
+                    setEarlierError(null);
                     void recycle.refresh();
                     void nodes.refresh();
                   }}
@@ -837,18 +921,27 @@ export default function ToolsPage() {
                       <TableRow>
                         <TableCell padding="checkbox">
                           <Checkbox
-                            inputProps={{ "aria-label": "选择全部已删除任务" }}
+                            inputProps={{
+                              "aria-label":
+                                uniqueIds.length > 128
+                                  ? "选择前 128 个已删除任务"
+                                  : "选择全部已删除任务",
+                            }}
                             checked={
-                              uniqueIds.length > 0 &&
-                              activeSelection.length === uniqueIds.length
+                              selectableIds.length > 0 &&
+                              selectableIds.every((id) =>
+                                activeSelection.includes(id),
+                              )
                             }
                             indeterminate={
                               activeSelection.length > 0 &&
-                              activeSelection.length < uniqueIds.length
+                              !selectableIds.every((id) =>
+                                activeSelection.includes(id),
+                              )
                             }
                             onChange={(event) =>
                               setSelectedIds(
-                                event.target.checked ? uniqueIds : [],
+                                event.target.checked ? selectableIds : [],
                               )
                             }
                           />
@@ -877,10 +970,16 @@ export default function ToolsPage() {
                                 checked={activeSelection.includes(
                                   task.taskIndex,
                                 )}
+                                disabled={
+                                  activeSelection.length >= 128 &&
+                                  !activeSelection.includes(task.taskIndex)
+                                }
                                 onChange={(event) =>
                                   setSelectedIds((ids) =>
                                     event.target.checked
-                                      ? [...new Set([...ids, task.taskIndex])]
+                                      ? [
+                                          ...new Set([...ids, task.taskIndex]),
+                                        ].slice(0, 128)
                                       : ids.filter(
                                           (id) => id !== task.taskIndex,
                                         ),

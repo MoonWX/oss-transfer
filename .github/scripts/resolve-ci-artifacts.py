@@ -11,10 +11,10 @@ import urllib.parse
 import urllib.request
 
 
-WORKFLOW_PATH = ".github/workflows/ci.yml"
-ARTIFACTS = {
-    "release-package": "package_artifact_id",
-    "release-image": "image_artifact_id",
+WORKFLOW = "ci.yml"
+ARTIFACT_NAMES = {
+    "go-release-assets": "package_artifact_id",
+    "go-release-image": "image_artifact_id",
 }
 WAIT_SECONDS = 65 * 60
 POLL_SECONDS = 15
@@ -86,6 +86,7 @@ class ArtifactResolver:
     def __init__(self, client, repository, commit, *, wait_seconds=WAIT_SECONDS,
                  poll_seconds=POLL_SECONDS, clock=time.monotonic,
                  sleep=time.sleep, log=print):
+        self.workflow, self.artifact_names = WORKFLOW, ARTIFACT_NAMES
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ResolutionError("GITHUB_REPOSITORY must be owner/repository.")
         if any(part in (".", "..") for part in repository.split("/")):
@@ -115,7 +116,7 @@ class ArtifactResolver:
             run.get("event") == "push"
             and run.get("head_branch") == "main"
             and run.get("head_sha") == self.commit
-            and run.get("path") == WORKFLOW_PATH
+            and run.get("path") == ".github/workflows/" + self.workflow
             and isinstance(repository_name, str)
             and repository_name.casefold() == self.repository.casefold()
             and type(run.get("id")) is int and run["id"] > 0
@@ -125,7 +126,7 @@ class ArtifactResolver:
         candidates = []
         # GitHub limits filtered workflow-run searches to 1,000 results.
         for page in range(1, 11):
-            payload = self.get(self.prefix + "/workflows/ci.yml/runs", {
+            payload = self.get(self.prefix + "/workflows/" + self.workflow + "/runs", {
                 "event": "push", "branch": "main", "head_sha": self.commit,
                 "exclude_pull_requests": "true", "per_page": 100, "page": page,
             })
@@ -180,7 +181,7 @@ class ArtifactResolver:
                 raise ResolutionError("GitHub API did not return CI artifacts.")
             for artifact in artifacts:
                 name = artifact.get("name") if isinstance(artifact, dict) else None
-                if name not in ARTIFACTS:
+                if name not in self.artifact_names:
                     continue
                 if name in found:
                     raise ResolutionError("CI has duplicate artifacts named {}.".format(name))
@@ -204,12 +205,12 @@ class ArtifactResolver:
                 break
         else:
             raise ResolutionError("Too many CI artifacts to resolve safely.")
-        missing = sorted(set(ARTIFACTS) - set(found))
+        missing = sorted(set(self.artifact_names) - set(found))
         if missing:
             raise ResolutionError(
                 "CI artifacts are missing: {}. Rerun CI at {}, then rerun Release."
                 .format(", ".join(missing), self.run_url(run_id)))
-        return {ARTIFACTS[name]: artifact_id for name, artifact_id in found.items()}
+        return {self.artifact_names[name]: artifact_id for name, artifact_id in found.items()}
 
     def resolve(self):
         run_id = None

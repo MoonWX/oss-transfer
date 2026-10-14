@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // runAdminCommand uses the same master APIs as the console.
@@ -58,10 +60,27 @@ func adminConfirmed(o commandOptions) error {
 	return nil
 }
 
-func adminIPv4(value string) error {
-	ip := net.ParseIP(value)
-	if ip == nil || ip.To4() == nil || ip.String() != value || ip.To4()[0] == 0 || ip.To4()[0] >= 224 {
-		return fmt.Errorf("节点须为规范 IPv4 地址，服务端口使用集群配置；SSH 端口仅用于部署")
+func adminNodeAddress(value string) error {
+	if !utf8.ValidString(value) || len(value) == 0 || len(value) > 256 {
+		return fmt.Errorf("请指定有效的节点名称、IPv4 或 IPv6 地址")
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		if ip.IsUnspecified() || ip.IsMulticast() {
+			return fmt.Errorf("不能使用未指定或组播地址")
+		}
+		return nil
+	}
+	onlyNumbers := true
+	for _, ch := range value {
+		if !(ch == '.' || ch >= '0' && ch <= '9') {
+			onlyNumbers = false
+		}
+		if !(unicode.IsLetter(ch) || unicode.IsDigit(ch) || ch == '-' || ch == '_' || ch == '.') {
+			return fmt.Errorf("节点名称不能包含端口、空格或路径分隔符")
+		}
+	}
+	if onlyNumbers || value == "." || value == ".." {
+		return fmt.Errorf("无效节点地址")
 	}
 	return nil
 }
@@ -75,6 +94,8 @@ func adminData(value map[string]interface{}) map[string]interface{} {
 
 func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	switch action {
+	case "show":
+		return agentShow(client, args)
 	case "invite":
 		return runAgentAdmin(client, "invite", args)
 	case "list":
@@ -121,7 +142,7 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			return nil, err
 		}
 		original := o.Positionals[0]
-		if err := adminIPv4(original); err != nil {
+		if err := adminNodeAddress(original); err != nil {
 			return nil, err
 		}
 		if action == "remove" {
@@ -137,7 +158,7 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			}
 			if o.Has("address") {
 				address = o.Value("address")
-				if err := adminIPv4(address); err != nil {
+				if err := adminNodeAddress(address); err != nil {
 					return nil, err
 				}
 			}
@@ -174,6 +195,12 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 }
 
 func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
+	switch action {
+	case "list", "show", "remove":
+		return runNodeAdmin(client, action, args)
+	case "update":
+		return agentUpdate(client, args)
+	}
 	if action != "invite" {
 		return nil, fmt.Errorf("未知 agent 子命令: %s", action)
 	}
@@ -183,7 +210,7 @@ func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]
 	}
 	address, label := strings.TrimSpace(o.Value("address")), strings.TrimSpace(o.Value("label"))
 	if o.Has("address") {
-		if err := adminIPv4(address); err != nil {
+		if err := adminNodeAddress(address); err != nil {
 			return nil, err
 		}
 	}
@@ -203,7 +230,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		if err == nil {
 			for _, raw := range adminArray(result["configs"]) {
 				if config, ok := raw.(map[string]interface{}); ok {
-					for _, field := range []string{"accessKey", "secretKey"} {
+					for _, field := range []string{"accessKey", "secretKey", "sessionToken"} {
 						if value, ok := config[field].(string); ok && value != "" {
 							config[field] = "********"
 						}
@@ -358,13 +385,37 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 		if _, err := adminOptions(args, nil, nil, 0); err != nil {
 			return nil, err
 		}
-		return client.Get("/rate-limit")
+		result, err := client.Get("/rate-limit")
+		if err == nil {
+			if workers, ok := result["workers"].(map[string]interface{}); ok {
+				rates := []interface{}{}
+				addresses := make([]string, 0, len(workers))
+				for address := range workers {
+					addresses = append(addresses, address)
+				}
+				sort.Strings(addresses)
+				for _, address := range addresses {
+					worker, _ := workers[address].(map[string]interface{})
+					if worker["success"] != true {
+						continue
+					}
+					rate, _ := worker["rateLimit"].(map[string]interface{})
+					if rate == nil {
+						continue
+					}
+					rate["workerIp"] = address
+					rates = append(rates, rate)
+				}
+				result["rateLimits"] = rates
+			}
+		}
+		return result, err
 	case "history":
 		o, err := adminOptions(args, []string{"limit"}, nil, 0)
 		if err != nil {
 			return nil, err
 		}
-		limit, err := adminInteger(o, "limit", 50, 1, 1000)
+		limit, err := adminInteger(o, "limit", 50, 1, 200)
 		if err != nil {
 			return nil, err
 		}
@@ -377,7 +428,7 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 		if o.Value("worker") == "" || o.Value("event-id") == "" {
 			return nil, fmt.Errorf("调节详情需要 --worker 和 --event-id")
 		}
-		if err := adminIPv4(o.Value("worker")); err != nil {
+		if err := adminNodeAddress(o.Value("worker")); err != nil {
 			return nil, err
 		}
 		query := url.Values{"workerIp": {o.Value("worker")}, "eventId": {o.Value("event-id")}}
@@ -403,7 +454,7 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 			return nil, fmt.Errorf("请指定 --worker <IPv4> 或 --all，且不能同时使用")
 		}
 		if o.Has("worker") {
-			if err := adminIPv4(o.Value("worker")); err != nil {
+			if err := adminNodeAddress(o.Value("worker")); err != nil {
 				return nil, err
 			}
 		}
@@ -502,7 +553,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 			return nil, err
 		}
 		result, err := client.Post("/"+kind+"/clear", nil)
-		if err == nil && kind == "fallback" {
+		if _, confirmed := result["complete"].(bool); err == nil && kind == "fallback" && !confirmed {
 			result["complete"] = false
 			result["warning"] = "降级记录清空请求已提交；此 API 不逐节点确认结果，请重新查询检查记录及节点完整性"
 			result["message"] = result["warning"]
@@ -583,7 +634,7 @@ func adminLocalExceptions(client *ApiClient, o commandOptions) (map[string]inter
 		}
 	}
 	if o.Has("worker") {
-		if err := adminIPv4(o.Value("worker")); err != nil {
+		if err := adminNodeAddress(o.Value("worker")); err != nil {
 			return nil, err
 		}
 	}
@@ -631,7 +682,7 @@ func adminOSSExceptions(client *ApiClient, kind string, o commandOptions) (map[s
 			return nil, fmt.Errorf("%s 不支持 --%s", kind, flag)
 		}
 	}
-	limit, err := adminInteger(o, "limit", 1000, 1, math.MaxInt32)
+	limit, err := adminInteger(o, "limit", 1000, 1, 10000)
 	if err != nil {
 		return nil, err
 	}
@@ -650,9 +701,10 @@ func adminOSSExceptions(client *ApiClient, kind string, o commandOptions) (map[s
 		body["destBucket"] = o.Value("dest-bucket")
 	}
 	if o.Has("worker") {
-		if err := adminIPv4(o.Value("worker")); err != nil {
+		if err := adminNodeAddress(o.Value("worker")); err != nil {
 			return nil, err
 		}
+		body["workerNode"] = o.Value("worker")
 	}
 	result, err := client.Post("/"+kind, body)
 	if err != nil {
@@ -686,6 +738,29 @@ func adminOSSExceptions(client *ApiClient, kind string, o commandOptions) (map[s
 	result["items"], result["total"], result["respondingNodes"] = items, total, workers
 	result["truncated"] = total > float64(len(items))
 	delete(result, key)
+	// The Go API declares the exact queried node set after parent/node filters.
+	// Do not compare it with unrelated cluster members as the V4 fallback did.
+	if queried, authoritative := result["queriedWorkers"].([]interface{}); authoritative {
+		if result["supported"] == false {
+			return result, nil
+		}
+		missing := []string{}
+		for _, raw := range queried {
+			address, valid := raw.(string)
+			if !valid {
+				return result, fmt.Errorf("服务返回无效节点范围")
+			}
+			rows, hasRows := grouped[address].([]interface{})
+			count, hasCount := grouped[address+"Count"].(float64)
+			if !hasRows || !hasCount || count < float64(len(rows)) {
+				missing = append(missing, address)
+			}
+		}
+		if len(missing) > 0 {
+			result["complete"], result["partial"], result["missingWorkers"] = false, true, missing
+		}
+		return result, nil
+	}
 	// Older fallback APIs silently omit unreachable workers. Compare membership
 	// instead of reporting an empty successful result as a complete cluster read.
 	registry, registryErr := client.Get("/nodes")

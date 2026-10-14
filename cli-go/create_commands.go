@@ -16,8 +16,12 @@ import (
 func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, error) {
 	opts, err := parseCommandOptions(args, []string{
 		"node", "binding", "prefix", "object-key", "mapping", "target-prefix", "target-key",
-		"target-relative-path", "conflict", "distribution", "date-after", "date-before", "bandwidth-mbps",
+		"target-relative-path", "conflict", "distribution", "date-after", "date-before", "bandwidth-mbps", "request-id",
 	}, []string{"overwrite", "balanced", "validate-only"})
+	if err != nil {
+		return nil, err
+	}
+	requestID, err := creationRequestIDOption(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +131,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 			return nil, err
 		}
 		row["eligibleWorkerNodes"] = nodes
-		return createSubmit(client, "buckets", []map[string]interface{}{row}, false)
+		return createSubmit(client, "buckets", []map[string]interface{}{row}, false, requestID)
 	}
 	if opts.Has("node") || opts.Has("mapping") {
 		return nil, fmt.Errorf("本地迁移请用 --binding 绑定节点；--node 和 --mapping 仅适用于 OSS 间迁移")
@@ -164,11 +168,15 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	if err := createValidateRow(row, "local"); err != nil {
 		return nil, err
 	}
-	return createSubmit(client, "local", []map[string]interface{}{row}, opts.Has("validate-only"))
+	return createSubmit(client, "local", []map[string]interface{}{row}, opts.Has("validate-only"), requestID)
 }
 
 func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, []string{"file", "format"}, []string{"balanced", "validate-only"})
+	opts, err := parseCommandOptions(args, []string{"file", "format", "request-id"}, []string{"balanced", "validate-only"})
+	if err != nil {
+		return nil, err
+	}
+	requestID, err := creationRequestIDOption(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -239,13 +247,17 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 			return nil, fmt.Errorf("第 %d 项: %w", i+1, err)
 		}
 	}
-	return createSubmit(client, kind, rows, opts.Has("validate-only"))
+	return createSubmit(client, kind, rows, opts.Has("validate-only"), requestID)
 }
 
 // The old import-tasks command has a different CSV schema from the WebUI. Keep
 // it explicit so a dateBefore or prefix can never silently become another field.
 func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, nil, []string{"balanced"})
+	opts, err := parseCommandOptions(args, []string{"request-id"}, []string{"balanced"})
+	if err != nil {
+		return nil, err
+	}
+	requestID, err := creationRequestIDOption(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +318,7 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("文件中没有迁移请求")
 	}
-	return createSubmit(client, "buckets", rows, false)
+	return createSubmit(client, "buckets", rows, false, requestID)
 }
 
 func createCopyOption(target map[string]interface{}, opts commandOptions, flag, field string) {
@@ -331,15 +343,15 @@ func createParseBindings(values []string) ([]interface{}, error) {
 	seen := map[string]bool{}
 	for _, value := range values {
 		parts := strings.SplitN(value, "=", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || !strings.HasPrefix(strings.TrimSpace(parts[1]), "/") {
-			return nil, fmt.Errorf("节点路径绑定格式错误: %q，应为节点IP=/绝对路径", value)
+		if len(parts) != 2 || adminNodeAddress(strings.TrimSpace(parts[0])) != nil || !agentAbsolutePath(parts[1]) {
+			return nil, fmt.Errorf("节点路径绑定格式错误: %q，应为节点=绝对路径", value)
 		}
 		ip := strings.TrimSpace(parts[0])
 		if seen[ip] {
 			return nil, fmt.Errorf("同一执行节点只能绑定一次: %s", ip)
 		}
 		seen[ip] = true
-		bindings = append(bindings, map[string]interface{}{"executionNodeIp": ip, "localPath": strings.TrimSpace(parts[1])})
+		bindings = append(bindings, map[string]interface{}{"executionNodeIp": ip, "localPath": parts[1]})
 	}
 	return bindings, nil
 }
@@ -430,6 +442,11 @@ func createReadCSV(data string) ([]map[string]interface{}, error) {
 }
 
 func createValidateRow(row map[string]interface{}, kind string) error {
+	if value := row["inventoryManifestId"]; value != nil {
+		if id, ok := value.(string); !ok || id != "" {
+			return fmt.Errorf("清单任务请使用原 .incr 文件执行 import-inventory；普通任务 JSON 不包含完整 Key 清单")
+		}
+	}
 	if value := row["taskBandwidthLimitMbps"]; value != nil {
 		n, ok := value.(float64)
 		if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0.1 || n > 1000000 {
@@ -455,7 +472,10 @@ func createValidateRow(row map[string]interface{}, kind string) error {
 		}
 		parsed, err := time.Parse("2006-01-02T15:04:05", s)
 		if err != nil {
-			return fmt.Errorf("%s 格式错误，应为 YYYY-MM-DDTHH:mm:ss", field)
+			parsed, err = time.Parse(time.RFC3339Nano, s)
+		}
+		if err != nil {
+			return fmt.Errorf("%s 格式错误，应为 YYYY-MM-DDTHH:mm:ss 或 RFC3339", field)
 		}
 		dates[i] = parsed
 		row[field] = s
@@ -614,9 +634,9 @@ func createValidateLocalRow(row map[string]interface{}) error {
 		}
 		ip, _ := binding["executionNodeIp"].(string)
 		path, _ := binding["localPath"].(string)
-		ip, path = strings.TrimSpace(ip), strings.TrimSpace(path)
-		if ip == "" || !strings.HasPrefix(path, "/") {
-			return fmt.Errorf("每个节点绑定需有 executionNodeIp 和以 / 开头的 localPath")
+		ip = strings.TrimSpace(ip)
+		if adminNodeAddress(ip) != nil || !agentAbsolutePath(path) {
+			return fmt.Errorf("每个节点绑定需有 executionNodeIp 和节点系统的绝对路径 localPath")
 		}
 		if seen[ip] {
 			return fmt.Errorf("同一执行节点只能绑定一次: %s", ip)
@@ -624,7 +644,7 @@ func createValidateLocalRow(row map[string]interface{}) error {
 		seen[ip] = true
 		binding["executionNodeIp"], binding["localPath"] = ip, path
 	}
-	if value := row["targetRelativePath"]; value != nil {
+	if value := row["targetRelativePath"]; value != nil && value != "" {
 		path, ok := value.(string)
 		if !ok || strings.TrimSpace(path) == "" || dir != "OSS_TO_LOCAL" || key == "" {
 			return fmt.Errorf("targetRelativePath 仅适用于单对象下载并须为非空相对路径")
@@ -647,7 +667,7 @@ func createValidateLocalRow(row map[string]interface{}) error {
 	return nil
 }
 
-func createSubmit(client *ApiClient, kind string, rows []map[string]interface{}, validateOnly bool) (map[string]interface{}, error) {
+func createSubmit(client *ApiClient, kind string, rows []map[string]interface{}, validateOnly bool, requestID string) (map[string]interface{}, error) {
 	path, countField := "/add-buckets", "addedCount"
 	if kind == "tasks" {
 		path, countField = "/import", "importedCount"
@@ -717,12 +737,20 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 		}
 		path, countField = "/local-transfers", "acceptedCount"
 	}
-	result, err := client.Post(path, rows)
-	if err != nil {
-		return result, err
+	if requestID == "" {
+		var err error
+		requestID, err = newCreationRequestID()
+		if err != nil {
+			return nil, err
+		}
 	}
+	result, err := client.PostCreation(path, rows, requestID)
 	if result == nil {
 		result = map[string]interface{}{}
+	}
+	result["requestId"] = requestID
+	if err != nil {
+		return result, creationSubmissionError(err, requestID)
 	}
 	data := result
 	if kind == "local" {
@@ -734,7 +762,7 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 	result["requestedCount"] = len(rows)
 	if data["partial"] == true || unknown > 0 || rejected > 0 || !confirmed || count != float64(len(rows)) {
 		result["submissionStatus"] = "partial"
-		return result, fmt.Errorf("提交结果未完全确认；部分任务可能已受理，请核对任务列表和受理编号后再重试，避免重复提交")
+		return result, creationSubmissionError(fmt.Errorf("提交结果未完全确认；部分任务可能已受理，请核对返回的任务编号"), requestID)
 	}
 	result["submissionStatus"] = "accepted"
 	result["submissionNote"] = "任务已受理并自动执行；受理不代表迁移完成，请查看任务状态"

@@ -63,6 +63,13 @@ type Node = {
   reachable: boolean;
   localTransferSupported: boolean;
 };
+function isAbsoluteAgentPath(value: string) {
+  if (value.startsWith("/")) return true;
+  return (
+    /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+(?:\\|$)/.test(value)
+  );
+}
+
 type Binding = { executionNodeIp: string; localPath: string };
 type TransferForm = {
   direction: Direction;
@@ -103,7 +110,6 @@ type Submission = {
   message: string;
   details?: string[];
   taskIds?: number[];
-  creationIds?: string[];
 };
 type Payload = Record<string, unknown>;
 type Draft = {
@@ -113,6 +119,7 @@ type Draft = {
   batchKind: "buckets" | "tasks" | "local";
   batchFormat: "json" | "csv";
   batchText: string;
+  pendingRequest?: { id: string; fingerprint: string };
 };
 const DRAFT_KEY = "oss-transfer-create-draft";
 const localUploadMode = (nodeCount: number) =>
@@ -255,6 +262,12 @@ function readDraft(): Draft | null {
       )
     )
       return null;
+    if (
+      draft.pendingRequest &&
+      (!/^[a-f0-9]{32}$/.test(draft.pendingRequest.id) ||
+        typeof draft.pendingRequest.fingerprint !== "string")
+    )
+      delete draft.pendingRequest;
     return { ...draft, form: cleanMappingFields(form) };
   } catch {
     return null;
@@ -446,11 +459,11 @@ export default function CreateTransfer() {
   const [batchText, setBatchText] = useState(initialDraft?.batchText ?? "");
   const submittedDraft = useRef(false);
   const submissionInFlight = useRef(false);
+  const pendingRequest = useRef(initialDraft?.pendingRequest);
   const defaultNodeSelection = useRef<string[] | null>(null);
   useEffect(() => {
     if (
-      submitted ||
-      submittedDraft.current ||
+      ((submitted || submittedDraft.current) && !pendingRequest.current) ||
       (JSON.stringify({ ...form, eligibleWorkerNodes: null }) ===
         JSON.stringify(freshForm()) &&
         (form.eligibleWorkerNodes === null ||
@@ -467,6 +480,7 @@ export default function CreateTransfer() {
       batchKind,
       batchFormat,
       batchText,
+      pendingRequest: pendingRequest.current,
     };
     try {
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
@@ -531,6 +545,7 @@ export default function CreateTransfer() {
       ),
     });
   const resetDraft = () => {
+    pendingRequest.current = undefined;
     setForm(freshForm());
     setTab(0);
     setBatchKind("buckets");
@@ -601,9 +616,11 @@ export default function CreateTransfer() {
     )
       throw new Error("请填写每个执行节点及其本地绝对路径。");
     if (
-      form.bindings.some((binding) => !binding.localPath.trim().startsWith("/"))
+      form.bindings.some(
+        (binding) => !isAbsoluteAgentPath(binding.localPath.trim()),
+      )
     )
-      throw new Error("本地路径必须是以 / 开头的绝对路径。");
+      throw new Error("请输入执行节点上的绝对路径。");
     if (
       new Set(form.bindings.map((binding) => binding.executionNodeIp.trim()))
         .size !== form.bindings.length
@@ -857,9 +874,38 @@ export default function CreateTransfer() {
         : tab === 1 && batchKind === "tasks"
           ? "/api/master/import"
           : "/api/master/add-buckets";
+      const fingerprint = JSON.stringify({ path, payload });
+      if (pendingRequest.current?.fingerprint !== fingerprint) {
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        pendingRequest.current = {
+          id: Array.from(bytes, (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join(""),
+          fingerprint,
+        };
+      }
+      // Persist before sending: a lost response or page reload must retry the
+      // same logical creation. A changed payload gets a new request identity.
+      try {
+        sessionStorage.setItem(
+          DRAFT_KEY,
+          JSON.stringify({
+            version: 1,
+            form,
+            tab,
+            batchKind,
+            batchFormat,
+            batchText,
+            pendingRequest: pendingRequest.current,
+          } satisfies Draft),
+        );
+      } catch {
+        // The in-memory identity still protects retries in this page.
+      }
       const response = await api<Record<string, unknown>>(path, {
         method: "POST",
         body: payload,
+        headers: { "Idempotency-Key": pendingRequest.current.id },
       });
       const result = (isLocal ? response.data : response) as Record<
         string,
@@ -921,16 +967,12 @@ export default function CreateTransfer() {
         message,
         details,
         taskIds: ids,
-        creationIds: Array.isArray(result.creationIds)
-          ? result.creationIds.filter(
-              (id): id is string => typeof id === "string" && id.length > 0,
-            )
-          : [],
       });
       submittedDraft.current = true;
+      if (!partial) pendingRequest.current = undefined;
       setSubmitted(true);
       setDraftRestored(false);
-      clearSavedDraft();
+      if (!partial) clearSavedDraft();
       notify(
         partial ? "部分任务未确认，请核对提交结果" : "迁移任务已提交",
         partial ? "warning" : "success",
@@ -1910,16 +1952,13 @@ export default function CreateTransfer() {
                 severity={submission.severity}
                 action={
                   submission.severity !== "error" ||
-                  submission.taskIds?.length ||
-                  submission.creationIds?.length ? (
+                  submission.taskIds?.length ? (
                     <Button
                       component={Link}
                       to={
                         submission.taskIds?.length === 1
                           ? `/tasks?taskId=${submission.taskIds[0]}`
-                          : submission.creationIds?.length === 1
-                            ? `/tasks?creationId=${encodeURIComponent(submission.creationIds[0])}`
-                            : "/tasks"
+                          : "/tasks"
                       }
                       color="inherit"
                       size="small"
@@ -1931,21 +1970,6 @@ export default function CreateTransfer() {
               >
                 <AlertTitle>{submission.title}</AlertTitle>
                 {submission.message}
-                {(submission.creationIds?.length || 0) > 1 && (
-                  <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
-                    {submission.creationIds!.map((id, index) => (
-                      <Button
-                        component={Link}
-                        to={`/tasks?creationId=${encodeURIComponent(id)}`}
-                        color="inherit"
-                        size="small"
-                        key={id}
-                      >
-                        查看第 {index + 1} 项任务
-                      </Button>
-                    ))}
-                  </Stack>
-                )}
                 {(submission.taskIds?.length || 0) > 1 && (
                   <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
                     {submission.taskIds!.map((taskId) => (

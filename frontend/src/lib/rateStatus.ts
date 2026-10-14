@@ -79,6 +79,17 @@ export type Worker = {
   success: boolean;
   message?: string;
   queueStatus?: Record<string, number>;
+  executionStatus?: {
+    activeScans: number;
+    maxConcurrentScans: number;
+    activeChildren: number;
+    maxConcurrentChildren: number;
+    unfinishedChildren: number;
+    maxUnfinishedChildren: number;
+  };
+  localStorage?: {
+    advertisedLocalRoots?: string[];
+  };
   rateLimit?: RateLimitSnapshot;
   rateLimitHistory?: Adjustment[];
   taskStats?: Record<string, number>;

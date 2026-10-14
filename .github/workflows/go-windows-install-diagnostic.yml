@@ -1,0 +1,99 @@
+name: Go Windows installation diagnostic
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Run containing the verified go-migration-packages artifact
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  install:
+    name: Windows SCM ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: windows-latest}
+          - {arch: arm64, runner: windows-11-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+      ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+      QA_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-migration-packages
+          path: output/go-development
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify existing native binaries without rebuilding
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import hashlib, importlib.util, json, os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          import zipfile
+          source_run = os.environ['ARTIFACT_RUN_ID']
+          if not source_run.isdecimal():
+              raise ValueError('Artifact run ID must be numeric')
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{source_run}"
+          request = Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urlopen(request, timeout=30) as response:
+              source_sha = json.load(response)['head_sha']
+          spec = importlib.util.spec_from_file_location('prepare', '.github/acceptance/prepare-go.py')
+          prepare = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(prepare)
+          arch = os.environ['QA_ARCH']
+          name = 'oss-transfer-go-windows-' + arch
+          archive = Path('output/go-development') / (name + '.zip')
+          expected = Path(str(archive) + '.sha256').read_text().split()[0]
+          if prepare.digest(archive) != expected:
+              raise ValueError('Archive checksum mismatch')
+          target = Path(os.environ['RUNNER_TEMP']) / 'go-scm-package'
+          target.mkdir()
+          with zipfile.ZipFile(archive) as package:
+              checks = dict((entry.split(None, 1)[1], entry.split()[0]) for entry in package.read(name + '/SHA256SUMS').decode().splitlines())
+              required = {'oss-transfer-master.exe', 'oss-transfer-agent.exe', 'oss-transfer-cli.exe', 'VERSION'}
+              if set(checks) != required:
+                  raise ValueError('Incomplete native checksum manifest')
+              for member, checksum in checks.items():
+                  payload = package.read(name + '/' + member)
+                  if hashlib.sha256(payload).hexdigest() != checksum:
+                      raise ValueError('Native binary checksum mismatch')
+                  (target / member).write_bytes(payload)
+          version = dict(line.split(': ', 1) for line in (target / 'VERSION').read_text().splitlines())
+          if version['FullCommit'] != source_sha or version['Platform'] != 'windows/' + arch:
+              raise ValueError('Archive does not match the requested build run/platform')
+          for role in ('master', 'agent', 'cli'):
+              prepare.verify_binary(target / ('oss-transfer-' + role + '.exe'), 'windows', arch)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              for role in ('master', 'agent'):
+                  stream.write('GO_QA_' + role.upper() + '=' + str(target / ('oss-transfer-' + role + '.exe')) + '\n')
+          print('Verified existing build', source_sha, 'windows/' + arch)
+      - name: Diagnose actual SCM installation and rollback
+        shell: bash
+        run: python .github/acceptance/go-install.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output output/go-install --repo "$GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-scm-diagnostic-${{ matrix.arch }}
+          path: |
+            output/go-install/evidence.json
+            output/go-install/*-install-*.log
+          if-no-files-found: ignore
+          retention-days: 7

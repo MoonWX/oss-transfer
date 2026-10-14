@@ -25,9 +25,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Check release version
+        id: version
         run: |
-          project_version="$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)"
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$ ]]
+          project_version="$(cat VERSION)"
           test "$RELEASE_TAG" = "v$project_version"
           if [[ "$project_version" = *-* ]]; then
             IFS='.' read -r -a identifiers <<< "${project_version#*-}"
@@ -96,7 +97,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.JDOSS_SK }}
-        run: bash deploy/publish-oss.sh "$RELEASE_TAG"
+        run: python3 deploy/go/publish-oss.py --assets output --tag "$RELEASE_TAG"
   release:
     needs: [artifacts, oss, docker_hub]
     runs-on: ubuntu-latest
@@ -105,6 +106,10 @@ jobs:
       contents: write
       actions: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 10
         with:
@@ -114,13 +119,9 @@ jobs:
           merge-multiple: true
           path: output
       - name: Verify release checksum
-        run: |
-          cd output
-          sha256sum --check oss-transfer.tar.gz.sha256
-          tar -xOzf oss-transfer.tar.gz oss-transfer/install.sh > install.sh
-          test -s install.sh
-          bash -n install.sh
-          sha256sum install.sh > install.sh.sha256
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 deploy/go/publish-oss.py --assets output --tag "$RELEASE_TAG" --dry-run
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,10 +130,11 @@ jobs:
         run: |
           release_flags=()
           if [[ "$RELEASE_TAG" = *-* ]]; then release_flags=(--prerelease --latest=false); fi
+          assets=(output/*)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" output/oss-transfer.tar.gz output/oss-transfer.tar.gz.sha256 output/install.sh output/install.sh.sha256 --clobber
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
             if [[ "$RELEASE_TAG" = *-* ]]; then gh release edit "$RELEASE_TAG" "${release_flags[@]}"; fi
           else
-            gh release create "$RELEASE_TAG" output/oss-transfer.tar.gz output/oss-transfer.tar.gz.sha256 output/install.sh output/install.sh.sha256 \
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
               --verify-tag --title "OSS Transfer $RELEASE_TAG" --generate-notes "${release_flags[@]}"
           fi

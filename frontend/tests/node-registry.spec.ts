@@ -112,7 +112,7 @@ test("Agent address is immutable while its name remains editable", async ({
     .click();
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await expect(
-    dialog.getByRole("textbox", { name: "节点 IPv4 地址", exact: true }),
+    dialog.getByRole("textbox", { name: "节点标识", exact: true }),
   ).toBeDisabled();
   await dialog.getByLabel("节点名称", { exact: true }).fill("Archive Agent");
   await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
@@ -237,7 +237,7 @@ test("master address cannot be changed while its label can be saved", async ({
     .click();
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await expect(
-    dialog.getByRole("textbox", { name: "节点 IPv4 地址", exact: true }),
+    dialog.getByRole("textbox", { name: "节点地址", exact: true }),
   ).toBeDisabled();
   await expect(dialog.getByRole("textbox")).toHaveCount(2);
   await expect(dialog.getByText(/展示目录|访问白名单/)).toHaveCount(0);
@@ -309,7 +309,7 @@ test("worker address and name remain editable without sending display directorie
     .click();
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await dialog
-    .getByRole("textbox", { name: "节点 IPv4 地址", exact: true })
+    .getByRole("textbox", { name: "节点地址", exact: true })
     .fill("10.0.1.14");
   await dialog.getByLabel("节点名称", { exact: true }).fill("归档节点");
   await dialog.getByRole("button", { name: "保存节点", exact: true }).click();

@@ -2,22 +2,35 @@ services:
   master:
     image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}
     restart: unless-stopped
-    init: true
-    stop_grace_period: 90s
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    tmpfs:
-      - /tmp:rw,exec,nosuid,nodev,size=256m,mode=1777
     ports:
-      - "${OSS_TRANSFER_BIND_ADDRESS:-0.0.0.0}:${OSS_TRANSFER_PORT:-1685}:${OSS_TRANSFER_PORT:-1685}"
-    environment:
-      TRANSFER_ROLE: master
-      TRANSFER_MASTER_WEB_URL: ${TRANSFER_MASTER_WEB_URL:-http://localhost:1685}
-      OSS_TRANSFER_PORT: ${OSS_TRANSFER_PORT:-1685}
-      JAVA_OPTS: ${JAVA_OPTS:--Xms128m -Xmx1024m}
+      - "${TRANSFER_PORT:-1685}:1685"
     volumes:
-      - master-data:/app/data
-      - ${OSS_TRANSFER_FILES_DIR:-./files}:/data
+      - master-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    stop_grace_period: 45s
+
+  # Enroll once before starting this profile:
+  # docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
+  agent:
+    profiles: [agent]
+    image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}
+    command: [oss-transfer-agent, --data-dir, /data]
+    restart: unless-stopped
+    volumes:
+      - agent-data:/data
+      # The host directory must exist and permit UID 65532 to read/write.
+      - type: bind
+        source: ${TRANSFER_LOCAL_ROOT:-./transfer-files}
+        target: /files
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    stop_grace_period: 45s
+
 volumes:
   master-data:
+  agent-data:

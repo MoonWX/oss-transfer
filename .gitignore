@@ -1,7 +1,12 @@
 # 构建产物
+# Keep previously built V4 files out of Go source snapshots.
 target/
+src/main/resources/static/assets/
+src/main/resources/static/index.html
 *.class
 *.jar
+__pycache__/
+*.pyc
 
 # 运行时数据
 data/
@@ -21,8 +26,7 @@ frontend/coverage/
 frontend/playwright-report/
 frontend/test-results/
 frontend/dist/
-src/main/resources/static/assets/
-src/main/resources/static/index.html
+internal/webui/assets/
 
 # 全量测试清单保留在本地及验收包，Git 保存核验摘要
 docs/test-evidence-*/full-*.jsonl.gz

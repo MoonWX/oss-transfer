@@ -88,6 +88,7 @@ const NodesPage = lazy(() => import("./pages/NodesPage"));
 const RateAdjustmentPage = lazy(() => import("./pages/RateAdjustmentPage"));
 const ExceptionsPage = lazy(() => import("./pages/ExceptionsPage"));
 const ToolsPage = lazy(() => import("./pages/ToolsPage"));
+const SetupPage = lazy(() => import("./pages/SetupPage"));
 
 class PageErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
@@ -251,7 +252,7 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
             color="text.secondary"
             sx={{ display: { xs: "none", md: "block" } }}
           >
-            OSS Transfer / V4
+            OSS Transfer
           </Typography>
         </Box>
         <Box
@@ -1098,7 +1099,8 @@ export default function App() {
     },
   );
   const [user, setUser] = useState<any>();
-  const [checking, setChecking] = useState(!!getToken());
+  const [checking, setChecking] = useState(true);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [sessionError, setSessionError] = useState("");
   const mode =
     preference === "system" ? (systemDark ? "dark" : "light") : preference;
@@ -1108,13 +1110,27 @@ export default function App() {
     localStorage.setItem("oss-transfer-theme", value);
   };
   async function checkSession() {
-    if (!getToken()) {
-      setChecking(false);
-      return;
-    }
     setChecking(true);
     setSessionError("");
     try {
+      const response = await fetch("/api/setup/status", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      });
+      const setup = await response.json();
+      if (
+        !response.ok ||
+        setup.success !== true ||
+        typeof setup.configured !== "boolean"
+      )
+        throw new Error("无法读取初始化状态，请重试。");
+      setNeedsSetup(!setup.configured);
+      if (!setup.configured) {
+        setToken(null);
+        setUser(undefined);
+        return;
+      }
+      if (!getToken()) return;
       const result = await api("/api/auth/current");
       setUser(result.user);
     } catch (e) {
@@ -1160,6 +1176,10 @@ export default function App() {
                 返回登录
               </Button>
             </Box>
+          ) : needsSetup ? (
+            <Suspense fallback={<LoadingState />}>
+              <SetupPage onComplete={() => void checkSession()} />
+            </Suspense>
           ) : user ? (
             <Workspace
               user={user}

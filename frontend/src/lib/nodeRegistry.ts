@@ -16,13 +16,17 @@ export type NodeRegistry = {
 export type NodeChange = {
   address: string;
   label: string;
+  advertisedLocalRoots?: string[];
 };
 export type AgentInvitation = {
   id: string;
   expiresAt: string;
   joinUrl: string;
-  dockerCommand: string;
-  traditionalCommand: string;
+  dockerCommand?: string;
+  traditionalCommand?: string;
+  windowsCommand?: string;
+  nativeCommand?: string;
+  nativeAgent?: { available: boolean };
 };
 export async function createAgentInvitation(change: Partial<NodeChange>) {
   const response = await api<AgentInvitation & { data?: AgentInvitation }>(

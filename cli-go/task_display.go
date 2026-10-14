@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+func renderTaskHistoryPage(out io.Writer, data map[string]interface{}, action string) {
+	if before := getInt(data, "nextBeforeId"); before > 0 {
+		fmt.Fprintf(out, "更早记录：task %s --before-id %d（可沿用原有筛选参数）\n", action, before)
+	}
+}
+
 func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 	page, ok := result["subtaskPage"].(map[string]interface{})
 	if !ok {

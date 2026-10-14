@@ -1,3 +1,4 @@
+import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import { useWorkerStatus } from "../lib/workerStatus";
 import {
   useCallback,
@@ -184,12 +185,26 @@ const canStartTask = (task: Task) =>
   !isExploring(task);
 const canStopTask = (task: Task) =>
   isExploring(task) ||
-  ["RUNNING", "LIST_DONE", "PENDING"].includes(task.status);
+  [
+    "RUNNING",
+    "LIST_DONE",
+    "PENDING",
+    "WAITING",
+    "RESUMING",
+    "RECOVERABLE",
+  ].includes(task.status);
 const canResumeTask = (task: Task) =>
   !isExploring(task) &&
   ["FAILED", "PARTIAL_FAILED", "STOPPED"].includes(task.status);
 const canDeleteTask = (task: Task) =>
-  !["RUNNING", "LIST_DONE", "STOPPING"].includes(task.status);
+  ![
+    "RUNNING",
+    "LIST_DONE",
+    "STOPPING",
+    "RESUMING",
+    "RECOVERABLE",
+    "WAITING",
+  ].includes(task.status);
 function Metrics({ data }: { data: any }) {
   const cards = [
     {
@@ -283,11 +298,8 @@ function TaskDetail({
   loading,
   busy,
   onAction,
-  relatedTaskIds,
-  onSelectTask,
   onRefresh,
   operationError,
-  creationWarning,
   childId: requestedChildId,
   childNode: requestedChildNode,
   onSelectChild,
@@ -300,11 +312,8 @@ function TaskDetail({
   loading: boolean;
   busy: boolean;
   onAction: (task: Task, operation: string) => void;
-  relatedTaskIds: number[];
-  onSelectTask: (id: number) => void;
   onRefresh: () => void;
   operationError: string;
-  creationWarning?: string;
   childId?: string;
   childNode?: string;
   onSelectChild: (id?: string, node?: string) => void;
@@ -410,9 +419,7 @@ function TaskDetail({
         childPartial: boolean;
         childError?: string | null;
         loading: boolean;
-        relatedTaskIds: number[];
         operationError: string;
-        creationWarning?: string;
         error: string | null;
         partial: boolean;
       }
@@ -435,9 +442,7 @@ function TaskDetail({
       childPartial: !!childData?.partial,
       childError: child.error,
       loading,
-      relatedTaskIds,
       operationError,
-      creationWarning,
       error: children.error || loadError || null,
       partial: loadPartial || !!task?.partial || !!pageData?.partial,
     };
@@ -653,25 +658,6 @@ function TaskDetail({
               label={directionLabel(current)}
             />
           </Stack>
-          {!current.ossTaskGroup && (view?.relatedTaskIds.length || 0) > 1 && (
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="caption" color="text.secondary">
-                本次创建的任务
-              </Typography>
-              <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 0.5 }}>
-                {view?.relatedTaskIds.map((id) => (
-                  <Button
-                    key={id}
-                    size="small"
-                    variant={id === taskId ? "contained" : "outlined"}
-                    onClick={() => onSelectTask(id)}
-                  >
-                    #{id}
-                  </Button>
-                ))}
-              </Stack>
-            </Box>
-          )}
           {(canStopTask(current) ||
             canResumeTask(current) ||
             canDeleteTask(current)) && (
@@ -732,11 +718,6 @@ function TaskDetail({
             active={!!taskId}
             refreshMs={refreshMs}
           />
-          {view?.creationWarning && (
-            <Alert severity="warning" sx={{ mb: 2 }}>
-              {view.creationWarning}
-            </Alert>
-          )}
           <ErrorAlert error={view?.error || null} onRetry={children.refresh} />
           {view?.partial && (
             <Alert severity="warning" sx={{ mb: 2 }}>
@@ -848,6 +829,7 @@ function TaskDetail({
           <Stack gap={2}>
             {[
               ["执行节点", workers(current)],
+              ...taskRequestLimitRows(current.requestLimits),
               [
                 "节点分发方式",
                 current.distributionMode === "balanced"
@@ -1085,6 +1067,48 @@ export default function TasksPage({
     refreshMs,
     true,
   );
+  const [historyTasks, setHistoryTasks] = useState<Task[] | null>(null);
+  const [historyCursor, setHistoryCursor] = useState<number | null>();
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => historyRequest.current?.abort(), []);
+  const mergeTasks = (older: Task[], newer: Task[]) => [
+    ...new Map(
+      [...older, ...newer].map((task) => [task.taskIndex, task]),
+    ).values(),
+  ];
+  useEffect(() => {
+    if (data?.tasks)
+      setHistoryTasks((previous) =>
+        previous === null ? null : mergeTasks(previous, data.tasks),
+      );
+  }, [data]);
+  const nextHistoryCursor =
+    historyCursor === undefined ? data?.nextBeforeId : historyCursor;
+  async function loadEarlierTasks() {
+    if (!nextHistoryCursor || historyRequest.current) return;
+    const controller = new AbortController();
+    historyRequest.current = controller;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const next = await api<{ tasks: Task[]; nextBeforeId?: number }>(
+        `/api/master/status?beforeId=${nextHistoryCursor}&limit=1000`,
+        { signal: controller.signal },
+      );
+      setHistoryTasks((previous) =>
+        mergeTasks(mergeTasks(previous ?? [], data?.tasks ?? []), next.tasks),
+      );
+      setHistoryCursor(next.nextBeforeId ?? null);
+    } catch (cause) {
+      if (!controller.signal.aborted)
+        setHistoryError(cause instanceof Error ? cause.message : "加载失败");
+    } finally {
+      historyRequest.current = null;
+      if (!controller.signal.aborted) setHistoryLoading(false);
+    }
+  }
   const health = useWorkerStatus();
   const nodeHealth = useApi("/api/master/local-nodes", refreshMs);
   const [query, setQuery] = useState("");
@@ -1107,34 +1131,6 @@ export default function TasksPage({
       return next;
     });
   };
-  const creationId = searchParams.get("creationId");
-  const [pollCreation, setPollCreation] = useState(true);
-  const creation = useApi(
-    creationId
-      ? `/api/master/task-creations/${encodeURIComponent(creationId)}`
-      : null,
-    pollCreation ? 1000 : 0,
-  );
-  const activeCreation =
-    creation.data?.creation?.id === creationId
-      ? creation.data.creation
-      : undefined;
-  const publicTaskId = Number(activeCreation?.publicTaskId);
-  const creationTaskIds: number[] =
-    Number.isSafeInteger(publicTaskId) && publicTaskId > 0
-      ? [publicTaskId]
-      : Array.isArray(activeCreation?.taskIds)
-        ? activeCreation.taskIds
-            .map(Number)
-            .filter((id: number) => Number.isSafeInteger(id) && id > 0)
-        : [];
-  useEffect(() => {
-    setPollCreation(true);
-  }, [creationId]);
-  useEffect(() => {
-    if (["COMPLETED", "FAILED"].includes(activeCreation?.status))
-      setPollCreation(false);
-  }, [activeCreation]);
   const requestedId = Number(searchParams.get("taskId"));
   const linkedTask =
     data?.tasks?.find((task: Task) => task.taskIndex === requestedId) ||
@@ -1146,6 +1142,19 @@ export default function TasksPage({
     Number.isSafeInteger(requestedId) && requestedId > 0
       ? (linkedTask?.taskIndex ?? requestedId)
       : undefined;
+  const detailFallback = useApi<{ data: Task }>(
+    detailId !== undefined && !linkedTask
+      ? `/api/master/tasks/${detailId}`
+      : null,
+    refreshMs,
+  );
+  useEffect(() => {
+    const task = detailFallback.data?.data;
+    if (task)
+      setHistoryTasks((previous) =>
+        previous === null ? null : mergeTasks(previous, [task]),
+      );
+  }, [detailFallback.data]);
   useEffect(() => {
     if (detailId === undefined || detailId === requestedId) return;
     setSearchParams(
@@ -1169,26 +1178,18 @@ export default function TasksPage({
       return next;
     });
   };
-  useEffect(() => {
-    if (creationId && !detailId && creationTaskIds.length) {
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          next.set("taskId", String(creationTaskIds[0]));
-          return next;
-        },
-        { replace: true },
-      );
-      void refresh();
-    }
-  }, [creationId, detailId, creationTaskIds.join(",")]);
   const [operation, setOperation] = useState("");
   const [operationIds, setOperationIds] = useState<number[] | null>(null);
   const [operationOpen, setOperationOpen] = useState(false);
   const [confirmationTasks, setConfirmationTasks] = useState<Task[]>([]);
   const [busy, setBusy] = useState(false);
   const [actionResult, setActionResult] = useState("");
-  const tasks: Task[] = data?.tasks || [];
+  const tasks: Task[] = useMemo(
+    () => mergeTasks(historyTasks ?? [], data?.tasks ?? []),
+    [historyTasks, data],
+  );
+  const detailTask = linkedTask || detailFallback.data?.data;
+  const actionCandidates = detailTask ? mergeTasks(tasks, [detailTask]) : tasks;
   const filtered = useMemo(
     () =>
       tasks
@@ -1203,7 +1204,7 @@ export default function TasksPage({
                 .includes(query.toLowerCase())),
         )
         .sort((a, b) => b.taskIndex - a.taskIndex),
-    [data, query, status, direction, worker],
+    [tasks, query, status, direction, worker],
   );
   useEffect(() => {
     setPage(0);
@@ -1212,13 +1213,13 @@ export default function TasksPage({
   useEffect(() => {
     if (data) {
       setSelected((s) =>
-        s.filter((id) => data.tasks.some((t: Task) => t.taskIndex === id)),
+        s.filter((id) => tasks.some((t: Task) => t.taskIndex === id)),
       );
       setPage((p) =>
         Math.min(p, Math.max(0, Math.ceil(filtered.length / pageSize) - 1)),
       );
     }
-  }, [data, filtered.length, pageSize]);
+  }, [data, tasks, filtered.length, pageSize]);
   const shown = overview
     ? filtered.slice(0, 5)
     : filtered.slice(page * pageSize, (page + 1) * pageSize);
@@ -1226,13 +1227,13 @@ export default function TasksPage({
   const actionTasks =
     operationIds === null
       ? chosen
-      : tasks.filter((t) => operationIds.includes(t.taskIndex));
+      : actionCandidates.filter((t) => operationIds.includes(t.taskIndex));
   const openOperation = (next: string, ids: number[] | null) => {
     setOperationIds(ids);
     setConfirmationTasks(
       ids === null
         ? chosen
-        : tasks.filter((task) => ids.includes(task.taskIndex)),
+        : actionCandidates.filter((task) => ids.includes(task.taskIndex)),
     );
     setOperation(next);
     setOperationOpen(true);
@@ -1251,7 +1252,7 @@ export default function TasksPage({
   );
   const toggle = (id: number) =>
     setSelected((s) =>
-      s.includes(id) ? s.filter((i) => i !== id) : [...s, id],
+      s.includes(id) ? s.filter((i) => i !== id) : [...s, id].slice(0, 128),
     );
   async function execute() {
     if (!actionTasks.length) return;
@@ -1333,7 +1334,17 @@ export default function TasksPage({
       actionTasks.some((task) => task.taskIndex === detailId)
     )
       setDetailId(undefined);
-    await refresh();
+    await Promise.all([refresh(), detailFallback.refresh()]);
+    if (!issues.length && operation === "删除")
+      setHistoryTasks(
+        (previous) =>
+          previous?.filter(
+            (task) =>
+              !actionTasks.some(
+                (removed) => removed.taskIndex === task.taskIndex,
+              ),
+          ) ?? null,
+      );
     setBusy(false);
     if (issues.length) {
       setActionResult(`部分请求未完成：${issues.join("；")}`);
@@ -1438,27 +1449,27 @@ export default function TasksPage({
         }
       />
       <ErrorAlert error={error} onRetry={refresh} />
-      {creationId && !detailId && (
-        <Box sx={{ mb: 2 }}>
-          <ErrorAlert error={creation.error} onRetry={creation.refresh} />
-          {!creation.error && (
-            <Alert
-              severity={activeCreation?.status === "FAILED" ? "error" : "info"}
-            >
-              {activeCreation?.status === "FAILED"
-                ? activeCreation.message ||
-                  "任务生成失败，请检查存储连接和节点状态。"
-                : activeCreation?.status === "COMPLETED" &&
-                    !creation.loading &&
-                    creationTaskIds.length === 0
-                  ? "本次创建未生成可执行任务。"
-                  : creationTaskIds.length > 0
-                    ? "正在打开任务详情。"
-                    : "正在生成任务，完成后将自动打开详情。"}
-            </Alert>
-          )}
-        </Box>
+      {!overview && (data?.truncated || nextHistoryCursor) && (
+        <Alert
+          severity="info"
+          action={
+            nextHistoryCursor ? (
+              <Button
+                disabled={historyLoading}
+                onClick={() => void loadEarlierTasks()}
+              >
+                {historyLoading ? "加载中" : "加载更早任务"}
+              </Button>
+            ) : undefined
+          }
+        >
+          已加载 {formatNumber(tasks.length)} 个任务。统计仅包含最近一页。
+        </Alert>
       )}
+      <ErrorAlert
+        error={historyError}
+        onRetry={() => void loadEarlierTasks()}
+      />
       {(health.error ||
         nodeHealth.error ||
         offline.length > 0 ||
@@ -1628,7 +1639,7 @@ export default function TasksPage({
                 sx={{ p: 2, bgcolor: "action.selected" }}
               >
                 <Typography variant="body2" sx={{ mr: 1 }}>
-                  已选 {selected.length} 项
+                  已选 {selected.length} 项（最多 128 项）
                 </Typography>
                 {filtered.some(
                   (task) => !selected.includes(task.taskIndex),
@@ -1636,10 +1647,14 @@ export default function TasksPage({
                   <Button
                     size="small"
                     onClick={() =>
-                      setSelected(filtered.map((task) => task.taskIndex))
+                      setSelected(
+                        filtered.slice(0, 128).map((task) => task.taskIndex),
+                      )
                     }
                   >
-                    选择全部 {filtered.length} 个结果
+                    {filtered.length > 128
+                      ? "选择前 128 个结果"
+                      : `选择全部 ${filtered.length} 个结果`}
                   </Button>
                 )}
                 {[
@@ -1757,7 +1772,7 @@ export default function TasksPage({
                                       ...s,
                                       ...shown.map((t) => t.taskIndex),
                                     ]),
-                                  ]
+                                  ].slice(0, 128)
                                 : s.filter(
                                     (id) =>
                                       !shown.some((t) => t.taskIndex === id),
@@ -1790,6 +1805,10 @@ export default function TasksPage({
                           <Checkbox
                             size="small"
                             checked={selected.includes(task.taskIndex)}
+                            disabled={
+                              selected.length >= 128 &&
+                              !selected.includes(task.taskIndex)
+                            }
                             onChange={() => toggle(task.taskIndex)}
                             slotProps={{
                               input: {
@@ -1888,6 +1907,10 @@ export default function TasksPage({
                       {!overview && (
                         <Checkbox
                           checked={selected.includes(task.taskIndex)}
+                          disabled={
+                            selected.length >= 128 &&
+                            !selected.includes(task.taskIndex)
+                          }
                           onChange={() => toggle(task.taskIndex)}
                           slotProps={{
                             input: {
@@ -1980,24 +2003,21 @@ export default function TasksPage({
         </Typography>
       </Stack>
       <TaskDetail
-        task={tasks.find((t) => t.taskIndex === detailId)}
+        task={detailTask}
         taskId={detailId}
         childId={childId}
         childNode={childNode}
         onSelectChild={setChildId}
-        loadError={error}
-        loadPartial={!!data?.partial}
-        loading={loading}
-        busy={busy}
-        relatedTaskIds={creationTaskIds}
-        onSelectTask={setDetailId}
-        onRefresh={() => void refresh()}
-        operationError={actionResult}
-        creationWarning={
-          activeCreation?.status === "FAILED"
-            ? activeCreation.message || "本次仅生成了部分任务。"
-            : undefined
+        loadError={linkedTask ? error : detailFallback.error}
+        loadPartial={
+          !!data?.partial && !data?.truncated && !detailFallback.data
         }
+        loading={linkedTask ? loading : detailFallback.loading}
+        busy={busy}
+        onRefresh={() =>
+          void Promise.all([refresh(), detailFallback.refresh()])
+        }
+        operationError={actionResult}
         onAction={(task, next) => openOperation(next, [task.taskIndex])}
         onClose={() => setDetailId(undefined)}
       />

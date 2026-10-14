@@ -2450,42 +2450,6 @@ func processSrcManifestWithCheck(srcFile, outputFile string, existsFunc func(str
 	return count, scanner.Err()
 }
 
-func cmdImportInventory(client *ApiClient, args []string) (map[string]interface{}, error) {
-	if len(args) < 3 {
-		fmt.Println("用法: oss-transfer-cli import-inventory <srcAlias/bucket> <destAlias/bucket> <inventoryDir> [--overwrite]")
-		fmt.Println("  srcAlias/bucket: 源S3别名/bucket名")
-		fmt.Println("  destAlias/bucket: 目标S3别名/bucket名")
-		fmt.Println("  inventoryDir: 增量清单目录")
-		fmt.Println("  --overwrite: 覆盖已存在对象")
-		os.Exit(1)
-	}
-
-	overwrite := false
-	for _, arg := range args {
-		if arg == "--overwrite" {
-			overwrite = true
-			break
-		}
-	}
-
-	body := map[string]interface{}{
-		"srcAliasBucket":  args[0],
-		"destAliasBucket": args[1],
-		"inventoryDir":    args[2],
-		"overwrite":       overwrite,
-	}
-
-	fmt.Printf("导入增量清单...\n")
-	fmt.Printf("  源: %s\n", args[0])
-	fmt.Printf("  目标: %s\n", args[1])
-	fmt.Printf("  清单目录: %s\n", args[2])
-	if overwrite {
-		fmt.Printf("  覆盖模式: 开启\n")
-	}
-
-	return client.PostWorker("/import-inventory", body)
-}
-
 func cmdCountLines(args []string) error {
 	if len(args) < 1 {
 		fmt.Println("用法: oss-transfer-cli count-lines <目录路径>")

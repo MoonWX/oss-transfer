@@ -68,8 +68,17 @@ export default function AgentInvitationDialog({
         label: label.trim(),
         address: address.trim(),
       });
-      if (!next.joinUrl || !next.dockerCommand || !next.traditionalCommand)
+      if (
+        !next.joinUrl ||
+        ![
+          next.dockerCommand,
+          next.traditionalCommand,
+          next.windowsCommand,
+          next.nativeCommand,
+        ].some(Boolean)
+      )
         throw new Error("加入指令不完整，请重新生成。");
+      setTab(0);
       setInvitation(next);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -85,11 +94,19 @@ export default function AgentInvitationDialog({
       notify("复制失败，请选择文本后手动复制。", "error");
     }
   }
-  const command = invitation
-    ? tab === 0
-      ? invitation.dockerCommand
-      : invitation.traditionalCommand
-    : "";
+  const methods = [
+    { label: "Docker", command: invitation?.dockerCommand },
+    {
+      label: invitation?.nativeAgent ? "Linux / macOS" : "传统部署",
+      command: invitation?.traditionalCommand,
+    },
+    { label: "Windows", command: invitation?.windowsCommand },
+    { label: "直接运行", command: invitation?.nativeCommand },
+  ].filter(
+    (item): item is { label: string; command: string } => !!item.command,
+  );
+  const command = methods[tab]?.command || "";
+  const showLink = invitation?.nativeAgent?.available !== false;
   const expiry = invitation ? new Date(invitation.expiresAt) : null;
 
   return (
@@ -115,7 +132,7 @@ export default function AgentInvitationDialog({
                 onChange={(event) => setLabel(event.target.value)}
               />
               <TextField
-                label="节点 IPv4 地址（可选）"
+                label="节点标识（可选）"
                 fullWidth
                 value={address}
                 disabled={saving}
@@ -128,24 +145,26 @@ export default function AgentInvitationDialog({
               <Typography variant="body2" color="text.secondary">
                 在新节点执行以下任一指令，Agent 将自动加入集群。
               </Typography>
-              <Stack spacing={1}>
-                <TextField
-                  label="加入链接"
-                  fullWidth
-                  multiline
-                  minRows={2}
-                  value={invitation.joinUrl}
-                  slotProps={{ input: { readOnly: true } }}
-                />
-                <Button
-                  size="small"
-                  startIcon={<ContentCopyRounded />}
-                  sx={{ alignSelf: "flex-end" }}
-                  onClick={() => void copy(invitation.joinUrl)}
-                >
-                  复制链接
-                </Button>
-              </Stack>
+              {showLink && (
+                <Stack spacing={1}>
+                  <TextField
+                    label="加入链接"
+                    fullWidth
+                    multiline
+                    minRows={2}
+                    value={invitation.joinUrl}
+                    slotProps={{ input: { readOnly: true } }}
+                  />
+                  <Button
+                    size="small"
+                    startIcon={<ContentCopyRounded />}
+                    sx={{ alignSelf: "flex-end" }}
+                    onClick={() => void copy(invitation.joinUrl)}
+                  >
+                    复制链接
+                  </Button>
+                </Stack>
+              )}
               <Box sx={{ minWidth: 0 }}>
                 <Tabs
                   value={tab}
@@ -153,11 +172,12 @@ export default function AgentInvitationDialog({
                   aria-label="Agent 部署方式"
                   sx={{ mb: 2 }}
                 >
-                  <Tab label="Docker" />
-                  <Tab label="传统部署" />
+                  {methods.map((method) => (
+                    <Tab key={method.label} label={method.label} />
+                  ))}
                 </Tabs>
                 <TextField
-                  label={tab === 0 ? "Docker 指令" : "传统部署指令"}
+                  label={`${methods[tab]?.label || "加入"}指令`}
                   fullWidth
                   multiline
                   minRows={4}
@@ -179,7 +199,7 @@ export default function AgentInvitationDialog({
                 </Button>
               </Box>
               <Typography variant="body2" color="text.secondary">
-                链接仅可加入一次
+                加入凭证仅可使用一次
                 {expiry && !Number.isNaN(expiry.getTime())
                   ? `，有效至 ${expiry.toLocaleString("zh-CN", { hour12: false })}`
                   : "，30 分钟内有效"}

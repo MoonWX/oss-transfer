@@ -16,8 +16,9 @@ import (
 
 func runMockCLI(t *testing.T, args []string, handler http.HandlerFunc) (int, string, string) {
 	t.Helper()
-	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "test-internal")
+	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "")
 	t.Setenv("OSS_TRANSFER_AUTH_TOKEN", "")
+	t.Setenv("OSS_TRANSFER_CLI_CONFIG_DIR", t.TempDir())
 	original := http.DefaultTransport
 	http.DefaultTransport = adminTestTransport(func(r *http.Request) (*http.Response, error) {
 		rec := httptest.NewRecorder()
@@ -130,15 +131,7 @@ func TestAuthSessionLifecycleAndIsolation(t *testing.T) {
 		t.Fatal("host isolation")
 	}
 	path, _ := sessionPath(host)
-	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
-		t.Fatal(info.Mode())
-	}
-	os.Chmod(path, 0644)
-	if _, err := loadSession(host); err == nil {
-		t.Fatal("unsafe session permissions accepted")
-	}
-	os.Chmod(path, 0600)
+	testSessionPermissions(t, path, host)
 	client = adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/logout" {
 			t.Fatal(r.URL)
@@ -177,5 +170,12 @@ func TestAuthSecretsAndRedaction(t *testing.T) {
 		if _, err := runAuthCommand(client, "login", args, strings.NewReader("secret"), "http://invalid"); err == nil {
 			t.Fatal(fmt.Sprint(args))
 		}
+	}
+}
+
+func TestSessionTokensAreRedactedRecursively(t *testing.T) {
+	encoded, err := json.Marshal(sanitizeOutput(map[string]interface{}{"configs": []interface{}{map[string]interface{}{"sessionToken": "temporary-secret", "session_token": "other-secret"}}, "requestId": "safe-id"}))
+	if err != nil || strings.Contains(string(encoded), "temporary-secret") || strings.Contains(string(encoded), "other-secret") || !strings.Contains(string(encoded), "safe-id") {
+		t.Fatalf("redaction failed: %s %v", encoded, err)
 	}
 }

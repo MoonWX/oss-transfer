@@ -15,11 +15,11 @@ func TestCLISubtasksReadOnlyRequestedNumberWindow(t *testing.T) {
 			requests := 0
 			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if r.URL.Path == "/api/master/status" {
-					if r.URL.Query().Get("includeSubtasks") != "false" {
+				if r.URL.Path == "/api/master/tasks/224" {
+					if r.URL.RawQuery != "" {
 						t.Fatal("loaded embedded child task payload")
 					}
-					adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, direction, "RUNNING")}, "partial": false})
+					adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, direction, "RUNNING"), "partial": false})
 					return
 				}
 				if r.Method != "GET" || r.URL.Path != "/api/master/tasks/224/children" || r.URL.Query().Get("offset") != "25" || r.URL.Query().Get("limit") != "25" {
@@ -55,8 +55,8 @@ func TestCLISubtasksReadOnlyRequestedNumberWindow(t *testing.T) {
 func TestCLIChildLookupIsDirectAndRejectsAmbiguousReplicas(t *testing.T) {
 	for _, selected := range []bool{false, true} {
 		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/master/status" {
-				adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_OSS", "STOPPED")}})
+			if r.URL.Path == "/api/master/tasks/224" {
+				adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, "OSS_TO_OSS", "STOPPED")})
 				return
 			}
 			if r.URL.Path != "/api/master/tasks/224/children/128" {
@@ -94,8 +94,8 @@ func TestCLISubtaskPageValidationBeforeNetworkAndPartialDiagnostics(t *testing.T
 		}
 	}
 	code, output, stderr := runMockCLI(t, []string{"task", "children", "224", "--json"}, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/master/status" {
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_LOCAL", "RUNNING")}})
+		if r.URL.Path == "/api/master/tasks/224" {
+			adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, "OSS_TO_LOCAL", "RUNNING")})
 			return
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"parentTaskId": 224, "items": []interface{}{}, "offset": 0, "limit": 25, "totalCount": 100, "hasMore": true, "partial": true, "unreachableWorkers": []string{"10.0.0.3"}}})
@@ -109,8 +109,8 @@ func TestCLISubtaskPageValidationBeforeNetworkAndPartialDiagnostics(t *testing.T
 func TestCLIChildMalformedPageDoesNotLookEmpty(t *testing.T) {
 	for _, malformed := range []interface{}{nil, "not-list", map[string]interface{}{"taskIndex": 1}, []interface{}{"not-an-object"}} {
 		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/master/status" {
-				adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_OSS", "RUNNING")}})
+			if r.URL.Path == "/api/master/tasks/224" {
+				adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, "OSS_TO_OSS", "RUNNING")})
 				return
 			}
 			adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"items": malformed}})

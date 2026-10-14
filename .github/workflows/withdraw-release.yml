@@ -1,0 +1,60 @@
+name: Withdraw release
+on:
+  workflow_dispatch:
+    inputs:
+      replacement_version:
+        description: Published stable version without the v prefix
+        required: true
+        type: string
+      retired_versions:
+        description: Two comma-separated versions (stable and its prerelease), without v
+        required: true
+        type: string
+      execute:
+        description: Delete the listed versions after checking the replacement
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: withdraw-release
+  cancel-in-progress: false
+jobs:
+  withdraw:
+    if: github.repository == 'MoonWX/oss-transfer' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check publishing tools
+        run: |
+          command -v aws >/dev/null
+          aws --version 2>&1 | grep -q '^aws-cli/2\.'
+          python3 -c 'from pathlib import Path; compile(Path("deploy/go/withdraw-release.py").read_text(), "withdraw-release.py", "exec")'
+      - name: Verify replacement and withdraw selected versions
+        env:
+          REPLACEMENT_VERSION: ${{ inputs.replacement_version }}
+          RETIRED_VERSIONS: ${{ inputs.retired_versions }}
+          EXECUTE_WITHDRAWAL: ${{ inputs.execute }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.JDOSS_SK }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+        run: |
+          set +x
+          args=()
+          if [[ "$EXECUTE_WITHDRAWAL" == true ]]; then args+=(--execute); fi
+          python3 deploy/go/withdraw-release.py \
+            --replacement-version "$REPLACEMENT_VERSION" \
+            --retired-versions "$RETIRED_VERSIONS" \
+            --evidence output/withdrawal.json "${args[@]}"
+      - name: Save withdrawal evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.1
+        with:
+          name: withdrawal-evidence
+          path: output/withdrawal.json
+          if-no-files-found: error
+          retention-days: 7

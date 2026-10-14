@@ -17,7 +17,15 @@ type cliSession struct {
 	Token string `json:"token"`
 }
 
-var sessionConfigDir = os.UserConfigDir
+var sessionConfigDir = func() (string, error) {
+	if directory := os.Getenv("OSS_TRANSFER_CLI_CONFIG_DIR"); directory != "" {
+		if !filepath.IsAbs(directory) {
+			return "", fmt.Errorf("OSS_TRANSFER_CLI_CONFIG_DIR 必须是绝对路径")
+		}
+		return directory, nil
+	}
+	return os.UserConfigDir()
+}
 
 func sessionPath(host string) (string, error) {
 	dir, err := sessionConfigDir()
@@ -39,8 +47,11 @@ func loadSession(host string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-		return "", fmt.Errorf("登录会话文件权限应为 0600: %s", path)
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("登录会话文件无效: %s", path)
+	}
+	if err := checkSessionPermissions(path); err != nil {
+		return "", err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -64,7 +75,7 @@ func saveSession(host, token string) error {
 	if info, e := os.Lstat(dir); e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("登录会话目录无效")
 	}
-	if err = os.Chmod(dir, 0700); err != nil {
+	if err = protectSessionPath(dir, true); err != nil {
 		return err
 	}
 	file, err := os.CreateTemp(dir, ".session-")
@@ -73,6 +84,11 @@ func saveSession(host, token string) error {
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
+	// Restrict access before writing the token, including on Windows where
+	// Unix permission bits do not control the file's DACL.
+	if err = protectSessionPath(file.Name(), false); err != nil {
+		return err
+	}
 	if err = json.NewEncoder(file).Encode(cliSession{host, token}); err != nil {
 		return err
 	}
@@ -104,7 +120,11 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 		}
 	}
 	if count != 1 {
-		return "", fmt.Errorf("请为 %s 指定一种输入方式：环境变量、文件%s", name, map[bool]string{true: "或 --password-stdin", false: ""}[allowStdin])
+		stdin := ""
+		if allowStdin {
+			stdin = "或 --" + name + "-stdin"
+		}
+		return "", fmt.Errorf("请为 %s 指定一种输入方式：环境变量、文件%s", name, stdin)
 	}
 	var value string
 	if opts.Has(name + "-env") {

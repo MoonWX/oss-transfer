@@ -86,7 +86,7 @@ func TestCLITrashFiltersDirectionsNodeBindingsAndIDs(t *testing.T) {
 		}
 	}
 	client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("invalid filter reached server") })
-	for _, args := range [][]string{{"224"}, {"--worker", "not-ip"}, {"--task-id", "0"}, {"--direction", "unknown"}, {"--search", "a", "--search", "b"}} {
+	for _, args := range [][]string{{"224"}, {"--worker", "invalid/node"}, {"--task-id", "0"}, {"--direction", "unknown"}, {"--search", "a", "--search", "b"}} {
 		if _, err := taskTrash(client, args); err == nil {
 			t.Fatalf("invalid recycle filter accepted: %v", args)
 		}

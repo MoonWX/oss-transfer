@@ -299,6 +299,16 @@ func TestImportRejectsInvalidBatchBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestImportRejectsInventoryScopeBeforeNetwork(t *testing.T) {
+	for _, kind := range []string{"buckets", "tasks", "local"} {
+		file := creationImportFile(t, "exported-inventory.json", `[{"sourceBucket":"a","destBucket":"b","inventoryManifestId":"sealed-manifest"}]`)
+		_, err := runTaskImport(creationTestClient(t), []string{kind, file})
+		if err == nil || !strings.Contains(err.Error(), "import-inventory") {
+			t.Fatalf("%s import lost exact-key scope: %v", kind, err)
+		}
+	}
+}
+
 func TestCreatePartialRetainsAcceptedIDsAndDoesNotRetry(t *testing.T) {
 	file := creationImportFile(t, "tasks.json", `[{"sourceBucket":"a","destBucket":"b"},{"sourceBucket":"c","destBucket":"d"}]`)
 	client := creationTestClient(t, creationExchange{method: "POST", path: "/import", response: `{"success":true,"importedCount":1,"taskIds":[5],"partial":true,"unknownCount":1,"unconfirmedTaskIds":[6]}`})
@@ -357,5 +367,53 @@ func TestCreatePrecheckBusinessFailureNeverSubmits(t *testing.T) {
 	result, err := runTaskCreate(client, []string{"local-to-oss", "target/dst", "--binding", "10.0.0.1=/mnt/file"})
 	if err == nil || result["message"] != "node unavailable" {
 		t.Fatalf("result %#v, error %v", result, err)
+	}
+}
+
+func TestImportExportedLocalDownloadWithDefaultName(t *testing.T) {
+	for _, key := range []string{"", "one.bin"} {
+		row := map[string]interface{}{
+			"direction": "OSS_TO_LOCAL", "targetRelativePath": "",
+			"sourceEndpoint":      map[string]interface{}{"type": "OSS", "s3Alias": "source", "bucket": "src"},
+			"destinationEndpoint": map[string]interface{}{"type": "LOCAL", "nodeBindings": []interface{}{map[string]interface{}{"executionNodeIp": "10.0.0.1", "localPath": "/target"}}},
+		}
+		if key != "" {
+			row["sourceEndpoint"].(map[string]interface{})["objectKey"] = key
+		}
+		encoded, _ := json.Marshal([]interface{}{row})
+		file := creationImportFile(t, "exported.json", string(encoded))
+		client := creationTestClient(t,
+			creationExchange{method: "POST", path: "/local-transfers/validate", response: `{"success":true,"data":{"valid":true,"nodeBindings":[{"valid":true,"pathType":"DIRECTORY"}]}}`},
+			creationExchange{method: "POST", path: "/local-transfers", response: `{"success":true,"data":{"acceptedCount":1,"parentTaskIds":[1]}}`},
+		)
+		if _, err := runTaskImport(client, []string{"local", file}); err != nil {
+			t.Fatalf("default name failed for key %q: %v", key, err)
+		}
+		for _, invalid := range []interface{}{5, []interface{}{}, " ", "../outside", "/outside", `C:\outside`} {
+			row["targetRelativePath"] = invalid
+			if err := createValidateRow(row, "local"); err == nil {
+				t.Fatalf("accepted invalid relative path %#v", invalid)
+			}
+		}
+	}
+}
+
+func TestImportPreservesExportedDateTimezoneAndPrecision(t *testing.T) {
+	for _, dates := range [][2]string{
+		{"2026-09-01T12:00:00Z", "2026-09-01T13:00:00Z"},
+		{"2026-09-01T12:00:00.123456789+08:00", "2026-09-01T05:00:00Z"},
+		{"2026-09-01T12:00:00", "2026-09-01T13:00:00"},
+	} {
+		row := map[string]interface{}{"sourceBucket": "src", "destBucket": "dst", "dateAfter": dates[0], "dateBefore": dates[1]}
+		if err := createValidateRow(row, "buckets"); err != nil {
+			t.Fatal(err)
+		}
+		if row["dateAfter"] != dates[0] || row["dateBefore"] != dates[1] {
+			t.Fatalf("date timezone/precision changed: %#v", row)
+		}
+	}
+	row := map[string]interface{}{"sourceBucket": "src", "destBucket": "dst", "dateAfter": "2026-09-01T12:00:00+08:00", "dateBefore": "2026-09-01T03:59:59Z"}
+	if err := createValidateRow(row, "buckets"); err == nil {
+		t.Fatal("date range compared wall time instead of instants")
 	}
 }

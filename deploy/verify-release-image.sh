@@ -17,7 +17,7 @@ if [[ "$version" == *-* ]]; then
 fi
 source_dir="$(cd "$(dirname "$0")/.." && pwd)"
 commit="$(git -C "$source_dir" rev-parse --verify 'HEAD^{commit}')"
-project_version="$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' "$source_dir/pom.xml" | head -n 1)"
+project_version="$(cat "$source_dir/VERSION")"
 [[ "$version" == "$project_version" ]] || fail 'image version does not match the project version'
 if [[ "${3:-}" != --ci-build ]]; then
     tag_commit="$(git -C "$source_dir" rev-parse --verify "refs/tags/$tag^{commit}")" || fail 'release tag is unavailable'

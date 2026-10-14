@@ -28,8 +28,12 @@ printf '%s\n' "${COMPREPLY[@]}"
 		words []string
 		wants []string
 	}{
+		{[]string{"oss-transfer-cli", "import-inventory", "source/bucket", "dest/bucket", "./lists", "--"}, []string{"--node", "--request-id", "--overwrite"}},
 		{[]string{"oss-transfer-cli", "ag"}, []string{"agent"}},
-		{[]string{"oss-transfer-cli", "agent", ""}, []string{"invite"}},
+		{[]string{"oss-transfer-cli", "agent", ""}, []string{"invite", "list", "show", "update", "remove"}},
+		{[]string{"oss-transfer-cli", "setup", ""}, []string{"status", "complete"}},
+		{[]string{"oss-transfer-cli", "setup", "complete", "--"}, []string{"--setup-token-env", "--password-stdin", "--public-url"}},
+		{[]string{"oss-transfer-cli", "agent", "update", "node-one", "--"}, []string{"--local-root", "--clear-local-roots"}},
 		{[]string{"oss-transfer-cli", "agent", "invite", "--"}, []string{"--label", "--address"}},
 		{[]string{"oss-transfer-cli", "node", ""}, []string{"invite"}},
 		{[]string{"oss-transfer-cli", "task", "children", "224", "--"}, []string{"--offset", "--limit"}},

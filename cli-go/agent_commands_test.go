@@ -59,7 +59,7 @@ func TestAgentInvitationAddressMayBeOmitted(t *testing.T) {
 
 func TestAgentInvitationRejectsInvalidArgumentsWithoutHTTP(t *testing.T) {
 	for _, args := range [][]string{
-		{"invite", "extra"}, {"invite", "--address", "host.example"},
+		{"invite", "extra"}, {"invite", "--address", "host/name"},
 		{"invite", "--address", "10.0.0.2:22"}, {"invite", "--label", "first", "--label", "second"},
 		{"invite", "--label", strings.Repeat("a", 81)}, {"invite", "--label", "a\nb"},
 		{"join", "--token", "value"}, {"invite", "--address", ""},
@@ -92,26 +92,6 @@ func TestAgentNodeStateUsesHeartbeat(t *testing.T) {
 	}
 }
 
-func TestInternalTokenExplicitConfigFile(t *testing.T) {
-	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "")
-	config := filepath.Join(t.TempDir(), "application.yml")
-	if err := os.WriteFile(config, []byte("transfer.internal-token: 'test-config-token'\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OSS_TRANSFER_CONFIG_FILE", config)
-	if token := loadInternalToken(); token != "test-config-token" {
-		t.Fatalf("explicit config token was not loaded: %q", token)
-	}
-	t.Setenv("OSS_TRANSFER_CONFIG_FILE", config+".missing")
-	if token := loadInternalToken(); token != "" {
-		t.Fatal("explicit missing config must not read credentials from a different deployment")
-	}
-	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "test-environment-token")
-	if token := loadInternalToken(); token != "test-environment-token" {
-		t.Fatal("environment token must take precedence over config")
-	}
-}
-
 func TestAgentConfigurationNeverSendsLocalExecutorCredentialToMaster(t *testing.T) {
 	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "")
 	config := filepath.Join(t.TempDir(), "application.yml")
@@ -119,9 +99,6 @@ func TestAgentConfigurationNeverSendsLocalExecutorCredentialToMaster(t *testing.
 		t.Fatal(err)
 	}
 	t.Setenv("OSS_TRANSFER_CONFIG_FILE", config)
-	if token := loadInternalToken(); token != "" {
-		t.Fatal("Agent local executor credential must not be used for Master administration")
-	}
 	client := NewApiClient("https://transfer.example.com")
 	client.client = &http.Client{Transport: adminTestTransport(func(request *http.Request) (*http.Response, error) {
 		if request.Header.Get("X-Internal-Token") != "" {

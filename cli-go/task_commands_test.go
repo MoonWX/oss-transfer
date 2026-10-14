@@ -282,7 +282,7 @@ func TestTaskShowPreservesGroupAndLocalDetailIncompleteness(t *testing.T) {
 	for _, local := range []bool{false, true} {
 		t.Run(map[bool]string{false: "group", true: "local"}[local], func(t *testing.T) {
 			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/master/status" {
+				if r.URL.Path == "/api/master/tasks/224" {
 					row := taskTestRow(224, "OSS_TO_OSS", "STOPPED")
 					if local {
 						row["direction"] = "OSS_TO_LOCAL"
@@ -290,7 +290,7 @@ func TestTaskShowPreservesGroupAndLocalDetailIncompleteness(t *testing.T) {
 						row["snapshotComplete"] = false
 						row["missingTaskIds"] = []int{225}
 					}
-					adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{row}, "partial": false})
+					adminTestJSON(t, w, map[string]interface{}{"data": row, "partial": false})
 					return
 				}
 				if r.URL.Path != "/api/master/tasks/224/children" || r.URL.Query().Get("limit") != "25" || r.URL.Query().Get("offset") != "0" {
@@ -325,8 +325,8 @@ func TestTaskShowPreservesGroupAndLocalDetailIncompleteness(t *testing.T) {
 func TestTaskChildSelectionUsesExecutingNode(t *testing.T) {
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		row := taskTestRow(224, "OSS_TO_LOCAL", "STOPPED")
-		if r.URL.Path == "/api/master/status" {
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{row}})
+		if r.URL.Path == "/api/master/tasks/224" {
+			adminTestJSON(t, w, map[string]interface{}{"data": row})
 			return
 		}
 		child := taskTestRow(225, "OSS_TO_LOCAL", "STOPPED")

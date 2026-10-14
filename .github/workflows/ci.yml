@@ -3,24 +3,20 @@ on:
   push:
     branches: [main]
   pull_request:
+    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/go-*.py', '.github/acceptance/prepare-go.py', '.github/tests/test-go-packaging.py', '.github/tests/test-resolve-ci-artifacts.py', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  PYTHONUTF8: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  build:
-    name: Build release artifacts
+  package:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    outputs:
-      package_id: ${{ steps.package.outputs.artifact-id }}
-      image_id: ${{ steps.image.outputs.artifact-id }}
-      package_sha256: ${{ steps.identity.outputs.package_sha256 }}
-      image_sha256: ${{ steps.identity.outputs.image_sha256 }}
-    env:
-      DOCKER_BUILD_RECORD_UPLOAD: 'false'
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,195 +26,240 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '8'
-          cache: maven
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.x'
-          cache-dependency-path: cli-go/go.sum
-      - name: Build installation package once
-        run: ./build.sh
-      - name: Check concurrent storage configuration synchronization
-        run: mvn -q -Dtest=StorageSynchronizationRaceTest test
-      - name: Check package identity and workflow syntax
-        id: version
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            cli-go/go.sum
+      - run: npm ci --prefix frontend
+      - name: Reject corrupt or ambiguous release packages
         run: |
-          (cd output && sha256sum --check oss-transfer.tar.gz.sha256)
-          mkdir "$RUNNER_TEMP/package-under-test"
-          tar -xzf output/oss-transfer.tar.gz -C "$RUNNER_TEMP/package-under-test"
-          # Test the bytes shipped in the tar, not a separate build directory.
-          rm -rf output/oss-transfer
-          mv "$RUNNER_TEMP/package-under-test/oss-transfer" output/oss-transfer
-          test -s output/oss-transfer/oss-transfer.jar
-          test -s output/oss-transfer/agent-bundle.tar.gz
-          test -x output/oss-transfer/oss-transfer-cli-amd64
-          test -x output/oss-transfer/oss-transfer-cli-arm64
-          (cd output/oss-transfer && sha256sum --check agent-bundle.tar.gz.sha256)
-          mkdir "$RUNNER_TEMP/agent-bundle-under-test"
-          tar -xzf output/oss-transfer/agent-bundle.tar.gz -C "$RUNNER_TEMP/agent-bundle-under-test"
-          for file in oss-transfer.jar oss-transfer-cli-amd64 oss-transfer-cli-arm64 VERSION; do
-            cmp "output/oss-transfer/$file" "$RUNNER_TEMP/agent-bundle-under-test/$file"
-          done
-          version="$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)"
-          test "$(sed -n 's/^Version: //p' output/oss-transfer/VERSION)" = "$version"
-          test "$(sed -n 's/^Commit: //p' output/oss-transfer/VERSION)" = "$(git rev-parse --short HEAD)"
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          "$(go env GOPATH)/bin/actionlint"
-          bash -n build.sh
-          find output/oss-transfer/deploy "$RUNNER_TEMP/agent-bundle-under-test/deploy" -name '*.sh' -print0 | xargs -0 -n1 bash -n
-      - name: Install image archive tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
-        with:
-          platforms: arm64
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-        id: buildx
-      - name: Build both image architectures from the same package
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          builder: ${{ steps.buildx.outputs.name }}
-          platforms: linux/amd64,linux/arm64
-          outputs: type=oci,dest=output/oss-transfer-image.tar,oci-mediatypes=false
-          tags: moonwx/osstransfer:${{ steps.version.outputs.version }}
-          labels: |
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
-      - name: Verify the actual image archive
+          python3 .github/tests/test-go-packaging.py -v
+          python3 .github/tests/test-resolve-ci-artifacts.py -v
+      - name: Build all candidate archives once
         env:
-          BUILD_VERSION: ${{ steps.version.outputs.version }}
+          GO_PLATFORMS: linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+          GO_AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
         run: |
-          (cd output && sha256sum oss-transfer-image.tar > oss-transfer-image.tar.sha256)
-          bash deploy/verify-release-image.sh "v$BUILD_VERSION" output --ci-build
-      - name: Record artifact identity
-        id: identity
-        run: |
-          printf 'package_sha256=%s\n' "$(sha256sum output/oss-transfer.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          printf 'image_sha256=%s\n' "$(sha256sum output/oss-transfer-image.tar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      # These are candidates until BOTH native acceptance jobs pass.
-      # Release also requires successful push/main CI for this exact commit.
-      - name: Upload installation package for acceptance
-        id: package
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git status --short
+            echo 'The build source changed before packaging.' >&2
+            exit 1
+          fi
+          GO_AGENT_ARTIFACT_VERSION="v$(cat VERSION)" GO_AGENT_DOCKER_IMAGE="moonwx/osstransfer:$(cat VERSION)" bash scripts/build-go.sh
+      - name: Assemble versioned native download assets
+        run: python3 deploy/go/release-assets.py --packages output/go-development --output output/go-release-assets --version "$(cat VERSION)" --commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-package
+          name: go-migration-packages
           path: |
-            output/oss-transfer.tar.gz
-            output/oss-transfer.tar.gz.sha256
-          overwrite: true
-          compression-level: 0
+            output/go-development/*.tar.gz
+            output/go-development/*.zip
+            output/go-development/*.sha256
           if-no-files-found: error
           retention-days: 7
-      - name: Upload image archive for acceptance
-        id: image
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-image
-          path: |
-            output/oss-transfer-image.tar
-            output/oss-transfer-image.tar.sha256
-          overwrite: true
-          compression-level: 0
+          name: go-release-assets
+          path: output/go-release-assets/*
           if-no-files-found: error
           retention-days: 7
-  acceptance:
-    name: Full acceptance (${{ matrix.arch }})
-    needs: build
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-            machine: x86_64
-          - arch: arm64
-            runner: ubuntu-26.04-arm
-            machine: aarch64
-    env:
-      ACCEPTANCE_ARCH: ${{ matrix.arch }}
-      EXPECTED_MACHINE: ${{ matrix.machine }}
-      PACKAGE_SHA256: ${{ needs.build.outputs.package_sha256 }}
-      IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+  image:
+    name: Archive the two-platform Go image
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        timeout-minutes: 10
         with:
-          artifact-ids: ${{ needs.build.outputs.package_id }},${{ needs.build.outputs.image_id }}
-          merge-multiple: true
-          path: output
-      - name: Verify and unpack the build artifacts
+          name: go-migration-packages
+          path: output/go-development
+      - name: Prepare the verified native binary context
+        id: release
         run: |
-          test "$(uname -m)" = "$EXPECTED_MACHINE"
-          (cd output && sha256sum --check oss-transfer.tar.gz.sha256 && sha256sum --check oss-transfer-image.tar.sha256)
-          printf '%s  %s\n' "$PACKAGE_SHA256" output/oss-transfer.tar.gz "$IMAGE_SHA256" output/oss-transfer-image.tar | sha256sum --check
-          tar -xzf output/oss-transfer.tar.gz -C output
-          test "$(sed -n 's/^Commit: //p' output/oss-transfer/VERSION)" = "$(git rev-parse --short HEAD)"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+          python3 deploy/go/docker-context.py --packages output/go-development --output output/go-docker-context
+          printf 'version=%s\n' "$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        id: buildx
+      - name: Archive both image architectures without rebuilding binaries
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Prepare independent acceptance clients
-        run: |
-          python3 -m venv "$RUNNER_TEMP/acceptance-venv"
-          "$RUNNER_TEMP/acceptance-venv/bin/pip" install -r .github/acceptance/requirements.txt
-          cd frontend
-          npm ci
-          npx playwright install --with-deps chromium
-      - name: Load the native image from the verified archive
+          context: output/go-docker-context
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          outputs: type=oci,dest=output/oss-transfer-image.tar,oci-mediatypes=false
+          tags: moonwx/osstransfer:${{ steps.release.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          provenance: false
+          sbom: false
+      - name: Verify the archived image identities
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
-          skopeo --command-timeout 3m --override-os linux --override-arch "$ACCEPTANCE_ARCH" copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/acceptance.tar:oss-transfer:acceptance"
-          docker load --input "$RUNNER_TEMP/acceptance.tar"
-          rm -f "$RUNNER_TEMP/acceptance.tar"
-          test "$(docker image inspect oss-transfer:acceptance --format '{{.Architecture}}')" = "$ACCEPTANCE_ARCH"
-          test "$(docker image inspect oss-transfer:acceptance --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
-          test "$(docker run --rm --entrypoint uname oss-transfer:acceptance -m)" = "$EXPECTED_MACHINE"
-          mkdir -p "output/acceptance/$ACCEPTANCE_ARCH"
-          python3 - <<'PYTHON'
-          import json, os, platform
-          from pathlib import Path
-          evidence = {"machine": platform.machine(), "architecture": os.environ["ACCEPTANCE_ARCH"],
-                      "commit": os.environ["GITHUB_SHA"], "packageSha256": os.environ["PACKAGE_SHA256"],
-                      "imageSha256": os.environ["IMAGE_SHA256"]}
-          Path("output/acceptance/" + os.environ["ACCEPTANCE_ARCH"] + "/artifact-identity.json").write_text(json.dumps(evidence, indent=2))
-          PYTHON
-      - name: Test installation and native upgrade recovery
-        timeout-minutes: 8
-        run: |
-          python3 .github/acceptance/quick-install.py --package output/oss-transfer \
-            --image oss-transfer:acceptance --evidence "output/acceptance/$ACCEPTANCE_ARCH"
-          python3 .github/acceptance/native-upgrade.py --package output/oss-transfer \
-            --evidence "output/acceptance/$ACCEPTANCE_ARCH"
-      - name: Test real transfers, UI, CLI and recovery
-        timeout-minutes: 12
-        run: |
-          "$RUNNER_TEMP/acceptance-venv/bin/python" .github/acceptance/run.py \
-            --image oss-transfer:acceptance --evidence "output/acceptance/$ACCEPTANCE_ARCH"
-      - name: Save acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          (cd output && sha256sum oss-transfer-image.tar > oss-transfer-image.tar.sha256)
+          bash deploy/verify-release-image.sh "v$(cat VERSION)" output --ci-build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: acceptance-evidence-${{ matrix.arch }}
-          path: output/acceptance/
-          overwrite: true
+          name: go-release-image
+          path: |
+            output/oss-transfer-image.tar
+            output/oss-transfer-image.tar.sha256
+          if-no-files-found: error
+          retention-days: 7
+  native:
+    name: Native ${{ matrix.platform }}
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux/amd64, runner: ubuntu-latest, race: '-race'}
+          - {platform: linux/arm64, runner: ubuntu-26.04-arm, race: '-race'}
+          - {platform: darwin/amd64, runner: macos-15-intel, race: '-race'}
+          - {platform: darwin/arm64, runner: macos-latest, race: '-race'}
+          - {platform: windows/amd64, runner: windows-latest, race: '-race'}
+          - {platform: windows/arm64, runner: windows-11-arm, race: ''}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            cli-go/go.sum
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-migration-packages
+          path: output/go-development
+      - name: Check durable execution and client behavior
+        env:
+          RACE_FLAG: ${{ matrix.race }}
+        run: |
+          race=()
+          if [[ -n "$RACE_FLAG" ]]; then race+=("$RACE_FLAG"); fi
+          go test "${race[@]}" ./...
+          (cd cli-go && go test "${race[@]}" ./...)
+      - name: Verify packages and prepare pinned S3 service
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m pip install -r .github/acceptance/requirements.txt
+          python .github/acceptance/prepare-go.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/go-native-package"
+      - name: Run packaged Master and two Agents
+        run: |
+          "$GO_QA_MASTER" --version
+          "$GO_QA_AGENT" --version
+          "$GO_QA_CLI" --version
+          python .github/acceptance/go-runtime-smoke.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --output output/go-smoke \
+            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
+            --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
+          python .github/acceptance/go-cli.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output output/go-cli
+          python .github/acceptance/go-cluster.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --weed "$GO_QA_WEED" --output output/go-cluster --scenario all --multipart-recovery
+          python .github/acceptance/go-inventory.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --weed "$GO_QA_WEED" --output output/go-inventory
+      - name: Verify native service installation, upgrade and rollback
+        run: |
+          python_path="$(python -c 'import sys; print(sys.executable)')"
+          args=(.github/acceptance/go-install.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output "$GITHUB_WORKSPACE/output/go-install" --repo "$GITHUB_WORKSPACE")
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo env "PATH=$PATH" "$python_path" "${args[@]}"
+          else
+            "$python_path" "${args[@]}"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: go-evidence-${{ strategy.job-index }}
+          path: |
+            output/go-smoke/evidence.json
+            output/go-smoke/*.log
+            output/go-cli/evidence.json
+            output/go-cli/*.log
+            output/go-cluster/evidence.json
+            output/go-cluster/bandwidth-samples.json
+            output/go-cluster/*.log
+            output/go-install/evidence.json
+            output/go-install/*-install-*.log
+            output/go-inventory/evidence.json
+            output/go-inventory/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+  docker:
+    name: Docker ${{ matrix.platform }}
+    needs: [package, image]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux/amd64, arch: amd64, runner: ubuntu-latest}
+          - {platform: linux/arm64, arch: arm64, runner: ubuntu-26.04-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-migration-packages
+          path: output/go-development
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-release-image
+          path: output
+      - name: Verify release archives and prepare native S3 service
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m pip install -r .github/acceptance/requirements.txt
+          python .github/acceptance/prepare-go.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/go-docker-package"
+      - name: Load the native image from the verified release archive
+        env:
+          QA_ARCH: ${{ matrix.arch }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          python deploy/go/verify-image.py --archive output/oss-transfer-image.tar --version "$(cat VERSION)" --commit "$GITHUB_SHA"
+          skopeo --command-timeout 3m --override-os linux --override-arch "$QA_ARCH" copy \
+            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/go-image.tar:oss-transfer-go:qa"
+          docker load --input "$RUNNER_TEMP/go-image.tar"
+          test "$(docker image inspect oss-transfer-go:qa --format '{{.Architecture}}')" = "$QA_ARCH"
+          test "$(docker image inspect oss-transfer-go:qa --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          OSS_TRANSFER_IMAGE=oss-transfer-go:qa docker compose -f docker-compose.yml config --quiet
+      - name: Verify setup, enrollment, bind transfers and persistent identity
+        run: python .github/acceptance/go-docker.py --image oss-transfer-go:qa --weed "$GO_QA_WEED" --output output/go-docker
+      - name: Install Master and Agent through the public Compose wizard
+        run: |
+          python deploy/go/package.py --packages output/go-development --output "$RUNNER_TEMP/go-installer-release"
+          python_path="$(python -c 'import sys; print(sys.executable)')"
+          sudo env "PATH=$PATH" "$python_path" .github/acceptance/go-setup.py --installer install.sh \
+            --manifest "$RUNNER_TEMP/go-installer-release/manifest.tsv" --image oss-transfer-go:qa --output output/go-setup
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: go-docker-evidence-${{ matrix.arch }}
+          path: |
+            output/go-docker/evidence.json
+            output/go-docker/image-provenance.json
+            output/go-docker/*.log
+            output/go-setup/evidence.json
+            output/go-setup/*.log
           if-no-files-found: ignore
           retention-days: 7

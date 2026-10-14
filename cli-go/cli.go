@@ -97,7 +97,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		if options.json {
 			json.NewEncoder(output).Encode(map[string]string{"version": version, "branch": branch, "commit": commit, "buildTime": buildTime})
 		} else {
-			fmt.Fprintf(output, "OSS Transfer CLI V4\nVersion: %s\nBranch: %s\nCommit: %s\nBuildTime: %s\n", version, branch, commit, buildTime)
+			fmt.Fprintf(output, "OSS Transfer CLI\nVersion: %s\nBranch: %s\nCommit: %s\nBuildTime: %s\n", version, branch, commit, buildTime)
 		}
 		return 0
 	}
@@ -110,7 +110,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		fmt.Fprintln(errors, "错误:", err)
 		return 2
 	}
-	if options.json && (normalized[0] == "diff-objects" || normalized[0] == "count-lines" || normalized[0] == "import-inventory") {
+	if options.json && (normalized[0] == "diff-objects" || normalized[0] == "count-lines") {
 		fmt.Fprintln(errors, "错误: 此旧版离线辅助命令不支持 --json")
 		return 2
 	}
@@ -127,7 +127,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 	}
 	defer stop()
 	client.requestContext = ctx
-	if os.Getenv("OSS_TRANSFER_AUTH_TOKEN") == "" && (os.Getenv("OSS_TRANSFER_INTERNAL_TOKEN") == "" || normalized[0] == "whoami" || normalized[0] == "logout" || normalized[0] == "change-password") && normalized[0] != "login" {
+	if os.Getenv("OSS_TRANSFER_AUTH_TOKEN") == "" && normalized[0] != "login" && normalized[0] != "setup" {
 		token, err := loadSession(options.host)
 		if err != nil {
 			if normalized[0] == "logout" && len(normalized) == 1 {
@@ -217,8 +217,10 @@ func watchable(args []string) bool {
 		case "bandwidth":
 			return len(args) == 3
 		}
-	case "node":
-		return args[1] == "list"
+	case "node", "agent":
+		return args[1] == "list" || args[1] == "show"
+	case "setup":
+		return args[1] == "status"
 	case "limit":
 		return args[1] == "list" || args[1] == "history" || args[1] == "adjustment"
 	case "exceptions":
@@ -228,6 +230,8 @@ func watchable(args []string) bool {
 }
 func dispatchCLI(client *ApiClient, args []string, input io.Reader, host string) (map[string]interface{}, error) {
 	switch args[0] {
+	case "setup":
+		return runSetupCommand(client, args[1:], input)
 	case "task":
 		return runTaskCommand(client, args[1:])
 	case "node", "agent", "storage", "limit", "exceptions", "object":
@@ -239,7 +243,7 @@ func dispatchCLI(client *ApiClient, args []string, input io.Reader, host string)
 	case "count-lines":
 		return nil, cmdCountLines(args[1:])
 	case "import-inventory":
-		return cmdImportInventory(client, args[1:])
+		return runInventoryImport(client, args[1:])
 	default:
 		return nil, fmt.Errorf("未知命令 %q；使用 --help 查看用法", args[0])
 	}
@@ -325,7 +329,7 @@ func sanitizeOutput(value interface{}) interface{} {
 		copy := map[string]interface{}{}
 		for k, item := range v {
 			key := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(k, "_", ""), "-", ""))
-			if strings.Contains(key, "password") || key == "secretkey" || key == "accesskey" || key == "internaltoken" || key == "token" {
+			if strings.Contains(key, "password") || key == "secretkey" || key == "accesskey" || key == "internaltoken" || key == "sessiontoken" || key == "token" {
 				copy[k] = "***"
 			} else {
 				copy[k] = sanitizeOutput(item)
@@ -365,12 +369,14 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	if rows, ok := data["recycledTasks"]; ok {
 		renderTaskRows(out, objectList(rows), false)
 		fmt.Fprintf(out, "显示 %d 条回收站记录\n", len(objectList(rows)))
+		renderTaskHistoryPage(out, data, "trash")
 		renderCLIAdminMessage(out, result)
 		return
 	}
 	if value, ok := data["tasks"]; ok {
 		renderTaskRows(out, objectList(value), false)
 		fmt.Fprintf(out, "显示 %d 个主任务\n", len(objectList(value)))
+		renderTaskHistoryPage(out, data, "list")
 		if msg := getString(data, "message"); msg != "" {
 			fmt.Fprintln(out, safeCLIText(msg))
 		}
@@ -625,7 +631,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	w.Flush()
 }
 
-var fieldLabels = map[string]string{"success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps"}
+var fieldLabels = map[string]string{"success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps"}
 
 func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 	keys := make([]string, 0, len(data))

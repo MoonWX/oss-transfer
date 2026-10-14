@@ -20,7 +20,11 @@ export function formatBytes(value: unknown) {
 }
 export const statusLabels: Record<string, string> = {
   PENDING: "待执行",
+  WAITING: "待执行",
   RUNNING: "执行中",
+  STOPPING: "停止中",
+  RESUMING: "恢复中",
+  RECOVERABLE: "等待恢复",
   LIST_DONE: "扫描完成",
   COMPLETED: "已完成",
   PARTIAL_FAILED: "部分失败",
@@ -33,6 +37,9 @@ export function StatusChip({ status }: { status?: string }) {
     "default" | "info" | "success" | "warning" | "error"
   > = {
     RUNNING: "info",
+    STOPPING: "warning",
+    RESUMING: "info",
+    RECOVERABLE: "warning",
     LIST_DONE: "info",
     COMPLETED: "success",
     PARTIAL_FAILED: "warning",

@@ -146,7 +146,7 @@ func TestAdminNodeUpdatePreservesLabel(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("calls = %d", calls)
 	}
-	for _, address := range []string{"10.0.0.2:2222", "host.example", "::1", "01.2.3.4", "224.0.0.1"} {
+	for _, address := range []string{"10.0.0.2:2222", "host/name", "01.2.3.4", "224.0.0.1"} {
 		if _, err := runAdminCommand(client, "node", []string{"add", address}); err == nil {
 			t.Errorf("invalid IPv4 accepted: %s", address)
 		}

@@ -77,12 +77,12 @@ class PublishImageTests(unittest.TestCase):
         (self.repo / 'deploy').mkdir(parents=True)
         for name in ('verify-release-image.sh', 'publish-image.sh'):
             shutil.copy2(SCRIPTS / name, self.repo / 'deploy' / name)
-        (self.repo / 'pom.xml').write_text('    <version>4.0.3</version>\n')
+        (self.repo / 'VERSION').write_text('4.1.0\n')
         self.git('init', '-q')
         self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                  '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'fixture')
         self.commit = self.git('rev-parse', 'HEAD').strip()
-        self.git('tag', 'v4.0.3')
+        self.git('tag', 'v4.1.0')
         self.artifacts = self.repo / 'output'
         self.artifacts.mkdir()
         self.archive = self.artifacts / 'oss-transfer-image.tar'
@@ -95,7 +95,7 @@ class PublishImageTests(unittest.TestCase):
         skopeo.chmod(0o755)
         self.log = self.root / 'skopeo-calls'
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
-                        IMAGE_STUB_LOG=str(self.log), IMAGE_STUB_VERSION='4.0.3', IMAGE_STUB_COMMIT=self.commit,
+                        IMAGE_STUB_LOG=str(self.log), IMAGE_STUB_VERSION='4.1.0', IMAGE_STUB_COMMIT=self.commit,
                         REGISTRY_USERNAME='offline-user', REGISTRY_PASSWORD='offline-registry-secret',
                         RUNNER_TEMP=str(self.root), TMPDIR=str(self.root),
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
@@ -108,7 +108,7 @@ class PublishImageTests(unittest.TestCase):
         digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         self.archive.with_suffix('.tar.sha256').write_text(digest + '  oss-transfer-image.tar\n')
 
-    def publish(self, tag='v4.0.3', *args, **env):
+    def publish(self, tag='v4.1.0', *args, **env):
         return subprocess.run(['bash', str(self.repo / 'deploy/publish-image.sh'), tag,
                                str(self.artifacts), *args], text=True, capture_output=True,
                               env={**self.env, **env}, timeout=20)
@@ -116,7 +116,7 @@ class PublishImageTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
-    def verify(self, *args, tag='v4.0.3', **env):
+    def verify(self, *args, tag='v4.1.0', **env):
         return subprocess.run(['bash', str(self.repo / 'deploy/verify-release-image.sh'), tag,
                                str(self.artifacts), *args], text=True, capture_output=True,
                               env={**self.env, **env}, timeout=20)
@@ -126,16 +126,6 @@ class PublishImageTests(unittest.TestCase):
         for call in self.calls():
             if 'authfile' in call:
                 self.assertFalse(Path(call['authfile']).exists())
-
-    def test_archive_export_names_only_one_version_without_implicit_latest(self):
-        workflow = (SCRIPTS.parent / '.github/workflows/ci.yml').read_text()
-        image_build = re.search(r'      - name: Build both image architectures[^\n]*\n'
-                                r'(.*?)      - name: Verify the actual image archive', workflow, re.S)
-        self.assertIsNotNone(image_build)
-        self.assertEqual(re.findall(r'^          tags: (.+)$', image_build.group(1), re.M),
-                         ['moonwx/osstransfer:${{ steps.version.outputs.version }}'])
-        self.assertIn('provenance: false', workflow)
-        self.assertIn('sbom: false', workflow)
 
     def test_docker_hub_publishes_all_architectures_then_verifies_real_pulls_then_aliases(self):
         image = 'docker.io/moonwx/osstransfer'
@@ -149,9 +139,9 @@ class PublishImageTests(unittest.TestCase):
         self.assertIn('--all', copies[0])
         self.assertEqual(copies[0][copies[0].index('--format') + 1], 'v2s2')
         self.assertNotIn('--preserve-digests', copies[0])
-        self.assertEqual(copies[0][-1], 'docker://' + image + ':4.0.3')
+        self.assertEqual(copies[0][-1], 'docker://' + image + ':4.1.0')
         self.assertEqual([c[c.index('--override-arch') + 1] for c in copies[1:3]], ['amd64', 'arm64'])
-        for args, alias in zip(copies[3:], ('4.0', 'latest')):
+        for args, alias in zip(copies[3:], ('4.1', 'latest')):
             self.assertIn('--all', args)
             self.assertIn('--preserve-digests', args)
             self.assertTrue(args[-2].startswith('docker://' + image + '@sha256:'))
@@ -160,15 +150,15 @@ class PublishImageTests(unittest.TestCase):
         self.assert_cleaned()
 
     def test_prerelease_does_not_update_stable_aliases(self):
-        self.git('tag', 'v4.0.3-rc.1')
-        (self.repo / 'pom.xml').write_text('    <version>4.0.3-rc.1</version>\n')
-        result = self.publish('v4.0.3-rc.1', IMAGE_STUB_VERSION='4.0.3-rc.1')
+        self.git('tag', 'v4.1.0-rc.1')
+        (self.repo / 'VERSION').write_text('4.1.0-rc.1\n')
+        result = self.publish('v4.1.0-rc.1', IMAGE_STUB_VERSION='4.1.0-rc.1')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(sum(c['command'] == 'copy' for c in self.calls()), 3)
         self.assert_cleaned()
 
     def test_ci_archive_is_verified_before_a_release_tag_exists(self):
-        self.git('tag', '-d', 'v4.0.3')
+        self.git('tag', '-d', 'v4.1.0')
         result = self.verify('--ci-build')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         inspected_arches = [c['args'][c['args'].index('--override-arch') + 1]
@@ -227,8 +217,8 @@ class PublishImageTests(unittest.TestCase):
         self.assert_cleaned()
 
     def test_wrong_tag_or_extra_argument_never_uses_credentials(self):
-        for args in [('v4.0.4',), ('v4.0.3-01',), ('v04.0.3',),
-                     ('v4.0.3', 'arbitrary.invalid/repository')]:
+        for args in [('v4.0.4',), ('v4.1.0-01',), ('v04.1.0',),
+                     ('v4.1.0', 'arbitrary.invalid/repository')]:
             with self.subTest(args=args):
                 result = self.publish(*args)
                 self.assertNotEqual(result.returncode, 0)

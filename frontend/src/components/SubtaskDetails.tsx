@@ -1,3 +1,4 @@
+import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import {
   Alert,
   Box,
@@ -53,6 +54,7 @@ export default function SubtaskDetails({
   const rows = task
     ? [
         ["执行节点", task.executionNodeIp || task.workerNode || "等待分配"],
+        ...taskRequestLimitRows(task.requestLimits),
         ["当前速度", speed(task.currentSpeedBytesPerSecond)],
         ["平均速度", speed(task.averageSpeedBytesPerSecond)],
         ["创建时间", timestamp(task.createTime)],

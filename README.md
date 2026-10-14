@@ -2,178 +2,134 @@
 
 [中文](README.zh-CN.md)
 
-OSS Transfer copies data between S3-compatible buckets and local directories, or between two buckets. A Master serves the WebUI and API. Agents connect to it to run transfers.
+OSS Transfer copies data between S3-compatible buckets and local directories. The Master provides the WebUI, API and scheduling; Agents scan and transfer data. Master, Agent and CLI are separate Go executables for Linux, macOS and Windows, on amd64 and arm64. Java is not required to run them.
 
-## Guided installation
+## Install the Master
 
-Run the installer on the target Linux host. It supports `amd64` and `arm64`:
+On Linux or macOS, download the installer from JD Cloud OSS:
 
 ```sh
-curl -fSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh &&
+RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
+curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --lang en
 ```
 
-Choose Master or Agent, then Docker Compose or systemd. Fill in the settings and confirm to install. Debian and Ubuntu install missing dependencies automatically; on other distributions, install them first.
+Choose Master and a deployment method. Linux supports a native systemd service or Docker Compose; macOS uses launchd. Native installation needs no language runtime. Use `--help` for custom paths and ports, or `--user` on macOS for a service owned by your logged-in user.
 
-For an Agent, create an invitation under **Execution nodes → Add node** in the WebUI, then paste its URL into the installer on the new node.
+On Windows, run PowerShell as Administrator:
 
-To use an extracted local package, add `--method native --package-dir /path/to/oss-transfer`. For an existing native deployment, the wizard offers an in-place upgrade. See [Upgrade and back up](#upgrade-and-back-up).
-
-## Deploy the master
-
-### Docker
-
-The image includes Java. Replace `http://master.example.com:1685` with an address your browser and Agents can reach:
-
-```sh
-docker run -d --name oss-transfer-master --restart unless-stopped \
-  -p 1685:1685 \
-  -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
-  -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:latest
+```powershell
+$ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
+Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
+.\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Yes
 ```
 
-`latest` follows stable releases. Use a tag such as `moonwx/osstransfer:4.0.5` to pin a version.
-
-Open the configured URL and log in as `admin`. Read the generated password with:
+Open `http://HOST:1685`. Use the setup token in the service log to create your administrator account and set the Master URL that browsers and Agents will use. There is no default password. The installer prints the service name, configuration path and log location. For the default Linux installation:
 
 ```sh
-docker exec oss-transfer-master cat /app/data/secrets/admin_password
+sudo cat /var/lib/oss-transfer-go/master/logs/service.log
 ```
 
-Change the password after logging in. Settings and task checkpoints are stored in `/app/data`; keep this volume when replacing the container.
+[GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) provides the same binaries and checksums. See the [native deployment guide](deploy/go/README.md) for local release files, upgrades and rollback.
 
-For local-file transfers, mount the directory with an option such as `-v /srv/transfer-files:/data`. The container runs as UID/GID `10001`, which needs read/write access to the directory. Use the container path (`/data` in this example) when creating a task.
+## Docker Compose
 
-### Docker Compose
-
-Use Docker Compose v2 with `docker-compose.yml` and `.env.example` from the repository or [release archive](#traditional-deployment). Run these commands in the directory containing those files:
+Copy `docker-compose.yml` and `.env.example` from the repository into a deployment directory:
 
 ```sh
 cp .env.example .env
 ```
 
-In `.env`, set `TRANSFER_MASTER_WEB_URL` to the address browsers and Agents will use. Set `OSS_TRANSFER_FILES_DIR` to the host directory for local-file transfers. The default image is `moonwx/osstransfer:latest`.
+Compose uses `moonwx/osstransfer:latest`. Adjust the port and local directory in `.env` as needed:
 
-Create the example directory and start the service:
-
-```sh
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/transfer-files
-docker compose pull
-docker compose up -d
+```dotenv
+OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest
+TRANSFER_PORT=1685
+TRANSFER_LOCAL_ROOT=./transfer-files
 ```
 
-Open the configured URL and log in as `admin`. Read the password and view service logs with:
+Start the Master and read its setup token:
 
 ```sh
-docker compose exec master cat /app/data/secrets/admin_password
-docker compose logs -f master
+docker compose pull master
+docker compose up -d master
+docker compose logs master
 ```
 
-To update, stop active tasks and run:
+Complete setup in the browser. The `master-data` volume stores the Master's database. `docker compose down` keeps it; `docker compose down -v` deletes it.
+
+The Master does not transfer files itself. Add an Agent even for a single-host installation. You can use the console's generated command, or the optional `agent` profile in this Compose file. For the profile, create the host directory and grant container UID/GID `65532` access:
 
 ```sh
-docker compose pull
-docker compose up -d
+sudo install -d -o 65532 -g 65532 -m 0750 ./transfer-files
 ```
 
-The `master-data` volume holds settings and task checkpoints. `docker compose down` keeps it; `docker compose down -v` deletes it.
+Create an invitation in **Execution nodes → Add node**. In Bash, enter its token and enroll the local Agent once:
 
-### Traditional deployment
+```bash
+read -r -s -p 'Invitation token: ' OSS_TRANSFER_JOIN_TOKEN; printf '\n'
+export OSS_TRANSFER_JOIN_TOKEN
+docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent \
+  oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
+unset OSS_TRANSFER_JOIN_TOKEN
+docker compose --profile agent up -d agent
+```
 
-Install Java 8 or later before running the installer. The host also needs Linux with systemd and the commands `curl`, `openssl`, `tar`, `sha256sum`, `timeout`, and `ss`.
+The profile mounts `TRANSFER_LOCAL_ROOT` at `/files`; use `/files` in transfer tasks. Its identity and checkpoints live in the separate `agent-data` volume. To access more host directories, add bind mounts to the Agent service. A native Agent can access permitted host paths directly.
 
-Download and extract the latest stable release from JD Cloud OSS:
+## Add execution nodes
+
+In **Execution nodes → Add node**, create a single-use invitation and run the generated native or Docker command on the new host. The Agent connects outbound to the Master and retains its identity across restarts. It needs no public administration port. Use the same release for Master and Agents.
+
+For a shared local-file task, mount the same filesystem at the same path on every selected Agent. Configure the available roots in node settings. The tool verifies shared access before assigning that task to multiple Agents.
+
+Keep invitation links private. Removing a node revokes its credential. Rejoining a removed node requires a new invitation and a fresh Agent data directory.
+
+## Transfer data
+
+Add storage connections, then create a task with its source, destination and execution nodes. Choose `SKIP` or `OVERWRITE`, key mapping and limits as needed. Task details show progress and clickable child tasks, numbered `#parent-1`, `#parent-2`, and so on.
+
+Stop and resume preserves recorded object results. An unfinished download restarts the file; an unfinished S3 upload is aborted and that object is uploaded again. Completed multipart parts are not reused after a process restart. Reports are available after a task stops or finishes. Node limits cover all work on that node; a task's bandwidth limit is shared across its selected nodes.
+
+The CLI uses the same user accounts as the WebUI. Log in from Bash:
+
+```bash
+read -r -s -p 'Password: ' OSS_TRANSFER_PASSWORD; printf '\n'
+export OSS_TRANSFER_PASSWORD
+oss-transfer-cli --host http://HOST:1685 login --username admin --password-env OSS_TRANSFER_PASSWORD
+unset OSS_TRANSFER_PASSWORD
+```
+
+Use the same `--host` for subsequent commands:
 
 ```sh
-OSS_TRANSFER_RELEASE=latest
-OSS_TRANSFER_DOWNLOAD_URL="https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/$OSS_TRANSFER_RELEASE"
-curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz" -o oss-transfer.tar.gz &&
-curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz.sha256" -o oss-transfer.tar.gz.sha256 &&
-sha256sum -c oss-transfer.tar.gz.sha256 &&
-tar -xzf oss-transfer.tar.gz
+oss-transfer-cli --host http://HOST:1685 task list
+oss-transfer-cli --host http://HOST:1685 task show 123
+oss-transfer-cli --host http://HOST:1685 task children 123 --offset 0 --limit 25
+oss-transfer-cli --host http://HOST:1685 task stop 123
+oss-transfer-cli --host http://HOST:1685 task resume 123
+oss-transfer-cli --host http://HOST:1685 task report 123 --output task-123.zip
 ```
 
-For a fixed version, set `OSS_TRANSFER_RELEASE=v4.0.5`. The archive and checksum are also available from [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases).
-
-Install the Master:
-
-```sh
-cd oss-transfer
-sudo ./deploy/install-master.sh --web-url http://master.example.com:1685
-```
-
-The service is named `oss-transfer`. It reads `/etc/oss-transfer/application.yml` and stores data in `/var/lib/oss-transfer`. Read the initial password and check the service with:
-
-```sh
-sudo cat /etc/oss-transfer/admin-password
-sudo systemctl status oss-transfer
-sudo journalctl -u oss-transfer -f
-```
-
-Use `--port` to set the service port or `--java-bin` to select a Java executable. Run `./deploy/install-master.sh --help` for the full options.
-
-## Add an agent
-
-In the Master's **Execution nodes → Add node**, create a single-use invitation. Run the generated Docker or traditional installation command on the new node. The Agent joins the cluster and keeps its credential across restarts.
-
-A Docker Agent uses the same image with `TRANSFER_ROLE=agent` and a persistent `/app/data` volume. Mount the local or shared directories it will access. Agents connect outbound to the Master, so their containers need no published ports.
-
-For traditional deployment, install Java first. The command downloads a bundle and checksum from the Master, then installs the `oss-transfer-agent` service. Configuration is stored in `/etc/oss-transfer-agent/application.yml` and data in `/var/lib/oss-transfer-agent`.
-
-Keep invitation URLs private. Use HTTPS when Agents connect to the Master over a public network. Removing a node revokes its credential; to rejoin, use a new invitation and a fresh Agent data directory or volume.
-
-For local-file tasks across several Agents, mount the same shared filesystem at the same path on each node.
-
-## Use the tool
-
-1. Add source and destination connections in **Storage connections**.
-2. Create a task. Select its direction, scope and execution nodes, then set conflict handling and limits as needed.
-3. View progress in **Task details**. Click a child task to inspect it.
-4. Stop and resume a task to continue from its recorded results. Reports can be exported after a task stops or finishes.
-
-Node limits apply to all tasks on that node. Task limits apply to one task and remain subject to the node limits. When storage throttling triggers automatic adjustment, the node details show the triggering request and recovery status.
-
-CLI examples:
-
-```sh
-oss-transfer-cli --help
-oss-transfer-cli worker-status
-oss-transfer-cli task list
-oss-transfer-cli task show 123
-oss-transfer-cli task children 123 --offset 25 --limit 25
-oss-transfer-cli task show 123 --child 123-26 --node 10.0.0.2
-oss-transfer-cli task trash --direction oss-to-local
-```
-
-Child tasks load in pages of 25. The WebUI loads the first page when you scroll to that section; the CLI prints a command for the next page. Add `--json` for structured output or `--host` to connect to another Master.
-
-For Docker, prefix CLI commands with `docker exec oss-transfer-master`; for Compose, use `docker compose exec master`.
+Use `--help` for creation, connection and node commands; add `--json` for structured output. In Compose, run the CLI with `docker compose exec master oss-transfer-cli`.
 
 ## Upgrade and back up
 
-Stop active tasks before upgrading. Stop the service before copying its configuration and data directories, or take a consistent filesystem snapshot. Copying a live RocksDB directory can produce an unusable backup.
+For an existing Go native installation, download the new version's installer and run it with the same paths and `--upgrade` (`-Upgrade` on Windows). It verifies the binaries, backs up the stopped database and service configuration, then checks the replacement service. Failed startup triggers rollback. The CLI is replaced only when owned by that installation or explicitly approved with `--replace-cli`.
 
-For Docker, pull the new version and recreate the container with the existing volume and storage mounts.
+For Compose, stop active tasks, back up the stopped services' data volumes, then run `docker compose pull` and `docker compose up -d`. If you pinned an image version, update that tag first. Keep the existing volumes and Agent mounts. Application rollback does not undo files or objects already transferred.
 
-For a native installation, run the wizard again and choose upgrade, or use:
+V4.0.x databases require [offline export and conversion](docs/development/legacy-migration.md). Do not point Go at the old RocksDB directory. The [migration guide](docs/go-migration.md) describes preserved state and the first resume after conversion.
 
-```sh
-sudo bash install.sh --upgrade
-```
+## Build
 
-The installer recognizes the current native services and the old `oss-transfer-tool` Master. It keeps the existing configuration, login password and database paths, backs up the stopped service to `/var/backups/oss-transfer/`, then replaces the program and CLI. If startup fails, it restores the backup. Existing Agents retain their enrollment credentials; legacy Workers need to join as Agents through a new invitation.
-
-Use `--service-name NAME` to select a custom service and `--cli-path PATH` if its CLI is installed elsewhere. For an extracted package, add `--package-dir /path/to/oss-transfer`. Use the existing Compose file for container upgrades; the native upgrade does not convert a deployment to Docker.
-
-## Build locally
-
-Building requires JDK 8+, Maven, Node.js 22.12+ and Go 1.22+.
+Use the Go version declared in `go.mod`, Node.js 24 and Python 3. A Bash environment is required for the build script:
 
 ```sh
-./build.sh
+./build.sh --test
+./build.sh --all
 ```
 
-The build writes `output/oss-transfer.tar.gz`, its SHA-256 file, and the extracted package in `output/oss-transfer/`. The WebUI version display reads the Git commit and build time from the package metadata.
+The first command tests and builds the current platform; the second builds all six platforms. Archives and checksums are written to `output/go-development/`. Each archive includes the three executables, `VERSION` and `SHA256SUMS`. The WebUI is embedded in the Master binary.
 
-See the [maintainer release guide](https://github.com/MoonWX/oss-transfer/blob/main/.github/RELEASING.md) for publishing steps.
+See [release steps](.github/RELEASING.md) and [acceptance checks](.github/acceptance/README.md).

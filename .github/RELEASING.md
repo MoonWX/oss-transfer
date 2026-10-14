@@ -1,48 +1,48 @@
 # Releases
 
-## Workflow
+A version tag publishes the already tested artifacts from the successful `main` CI run for that exact commit. Release does not rebuild them. It uploads to Docker Hub and JD Cloud OSS, then creates the GitHub Release.
 
-- CI builds the installation archive once, then builds Linux `amd64`/`arm64` images from that archive.
-- Pull requests, pushes to `main` and manual runs test those same artifacts in parallel on native `ubuntu-latest` (amd64) and `ubuntu-26.04-arm` (ARM64) runners. Both run the full acceptance suite against an isolated S3 service. CI does not publish a release.
-- The build job uploads candidate artifacts for the two test jobs to download by immutable ID and verify against the build SHA-256. Release can use them only after the entire `push`/`main` CI run succeeds; an uploaded artifact alone is not a passed release.
-- Pushing a version tag starts Release. It waits for successful `push`/`main` CI for that exact commit, then downloads its artifacts by their fixed IDs. It does not compile or build again.
-- Docker Hub and JD Cloud OSS publish in parallel on GitHub-hosted `ubuntu-latest` runners. Each downloads only the artifacts it needs; neither rebuilds them.
-- GitHub Release is published after Docker Hub and OSS succeed.
-
-If CI fails or its artifacts are missing or expired, rerun the `main` CI run for the tagged commit, then rerun Release. Do not use artifacts from a different commit or the latest `main` build.
-
-## Tests
-
-Each architecture runs the same acceptance chain using a real Master, two Agents, the packaged CLI, the packaged WebUI in Chromium, and a pinned official SeaweedFS S3 service. It uploads local files, copies them between buckets, downloads them, and independently compares every key, size and SHA-256. The same chain checks two-agent execution, task bandwidth, stop/resume, process termination and recovery, reports, and SKIP/OVERWRITE. See [the acceptance contract](acceptance/README.md) for exact assertions and limits.
-
-The previous mock-based server, browser, CLI and publisher suites are not default CI gates. They remain available for focused development with `./build.sh --test`, `cd frontend && npm test`, and the individual deployment test scripts. There is no test-count target or path-based bypass. Acceptance failures preserve checks, independent manifests, task reports, logs and browser traces as `acceptance-evidence-amd64` and `acceptance-evidence-arm64`; either failure blocks release. One failed architecture does not cancel the other, so both results remain available.
-
-The focused `StorageSynchronizationRaceTest` also runs in CI. It deterministically reproduces competing user and background configuration changes using real controllers, RocksDB and loopback HTTP, without waiting for a scheduling race to occur during a transfer.
+`VERSION` is the version source. `ci.yml` builds six native packages and one multi-architecture image, then tests them. All native and container acceptance jobs must pass before Release can resolve the immutable artifact IDs. A successful package job alone does not authorize publication.
 
 ## Publish a version
 
-Change the project `<version>` in `pom.xml`, test and commit it on `main`. This is the version source for the JAR, CLI and package metadata; installers and Compose default to `latest`.
+Commit intermediate changes to `main` normally; these commits run CI without publishing. When the changes are ready:
 
-From that committed checkout:
+1. Update `VERSION`, such as `4.1.0-rc.1` for a candidate or `4.1.0` for a stable release.
+2. Test and commit that change, then push `main`.
+3. Wait for the complete CI run on that commit to pass.
+4. Create and push an annotated tag pointing to that commit.
 
 ```sh
-version=$(sed -n 's/^[[:space:]]*<version>\([^<]*\)<\/version>.*/\1/p' pom.xml | head -n1)
 git push origin main
+# After the matching CI run passes:
+version=$(cat VERSION)
 git tag -a "v$version" -m "OSS Transfer v$version"
 git push origin "refs/tags/v$version"
 ```
 
-The tag must match the POM version. Use a new version and tag for each release; do not move an existing release tag.
+Check that `HEAD` is the tested commit before tagging. The version in the tag must match `VERSION`. Use a new tag for each release; do not move an existing published tag.
 
-Stable releases publish image tags `X.Y.Z`, `X.Y` and `latest`. Pre-releases publish only their version tag and are marked as pre-releases on GitHub.
+Release waits for a successful `push` to `main` CI run at the tagged commit. A manual workflow run or a passing run at another commit cannot substitute. If tests fail or artifacts expire, rerun the matching main CI run before retrying Release.
 
-OSS stores `oss-transfer.tar.gz`, `install.sh`, their SHA-256 files and `VERSION` under `osstransfer/vX.Y.Z/`. Stable releases also update `osstransfer/latest/`; pre-releases only update their version directory. GitHub Release includes the same archive and installer. The standalone installer is extracted from the verified CI package.
+## Outputs
 
-## Repository configuration
+GitHub and OSS provide all six platform archives, individual Master/Agent/CLI binaries, Unix and Windows installers, Compose, version metadata and SHA-256 checksums. The image contains the same tested Linux executables; Docker packaging does not compile another copy.
 
-| Destination | Address | Secrets |
+| Release | Docker Hub tags | OSS directory | GitHub |
+| --- | --- | --- | --- |
+| Stable `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest` | `osstransfer/vX.Y.Z/` and `osstransfer/latest/` | Release |
+| Candidate `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` | `osstransfer/vX.Y.Z-rc.N/` | Prerelease |
+
+Prereleases do not update `latest`. The repository Compose file defaults to `latest`; a prerelease download contains Compose pinned to its candidate image. Native installers resolve `latest` metadata to a fixed version before fetching binaries and verify that the manifest has not changed during resolution.
+
+After uploading a stable Go version and its `latest` metadata, publication retires only the obsolete V4.0.x `latest/oss-transfer.tar.gz`, its `.sha256`, and `latest/install.sh.sha256`. Existing `v4.0.*` directories remain available.
+
+## Secrets
+
+| Destination | Address | Repository secrets |
 | --- | --- | --- |
 | Docker Hub | `moonwx/osstransfer` | `DOCKER_USERNAME`, `DOCKER_PAT` |
 | JD Cloud OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/` | `JDOSS_AK`, `JDOSS_SK` |
 
-Publishing secrets are used only by the release workflow triggered by version tags. Pull-request CI does not use them.
+Publishing runs on GitHub-hosted `ubuntu-latest` runners. Publishing credentials are used only by the release workflow.

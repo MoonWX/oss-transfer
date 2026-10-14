@@ -18,81 +18,31 @@ import (
 )
 
 type ApiClient struct {
-	requestContext context.Context
-	baseUrl        string
-	client         *http.Client
-	verbose        bool
-	internalToken  string
-	authToken      string
+	requestContext     context.Context
+	baseUrl            string
+	client             *http.Client
+	verbose            bool
+	configurationError error
+	authToken          string
 }
 
 func NewApiClient(host string) *ApiClient {
 	client := &ApiClient{
-		baseUrl:       strings.TrimRight(host, "/") + "/api/master",
-		client:        &http.Client{Timeout: 60 * time.Second},
-		internalToken: loadInternalToken(),
+		baseUrl: strings.TrimRight(host, "/") + "/api/master",
+		client:  &http.Client{Timeout: 60 * time.Second},
+	}
+	if strings.TrimSpace(os.Getenv("OSS_TRANSFER_INTERNAL_TOKEN")) != "" {
+		client.configurationError = errors.New("OSS_TRANSFER_INTERNAL_TOKEN 已停用；请取消该环境变量后运行 login，CLI 使用用户登录会话")
 	}
 	client.SetAuthToken(strings.TrimSpace(os.Getenv("OSS_TRANSFER_AUTH_TOKEN")))
 	return client
 }
 
-// loadInternalToken uses an explicit environment token or node configuration.
-// An explicit config file never falls back to another node's credentials.
-func loadInternalToken() string {
-	if t := os.Getenv("OSS_TRANSFER_INTERNAL_TOKEN"); t != "" {
-		return t
-	}
-	if configured := strings.TrimSpace(os.Getenv("OSS_TRANSFER_CONFIG_FILE")); configured != "" {
-		return readTokenFromYml(configured)
-	}
-	for _, p := range []string{"/etc/oss-transfer/application.yml", "application.yml", "/export/oss-transfer-tool/application.yml"} {
-		t, agent := readDeploymentToken(p)
-		if agent {
-			return ""
-		}
-		if t != "" {
-			return t
-		}
-	}
-	return ""
-}
-
-func readTokenFromYml(path string) string {
-	token, _ := readDeploymentToken(path)
-	return token
-}
-
-func readDeploymentToken(path string) (string, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	token, agent := "", false
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "transfer.role:") {
-			value := strings.SplitN(strings.TrimPrefix(line, "transfer.role:"), "#", 2)[0]
-			role := strings.Trim(strings.TrimSpace(value), "\"'")
-			agent = strings.EqualFold(role, "agent")
-		}
-		if strings.HasPrefix(line, "transfer.internal-token:") {
-			token = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "transfer.internal-token:")), "\"'")
-		}
-	}
-	if agent {
-		return "", true
-	}
-	return token, false
-}
-
 func (c *ApiClient) SetVerbose(verbose bool) { c.verbose = verbose }
 
-// A selected user session must not silently fall back to node credentials.
+// Tokens come from an explicit user session or the CLI login store.
 func (c *ApiClient) SetAuthToken(token string) {
 	c.authToken = strings.TrimSpace(token)
-	if c.authToken != "" {
-		c.internalToken = ""
-	}
 }
 
 func (c *ApiClient) Get(path string) (map[string]interface{}, error) {
@@ -101,6 +51,21 @@ func (c *ApiClient) Get(path string) (map[string]interface{}, error) {
 
 func (c *ApiClient) Post(path string, body interface{}) (map[string]interface{}, error) {
 	return c.Request(http.MethodPost, path, body)
+}
+
+// PostCreation sends one explicit creation attempt. After an uncertain response,
+// the caller can retry with the same request ID to retrieve its saved result.
+func (c *ApiClient) PostCreation(path string, body interface{}, requestID string) (map[string]interface{}, error) {
+	if err := validateCreationRequestID(requestID); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Idempotency-Key", requestID)
+	req.GetBody = nil
+	return c.sendRequest(req)
 }
 
 func (c *ApiClient) Put(path string, body interface{}) (map[string]interface{}, error) {
@@ -122,6 +87,10 @@ func (c *ApiClient) Request(method, path string, body interface{}) (map[string]i
 	if err != nil {
 		return nil, err
 	}
+	return c.sendRequest(req)
+}
+
+func (c *ApiClient) sendRequest(req *http.Request) (map[string]interface{}, error) {
 	resp, err := c.do(req, false)
 	if err != nil {
 		return nil, err
@@ -140,6 +109,9 @@ func (c *ApiClient) request(method, path string, body interface{}) (map[string]i
 }
 
 func (c *ApiClient) newRequest(method, path string, body interface{}) (*http.Request, error) {
+	if c.configurationError != nil {
+		return nil, c.configurationError
+	}
 	base, err := url.Parse(c.baseUrl)
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil {
 		return nil, fmt.Errorf("服务地址无效，请使用 http://主机:端口 或 https://主机:端口")
@@ -179,9 +151,6 @@ func (c *ApiClient) newRequest(method, path string, body interface{}) (*http.Req
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.internalToken != "" {
-		req.Header.Set("X-Internal-Token", c.internalToken)
 	}
 	if c.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
@@ -228,6 +197,13 @@ func (c *ApiClient) do(req *http.Request, download bool) (*http.Response, error)
 	return resp, nil
 }
 
+type apiHTTPError struct {
+	Status  int
+	Message string
+}
+
+func (e *apiHTTPError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
+
 func decodeAPIResponse(status int, body []byte) (map[string]interface{}, error) {
 	var result map[string]interface{}
 	var decodeErr error
@@ -236,9 +212,9 @@ func decodeAPIResponse(status int, body []byte) (map[string]interface{}, error) 
 	}
 	if status < 200 || status >= 300 {
 		if message := apiResponseMessage(result); message != "" {
-			return result, fmt.Errorf("HTTP %d: %s", status, message)
+			return result, &apiHTTPError{status, message}
 		}
-		return result, fmt.Errorf("HTTP %d: %s", status, http.StatusText(status))
+		return result, &apiHTTPError{status, http.StatusText(status)}
 	}
 	if decodeErr != nil {
 		return nil, fmt.Errorf("响应不是有效的 JSON 对象: %w", decodeErr)

@@ -2,178 +2,134 @@
 
 [English](README.md)
 
-OSS Transfer 支持 S3 兼容存储桶之间的迁移，以及对象存储与本地目录之间的上传、下载。Master 提供 WebUI 和 API，Agent 连接 Master 执行传输。
+OSS Transfer 支持 S3 兼容存储之间，以及对象存储与本地目录之间的数据迁移。Master 提供 WebUI、API 和调度；Agent 负责扫描和传输。Master、Agent、CLI 均为独立 Go 程序，支持 Linux、macOS、Windows 的 amd64 和 arm64，运行时不需要 Java。
 
-## 一键安装
+## 安装 Master
 
-在目标 Linux 主机上运行安装脚本，支持 `amd64` 和 `arm64`：
+在 Linux 或 macOS 上，从京东云 OSS 下载安装器：
 
 ```sh
-curl -fSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh &&
+RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
+curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --lang zh
 ```
 
-选择 Master 或 Agent，再选择 Docker Compose 或 systemd。填写配置并确认后开始安装。Debian、Ubuntu 会自动安装缺少的依赖，其他发行版需提前安装。
+按提示选择主节点和部署方式。Linux 支持原生 systemd 服务和 Docker Compose；macOS 使用 launchd。原生部署不需要语言运行环境。自定义目录、端口可查看 `--help`；macOS 加 `--user` 可安装为当前登录用户的服务。
 
-安装 Agent 时，先在 WebUI 的**执行节点 → 添加节点**中生成邀请，再将 URL 粘贴到新节点的安装脚本中。
+Windows 使用管理员 PowerShell：
 
-使用已解压的本地安装包时，添加 `--method native --package-dir /path/to/oss-transfer`。检测到已有原生部署时，向导会提供原位升级选项。详见[升级与备份](#升级与备份)。
-
-## 部署 Master
-
-### Docker
-
-镜像内含 Java。将 `http://master.example.com:1685` 替换为浏览器和 Agent 能访问的地址：
-
-```sh
-docker run -d --name oss-transfer-master --restart unless-stopped \
-  -p 1685:1685 \
-  -e TRANSFER_MASTER_WEB_URL=http://master.example.com:1685 \
-  -v oss-transfer-master-data:/app/data \
-  moonwx/osstransfer:latest
+```powershell
+$ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
+Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
+.\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Yes
 ```
 
-`latest` 跟随稳定版本。固定版本时，使用 `moonwx/osstransfer:4.0.5` 这样的标签。
-
-打开配置的地址，使用 `admin` 登录。初始密码随机生成，通过以下命令读取：
+打开 `http://主机地址:1685`，使用服务日志中的 setup token 创建管理员账号，并设置浏览器和 Agent 可访问的 Master URL。没有默认密码。安装器会输出服务名、配置路径和日志位置。Linux 默认安装的日志命令为：
 
 ```sh
-docker exec oss-transfer-master cat /app/data/secrets/admin_password
+sudo cat /var/lib/oss-transfer-go/master/logs/service.log
 ```
 
-登录后修改密码。配置和任务断点保存在 `/app/data`，更换容器时保留该卷。
+[GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) 提供相同的程序和校验文件。本地安装文件、升级和回滚见[原生部署文档](deploy/go/README.md)。
 
-迁移本地文件时，添加目录挂载，例如 `-v /srv/transfer-files:/data`。容器以 UID/GID `10001` 运行，需要该目录的读写权限。创建任务时填写容器内路径，本例为 `/data`。
+## Docker Compose 部署
 
-### Docker Compose
-
-使用 Docker Compose v2，以及仓库或[安装包](#传统部署)中的 `docker-compose.yml` 和 `.env.example`。在这两个文件所在目录执行：
+把仓库中的 `docker-compose.yml` 和 `.env.example` 放到部署目录：
 
 ```sh
 cp .env.example .env
 ```
 
-在 `.env` 中，将 `TRANSFER_MASTER_WEB_URL` 设置为浏览器和 Agent 可访问的地址，`OSS_TRANSFER_FILES_DIR` 设置为迁移文件所在的宿主机目录。默认镜像为 `moonwx/osstransfer:latest`。
+Compose 默认使用 `moonwx/osstransfer:latest`，端口和本地目录可在 `.env` 中修改：
 
-按示例创建目录并启动服务：
-
-```sh
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/transfer-files
-docker compose pull
-docker compose up -d
+```dotenv
+OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest
+TRANSFER_PORT=1685
+TRANSFER_LOCAL_ROOT=./transfer-files
 ```
 
-打开配置的地址，使用 `admin` 登录。读取初始密码、查看服务日志：
+启动 Master，查看初始化令牌：
 
 ```sh
-docker compose exec master cat /app/data/secrets/admin_password
-docker compose logs -f master
+docker compose pull master
+docker compose up -d master
+docker compose logs master
 ```
 
-更新时，先停止运行中的任务，再执行：
+在浏览器完成首次设置。Master 的数据库保存在 `master-data` 卷中。`docker compose down` 保留该卷；`docker compose down -v` 会删除它。
+
+Master 不执行文件传输，单机部署也需要添加 Agent。可以使用控制台生成的安装命令，或启用 Compose 中的 `agent` profile。使用该 profile 前，创建宿主机目录并授予容器 UID/GID `65532` 访问权限：
 
 ```sh
-docker compose pull
-docker compose up -d
+sudo install -d -o 65532 -g 65532 -m 0750 ./transfer-files
 ```
 
-`master-data` 卷保存配置和任务断点。`docker compose down` 保留该卷，`docker compose down -v` 会将其删除。
+在 **执行节点 → 添加节点** 创建邀请。在 Bash 中输入令牌，完成一次注册：
 
-### 传统部署
-
-执行安装脚本前，先安装 Java 8 或更高版本。主机还需具备 Linux、systemd，以及 `curl`、`openssl`、`tar`、`sha256sum`、`timeout`、`ss` 命令。
-
-从京东云 OSS 下载并解压最新稳定版：
-
-```sh
-OSS_TRANSFER_RELEASE=latest
-OSS_TRANSFER_DOWNLOAD_URL="https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/$OSS_TRANSFER_RELEASE"
-curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz" -o oss-transfer.tar.gz &&
-curl -fSL "$OSS_TRANSFER_DOWNLOAD_URL/oss-transfer.tar.gz.sha256" -o oss-transfer.tar.gz.sha256 &&
-sha256sum -c oss-transfer.tar.gz.sha256 &&
-tar -xzf oss-transfer.tar.gz
+```bash
+read -r -s -p 'Invitation token: ' OSS_TRANSFER_JOIN_TOKEN; printf '\n'
+export OSS_TRANSFER_JOIN_TOKEN
+docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent \
+  oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
+unset OSS_TRANSFER_JOIN_TOKEN
+docker compose --profile agent up -d agent
 ```
 
-固定版本时，设置 `OSS_TRANSFER_RELEASE=v4.0.5`。安装包和校验文件也可从 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases) 下载。
+该 profile 将 `TRANSFER_LOCAL_ROOT` 挂载到容器的 `/files`，创建任务时填写 `/files`。Agent 身份和断点保存在独立的 `agent-data` 卷中。需要访问更多目录时，为 Agent 增加 bind mount；原生 Agent 则可以直接访问主机上有权限的路径。
 
-安装 Master：
+## 添加执行节点
 
-```sh
-cd oss-transfer
-sudo ./deploy/install-master.sh --web-url http://master.example.com:1685
-```
+在 **执行节点 → 添加节点** 创建一次性邀请，把生成的原生或 Docker 命令放到新主机执行。Agent 主动连接 Master，重启后保留身份，无须对外开放管理端口。Master 和 Agent 使用相同版本。
 
-服务名为 `oss-transfer`，配置文件为 `/etc/oss-transfer/application.yml`，数据目录为 `/var/lib/oss-transfer`。读取初始密码并检查服务：
+多节点访问本地文件时，应在各节点的相同路径挂载同一共享文件系统，并在节点设置中声明可用根目录。工具会在分发任务前验证共享访问。
 
-```sh
-sudo cat /etc/oss-transfer/admin-password
-sudo systemctl status oss-transfer
-sudo journalctl -u oss-transfer -f
-```
-
-使用 `--port` 设置服务端口，使用 `--java-bin` 指定 Java 路径。完整参数见 `./deploy/install-master.sh --help`。
-
-## 添加 Agent
-
-在 Master 的**执行节点 → 添加节点**中生成一次性邀请，将页面提供的 Docker 或传统部署指令复制到新节点执行。Agent 会加入集群，重启后继续使用已保存的凭据。
-
-Docker Agent 使用同一镜像，设置 `TRANSFER_ROLE=agent`，并挂载持久化的 `/app/data` 卷。按需挂载本地或共享目录。Agent 主动连接 Master，容器无需发布端口。
-
-传统部署需先安装 Java。指令从 Master 下载并校验安装包，然后安装 `oss-transfer-agent` 服务。配置文件为 `/etc/oss-transfer-agent/application.yml`，数据目录为 `/var/lib/oss-transfer-agent`。
-
-不要公开邀请 URL。Agent 通过公网连接 Master 时应使用 HTTPS。删除节点会撤销其凭据；重新加入时，使用新的邀请和新的 Agent 数据目录或卷。
-
-多节点执行本地文件任务时，将同一共享文件系统挂载到各节点的相同路径。
+邀请链接不要公开。删除节点会撤销其凭据；重新加入需要新邀请和新的 Agent 数据目录。
 
 ## 使用
 
-1. 在**存储连接**中添加源和目标连接。
-2. 创建任务，选择方向、范围和执行节点，按需设置冲突策略和限速。
-3. 在**任务详情**中查看进度，点击子任务查看详情。
-4. 停止后续传会沿用已记录的结果。任务停止或结束后可导出报告。
+先添加存储连接，再创建任务，选择来源、目标和执行节点，按需设置 `SKIP` 或 `OVERWRITE`、目标命名和限速。任务详情展示进度和子任务；子任务使用 `#主任务ID-1`、`#主任务ID-2` 等编号，点击可查看详情。
 
-节点限速约束该节点上的全部任务。任务限速只作用于对应任务，同时受节点上限约束。对象存储限流触发自动调节时，节点详情会显示触发请求和恢复状态。
+停止后恢复会保留已记录的对象结果。未完成的下载从该文件重新开始；未完成的 S3 上传会清理旧 multipart，再重传该对象。进程重启后不会复用已上传的分片。任务停止或结束后可导出报告。节点限速作用于该节点上的全部任务；任务带宽上限由所选节点共同使用。
 
-CLI 示例：
+CLI 使用 WebUI 的同一套账号。在 Bash 中登录：
 
-```sh
-oss-transfer-cli --help
-oss-transfer-cli worker-status
-oss-transfer-cli task list
-oss-transfer-cli task show 123
-oss-transfer-cli task children 123 --offset 25 --limit 25
-oss-transfer-cli task show 123 --child 123-26 --node 10.0.0.2
-oss-transfer-cli task trash --direction oss-to-local
+```bash
+read -r -s -p 'Password: ' OSS_TRANSFER_PASSWORD; printf '\n'
+export OSS_TRANSFER_PASSWORD
+oss-transfer-cli --host http://主机地址:1685 login --username admin --password-env OSS_TRANSFER_PASSWORD
+unset OSS_TRANSFER_PASSWORD
 ```
 
-子任务每页 25 个。WebUI 滚动到子任务区域后加载首页，CLI 会给出下一页命令。使用 `--json` 输出结构化结果，使用 `--host` 连接其他 Master。
+后续命令使用相同的 `--host`：
 
-Docker 中在 CLI 命令前加 `docker exec oss-transfer-master`；Compose 中使用 `docker compose exec master`。
+```sh
+oss-transfer-cli --host http://主机地址:1685 task list
+oss-transfer-cli --host http://主机地址:1685 task show 123
+oss-transfer-cli --host http://主机地址:1685 task children 123 --offset 0 --limit 25
+oss-transfer-cli --host http://主机地址:1685 task stop 123
+oss-transfer-cli --host http://主机地址:1685 task resume 123
+oss-transfer-cli --host http://主机地址:1685 task report 123 --output task-123.zip
+```
+
+创建任务、管理连接和节点的选项见 `--help`，加 `--json` 输出结构化结果。Compose 中使用 `docker compose exec master oss-transfer-cli` 执行 CLI。
 
 ## 升级与备份
 
-升级前停止运行中的任务。停止服务后再复制配置和数据目录，或使用一致性文件系统快照。直接复制正在使用的 RocksDB 目录可能得到无法恢复的备份。
+已有 Go 原生部署，下载新版本安装器，使用原来的路径并加 `--upgrade`；Windows 使用 `-Upgrade`。安装器验证程序后，备份停止状态下的数据库及服务配置，再检查新服务。启动失败会回滚。仅本安装管理的 CLI 会直接替换，其他已有 CLI 需要明确使用 `--replace-cli` 同意备份后替换。
 
-Docker 拉取新版本，使用原有卷和挂载重建容器。
+Compose 部署先停止运行中的任务，备份停止服务后的数据卷，再执行 `docker compose pull` 和 `docker compose up -d`。如果固定了镜像版本，先更新该标签。保留原有数据卷和 Agent 挂载。应用回滚不会撤销已传输的文件或对象。
 
-原生部署重新运行向导，选择升级，也可执行：
+V4.0.x 数据库需要[离线导出和转换](docs/development/legacy-migration.md)，不能直接把 Go 指向旧 RocksDB 目录。保留范围及转换后首次恢复的行为见[迁移说明](docs/go-migration.md)。
 
-```sh
-sudo bash install.sh --lang zh --upgrade
-```
+## 编译
 
-脚本支持当前原生服务和旧版 `oss-transfer-tool` 主节点。沿用原配置、登录密码和数据库路径，停服备份到 `/var/backups/oss-transfer/` 后更新程序和 CLI；启动失败时恢复备份。现有 Agent 保留加入凭据，旧版 Worker 则需通过新邀请加入为 Agent。
-
-自定义服务名使用 `--service-name NAME`，自定义 CLI 路径使用 `--cli-path PATH`。使用已解压的安装包时，添加 `--package-dir /path/to/oss-transfer`。容器升级沿用原 Compose 文件，原生升级不会转换为 Docker 部署。
-
-## 本地构建
-
-构建需要 JDK 8+、Maven、Node.js 22.12+ 和 Go 1.22+。
+使用 `go.mod` 指定的 Go 版本、Node.js 24 和 Python 3。构建脚本需要 Bash：
 
 ```sh
-./build.sh
+./build.sh --test
+./build.sh --all
 ```
 
-构建输出为 `output/oss-transfer.tar.gz`、SHA-256 校验文件，以及解压目录 `output/oss-transfer/`。WebUI 从包内元数据读取 Git 提交和构建时间，用于显示版本。
+第一条执行测试并构建当前平台，第二条构建全部六个平台。压缩包和校验文件输出到 `output/go-development/`。每个包包含三个程序、`VERSION` 和 `SHA256SUMS`，WebUI 已嵌入 Master 程序。
 
-发布步骤见[维护者发布指南](https://github.com/MoonWX/oss-transfer/blob/main/.github/RELEASING.md)。
+另见[发版步骤](.github/RELEASING.md)和[验收项](.github/acceptance/README.md)。

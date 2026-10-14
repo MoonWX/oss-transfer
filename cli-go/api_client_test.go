@@ -135,7 +135,7 @@ func TestAPIPathsAndMethods(t *testing.T) {
 	}
 }
 func TestAPIAuthSelectionAndTrailingSlash(t *testing.T) {
-	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "internal-secret")
+	t.Setenv("OSS_TRANSFER_INTERNAL_TOKEN", "")
 	t.Setenv("OSS_TRANSFER_AUTH_TOKEN", " user-secret ")
 	client := NewApiClient("http://example.test///")
 	request, err := client.newRequest("GET", "/status", nil)
@@ -148,8 +148,8 @@ func TestAPIAuthSelectionAndTrailingSlash(t *testing.T) {
 	t.Setenv("OSS_TRANSFER_AUTH_TOKEN", "")
 	client = NewApiClient("http://example.test")
 	request, _ = client.newRequest("GET", "/status", nil)
-	if request.Header.Get("X-Internal-Token") != "internal-secret" {
-		t.Fatal("existing internal token loading was lost")
+	if request.Header.Get("X-Internal-Token") != "" || request.Header.Get("Authorization") != "" {
+		t.Fatal("missing user session acquired credentials")
 	}
 	client.SetAuthToken("saved-session")
 	request, _ = client.newRequest("GET", "/status", nil)
@@ -161,7 +161,7 @@ func TestAPIVerboseDoesNotPrintCredentials(t *testing.T) {
 	client := apiTestClient(func(*http.Request) (*http.Response, error) {
 		return apiTestResponse(200, "application/json", strings.NewReader(`{"success":true,"data":{"secretKey":"response-secret"}}`)), nil
 	})
-	client.internalToken, client.authToken = "internal-secret", "auth-secret"
+	client.authToken = "auth-secret"
 	client.SetVerbose(true)
 	original := os.Stderr
 	reader, writer, err := os.Pipe()
@@ -197,7 +197,7 @@ func TestAPICrossOriginRedirectIsBlocked(t *testing.T) {
 		response.Header.Set("Location", "http://external.test/capture")
 		return response, nil
 	})
-	client.internalToken, client.authToken = "internal-secret", "auth-secret"
+	client.authToken = "auth-secret"
 	if _, err := client.Get("/status"); err == nil || !strings.Contains(err.Error(), "跨源") {
 		t.Fatalf("cross-origin redirect not rejected: %v", err)
 	}
@@ -216,12 +216,12 @@ func TestAPISameOriginRedirectRetainsAuthentication(t *testing.T) {
 			response.Header.Set("Location", "/api/master/ready")
 			return response, nil
 		}
-		if request.Header.Get("X-Internal-Token") != "node-key" {
+		if request.Header.Get("Authorization") != "Bearer user-session" {
 			t.Error("same-origin redirect lost authentication")
 		}
 		return apiTestResponse(200, "application/json", strings.NewReader(`{"success":true}`)), nil
 	})
-	client.internalToken = "node-key"
+	client.authToken = "user-session"
 	if _, err := client.Get("/status"); err != nil {
 		t.Fatal(err)
 	}
@@ -236,12 +236,12 @@ func TestAPIDownloadCompleteAndNoOverwrite(t *testing.T) {
 		if !ok || time.Until(deadline) < 29*time.Minute {
 			t.Error("report download still uses short API timeout")
 		}
-		if request.Header.Get("X-Internal-Token") != "node-key" || request.Header.Get("Accept") != "application/zip" {
+		if request.Header.Get("Authorization") != "Bearer user-session" || request.Header.Get("Accept") != "application/zip" {
 			t.Error("report download lost authentication or content negotiation")
 		}
 		return apiTestResponse(200, "application/zip", bytes.NewReader(archive)), nil
 	})
-	client.internalToken = "node-key"
+	client.authToken = "user-session"
 	destination := filepath.Join(t.TempDir(), "report.zip")
 	if err := client.Download("GET", "/task-reports/224", nil, destination); err != nil {
 		t.Fatal(err)

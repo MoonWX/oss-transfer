@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -62,7 +63,7 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 }
 
 func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error) {
-	opts, err := adminOptions(args, []string{"task-id", "worker", "direction", "search"}, nil, 0)
+	opts, err := adminOptions(args, []string{"task-id", "worker", "direction", "search", "before-id", "limit"}, nil, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,7 @@ func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error)
 		}
 	}
 	if opts.Has("worker") {
-		if err := adminIPv4(opts.Value("worker")); err != nil {
+		if err := adminNodeAddress(opts.Value("worker")); err != nil {
 			return nil, err
 		}
 	}
@@ -82,7 +83,15 @@ func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error)
 	if direction != "" && direction != "OSS_TO_OSS" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
 		return nil, fmt.Errorf("无效迁移方向 %q", opts.Value("direction"))
 	}
-	result, err := client.Get("/deleted-tasks")
+	query := url.Values{}
+	if err := taskPageQuery(opts, query); err != nil {
+		return nil, err
+	}
+	endpoint := "/deleted-tasks"
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
+	}
+	result, err := client.Get(endpoint)
 	if err != nil {
 		return result, err
 	}
@@ -144,7 +153,7 @@ func cliTaskHasWorker(task map[string]interface{}, worker string) bool {
 	return false
 }
 func taskList(client *ApiClient, args []string) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, []string{"status", "source", "dest", "worker", "direction", "search"}, []string{"all", "a"})
+	opts, err := parseCommandOptions(args, []string{"status", "source", "dest", "worker", "direction", "search", "before-id", "limit"}, []string{"all", "a"})
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +162,9 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 	}
 	query := url.Values{}
 	query.Set("includeSubtasks", "false")
+	if err := taskPageQuery(opts, query); err != nil {
+		return nil, err
+	}
 	for flag, param := range map[string]string{"source": "sourceBucket", "dest": "destBucket", "worker": "workerNode"} {
 		if opts.Has(flag) {
 			query.Set(param, opts.Value(flag))
@@ -161,7 +173,7 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 	if opts.Has("status") {
 		status := strings.ToUpper(opts.Value("status"))
 		switch status {
-		case "PENDING", "RUNNING", "LIST_DONE", "STOPPING", "STOPPED", "COMPLETED", "PARTIAL_FAILED", "FAILED":
+		case "PENDING", "RUNNING", "LIST_DONE", "RECOVERABLE", "RESUMING", "STOPPING", "STOPPED", "COMPLETED", "PARTIAL_FAILED", "FAILED":
 		default:
 			return nil, fmt.Errorf("无效任务状态 %q", status)
 		}
@@ -189,6 +201,27 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 	responseData(result)["tasks"] = filtered
 	responseData(result)["filteredCount"] = len(filtered)
 	return result, nil
+}
+
+func taskPageQuery(opts commandOptions, query url.Values) error {
+	for _, flag := range []string{"before-id", "limit"} {
+		if !opts.Has(flag) {
+			continue
+		}
+		if len(opts.Values[flag]) != 1 {
+			return fmt.Errorf("--%s 只能指定一次", flag)
+		}
+		value, err := strconv.ParseInt(opts.Value(flag), 10, 64)
+		if err != nil || value <= 0 || flag == "limit" && value > 10000 {
+			return fmt.Errorf("--%s 必须为正整数；--limit 不得超过 10000", flag)
+		}
+		name := flag
+		if flag == "before-id" {
+			name = "beforeId"
+		}
+		query.Set(name, strconv.FormatInt(value, 10))
+	}
+	return nil
 }
 func taskDirection(task map[string]interface{}) string {
 	if direction := getString(task, "direction"); direction != "" {
@@ -344,6 +377,31 @@ func taskSnapshot(client *ApiClient) (map[string]interface{}, map[int]map[string
 	}
 	return result, tasks, nil
 }
+
+func taskByID(client *ApiClient, id int) (map[string]interface{}, map[string]interface{}, error) {
+	result, err := client.Get(fmt.Sprintf("/tasks/%d", id))
+	if err == nil {
+		row := responseData(result)
+		if getInt(row, "taskIndex") != id {
+			return result, nil, fmt.Errorf("服务未返回请求的主任务 #%d", id)
+		}
+		return result, row, nil
+	}
+	var status *apiHTTPError
+	if !errors.As(err, &status) || status.Status != 404 {
+		return result, nil, err
+	}
+	// V4 did not have a direct parent lookup. Only an absent route/task can
+	// fall back; authentication and storage failures must remain failures.
+	snapshot, tasks, fallbackErr := taskSnapshot(client)
+	if fallbackErr != nil {
+		return snapshot, nil, fallbackErr
+	}
+	if row := tasks[id]; row != nil {
+		return snapshot, row, nil
+	}
+	return result, nil, err
+}
 func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]interface{}, error) {
 	opts, err := adminOptions(args, []string{"child", "node", "offset", "limit"}, nil, 1)
 	if err != nil {
@@ -365,7 +423,7 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 		if !opts.Has("child") {
 			return nil, fmt.Errorf("--node 仅用于选择 --child 对应节点")
 		}
-		if err := adminIPv4(opts.Value("node")); err != nil {
+		if err := adminNodeAddress(opts.Value("node")); err != nil {
 			return nil, err
 		}
 	}
@@ -381,13 +439,9 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 			return nil, fmt.Errorf("子任务编号应为 %d-序号，序号从 1 开始", id)
 		}
 	}
-	snapshot, tasks, err := taskSnapshot(client)
+	snapshot, task, err := taskByID(client, id)
 	if err != nil {
 		return snapshot, err
-	}
-	task := tasks[id]
-	if task == nil {
-		return snapshot, fmt.Errorf("未找到主任务 #%d；节点未响应时列表可能不完整", id)
 	}
 	path := fmt.Sprintf("/tasks/%d/children?offset=%d&limit=%d", id, offset, limit)
 	if childNumber > 0 {

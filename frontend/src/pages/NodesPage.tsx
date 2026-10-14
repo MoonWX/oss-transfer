@@ -60,6 +60,7 @@ import {
   removeNode,
   saveNode,
   type NodeRegistry,
+  type NodeChange,
   type RegisteredNode,
 } from "../lib/nodeRegistry";
 
@@ -99,6 +100,9 @@ export default function NodesPage() {
     label: string;
     master: boolean;
     agent: boolean;
+    roots: string | null;
+    initialRoots: string | null;
+    goAgent: boolean;
   } | null>(null);
   const [nodeDelete, setNodeDelete] = useState<RegisteredNode | null>(null);
   const [nodeSaving, setNodeSaving] = useState(false);
@@ -129,27 +133,57 @@ export default function NodesPage() {
     Promise.all([workers.refresh(), history.refresh(), registry.refresh()]);
   const openNodeEditor = (node?: RegisteredNode) => {
     setNodeError(null);
+    const status = node ? workers.data?.workers?.[node.address] : undefined;
+    const declaredRoots = status?.localStorage?.advertisedLocalRoots;
+    const roots =
+      status?.success &&
+      !workers.stale &&
+      Array.isArray(declaredRoots) &&
+      declaredRoots.every((root) => typeof root === "string")
+        ? declaredRoots.join("\n")
+        : null;
     setNodeEdit({
       original: node?.address ?? null,
       address: node?.address ?? "",
       label: node?.label ?? "",
       master: !!node?.master,
       agent: !!node?.agent,
+      roots,
+      initialRoots: roots,
+      goAgent: !!status?.executionStatus,
     });
   };
   async function saveNodeEdit() {
     if (!nodeEdit) return;
     if (!nodeEdit.address.trim()) {
-      setNodeError("请输入节点 IPv4 地址。");
+      setNodeError("请输入节点标识。");
       return;
     }
     setNodeSaving(true);
     setNodeError(null);
     try {
-      await saveNode(nodeEdit.original, {
+      const change: NodeChange = {
         address: nodeEdit.address.trim(),
         label: nodeEdit.label.trim(),
-      });
+      };
+      if (
+        nodeEdit.goAgent &&
+        nodeEdit.roots !== null &&
+        nodeEdit.roots !== nodeEdit.initialRoots
+      ) {
+        const current = workers.data?.workers?.[nodeEdit.original ?? ""];
+        if (!current?.success || workers.stale) {
+          throw new Error("节点状态已失效，请刷新后重新编辑根目录。");
+        }
+        const roots = nodeEdit.roots
+          .split(/\r?\n/)
+          .filter((root) => root !== "");
+        if (new Set(roots).size !== roots.length) {
+          throw new Error("本地根目录不能重复。");
+        }
+        change.advertisedLocalRoots = roots;
+      }
+      await saveNode(nodeEdit.original, change);
       notify(
         nodeEdit.original ? "节点设置已保存。" : "节点已添加。",
         "success",
@@ -233,7 +267,7 @@ export default function NodesPage() {
     <Stack spacing={3}>
       <PageHeader
         title="执行节点"
-        description="查看节点状态、队列和速率。"
+        description="查看节点状态和速率。"
         action={
           <Stack
             direction="row"
@@ -346,7 +380,7 @@ export default function NodesPage() {
           {workers.data && entries.length === 0 && (
             <EmptyState
               title="暂无执行节点"
-              description="配置执行节点后可查看状态、队列和速率。"
+              description="添加 Agent 后可查看节点状态。"
             />
           )}
           <Box
@@ -364,6 +398,45 @@ export default function NodesPage() {
               const registered = registry.data?.data?.nodes?.find(
                 (node) => node.address === ip,
               );
+              const execution = worker.executionStatus;
+              const activity = execution
+                ? [
+                    {
+                      key: "scans",
+                      label: "扫描并发",
+                      size: execution.activeScans,
+                      capacity: execution.maxConcurrentScans,
+                    },
+                    {
+                      key: "children",
+                      label: "传输并发",
+                      size: execution.activeChildren,
+                      capacity: execution.maxConcurrentChildren,
+                    },
+                    {
+                      key: "unfinished",
+                      label: "未完成子任务",
+                      size: execution.unfinishedChildren,
+                      capacity: execution.maxUnfinishedChildren,
+                    },
+                  ]
+                : queues.map((queue) => ({
+                    ...queue,
+                    size: worker.queueStatus?.[`${queue.key}QueueSize`],
+                    capacity: worker.queueStatus?.[`${queue.key}QueueCapacity`],
+                  }));
+              const visibleActivity = activity.filter(
+                (
+                  item,
+                ): item is typeof item & { size: number; capacity: number } =>
+                  typeof item.size === "number" &&
+                  Number.isFinite(item.size) &&
+                  item.size >= 0 &&
+                  typeof item.capacity === "number" &&
+                  Number.isFinite(item.capacity) &&
+                  item.capacity > 0,
+              );
+              const localRoots = worker.localStorage?.advertisedLocalRoots;
               return (
                 <Paper
                   key={ip}
@@ -470,58 +543,89 @@ export default function NodesPage() {
                           onEdit={openEditor}
                         />
                       </Box>
-                      <Divider />
-                      <Box sx={{ p: 2.5 }}>
-                        <Typography variant="subtitle2" sx={{ mb: 2 }}>
-                          队列占用
-                        </Typography>
-                        <Stack spacing={1.75}>
-                          {queues.map((queue) => {
-                            const size =
-                              worker.queueStatus?.[`${queue.key}QueueSize`];
-                            const capacity =
-                              worker.queueStatus?.[`${queue.key}QueueCapacity`];
-                            const percentage =
-                              size !== undefined && capacity && capacity > 0
-                                ? Math.min(100, (size / capacity) * 100)
-                                : 0;
-                            return (
-                              <Box key={queue.key}>
-                                <Stack
-                                  direction="row"
-                                  justifyContent="space-between"
-                                  sx={{ mb: 0.75 }}
+                      {visibleActivity.length > 0 && (
+                        <>
+                          <Divider />
+                          <Box sx={{ p: 2.5 }}>
+                            <Typography variant="subtitle2" sx={{ mb: 2 }}>
+                              {execution ? "执行负载" : "队列占用"}
+                            </Typography>
+                            <Stack spacing={1.75}>
+                              {visibleActivity.map((queue) => {
+                                const { size, capacity } = queue;
+                                const percentage = Math.min(
+                                  100,
+                                  (size / capacity) * 100,
+                                );
+                                return (
+                                  <Box key={queue.key}>
+                                    <Stack
+                                      direction="row"
+                                      justifyContent="space-between"
+                                      sx={{ mb: 0.75 }}
+                                    >
+                                      <Typography
+                                        variant="body2"
+                                        color="text.secondary"
+                                      >
+                                        {queue.label}
+                                      </Typography>
+                                      <Typography variant="caption">
+                                        {formatNumber(size)} /{" "}
+                                        {formatNumber(capacity)}
+                                      </Typography>
+                                    </Stack>
+                                    <LinearProgress
+                                      variant="determinate"
+                                      value={percentage}
+                                      color={
+                                        percentage > 85 ? "warning" : "primary"
+                                      }
+                                      sx={{ height: 5, borderRadius: 5 }}
+                                      aria-label={
+                                        execution
+                                          ? queue.label
+                                          : `${queue.label}队列占用`
+                                      }
+                                    />
+                                  </Box>
+                                );
+                              })}
+                            </Stack>
+                          </Box>
+                        </>
+                      )}
+                      {Array.isArray(localRoots) && (
+                        <>
+                          <Divider />
+                          <Box sx={{ p: 2.5 }}>
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                              本地根目录
+                            </Typography>
+                            {localRoots.length > 0 ? (
+                              localRoots.map((root) => (
+                                <Typography
+                                  key={root}
+                                  variant="body2"
+                                  sx={{
+                                    fontFamily: "monospace",
+                                    overflowWrap: "anywhere",
+                                  }}
                                 >
-                                  <Typography
-                                    variant="body2"
-                                    color="text.secondary"
-                                  >
-                                    {queue.label}
-                                  </Typography>
-                                  <Typography variant="caption">
-                                    {size === undefined
-                                      ? "—"
-                                      : formatNumber(size)}{" "}
-                                    /{" "}
-                                    {capacity === undefined
-                                      ? "—"
-                                      : formatNumber(capacity)}
-                                  </Typography>
-                                </Stack>
-                                <LinearProgress
-                                  variant="determinate"
-                                  value={percentage}
-                                  color={
-                                    percentage > 85 ? "warning" : "primary"
-                                  }
-                                  sx={{ height: 5, borderRadius: 5 }}
-                                  aria-label={`${queue.label}队列占用`}
-                                />
-                              </Box>
-                            );
-                          })}
-                        </Stack>
-                      </Box>
+                                  {root}
+                                </Typography>
+                              ))
+                            ) : (
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                              >
+                                未设置
+                              </Typography>
+                            )}
+                          </Box>
+                        </>
+                      )}
                     </>
                   )}
                 </Paper>
@@ -676,7 +780,7 @@ export default function NodesPage() {
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
             <TextField
-              label="节点 IPv4 地址"
+              label={nodeEdit?.agent ? "节点标识" : "节点地址"}
               required
               fullWidth
               value={nodeEdit?.address ?? ""}
@@ -688,7 +792,7 @@ export default function NodesPage() {
               }
               helperText={
                 nodeEdit?.agent
-                  ? "地址与 Agent 身份绑定。"
+                  ? undefined
                   : `服务端口：${registry.data?.data?.port ?? "使用集群配置"}`
               }
             />
@@ -704,6 +808,31 @@ export default function NodesPage() {
                 )
               }
             />
+            {nodeEdit?.goAgent && (
+              <TextField
+                label="本地根目录"
+                multiline
+                minRows={3}
+                fullWidth
+                value={nodeEdit.roots ?? ""}
+                disabled={
+                  nodeSaving ||
+                  nodeEdit.roots === null ||
+                  workers.stale ||
+                  !workers.data?.workers?.[nodeEdit.original ?? ""]?.success
+                }
+                helperText={
+                  nodeEdit.roots === null
+                    ? "节点未返回根目录配置，暂时不能编辑。"
+                    : "每行一个绝对路径。用于路径选择提示，不限制节点的文件访问权限。"
+                }
+                onChange={(event) =>
+                  setNodeEdit(
+                    (value) => value && { ...value, roots: event.target.value },
+                  )
+                }
+              />
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>

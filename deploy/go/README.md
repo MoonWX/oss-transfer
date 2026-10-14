@@ -124,7 +124,7 @@ python3 deploy/go/release-assets.py --packages output/go-development \
   --output output/go-release --version "$(cat VERSION)" --commit "$(git rev-parse HEAD)"
 ```
 
-Choose a new output directory for each run. The assembler checks all six packages' hashes, platforms, versions and commits, and includes installers from that commit. Use the resulting directory with `--package-dir`. Publication is covered in [release steps](../../.github/RELEASING.md).
+Choose a new output directory for each run. The assembler checks every listed package's hashes, platform, version and commit, and includes installers from that commit. Use the resulting directory with `--package-dir`. Publication is covered in [release steps](../../.github/RELEASING.md).
 
 ## Platform requirements
 

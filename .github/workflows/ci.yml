@@ -225,6 +225,13 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        if: matrix.arch == 'armv7'
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            cli-go/go.sum
       - name: Enable the target CPU interpreter
         env:
           QA_INTERPRETER: ${{ matrix.interpreter }}
@@ -234,6 +241,16 @@ jobs:
           sudo update-binfmts --enable "qemu-$QA_INTERPRETER"
           grep -q enabled "/proc/sys/fs/binfmt_misc/qemu-$QA_INTERPRETER"
           python -m pip install -r .github/acceptance/requirements.txt
+      - name: Exercise signed 32-bit task-number boundaries
+        if: matrix.arch == 'armv7'
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: arm
+          GOARM: '7'
+        run: |
+          go test -count=1 -timeout=2m -v -run '^TestLegacyChildNumberUsesSameSigned32BitBoundsOnEveryArchitecture$' ./internal/task
+          (cd cli-go && go test -count=1 -timeout=2m -v -run '^TestTaskChildNumberingKeeps32BitBoundaryAndInvalidLegacyIndicesDistinct$' .)
       - name: Verify the target package and prepare native S3 fixture
         env:
           QA_ARCH: ${{ matrix.arch }}
@@ -285,7 +302,8 @@ jobs:
           prepare: |
             pkg install -y bash curl python311 go ca_root_nss
           run: |
-            set -eu
+            status=0
+            sh -e <<'TESTS' || status=$?
             python3.11 -m venv /tmp/oss-transfer-qa
             py=/tmp/oss-transfer-qa/bin/python
             "$py" -m pip install -r .github/acceptance/requirements.txt
@@ -295,11 +313,18 @@ jobs:
             "$py" .github/acceptance/go-runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/go-smoke
             "$py" .github/acceptance/go-cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/go-cluster --scenario core
             "$py" .github/acceptance/go-install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --repo "$PWD" --output "$PWD/output/go-install" --all-installed
+            TESTS
+            mkdir -p output
+            printf '%s\n' "$status" > output/freebsd-exit-code
+      # Let the VM action copy logs back before failing the job.
+      - name: Require successful FreeBSD acceptance
+        run: test "$(cat output/freebsd-exit-code)" = 0
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: go-freebsd-evidence-${{ matrix.arch }}
           path: |
+            output/freebsd-exit-code
             output/go-smoke/evidence.json
             output/go-smoke/*.log
             output/go-cluster/evidence.json

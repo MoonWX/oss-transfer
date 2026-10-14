@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -56,6 +57,45 @@ def main():
     environment = dict(os.environ, PATH=str(root / "no-external-programs"))
     children = []
     logs = []
+    process_names = []
+    secrets = []
+    last_nodes = []
+    phase = "Master startup"
+
+    def redact(text):
+        text = re.sub(r"Setup token: \S+", "Setup token: [redacted]", text)
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[redacted]")
+        return text
+
+    def failure_evidence(error):
+        # Capture state before cleanup signals change the observed exit codes.
+        observed = []
+        for name, process in zip(process_names, children):
+            code = process.poll()
+            observed.append({"name": name, "pid": process.pid, "exitCode": code, "running": code is None})
+        payload = {"result": "failed", "phase": phase, "error": str(error), "completedChecks": checks,
+                   "processes": observed, "lastNodesResponse": last_nodes, "logs": {}}
+        for log in root.glob("*.log"):
+            try:
+                payload["logs"][log.name] = log.read_text(errors="replace", encoding="utf-8")
+            except OSError as log_error:
+                payload["logs"][log.name] = "Cannot read log: " + str(log_error)
+        def sanitize(value):
+            if isinstance(value, str):
+                return redact(value)
+            if isinstance(value, list):
+                return [sanitize(item) for item in value]
+            if isinstance(value, dict):
+                return {key: sanitize(item) for key, item in value.items()}
+            return value
+
+        diagnostic = json.dumps(sanitize(payload), indent=2) + "\n"
+        (root / "evidence.json").write_text(diagnostic, encoding="utf-8")
+        # A VM action can fail before syncing files back to the host runner.
+        # Keep the same evidence in the job log without command-line secrets.
+        print("Runtime smoke failure evidence:\n" + diagnostic, file=sys.stderr, flush=True)
 
     def spawn(name, executable, *arguments):
         log_path = root / (name + ".log")
@@ -64,6 +104,7 @@ def main():
             os.chmod(log_path, 0o600)
         process = subprocess.Popen([str(executable.resolve()), *arguments], cwd=root, env=environment, stdout=stream, stderr=subprocess.STDOUT)
         children.append(process)
+        process_names.append(name)
         logs.append(stream)
         return process, log_path
 
@@ -72,7 +113,9 @@ def main():
         master, log = spawn("master-first", args.master, "--listen", "127.0.0.1:0", "--data-dir", str(root / "master-data"))
         address = eventually(lambda: re.search(r"Master listening on (127\.0\.0\.1:\d+)", log.read_text(encoding="utf-8")))[1]
         origin = "http://" + address
+        phase = "Authenticated setup"
         setup_token = eventually(lambda: re.search(r"Setup token: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")))[1]
+        secrets.append(setup_token)
         with urlopen(origin + "/", timeout=10) as response:
             html = response.read().decode()
             assert response.status == 200
@@ -85,13 +128,17 @@ def main():
         assert api(origin, "/api/setup/status")["configured"] is False
         api(origin, "/api/master/nodes", expected=503)
         credentials = {"username": "runtime-qa", "password": "temporary runtime QA password"}
+        secrets.append(credentials["password"])
         api(origin, "/api/setup/complete", "POST", dict(credentials, publicUrl=origin, setupToken=setup_token))
         login = api(origin, "/api/auth/login", "POST", credentials)
         token = login["token"]
+        secrets.append(token)
         checks.append("embedded console and atomic authenticated setup without external runtime")
+        phase = "Initial Agent enrollment"
         agents = []
         for number in (1, 2):
             invitation = api(origin, "/api/master/agents/invitations", "POST", {"address": f"qa-node-{number}", "label": f"Agent {number}"}, token)["data"]
+            secrets.append(invitation["inviteToken"])
             if number == 1 and args.expect_agent_release_url:
                 assert invitation.get("nativeAgent", {}).get("available") is True, "Published Master has no native Agent installation command"
                 bootstrap = origin + "/api/agents/bootstrap/" + invitation["inviteToken"]
@@ -109,12 +156,15 @@ def main():
             agents.append(process)
 
         def nodes_online():
+            nonlocal last_nodes
             nodes = api(origin, "/api/master/nodes", token=token)["data"]["nodes"]
+            last_nodes = nodes
             return nodes if len(nodes) == 2 and all(node["online"] for node in nodes) else None
 
         nodes = eventually(nodes_online)
         identities = {node["address"]: node["id"] for node in nodes}
         checks.append("two separate native Agent processes enroll through outbound connections")
+        phase = "Agent reconnection after forced Master restart"
         agents[0].kill()
         agents[0].wait(timeout=10)
         agents[0], _ = spawn("agent-1-restart", args.agent, "--data-dir", str(root / "agent-1-data"))
@@ -129,6 +179,7 @@ def main():
         nodes = eventually(nodes_online)
         assert {node["address"]: node["id"] for node in nodes} == identities
         checks.append("forced Master/Agent termination retains account, sessions and enrollment identities")
+        phase = "Agent revocation"
         api(origin, "/api/master/nodes/qa-node-1", "DELETE", token=token)
         eventually(lambda: agents[0].poll() is not None)
         remaining = api(origin, "/api/master/nodes", token=token)["data"]["nodes"]
@@ -138,6 +189,9 @@ def main():
         evidence = {"scope": "Go process setup, enrollment, crash recovery and revocation; no transfer claims", "checks": checks, "masterSha256": hashlib.sha256(args.master.read_bytes()).hexdigest(), "agentSha256": hashlib.sha256(args.agent.read_bytes()).hexdigest(), "platform": os.name}
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(evidence, indent=2))
+    except Exception as error:
+        failure_evidence(error)
+        raise
     finally:
         for child in reversed(children):
             if child.poll() is None:
@@ -152,7 +206,7 @@ def main():
         # The original startup log contains the one-use setup token. Keep only
         # sanitized logs as acceptance evidence.
         for log in root.glob("*.log"):
-            log.write_text(re.sub(r"Setup token: \S+", "Setup token: [redacted]", log.read_text(errors="replace", encoding="utf-8")), encoding="utf-8")
+            log.write_text(redact(log.read_text(errors="replace", encoding="utf-8")), encoding="utf-8")
 
 
 if __name__ == "__main__":

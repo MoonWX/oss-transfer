@@ -33,6 +33,8 @@ jobs:
             go.sum
             cli-go/go.sum
       - run: npm ci --prefix frontend
+      - name: Check translations and preserve message parameters
+        run: npm run test:messages --prefix frontend
       - name: Reject corrupt or ambiguous release packages
         run: |
           python3 .github/tests/test-go-packaging.py -v

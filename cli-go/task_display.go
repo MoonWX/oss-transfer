@@ -10,7 +10,7 @@ import (
 
 func renderTaskHistoryPage(out io.Writer, data map[string]interface{}, action string) {
 	if before := getInt(data, "nextBeforeId"); before > 0 {
-		fmt.Fprintf(out, "更早记录：task %s --before-id %d（可沿用原有筛选参数）\n", action, before)
+		fmt.Fprintf(out, cliText(out, "更早记录：task %s --before-id %d（可沿用原有筛选参数）\n"), action, before)
 	}
 }
 
@@ -26,14 +26,14 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 			end = total
 		}
 		if len(objectList(result["children"])) == 0 || offset >= total {
-			fmt.Fprintf(out, "此编号范围无记录，最大编号 %d\n", total)
+			fmt.Fprintf(out, cliText(out, "此编号范围无记录，最大编号 %d\n"), total)
 		} else {
-			fmt.Fprintf(out, "子任务编号 %d–%d / %d\n", offset+1, end, total)
+			fmt.Fprintf(out, cliText(out, "子任务编号 %d–%d / %d\n"), offset+1, end, total)
 		}
 	}
 	if page["hasMore"] == true && limit > 0 {
 		parent := getInt(page, "parentTaskId")
-		fmt.Fprintf(out, "下一页：task children %d --offset %d --limit %d\n", parent, offset+limit, limit)
+		fmt.Fprintf(out, cliText(out, "下一页：task children %d --offset %d --limit %d\n"), parent, offset+limit, limit)
 	}
 }
 

@@ -1,3 +1,4 @@
+import { t, useI18n, formatDate } from "../lib/i18n";
 import { useState } from "react";
 import {
   Alert,
@@ -19,7 +20,6 @@ import {
   type AgentInvitation,
 } from "../lib/nodeRegistry";
 import { useNotify } from "../lib/api";
-
 async function copyText(value: string) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(value);
@@ -38,13 +38,12 @@ async function copyText(value: string) {
   try {
     field.focus();
     field.select();
-    if (!document.execCommand("copy")) throw new Error("请手动复制。");
+    if (!document.execCommand("copy")) throw new Error(t("请手动复制。"));
   } finally {
     field.remove();
     previousFocus?.focus();
   }
 }
-
 export default function AgentInvitationDialog({
   open,
   onClose,
@@ -52,6 +51,7 @@ export default function AgentInvitationDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  useI18n();
   const notify = useNotify();
   const [label, setLabel] = useState("");
   const [address, setAddress] = useState("");
@@ -59,7 +59,6 @@ export default function AgentInvitationDialog({
   const [tab, setTab] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   async function generate() {
     setSaving(true);
     setError(null);
@@ -77,7 +76,7 @@ export default function AgentInvitationDialog({
           next.nativeCommand,
         ].some(Boolean)
       )
-        throw new Error("加入指令不完整，请重新生成。");
+        throw new Error(t("加入指令不完整，请重新生成。"));
       setTab(0);
       setInvitation(next);
     } catch (failure) {
@@ -89,26 +88,33 @@ export default function AgentInvitationDialog({
   async function copy(value: string) {
     try {
       await copyText(value);
-      notify("已复制。", "success");
+      notify(t("已复制。"), "success");
     } catch {
-      notify("复制失败，请选择文本后手动复制。", "error");
+      notify(t("复制失败，请选择文本后手动复制。"), "error");
     }
   }
   const methods = [
     { label: "Docker", command: invitation?.dockerCommand },
     {
-      label: invitation?.nativeAgent ? "Linux / macOS" : "传统部署",
+      label: invitation?.nativeAgent ? "Linux / macOS" : t("传统部署"),
       command: invitation?.traditionalCommand,
     },
     { label: "Windows", command: invitation?.windowsCommand },
-    { label: "直接运行", command: invitation?.nativeCommand },
+    {
+      label: t("直接运行"),
+      command: invitation?.nativeCommand,
+    },
   ].filter(
-    (item): item is { label: string; command: string } => !!item.command,
+    (
+      item,
+    ): item is {
+      label: string;
+      command: string;
+    } => !!item.command,
   );
   const command = methods[tab]?.command || "";
   const showLink = invitation?.nativeAgent?.available !== false;
   const expiry = invitation ? new Date(invitation.expiresAt) : null;
-
   return (
     <Dialog
       open={open}
@@ -117,14 +123,14 @@ export default function AgentInvitationDialog({
       maxWidth="md"
       aria-labelledby="agent-invitation-title"
     >
-      <DialogTitle id="agent-invitation-title">添加节点</DialogTitle>
+      <DialogTitle id="agent-invitation-title">{t("添加节点")}</DialogTitle>
       <DialogContent>
         <Stack spacing={2.5} sx={{ pt: 1, minWidth: 0 }}>
           {error && <Alert severity="error">{error}</Alert>}
           {!invitation ? (
             <>
               <TextField
-                label="节点名称"
+                label={t("节点名称")}
                 fullWidth
                 value={label}
                 disabled={saving}
@@ -132,23 +138,23 @@ export default function AgentInvitationDialog({
                 onChange={(event) => setLabel(event.target.value)}
               />
               <TextField
-                label="节点标识（可选）"
+                label={t("节点标识（可选）")}
                 fullWidth
                 value={address}
                 disabled={saving}
-                helperText="留空时由 Agent 自动识别。"
+                helperText={t("留空时由 Agent 自动识别。")}
                 onChange={(event) => setAddress(event.target.value)}
               />
             </>
           ) : (
             <>
               <Typography variant="body2" color="text.secondary">
-                在新节点执行以下任一指令，Agent 将自动加入集群。
+                {t("在新节点执行以下任一指令，Agent 将自动加入集群。")}
               </Typography>
               {showLink && (
                 <Stack spacing={1}>
                   <TextField
-                    label="加入链接"
+                    label={t("加入链接")}
                     fullWidth
                     multiline
                     minRows={2}
@@ -161,7 +167,7 @@ export default function AgentInvitationDialog({
                     sx={{ alignSelf: "flex-end" }}
                     onClick={() => void copy(invitation.joinUrl)}
                   >
-                    复制链接
+                    {t("复制链接")}
                   </Button>
                 </Stack>
               )}
@@ -169,7 +175,7 @@ export default function AgentInvitationDialog({
                 <Tabs
                   value={tab}
                   onChange={(_, next: number) => setTab(next)}
-                  aria-label="Agent 部署方式"
+                  aria-label={t("Agent 部署方式")}
                   sx={{ mb: 2 }}
                 >
                   {methods.map((method) => (
@@ -177,7 +183,9 @@ export default function AgentInvitationDialog({
                   ))}
                 </Tabs>
                 <TextField
-                  label={`${methods[tab]?.label || "加入"}指令`}
+                  label={t("{method} 指令", {
+                    method: methods[tab]?.label || t("加入"),
+                  })}
                   fullWidth
                   multiline
                   minRows={4}
@@ -195,15 +203,15 @@ export default function AgentInvitationDialog({
                   onClick={() => void copy(command)}
                   sx={{ mt: 1.5 }}
                 >
-                  复制指令
+                  {t("复制指令")}
                 </Button>
               </Box>
               <Typography variant="body2" color="text.secondary">
-                加入凭证仅可使用一次
                 {expiry && !Number.isNaN(expiry.getTime())
-                  ? `，有效至 ${expiry.toLocaleString("zh-CN", { hour12: false })}`
-                  : "，30 分钟内有效"}
-                。
+                  ? t("加入凭证仅可使用一次，有效至 {expiry}。", {
+                      expiry: formatDate(expiry),
+                    })
+                  : t("加入凭证仅可使用一次，30 分钟内有效。")}
               </Typography>
             </>
           )}
@@ -211,7 +219,7 @@ export default function AgentInvitationDialog({
       </DialogContent>
       <DialogActions>
         <Button disabled={saving} onClick={onClose}>
-          {invitation ? "关闭" : "取消"}
+          {invitation ? t("关闭") : t("取消")}
         </Button>
         {!invitation && (
           <Button
@@ -219,7 +227,7 @@ export default function AgentInvitationDialog({
             disabled={saving}
             onClick={() => void generate()}
           >
-            {saving ? "正在生成…" : "生成加入指令"}
+            {saving ? t("正在生成…") : t("生成加入指令")}
           </Button>
         )}
       </DialogActions>

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net/url"
 	"strings"
 	"unicode/utf8"
@@ -29,7 +28,7 @@ func agentShow(client *ApiClient, args []string) (map[string]interface{}, error)
 		}
 	}
 	if selected == nil {
-		return nil, fmt.Errorf("节点未注册: %s", address)
+		return nil, cliErrorf("节点未注册: %s", address)
 	}
 	workers, _ := result["workers"].(map[string]interface{})
 	worker, _ := workers[address].(map[string]interface{})
@@ -47,19 +46,19 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		return nil, err
 	}
 	if len(o.Positionals) != 1 || len(o.Values["label"]) > 1 || !o.Has("label") && !o.Has("local-root") && !o.Has("clear-local-roots") {
-		return nil, fmt.Errorf("用法: agent update <节点> [--label 名称] [--local-root 目录 ... | --clear-local-roots]")
+		return nil, cliErrorf("用法: agent update <节点> [--label 名称] [--local-root 目录 ... | --clear-local-roots]")
 	}
 	if err := adminNodeAddress(o.Positionals[0]); err != nil {
 		return nil, err
 	}
 	if o.Has("clear-local-roots") && o.Has("local-root") {
-		return nil, fmt.Errorf("--local-root 和 --clear-local-roots 不能同时使用")
+		return nil, cliErrorf("--local-root 和 --clear-local-roots 不能同时使用")
 	}
 	body := map[string]interface{}{}
 	if o.Has("label") {
 		label := strings.TrimSpace(o.Value("label"))
 		if !utf8.ValidString(label) || len(label) > 128 || strings.ContainsAny(label, "\x00\r\n") {
-			return nil, fmt.Errorf("节点名称不能超过 128 字节或包含换行")
+			return nil, cliErrorf("节点名称不能超过 128 字节或包含换行")
 		}
 		body["label"] = label
 	}
@@ -68,7 +67,7 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		seen := map[string]bool{}
 		for _, root := range o.Values["local-root"] {
 			if !agentAbsolutePath(root) || seen[root] {
-				return nil, fmt.Errorf("本地根目录必须是非重复的节点绝对路径: %s", root)
+				return nil, cliErrorf("本地根目录必须是非重复的节点绝对路径: %s", root)
 			}
 			seen[root] = true
 			roots = append(roots, root)

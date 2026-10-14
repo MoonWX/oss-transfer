@@ -1,3 +1,4 @@
+import { t, useI18n, formatDate } from "../lib/i18n";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import {
@@ -63,7 +64,6 @@ import {
   type NodeChange,
   type RegisteredNode,
 } from "../lib/nodeRegistry";
-
 const queues = [
   { key: "list", label: "对象扫描" },
   { key: "put", label: "对象传输" },
@@ -72,12 +72,12 @@ const queues = [
   { key: "fallback", label: "降级记录" },
 ];
 export default function NodesPage() {
+  useI18n();
   const { refreshMs, refreshSeconds } = useRefreshPreference();
   const workers = useWorkerStatus();
-  const registry = useApi<{ data: NodeRegistry }>(
-    "/api/master/nodes",
-    refreshMs,
-  );
+  const registry = useApi<{
+    data: NodeRegistry;
+  }>("/api/master/nodes", refreshMs);
   const history = useApi<{
     adjustments: Adjustment[];
     partial?: boolean;
@@ -120,7 +120,7 @@ export default function NodesPage() {
     ip,
     workers.data?.workers?.[ip] ?? {
       success: false,
-      message: "节点未返回状态，请检查节点服务和网络。",
+      message: t("节点未返回状态，请检查节点服务和网络。"),
     },
   ]);
   const reachable = entries.filter(([address, worker]) => {
@@ -156,7 +156,7 @@ export default function NodesPage() {
   async function saveNodeEdit() {
     if (!nodeEdit) return;
     if (!nodeEdit.address.trim()) {
-      setNodeError("请输入节点标识。");
+      setNodeError(t("请输入节点标识。"));
       return;
     }
     setNodeSaving(true);
@@ -173,19 +173,19 @@ export default function NodesPage() {
       ) {
         const current = workers.data?.workers?.[nodeEdit.original ?? ""];
         if (!current?.success || workers.stale) {
-          throw new Error("节点状态已失效，请刷新后重新编辑根目录。");
+          throw new Error(t("节点状态已失效，请刷新后重新编辑根目录。"));
         }
         const roots = nodeEdit.roots
           .split(/\r?\n/)
           .filter((root) => root !== "");
         if (new Set(roots).size !== roots.length) {
-          throw new Error("本地根目录不能重复。");
+          throw new Error(t("本地根目录不能重复。"));
         }
         change.advertisedLocalRoots = roots;
       }
       await saveNode(nodeEdit.original, change);
       notify(
-        nodeEdit.original ? "节点设置已保存。" : "节点已添加。",
+        nodeEdit.original ? t("节点设置已保存。") : t("节点已添加。"),
         "success",
       );
       setNodeEdit(null);
@@ -202,7 +202,7 @@ export default function NodesPage() {
     setNodeError(null);
     try {
       await removeNode(nodeDelete.address);
-      notify("节点已移除。", "success");
+      notify(t("节点已移除。"), "success");
       setNodeDelete(null);
       await refresh();
     } catch (error) {
@@ -218,7 +218,7 @@ export default function NodesPage() {
     );
     return target === undefined
       ? ""
-      : String(Math.max(0, target) / (type === "bandwidth" ? 1_000_000 : 1));
+      : String(Math.max(0, target) / (type === "bandwidth" ? 1000000 : 1));
   };
   const openEditor = (worker = "", type: RateType = "put", value?: number) => {
     setSaveError(null);
@@ -229,20 +229,16 @@ export default function NodesPage() {
         value === undefined
           ? ""
           : String(
-              value > 0
-                ? type === "bandwidth"
-                  ? value / 1_000_000
-                  : value
-                : 0,
+              value > 0 ? (type === "bandwidth" ? value / 1000000 : value) : 0,
             ),
     });
   };
   async function saveRate() {
     const qps = edit
-      ? Number(edit.value) * (edit.type === "bandwidth" ? 1_000_000 : 1)
+      ? Number(edit.value) * (edit.type === "bandwidth" ? 1000000 : 1)
       : NaN;
     if (!edit || edit.value.trim() === "" || !Number.isFinite(qps) || qps < 0) {
-      setSaveError("请输入大于或等于 0 的数值。");
+      setSaveError(t("请输入大于或等于 0 的数值。"));
       return;
     }
     setSaving(true);
@@ -252,7 +248,7 @@ export default function NodesPage() {
         `/api/master/rate-limit/${edit.type}${edit.worker ? `/${encodeURIComponent(edit.worker)}` : ""}`,
         { method: "POST", body: { qps } },
       );
-      notify("限速设置已提交，正在刷新节点状态。", "success");
+      notify(t("限速设置已提交，正在刷新节点状态。"), "success");
       setEdit(null);
       await refresh();
     } catch (error) {
@@ -262,12 +258,11 @@ export default function NodesPage() {
       setSaving(false);
     }
   }
-
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="执行节点"
-        description="查看节点状态和速率。"
+        title={t("执行节点")}
+        description={t("查看节点状态和速率。")}
         action={
           <Stack
             direction="row"
@@ -281,7 +276,7 @@ export default function NodesPage() {
               startIcon={<AddRounded />}
               onClick={() => setInviteOpen(true)}
             >
-              添加节点
+              {t("添加节点")}
             </Button>
             <RefreshControls
               onRefresh={refresh}
@@ -293,14 +288,16 @@ export default function NodesPage() {
               onClick={() => openEditor()}
               disabled={!entries.length}
             >
-              调整限速
+              {t("调整限速")}
             </Button>
           </Stack>
         }
       />
       {workers.error && <Alert severity="error">{workers.error}</Alert>}
       {registry.error && (
-        <Alert severity="error">节点配置读取失败：{registry.error}</Alert>
+        <Alert severity="error">
+          {t("节点配置读取失败：{error}", { error: registry.error || "" })}
+        </Alert>
       )}
       <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
         <Stack
@@ -322,11 +319,14 @@ export default function NodesPage() {
               <DnsRounded />
             </Box>
             <Box>
-              <Typography variant="h6">节点列表</Typography>
+              <Typography variant="h6">{t("节点列表")}</Typography>
               <Typography variant="body2" color="text.secondary">
                 {workers.data
-                  ? `${reachable} / ${entries.length} 个节点正常响应`
-                  : "正在读取节点状态"}
+                  ? t("{value1} / {value2} 个节点正常响应", {
+                      value1: reachable,
+                      value2: entries.length,
+                    })
+                  : t("正在读取节点状态")}
               </Typography>
             </Box>
           </Stack>
@@ -336,10 +336,10 @@ export default function NodesPage() {
                 size="small"
                 label={
                   reachable === entries.length && entries.length > 0
-                    ? "节点连接正常"
+                    ? t("节点连接正常")
                     : entries.length
-                      ? "部分节点不可达"
-                      : "尚未配置节点"
+                      ? t("部分节点不可达")
+                      : t("尚未配置节点")
                 }
                 color={
                   reachable === entries.length && entries.length > 0
@@ -360,18 +360,18 @@ export default function NodesPage() {
       <Tabs
         value={tab}
         onChange={(_, value) => setTab(value)}
-        aria-label="节点视图"
+        aria-label={t("节点视图")}
         sx={{ borderBottom: 1, borderColor: "divider" }}
       >
         <Tab
           icon={<SpeedRounded fontSize="small" />}
           iconPosition="start"
-          label="实时状态"
+          label={t("实时状态")}
         />
         <Tab
           icon={<HistoryRounded fontSize="small" />}
           iconPosition="start"
-          label="限速历史"
+          label={t("限速历史")}
         />
       </Tabs>
       {workers.loading && !workers.data && <LinearProgress />}
@@ -379,8 +379,8 @@ export default function NodesPage() {
         <>
           {workers.data && entries.length === 0 && (
             <EmptyState
-              title="暂无执行节点"
-              description="添加 Agent 后可查看节点状态。"
+              title={t("暂无执行节点")}
+              description={t("添加 Agent 后可查看节点状态。")}
             />
           )}
           <Box
@@ -403,32 +403,36 @@ export default function NodesPage() {
                 ? [
                     {
                       key: "scans",
-                      label: "扫描并发",
+                      label: t("扫描并发"),
                       size: execution.activeScans,
                       capacity: execution.maxConcurrentScans,
                     },
                     {
                       key: "children",
-                      label: "传输并发",
+                      label: t("传输并发"),
                       size: execution.activeChildren,
                       capacity: execution.maxConcurrentChildren,
                     },
                     {
                       key: "unfinished",
-                      label: "未完成子任务",
+                      label: t("未完成子任务"),
                       size: execution.unfinishedChildren,
                       capacity: execution.maxUnfinishedChildren,
                     },
                   ]
                 : queues.map((queue) => ({
                     ...queue,
+                    label: t(queue.label),
                     size: worker.queueStatus?.[`${queue.key}QueueSize`],
                     capacity: worker.queueStatus?.[`${queue.key}QueueCapacity`],
                   }));
               const visibleActivity = activity.filter(
                 (
                   item,
-                ): item is typeof item & { size: number; capacity: number } =>
+                ): item is typeof item & {
+                  size: number;
+                  capacity: number;
+                } =>
                   typeof item.size === "number" &&
                   Number.isFinite(item.size) &&
                   item.size >= 0 &&
@@ -441,7 +445,9 @@ export default function NodesPage() {
                 <Paper
                   key={ip}
                   component="section"
-                  aria-label={`执行节点 ${ip}`}
+                  aria-label={t("执行节点 {value1}", {
+                    value1: ip,
+                  })}
                   variant="outlined"
                   sx={{ overflow: "hidden" }}
                 >
@@ -459,18 +465,16 @@ export default function NodesPage() {
                       <Typography variant="body2" color="text.secondary">
                         {registered?.label ||
                           (registered?.master
-                            ? "主节点 · 执行节点"
-                            : "执行节点")}
+                            ? t("主节点 · 执行节点")
+                            : t("执行节点"))}
                       </Typography>
                       {registered?.agent &&
                         !registered.online &&
                         registered.lastSeen && (
                           <Typography variant="caption" color="text.secondary">
-                            最后连接：
-                            {new Date(registered.lastSeen).toLocaleString(
-                              "zh-CN",
-                              { hour12: false },
-                            )}
+                            {t("最后连接：{time}", {
+                              time: formatDate(registered.lastSeen),
+                            })}
                           </Typography>
                         )}
                     </Box>
@@ -493,11 +497,11 @@ export default function NodesPage() {
                         label={
                           registered?.agent
                             ? registered.online
-                              ? "在线"
-                              : "离线"
+                              ? t("在线")
+                              : t("离线")
                             : worker.success
-                              ? "在线"
-                              : "无法连接"
+                              ? t("在线")
+                              : t("无法连接")
                         }
                       />
                     </Stack>
@@ -509,7 +513,7 @@ export default function NodesPage() {
                         startIcon={<EditOutlined />}
                         onClick={() => openNodeEditor(registered)}
                       >
-                        编辑节点
+                        {t("编辑节点")}
                       </Button>
                       {!registered.master && (
                         <Button
@@ -521,7 +525,7 @@ export default function NodesPage() {
                             setNodeDelete(registered);
                           }}
                         >
-                          移除节点
+                          {t("移除节点")}
                         </Button>
                       )}
                     </Stack>
@@ -529,7 +533,7 @@ export default function NodesPage() {
                   {!worker.success ? (
                     <Alert severity="error" sx={{ mx: 2.5, mb: 2.5 }}>
                       {worker.message ||
-                        "节点未返回有效状态，请检查节点服务和网络。"}
+                        t("节点未返回有效状态，请检查节点服务和网络。")}
                     </Alert>
                   ) : (
                     <>
@@ -548,7 +552,7 @@ export default function NodesPage() {
                           <Divider />
                           <Box sx={{ p: 2.5 }}>
                             <Typography variant="subtitle2" sx={{ mb: 2 }}>
-                              {execution ? "执行负载" : "队列占用"}
+                              {execution ? t("执行负载") : t("队列占用")}
                             </Typography>
                             <Stack spacing={1.75}>
                               {visibleActivity.map((queue) => {
@@ -585,7 +589,9 @@ export default function NodesPage() {
                                       aria-label={
                                         execution
                                           ? queue.label
-                                          : `${queue.label}队列占用`
+                                          : t("{value1}队列占用", {
+                                              value1: queue.label,
+                                            })
                                       }
                                     />
                                   </Box>
@@ -600,7 +606,7 @@ export default function NodesPage() {
                           <Divider />
                           <Box sx={{ p: 2.5 }}>
                             <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                              本地根目录
+                              {t("本地根目录")}
                             </Typography>
                             {localRoots.length > 0 ? (
                               localRoots.map((root) => (
@@ -620,7 +626,7 @@ export default function NodesPage() {
                                 variant="body2"
                                 color="text.secondary"
                               >
-                                未设置
+                                {t("未设置")}
                               </Typography>
                             )}
                           </Box>
@@ -639,15 +645,17 @@ export default function NodesPage() {
           {history.error && <Alert severity="error">{history.error}</Alert>}
           {(history.data?.partial || history.data?.complete === false) && (
             <Alert severity="warning">
-              限速历史不完整。
               {history.data.failedWorkers?.length
-                ? `未获取到节点 ${history.data.failedWorkers.join("、")} 的记录。`
-                : "部分节点未返回记录。"}
+                ? t("限速历史不完整。未获取到节点 {nodes} 的记录。", {
+                    nodes: history.data.failedWorkers.join(", "),
+                  })
+                : t("限速历史不完整。部分节点未返回记录。")}
             </Alert>
           )}
           <Typography variant="body2" color="text.secondary">
-            显示各节点最近 50
-            条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。
+            {t(
+              "显示各节点最近 50 条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。",
+            )}
           </Typography>
           {history.loading && !history.data && <LinearProgress />}
           {history.data?.adjustments?.length ? (
@@ -655,13 +663,13 @@ export default function NodesPage() {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>时间</TableCell>
-                    <TableCell>节点</TableCell>
-                    <TableCell>类型</TableCell>
-                    <TableCell>运行上限变化</TableCell>
-                    <TableCell>阶段</TableCell>
-                    <TableCell>依据</TableCell>
-                    <TableCell>详情</TableCell>
+                    <TableCell>{t("时间")}</TableCell>
+                    <TableCell>{t("节点")}</TableCell>
+                    <TableCell>{t("类型")}</TableCell>
+                    <TableCell>{t("运行上限变化")}</TableCell>
+                    <TableCell>{t("阶段")}</TableCell>
+                    <TableCell>{t("依据")}</TableCell>
+                    <TableCell>{t("详情")}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -672,10 +680,9 @@ export default function NodesPage() {
                         key={`${item.workerIp}-${item.timestamp}-${index}`}
                       >
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
-                          {item.timestampFormatted ||
-                            (item.timestamp
-                              ? new Date(item.timestamp).toLocaleString()
-                              : "—")}
+                          {item.timestamp != null
+                            ? formatDate(item.timestamp)
+                            : item.timestampFormatted || "—"}
                         </TableCell>
                         <TableCell sx={{ fontFamily: "monospace" }}>
                           {item.workerIp}
@@ -712,11 +719,12 @@ export default function NodesPage() {
                               display="block"
                               color="text.secondary"
                             >
-                              当时目标：
-                              {rateText(
-                                item.manualTarget,
-                                item.type === "bandwidth",
-                              )}
+                              {t("当时目标：{limit}", {
+                                limit: rateText(
+                                  item.manualTarget,
+                                  item.type === "bandwidth",
+                                ),
+                              })}
                             </Typography>
                           )}
                         </TableCell>
@@ -729,14 +737,14 @@ export default function NodesPage() {
                               to={adjustmentDetailsPath(item.workerIp, item.id)}
                               size="small"
                             >
-                              查看详情
+                              {t("查看详情")}
                             </Button>
                           ) : (
                             <Typography
                               variant="caption"
                               color="text.secondary"
                             >
-                              未记录详情
+                              {t("未记录详情")}
                             </Typography>
                           )}
                         </TableCell>
@@ -751,13 +759,13 @@ export default function NodesPage() {
               <EmptyState
                 title={
                   history.data?.partial || history.data?.complete === false
-                    ? "已响应节点暂无调整记录"
-                    : "暂无调整记录"
+                    ? t("已响应节点暂无调整记录")
+                    : t("暂无调整记录")
                 }
                 description={
                   history.data?.partial || history.data?.complete === false
-                    ? "其余节点的历史尚未获取，无法确认是否发生调节。"
-                    : "限速调整记录生成后自动显示。"
+                    ? t("其余节点的历史尚未获取，无法确认是否发生调节。")
+                    : t("限速调整记录生成后自动显示。")
                 }
               />
             )
@@ -774,13 +782,13 @@ export default function NodesPage() {
         maxWidth="sm"
       >
         <DialogTitle>
-          {nodeEdit?.original ? "编辑节点" : "添加节点"}
+          {nodeEdit?.original ? t("编辑节点") : t("添加节点")}
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
             <TextField
-              label={nodeEdit?.agent ? "节点标识" : "节点地址"}
+              label={nodeEdit?.agent ? t("节点标识") : t("节点地址")}
               required
               fullWidth
               value={nodeEdit?.address ?? ""}
@@ -793,11 +801,13 @@ export default function NodesPage() {
               helperText={
                 nodeEdit?.agent
                   ? undefined
-                  : `服务端口：${registry.data?.data?.port ?? "使用集群配置"}`
+                  : t("服务端口：{value1}", {
+                      value1: registry.data?.data?.port ?? t("使用集群配置"),
+                    })
               }
             />
             <TextField
-              label="节点名称"
+              label={t("节点名称")}
               fullWidth
               value={nodeEdit?.label ?? ""}
               disabled={nodeSaving}
@@ -810,7 +820,7 @@ export default function NodesPage() {
             />
             {nodeEdit?.goAgent && (
               <TextField
-                label="本地根目录"
+                label={t("本地根目录")}
                 multiline
                 minRows={3}
                 fullWidth
@@ -823,8 +833,10 @@ export default function NodesPage() {
                 }
                 helperText={
                   nodeEdit.roots === null
-                    ? "节点未返回根目录配置，暂时不能编辑。"
-                    : "每行一个绝对路径。用于路径选择提示，不限制节点的文件访问权限。"
+                    ? t("节点未返回根目录配置，暂时不能编辑。")
+                    : t(
+                        "每行一个绝对路径。用于路径选择提示，不限制节点的文件访问权限。",
+                      )
                 }
                 onChange={(event) =>
                   setNodeEdit(
@@ -837,14 +849,14 @@ export default function NodesPage() {
         </DialogContent>
         <DialogActions>
           <Button disabled={nodeSaving} onClick={() => setNodeEdit(null)}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             variant="contained"
             disabled={nodeSaving}
             onClick={() => void saveNodeEdit()}
           >
-            {nodeSaving ? "正在保存…" : "保存节点"}
+            {nodeSaving ? t("正在保存…") : t("保存节点")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -854,21 +866,23 @@ export default function NodesPage() {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>移除节点 {nodeDelete?.address}</DialogTitle>
+        <DialogTitle>
+          {t("移除节点 {node}", { node: nodeDelete?.address || "" })}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2}>
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
             <Typography>
-              移除此执行节点，不删除节点上的文件、对象或数据库。
+              {t("移除此执行节点，不删除节点上的文件、对象或数据库。")}
             </Typography>
             <Alert severity="info">
-              节点不可达、仍有任务记录或集群正在执行任务时，无法移除。
+              {t("节点不可达、仍有任务记录或集群正在执行任务时，无法移除。")}
             </Alert>
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button disabled={nodeSaving} onClick={() => setNodeDelete(null)}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             color="error"
@@ -876,7 +890,7 @@ export default function NodesPage() {
             disabled={nodeSaving}
             onClick={() => void deleteSelectedNode()}
           >
-            {nodeSaving ? "正在检查…" : "确认移除"}
+            {nodeSaving ? t("正在检查…") : t("确认移除")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -886,14 +900,14 @@ export default function NodesPage() {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>调整传输限速</DialogTitle>
+        <DialogTitle>{t("调整传输限速")}</DialogTitle>
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {saveError && <Alert severity="error">{saveError}</Alert>}
             <TextField
               select
               fullWidth
-              label="应用范围"
+              label={t("应用范围")}
               slotProps={{
                 select: { displayEmpty: true },
                 inputLabel: { shrink: true },
@@ -910,7 +924,7 @@ export default function NodesPage() {
                 )
               }
             >
-              <MenuItem value="">全部执行节点</MenuItem>
+              <MenuItem value="">{t("全部执行节点")}</MenuItem>
               {entries.map(([ip]) => (
                 <MenuItem key={ip} value={ip}>
                   {ip}
@@ -920,7 +934,7 @@ export default function NodesPage() {
             <TextField
               select
               fullWidth
-              label="限制类型"
+              label={t("限制类型")}
               value={edit?.type ?? "put"}
               onChange={(event) =>
                 setEdit(
@@ -948,8 +962,8 @@ export default function NodesPage() {
               fullWidth
               label={
                 edit?.type === "bandwidth"
-                  ? "带宽上限（Mbps）"
-                  : "请求上限（次/秒）"
+                  ? t("带宽上限（Mbps）")
+                  : t("请求上限（次/秒）")
               }
               type="number"
               value={edit?.value ?? ""}
@@ -959,18 +973,20 @@ export default function NodesPage() {
                 )
               }
               slotProps={{ htmlInput: { min: 0, step: "any" } }}
-              helperText="修改目标上限，0 表示不限速。保存后立即应用，节点重启后仍生效；临时降速不覆盖该目标。"
+              helperText={t(
+                "修改目标上限，0 表示不限速。保存后立即应用，节点重启后仍生效；临时降速不覆盖该目标。",
+              )}
             />
             {!edit?.worker && (
               <Alert severity="info">
-                设置逐一应用于全部执行节点，各节点使用相同上限。
+                {t("设置逐一应用于全部执行节点，各节点使用相同上限。")}
               </Alert>
             )}
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button disabled={saving} onClick={() => setEdit(null)}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             variant="contained"
@@ -982,7 +998,7 @@ export default function NodesPage() {
               ) : undefined
             }
           >
-            应用设置
+            {t("应用设置")}
           </Button>
         </DialogActions>
       </Dialog>

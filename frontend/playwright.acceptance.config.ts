@@ -9,6 +9,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   outputDir: process.env.ACCEPTANCE_EVIDENCE || "./test-results/acceptance",
   use: {
+    locale: "zh-CN",
     baseURL: process.env.ACCEPTANCE_BASE_URL,
     browserName: "chromium",
     viewport: { width: 1440, height: 1000 },

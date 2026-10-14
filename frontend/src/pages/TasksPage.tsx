@@ -1,3 +1,4 @@
+import { t as tr, useI18n, getLocale, formatDate } from "../lib/i18n";
 import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import { useWorkerStatus } from "../lib/workerStatus";
 import {
@@ -96,17 +97,18 @@ const reportAvailable = (task: Task) =>
   !groupIncomplete(task) &&
   ["STOPPED", "COMPLETED", "FAILED", "PARTIAL_FAILED"].includes(task.status);
 function TaskStatus({ task }: { task: Task }) {
+  useI18n();
   return isExploring(task) ? (
-    <Chip size="small" variant="outlined" color="info" label="扫描中" />
+    <Chip size="small" variant="outlined" color="info" label={tr("扫描中")} />
   ) : (
     <StatusChip status={task.status} />
   );
 }
 const directionLabel = (task: Task) =>
   task.direction === "OSS_TO_LOCAL"
-    ? "OSS → 本地"
+    ? tr("OSS → 本地")
     : task.direction === "LOCAL_TO_OSS"
-      ? "本地 → OSS"
+      ? tr("本地 → OSS")
       : "OSS → OSS";
 const workers = (task: Task) =>
   (task.participatingWorkerNodes?.length
@@ -116,7 +118,7 @@ const workers = (task: Task) =>
       : [task.executionNodeIp || task.workerNode]
   )
     .filter(Boolean)
-    .join(", ") || "等待分配";
+    .join(", ") || tr("等待分配");
 function endpoint(task: Task, source: boolean) {
   const value = source ? task.sourceEndpoint : task.destinationEndpoint;
   if (
@@ -127,7 +129,7 @@ function endpoint(task: Task, source: boolean) {
       value?.localPath ||
       value?.nodeBindings?.[0]?.localPath ||
       task.localPath ||
-      "本地文件系统"
+      tr("本地文件系统")
     );
   return (
     [
@@ -154,7 +156,10 @@ function subtaskEndpoint(task: Task, source: boolean) {
       (item: any) => item.executionNodeIp === subtaskNode(task),
     );
     return (
-      task.localPath || binding?.localPath || value?.localPath || "本地文件系统"
+      task.localPath ||
+      binding?.localPath ||
+      value?.localPath ||
+      tr("本地文件系统")
     );
   }
   return endpoint(task, source);
@@ -206,34 +211,43 @@ const canDeleteTask = (task: Task) =>
     "WAITING",
   ].includes(task.status);
 function Metrics({ data }: { data: any }) {
+  useI18n();
   const cards = [
     {
-      label: "迁移任务",
+      label: tr("迁移任务"),
       value: formatNumber(data?.totalTasks),
-      detail: `${formatNumber(data?.pendingTasks)} 个待执行`,
+      detail: tr("{value1} 个待执行", {
+        value1: formatNumber(data?.pendingTasks),
+      }),
       icon: <CloudSyncRounded />,
       color: "primary.main",
     },
     {
-      label: "执行中任务",
+      label: tr("执行中任务"),
       value: formatNumber(
         (data?.runningTasks || 0) + (data?.listDoneTasks || 0),
       ),
-      detail: "含运行中和扫描完成的任务",
+      detail: tr("含运行中和扫描完成的任务"),
       icon: <PlayArrowRounded />,
       color: "info.main",
     },
     {
-      label: "已迁移数据",
+      label: tr("已迁移数据"),
       value: formatBytes(data?.totalPutObjectSize),
-      detail: `${formatNumber(data?.totalPutObjectCount)} 个对象已传输`,
+      detail: tr("{value1} 个对象已传输", {
+        value1: formatNumber(data?.totalPutObjectCount),
+      }),
       icon: <CheckCircleOutlineRounded />,
       color: "success.main",
     },
     {
-      label: "失败对象",
+      label: tr("失败对象"),
       value: formatNumber(data?.totalFailedObjectCount),
-      detail: `${formatNumber((data?.failedTasks || 0) + (data?.partialFailedTasks || 0))} 个失败或部分失败任务`,
+      detail: tr("{value1} 个失败或部分失败任务", {
+        value1: formatNumber(
+          (data?.failedTasks || 0) + (data?.partialFailedTasks || 0),
+        ),
+      }),
       icon: <WarningAmberRounded />,
       color: "warning.main",
     },
@@ -285,7 +299,7 @@ function Metrics({ data }: { data: any }) {
             {data ? card.value : "—"}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {data ? card.detail : "等待服务响应"}
+            {data ? card.detail : tr("等待服务响应")}
           </Typography>
         </Paper>
       ))}
@@ -321,6 +335,7 @@ function TaskDetail({
   loadPartial: boolean;
   onClose: () => void;
 }) {
+  useI18n();
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
   const local = task && isLocal(task);
@@ -542,12 +557,15 @@ function TaskDetail({
     setExporting(true);
     try {
       await downloadTaskReport(taskId, (message) =>
-        notify(`任务 #${taskId}：${message}`, "error"),
+        notify(
+          tr("任务 #{value1}：{value2}", { value1: taskId, value2: message }),
+          "error",
+        ),
       );
-      notify("报告下载已请求，请查看浏览器下载列表。", "info");
+      notify(tr("报告下载已请求，请查看浏览器下载列表。"), "info");
     } catch (error) {
       notify(
-        error instanceof Error ? error.message : "报告下载失败，请重试。",
+        error instanceof Error ? error.message : tr("报告下载失败，请重试。"),
         "error",
       );
     } finally {
@@ -609,8 +627,11 @@ function TaskDetail({
             alignItems="center"
             sx={{ mb: 3 }}
           >
-            <Typography variant="h5">迁移任务 #{view?.taskId}</Typography>
-            <IconButton onClick={onClose} aria-label="关闭详情">
+            <Typography variant="h5">
+              {tr("迁移任务 #")}
+              {view?.taskId}
+            </Typography>
+            <IconButton onClick={onClose} aria-label={tr("关闭详情")}>
               <CloseRounded />
             </IconButton>
           </Stack>
@@ -621,11 +642,11 @@ function TaskDetail({
               severity="info"
               action={
                 <Button onClick={onRefresh} size="small" color="inherit">
-                  刷新
+                  {tr("刷新")}
                 </Button>
               }
             >
-              当前列表中未找到此任务，请刷新任务状态。
+              {tr("当前列表中未找到此任务，请刷新任务状态。")}
             </Alert>
           )}
         </>
@@ -640,13 +661,14 @@ function TaskDetail({
           >
             <Box>
               <Typography variant="overline" color="text.secondary">
-                任务详情
+                {tr("任务详情")}
               </Typography>
               <Typography variant="h5">
-                迁移任务 #{current.taskIndex}
+                {tr("迁移任务 #")}
+                {current.taskIndex}
               </Typography>
             </Box>
-            <IconButton onClick={onClose} aria-label="关闭详情">
+            <IconButton onClick={onClose} aria-label={tr("关闭详情")}>
               <CloseRounded />
             </IconButton>
           </Stack>
@@ -669,7 +691,7 @@ function TaskDetail({
                   disabled={busy}
                   onClick={() => onAction(current, "启动")}
                 >
-                  启动任务
+                  {tr("启动任务")}
                 </Button>
               )}
               {canStopTask(current) && (
@@ -680,7 +702,7 @@ function TaskDetail({
                   disabled={busy}
                   onClick={() => onAction(current, "停止")}
                 >
-                  停止任务
+                  {tr("停止任务")}
                 </Button>
               )}
               {canResumeTask(current) && (
@@ -690,7 +712,7 @@ function TaskDetail({
                   disabled={busy}
                   onClick={() => onAction(current, "继续传输")}
                 >
-                  继续传输
+                  {tr("继续传输")}
                 </Button>
               )}
               {canDeleteTask(current) && (
@@ -701,7 +723,7 @@ function TaskDetail({
                   disabled={busy}
                   onClick={() => onAction(current, "删除")}
                 >
-                  删除任务
+                  {tr("删除任务")}
                 </Button>
               )}
             </Stack>
@@ -721,7 +743,7 @@ function TaskDetail({
           <ErrorAlert error={view?.error || null} onRetry={children.refresh} />
           {view?.partial && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              任务信息不完整，请刷新或检查执行节点。
+              {tr("任务信息不完整，请刷新或检查执行节点。")}
             </Alert>
           )}
           {current.errorMessage && (
@@ -731,7 +753,7 @@ function TaskDetail({
           )}
           <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
             <Typography variant="caption" color="text.secondary">
-              来源
+              {tr("来源")}
             </Typography>
             <Typography sx={{ overflowWrap: "anywhere", mt: 0.5 }}>
               {endpoint(current, true)}
@@ -742,14 +764,14 @@ function TaskDetail({
               display="block"
               color="text.secondary"
             >
-              目标
+              {tr("目标")}
             </Typography>
             <Typography sx={{ overflowWrap: "anywhere", mt: 0.5 }}>
               {endpoint(current, false)}
             </Typography>
           </Paper>
           <Typography variant="h6" sx={{ mb: 2 }}>
-            传输统计
+            {tr("传输统计")}
           </Typography>
           <Box
             sx={{
@@ -760,10 +782,18 @@ function TaskDetail({
             }}
           >
             {[
-              ["已扫描", current.listObjectCount, current.listObjectSize],
-              ["已迁移", current.putObjectCount, current.putObjectSize],
-              ["已跳过", current.skippedObjectCount, current.skippedObjectSize],
-              ["失败对象", current.failedObjectCount, current.failedObjectSize],
+              [tr("已扫描"), current.listObjectCount, current.listObjectSize],
+              [tr("已迁移"), current.putObjectCount, current.putObjectSize],
+              [
+                tr("已跳过"),
+                current.skippedObjectCount,
+                current.skippedObjectSize,
+              ],
+              [
+                tr("失败对象"),
+                current.failedObjectCount,
+                current.failedObjectSize,
+              ],
             ].map(([label, count, bytes]) => (
               <Box key={label}>
                 <Typography variant="caption" color="text.secondary">
@@ -794,7 +824,7 @@ function TaskDetail({
               disabled={exporting || !reportAvailable(current)}
               onClick={() => void exportReport()}
             >
-              {exporting ? "正在准备下载" : "导出任务报告"}
+              {exporting ? tr("正在准备下载") : tr("导出任务报告")}
             </Button>
             {!reportAvailable(current) && (
               <Typography
@@ -803,8 +833,8 @@ function TaskDetail({
                 sx={{ display: "block", mt: 1 }}
               >
                 {current.ossTaskGroup && current.partial
-                  ? "节点状态恢复后可导出报告。"
-                  : "停止或结束后可导出报告。"}
+                  ? tr("节点状态恢复后可导出报告。")
+                  : tr("停止或结束后可导出报告。")}
               </Typography>
             )}
           </Box>
@@ -819,46 +849,63 @@ function TaskDetail({
               endIcon={<ArrowForwardRounded />}
               sx={{ mb: 3 }}
             >
-              {current.failedObjectCount > 0 ? "查看失败对象" : "查看异常记录"}
+              {current.failedObjectCount > 0
+                ? tr("查看失败对象")
+                : tr("查看异常记录")}
             </Button>
           )}
           <Divider sx={{ mb: 3 }} />
           <Typography variant="h6" sx={{ mb: 2 }}>
-            执行信息
+            {tr("执行信息")}
           </Typography>
           <Stack gap={2}>
             {[
-              ["执行节点", workers(current)],
+              [tr("执行节点"), workers(current)],
               ...taskRequestLimitRows(current.requestLimits),
               [
-                "节点分发方式",
+                tr("节点分发方式"),
                 current.distributionMode === "balanced"
-                  ? "均衡分发"
-                  : "亲和分发",
+                  ? tr("均衡分发")
+                  : tr("亲和分发"),
               ],
-              ["共享存储 ID", current.storageId],
+              [tr("共享存储 ID"), current.storageId],
               [
-                "当前速度",
+                tr("当前速度"),
                 current.currentSpeedBytesPerSecond == null
                   ? null
                   : `${formatBytes(current.currentSpeedBytesPerSecond)}/s`,
               ],
               [
-                "平均速度",
+                tr("平均速度"),
                 current.averageSpeedBytesPerSecond == null
                   ? null
                   : `${formatBytes(current.averageSpeedBytesPerSecond)}/s`,
               ],
-              ["创建时间", current.createTime],
-              ["开始时间", current.startTime],
-              ["结束时间", current.endTime],
-              ["耗时", current.duration],
-              ["起始 Key", current.startKey],
-              ["结束 Key", current.endKey],
-              ["源对象 Key", !local ? sourceObjectKey : null],
-              ["源前缀", !local ? sourcePrefix : null],
               [
-                "目标命名",
+                tr("创建时间"),
+                current.createTime == null || current.createTime === ""
+                  ? null
+                  : formatDate(current.createTime),
+              ],
+              [
+                tr("开始时间"),
+                current.startTime == null || current.startTime === ""
+                  ? null
+                  : formatDate(current.startTime),
+              ],
+              [
+                tr("结束时间"),
+                current.endTime == null || current.endTime === ""
+                  ? null
+                  : formatDate(current.endTime),
+              ],
+              [tr("耗时"), current.duration],
+              [tr("起始 Key"), current.startKey],
+              [tr("结束 Key"), current.endKey],
+              [tr("源对象 Key"), !local ? sourceObjectKey : null],
+              [tr("源前缀"), !local ? sourcePrefix : null],
+              [
+                tr("目标命名"),
                 !local
                   ? keyMappingLabels[
                       (current.keyMapping?.mode ||
@@ -867,14 +914,17 @@ function TaskDetail({
                   : null,
               ],
               [
-                "目标前缀",
+                tr("目标前缀"),
                 !local && current.keyMapping?.targetPrefix != null
                   ? JSON.stringify(current.keyMapping.targetPrefix)
                   : null,
               ],
-              ["目标对象 Key", !local ? current.keyMapping?.targetKey : null],
               [
-                sourceObjectKey ? "Key 映射" : "Key 示例",
+                tr("目标对象 Key"),
+                !local ? current.keyMapping?.targetKey : null,
+              ],
+              [
+                sourceObjectKey ? tr("Key 映射") : tr("Key 示例"),
                 !local && current.keyMapping
                   ? mappingExample(
                       sourceObjectKey
@@ -887,10 +937,20 @@ function TaskDetail({
                     )
                   : null,
               ],
-              ["修改时间晚于", current.dateAfter],
-              ["修改时间早于", current.dateBefore],
               [
-                "冲突策略",
+                tr("修改时间晚于"),
+                current.dateAfter == null || current.dateAfter === ""
+                  ? null
+                  : formatDate(current.dateAfter),
+              ],
+              [
+                tr("修改时间早于"),
+                current.dateBefore == null || current.dateBefore === ""
+                  ? null
+                  : formatDate(current.dateBefore),
+              ],
+              [
+                tr("冲突策略"),
                 current.conflictPolicy ||
                   (current.overwrite ? "OVERWRITE" : "SKIP"),
               ],
@@ -912,9 +972,7 @@ function TaskDetail({
                     variant="body2"
                     sx={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}
                   >
-                    {typeof value === "number" && String(label).includes("时间")
-                      ? new Date(value).toLocaleString("zh-CN")
-                      : String(value)}
+                    {String(value)}
                   </Typography>
                 </Box>
               ))}
@@ -927,7 +985,7 @@ function TaskDetail({
                 data-testid="task-children-region"
               >
                 <Typography variant="h6" sx={{ mb: 2 }}>
-                  子任务
+                  {tr("子任务")}
                 </Typography>
                 {view?.shardsLoading ? (
                   <Stack
@@ -938,15 +996,15 @@ function TaskDetail({
                   >
                     <CircularProgress size={16} />
                     <Typography variant="body2" color="text.secondary">
-                      正在加载子任务…
+                      {tr("正在加载子任务…")}
                     </Typography>
                   </Stack>
                 ) : shards.length === 0 ? (
                   view?.shardsComplete ? (
                     <Typography variant="body2" color="text.secondary">
                       {view?.childrenTotal
-                        ? "此范围暂无子任务"
-                        : "尚未生成子任务"}
+                        ? tr("此范围暂无子任务")
+                        : tr("尚未生成子任务")}
                     </Typography>
                   ) : null
                 ) : (
@@ -958,7 +1016,10 @@ function TaskDetail({
                         sx={{ overflow: "hidden" }}
                       >
                         <ButtonBase
-                          aria-label={`查看子任务 ${current.taskIndex}-${shard.subtaskNumber}`}
+                          aria-label={tr("查看子任务 {value1}-{value2}", {
+                            value1: current.taskIndex,
+                            value2: shard.subtaskNumber,
+                          })}
                           data-child-id={`${current.taskIndex}-${shard.subtaskNumber}`}
                           data-child-node={subtaskNode(shard)}
                           onClick={() =>
@@ -993,8 +1054,8 @@ function TaskDetail({
                                 variant="body2"
                                 sx={{ overflowWrap: "anywhere" }}
                               >
-                                子任务 #{current.taskIndex}-
-                                {shard.subtaskNumber} ·{" "}
+                                {tr("子任务 #")}
+                                {current.taskIndex}-{shard.subtaskNumber} ·{" "}
                                 {shard.executionNodeIp || shard.workerNode}
                               </Typography>
                               <StatusChip status={shard.status} />
@@ -1003,8 +1064,10 @@ function TaskDetail({
                               variant="caption"
                               color="text.secondary"
                             >
-                              已迁移 {formatNumber(shard.putObjectCount)} · 失败{" "}
-                              {formatNumber(shard.failedObjectCount)}
+                              {tr("已迁移 {transferred} · 失败 {failed}", {
+                                transferred: formatNumber(shard.putObjectCount),
+                                failed: formatNumber(shard.failedObjectCount),
+                              })}
                             </Typography>
                           </Box>
                           <ArrowForwardRounded
@@ -1021,7 +1084,11 @@ function TaskDetail({
                     color="text.secondary"
                     sx={{ display: "block", mt: 1 }}
                   >
-                    快照 {new Date(view.snapshotAt).toLocaleTimeString("zh-CN")}
+                    {tr("快照 {time}", {
+                      time: new Date(view.snapshotAt).toLocaleTimeString(
+                        getLocale(),
+                      ),
+                    })}
                   </Typography>
                 )}
                 {((view?.childrenTotal || 0) > 25 ||
@@ -1036,7 +1103,7 @@ function TaskDetail({
                       `${from}–${to} / ${count}`
                     }
                     getItemAriaLabel={(type) =>
-                      type === "next" ? "下一页子任务" : "上一页子任务"
+                      type === "next" ? tr("下一页子任务") : tr("上一页子任务")
                     }
                     onPageChange={(_, page) =>
                       setPageWindow({ parentId: taskId, offset: page * 25 })
@@ -1060,6 +1127,7 @@ export default function TasksPage({
 }: {
   overview?: boolean;
 }) {
+  const { locale } = useI18n();
   const notify = useNotify();
   const { refreshMs, refreshSeconds } = useRefreshPreference();
   const { data, loading, error, refresh } = useApi(
@@ -1103,7 +1171,9 @@ export default function TasksPage({
       setHistoryCursor(next.nextBeforeId ?? null);
     } catch (cause) {
       if (!controller.signal.aborted)
-        setHistoryError(cause instanceof Error ? cause.message : "加载失败");
+        setHistoryError(
+          cause instanceof Error ? cause.message : tr("加载失败"),
+        );
     } finally {
       historyRequest.current = null;
       if (!controller.signal.aborted) setHistoryLoading(false);
@@ -1204,7 +1274,7 @@ export default function TasksPage({
                 .includes(query.toLowerCase())),
         )
         .sort((a, b) => b.taskIndex - a.taskIndex),
-    [tasks, query, status, direction, worker],
+    [tasks, query, status, direction, worker, locale],
   );
   useEffect(() => {
     setPage(0);
@@ -1291,7 +1361,22 @@ export default function TasksPage({
           ]),
         ];
         const operationSummary = Number.isFinite(detail.accepted)
-          ? `${path.startsWith("/local-transfers/") ? "本地执行项" : "执行项"}已受理 ${detail.accepted}，忽略 ${detail.ignored ?? 0}，失败 ${detail.failed ?? 0}${unavailable.length ? `；未响应节点：${unavailable.join("、")}` : ""}`
+          ? tr(
+              "{value1}已受理 {value2}，忽略 {value3}，失败 {value4}{value5}",
+              {
+                value1: path.startsWith("/local-transfers/")
+                  ? tr("本地执行项")
+                  : tr("执行项"),
+                value2: detail.accepted,
+                value3: detail.ignored ?? 0,
+                value4: detail.failed ?? 0,
+                value5: unavailable.length
+                  ? tr("；未响应节点：{value1}", {
+                      value1: unavailable.join("、"),
+                    })
+                  : "",
+              },
+            )
           : "";
         if (
           detail.partial ||
@@ -1347,11 +1432,16 @@ export default function TasksPage({
       );
     setBusy(false);
     if (issues.length) {
-      setActionResult(`部分请求未完成：${issues.join("；")}`);
-      notify("部分操作未完成，详见列表上方的结果。", "warning");
+      setActionResult(
+        tr("部分请求未完成：{value1}", { value1: issues.join("；") }),
+      );
+      notify(tr("部分操作未完成，详见列表上方的结果。"), "warning");
     } else {
       notify(
-        `${operation}请求已提交${summaries.length ? `，${summaries.join("；")}` : ""}。请以刷新后的任务状态为准。`,
+        tr("{value1}请求已提交{value2}。请以刷新后的任务状态为准。", {
+          value1: tr(operation),
+          value2: summaries.length ? `，${summaries.join("；")}` : "",
+        }),
         "info",
       );
       setSelected([]);
@@ -1390,18 +1480,20 @@ export default function TasksPage({
           <Typography variant="caption" color="text.secondary">
             {countsCurrent
               ? `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`
-              : `${formatNumber(task.putObjectCount)} 已迁移`}
+              : tr("{value1} 已迁移", {
+                  value1: formatNumber(task.putObjectCount),
+                })}
           </Typography>
           <Typography variant="caption">
             {complete
               ? `${Math.floor(progress(task))}%`
               : !countsCurrent
-                ? "统计更新中"
+                ? tr("统计更新中")
                 : task.status === "PENDING"
-                  ? "待扫描"
+                  ? tr("待扫描")
                   : scanning
-                    ? "扫描中"
-                    : "扫描未完成"}
+                    ? tr("扫描中")
+                    : tr("扫描未完成")}
           </Typography>
         </Stack>
         <LinearProgress
@@ -1422,16 +1514,16 @@ export default function TasksPage({
   return (
     <>
       <PageHeader
-        title={overview ? "迁移概览" : "迁移任务"}
+        title={overview ? tr("迁移概览") : tr("迁移任务")}
         description={
           overview
-            ? "任务统计与近期传输状态。"
-            : "查看传输进度，启动、停止或继续任务。"
+            ? tr("任务统计与近期传输状态。")
+            : tr("查看传输进度，启动、停止或继续任务。")
         }
         action={
           <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
             <RefreshControls
-              refreshLabel="刷新任务"
+              refreshLabel={tr("刷新任务")}
               onRefresh={() =>
                 Promise.all([refresh(), health.refresh(), nodeHealth.refresh()])
               }
@@ -1443,7 +1535,7 @@ export default function TasksPage({
               variant="contained"
               startIcon={<AddRounded />}
             >
-              创建迁移
+              {tr("创建迁移")}
             </Button>
           </Stack>
         }
@@ -1458,12 +1550,14 @@ export default function TasksPage({
                 disabled={historyLoading}
                 onClick={() => void loadEarlierTasks()}
               >
-                {historyLoading ? "加载中" : "加载更早任务"}
+                {historyLoading ? tr("加载中") : tr("加载更早任务")}
               </Button>
             ) : undefined
           }
         >
-          已加载 {formatNumber(tasks.length)} 个任务。统计仅包含最近一页。
+          {tr("已加载 {count} 个任务。统计仅包含最近一页。", {
+            count: formatNumber(tasks.length),
+          })}
         </Alert>
       )}
       <ErrorAlert
@@ -1475,9 +1569,9 @@ export default function TasksPage({
         offline.length > 0 ||
         missingNodes) && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          部分节点状态不可用，任务统计可能不完整。
+          {tr("部分节点状态不可用，任务统计可能不完整。")}
           <Button component={RouterLink} to="/nodes" size="small">
-            查看节点
+            {tr("查看节点")}
           </Button>
         </Alert>
       )}
@@ -1508,13 +1602,13 @@ export default function TasksPage({
               <StorageRounded />
             </Avatar>
             <Box>
-              <Typography variant="h6">存储连接</Typography>
+              <Typography variant="h6">{tr("存储连接")}</Typography>
               <Typography
                 variant="body2"
                 color="text.secondary"
                 sx={{ mt: 0.5 }}
               >
-                管理对象存储的访问地址和凭证。
+                {tr("管理对象存储的访问地址和凭证。")}
               </Typography>
             </Box>
           </Stack>
@@ -1523,7 +1617,7 @@ export default function TasksPage({
             to="/storage"
             endIcon={<ArrowForwardRounded />}
           >
-            管理存储连接
+            {tr("管理存储连接")}
           </Button>
         </Paper>
       )}
@@ -1548,7 +1642,7 @@ export default function TasksPage({
         >
           <Stack direction="row" alignItems="center" gap={1.5}>
             <Typography variant="h6">
-              {overview ? "最近任务" : "全部任务"}
+              {overview ? tr("最近任务") : tr("全部任务")}
             </Typography>
             <Chip
               size="small"
@@ -1563,7 +1657,7 @@ export default function TasksPage({
               size="small"
               endIcon={<ArrowForwardRounded />}
             >
-              查看全部
+              {tr("查看全部")}
             </Button>
           )}
         </Stack>
@@ -1583,12 +1677,12 @@ export default function TasksPage({
               }}
             >
               <TextField
-                placeholder="搜索任务、存储桶或路径"
+                placeholder={tr("搜索任务、存储桶或路径")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}
                 slotProps={{
-                  htmlInput: { "aria-label": "搜索任务" },
+                  htmlInput: { "aria-label": tr("搜索任务") },
                   input: {
                     startAdornment: (
                       <InputAdornment position="start">
@@ -1600,11 +1694,11 @@ export default function TasksPage({
               />
               <TextField
                 select
-                label="任务状态"
+                label={tr("任务状态")}
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
               >
-                <MenuItem value="">全部状态</MenuItem>
+                <MenuItem value="">{tr("全部状态")}</MenuItem>
                 {Object.entries(statusLabels).map(([key, label]) => (
                   <MenuItem key={key} value={key}>
                     {label}
@@ -1613,18 +1707,18 @@ export default function TasksPage({
               </TextField>
               <TextField
                 select
-                label="传输方向"
+                label={tr("传输方向")}
                 value={direction}
                 onChange={(e) => setDirection(e.target.value)}
               >
-                <MenuItem value="">全部方向</MenuItem>
+                <MenuItem value="">{tr("全部方向")}</MenuItem>
                 <MenuItem value="OSS_TO_OSS">OSS → OSS</MenuItem>
-                <MenuItem value="OSS_TO_LOCAL">OSS → 本地</MenuItem>
-                <MenuItem value="LOCAL_TO_OSS">本地 → OSS</MenuItem>
+                <MenuItem value="OSS_TO_LOCAL">{tr("OSS → 本地")}</MenuItem>
+                <MenuItem value="LOCAL_TO_OSS">{tr("本地 → OSS")}</MenuItem>
               </TextField>
               <TextField
-                label="执行节点"
-                placeholder="IP 地址"
+                label={tr("执行节点")}
+                placeholder={tr("IP 地址")}
                 value={worker}
                 onChange={(e) => setWorker(e.target.value)}
                 sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}
@@ -1639,7 +1733,9 @@ export default function TasksPage({
                 sx={{ p: 2, bgcolor: "action.selected" }}
               >
                 <Typography variant="body2" sx={{ mr: 1 }}>
-                  已选 {selected.length} 项（最多 128 项）
+                  {tr("已选 {count} 项（最多 128 项）", {
+                    count: formatNumber(selected.length),
+                  })}
                 </Typography>
                 {filtered.some(
                   (task) => !selected.includes(task.taskIndex),
@@ -1653,8 +1749,10 @@ export default function TasksPage({
                     }
                   >
                     {filtered.length > 128
-                      ? "选择前 128 个结果"
-                      : `选择全部 ${filtered.length} 个结果`}
+                      ? tr("选择前 128 个结果")
+                      : tr("选择全部 {value1} 个结果", {
+                          value1: filtered.length,
+                        })}
                   </Button>
                 )}
                 {[
@@ -1667,14 +1765,14 @@ export default function TasksPage({
                     key={String(label)}
                     title={
                       enabled
-                        ? `${label}选中任务`
+                        ? tr("{value1}选中任务", { value1: tr(String(label)) })
                         : label === "启动"
-                          ? "请选择待启动的 OSS→OSS 任务"
+                          ? tr("请选择待启动的 OSS→OSS 任务")
                           : label === "停止"
-                            ? "请选择待启动或运行中的任务"
+                            ? tr("请选择待启动或运行中的任务")
                             : label === "继续传输"
-                              ? "请选择已停止或失败的任务"
-                              : "请选择未在运行的任务"
+                              ? tr("请选择已停止或失败的任务")
+                              : tr("请选择未在运行的任务")
                     }
                   >
                     <span>
@@ -1684,7 +1782,7 @@ export default function TasksPage({
                         disabled={!enabled || busy}
                         onClick={() => openOperation(String(label), null)}
                       >
-                        {String(label)}
+                        {tr(String(label))}
                       </Button>
                     </span>
                   </Tooltip>
@@ -1699,10 +1797,10 @@ export default function TasksPage({
                     )
                   }
                 >
-                  导出 JSON
+                  {tr("导出 JSON")}
                 </Button>
                 <Button size="small" onClick={() => setSelected([])}>
-                  取消选择
+                  {tr("取消选择")}
                 </Button>
               </Stack>
             )}
@@ -1714,17 +1812,17 @@ export default function TasksPage({
           <EmptyState
             title={
               query || status || direction || worker
-                ? "没有匹配的任务"
+                ? tr("没有匹配的任务")
                 : error
-                  ? "任务加载失败"
-                  : "暂无迁移任务"
+                  ? tr("任务加载失败")
+                  : tr("暂无迁移任务")
             }
             description={
               query || status || direction || worker
-                ? "请调整筛选条件或搜索关键词。"
+                ? tr("请调整筛选条件或搜索关键词。")
                 : error
-                  ? "请检查连接后重试。"
-                  : "配置存储连接后创建迁移任务。"
+                  ? tr("请检查连接后重试。")
+                  : tr("配置存储连接后创建迁移任务。")
             }
             action={
               !query && !status && !direction && !worker && !error ? (
@@ -1734,7 +1832,7 @@ export default function TasksPage({
                   variant="contained"
                   startIcon={<AddRounded />}
                 >
-                  创建迁移任务
+                  {tr("创建迁移任务")}
                 </Button>
               ) : undefined
             }
@@ -1745,7 +1843,7 @@ export default function TasksPage({
               <Table
                 size="small"
                 sx={{ tableLayout: "fixed", minWidth: 1080 }}
-                aria-label="迁移任务列表"
+                aria-label={tr("迁移任务列表")}
               >
                 <TableHead>
                   <TableRow>
@@ -1762,7 +1860,7 @@ export default function TasksPage({
                             !shown.every((t) => selected.includes(t.taskIndex))
                           }
                           slotProps={{
-                            input: { "aria-label": "选择当前页任务" },
+                            input: { "aria-label": tr("选择当前页任务") },
                           }}
                           onChange={(_, checked) =>
                             setSelected((s) =>
@@ -1782,13 +1880,17 @@ export default function TasksPage({
                         />
                       </TableCell>
                     )}
-                    <TableCell sx={{ width: 100 }}>任务</TableCell>
-                    <TableCell sx={{ width: "30%" }}>来源 / 目标</TableCell>
-                    <TableCell sx={{ width: "21%" }}>已迁移 / 已扫描</TableCell>
-                    <TableCell sx={{ width: 112 }}>状态</TableCell>
-                    <TableCell sx={{ width: 128 }}>执行节点</TableCell>
+                    <TableCell sx={{ width: 100 }}>{tr("任务")}</TableCell>
+                    <TableCell sx={{ width: "30%" }}>
+                      {tr("来源 / 目标")}
+                    </TableCell>
+                    <TableCell sx={{ width: "21%" }}>
+                      {tr("已迁移 / 已扫描")}
+                    </TableCell>
+                    <TableCell sx={{ width: 112 }}>{tr("状态")}</TableCell>
+                    <TableCell sx={{ width: 128 }}>{tr("执行节点")}</TableCell>
                     <TableCell align="right" sx={{ width: 75 }}>
-                      失败
+                      {tr("失败")}
                     </TableCell>
                     <TableCell sx={{ width: 65 }} />
                   </TableRow>
@@ -1812,7 +1914,9 @@ export default function TasksPage({
                             onChange={() => toggle(task.taskIndex)}
                             slotProps={{
                               input: {
-                                "aria-label": `选择任务 ${task.taskIndex}`,
+                                "aria-label": tr("选择任务 {value1}", {
+                                  value1: task.taskIndex,
+                                }),
                               },
                             }}
                           />
@@ -1876,10 +1980,12 @@ export default function TasksPage({
                         )}
                       </TableCell>
                       <TableCell>
-                        <Tooltip title="查看详情">
+                        <Tooltip title={tr("查看详情")}>
                           <IconButton
                             size="small"
-                            aria-label={`查看任务 ${task.taskIndex}`}
+                            aria-label={tr("查看任务 {value1}", {
+                              value1: task.taskIndex,
+                            })}
                             onClick={() => setDetailId(task.taskIndex)}
                           >
                             <ArrowForwardRounded sx={{ fontSize: 18 }} />
@@ -1914,7 +2020,9 @@ export default function TasksPage({
                           onChange={() => toggle(task.taskIndex)}
                           slotProps={{
                             input: {
-                              "aria-label": `选择任务 ${task.taskIndex}`,
+                              "aria-label": tr("选择任务 {value1}", {
+                                value1: task.taskIndex,
+                              }),
                             },
                           }}
                           size="small"
@@ -1947,7 +2055,7 @@ export default function TasksPage({
                       size="small"
                       onClick={() => setDetailId(task.taskIndex)}
                     >
-                      查看详情
+                      {tr("查看详情")}
                     </Button>
                   </Stack>
                 </Box>
@@ -1967,11 +2075,13 @@ export default function TasksPage({
               setPage(0);
             }}
             rowsPerPageOptions={[10, 25, 50]}
-            labelRowsPerPage="每页"
+            labelRowsPerPage={tr("每页")}
             labelDisplayedRows={({ from, to, count }) =>
               `${from}–${to} / ${count}`
             }
-            getItemAriaLabel={(type) => (type === "next" ? "下一页" : "上一页")}
+            getItemAriaLabel={(type) =>
+              type === "next" ? tr("下一页") : tr("上一页")
+            }
             sx={{
               borderTop: "1px solid",
               borderColor: "divider",
@@ -1990,8 +2100,10 @@ export default function TasksPage({
       >
         <Typography variant="caption" color="text.secondary">
           {overview
-            ? "最近创建的 5 个任务"
-            : `共 ${formatNumber(filtered.length)} 个任务`}{" "}
+            ? tr("最近创建的 5 个任务")
+            : tr("共 {value1} 个任务", {
+                value1: formatNumber(filtered.length),
+              })}{" "}
           · {refreshDescription(refreshSeconds)}
         </Typography>
         <Typography
@@ -1999,7 +2111,7 @@ export default function TasksPage({
           color="text.secondary"
           sx={{ display: { xs: "none", sm: "block" } }}
         >
-          进度包含成功与跳过对象；扫描中总量可能变化
+          {tr("进度包含成功与跳过对象；扫描中总量可能变化")}
         </Typography>
       </Stack>
       <TaskDetail
@@ -2037,26 +2149,29 @@ export default function TasksPage({
         maxWidth="xs"
       >
         <DialogTitle>
-          {operation} {confirmationTasks.length} 个任务？
+          {tr("{operation} {count} 个任务？", {
+            operation: tr(operation),
+            count: formatNumber(confirmationTasks.length),
+          })}
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
             {operation === "删除"
-              ? "任务记录将移至回收站，不会删除源或目标存储中的对象。"
+              ? tr("任务记录将移至回收站，不会删除源或目标存储中的对象。")
               : operation === "停止"
-                ? "停止扫描和传输，保留已完成的对象与进度。"
+                ? tr("停止扫描和传输，保留已完成的对象与进度。")
                 : operation === "继续传输"
-                  ? "继续扫描和处理未完成的对象，保留已有传输进度。"
-                  : "任务将开始传输，请确认来源和目标配置。"}
+                  ? tr("继续扫描和处理未完成的对象，保留已有传输进度。")
+                  : tr("任务将开始传输，请确认来源和目标配置。")}
           </Typography>
           <Typography variant="body2" sx={{ mt: 2 }}>
-            任务：
+            {tr("任务：")}
             {confirmationTasks.map((task) => `#${task.taskIndex}`).join("、")}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ p: 3 }}>
           <Button onClick={() => setOperationOpen(false)} disabled={busy}>
-            取消
+            {tr("取消")}
           </Button>
           <Button
             variant="contained"
@@ -2064,7 +2179,9 @@ export default function TasksPage({
             onClick={execute}
             disabled={busy}
           >
-            {busy ? "提交中…" : `确认${operation}`}
+            {busy
+              ? tr("提交中…")
+              : tr("确认{value1}", { value1: tr(operation) })}
           </Button>
         </DialogActions>
       </Dialog>

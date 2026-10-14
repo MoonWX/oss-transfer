@@ -1,3 +1,4 @@
+import { t, useI18n, getLocale } from "../lib/i18n";
 import { useState, type FormEvent } from "react";
 import {
   Button,
@@ -25,12 +26,13 @@ import {
 export default function RefreshControls({
   onRefresh,
   loading = false,
-  refreshLabel = "刷新",
+  refreshLabel = t("刷新"),
 }: {
   onRefresh: () => unknown;
   loading?: boolean;
   refreshLabel?: string;
 }) {
+  useI18n();
   const { refreshSeconds, setRefreshSeconds } = useRefreshPreference();
   const [customOpen, setCustomOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -58,7 +60,7 @@ export default function RefreshControls({
         <TextField
           select
           size="small"
-          label="自动刷新"
+          label={t("自动刷新")}
           value={preset ? refreshSeconds : "custom"}
           onChange={(event) => {
             if (event.target.value !== "custom") {
@@ -69,17 +71,19 @@ export default function RefreshControls({
         >
           {REFRESH_PRESETS.map((value) => (
             <MenuItem key={value} value={value}>
-              {value === 0 ? "暂停" : `${value} 秒`}
+              {value === 0 ? t("暂停") : t("{p1} 秒", { p1: value })}
             </MenuItem>
           ))}
           <MenuItem value="custom" onClick={openCustom}>
-            {preset ? "自定义…" : `自定义（${refreshSeconds} 秒）`}
+            {preset
+              ? t("自定义…")
+              : t("自定义（{p1} 秒）", { p1: refreshSeconds })}
           </MenuItem>
         </TextField>
-        <Tooltip title={refreshLabel}>
+        <Tooltip title={t(refreshLabel)}>
           <span>
             <IconButton
-              aria-label={refreshLabel}
+              aria-label={t(refreshLabel)}
               onClick={() => void onRefresh()}
               disabled={loading}
             >
@@ -95,16 +99,16 @@ export default function RefreshControls({
         maxWidth="xs"
       >
         <form onSubmit={saveCustom} noValidate>
-          <DialogTitle>自定义刷新间隔</DialogTitle>
+          <DialogTitle>{t("自定义刷新间隔")}</DialogTitle>
           <DialogContent>
             <DialogContentText sx={{ mb: 2 }}>
-              适用于概览、迁移任务和执行节点。
+              {t("适用于概览、迁移任务和执行节点。")}
             </DialogContentText>
             <TextField
               autoFocus
               fullWidth
               type="number"
-              label="间隔（秒）"
+              label={t("间隔（秒）")}
               value={draft}
               onChange={(event) => {
                 setDraft(event.target.value);
@@ -113,8 +117,14 @@ export default function RefreshControls({
               error={error}
               helperText={
                 error
-                  ? `请输入 ${MIN_REFRESH_SECONDS}–${MAX_REFRESH_SECONDS} 之间的整数。`
-                  : `${MIN_REFRESH_SECONDS}–${MAX_REFRESH_SECONDS} 秒，整数。`
+                  ? t("请输入 {p1}–{p2} 之间的整数。", {
+                      p1: MIN_REFRESH_SECONDS,
+                      p2: MAX_REFRESH_SECONDS,
+                    })
+                  : t("{p1}–{p2} 秒，整数。", {
+                      p1: MIN_REFRESH_SECONDS,
+                      p2: MAX_REFRESH_SECONDS,
+                    })
               }
               slotProps={{
                 htmlInput: {
@@ -126,9 +136,9 @@ export default function RefreshControls({
             />
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setCustomOpen(false)}>取消</Button>
+            <Button onClick={() => setCustomOpen(false)}>{t("取消")}</Button>
             <Button type="submit" variant="contained">
-              应用
+              {t("应用")}
             </Button>
           </DialogActions>
         </form>

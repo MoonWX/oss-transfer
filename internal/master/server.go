@@ -131,6 +131,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
 	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w, r = localizedAPI(w, r)
 		w.Header().Set("Cache-Control", "no-store")
 		// There is no cookie authentication or permissive CORS. Also reject
 		// foreign-origin POSTs before they reach setup or credential handlers.
@@ -446,5 +447,5 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 func fail(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"success": false, "message": message})
+	writeJSON(w, status, map[string]any{"success": false, "message": localize(w, message)})
 }

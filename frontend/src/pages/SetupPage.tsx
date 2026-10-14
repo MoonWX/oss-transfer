@@ -1,3 +1,4 @@
+import { t, useI18n, getLocale } from "../lib/i18n";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Alert,
@@ -20,21 +21,18 @@ import {
   VisibilityOffOutlined,
   VisibilityOutlined,
 } from "@mui/icons-material";
-
 type SetupStatus = {
   success: true;
   configured: boolean;
   dataDirectory: string;
   tokenRequired: true;
 };
-
 type FieldErrors = Partial<
   Record<
     "username" | "password" | "confirm" | "publicUrl" | "setupToken",
     string
   >
 >;
-
 async function setupRequest<T>(
   path: string,
   signal: AbortSignal,
@@ -46,28 +44,29 @@ async function setupRequest<T>(
       method: body === undefined ? "GET" : "POST",
       credentials: "same-origin",
       cache: "no-store",
-      headers:
-        body === undefined ? undefined : { "Content-Type": "application/json" },
+      headers: {
+        "Accept-Language": getLocale(),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal,
     });
   } catch (failure) {
     if (signal.aborted) throw failure;
-    throw new Error("无法连接主节点，请重试。");
+    throw new Error(t("无法连接主节点，请重试。"));
   }
   const result = await response.json().catch(() => {
-    throw new Error("主节点返回了无效响应，请重试。");
+    throw new Error(t("主节点返回了无效响应，请重试。"));
   });
   if (!response.ok || result?.success !== true) {
     throw new Error(
       typeof result?.message === "string"
         ? result.message
-        : "初始化请求失败，请重试。",
+        : t("初始化请求失败，请重试。"),
     );
   }
   return result as T;
 }
-
 function normalizedOrigin(value: string): string | null {
   try {
     const url = new URL(value.trim());
@@ -86,8 +85,8 @@ function normalizedOrigin(value: string): string | null {
     return null;
   }
 }
-
 export default function SetupPage({ onComplete }: { onComplete: () => void }) {
+  useI18n();
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -106,7 +105,6 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
   const complete = useRef(onComplete);
   const submitController = useRef<AbortController | null>(null);
   complete.current = onComplete;
-
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -127,7 +125,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
           typeof next.dataDirectory !== "string" ||
           !next.dataDirectory.trim()
         ) {
-          throw new Error("初始化状态不完整，请重试。");
+          throw new Error(t("初始化状态不完整，请重试。"));
         }
         setStatus(next);
       })
@@ -135,10 +133,10 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
         if (!controller.signal.aborted)
           setLoadError(
             failure instanceof DOMException && failure.name === "TimeoutError"
-              ? "读取初始化状态超时，请重试。"
+              ? t("读取初始化状态超时，请重试。")
               : failure instanceof Error
                 ? failure.message
-                : "无法读取初始化状态。",
+                : t("无法读取初始化状态。"),
           );
       })
       .finally(() => {
@@ -146,22 +144,20 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
       });
     return () => controller.abort();
   }, [retry]);
-
   useEffect(() => () => submitController.current?.abort(), []);
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting.current || !status) return;
     const next: FieldErrors = {};
-    if (!username.trim()) next.username = "请输入用户名。";
-    if (!password) next.password = "请输入密码。";
-    if (!confirm) next.confirm = "请再次输入密码。";
-    else if (confirm !== password) next.confirm = "两次输入的密码不一致。";
+    if (!username.trim()) next.username = t("请输入用户名。");
+    if (!password) next.password = t("请输入密码。");
+    if (!confirm) next.confirm = t("请再次输入密码。");
+    else if (confirm !== password) next.confirm = t("两次输入的密码不一致。");
     const origin = normalizedOrigin(publicUrl);
     if (step >= 1 && !origin)
-      next.publicUrl = "请输入完整的 HTTP 或 HTTPS 地址，不含路径。";
+      next.publicUrl = t("请输入完整的 HTTP 或 HTTPS 地址，不含路径。");
     if (step === 2 && !setupToken.trim())
-      next.setupToken = "请输入初始化密钥。";
+      next.setupToken = t("请输入初始化密钥。");
     setErrors(next);
     setError("");
     if (next.username || next.password || next.confirm) {
@@ -203,17 +199,16 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
       if (!controller.signal.aborted)
         setError(
           failure instanceof DOMException && failure.name === "TimeoutError"
-            ? "请求超时，请刷新页面确认初始化状态。"
+            ? t("请求超时，请刷新页面确认初始化状态。")
             : failure instanceof Error
               ? failure.message
-              : "初始化失败，请重试。",
+              : t("初始化失败，请重试。"),
         );
     } finally {
       submitting.current = false;
       if (!controller.signal.aborted) setSaving(false);
     }
   }
-
   return (
     <Box
       sx={{
@@ -247,7 +242,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
             <CloudSyncRounded />
           </Box>
           <Typography variant="h5" component="h1">
-            初始化 OSS Transfer
+            {t("初始化 OSS Transfer")}
           </Typography>
         </Stack>
         {loading ? (
@@ -260,7 +255,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
             role="status"
           >
             <CircularProgress size={22} />
-            <Typography color="text.secondary">正在读取配置…</Typography>
+            <Typography color="text.secondary">{t("正在读取配置…")}</Typography>
           </Stack>
         ) : loadError ? (
           <Alert
@@ -270,7 +265,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                 color="inherit"
                 onClick={() => setRetry((value) => value + 1)}
               >
-                重试
+                {t("重试")}
               </Button>
             }
           >
@@ -279,7 +274,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
         ) : status ? (
           <Box component="form" noValidate onSubmit={submit} aria-busy={saving}>
             <Stepper activeStep={step} alternativeLabel sx={{ mb: 4 }}>
-              {["管理员", "主节点", "确认"].map((label) => (
+              {[t("管理员"), t("主节点"), t("确认")].map((label) => (
                 <Step key={label}>
                   <StepLabel>{label}</StepLabel>
                 </Step>
@@ -290,7 +285,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
               {step === 0 && (
                 <>
                   <TextField
-                    label="用户名"
+                    label={t("用户名")}
                     value={username}
                     required
                     autoFocus
@@ -301,7 +296,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                     helperText={errors.username}
                   />
                   <TextField
-                    label="密码"
+                    label={t("密码")}
                     value={password}
                     required
                     type={visible ? "text" : "password"}
@@ -316,7 +311,9 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                           <InputAdornment position="end">
                             <IconButton
                               type="button"
-                              aria-label={visible ? "隐藏密码" : "显示密码"}
+                              aria-label={
+                                visible ? t("隐藏密码") : t("显示密码")
+                              }
                               onClick={() => setVisible((value) => !value)}
                               edge="end"
                             >
@@ -332,7 +329,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                     }}
                   />
                   <TextField
-                    label="确认密码"
+                    label={t("确认密码")}
                     value={confirm}
                     required
                     type={visible ? "text" : "password"}
@@ -347,7 +344,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
               {step === 1 && (
                 <>
                   <TextField
-                    label="主节点地址"
+                    label={t("主节点地址")}
                     value={publicUrl}
                     required
                     autoFocus
@@ -357,12 +354,12 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                     onChange={(event) => setPublicUrl(event.target.value)}
                     error={Boolean(errors.publicUrl)}
                     helperText={
-                      errors.publicUrl || "浏览器和 Agent 使用此地址连接。"
+                      errors.publicUrl || t("浏览器和 Agent 使用此地址连接。")
                     }
                   />
                   <Box>
                     <Typography variant="body2" color="text.secondary">
-                      数据目录
+                      {t("数据目录")}
                     </Typography>
                     <Typography
                       sx={{
@@ -380,9 +377,9 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                 <>
                   <Stack component="dl" gap={1.5} sx={{ m: 0 }}>
                     {[
-                      ["管理员", username.trim()],
-                      ["主节点地址", publicUrl],
-                      ["数据目录", status.dataDirectory],
+                      [t("管理员"), username.trim()],
+                      [t("主节点地址"), publicUrl],
+                      [t("数据目录"), status.dataDirectory],
                     ].map(([label, value]) => (
                       <Box
                         key={label}
@@ -406,7 +403,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                   </Stack>
                   <Divider />
                   <TextField
-                    label="初始化密钥"
+                    label={t("初始化密钥")}
                     value={setupToken}
                     required
                     autoFocus
@@ -415,13 +412,15 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                     disabled={saving}
                     onChange={(event) => setSetupToken(event.target.value)}
                     error={Boolean(errors.setupToken)}
-                    helperText={errors.setupToken || "从主节点启动输出中复制。"}
+                    helperText={
+                      errors.setupToken || t("从主节点启动输出中复制。")
+                    }
                     slotProps={{
                       htmlInput: { spellCheck: false, autoCapitalize: "none" },
                     }}
                   />
                   <Typography variant="body2" color="text.secondary">
-                    主节点不执行传输。登录后前往“执行节点”添加 Agent。
+                    {t("主节点不执行传输。登录后前往“执行节点”添加 Agent。")}
                   </Typography>
                 </>
               )}
@@ -440,7 +439,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                   setStep((value) => value - 1);
                 }}
               >
-                上一步
+                {t("上一步")}
               </Button>
               <Button
                 type="submit"
@@ -452,7 +451,11 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                   ) : undefined
                 }
               >
-                {saving ? "正在初始化…" : step === 2 ? "完成并登录" : "下一步"}
+                {saving
+                  ? t("正在初始化…")
+                  : step === 2
+                    ? t("完成并登录")
+                    : t("下一步")}
               </Button>
             </Stack>
           </Box>

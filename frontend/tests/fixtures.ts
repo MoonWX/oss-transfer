@@ -127,7 +127,9 @@ export async function mockApi(
       body: request.postDataJSON(),
     });
     let result: any = { success: true };
-    if (path === "/api/auth/login")
+    if (path === "/api/setup/status")
+      result = { success: true, configured: true };
+    else if (path === "/api/auth/login")
       result = {
         success: true,
         token: "test-token",

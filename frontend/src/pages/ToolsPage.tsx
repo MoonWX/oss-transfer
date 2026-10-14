@@ -1,3 +1,4 @@
+import { t, useI18n, formatDate } from "../lib/i18n";
 import { useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
@@ -43,7 +44,6 @@ import {
   formatBytes,
   formatNumber,
 } from "../components/Common";
-
 type ObjectMetadata = {
   exists?: boolean | null;
   queryStatus?: "FOUND" | "NOT_FOUND" | "UNAVAILABLE";
@@ -66,7 +66,10 @@ type Comparison = {
   partial?: boolean;
   sourceMetadata: ObjectMetadata;
   destMetadata: ObjectMetadata;
-  verification?: { sizeMatch?: boolean | null; message?: string };
+  verification?: {
+    sizeMatch?: boolean | null;
+    message?: string;
+  };
   sourceBucket?: string;
   sourceKey?: string;
   destBucket?: string;
@@ -90,7 +93,9 @@ type DeletedTask = {
     localPath?: string;
     bucket?: string;
     s3Alias?: string;
-    nodeBindings?: { localPath?: string }[];
+    nodeBindings?: {
+      localPath?: string;
+    }[];
   };
   destinationEndpoint?: DeletedTask["sourceEndpoint"];
 };
@@ -105,7 +110,7 @@ function deletedEndpoint(task: DeletedTask, source: boolean) {
       value?.localPath ||
       value?.nodeBindings?.[0]?.localPath ||
       task.localPath ||
-      "本地文件系统"
+      t("本地文件系统")
     );
   return (
     [
@@ -144,12 +149,15 @@ const displayValue = (value: unknown, format?: "bytes" | "date") =>
   value == null || value === ""
     ? "—"
     : format === "bytes"
-      ? `${formatBytes(Number(value))}（${formatNumber(Number(value))} 字节）`
+      ? t("{value1}（{value2} 字节）", {
+          value1: formatBytes(Number(value)),
+          value2: formatNumber(Number(value)),
+        })
       : format === "date"
-        ? new Date(value as string | number).toLocaleString()
+        ? formatDate(value)
         : String(value);
-
 export default function ToolsPage() {
+  useI18n();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "recycle" ? 1 : 0;
   const notify = useNotify();
@@ -191,7 +199,9 @@ export default function ToolsPage() {
     nextBeforeId?: number;
   }>(tab === 1 ? "/api/master/deleted-tasks" : null);
   const [earlierRows, setEarlierRows] = useState<
-    (DeletedTask & { workerNode: string })[]
+    (DeletedTask & {
+      workerNode: string;
+    })[]
   >([]);
   const [earlierCursor, setEarlierCursor] = useState<number | null>();
   const [earlierLoading, setEarlierLoading] = useState(false);
@@ -229,9 +239,9 @@ export default function ToolsPage() {
     }
   }
   // Recycle completeness belongs to this snapshot, not the live status poll.
-  const nodes = useApi<{ data: NodeRegistry }>(
-    tab === 1 ? "/api/master/nodes" : null,
-  );
+  const nodes = useApi<{
+    data: NodeRegistry;
+  }>(tab === 1 ? "/api/master/nodes" : null);
   const hasMembershipSnapshot = Array.isArray(recycle.data?.queriedWorkers);
   const nodeDiscoveryFailed = !hasMembershipSnapshot && !!nodes.error;
   const membershipKnown = hasMembershipSnapshot || !!nodes.data?.data?.nodes;
@@ -326,7 +336,6 @@ export default function ToolsPage() {
         comparison?.destMetadata.userMetadata?.[key],
       ),
   );
-
   async function compare(event: FormEvent) {
     event.preventDefault();
     setComparing(true);
@@ -345,7 +354,7 @@ export default function ToolsPage() {
         !values.sourceKey ||
         !values.destKey
       )
-        throw new Error("请填写源、目标对象的 Bucket 和 Key。");
+        throw new Error(t("请填写源、目标对象的 Bucket 和 Key。"));
       setComparison(
         await api<Comparison>(
           `/api/master/object-metadata?${new URLSearchParams(values)}`,
@@ -396,15 +405,30 @@ export default function ToolsPage() {
       if (!partial) setSelectedIds([]);
       else
         setDeleteError(
-          `${detail.message || "部分记录未删除，请刷新后重试。"}${failedWorkers.length ? `（未完成节点：${failedWorkers.join("、")}）` : ""}`,
+          t("{value1}{value2}", {
+            value1: detail.message || t("部分记录未删除，请刷新后重试。"),
+            value2: failedWorkers.length
+              ? t("（未完成节点：{value1}）", {
+                  value1: failedWorkers.join(", "),
+                })
+              : "",
+          }),
         );
       setPage(0);
       notify(
         partial
-          ? `部分记录未删除${failedWorkers.length ? `，未响应节点：${failedWorkers.join("、")}` : "，请刷新后重试"}。`
+          ? t("部分记录未删除{value1}。", {
+              value1: failedWorkers.length
+                ? t("，未响应节点：{value1}", {
+                    value1: failedWorkers.join(", "),
+                  })
+                : t("，请刷新后重试"),
+            })
           : retained.length
-            ? `任务记录已删除；已移除节点的本地历史保留：${retained.join("、")}。`
-            : "永久删除请求已提交，正在刷新回收站。",
+            ? t("任务记录已删除；已移除节点的本地历史保留：{value1}。", {
+                value1: retained.join(", "),
+              })
+            : t("永久删除请求已提交，正在刷新回收站。"),
         partial ? "warning" : "info",
       );
       await Promise.all([recycle.refresh(), nodes.refresh()]);
@@ -421,7 +445,14 @@ export default function ToolsPage() {
         detail?.partial ||
         Number(detail?.failed) > 0 ||
         failedWorkers.length > 0;
-      const message = `${errorText(error)}${failedWorkers.length ? `（未完成节点：${failedWorkers.join("、")}）` : ""}`;
+      const message = t("{value1}{value2}", {
+        value1: errorText(error),
+        value2: failedWorkers.length
+          ? t("（未完成节点：{value1}）", {
+              value1: failedWorkers.join(", "),
+            })
+          : "",
+      });
       setDeleteError(message);
       notify(message, partial ? "warning" : "error");
       if (partial) {
@@ -434,12 +465,11 @@ export default function ToolsPage() {
       setDeleting(false);
     }
   }
-
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="运维工具"
-        description="比对对象元数据，管理回收站任务记录。"
+        title={t("运维工具")}
+        description={t("比对对象元数据，管理回收站任务记录。")}
       />
       <Tabs
         value={tab}
@@ -448,18 +478,18 @@ export default function ToolsPage() {
           value === 1 ? next.set("tab", "recycle") : next.delete("tab");
           setParams(next, { replace: true });
         }}
-        aria-label="运维工具"
+        aria-label={t("运维工具")}
         sx={{ borderBottom: 1, borderColor: "divider" }}
       >
         <Tab
           icon={<CompareArrowsRounded fontSize="small" />}
           iconPosition="start"
-          label="对象比对"
+          label={t("对象比对")}
         />
         <Tab
           icon={<DeleteForeverRounded fontSize="small" />}
           iconPosition="start"
-          label="任务回收站"
+          label={t("任务回收站")}
         />
       </Tabs>
       {tab === 0 && (
@@ -480,12 +510,12 @@ export default function ToolsPage() {
                 }}
               >
                 <Stack spacing={2}>
-                  <Typography variant="h6">源对象</Typography>
+                  <Typography variant="h6">{t("源对象")}</Typography>
                   <TextField
                     required
                     fullWidth
-                    label="源 Bucket"
-                    placeholder="连接名称/bucket-name"
+                    label={t("源 Bucket")}
+                    placeholder={t("连接名称/bucket-name")}
                     value={query.sourceBucket}
                     onChange={(event) =>
                       setQuery((value) => ({
@@ -493,12 +523,14 @@ export default function ToolsPage() {
                         sourceBucket: event.target.value,
                       }))
                     }
-                    helperText="使用已配置的连接名称，例如 storage/my-bucket。"
+                    helperText={t(
+                      "使用已配置的连接名称，例如 storage/my-bucket。",
+                    )}
                   />
                   <TextField
                     required
                     fullWidth
-                    label="源对象 Key"
+                    label={t("源对象 Key")}
                     placeholder="path/to/object"
                     value={query.sourceKey}
                     onChange={(event) =>
@@ -514,12 +546,12 @@ export default function ToolsPage() {
                   sx={{ display: { xs: "none", md: "block" } }}
                 />
                 <Stack spacing={2}>
-                  <Typography variant="h6">目标对象</Typography>
+                  <Typography variant="h6">{t("目标对象")}</Typography>
                   <TextField
                     required
                     fullWidth
-                    label="目标 Bucket"
-                    placeholder="连接名称/bucket-name"
+                    label={t("目标 Bucket")}
+                    placeholder={t("连接名称/bucket-name")}
                     value={query.destBucket}
                     onChange={(event) =>
                       setQuery((value) => ({
@@ -527,12 +559,14 @@ export default function ToolsPage() {
                         destBucket: event.target.value,
                       }))
                     }
-                    helperText="填写连接名称和存储桶，例如 storage/my-bucket。"
+                    helperText={t(
+                      "填写连接名称和存储桶，例如 storage/my-bucket。",
+                    )}
                   />
                   <TextField
                     required
                     fullWidth
-                    label="目标对象 Key"
+                    label={t("目标对象 Key")}
                     placeholder="path/to/object"
                     value={query.destKey}
                     onChange={(event) =>
@@ -559,7 +593,7 @@ export default function ToolsPage() {
                   }
                   disabled={!query.sourceKey || comparing}
                 >
-                  目标使用相同 Key
+                  {t("目标使用相同 Key")}
                 </Button>
                 <Button
                   type="submit"
@@ -573,7 +607,7 @@ export default function ToolsPage() {
                     )
                   }
                 >
-                  {comparing ? "正在读取元数据…" : "开始比对"}
+                  {comparing ? t("正在读取元数据…") : t("开始比对")}
                 </Button>
               </Stack>
             </Stack>
@@ -581,8 +615,10 @@ export default function ToolsPage() {
           {compareError && <Alert severity="error">{compareError}</Alert>}
           {!comparison && !comparing && !compareError && (
             <EmptyState
-              title="对象元数据比对"
-              description="比较对象大小、ETag、存储类型和自定义元数据，不修改对象。"
+              title={t("对象元数据比对")}
+              description={t(
+                "比较对象大小、ETag、存储类型和自定义元数据，不修改对象。",
+              )}
             />
           )}
           {comparison && (
@@ -599,13 +635,13 @@ export default function ToolsPage() {
               >
                 {[
                   {
-                    title: "源对象",
+                    title: t("源对象"),
                     meta: comparison.sourceMetadata,
                     bucket: comparison.sourceBucket,
                     key: comparison.sourceKey,
                   },
                   {
-                    title: "目标对象",
+                    title: t("目标对象"),
                     meta: comparison.destMetadata,
                     bucket: comparison.destBucket,
                     key: comparison.destKey,
@@ -631,12 +667,12 @@ export default function ToolsPage() {
                         }
                         label={
                           item.meta.queryStatus === "UNAVAILABLE"
-                            ? "查询失败，存在状态未知"
+                            ? t("查询失败，存在状态未知")
                             : item.meta.exists === true
-                              ? "读取成功"
+                              ? t("读取成功")
                               : item.meta.exists === false
-                                ? "对象不存在"
-                                : "存在状态未知"
+                                ? t("对象不存在")
+                                : t("存在状态未知")
                         }
                       />
                     </Stack>
@@ -677,12 +713,12 @@ export default function ToolsPage() {
                 }
               >
                 {comparable && comparison.verification?.sizeMatch === true
-                  ? "两个对象的大小一致。"
+                  ? t("两个对象的大小一致。")
                   : comparable && comparison.verification?.sizeMatch === false
-                    ? "两个对象的大小不一致，请检查迁移结果。"
+                    ? t("两个对象的大小不一致，请检查迁移结果。")
                     : comparison.verification?.message ||
-                      "元数据不完整，无法完成比对。"}{" "}
-                对象大小和 ETag 的比较不等同于完整内容校验。
+                      t("元数据不完整，无法完成比对。")}{" "}
+                {t("对象大小和 ETag 的比较不等同于完整内容校验。")}
               </Alert>
               <Paper variant="outlined" sx={{ overflow: "hidden" }}>
                 <Stack
@@ -693,11 +729,13 @@ export default function ToolsPage() {
                   sx={{ p: 2.5 }}
                 >
                   <Box>
-                    <Typography variant="h6">元数据差异</Typography>
+                    <Typography variant="h6">{t("元数据差异")}</Typography>
                     <Typography variant="body2" color="text.secondary">
                       {comparable
-                        ? `${differences} 个字段不同`
-                        : "元数据不完整，无法统计差异"}
+                        ? t("{value1} 个字段不同", {
+                            value1: differences,
+                          })
+                        : t("元数据不完整，无法统计差异")}
                     </Typography>
                   </Box>
                   <Button
@@ -706,16 +744,20 @@ export default function ToolsPage() {
                     disabled={!comparable}
                     onClick={() => setOnlyDifferences((value) => !value)}
                   >
-                    {onlyDifferences ? "显示全部字段" : "仅看差异"}
+                    {onlyDifferences ? t("显示全部字段") : t("仅看差异")}
                   </Button>
                 </Stack>
                 <TableContainer>
                   <Table sx={{ minWidth: 560 }}>
                     <TableHead>
                       <TableRow>
-                        <TableCell sx={{ width: "24%" }}>字段</TableCell>
-                        <TableCell sx={{ width: "38%" }}>源对象</TableCell>
-                        <TableCell sx={{ width: "38%" }}>目标对象</TableCell>
+                        <TableCell sx={{ width: "24%" }}>{t("字段")}</TableCell>
+                        <TableCell sx={{ width: "38%" }}>
+                          {t("源对象")}
+                        </TableCell>
+                        <TableCell sx={{ width: "38%" }}>
+                          {t("目标对象")}
+                        </TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -737,14 +779,14 @@ export default function ToolsPage() {
                           >
                             <TableCell>
                               <Typography variant="body2">
-                                {field.label}
+                                {t(field.label)}
                               </Typography>
                               {different && (
                                 <Typography
                                   variant="caption"
                                   color="warning.main"
                                 >
-                                  存在差异
+                                  {t("存在差异")}
                                 </Typography>
                               )}
                             </TableCell>
@@ -767,7 +809,7 @@ export default function ToolsPage() {
                         <TableRow>
                           <TableCell colSpan={3}>
                             <Typography variant="subtitle2">
-                              自定义元数据
+                              {t("自定义元数据")}
                             </Typography>
                           </TableCell>
                         </TableRow>
@@ -811,8 +853,8 @@ export default function ToolsPage() {
                 </TableContainer>
                 {comparable && onlyDifferences && differences === 0 && (
                   <EmptyState
-                    title="没有元数据差异"
-                    description="本次返回的元数据字段一致。"
+                    title={t("没有元数据差异")}
+                    description={t("本次返回的元数据字段一致。")}
                   />
                 )}
               </Paper>
@@ -823,26 +865,29 @@ export default function ToolsPage() {
       {tab === 1 && (
         <>
           <Alert severity="info">
-            回收站保留已标记删除的任务。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。
+            {t(
+              "回收站保留已标记删除的任务。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。",
+            )}
           </Alert>
           {recycle.error && <Alert severity="error">{recycle.error}</Alert>}
           {deleteError && <Alert severity="warning">{deleteError}</Alert>}
           {nodeDiscoveryFailed && (
             <Alert severity="warning">
-              节点清单读取失败，无法确认回收站是否覆盖全部节点。
+              {t("节点清单读取失败，无法确认回收站是否覆盖全部节点。")}
             </Alert>
           )}
           {recycle.data && missingNodes.length > 0 && (
             <Alert severity="warning">
-              以下节点未返回回收站数据，当前列表可能不完整：
-              {missingNodes.join("、")}
+              {t("以下节点未返回回收站数据，当前列表可能不完整：{nodes}", {
+                nodes: missingNodes.join(", "),
+              })}
             </Alert>
           )}
           {(recycle.data?.partial || recycle.data?.complete === false) &&
             !recycle.data?.truncated &&
             missingNodes.length === 0 && (
               <Alert severity="warning">
-                部分回收站记录未返回，当前列表可能不完整。
+                {t("部分回收站记录未返回，当前列表可能不完整。")}
               </Alert>
             )}
           {nextEarlierCursor && (
@@ -853,11 +898,13 @@ export default function ToolsPage() {
                   disabled={earlierLoading}
                   onClick={() => void loadEarlierRecords()}
                 >
-                  {earlierLoading ? "加载中" : "加载更早记录"}
+                  {earlierLoading ? t("加载中") : t("加载更早记录")}
                 </Button>
               }
             >
-              已加载 {formatNumber(rows.length)} 条记录。
+              {t("已加载 {count} 条记录。", {
+                count: formatNumber(rows.length),
+              })}
             </Alert>
           )}
           {earlierError && <Alert severity="error">{earlierError}</Alert>}
@@ -870,11 +917,18 @@ export default function ToolsPage() {
               sx={{ p: 2.5 }}
             >
               <Box>
-                <Typography variant="h6">已删除任务</Typography>
+                <Typography variant="h6">{t("已删除任务")}</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {recycle.data
-                    ? `${formatNumber(rows.length)} 条节点任务记录${activeSelection.length ? ` · 已选择 ${activeSelection.length} 个任务 ID（最多 128 个）` : ""}`
-                    : "正在读取回收站"}
+                    ? t("{value1} 条节点任务记录{value2}", {
+                        value1: formatNumber(rows.length),
+                        value2: activeSelection.length
+                          ? t(" · 已选择 {value1} 个任务 ID（最多 128 个）", {
+                              value1: activeSelection.length,
+                            })
+                          : "",
+                      })
+                    : t("正在读取回收站")}
                 </Typography>
               </Box>
               <Stack direction="row" spacing={1}>
@@ -892,7 +946,7 @@ export default function ToolsPage() {
                     void nodes.refresh();
                   }}
                 >
-                  刷新
+                  {t("刷新")}
                 </Button>
                 <Button
                   variant="outlined"
@@ -903,13 +957,13 @@ export default function ToolsPage() {
                   }
                   onClick={() => setConfirmDelete(true)}
                 >
-                  永久删除
+                  {t("永久删除")}
                 </Button>
               </Stack>
             </Stack>
             <Box sx={{ height: 4 }}>
               <LinearProgress
-                aria-label="刷新回收站"
+                aria-label={t("刷新回收站")}
                 sx={{ visibility: recycle.loading ? "visible" : "hidden" }}
               />
             </Box>
@@ -924,8 +978,8 @@ export default function ToolsPage() {
                             inputProps={{
                               "aria-label":
                                 uniqueIds.length > 128
-                                  ? "选择前 128 个已删除任务"
-                                  : "选择全部已删除任务",
+                                  ? t("选择前 128 个已删除任务")
+                                  : t("选择全部已删除任务"),
                             }}
                             checked={
                               selectableIds.length > 0 &&
@@ -946,11 +1000,11 @@ export default function ToolsPage() {
                             }
                           />
                         </TableCell>
-                        <TableCell>任务</TableCell>
-                        <TableCell>迁移路径</TableCell>
-                        <TableCell>节点</TableCell>
-                        <TableCell>最终状态</TableCell>
-                        <TableCell align="right">已传输</TableCell>
+                        <TableCell>{t("任务")}</TableCell>
+                        <TableCell>{t("迁移路径")}</TableCell>
+                        <TableCell>{t("节点")}</TableCell>
+                        <TableCell>{t("最终状态")}</TableCell>
+                        <TableCell align="right">{t("已传输")}</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -965,7 +1019,9 @@ export default function ToolsPage() {
                             <TableCell padding="checkbox">
                               <Checkbox
                                 inputProps={{
-                                  "aria-label": `选择任务 ${task.taskIndex}`,
+                                  "aria-label": t("选择任务 {value1}", {
+                                    value1: task.taskIndex,
+                                  }),
                                 }}
                                 checked={activeSelection.includes(
                                   task.taskIndex,
@@ -996,9 +1052,11 @@ export default function ToolsPage() {
                                 color="text.secondary"
                               >
                                 {task.createTime
-                                  ? new Date(
-                                      task.createTime,
-                                    ).toLocaleDateString()
+                                  ? formatDate(task.createTime, {
+                                      year: "numeric",
+                                      month: "numeric",
+                                      day: "numeric",
+                                    })
                                   : "—"}
                               </Typography>
                             </TableCell>
@@ -1037,7 +1095,9 @@ export default function ToolsPage() {
                               <Typography variant="body2">
                                 {task.putObjectCount === undefined
                                   ? "—"
-                                  : `${formatNumber(task.putObjectCount)} 个对象`}
+                                  : t("{value1} 个对象", {
+                                      value1: formatNumber(task.putObjectCount),
+                                    })}
                               </Typography>
                               <Typography
                                 variant="caption"
@@ -1064,18 +1124,18 @@ export default function ToolsPage() {
                     setPage(0);
                   }}
                   rowsPerPageOptions={[25, 50, 100]}
-                  labelRowsPerPage="每页"
+                  labelRowsPerPage={t("每页")}
                   labelDisplayedRows={({ from, to, count }) =>
                     `${from}–${to} / ${count}`
                   }
                   getItemAriaLabel={(type) =>
                     type === "next"
-                      ? "下一页"
+                      ? t("下一页")
                       : type === "previous"
-                        ? "上一页"
+                        ? t("上一页")
                         : type === "first"
-                          ? "第一页"
-                          : "最后一页"
+                          ? t("第一页")
+                          : t("最后一页")
                   }
                 />
               </>
@@ -1088,8 +1148,8 @@ export default function ToolsPage() {
               membershipKnown &&
               missingNodes.length === 0 && (
                 <EmptyState
-                  title="暂无已删除任务"
-                  description="从任务列表删除的记录会移入回收站。"
+                  title={t("暂无已删除任务")}
+                  description={t("从任务列表删除的记录会移入回收站。")}
                 />
               )
             )}
@@ -1101,18 +1161,24 @@ export default function ToolsPage() {
             fullWidth
           >
             <DialogTitle>
-              永久删除 {activeSelection.length} 个任务？
+              {t("永久删除 {count} 个任务？", {
+                count: activeSelection.length,
+              })}
             </DialogTitle>
             <DialogContent>
               <Alert severity="warning" sx={{ mb: 2 }}>
-                此操作无法撤销，将清理所有执行节点上同 ID 的已删除任务记录。
+                {t(
+                  "此操作无法撤销，将清理所有执行节点上同 ID 的已删除任务记录。",
+                )}
               </Alert>
               <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                任务 ID：{activeSelection.map((id) => `#${id}`).join("、")}
+                {t("任务 ID：{ids}", {
+                  ids: activeSelection.map((id) => `#${id}`).join(", "),
+                })}
               </Typography>
               <Divider sx={{ my: 2 }} />
               <Typography variant="body2" color="text.secondary">
-                源端和目标端的数据对象不受影响。
+                {t("源端和目标端的数据对象不受影响。")}
               </Typography>
             </DialogContent>
             <DialogActions>
@@ -1120,7 +1186,7 @@ export default function ToolsPage() {
                 disabled={deleting}
                 onClick={() => setConfirmDelete(false)}
               >
-                取消
+                {t("取消")}
               </Button>
               <Button
                 variant="contained"
@@ -1135,7 +1201,7 @@ export default function ToolsPage() {
                 }
                 onClick={() => void deleteTasks()}
               >
-                确认永久删除
+                {t("确认永久删除")}
               </Button>
             </DialogActions>
           </Dialog>

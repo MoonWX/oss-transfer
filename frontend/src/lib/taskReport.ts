@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { api, ApiError } from "./api";
 
 let downloadSequence = 0;
@@ -12,11 +13,11 @@ export async function downloadTaskReport(
   );
   const ticket = response.data?.ticket;
   if (typeof ticket !== "string" || ticket.trim() === "")
-    throw new ApiError("报告下载票据无效，请重试。");
+    throw new ApiError(tr("报告下载票据无效，请重试。"));
 
   const frame = document.createElement("iframe");
   frame.name = `task-report-${Date.now()}-${++downloadSequence}`;
-  frame.title = "任务报告下载";
+  frame.title = tr("任务报告下载");
   frame.hidden = true;
   frame.tabIndex = -1;
   frame.setAttribute("aria-hidden", "true");
@@ -31,17 +32,17 @@ export async function downloadTaskReport(
     frame.remove();
     onError(message);
   };
-  frame.addEventListener("error", () => fail("报告下载失败，请重试。"));
+  frame.addEventListener("error", () => fail(tr("报告下载失败，请重试。")));
   frame.addEventListener("load", () => {
     try {
       const doc = frame.contentDocument;
       if (!doc) {
-        fail("报告下载失败，请重试。");
+        fail(tr("报告下载失败，请重试。"));
         return;
       }
       if (doc.URL === "about:blank") return;
       const text = doc.body?.textContent || "";
-      let message = "服务未返回报告文件，请重试。";
+      let message = tr("服务未返回报告文件，请重试。");
       try {
         const error = JSON.parse(text);
         if (typeof error.message === "string" && error.message.trim())
@@ -51,7 +52,7 @@ export async function downloadTaskReport(
       }
       fail(message);
     } catch {
-      fail("无法读取报告下载结果，请检查浏览器下载列表或重试。");
+      fail(tr("无法读取报告下载结果，请检查浏览器下载列表或重试。"));
     }
   });
 

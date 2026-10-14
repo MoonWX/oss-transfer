@@ -130,5 +130,5 @@ func (s *Server) compareMetadata(w http.ResponseWriter, r *http.Request) {
 	if partial {
 		status = 502
 	}
-	writeJSON(w, status, map[string]any{"success": !partial, "partial": partial, "sourceBucket": q.Get("sourceBucket"), "destBucket": q.Get("destBucket"), "sourceKey": q.Get("sourceKey"), "destKey": q.Get("destKey"), "sourceMetadata": metadataValue(objects[0], results[0]), "destMetadata": metadataValue(objects[1], results[1]), "verification": map[string]any{"sizeMatch": sizeMatch, "message": "仅比较对象元数据。"}})
+	writeJSON(w, status, map[string]any{"success": !partial, "partial": partial, "sourceBucket": q.Get("sourceBucket"), "destBucket": q.Get("destBucket"), "sourceKey": q.Get("sourceKey"), "destKey": q.Get("destKey"), "sourceMetadata": metadataValue(objects[0], results[0]), "destMetadata": metadataValue(objects[1], results[1]), "verification": map[string]any{"sizeMatch": sizeMatch, "message": localize(w, "仅比较对象元数据。")}})
 }

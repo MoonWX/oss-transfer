@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 )
 
@@ -21,7 +20,7 @@ func checkSessionPermissions(path string) error {
 		return err
 	}
 	if info.Mode().Perm()&0077 != 0 {
-		return fmt.Errorf("登录会话文件权限应为 0600: %s", path)
+		return cliErrorf("登录会话文件权限应为 0600: %s", path)
 	}
 	return nil
 }

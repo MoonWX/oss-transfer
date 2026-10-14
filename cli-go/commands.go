@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"os"
@@ -1226,7 +1227,7 @@ func cmdImportTasks(client *ApiClient, args []string) (map[string]interface{}, e
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("打开文件失败: %w", err)
+		return nil, cliErrorf("打开文件失败: %w", err)
 	}
 	defer file.Close()
 
@@ -1250,7 +1251,7 @@ func cmdImportTasks(client *ApiClient, args []string) (map[string]interface{}, e
 	}
 
 	if len(pairs) == 0 {
-		return nil, fmt.Errorf("文件中没有有效的bucket对")
+		return nil, cliErrorf("文件中没有有效的bucket对")
 	}
 
 	fmt.Printf("从文件导入 %d 个bucket对: %s\n", len(pairs), filePath)
@@ -1598,21 +1599,10 @@ type SourceObject struct {
 	Md5Hash string
 }
 
-func cmdDiffObjects(args []string) error {
+func cmdDiffObjects(args []string, outputs ...io.Writer) error {
+	out := offlineCLIOutput(outputs)
 	if len(args) < 3 {
-		fmt.Println("用法: oss-transfer-cli diff-objects <srcDir> <destManifest> <outputDir> [选项]")
-		fmt.Println("  srcDir: 源bucket对象清单目录(包含多个CSV文件)")
-		fmt.Println("  destManifest: 目标bucket对象清单文件(必须按key有序)")
-		fmt.Println("  outputDir: 增量对象输出目录")
-		fmt.Println()
-		fmt.Println("选项:")
-		fmt.Println("  --mode <bloom|sort-merge>  筛选模式(默认sort-merge)")
-		fmt.Println("    bloom: 使用布隆过滤器，内存占用小，有误判率")
-		fmt.Println("    sort-merge: 排序归并，100%准确（默认，推荐）")
-		fmt.Println("  --false-positive <rate> 布隆过滤器误判率(默认0.01，即1%)")
-		fmt.Println("    支持: 0.1(10%), 0.01(1%), 0.001(0.1%), 0.0001(0.01%)")
-		fmt.Println("    误判率越低，内存占用越大")
-		os.Exit(1)
+		return cliErrorf("用法: diff-objects <源目录> <有序目标清单> <输出目录>；详见 help tools")
 	}
 
 	srcDir := args[0]
@@ -1630,8 +1620,7 @@ func cmdDiffObjects(args []string) error {
 		} else if args[i] == "--false-positive" && i+1 < len(args) {
 			rate, err := strconv.ParseFloat(args[i+1], 64)
 			if err != nil || rate <= 0 || rate >= 1 {
-				fmt.Printf("错误: 无效的误判率: %s，请输入0到1之间的值\n", args[i+1])
-				os.Exit(1)
+				return cliErrorf("--false-positive 必须大于 0 且小于 1: %s", args[i+1])
 			}
 			falsePositiveRate = rate
 			i++
@@ -1639,38 +1628,38 @@ func cmdDiffObjects(args []string) error {
 	}
 
 	if mode != "bloom" && mode != "sort-merge" {
-		return fmt.Errorf("不支持的模式: %s，请使用 bloom 或 sort-merge", mode)
+		return cliErrorf("不支持的模式: %s，请使用 bloom 或 sort-merge", mode)
 	}
 
-	fmt.Printf("提取增量对象...\n")
-	fmt.Printf("  源清单目录: %s\n", srcDir)
-	fmt.Printf("  目标清单: %s\n", destManifest)
-	fmt.Printf("  输出目录: %s\n", outputDir)
-	fmt.Printf("  模式: %s\n", mode)
+	fmt.Fprintf(out, cliText(out, "提取增量对象...\n"))
+	fmt.Fprintf(out, cliText(out, "  源清单目录: %s\n"), srcDir)
+	fmt.Fprintf(out, cliText(out, "  目标清单: %s\n"), destManifest)
+	fmt.Fprintf(out, cliText(out, "  输出目录: %s\n"), outputDir)
+	fmt.Fprintf(out, cliText(out, "  模式: %s\n"), mode)
 
 	srcDirInfo, err := os.Stat(srcDir)
 	if err != nil {
-		return fmt.Errorf("源目录不存在: %v", err)
+		return cliErrorf("源目录不存在: %v", err)
 	}
 	if !srcDirInfo.IsDir() {
-		return fmt.Errorf("源清单路径不是目录: %s", srcDir)
+		return cliErrorf("源清单路径不是目录: %s", srcDir)
 	}
 
 	err = os.MkdirAll(outputDir, 0755)
 	if err != nil {
-		return fmt.Errorf("创建输出目录失败: %v", err)
+		return cliErrorf("创建输出目录失败: %v", err)
 	}
 
 	destInfo, err := os.Stat(destManifest)
 	if err != nil {
-		return fmt.Errorf("目标清单文件不存在: %v", err)
+		return cliErrorf("目标清单文件不存在: %v", err)
 	}
 
 	if mode == "bloom" {
 		destFileSize := destInfo.Size()
 		lineCount, err := countLines(destManifest)
 		if err != nil {
-			return fmt.Errorf("统计目标清单行数失败: %v", err)
+			return cliErrorf("统计目标清单行数失败: %v", err)
 		}
 
 		avgKeySize := int(destFileSize) / lineCount
@@ -1678,23 +1667,23 @@ func cmdDiffObjects(args []string) error {
 			avgKeySize = 50
 		}
 
-		fmt.Printf("  目标对象数: %d\n", lineCount)
+		fmt.Fprintf(out, cliText(out, "  目标对象数: %d\n"), lineCount)
 
 		bitsPerKey := -math.Log(falsePositiveRate) / (math.Ln2 * math.Ln2)
 		memSize := int(float64(lineCount) * bitsPerKey / 8)
-		fmt.Printf("\n预计资源使用:")
-		fmt.Printf("  内存: ~%s\n", formatSize(int64(memSize)))
-		fmt.Printf("  磁盘: ~0\n")
-		fmt.Printf("  准确率: %.4f%% \n", (1-falsePositiveRate)*100)
+		fmt.Fprintf(out, cliText(out, "\n预计资源使用:"))
+		fmt.Fprintf(out, cliText(out, "  内存: ~%s\n"), formatSize(int64(memSize)))
+		fmt.Fprintf(out, cliText(out, "  磁盘: ~0\n"))
+		fmt.Fprintf(out, cliText(out, "  准确率: %.4f%% \n"), (1-falsePositiveRate)*100)
 
-		return cmdDiffObjectsBloom(srcDir, destManifest, outputDir, lineCount, falsePositiveRate, totalStartTime)
+		return cmdDiffObjectsBloom(srcDir, destManifest, outputDir, lineCount, falsePositiveRate, totalStartTime, out)
 	} else {
-		fmt.Printf("\n预计资源使用:")
-		fmt.Printf("  内存: ~10*单个源清单大小\n")
-		fmt.Printf("  磁盘: ~0\n")
-		fmt.Printf("  准确率: 100%%\n")
+		fmt.Fprintf(out, cliText(out, "\n预计资源使用:"))
+		fmt.Fprintf(out, cliText(out, "  内存: ~10*单个源清单大小\n"))
+		fmt.Fprintf(out, cliText(out, "  磁盘: ~0\n"))
+		fmt.Fprintf(out, cliText(out, "  准确率: 100%%\n"))
 
-		return cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, "", totalStartTime)
+		return cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, "", totalStartTime, out)
 	}
 }
 
@@ -1719,26 +1708,27 @@ func countLines(filename string) (int, error) {
 	return count, scanner.Err()
 }
 
-func cmdDiffObjectsBloom(srcDir, destManifest, outputDir string, expectedCount int, falsePositiveRate float64, totalStartTime time.Time) error {
-	fmt.Println("\n[1/3] 构建目标bucket对象布隆过滤器...")
+func cmdDiffObjectsBloom(srcDir, destManifest, outputDir string, expectedCount int, falsePositiveRate float64, totalStartTime time.Time, outputs ...io.Writer) error {
+	out := offlineCLIOutput(outputs)
+	fmt.Fprintln(out, cliText(out, "\n[1/3] 构建目标bucket对象布隆过滤器..."))
 	buildStartTime := time.Now()
 	filter, totalCount, err := buildBloomFilterWithCount(destManifest, expectedCount, falsePositiveRate)
 	if err != nil {
-		return fmt.Errorf("构建布隆过滤器失败: %v", err)
+		return cliErrorf("构建布隆过滤器失败: %v", err)
 	}
 	buildElapsed := time.Since(buildStartTime)
-	fmt.Printf("  已加载 %d 个目标对象到布隆过滤器，误判率: %.4f%%，耗时: %s\n", totalCount, falsePositiveRate*100, buildElapsed)
+	fmt.Fprintf(out, cliText(out, "  已加载 %d 个目标对象到布隆过滤器，误判率: %.4f%%，耗时: %s\n"), totalCount, falsePositiveRate*100, buildElapsed)
 
 	processStartTime := time.Now()
 	err = processSourceManifests(srcDir, outputDir, func(key string) bool {
 		return filter.Test([]byte(key))
-	})
+	}, out)
 	processElapsed := time.Since(processStartTime)
 	totalElapsed := time.Since(totalStartTime)
 
-	fmt.Printf("\n  构建过滤器耗时: %s\n", buildElapsed)
-	fmt.Printf("  筛选增量对象耗时: %s\n", processElapsed)
-	fmt.Printf("  总耗时: %s\n", totalElapsed)
+	fmt.Fprintf(out, cliText(out, "\n  构建过滤器耗时: %s\n"), buildElapsed)
+	fmt.Fprintf(out, cliText(out, "  筛选增量对象耗时: %s\n"), processElapsed)
+	fmt.Fprintf(out, cliText(out, "  总耗时: %s\n"), totalElapsed)
 
 	return err
 }
@@ -1773,11 +1763,12 @@ func buildBloomFilterWithCount(filename string, expectedCount int, falsePositive
 	return filter, count, nil
 }
 
-func cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, customTmpDir string, totalStartTime time.Time) error {
-	fmt.Println("\n[1/4] 遍历源bucket对象清单目录...")
+func cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, customTmpDir string, totalStartTime time.Time, outputs ...io.Writer) error {
+	out := offlineCLIOutput(outputs)
+	fmt.Fprintln(out, cliText(out, "\n[1/4] 遍历源bucket对象清单目录..."))
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
-		return fmt.Errorf("读取源目录失败: %v", err)
+		return cliErrorf("读取源目录失败: %v", err)
 	}
 
 	var srcFiles []string
@@ -1794,25 +1785,25 @@ func cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, customTmpDir strin
 		}
 	}
 
-	fmt.Printf("  找到 %d 个CSV文件，总大小: %s\n", len(srcFiles), formatSize(totalSrcSize))
+	fmt.Fprintf(out, cliText(out, "  找到 %d 个CSV文件，总大小: %s\n"), len(srcFiles), formatSize(totalSrcSize))
 
 	destFile, err := os.Open(destManifest)
 	if err != nil {
-		return fmt.Errorf("打开目标清单失败: %v", err)
+		return cliErrorf("打开目标清单失败: %v", err)
 	}
 	destStat, _ := destFile.Stat()
 	destFileSize := destStat.Size()
-	fmt.Printf("  目标清单大小: %s\n", formatSize(destFileSize))
+	fmt.Fprintf(out, cliText(out, "  目标清单大小: %s\n"), formatSize(destFileSize))
 	destFile.Close()
 
 	sortedDir := "./sorted-src/"
 	os.RemoveAll(sortedDir)
 	err = os.MkdirAll(sortedDir, 0755)
 	if err != nil {
-		return fmt.Errorf("创建排序目录失败: %v", err)
+		return cliErrorf("创建排序目录失败: %v", err)
 	}
 
-	fmt.Println("\n[2/4] 并发排序源清单并写入磁盘...")
+	fmt.Fprintln(out, cliText(out, "\n[2/4] 并发排序源清单并写入磁盘..."))
 
 	type SortResult struct {
 		Index      int
@@ -1854,21 +1845,21 @@ func cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, customTmpDir strin
 	for result := range sortResults {
 		sortedCount++
 		if result.Err != nil {
-			return fmt.Errorf("排序源清单失败 %s: %v", srcFiles[result.Index], result.Err)
+			return cliErrorf("排序源清单失败 %s: %v", srcFiles[result.Index], result.Err)
 		}
 		sortedFiles[result.Index] = result.SortedFile
 		totalKeys += result.KeyCount
 		if sortedCount%10 == 0 || sortedCount == len(srcFiles) {
 			elapsed := time.Since(totalStartTime).Seconds()
-			fmt.Printf("  已排序 %d/%d 个文件，累计对象: %d，耗时: %.1fs\n", sortedCount, len(srcFiles), totalKeys, elapsed)
+			fmt.Fprintf(out, cliText(out, "  已排序 %d/%d 个文件，累计对象: %d，耗时: %.1fs\n"), sortedCount, len(srcFiles), totalKeys, elapsed)
 		}
 	}
 
 	sortElapsed := time.Since(totalStartTime)
-	fmt.Printf("  排序完成，总对象数: %d，耗时: %s\n", totalKeys, sortElapsed)
+	fmt.Fprintf(out, cliText(out, "  排序完成，总对象数: %d，耗时: %s\n"), totalKeys, sortElapsed)
 
 	mergeStartTime := time.Now()
-	fmt.Println("\n[3/4] 并发归并筛选增量对象...")
+	fmt.Fprintln(out, cliText(out, "\n[3/4] 并发归并筛选增量对象..."))
 	type ProcessResult struct {
 		FileName string
 		Count    int
@@ -1914,14 +1905,14 @@ func cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, customTmpDir strin
 		fileCount++
 		if result.Err != nil {
 			errorCount++
-			fmt.Printf("  [错误] %s: %v\n", result.FileName, result.Err)
+			fmt.Fprintf(out, cliText(out, "  [错误] %s: %v\n"), result.FileName, result.Err)
 		} else {
 			totalIncrCount += result.Count
 			now := time.Now()
 			if now.Sub(lastPrintTime) >= 3*time.Second || fileCount%10 == 0 || fileCount == len(srcFiles) {
 				elapsed := time.Since(mergeStartTime).Seconds()
 				percent := float64(fileCount) / float64(len(srcFiles)) * 100
-				fmt.Printf("  进度: %d/%d (%.1f%%)，累计增量对象: %d，耗时: %.1fs\n",
+				fmt.Fprintf(out, cliText(out, "  进度: %d/%d (%.1f%%)，累计增量对象: %d，耗时: %.1fs\n"),
 					fileCount, len(srcFiles), percent, totalIncrCount, elapsed)
 				lastPrintTime = now
 			}
@@ -1930,19 +1921,19 @@ func cmdDiffObjectsSortMerge(srcDir, destManifest, outputDir, customTmpDir strin
 
 	mergeElapsed := time.Since(mergeStartTime)
 
-	fmt.Println("\n[4/4] 清理临时文件...")
+	fmt.Fprintln(out, cliText(out, "\n[4/4] 清理临时文件..."))
 	os.RemoveAll(sortedDir)
 
-	fmt.Println("\n处理完成!")
-	fmt.Printf("  处理文件数: %d\n", fileCount)
-	fmt.Printf("  成功文件数: %d\n", fileCount-errorCount)
-	fmt.Printf("  总增量对象: %d\n", totalIncrCount)
+	fmt.Fprintln(out, cliText(out, "\n处理完成!"))
+	fmt.Fprintf(out, cliText(out, "  处理文件数: %d\n"), fileCount)
+	fmt.Fprintf(out, cliText(out, "  成功文件数: %d\n"), fileCount-errorCount)
+	fmt.Fprintf(out, cliText(out, "  总增量对象: %d\n"), totalIncrCount)
 	if errorCount > 0 {
-		fmt.Printf("  失败文件数: %d\n", errorCount)
+		fmt.Fprintf(out, cliText(out, "  失败文件数: %d\n"), errorCount)
 	}
-	fmt.Printf("  排序耗时: %s\n", sortElapsed)
-	fmt.Printf("  归并耗时: %s\n", mergeElapsed)
-	fmt.Printf("  总耗时: %s\n", time.Since(totalStartTime))
+	fmt.Fprintf(out, cliText(out, "  排序耗时: %s\n"), sortElapsed)
+	fmt.Fprintf(out, cliText(out, "  归并耗时: %s\n"), mergeElapsed)
+	fmt.Fprintf(out, cliText(out, "  总耗时: %s\n"), time.Since(totalStartTime))
 
 	return nil
 }
@@ -2315,11 +2306,12 @@ func diffSortedSource(sortedFile, destManifest, outputFile string) (int, error) 
 	return count, nil
 }
 
-func processSourceManifests(srcDir, outputDir string, existsFunc func(string) bool) error {
-	fmt.Println("\n[2/3] 遍历源bucket对象清单目录...")
+func processSourceManifests(srcDir, outputDir string, existsFunc func(string) bool, outputs ...io.Writer) error {
+	out := offlineCLIOutput(outputs)
+	fmt.Fprintln(out, cliText(out, "\n[2/3] 遍历源bucket对象清单目录..."))
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
-		return fmt.Errorf("读取源目录失败: %v", err)
+		return cliErrorf("读取源目录失败: %v", err)
 	}
 
 	var files []string
@@ -2334,7 +2326,7 @@ func processSourceManifests(srcDir, outputDir string, existsFunc func(string) bo
 		files = append(files, fileName)
 	}
 
-	fmt.Printf("  找到 %d 个CSV文件，开始并发处理...\n", len(files))
+	fmt.Fprintf(out, cliText(out, "  找到 %d 个CSV文件，开始并发处理...\n"), len(files))
 
 	type ProcessResult struct {
 		FileName string
@@ -2386,21 +2378,21 @@ func processSourceManifests(srcDir, outputDir string, existsFunc func(string) bo
 		fileCount++
 		if result.Err != nil {
 			errorCount++
-			fmt.Printf("  [错误] %s: %v\n", result.FileName, result.Err)
+			fmt.Fprintf(out, cliText(out, "  [错误] %s: %v\n"), result.FileName, result.Err)
 		} else {
 			totalIncrCount += result.Count
 			if fileCount%10 == 0 {
-				fmt.Printf("  已处理 %d/%d 个文件，累计增量对象: %d\n", fileCount, len(files), totalIncrCount)
+				fmt.Fprintf(out, cliText(out, "  已处理 %d/%d 个文件，累计增量对象: %d\n"), fileCount, len(files), totalIncrCount)
 			}
 		}
 	}
 
-	fmt.Println("\n[3/3] 处理完成!")
-	fmt.Printf("  处理文件数: %d\n", fileCount)
-	fmt.Printf("  成功文件数: %d\n", fileCount-errorCount)
-	fmt.Printf("  总增量对象: %d\n", totalIncrCount)
+	fmt.Fprintln(out, cliText(out, "\n[3/3] 处理完成!"))
+	fmt.Fprintf(out, cliText(out, "  处理文件数: %d\n"), fileCount)
+	fmt.Fprintf(out, cliText(out, "  成功文件数: %d\n"), fileCount-errorCount)
+	fmt.Fprintf(out, cliText(out, "  总增量对象: %d\n"), totalIncrCount)
 	if errorCount > 0 {
-		fmt.Printf("  失败文件数: %d\n", errorCount)
+		fmt.Fprintf(out, cliText(out, "  失败文件数: %d\n"), errorCount)
 	}
 
 	return nil
@@ -2450,29 +2442,28 @@ func processSrcManifestWithCheck(srcFile, outputFile string, existsFunc func(str
 	return count, scanner.Err()
 }
 
-func cmdCountLines(args []string) error {
+func cmdCountLines(args []string, outputs ...io.Writer) error {
+	out := offlineCLIOutput(outputs)
 	if len(args) < 1 {
-		fmt.Println("用法: oss-transfer-cli count-lines <目录路径>")
-		fmt.Println("  目录路径: 要统计的目录")
-		os.Exit(1)
+		return cliErrorf("用法: count-lines <目录>")
 	}
 
 	dir := args[0]
 
 	dirInfo, err := os.Stat(dir)
 	if err != nil {
-		return fmt.Errorf("目录不存在: %v", err)
+		return cliErrorf("目录不存在: %v", err)
 	}
 	if !dirInfo.IsDir() {
-		return fmt.Errorf("路径不是目录: %s", dir)
+		return cliErrorf("路径不是目录: %s", dir)
 	}
 
-	fmt.Printf("统计目录: %s\n", dir)
-	fmt.Println("扫描文件...")
+	fmt.Fprintf(out, cliText(out, "统计目录: %s\n"), dir)
+	fmt.Fprintln(out, cliText(out, "扫描文件..."))
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("读取目录失败: %v", err)
+		return cliErrorf("读取目录失败: %v", err)
 	}
 
 	type FileResult struct {
@@ -2487,7 +2478,7 @@ func cmdCountLines(args []string) error {
 		}
 	}
 
-	fmt.Printf("找到 %d 个文件，开始并发统计...\n", len(files))
+	fmt.Fprintf(out, cliText(out, "找到 %d 个文件，开始并发统计...\n"), len(files))
 
 	numWorkers := 10
 	if len(files) < numWorkers {
@@ -2530,16 +2521,16 @@ func cmdCountLines(args []string) error {
 			totalLines += result.Lines
 			fileCount++
 			if fileCount%100 == 0 {
-				fmt.Printf("已处理 %d 个文件，累计 %d 行...\n", fileCount, totalLines)
+				fmt.Fprintf(out, cliText(out, "已处理 %d 个文件，累计 %d 行...\n"), fileCount, totalLines)
 			}
 		}
 	}
 
-	fmt.Println("================================")
-	fmt.Printf("文件总数: %d\n", fileCount)
-	fmt.Printf("总行数: %d\n", totalLines)
+	fmt.Fprintln(out, "================================")
+	fmt.Fprintf(out, cliText(out, "文件总数: %d\n"), fileCount)
+	fmt.Fprintf(out, cliText(out, "总行数: %d\n"), totalLines)
 	if errorCount > 0 {
-		fmt.Printf("失败文件: %d\n", errorCount)
+		fmt.Fprintf(out, cliText(out, "失败文件: %d\n"), errorCount)
 	}
 
 	return nil

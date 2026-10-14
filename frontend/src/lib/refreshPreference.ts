@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { t } from "./i18n";
 
 const STORAGE_KEY = "oss-transfer-refresh-seconds";
 const CHANGE_EVENT = "oss-transfer-refresh-change";
@@ -66,4 +67,6 @@ export function useRefreshPreference() {
 }
 
 export const refreshDescription = (value: number) =>
-  value === 0 ? "自动刷新已暂停" : `每 ${value} 秒刷新`;
+  value === 0
+    ? t("自动刷新已暂停")
+    : t("每 {seconds} 秒刷新", { seconds: value });

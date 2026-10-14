@@ -2,7 +2,7 @@
 _oss_transfer_cli_completion() {
     local cur prev words cword
     _init_completion -n = || return
-    local globals="--host --json --verbose --watch --help --version"
+    local globals="--lang --host --json --verbose --watch --help --version"
     local commands="task node agent setup storage limit exceptions object login logout whoami change-password \
         list-task status show-task stop resume start retry delete-task clear list-deleted permanent-delete export-report \
         add-task import-tasks list-worker worker-status list-s3-config remove-s3-config \
@@ -24,7 +24,7 @@ _oss_transfer_cli_completion() {
         if ((skip)); then skip=0; continue; fi
         case "$word" in
             --*=*) continue ;;
-            --host|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
+            --lang|--host|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
                 skip=1; continue ;;
             -*) continue ;;
         esac
@@ -34,6 +34,7 @@ _oss_transfer_cli_completion() {
     action=${positional[1]}
 
     case "$prev" in
+        --lang) COMPREPLY=( $(compgen -W "zh en ja" -- "$cur") ); return ;;
         --file|--output|--setup-token-file|--password-file|--old-password-file|--new-password-file|--access-key-file|--secret-key-file)
             _filedir; return ;;
         --setup-token-env|--password-env|--old-password-env|--new-password-env|--access-key-env|--secret-key-env)

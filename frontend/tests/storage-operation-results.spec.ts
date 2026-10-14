@@ -79,3 +79,50 @@ for (const operation of [
     });
   }
 }
+
+test.describe("storage result status does not depend on its language", () => {
+  test.use({ locale: "ja-JP" });
+  for (const partial of [true, false]) {
+    test(`uses structured status for ${partial ? "Japanese failure" : "a success with a failure-like node name"}`, async ({
+      page,
+    }) => {
+      await mockApi(page);
+      await page.route("**/api/master/s3-config**", async (route) => {
+        if (route.request().method() === "GET") return route.fallback();
+        await route.fulfill({
+          json: {
+            success: true,
+            ...(partial ? { failedCount: 1 } : {}),
+            message: partial
+              ? "一部のノードで設定を保存できませんでした"
+              : "保存しました",
+            // Node names are data, including names that contain Chinese failure words.
+            details: partial
+              ? ["ノード a: 応答なし"]
+              : ["失败-archive: 保存済み"],
+          },
+        });
+      });
+      await page.goto("/storage");
+      await page
+        .getByRole("button", { name: "接続 production を編集", exact: true })
+        .click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "接続を保存", exact: true })
+        .click();
+      await expect(page.getByRole("dialog")).toBeHidden();
+      const result = page
+        .getByRole("alert")
+        .filter({ has: page.getByRole("list") });
+      await expect(result).toHaveClass(
+        partial ? /MuiAlert-standardWarning/ : /MuiAlert-standardSuccess/,
+      );
+      await expect(result).toContainText(
+        partial
+          ? "一部のノードで設定を保存できませんでした"
+          : "失败-archive: 保存済み",
+      );
+    });
+  }
+});

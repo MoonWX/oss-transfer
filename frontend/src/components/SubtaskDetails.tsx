@@ -1,3 +1,4 @@
+import { t, useI18n, formatDate } from "../lib/i18n";
 import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import {
   Alert,
@@ -17,7 +18,6 @@ import {
 } from "@mui/icons-material";
 import { formatBytes, formatNumber, LoadingState, StatusChip } from "./Common";
 import { keyMappingLabels, type OssKeyMappingMode } from "../lib/ossKeyMapping";
-
 type Props = {
   childId: string;
   task?: Record<string, any>;
@@ -31,12 +31,17 @@ type Props = {
   onClose: () => void;
   onRefresh: () => void;
 };
-
+// Only timestamp fields call this helper. Keep unrecognized legacy values intact.
 const timestamp = (value: unknown) =>
-  typeof value === "number" ? new Date(value).toLocaleString("zh-CN") : value;
+  typeof value === "number" ||
+  (typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(
+      value,
+    ))
+    ? formatDate(value)
+    : value;
 const speed = (value: unknown) =>
   value == null ? null : `${formatBytes(value)}/s`;
-
 export default function SubtaskDetails({
   childId,
   task,
@@ -50,40 +55,44 @@ export default function SubtaskDetails({
   onClose,
   onRefresh,
 }: Props) {
+  useI18n();
   const sourceEndpoint = task?.sourceEndpoint;
   const rows = task
     ? [
-        ["执行节点", task.executionNodeIp || task.workerNode || "等待分配"],
-        ...taskRequestLimitRows(task.requestLimits),
-        ["当前速度", speed(task.currentSpeedBytesPerSecond)],
-        ["平均速度", speed(task.averageSpeedBytesPerSecond)],
-        ["创建时间", timestamp(task.createTime)],
-        ["开始时间", timestamp(task.startTime)],
-        ["结束时间", timestamp(task.endTime)],
-        ["耗时", task.duration],
-        ["起始 Key", task.startKey],
-        ["结束 Key", task.endKey],
-        ["源对象 Key", task.objectKey || sourceEndpoint?.objectKey],
         [
-          "源前缀",
+          t("执行节点"),
+          task.executionNodeIp || task.workerNode || t("等待分配"),
+        ],
+        ...taskRequestLimitRows(task.requestLimits),
+        [t("当前速度"), speed(task.currentSpeedBytesPerSecond)],
+        [t("平均速度"), speed(task.averageSpeedBytesPerSecond)],
+        [t("创建时间"), timestamp(task.createTime)],
+        [t("开始时间"), timestamp(task.startTime)],
+        [t("结束时间"), timestamp(task.endTime)],
+        [t("耗时"), task.duration],
+        [t("起始 Key"), task.startKey],
+        [t("结束 Key"), task.endKey],
+        [t("源对象 Key"), task.objectKey || sourceEndpoint?.objectKey],
+        [
+          t("源前缀"),
           task.prefix ||
             (sourceEndpoint?.prefixFilterEnabled
               ? sourceEndpoint.prefix
               : null),
         ],
-        ["目标相对路径", task.targetRelativePath],
+        [t("目标相对路径"), task.targetRelativePath],
         [
-          "目标命名",
+          t("目标命名"),
           task.keyMapping
             ? keyMappingLabels[task.keyMapping.mode as OssKeyMappingMode]
             : null,
         ],
-        ["目标前缀", task.keyMapping?.targetPrefix],
-        ["目标对象 Key", task.keyMapping?.targetKey],
-        ["修改时间晚于", task.dateAfter],
-        ["修改时间早于", task.dateBefore],
+        [t("目标前缀"), task.keyMapping?.targetPrefix],
+        [t("目标对象 Key"), task.keyMapping?.targetKey],
+        [t("修改时间晚于"), timestamp(task.dateAfter)],
+        [t("修改时间早于"), timestamp(task.dateBefore)],
         [
-          "冲突策略",
+          t("冲突策略"),
           task.conflictPolicy ||
             (task.overwrite == null
               ? null
@@ -93,7 +102,6 @@ export default function SubtaskDetails({
         ],
       ].filter(([, value]) => value != null && value !== "")
     : [];
-
   return (
     <Box>
       <Stack
@@ -107,9 +115,9 @@ export default function SubtaskDetails({
           onClick={onBack}
           sx={{ ml: -1 }}
         >
-          返回主任务
+          {t("返回主任务")}
         </Button>
-        <IconButton aria-label="关闭详情" onClick={onClose}>
+        <IconButton aria-label={t("关闭详情")} onClick={onClose}>
           <CloseRounded />
         </IconButton>
       </Stack>
@@ -119,7 +127,7 @@ export default function SubtaskDetails({
         data-subtask-heading
         sx={{ mb: 2, outline: "none", overflowWrap: "anywhere" }}
       >
-        子任务 #{childId}
+        {t("子任务 #{id}", { id: childId })}
       </Typography>
       {error && (
         <Alert
@@ -127,7 +135,7 @@ export default function SubtaskDetails({
           sx={{ mb: 2 }}
           action={
             <Button color="inherit" size="small" onClick={onRefresh}>
-              刷新
+              {t("刷新")}
             </Button>
           }
         >
@@ -136,7 +144,7 @@ export default function SubtaskDetails({
       )}
       {partial && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          子任务信息不完整，请刷新或检查执行节点。
+          {t("子任务信息不完整，请刷新或检查执行节点。")}
         </Alert>
       )}
       {!task ? (
@@ -147,13 +155,13 @@ export default function SubtaskDetails({
             severity="info"
             action={
               <Button color="inherit" size="small" onClick={onRefresh}>
-                刷新
+                {t("刷新")}
               </Button>
             }
           >
             {partial || error
-              ? "当前节点未返回此子任务，请刷新后重试。"
-              : "未找到此子任务。"}
+              ? t("当前节点未返回此子任务，请刷新后重试。")
+              : t("未找到此子任务。")}
           </Alert>
         )
       ) : (
@@ -169,7 +177,7 @@ export default function SubtaskDetails({
           )}
           <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
             <Typography variant="caption" color="text.secondary">
-              来源
+              {t("来源")}
             </Typography>
             <Typography sx={{ overflowWrap: "anywhere", mt: 0.5 }}>
               {source}
@@ -180,14 +188,14 @@ export default function SubtaskDetails({
               color="text.secondary"
               display="block"
             >
-              目标
+              {t("目标")}
             </Typography>
             <Typography sx={{ overflowWrap: "anywhere", mt: 0.5 }}>
               {destination}
             </Typography>
           </Paper>
           <Typography variant="h6" sx={{ mb: 2 }}>
-            传输统计
+            {t("传输统计")}
           </Typography>
           <Box
             sx={{
@@ -198,10 +206,10 @@ export default function SubtaskDetails({
             }}
           >
             {[
-              ["已扫描", task.listObjectCount, task.listObjectSize],
-              ["已迁移", task.putObjectCount, task.putObjectSize],
-              ["已跳过", task.skippedObjectCount, task.skippedObjectSize],
-              ["失败对象", task.failedObjectCount, task.failedObjectSize],
+              [t("已扫描"), task.listObjectCount, task.listObjectSize],
+              [t("已迁移"), task.putObjectCount, task.putObjectSize],
+              [t("已跳过"), task.skippedObjectCount, task.skippedObjectSize],
+              [t("失败对象"), task.failedObjectCount, task.failedObjectSize],
             ].map(([label, count, bytes]) => (
               <Box key={label}>
                 <Typography variant="caption" color="text.secondary">
@@ -221,7 +229,7 @@ export default function SubtaskDetails({
           </Box>
           <Divider sx={{ mb: 3 }} />
           <Typography variant="h6" sx={{ mb: 2 }}>
-            执行信息
+            {t("执行信息")}
           </Typography>
           <Stack gap={2}>
             {rows.map(([label, value]) => (

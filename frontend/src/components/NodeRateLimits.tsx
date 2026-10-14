@@ -1,3 +1,4 @@
+import { t, useI18n, formatNumber } from "../lib/i18n";
 import { Link as RouterLink } from "react-router-dom";
 import {
   Alert,
@@ -8,8 +9,6 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { formatNumber } from "./Common";
-
 import type {
   RateType,
   Rate,
@@ -19,10 +18,18 @@ import type {
 export type { RateType, Rate, Adjustment } from "../lib/rateStatus";
 export const rateTypes: RateType[] = ["list", "put", "head", "bandwidth"];
 export const rateNames: Record<RateType, string> = {
-  list: "LIST 请求",
-  put: "PUT 请求",
-  head: "HEAD 请求",
-  bandwidth: "传输带宽",
+  get list() {
+    return t("LIST 请求");
+  },
+  get put() {
+    return t("PUT 请求");
+  },
+  get head() {
+    return t("HEAD 请求");
+  },
+  get bandwidth() {
+    return t("传输带宽");
+  },
 };
 export const rateText = (
   value: number | null | undefined,
@@ -31,55 +38,57 @@ export const rateText = (
   value == null
     ? "—"
     : value <= 0
-      ? "不限速"
+      ? t("不限速")
       : bandwidth
-        ? `${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} Mbps`
-        : `${formatNumber(value)} 次/秒`;
+        ? `${formatNumber(value / 1_000_000, { maximumFractionDigits: 2 })} Mbps`
+        : t("{value1} 次/秒", { value1: formatNumber(value) });
 const currentText = (value: number | null | undefined, bandwidth: boolean) =>
   value == null
     ? "—"
     : bandwidth
-      ? `${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} Mbps`
-      : `${formatNumber(value)} 次/秒`;
+      ? `${formatNumber(value / 1_000_000, { maximumFractionDigits: 2 })} Mbps`
+      : t("{value1} 次/秒", { value1: formatNumber(value) });
 export const rateTarget = (rate: Rate | undefined, type: RateType) =>
   type === "bandwidth" ? rate?.manualLimitBps : rate?.manualLimitQps;
 export const adjustmentPhase = (event: Adjustment) => {
-  if (event.manual || event.reasonCode === "MANUAL_SET") return "手动设置";
+  if (event.manual || event.reasonCode === "MANUAL_SET") return t("手动设置");
   switch (event.reasonCode) {
     case "OSS_503":
-      return "自动降速";
+      return t("自动降速");
     case "RECOVERY_STEP":
-      return "逐步恢复";
+      return t("逐步恢复");
     case "RECOVERED":
-      return "已恢复目标";
+      return t("已恢复目标");
     default:
-      return "自动调整";
+      return t("自动调整");
   }
 };
 export const adjustmentReason = (event: Adjustment) => {
   switch (event.reasonCode) {
     case "MANUAL_SET":
-      return "用户修改上限，保存后立即生效。";
+      return t("用户修改上限，保存后立即生效。");
     case "OSS_503":
       return event.consecutive503Count != null &&
         event.consecutive503Threshold != null
-        ? `OSS 返回 HTTP 503；计数 ${formatNumber(event.consecutive503Count)}，阈值 ${formatNumber(event.consecutive503Threshold)}。`
-        : "OSS 返回 HTTP 503，触发节点降速。";
+        ? t("OSS 返回 HTTP 503；计数 {value1}，阈值 {value2}。", {
+            value1: formatNumber(event.consecutive503Count),
+            value2: formatNumber(event.consecutive503Threshold),
+          })
+        : t("OSS 返回 HTTP 503，触发节点降速。");
     case "RECOVERY_STEP":
-      return "定时恢复，提高运行上限；仍低于目标。";
+      return t("定时恢复，提高运行上限；仍低于目标。");
     case "RECOVERED":
-      return "定时恢复，运行上限已达到目标。";
+      return t("定时恢复，运行上限已达到目标。");
     case "AUTO_ADJUST":
-      return "自动调整；未记录更具体的原因。";
+      return t("自动调整；未记录更具体的原因。");
     default:
-      return "历史记录未保存调整原因。";
+      return t("历史记录未保存调整原因。");
   }
 };
 export const adjustmentDetailsPath = (workerIp: string, eventId: string) =>
   `/nodes/adjustments?${new URLSearchParams({ workerIp, eventId }).toString()}`;
 const percentText = (value: number) =>
-  value.toLocaleString(undefined, { maximumFractionDigits: 1 });
-
+  formatNumber(value, { maximumFractionDigits: 1 });
 export default function NodeRateLimits({
   ip,
   rateLimit,
@@ -93,6 +102,7 @@ export default function NodeRateLimits({
   stale: boolean;
   onEdit: (ip: string, type: RateType, target?: number) => void;
 }) {
+  useI18n();
   const uncertain = stale || refreshMs === 0;
   const activeAdjustments = [rateLimit?.put, rateLimit?.head].filter(
     (rate) => rate?.state === "REDUCED" || rate?.state === "RECOVERING",
@@ -105,25 +115,24 @@ export default function NodeRateLimits({
         (b.timestamp ?? 0) - (a.timestamp ?? 0) ||
         (b.sequence ?? 0) - (a.sequence ?? 0),
     )[0];
-
   return (
     <Stack spacing={2}>
-      <Typography variant="subtitle2">请求与带宽</Typography>
+      <Typography variant="subtitle2">{t("请求与带宽")}</Typography>
       {refreshMs === 0 && (
         <Alert severity="info">
-          自动刷新已暂停。以下状态为最近一次读取结果。
+          {t("自动刷新已暂停。以下状态为最近一次读取结果。")}
         </Alert>
       )}
       {stale && (
         <Alert severity="warning">
-          节点状态未更新。以下为上次读取值，当前限速与恢复进度待确认。
+          {t("节点状态未更新。以下为上次读取值，当前限速与恢复进度待确认。")}
         </Alert>
       )}
       {!uncertain && activeAdjustments.length > 0 && (
         <Alert severity="warning" data-testid={`rate-notice-${ip}`}>
           <Stack spacing={0.5} alignItems="flex-start">
             <Typography variant="body2">
-              节点可能遭遇限速，已自动调整运行上限。
+              {t("节点可能遭遇限速，已自动调整运行上限。")}
             </Typography>
             {latestAdjustment?.id &&
               latestAdjustment.detailsAvailable !== false && (
@@ -134,7 +143,7 @@ export default function NodeRateLimits({
                   size="small"
                   sx={{ minWidth: 0, p: 0 }}
                 >
-                  查看详情
+                  {t("查看详情")}
                 </Button>
               )}
           </Stack>
@@ -160,17 +169,17 @@ export default function NodeRateLimits({
         const recovered = !uncertain && rate?.state === "RECOVERED";
         const recovering = !uncertain && rate?.state === "RECOVERING";
         const stateLabel = uncertain
-          ? "状态待确认"
+          ? t("状态待确认")
           : reduced
             ? rate?.state === "RECOVERING"
-              ? "恢复中"
-              : "自动降速"
+              ? t("逐步恢复")
+              : t("自动降速")
             : recovered
-              ? "已恢复目标"
+              ? t("已恢复目标")
               : target !== undefined && target <= 0
-                ? "不限速"
+                ? t("不限速")
                 : rate?.state === "NORMAL"
-                  ? "按目标运行"
+                  ? t("按目标运行")
                   : undefined;
         const showProgress =
           hasRecoveryStatus &&
@@ -237,10 +246,13 @@ export default function NodeRateLimits({
               <Button
                 size="small"
                 onClick={() => onEdit(ip, type, target)}
-                aria-label={`调整 ${ip} 的 ${rateNames[type]} 限速`}
+                aria-label={t("调整 {value1} 的 {value2} 限速", {
+                  value1: ip,
+                  value2: rateNames[type],
+                })}
                 sx={{ flexShrink: 0 }}
               >
-                调整
+                {t("调整")}
               </Button>
             </Stack>
             <Box
@@ -255,16 +267,22 @@ export default function NodeRateLimits({
               }}
             >
               {[
-                { label: "运行上限", value: rateText(limit, bandwidth) },
+                {
+                  label: t("运行上限"),
+                  value: rateText(limit, bandwidth),
+                },
                 {
                   label: usesConfiguredTarget
-                    ? "配置目标"
+                    ? t("配置目标")
                     : rate?.limitSource === "PERSISTED_MANUAL"
-                      ? "已保存目标"
-                      : "目标上限",
+                      ? t("已保存目标")
+                      : t("目标上限"),
                   value: rateText(target, bandwidth),
                 },
-                { label: "实测速率", value: currentText(current, bandwidth) },
+                {
+                  label: t("实测速率"),
+                  value: currentText(current, bandwidth),
+                },
               ].map(({ label, value }) => (
                 <Box key={label}>
                   <Typography variant="caption" color="text.secondary">
@@ -292,7 +310,7 @@ export default function NodeRateLimits({
                   sx={{ mb: 0.75 }}
                 >
                   <Typography variant="caption" color="text.secondary">
-                    运行上限 / 目标上限
+                    {t("运行上限 / 目标上限")}
                   </Typography>
                   <Typography variant="caption">
                     {percentText(percentage)}%
@@ -304,8 +322,12 @@ export default function NodeRateLimits({
                   color={
                     recovered ? "success" : recovering ? "info" : "warning"
                   }
-                  aria-label={`${rateNames[type]}运行上限占目标比例`}
-                  aria-valuetext={`${percentText(percentage)}%，运行上限占目标上限比例`}
+                  aria-label={t("{value1}运行上限占目标比例", {
+                    value1: rateNames[type],
+                  })}
+                  aria-valuetext={t("{value1}%，运行上限占目标上限比例", {
+                    value1: percentText(percentage),
+                  })}
                   sx={{ height: 6, borderRadius: 6 }}
                 />
               </Box>

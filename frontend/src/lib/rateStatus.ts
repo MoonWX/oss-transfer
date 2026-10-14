@@ -1,3 +1,4 @@
+import { t as tr, getLocale } from "./i18n";
 export type RateType = "list" | "put" | "head" | "bandwidth";
 export type TriggerRequest = {
   operation?: string | null;
@@ -118,13 +119,13 @@ export function activeRates(worker: Worker): [RateType, Rate][] {
 }
 
 const numeric = (value: number) =>
-  value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  value.toLocaleString(getLocale(), { maximumFractionDigits: 2 });
 export function eventChange(event: Adjustment) {
   const unit = event.type === "bandwidth" ? "Mbps" : "QPS";
   const factor = event.type === "bandwidth" ? 1_000_000 : 1;
   const value = (n: number) =>
-    n <= 0 ? "不限速" : `${numeric(n / factor)} ${unit}`;
-  return `${event.type === "bandwidth" ? "带宽" : event.type.toUpperCase()} ${event.previousValue == null ? "—" : value(event.previousValue)} → ${value(event.value)}`;
+    n <= 0 ? tr("不限速") : `${numeric(n / factor)} ${unit}`;
+  return `${event.type === "bandwidth" ? tr("带宽") : event.type.toUpperCase()} ${event.previousValue == null ? "—" : value(event.previousValue)} → ${value(event.value)}`;
 }
 
 export function describeRateEvents(
@@ -140,12 +141,15 @@ export function describeRateEvents(
     (type) =>
       worker.rateLimit?.[type]?.lastAdjustment?.reasonCode === "MANUAL_SET",
   );
-  if (manuallyChanged) return `${ip} 自动调节后，上限已手动更新。`;
+  if (manuallyChanged)
+    return tr("{value1} 自动调节后，上限已手动更新。", { value1: ip });
   if (last.reasonCode === "RECOVERED" && !stillLimited)
-    return `${ip} 已恢复到目标上限。`;
+    return tr("{value1} 已恢复到目标上限。", { value1: ip });
   if (last.reasonCode === "RECOVERY_STEP" || last.reasonCode === "RECOVERED")
-    return `${ip} 正在恢复请求上限。`;
-  return `${ip} 可能遭遇存储服务限速，已自动降低请求上限。`;
+    return tr("{value1} 正在恢复请求上限。", { value1: ip });
+  return tr("{value1} 可能遭遇存储服务限速，已自动降低请求上限。", {
+    value1: ip,
+  });
 }
 
 export function adjustmentLink(workerIp: string, eventId: string) {

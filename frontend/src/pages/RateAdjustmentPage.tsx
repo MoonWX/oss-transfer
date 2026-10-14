@@ -1,3 +1,4 @@
+import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import { ArrowBackRounded } from "@mui/icons-material";
@@ -34,27 +35,10 @@ type Detail = {
   historyComplete?: boolean;
 };
 const dateTime = (value?: number | null) =>
-  value ? new Date(value).toLocaleString() : "未记录";
-const fields: [keyof TriggerRequest, string][] = [
-  ["operation", "操作"],
-  ["direction", "迁移方向"],
-  ["method", "HTTP 方法"],
-  ["taskId", "任务 ID"],
-  ["connectionAlias", "存储连接"],
-  ["bucket", "Bucket"],
-  ["key", "对象 Key"],
-  ["sourceBucket", "源 Bucket"],
-  ["destinationBucket", "目标 Bucket"],
-  ["partNumber", "分片编号"],
-  ["attempt", "尝试次数"],
-  ["statusCode", "HTTP 状态码"],
-  ["errorCode", "错误码"],
-  ["requestId", "请求 ID"],
-  ["extendedRequestId", "扩展请求 ID"],
-  ["handlingStage", "处理阶段"],
-  ["message", "错误信息"],
-];
+  value ? new Date(value).toLocaleString(getLocale()) : tr("未记录");
+
 function Field({ label, value }: { label: string; value: string | number }) {
+  useI18n();
   return (
     <Box sx={{ minWidth: 0 }}>
       <Typography component="dt" variant="body2" color="text.secondary">
@@ -71,6 +55,7 @@ function Field({ label, value }: { label: string; value: string | number }) {
 }
 
 export default function RateAdjustmentPage() {
+  useI18n();
   const [params] = useSearchParams();
   const workerIp = params.get("workerIp") ?? "";
   const eventId = params.get("eventId") ?? "";
@@ -90,6 +75,27 @@ function DetailContent({
   workerIp: string;
   eventId: string;
 }) {
+  const fields: [keyof TriggerRequest, string][] = [
+    ["operation", tr("操作")],
+    ["direction", tr("迁移方向")],
+    ["method", tr("HTTP 方法")],
+    ["taskId", tr("任务 ID")],
+    ["connectionAlias", tr("存储连接")],
+    ["bucket", "Bucket"],
+    ["key", tr("对象 Key")],
+    ["sourceBucket", tr("源 Bucket")],
+    ["destinationBucket", tr("目标 Bucket")],
+    ["partNumber", tr("分片编号")],
+    ["attempt", tr("尝试次数")],
+    ["statusCode", tr("HTTP 状态码")],
+    ["errorCode", tr("错误码")],
+    ["requestId", tr("请求 ID")],
+    ["extendedRequestId", tr("扩展请求 ID")],
+    ["handlingStage", tr("处理阶段")],
+    ["message", tr("错误信息")],
+  ];
+
+  useI18n();
   const { refreshMs, refreshSeconds } = useRefreshPreference();
   const path =
     workerIp && eventId
@@ -140,7 +146,7 @@ function DetailContent({
       })
       .catch((e: Error) => {
         if (!controller.signal.aborted)
-          setMoreError(`后续记录未更新：${e.message}`);
+          setMoreError(tr("后续记录未更新：{value1}", { value1: e.message }));
       });
     return () => controller.abort();
   }, [data, path]);
@@ -201,21 +207,21 @@ function DetailContent({
         startIcon={<ArrowBackRounded />}
         sx={{ mb: 2 }}
       >
-        返回执行节点
+        {tr("返回执行节点")}
       </Button>
       <PageHeader
-        title="调节详情"
+        title={tr("调节详情")}
         description={workerIp || undefined}
         action={
           <RefreshControls
             onRefresh={refreshDetail}
             loading={loading}
-            refreshLabel="刷新调节详情"
+            refreshLabel={tr("刷新调节详情")}
           />
         }
       />
       {!path ? (
-        <Alert severity="error">缺少节点或事件 ID。</Alert>
+        <Alert severity="error">{tr("缺少节点或事件 ID。")}</Alert>
       ) : (
         <>
           <ErrorAlert error={error} onRetry={refreshDetail} />
@@ -224,31 +230,32 @@ function DetailContent({
             <Stack spacing={3}>
               {data.historyComplete === false && (
                 <Alert severity="warning">
-                  本轮部分记录未保存，以下详情不完整。
+                  {tr("本轮部分记录未保存，以下详情不完整。")}
                 </Alert>
               )}
               {data.processRestarted ? (
                 <Alert severity="info">
-                  节点已重启，以下为历史记录，无法据此判断当前恢复状态。
+                  {tr("节点已重启，以下为历史记录，无法据此判断当前恢复状态。")}
                 </Alert>
               ) : refreshSeconds === 0 ? (
                 <Alert severity="info">
-                  自动刷新已暂停，以下为最近一次读取结果。
+                  {tr("自动刷新已暂停，以下为最近一次读取结果。")}
                 </Alert>
               ) : data.incidentActive && !currentUnknown ? (
                 <Alert severity="warning">
-                  该节点曾收到 HTTP
-                  503，已自动调整请求上限，最近读取时尚未恢复到目标。
+                  {tr(
+                    "该节点曾收到 HTTP 503，已自动调整请求上限，最近读取时尚未恢复到目标。",
+                  )}
                 </Alert>
               ) : !manual &&
                 data.incidentId &&
                 data.incidentActive === false &&
                 !currentUnknown ? (
-                <Alert severity="success">本轮调节已结束。</Alert>
+                <Alert severity="success">{tr("本轮调节已结束。")}</Alert>
               ) : null}
               <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
                 <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-                  {manual ? "手动调整" : "触发本次降速的请求"}
+                  {manual ? tr("手动调整") : tr("触发本次降速的请求")}
                 </Typography>
                 <Box
                   component="dl"
@@ -264,12 +271,12 @@ function DetailContent({
                   }}
                 >
                   <Field
-                    label={manual ? "调整时间" : "触发时间"}
+                    label={manual ? tr("调整时间") : tr("触发时间")}
                     value={dateTime((trigger ?? data.event).timestamp)}
                   />
                   <Field
-                    label="事件 ID"
-                    value={(trigger ?? data.event).id ?? "未记录"}
+                    label={tr("事件 ID")}
+                    value={(trigger ?? data.event).id ?? tr("未记录")}
                   />
                   {requestFields.map(([key, label]) => (
                     <Field key={key} label={label} value={request![key]!} />
@@ -277,19 +284,19 @@ function DetailContent({
                 </Box>
                 {request?.contextSource === "TRANSFER_CONTEXT" && (
                   <Typography color="text.secondary" sx={{ mt: 2 }}>
-                    仅记录到迁移处理阶段，未确定具体 HTTP 请求。
+                    {tr("仅记录到迁移处理阶段，未确定具体 HTTP 请求。")}
                   </Typography>
                 )}
                 {!manual && !requestFields.length && (
                   <Typography color="text.secondary" sx={{ mt: 2 }}>
-                    未记录触发请求详情。
+                    {tr("未记录触发请求详情。")}
                   </Typography>
                 )}
               </Paper>
               {trigger && (
                 <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
                   <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-                    触发条件
+                    {tr("触发条件")}
                   </Typography>
                   <Box
                     component="dl"
@@ -304,30 +311,34 @@ function DetailContent({
                     }}
                   >
                     <Field
-                      label="节点 503 计数 / 阈值"
-                      value={`${trigger.consecutive503Count ?? "未记录"} / ${trigger.consecutive503Threshold ?? "未记录"}`}
+                      label={tr("节点 503 计数 / 阈值")}
+                      value={`${trigger.consecutive503Count ?? tr("未记录")} / ${trigger.consecutive503Threshold ?? tr("未记录")}`}
                     />
                     {trigger.factor != null && (
                       <Field
-                        label="降速幅度"
+                        label={tr("降速幅度")}
                         value={`${Number(((1 - trigger.factor) * 100).toFixed(2))}%`}
                       />
                     )}
                     {trigger.minQps != null && (
                       <Field
-                        label="降速下限"
-                        value={`${trigger.minQps} 次/秒（目标更低时保持目标）`}
+                        label={tr("降速下限")}
+                        value={tr("{value1} 次/秒（目标更低时保持目标）", {
+                          value1: trigger.minQps,
+                        })}
                       />
                     )}
                     {trigger.intervalMs != null && (
                       <Field
-                        label="恢复间隔"
-                        value={`${trigger.intervalMs / 1000} 秒`}
+                        label={tr("恢复间隔")}
+                        value={tr("{value1} 秒", {
+                          value1: trigger.intervalMs / 1000,
+                        })}
                       />
                     )}
                     {trigger.increaseFactor != null && (
                       <Field
-                        label="每次恢复幅度"
+                        label={tr("每次恢复幅度")}
                         value={`${Number(((trigger.increaseFactor - 1) * 100).toFixed(2))}%`}
                       />
                     )}
@@ -336,7 +347,7 @@ function DetailContent({
               )}
               <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
                 <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-                  调整记录
+                  {tr("调整记录")}
                 </Typography>
                 <Stack
                   component="ol"
@@ -389,7 +400,7 @@ function DetailContent({
                           color="text.secondary"
                           sx={{ mt: 0.5 }}
                         >
-                          定时恢复
+                          {tr("定时恢复")}
                         </Typography>
                       )}
                     </Box>
@@ -402,7 +413,7 @@ function DetailContent({
                     disabled={loadingMore}
                     sx={{ mt: 2 }}
                   >
-                    {loadingMore ? "正在加载…" : "加载更多"}
+                    {loadingMore ? tr("正在加载…") : tr("加载更多")}
                   </Button>
                 )}
               </Paper>

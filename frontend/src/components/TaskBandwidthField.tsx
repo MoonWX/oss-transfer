@@ -1,10 +1,10 @@
+import { t, useI18n } from "../lib/i18n";
 import { InputAdornment, TextField } from "@mui/material";
 import {
   parseTaskBandwidth,
   TASK_BANDWIDTH_MIN_MBPS,
   TASK_BANDWIDTH_MAX_MBPS,
 } from "../lib/taskBandwidth";
-
 export function TaskBandwidthField({
   value,
   onChange,
@@ -16,6 +16,7 @@ export function TaskBandwidthField({
   disabled?: boolean;
   autoFocus?: boolean;
 }) {
+  useI18n();
   let error = "";
   try {
     parseTaskBandwidth(value);
@@ -24,14 +25,14 @@ export function TaskBandwidthField({
   }
   return (
     <TextField
-      label="任务带宽上限"
+      label={t("任务带宽上限")}
       type="number"
       value={value}
       onChange={(event) => onChange(event.target.value)}
       disabled={disabled}
       autoFocus={autoFocus}
       error={Boolean(error)}
-      helperText={error || "留空时仅使用节点限速。"}
+      helperText={error || t("留空时仅使用节点限速。")}
       slotProps={{
         htmlInput: {
           min: TASK_BANDWIDTH_MIN_MBPS,

@@ -87,6 +87,8 @@ Keep invitation links private. Removing a node revokes its credential. Rejoining
 
 ## Transfer data
 
+The WebUI supports Chinese, English and Japanese. It follows your browser language on first use; the language menu saves your choice without leaving the page. The CLI accepts `--lang en`, `--lang zh` or `--lang ja`, or the `OSS_TRANSFER_LANG` environment variable. For example: `oss-transfer-cli --lang ja task list`. JSON keys, status codes, paths and object keys stay unchanged.
+
 Add storage connections, then create a task with its source, destination and execution nodes. Choose `SKIP` or `OVERWRITE`, key mapping and limits as needed. Task details show progress and clickable child tasks, numbered `#parent-1`, `#parent-2`, and so on.
 
 Stop and resume preserves recorded object results. An unfinished download restarts the file; an unfinished S3 upload is aborted and that object is uploaded again. Completed multipart parts are not reused after a process restart. Reports are available after a task stops or finishes. Node limits cover all work on that node; a task's bandwidth limit is shared across its selected nodes.

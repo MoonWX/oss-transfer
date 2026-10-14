@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,7 +19,7 @@ type cliSession struct {
 var sessionConfigDir = func() (string, error) {
 	if directory := os.Getenv("OSS_TRANSFER_CLI_CONFIG_DIR"); directory != "" {
 		if !filepath.IsAbs(directory) {
-			return "", fmt.Errorf("OSS_TRANSFER_CLI_CONFIG_DIR 必须是绝对路径")
+			return "", cliErrorf("OSS_TRANSFER_CLI_CONFIG_DIR 必须是绝对路径")
 		}
 		return directory, nil
 	}
@@ -48,7 +47,7 @@ func loadSession(host string) (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("登录会话文件无效: %s", path)
+		return "", cliErrorf("登录会话文件无效: %s", path)
 	}
 	if err := checkSessionPermissions(path); err != nil {
 		return "", err
@@ -59,7 +58,7 @@ func loadSession(host string) (string, error) {
 	}
 	var session cliSession
 	if json.Unmarshal(data, &session) != nil || session.Host != host || session.Token == "" {
-		return "", fmt.Errorf("登录会话文件无效，请重新 login")
+		return "", cliErrorf("登录会话文件无效，请重新 login")
 	}
 	return session.Token, nil
 }
@@ -73,7 +72,7 @@ func saveSession(host, token string) error {
 		return err
 	}
 	if info, e := os.Lstat(dir); e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("登录会话目录无效")
+		return cliErrorf("登录会话目录无效")
 	}
 	if err = protectSessionPath(dir, true); err != nil {
 		return err
@@ -120,30 +119,30 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 		}
 	}
 	if count != 1 {
-		stdin := ""
+		var stdin interface{} = ""
 		if allowStdin {
-			stdin = "或 --" + name + "-stdin"
+			stdin = cliErrorf("或 --%s-stdin", name)
 		}
-		return "", fmt.Errorf("请为 %s 指定一种输入方式：环境变量、文件%s", name, stdin)
+		return "", cliErrorf("请为 %s 指定一种输入方式：环境变量、文件%s", name, stdin)
 	}
 	var value string
 	if opts.Has(name + "-env") {
 		var found bool
 		value, found = os.LookupEnv(opts.Value(name + "-env"))
 		if !found {
-			return "", fmt.Errorf("环境变量 %s 未设置", opts.Value(name+"-env"))
+			return "", cliErrorf("环境变量 %s 未设置", opts.Value(name+"-env"))
 		}
 	}
 	if opts.Has(name + "-file") {
 		data, err := os.ReadFile(opts.Value(name + "-file"))
 		if err != nil {
-			return "", fmt.Errorf("读取密码文件失败: %w", err)
+			return "", cliErrorf("读取密码文件失败: %w", err)
 		}
 		value = string(data)
 	}
 	if opts.Has(name + "-stdin") {
 		if !allowStdin {
-			return "", fmt.Errorf("不支持 stdin")
+			return "", cliErrorf("不支持 stdin")
 		}
 		data, err := io.ReadAll(io.LimitReader(input, 65537))
 		if err != nil {
@@ -156,7 +155,7 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 		value = strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r")
 	}
 	if len(value) == 0 || len(value) > 65536 {
-		return "", fmt.Errorf("密码不能为空或超过 65536 字节")
+		return "", cliErrorf("密码不能为空或超过 65536 字节")
 	}
 	return value, nil
 }
@@ -168,11 +167,11 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 			return nil, err
 		}
 		if len(opts.Positionals) > 0 {
-			return nil, fmt.Errorf("login 不接受位置参数")
+			return nil, cliErrorf("login 不接受位置参数")
 		}
 		username := strings.TrimSpace(opts.Value("username"))
 		if username == "" {
-			return nil, fmt.Errorf("请通过 --username 指定 WebUI 用户名")
+			return nil, cliErrorf("请通过 --username 指定 WebUI 用户名")
 		}
 		password, err := authSecret(opts, "password", input, true)
 		if err != nil {
@@ -185,27 +184,27 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		token, _ := result["token"].(string)
 		delete(result, "token")
 		if token == "" {
-			return result, fmt.Errorf("登录接口未返回会话")
+			return result, cliErrorf("登录接口未返回会话")
 		}
 		if err = saveSession(host, token); err != nil {
-			return result, fmt.Errorf("登录成功，但保存会话失败: %w", err)
+			return result, cliErrorf("登录成功，但保存会话失败: %w", err)
 		}
-		result["message"] = "已登录"
+		result["message"] = client.text("已登录")
 		result["host"] = host
 		return result, nil
 	case "logout", "whoami":
 		if len(args) != 0 {
-			return nil, fmt.Errorf("%s 不接受额外参数", command)
+			return nil, cliErrorf("%s 不接受额外参数", command)
 		}
 		if command == "whoami" {
 			return client.Request("GET", "/api/auth/current", nil)
 		}
 		result, err := client.Request("POST", "/api/auth/logout", nil)
 		if removeErr := removeSession(host); removeErr != nil {
-			return result, fmt.Errorf("清理本机会话失败: %w", removeErr)
+			return result, cliErrorf("清理本机会话失败: %w", removeErr)
 		}
 		if err != nil {
-			return map[string]interface{}{"message": "本机会话已移除；服务端退出请求未成功"}, err
+			return map[string]interface{}{"message": client.text("本机会话已移除；服务端退出请求未成功")}, err
 		}
 		return result, nil
 	case "change-password":
@@ -214,7 +213,7 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 			return nil, err
 		}
 		if len(opts.Positionals) > 0 {
-			return nil, fmt.Errorf("change-password 不接受位置参数")
+			return nil, cliErrorf("change-password 不接受位置参数")
 		}
 		old, err := authSecret(opts, "old-password", input, false)
 		if err != nil {
@@ -226,5 +225,5 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		}
 		return client.Request("POST", "/api/auth/change-password", map[string]string{"oldPassword": old, "newPassword": next})
 	}
-	return nil, fmt.Errorf("未知账户命令")
+	return nil, cliErrorf("未知账户命令")
 }

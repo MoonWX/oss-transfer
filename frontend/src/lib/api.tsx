@@ -1,3 +1,4 @@
+import { t, useI18n, getLocale } from "./i18n";
 import {
   createContext,
   useCallback,
@@ -34,7 +35,10 @@ type Options = {
   headers?: Record<string, string>;
 };
 async function request(path: string, options: Options = {}) {
-  const headers: Record<string, string> = { ...options.headers };
+  const headers: Record<string, string> = {
+    "Accept-Language": getLocale(),
+    ...options.headers,
+  };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -50,12 +54,12 @@ async function request(path: string, options: Options = {}) {
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
-    throw new ApiError("无法连接服务，请检查网络或主节点状态。");
+    throw new ApiError(t("无法连接服务，请检查网络或主节点状态。"));
   }
   if (response.status === 401) {
     setToken(null);
     window.dispatchEvent(new Event("session-expired"));
-    throw new ApiError("登录已过期，请重新登录。", 401);
+    throw new ApiError(t("登录已过期，请重新登录。"), 401);
   }
   return response;
 }
@@ -66,13 +70,13 @@ export async function api<T = any>(
   const response = await request(path, options);
   const data = await response.json().catch(() => {
     throw new ApiError(
-      `服务返回了无效响应（HTTP ${response.status}）`,
+      t("服务返回了无效响应（HTTP {p1}）", { p1: response.status }),
       response.status,
     );
   });
   if (!response.ok || data.success === false)
     throw new ApiError(
-      data.message || `请求失败（HTTP ${response.status}）`,
+      data.message || t("请求失败（HTTP {p1}）", { p1: response.status }),
       response.status,
       data,
     );
@@ -86,7 +90,7 @@ export async function download(path: string, filename: string) {
   ) {
     const data = await response.json().catch(() => ({}));
     throw new ApiError(
-      data.message || "下载失败，请稍后重试。",
+      data.message || t("下载失败，请稍后重试。"),
       response.status,
     );
   }
@@ -143,7 +147,7 @@ export function useApi<T = any>(
         id === sequence.current &&
         !(e instanceof DOMException && e.name === "AbortError")
       )
-        setError(e instanceof Error ? e.message : "加载失败");
+        setError(e instanceof Error ? e.message : t("加载失败"));
     } finally {
       if (id === sequence.current) {
         setLoading(false);
@@ -181,6 +185,7 @@ const NotifyContext = createContext<
 >(() => {});
 export const useNotify = () => useContext(NotifyContext);
 export function NotifyProvider({ children }: { children: ReactNode }) {
+  useI18n();
   const [notice, setNotice] = useState<{
     message: string;
     severity: Severity;

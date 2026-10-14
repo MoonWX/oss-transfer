@@ -1,3 +1,4 @@
+import { t, useI18n, getLocale } from "../lib/i18n";
 import type { ReactNode } from "react";
 import {
   Alert,
@@ -11,27 +12,50 @@ import {
 import InboxOutlined from "@mui/icons-material/InboxOutlined";
 
 export const formatNumber = (n: unknown) =>
-  Number(n || 0).toLocaleString("zh-CN");
+  Number(n || 0).toLocaleString(getLocale());
 export function formatBytes(value: unknown) {
   const n = Number(value || 0);
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const index = Math.min(Math.floor(Math.log(n) / Math.log(1024)), 5);
-  return `${(n / 1024 ** index).toLocaleString("zh-CN", { maximumFractionDigits: index ? 1 : 0 })} ${["B", "KiB", "MiB", "GiB", "TiB", "PiB"][index]}`;
+  return `${(n / 1024 ** index).toLocaleString(getLocale(), { maximumFractionDigits: index ? 1 : 0 })} ${["B", "KiB", "MiB", "GiB", "TiB", "PiB"][index]}`;
 }
 export const statusLabels: Record<string, string> = {
-  PENDING: "待执行",
-  WAITING: "待执行",
-  RUNNING: "执行中",
-  STOPPING: "停止中",
-  RESUMING: "恢复中",
-  RECOVERABLE: "等待恢复",
-  LIST_DONE: "扫描完成",
-  COMPLETED: "已完成",
-  PARTIAL_FAILED: "部分失败",
-  FAILED: "失败",
-  STOPPED: "已停止",
+  get PENDING() {
+    return t("待执行");
+  },
+  get WAITING() {
+    return t("待执行");
+  },
+  get RUNNING() {
+    return t("执行中");
+  },
+  get STOPPING() {
+    return t("停止中");
+  },
+  get RESUMING() {
+    return t("恢复中");
+  },
+  get RECOVERABLE() {
+    return t("等待恢复");
+  },
+  get LIST_DONE() {
+    return t("扫描完成");
+  },
+  get COMPLETED() {
+    return t("已完成");
+  },
+  get PARTIAL_FAILED() {
+    return t("部分失败");
+  },
+  get FAILED() {
+    return t("失败");
+  },
+  get STOPPED() {
+    return t("已停止");
+  },
 };
 export function StatusChip({ status }: { status?: string }) {
+  useI18n();
   const colors: Record<
     string,
     "default" | "info" | "success" | "warning" | "error"
@@ -48,7 +72,7 @@ export function StatusChip({ status }: { status?: string }) {
   };
   return (
     <Chip
-      label={statusLabels[status || ""] || status || "未知"}
+      label={statusLabels[status || ""] || status || t("未知")}
       size="small"
       color={colors[status || ""] || "default"}
       variant="outlined"
@@ -134,6 +158,7 @@ export function ErrorAlert({
   error: string | null;
   onRetry?: () => void;
 }) {
+  useI18n();
   return error ? (
     <Alert
       severity="error"
@@ -141,7 +166,7 @@ export function ErrorAlert({
       action={
         onRetry ? (
           <Button color="inherit" size="small" onClick={onRetry}>
-            重试
+            {t("重试")}
           </Button>
         ) : undefined
       }
@@ -151,6 +176,7 @@ export function ErrorAlert({
   ) : null;
 }
 export function LoadingState() {
+  useI18n();
   return (
     <Stack
       direction="row"
@@ -160,7 +186,7 @@ export function LoadingState() {
       sx={{ p: 8 }}
     >
       <CircularProgress size={24} />
-      <Typography color="text.secondary">正在加载…</Typography>
+      <Typography color="text.secondary">{t("正在加载…")}</Typography>
     </Stack>
   );
 }

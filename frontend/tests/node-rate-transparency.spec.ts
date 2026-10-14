@@ -152,7 +152,9 @@ test("node links active adjustments to details and keeps recovery progress conci
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   state.worker = workerState(874.8, "RECOVERING", 2);
   await page.getByRole("button", { name: "刷新", exact: true }).click();
-  await expect(put.getByText("恢复中", { exact: true })).toBeVisible();
+  await expect(
+    put.getByText("逐步恢复", { exact: true }).first(),
+  ).toBeVisible();
   await expect(put.getByRole("progressbar")).toHaveAttribute(
     "aria-valuenow",
     "87",
@@ -188,7 +190,9 @@ test("failed refresh, paused polling and offline nodes do not claim recovery", a
   state.error = false;
   state.worker = workerState(874.8, "RECOVERING", 2);
   await page.getByRole("button", { name: "刷新", exact: true }).click();
-  await expect(put.getByText("恢复中", { exact: true })).toBeVisible();
+  await expect(
+    put.getByText("逐步恢复", { exact: true }).first(),
+  ).toBeVisible();
   await page.getByRole("combobox", { name: /^自动刷新/ }).click();
   await page.getByRole("option", { name: "暂停", exact: true }).click();
   await expect(put.getByText("状态待确认", { exact: true })).toBeVisible();
@@ -352,4 +356,45 @@ test("rounded fractional targets do not imply automatic reduction", async ({
   await expect(put.getByText("自动降速", { exact: true })).toHaveCount(0);
   await expect(put.getByRole("progressbar")).toHaveCount(0);
   await expect(page.getByText(/下次恢复计划/)).toHaveCount(0);
+});
+
+test.describe("localized rate history timestamps", () => {
+  test.use({ locale: "en-US", timezoneId: "UTC" });
+  test("formats raw timestamps instead of reusing server-formatted text", async ({
+    page,
+  }) => {
+    await mockApi(page);
+    await page.route("**/api/master/rate-limit/history?*", (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          adjustments: [
+            {
+              workerIp: nodeIp,
+              type: "put",
+              value: 900,
+              previousValue: 1000,
+              timestamp: Date.parse("2026-09-24T01:02:03Z"),
+              timestampFormatted: "2026年9月24日 旧格式",
+              reasonCode: "MANUAL_SET",
+              manual: true,
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto("/nodes");
+    await page.getByRole("tab", { name: "Limit history", exact: true }).click();
+    await expect(
+      page.getByRole("cell", { name: "9/24/2026, 01:02:03", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("2026年9月24日 旧格式", { exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Language", exact: true }).click();
+    await page.getByRole("menuitem", { name: "日本語", exact: true }).click();
+    await expect(
+      page.getByRole("cell", { name: "2026/9/24 1:02:03", exact: true }),
+    ).toBeVisible();
+  });
 });

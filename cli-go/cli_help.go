@@ -44,6 +44,7 @@ const cliHelp = `OSS Transfer CLI
 
 全局选项
   --host <http://IP:1685>         服务地址，默认 http://localhost:1685
+  --lang zh|en|ja                 界面语言，支持带地区的语言代码
   --json                         输出结构化 JSON；持续刷新时每次一行
   --verbose                      将请求路径及 HTTP 状态写入标准错误
   --watch <秒|5s>                每隔 1–3600 整数秒刷新，只支持只读查询
@@ -65,6 +66,8 @@ const cliHelp = `OSS Transfer CLI
   查询不完整会保留节点错误；退出码 0=成功，1=操作失败，2=命令错误，3=结果不完整，130=用户中断。
   OSS_TRANSFER_MASTER_SERVER 可设置默认服务地址；密钥和密码请用环境变量或文件。
   OSS_TRANSFER_CLI_CONFIG_DIR 可指定会话目录，须为绝对路径。
+  语言优先级：--lang > OSS_TRANSFER_LANG > LC_ALL > LC_MESSAGES > LANG；未设置时为中文，不支持的系统语言使用英文。
+  JSON 字段名、枚举值和用户数据保持原样。
   帮助：help task、help task create、help task import、help node、help storage、
         help agent、help setup、help limit、help exceptions、help object、help login、help tools。
 `
@@ -376,7 +379,7 @@ const cliAuthHelp = `登录与账户
 --password-stdin 从标准输入读取；文件读取使用 --password-file。
 修改密码的来源也可使用 --old-password-file / --new-password-file。
 登录会话按 --host 对应服务保存；切换服务时须使用对应会话。
-OSS_TRANSFER_AUTH_TOKEN 可提供登录令牌；部署节点可沿用内部共享密钥认证。
+OSS_TRANSFER_AUTH_TOKEN 可提供用户登录令牌；CLI 不接受 OSS_TRANSFER_INTERNAL_TOKEN。
 `
 
 const cliToolsHelp = `对象清单工具

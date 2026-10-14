@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { Box, Typography } from "@mui/material";
+import { getLocale, t, useI18n } from "../lib/i18n";
 
 declare const __BUILD_INFO__: { commit: string; builtAt: string };
 
 const { commit, builtAt } = __BUILD_INFO__;
 const builtTime = new Date(builtAt);
-const relativeTime = new Intl.RelativeTimeFormat("en", { style: "short" });
 
 function buildAge(now: number) {
+  const relativeTime = new Intl.RelativeTimeFormat(getLocale(), {
+    style: "short",
+  });
   const elapsed = Math.max(0, Math.floor((now - builtTime.getTime()) / 1000));
   const units = [
     [31536000, "year"],
@@ -20,10 +23,11 @@ function buildAge(now: number) {
     if (elapsed >= seconds)
       return relativeTime.format(-Math.floor(elapsed / seconds), unit);
   }
-  return "<1 min. ago";
+  return t("不到 1 分钟前");
 }
 
 export function BuildInfo() {
+  useI18n();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -48,10 +52,10 @@ export function BuildInfo() {
       <Box
         component="time"
         dateTime={builtAt}
-        title={builtTime.toLocaleString()}
+        title={builtTime.toLocaleString(getLocale())}
         sx={{ whiteSpace: "nowrap" }}
       >
-        built {buildAge(now)}
+        {t("构建于 {age}", { age: buildAge(now) })}
       </Box>
     </Typography>
   );

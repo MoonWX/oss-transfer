@@ -35,7 +35,7 @@ func protectSessionPath(path string, directory bool) error {
 func checkSessionPermissions(path string) error {
 	for _, target := range []string{filepath.Dir(path), path} {
 		if err := checkPrivateSessionACL(target); err != nil {
-			return fmt.Errorf("登录会话仅允许当前用户访问，请重新 login: %s: %w", target, err)
+			return cliErrorf("登录会话仅允许当前用户访问，请重新 login: %s: %w", target, err)
 		}
 	}
 	return nil

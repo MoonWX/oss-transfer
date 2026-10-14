@@ -173,10 +173,10 @@ for (const direction of [
       child.getByText("child-2/999.bin", { exact: true }),
     ).toBeVisible();
     await expect(
-      child.getByText("2026-09-24 09:01:02", { exact: true }),
+      child.getByText("2026/9/24 09:01:02", { exact: true }),
     ).toBeVisible();
     await expect(
-      child.getByText("2026-09-24 09:03:04", { exact: true }),
+      child.getByText("2026/9/24 09:03:04", { exact: true }),
     ).toBeVisible();
     await expect(child.getByText("读取 child-2/failed.bin 失败")).toBeVisible();
     await expect(
@@ -442,4 +442,60 @@ test("closing child details retains the child through the exit animation", async
   await expect(
     page.getByRole("button", { name: "查看任务 821" }),
   ).toBeVisible();
+});
+
+test.describe("localized subtask timestamps", () => {
+  test.use({ locale: "en-US", timezoneId: "UTC" });
+  test("formats numeric and ISO time fields while preserving date-like object keys", async ({
+    page,
+  }) => {
+    const { data } = await arrange(page, "OSS_TO_OSS");
+    const dateLikeKey = "2026-09-24T01:02:03Z";
+    Object.assign(data.children[1], {
+      createTime: dateLikeKey,
+      startTime: Date.parse("2026-09-24T01:03:04Z"),
+      dateAfter: "2026-09-22T12:00:00Z",
+      dateBefore: "2026-09-25T18:00:00Z",
+      objectKey: dateLikeKey,
+      targetRelativePath: "2026-09-24/日本語.txt",
+    });
+    await page.goto("/tasks?taskId=821&childTaskId=821-2&childNode=10.0.1.13");
+    const heading = page.getByRole("heading", {
+      name: "Subtask #821-2",
+      exact: true,
+    });
+    await expect(heading).toBeVisible();
+    const child = heading.locator("..");
+    for (const value of [
+      "9/24/2026, 01:02:03",
+      "9/24/2026, 01:03:04",
+      "9/22/2026, 12:00:00",
+      "9/25/2026, 18:00:00",
+      dateLikeKey,
+      "2026-09-24/日本語.txt",
+    ])
+      await expect(child.getByText(value, { exact: true })).toBeVisible();
+    // Simulate a language preference changed in another tab while details stay open.
+    await page.evaluate(() => {
+      localStorage.setItem("oss-transfer-language", "ja-JP");
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "oss-transfer-language",
+          newValue: "ja-JP",
+        }),
+      );
+    });
+    await expect(
+      page.getByRole("heading", { name: "サブタスク #821-2", exact: true }),
+    ).toBeVisible();
+    for (const value of [
+      "2026/9/24 1:02:03",
+      "2026/9/24 1:03:04",
+      "2026/9/22 12:00:00",
+      "2026/9/25 18:00:00",
+      dateLikeKey,
+      "2026-09-24/日本語.txt",
+    ])
+      await expect(page.getByText(value, { exact: true })).toBeVisible();
+  });
 });

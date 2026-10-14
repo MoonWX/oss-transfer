@@ -1,3 +1,4 @@
+import { t, useI18n } from "../lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -20,13 +21,16 @@ import {
   validateTaskBandwidth,
 } from "../lib/taskBandwidth";
 import { TaskBandwidthField } from "./TaskBandwidthField";
-
 type BandwidthStatus = {
   limitMbps: number | null;
   applied: boolean;
   sharedTaskCount: number;
   canEdit: boolean;
-  nodes: { address: string; applied: boolean; message?: string }[];
+  nodes: {
+    address: string;
+    applied: boolean;
+    message?: string;
+  }[];
 };
 function readStatus(response: { data?: BandwidthStatus }): BandwidthStatus {
   const status = response.data;
@@ -38,11 +42,10 @@ function readStatus(response: { data?: BandwidthStatus }): BandwidthStatus {
     !Array.isArray(status.nodes) ||
     !(status.sharedTaskCount >= 1)
   )
-    throw new Error("限速设置响应无效，请重试。");
+    throw new Error(t("限速设置响应无效，请重试。"));
   validateTaskBandwidth(status.limitMbps);
   return status;
 }
-
 export default function TaskBandwidth({
   taskId,
   active,
@@ -54,6 +57,7 @@ export default function TaskBandwidth({
   refreshMs: number;
   completed?: boolean;
 }) {
+  useI18n();
   const path = `/api/master/tasks/${taskId}/bandwidth-limit`;
   const notify = useNotify();
   const [status, setStatus] = useState<BandwidthStatus>();
@@ -93,7 +97,7 @@ export default function TaskBandwidth({
         !(error instanceof DOMException && error.name === "AbortError")
       )
         setReadError(
-          error instanceof Error ? error.message : "读取失败，请重试。",
+          error instanceof Error ? error.message : t("读取失败，请重试。"),
         );
     } finally {
       if (current === sequence.current) {
@@ -118,7 +122,6 @@ export default function TaskBandwidth({
     }, refreshMs);
     return () => window.clearInterval(timer);
   }, [active, open, refreshMs, load]);
-
   const edit = () => {
     if (completed || !active || !status?.canEdit || readError) return;
     // Editing uses the last confirmed settings; an older background read must
@@ -157,7 +160,9 @@ export default function TaskBandwidth({
       setStatus(next);
       if (next.applied) {
         notify(
-          limitMbps == null ? "已清除任务带宽上限。" : "任务带宽上限已更新。",
+          limitMbps == null
+            ? t("已清除任务带宽上限。")
+            : t("任务带宽上限已更新。"),
         );
         setOpen(false);
       }
@@ -169,19 +174,24 @@ export default function TaskBandwidth({
           /* Retain the last confirmed settings if the response is incomplete. */
         }
       }
-      setSaveError("正在核对应用结果…");
+      setSaveError(t("正在核对应用结果…"));
       const confirmed = await load();
       if (confirmed?.applied && confirmed.limitMbps === limitMbps) {
         setSaveError("");
         setOpen(false);
         notify(
           limitMbps == null
-            ? "已核对：任务带宽上限已清除。"
-            : "已核对：任务带宽上限已生效。",
+            ? t("已核对：任务带宽上限已清除。")
+            : t("已核对：任务带宽上限已生效。"),
         );
       } else {
         setSaveError(
-          `应用结果未确认：${error instanceof Error ? error.message : "请核对当前设置后重试。"}`,
+          t("应用结果未确认：{value1}", {
+            value1:
+              error instanceof Error
+                ? error.message
+                : t("请核对当前设置后重试。"),
+          }),
         );
       }
     } finally {
@@ -197,12 +207,12 @@ export default function TaskBandwidth({
       action={
         !open && status?.canEdit && !completed ? (
           <Button color="inherit" size="small" onClick={edit}>
-            重试
+            {t("重试")}
           </Button>
         ) : undefined
       }
     >
-      部分节点未生效
+      {t("部分节点未生效")}
       {failures.length > 0 && (
         <Stack spacing={0.5} sx={{ mt: 0.75 }}>
           {failures.map((node) => (
@@ -211,7 +221,7 @@ export default function TaskBandwidth({
               variant="body2"
               sx={{ overflowWrap: "anywhere" }}
             >
-              {node.address}：{node.message || "未生效"}
+              {node.address}：{node.message || t("未生效")}
             </Typography>
           ))}
         </Stack>
@@ -224,22 +234,24 @@ export default function TaskBandwidth({
         <Stack direction="row" gap={1} alignItems="center" role="status">
           <CircularProgress size={16} />
           <Typography variant="body2" color="text.secondary">
-            读取限速设置…
+            {t("读取限速设置…")}
           </Typography>
         </Stack>
       ) : status ? (
         <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
           {status.limitMbps != null && (
             <Typography variant="body2">
-              带宽上限 {formatTaskBandwidth(status.limitMbps)}
+              {t("带宽上限 {limit}", {
+                limit: formatTaskBandwidth(status.limitMbps),
+              })}
             </Typography>
           )}
           <Tooltip
             title={
               completed
-                ? "已完成任务不可调整限速"
+                ? t("已完成任务不可调整限速")
                 : !status.canEdit
-                  ? "当前任务不可调整限速"
+                  ? t("当前任务不可调整限速")
                   : ""
             }
           >
@@ -256,7 +268,7 @@ export default function TaskBandwidth({
                   ) : undefined
                 }
               >
-                {status.limitMbps == null ? "限速" : "调整"}
+                {status.limitMbps == null ? t("限速") : t("调整")}
               </Button>
             </span>
           </Tooltip>
@@ -271,13 +283,13 @@ export default function TaskBandwidth({
               size="small"
               disabled={loading}
               onClick={() => void load()}
-              aria-label="重试读取任务限速"
+              aria-label={t("重试读取任务限速")}
             >
-              重试
+              {t("重试")}
             </Button>
           }
         >
-          无法读取任务限速：{readError}
+          {t("无法读取任务限速：{error}", { error: readError })}
         </Alert>
       )}
       {!open && partial && warning}
@@ -298,7 +310,7 @@ export default function TaskBandwidth({
           }}
         >
           <DialogTitle id="task-bandwidth-title">
-            任务 #{taskId} 限速
+            {t("任务 #{id} 限速", { id: taskId })}
           </DialogTitle>
           <DialogContent>
             <Box sx={{ mt: 1 }}>
@@ -318,7 +330,9 @@ export default function TaskBandwidth({
                 color="text.secondary"
                 sx={{ display: "block", mt: 1.5 }}
               >
-                {status!.sharedTaskCount} 个子任务共享此上限。
+                {t("{count} 个子任务共享此上限。", {
+                  count: status!.sharedTaskCount,
+                })}
               </Typography>
             )}
             {partial && warning}
@@ -330,7 +344,7 @@ export default function TaskBandwidth({
           </DialogContent>
           <DialogActions>
             <Button disabled={saving} onClick={() => setOpen(false)}>
-              取消
+              {t("取消")}
             </Button>
             <Button
               type="submit"
@@ -342,7 +356,7 @@ export default function TaskBandwidth({
                 ) : undefined
               }
             >
-              {saving ? "正在应用" : partial ? "重试应用" : "应用"}
+              {saving ? t("正在应用") : partial ? t("重试应用") : t("应用")}
             </Button>
           </DialogActions>
         </Box>

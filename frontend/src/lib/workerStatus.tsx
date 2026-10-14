@@ -1,3 +1,4 @@
+import { t, useI18n, getLocale } from "./i18n";
 import {
   createContext,
   useContext,
@@ -80,7 +81,7 @@ export function WorkerStatusProvider({
     }
     if (messages.length)
       notify(
-        messages.join("；"),
+        messages.join(getLocale() === "en-US" ? "; " : "；"),
         reduced ? "warning" : recovering ? "info" : "success",
       );
   }, [workers.data, notify]);
@@ -104,6 +105,7 @@ export function useWorkerStatus() {
 }
 
 export function RateAdjustmentBanner() {
+  useI18n();
   const { data, stale } = useWorkerStatus();
   const { refreshSeconds } = useRefreshPreference();
   const { pathname } = useLocation();
@@ -146,15 +148,17 @@ export function RateAdjustmentBanner() {
                 }
                 color="inherit"
               >
-                查看详情
+                {t("查看详情")}
               </Button>
             }
           >
             {uncertain
-              ? `${ip} 曾触发自动调节，当前状态待更新。`
+              ? t("{p1} 曾触发自动调节，当前状态待更新。", { p1: ip })
               : reduced
-                ? `${ip} 可能遭遇存储服务限速，已自动降低请求上限。`
-                : `${ip} 正在恢复请求上限。`}
+                ? t("{p1} 可能遭遇存储服务限速，已自动降低请求上限。", {
+                    p1: ip,
+                  })
+                : t("{p1} 正在恢复请求上限。", { p1: ip })}
           </Alert>
         );
       })}

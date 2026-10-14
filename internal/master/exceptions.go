@@ -172,7 +172,7 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 		result := map[string]any{"success": true, name: groups, "totalCount": total, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "complete": len(failed) == 0, "partial": len(failed) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
 		if fallback {
 			result["supported"] = false
-			result["message"] = "The Go transfer engine does not use the legacy SDK fallback mechanism"
+			result["message"] = localize(w, "The Go transfer engine does not use the legacy SDK fallback mechanism")
 		}
 		writeJSON(w, 200, result)
 	}

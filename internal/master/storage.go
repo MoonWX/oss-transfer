@@ -130,7 +130,7 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Validate {
 		if _, err := s.storageBuckets(r.Context(), request.Config); err != nil {
-			fail(w, 400, "Storage validation failed: "+err.Error())
+			fail(w, 400, localize(w, "Storage validation failed: ")+err.Error())
 			return
 		}
 	}
@@ -188,14 +188,14 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
 			case <-ctx.Done():
-				details[i] = member.Address + ": 等待同步"
+				details[i] = member.Address + ": " + localize(w, "等待同步")
 				return
 			}
 			if err := s.syncStorage(ctx, member, snapshot); err != nil {
-				details[i] = member.Address + ": 等待同步"
+				details[i] = member.Address + ": " + localize(w, "等待同步")
 			} else {
 				success[i] = true
-				details[i] = member.Address + ": 同步成功"
+				details[i] = member.Address + ": " + localize(w, "同步成功")
 			}
 		}()
 	}
@@ -206,7 +206,7 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			count++
 		}
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "message": "存储连接已保存", "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details})
+	writeJSON(w, 200, map[string]any{"success": true, "message": localize(w, "存储连接已保存"), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details})
 }
 func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := storageconfig.NewMaster(s.store).Snapshot()

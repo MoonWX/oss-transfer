@@ -131,7 +131,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 			_, exportedLocal := fields["taskIndex"]
 			if localImport && exportedLocal {
 				if err := normalizeLocalTaskExport(fields); err != nil {
-					fail(w, 400, fmt.Sprintf("Invalid imported task %d: %v", i+1, err))
+					fail(w, 400, fmt.Sprintf(localize(w, "Invalid imported task %d: %s"), i+1, localize(w, err.Error())))
 					return nil, false
 				}
 			}
@@ -141,7 +141,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
 				if value, ok := fields[name]; ok {
 					if string(value) != "null" && string(value) != "0" && string(value) != "\"\"" && string(value) != "[]" {
-						fail(w, 400, "Import requires an explicit replacement for "+name)
+						fail(w, 400, fmt.Sprintf(localize(w, "Import requires an explicit replacement for %s"), name))
 						return nil, false
 					}
 					delete(fields, name)
@@ -152,7 +152,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 		rowDecoder := json.NewDecoder(bytes.NewReader(raw))
 		rowDecoder.DisallowUnknownFields()
 		if err := rowDecoder.Decode(&rows[i]); err != nil {
-			fail(w, 400, fmt.Sprintf("Invalid task %d: %v", i+1, err))
+			fail(w, 400, fmt.Sprintf(localize(w, "Invalid task %d: %s"), i+1, err.Error()))
 			return nil, false
 		}
 	}
@@ -617,7 +617,7 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 		for _, address := range requested {
 			member, ok := byAddress[address]
 			if !ok {
-				return spec, nil, fmt.Errorf("execution Agent %q is unavailable", address)
+				return spec, nil, fmt.Errorf(localizeContext(ctx, "execution Agent %q is unavailable"), address)
 			}
 			if seen[member.ID] {
 				return spec, nil, errors.New("duplicate execution Agent")
@@ -636,11 +636,11 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 		check := bindingCheck{taskBinding: binding}
 		member, ok := byAddress[binding.ExecutionNodeIP]
 		if !ok {
-			check.Message = "执行节点未连接"
+			check.Message = localizeContext(ctx, "执行节点未连接")
 		} else if seen[member.ID] {
-			check.Message = "执行节点重复"
+			check.Message = localizeContext(ctx, "执行节点重复")
 		} else if !absoluteAgentPath(binding.LocalPath) || strings.ContainsRune(binding.LocalPath, 0) {
-			check.Message = "本地路径必须为绝对路径"
+			check.Message = localizeContext(ctx, "本地路径必须为绝对路径")
 		} else {
 			seen[member.ID] = true
 			var probe struct {
@@ -652,16 +652,16 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 			if probeErr != nil {
 				check.Message = probeErr.Error()
 			} else if spec.Direction == "LOCAL_TO_OSS" && probe.PathType == "MISSING" {
-				check.Message = "源路径不存在"
+				check.Message = localizeContext(ctx, "源路径不存在")
 			} else if spec.Direction == "LOCAL_TO_OSS" && probe.PathType == "FILE" && len(bindings) > 1 {
 				check.Code = "SINGLE_FILE_REQUIRES_ONE_NODE"
-				check.Message = "单文件上传只能选择一个节点"
+				check.Message = localizeContext(ctx, "单文件上传只能选择一个节点")
 			} else if spec.Direction == "LOCAL_TO_OSS" && probe.PathType == "DIRECTORY" && spec.TargetKey != "" {
-				check.Message = "目录上传不能指定单个目标 Key"
+				check.Message = localizeContext(ctx, "目录上传不能指定单个目标 Key")
 			} else if spec.Direction == "OSS_TO_LOCAL" && probe.PathType == "FILE" {
-				check.Message = "下载目标必须是目录"
+				check.Message = localizeContext(ctx, "下载目标必须是目录")
 			} else if probe.PathType != "FILE" && probe.PathType != "DIRECTORY" && probe.PathType != "MISSING" {
-				check.Message = "节点未返回有效路径类型"
+				check.Message = localizeContext(ctx, "节点未返回有效路径类型")
 			} else {
 				check.Valid = true
 				root := binding.LocalPath
@@ -669,7 +669,7 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 					root, spec.ObjectKey = splitAgentFile(binding.LocalPath)
 				}
 				if probe.PathType == "MISSING" {
-					check.Message = "目标目录将在任务开始时创建"
+					check.Message = localizeContext(ctx, "目标目录将在任务开始时创建")
 				}
 				spec.Nodes = append(spec.Nodes, task.Node{ID: member.ID, EnrollmentID: member.EnrollmentID, Address: member.Address, LocalRoot: root})
 			}
@@ -714,7 +714,7 @@ func (s *Server) createTaskHTTP(kind string) http.HandlerFunc {
 		for i, row := range rows {
 			spec, checks, err := s.resolveTaskSpec(r.Context(), row, kind)
 			if err != nil {
-				problems = append(problems, fmt.Sprintf("%d: %v", i+1, err))
+				problems = append(problems, fmt.Sprintf("%d: %s", i+1, localize(w, err.Error())))
 				continue
 			}
 			created, err := s.createTransfer(r.Context(), spec, fmt.Sprintf("%s:%d", requestKey, i))
@@ -723,7 +723,7 @@ func (s *Server) createTaskHTTP(kind string) http.HandlerFunc {
 				acceptedBindings = append(acceptedBindings, map[string]any{"parentTaskId": created.ID, "distributionMode": strings.ToLower(spec.DistributionMode), "nodeBindings": checks})
 			}
 			if err != nil {
-				problems = append(problems, fmt.Sprintf("%d: %v", i+1, err))
+				problems = append(problems, fmt.Sprintf("%d: %s", i+1, localize(w, err.Error())))
 			}
 		}
 		result := map[string]any{"success": true, "partial": len(problems) > 0, "taskIds": ids, "rejectedCount": len(rows) - len(ids), "validationErrors": problems}
@@ -755,7 +755,7 @@ func (s *Server) validateTaskHTTP(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, items...)
 		if err != nil {
 			valid = false
-			problems = append(problems, err.Error())
+			problems = append(problems, localize(w, err.Error()))
 		}
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"valid": valid, "nodeBindings": checks, "validationErrors": problems}})
@@ -1024,7 +1024,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 	result["totalTasks"] = len(rows)
 	if truncated {
 		result["nextBeforeId"] = next
-		result["message"] = "Showing recent tasks; load an earlier page for more history"
+		result["message"] = localize(w, "Showing recent tasks; load an earlier page for more history")
 	}
 	result["truncated"] = truncated
 	writeJSON(w, 200, result)
@@ -1178,7 +1178,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 					}
 					if len(retained) > 0 {
 						item["retainedAgentHistory"] = retained
-						item["message"] = "已删除任务记录；已移除节点的本地历史保留：" + strings.Join(retained, "、")
+						item["message"] = localize(w, "已删除任务记录；已移除节点的本地历史保留：") + strings.Join(retained, "、")
 					}
 				}
 			}
@@ -1299,7 +1299,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			for index := range indexes {
 				node := parent.Spec.Nodes[index]
 				if online[node.ID] != node.EnrollmentID {
-					nodes[index] = map[string]any{"address": node.Address, "applied": false, "message": "执行节点未连接"}
+					nodes[index] = map[string]any{"address": node.Address, "applied": false, "message": localize(w, "执行节点未连接")}
 					continue
 				}
 				var policy ratelimit.ParentLimit

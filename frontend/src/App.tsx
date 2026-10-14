@@ -1,3 +1,4 @@
+import { t, useI18n, getLocale } from "./lib/i18n";
 import {
   Component,
   Suspense,
@@ -71,6 +72,7 @@ import {
 import { api, getToken, NotifyProvider, setToken, useNotify } from "./lib/api";
 import { makeTheme } from "./theme";
 import { LoadingState } from "./components/Common";
+import LanguageSelector from "./components/LanguageSelector";
 import { BuildInfo } from "./components/BuildInfo";
 import {
   SIDEBAR_COLLAPSED_WIDTH,
@@ -105,9 +107,9 @@ class PageErrorBoundary extends Component<
   render() {
     return this.state.error ? (
       <Box sx={{ p: 5 }}>
-        <Alert severity="error">页面加载失败，请刷新重试。</Alert>
+        <Alert severity="error">{t("页面加载失败，请刷新重试。")}</Alert>
         <Button sx={{ mt: 2 }} onClick={() => window.location.reload()}>
-          重新加载
+          {t("重新加载")}
         </Button>
       </Box>
     ) : (
@@ -123,6 +125,7 @@ function Brand({
   compact?: boolean;
   iconOnly?: boolean;
 }) {
+  useI18n();
   return (
     <Stack direction="row" alignItems="center" gap={1.5}>
       <Box
@@ -154,7 +157,7 @@ function Brand({
         </Typography>
         {!compact && (
           <Typography variant="caption" color="text.secondary">
-            数据迁移控制台
+            {t("数据迁移控制台")}
           </Typography>
         )}
       </Box>
@@ -162,6 +165,7 @@ function Brand({
   );
 }
 function Login({ onLogin }: { onLogin: (user: any) => void }) {
+  useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
@@ -239,12 +243,12 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
               variant="h4"
               sx={{ fontSize: { xs: 30, md: 36 }, lineHeight: 1.45 }}
             >
-              对象存储与
+              {t("对象存储与")}
               <br />
-              本地文件传输
+              {t("本地文件传输")}
             </Typography>
             <Typography color="text.secondary" sx={{ mt: 2, maxWidth: 330 }}>
-              配置存储连接、创建任务并查看传输状态。
+              {t("配置存储连接、创建任务并查看传输状态。")}
             </Typography>
           </Box>
           <Typography
@@ -274,18 +278,18 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
             }}
           />
           <Typography variant="h5" component="h1">
-            登录控制台
+            {t("登录控制台")}
           </Typography>
           <Typography
             color="text.secondary"
             sx={{ mt: 1, mb: { xs: 3, md: 4 } }}
           >
-            使用控制台账号登录
+            {t("使用控制台账号登录")}
           </Typography>
           <Stack gap={{ xs: 2, md: 2.5 }}>
             {error && <Alert severity="error">{error}</Alert>}
             <TextField
-              label="用户名"
+              label={t("用户名")}
               value={username}
               required
               autoComplete="username"
@@ -293,7 +297,7 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
               autoFocus
             />
             <TextField
-              label="密码"
+              label={t("密码")}
               value={password}
               required
               type={visible ? "text" : "password"}
@@ -305,7 +309,7 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
                     <InputAdornment position="end">
                       <IconButton
                         edge="end"
-                        aria-label={visible ? "隐藏密码" : "显示密码"}
+                        aria-label={visible ? t("隐藏密码") : t("显示密码")}
                         onClick={() => setVisible(!visible)}
                       >
                         {visible ? (
@@ -332,7 +336,7 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
                 )
               }
             >
-              登录
+              {t("登录")}
             </Button>
           </Stack>
           <Typography
@@ -340,7 +344,7 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
             color="text.secondary"
             sx={{ mt: { xs: 2, md: 3 } }}
           >
-            会话仅保存在当前浏览器标签页。
+            {t("会话仅保存在当前浏览器标签页。")}
           </Typography>
         </Box>
       </Paper>
@@ -367,13 +371,15 @@ function Workspace({
   preference: string;
   setPreference: (v: "light" | "dark" | "system") => void;
 }) {
+  useI18n();
   const { pathname } = useLocation();
-  const pageTitle =
+  const pageTitle = t(
     pathname === "/nodes/adjustments"
       ? "调节详情"
       : pathname === "/create"
         ? "创建迁移"
-        : navigation.find((n) => n.path === pathname)?.label || "页面不存在";
+        : navigation.find((n) => n.path === pathname)?.label || "页面不存在",
+  );
   const notify = useNotify();
   const [mobileOpen, setMobileOpen] = useState(false);
   const sidebarPreference = useSidebarPreference();
@@ -418,9 +424,11 @@ function Workspace({
     void loadNode();
   }, []);
   useEffect(() => {
-    setMobileOpen(false);
     document.title = `${pageTitle} · OSS Transfer`;
-  }, [pathname, pageTitle]);
+  }, [pageTitle]);
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
   async function logout() {
     try {
       await api("/api/auth/logout", { method: "POST" });
@@ -434,7 +442,7 @@ function Workspace({
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
-      notify("两次输入的新密码不一致", "error");
+      notify(t("两次输入的新密码不一致"), "error");
       return;
     }
     setBusy(true);
@@ -443,7 +451,7 @@ function Workspace({
         method: "POST",
         body: { oldPassword, newPassword },
       });
-      notify("密码已修改");
+      notify(t("密码已修改"));
       setPasswordOpen(false);
       setOldPassword("");
       setNewPassword("");
@@ -470,8 +478,8 @@ function Workspace({
       <Button
         component={RouterLink}
         to="/create"
-        aria-label="创建迁移"
-        title={iconOnly ? "创建迁移" : undefined}
+        aria-label={t("创建迁移")}
+        title={iconOnly ? t("创建迁移") : undefined}
         onClick={() => setMobileOpen(false)}
         variant="contained"
         sx={{
@@ -492,7 +500,7 @@ function Workspace({
           aria-hidden={iconOnly}
           sx={{ opacity: iconOnly ? 0 : 1, transition: "opacity 120ms ease" }}
         >
-          创建迁移
+          {t("创建迁移")}
         </Box>
       </Button>
       <Typography
@@ -509,7 +517,7 @@ function Workspace({
           whiteSpace: "nowrap",
         }}
       >
-        控制台
+        {t("控制台")}
       </Typography>
       <List disablePadding>
         {navigation.map((item, index) => (
@@ -518,8 +526,8 @@ function Workspace({
             <ListItemButton
               component={RouterLink}
               to={item.path}
-              aria-label={item.label}
-              title={iconOnly ? item.label : undefined}
+              aria-label={t(item.label)}
+              title={iconOnly ? t(item.label) : undefined}
               onClick={() => setMobileOpen(false)}
               selected={
                 pathname === item.path || pathname.startsWith(`${item.path}/`)
@@ -550,7 +558,7 @@ function Workspace({
                   whiteSpace: "nowrap",
                 }}
                 aria-hidden={iconOnly}
-                primary={item.label}
+                primary={t(item.label)}
                 slotProps={{
                   primary: {
                     fontSize: 14,
@@ -568,9 +576,12 @@ function Workspace({
       </List>
       <Box sx={{ flex: 1 }} />
       {desktop && (
-        <Tooltip title={iconOnly ? "展开侧栏" : "折叠侧栏"} placement="right">
+        <Tooltip
+          title={iconOnly ? t("展开侧栏") : t("折叠侧栏")}
+          placement="right"
+        >
           <Button
-            aria-label={iconOnly ? "展开侧栏" : "折叠侧栏"}
+            aria-label={iconOnly ? t("展开侧栏") : t("折叠侧栏")}
             aria-expanded={!iconOnly}
             onClick={sidebarPreference.toggle}
             color="inherit"
@@ -600,7 +611,7 @@ function Workspace({
                 transition: "opacity 120ms ease",
               }}
             >
-              折叠侧栏
+              {t("折叠侧栏")}
             </Box>
           </Button>
         </Tooltip>
@@ -653,11 +664,11 @@ function Workspace({
           },
         }}
       >
-        跳转到主要内容
+        {t("跳转到主要内容")}
       </Box>
       <Box
         component="nav"
-        aria-label="主导航"
+        aria-label={t("主导航")}
         sx={{
           width: { xs: 0, md: sidebarWidth },
           flexShrink: { md: 0 },
@@ -693,13 +704,13 @@ function Workspace({
             <Box
               role="separator"
               tabIndex={0}
-              aria-label="调整侧栏宽度"
+              aria-label={t("调整侧栏宽度")}
               aria-orientation="vertical"
               aria-valuemin={SIDEBAR_MIN_WIDTH}
               aria-valuemax={SIDEBAR_MAX_WIDTH}
               aria-valuenow={sidebarWidth}
-              aria-valuetext={`${sidebarWidth} 像素`}
-              title="拖动调整宽度；方向键微调，双击恢复默认"
+              aria-valuetext={t("{p1} 像素", { p1: sidebarWidth })}
+              title={t("拖动调整宽度；方向键微调，双击恢复默认")}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 resizeStart.current = {
@@ -808,7 +819,7 @@ function Workspace({
             }}
           >
             <IconButton
-              aria-label="打开导航"
+              aria-label={t("打开导航")}
               onClick={() => setMobileOpen(true)}
               sx={{ display: { md: "none" } }}
             >
@@ -824,7 +835,7 @@ function Workspace({
                 component="span"
                 sx={{ display: { xs: "none", sm: "inline" } }}
               >
-                控制台{" "}
+                {t("控制台")}{" "}
                 <Box component="span" sx={{ px: 1.5, opacity: 0.5 }}>
                   /
                 </Box>
@@ -836,14 +847,14 @@ function Workspace({
             <Tooltip
               title={
                 preference === "system"
-                  ? "主题：跟随系统"
+                  ? t("主题：跟随系统")
                   : preference === "dark"
-                    ? "主题：深色"
-                    : "主题：浅色"
+                    ? t("主题：深色")
+                    : t("主题：浅色")
               }
             >
               <IconButton
-                aria-label="切换主题"
+                aria-label={t("切换主题")}
                 onClick={() =>
                   setPreference(
                     preference === "light"
@@ -863,18 +874,19 @@ function Workspace({
                 )}
               </IconButton>
             </Tooltip>
-            <Tooltip title="使用帮助">
+            <LanguageSelector />
+            <Tooltip title={t("使用帮助")}>
               <IconButton
-                aria-label="使用帮助"
+                aria-label={t("使用帮助")}
                 onClick={() => setHelpOpen(true)}
               >
                 <HelpOutlineRounded />
               </IconButton>
             </Tooltip>
             <Divider orientation="vertical" flexItem sx={{ my: 2.5, mx: 1 }} />
-            <Tooltip title="账号设置">
+            <Tooltip title={t("账号设置")}>
               <IconButton
-                aria-label="账号设置"
+                aria-label={t("账号设置")}
                 onClick={(e) => setMenu(e.currentTarget)}
               >
                 <Avatar
@@ -909,7 +921,7 @@ function Workspace({
             {nodeError ? (
               <Alert
                 severity="error"
-                action={<Button onClick={loadNode}>重试</Button>}
+                action={<Button onClick={loadNode}>{t("重试")}</Button>}
               >
                 {nodeError}
               </Alert>
@@ -917,15 +929,15 @@ function Workspace({
               <LoadingState />
             ) : node.isMaster === false ? (
               <Paper variant="outlined" sx={{ p: 5 }}>
-                <Typography variant="h5">当前为执行节点</Typography>
+                <Typography variant="h5">{t("当前为执行节点")}</Typography>
                 <Typography color="text.secondary" sx={{ my: 2 }}>
-                  迁移任务由主节点管理。
+                  {t("迁移任务由主节点管理。")}
                 </Typography>
                 <Button
                   variant="contained"
                   href={`http://${node.masterIp}:${Number(node.masterPort) || 1685}`}
                 >
-                  打开主节点控制台
+                  {t("打开主节点控制台")}
                 </Button>
               </Paper>
             ) : (
@@ -956,11 +968,11 @@ function Workspace({
                             severity="info"
                             action={
                               <Button component={RouterLink} to="/">
-                                返回概览
+                                {t("返回概览")}
                               </Button>
                             }
                           >
-                            页面不存在
+                            {t("页面不存在")}
                           </Alert>
                         }
                       />
@@ -987,7 +999,7 @@ function Workspace({
           }}
         >
           <SecurityOutlined sx={{ mr: 1.5 }} fontSize="small" />
-          修改密码
+          {t("修改密码")}
         </MenuItem>
         <MenuItem
           onClick={() => {
@@ -996,7 +1008,7 @@ function Workspace({
           }}
         >
           <LogoutRounded sx={{ mr: 1.5 }} fontSize="small" />
-          退出登录
+          {t("退出登录")}
         </MenuItem>
       </Menu>
       <Dialog
@@ -1006,11 +1018,11 @@ function Workspace({
         maxWidth="xs"
       >
         <Box component="form" onSubmit={changePassword}>
-          <DialogTitle>修改密码</DialogTitle>
+          <DialogTitle>{t("修改密码")}</DialogTitle>
           <DialogContent>
             <Stack gap={2.5} sx={{ pt: 1 }}>
               <TextField
-                label="当前密码"
+                label={t("当前密码")}
                 type="password"
                 required
                 autoComplete="current-password"
@@ -1018,7 +1030,7 @@ function Workspace({
                 onChange={(e) => setOldPassword(e.target.value)}
               />
               <TextField
-                label="新密码"
+                label={t("新密码")}
                 type="password"
                 required
                 autoComplete="new-password"
@@ -1026,7 +1038,7 @@ function Workspace({
                 onChange={(e) => setNewPassword(e.target.value)}
               />
               <TextField
-                label="确认新密码"
+                label={t("确认新密码")}
                 type="password"
                 required
                 autoComplete="new-password"
@@ -1037,10 +1049,10 @@ function Workspace({
           </DialogContent>
           <DialogActions sx={{ p: 3 }}>
             <Button onClick={() => setPasswordOpen(false)} disabled={busy}>
-              取消
+              {t("取消")}
             </Button>
             <Button type="submit" variant="contained" disabled={busy}>
-              保存密码
+              {t("保存密码")}
             </Button>
           </DialogActions>
         </Box>
@@ -1051,20 +1063,22 @@ function Workspace({
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>操作说明</DialogTitle>
+        <DialogTitle>{t("操作说明")}</DialogTitle>
         <DialogContent>
           <Stack gap={3}>
             {[
-              ["1", "添加存储连接", "配置 S3 兼容存储的访问地址和凭证。"],
+              ["1", t("添加存储连接"), t("配置 S3 兼容存储的访问地址和凭证。")],
               [
                 "2",
-                "创建迁移任务",
-                "配置传输方向、来源和目标。本地传输需绑定执行节点并通过路径预检。",
+                t("创建迁移任务"),
+                t(
+                  "配置传输方向、来源和目标。本地传输需绑定执行节点并通过路径预检。",
+                ),
               ],
               [
                 "3",
-                "执行与查看结果",
-                "任务创建后自动执行。结果见任务详情和异常记录。",
+                t("执行与查看结果"),
+                t("任务创建后自动执行。结果见任务详情和异常记录。"),
               ],
             ].map(([n, title, description]) => (
               <Stack key={n} direction="row" gap={2}>
@@ -1084,13 +1098,14 @@ function Workspace({
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setHelpOpen(false)}>关闭</Button>
+          <Button onClick={() => setHelpOpen(false)}>{t("关闭")}</Button>
         </DialogActions>
       </Dialog>
     </Box>
   );
 }
 export default function App() {
+  const { locale } = useI18n();
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
   const [preference, updatePreference] = useState<"light" | "dark" | "system">(
     () => {
@@ -1104,7 +1119,11 @@ export default function App() {
   const [sessionError, setSessionError] = useState("");
   const mode =
     preference === "system" ? (systemDark ? "dark" : "light") : preference;
-  const theme = useMemo(() => makeTheme(mode), [mode]);
+  useEffect(() => {
+    if (!user)
+      document.title = `${t(needsSetup ? "初始化" : "登录")} · OSS Transfer`;
+  }, [user, needsSetup, locale]);
+  const theme = useMemo(() => makeTheme(mode, locale), [mode, locale]);
   const setPreference = (value: "light" | "dark" | "system") => {
     updatePreference(value);
     localStorage.setItem("oss-transfer-theme", value);
@@ -1115,6 +1134,7 @@ export default function App() {
     try {
       const response = await fetch("/api/setup/status", {
         cache: "no-store",
+        headers: { "Accept-Language": getLocale() },
         signal: AbortSignal.timeout(15000),
       });
       const setup = await response.json();
@@ -1123,7 +1143,7 @@ export default function App() {
         setup.success !== true ||
         typeof setup.configured !== "boolean"
       )
-        throw new Error("无法读取初始化状态，请重试。");
+        throw new Error(t("无法读取初始化状态，请重试。"));
       setNeedsSetup(!setup.configured);
       if (!setup.configured) {
         setToken(null);
@@ -1160,20 +1180,32 @@ export default function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <NotifyProvider>
+        {!user && (
+          <Box
+            sx={{
+              position: "absolute",
+              right: { xs: 12, sm: 24 },
+              top: 12,
+              zIndex: 1200,
+            }}
+          >
+            <LanguageSelector />
+          </Box>
+        )}
         <BrowserRouter>
           {checking ? (
             <LoadingState />
           ) : sessionError ? (
             <Box sx={{ maxWidth: 560, mx: "auto", mt: 10, p: 3 }}>
               <Alert severity="error">{sessionError}</Alert>
-              <Button onClick={checkSession}>重试连接</Button>
+              <Button onClick={checkSession}>{t("重试连接")}</Button>
               <Button
                 onClick={() => {
                   setToken(null);
                   setSessionError("");
                 }}
               >
-                返回登录
+                {t("返回登录")}
               </Button>
             </Box>
           ) : needsSetup ? (

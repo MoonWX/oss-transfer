@@ -7,6 +7,7 @@ export default defineConfig({
   timeout: process.env.CI ? 60000 : 30000,
   expect: { timeout: 7000 },
   use: {
+    locale: "zh-CN",
     baseURL: "http://127.0.0.1:5173",
     channel: "chrome",
     screenshot: "only-on-failure",

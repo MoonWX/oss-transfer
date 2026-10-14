@@ -28,7 +28,7 @@ type inventoryFile struct {
 func snapshotInventories(ctx context.Context, directory string) ([]inventoryFile, func(), error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取本机清单目录: %w", err)
+		return nil, nil, cliErrorf("读取本机清单目录: %w", err)
 	}
 	work, err := os.MkdirTemp("", "oss-transfer-inventory-")
 	if err != nil {
@@ -48,7 +48,7 @@ func snapshotInventories(ctx context.Context, directory string) ([]inventoryFile
 			break
 		}
 		if !utf8.ValidString(entry.Name()) || len(entry.Name()) > 255 || strings.ContainsAny(entry.Name(), "\x00\r\n") {
-			err = fmt.Errorf("清单文件名无效")
+			err = cliErrorf("清单文件名无效")
 			break
 		}
 		info, e := entry.Info()
@@ -57,19 +57,19 @@ func snapshotInventories(ctx context.Context, directory string) ([]inventoryFile
 			break
 		}
 		if !info.Mode().IsRegular() {
-			err = fmt.Errorf("清单须为普通文件，不能是链接或目录: %s", entry.Name())
+			err = cliErrorf("清单须为普通文件，不能是链接或目录: %s", entry.Name())
 			break
 		}
 		file := inventoryFile{name: entry.Name(), snapshot: filepath.Join(work, fmt.Sprintf("%d.keys", len(files)))}
 		file.count, file.digest, err = snapshotInventory(ctx, filepath.Join(directory, entry.Name()), file.snapshot, info)
 		if err != nil {
-			err = fmt.Errorf("清单 %s: %w", entry.Name(), err)
+			err = cliErrorf("清单 %s: %w", entry.Name(), err)
 			break
 		}
 		files = append(files, file)
 	}
 	if err == nil && len(files) == 0 {
-		err = fmt.Errorf("本机清单目录中没有 .incr 文件")
+		err = cliErrorf("本机清单目录中没有 .incr 文件")
 	}
 	if err != nil {
 		cleanup()
@@ -86,7 +86,7 @@ func snapshotInventory(ctx context.Context, path, snapshot string, expected os.F
 	defer input.Close()
 	info, err := input.Stat()
 	if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, expected) {
-		return 0, "", fmt.Errorf("读取前清单文件已变更")
+		return 0, "", cliErrorf("读取前清单文件已变更")
 	}
 	output, err := os.OpenFile(snapshot, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -101,7 +101,7 @@ func snapshotInventory(ctx context.Context, path, snapshot string, expected os.F
 	var count, total int64
 	err = readInventory(ctx, input, func(key string) error {
 		if count >= 10_000_000 || total+int64(len(key)+1) > 1<<30 {
-			return fmt.Errorf("单个清单最多 1000 万条 Key、规范化文本最多 1 GiB")
+			return cliErrorf("单个清单最多 1000 万条 Key、规范化文本最多 1 GiB")
 		}
 		if _, err := writer.WriteString(key + "\n"); err != nil {
 			return err
@@ -118,7 +118,7 @@ func snapshotInventory(ctx context.Context, path, snapshot string, expected os.F
 	}
 	after, err := input.Stat()
 	if err != nil || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
-		return 0, "", fmt.Errorf("读取期间清单文件已变更")
+		return 0, "", cliErrorf("读取期间清单文件已变更")
 	}
 	if err := output.Close(); err != nil {
 		return 0, "", err
@@ -142,14 +142,14 @@ func readInventory(ctx context.Context, input io.Reader, emit func(string) error
 			continue
 		}
 		if len(key) > 1024 || !utf8.ValidString(key) || strings.ContainsAny(key, "\x00\r\n") {
-			return fmt.Errorf("第 %d 行不是有效的 UTF-8 Key（最多 1024 字节，不能含 NUL 或换行）", line)
+			return cliErrorf("第 %d 行不是有效的 UTF-8 Key（最多 1024 字节，不能含 NUL 或换行）", line)
 		}
 		if err := emit(key); err != nil {
 			return err
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("清单读取失败（第 %d 行附近）: %w", line+1, err)
+		return cliErrorf("清单读取失败（第 %d 行附近）: %w", line+1, err)
 	}
 	return ctx.Err()
 }
@@ -165,7 +165,7 @@ func runInventoryImport(client *ApiClient, args []string) (map[string]interface{
 		return nil, err
 	}
 	if len(opts.Positionals) != 3 {
-		return nil, fmt.Errorf("用法: import-inventory <源连接/桶> <目标连接/桶> <本机清单目录> [--node 节点] [--overwrite] [--request-id 标识]")
+		return nil, cliErrorf("用法: import-inventory <源连接/桶> <目标连接/桶> <本机清单目录> [--node 节点] [--overwrite] [--request-id 标识]")
 	}
 	rootID, err := creationRequestIDOption(opts)
 	if err != nil {
@@ -228,14 +228,14 @@ func runInventoryImport(client *ApiClient, args []string) (map[string]interface{
 			item["state"] = "UNCONFIRMED"
 			result["submissionStatus"], result["partial"] = "unconfirmed", len(taskIDs) > 0
 			result["taskCount"] = len(taskIDs)
-			return result, fmt.Errorf("清单 %s 提交未完成或结果未确认: %w；保留原文件和参数，添加 --request-id %s 重试", file.name, callErr, rootID)
+			return result, cliErrorf("清单 %s 提交未完成或结果未确认: %w；保留原文件和参数，添加 --request-id %s 重试", file.name, callErr, rootID)
 		}
 		item["state"], item["taskId"] = "FINALIZED", taskID
 		taskIDs = append(taskIDs, taskID)
 		result["taskIds"] = taskIDs
 	}
 	result["success"], result["submissionStatus"], result["taskCount"] = true, "accepted", len(taskIDs)
-	result["message"] = "清单已提交；每个文件对应一个主任务"
+	result["message"] = client.text("清单已提交；每个文件对应一个主任务")
 	return result, nil
 }
 
@@ -247,11 +247,11 @@ func uploadInventory(client *ApiClient, file inventoryFile, body, item map[strin
 	data := responseData(created)
 	id, _ := data["id"].(string)
 	if id == "" || len(id) > 128 {
-		return "", 0, fmt.Errorf("服务端未返回有效清单编号")
+		return "", 0, cliErrorf("服务端未返回有效清单编号")
 	}
 	for _, ch := range id {
 		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
-			return "", 0, fmt.Errorf("服务端清单编号无效")
+			return "", 0, cliErrorf("服务端清单编号无效")
 		}
 	}
 	if taskID := getInt(data, "taskId"); taskID > 0 && data["state"] == "FINALIZED" {
@@ -278,7 +278,7 @@ func uploadInventory(client *ApiClient, file inventoryFile, body, item map[strin
 		if e == nil {
 			count, valid := cliNumeric(responseData(response)["uniqueCount"])
 			if !valid || math.IsNaN(count) || math.IsInf(count, 0) || count < 0 || count > 10_000_000 || math.Trunc(count) != count {
-				e = fmt.Errorf("服务端未返回有效清单去重数量")
+				e = cliErrorf("服务端未返回有效清单去重数量")
 			} else {
 				uniqueCount = int64(count)
 				item["uploadedBatches"] = batch
@@ -307,7 +307,7 @@ func uploadInventory(client *ApiClient, file inventoryFile, body, item map[strin
 	data = responseData(finalized)
 	taskID := getInt(data, "taskId")
 	if taskID <= 0 || data["state"] != "FINALIZED" {
-		return id, 0, fmt.Errorf("服务端未确认清单已封存及对应主任务 ID")
+		return id, 0, cliErrorf("服务端未确认清单已封存及对应主任务 ID")
 	}
 	return id, int64(taskID), nil
 }

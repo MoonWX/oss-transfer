@@ -1,3 +1,4 @@
+import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { useWorkerStatus } from "../lib/workerStatus";
 import {
   useCallback,
@@ -99,12 +100,13 @@ const initialFilters: Filters = {
   limit: "1000",
 };
 const modes = ["failed", "fallback", "local"] as const;
-const labels = ["失败对象", "降级迁移记录", "本地迁移失败"];
+
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 const failureTime = (item: Failure) =>
-  item.timestampFormatted ||
-  (item.timestamp ? new Date(item.timestamp).toLocaleString() : "—");
+  item.timestamp
+    ? new Date(item.timestamp).toLocaleString(getLocale())
+    : item.timestampFormatted || "—";
 
 function exportRows(rows: Failure[], name: string) {
   const fields = [
@@ -153,6 +155,9 @@ function exportRows(rows: Failure[], name: string) {
 }
 
 export default function ExceptionsPage() {
+  const labels = [tr("失败对象"), tr("降级迁移记录"), tr("本地迁移失败")];
+
+  useI18n();
   const notify = useNotify();
   const [params] = useSearchParams();
   const linkedFilters = {
@@ -317,7 +322,7 @@ export default function ExceptionsPage() {
       draft.task &&
       (!Number.isInteger(Number(draft.task)) || Number(draft.task) < 0)
     ) {
-      notify("任务 ID 必须是非负整数。", "error");
+      notify(tr("任务 ID 必须是非负整数。"), "error");
       return;
     }
     setPage(0);
@@ -333,10 +338,11 @@ export default function ExceptionsPage() {
         value.failedWorkers?.length ||
         value.unreachableWorkers?.length
       ) {
-        const message = value.message || "部分节点未能清除记录，请刷新后重试。";
+        const message =
+          value.message || tr("部分节点未能清除记录，请刷新后重试。");
         setClearError(message);
         notify(message, "warning");
-      } else notify("清除请求已提交，正在刷新各节点记录。", "info");
+      } else notify(tr("清除请求已提交，正在刷新各节点记录。"), "info");
       setConfirmClear(false);
       setPage(0);
       await load();
@@ -348,7 +354,7 @@ export default function ExceptionsPage() {
           ...(value?.unreachableWorkers ?? []),
         ]),
       ];
-      const message = `${errorText(cause)}${failedNodes.length ? `（未完成节点：${failedNodes.join("、")}）` : ""}`;
+      const message = `${errorText(cause)}${failedNodes.length ? tr("（未完成节点：{value1}）", { value1: failedNodes.join("、") }) : ""}`;
       setClearError(message);
       notify(message, value?.partial ? "warning" : "error");
       if (value?.partial) {
@@ -379,7 +385,16 @@ export default function ExceptionsPage() {
       });
       const value = response.data;
       notify(
-        `重试已受理 ${value.accepted}，忽略 ${value.ignored}，失败 ${value.failed}${value.partial ? `；不可达节点：${value.unreachableWorkers?.join("、") || "未知"}` : ""}`,
+        tr("重试已受理 {value1}，忽略 {value2}，失败 {value3}{value4}", {
+          value1: value.accepted,
+          value2: value.ignored,
+          value3: value.failed,
+          value4: value.partial
+            ? tr("；不可达节点：{value1}", {
+                value1: value.unreachableWorkers?.join("、") || tr("未知"),
+              })
+            : "",
+        }),
         value.partial || value.failed > 0 ? "warning" : "success",
       );
       await load();
@@ -406,8 +421,8 @@ export default function ExceptionsPage() {
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="异常记录"
-        description="查看失败对象和降级记录，导出异常明细。"
+        title={tr("异常记录")}
+        description={tr("查看失败对象和降级记录，导出异常明细。")}
         action={
           <Button
             startIcon={<RefreshRounded />}
@@ -417,7 +432,7 @@ export default function ExceptionsPage() {
             }}
             disabled={loading}
           >
-            刷新
+            {tr("刷新")}
           </Button>
         }
       />
@@ -432,7 +447,7 @@ export default function ExceptionsPage() {
         }}
         variant="scrollable"
         scrollButtons="auto"
-        aria-label="异常记录类型"
+        aria-label={tr("异常记录类型")}
         sx={{ borderBottom: 1, borderColor: "divider" }}
       >
         {labels.map((label) => (
@@ -458,7 +473,7 @@ export default function ExceptionsPage() {
             }}
           >
             <TextField
-              label="任务 ID"
+              label={tr("任务 ID")}
               size="small"
               type="number"
               value={draft.task}
@@ -467,12 +482,12 @@ export default function ExceptionsPage() {
             />
             <TextField
               select
-              label="执行节点"
+              label={tr("执行节点")}
               size="small"
               value={draft.node}
               onChange={(event) => updateDraft("node", event.target.value)}
             >
-              <MenuItem value="">全部节点</MenuItem>
+              <MenuItem value="">{tr("全部节点")}</MenuItem>
               {Object.keys(nodes.data?.workers ?? {}).map((ip) => (
                 <MenuItem key={ip} value={ip}>
                   {ip}
@@ -483,19 +498,19 @@ export default function ExceptionsPage() {
               <>
                 <TextField
                   select
-                  label="迁移方向"
+                  label={tr("迁移方向")}
                   size="small"
                   value={draft.direction}
                   onChange={(event) =>
                     updateDraft("direction", event.target.value)
                   }
                 >
-                  <MenuItem value="">全部方向</MenuItem>
-                  <MenuItem value="OSS_TO_LOCAL">OSS → 本地</MenuItem>
-                  <MenuItem value="LOCAL_TO_OSS">本地 → OSS</MenuItem>
+                  <MenuItem value="">{tr("全部方向")}</MenuItem>
+                  <MenuItem value="OSS_TO_LOCAL">{tr("OSS → 本地")}</MenuItem>
+                  <MenuItem value="LOCAL_TO_OSS">{tr("本地 → OSS")}</MenuItem>
                 </TextField>
                 <TextField
-                  label="端点 / 路径"
+                  label={tr("端点 / 路径")}
                   size="small"
                   value={draft.endpoint}
                   onChange={(event) =>
@@ -507,7 +522,7 @@ export default function ExceptionsPage() {
             ) : (
               <>
                 <TextField
-                  label="源 Bucket"
+                  label={tr("源 Bucket")}
                   size="small"
                   value={draft.source}
                   onChange={(event) =>
@@ -515,7 +530,7 @@ export default function ExceptionsPage() {
                   }
                 />
                 <TextField
-                  label="目标 Bucket"
+                  label={tr("目标 Bucket")}
                   size="small"
                   value={draft.destination}
                   onChange={(event) =>
@@ -524,14 +539,14 @@ export default function ExceptionsPage() {
                 />
                 <TextField
                   select
-                  label="每节点读取上限"
+                  label={tr("每节点读取上限")}
                   size="small"
                   value={draft.limit}
                   onChange={(event) => updateDraft("limit", event.target.value)}
                 >
                   {["100", "1000", "5000", "10000"].map((value) => (
                     <MenuItem key={value} value={value}>
-                      {formatNumber(Number(value))} 条
+                      {tr("{count} 条", { count: formatNumber(Number(value)) })}
                     </MenuItem>
                   ))}
                 </TextField>
@@ -545,7 +560,7 @@ export default function ExceptionsPage() {
               startIcon={<FilterAltRounded />}
               disabled={loading}
             >
-              应用筛选
+              {tr("应用筛选")}
             </Button>
             <Button
               onClick={() => {
@@ -555,7 +570,7 @@ export default function ExceptionsPage() {
               }}
               disabled={loading}
             >
-              重置
+              {tr("重置")}
             </Button>
           </Stack>
         </Stack>
@@ -563,14 +578,17 @@ export default function ExceptionsPage() {
       {error && <Alert severity="error">{error}</Alert>}
       {nodes.error && (
         <Alert severity="warning">
-          节点清单读取失败，无法确认结果是否覆盖全部节点。
+          {tr("节点清单读取失败，无法确认结果是否覆盖全部节点。")}
         </Alert>
       )}
       {clearError && <Alert severity="warning">{clearError}</Alert>}
       {(result?.partial || missingNodes.length > 0) && (
         <Alert severity="warning">
-          部分节点未返回数据，当前结果不完整。
-          {missingNodes.length > 0 && `不可达节点：${missingNodes.join("、")}`}
+          {missingNodes.length > 0
+            ? tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
+                nodes: missingNodes.join("、"),
+              })
+            : tr("部分节点未返回数据，当前结果不完整。")}
           {Object.entries(result?.workerErrors ?? {}).map(([node, message]) => (
             <Typography key={node} variant="body2">
               {node}：{message}
@@ -580,14 +598,20 @@ export default function ExceptionsPage() {
       )}
       {!isLocal && result && result.total > result.items.length && (
         <Alert severity="info">
-          共查询到 {formatNumber(result.total)} 条记录，当前加载{" "}
-          {formatNumber(result.items.length)}{" "}
-          条。可提高每节点读取上限或缩小筛选范围。
+          {tr(
+            "共查询到 {total} 条记录，当前加载 {loaded} 条。可提高每节点读取上限或缩小筛选范围。",
+            {
+              total: formatNumber(result.total),
+              loaded: formatNumber(result.items.length),
+            },
+          )}
         </Alert>
       )}
       {mode === "fallback" && (
         <Alert severity="info">
-          降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。
+          {tr(
+            "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
+          )}
         </Alert>
       )}
       <Paper variant="outlined" sx={{ overflow: "hidden" }}>
@@ -602,10 +626,17 @@ export default function ExceptionsPage() {
             <Typography variant="h6">{labels[tab]}</Typography>
             <Typography variant="body2" color="text.secondary">
               {result
-                ? `${formatNumber(result.total)} 条记录${!isLocal ? ` · 已加载 ${formatNumber(result.items.length)} 条` : ""}`
+                ? tr("{value1} 条记录{value2}", {
+                    value1: formatNumber(result.total),
+                    value2: !isLocal
+                      ? tr(" · 已加载 {value1} 条", {
+                          value1: formatNumber(result.items.length),
+                        })
+                      : "",
+                  })
                 : error
-                  ? "读取失败"
-                  : "正在读取记录"}
+                  ? tr("读取失败")
+                  : tr("正在读取记录")}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -617,7 +648,7 @@ export default function ExceptionsPage() {
                 exportRows(result?.items ?? [], `${mode}-records.csv`)
               }
             >
-              {isLocal ? "导出当前页" : "导出已加载记录"}
+              {isLocal ? tr("导出当前页") : tr("导出已加载记录")}
             </Button>
             {isLocal ? (
               <Button
@@ -627,7 +658,7 @@ export default function ExceptionsPage() {
                 onClick={() => void report()}
                 disabled={busy}
               >
-                完整迁移报告
+                {tr("完整迁移报告")}
               </Button>
             ) : (
               <Button
@@ -637,7 +668,7 @@ export default function ExceptionsPage() {
                 onClick={() => setConfirmClear(true)}
                 disabled={busy || loading}
               >
-                清除全部记录
+                {tr("清除全部记录")}
               </Button>
             )}
           </Stack>
@@ -648,11 +679,11 @@ export default function ExceptionsPage() {
             <Table size="small" sx={{ minWidth: 780 }}>
               <TableHead>
                 <TableRow>
-                  <TableCell>对象 / 路径</TableCell>
-                  <TableCell>任务与节点</TableCell>
-                  <TableCell>原因</TableCell>
-                  <TableCell>记录时间</TableCell>
-                  <TableCell align="right">操作</TableCell>
+                  <TableCell>{tr("对象 / 路径")}</TableCell>
+                  <TableCell>{tr("任务与节点")}</TableCell>
+                  <TableCell>{tr("原因")}</TableCell>
+                  <TableCell>{tr("记录时间")}</TableCell>
+                  <TableCell align="right">{tr("操作")}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -681,7 +712,8 @@ export default function ExceptionsPage() {
                               whiteSpace: "pre-wrap",
                             }}
                           >
-                            目标：{item.destinationKey}
+                            {tr("目标：")}
+                            {item.destinationKey}
                           </Typography>
                         )}
                       <Typography
@@ -711,7 +743,9 @@ export default function ExceptionsPage() {
                         color="text.secondary"
                         sx={{ fontFamily: "monospace" }}
                       >
-                        {item.workerNode || item.executionNodeIp || "调度阶段"}
+                        {item.workerNode ||
+                          item.executionNodeIp ||
+                          tr("调度阶段")}
                       </Typography>
                       {item.stage && (
                         <Chip
@@ -738,7 +772,9 @@ export default function ExceptionsPage() {
                           overflow: "hidden",
                         }}
                       >
-                        {item.errorMessage || item.errorCode || "未提供原因"}
+                        {item.errorMessage ||
+                          item.errorCode ||
+                          tr("未提供原因")}
                       </Typography>
                       {item.errorCode && (
                         <Typography variant="caption" color="text.secondary">
@@ -753,7 +789,7 @@ export default function ExceptionsPage() {
                     </TableCell>
                     <TableCell align="right">
                       <Button size="small" onClick={() => setSelected(item)}>
-                        详情
+                        {tr("详情")}
                       </Button>
                       {isLocal &&
                         (item.parentTaskId !== undefined ||
@@ -764,7 +800,7 @@ export default function ExceptionsPage() {
                             onClick={() => void retry(item)}
                             disabled={busy}
                           >
-                            重试任务
+                            {tr("重试任务")}
                           </Button>
                         )}
                     </TableCell>
@@ -778,12 +814,16 @@ export default function ExceptionsPage() {
           !error && (
             <EmptyState
               title={
-                result && result.total > 0 ? "当前页无记录" : "暂无匹配记录"
+                result && result.total > 0
+                  ? tr("当前页无记录")
+                  : tr("暂无匹配记录")
               }
               description={
                 result && result.total > 0
-                  ? "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。"
-                  : "请调整筛选条件，或在任务执行后刷新。"
+                  ? tr(
+                      "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。",
+                    )
+                  : tr("请调整筛选条件，或在任务执行后刷新。")
               }
             />
           )
@@ -799,25 +839,26 @@ export default function ExceptionsPage() {
             setPage(0);
           }}
           rowsPerPageOptions={[25, 50, 100]}
-          labelRowsPerPage="每页"
+          labelRowsPerPage={tr("每页")}
           labelDisplayedRows={({ from, to, count }) =>
             `${from}–${to} / ${count}`
           }
           getItemAriaLabel={(type) =>
             type === "next"
-              ? "下一页"
+              ? tr("下一页")
               : type === "previous"
-                ? "上一页"
+                ? tr("上一页")
                 : type === "first"
-                  ? "第一页"
-                  : "最后一页"
+                  ? tr("第一页")
+                  : tr("最后一页")
           }
         />
       </Paper>
       {isLocal && (
         <Typography variant="caption" color="text.secondary">
-          完整迁移报告包含所有本地迁移任务与失败记录，ZIP
-          中包含不可达节点信息；报告不受当前筛选条件影响。
+          {tr(
+            "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。",
+          )}
         </Typography>
       )}
       <Dialog
@@ -827,21 +868,27 @@ export default function ExceptionsPage() {
         maxWidth="sm"
       >
         <DialogTitle>
-          清除全部{mode === "fallback" ? "降级" : "失败"}记录？
+          {mode === "fallback"
+            ? tr("清除全部降级记录？")
+            : tr("清除全部失败记录？")}
         </DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
-            清除所有执行节点的记录，不受当前筛选条件限制。
+            {tr("清除所有执行节点的记录，不受当前筛选条件限制。")}
           </Alert>
           <Typography>
-            记录清除后无法恢复。
-            {mode === "failed" && "清除范围也包括本地迁移产生的失败对象。"}
-            仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。
+            {mode === "failed"
+              ? tr(
+                  "记录清除后无法恢复。清除范围也包括本地迁移产生的失败对象。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。",
+                )
+              : tr(
+                  "记录清除后无法恢复。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。",
+                )}
           </Typography>
         </DialogContent>
         <DialogActions>
           <Button disabled={busy} onClick={() => setConfirmClear(false)}>
-            取消
+            {tr("取消")}
           </Button>
           <Button
             variant="contained"
@@ -852,7 +899,7 @@ export default function ExceptionsPage() {
               busy ? <CircularProgress size={16} color="inherit" /> : undefined
             }
           >
-            确认清除全部
+            {tr("确认清除全部")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -862,7 +909,7 @@ export default function ExceptionsPage() {
         fullWidth
         maxWidth="md"
       >
-        <DialogTitle>异常详情</DialogTitle>
+        <DialogTitle>{tr("异常详情")}</DialogTitle>
         <DialogContent>
           <Stack spacing={2}>
             {selected &&
@@ -878,26 +925,26 @@ export default function ExceptionsPage() {
                         {
                           taskIndex:
                             selected.parentTaskId != null
-                              ? "子任务 ID"
-                              : "任务 ID",
-                          parentTaskId: "任务 ID",
-                          workerNode: "执行节点",
-                          executionNodeIp: "执行节点",
-                          sourceBucket: "源 Bucket",
-                          destBucket: "目标 Bucket",
-                          key: "源对象 Key",
-                          destinationKey: "目标对象 Key",
-                          localPath: "本地路径",
-                          errorMessage: "错误信息",
-                          errorCode: "错误代码",
-                          objectSize: "对象大小（字节）",
-                          stage: "失败阶段",
-                          retryCount: "重试次数",
-                          timestamp: "时间戳",
-                          timestampFormatted: "记录时间",
-                          tmpFilePath: "临时文件路径",
-                          storageId: "存储 ID",
-                          direction: "迁移方向",
+                              ? tr("子任务 ID")
+                              : tr("任务 ID"),
+                          parentTaskId: tr("任务 ID"),
+                          workerNode: tr("执行节点"),
+                          executionNodeIp: tr("执行节点"),
+                          sourceBucket: tr("源 Bucket"),
+                          destBucket: tr("目标 Bucket"),
+                          key: tr("源对象 Key"),
+                          destinationKey: tr("目标对象 Key"),
+                          localPath: tr("本地路径"),
+                          errorMessage: tr("错误信息"),
+                          errorCode: tr("错误代码"),
+                          objectSize: tr("对象大小（字节）"),
+                          stage: tr("失败阶段"),
+                          retryCount: tr("重试次数"),
+                          timestamp: tr("时间戳"),
+                          timestampFormatted: tr("记录时间"),
+                          tmpFilePath: tr("临时文件路径"),
+                          storageId: tr("存储 ID"),
+                          direction: tr("迁移方向"),
                         } as Record<string, string>
                       )[key] || key}
                     </Typography>
@@ -921,7 +968,7 @@ export default function ExceptionsPage() {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSelected(null)}>关闭</Button>
+          <Button onClick={() => setSelected(null)}>{tr("关闭")}</Button>
         </DialogActions>
       </Dialog>
     </Stack>

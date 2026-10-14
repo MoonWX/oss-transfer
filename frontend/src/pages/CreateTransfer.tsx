@@ -1,3 +1,4 @@
+import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { Link } from "react-router-dom";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -126,10 +127,10 @@ const localUploadMode = (nodeCount: number) =>
   nodeCount > 1 ? "balanced" : "affinity";
 const distributionLabel = (mode: string | undefined, direction?: string) =>
   mode === "balanced"
-    ? "均衡分发"
+    ? tr("均衡分发")
     : direction === "LOCAL_TO_OSS"
-      ? "单节点执行"
-      : "亲和分发";
+      ? tr("单节点执行")
+      : tr("亲和分发");
 const freshForm = (): TransferForm => ({
   direction: "OSS_TO_OSS",
   sourceAlias: "",
@@ -152,31 +153,7 @@ const freshForm = (): TransferForm => ({
   dateBefore: "",
   taskBandwidthLimitMbps: "",
 });
-const directions: Array<{
-  value: Direction;
-  title: string;
-  description: string;
-  icon: ReactNode;
-}> = [
-  {
-    value: "OSS_TO_OSS",
-    title: "对象存储 → 对象存储",
-    description: "跨存储桶或云平台迁移",
-    icon: <CloudOutlined />,
-  },
-  {
-    value: "OSS_TO_LOCAL",
-    title: "对象存储 → 本地",
-    description: "下载至执行节点或共享存储",
-    icon: <CloudDownloadOutlined />,
-  },
-  {
-    value: "LOCAL_TO_OSS",
-    title: "本地 → 对象存储",
-    description: "上传本地文件或目录",
-    icon: <CloudUploadOutlined />,
-  },
-];
+
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const dateValue = (value: string) =>
   value.length === 16 ? `${value}:00` : value;
@@ -212,7 +189,9 @@ function validateOssDestination(
     alias(sourceAlias) === alias(destinationAlias)
   )
     throw new Error(
-      `${context}源和目标不能是同一存储桶，请选择其他目标存储桶。`,
+      tr("{value1}源和目标不能是同一存储桶，请选择其他目标存储桶。", {
+        value1: context,
+      }),
     );
 }
 
@@ -293,6 +272,7 @@ function EndpointCard({
   icon: ReactNode;
   children: ReactNode;
 }) {
+  useI18n();
   return (
     <Paper variant="outlined" sx={{ p: { xs: 2.5, md: 3 }, minWidth: 0 }}>
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 3 }}>
@@ -334,6 +314,7 @@ function OssFields({
   onAlias: (value: string) => void;
   onBucket: (value: string) => void;
 }) {
+  useI18n();
   const [buckets, setBuckets] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -366,7 +347,7 @@ function OssFields({
         select
         required
         fullWidth
-        label={`${side}存储连接`}
+        label={tr("{value1}存储连接", { value1: tr(side) })}
         value={alias}
         onChange={(e) => onAlias(e.target.value)}
         helperText={configs.find((config) => config.alias === alias)?.endpoint}
@@ -393,9 +374,9 @@ function OssFields({
             <TextField
               {...params}
               required
-              label={`${side}存储桶`}
-              placeholder="输入存储桶名称"
-              helperText="输入存储桶名称，或获取列表后选择。"
+              label={tr("{value1}存储桶", { value1: tr(side) })}
+              placeholder={tr("输入存储桶名称")}
+              helperText={tr("输入存储桶名称，或获取列表后选择。")}
             />
           )}
         />
@@ -408,7 +389,7 @@ function OssFields({
             }
             onClick={() => void fetchBuckets()}
           >
-            {loading ? "正在获取存储桶列表" : "获取存储桶列表"}
+            {loading ? tr("正在获取存储桶列表") : tr("获取存储桶列表")}
           </Button>
           {buckets.length > 0 && (
             <Typography
@@ -417,14 +398,18 @@ function OssFields({
               color="text.secondary"
               sx={{ ml: 1 }}
             >
-              {buckets.length} 个可选
+              {tr("{count} 个可选", {
+                count: buckets.length.toLocaleString(getLocale()),
+              })}
             </Typography>
           )}
         </Box>
         {error && (
           <Alert severity="warning" sx={{ fontSize: 12 }}>
-            无法获取存储桶列表：{error}
-            。如有对应存储桶的访问权限，可直接填写名称。
+            {tr(
+              "无法获取存储桶列表：{error}。如有对应存储桶的访问权限，可直接填写名称。",
+              { error },
+            )}
           </Alert>
         )}
       </Stack>
@@ -433,6 +418,33 @@ function OssFields({
 }
 
 export default function CreateTransfer() {
+  const directions: Array<{
+    value: Direction;
+    title: string;
+    description: string;
+    icon: ReactNode;
+  }> = [
+    {
+      value: "OSS_TO_OSS",
+      title: tr("对象存储 → 对象存储"),
+      description: tr("跨存储桶或云平台迁移"),
+      icon: <CloudOutlined />,
+    },
+    {
+      value: "OSS_TO_LOCAL",
+      title: tr("对象存储 → 本地"),
+      description: tr("下载至执行节点或共享存储"),
+      icon: <CloudDownloadOutlined />,
+    },
+    {
+      value: "LOCAL_TO_OSS",
+      title: tr("本地 → 对象存储"),
+      description: tr("上传本地文件或目录"),
+      icon: <CloudUploadOutlined />,
+    },
+  ];
+
+  useI18n();
   const connections = useApi<{ configs: Connection[] }>(
     "/api/master/s3-config",
   );
@@ -558,18 +570,18 @@ export default function CreateTransfer() {
 
   const buildRequest = (): Payload => {
     if (form.dateAfter && form.dateBefore && form.dateBefore <= form.dateAfter)
-      throw new Error("结束时间必须晚于开始时间。");
+      throw new Error(tr("结束时间必须晚于开始时间。"));
     const sourceOss = form.direction !== "LOCAL_TO_OSS";
     const destinationOss = form.direction !== "OSS_TO_LOCAL";
     if (sourceOss && (!form.sourceAlias || !form.sourceBucket.trim()))
-      throw new Error("请选择源存储连接并填写源存储桶。");
+      throw new Error(tr("请选择源存储连接并填写源存储桶。"));
     if (
       destinationOss &&
       (!form.destinationAlias || !form.destinationBucket.trim())
     )
-      throw new Error("请选择目标存储连接并填写目标存储桶。");
+      throw new Error(tr("请选择目标存储连接并填写目标存储桶。"));
     if (sourceOss && form.sourceMode !== "all" && !form.sourceSelection)
-      throw new Error("请填写源对象前缀或对象 Key。");
+      throw new Error(tr("请填写源对象前缀或对象 Key。"));
     const common = {
       dateAfter: optional(dateValue(form.dateAfter)),
       dateBefore: optional(dateValue(form.dateBefore)),
@@ -579,9 +591,9 @@ export default function CreateTransfer() {
     };
     if (!local) {
       if (!selectedWorkerNodes.length)
-        throw new Error("请至少选择一个执行节点。");
+        throw new Error(tr("请至少选择一个执行节点。"));
       if (unavailableSelection)
-        throw new Error("所选执行节点不可用，请刷新节点列表或重新选择。");
+        throw new Error(tr("所选执行节点不可用，请刷新节点列表或重新选择。"));
       validateOssDestination(
         form.sourceAlias,
         form.sourceBucket,
@@ -614,24 +626,24 @@ export default function CreateTransfer() {
           !binding.executionNodeIp.trim() || !binding.localPath.trim(),
       )
     )
-      throw new Error("请填写每个执行节点及其本地绝对路径。");
+      throw new Error(tr("请填写每个执行节点及其本地绝对路径。"));
     if (
       form.bindings.some(
         (binding) => !isAbsoluteAgentPath(binding.localPath.trim()),
       )
     )
-      throw new Error("请输入执行节点上的绝对路径。");
+      throw new Error(tr("请输入执行节点上的绝对路径。"));
     if (
       new Set(form.bindings.map((binding) => binding.executionNodeIp.trim()))
         .size !== form.bindings.length
     )
-      throw new Error("同一个执行节点只能绑定一次。");
+      throw new Error(tr("同一个执行节点只能绑定一次。"));
     if (
       !sourceOss &&
       form.destinationMode !== "original" &&
       !form.destinationKey
     )
-      throw new Error("请填写目标对象 Key 或目标前缀。");
+      throw new Error(tr("请填写目标对象 Key 或目标前缀。"));
     const localEndpoint = {
       type: "LOCAL",
       nodeBindings: form.bindings.map((binding) => ({
@@ -672,7 +684,8 @@ export default function CreateTransfer() {
   };
 
   const parseBatch = (): Payload[] => {
-    if (!batchText.trim()) throw new Error("请填写任务数据或读取数据文件。");
+    if (!batchText.trim())
+      throw new Error(tr("请填写任务数据或读取数据文件。"));
     let rows: unknown;
     if (batchKind === "buckets" && batchFormat === "csv") {
       rows = batchText
@@ -690,19 +703,28 @@ export default function CreateTransfer() {
             !destination.every(Boolean)
           )
             throw new Error(
-              `第 ${index + 1} 行格式错误，请使用“源连接/源桶,目标连接/目标桶”。`,
+              tr(
+                "第 {value1} 行格式错误，请使用“源连接/源桶,目标连接/目标桶”。",
+                { value1: index + 1 },
+              ),
             );
           if (cells[3] && !["true", "false"].includes(cells[3].toLowerCase()))
             throw new Error(
-              `第 ${index + 1} 行的覆盖选项必须是 true 或 false。`,
+              tr("第 {value1} 行的覆盖选项必须是 true 或 false。", {
+                value1: index + 1,
+              }),
             );
           if (cells[4] && !["affinity", "balanced"].includes(cells[4]))
             throw new Error(
-              `第 ${index + 1} 行的分发模式必须是 affinity 或 balanced。`,
+              tr("第 {value1} 行的分发模式必须是 affinity 或 balanced。", {
+                value1: index + 1,
+              }),
             );
           if (cells.length > 5)
             throw new Error(
-              `第 ${index + 1} 行超过 5 列，其他配置请使用 JSON 格式。`,
+              tr("第 {value1} 行超过 5 列，其他配置请使用 JSON 格式。", {
+                value1: index + 1,
+              }),
             );
           return {
             sourceS3Alias: source[0],
@@ -718,18 +740,25 @@ export default function CreateTransfer() {
       try {
         rows = JSON.parse(batchText);
       } catch {
-        throw new Error("JSON 格式无效，请检查括号、双引号和逗号。");
+        throw new Error(tr("JSON 格式无效，请检查括号、双引号和逗号。"));
       }
     }
     if (!Array.isArray(rows) || rows.length === 0)
-      throw new Error("任务数据必须是非空数组。");
+      throw new Error(tr("任务数据必须是非空数组。"));
     rows.forEach((row, index) => {
       if (!row || typeof row !== "object" || Array.isArray(row))
-        throw new Error(`第 ${index + 1} 项必须是任务对象。`);
+        throw new Error(
+          tr("第 {value1} 项必须是任务对象。", { value1: index + 1 }),
+        );
       try {
         validateTaskBandwidth(row.taskBandwidthLimitMbps);
       } catch (error) {
-        throw new Error(`第 ${index + 1} 项：${(error as Error).message}`);
+        throw new Error(
+          tr("第 {value1} 项：{value2}", {
+            value1: index + 1,
+            value2: (error as Error).message,
+          }),
+        );
       }
       if (batchKind === "local") {
         if (
@@ -738,7 +767,10 @@ export default function CreateTransfer() {
           !row.destinationEndpoint
         )
           throw new Error(
-            `第 ${index + 1} 项的 direction 必须为 OSS_TO_LOCAL 或 LOCAL_TO_OSS，并提供 sourceEndpoint 和 destinationEndpoint。`,
+            tr(
+              "第 {value1} 项的 direction 必须为 OSS_TO_LOCAL 或 LOCAL_TO_OSS，并提供 sourceEndpoint 和 destinationEndpoint。",
+              { value1: index + 1 },
+            ),
           );
         if (row.direction === "LOCAL_TO_OSS") {
           row.distributionMode = localUploadMode(
@@ -749,24 +781,33 @@ export default function CreateTransfer() {
         }
       } else if (!row.sourceBucket || !row.destBucket)
         throw new Error(
-          `第 ${index + 1} 项必须填写 sourceBucket 和 destBucket。`,
+          tr("第 {value1} 项必须填写 sourceBucket 和 destBucket。", {
+            value1: index + 1,
+          }),
         );
       else if (row.direction && row.direction !== "OSS_TO_OSS")
         throw new Error(
-          `第 ${index + 1} 项涉及本地路径，请选择“本地迁移请求”。`,
+          tr("第 {value1} 项涉及本地路径，请选择“本地迁移请求”。", {
+            value1: index + 1,
+          }),
         );
       if (batchKind !== "local") {
         try {
           validateOssKeyMapping(row, batchKind);
         } catch (error) {
-          throw new Error(`第 ${index + 1} 项：${errorText(error)}`);
+          throw new Error(
+            tr("第 {value1} 项：{value2}", {
+              value1: index + 1,
+              value2: errorText(error),
+            }),
+          );
         }
         validateOssDestination(
           row.sourceS3Alias,
           row.sourceBucket,
           row.destS3Alias,
           row.destBucket,
-          `第 ${index + 1} 项：`,
+          tr("第 {value1} 项：", { value1: index + 1 }),
         );
       }
     });
@@ -781,7 +822,7 @@ export default function CreateTransfer() {
           ...binding,
           valid: false,
           code: "SINGLE_FILE_REQUIRES_ONE_NODE",
-          message: "单文件上传请只保留一个执行节点。",
+          message: tr("单文件上传请只保留一个执行节点。"),
         };
       if (
         form.destinationMode === "object" &&
@@ -791,8 +832,9 @@ export default function CreateTransfer() {
         return {
           ...binding,
           valid: false,
-          message:
+          message: tr(
             "源路径是目录。请选择“保留源文件名 / 相对路径”或“添加目标前缀”；指定对象 Key 仅适用于单文件。",
+          ),
         };
       return binding;
     });
@@ -813,7 +855,7 @@ export default function CreateTransfer() {
     } catch (e) {
       setSubmission({
         severity: "error",
-        title: "任务配置无效",
+        title: tr("任务配置无效"),
         message: errorText(e),
       });
       submissionInFlight.current = false;
@@ -830,7 +872,9 @@ export default function CreateTransfer() {
         const checked = applyUploadPrecheck(response.data);
         setPrecheck(checked);
         notify(
-          checked.valid ? "所有节点预检通过" : "预检完成，存在未通过的节点。",
+          checked.valid
+            ? tr("所有节点预检通过")
+            : tr("预检完成，存在未通过的节点。"),
           checked.valid ? "success" : "warning",
         );
         return;
@@ -855,9 +899,9 @@ export default function CreateTransfer() {
             (binding) => binding.code === "SINGLE_FILE_REQUIRES_ONE_NODE",
           )
         )
-          throw new Error("单文件上传请只保留一个执行节点。");
+          throw new Error(tr("单文件上传请只保留一个执行节点。"));
         if (!checked.valid)
-          throw new Error("节点预检未通过，请检查节点和源路径。");
+          throw new Error(tr("节点预检未通过，请检查节点和源路径。"));
         if (
           form.destinationMode === "object" &&
           checked.nodeBindings.some(
@@ -865,7 +909,9 @@ export default function CreateTransfer() {
           )
         ) {
           throw new Error(
-            "指定目标对象 Key 时，各节点的源路径必须是可访问的单个文件。目录迁移请选择“添加目标前缀”或“保留源文件名 / 相对路径”。",
+            tr(
+              "指定目标对象 Key 时，各节点的源路径必须是可访问的单个文件。目录迁移请选择“添加目标前缀”或“保留源文件名 / 相对路径”。",
+            ),
           );
         }
       }
@@ -946,9 +992,15 @@ export default function CreateTransfer() {
             nodeBindings?: Binding[];
           }>)
         : [];
-      const details = accepted.map(
-        (item, index) =>
-          `任务 #${item.parentTaskId ?? "—"} · ${distributionLabel(item.distributionMode, String(payload[index]?.direction || ""))} · ${item.nodeBindings?.length ?? 0} 个执行节点`,
+      const details = accepted.map((item, index) =>
+        tr("任务 #{value1} · {value2} · {value3} 个执行节点", {
+          value1: item.parentTaskId ?? "—",
+          value2: distributionLabel(
+            item.distributionMode,
+            String(payload[index]?.direction || ""),
+          ),
+          value3: item.nodeBindings?.length ?? 0,
+        }),
       );
       if (Array.isArray(result.validationErrors))
         details.push(
@@ -958,12 +1010,23 @@ export default function CreateTransfer() {
         );
       if (partial)
         details.push(
-          "部分任务可能已受理。重试前请核对任务列表，避免重复提交。",
+          tr("部分任务可能已受理。重试前请核对任务列表，避免重复提交。"),
         );
-      const message = `提交 ${payload.length} 个任务，${Number.isFinite(count) ? `已受理 ${count} 个` : "服务端未确认受理数量"}。${ids.length ? `任务 ID：${ids.join("、")}。` : ""}任务自动执行，可在“迁移任务”中查看状态。`;
+      const message = tr(
+        "提交 {value1} 个任务，{value2}。{value3}任务自动执行，可在“迁移任务”中查看状态。",
+        {
+          value1: payload.length,
+          value2: Number.isFinite(count)
+            ? tr("已受理 {value1} 个", { value1: count })
+            : tr("服务端未确认受理数量"),
+          value3: ids.length
+            ? tr("任务 ID：{value1}。", { value1: ids.join("、") })
+            : "",
+        },
+      );
       setSubmission({
         severity: partial ? "warning" : "success",
-        title: partial ? "提交结果待核对" : "迁移任务已提交",
+        title: partial ? tr("提交结果待核对") : tr("迁移任务已提交"),
         message,
         details,
         taskIds: ids,
@@ -974,17 +1037,21 @@ export default function CreateTransfer() {
       setDraftRestored(false);
       if (!partial) clearSavedDraft();
       notify(
-        partial ? "部分任务未确认，请核对提交结果" : "迁移任务已提交",
+        partial ? tr("部分任务未确认，请核对提交结果") : tr("迁移任务已提交"),
         partial ? "warning" : "success",
       );
     } catch (e) {
       setSubmission({
         severity: "error",
-        title: validateOnly ? "预检未通过" : "任务提交失败",
+        title: validateOnly ? tr("预检未通过") : tr("任务提交失败"),
         message: errorText(e),
         details: validateOnly
           ? undefined
-          : ["服务端可能已受理部分任务。重试前请核对任务列表，避免重复提交。"],
+          : [
+              tr(
+                "服务端可能已受理部分任务。重试前请核对任务列表，避免重复提交。",
+              ),
+            ],
       });
       if (validateOnly) setPrecheck(null);
     } finally {
@@ -1004,11 +1071,12 @@ export default function CreateTransfer() {
               size="small"
               onClick={() => void localNodes.refresh()}
             >
-              重试
+              {tr("重试")}
             </Button>
           }
         >
-          无法获取节点信息：{localNodes.error}
+          {tr("无法获取节点信息：")}
+          {localNodes.error}
         </Alert>
       )}
       {localNodes.loading && !localNodes.data && <LinearProgress />}
@@ -1034,12 +1102,14 @@ export default function CreateTransfer() {
                 sx={{ mb: 2 }}
               >
                 <Typography variant="subtitle2">
-                  执行节点 {index + 1}
+                  {tr("执行节点 {index}", { index: index + 1 })}
                 </Typography>
                 {form.bindings.length > 1 && (
                   <IconButton
                     size="small"
-                    aria-label={`移除执行节点 ${index + 1}`}
+                    aria-label={tr("移除执行节点 {value1}", {
+                      value1: index + 1,
+                    })}
                     onClick={() =>
                       update({
                         bindings: form.bindings.filter((_, i) => i !== index),
@@ -1073,8 +1143,8 @@ export default function CreateTransfer() {
                           size="small"
                           label={
                             node?.reachable && node?.localTransferSupported
-                              ? "可用"
-                              : "不可用"
+                              ? tr("可用")
+                              : tr("不可用")
                           }
                           color={
                             node?.reachable && node?.localTransferSupported
@@ -1089,8 +1159,8 @@ export default function CreateTransfer() {
                     <TextField
                       {...params}
                       required
-                      label="执行节点 IP"
-                      placeholder="选择或输入执行节点 IP"
+                      label={tr("执行节点 IP")}
+                      placeholder={tr("选择或输入执行节点 IP")}
                     />
                   )}
                 />
@@ -1099,8 +1169,8 @@ export default function CreateTransfer() {
                   fullWidth
                   label={
                     form.direction === "LOCAL_TO_OSS"
-                      ? "源文件或目录绝对路径"
-                      : "目标目录绝对路径"
+                      ? tr("源文件或目录绝对路径")
+                      : tr("目标目录绝对路径")
                   }
                   placeholder="/mnt/storage/transfer"
                   value={binding.localPath}
@@ -1112,7 +1182,7 @@ export default function CreateTransfer() {
                   (!selectedNode.reachable ||
                     !selectedNode.localTransferSupported) && (
                     <Alert severity="warning">
-                      节点不可达或不支持本地迁移，请检查节点状态。
+                      {tr("节点不可达或不支持本地迁移，请检查节点状态。")}
                     </Alert>
                   )}
               </Stack>
@@ -1131,21 +1201,23 @@ export default function CreateTransfer() {
             })
           }
         >
-          添加共享存储节点
+          {tr("添加共享存储节点")}
         </Button>
       </Stack>
       {form.bindings.length > 1 && (
         <Alert severity="info">
-          多个节点必须访问同一共享存储中的同一份数据，挂载路径可以不同。预检检查可访问性，不验证是否属于同一共享卷。
+          {tr(
+            "多个节点必须访问同一共享存储中的同一份数据，挂载路径可以不同。预检检查可访问性，不验证是否属于同一共享卷。",
+          )}
         </Alert>
       )}
       {form.direction === "OSS_TO_LOCAL" && form.sourceMode === "object" && (
         <TextField
-          label="目标相对路径（可选）"
+          label={tr("目标相对路径（可选）")}
           value={form.targetRelativePath}
           onChange={(e) => update({ targetRelativePath: e.target.value })}
           placeholder="archive/renamed-file.zip"
-          helperText="指定单个对象在目标目录内的文件名或相对路径。"
+          helperText={tr("指定单个对象在目标目录内的文件名或相对路径。")}
         />
       )}
     </>
@@ -1153,11 +1225,11 @@ export default function CreateTransfer() {
 
   const sourceCard = (
     <EndpointCard
-      title="迁移源"
+      title={tr("迁移源")}
       description={
         form.direction === "LOCAL_TO_OSS"
-          ? "执行节点上的文件或目录"
-          : "待迁移的存储桶或对象"
+          ? tr("执行节点上的文件或目录")
+          : tr("待迁移的存储桶或对象")
       }
       icon={
         form.direction === "LOCAL_TO_OSS" ? (
@@ -1183,7 +1255,7 @@ export default function CreateTransfer() {
           />
           <TextField
             select
-            label="迁移范围"
+            label={tr("迁移范围")}
             value={form.sourceMode}
             onChange={(e) =>
               update({
@@ -1191,14 +1263,18 @@ export default function CreateTransfer() {
               })
             }
           >
-            <MenuItem value="all">整个存储桶</MenuItem>
-            <MenuItem value="prefix">按对象前缀筛选</MenuItem>
-            <MenuItem value="object">单个对象</MenuItem>
+            <MenuItem value="all">{tr("整个存储桶")}</MenuItem>
+            <MenuItem value="prefix">{tr("按对象前缀筛选")}</MenuItem>
+            <MenuItem value="object">{tr("单个对象")}</MenuItem>
           </TextField>
           {form.sourceMode !== "all" && (
             <TextField
               required
-              label={form.sourceMode === "object" ? "源对象 Key" : "源对象前缀"}
+              label={
+                form.sourceMode === "object"
+                  ? tr("源对象 Key")
+                  : tr("源对象前缀")
+              }
               value={form.sourceSelection}
               onChange={(e) => update({ sourceSelection: e.target.value })}
               placeholder={
@@ -1208,8 +1284,8 @@ export default function CreateTransfer() {
               }
               helperText={
                 form.sourceMode === "object"
-                  ? "填写完整对象 Key，区分大小写。"
-                  : "仅迁移 Key 以此前缀开头的对象，区分大小写。"
+                  ? tr("填写完整对象 Key，区分大小写。")
+                  : tr("仅迁移 Key 以此前缀开头的对象，区分大小写。")
               }
             />
           )}
@@ -1219,11 +1295,11 @@ export default function CreateTransfer() {
   );
   const destinationCard = (
     <EndpointCard
-      title="迁移目标"
+      title={tr("迁移目标")}
       description={
         form.direction === "OSS_TO_LOCAL"
-          ? "执行节点或共享存储上的目标目录"
-          : "接收数据的存储桶"
+          ? tr("执行节点或共享存储上的目标目录")
+          : tr("接收数据的存储桶")
       }
       icon={
         form.direction === "OSS_TO_LOCAL" ? (
@@ -1251,7 +1327,7 @@ export default function CreateTransfer() {
             <>
               <TextField
                 select
-                label="目标对象命名"
+                label={tr("目标对象命名")}
                 value={form.destinationMode}
                 onChange={(e) =>
                   update({
@@ -1260,17 +1336,19 @@ export default function CreateTransfer() {
                   })
                 }
               >
-                <MenuItem value="original">保留源文件名 / 相对路径</MenuItem>
-                <MenuItem value="prefix">添加目标前缀</MenuItem>
-                <MenuItem value="object">指定单文件目标 Key</MenuItem>
+                <MenuItem value="original">
+                  {tr("保留源文件名 / 相对路径")}
+                </MenuItem>
+                <MenuItem value="prefix">{tr("添加目标前缀")}</MenuItem>
+                <MenuItem value="object">{tr("指定单文件目标 Key")}</MenuItem>
               </TextField>
               {form.destinationMode !== "original" && (
                 <TextField
                   required
                   label={
                     form.destinationMode === "object"
-                      ? "目标对象 Key"
-                      : "目标对象前缀"
+                      ? tr("目标对象 Key")
+                      : tr("目标对象前缀")
                   }
                   value={form.destinationKey}
                   onChange={(e) => update({ destinationKey: e.target.value })}
@@ -1286,7 +1364,7 @@ export default function CreateTransfer() {
             <>
               <TextField
                 select
-                label="目标对象命名"
+                label={tr("目标对象命名")}
                 value={form.ossMappingMode}
                 onChange={(event) =>
                   update({
@@ -1305,8 +1383,8 @@ export default function CreateTransfer() {
                   required={form.ossMappingMode !== "REPLACE_PREFIX"}
                   label={
                     form.ossMappingMode === "EXACT_KEY"
-                      ? "目标对象 Key"
-                      : "目标对象前缀"
+                      ? tr("目标对象 Key")
+                      : tr("目标对象前缀")
                   }
                   value={
                     form.ossMappingMode === "EXACT_KEY"
@@ -1432,15 +1510,15 @@ export default function CreateTransfer() {
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="创建迁移"
-        description="配置迁移源、目标、范围和执行方式。"
+        title={tr("创建迁移")}
+        description={tr("配置迁移源、目标、范围和执行方式。")}
         action={
           <Button
             component={Link}
             to="/tasks"
             endIcon={<ArrowForwardRounded />}
           >
-            查看迁移任务
+            {tr("查看迁移任务")}
           </Button>
         }
       />
@@ -1450,20 +1528,20 @@ export default function CreateTransfer() {
           setTab(value);
           clearFeedback(false);
         }}
-        aria-label="创建方式"
+        aria-label={tr("创建方式")}
         sx={{ borderBottom: "1px solid", borderColor: "divider" }}
       >
-        <Tab label="配置迁移" disabled={Boolean(busy)} />
+        <Tab label={tr("配置迁移")} disabled={Boolean(busy)} />
         <Tab
           disabled={Boolean(busy)}
-          label="批量导入"
+          label={tr("批量导入")}
           icon={<CodeRounded fontSize="small" />}
           iconPosition="start"
         />
       </Tabs>
       {draftRestored && (
         <Alert severity="info" onClose={() => setDraftRestored(false)}>
-          已恢复当前标签页的草稿。预检结果未保存。
+          {tr("已恢复当前标签页的草稿。预检结果未保存。")}
         </Alert>
       )}
       {connections.error && (
@@ -1471,11 +1549,12 @@ export default function CreateTransfer() {
           severity="error"
           action={
             <Button color="inherit" onClick={() => void connections.refresh()}>
-              重试
+              {tr("重试")}
             </Button>
           }
         >
-          无法加载存储连接：{connections.error}
+          {tr("无法加载存储连接：")}
+          {connections.error}
         </Alert>
       )}
       {!connections.loading && !connections.error && configs.length === 0 && (
@@ -1483,11 +1562,11 @@ export default function CreateTransfer() {
           severity="info"
           action={
             <Button component={Link} to="/storage" color="inherit">
-              添加连接
+              {tr("添加连接")}
             </Button>
           }
         >
-          创建任务前需添加存储连接。
+          {tr("创建任务前需添加存储连接。")}
         </Alert>
       )}
       <Box
@@ -1586,9 +1665,11 @@ export default function CreateTransfer() {
                     <Stack direction="row" alignItems="center" spacing={1.5}>
                       <TuneRounded color="action" />
                       <Box>
-                        <Typography fontWeight={600}>迁移选项</Typography>
+                        <Typography fontWeight={600}>
+                          {tr("迁移选项")}
+                        </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          冲突处理、节点分发、时间与带宽
+                          {tr("冲突处理、节点分发、时间与带宽")}
                         </Typography>
                       </Box>
                     </Stack>
@@ -1628,7 +1709,7 @@ export default function CreateTransfer() {
                             onChange={(_, value) =>
                               update({ eligibleWorkerNodes: value })
                             }
-                            noOptionsText="暂无可用节点"
+                            noOptionsText={tr("暂无可用节点")}
                             renderOption={(props, ip, { selected }) => {
                               const { key, ...optionProps } = props;
                               const available = nodes.some(
@@ -1639,14 +1720,14 @@ export default function CreateTransfer() {
                                 <li key={key} {...optionProps}>
                                   <Checkbox checked={selected} sx={{ mr: 1 }} />
                                   {ip}
-                                  {!available && " · 不可用"}
+                                  {!available && tr(" · 不可用")}
                                 </li>
                               );
                             }}
                             renderInput={(params) => (
                               <TextField
                                 {...params}
-                                label="执行节点"
+                                label={tr("执行节点")}
                                 error={
                                   !localNodes.loading &&
                                   (selectedWorkerNodes.length === 0 ||
@@ -1655,23 +1736,23 @@ export default function CreateTransfer() {
                                 }
                                 helperText={
                                   localNodes.error
-                                    ? "节点列表加载失败"
+                                    ? tr("节点列表加载失败")
                                     : !localNodes.loading &&
                                         selectedWorkerNodes.length === 0
-                                      ? "请至少选择一个执行节点"
+                                      ? tr("请至少选择一个执行节点")
                                       : !localNodes.loading &&
                                           unavailableSelection
-                                        ? "所选节点不可用，请重新选择"
+                                        ? tr("所选节点不可用，请重新选择")
                                         : undefined
                                 }
                               />
                             )}
                             sx={{ flex: 1, minWidth: 0 }}
                           />
-                          <Tooltip title="刷新执行节点">
+                          <Tooltip title={tr("刷新执行节点")}>
                             <span>
                               <IconButton
-                                aria-label="刷新执行节点"
+                                aria-label={tr("刷新执行节点")}
                                 onClick={localNodes.refresh}
                                 disabled={localNodes.loading}
                                 sx={{ mt: 1 }}
@@ -1684,7 +1765,7 @@ export default function CreateTransfer() {
                       )}
                       <TextField
                         select
-                        label="目标已存在时"
+                        label={tr("目标已存在时")}
                         value={form.conflictPolicy}
                         onChange={(e) =>
                           update({
@@ -1692,11 +1773,13 @@ export default function CreateTransfer() {
                               .value as TransferForm["conflictPolicy"],
                           })
                         }
-                        helperText="覆盖会替换目标同名对象或文件。"
+                        helperText={tr("覆盖会替换目标同名对象或文件。")}
                       >
-                        <MenuItem value="SKIP">跳过同名对象或文件</MenuItem>
+                        <MenuItem value="SKIP">
+                          {tr("跳过同名对象或文件")}
+                        </MenuItem>
                         <MenuItem value="OVERWRITE">
-                          覆盖同名对象或文件
+                          {tr("覆盖同名对象或文件")}
                         </MenuItem>
                       </TextField>
                       {form.direction === "LOCAL_TO_OSS" ? (
@@ -1704,7 +1787,7 @@ export default function CreateTransfer() {
                       ) : (
                         <TextField
                           select
-                          label="节点分发方式"
+                          label={tr("节点分发方式")}
                           value={form.distributionMode}
                           onChange={(e) =>
                             update({
@@ -1716,24 +1799,26 @@ export default function CreateTransfer() {
                             local &&
                             form.bindings.length === 1 &&
                             form.distributionMode === "balanced"
-                              ? "当前仅绑定一个节点，任务将在该节点执行。"
-                              : "亲和分发优先使用固定节点；均衡分发将任务分配给可用节点。"
+                              ? tr("当前仅绑定一个节点，任务将在该节点执行。")
+                              : tr(
+                                  "亲和分发优先使用固定节点；均衡分发将任务分配给可用节点。",
+                                )
                           }
                         >
-                          <MenuItem value="affinity">亲和分发</MenuItem>
-                          <MenuItem value="balanced">均衡分发</MenuItem>
+                          <MenuItem value="affinity">{tr("亲和分发")}</MenuItem>
+                          <MenuItem value="balanced">{tr("均衡分发")}</MenuItem>
                         </TextField>
                       )}
                       <TextField
-                        label="修改时间晚于（可选）"
+                        label={tr("修改时间晚于（可选）")}
                         type="datetime-local"
                         value={form.dateAfter}
                         onChange={(e) => update({ dateAfter: e.target.value })}
                         slotProps={{ inputLabel: { shrink: true } }}
-                        helperText="时间按服务端时区解释。"
+                        helperText={tr("时间按服务端时区解释。")}
                       />
                       <TextField
-                        label="修改时间早于（可选）"
+                        label={tr("修改时间早于（可选）")}
                         type="datetime-local"
                         value={form.dateBefore}
                         onChange={(e) => update({ dateBefore: e.target.value })}
@@ -1748,13 +1833,15 @@ export default function CreateTransfer() {
               <Paper variant="outlined" sx={{ p: { xs: 2.5, md: 3 } }}>
                 <Stack spacing={2.5}>
                   <Box>
-                    <Typography variant="h6">批量导入</Typography>
+                    <Typography variant="h6">{tr("批量导入")}</Typography>
                     <Typography
                       variant="body2"
                       color="text.secondary"
                       sx={{ mt: 0.5 }}
                     >
-                      选择任务类型，粘贴数据或读取文件。提交后保留输入数据供核对。
+                      {tr(
+                        "选择任务类型，粘贴数据或读取文件。提交后保留输入数据供核对。",
+                      )}
                     </Typography>
                   </Box>
                   <Box
@@ -1766,20 +1853,24 @@ export default function CreateTransfer() {
                   >
                     <TextField
                       select
-                      label="导入类型"
+                      label={tr("导入类型")}
                       value={batchKind}
                       onChange={(e) => {
                         setBatchKind(e.target.value as typeof batchKind);
                         clearFeedback();
                       }}
                     >
-                      <MenuItem value="buckets">OSS 存储桶迁移</MenuItem>
-                      <MenuItem value="tasks">OSS 子任务恢复 / 导入</MenuItem>
-                      <MenuItem value="local">本地迁移请求</MenuItem>
+                      <MenuItem value="buckets">
+                        {tr("OSS 存储桶迁移")}
+                      </MenuItem>
+                      <MenuItem value="tasks">
+                        {tr("OSS 子任务恢复 / 导入")}
+                      </MenuItem>
+                      <MenuItem value="local">{tr("本地迁移请求")}</MenuItem>
                     </TextField>
                     <TextField
                       select
-                      label="数据格式"
+                      label={tr("数据格式")}
                       value={batchKind === "buckets" ? batchFormat : "json"}
                       disabled={batchKind !== "buckets"}
                       onChange={(e) => {
@@ -1787,21 +1878,22 @@ export default function CreateTransfer() {
                         clearFeedback();
                       }}
                     >
-                      <MenuItem value="json">JSON 数组</MenuItem>
-                      <MenuItem value="csv">逗号分隔文本</MenuItem>
+                      <MenuItem value="json">{tr("JSON 数组")}</MenuItem>
+                      <MenuItem value="csv">{tr("逗号分隔文本")}</MenuItem>
                     </TextField>
                   </Box>
                   {batchKind === "tasks" && (
                     <Alert severity="info">
-                      用于导入已有的 OSS 子任务或恢复断点。支持
-                      startKey、endKey、marker 和 workerNode；留空 workerNode
-                      时由集群分配。
+                      {tr(
+                        "用于导入已有的 OSS 子任务或恢复断点。支持 startKey、endKey、marker 和 workerNode；留空 workerNode 时由集群分配。",
+                      )}
                     </Alert>
                   )}
                   {batchKind === "buckets" && batchFormat === "csv" && (
                     <Alert severity="info">
-                      每行一个任务：源连接/源桶,目标连接/目标桶,修改时间晚于,是否覆盖,分发模式。后三项可留空。前缀或修改时间早于筛选请使用
-                      JSON。目标命名规则和任务带宽上限请使用 JSON 配置。
+                      {tr(
+                        "每行一个任务：源连接/源桶,目标连接/目标桶,修改时间晚于,是否覆盖,分发模式。后三项可留空。前缀或修改时间早于筛选请使用 JSON。目标命名规则和任务带宽上限请使用 JSON 配置。",
+                      )}
                     </Alert>
                   )}
                   <TextField
@@ -1809,7 +1901,7 @@ export default function CreateTransfer() {
                     minRows={12}
                     maxRows={24}
                     fullWidth
-                    label="任务数据"
+                    label={tr("任务数据")}
                     value={batchText}
                     onChange={(e) => {
                       setBatchText(e.target.value);
@@ -1832,7 +1924,7 @@ export default function CreateTransfer() {
                       component="label"
                       startIcon={<CloudUploadOutlined />}
                     >
-                      读取数据文件
+                      {tr("读取数据文件")}
                       <input
                         hidden
                         type="file"
@@ -1857,7 +1949,7 @@ export default function CreateTransfer() {
                         clearFeedback();
                       }}
                     >
-                      填入示例
+                      {tr("填入示例")}
                     </Button>
                   </Stack>
                   <Accordion
@@ -1870,7 +1962,7 @@ export default function CreateTransfer() {
                   >
                     <AccordionSummary expandIcon={<ExpandMoreRounded />}>
                       <Typography variant="body2" fontWeight={600}>
-                        字段说明
+                        {tr("字段说明")}
                       </Typography>
                     </AccordionSummary>
                     <AccordionDetails>
@@ -1880,8 +1972,20 @@ export default function CreateTransfer() {
                         sx={{ lineHeight: 1.9 }}
                       >
                         {batchKind === "local"
-                          ? "direction：OSS_TO_LOCAL 或 LOCAL_TO_OSS；sourceEndpoint / destinationEndpoint：OSS 端提供 type、s3Alias、bucket 和可选 objectKey / prefix；LOCAL 端提供 type、nodeBindings，多节点绑定必须访问同一份共享数据。LOCAL_TO_OSS 按节点数自动分发，单文件仅支持一个节点。可选 conflictPolicy、dateAfter、dateBefore、targetRelativePath；OSS_TO_LOCAL 可选 distributionMode。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。"
-                          : `sourceS3Alias / destS3Alias：连接名称；sourceBucket / destBucket：存储桶；prefix：源前缀筛选，objectKey：单个源对象，二者互斥。${batchKind === "tasks" ? "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、marker、workerNode。" : "存储桶迁移会按源范围生成子任务。"}keyMapping 省略或 null 保留完整源 Key；mode 可选 PRESERVE、ADD_PREFIX（targetPrefix）、REPLACE_PREFIX（sourcePrefix 与源筛选前缀一致，targetPrefix 可为空）、EXACT_KEY（仅单对象，targetKey）。ADD_PREFIX 末尾缺少 / 时补一个；REPLACE_PREFIX 字面替换且不补 /；所有 Key 和前缀均保留空格与斜杠。dateAfter / dateBefore：修改时间范围，格式 YYYY-MM-DDTHH:mm:ss；overwrite：是否覆盖；distributionMode：affinity 或 balanced。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。`}
+                          ? tr(
+                              "direction：OSS_TO_LOCAL 或 LOCAL_TO_OSS；sourceEndpoint / destinationEndpoint：OSS 端提供 type、s3Alias、bucket 和可选 objectKey / prefix；LOCAL 端提供 type、nodeBindings，多节点绑定必须访问同一份共享数据。LOCAL_TO_OSS 按节点数自动分发，单文件仅支持一个节点。可选 conflictPolicy、dateAfter、dateBefore、targetRelativePath；OSS_TO_LOCAL 可选 distributionMode。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。",
+                            )
+                          : tr(
+                              "sourceS3Alias / destS3Alias：连接名称；sourceBucket / destBucket：存储桶；prefix：源前缀筛选，objectKey：单个源对象，二者互斥。{value1}keyMapping 省略或 null 保留完整源 Key；mode 可选 PRESERVE、ADD_PREFIX（targetPrefix）、REPLACE_PREFIX（sourcePrefix 与源筛选前缀一致，targetPrefix 可为空）、EXACT_KEY（仅单对象，targetKey）。ADD_PREFIX 末尾缺少 / 时补一个；REPLACE_PREFIX 字面替换且不补 /；所有 Key 和前缀均保留空格与斜杠。dateAfter / dateBefore：修改时间范围，格式 YYYY-MM-DDTHH:mm:ss；overwrite：是否覆盖；distributionMode：affinity 或 balanced。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。",
+                              {
+                                value1:
+                                  batchKind === "tasks"
+                                    ? tr(
+                                        "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、marker、workerNode。",
+                                      )
+                                    : tr("存储桶迁移会按源范围生成子任务。"),
+                              },
+                            )}
                       </Typography>
                     </AccordionDetails>
                   </Accordion>
@@ -1896,15 +2000,20 @@ export default function CreateTransfer() {
                   sx={{ borderRadius: 0 }}
                 >
                   <AlertTitle>
-                    {precheck.valid ? "节点预检通过" : "节点预检未通过"}
+                    {precheck.valid ? tr("节点预检通过") : tr("节点预检未通过")}
                   </AlertTitle>
-                  通过{" "}
-                  {
-                    precheck.nodeBindings.filter((binding) => binding.valid)
-                      .length
-                  }{" "}
-                  / {precheck.nodeBindings.length}{" "}
-                  个节点配置。修改配置后需重新预检。
+                  {tr(
+                    "通过 {passed} / {total} 个节点配置。修改配置后需重新预检。",
+                    {
+                      passed: precheck.nodeBindings
+                        .filter((binding) => binding.valid)
+                        .length.toLocaleString(getLocale()),
+                      total:
+                        precheck.nodeBindings.length.toLocaleString(
+                          getLocale(),
+                        ),
+                    },
+                  )}
                 </Alert>
                 <Stack divider={<Divider />} sx={{ px: 2.5 }}>
                   {precheck.nodeBindings.map((binding, index) => (
@@ -1928,7 +2037,7 @@ export default function CreateTransfer() {
                         </Typography>
                         {!binding.valid && (
                           <Typography variant="body2" color="error.main">
-                            {binding.message || binding.code || "预检失败"}
+                            {binding.message || binding.code || tr("预检失败")}
                           </Typography>
                         )}
                       </Box>
@@ -1937,8 +2046,12 @@ export default function CreateTransfer() {
                         color={binding.valid ? "success" : "error"}
                         label={
                           binding.valid
-                            ? `通过${binding.pathType ? ` · ${binding.pathType === "FILE" ? "文件" : "目录"}` : ""}`
-                            : "未通过"
+                            ? tr("通过{value1}", {
+                                value1: binding.pathType
+                                  ? ` · ${binding.pathType === "FILE" ? tr("文件") : tr("目录")}`
+                                  : "",
+                              })
+                            : tr("未通过")
                         }
                         sx={{ alignSelf: "flex-start" }}
                       />
@@ -1963,7 +2076,7 @@ export default function CreateTransfer() {
                       color="inherit"
                       size="small"
                     >
-                      查看任务
+                      {tr("查看任务")}
                     </Button>
                   ) : undefined
                 }
@@ -1980,7 +2093,8 @@ export default function CreateTransfer() {
                         size="small"
                         key={taskId}
                       >
-                        查看任务 #{taskId}
+                        {tr("查看任务 #")}
+                        {taskId}
                       </Button>
                     ))}
                   </Stack>
@@ -2007,27 +2121,35 @@ export default function CreateTransfer() {
                       ? directions.find(
                           (direction) => direction.value === form.direction,
                         )?.title
-                      : "批量创建迁移任务"}
+                      : tr("批量创建迁移任务")}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     {tab === 0
-                      ? `${form.conflictPolicy === "SKIP" ? "跳过同名对象或文件" : "覆盖同名对象或文件"} · ${distributionLabel(effectiveDistributionMode, form.direction)}`
-                      : "提交前请核对存储连接和迁移路径。"}
+                      ? `${form.conflictPolicy === "SKIP" ? tr("跳过同名对象或文件") : tr("覆盖同名对象或文件")} · ${distributionLabel(effectiveDistributionMode, form.direction)}`
+                      : tr("提交前请核对存储连接和迁移路径。")}
                     {tab === 0 &&
                     form.taskBandwidthLimitMbps.trim() &&
                     Number.isFinite(Number(form.taskBandwidthLimitMbps)) &&
                     Number(form.taskBandwidthLimitMbps) >= 0.1 &&
                     Number(form.taskBandwidthLimitMbps) <= 1_000_000
-                      ? ` · 上限 ${formatTaskBandwidth(Number(form.taskBandwidthLimitMbps))}`
+                      ? tr(" · 上限 {value1}", {
+                          value1: formatTaskBandwidth(
+                            Number(form.taskBandwidthLimitMbps),
+                          ),
+                        })
                       : ""}
                   </Typography>
                 </Box>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
                   <Button disabled={Boolean(busy)} onClick={resetDraft}>
-                    重置草稿
+                    {tr("重置草稿")}
                   </Button>
                   {(tab === 0 ? local : batchKind === "local") && (
-                    <Tooltip title="检查节点、路径和存储桶可访问性。目标目录在预检时可能被创建。">
+                    <Tooltip
+                      title={tr(
+                        "检查节点、路径和存储桶可访问性。目标目录在预检时可能被创建。",
+                      )}
+                    >
                       <span>
                         <Button
                           fullWidth
@@ -2042,7 +2164,9 @@ export default function CreateTransfer() {
                           disabled={Boolean(busy) || submitted}
                           onClick={() => void submit(true)}
                         >
-                          {busy === "validate" ? "正在预检" : "运行预检"}
+                          {busy === "validate"
+                            ? tr("正在预检")
+                            : tr("运行预检")}
                         </Button>
                       </span>
                     </Tooltip>
@@ -2057,7 +2181,7 @@ export default function CreateTransfer() {
                         clearFeedback();
                       }}
                     >
-                      继续配置任务
+                      {tr("继续配置任务")}
                     </Button>
                   ) : (
                     <Button
@@ -2076,10 +2200,10 @@ export default function CreateTransfer() {
                       }
                     >
                       {busy === "create"
-                        ? "正在提交"
+                        ? tr("正在提交")
                         : tab === 0
-                          ? "创建迁移任务"
-                          : "导入任务"}
+                          ? tr("创建迁移任务")
+                          : tr("导入任务")}
                     </Button>
                   )}
                 </Stack>
@@ -2090,7 +2214,9 @@ export default function CreateTransfer() {
                   color="text.secondary"
                   sx={{ display: "block", mt: 1.5 }}
                 >
-                  预检检查本地路径和访问权限，必要时创建目标目录。任务创建后自动分发。
+                  {tr(
+                    "预检检查本地路径和访问权限，必要时创建目标目录。任务创建后自动分发。",
+                  )}
                 </Typography>
               )}
               <Typography
@@ -2098,7 +2224,7 @@ export default function CreateTransfer() {
                 color="text.secondary"
                 sx={{ display: "block", mt: 1 }}
               >
-                未提交的配置自动保存在当前标签页，切换页面后可继续填写。
+                {tr("未提交的配置自动保存在当前标签页，切换页面后可继续填写。")}
               </Typography>
             </Paper>
           </Stack>

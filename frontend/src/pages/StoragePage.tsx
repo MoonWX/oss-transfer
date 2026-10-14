@@ -1,3 +1,4 @@
+import { t, useI18n } from "../lib/i18n";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Alert,
@@ -37,7 +38,6 @@ import {
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
 import { EmptyState, PageHeader } from "../components/Common";
-
 type Connection = {
   alias: string;
   endpoint: string;
@@ -47,22 +47,25 @@ type Connection = {
   pathStyleEnable?: boolean | null;
 };
 type SaveResult = {
+  success?: boolean;
   message?: string;
   details?: string[];
   partial?: boolean;
   successCount?: number;
   failedCount?: number;
 };
-type StorageAction = "添加" | "更新" | "删除";
+type StorageAction = "ADD" | "UPDATE" | "DELETE";
 const partialResult = (result?: SaveResult | null) => {
   if (
     typeof result?.partial === "boolean" ||
     typeof result?.failedCount === "number"
   )
     return result.partial === true || (result.failedCount ?? 0) > 0;
-  return Boolean(result?.details?.some((detail) => /失败|异常/.test(detail)));
+  return result?.success === false;
 };
-type Form = Connection & { validate: boolean };
+type Form = Connection & {
+  validate: boolean;
+};
 const blankForm = (): Form => ({
   alias: "",
   endpoint: "",
@@ -77,11 +80,11 @@ const optionValue = (value: boolean | null | undefined) =>
   value == null ? "inherit" : String(value);
 const parseOption = (value: string) =>
   value === "inherit" ? null : value === "true";
-
 export default function StoragePage() {
-  const { data, error, loading, refresh } = useApi<{ configs: Connection[] }>(
-    "/api/master/s3-config",
-  );
+  useI18n();
+  const { data, error, loading, refresh } = useApi<{
+    configs: Connection[];
+  }>("/api/master/s3-config");
   const notify = useNotify();
   const [search, setSearch] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
@@ -92,7 +95,10 @@ export default function StoragePage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
   const [result, setResult] = useState<
-    (SaveResult & { action: StorageAction }) | null
+    | (SaveResult & {
+        action: StorageAction;
+      })
+    | null
   >(null);
   const [bucketState, setBucketState] = useState<{
     alias: string;
@@ -110,7 +116,6 @@ export default function StoragePage() {
     [configs, search],
   );
   const partial = partialResult(result);
-
   const edit = (connection?: Connection) => {
     setEditing(connection?.alias ?? null);
     setForm(connection ? { ...connection, validate: true } : blankForm());
@@ -131,14 +136,14 @@ export default function StoragePage() {
         (value) => value.trim(),
       )
     ) {
-      setFormError("请填写连接名称、Endpoint、Access Key 和 Secret Key。");
+      setFormError(t("请填写连接名称、Endpoint、Access Key 和 Secret Key。"));
       return;
     }
     if (
       !editing &&
       configs.some((config) => config.alias === form.alias.trim())
     ) {
-      setFormError("连接名称已存在，请更换名称或编辑现有连接。");
+      setFormError(t("连接名称已存在，请更换名称或编辑现有连接。"));
       return;
     }
     setBusy(true);
@@ -157,12 +162,13 @@ export default function StoragePage() {
           },
         },
       );
-      setResult({ ...response, action: editing ? "更新" : "添加" });
+      setResult({ ...response, action: editing ? "UPDATE" : "ADD" });
       setEditorOpen(false);
       setForm(blankForm());
       setReveal(false);
       notify(
-        response.message || `存储连接${editing ? "更新" : "添加"}完成`,
+        response.message ||
+          (editing ? t("存储连接已更新") : t("存储连接已添加")),
         partialResult(response) ? "warning" : "success",
       );
       await refresh();
@@ -180,10 +186,10 @@ export default function StoragePage() {
         `/api/master/s3-config/${encodeURIComponent(deleting.alias)}`,
         { method: "DELETE" },
       );
-      setResult({ ...response, action: "删除" });
+      setResult({ ...response, action: "DELETE" });
       setDeleting(null);
       notify(
-        response.message || "存储连接已删除",
+        response.message || t("存储连接已删除"),
         partialResult(response) ? "warning" : "success",
       );
       await refresh();
@@ -197,9 +203,9 @@ export default function StoragePage() {
     const request = ++bucketRequest.current;
     setBucketState({ alias, loading: true, buckets: [] });
     try {
-      const response = await api<{ buckets: string[] }>(
-        `/api/master/s3-config/${encodeURIComponent(alias)}/buckets`,
-      );
+      const response = await api<{
+        buckets: string[];
+      }>(`/api/master/s3-config/${encodeURIComponent(alias)}/buckets`);
       if (request === bucketRequest.current)
         setBucketState({
           alias,
@@ -220,19 +226,18 @@ export default function StoragePage() {
     bucketRequest.current += 1;
     setBucketState(null);
   };
-
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="存储连接"
-        description="管理 S3 兼容存储连接。"
+        title={t("存储连接")}
+        description={t("管理 S3 兼容存储连接。")}
         action={
           <Button
             variant="contained"
             startIcon={<AddRounded />}
             onClick={() => edit()}
           >
-            添加连接
+            {t("添加连接")}
           </Button>
         }
       />
@@ -243,8 +248,16 @@ export default function StoragePage() {
         >
           <AlertTitle>
             {partial
-              ? `部分节点${result.action}失败`
-              : `连接${result.action}完成`}
+              ? result.action === "DELETE"
+                ? t("部分节点删除失败")
+                : result.action === "UPDATE"
+                  ? t("部分节点更新失败")
+                  : t("部分节点添加失败")
+              : result.action === "DELETE"
+                ? t("连接删除完成")
+                : result.action === "UPDATE"
+                  ? t("连接更新完成")
+                  : t("连接添加完成")}
           </AlertTitle>
           {result.message}
           {result.details && result.details.length > 0 && (
@@ -261,7 +274,7 @@ export default function StoragePage() {
           severity="error"
           action={
             <Button color="inherit" onClick={() => void refresh()}>
-              重试
+              {t("重试")}
             </Button>
           }
         >
@@ -287,13 +300,13 @@ export default function StoragePage() {
             >
               <CloudOutlined />
             </Box>
-            <Typography fontWeight={600}>已配置连接</Typography>
+            <Typography fontWeight={600}>{t("已配置连接")}</Typography>
             <Chip size="small" label={configs.length} />
           </Stack>
           <Stack direction="row" spacing={1}>
             <TextField
               size="small"
-              label="搜索连接"
+              label={t("搜索连接")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               sx={{ flex: 1, minWidth: 0 }}
@@ -307,8 +320,11 @@ export default function StoragePage() {
                 },
               }}
             />
-            <Tooltip title="刷新连接">
-              <IconButton aria-label="刷新连接" onClick={() => void refresh()}>
+            <Tooltip title={t("刷新连接")}>
+              <IconButton
+                aria-label={t("刷新连接")}
+                onClick={() => void refresh()}
+              >
                 <RefreshRounded />
               </IconButton>
             </Tooltip>
@@ -316,15 +332,15 @@ export default function StoragePage() {
         </Stack>
       </Paper>
       {loading && !data ? (
-        <LinearProgress aria-label="正在加载存储连接" />
+        <LinearProgress aria-label={t("正在加载存储连接")} />
       ) : filtered.length === 0 ? (
         !error && (
           <EmptyState
-            title={configs.length ? "暂无匹配连接" : "暂无存储连接"}
+            title={configs.length ? t("暂无匹配连接") : t("暂无存储连接")}
             description={
               configs.length
-                ? "请更换连接名称或 Endpoint 关键词。"
-                : "添加存储连接，供迁移任务使用。"
+                ? t("请更换连接名称或 Endpoint 关键词。")
+                : t("添加存储连接，供迁移任务使用。")
             }
             action={
               !configs.length ? (
@@ -333,7 +349,7 @@ export default function StoragePage() {
                   onClick={() => edit()}
                   startIcon={<AddRounded />}
                 >
-                  添加连接
+                  {t("添加连接")}
                 </Button>
               ) : undefined
             }
@@ -384,7 +400,7 @@ export default function StoragePage() {
                     {connection.alias}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    S3 兼容对象存储
+                    {t("S3 兼容对象存储")}
                   </Typography>
                 </Box>
               </Stack>
@@ -407,7 +423,7 @@ export default function StoragePage() {
                   variant="outlined"
                   label={
                     connection.useV2SignerType == null
-                      ? "默认签名"
+                      ? t("默认签名")
                       : connection.useV2SignerType
                         ? "Signature V2"
                         : "Signature V4"
@@ -418,7 +434,7 @@ export default function StoragePage() {
                   variant="outlined"
                   label={
                     connection.pathStyleEnable == null
-                      ? "默认寻址"
+                      ? t("默认寻址")
                       : connection.pathStyleEnable
                         ? "Path-style"
                         : "Virtual-hosted"
@@ -432,7 +448,7 @@ export default function StoragePage() {
                 sx={{ color: "text.secondary", mb: 2.5 }}
               >
                 <ShieldOutlined sx={{ fontSize: 17 }} />
-                <Typography variant="caption">访问凭据已隐藏</Typography>
+                <Typography variant="caption">{t("访问凭据已隐藏")}</Typography>
               </Stack>
               <Divider sx={{ mt: "auto", mb: 1.5 }} />
               <Stack direction="row" justifyContent="space-between" spacing={1}>
@@ -441,21 +457,25 @@ export default function StoragePage() {
                   startIcon={<FolderOutlined />}
                   onClick={() => void testConnection(connection.alias)}
                 >
-                  测试连接
+                  {t("测试连接")}
                 </Button>
                 <Stack direction="row" spacing={0.5}>
-                  <Tooltip title="编辑连接">
+                  <Tooltip title={t("编辑连接")}>
                     <IconButton
-                      aria-label={`编辑连接 ${connection.alias}`}
+                      aria-label={t("编辑连接 {value1}", {
+                        value1: connection.alias,
+                      })}
                       size="small"
                       onClick={() => edit(connection)}
                     >
                       <EditOutlined fontSize="small" />
                     </IconButton>
                   </Tooltip>
-                  <Tooltip title="删除连接">
+                  <Tooltip title={t("删除连接")}>
                     <IconButton
-                      aria-label={`删除连接 ${connection.alias}`}
+                      aria-label={t("删除连接 {value1}", {
+                        value1: connection.alias,
+                      })}
                       size="small"
                       onClick={() => setDeleting(connection)}
                     >
@@ -484,22 +504,24 @@ export default function StoragePage() {
           },
         }}
       >
-        <DialogTitle>{editing ? "编辑存储连接" : "添加存储连接"}</DialogTitle>
+        <DialogTitle>
+          {editing ? t("编辑存储连接") : t("添加存储连接")}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {formError && <Alert severity="error">{formError}</Alert>}
             <TextField
               autoFocus
               required
-              label="连接名称"
-              placeholder="例如：production-oss"
+              label={t("连接名称")}
+              placeholder={t("例如：production-oss")}
               value={form.alias}
               disabled={busy || Boolean(editing)}
               onChange={(e) => setForm({ ...form, alias: e.target.value })}
               helperText={
                 editing
-                  ? "连接名称用于关联任务，创建后不可修改。"
-                  : "创建迁移任务时通过此名称选择连接。"
+                  ? t("连接名称用于关联任务，创建后不可修改。")
+                  : t("创建迁移任务时通过此名称选择连接。")
               }
             />
             <TextField
@@ -533,7 +555,9 @@ export default function StoragePage() {
                     <InputAdornment position="end">
                       <IconButton
                         onClick={() => setReveal(!reveal)}
-                        aria-label={reveal ? "隐藏访问凭据" : "显示访问凭据"}
+                        aria-label={
+                          reveal ? t("隐藏访问凭据") : t("显示访问凭据")
+                        }
                         edge="end"
                       >
                         {reveal ? (
@@ -556,7 +580,7 @@ export default function StoragePage() {
             >
               <TextField
                 select
-                label="签名版本"
+                label={t("签名版本")}
                 value={optionValue(form.useV2SignerType)}
                 disabled={busy}
                 onChange={(e) =>
@@ -566,13 +590,13 @@ export default function StoragePage() {
                   })
                 }
               >
-                <MenuItem value="inherit">使用服务端默认值</MenuItem>
+                <MenuItem value="inherit">{t("使用服务端默认值")}</MenuItem>
                 <MenuItem value="false">Signature V4</MenuItem>
                 <MenuItem value="true">Signature V2</MenuItem>
               </TextField>
               <TextField
                 select
-                label="寻址方式"
+                label={t("寻址方式")}
                 value={optionValue(form.pathStyleEnable)}
                 disabled={busy}
                 onChange={(e) =>
@@ -582,7 +606,7 @@ export default function StoragePage() {
                   })
                 }
               >
-                <MenuItem value="inherit">使用服务端默认值</MenuItem>
+                <MenuItem value="inherit">{t("使用服务端默认值")}</MenuItem>
                 <MenuItem value="true">Path-style</MenuItem>
                 <MenuItem value="false">Virtual-hosted</MenuItem>
               </TextField>
@@ -597,16 +621,16 @@ export default function StoragePage() {
                   }
                 />
               }
-              label="保存时验证访问权限"
+              label={t("保存时验证访问权限")}
             />
             <Typography variant="caption" color="text.secondary">
-              凭据通过当前控制台连接提交至服务端，并同步到执行节点。
+              {t("凭据通过当前控制台连接提交至服务端，并同步到执行节点。")}
             </Typography>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button onClick={closeEditor} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             type="submit"
@@ -616,7 +640,7 @@ export default function StoragePage() {
               busy ? <CircularProgress size={16} color="inherit" /> : undefined
             }
           >
-            {busy ? "正在保存" : "保存连接"}
+            {busy ? t("正在保存") : t("保存连接")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -627,16 +651,18 @@ export default function StoragePage() {
         fullWidth
         maxWidth="xs"
       >
-        <DialogTitle>删除存储连接</DialogTitle>
+        <DialogTitle>{t("删除存储连接")}</DialogTitle>
         <DialogContent>
           <Typography>
-            删除「{deleting?.alias}
-            」后，使用此连接的后续迁移将无法访问存储。该操作会同步到执行节点。
+            {t(
+              "删除连接 {alias} 后，后续迁移将无法使用此连接。此操作会同步到执行节点。",
+              { alias: deleting?.alias || "" },
+            )}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button disabled={busy} onClick={() => setDeleting(null)}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             color="error"
@@ -644,7 +670,7 @@ export default function StoragePage() {
             disabled={busy}
             onClick={() => void remove()}
           >
-            删除连接
+            {t("删除连接")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -654,13 +680,15 @@ export default function StoragePage() {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>连接测试 · {bucketState?.alias}</DialogTitle>
+        <DialogTitle>
+          {t("连接测试 · {alias}", { alias: bucketState?.alias || "" })}
+        </DialogTitle>
         <DialogContent>
           {bucketState?.loading ? (
             <Stack spacing={2} sx={{ py: 2 }}>
               <LinearProgress />
               <Typography color="text.secondary">
-                正在获取可访问的存储桶…
+                {t("正在获取可访问的存储桶…")}
               </Typography>
             </Stack>
           ) : bucketState?.error ? (
@@ -668,10 +696,14 @@ export default function StoragePage() {
           ) : (
             <Stack spacing={2}>
               <Alert severity="success">
-                已获取 {bucketState?.buckets.length ?? 0} 个存储桶。
+                {t("已获取 {count} 个存储桶。", {
+                  count: bucketState?.buckets.length ?? 0,
+                })}
               </Alert>
               <Typography variant="body2" color="text.secondary">
-                此测试仅验证列举存储桶的权限。存储桶读写权限在迁移时验证。
+                {t(
+                  "此测试仅验证列举存储桶的权限。存储桶读写权限在迁移时验证。",
+                )}
               </Typography>
               <Box sx={{ maxHeight: 360, overflowY: "auto" }}>
                 {bucketState?.buckets.map((bucket) => (
@@ -693,7 +725,7 @@ export default function StoragePage() {
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={closeBuckets}>关闭</Button>
+          <Button onClick={closeBuckets}>{t("关闭")}</Button>
         </DialogActions>
       </Dialog>
     </Stack>

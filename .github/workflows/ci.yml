@@ -283,7 +283,7 @@ jobs:
           arch: ${{ matrix.vm_arch }}
           envs: QA_ARCH GITHUB_SHA
           prepare: |
-            pkg install -y bash curl python311 py311-pip go ca_root_nss
+            pkg install -y bash curl python311 go ca_root_nss
           run: |
             set -eu
             python3.11 -m venv /tmp/oss-transfer-qa

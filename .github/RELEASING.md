@@ -23,9 +23,11 @@ The release workflow selects artifacts by commit and CI run ID. It accepts a suc
 
 ## Published files
 
-GitHub Release contains the eleven platform archives listed in [platforms.json](../deploy/go/platforms.json). Each archive includes Master, Agent, CLI, documentation and checksums.
+GitHub Release contains the eleven platform archives listed in [platforms.json](../deploy/go/platforms.json). Each archive includes Master, Agent, CLI, documentation and checksums. Installation scripts live in the repository.
 
 OSS stores the same archives, three installation scripts, `manifest.tsv`, `release.json` and `SHA256SUMS`. The installer downloads one platform archive and extracts the service and CLI. For example, Linux amd64 uses `oss-transfer-linux-amd64.tar.gz`. The Docker image uses the tested Linux binaries.
+
+Installers choose OSS for a mainland Chinese public IP and GitHub elsewhere. GitHub downloads use the release API's archive digest and the installer from the commit recorded in that archive; OSS uses its versioned manifest. Explicit source and local package options skip location detection.
 
 | Version | OSS location | GitHub | Docker Hub tags |
 | --- | --- | --- | --- |

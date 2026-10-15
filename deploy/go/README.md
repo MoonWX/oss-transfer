@@ -7,20 +7,24 @@ Install a Master for the WebUI and scheduling, then an Agent on each host that w
 On Linux, macOS or FreeBSD (install `bash` and `curl` first on FreeBSD):
 
 ```sh
-RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
-curl -fSL "$RELEASE_URL/install.sh" -o install.sh
-sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" --yes
+curl -fSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh -o install.sh
+sudo bash install.sh --role master --method native --yes
 ```
+
+In mainland China, download from `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh` instead.
+
+The installer selects JD Cloud OSS for a mainland Chinese public egress IP and GitHub for other locations. Use `--source github` or `--source jdoss` to override it. Add `--version 4.1.5` to select a release. An explicit `--release-url URL` or offline `--package-dir DIR` skips location detection.
 
 The Master listens on port `1685`. Add `--port 1785` to change it. For a macOS user service, run the command without `sudo` and add `--user`.
 
 On Windows, open PowerShell as Administrator:
 
 ```powershell
-$ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
-Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
-.\Install.ps1 -Role master -ReleaseUrl $ReleaseUrl -Listen '0.0.0.0:1685' -Yes
+Invoke-WebRequest 'https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/go/Install.ps1' -OutFile Install.ps1
+.\Install.ps1 -Role master -Listen '0.0.0.0:1685' -Yes
 ```
+
+The Windows download URL for mainland China is `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/Install.ps1`. PowerShell uses `-Source`, `-Version`, `-ReleaseUrl` and `-PackageDir` for the corresponding options.
 
 Open the Master URL and enter the setup token printed in its service log. Create an administrator and set the public URL that browsers and Agents will use. The installer prints the log and configuration paths.
 
@@ -84,7 +88,7 @@ Include the Master's actual URL and port in CLI `--host`; see [CLI login](../../
 
 ## Upgrade
 
-Download the latest installer, then run:
+Download the installer again from either address in [Install](#install), then run:
 
 ```sh
 sudo bash install.sh --upgrade
@@ -105,7 +109,7 @@ Use `--adopt-config` to register a service for stopped Go data. For V4.0.x, comp
 The service name and data directory must match the imported `service.json`. The program and configuration installation directories must be empty. This example matches the Master configuration produced by the converter:
 
 ```sh
-sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" \
+sudo bash install.sh --role master --method native \
   --adopt-config /srv/oss-transfer-import/master/service.json \
   --service-name oss-transfer-master --data-dir /srv/oss-transfer-import/master --yes
 ```

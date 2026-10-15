@@ -13,25 +13,34 @@ OSS Transfer 用于 S3 兼容存储与本地文件之间的数据迁移，也支
 | Linux | amd64、arm64、ARMv7、riscv64、loong64 |
 | macOS、Windows、FreeBSD | amd64、arm64 |
 
-在 Linux 或 macOS 上下载安装器：
+Linux 或 macOS，国内使用京东云 OSS：
 
 ```sh
-RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
-curl -fSL "$RELEASE_URL/install.sh" -o install.sh
+curl -fSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh
 sudo bash install.sh --lang zh
 ```
+
+国外使用 GitHub 仓库：
+
+```sh
+curl -fSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh -o install.sh
+sudo bash install.sh --lang zh
+```
+
+安装器按本机公网出口 IP 选择下载源：中国大陆使用京东云 OSS，其他地区使用 GitHub。可加 `--source github` 或 `--source jdoss` 手动选择，加 `--version 4.1.5` 安装指定版本。
 
 按提示设置监听端口。安装器在 Linux 上注册 systemd 服务，在 macOS 上注册 launchd 服务。macOS 如需安装为当前用户的服务，执行 `bash install.sh --role master --method native --user`，不加 `sudo`。
 
 FreeBSD 以 root 执行 `pkg install bash curl`，然后下载同一脚本并运行 `bash install.sh`，服务由 rc.d 管理。CPU 和系统版本要求见[平台兼容性](deploy/go/README.md#platform-requirements)。
 
-Windows 使用管理员 PowerShell：
+Windows 使用管理员 PowerShell。国内下载地址为：
 
 ```powershell
-$ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
-Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
+Invoke-WebRequest 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/Install.ps1' -OutFile Install.ps1
 .\Install.ps1
 ```
+
+国外将下载地址换为 `https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/go/Install.ps1`。下载源和版本参数分别为 `-Source github` / `-Source jdoss` 和 `-Version 4.1.5`。
 
 打开 `http://主机地址:1685`，使用自定义端口时替换 `1685`。输入服务日志中的 setup token，创建管理员账号，并把 Master URL 设置为浏览器和 Agent 主机均可访问的地址。
 
@@ -94,11 +103,9 @@ CLI 默认跟随系统语言，支持中、英、日语，无法匹配时使用�
 
 ## 升级与备份
 
-升级前停止正在运行的任务，下载最新安装器后执行：
+升级前停止正在运行的任务，使用[安装部分](#安装-master)的国内或国外地址重新下载脚本，再执行：
 
 ```sh
-RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
-curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --upgrade
 ```
 

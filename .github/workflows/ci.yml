@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
+    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'scripts/sync-installer-source.py', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -37,6 +37,9 @@ jobs:
         run: npm run test:messages --prefix frontend
       - name: Reject corrupt or ambiguous release packages
         run: |
+          python3 scripts/sync-installer-source.py --check
+          python3 .github/tests/test-source-selection.py -v
+          python3 .github/tests/test-download-source.py -v
           python3 .github/tests/test-go-packaging.py -v
           python3 .github/tests/test-go-oss-layout.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
@@ -213,6 +216,12 @@ jobs:
           python .github/acceptance/go-inventory.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --weed "$GO_QA_WEED" --output output/go-inventory
       - name: Verify native service installation, upgrade and rollback
         run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            pwsh -NoProfile -File .github/tests/test-download-source.ps1
+          else
+            python .github/tests/test-source-selection.py -v
+            python .github/tests/test-download-source.py -v
+          fi
           python_path="$(python -c 'import sys; print(sys.executable)')"
           args=(.github/acceptance/go-install.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output "$GITHUB_WORKSPACE/output/go-install" --repo "$GITHUB_WORKSPACE" --all-installed)
           if [[ "$RUNNER_OS" == Linux ]]; then
@@ -386,6 +395,8 @@ jobs:
               "$py" .github/acceptance/go-cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/go-cluster \
                 --scenario all --multipart-recovery --multipart-test-binary "$GO_QA_MULTIPART_TEST_BINARY"
             else
+              "$py" .github/tests/test-source-selection.py -v
+              "$py" .github/tests/test-download-source.py -v
               "$py" .github/acceptance/go-test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/go-test-binaries --repo "$PWD" --output output/go-unit --parallel 2
               "$py" .github/acceptance/go-cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/go-cli
               "$py" .github/acceptance/go-inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/go-inventory

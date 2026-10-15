@@ -13,13 +13,21 @@ Prebuilt packages are available for:
 | Linux | amd64, arm64, ARMv7, riscv64, loong64 |
 | macOS, Windows, FreeBSD | amd64, arm64 |
 
-On Linux or macOS, download the installer and run it:
+On Linux or macOS, download the installer from GitHub:
 
 ```sh
-RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
-curl -fSL "$RELEASE_URL/install.sh" -o install.sh
+curl -fSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh -o install.sh
 sudo bash install.sh
 ```
+
+In mainland China, use JD Cloud OSS:
+
+```sh
+curl -fSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh
+sudo bash install.sh
+```
+
+The installer chooses the download source from the host's public egress IP: JD Cloud OSS in mainland China, GitHub elsewhere. Use `--source github` or `--source jdoss` to choose explicitly, and `--version 4.1.5` to install a specific version.
 
 The installer asks for the role and listening port and registers a systemd service on Linux or a launchd service on macOS. For a macOS user service, run `bash install.sh --role master --method native --user` without `sudo`.
 
@@ -28,10 +36,11 @@ On FreeBSD, run `pkg install bash curl` as root, download the same script and ru
 On Windows, open PowerShell as Administrator:
 
 ```powershell
-$ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest'
-Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
+Invoke-WebRequest 'https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/go/Install.ps1' -OutFile Install.ps1
 .\Install.ps1
 ```
+
+In mainland China, use `https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/Install.ps1` as the download URL. The equivalent options are `-Source github` / `-Source jdoss` and `-Version 4.1.5`.
 
 Open `http://HOST:1685`, or the port you chose. Enter the setup token from the service log, create an administrator account, and set the Master URL to an address your browser and Agent hosts can reach.
 
@@ -94,11 +103,9 @@ The CLI follows the system language, using English when it cannot match English,
 
 ## Upgrade and back up
 
-Stop active tasks, download the latest installer and run:
+Stop active tasks and download the installer again using either address in [Install the Master](#install-the-master), then run:
 
 ```sh
-RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
-curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --upgrade
 ```
 

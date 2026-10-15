@@ -2,6 +2,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet('master','agent')][string]$Role,
+    [ValidateSet('auto','github','jdoss')][string]$Source = 'auto',
+    [string]$Version = 'latest',
     [string]$ReleaseUrl,
     [string]$PackageDir,
     [string]$AdoptConfig,
@@ -20,15 +22,177 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Source resolution is kept separate from service operations so malformed downloads
+# are rejected before an existing installation is stopped.
+function Protect-Directory([string]$Path) {
+    [IO.Directory]::CreateDirectory($Path) | Out-Null
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($sid in @('S-1-5-18','S-1-5-32-544',$identity.User.Value)) {
+        $principal = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($principal,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+function Normalize-ReleaseVersion([string]$Value) {
+    if ($Value -ceq 'latest') { return $Value }
+    if ($Value -cnotmatch '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\z') { throw 'Version must be latest or a release such as v4.1.5.' }
+    return 'v' + ($Value -replace '^v','')
+}
+function Invoke-SourceRequest([string]$Url,[int]$Timeout = 20,[string]$Target) {
+    $arguments = @{Uri=$Url; UseBasicParsing=$true; TimeoutSec=$Timeout; Headers=@{'User-Agent'='oss-transfer-installer'; Accept='application/vnd.github+json'}}
+    if ($Target) { $arguments.OutFile=$Target; $arguments.PassThru=$true }
+    try { $response = Invoke-WebRequest @arguments }
+    catch { throw [Net.WebException]::new('Could not download release metadata or archive.', $_.Exception) }
+    if ($response.BaseResponse.PSObject.Properties['ResponseUri']) { $finalUri = $response.BaseResponse.ResponseUri } else { $finalUri = $response.BaseResponse.RequestMessage.RequestUri }
+    if ($finalUri.Scheme -cne 'https') { throw 'Download redirected to an insecure URL.' }
+    if (-not $Target) { return [string]$response.Content }
+}
+function Get-PublicIPCountry {
+    try {
+        $trace = Invoke-SourceRequest 'https://www.cloudflare.com/cdn-cgi/trace' 3
+        $locations = @($trace -split "\r?\n" | Where-Object { $_ -cmatch '^loc=[A-Z]{2}$' })
+        if ($locations.Count -eq 1 -and $locations[0] -cne 'loc=XX') { return $locations[0].Substring(4) }
+    } catch { }
+    try {
+        $country = (Invoke-SourceRequest 'https://ipinfo.io/country' 3).Trim()
+        if ($country -cmatch '^[A-Z]{2}$' -and $country -cne 'XX') { return $country }
+    } catch { }
+    return ''
+}
+function Get-SourceMetadata([string]$Selected,[string]$RequestedVersion,[string]$Architecture) {
+    if ($Selected -eq 'jdoss') {
+        $base = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
+        $url = "$base/$RequestedVersion"
+        $manifest = Invoke-SourceRequest "$url/manifest.tsv"
+        if ([Text.Encoding]::UTF8.GetByteCount($manifest) -ge 65536) { throw 'Manifest too large.' }
+        $rows = @($manifest -split "\r?\n")
+        if (@($rows | Where-Object { $_ -ceq "format`toss-transfer-go-v1" }).Count -ne 1) { throw 'Unknown release format.' }
+        $versions = @($rows | Where-Object { $_.StartsWith("version`t") })
+        $commits = @($rows | Where-Object { $_.StartsWith("commit`t") })
+        if ($versions.Count -ne 1 -or $versions[0] -cnotmatch '^version\t([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$') { throw 'Invalid release version.' }
+        $tag = 'v' + $Matches[1]
+        if ($commits.Count -ne 1 -or $commits[0] -cnotmatch '^commit\t[a-f0-9]{40}$') { throw 'Invalid release commit.' }
+        if ($RequestedVersion -ne 'latest' -and $tag -cne $RequestedVersion) { throw 'Requested and published release versions differ.' }
+        if ($RequestedVersion -eq 'latest') {
+            $url = "$base/$tag"
+            # Once metadata identifies a version, a partial publication is fatal.
+            try { $pinned = Invoke-SourceRequest "$url/manifest.tsv" }
+            catch { throw 'Could not verify the versioned release manifest.' }
+            if ($manifest -cne $pinned) { throw 'Latest and versioned release manifests differ; retry after publication finishes.' }
+        }
+        return @{Source='jdoss'; Version=$tag; ReleaseUrl=$url}
+    }
+    $endpoint = if ($RequestedVersion -eq 'latest') { 'latest' } else { 'tags/' + $RequestedVersion }
+    $body = Invoke-SourceRequest "https://api.github.com/repos/MoonWX/oss-transfer/releases/$endpoint"
+    if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 1048576) { throw 'Release metadata too large.' }
+    $release = $body | ConvertFrom-Json
+    if ($release.tag_name -isnot [string] -or $release.tag_name -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\z' -or $release.draft -isnot [bool] -or $release.draft -ne $false -or $release.assets -isnot [Array]) { throw 'Invalid GitHub release identity.' }
+    if ($RequestedVersion -ne 'latest' -and $release.tag_name -cne $RequestedVersion) { throw 'Requested and published release versions differ.' }
+    $name = "oss-transfer-windows-$Architecture.zip"
+    $assets = @($release.assets | Where-Object { $_.name -ceq $name })
+    if ($assets.Count -ne 1) { throw 'Missing or duplicate GitHub platform archive.' }
+    $asset = $assets[0]
+    $expectedURL = "https://github.com/MoonWX/oss-transfer/releases/download/$($release.tag_name)/$name"
+    if ($asset.browser_download_url -cne $expectedURL -or $asset.digest -cnotmatch '^sha256:[a-f0-9]{64}$' -or [string]$asset.size -cnotmatch '^[1-9][0-9]{0,9}$' -or [long]$asset.size -gt 2147483647) { throw 'Invalid GitHub archive URL, checksum or size.' }
+    return @{Source='github'; Version=[string]$release.tag_name; Name=$name; Url=$expectedURL; Hash=$asset.digest.Substring(7); Size=[long]$asset.size; Architecture=$Architecture}
+}
+function Resolve-DownloadSource([string]$Preference,[string]$RequestedVersion,[string]$Architecture) {
+    $selected = $Preference
+    if ($selected -eq 'auto') { $selected = if ((Get-PublicIPCountry) -ceq 'CN') { 'jdoss' } else { 'github' } }
+    try { return Get-SourceMetadata $selected $RequestedVersion $Architecture }
+    catch [Net.WebException] {
+        if ($Preference -ne 'auto') { throw }
+        $alternate = if ($selected -eq 'github') { 'jdoss' } else { 'github' }
+        Write-Warning "Could not reach $selected; trying $alternate."
+        return Get-SourceMetadata $alternate $RequestedVersion $Architecture
+    }
+}
+function Get-RegularZipEntry($Archive,[string]$Name,[long]$MaximumSize) {
+    $entries = @($Archive.Entries | Where-Object { $_.FullName -ceq $Name })
+    if ($entries.Count -ne 1) { throw "Archive member must occur once: $Name" }
+    $entry = $entries[0]
+    $kind = ($entry.ExternalAttributes -shr 16) -band 0xF000
+    if ($kind -notin @(0,0x8000) -or ($entry.ExternalAttributes -band 0x10) -ne 0 -or $entry.Length -le 0 -or $entry.Length -gt $MaximumSize) { throw "Invalid regular archive member: $Name" }
+    return $entry
+}
+function Read-ZipEntryText($Entry) {
+    $stream = $Entry.Open()
+    try {
+        $reader = [IO.StreamReader]::new($stream,[Text.UTF8Encoding]::new($false,$true))
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally { $stream.Dispose() }
+}
+function Get-ZipEntryHash($Entry) {
+    $stream = $Entry.Open()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
+function New-GitHubPackage($Release,[string]$Directory) {
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    $archivePath = Join-Path $Directory $Release.Name
+    Invoke-SourceRequest $Release.Url 600 $archivePath
+    if ((Get-Item -LiteralPath $archivePath).Length -ne $Release.Size -or (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Release.Hash) { throw 'Archive checksum mismatch.' }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        $root = "oss-transfer-windows-$($Release.Architecture)/"
+        $versionEntry = Get-RegularZipEntry $zip ($root+'VERSION') 65535
+        $sumEntry = Get-RegularZipEntry $zip ($root+'SHA256SUMS') 65535
+        $checksums = @{}
+        foreach ($line in ((Read-ZipEntryText $sumEntry) -split "\r?\n")) {
+            if (-not $line) { continue }
+            if ($line -cnotmatch '^([a-f0-9]{64}) [ *](VERSION|oss-transfer-(?:master|agent|cli)\.exe)$') { throw 'Invalid package checksum entry.' }
+            if ($checksums.ContainsKey($Matches[2])) { throw 'Duplicate package checksum entry.' }
+            $checksums[$Matches[2]] = $Matches[1]
+        }
+        if ($checksums.Count -ne 4 -or (Get-ZipEntryHash $versionEntry) -cne $checksums['VERSION']) { throw 'Package VERSION checksum mismatch.' }
+        $fields = @{}
+        foreach ($line in ((Read-ZipEntryText $versionEntry) -split "\r?\n")) {
+            if (-not $line) { continue }
+            if ($line -cnotmatch '^([A-Za-z]+): (.+)$' -or $fields.ContainsKey($Matches[1])) { throw 'Invalid package VERSION entry.' }
+            $fields[$Matches[1]] = $Matches[2]
+        }
+        if ($fields['Version'] -cne $Release.Version.Substring(1) -or $fields['Platform'] -cne "windows/$($Release.Architecture)" -or $fields['FullCommit'] -cnotmatch '^[a-f0-9]{40}$' -or $fields['Commit'] -cnotmatch '^[a-f0-9]{7,40}$' -or -not $fields['FullCommit'].StartsWith($fields['Commit'],[StringComparison]::Ordinal)) { throw 'Package version, commit or platform differs from the release.' }
+        $manifest = [Collections.Generic.List[string]]::new()
+        $manifest.Add("format`toss-transfer-go-v1")
+        $manifest.Add("version`t$($fields['Version'])")
+        $manifest.Add("commit`t$($fields['FullCommit'])")
+        foreach ($program in @('master','agent','cli')) {
+            $member = "oss-transfer-$program.exe"
+            $entry = Get-RegularZipEntry $zip ($root+$member) 2147483647
+            if (-not $checksums.ContainsKey($member) -or (Get-ZipEntryHash $entry) -cne $checksums[$member]) { throw 'Package binary checksum mismatch.' }
+            $manifest.Add("file`twindows`t$($Release.Architecture)`t$program`toss-transfer-$program-windows-$($Release.Architecture).exe`t$($checksums[$member])`t$($entry.Length)")
+        }
+        $manifest.Add("archive`twindows`t$($Release.Architecture)`t$($Release.Name)`t$($Release.Hash)`t$($Release.Size)")
+        [IO.File]::WriteAllText((Join-Path $Directory 'manifest.tsv'),(($manifest -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
+    } finally { $zip.Dispose() }
+}
+
+$Version = Normalize-ReleaseVersion $Version
+$sourceWork = $null
+try {
 if ($env:OS -ne 'Windows_NT') { throw 'This installer requires Windows.' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run PowerShell as Administrator.' }
-if (-not $ReleaseUrl -and -not $PackageDir) { $ReleaseUrl = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest' }
 if ($ReleaseUrl -and $PackageDir) { throw 'Choose -ReleaseUrl or -PackageDir.' }
 if ($ReleaseUrl) { $ReleaseUrl = $ReleaseUrl.TrimEnd('/') }
 if ($AdoptConfig -and $Upgrade) { throw 'Choose -AdoptConfig or -Upgrade.' }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $arch = switch ($architecture) { 'x64' {'amd64'} 'arm64' {'arm64'} default {throw 'Unsupported CPU architecture.'} }
+if (-not $ReleaseUrl -and -not $PackageDir) {
+    $resolved = Resolve-DownloadSource $Source $Version $arch
+    Write-Host "Download source: $($resolved.Source) ($($resolved.Version))"
+    if ($resolved.Source -eq 'github') {
+        $sourceWork = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-source-'+[Guid]::NewGuid().ToString('N'))
+        Protect-Directory $sourceWork
+        New-GitHubPackage $resolved $sourceWork
+        $PackageDir = $sourceWork
+    } else { $ReleaseUrl = $resolved.ReleaseUrl }
+}
+
 if ($Upgrade) {
     if (-not $InstallDir) {
         $candidates = @{}
@@ -83,6 +247,7 @@ if ($Upgrade) {
             $childArguments = @{}
             foreach ($key in $PSBoundParameters.Keys) { $childArguments[$key] = $PSBoundParameters[$key] }
             if ($ReleaseUrl) { $childArguments.ReleaseUrl = $ReleaseUrl }
+            if ($PackageDir) { $childArguments.PackageDir = $PackageDir; $childArguments.Remove('ReleaseUrl') }
             $childArguments.InstallDir = $directory
             $childArguments.Yes = $true
             & $PSCommandPath @childArguments
@@ -129,17 +294,6 @@ foreach ($path in $directories) { Assert-DirectoryPath $path }
 for ($i=0; $i -lt 4; $i++) { for ($j=0; $j -lt 4; $j++) {
     if ($i -ne $j -and ($directories[$i].Equals($directories[$j],[StringComparison]::OrdinalIgnoreCase) -or $directories[$i].StartsWith($directories[$j]+'\',[StringComparison]::OrdinalIgnoreCase))) { throw 'Binary, config, data and backup directories must be separate.' }
 } }
-function Protect-Directory([string]$Path) {
-    [IO.Directory]::CreateDirectory($Path) | Out-Null
-    $acl = New-Object Security.AccessControl.DirectorySecurity
-    $acl.SetAccessRuleProtection($true,$false)
-    foreach ($sid in @('S-1-5-18','S-1-5-32-544',$identity.User.Value)) {
-        $principal = New-Object Security.Principal.SecurityIdentifier($sid)
-        $rule = New-Object Security.AccessControl.FileSystemAccessRule($principal,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
-        $acl.AddAccessRule($rule)
-    }
-    Set-Acl -LiteralPath $Path -AclObject $acl
-}
 function Assert-RegularFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Expected a regular file: $Path" }
 }
@@ -453,4 +607,8 @@ try {
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+} finally {
+    if ($sourceWork) { Remove-Item -LiteralPath $sourceWork -Recurse -Force -ErrorAction SilentlyContinue }
 }

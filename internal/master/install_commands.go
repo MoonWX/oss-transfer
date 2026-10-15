@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/MoonWX/oss-transfer/internal/cluster"
@@ -15,6 +16,31 @@ import (
 var artifactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 var imageReference = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@-]+$`)
 var artifactBase = regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$`)
+
+const officialAgentArtifactBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer"
+
+func (s *Server) regionalAgentArtifacts() bool {
+	base := strings.TrimRight(s.options.AgentArtifactBase, "/")
+	if base != officialAgentArtifactBase && base != "https://github.com/MoonWX/oss-transfer/releases/download" {
+		return false
+	}
+	// Earlier pinned installers do not accept --source / -Source.
+	version := strings.SplitN(strings.TrimPrefix(s.options.AgentArtifactVersion, "v"), "-", 2)[0]
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for i, minimum := range []int{4, 1, 6} {
+		number, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return false
+		}
+		if number != minimum {
+			return number > minimum
+		}
+	}
+	return true
+}
 
 // ValidateAgentArtifacts also runs during installer preflight, before stopping a service.
 func ValidateAgentArtifacts(options Options) error { return validateAgentArtifacts(options) }
@@ -89,9 +115,68 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if s.regionalAgentArtifacts() {
+		s.officialAgentBootstrap(w, r.URL.Query().Get("platform") == "windows", token, config.PublicURL)
+		return
+	}
 	if r.URL.Query().Get("platform") == "windows" {
 		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & $installer -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(config.PublicURL))
 		return
 	}
 	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent --method native --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), shellQuote(s.agentReleaseURL()), shellQuote(config.PublicURL))
+}
+
+func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL string) {
+	version := "v" + strings.TrimPrefix(s.options.AgentArtifactVersion, "v")
+	github := "https://raw.githubusercontent.com/MoonWX/oss-transfer/" + version
+	jdoss := officialAgentArtifactBase + "/" + version
+	if windows {
+		fmt.Fprintf(w, `$ErrorActionPreference = 'Stop'
+$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
+$source = 'github'
+$country = ''
+try {
+  $trace = [string](Invoke-RestMethod -Uri 'https://www.cloudflare.com/cdn-cgi/trace' -TimeoutSec 3)
+  if ($trace -match '(?m)^loc=([A-Z]{2})\r?$') { $country = $Matches[1] }
+} catch {}
+if ($country -notmatch '^[A-Z]{2}$' -or $country -eq 'XX') {
+  try { $country = ([string](Invoke-RestMethod -Uri 'https://ipinfo.io/country' -TimeoutSec 3)).Trim().ToUpperInvariant() } catch {}
+}
+if ($country -eq 'CN') { $source = 'jdoss' }
+$urls = @{ github = %s; jdoss = %s }
+try {
+  try {
+    Invoke-WebRequest -Uri $urls[$source] -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
+  } catch {
+    $source = if ($source -eq 'github') { 'jdoss' } else { 'github' }
+    Invoke-WebRequest -Uri $urls[$source] -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
+  }
+  $env:TRANSFER_JOIN_TOKEN = %s
+  & $installer -Role agent -Source auto -Version %s -MasterUrl %s -Yes
+} finally {
+  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item $installer -ErrorAction SilentlyContinue
+}
+`, psQuote(github+"/deploy/go/Install.ps1"), psQuote(jdoss+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
+		return
+	}
+	fmt.Fprintf(w, `#!/usr/bin/env bash
+set -euo pipefail
+installer=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+source=github
+country=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | awk -F= '$1 == "loc" {sub(/\r$/, "", $2); print $2; exit}') || country=
+if [[ ! "$country" =~ ^[A-Z]{2}$ || "$country" == XX ]]; then
+  country=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 https://ipinfo.io/country 2>/dev/null | tr -d '\r\n') || country=
+fi
+[[ "$country" != CN ]] || source=jdoss
+github_url=%s
+jdoss_url=%s
+if [[ "$source" == jdoss ]]; then url=$jdoss_url; else url=$github_url; fi
+if ! curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 "$url" -o "$installer"; then
+  if [[ "$source" == jdoss ]]; then source=github; url=$github_url; else source=jdoss; url=$jdoss_url; fi
+  curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 "$url" -o "$installer"
+fi
+printf '%%s' %s | bash "$installer" --role agent --method native --source auto --version %s --master-url %s --token-stdin --yes "$@"
+`, shellQuote(github+"/install.sh"), shellQuote(jdoss+"/install.sh"), shellQuote(token), shellQuote(version), shellQuote(masterURL))
 }

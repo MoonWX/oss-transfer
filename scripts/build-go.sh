@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+python3 scripts/sync-installer-source.py --check
 version="$(cat VERSION)"
 revision="$(git rev-parse HEAD)"
 short_revision="$(git rev-parse --short HEAD)"

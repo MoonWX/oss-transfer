@@ -13,8 +13,8 @@ import urllib.request
 
 WORKFLOW = "ci.yml"
 ARTIFACT_NAMES = {
-    "go-release-assets": "package_artifact_id",
-    "go-release-image": "image_artifact_id",
+    "release-assets": "package_artifact_id",
+    "release-image": "image_artifact_id",
 }
 WAIT_SECONDS = 65 * 60
 POLL_SECONDS = 15

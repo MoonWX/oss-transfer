@@ -28,7 +28,7 @@ Run the install command again whenever you want to upgrade.
 
 ## Docs
 
-- [Deployment](deploy/go/README.md): Windows, offline install, custom paths
+- [Deployment](deploy/native/README.md): Windows, offline install, custom paths
 - [Docker Compose](docs/docker-compose.md)
 - [CLI](docs/cli.md)
 

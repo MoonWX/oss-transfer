@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tempfile
 
-SPEC = importlib.util.spec_from_file_location("go_package", Path(__file__).with_name("package.py"))
+SPEC = importlib.util.spec_from_file_location("native_package", Path(__file__).with_name("package.py"))
 PACKAGE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PACKAGE)
 
@@ -28,10 +28,21 @@ def release_sources(destination, commit):
     repository = Path(__file__).resolve().parents[2]
     destination.mkdir()
     for name in PACKAGE.INSTALLERS.values():
-        result = subprocess.run(
-            ["git", "show", commit + ":" + name], cwd=repository,
-            check=True, capture_output=True,
-        )
+        try:
+            result = subprocess.run(
+                ["git", "show", commit + ":" + name], cwd=repository,
+                check=True, capture_output=True,
+            )
+        except subprocess.CalledProcessError:
+            if not name.startswith("deploy/native/"):
+                raise
+            # Older archives still point to commits before the directory rename.
+            # Keep both lookups pinned to the archive's commit.
+            legacy_name = name.replace("deploy/native/", "deploy/go/", 1)
+            result = subprocess.run(
+                ["git", "show", commit + ":" + legacy_name], cwd=repository,
+                check=True, capture_output=True,
+            )
         (destination / name).parent.mkdir(parents=True, exist_ok=True)
         (destination / name).write_bytes(result.stdout)
 
@@ -46,7 +57,7 @@ def assemble(packages, output, version, commit):
     if output.exists():
         raise ValueError("Release output already exists")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".go-release-assets-", dir=output.parent) as work:
+    with tempfile.TemporaryDirectory(prefix=".release-assets-", dir=output.parent) as work:
         root = Path(work)
         scripts = root / "scripts"
         release_sources(scripts, commit)

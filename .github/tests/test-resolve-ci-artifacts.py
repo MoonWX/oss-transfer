@@ -30,7 +30,7 @@ def artifact(name, artifact_id):
                 "id": 123, "head_sha": SHA, "head_branch": "main"}}
 
 
-ARTIFACTS = [artifact("go-release-assets", 501), artifact("go-release-image", 502)]
+ARTIFACTS = [artifact("release-assets", 501), artifact("release-image", 502)]
 
 
 class Clock:
@@ -94,8 +94,8 @@ class ResolveTests(unittest.TestCase):
             self.resolve(FakeAPI(listings=[[run]], runs=[run]))
 
     def test_native_archives_alone_are_not_release_assets(self):
-        artifacts = [artifact("go-migration-packages", 601), artifact("go-release-image", 602)]
-        with self.assertRaisesRegex(MODULE.ResolutionError, "missing: go-release-assets"):
+        artifacts = [artifact("packages", 601), artifact("release-image", 602)]
+        with self.assertRaisesRegex(MODULE.ResolutionError, "missing: release-assets"):
             self.resolve(FakeAPI(artifacts=artifacts))
 
     def test_main_and_tag_race_waits_for_creation_and_completion(self):
@@ -156,7 +156,7 @@ class ResolveTests(unittest.TestCase):
             self.resolve(FakeAPI(runs=[dict(RUN, head_branch="feature")]))
 
     def test_missing_artifacts_fail_without_fallback(self):
-        with self.assertRaisesRegex(MODULE.ResolutionError, "missing: go-release-image"):
+        with self.assertRaisesRegex(MODULE.ResolutionError, "missing: release-image"):
             self.resolve(FakeAPI(artifacts=ARTIFACTS[:1]))
 
     def test_expired_empty_invalid_artifacts_fail(self):

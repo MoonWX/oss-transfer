@@ -32,7 +32,7 @@ jobs:
         run: |
           command -v aws >/dev/null
           aws --version 2>&1 | grep -q '^aws-cli/2\.'
-          python3 -c 'from pathlib import Path; compile(Path("deploy/go/withdraw-release.py").read_text(), "withdraw-release.py", "exec")'
+          python3 -c 'from pathlib import Path; compile(Path("deploy/native/withdraw-release.py").read_text(), "withdraw-release.py", "exec")'
       - name: Verify replacement and withdraw selected versions
         env:
           REPLACEMENT_VERSION: ${{ inputs.replacement_version }}
@@ -46,7 +46,7 @@ jobs:
           set +x
           args=()
           if [[ "$EXECUTE_WITHDRAWAL" == true ]]; then args+=(--execute); fi
-          python3 deploy/go/withdraw-release.py \
+          python3 deploy/native/withdraw-release.py \
             --replacement-version "$REPLACEMENT_VERSION" \
             --retired-versions "$RETIRED_VERSIONS" \
             --evidence output/withdrawal.json "${args[@]}"

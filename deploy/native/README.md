@@ -43,7 +43,7 @@ Download the installer in an Administrator PowerShell window:
 ```powershell
 & {
     try {
-        Invoke-WebRequest https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/go/Install.ps1 -OutFile Install.ps1 -TimeoutSec 15 -ErrorAction Stop
+        Invoke-WebRequest https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/native/Install.ps1 -OutFile Install.ps1 -TimeoutSec 15 -ErrorAction Stop
     } catch {
         Invoke-WebRequest https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/Install.ps1 -OutFile Install.ps1 -TimeoutSec 15 -ErrorAction Stop
     }
@@ -74,15 +74,15 @@ Configure network filesystems to mount after a restart. A containerized Master c
 
 ## Change paths and startup settings
 
-Linux defaults:
+Defaults for new Linux installations:
 
 | Item | Master | Agent |
 | --- | --- | --- |
-| Service | `oss-transfer-go-master` | `oss-transfer-go-agent` |
-| Programs | `/opt/oss-transfer-go/master` | `/opt/oss-transfer-go/agent` |
-| Configuration | `/etc/oss-transfer-go/master/service.json` | `/etc/oss-transfer-go/agent/service.json` |
-| Data | `/var/lib/oss-transfer-go/master` | `/var/lib/oss-transfer-go/agent` |
-| Backups | `/var/backups/oss-transfer-go/master` | `/var/backups/oss-transfer-go/agent` |
+| Service | `oss-transfer-master` | `oss-transfer-agent` |
+| Programs | `/opt/oss-transfer/master` | `/opt/oss-transfer/agent` |
+| Configuration | `/etc/oss-transfer/master/service.json` | `/etc/oss-transfer/agent/service.json` |
+| Data | `/var/lib/oss-transfer/master` | `/var/lib/oss-transfer/agent` |
+| Backups | `/var/backups/oss-transfer/master` | `/var/backups/oss-transfer/agent` |
 
 Use `--install-dir`, `--config-dir`, `--data-dir`, `--backup-dir`, `--service-name` and `--cli-path` to change these locations. PowerShell uses `-InstallDir`, `-ConfigDir`, `-DataDir`, `-BackupDir`, `-ServiceName` and `-CliPath`. Program, configuration, data and backup directories must be separate and must not contain one another.
 
@@ -99,33 +99,33 @@ To host Agent downloads yourself, set `agentArtifactBase`, `agentArtifactVersion
 Linux, using the default Master service:
 
 ```sh
-sudo systemctl status oss-transfer-go-master
-sudo tail -n 50 /var/lib/oss-transfer-go/master/logs/service.log
-sudo systemctl restart oss-transfer-go-master
+sudo systemctl status oss-transfer-master
+sudo tail -n 50 /var/lib/oss-transfer/master/logs/service.log
+sudo systemctl restart oss-transfer-master
 ```
 
 For a macOS user service:
 
 ```sh
-launchctl print "gui/$(id -u)/oss-transfer-go-master"
+launchctl print "gui/$(id -u)/oss-transfer-master"
 tail -n 50 "$HOME/Library/Application Support/OSS Transfer/master/data/logs/service.log"
-launchctl kickstart -k "gui/$(id -u)/oss-transfer-go-master"
+launchctl kickstart -k "gui/$(id -u)/oss-transfer-master"
 ```
 
 FreeBSD, as root:
 
 ```sh
-service oss_transfer_go_master status
+service oss_transfer_master status
 tail -n 50 /var/db/oss-transfer/master/logs/service.log
-service oss_transfer_go_master restart
+service oss_transfer_master restart
 ```
 
 Windows, in Administrator PowerShell:
 
 ```powershell
-Get-Service OSSTransferGoMaster
+Get-Service OSSTransferMaster
 Get-Content "$env:ProgramData\OSS Transfer\master\data\logs\service.log" -Tail 50
-Restart-Service OSSTransferGoMaster
+Restart-Service OSSTransferMaster
 ```
 
 Use the names and paths printed during installation if you changed the defaults.
@@ -142,7 +142,7 @@ On Windows, download the current `Install.ps1` using the download block in [Wind
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Upgrade
 ```
 
-The installer lists discovered services and reuses their paths. To upgrade only Agents, add `--role agent` or `-Role agent`. A custom service can be selected with `--service-name` or `-ServiceName`. If its service definition has been removed, pass its existing `--install-dir` or `-InstallDir` so the installer can locate it.
+The installer lists discovered services and reuses their paths, including older installations with `oss-transfer-go` names. To upgrade only Agents, add `--role agent` or `-Role agent`. A custom service can be selected with `--service-name` or `-ServiceName`. If its service definition has been removed, pass its existing `--install-dir` or `-InstallDir` so the installer can locate it.
 
 The installer stops the service and backs up its programs, configuration, service definition and database. Accounts, settings and Agent identities remain. If the new service fails its startup check, the installer restores the backup and restarts the previous service if it was running. Older installations that did not record a custom backup directory use the platform default.
 
@@ -194,8 +194,8 @@ From a clean source checkout with Go, Node.js, npm and Python 3 installed:
 
 ```sh
 ./build.sh --all
-python3 deploy/go/release-assets.py --packages output/go-development \
-  --output "output/go-releases/$(git rev-parse --short HEAD)" \
+python3 deploy/native/release-assets.py --packages output/packages \
+  --output "output/releases/$(git rev-parse --short HEAD)" \
   --version "$(cat VERSION)" --commit "$(git rev-parse HEAD)"
 ```
 

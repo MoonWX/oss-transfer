@@ -97,7 +97,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.JDOSS_SK }}
-        run: python3 deploy/go/publish-oss.py --assets output --tag "$RELEASE_TAG"
+        run: python3 deploy/native/publish-oss.py --assets output --tag "$RELEASE_TAG"
   release:
     needs: [artifacts, oss, docker_hub]
     runs-on: ubuntu-latest
@@ -121,7 +121,7 @@ jobs:
       - name: Verify release checksum
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: python3 deploy/go/publish-oss.py --assets output --tag "$RELEASE_TAG" --dry-run
+        run: python3 deploy/native/publish-oss.py --assets output --tag "$RELEASE_TAG" --dry-run
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,7 +131,7 @@ jobs:
           release_flags=()
           if [[ "$RELEASE_TAG" = *-* ]]; then release_flags=(--prerelease --latest=false); fi
           assets=()
-          archive_names="$(python3 deploy/go/platforms.py --archives)"
+          archive_names="$(python3 deploy/native/platforms.py --archives)"
           while IFS= read -r archive; do assets+=("output/$archive"); done <<< "$archive_names"
           for asset in "${assets[@]}"; do
             [[ -f "$asset" && ! -L "$asset" ]] || { echo "Missing release archive: $asset" >&2; exit 1; }

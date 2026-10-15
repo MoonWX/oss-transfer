@@ -78,7 +78,7 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="runtime-", dir=evidence))
     data = work / "s3-data"
     data.mkdir()
-    access, secret = "go-qa-" + secrets.token_hex(8), secrets.token_urlsafe(32)
+    access, secret = "qa-" + secrets.token_hex(8), secrets.token_urlsafe(32)
     ports = reserve_ports(8)
     flags = ["master.port", "master.port.grpc", "volume.port", "volume.port.grpc", "filer.port", "filer.port.grpc", "s3.port", "s3.port.grpc"]
     command = [str(args.weed.resolve()), "mini", "-dir=" + str(data), "-ip=127.0.0.1", "-ip.bind=127.0.0.1",
@@ -108,15 +108,15 @@ def main():
                 time.sleep(0.2)
             env = dict(os.environ, OSS_TRANSFER_STORE_QA_ENDPOINT=endpoint,
                        OSS_TRANSFER_STORE_QA_ACCESS_KEY=access, OSS_TRANSFER_STORE_QA_SECRET_KEY=secret,
-                       OSS_TRANSFER_STORE_QA_REPORT=str(evidence / "go-store-results.json"),
+                       OSS_TRANSFER_STORE_QA_REPORT=str(evidence / "store-results.json"),
                        OSS_TRANSFER_STORE_QA_FIXTURE=str(evidence / "fixture"))
-            env.setdefault("GOCACHE", "/tmp/oss-transfer-go-build")
+            env.setdefault("GOCACHE", "/tmp/oss-transfer-build")
             result = subprocess.run(["go", "test", "-count=1", "-timeout=12m", "-v", "./internal/transferstore", "./internal/agentservice", "-run", "^(TestRealS3StoreAcceptance|TestRealS3CrashRecovery)$"],
                                     cwd=ROOT, env=env, text=True, capture_output=True, timeout=750)
             text = result.stdout + result.stderr
             for value in (access, secret):
                 text = text.replace(value, "[redacted]")
-            (evidence / "go-store-test.log").write_text(text)
+            (evidence / "store-test.log").write_text(text)
             print(text, end="", flush=True)
             if result.returncode:
                 raise RuntimeError("Real S3 Store acceptance failed; evidence: " + str(evidence))
@@ -191,7 +191,7 @@ def java_baseline(args, evidence, work, endpoint, access, secret):
             env = dict(os.environ, OSS_TRANSFER_STORE_QA_ENDPOINT=endpoint, OSS_TRANSFER_STORE_QA_ACCESS_KEY=access,
                        OSS_TRANSFER_STORE_QA_SECRET_KEY=secret, OSS_TRANSFER_STORE_QA_JAVA_URL=origin,
                        OSS_TRANSFER_STORE_QA_JAVA_TOKEN=token, OSS_TRANSFER_STORE_QA_BENCH_REPORT=str(evidence / "java-go-benchmark.json"))
-            env.setdefault("GOCACHE", "/tmp/oss-transfer-go-build")
+            env.setdefault("GOCACHE", "/tmp/oss-transfer-build")
             result = subprocess.run(["go", "test", "-count=1", "-timeout=15m", "-v", "./internal/transferstore", "-run", "^TestRealS3JavaBaseline$"],
                                     cwd=ROOT, env=env, text=True, capture_output=True, timeout=930)
             text = result.stdout + result.stderr

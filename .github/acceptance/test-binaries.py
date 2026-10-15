@@ -17,11 +17,11 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 PLATFORMS = {row["os"] + "/" + row["arch"]: row for row in
-             json.loads((ROOT / "deploy/go/platforms.json").read_text(encoding="utf-8"))}
+             json.loads((ROOT / "deploy/native/platforms.json").read_text(encoding="utf-8"))}
 SUPPORTED = ("linux/armv7", "linux/riscv64", "linux/loong64", "freebsd/amd64", "freebsd/arm64")
 GO_OSES = set("aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos".split())
 GO_ARCHES = set("386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64 mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm".split())
-FIXTURES = {"failure-master": "GO_QA_FAILURE_MASTER", "rollback-cli": "GO_QA_ROLLBACK_CLI"}
+FIXTURES = {"failure-master": "QA_FAILURE_MASTER", "rollback-cli": "QA_ROLLBACK_CLI"}
 
 
 def digest(path):
@@ -133,7 +133,7 @@ def selected_test(path, target, go_version):
 
 def source_inventory(repo, target, go_version):
     result = {}
-    for module in (".", "cli-go"):
+    for module in (".", "cli"):
         base = repo / module
         for current, directories, files in os.walk(base):
             directories[:] = [name for name in directories if not name.startswith((".", "_"))
@@ -175,7 +175,7 @@ def build(platform, output):
     manifest = {"schema": 1, "platform": platform, "commit": commit, "goVersion": go_version,
                 "testSources": sources, "tests": [], "fixtures": []}
     listed_sources = set()
-    for module in (".", "cli-go"):
+    for module in (".", "cli"):
         listing = subprocess.check_output(["go", "list", "-json", "./..."], cwd=ROOT / module,
                                           env=environment, text=True)
         for package in json_stream(listing):
@@ -253,7 +253,7 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
         confined(repo, cwd, directory=True)
         if cwd in seen_cwds or package in seen_packages:
             raise ValueError("Duplicate test package: " + package)
-        expected_package = "oss-transfer-cli" if cwd == "cli-go" else "github.com/MoonWX/oss-transfer" + ("/" + cwd if cwd != "." else "")
+        expected_package = "oss-transfer-cli" if cwd == "cli" else "github.com/MoonWX/oss-transfer" + ("/" + cwd if cwd != "." else "")
         if package != expected_package:
             raise ValueError("Package import path differs from its source directory: " + package)
         seen_cwds.add(cwd)
@@ -265,7 +265,7 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
         seen_files.update(files)
         path = executable(entry)
         if cwd == "internal/agentservice":
-            values["GO_QA_MULTIPART_TEST_BINARY"] = str(path)
+            values["QA_MULTIPART_TEST_BINARY"] = str(path)
     if seen_cwds != expected_cwds or seen_files != set(sources):
         raise ValueError("Test manifest omits packages from this checkout")
     fixture_names = set()
@@ -278,7 +278,7 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
         if entry.get("source") != source or digest(confined(repo, source)) != entry.get("sourceSha256"):
             raise ValueError("Fixture source differs from this checkout: " + name)
         values[FIXTURES[name]] = str(executable(entry))
-    if fixture_names != set(FIXTURES) or "GO_QA_MULTIPART_TEST_BINARY" not in values:
+    if fixture_names != set(FIXTURES) or "QA_MULTIPART_TEST_BINARY" not in values:
         raise ValueError("Required test fixtures are missing")
     # upload-artifact does not preserve executable modes. Restore them only
     # after validating the whole manifest, source inventory and every binary.

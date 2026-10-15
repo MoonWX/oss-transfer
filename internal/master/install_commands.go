@@ -143,13 +143,22 @@ if ($country -notmatch '^[A-Z]{2}$' -or $country -eq 'XX') {
   try { $country = ([string](Invoke-RestMethod -Uri 'https://ipinfo.io/country' -TimeoutSec 3)).Trim().ToUpperInvariant() } catch {}
 }
 if ($country -eq 'CN') { $source = 'jdoss' }
-$urls = @{ github = %s; jdoss = %s }
+$urls = @{ github = @(%s, %s); jdoss = @(%s) }
+function Download-Installer($sourceName) {
+  foreach ($url in $urls[$sourceName]) {
+    try {
+      Invoke-WebRequest -Uri $url -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
+      return
+    } catch { $lastError = $_ }
+  }
+  throw $lastError
+}
 try {
   try {
-    Invoke-WebRequest -Uri $urls[$source] -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
+    Download-Installer $source
   } catch {
     $source = if ($source -eq 'github') { 'jdoss' } else { 'github' }
-    Invoke-WebRequest -Uri $urls[$source] -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
+    Download-Installer $source
   }
   $env:TRANSFER_JOIN_TOKEN = %s
   & $installer -Role agent -Source auto -Version %s -MasterUrl %s -Yes
@@ -157,7 +166,7 @@ try {
   Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
   Remove-Item $installer -ErrorAction SilentlyContinue
 }
-`, psQuote(github+"/deploy/go/Install.ps1"), psQuote(jdoss+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
+`, psQuote(github+"/deploy/native/Install.ps1"), psQuote(github+"/deploy/go/Install.ps1"), psQuote(jdoss+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
 		return
 	}
 	fmt.Fprintf(w, `#!/usr/bin/env bash

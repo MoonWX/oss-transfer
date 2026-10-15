@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'scripts/sync-installer-source.py', '.github/actions/**', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
+    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build.sh', 'scripts/sync-installer-source.py', '.github/actions/**', 'deploy/native/**', 'docs/migration.md', 'frontend/**', 'cli/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,8 +15,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   package:
+    name: Build packages and test programs
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,7 +32,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
-            cli-go/go.sum
+            cli/go.sum
       - run: npm ci --prefix frontend
       - name: Check translations and preserve message parameters
         run: npm run test:messages --prefix frontend
@@ -40,75 +41,93 @@ jobs:
           python3 scripts/sync-installer-source.py --check
           python3 .github/tests/test-source-selection.py -v
           python3 .github/tests/test-download-source.py -v
-          python3 .github/tests/test-go-packaging.py -v
-          python3 .github/tests/test-go-oss-layout.py -v
+          python3 .github/tests/test-packaging.py -v
+          python3 .github/tests/test-oss-layout.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
-          python3 .github/tests/test-go-test-binaries.py -v
-          python3 .github/tests/test-go-cluster-diagnostics.py -v
+          python3 .github/tests/test-binaries.py -v
+          python3 .github/tests/test-cluster-diagnostics.py -v
       - name: Build all candidate archives once
         env:
-          GO_AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
+          AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then
             git status --short
             echo 'The build source changed before packaging.' >&2
             exit 1
           fi
-          GO_PLATFORMS="$(python3 deploy/go/platforms.py --list)"
-          export GO_PLATFORMS
-          GO_AGENT_ARTIFACT_VERSION="v$(cat VERSION)" GO_AGENT_DOCKER_IMAGE="moonwx/osstransfer:$(cat VERSION)" bash scripts/build-go.sh
+          BUILD_PLATFORMS="$(python3 deploy/native/platforms.py --list)"
+          export BUILD_PLATFORMS
+          AGENT_ARTIFACT_VERSION="v$(cat VERSION)" AGENT_DOCKER_IMAGE="moonwx/osstransfer:$(cat VERSION)" bash scripts/build.sh
+      - name: Compile target tests alongside the release packages
+        run: |
+          python3 - <<'PYTHON'
+          from concurrent.futures import ThreadPoolExecutor
+          from pathlib import Path
+          import runpy
+          import subprocess
+          import sys
+
+          helper = Path('.github/acceptance/test-binaries.py')
+          platforms = runpy.run_path(str(helper))['SUPPORTED']
+
+          def compile_tests(platform):
+              subprocess.run([
+                  sys.executable, str(helper), 'build', '--platform', platform,
+                  '--output', 'output/test-binaries/' + platform.replace('/', '-'),
+              ], check=True)
+
+          with ThreadPoolExecutor(max_workers=2) as pool:
+              list(pool.map(compile_tests, platforms))
+          PYTHON
       - name: Assemble versioned native download assets
-        run: python3 deploy/go/release-assets.py --packages output/go-development --output output/go-release-assets --version "$(cat VERSION)" --commit "$GITHUB_SHA"
+        run: python3 deploy/native/release-assets.py --packages output/packages --output output/release-assets --version "$(cat VERSION)" --commit "$GITHUB_SHA"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: go-migration-packages
+          name: packages
           path: |
-            output/go-development/*.tar.gz
-            output/go-development/*.zip
-            output/go-development/*.sha256
+            output/packages/*.tar.gz
+            output/packages/*.zip
+            output/packages/*.sha256
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: go-release-assets
-          path: output/go-release-assets/*
+          name: release-assets
+          path: output/release-assets/*
           if-no-files-found: error
           retention-days: 7
-  test_binaries:
-    name: Build tests ${{ matrix.platform }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {platform: linux/armv7, artifact: linux-armv7}
-          - {platform: linux/riscv64, artifact: linux-riscv64}
-          - {platform: linux/loong64, artifact: linux-loong64}
-          - {platform: freebsd/amd64, artifact: freebsd-amd64}
-          - {platform: freebsd/arm64, artifact: freebsd-arm64}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-go
+          name: test-binaries-linux-armv7
+          path: output/test-binaries/linux-armv7/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            cli-go/go.sum
-      - name: Cross-compile target tests and failure fixtures
-        env:
-          QA_PLATFORM: ${{ matrix.platform }}
-        run: python3 .github/acceptance/go-test-binaries.py build --platform "$QA_PLATFORM" --output output/go-test-binaries
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+          name: test-binaries-linux-riscv64
+          path: output/test-binaries/linux-riscv64/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: go-test-binaries-${{ matrix.artifact }}
-          path: output/go-test-binaries/
+          name: test-binaries-linux-loong64
+          path: output/test-binaries/linux-loong64/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-binaries-freebsd-amd64
+          path: output/test-binaries/freebsd-amd64/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-binaries-freebsd-arm64
+          path: output/test-binaries/freebsd-arm64/
           if-no-files-found: error
           retention-days: 7
   image:
-    name: Archive the two-platform Go image
+    name: Build container image
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -118,19 +137,19 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: go-migration-packages
-          path: output/go-development
+          name: packages
+          path: output/packages
       - name: Prepare the verified native binary context
         id: release
         run: |
-          python3 deploy/go/docker-context.py --packages output/go-development --output output/go-docker-context
+          python3 deploy/native/docker-context.py --packages output/packages --output output/docker-context
           printf 'version=%s\n' "$(cat VERSION)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
       - name: Archive both image architectures without rebuilding binaries
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          context: output/go-docker-context
+          context: output/docker-context
           builder: ${{ steps.buildx.outputs.name }}
           platforms: linux/amd64,linux/arm64
           outputs: type=oci,dest=output/oss-transfer-image.tar,oci-mediatypes=false
@@ -148,7 +167,7 @@ jobs:
           bash deploy/verify-release-image.sh "v$(cat VERSION)" output --ci-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: go-release-image
+          name: release-image
           path: |
             output/oss-transfer-image.tar
             output/oss-transfer-image.tar.sha256
@@ -181,14 +200,14 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
-            cli-go/go.sum
+            cli/go.sum
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: go-migration-packages
-          path: output/go-development
+          name: packages
+          path: output/packages
       - name: Check durable execution and client behavior
         env:
           RACE_FLAG: ${{ matrix.race }}
@@ -196,24 +215,24 @@ jobs:
           race=()
           if [[ -n "$RACE_FLAG" ]]; then race+=("$RACE_FLAG"); fi
           go test "${race[@]}" ./...
-          (cd cli-go && go test "${race[@]}" ./...)
+          (cd cli && go test "${race[@]}" ./...)
       - name: Verify packages and prepare pinned S3 service
         env:
           QA_PLATFORM: ${{ matrix.platform }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
-          python .github/acceptance/prepare-go.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/go-native-package"
+          python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
       - name: Run packaged Master and two Agents
         run: |
-          "$GO_QA_MASTER" --version
-          "$GO_QA_AGENT" --version
-          "$GO_QA_CLI" --version
-          python .github/acceptance/go-runtime-smoke.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --output output/go-smoke \
+          "$QA_MASTER" --version
+          "$QA_AGENT" --version
+          "$QA_CLI" --version
+          python .github/acceptance/runtime-smoke.py --master "$QA_MASTER" --agent "$QA_AGENT" --output output/smoke \
             --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
             --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-          python .github/acceptance/go-cli.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output output/go-cli
-          python .github/acceptance/go-cluster.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --weed "$GO_QA_WEED" --output output/go-cluster --scenario all --multipart-recovery
-          python .github/acceptance/go-inventory.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --weed "$GO_QA_WEED" --output output/go-inventory
+          python .github/acceptance/cli.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output output/cli
+          python .github/acceptance/cluster.py --master "$QA_MASTER" --agent "$QA_AGENT" --weed "$QA_WEED" --output output/cluster --scenario all --multipart-recovery
+          python .github/acceptance/inventory.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --weed "$QA_WEED" --output output/inventory
       - name: Verify native service installation, upgrade and rollback
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then
@@ -223,7 +242,7 @@ jobs:
             python .github/tests/test-download-source.py -v
           fi
           python_path="$(python -c 'import sys; print(sys.executable)')"
-          args=(.github/acceptance/go-install.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output "$GITHUB_WORKSPACE/output/go-install" --repo "$GITHUB_WORKSPACE" --all-installed)
+          args=(.github/acceptance/install.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output "$GITHUB_WORKSPACE/output/install" --repo "$GITHUB_WORKSPACE" --all-installed)
           if [[ "$RUNNER_OS" == Linux ]]; then
             sudo env "PATH=$PATH" "$python_path" "${args[@]}"
           else
@@ -232,24 +251,24 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: go-evidence-${{ strategy.job-index }}
+          name: evidence-${{ strategy.job-index }}
           path: |
-            output/go-smoke/evidence.json
-            output/go-smoke/*.log
-            output/go-cli/evidence.json
-            output/go-cli/*.log
-            output/go-cluster/evidence.json
-            output/go-cluster/bandwidth-samples.json
-            output/go-cluster/*.log
-            output/go-install/evidence.json
-            output/go-install/*-install-*.log
-            output/go-inventory/evidence.json
-            output/go-inventory/*.log
+            output/smoke/evidence.json
+            output/smoke/*.log
+            output/cli/evidence.json
+            output/cli/*.log
+            output/cluster/evidence.json
+            output/cluster/bandwidth-samples.json
+            output/cluster/*.log
+            output/install/evidence.json
+            output/install/*-install-*.log
+            output/inventory/evidence.json
+            output/inventory/*.log
           if-no-files-found: ignore
           retention-days: 7
   emulated:
     name: Linux ${{ matrix.arch }} / ${{ matrix.suite }}
-    needs: [package, test_binaries]
+    needs: package
     strategy:
       fail-fast: false
       matrix:
@@ -267,12 +286,12 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: go-migration-packages
-          path: output/go-development
+          name: packages
+          path: output/packages
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: go-test-binaries-linux-${{ matrix.arch }}
-          path: output/go-test-binaries
+          name: test-binaries-linux-${{ matrix.arch }}
+          path: output/test-binaries
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
@@ -289,59 +308,59 @@ jobs:
         env:
           QA_ARCH: ${{ matrix.arch }}
         run: |
-          python .github/acceptance/prepare-go.py --platform "linux/$QA_ARCH" --fixture-platform linux/amd64 --directory "$RUNNER_TEMP/go-emulated-package"
-          python .github/acceptance/go-test-binaries.py verify --platform "linux/$QA_ARCH" --directory output/go-test-binaries --repo "$GITHUB_WORKSPACE"
+          python .github/acceptance/prepare.py --platform "linux/$QA_ARCH" --fixture-platform linux/amd64 --directory "$RUNNER_TEMP/emulated-package"
+          python .github/acceptance/test-binaries.py verify --platform "linux/$QA_ARCH" --directory output/test-binaries --repo "$GITHUB_WORKSPACE"
       - name: Check setup, transfers, shared limits and crash recovery
         if: matrix.suite == 'transfer'
         run: |
-          python .github/acceptance/go-runtime-smoke.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --output output/go-smoke \
+          python .github/acceptance/runtime-smoke.py --master "$QA_MASTER" --agent "$QA_AGENT" --output output/smoke \
             --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
             --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-          python .github/acceptance/go-cluster.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --weed "$GO_QA_WEED" --output output/go-cluster \
-            --scenario all --multipart-recovery --multipart-test-binary "$GO_QA_MULTIPART_TEST_BINARY"
+          python .github/acceptance/cluster.py --master "$QA_MASTER" --agent "$QA_AGENT" --weed "$QA_WEED" --output output/cluster \
+            --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"
       - name: Run target Go and CLI tests
         if: matrix.suite == 'management'
         env:
           QA_ARCH: ${{ matrix.arch }}
-        run: python .github/acceptance/go-test-binaries.py run --platform "linux/$QA_ARCH" --directory output/go-test-binaries --repo "$GITHUB_WORKSPACE" --output output/go-unit --parallel 2
+        run: python .github/acceptance/test-binaries.py run --platform "linux/$QA_ARCH" --directory output/test-binaries --repo "$GITHUB_WORKSPACE" --output output/unit --parallel 2
       - name: Check CLI administration and inventory recovery
         if: matrix.suite == 'management'
         run: |
-          python .github/acceptance/go-cli.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output output/go-cli
-          python .github/acceptance/go-inventory.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --weed "$GO_QA_WEED" --output output/go-inventory
+          python .github/acceptance/cli.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output output/cli
+          python .github/acceptance/inventory.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --weed "$QA_WEED" --output output/inventory
       - name: Check real systemd installation, upgrade and rollback
         if: matrix.suite == 'management'
         env:
           QA_ARCH: ${{ matrix.arch }}
         run: |
           python_path="$(python -c 'import sys; print(sys.executable)')"
-          sudo env "PATH=$PATH" "$python_path" .github/acceptance/go-install.py \
-            --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" \
-            --output "$GITHUB_WORKSPACE/output/go-install" --repo "$GITHUB_WORKSPACE" --all-installed \
-            --target-platform "linux/$QA_ARCH" --failure-master-fixture "$GO_QA_FAILURE_MASTER" --rollback-cli-fixture "$GO_QA_ROLLBACK_CLI"
+          sudo env "PATH=$PATH" "$python_path" .github/acceptance/install.py \
+            --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" \
+            --output "$GITHUB_WORKSPACE/output/install" --repo "$GITHUB_WORKSPACE" --all-installed \
+            --target-platform "linux/$QA_ARCH" --failure-master-fixture "$QA_FAILURE_MASTER" --rollback-cli-fixture "$QA_ROLLBACK_CLI"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: go-emulated-evidence-${{ matrix.arch }}-${{ matrix.suite }}
+          name: emulated-evidence-${{ matrix.arch }}-${{ matrix.suite }}
           path: |
-            output/go-smoke/evidence.json
-            output/go-smoke/*.log
-            output/go-cluster/evidence.json
-            output/go-cluster/bandwidth-samples.json
-            output/go-cluster/*.log
-            output/go-unit/evidence.json
-            output/go-unit/*.log
-            output/go-cli/evidence.json
-            output/go-cli/*.log
-            output/go-inventory/evidence.json
-            output/go-inventory/*.log
-            output/go-install/evidence.json
-            output/go-install/*-install-*.log
+            output/smoke/evidence.json
+            output/smoke/*.log
+            output/cluster/evidence.json
+            output/cluster/bandwidth-samples.json
+            output/cluster/*.log
+            output/unit/evidence.json
+            output/unit/*.log
+            output/cli/evidence.json
+            output/cli/*.log
+            output/inventory/evidence.json
+            output/inventory/*.log
+            output/install/evidence.json
+            output/install/*-install-*.log
           if-no-files-found: ignore
           retention-days: 7
   freebsd:
     name: FreeBSD ${{ matrix.arch }} / ${{ matrix.suite }}
-    needs: [package, test_binaries]
+    needs: package
     strategy:
       fail-fast: false
       matrix:
@@ -358,12 +377,12 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: go-migration-packages
-          path: output/go-development
+          name: packages
+          path: output/packages
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: go-test-binaries-freebsd-${{ matrix.arch }}
-          path: output/go-test-binaries
+          name: test-binaries-freebsd-${{ matrix.arch }}
+          path: output/test-binaries
       - name: Run target acceptance in FreeBSD
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         env:
@@ -384,25 +403,25 @@ jobs:
             status=0
             sh -e <<'TESTS' || status=$?
             py=/opt/oss-transfer-ci-venv/bin/python
-            "$py" .github/acceptance/prepare-go.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package
-            "$py" .github/acceptance/go-test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/go-test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
+            "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package
+            "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
             . /tmp/oss-qa-tests.env
             bin=/tmp/oss-transfer-package
             if [ "$QA_SUITE" = transfer ]; then
-              "$py" .github/acceptance/go-runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/go-smoke \
+              "$py" .github/acceptance/runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/smoke \
                 --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
                 --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-              "$py" .github/acceptance/go-cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/go-cluster \
-                --scenario all --multipart-recovery --multipart-test-binary "$GO_QA_MULTIPART_TEST_BINARY"
+              "$py" .github/acceptance/cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/cluster \
+                --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"
             else
               "$py" .github/tests/test-source-selection.py -v
               "$py" .github/tests/test-download-source.py -v
-              "$py" .github/acceptance/go-test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/go-test-binaries --repo "$PWD" --output output/go-unit --parallel 2
-              "$py" .github/acceptance/go-cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/go-cli
-              "$py" .github/acceptance/go-inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/go-inventory
-              "$py" .github/acceptance/go-install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" \
-                --repo "$PWD" --output "$PWD/output/go-install" --all-installed \
-                --failure-master-fixture "$GO_QA_FAILURE_MASTER" --rollback-cli-fixture "$GO_QA_ROLLBACK_CLI"
+              "$py" .github/acceptance/test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --output output/unit --parallel 2
+              "$py" .github/acceptance/cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/cli
+              "$py" .github/acceptance/inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/inventory
+              "$py" .github/acceptance/install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" \
+                --repo "$PWD" --output "$PWD/output/install" --all-installed \
+                --failure-master-fixture "$QA_FAILURE_MASTER" --rollback-cli-fixture "$QA_ROLLBACK_CLI"
             fi
             TESTS
             mkdir -p output
@@ -413,22 +432,22 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: go-freebsd-evidence-${{ matrix.arch }}-${{ matrix.suite }}
+          name: freebsd-evidence-${{ matrix.arch }}-${{ matrix.suite }}
           path: |
             output/freebsd-exit-code
-            output/go-smoke/evidence.json
-            output/go-smoke/*.log
-            output/go-cluster/evidence.json
-            output/go-cluster/bandwidth-samples.json
-            output/go-cluster/*.log
-            output/go-unit/evidence.json
-            output/go-unit/*.log
-            output/go-cli/evidence.json
-            output/go-cli/*.log
-            output/go-inventory/evidence.json
-            output/go-inventory/*.log
-            output/go-install/evidence.json
-            output/go-install/*-install-*.log
+            output/smoke/evidence.json
+            output/smoke/*.log
+            output/cluster/evidence.json
+            output/cluster/bandwidth-samples.json
+            output/cluster/*.log
+            output/unit/evidence.json
+            output/unit/*.log
+            output/cli/evidence.json
+            output/cli/*.log
+            output/inventory/evidence.json
+            output/inventory/*.log
+            output/install/evidence.json
+            output/install/*-install-*.log
           if-no-files-found: ignore
           retention-days: 7
   docker:
@@ -451,47 +470,47 @@ jobs:
           python-version: '3.13'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: go-migration-packages
-          path: output/go-development
+          name: packages
+          path: output/packages
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: go-release-image
+          name: release-image
           path: output
       - name: Verify release archives and prepare native S3 service
         env:
           QA_PLATFORM: ${{ matrix.platform }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
-          python .github/acceptance/prepare-go.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/go-docker-package"
+          python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/docker-package"
       - name: Load the native image from the verified release archive
         env:
           QA_ARCH: ${{ matrix.arch }}
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
-          python deploy/go/verify-image.py --archive output/oss-transfer-image.tar --version "$(cat VERSION)" --commit "$GITHUB_SHA"
+          python deploy/native/verify-image.py --archive output/oss-transfer-image.tar --version "$(cat VERSION)" --commit "$GITHUB_SHA"
           skopeo --command-timeout 3m --override-os linux --override-arch "$QA_ARCH" copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/go-image.tar:oss-transfer-go:qa"
-          docker load --input "$RUNNER_TEMP/go-image.tar"
-          test "$(docker image inspect oss-transfer-go:qa --format '{{.Architecture}}')" = "$QA_ARCH"
-          test "$(docker image inspect oss-transfer-go:qa --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
-          OSS_TRANSFER_IMAGE=oss-transfer-go:qa docker compose -f docker-compose.yml config --quiet
+            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/image.tar:oss-transfer:qa"
+          docker load --input "$RUNNER_TEMP/image.tar"
+          test "$(docker image inspect oss-transfer:qa --format '{{.Architecture}}')" = "$QA_ARCH"
+          test "$(docker image inspect oss-transfer:qa --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          OSS_TRANSFER_IMAGE=oss-transfer:qa docker compose -f docker-compose.yml config --quiet
       - name: Verify setup, enrollment, bind transfers and persistent identity
-        run: python .github/acceptance/go-docker.py --image oss-transfer-go:qa --weed "$GO_QA_WEED" --output output/go-docker
+        run: python .github/acceptance/docker.py --image oss-transfer:qa --weed "$QA_WEED" --output output/docker
       - name: Install Master and Agent through the public Compose wizard
         run: |
-          python deploy/go/package.py --packages output/go-development --output "$RUNNER_TEMP/go-installer-release"
+          python deploy/native/package.py --packages output/packages --output "$RUNNER_TEMP/installer-release"
           python_path="$(python -c 'import sys; print(sys.executable)')"
-          sudo env "PATH=$PATH" "$python_path" .github/acceptance/go-setup.py --installer install.sh \
-            --manifest "$RUNNER_TEMP/go-installer-release/manifest.tsv" --image oss-transfer-go:qa --output output/go-setup
+          sudo env "PATH=$PATH" "$python_path" .github/acceptance/setup.py --installer install.sh \
+            --manifest "$RUNNER_TEMP/installer-release/manifest.tsv" --image oss-transfer:qa --output output/setup
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: go-docker-evidence-${{ matrix.arch }}
+          name: docker-evidence-${{ matrix.arch }}
           path: |
-            output/go-docker/evidence.json
-            output/go-docker/image-provenance.json
-            output/go-docker/*.log
-            output/go-setup/evidence.json
-            output/go-setup/*.log
+            output/docker/evidence.json
+            output/docker/image-provenance.json
+            output/docker/*.log
+            output/setup/evidence.json
+            output/setup/*.log
           if-no-files-found: ignore
           retention-days: 7

@@ -255,7 +255,7 @@ if ($Upgrade) {
         return
     }
     $recordPath = Join-Path $InstallDir 'install.json'
-    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'No managed Go installation found in the selected directory.' }
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'No managed installation found in the selected directory.' }
     $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
     if ($record.role -notin @('master','agent') -or ($Role -and $Role -ne $record.role)) { throw 'Installed role differs from -Role.' }
     $Role = $record.role
@@ -271,7 +271,7 @@ if ($Upgrade) {
     }
 }
 if (-not $Role) { $Role = 'master' }
-if (-not $ServiceName) { $ServiceName = "OSSTransferGo$((Get-Culture).TextInfo.ToTitleCase($Role))" }
+if (-not $ServiceName) { $ServiceName = "OSSTransfer$((Get-Culture).TextInfo.ToTitleCase($Role))" }
 if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid service name.' }
 $base = Join-Path $env:ProgramData "OSS Transfer\$Role"
 if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles "OSS Transfer\$Role" }
@@ -325,12 +325,12 @@ $database = Join-Path $DataDir "$Role.db"
 $existing = Test-Path -LiteralPath $metadata
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
-    if (-not $Upgrade) { throw 'Go installation exists; rerun with -Upgrade.' }
+    if (-not $Upgrade) { throw 'Installation exists; rerun with -Upgrade.' }
     Assert-RegularFile $metadata; Assert-RegularFile $binary; Assert-RegularFile $config
     $installed = Get-Content -LiteralPath $metadata -Raw | ConvertFrom-Json
     if ($installed.role -ne $Role -or $installed.serviceName -ne $ServiceName -or $installed.config -ne $config) { throw 'Existing installation identity does not match.' }
 } else {
-    if ($Upgrade) { throw 'No managed Go installation found; this does not upgrade Java V4.0.x.' }
+    if ($Upgrade) { throw 'No managed installation found; V4.0.x requires database migration first.' }
     if ($service) { throw 'An unmanaged service already exists.' }
     foreach ($path in @($InstallDir,$ConfigDir,$DataDir)) {
         if ($AdoptConfig -and $path -eq $DataDir) { continue }
@@ -535,7 +535,7 @@ try {
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
         $result = Invoke-CimMethod -InputObject (Service-Record) -MethodName Change -Arguments @{PathName=$command}
         if ($result.ReturnValue -ne 0) { throw 'Could not update the service command.' }
-    } else { New-Service -Name $ServiceName -BinaryPathName $command -DisplayName "OSS Transfer Go $Role" -StartupType Automatic | Out-Null }
+    } else { New-Service -Name $ServiceName -BinaryPathName $command -DisplayName "OSS Transfer $Role" -StartupType Automatic | Out-Null }
     Prepare-Start
     Start-Service -Name $ServiceName
     Wait-Ready

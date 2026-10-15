@@ -2,7 +2,7 @@
 # outside a temporary directory is changed. Compatible with Windows PowerShell 5.1.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$installer = Join-Path $PSScriptRoot '../../deploy/go/Install.ps1'
+$installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }

@@ -1,5 +1,5 @@
 # 构建产物
-# Keep previously built V4 files out of Go source snapshots.
+# Legacy build artifacts
 target/
 src/main/resources/static/assets/
 src/main/resources/static/index.html
@@ -16,8 +16,8 @@ logs/
 output/
 
 # 编译好的二进制
-cli-go/oss-transfer-cli-amd64
-cli-go/oss-transfer-cli-arm64
+cli/oss-transfer-cli-amd64
+cli/oss-transfer-cli-arm64
 
 # 前端依赖与测试产物
 frontend/node_modules/

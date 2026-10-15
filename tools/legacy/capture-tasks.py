@@ -9,7 +9,7 @@ import subprocess
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("comparison", ROOT / ".github/acceptance/go-compare.py")
+SPEC = importlib.util.spec_from_file_location("comparison", ROOT / ".github/acceptance/compare.py")
 comparison = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(comparison)
 require = comparison.require

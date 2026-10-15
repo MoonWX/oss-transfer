@@ -105,7 +105,7 @@ def verify(directory, tag, commit):
 def publish(assets, tag, commit, dry_run=False):
     # Validate a private copy so another local build cannot change bytes between
     # checksum validation and uploading them.
-    with tempfile.TemporaryDirectory(prefix="oss-go-publish-") as work:
+    with tempfile.TemporaryDirectory(prefix="oss-publish-") as work:
         root = Path(work)
         snapshot = root / "assets"
         snapshot.mkdir()

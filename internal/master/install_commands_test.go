@@ -224,7 +224,7 @@ func TestAgentBootstrapKeepsCustomSourceAndWindowsVersion(t *testing.T) {
 			if strings.Contains(text, "--release-url") || strings.Contains(text, "-ReleaseUrl") || strings.Contains(text, "/latest/") {
 				t.Fatal("official bootstrap does not select a fixed regional source", text)
 			}
-			if suffix != "" && (!strings.Contains(text, "-Source auto -Version 'v4.1.6'") || !strings.Contains(text, "/v4.1.6/deploy/go/Install.ps1") || !strings.Contains(text, "/v4.1.6/Install.ps1") || !strings.Contains(text, "-TimeoutSec 3")) {
+			if suffix != "" && (!strings.Contains(text, "-Source auto -Version 'v4.1.6'") || (!strings.Contains(text, "/v4.1.6/deploy/native/Install.ps1") || !strings.Contains(text, "/v4.1.6/deploy/go/Install.ps1")) || !strings.Contains(text, "/v4.1.6/Install.ps1") || !strings.Contains(text, "-TimeoutSec 3")) {
 				t.Fatal("Windows source selection or tag pin missing", text)
 			}
 		}

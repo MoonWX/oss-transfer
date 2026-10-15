@@ -28,7 +28,7 @@ def create(source, output):
     if output.exists() or output.is_symlink():
         raise ValueError("Docker context already exists; choose a new output directory")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".go-docker-", dir=output.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".docker-", dir=output.parent) as temporary:
         root = Path(temporary)
         snapshot = root / "packages"
         snapshot.mkdir()

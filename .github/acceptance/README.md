@@ -23,6 +23,8 @@ The Linux QEMU jobs install real systemd services on the Ubuntu runner. Only the
 
 ## Scheduling
 
+The package job builds release archives and cross-compiles the five additional platforms’ test executables, at most two platforms at a time. Test compilation has no separate jobs.
+
 Release archives are built once. A separate five-platform matrix compiles test executables and failure fixtures at the same time, without delaying the six native jobs. Test artifacts record the commit, target architecture and SHA-256 hashes and are not published in releases. The multipart crash test uses the target `agentservice` test executable, including its self-executed crash helper.
 
 Each additional platform has two parallel jobs on separate runners or VMs:
@@ -32,7 +34,7 @@ Each additional platform has two parallel jobs on separate runners or VMs:
 
 Management runs at most two Go test packages at once. Bandwidth measurements have a separate runner so other tests do not compete with their transfer window. FreeBSD caches its Python environment and dependencies; changes to the requirements file invalidate that cache. It does not compile tests inside the VM.
 
-Release waits for every job. Builds and publication read the same [platform list](../../deploy/go/platforms.json).
+Release waits for every job. Builds and publication read the same [platform list](../../deploy/native/platforms.json).
 
 ## Coverage
 
@@ -61,31 +63,31 @@ Build a package for the current platform with `./build.sh --test`, then prepare 
 ```sh
 python3 -m venv /tmp/oss-transfer-qa-venv
 /tmp/oss-transfer-qa-venv/bin/pip install -r .github/acceptance/requirements.txt
-/tmp/oss-transfer-qa-venv/bin/python .github/acceptance/prepare-go.py \
+/tmp/oss-transfer-qa-venv/bin/python .github/acceptance/prepare.py \
   --platform linux/amd64 --directory /tmp/oss-transfer-qa-bin
-/tmp/oss-transfer-qa-venv/bin/python .github/acceptance/go-cluster.py \
+/tmp/oss-transfer-qa-venv/bin/python .github/acceptance/cluster.py \
   --master /tmp/oss-transfer-qa-bin/oss-transfer-master \
   --agent /tmp/oss-transfer-qa-bin/oss-transfer-agent \
   --weed /tmp/oss-transfer-qa-bin/weed \
-  --output output/go-cluster-local --scenario all --multipart-recovery
+  --output output/cluster-local --scenario all --multipart-recovery
 ```
 
-Use a fresh output directory. On Windows, use `.exe` filenames and the Python executable from your environment. By default, `--multipart-recovery` compiles an Agent test binary and requires Go. Pass `--multipart-test-binary` to use a verified executable from `go-test-binaries.py` instead. The main scenarios execute the packaged binaries with an empty executable PATH.
+Use a fresh output directory. On Windows, use `.exe` filenames and the Python executable from your environment. By default, `--multipart-recovery` compiles an Agent test binary and requires Go. Pass `--multipart-test-binary` to use a verified executable from `test-binaries.py` instead. The main scenarios execute the packaged binaries with an empty executable PATH.
 
 To prepare the additional platforms' test executables on a build host:
 
 ```sh
-python3 .github/acceptance/go-test-binaries.py build --platform linux/armv7 --output /tmp/oss-transfer-tests
+python3 .github/acceptance/test-binaries.py build --platform linux/armv7 --output /tmp/oss-transfer-tests
 ```
 
 Copy that directory to the target environment and use `verify` or `run` with `--platform`, `--directory` and `--repo`. Verification checks the executable architecture, checksums and checkout before running anything. `run` also takes a fresh `--output` directory for logs and results. Linux emulation needs binfmt registered for both the initial process and the subprocesses created by recovery tests.
 
-For service installation tests, run `go-install.py` with `--master`, `--agent`, `--cli`, `--repo` and `--output`. Linux requires root and systemd; Windows requires Administrator. macOS uses a user LaunchAgent, or a system LaunchDaemon with `--system`. Tests use separate service names and directories and remove their registrations afterward. Only disposable CI machines use `--all-installed`, which exercises discovery and upgrade of every installed role.
+For service installation tests, run `install.py` with `--master`, `--agent`, `--cli`, `--repo` and `--output`. Linux requires root and systemd; Windows requires Administrator. macOS uses a user LaunchAgent, or a system LaunchDaemon with `--system`. Tests use separate service names and directories and remove their registrations afterward. Only disposable CI machines use `--all-installed`, which exercises discovery and upgrade of every installed role.
 
-`go-docker.py` checks a prepared image. `go-setup.py` tests the public installer against a local release directory. [ci.yml](../workflows/ci.yml) contains their full commands.
+`docker.py` checks a prepared image. `setup.py` tests the public installer against a local release directory. [ci.yml](../workflows/ci.yml) contains their full commands.
 
 ## Results
 
 Scenarios write `evidence.json` and sanitized logs under their output directory. Bandwidth tests also save samples; package and image checks record artifact identities. CI retains the uploaded results for seven days.
 
-Performance comparisons are separate from release acceptance. `go-compare.py` compares a historical V4.0.x JAR package with Go using the same fixture; `go-cloud-compare.py` adds resource limits for an isolated Linux host. See [the migration record](../../docs/go-migration-acceptance.md) for measurements and remaining checks.
+Performance comparisons are separate from release acceptance. `compare.py` compares a historical V4.0.x JAR package with Go using the same fixture; `cloud-compare.py` adds resource limits for an isolated Linux host. See [the migration record](../../docs/migration-acceptance.md) for measurements and remaining checks.

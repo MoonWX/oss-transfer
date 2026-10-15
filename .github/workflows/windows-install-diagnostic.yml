@@ -1,9 +1,9 @@
-name: Go Windows installation diagnostic
+name: Windows installation diagnostic
 on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: Run containing the verified go-migration-packages artifact
+        description: Run containing the verified packages artifact
         required: true
 permissions:
   contents: read
@@ -32,14 +32,45 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
-            cli-go/go.sum
+            cli/go.sum
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
+      - name: Locate package artifact
+        id: packages
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json, os
+          from urllib.request import Request, urlopen
+          run_id = os.environ['ARTIFACT_RUN_ID']
+          if not run_id.isdecimal():
+              raise ValueError('Artifact run ID must be numeric')
+          base = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}/artifacts"
+          found = {}
+          for page in range(1, 101):
+              request = Request(base + f'?per_page=100&page={page}', headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+              with urlopen(request, timeout=30) as response:
+                  artifacts = json.load(response)['artifacts']
+              for artifact in artifacts:
+                  if artifact['name'] in ('packages', 'go-migration-packages') and not artifact['expired']:
+                      if artifact['name'] in found:
+                          raise ValueError('Ambiguous package artifacts in requested run')
+                      found[artifact['name']] = artifact['id']
+              if len(artifacts) < 100:
+                  break
+          artifact_id = found.get('packages') or found.get('go-migration-packages')
+          if not artifact_id:
+              raise ValueError('No package artifact remains in the requested run')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f'artifact_id={artifact_id}\n')
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: go-migration-packages
-          path: output/go-development
+          artifact-ids: ${{ steps.packages.outputs.artifact_id }}
+          merge-multiple: true
+          path: output/packages
           run-id: ${{ inputs.artifact_run_id }}
           github-token: ${{ github.token }}
       - name: Verify existing native binaries without rebuilding
@@ -58,16 +89,16 @@ jobs:
           request = Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
           with urlopen(request, timeout=30) as response:
               source_sha = json.load(response)['head_sha']
-          spec = importlib.util.spec_from_file_location('prepare', '.github/acceptance/prepare-go.py')
+          spec = importlib.util.spec_from_file_location('prepare', '.github/acceptance/prepare.py')
           prepare = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(prepare)
           arch = os.environ['QA_ARCH']
           name = 'oss-transfer-windows-' + arch
-          archive = Path('output/go-development') / (name + '.zip')
+          archive = Path('output/packages') / (name + '.zip')
           expected = Path(str(archive) + '.sha256').read_text().split()[0]
           if prepare.digest(archive) != expected:
               raise ValueError('Archive checksum mismatch')
-          target = Path(os.environ['RUNNER_TEMP']) / 'go-scm-package'
+          target = Path(os.environ['RUNNER_TEMP']) / 'scm-package'
           target.mkdir()
           with zipfile.ZipFile(archive) as package:
               checks = dict((entry.split(None, 1)[1], entry.split()[0]) for entry in package.read(name + '/SHA256SUMS').decode().splitlines())
@@ -86,17 +117,17 @@ jobs:
               prepare.verify_binary(target / ('oss-transfer-' + role + '.exe'), 'windows', arch)
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
               for role in ('master', 'agent', 'cli'):
-                  stream.write('GO_QA_' + role.upper() + '=' + str(target / ('oss-transfer-' + role + '.exe')) + '\n')
+                  stream.write('QA_' + role.upper() + '=' + str(target / ('oss-transfer-' + role + '.exe')) + '\n')
           print('Verified existing build', source_sha, 'windows/' + arch)
       - name: Diagnose actual SCM installation and rollback
         shell: bash
-        run: python .github/acceptance/go-install.py --master "$GO_QA_MASTER" --agent "$GO_QA_AGENT" --cli "$GO_QA_CLI" --output output/go-install --repo "$GITHUB_WORKSPACE"
+        run: python .github/acceptance/install.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output output/install --repo "$GITHUB_WORKSPACE"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: windows-scm-diagnostic-${{ matrix.arch }}
           path: |
-            output/go-install/evidence.json
-            output/go-install/*-install-*.log
+            output/install/evidence.json
+            output/install/*-install-*.log
           if-no-files-found: ignore
           retention-days: 7

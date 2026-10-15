@@ -42,7 +42,7 @@ Save a private `migration-plan.json`. This example covers one combined Master/wo
 ```json
 {
   "snapshots": ["/backup/exports/master.jsonl"],
-  "destination": "/export/oss-transfer-go",
+  "destination": "/export/oss-transfer",
   "publicUrl": "https://transfer.example.com",
   "directNodes": {
     "10.0.0.10": {"address": "10.0.0.10", "label": "Master host execution"}
@@ -101,14 +101,14 @@ The destination contains `master/master.db`, `agents/<instanceId>/agent.db`, the
 
 Each Agent must run on its intended execution host. Copy only its private directory there, preserving the absolute path recorded in `service.json`, directory mode `0700` and file mode `0600`. Keep Master state and raw exports on the Master host. Check that the old local source and target paths still resolve to the intended mounts.
 
-Use the native installer's [adoption flow](../../deploy/go/README.md#adopt-converted-or-manually-created-go-data) for service registration. The service name and data path must match the generated configuration. For the Master in this example:
+Use the native installer's [adoption flow](../../deploy/native/README.md#register-existing-data-as-a-service) for service registration. The service name and data path must match the generated configuration. For the Master in this example:
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" \
-  --adopt-config /export/oss-transfer-go/master/service.json \
-  --service-name oss-transfer-master --data-dir /export/oss-transfer-go/master --yes
+  --adopt-config /export/oss-transfer/master/service.json \
+  --service-name oss-transfer-master --data-dir /export/oss-transfer/master --yes
 ```
 
 The Agent's generated service name is `oss-transfer-agent-<instanceId>`. Use its own `service.json`, service name and data path when adopting it. Program and configuration installation directories must be empty; the installer snapshots the stopped database before startup.
@@ -116,8 +116,8 @@ The Agent's generated service name is `oss-transfer-agent-<instanceId>`. Use its
 For a foreground check, run each binary on its host:
 
 ```sh
-oss-transfer-master --config /export/oss-transfer-go/master/service.json
-oss-transfer-agent --config '/export/oss-transfer-go/agents/<instanceId>/service.json'
+oss-transfer-master --config /export/oss-transfer/master/service.json
+oss-transfer-agent --config '/export/oss-transfer/agents/<instanceId>/service.json'
 ```
 
 Sign in with the existing account password and confirm the Agents are online. Successful login upgrades the old password hash to Argon2id. Imported accounts keep their roles and display names; login sessions are renewed.
@@ -202,27 +202,27 @@ go test -race ./internal/legacyimport
 go vet ./internal/legacyimport ./tools/legacy/inspect
 python3 tools/legacy/test-export.py \
   --jdk-home /path/to/jdk8 \
-  --output output/go-development/qa/legacy-export
+  --output output/packages/qa/legacy-export
 ```
 
 The exporter test uses the actual V4.0.6 RocksDB JNI library. It compares every exported key/value byte and checks source files, output permissions, existing-output rejection and locking against an active writer. Go tests cover damaged exports, missing node snapshots, identity conflicts, content changes during recovery and interrupted finalization.
 
-The recorded fixture at `output/go-development/qa/legacy-real-tasks-2` was captured by `tools/legacy/capture-tasks.py` using V4.0.6 and SeaweedFS. It contains six logical tasks: four completed, including one recycled task, and two interrupted tasks. The test archive is pinned to SHA-256 `64a0e80a28d61322fad20be17c8d47c31f77565a76daf5b1f4718590f9c992d4`.
+The recorded fixture at `output/packages/qa/legacy-real-tasks-2` was captured by `tools/legacy/capture-tasks.py` using V4.0.6 and SeaweedFS. It contains six logical tasks: four completed, including one recycled task, and two interrupted tasks. The test archive is pinned to SHA-256 `64a0e80a28d61322fad20be17c8d47c31f77565a76daf5b1f4718590f9c992d4`.
 
 With that fixture available, check history conversion:
 
 ```sh
-OSS_TRANSFER_LEGACY_TASK_SNAPSHOT="$PWD/output/go-development/qa/legacy-real-tasks-2/master.jsonl" \
+OSS_TRANSFER_LEGACY_TASK_SNAPSHOT="$PWD/output/packages/qa/legacy-real-tasks-2/master.jsonl" \
   go test -count=1 ./internal/legacyimport ./internal/master -run 'TestRealV4'
 ```
 
 For process-level recovery, supply release binaries with embedded web assets:
 
 ```sh
-OSS_TRANSFER_LEGACY_RESUME_SNAPSHOT="$PWD/output/go-development/qa/legacy-real-tasks-2/master.jsonl" \
+OSS_TRANSFER_LEGACY_RESUME_SNAPSHOT="$PWD/output/packages/qa/legacy-real-tasks-2/master.jsonl" \
 OSS_TRANSFER_NATIVE_MASTER=/path/to/oss-transfer-master \
 OSS_TRANSFER_NATIVE_AGENT=/path/to/oss-transfer-agent \
   go test -count=1 ./internal/legacyimport -run '^TestRealV4FinalizedNativeProcesses$' -v
 ```
 
-This test copies the storage fixture, starts the finalized services, signs in with the old password and checks the Agent identity and saved 1 Mbps limit. It raises that isolated test limit through the administrator API, resumes tasks #7 and #8, and hashes all 520 source/target pairs. It also checks the recycle-bin task and reuse of four old successful results. Provider compatibility and performance are tracked separately in the [acceptance inventory](../go-migration-acceptance.md).
+This test copies the storage fixture, starts the finalized services, signs in with the old password and checks the Agent identity and saved 1 Mbps limit. It raises that isolated test limit through the administrator API, resumes tasks #7 and #8, and hashes all 520 source/target pairs. It also checks the recycle-bin task and reuse of four old successful results. Provider compatibility and performance are tracked separately in the [acceptance inventory](../migration-acceptance.md).

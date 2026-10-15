@@ -102,8 +102,8 @@ def main():
         if fixture not in ('small', 'large') or direction not in ('LOCAL_TO_OSS', 'OSS_TO_OSS', 'OSS_TO_LOCAL') or engine not in ('java', 'go') or repetition not in ('1', '2', '3', '4', '5'):
             parser.error('Invalid component')
     root = args.root.resolve()
-    if args.root.is_symlink() or not root.name.startswith('oss-go-cloud-qa-') or root.stat().st_mode & 0o077:
-        raise RuntimeError('Expected a private oss-go-cloud-qa-* directory')
+    if args.root.is_symlink() or not root.name.startswith('oss-cloud-qa-') or root.stat().st_mode & 0o077:
+        raise RuntimeError('Expected a private oss-cloud-qa-* directory')
     results = root / ('results-' + '-'.join(args.component) if args.component else 'results')
     results.mkdir(mode=0o700, exist_ok=False)
     cgroup = cgroup_directory()
@@ -141,7 +141,7 @@ def main():
             for direction in ('LOCAL_TO_OSS', 'OSS_TO_OSS', 'OSS_TO_LOCAL')]
         for fixture, direction, engine, repetition in schedule:
             output = results / (fixture + '-' + direction)
-            command = [sys.executable, str(Path(__file__).with_name('go-compare.py')),
+            command = [sys.executable, str(Path(__file__).with_name('compare.py')),
                        '--java', str(args.java), '--java-package', str(args.java_package),
                        '--go-package', str(args.go_package), '--weed', str(args.weed),
                        '--output', str(output), '--profile', 'cloud-small', '--fixtures', fixture,

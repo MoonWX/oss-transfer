@@ -8,9 +8,9 @@ revision="$(git rev-parse HEAD)"
 short_revision="$(git rev-parse --short HEAD)"
 branch="$(git branch --show-current)"
 build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-artifact_base="${GO_AGENT_ARTIFACT_BASE:-https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer}"
-artifact_version="${GO_AGENT_ARTIFACT_VERSION:-v$version}"
-agent_image="${GO_AGENT_DOCKER_IMAGE:-moonwx/osstransfer:$version}"
+artifact_base="${AGENT_ARTIFACT_BASE:-https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer}"
+artifact_version="${AGENT_ARTIFACT_VERSION:-v$version}"
+agent_image="${AGENT_DOCKER_IMAGE:-moonwx/osstransfer:$version}"
 if [[ -n "$artifact_base" || -n "$artifact_version" ]]; then
   [[ "$artifact_base" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ && "$artifact_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { printf 'Invalid fixed Agent download URL/version\n' >&2; exit 1; }
 fi
@@ -25,12 +25,12 @@ if [[ "$host_arch" == arm ]]; then
   host_arm="${GOARM:-$(go env GOARM)}"
   host_arch="armv${host_arm%%,*}"
 fi
-platforms="${GO_PLATFORMS:-$host_os/$host_arch}"
+platforms="${BUILD_PLATFORMS:-$host_os/$host_arch}"
 for platform in $platforms; do
-  python3 deploy/go/platforms.py --go-env "$platform" >/dev/null
+  python3 deploy/native/platforms.py --go-env "$platform" >/dev/null
 done
-mkdir -p output/go-development
-lock="$root/output/.go-build-lock"
+mkdir -p output/packages
+lock="$root/output/.build-lock"
 if ! mkdir "$lock" 2>/dev/null; then
   printf 'Another Go build holds %s; check its PID before removing a stale lock.\n' "$lock" >&2
   exit 1
@@ -39,7 +39,7 @@ printf '%s\n' "$$" > "$lock/pid"
 stage=""
 cleanup() { if [[ -n "$stage" ]]; then rm -rf "$stage"; fi; rm -f "$lock/pid"; rmdir "$lock"; }
 trap cleanup EXIT
-stage="$(mktemp -d "$root/output/.go-build.XXXXXX")"
+stage="$(mktemp -d "$root/output/.build.XXXXXX")"
 (
   cd frontend
   VITE_BUILD_COMMIT="$short_revision" VITE_BUILD_TIME="$build_time" npm run build
@@ -52,7 +52,7 @@ cp -R frontend/dist/. internal/webui/assets/
 for platform in $platforms; do
   target_os="${platform%/*}"
   target_arch="${platform#*/}"
-  IFS=$'\t' read -r target_os go_arch go_arm < <(python3 deploy/go/platforms.py --go-env "$platform")
+  IFS=$'\t' read -r target_os go_arch go_arm < <(python3 deploy/native/platforms.py --go-env "$platform")
   name="oss-transfer-$target_os-$target_arch"
   package="$stage/$name"
   mkdir -p "$package"
@@ -68,7 +68,7 @@ for platform in $platforms; do
       -o "$package/oss-transfer-$program$extension" "./cmd/oss-transfer-$program"
   done
   (
-    cd cli-go
+    cd cli
     CGO_ENABLED=0 GOOS="$target_os" GOARCH="$go_arch" GOARM="$go_arm" GOAMD64=v1 GOARM64=v8.0 GORISCV64=rva20u64 go build -trimpath \
       -ldflags "-s -w -X main.version=$version -X main.branch=$branch -X main.commit=$short_revision -X main.buildTime=$build_time" \
       -o "$package/oss-transfer-cli$extension" .
@@ -96,6 +96,6 @@ PY
     archive="$name.tar.gz"
   fi
   (cd "$stage" && shasum -a 256 "$archive" > "$archive.sha256")
-  mv "$stage/$archive" "$stage/$archive.sha256" "$root/output/go-development/"
-  printf '%s\n' "$root/output/go-development/$archive"
+  mv "$stage/$archive" "$stage/$archive.sha256" "$root/output/packages/"
+  printf '%s\n' "$root/output/packages/$archive"
 done

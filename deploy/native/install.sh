@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install or upgrade the Go Master or Agent as a native service.
+# Install or upgrade the Master or Agent as a native service.
 set -euo pipefail
 umask 077
 # BEGIN embedded download source
@@ -214,7 +214,7 @@ transfer_github_prepare() (
     END { if (fields["Version"]!=version || fields["Platform"]!=platform || length(fields["FullCommit"])!=40 || fields["FullCommit"] ~ /[^a-f0-9]/) exit 1; print fields["FullCommit"] }
   ' "$transfer_download_work/VERSION") || { transfer_source_error 'Archive identity does not match the release'; return 1; }
   commit=$actual
-  # Exactly three executables and VERSION are checksummed by build-go.sh.
+  # Exactly three executables and VERSION are checksummed by scripts/build.sh.
   awk '
     NF!=2 { bad=1; exit 1 }
     { hash=$1; name=$2; sub(/^\*/,"",name); if (length(hash)!=64 || hash ~ /[^a-f0-9]/ || name !~ /^(oss-transfer-(master|agent|cli)|VERSION)$/ || name in seen) { bad=1; exit 1 }; seen[name]=1; print name "\t" hash; count++ }
@@ -233,7 +233,11 @@ transfer_github_prepare() (
     printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$transfer_download_work/manifest.tsv" || return 1
   done
   printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$transfer_download_work/manifest.tsv" || return 1
-  transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
+  # Older releases stored the installer under deploy/go. Keep both lookups
+  # pinned to the verified archive commit; never substitute the current branch.
+  if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/native/install.sh" "$transfer_download_work/native-install.sh" 1048576; then
+    transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
+  fi
   [[ -s "$transfer_download_work/native-install.sh" ]] || { transfer_source_error 'Empty native installer'; return 1; }
   native_hash=$(transfer_source_sha256 "$transfer_download_work/native-install.sh") || return 1
   native_size=$(wc -c < "$transfer_download_work/native-install.sh" | tr -d '[:space:]') || return 1
@@ -275,7 +279,7 @@ Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --source auto|github|jdoss  Download source (default: public IP location)
   --version VERSION   Release version (default: latest)
   --package-dir DIR    Install verified files from a local release directory
-  --upgrade            Back up and upgrade an existing Go installation
+  --upgrade            Back up and upgrade an existing installation
   --adopt-config FILE   Install a service for stopped, existing Go data
   --cli-path FILE       CLI location (default: beside the service binary)
   --replace-cli         Back up and replace an existing unmanaged CLI
@@ -367,7 +371,9 @@ if ((upgrade)); then
       candidates+=("$directory")
     }
     for item_role in master agent; do
-      if [[ "$platform" == linux ]]; then add_candidate "/opt/oss-transfer-go/$item_role"
+      if [[ "$platform" == linux ]]; then
+        add_candidate "/opt/oss-transfer/$item_role"
+        add_candidate "/opt/oss-transfer-go/$item_role"
       elif [[ "$platform" == freebsd ]]; then add_candidate "/usr/local/lib/oss-transfer/$item_role"
       elif ((user_service)); then add_candidate "$HOME/Library/Application Support/OSS Transfer/$item_role/bin"
       else add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi
@@ -375,7 +381,7 @@ if ((upgrade)); then
     if [[ "$platform" == linux ]]; then
       for definition in /etc/systemd/system/*.service; do
         [[ -f "$definition" && ! -L "$definition" ]] || continue
-        installed_binary=$(sed -n 's/^ExecStart="\([^"]*\/oss-transfer-\(master\|agent\)\)" .*/\1/p' "$definition")
+        installed_binary=$(sed -nE 's#^ExecStart="([^"]*/oss-transfer-(master|agent))" .*#\1#p' "$definition")
         [[ -z "$installed_binary" ]] || add_candidate "$(dirname "$installed_binary")"
       done
     elif [[ "$platform" == freebsd ]]; then
@@ -423,7 +429,7 @@ if ((upgrade)); then
     exit 0
   fi
   installed_metadata=$install_dir/install.tsv
-  [[ -f "$installed_metadata" && ! -L "$installed_metadata" ]] || fail 'No managed Go installation found in the selected directory'
+  [[ -f "$installed_metadata" && ! -L "$installed_metadata" ]] || fail 'No managed installation found in the selected directory'
   saved_role=$(metadata_field "$installed_metadata" role)
   [[ "$saved_role" == master || "$saved_role" == agent ]] || fail 'Invalid installed role'
   [[ -z "$role" || "$role" == "$saved_role" ]] || fail 'Installed role differs from --role'
@@ -445,19 +451,22 @@ if ((upgrade)); then
   data_dir=${data_dir:-$saved_data}
 fi
 role=${role:-master}
+if [[ "$platform" == linux && -z "$install_dir" && "$upgrade" == 0 && -f "/opt/oss-transfer-go/$role/install.tsv" ]]; then
+  fail 'Installation exists; rerun with --upgrade'
+fi
 if [[ "$platform" == freebsd ]]; then
-  service_name=${service_name:-oss_transfer_go_$role}
+  service_name=${service_name:-oss_transfer_$role}
   [[ "$service_name" =~ ^[A-Za-z][A-Za-z0-9_]{0,99}$ ]] || fail 'FreeBSD service names must start with a letter and contain only letters, digits and underscores'
 else
-  service_name=${service_name:-oss-transfer-go-$role}
+  service_name=${service_name:-oss-transfer-$role}
 fi
 [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] || fail 'Invalid service name'
 if [[ "$platform" == linux ]]; then
   command -v systemctl >/dev/null || fail 'systemd is required'
-  install_dir=${install_dir:-/opt/oss-transfer-go/$role}
-  config_dir=${config_dir:-/etc/oss-transfer-go/$role}
-  data_dir=${data_dir:-/var/lib/oss-transfer-go/$role}
-  backup_dir=${backup_dir:-/var/backups/oss-transfer-go/$role}
+  install_dir=${install_dir:-/opt/oss-transfer/$role}
+  config_dir=${config_dir:-/etc/oss-transfer/$role}
+  data_dir=${data_dir:-/var/lib/oss-transfer/$role}
+  backup_dir=${backup_dir:-/var/backups/oss-transfer/$role}
   unit=/etc/systemd/system/$service_name.service
 elif [[ "$platform" == freebsd ]]; then
   [[ -f /etc/rc.subr && -x /usr/sbin/daemon ]] || fail 'FreeBSD rc.d and daemon are required'
@@ -508,11 +517,11 @@ done
 existed=0
 if [[ -f "$metadata" && ! -L "$metadata" ]]; then
   existed=1
-  ((upgrade)) || fail 'Go installation exists; rerun with --upgrade'
+  ((upgrade)) || fail 'Installation exists; rerun with --upgrade'
   [[ $(awk -F '\t' '$1=="role"{print $2}' "$metadata") == "$role" && $(awk -F '\t' '$1=="serviceName"{print $2}' "$metadata") == "$service_name" && $(awk -F '\t' '$1=="config"{print $2}' "$metadata") == "$config" && $(awk -F '\t' '$1=="unit"{print $2}' "$metadata") == "$unit" ]] || fail 'Existing installation identity does not match'
   [[ -f "$binary" && ! -L "$binary" && -f "$config" && ! -L "$config" ]] || fail 'Existing installation files are missing or symlinked'
 else
-  ((upgrade == 0)) || fail 'No managed Go installation found; this does not upgrade Java V4.0.x'
+  ((upgrade == 0)) || fail 'No managed installation found; V4.0.x requires database migration first'
   for path in "$install_dir" "$config_dir" "$data_dir"; do
     [[ -n "$adopt_config" && "$path" == "$data_dir" ]] && continue
     [[ ! -e "$path" || -z $(ls -A "$path") ]] || fail "Refusing nonempty directory: $path"

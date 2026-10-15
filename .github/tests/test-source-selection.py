@@ -37,7 +37,7 @@ else: print(body,end='')
         environment = dict(os.environ, PATH=str(self.root)+os.pathsep+os.environ['PATH'],
                            RESPONSES=json.dumps(responses), CALLS=str(calls))
         result = subprocess.run(['bash','-c','source "$1"; transfer_select_source "$2" "$3"',
-                                 'test', str(ROOT/'deploy/go/select-source.sh'),source,version],
+                                 'test', str(ROOT/'deploy/native/select-source.sh'),source,version],
                                 env=environment,text=True,capture_output=True)
         self.assertEqual(result.returncode == 0, success, result.stderr)
         return result.stdout.strip(), calls.read_text().splitlines() if calls.exists() else []

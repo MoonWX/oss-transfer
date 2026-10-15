@@ -49,8 +49,8 @@ class Acceptance:
         # Only scrubbed evidence lives here; installer configuration and state
         # stay in the separate private temporary directory until cleanup.
         self.output.chmod(0o755)
-        self.work = Path(tempfile.mkdtemp(prefix="oss-go-setup-"))
-        self.prefix = "oss-go-setup-" + secrets.token_hex(6)
+        self.work = Path(tempfile.mkdtemp(prefix="oss-setup-"))
+        self.prefix = "oss-setup-" + secrets.token_hex(6)
         self.projects = {role: self.prefix + "-" + role for role in ("master", "agent")}
         self.secrets, self.manifest_requests = [], []
         self.server = self.thread = None

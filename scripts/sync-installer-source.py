@@ -9,9 +9,9 @@ END = '# END embedded download source\n'
 
 
 def sync(check=False):
-    body = START + ''.join((ROOT / 'deploy/go' / name).read_text() + '\n'
+    body = START + ''.join((ROOT / 'deploy/native' / name).read_text() + '\n'
                            for name in ('select-source.sh', 'download-source.sh')) + END
-    for name in ('install.sh', 'deploy/go/install.sh'):
+    for name in ('install.sh', 'deploy/native/install.sh'):
         path = ROOT / name
         text = path.read_text()
         if START in text:

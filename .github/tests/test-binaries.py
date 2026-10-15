@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("test_binaries", ROOT / ".github/acceptance/go-test-binaries.py")
+SPEC = importlib.util.spec_from_file_location("test_binaries", ROOT / ".github/acceptance/test-binaries.py")
 TESTS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TESTS)
 
@@ -30,19 +30,19 @@ class TestArtifacts(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
         (self.repo / "go.mod").write_text("module github.com/MoonWX/oss-transfer\n")
-        for relative in ("internal/agentservice/service_test.go", "internal/task/integer_test.go", "cli-go/cli_test.go"):
+        for relative in ("internal/agentservice/service_test.go", "internal/task/integer_test.go", "cli/cli_test.go"):
             path = self.repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("package qa\n")
-        (self.repo / "cli-go/go.mod").write_text("module oss-transfer-cli\n")
+        (self.repo / "cli/go.mod").write_text("module oss-transfer-cli\n")
         (self.repo / "internal/task/windows_test.go").write_text("//go:build windows\n\npackage qa\n")
         self.manifest = {"schema": 1, "platform": "linux/armv7", "commit": self.commit, "goVersion": "go1.26.5",
                          "testSources": TESTS.source_inventory(self.repo, TESTS.PLATFORMS["linux/armv7"], "go1.26.5"),
                          "tests": [], "fixtures": []}
-        for cwd in ("internal/agentservice", "internal/task", "cli-go"):
+        for cwd in ("internal/agentservice", "internal/task", "cli"):
             binary = "bin/" + cwd.replace("/", "-") + ".test"
             self.elf(binary)
-            self.manifest["tests"].append({"cwd": cwd, "package": "oss-transfer-cli" if cwd == "cli-go" else "github.com/MoonWX/oss-transfer/" + cwd,
+            self.manifest["tests"].append({"cwd": cwd, "package": "oss-transfer-cli" if cwd == "cli" else "github.com/MoonWX/oss-transfer/" + cwd,
                                            "binary": binary, "sha256": TESTS.digest(self.directory / binary),
                                            "testFiles": sorted(p for p in self.manifest["testSources"] if str(Path(p).parent) == cwd)})
         for name in TESTS.FIXTURES:
@@ -76,7 +76,7 @@ class TestArtifacts(unittest.TestCase):
         for item in self.manifest["tests"] + self.manifest["fixtures"]:
             self.assertTrue((self.directory / item["binary"]).stat().st_mode & stat.S_IXUSR)
         text = env_file.read_text()
-        self.assertIn("export GO_QA_MULTIPART_TEST_BINARY='", text)
+        self.assertIn("export QA_MULTIPART_TEST_BINARY='", text)
         self.assertEqual(len(github_env.read_text().splitlines()), 3)
 
     def test_missing_or_duplicate_packages_and_test_sources_fail_closed(self):

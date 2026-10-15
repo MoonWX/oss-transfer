@@ -218,7 +218,7 @@ transfer_github_prepare() (
     END { if (fields["Version"]!=version || fields["Platform"]!=platform || length(fields["FullCommit"])!=40 || fields["FullCommit"] ~ /[^a-f0-9]/) exit 1; print fields["FullCommit"] }
   ' "$transfer_download_work/VERSION") || { transfer_source_error 'Archive identity does not match the release'; return 1; }
   commit=$actual
-  # Exactly three executables and VERSION are checksummed by build-go.sh.
+  # Exactly three executables and VERSION are checksummed by scripts/build.sh.
   awk '
     NF!=2 { bad=1; exit 1 }
     { hash=$1; name=$2; sub(/^\*/,"",name); if (length(hash)!=64 || hash ~ /[^a-f0-9]/ || name !~ /^(oss-transfer-(master|agent|cli)|VERSION)$/ || name in seen) { bad=1; exit 1 }; seen[name]=1; print name "\t" hash; count++ }
@@ -237,7 +237,11 @@ transfer_github_prepare() (
     printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$transfer_download_work/manifest.tsv" || return 1
   done
   printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$transfer_download_work/manifest.tsv" || return 1
-  transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
+  # Older releases stored the installer under deploy/go. Keep both lookups
+  # pinned to the verified archive commit; never substitute the current branch.
+  if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/native/install.sh" "$transfer_download_work/native-install.sh" 1048576; then
+    transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
+  fi
   [[ -s "$transfer_download_work/native-install.sh" ]] || { transfer_source_error 'Empty native installer'; return 1; }
   native_hash=$(transfer_source_sha256 "$transfer_download_work/native-install.sh") || return 1
   native_size=$(wc -c < "$transfer_download_work/native-install.sh" | tr -d '[:space:]') || return 1
@@ -332,17 +336,25 @@ if [[ -z "$lang" ]]; then
   fi
 fi
 default_install_dir() {
-  if [[ "$os" == Linux ]]; then printf '/opt/oss-transfer-go/%s\n' "$1"
+  if [[ "$os" == Linux ]]; then printf '/opt/oss-transfer/%s\n' "$1"
   elif [[ "$os" == FreeBSD ]]; then printf '/usr/local/lib/oss-transfer/%s\n' "$1"
   elif ((user_service)); then printf '%s\n' "$HOME/Library/Application Support/OSS Transfer/$1/bin"
   else printf '/usr/local/lib/oss-transfer/%s\n' "$1"; fi
+}
+existing_install_dir() {
+  local directory
+  directory=$(default_install_dir "$1")
+  if [[ -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]]; then
+    printf '%s\n' "$directory"
+  elif [[ "$os" == Linux && -f "/opt/oss-transfer-go/$1/install.tsv" && ! -L "/opt/oss-transfer-go/$1/install.tsv" ]]; then
+    printf '/opt/oss-transfer-go/%s\n' "$1"
+  fi
 }
 # Rerunning the same one-line command offers to upgrade what is already installed.
 if ((interactive && upgrade == 0)) && [[ -z "$role$method$package_dir$release_url$adopt_config" ]]; then
   installed=''
   for candidate in master agent; do
-    metadata=$(default_install_dir "$candidate")/install.tsv
-    [[ ! -f "$metadata" || -L "$metadata" ]] || installed+=" $candidate"
+    [[ -z $(existing_install_dir "$candidate") ]] || installed+=" $candidate"
   done
   if [[ -n "$installed" ]]; then
     prompt answer "$(say "Installed:$installed. 1 Upgrade / 2 Install another role" "已安装：$installed。1 升级 / 2 安装其他角色")" 1
@@ -442,10 +454,10 @@ if [[ "$method" == native ]]; then
     bash "$stage/native-install.sh" "${native_args[@]}"
     exit 0
   fi
-  # Match the native installer's default directory to recognize a managed
-  # installation. The installer validates all metadata and paths again.
-  [[ -n "$install_dir" ]] || install_dir=$(default_install_dir "$role")
-  metadata=$install_dir/install.tsv
+  # Preserve an existing installation, but let the downloaded version choose
+  # its own defaults on first install (older releases used different paths).
+  [[ -n "$install_dir" ]] || install_dir=$(existing_install_dir "$role")
+  metadata=${install_dir:+$install_dir/install.tsv}
   owned_cli=''
   if [[ -f "$metadata" && ! -L "$metadata" ]]; then
     if ((upgrade == 0 && yes == 0)); then
@@ -459,9 +471,10 @@ if [[ "$method" == native ]]; then
   # Master installs the user-facing CLI globally. An Agent's CLI stays beside
   # its binary, so adding it on the same host does not replace the Master's CLI.
   if [[ -z "$cli_path" ]]; then
-    if [[ "$role" == agent ]]; then cli_path=$install_dir/oss-transfer-cli
-    elif ((user_service)); then cli_path=$HOME/.local/bin/oss-transfer-cli
-    else cli_path=/usr/local/bin/oss-transfer-cli; fi
+    if [[ "$role" == master ]]; then
+      if ((user_service)); then cli_path=$HOME/.local/bin/oss-transfer-cli
+      else cli_path=/usr/local/bin/oss-transfer-cli; fi
+    fi
   fi
   if [[ -e "$cli_path" && "$cli_path" != "$owned_cli" && "$replace_cli" == 0 && "$yes" == 0 ]]; then
     prompt answer "$(say 'Existing CLI: back up and replace? y / n' '已有 CLI，是否备份后替换？y / n')" n
@@ -473,7 +486,8 @@ if [[ "$method" == native ]]; then
     prompt answer "$(say 'Install? y / n' '安装？y / n')" y
     [[ "$answer" == y || "$answer" == Y ]] || exit 0
   fi
-  native_args+=(--role "$role" --cli-path "$cli_path" --yes)
+  native_args+=(--role "$role" --yes)
+  [[ -z "$cli_path" ]] || native_args+=(--cli-path "$cli_path")
   if [[ -n "$package_dir" ]]; then native_args+=(--package-dir "$package_dir"); else native_args+=(--release-url "$release_url"); fi
   for field in install_dir data_dir service_name; do
     value=${!field}

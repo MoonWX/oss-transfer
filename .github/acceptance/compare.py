@@ -28,7 +28,7 @@ from urllib.error import HTTPError, URLError
 import psutil
 
 
-SPEC = importlib.util.spec_from_file_location("cluster_qa", Path(__file__).with_name("go-cluster.py"))
+SPEC = importlib.util.spec_from_file_location("cluster_qa", Path(__file__).with_name("cluster.py"))
 cluster = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cluster)
 MIB = 1024 * 1024

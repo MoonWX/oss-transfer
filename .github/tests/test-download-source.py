@@ -13,14 +13,14 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HELPER = ROOT / "deploy/go/download-source.sh"
+HELPER = ROOT / "deploy/native/download-source.sh"
 ARCHIVE = "oss-transfer-linux-amd64.tar.gz"
 PREFIX = "oss-transfer-linux-amd64/"
 TAG = "v4.1.5"
 COMMIT = "a" * 40
 API = "https://api.github.com/repos/MoonWX/oss-transfer/releases/latest"
 ASSET_URL = f"https://github.com/MoonWX/oss-transfer/releases/download/{TAG}/{ARCHIVE}"
-INSTALLER_URL = f"https://raw.githubusercontent.com/MoonWX/oss-transfer/{COMMIT}/deploy/go/install.sh"
+INSTALLER_URL = f"https://raw.githubusercontent.com/MoonWX/oss-transfer/{COMMIT}/deploy/native/install.sh"
 
 
 class DownloadSourceTests(unittest.TestCase):
@@ -160,6 +160,27 @@ shutil.copyfile(source,args[args.index('-o')+1])
         self.assertEqual((self.package / ARCHIVE).read_bytes(), self.archive.read_bytes())
         self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL])
         self.assertNotIn("NEVER_EXECUTE", result.stdout)
+
+    def test_old_release_uses_legacy_installer_path_at_same_verified_commit(self):
+        mapping = json.loads(self.env["DOWNLOAD_MAP"])
+        legacy_url = INSTALLER_URL.replace("/deploy/native/", "/deploy/go/")
+        mapping[legacy_url] = mapping.pop(INSTALLER_URL)
+        self.env["DOWNLOAD_MAP"] = json.dumps(mapping)
+        result = self.prepare()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL, legacy_url])
+        self.assertEqual((self.package / "native-install.sh").read_bytes(), self.installer.read_bytes())
+
+    def test_missing_pinned_installers_fail_without_using_a_moving_branch(self):
+        mapping = json.loads(self.env["DOWNLOAD_MAP"])
+        del mapping[INSTALLER_URL]
+        self.env["DOWNLOAD_MAP"] = json.dumps(mapping)
+        result = self.prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(self.package.iterdir()), [])
+        self.assertIn("Cannot fetch the versioned native installer", result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL,
+                         INSTALLER_URL.replace("/deploy/native/", "/deploy/go/")])
 
     def test_fixed_version_uses_tag_endpoint(self):
         result = self.prepare(TAG)

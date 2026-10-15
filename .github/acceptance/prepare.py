@@ -11,7 +11,7 @@ import tarfile
 from urllib.request import urlopen
 import zipfile
 
-SPEC = importlib.util.spec_from_file_location("release_platforms", Path(__file__).resolve().parents[2] / "deploy/go/platforms.py")
+SPEC = importlib.util.spec_from_file_location("release_platforms", Path(__file__).resolve().parents[2] / "deploy/native/platforms.py")
 TARGETS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TARGETS)
 
@@ -78,7 +78,7 @@ def main():
     parser.add_argument("--platform", required=True, choices=[o + "/" + a for o, a in TARGETS.PLATFORMS])
     parser.add_argument("--fixture-platform", help="S3 fixture platform; application binaries always use --platform")
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--packages", type=Path, default=Path("output/go-development"))
+    parser.add_argument("--packages", type=Path, default=Path("output/packages"))
     args = parser.parse_args()
     operating_system, architecture = args.platform.split("/")
     extension = ".exe" if operating_system == "windows" else ""
@@ -120,8 +120,8 @@ def main():
     weed = directory / ("weed" + extension)
     copy_member(weed_archive, weed.name, weed)
     weed.chmod(0o755)
-    values = {"GO_QA_" + program.upper(): str(directory / member) for program, member in zip(("master", "agent", "cli"), names)}
-    values["GO_QA_WEED"] = str(weed)
+    values = {"QA_" + program.upper(): str(directory / member) for program, member in zip(("master", "agent", "cli"), names)}
+    values["QA_WEED"] = str(weed)
     if os.environ.get("GITHUB_ENV"):
         with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
             for key, value in values.items():

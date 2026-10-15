@@ -52,7 +52,7 @@ class Acceptance:
         self.args = args
         self.root = args.output.resolve()
         self.root.mkdir(parents=True, mode=0o700, exist_ok=False)
-        self.prefix = "oss-go-qa-" + secrets.token_hex(6)
+        self.prefix = "oss-qa-" + secrets.token_hex(6)
         self.network = self.prefix + "-network"
         self.containers, self.volumes, self.secrets = [], [], []
         self.token, self.origin = "", ""

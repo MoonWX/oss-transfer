@@ -37,7 +37,7 @@ Local tests use temporary files. S3 unit tests use an HTTP simulator for retries
 To test with SeaweedFS 4.48:
 
 ```sh
-python3 .github/acceptance/go-store-qa.py --weed /path/to/weed --evidence /tmp/store-qa
+python3 .github/acceptance/store-qa.py --weed /path/to/weed --evidence /tmp/store-qa
 ```
 
 This starts a loopback S3 server, transfers 1,010 files in all three directions and checks hashes and metadata. Cases include empty files, Unicode keys, multipart upload, SKIP, OVERWRITE, cancellation after an uploaded part, abort cleanup, V2 authentication and invalid credentials. The script removes its buckets and stops the server. Logs, fixture files, runtime data and binary hashes remain in the output directory. JD Cloud OSS compatibility requires a separate provider test.

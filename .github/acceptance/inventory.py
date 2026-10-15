@@ -18,7 +18,7 @@ import threading
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-MODULE = importlib.util.spec_from_file_location("cluster_inventory", Path(__file__).with_name("go-cluster.py"))
+MODULE = importlib.util.spec_from_file_location("cluster_inventory", Path(__file__).with_name("cluster.py"))
 cluster = importlib.util.module_from_spec(MODULE)
 MODULE.loader.exec_module(cluster)
 require, eventually = cluster.require, cluster.eventually

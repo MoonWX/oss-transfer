@@ -31,7 +31,7 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-PREPARE_SPEC = importlib.util.spec_from_file_location('prepare_go', Path(__file__).with_name('prepare-go.py'))
+PREPARE_SPEC = importlib.util.spec_from_file_location('prepare_go', Path(__file__).with_name('prepare.py'))
 PREPARE = importlib.util.module_from_spec(PREPARE_SPEC)
 PREPARE_SPEC.loader.exec_module(PREPARE)
 
@@ -76,7 +76,7 @@ class Lifecycle:
             # generated ExecStart remain real host services using target ELF.
             self.installer_env['PATH'] = str(shim_dir)+os.pathsep+os.environ.get('PATH','')
         self.cli_path=self.root/'shared CLI'/('oss-transfer-cli.exe' if self.system=='Windows' else 'oss-transfer-cli')
-        self.names = {role:'oss-go-qa-'+role+'-'+secrets.token_hex(5) for role in ('master','agent')}
+        self.names = {role:'oss-qa-'+role+'-'+secrets.token_hex(5) for role in ('master','agent')}
         if self.system == 'FreeBSD': self.names = {role:name.replace('-','_') for role,name in self.names.items()}
         self.roles = []
         self.secrets = []
@@ -101,7 +101,7 @@ class Lifecycle:
             rows.append(self.row(role,source))
         if self.system!='Windows':
             native=self.release/'native-install.sh'
-            shutil.copy2(args.repo/'deploy/go/install.sh',native)
+            shutil.copy2(args.repo/'deploy/native/install.sh',native)
             payload=native.read_bytes()
             rows.append('\t'.join(('asset',native.name,hashlib.sha256(payload).hexdigest(),str(len(payload)))))
         self.version = version
@@ -218,7 +218,7 @@ class Lifecycle:
         if role not in self.roles:
             self.roles.append(role)
         if self.system=='Windows':
-            command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',self.args.repo/'deploy/go/Install.ps1',
+            command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',self.args.repo/'deploy/native/Install.ps1',
                      '-Role',role,('-ReleaseUrl' if release_url else '-PackageDir'),release_url or release or self.release,'-ServiceName',self.names[role],'-InstallDir',paths['bin'],
                      '-ConfigDir',paths['config'],'-DataDir',paths['data'],'-BackupDir',paths['backups'],'-Yes','-StartupTimeout',str(timeout)]
             if upgrade: command+=['-Upgrade']
@@ -243,7 +243,7 @@ class Lifecycle:
             # A custom service-name filter isolates this test on shared runners.
             # Role, all directories, CLI path and enrollment inputs are omitted.
             if self.system == 'Windows':
-                command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',self.args.repo/'deploy/go/Install.ps1',
+                command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',self.args.repo/'deploy/native/Install.ps1',
                          '-Upgrade',('-ReleaseUrl' if release_url else '-PackageDir'),release_url or release or self.release,'-Yes','-StartupTimeout',str(timeout)]
                 if not discover_all: command+=['-ServiceName',self.names[role]]
             else:

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def module(name, filename):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "deploy/go" / filename)
+    spec = importlib.util.spec_from_file_location(name, ROOT / "deploy/native" / filename)
     value = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(value)
     return value

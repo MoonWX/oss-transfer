@@ -28,7 +28,7 @@ Master 只负责调度，数据由 Agent 传输。在 **执行节点 → 添加�
 
 ## 文档
 
-- [部署](deploy/go/README.md)：Windows、离线安装、自定义路径
+- [部署](deploy/native/README.md)：Windows、离线安装、自定义路径
 - [Docker Compose](docs/docker-compose.md)
 - [CLI](docs/cli.md)
 

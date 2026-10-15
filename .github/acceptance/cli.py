@@ -146,7 +146,7 @@ def main():
         assert cli("whoami")["user"]["username"] == "cli-qa"
         checks.append("forced restart preserves account/session/node/settings; revocation disconnects Agent; logout invalidates session")
         evidence = {"status": "PASSED", "checks": checks, "platform": os.name,
-                    "scope": "CLI administration against real native Master and Agent; transfer content is covered by go-cluster.py",
+                    "scope": "CLI administration against real native Master and Agent; transfer content is covered by cluster.py",
                     "sha256": {name: hashlib.sha256(getattr(args, name).read_bytes()).hexdigest() for name in ("master", "agent", "cli")}}
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(evidence, indent=2))

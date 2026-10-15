@@ -12,7 +12,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("cluster_diagnostics", ROOT / ".github/acceptance/go-cluster.py")
+SPEC = importlib.util.spec_from_file_location("cluster_diagnostics", ROOT / ".github/acceptance/cluster.py")
 CLUSTER = importlib.util.module_from_spec(SPEC)
 # These tests never use S3. Keep the diagnostic failure paths runnable without
 # installing the acceptance client's dependencies or starting any service.

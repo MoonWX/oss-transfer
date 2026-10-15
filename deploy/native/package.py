@@ -13,8 +13,8 @@ import zipfile
 
 INSTALLERS = {
     'install.sh': 'install.sh',
-    'native-install.sh': 'deploy/go/install.sh',
-    'Install.ps1': 'deploy/go/Install.ps1',
+    'native-install.sh': 'deploy/native/install.sh',
+    'Install.ps1': 'deploy/native/Install.ps1',
 }
 
 SPEC = importlib.util.spec_from_file_location('native_platforms', pathlib.Path(__file__).with_name('platforms.py'))
@@ -54,7 +54,7 @@ def package(source, destination, scripts, require_all=True, unpack_binaries=Fals
     if destination.exists():
         raise ValueError('release output already exists; use a new directory')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.go-release-', dir=destination.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix='.release-', dir=destination.parent) as temporary:
         stage = pathlib.Path(temporary) / 'release'
         stage.mkdir()
         rows, identity, found = [], None, 0

@@ -31,7 +31,7 @@ import boto3
 from botocore.config import Config
 
 
-HELPERS = importlib.util.spec_from_file_location("store_qa", Path(__file__).with_name("go-store-qa.py"))
+HELPERS = importlib.util.spec_from_file_location("store_qa", Path(__file__).with_name("store-qa.py"))
 store_qa = importlib.util.module_from_spec(HELPERS)
 HELPERS.loader.exec_module(store_qa)
 MIB = 1024 * 1024
@@ -53,7 +53,7 @@ def sha256(path):
 
 def multipart_test_platform(agent, test_binary):
     """Check the test executable against the released Agent, not the host CPU."""
-    spec = importlib.util.spec_from_file_location("multipart_package_check", Path(__file__).with_name("prepare-go.py"))
+    spec = importlib.util.spec_from_file_location("multipart_package_check", Path(__file__).with_name("prepare.py"))
     package_check = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package_check)
     matches = []
@@ -94,7 +94,7 @@ def create_fixture(directory, rate=False, bandwidth=False):
         suffix = " unicode 空格.bin" if index == 2 else ".bin"
         key = f"{index:04d}" + suffix
         path = directory / key
-        block = hashlib.sha256(("go-cluster:" + str(index)).encode()).digest() * 2048
+        block = hashlib.sha256(("cluster:" + str(index)).encode()).digest() * 2048
         remaining = size
         with path.open("wb") as stream:
             while remaining:
@@ -292,7 +292,7 @@ class Harness:
 
         eventually(ready, "authenticated SeaweedFS readiness")
         suffix = secrets.token_hex(4)
-        self.buckets = {name: "go-cluster-" + name + "-" + suffix for name in ("source", "destination", "rate")}
+        self.buckets = {name: "cluster-" + name + "-" + suffix for name in ("source", "destination", "rate")}
         for bucket in self.buckets.values():
             self.s3.create_bucket(Bucket=bucket)
         self.storage = {"alias": "cluster-qa", "endpoint": endpoint, "accessKey": access, "secretKey": secret,

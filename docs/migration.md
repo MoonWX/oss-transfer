@@ -2,7 +2,7 @@
 
 V4.0.x data needs an offline conversion before it can be used by V4.1.x. The converter keeps accounts, storage connections, node limits, task history and the recycle bin. Unfinished tasks enter the new installation stopped.
 
-For a fresh installation, follow the [deployment instructions](../README.md). For an existing V4.1.x installation, use the [native upgrade command](../deploy/go/README.md#upgrade).
+For a fresh installation, follow the [deployment instructions](../README.md). For an existing V4.1.x installation, use the [native upgrade command](../deploy/native/README.md#upgrade).
 
 ## Convert an existing installation
 
@@ -28,4 +28,4 @@ Completed tasks retain their historical results and report coverage. New transfe
 
 ## Validation
 
-The migration tests use a V4.0.6 RocksDB export and SeaweedFS. The recorded native-process run retained the account, Agent identity and node limit, resumed two interrupted tasks, and verified all 520 resulting source/target pairs with SHA-256. Test commands and fixture details are in the [conversion guide](development/legacy-migration.md#tests). The [acceptance inventory](go-migration-acceptance.md) lists the remaining verification scope.
+The migration tests use a V4.0.6 RocksDB export and SeaweedFS. The recorded native-process run retained the account, Agent identity and node limit, resumed two interrupted tasks, and verified all 520 resulting source/target pairs with SHA-256. Test commands and fixture details are in the [conversion guide](development/legacy-migration.md#tests). The [acceptance inventory](migration-acceptance.md) lists the remaining verification scope.

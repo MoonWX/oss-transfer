@@ -17,16 +17,73 @@ import warnings
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("release_assets", ROOT / "deploy/go/release-assets.py")
+SPEC = importlib.util.spec_from_file_location("release_assets", ROOT / "deploy/native/release-assets.py")
 ASSETS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ASSETS)
 PACKAGE = ASSETS.PACKAGE
-PUBLISH_SPEC = importlib.util.spec_from_file_location("publish_oss", ROOT / "deploy/go/publish-oss.py")
+PUBLISH_SPEC = importlib.util.spec_from_file_location("publish_oss", ROOT / "deploy/native/publish-oss.py")
 PUBLISH = importlib.util.module_from_spec(PUBLISH_SPEC)
 PUBLISH_SPEC.loader.exec_module(PUBLISH)
-DOCKER_SPEC = importlib.util.spec_from_file_location("docker_context", ROOT / "deploy/go/docker-context.py")
+DOCKER_SPEC = importlib.util.spec_from_file_location("docker_context", ROOT / "deploy/native/docker-context.py")
 DOCKER = importlib.util.module_from_spec(DOCKER_SPEC)
 DOCKER_SPEC.loader.exec_module(DOCKER)
+
+
+class InstallerHistory(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.repository = self.root / "repository"
+        self.environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        self.repository.mkdir()
+        self.git("init", "-q")
+        self.legacy = {
+            "install.sh": b"root installer from old commit\n",
+            "deploy/go/install.sh": b"native installer from old commit\n",
+            "deploy/go/Install.ps1": b"Windows installer from old commit\n",
+        }
+        for name, content in self.legacy.items():
+            path = self.repository / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        self.old_commit = self.commit("Old installer layout")
+        # Keep the old paths too so the preference for current paths is tested.
+        self.current = {name.replace("deploy/go/", "deploy/native/"): b"new " + content
+                        for name, content in self.legacy.items()}
+        for name, content in self.current.items():
+            path = self.repository / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        self.new_commit = self.commit("New installer layout")
+        for name in self.current:
+            (self.repository / name).write_bytes(b"uncommitted installer must not be used\n")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.repository), *args],
+                                       env=self.environment, stderr=subprocess.PIPE)
+
+    def commit(self, message):
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "-qm", message)
+        return self.git("rev-parse", "HEAD").decode().strip()
+
+    def test_installer_sources_follow_archive_commit_across_directory_rename(self):
+        for commit, expected in ((self.old_commit, self.legacy), (self.new_commit, self.current)):
+            with self.subTest(commit=commit):
+                destination = self.root / commit
+                module_path = self.repository / "deploy/native/release-assets.py"
+                with mock.patch.object(ASSETS, "__file__", str(module_path)):
+                    ASSETS.release_sources(destination, commit)
+                for name, content in expected.items():
+                    self.assertEqual((destination / name.replace("deploy/go/", "deploy/native/")).read_bytes(), content)
+
+    def test_missing_commit_never_uses_working_tree_installers(self):
+        module_path = self.repository / "deploy/native/release-assets.py"
+        with mock.patch.object(ASSETS, "__file__", str(module_path)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                ASSETS.release_sources(self.root / "invalid", "0" * 40)
 
 
 class Packaging(unittest.TestCase):
@@ -103,7 +160,11 @@ class Packaging(unittest.TestCase):
                 self.assertEqual(payload, (role + os_name + arch).encode())
                 self.assertIn(['file', os_name, arch, role, f'oss-transfer-{role}-{os_name}-{arch}{extension}',
                                hashlib.sha256(payload).hexdigest(), str(len(payload))], manifest)
+        committed_paths = subprocess.check_output(
+            ["git", "ls-tree", "-r", "--name-only", self.commit], cwd=ROOT, text=True).splitlines()
         for name, source_name in PACKAGE.INSTALLERS.items():
+            if source_name not in committed_paths:
+                source_name = source_name.replace("deploy/native/", "deploy/go/", 1)
             expected = subprocess.check_output(["git", "show", self.commit + ":" + source_name], cwd=ROOT)
             self.assertEqual((self.output / name).read_bytes(), expected)
         for line in (self.output / "SHA256SUMS").read_text().splitlines():
@@ -230,10 +291,10 @@ class Packaging(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         step = workflow.split("      - name: Publish GitHub Release\n", 1)[1]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
-        platform_dir = self.root / "deploy/go"
+        platform_dir = self.root / "deploy/native"
         platform_dir.mkdir(parents=True, exist_ok=True)
         for name in ("platforms.py", "platforms.json"):
-            shutil.copyfile(ROOT / "deploy/go" / name, platform_dir / name)
+            shutil.copyfile(ROOT / "deploy/native" / name, platform_dir / name)
         bin_dir = self.root / "bin"
         bin_dir.mkdir(exist_ok=True)
         calls = self.root / "github-calls.jsonl"

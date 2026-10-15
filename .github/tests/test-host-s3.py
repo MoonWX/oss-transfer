@@ -84,6 +84,23 @@ class HostS3Tests(unittest.TestCase):
         self.assertEqual(first.storage["endpoint"], self.config["endpoint"])
         self.assertEqual(second.storage["secretKey"], self.config["secretKey"])
 
+    def test_multipart_host_opt_in_is_set_only_for_an_external_fixture(self):
+        for external in (False, True):
+            with self.subTest(external=external):
+                h = self.harness()
+                h.external_s3 = self.config if external else None
+                h.args = types.SimpleNamespace(multipart_test_binary=None)
+                h.storage = self.config
+                h.root, h.evidence = self.directory, {}
+                h.secrets = [self.config["accessKey"], self.config["secretKey"]]
+                h.save, h.record = mock.Mock(), mock.Mock()
+                result = types.SimpleNamespace(returncode=0, stdout="--- PASS: TestRealS3CrashRecovery")
+                with mock.patch.dict(os.environ, OSS_TRANSFER_STORE_QA_HOST_FIXTURE="1"), \
+                        mock.patch.object(CLUSTER.subprocess, "run", return_value=result) as run:
+                    h.multipart_crash_recovery()
+                environment = run.call_args.kwargs["env"]
+                self.assertEqual(environment.get("OSS_TRANSFER_STORE_QA_HOST_FIXTURE"), "1" if external else None)
+
     def test_stop_refuses_reused_pid_and_scrubs_private_log(self):
         state = {"pid": 123, "processIdentity": "fixture process", "accessKey": "private-access",
                  "secretKey": "private-secret"}

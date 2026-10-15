@@ -347,6 +347,9 @@ class Harness:
                            OSS_TRANSFER_STORE_QA_ENDPOINT=self.storage["endpoint"],
                            OSS_TRANSFER_STORE_QA_ACCESS_KEY=self.storage["accessKey"],
                            OSS_TRANSFER_STORE_QA_SECRET_KEY=self.storage["secretKey"])
+        environment.pop("OSS_TRANSFER_STORE_QA_HOST_FIXTURE", None)
+        if self.external_s3:
+            environment["OSS_TRANSFER_STORE_QA_HOST_FIXTURE"] = "1"
         test_binary = self.args.multipart_test_binary
         if test_binary:
             test_binary = test_binary.resolve(strict=True)

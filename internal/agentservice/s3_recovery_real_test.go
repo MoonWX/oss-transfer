@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -86,9 +87,8 @@ func TestRealS3CrashRecovery(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("start the isolated real-S3 acceptance harness")
 	}
-	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Hostname() != "127.0.0.1" {
-		t.Fatal("recovery acceptance requires a loopback endpoint")
+	if !recoveryAcceptanceEndpointAllowed(endpoint, os.Getenv("OSS_TRANSFER_STORE_QA_HOST_FIXTURE") == "1") {
+		t.Fatal("recovery acceptance requires a loopback endpoint or the explicitly enabled VM host fixture")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -234,4 +234,55 @@ func TestRealS3CrashRecovery(t *testing.T) {
 		t.Fatal("recovery damaged previous completed destination")
 	}
 	t.Logf("real SIGKILL: %d MiB part committed, %d owned spool files removed, owned MPU removed, foreign MPU and old object preserved", recoveryPartSize/(1024*1024), local.Removed)
+}
+
+func recoveryAcceptanceEndpointAllowed(endpoint string, hostFixture bool) bool {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Opaque != "" ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawPath != "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return false
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return false
+	}
+	// The pinned FreeBSD VM's user-mode network maps this one address to the
+	// runner's loopback interface. Never turn this opt-in into arbitrary S3 access.
+	return parsed.Hostname() == "127.0.0.1" || (hostFixture && parsed.Hostname() == "192.168.122.2")
+}
+
+func TestRecoveryAcceptanceEndpointGuard(t *testing.T) {
+	for _, test := range []struct {
+		name, endpoint string
+		hostFixture    bool
+		allowed        bool
+	}{
+		{"loopback", "http://127.0.0.1:19444", false, true},
+		{"loopback with opt-in", "http://127.0.0.1:19444/", true, true},
+		{"VM host explicitly enabled", "http://192.168.122.2:19444", true, true},
+		{"VM host without opt-in", "http://192.168.122.2:19444", false, false},
+		{"public IP with opt-in", "http://1.2.3.4:19444", true, false},
+		{"other private IP with opt-in", "http://192.168.122.3:19444", true, false},
+		{"DNS alias", "http://localhost:19444", true, false},
+		{"credentials on loopback", "http://key:secret@127.0.0.1:19444", false, false},
+		{"credentials on VM host", "http://key:secret@192.168.122.2:19444", true, false},
+		{"userinfo host trick", "http://192.168.122.2@1.2.3.4:19444", true, false},
+		{"wrong scheme", "https://192.168.122.2:19444", true, false},
+		{"missing port", "http://192.168.122.2", true, false},
+		{"zero port", "http://192.168.122.2:0", true, false},
+		{"out of range port", "http://192.168.122.2:65536", true, false},
+		{"invalid port", "http://192.168.122.2:bad", true, false},
+		{"bucket path", "http://192.168.122.2:19444/bucket", true, false},
+		{"query", "http://192.168.122.2:19444?key=secret", true, false},
+		{"empty query", "http://192.168.122.2:19444?", true, false},
+		{"fragment", "http://192.168.122.2:19444#secret", true, false},
+		{"IPv6 address", "http://[::1]:19444", true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if actual := recoveryAcceptanceEndpointAllowed(test.endpoint, test.hostFixture); actual != test.allowed {
+				t.Fatalf("endpoint acceptance = %v, want %v", actual, test.allowed)
+			}
+		})
+	}
 }

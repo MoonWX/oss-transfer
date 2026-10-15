@@ -275,7 +275,7 @@ jobs:
           QA_PLATFORM: ${{ matrix.platform }}
           RACE_FLAG: ${{ matrix.race }}
         run: |
-          args=(--platform "$QA_PLATFORM")
+          args=(--platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance")
           if [[ -n "$RACE_FLAG" ]]; then args+=(--race); fi
           if [[ "$RUNNER_OS" == Linux ]]; then
             args+=(--docker-image oss-transfer:qa --installer-manifest "$RUNNER_TEMP/installer-release/manifest.tsv")
@@ -286,26 +286,26 @@ jobs:
         with:
           name: evidence-${{ strategy.job-index }}
           path: |
-            output/platform/evidence.json
-            output/platform/*.log
-            output/unit/evidence.json
-            output/unit/*.log
-            output/smoke/evidence.json
-            output/smoke/*.log
-            output/cli/evidence.json
-            output/cli/*.log
-            output/cluster/evidence.json
-            output/cluster/bandwidth-samples.json
-            output/cluster/*.log
-            output/install/evidence.json
-            output/install/*-install-*.log
-            output/inventory/evidence.json
-            output/inventory/*.log
-            output/docker/evidence.json
-            output/docker/image-provenance.json
-            output/docker/*.log
-            output/setup/evidence.json
-            output/setup/*.log
+            ${{ runner.temp }}/acceptance/platform/evidence.json
+            ${{ runner.temp }}/acceptance/platform/*.log
+            ${{ runner.temp }}/acceptance/unit/evidence.json
+            ${{ runner.temp }}/acceptance/unit/*.log
+            ${{ runner.temp }}/acceptance/smoke/evidence.json
+            ${{ runner.temp }}/acceptance/smoke/*.log
+            ${{ runner.temp }}/acceptance/cli/evidence.json
+            ${{ runner.temp }}/acceptance/cli/*.log
+            ${{ runner.temp }}/acceptance/cluster/evidence.json
+            ${{ runner.temp }}/acceptance/cluster/bandwidth-samples.json
+            ${{ runner.temp }}/acceptance/cluster/*.log
+            ${{ runner.temp }}/acceptance/install/evidence.json
+            ${{ runner.temp }}/acceptance/install/*-install-*.log
+            ${{ runner.temp }}/acceptance/inventory/evidence.json
+            ${{ runner.temp }}/acceptance/inventory/*.log
+            ${{ runner.temp }}/acceptance/docker/evidence.json
+            ${{ runner.temp }}/acceptance/docker/image-provenance.json
+            ${{ runner.temp }}/acceptance/docker/*.log
+            ${{ runner.temp }}/acceptance/setup/evidence.json
+            ${{ runner.temp }}/acceptance/setup/*.log
           if-no-files-found: ignore
           retention-days: 7
   emulated:
@@ -385,8 +385,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {arch: amd64, vm_arch: x86_64}
-          - {arch: arm64, vm_arch: aarch64}
+          - {arch: amd64, vm_arch: x86_64, cpu: ''}
+          - {arch: arm64, vm_arch: aarch64, cpu: '4'}
     # Hosted ARM runners do not expose KVM; changing the host label would still use TCG.
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -437,6 +437,7 @@ jobs:
           cache-after-prepare-key-suffix: ${{ hashFiles('.github/acceptance/requirements.txt') }}
           release: '14.4'
           arch: ${{ matrix.vm_arch }}
+          cpu: ${{ matrix.cpu }}
           copyback: false
           envs: QA_ARCH GITHUB_SHA
           prepare: |

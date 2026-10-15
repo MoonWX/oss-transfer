@@ -197,6 +197,11 @@ func TestLeasedDeliveryRejectsStaleConfirmationAndResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Keep the first delivery's real 10 ms expiry, but let later deliveries use
+	// the normal lease so valid receipts do not race a tiny scheduler window.
+	b.mu.Lock()
+	b.options.DeliveryLease = 5 * time.Second
+	b.mu.Unlock()
 	if err = b.Complete(testSession, Result{RequestID: first.RequestID, DeliveryID: first.DeliveryID, Response: Response{Status: 200}}); !errors.Is(err, ErrNotDelivered) {
 		t.Fatalf("unconfirmed result accepted: %v", err)
 	}

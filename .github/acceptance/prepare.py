@@ -77,9 +77,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", required=True, choices=[o + "/" + a for o, a in TARGETS.PLATFORMS])
     parser.add_argument("--fixture-platform", help="S3 fixture platform; application binaries always use --platform")
+    parser.add_argument("--external-s3-fixture", action="store_true", help="Use the explicitly configured host S3 fixture instead of installing weed")
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--packages", type=Path, default=Path("output/packages"))
     args = parser.parse_args()
+    if args.external_s3_fixture and not Path(os.environ.get("OSS_TRANSFER_QA_S3_CONFIG", "")).is_file():
+        parser.error("--external-s3-fixture requires OSS_TRANSFER_QA_S3_CONFIG to name an existing private fixture configuration")
     operating_system, architecture = args.platform.split("/")
     extension = ".exe" if operating_system == "windows" else ""
     name = "oss-transfer-" + args.platform.replace("/", "-")
@@ -108,6 +111,14 @@ def main():
     for member in names:
         verify_binary(directory / member, operating_system, architecture)
         (directory / member).chmod(0o755)
+    values = {"QA_" + program.upper(): str(directory / member) for program, member in zip(("master", "agent", "cli"), names)}
+    if args.external_s3_fixture:
+        if os.environ.get("GITHUB_ENV"):
+            with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
+                for key, value in values.items():
+                    stream.write(key + "=" + value + "\n")
+        print("Verified native package for " + args.platform + "; using the configured host S3 fixture")
+        return
     # The fixture has no Windows ARM64 release. Windows ARM runs its x64 S3
     # fixture under OS emulation; both tested transfer programs remain native ARM64.
     fixture_os, fixture_arch = (args.fixture_platform or args.platform).split("/")
@@ -120,7 +131,6 @@ def main():
     weed = directory / ("weed" + extension)
     copy_member(weed_archive, weed.name, weed)
     weed.chmod(0o755)
-    values = {"QA_" + program.upper(): str(directory / member) for program, member in zip(("master", "agent", "cli"), names)}
     values["QA_WEED"] = str(weed)
     if os.environ.get("GITHUB_ENV"):
         with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:

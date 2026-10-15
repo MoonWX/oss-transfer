@@ -126,11 +126,11 @@ class Lifecycle:
         suffix='.zip' if self.system=='Windows' else '.tar.gz'
         archive=directory/(prefix+suffix)
         if self.system=='Windows':
-            with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED) as target:
+            with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=1) as target:
                 for role,source in payloads.items():
                     target.write(source,prefix+'/oss-transfer-'+role+'.exe')
         else:
-            with tarfile.open(archive,'w:gz') as target:
+            with tarfile.open(archive,'w:gz',compresslevel=1) as target:
                 for role,source in payloads.items():
                     target.add(source,arcname=prefix+'/oss-transfer-'+role,recursive=False)
         manifest=directory/'manifest.tsv'

@@ -235,9 +235,13 @@ class InventoryAcceptance:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("master", "agent", "cli", "weed", "output"):
+    for name in ("master", "agent", "cli", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
-    acceptance = InventoryAcceptance(parser.parse_args())
+    parser.add_argument("--weed", type=Path, help="Verified local S3 fixture binary; omitted with OSS_TRANSFER_QA_S3_CONFIG")
+    args = parser.parse_args()
+    if not args.weed and not os.environ.get("OSS_TRANSFER_QA_S3_CONFIG"):
+        parser.error("--weed is required without OSS_TRANSFER_QA_S3_CONFIG")
+    acceptance = InventoryAcceptance(args)
     try:
         acceptance.run()
         acceptance.h.evidence["status"] = "PASSED"

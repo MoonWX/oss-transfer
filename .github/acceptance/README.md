@@ -13,9 +13,9 @@ CI builds the release archives once, then runs their Master, Agent and CLI again
 | Windows amd64 | `windows-latest` |
 | Windows arm64 | `windows-11-arm` |
 
-These six platforms run the same application and native installer scenarios in parallel. Linux also tests the Docker image and Compose installer on both architectures. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
+Each platform has one acceptance job. These six platforms run the same application and native installer scenarios. The two Linux jobs also test their Docker image and Compose installer. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
 
-Linux ARMv7, riscv64 and loong64 execute the target binaries under QEMU, with an amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 run in FreeBSD 14.4 VMs. All five run the same Go/CLI tests and application scenarios as the six platforms above, including shared bandwidth, stop/restart, multipart cleanup, inventory recovery and installation rollback. Their test executables are cross-compiled with `CGO_ENABLED=0`; they do not run the race detector.
+Linux ARMv7, riscv64 and loong64 execute the target binaries under QEMU, with an amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 each run in one FreeBSD 14.4 VM; their SeaweedFS fixture runs natively on the Linux host. Master, Agent, CLI and crash-recovery test executables still run inside FreeBSD, using its filesystem and service manager. All five run the same Go/CLI tests and application scenarios as the six platforms above, including shared bandwidth, stop/restart, multipart cleanup, inventory recovery and installation rollback. Their test executables are cross-compiled with `CGO_ENABLED=0`; they do not run the race detector.
 
 The old Java database converter supports Linux and macOS. Other platforms test that publication is rejected before changing migration state; FreeBSD also checks that staged data and the startup fence remain intact.
 
@@ -27,14 +27,13 @@ The package job builds release archives and cross-compiles the five additional p
 
 Test artifacts record the commit, target architecture and SHA-256 hashes and are not published in releases. The multipart crash test uses the target `agentservice` test executable, including its self-executed crash helper.
 
-Linux emulation and FreeBSD amd64 each have two parallel jobs on separate runners or VMs:
+There are eleven platform jobs, plus the shared package and image builds. Each platform starts four groups internally: unit tests, CLI and inventory checks, installation, and transfers. Go test packages run at most two at once. Native installation and Compose installation run sequentially because both discover installed services.
 
-- **Transfer:** setup and enrollment, three transfer directions, reports, shared bandwidth, stop/restart and multipart recovery.
-- **Management:** all Go/CLI test packages, CLI administration, inventory import and recovery, service installation, upgrade and rollback.
+Transfers can overlap other groups while checking setup, multipart recovery and the three transfer directions. Before measuring bandwidth, the transfer group waits for every other group to pass, exit and finish cleanup. Bandwidth and stop/restart tests then run alone. A failed group prevents this window from opening and fails the job; every run has its own gate identity.
 
-FreeBSD arm64 uses four independent VMs: transfer, unit tests, CLI and inventory, and service installation. Together they run the same checks. The unit VM also runs the installer source-selection tests. This keeps installation and inventory from waiting behind the Go tests.
+FreeBSD caches its Python environment and dependencies; changes to the requirements file invalidate that cache. It receives only its own platform archive and returns only logs and evidence. The host S3 fixture uses the pinned SeaweedFS archive, temporary credentials and a loopback listener reached through QEMU's private network. Fixture credentials are excluded from uploaded artifacts. Installation fixtures use fast gzip/ZIP compression; published archives and archive validation are unchanged.
 
-Go test packages run at most two at once. Bandwidth measurements have a separate runner so other tests do not compete with their transfer window. FreeBSD caches its Python environment and dependencies; changes to the requirements file invalidate that cache. It receives only its own platform archive and returns only logs and evidence. `freebsd-phases.tsv` records elapsed seconds and exit status for each stage.
+`output/platform/evidence.json` records each stage's time and result. Detailed output is in the adjacent logs. The cluster evidence also records which groups completed before the exclusive transfer window.
 
 FreeBSD arm64 currently uses QEMU software emulation on `ubuntu-latest`. The hosted `ubuntu-26.04-arm` runner did not expose `/dev/kvm` in the capability check, so switching labels would not enable hardware virtualization. Recheck that capability before changing the host.
 

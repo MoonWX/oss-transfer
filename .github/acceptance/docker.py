@@ -271,14 +271,41 @@ class Acceptance:
         self.record("restart retains administrator, Agent, storage and task state; bind download SHA matches", objects=len(manifest), bytes=total)
 
     def close(self):
+        errors = []
         for name in reversed(self.containers):
-            result = subprocess.run(["docker", "logs", name], capture_output=True, text=True, timeout=15)
-            (self.root / (name.removeprefix(self.prefix + "-") + ".log")).write_text(self.scrub(result.stdout + result.stderr), encoding="utf-8")
-            self.docker("rm", "-f", name, check=False)
+            try:
+                result = subprocess.run(["docker", "logs", name], capture_output=True, text=True, timeout=15)
+                (self.root / (name.removeprefix(self.prefix + "-") + ".log")).write_text(self.scrub(result.stdout + result.stderr), encoding="utf-8")
+            except Exception as error:
+                errors.append(self.scrub("Container log collection failed: " + str(error)))
+            try:
+                self.docker("rm", "-f", name)
+            except Exception as error:
+                errors.append(self.scrub(str(error)))
         for name in self.volumes:
-            self.docker("volume", "rm", name, check=False)
-        self.docker("network", "rm", self.network, check=False)
+            try:
+                self.docker("volume", "rm", name)
+            except Exception as error:
+                errors.append(self.scrub(str(error)))
+        try:
+            self.docker("network", "rm", self.network)
+        except Exception as error:
+            errors.append(self.scrub(str(error)))
+        for kind, command, owned in (
+            ("containers", ("ps", "-a", "--format", "{{.Names}}"), self.containers),
+            ("volumes", ("volume", "ls", "--format", "{{.Name}}"), self.volumes),
+            ("networks", ("network", "ls", "--format", "{{.Name}}"), [self.network]),
+        ):
+            try:
+                remaining = set(self.docker(*command).splitlines()) & set(owned)
+                require(not remaining, "Test " + kind + " remain: " + ", ".join(sorted(remaining)))
+            except Exception as error:
+                errors.append(self.scrub(str(error)))
+        self.evidence["testResourcesRemoved"] = not errors
+        if errors:
+            self.evidence["cleanupErrors"] = errors
         self.save()
+        require(not errors, "Docker acceptance cleanup failed: " + "; ".join(errors))
 
 
 if __name__ == "__main__":

@@ -47,8 +47,12 @@ jobs:
       - name: Check translations and preserve message parameters
         if: steps.reuse.outputs.reuse_tests != 'true'
         run: npm run test:messages --prefix frontend
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
       - name: Reject corrupt or ambiguous release packages
         run: |
+          python3 -m pip install -r .github/acceptance/requirements.txt
           python3 scripts/sync-installer-source.py --check
           python3 .github/tests/test-source-selection.py -v
           python3 .github/tests/test-download-source.py -v
@@ -58,6 +62,9 @@ jobs:
           python3 .github/tests/test-resolve-ci-artifacts.py -v
           python3 .github/tests/test-binaries.py -v
           python3 .github/tests/test-cluster-diagnostics.py -v
+          python3 .github/tests/test-platform-runner.py -v
+          python3 .github/tests/test-host-s3.py -v
+          python3 .github/tests/test-docker-cleanup.py -v
       - name: Build all candidate archives once
         env:
           AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
@@ -205,13 +212,13 @@ jobs:
   native:
     if: needs.package.outputs.reuse_tests != 'true'
     name: Native ${{ matrix.platform }}
-    needs: package
+    needs: [package, image]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {platform: linux/amd64, runner: ubuntu-latest, race: '-race'}
-          - {platform: linux/arm64, runner: ubuntu-26.04-arm, race: '-race'}
+          - {platform: linux/amd64, arch: amd64, runner: ubuntu-latest, race: '-race'}
+          - {platform: linux/arm64, arch: arm64, runner: ubuntu-26.04-arm, race: '-race'}
           - {platform: darwin/amd64, runner: macos-15-intel, race: '-race'}
           - {platform: darwin/arm64, runner: macos-latest, race: '-race'}
           - {platform: windows/amd64, runner: windows-latest, race: '-race'}
@@ -238,51 +245,51 @@ jobs:
         with:
           name: packages
           path: output/packages
-      - name: Check durable execution and client behavior
-        env:
-          RACE_FLAG: ${{ matrix.race }}
-        run: |
-          race=()
-          if [[ -n "$RACE_FLAG" ]]; then race+=("$RACE_FLAG"); fi
-          go test "${race[@]}" ./...
-          (cd cli && go test "${race[@]}" ./...)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: runner.os == 'Linux'
+        with:
+          name: release-image
+          path: output
       - name: Verify packages and prepare pinned S3 service
         env:
           QA_PLATFORM: ${{ matrix.platform }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
-      - name: Run packaged Master and two Agents
+      - name: Load the verified image and prepare the Compose installer
+        if: runner.os == 'Linux'
+        env:
+          QA_ARCH: ${{ matrix.arch }}
         run: |
-          "$QA_MASTER" --version
-          "$QA_AGENT" --version
-          "$QA_CLI" --version
-          python .github/acceptance/runtime-smoke.py --master "$QA_MASTER" --agent "$QA_AGENT" --output output/smoke \
-            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
-            --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-          python .github/acceptance/cli.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output output/cli
-          python .github/acceptance/cluster.py --master "$QA_MASTER" --agent "$QA_AGENT" --weed "$QA_WEED" --output output/cluster --scenario all --multipart-recovery
-          python .github/acceptance/inventory.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --weed "$QA_WEED" --output output/inventory
-      - name: Verify native service installation, upgrade and rollback
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          python deploy/native/verify-image.py --archive output/oss-transfer-image.tar --version "$(cat VERSION)" --commit "$GITHUB_SHA"
+          skopeo --command-timeout 3m --override-os linux --override-arch "$QA_ARCH" copy \
+            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/image.tar:oss-transfer:qa"
+          docker load --input "$RUNNER_TEMP/image.tar"
+          test "$(docker image inspect oss-transfer:qa --format '{{.Architecture}}')" = "$QA_ARCH"
+          test "$(docker image inspect oss-transfer:qa --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          OSS_TRANSFER_IMAGE=oss-transfer:qa docker compose -f docker-compose.yml config --quiet
+          python deploy/native/package.py --packages output/packages --output "$RUNNER_TEMP/installer-release"
+      - name: Check execution, administration and service lifecycle
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+          RACE_FLAG: ${{ matrix.race }}
         run: |
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            pwsh -NoProfile -File .github/tests/test-download-source.ps1
-          else
-            python .github/tests/test-source-selection.py -v
-            python .github/tests/test-download-source.py -v
-          fi
-          python_path="$(python -c 'import sys; print(sys.executable)')"
-          args=(.github/acceptance/install.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output "$GITHUB_WORKSPACE/output/install" --repo "$GITHUB_WORKSPACE" --all-installed)
+          args=(--platform "$QA_PLATFORM")
+          if [[ -n "$RACE_FLAG" ]]; then args+=(--race); fi
           if [[ "$RUNNER_OS" == Linux ]]; then
-            sudo env "PATH=$PATH" "$python_path" "${args[@]}"
-          else
-            "$python_path" "${args[@]}"
+            args+=(--docker-image oss-transfer:qa --installer-manifest "$RUNNER_TEMP/installer-release/manifest.tsv")
           fi
+          python .github/acceptance/run-platform.py "${args[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: evidence-${{ strategy.job-index }}
           path: |
+            output/platform/evidence.json
+            output/platform/*.log
+            output/unit/evidence.json
+            output/unit/*.log
             output/smoke/evidence.json
             output/smoke/*.log
             output/cli/evidence.json
@@ -294,17 +301,20 @@ jobs:
             output/install/*-install-*.log
             output/inventory/evidence.json
             output/inventory/*.log
+            output/docker/evidence.json
+            output/docker/image-provenance.json
+            output/docker/*.log
+            output/setup/evidence.json
+            output/setup/*.log
           if-no-files-found: ignore
           retention-days: 7
   emulated:
     if: needs.package.outputs.reuse_tests != 'true'
-    name: Linux ${{ matrix.arch }} / ${{ matrix.suite }}
+    name: Linux ${{ matrix.arch }}
     needs: package
     strategy:
       fail-fast: false
       matrix:
-        arch: [armv7, riscv64, loong64]
-        suite: [transfer, management]
         include:
           - {arch: armv7, interpreter: arm}
           - {arch: riscv64, interpreter: riscv64}
@@ -341,39 +351,17 @@ jobs:
         run: |
           python .github/acceptance/prepare.py --platform "linux/$QA_ARCH" --fixture-platform linux/amd64 --directory "$RUNNER_TEMP/emulated-package"
           python .github/acceptance/test-binaries.py verify --platform "linux/$QA_ARCH" --directory output/test-binaries --repo "$GITHUB_WORKSPACE"
-      - name: Check setup, transfers, shared limits and crash recovery
-        if: matrix.suite == 'transfer'
-        run: |
-          python .github/acceptance/runtime-smoke.py --master "$QA_MASTER" --agent "$QA_AGENT" --output output/smoke \
-            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
-            --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-          python .github/acceptance/cluster.py --master "$QA_MASTER" --agent "$QA_AGENT" --weed "$QA_WEED" --output output/cluster \
-            --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"
-      - name: Run target Go and CLI tests
-        if: matrix.suite == 'management'
+      - name: Check execution, administration and service lifecycle
         env:
           QA_ARCH: ${{ matrix.arch }}
-        run: python .github/acceptance/test-binaries.py run --platform "linux/$QA_ARCH" --directory output/test-binaries --repo "$GITHUB_WORKSPACE" --output output/unit --parallel 2
-      - name: Check CLI administration and inventory recovery
-        if: matrix.suite == 'management'
-        run: |
-          python .github/acceptance/cli.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output output/cli
-          python .github/acceptance/inventory.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --weed "$QA_WEED" --output output/inventory
-      - name: Check real systemd installation, upgrade and rollback
-        if: matrix.suite == 'management'
-        env:
-          QA_ARCH: ${{ matrix.arch }}
-        run: |
-          python_path="$(python -c 'import sys; print(sys.executable)')"
-          sudo env "PATH=$PATH" "$python_path" .github/acceptance/install.py \
-            --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" \
-            --output "$GITHUB_WORKSPACE/output/install" --repo "$GITHUB_WORKSPACE" --all-installed \
-            --target-platform "linux/$QA_ARCH" --failure-master-fixture "$QA_FAILURE_MASTER" --rollback-cli-fixture "$QA_ROLLBACK_CLI"
+        run: python .github/acceptance/run-platform.py --platform "linux/$QA_ARCH" --test-binaries output/test-binaries
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: emulated-evidence-${{ matrix.arch }}-${{ matrix.suite }}
+          name: emulated-evidence-${{ matrix.arch }}
           path: |
+            output/platform/evidence.json
+            output/platform/*.log
             output/smoke/evidence.json
             output/smoke/*.log
             output/cluster/evidence.json
@@ -391,18 +379,14 @@ jobs:
           retention-days: 7
   freebsd:
     if: needs.package.outputs.reuse_tests != 'true'
-    name: FreeBSD ${{ matrix.arch }} / ${{ matrix.suite }}
+    name: FreeBSD ${{ matrix.arch }}
     needs: package
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {arch: amd64, vm_arch: x86_64, suite: transfer}
-          - {arch: amd64, vm_arch: x86_64, suite: management}
-          - {arch: arm64, vm_arch: aarch64, suite: transfer}
-          - {arch: arm64, vm_arch: aarch64, suite: unit}
-          - {arch: arm64, vm_arch: aarch64, suite: control}
-          - {arch: arm64, vm_arch: aarch64, suite: install}
+          - {arch: amd64, vm_arch: x86_64}
+          - {arch: arm64, vm_arch: aarch64}
     # Hosted ARM runners do not expose KVM; changing the host label would still use TCG.
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -418,6 +402,15 @@ jobs:
         with:
           name: test-binaries-freebsd-${{ matrix.arch }}
           path: output/test-binaries
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Start the native host S3 fixture
+        run: |
+          python -m pip install -r .github/acceptance/requirements.txt
+          python .github/acceptance/host-s3.py start --directory "$RUNNER_TEMP/freebsd-host-s3" --guest-host 192.168.122.2
+          install -m 600 "$RUNNER_TEMP/freebsd-host-s3/config.json" output/host-s3-config.json
+          cp "$RUNNER_TEMP/freebsd-host-s3/provenance.json" output/freebsd-host-s3.json
       - name: Keep only the guest platform archive
         env:
           QA_ARCH: ${{ matrix.arch }}
@@ -439,14 +432,13 @@ jobs:
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         env:
           QA_ARCH: ${{ matrix.arch }}
-          QA_SUITE: ${{ matrix.suite }}
         with:
           cache-after-prepare: true
           cache-after-prepare-key-suffix: ${{ hashFiles('.github/acceptance/requirements.txt') }}
           release: '14.4'
           arch: ${{ matrix.vm_arch }}
           copyback: false
-          envs: QA_ARCH QA_SUITE GITHUB_SHA
+          envs: QA_ARCH GITHUB_SHA
           prepare: |
             set -e
             pkg install -y bash curl python311 ca_root_nss
@@ -456,45 +448,11 @@ jobs:
             status=0
             sh -e <<'TESTS' || status=$?
             py=/opt/oss-transfer-ci-venv/bin/python
-            case "$QA_SUITE" in
-              transfer|management|unit|control|install) ;;
-              *) echo "Unknown FreeBSD suite: $QA_SUITE" >&2; exit 1 ;;
-            esac
-            mkdir -p output
-            run_check() {
-              phase=$1; shift
-              began=$(date +%s)
-              result=0
-              "$@" || result=$?
-              printf '%s\t%s\t%s\n' "$phase" "$(($(date +%s) - began))" "$result" >> output/freebsd-phases.tsv
-              return "$result"
-            }
-            run_check prepare "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package
-            run_check verify "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
+            export OSS_TRANSFER_QA_S3_CONFIG="$PWD/output/host-s3-config.json"
+            "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package --external-s3-fixture
+            "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
             . /tmp/oss-qa-tests.env
-            bin=/tmp/oss-transfer-package
-            if [ "$QA_SUITE" = transfer ]; then
-              run_check smoke "$py" .github/acceptance/runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/smoke \
-                --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
-                --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-              run_check transfer "$py" .github/acceptance/cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/cluster \
-                --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"
-            else
-              if [ "$QA_SUITE" = management ] || [ "$QA_SUITE" = unit ]; then
-                run_check sources "$py" .github/tests/test-source-selection.py -v
-                run_check downloads "$py" .github/tests/test-download-source.py -v
-                run_check unit "$py" .github/acceptance/test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --output output/unit --parallel 2
-              fi
-              if [ "$QA_SUITE" = management ] || [ "$QA_SUITE" = control ]; then
-                run_check cli "$py" .github/acceptance/cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/cli
-                run_check inventory "$py" .github/acceptance/inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/inventory
-              fi
-              if [ "$QA_SUITE" = management ] || [ "$QA_SUITE" = install ]; then
-                run_check install "$py" .github/acceptance/install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" \
-                  --repo "$PWD" --output "$PWD/output/install" --all-installed \
-                  --failure-master-fixture "$QA_FAILURE_MASTER" --rollback-cli-fixture "$QA_ROLLBACK_CLI"
-              fi
-            fi
+            "$py" .github/acceptance/run-platform.py --platform "freebsd/$QA_ARCH" --test-binaries output/test-binaries --bin-dir /tmp/oss-transfer-package
             TESTS
             mkdir -p output
             printf '%s\n' "$status" > output/freebsd-exit-code
@@ -504,7 +462,8 @@ jobs:
           mkdir -p output
           rsync -a --timeout=120 --rsync-path=/usr/local/bin/rsync \
             -e 'ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4' \
-            --include='/freebsd-exit-code' --include='/freebsd-phases.tsv' \
+            --include='/freebsd-exit-code' \
+            --include='/platform/' --include='/platform/evidence.json' --include='/platform/*.log' \
             --include='/smoke/' --include='/smoke/evidence.json' --include='/smoke/*.log' \
             --include='/cluster/' --include='/cluster/evidence.json' --include='/cluster/bandwidth-samples.json' --include='/cluster/*.log' \
             --include='/unit/' --include='/unit/evidence.json' --include='/unit/*.log' \
@@ -513,16 +472,21 @@ jobs:
             --include='/install/' --include='/install/evidence.json' --include='/install/*-install-*.log' \
             --exclude='*' \
             "freebsd:$GITHUB_WORKSPACE/output/" output/
+      - name: Stop the host S3 fixture
+        if: always()
+        run: python .github/acceptance/host-s3.py stop --directory "$RUNNER_TEMP/freebsd-host-s3"
       # Copy diagnostics back before enforcing the test result.
       - name: Require successful FreeBSD acceptance
         run: test "$(cat output/freebsd-exit-code)" = 0
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: freebsd-evidence-${{ matrix.arch }}-${{ matrix.suite }}
+          name: freebsd-evidence-${{ matrix.arch }}
           path: |
             output/freebsd-exit-code
-            output/freebsd-phases.tsv
+            output/freebsd-host-s3.json
+            output/platform/evidence.json
+            output/platform/*.log
             output/smoke/evidence.json
             output/smoke/*.log
             output/cluster/evidence.json
@@ -536,70 +500,5 @@ jobs:
             output/inventory/*.log
             output/install/evidence.json
             output/install/*-install-*.log
-          if-no-files-found: ignore
-          retention-days: 7
-  docker:
-    if: needs.package.outputs.reuse_tests != 'true'
-    name: Docker ${{ matrix.platform }}
-    needs: [package, image]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {platform: linux/amd64, arch: amd64, runner: ubuntu-latest}
-          - {platform: linux/arm64, arch: arm64, runner: ubuntu-26.04-arm}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: packages
-          path: output/packages
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-image
-          path: output
-      - name: Verify release archives and prepare native S3 service
-        env:
-          QA_PLATFORM: ${{ matrix.platform }}
-        run: |
-          python -m pip install -r .github/acceptance/requirements.txt
-          python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/docker-package"
-      - name: Load the native image from the verified release archive
-        env:
-          QA_ARCH: ${{ matrix.arch }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
-          python deploy/native/verify-image.py --archive output/oss-transfer-image.tar --version "$(cat VERSION)" --commit "$GITHUB_SHA"
-          skopeo --command-timeout 3m --override-os linux --override-arch "$QA_ARCH" copy \
-            oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/image.tar:oss-transfer:qa"
-          docker load --input "$RUNNER_TEMP/image.tar"
-          test "$(docker image inspect oss-transfer:qa --format '{{.Architecture}}')" = "$QA_ARCH"
-          test "$(docker image inspect oss-transfer:qa --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
-          OSS_TRANSFER_IMAGE=oss-transfer:qa docker compose -f docker-compose.yml config --quiet
-      - name: Verify setup, enrollment, bind transfers and persistent identity
-        run: python .github/acceptance/docker.py --image oss-transfer:qa --weed "$QA_WEED" --output output/docker
-      - name: Install Master and Agent through the public Compose wizard
-        run: |
-          python deploy/native/package.py --packages output/packages --output "$RUNNER_TEMP/installer-release"
-          python_path="$(python -c 'import sys; print(sys.executable)')"
-          sudo env "PATH=$PATH" "$python_path" .github/acceptance/setup.py --installer install.sh \
-            --manifest "$RUNNER_TEMP/installer-release/manifest.tsv" --image oss-transfer:qa --output output/setup
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: docker-evidence-${{ matrix.arch }}
-          path: |
-            output/docker/evidence.json
-            output/docker/image-provenance.json
-            output/docker/*.log
-            output/setup/evidence.json
-            output/setup/*.log
           if-no-files-found: ignore
           retention-days: 7

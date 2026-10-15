@@ -18,12 +18,13 @@ from pathlib import Path
 import platform
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import threading
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -41,6 +42,33 @@ TERMINAL = {"COMPLETED", "STOPPED", "FAILED", "PARTIAL_FAILED"}
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def external_s3_fixture():
+    name = os.environ.get("OSS_TRANSFER_QA_S3_CONFIG")
+    if not name:
+        return None
+    path = Path(name)
+    require(path.is_file(), "External S3 fixture configuration is missing")
+    require(os.name == "nt" or stat.S_IMODE(path.stat().st_mode) & 0o077 == 0,
+            "External S3 fixture configuration must be private (mode 0600)")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    require(config.get("format") == 1, "Unsupported external S3 fixture configuration")
+    require(all(isinstance(config.get(key), str) and config[key] for key in ("endpoint", "accessKey", "secretKey")),
+            "External S3 fixture endpoint or credentials are missing")
+    endpoint = urlsplit(config["endpoint"])
+    require(endpoint.scheme == "http" and endpoint.hostname and endpoint.port
+            and not endpoint.username and not endpoint.password and endpoint.path in ("", "/")
+            and not endpoint.query and not endpoint.fragment, "Invalid external S3 fixture endpoint")
+    provenance = config.get("provenance", {})
+    require(provenance.get("mode") == "host-native" and provenance.get("release") == "4.48"
+            and all(isinstance(provenance.get(key), str) and provenance[key]
+                    for key in ("platform", "sha256", "archive", "archiveSHA256", "version")),
+            "External S3 fixture provenance is incomplete")
+    # Do not copy arbitrary configuration fields into public acceptance evidence.
+    config["provenance"] = {key: provenance[key] for key in
+                            ("mode", "release", "platform", "sha256", "archive", "archiveSHA256", "version")}
+    return config
 
 
 def sha256(path):
@@ -192,6 +220,9 @@ class Harness:
         self.root = args.output.resolve()
         self.root.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.children, self.streams, self.secrets = [], [], []
+        self.external_s3 = external_s3_fixture()
+        if self.external_s3:
+            self.secrets.extend([self.external_s3["accessKey"], self.external_s3["secretKey"]])
         self.environment = dict(os.environ, PATH=str(self.root / "no-external-programs"))
         self.token, self.origin = "", ""
         self.nodes = ["cluster-qa-1", "cluster-qa-2"]
@@ -205,7 +236,8 @@ class Harness:
                                          "No Java/Go performance-equivalence claim"],
                          "binaries": {"master": store_qa.binary_provenance(args.master, "--version"),
                                       "agent": store_qa.binary_provenance(args.agent, "--version"),
-                                      "seaweedfs": store_qa.binary_provenance(args.weed, "version")}}
+                                      "seaweedfs": self.external_s3["provenance"] if self.external_s3
+                                      else store_qa.binary_provenance(args.weed, "version")}}
         self.save()
 
     def scrub(self, text):
@@ -262,19 +294,23 @@ class Harness:
         return data
 
     def start_s3(self):
-        access, secret = "cluster-qa-" + secrets.token_hex(8), secrets.token_urlsafe(32)
-        self.secrets.extend([access, secret])
-        ports = store_qa.reserve_ports(8)
-        flags = ["master.port", "master.port.grpc", "volume.port", "volume.port.grpc",
-                 "filer.port", "filer.port.grpc", "s3.port", "s3.port.grpc"]
-        directory = self.root / "seaweed-data"
-        directory.mkdir()
-        arguments = ["mini", "-dir=" + str(directory), "-ip=127.0.0.1", "-ip.bind=127.0.0.1",
-                     "-admin.ui=false", "-webdav=false", "-s3.port.iceberg=0", "-s3.port.lance=0"]
-        arguments += [f"-{flag}={port}" for flag, port in zip(flags, ports)]
-        process, _ = self.spawn("seaweedfs", self.args.weed, arguments,
-                                dict(self.environment, AWS_ACCESS_KEY_ID=access, AWS_SECRET_ACCESS_KEY=secret))
-        endpoint = "http://127.0.0.1:" + str(ports[6])
+        process = None
+        if self.external_s3:
+            access, secret, endpoint = (self.external_s3[key] for key in ("accessKey", "secretKey", "endpoint"))
+        else:
+            access, secret = "cluster-qa-" + secrets.token_hex(8), secrets.token_urlsafe(32)
+            self.secrets.extend([access, secret])
+            ports = store_qa.reserve_ports(8)
+            flags = ["master.port", "master.port.grpc", "volume.port", "volume.port.grpc",
+                     "filer.port", "filer.port.grpc", "s3.port", "s3.port.grpc"]
+            directory = self.root / "seaweed-data"
+            directory.mkdir()
+            arguments = ["mini", "-dir=" + str(directory), "-ip=127.0.0.1", "-ip.bind=127.0.0.1",
+                         "-admin.ui=false", "-webdav=false", "-s3.port.iceberg=0", "-s3.port.lance=0"]
+            arguments += [f"-{flag}={port}" for flag, port in zip(flags, ports)]
+            process, _ = self.spawn("seaweedfs", self.args.weed, arguments,
+                                    dict(self.environment, AWS_ACCESS_KEY_ID=access, AWS_SECRET_ACCESS_KEY=secret))
+            endpoint = "http://127.0.0.1:" + str(ports[6])
         self.s3 = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1",
                               aws_access_key_id=access, aws_secret_access_key=secret,
                               config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
@@ -283,14 +319,22 @@ class Harness:
                                             response_checksum_validation="when_required"))
 
         def ready():
-            require(process.poll() is None, "SeaweedFS exited before readiness")
+            require(process is None or process.poll() is None, "SeaweedFS exited before readiness")
             try:
                 self.s3.list_buckets()
                 return True
             except Exception:
                 return False
 
-        eventually(ready, "authenticated SeaweedFS readiness")
+        if self.external_s3:
+            # The host has already checked readiness. Authentication/connectivity
+            # failures here are fatal; never silently launch a different fixture.
+            try:
+                self.s3.list_buckets()
+            except Exception:
+                raise RuntimeError("External S3 fixture authentication/connectivity check failed") from None
+        else:
+            eventually(ready, "authenticated SeaweedFS readiness")
         suffix = secrets.token_hex(4)
         self.buckets = {name: "cluster-" + name + "-" + suffix for name in ("source", "destination", "rate")}
         for bucket in self.buckets.values():
@@ -827,16 +871,42 @@ class Harness:
             path.write_text(self.scrub(path.read_text(errors="replace", encoding="utf-8")), encoding="utf-8")
 
 
+def wait_for_exclusive(gate, run_id, timeout=1200):
+    """Require this run's other groups to exit before measuring bandwidth."""
+    required = {"unit", "control", "install"}
+
+    def ready():
+        state = json.loads(gate.read_text(encoding="utf-8"))
+        require(state.get("runId") == run_id, "Exclusive transfer gate belongs to another run")
+        groups = state.get("requiredGroups", [])
+        require(len(groups) == len(required) and set(groups) == required, "Exclusive transfer gate omitted a required group")
+        require(state.get("status") in ("WAITING", "READY"), "Another acceptance group failed before exclusive transfer")
+        if state["status"] == "WAITING":
+            return None
+        require(all(state.get("groups", {}).get(name) == "PASSED" for name in required),
+                "Exclusive transfer started before every other group passed")
+        return state
+
+    return eventually(ready, "exclusive bandwidth and recovery window", timeout)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("master", "agent", "weed", "output"):
+    for name in ("master", "agent", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--weed", type=Path, help="Verified local S3 fixture binary; omitted with OSS_TRANSFER_QA_S3_CONFIG")
     parser.add_argument("--scenario", choices=("core", "all"), default="all")
     parser.add_argument("--fixture", type=Path, help="Read an existing Java/Go shared fixture; never modify it")
     parser.add_argument("--multipart-recovery", action="store_true", help="Run the real S3 crash-recovery integration test using the current source")
     parser.add_argument("--multipart-test-binary", type=Path, help="Use a precompiled target-platform Agent test executable; requires --multipart-recovery")
     parser.add_argument("--single-upload", action="store_true", help="Use one Agent for upload until shared-root validation is ready")
+    parser.add_argument("--exclusive-gate", type=Path, help="Wait for the platform runner's other groups before bandwidth and recovery")
+    parser.add_argument("--exclusive-run-id", help="Identity of this platform run's gate")
     args = parser.parse_args()
+    if bool(args.exclusive_gate) != bool(args.exclusive_run_id) or (args.exclusive_gate and args.scenario != "all"):
+        parser.error("Exclusive transfer requires a gate, its run ID, and --scenario all")
+    if not args.weed and not os.environ.get("OSS_TRANSFER_QA_S3_CONFIG"):
+        parser.error("--weed is required without OSS_TRANSFER_QA_S3_CONFIG")
     if args.multipart_test_binary and not args.multipart_recovery:
         parser.error("--multipart-test-binary requires --multipart-recovery")
     h = Harness(args)
@@ -854,6 +924,9 @@ def main():
         h.node_settings()
         h.core()
         if args.scenario == "all":
+            if args.exclusive_gate:
+                h.evidence["exclusiveWindow"] = wait_for_exclusive(args.exclusive_gate, args.exclusive_run_id)
+                h.save()
             _, bandwidth_manifest = h.rate_fixture(bandwidth=True)
             h.bandwidth(bandwidth_manifest)
             directory, manifest = h.rate_fixture()

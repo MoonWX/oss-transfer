@@ -184,6 +184,28 @@ class TestArtifacts(unittest.TestCase):
         self.assertEqual(result["passedTests"], 0)
         self.assertEqual(result["result"], "failed")
 
+    def test_platform_budget_keeps_outer_deadline_after_go_timeout(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["tests"] = manifest["tests"][:1]
+        for platform in TESTS.SUPPORTED:
+            with self.subTest(platform=platform):
+                timeout = 300 if platform == "freebsd/arm64" else 180
+                process = mock.Mock(pid=123456, wait=mock.Mock(return_value=0))
+
+                def start(command, **kwargs):
+                    self.assertIn(f"-test.timeout={timeout}s", command)
+                    kwargs["stdout"].write("--- PASS: TestFixture (0.00s)\nPASS\n")
+                    return process
+
+                output = self.root / platform.replace("/", "-")
+                with mock.patch.object(TESTS, "verify", return_value=manifest), \
+                        mock.patch.object(TESTS.subprocess, "Popen", side_effect=start), \
+                        mock.patch.object(TESTS.os, "killpg"):
+                    self.assertEqual(TESTS.run(platform, self.directory, self.repo, output, 1), 0)
+                process.wait.assert_any_call(timeout=timeout + 15)
+                evidence = json.loads((output / "evidence.json").read_text())
+                self.assertEqual(evidence["packages"][0]["timeoutSeconds"], timeout)
+
 
 if __name__ == "__main__":
     unittest.main()

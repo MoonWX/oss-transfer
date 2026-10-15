@@ -300,6 +300,10 @@ def run(platform, directory, repo, output, parallel):
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     evidence = {"platform": platform, "result": "failed", "phase": "verify", "packages": []}
+    # The ARM64 FreeBSD VM runs under full-system emulation. The complete
+    # Master package can exceed three minutes even with every test progressing;
+    # individual operation deadlines inside those tests remain unchanged.
+    package_timeout = 300 if platform == "freebsd/arm64" else 180
     started = time.monotonic()
     try:
         manifest = verify(platform, directory, repo, publish_env=False)
@@ -308,14 +312,15 @@ def run(platform, directory, repo, output, parallel):
         def execute(entry):
             log = output / (entry["cwd"].replace("/", "-") + ".log")
             began = time.monotonic()
-            result = {"package": entry["package"], "binary": entry["binary"], "sha256": entry["sha256"], "log": log.name}
+            result = {"package": entry["package"], "binary": entry["binary"], "sha256": entry["sha256"],
+                      "log": log.name, "timeoutSeconds": package_timeout}
             with log.open("w", encoding="utf-8") as stream:
                 process = None
                 try:
-                    command = [str(confined(directory.resolve(), entry["binary"])), "-test.count=1", "-test.v", "-test.timeout=3m"]
+                    command = [str(confined(directory.resolve(), entry["binary"])), "-test.count=1", "-test.v", f"-test.timeout={package_timeout}s"]
                     process = subprocess.Popen(command, cwd=confined(repo.resolve(), entry["cwd"], directory=True),
                                                stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
-                    result["exitCode"] = process.wait(timeout=195)
+                    result["exitCode"] = process.wait(timeout=package_timeout + 15)
                 except Exception as error:
                     result.update(exitCode=None, error=str(error))
                     stream.write("\nTest runner error: " + str(error) + "\n")

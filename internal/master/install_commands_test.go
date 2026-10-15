@@ -97,6 +97,11 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix Agent bootstrap requires Bash")
 	}
+	// Each case has its own invitation and download sandbox. Account setup is
+	// shared because these cases exercise source selection, not password hashing.
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentArtifactBase = officialAgentArtifactBase
+	f.master.options.AgentArtifactVersion = "v4.1.6"
 	for _, tc := range []struct {
 		name, country, fallbackCountry, failSource, source string
 		wantError, wantIPInfo                              bool
@@ -112,10 +117,7 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 		{name: "both-unreachable", country: "CN", failSource: "both", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newAgentHTTPFixture(t)
-			f.master.options.AgentArtifactBase = officialAgentArtifactBase
-			f.master.options.AgentArtifactVersion = "v4.1.6"
-			invite, err := f.master.agents.registry.Invite("regional-bootstrap", "")
+			invite, err := f.master.agents.registry.Invite("regional-bootstrap-"+tc.name, "")
 			if err != nil {
 				t.Fatal(err)
 			}

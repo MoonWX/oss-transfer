@@ -1,0 +1,24 @@
+name: Set up Go
+description: Fetch the pinned official setup-go action through Git.
+inputs:
+  go-version-file:
+    description: File containing the Go version.
+    required: true
+  cache-dependency-path:
+    description: Dependency files used by the Go cache.
+    required: true
+runs:
+  using: composite
+  steps:
+    # GitHub's codeload SHA archive endpoint can fail independently of Git.
+    # Keep this checkout until the official action's cache post-step finishes.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: actions/setup-go
+        ref: b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        path: output/ci-actions/setup-go
+        persist-credentials: false
+    - uses: ./output/ci-actions/setup-go
+      with:
+        go-version-file: ${{ inputs.go-version-file }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}

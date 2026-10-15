@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'scripts/sync-installer-source.py', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
+    paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build-go.sh', 'scripts/sync-installer-source.py', '.github/actions/**', 'deploy/go/**', 'docs/go-migration.md', 'frontend/**', 'cli-go/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: ./.github/actions/setup-go
         with:
           go-version-file: go.mod
           cache-dependency-path: |
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: ./.github/actions/setup-go
         with:
           go-version-file: go.mod
           cache-dependency-path: |
@@ -176,7 +176,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: ./.github/actions/setup-go
         with:
           go-version-file: go.mod
           cache-dependency-path: |

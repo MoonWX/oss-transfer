@@ -82,7 +82,7 @@ def main():
     args = parser.parse_args()
     operating_system, architecture = args.platform.split("/")
     extension = ".exe" if operating_system == "windows" else ""
-    name = "oss-transfer-go-" + args.platform.replace("/", "-")
+    name = "oss-transfer-" + args.platform.replace("/", "-")
     archive = args.packages / (name + (".zip" if extension else ".tar.gz"))
     expected = Path(str(archive) + ".sha256").read_text(encoding="utf-8").split()[0]
     if digest(archive) != expected:

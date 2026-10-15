@@ -123,7 +123,7 @@ fetch() {
   fi
 }
 fetch manifest.tsv
-[[ $(wc -c < "$stage/manifest.tsv") -lt 65536 && $(awk -F '\t' '$1=="format"{print $2}' "$stage/manifest.tsv") == oss-transfer-go-v1 ]] || fail 'This installer requires a Go release manifest'
+[[ $(wc -c < "$stage/manifest.tsv") -lt 65536 && $(awk -F '\t' '$1=="format"{print $2}' "$stage/manifest.tsv") == oss-transfer-go-v1 ]] || fail 'Invalid release manifest'
 version=$(awk -F '\t' '$1=="version"{print $2}' "$stage/manifest.tsv")
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid release version'
 commit=$(awk -F '\t' '$1=="commit"{print $2}' "$stage/manifest.tsv")

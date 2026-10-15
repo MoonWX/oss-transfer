@@ -38,6 +38,7 @@ jobs:
       - name: Reject corrupt or ambiguous release packages
         run: |
           python3 .github/tests/test-go-packaging.py -v
+          python3 .github/tests/test-go-oss-layout.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
           python3 .github/tests/test-go-test-binaries.py -v
           python3 .github/tests/test-go-cluster-diagnostics.py -v

@@ -36,7 +36,7 @@ def create(source, output):
         # A local build may replace source archives while this command runs.
         # Both provenance and extracted payloads must come from the same copy.
         for os_name, arch in PACKAGE.PLATFORMS:
-            name = f"oss-transfer-go-{os_name}-{arch}" + (".zip" if os_name == "windows" else ".tar.gz")
+            name = f"oss-transfer-{os_name}-{arch}" + (".zip" if os_name == "windows" else ".tar.gz")
             for relative in (name, name + ".sha256"):
                 original = source / relative
                 if original.is_symlink() or not original.is_file():
@@ -49,7 +49,7 @@ def create(source, output):
                 raise ValueError("archive checksum mismatch: " + name)
             archives.append({"name": name, "sha256": actual})
         release = root / "release"
-        PACKAGE.package(snapshot, release, ROOT, require_all=True)
+        PACKAGE.package(snapshot, release, ROOT, require_all=True, unpack_binaries=True)
         lines = [line.split("\t") for line in (release / "manifest.tsv").read_text(encoding="utf-8").splitlines()]
         identity = {row[0]: row[1] for row in lines if row[0] in ("version", "commit")}
         if not re.fullmatch(r"[a-f0-9]{40}", identity["commit"]):

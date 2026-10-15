@@ -19,7 +19,8 @@ OSS = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer"
 GITHUB = "https://api.github.com/repos/MoonWX/oss-transfer"
 REGISTRY = "https://registry-1.docker.io/v2/moonwx/osstransfer"
 HUB = "https://hub.docker.com"
-LATEST = ("release.json", "VERSION", "manifest.tsv", "install.sh", "Install.ps1", "docker-compose.yml")
+LATEST = ("release.json", "manifest.tsv", "install.sh", "Install.ps1")
+LEGACY_LATEST = ("VERSION", "docker-compose.yml")
 SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 SHA = re.compile(r"[a-f0-9]{64}\Z")
@@ -139,18 +140,40 @@ def verify_oss(version, commit):
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(check_asset, rows))
+    # Before archive-based installation, releases also published VERSION and
+    # Compose at latest. Keep those releases verifiable without requiring the
+    # retired files from the current compact layout.
+    legacy = set(LEGACY_LATEST).intersection(records)
+    require(not legacy or legacy == set(LEGACY_LATEST), "Replacement legacy metadata is incomplete")
+    latest_names = LATEST + (LEGACY_LATEST if legacy else ())
     metadata = {"release.json": body}
-    for name in LATEST:
+    for name in latest_names:
         if name not in metadata:
             _, _, metadata[name] = request(base + name)
             require(len(metadata[name]) == records[name]["size"] and sha(metadata[name]) == records[name]["sha256"],
                     "Replacement metadata checksum mismatch: " + name)
         _, _, latest = request(OSS + "/latest/" + name)
         require(latest == metadata[name], "OSS latest differs from replacement: " + name)
-    require(metadata["VERSION"].decode() == f"Version: {version}\nFullCommit: {commit}\n", "Replacement VERSION differs")
+    if legacy:
+        require(metadata["VERSION"].decode() == f"Version: {version}\nFullCommit: {commit}\n", "Replacement VERSION differs")
     fields = [line.split("\t") for line in metadata["manifest.tsv"].decode().splitlines()]
     for key, value in (("format", "oss-transfer-go-v1"), ("version", version), ("commit", commit)):
         require([row for row in fields if row[0] == key] == [[key, value]], "Replacement manifest identity differs")
+    if not legacy:
+        archives = [row for row in fields if row[0] == "archive"]
+        require(archives, "Replacement archive manifest is missing")
+        names, platforms = set(), set()
+        for row in archives:
+            require(len(row) == 6, "Invalid replacement archive record")
+            _, operating_system, architecture, name, checksum, size = row
+            platform = (operating_system, architecture)
+            require(name not in names and platform not in platforms and name in records and
+                    checksum == records[name]["sha256"] and size == str(records[name]["size"]),
+                    "Replacement archive manifest differs")
+            names.add(name)
+            platforms.add(platform)
+        require(set(records) == names | {"install.sh", "native-install.sh", "Install.ps1", "manifest.tsv"},
+                "Replacement compact release contains unexpected files")
     return {name: sha(data) for name, data in metadata.items()}
 
 

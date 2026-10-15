@@ -25,14 +25,14 @@ The release workflow selects artifacts by commit and CI run ID. It accepts a suc
 
 GitHub Release contains the eleven platform archives listed in [platforms.json](../deploy/go/platforms.json). Each archive includes Master, Agent, CLI, documentation and checksums.
 
-OSS stores these archives plus the binaries and metadata used by the installer and Agent enrollment. Installation scripts are maintained in the repository. The Docker image uses the tested Linux binaries.
+OSS stores the same archives, three installation scripts, `manifest.tsv`, `release.json` and `SHA256SUMS`. The installer downloads one platform archive and extracts the service and CLI. For example, Linux amd64 uses `oss-transfer-linux-amd64.tar.gz`. The Docker image uses the tested Linux binaries.
 
 | Version | OSS location | GitHub | Docker Hub tags |
 | --- | --- | --- | --- |
 | `vX.Y.Z` | `osstransfer/vX.Y.Z/` | Release | `X.Y.Z`, `X.Y`, `latest` |
 | `vX.Y.Z-rc.N` | `osstransfer/vX.Y.Z-rc.N/` | Prerelease | `X.Y.Z-rc.N` |
 
-Stable releases also update `osstransfer/latest/`. Installers resolve this metadata to a fixed version before downloading binaries. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
+Stable releases update four files under `osstransfer/latest/`: `install.sh`, `Install.ps1`, `manifest.tsv` and `release.json`. Installers resolve this metadata to a fixed version before downloading an archive. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
 
 ## Credentials
 

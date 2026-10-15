@@ -44,7 +44,7 @@ class Packaging(unittest.TestCase):
 
     def archive(self, os_name, arch, omit_version=False, duplicate_member=False,
                 duplicate_hash=False, altered_version=False, payload_suffix=b""):
-        name = f"oss-transfer-go-{os_name}-{arch}"
+        name = f"oss-transfer-{os_name}-{arch}"
         extension = ".exe" if os_name == "windows" else ""
         payloads = {"oss-transfer-" + role + extension: (role + os_name + arch).encode() + payload_suffix
                     for role in ("master", "agent", "cli")}
@@ -85,11 +85,24 @@ class Packaging(unittest.TestCase):
 
     def test_release_uses_identical_payloads_and_committed_installers(self):
         self.assemble()
+        names = {PACKAGE.TARGETS.archive_name(*platform) for platform in PACKAGE.PLATFORMS}
+        names.update({'install.sh', 'native-install.sh', 'Install.ps1', 'manifest.tsv', 'release.json', 'SHA256SUMS'})
+        self.assertEqual({p.name for p in self.output.iterdir()}, names)
+        manifest = [line.split('\t') for line in (self.output / 'manifest.tsv').read_text().splitlines()]
+        archive_rows = [row for row in manifest if row[0] == 'archive']
+        self.assertEqual(len(archive_rows), len(PACKAGE.PLATFORMS))
         for os_name, arch in PACKAGE.PLATFORMS:
+            name = PACKAGE.TARGETS.archive_name(os_name, arch)
+            path = self.output / name
+            self.assertEqual(path.read_bytes(), (self.source / name).read_bytes())
+            self.assertIn(['archive', os_name, arch, name, ASSETS.sha256(path), str(path.stat().st_size)], archive_rows)
+            contents = PACKAGE.members(path)
             extension = ".exe" if os_name == "windows" else ""
             for role in ("master", "agent", "cli"):
-                path = self.output / f"oss-transfer-{role}-{os_name}-{arch}{extension}"
-                self.assertEqual(path.read_bytes(), (role + os_name + arch).encode())
+                payload = contents[f'oss-transfer-{os_name}-{arch}/oss-transfer-{role}{extension}']
+                self.assertEqual(payload, (role + os_name + arch).encode())
+                self.assertIn(['file', os_name, arch, role, f'oss-transfer-{role}-{os_name}-{arch}{extension}',
+                               hashlib.sha256(payload).hexdigest(), str(len(payload))], manifest)
         for name, source_name in PACKAGE.INSTALLERS.items():
             expected = subprocess.check_output(["git", "show", self.commit + ":" + source_name], cwd=ROOT)
             self.assertEqual((self.output / name).read_bytes(), expected)
@@ -100,6 +113,27 @@ class Packaging(unittest.TestCase):
     def test_metadata_must_be_checksummed(self):
         self.archive("linux", "amd64", omit_version=True)
         self.rejected()
+
+    def test_installer_package_reads_one_archive_snapshot(self):
+        name = PACKAGE.TARGETS.archive_name('linux', 'amd64')
+        original = (self.source / name).read_bytes()
+        members = PACKAGE.members
+
+        def replace_source_after_copy(path):
+            self.assertNotEqual(path.parent, self.source)
+            contents = members(path)
+            if path.name == name:
+                self.archive('linux', 'amd64', payload_suffix=b'-concurrent-build')
+            return contents
+
+        with mock.patch.object(PACKAGE, 'members', side_effect=replace_source_after_copy):
+            PACKAGE.package(self.source, self.output, ROOT)
+        self.assertEqual((self.output / name).read_bytes(), original)
+        self.assertNotEqual((self.source / name).read_bytes(), original)
+        rows = [line.split('\t') for line in (self.output / 'manifest.tsv').read_text().splitlines()]
+        self.assertIn(['archive', 'linux', 'amd64', name, hashlib.sha256(original).hexdigest(), str(len(original))], rows)
+        self.assertIn(['file', 'linux', 'amd64', 'master', 'oss-transfer-master-linux-amd64',
+                       hashlib.sha256(b'masterlinuxamd64').hexdigest(), str(len(b'masterlinuxamd64'))], rows)
 
     def test_modified_metadata_is_rejected_even_with_valid_outer_hash(self):
         self.archive("linux", "amd64", altered_version=True)
@@ -117,7 +151,7 @@ class Packaging(unittest.TestCase):
         self.rejected()
 
     def test_outer_hash_mismatch_is_rejected(self):
-        archive = self.source / "oss-transfer-go-linux-amd64.tar.gz"
+        archive = self.source / "oss-transfer-linux-amd64.tar.gz"
         with archive.open("ab") as stream:
             stream.write(b"changed")
         self.rejected()
@@ -128,14 +162,14 @@ class Packaging(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_docker_context_uses_private_archive_snapshot(self):
-        archive = self.source / "oss-transfer-go-linux-amd64.tar.gz"
+        archive = self.source / "oss-transfer-linux-amd64.tar.gz"
         original_hash = ASSETS.sha256(archive)
         package = DOCKER.PACKAGE.package
 
-        def rebuild_after_verification(source, destination, scripts, require_all):
+        def rebuild_after_verification(source, destination, scripts, require_all, unpack_binaries):
             self.assertNotEqual(source, self.source)
             self.archive("linux", "amd64", payload_suffix=b"-concurrent-rebuild")
-            return package(source, destination, scripts, require_all)
+            return package(source, destination, scripts, require_all, unpack_binaries)
 
         with mock.patch.object(DOCKER.PACKAGE, "package", side_effect=rebuild_after_verification):
             DOCKER.create(self.source, self.output)
@@ -175,7 +209,7 @@ class Packaging(unittest.TestCase):
         self.assertEqual(json.loads((self.output / "provenance.json").read_text())["commit"], self.commit)
 
     def test_docker_context_rejects_bad_archive_without_partial_output(self):
-        archive = self.source / "oss-transfer-go-linux-amd64.tar.gz"
+        archive = self.source / "oss-transfer-linux-amd64.tar.gz"
         with archive.open("ab") as stream:
             stream.write(b"changed")
         with self.assertRaisesRegex(ValueError, "archive checksum mismatch"):
@@ -239,7 +273,7 @@ if sys.argv[1:3] == ['release', 'view']:
     def test_github_release_rejects_missing_archive_before_publishing(self):
         self.assemble()
         shutil.copytree(self.output, self.root / "output")
-        (self.root / "output/oss-transfer-go-windows-arm64.zip").unlink()
+        (self.root / "output/oss-transfer-windows-arm64.zip").unlink()
         result, commands = self.github_publication()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing release archive", result.stderr)
@@ -260,6 +294,15 @@ if sys.argv[1:3] == ['release', 'view']:
     def uploaded(self, fail_at=None):
         keys = []
         def upload(command, **options):
+            if 'list-objects-v2' in command:
+                prefix = command[command.index('--prefix') + 1]
+                if prefix.endswith('/latest/'):
+                    names = PUBLISH.LATEST
+                else:
+                    self.assertEqual(prefix, 'osstransfer/v' + self.version + '/')
+                    names = [path.name for path in self.output.iterdir()]
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps({
+                    'IsTruncated': False, 'Contents': [{'Key': prefix + name} for name in names]}), stderr='')
             keys.append(command[command.index("--key") + 1])
             if "put-object" in command:
                 path = Path(command[command.index("--body") + 1])
@@ -285,16 +328,12 @@ if sys.argv[1:3] == ['release', 'view']:
 
     def test_prerelease_never_updates_latest(self):
         self.assemble()
-        compose = (self.output / "docker-compose.yml").read_text()
-        self.assertIn("${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:4.1.0-test}", compose)
-        self.assertNotIn("osstransfer:latest", compose)
         keys = self.uploaded()
         self.assertTrue(keys)
         self.assertTrue(all(key.startswith("osstransfer/v4.1.0-test/") for key in keys))
 
     def test_latest_advances_only_after_all_versioned_uploads(self):
         self.stable()
-        self.assertIn("${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}", (self.output / "docker-compose.yml").read_text())
         keys = self.uploaded()
         versioned = ["osstransfer/v4.1.0/" + path.name for path in sorted(self.output.iterdir())]
         latest = ["osstransfer/latest/" + name for name in PUBLISH.LATEST]

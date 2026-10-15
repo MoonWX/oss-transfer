@@ -52,7 +52,7 @@ for platform in $platforms; do
   target_os="${platform%/*}"
   target_arch="${platform#*/}"
   IFS=$'\t' read -r target_os go_arch go_arm < <(python3 deploy/go/platforms.py --go-env "$platform")
-  name="oss-transfer-go-$target_os-$target_arch"
+  name="oss-transfer-$target_os-$target_arch"
   package="$stage/$name"
   mkdir -p "$package"
   extension=""

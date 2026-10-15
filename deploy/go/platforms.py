@@ -10,7 +10,7 @@ PLATFORMS = [(row["os"], row["arch"]) for row in TARGETS]
 
 
 def archive_name(os_name, arch):
-    return f"oss-transfer-go-{os_name}-{arch}" + (".zip" if os_name == "windows" else ".tar.gz")
+    return f"oss-transfer-{os_name}-{arch}" + (".zip" if os_name == "windows" else ".tar.gz")
 
 
 if __name__ == "__main__":

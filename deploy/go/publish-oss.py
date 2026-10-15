@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import mimetypes
 import os
@@ -15,9 +16,37 @@ import tempfile
 ENDPOINT = "https://s3.cn-north-1.jdcloud-oss.com"
 BUCKET = "moonwx"
 PREFIX = "osstransfer"
-LATEST = ("install.sh", "Install.ps1", "docker-compose.yml", "VERSION", "manifest.tsv", "release.json")
-# Retire only the old mutable Java bundle URLs. Versioned V4.0.x downloads remain.
-RETIRED_LATEST = ("oss-transfer.tar.gz", "oss-transfer.tar.gz.sha256", "install.sh.sha256")
+LATEST = ("install.sh", "Install.ps1", "manifest.tsv", "release.json")
+# Only these obsolete mutable URLs are removed. Old version directories still
+# serve the installers and binaries used by Masters pinned to those releases.
+RETIRED_LATEST = ("VERSION", "docker-compose.yml", "oss-transfer.tar.gz", "oss-transfer.tar.gz.sha256", "install.sh.sha256")
+SPEC = importlib.util.spec_from_file_location("oss_release_platforms", Path(__file__).with_name("platforms.py"))
+PLATFORMS = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PLATFORMS)
+
+
+def release_names():
+    return {PLATFORMS.archive_name(*target) for target in PLATFORMS.PLATFORMS} | {
+        "install.sh", "native-install.sh", "Install.ps1", "manifest.tsv", "release.json", "SHA256SUMS",
+    }
+
+
+def verify_listing(page, prefix, names):
+    expected = {f"{PREFIX}/{prefix}/{name}" for name in names}
+    if not isinstance(page, dict) or page.get("IsTruncated") is not False or page.get("NextContinuationToken"):
+        raise ValueError("OSS release listing is incomplete or paginated")
+    rows = page.get("Contents", [])
+    if not isinstance(rows, list) or len(rows) > 100:
+        raise ValueError("OSS release listing exceeds its bound")
+    keys = []
+    for row in rows:
+        key = row.get("Key") if isinstance(row, dict) else None
+        if not isinstance(key, str) or not key.startswith(f"{PREFIX}/{prefix}/") or key in keys:
+            raise ValueError("OSS release listing contains an invalid or duplicate key")
+        keys.append(key)
+    if set(keys) != expected:
+        raise ValueError("OSS release directory contains missing or unexpected files")
+    return len(keys)
 
 
 def digest(path, algorithm="sha256"):
@@ -51,6 +80,8 @@ def verify(directory, tag, commit):
     if set(checks) != set(records) | {"release.json"}:
         raise ValueError("Release checksums are incomplete")
     expected = set(checks) | {"SHA256SUMS"}
+    if expected != release_names():
+        raise ValueError("Release must contain only supported platform archives and installer metadata")
     if {path.name for path in directory.iterdir()} != expected:
         raise ValueError("Release directory has missing or unlisted files")
     for name in expected:
@@ -106,6 +137,22 @@ def publish(assets, tag, commit, dry_run=False):
                             "--content-md5", md5, "--content-type", content_type, "--cache-control", "no-cache"],
                            env=environment, check=True, stdout=subprocess.DEVNULL, timeout=600)
 
+        def verify_remote(prefix, expected):
+            result = subprocess.run(["aws", "--endpoint-url", ENDPOINT, "--region", "cn-north-1", "--cli-connect-timeout", "15",
+                                     "--cli-read-timeout", "120", "--no-paginate", "--output", "json", "s3api", "list-objects-v2",
+                                     "--bucket", BUCKET, "--prefix", f"{PREFIX}/{prefix}/", "--max-keys", "100"],
+                                    env=environment, capture_output=True, timeout=180)
+            if result.returncode != 0:
+                raise ValueError("OSS release directory verification failed; check list permission and connectivity")
+            if len(result.stdout) > 128 * 1024:
+                raise ValueError("OSS release listing exceeds its response bound")
+            try:
+                page = json.loads(result.stdout)
+            except (ValueError, UnicodeError):
+                raise ValueError("OSS release listing is not valid JSON") from None
+            count = verify_listing(page, prefix, expected)
+            print(f"Verified {prefix} directory: {count} files")
+
         for name in names:
             upload(tag, name)
         print("Published " + tag)
@@ -118,7 +165,10 @@ def publish(assets, tag, commit, dry_run=False):
                 subprocess.run(["aws", "--endpoint-url", ENDPOINT, "--region", "cn-north-1", "--cli-connect-timeout", "15", "--cli-read-timeout", "120",
                                 "s3api", "delete-object", "--bucket", BUCKET, "--key", f"{PREFIX}/latest/{name}"],
                                env=environment, check=True, stdout=subprocess.DEVNULL, timeout=180)
-            print("Updated latest metadata and retired the old latest Java bundle")
+            print("Updated latest metadata and removed obsolete latest files")
+        verify_remote(tag, names)
+        if latest:
+            verify_remote("latest", LATEST)
 
 
 if __name__ == "__main__":

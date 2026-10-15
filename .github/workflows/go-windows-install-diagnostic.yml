@@ -59,7 +59,7 @@ jobs:
           prepare = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(prepare)
           arch = os.environ['QA_ARCH']
-          name = 'oss-transfer-go-windows-' + arch
+          name = 'oss-transfer-windows-' + arch
           archive = Path('output/go-development') / (name + '.zip')
           expected = Path(str(archive) + '.sha256').read_text().split()[0]
           if prepare.digest(archive) != expected:
@@ -82,7 +82,7 @@ jobs:
           for role in ('master', 'agent', 'cli'):
               prepare.verify_binary(target / ('oss-transfer-' + role + '.exe'), 'windows', arch)
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
-              for role in ('master', 'agent'):
+              for role in ('master', 'agent', 'cli'):
                   stream.write('GO_QA_' + role.upper() + '=' + str(target / ('oss-transfer-' + role + '.exe')) + '\n')
           print('Verified existing build', source_sha, 'windows/' + arch)
       - name: Diagnose actual SCM installation and rollback

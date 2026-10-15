@@ -260,17 +260,49 @@ try {
     if ($records.Count -ne 1) { throw 'Missing or duplicate platform binary.' }
     $record = $records[0] -split "`t"
     if ($record.Count -ne 7 -or $record[4] -cne $filename -or $record[5] -notmatch '^[a-f0-9]{64}$' -or $record[6] -notmatch '^[0-9]+$') { throw 'Invalid binary manifest entry.' }
-    $candidate = Fetch $filename
-    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -cne $record[5] -or (Get-Item $candidate).Length -ne [long]$record[6]) { throw 'Binary checksum mismatch.' }
-    $versionOutput = Invoke-Native $candidate @('--version')
-    if (-not $versionOutput.StartsWith("oss-transfer-$Role $version ")) { throw 'Binary version or platform check failed.' }
     $cliFilename = "oss-transfer-cli-windows-$arch.exe"
     $cliRecords = @($rows | Where-Object { $_.StartsWith("file`twindows`t$arch`tcli`t") })
     if ($cliRecords.Count -ne 1) { throw 'Missing or duplicate CLI binary.' }
     $cliRecord = $cliRecords[0] -split "`t"
     if ($cliRecord.Count -ne 7 -or $cliRecord[4] -cne $cliFilename -or $cliRecord[5] -notmatch '^[a-f0-9]{64}$' -or $cliRecord[6] -notmatch '^[0-9]+$') { throw 'Invalid CLI manifest entry.' }
-    $cliCandidate = Fetch $cliFilename
+    if (@($rows | Where-Object { $_.StartsWith("archive`t") }).Count -gt 0) {
+        $archiveRoot = "oss-transfer-windows-$arch"
+        $archiveName = "$archiveRoot.zip"
+        $archiveRecords = @($rows | Where-Object { $_.StartsWith("archive`twindows`t$arch`t") })
+        if ($archiveRecords.Count -ne 1) { throw 'Missing or duplicate platform archive.' }
+        $archiveRecord = $archiveRecords[0] -split "`t"
+        if ($archiveRecord.Count -ne 6 -or $archiveRecord[3] -cne $archiveName -or $archiveRecord[4] -notmatch '^[a-f0-9]{64}$' -or $archiveRecord[5] -notmatch '^[0-9]+$') { throw 'Invalid archive manifest entry.' }
+        $archivePath = Fetch $archiveName
+        if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $archiveRecord[4] -or (Get-Item $archivePath).Length -ne [long]$archiveRecord[5]) { throw 'Archive checksum mismatch.' }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
+        try {
+            foreach ($binaryRecord in @($record,$cliRecord)) {
+                $member = "$archiveRoot/oss-transfer-$($binaryRecord[3]).exe"
+                $entries = @($archive.Entries | Where-Object { $_.FullName -ceq $member })
+                if ($entries.Count -ne 1) { throw "Archive member must occur once: $member" }
+                $entry = $entries[0]
+                $kind = ($entry.ExternalAttributes -shr 16) -band 0xF000
+                if ($kind -notin @(0,0x8000) -or ($entry.ExternalAttributes -band 0x10) -ne 0 -or $entry.Length -ne [long]$binaryRecord[6]) { throw "Archive member must be a regular file of the expected size: $member" }
+                $destination = Join-Path $work $binaryRecord[4]
+                $entryStream = $entry.Open()
+                try {
+                    $targetStream = [IO.File]::Create($destination)
+                    try { $entryStream.CopyTo($targetStream) } finally { $targetStream.Dispose() }
+                } finally { $entryStream.Dispose() }
+            }
+        } finally { $archive.Dispose() }
+        $candidate = Join-Path $work $filename
+        $cliCandidate = Join-Path $work $cliFilename
+    } else {
+        # Older releases publish individual binaries instead of archive rows.
+        $candidate = Fetch $filename
+        $cliCandidate = Fetch $cliFilename
+    }
+    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -cne $record[5] -or (Get-Item $candidate).Length -ne [long]$record[6]) { throw 'Binary checksum mismatch.' }
     if ((Get-FileHash -LiteralPath $cliCandidate -Algorithm SHA256).Hash.ToLowerInvariant() -cne $cliRecord[5] -or (Get-Item $cliCandidate).Length -ne [long]$cliRecord[6]) { throw 'CLI checksum mismatch.' }
+    $versionOutput = Invoke-Native $candidate @('--version')
+    if (-not $versionOutput.StartsWith("oss-transfer-$Role $version ")) { throw 'Binary version or platform check failed.' }
     $cliVersion = (Invoke-Native $cliCandidate @('--version','--json') | ConvertFrom-Json).version
     if ($cliVersion -cne $version) { throw 'CLI version or platform check failed.' }
     if ($existing -or $AdoptConfig) {

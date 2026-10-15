@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble versioned Go download assets from the tested native archives."""
+"""Assemble release downloads from the tested native archives."""
 import argparse
 import hashlib
 import importlib.util
@@ -27,7 +27,7 @@ def release_sources(destination, commit):
     """Use the scripts from the binary commit, regardless of working-tree edits."""
     repository = Path(__file__).resolve().parents[2]
     destination.mkdir()
-    for name in (*PACKAGE.INSTALLERS.values(), "docker-compose.yml"):
+    for name in PACKAGE.INSTALLERS.values():
         result = subprocess.run(
             ["git", "show", commit + ":" + name], cwd=repository,
             check=True, capture_output=True,
@@ -53,7 +53,7 @@ def assemble(packages, output, version, commit):
         snapshot = root / "packages"
         snapshot.mkdir()
         for os_name, arch in PACKAGE.PLATFORMS:
-            name = f"oss-transfer-go-{os_name}-{arch}" + (".zip" if os_name == "windows" else ".tar.gz")
+            name = PACKAGE.TARGETS.archive_name(os_name, arch)
             for relative in (name, name + ".sha256"):
                 source = packages / relative
                 if not source.is_file() or source.is_symlink():
@@ -68,15 +68,6 @@ def assemble(packages, output, version, commit):
         identity = {row.split("\t")[0]: row.split("\t")[1] for row in manifest if row.startswith(("version\t", "commit\t"))}
         if identity != {"version": version, "commit": commit}:
             raise ValueError("Native packages differ from the release version or commit")
-        for source in snapshot.iterdir():
-            shutil.copy2(source, stage / source.name)
-        compose = (scripts / "docker-compose.yml").read_text(encoding="utf-8")
-        # A prerelease must not start a different stable runtime.
-        image_tag = version if "-" in version else "latest"
-        compose = compose.replace("${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}", "${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:" + image_tag + "}")
-        compose = compose.replace("# Set OSS_TRANSFER_IMAGE to a published Go version or the locally built candidate.\n", "")
-        (stage / "docker-compose.yml").write_text(compose, encoding="utf-8")
-        (stage / "VERSION").write_text(f"Version: {version}\nFullCommit: {commit}\n", encoding="utf-8")
         assets = [{"name": p.name, "size": p.stat().st_size, "sha256": sha256(p)} for p in sorted(stage.iterdir())]
         release = {"format": "oss-transfer-release-v1", "version": version, "tag": "v" + version,
                    "commit": commit, "assets": assets}

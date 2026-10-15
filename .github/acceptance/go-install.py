@@ -19,8 +19,10 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tarfile
 import threading
 import time
+import zipfile
 from urllib.request import Request, urlopen
 
 
@@ -86,6 +88,7 @@ class Lifecycle:
             self.evidence['limitations'] = ['Target CPU binaries execute through host Linux binfmt; kernel and systemd remain the host platform']
         self.release = self.root/'release'
         self.release.mkdir()
+        self.payloads = {role:getattr(args,role).resolve() for role in ('master','agent','cli')}
         rows = ['format\toss-transfer-go-v1']
         version = None
         for role in ('master','agent','cli'):
@@ -95,9 +98,7 @@ class Lifecycle:
             require(version is None or version == current,'Master and Agent versions differ')
             version = current
             self.evidence[role] = {'version':output,'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
-            name = f'oss-transfer-{role}-{self.os_name}-{self.arch}'+('.exe' if self.system=='Windows' else '')
-            shutil.copy2(source,self.release/name)
-            rows.append(self.row(role,self.release/name))
+            rows.append(self.row(role,source))
         if self.system!='Windows':
             native=self.release/'native-install.sh'
             shutil.copy2(args.repo/'deploy/go/install.sh',native)
@@ -106,6 +107,7 @@ class Lifecycle:
         self.version = version
         rows[1:1] = ['version\t'+version,'commit\tisolated-lifecycle-test']
         (self.release/'manifest.tsv').write_text('\n'.join(rows)+'\n', encoding="utf-8")
+        self.write_archive(self.release,self.payloads)
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0))
             self.port = listener.getsockname()[1]
@@ -114,7 +116,43 @@ class Lifecycle:
 
     def row(self,role,path):
         raw=path.read_bytes()
-        return '\t'.join(('file',self.os_name,self.arch,role,path.name,hashlib.sha256(raw).hexdigest(),str(len(raw))))
+        return '\t'.join(('file',self.os_name,self.arch,role,self.binary_name(role),hashlib.sha256(raw).hexdigest(),str(len(raw))))
+
+    def binary_name(self,role):
+        return f'oss-transfer-{role}-{self.os_name}-{self.arch}'+('.exe' if self.system=='Windows' else '')
+
+    def write_archive(self,directory,payloads,update_file_rows=True):
+        prefix=f'oss-transfer-{self.os_name}-{self.arch}'
+        suffix='.zip' if self.system=='Windows' else '.tar.gz'
+        archive=directory/(prefix+suffix)
+        if self.system=='Windows':
+            with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED) as target:
+                for role,source in payloads.items():
+                    target.write(source,prefix+'/oss-transfer-'+role+'.exe')
+        else:
+            with tarfile.open(archive,'w:gz') as target:
+                for role,source in payloads.items():
+                    target.add(source,arcname=prefix+'/oss-transfer-'+role,recursive=False)
+        manifest=directory/'manifest.tsv'
+        rows=[]
+        for line in manifest.read_text(encoding='utf-8').splitlines():
+            fields=line.split('\t')
+            if fields[0]=='archive':continue
+            if update_file_rows and fields[0]=='file':line=self.row(fields[3],payloads[fields[3]])
+            rows.append(line)
+        rows.append('\t'.join(('archive',self.os_name,self.arch,archive.name,hashlib.sha256(archive.read_bytes()).hexdigest(),str(archive.stat().st_size))))
+        manifest.write_text('\n'.join(rows)+'\n',encoding='utf-8')
+        return archive
+
+    def legacy_release(self):
+        directory=self.root/'legacy-release'
+        shutil.copytree(self.release,directory)
+        for entry in directory.iterdir():
+            if entry.name.endswith(('.zip','.tar.gz')):entry.unlink()
+        for role,source in self.payloads.items():shutil.copy2(source,directory/self.binary_name(role))
+        manifest=directory/'manifest.tsv'
+        manifest.write_text('\n'.join(line for line in manifest.read_text(encoding='utf-8').splitlines() if not line.startswith('archive\t'))+'\n',encoding='utf-8')
+        return directory
 
     def scrub(self,text):
         text=re.sub(r'Setup token: \S+','Setup token: [redacted]',text)
@@ -162,6 +200,12 @@ class Lifecycle:
             require(requests.count('/latest/manifest.tsv') == 1, 'Latest was resolved separately for installed roles')
             require(not any(path.startswith('/latest/') and path!='/latest/manifest.tsv' for path in requests),
                     'Installer downloaded a mutable latest binary')
+            archive_suffix='.zip' if self.system=='Windows' else '.tar.gz'
+            archive_name=f'oss-transfer-{self.os_name}-{self.arch}'+archive_suffix
+            allowed={'/latest/manifest.tsv','/'+version_name+'/manifest.tsv','/'+version_name+'/'+archive_name}
+            if self.system!='Windows':allowed.add('/'+version_name+'/native-install.sh')
+            require(set(requests)<=allowed and '/'+version_name+'/'+archive_name in requests,
+                    'Installer did not use the verified archive, or requested a loose binary')
             self.record('latest_resolves_fixed_version_before_binary_download',requests=requests)
         finally:
             server.shutdown()
@@ -397,10 +441,12 @@ func main(){
     def failure_release(self):
         directory=self.root/'startup-failure'
         shutil.copytree(self.release,directory)
-        target=next(directory.glob('oss-transfer-master-*'))
+        fixture_directory=self.root/'failure-payloads'
+        fixture_directory.mkdir()
+        target=fixture_directory/self.binary_name('master')
         # A deliberately failing service fixture delegates only the real binary's
         # preflight flags. This tests rollback after stop, not a checksum refusal.
-        cli_target=next(directory.glob('oss-transfer-cli-*'))
+        cli_target=fixture_directory/self.binary_name('cli')
         fixture_sources = self.args.repo/'.github/acceptance/fixtures'
         build_env = dict(os.environ, CGO_ENABLED='0', GOOS=self.os_name,
                          GOARCH='arm' if self.arch == 'armv7' else self.arch)
@@ -421,13 +467,7 @@ func main(){
             'masterSha256': hashlib.sha256(target.read_bytes()).hexdigest(),
             'cliSha256': hashlib.sha256(cli_target.read_bytes()).hexdigest()}
         self.save()
-        manifest=directory/'manifest.tsv'
-        rows=[]
-        for line in manifest.read_text(encoding='utf-8').splitlines():
-            if line.startswith('file\t'+self.os_name+'\t'+self.arch+'\tmaster\t'):line=self.row('master',target)
-            if line.startswith('file\t'+self.os_name+'\t'+self.arch+'\tcli\t'):line=self.row('cli',cli_target)
-            rows.append(line)
-        manifest.write_text('\n'.join(rows)+'\n', encoding="utf-8")
+        self.write_archive(directory,dict(self.payloads,master=target,cli=cli_target))
         return directory
 
     def run(self):
@@ -506,9 +546,16 @@ func main(){
             require(metadata['backupDir']==str(self.root/role/'backups'), 'Discovered upgrade changed the custom backup directory')
             require(any((self.root/role/'backups').iterdir()), 'Upgrade did not retain a backup in the custom directory')
         if self.args.all_installed: self.record('unfiltered_upgrade_discovers_both_roles_and_preserves_configuration_password_membership_and_cli_paths')
+        legacy_before=self.pid('master')
+        self.install('master',upgrade=True,release=self.legacy_release(),discover=True)
+        require(self.pid('master')!=legacy_before and config.read_bytes()==config_bytes,'Legacy-format upgrade did not preserve the installed service')
+        self.login()
+        require(self.api('/api/master/nodes')['nodes'][0]['id']==member_id,'Legacy-format upgrade lost membership')
+        self.record('legacy_manifest_without_archive_still_upgrades_existing_service')
         tampered=self.root/'tampered'
         shutil.copytree(self.release,tampered)
-        with next(tampered.glob('oss-transfer-master-*')).open('ab') as stream:stream.write(b'bad-checksum')
+        archive=next(entry for entry in tampered.iterdir() if entry.name.endswith(('.tar.gz','.zip')))
+        with archive.open('ab') as stream:stream.write(b'bad-archive-checksum')
         before=self.pid('master')
         self.install('master',upgrade=True,release=tampered,expect=1)
         require(self.pid('master')==before,'Checksum refusal stopped the Master')
@@ -516,7 +563,9 @@ func main(){
         self.record('checksum_failure_refused_before_service_stop')
         cli_tampered=self.root/'cli-tampered'
         shutil.copytree(self.release,cli_tampered)
-        with next(cli_tampered.glob('oss-transfer-cli-*')).open('ab') as stream:stream.write(b'bad-cli-checksum')
+        corrupt_cli=self.root/'corrupt-cli-payload'
+        corrupt_cli.write_bytes(self.payloads['cli'].read_bytes()+b'bad-cli-checksum')
+        self.write_archive(cli_tampered,dict(self.payloads,cli=corrupt_cli),update_file_rows=False)
         self.install('master',upgrade=True,release=cli_tampered,expect=1)
         require(self.pid('master')==before and hashlib.sha256(cli_path.read_bytes()).hexdigest()==cli_hash,'Corrupt CLI disturbed installed service or CLI')
         self.record('cli_checksum_failure_refused_before_service_stop')

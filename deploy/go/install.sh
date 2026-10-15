@@ -311,17 +311,39 @@ filename=oss-transfer-$role-$platform-$arch
 record=$(awk -F '\t' -v os="$platform" -v arch="$arch" -v role="$role" '$1=="file" && $2==os && $3==arch && $4==role {print $5 "\t" $6 "\t" $7}' "$work/manifest.tsv")
 IFS=$'\t' read -r listed checksum length <<< "$record"
 [[ "$listed" == "$filename" && "$checksum" =~ ^[a-f0-9]{64}$ && "$length" =~ ^[0-9]+$ && "$record" != *$'\n'* ]] || fail 'Missing or invalid platform binary'
-fetch "$filename"
-[[ $(wc -c < "$work/$filename" | tr -d ' ') == "$length" && $(sha256 "$work/$filename") == "$checksum" ]] || fail 'Binary checksum mismatch'
-chmod 700 "$work/$filename"
-[[ $("$work/$filename" --version) == "oss-transfer-$role $version "* ]] || fail 'Binary version or platform check failed'
 cli_filename=oss-transfer-cli-$platform-$arch
 cli_record=$(awk -F '\t' -v os="$platform" -v arch="$arch" '$1=="file" && $2==os && $3==arch && $4=="cli" {print $5 "\t" $6 "\t" $7}' "$work/manifest.tsv")
 IFS=$'\t' read -r cli_listed cli_checksum cli_length <<< "$cli_record"
 [[ "$cli_listed" == "$cli_filename" && "$cli_checksum" =~ ^[a-f0-9]{64}$ && "$cli_length" =~ ^[0-9]+$ && "$cli_record" != *$'\n'* ]] || fail 'Missing or invalid CLI manifest entry'
-fetch "$cli_filename"
+if awk -F '\t' '$1=="archive" {found=1} END {exit !found}' "$work/manifest.tsv"; then
+  archive_root=oss-transfer-$platform-$arch
+  archive_name=$archive_root.tar.gz
+  archive_record=$(awk -F '\t' -v os="$platform" -v arch="$arch" '$1=="archive" && $2==os && $3==arch {if (NF!=6) print "invalid"; else print $4 "\t" $5 "\t" $6}' "$work/manifest.tsv")
+  IFS=$'\t' read -r archive_listed archive_checksum archive_length <<< "$archive_record"
+  [[ "$archive_listed" == "$archive_name" && "$archive_checksum" =~ ^[a-f0-9]{64}$ && "$archive_length" =~ ^[0-9]+$ && "$archive_record" != *$'\n'* ]] || fail 'Missing or invalid platform archive'
+  command -v tar >/dev/null || fail 'tar is required to read release archives'
+  fetch "$archive_name"
+  [[ $(wc -c < "$work/$archive_name" | tr -d ' ') == "$archive_length" && $(sha256 "$work/$archive_name") == "$archive_checksum" ]] || fail 'Archive checksum mismatch'
+  extract_binary() {
+    local member="$archive_root/oss-transfer-$1" destination=$2 entry
+    entry=$(LC_ALL=C tar -tvzf "$work/$archive_name" -- "$member") || fail "Archive member missing: $member"
+    [[ "$entry" == -* && "$entry" != *$'\n'* ]] || fail "Archive member must be one regular file: $member"
+    # Write only this literal member to our chosen temporary file. Never let
+    # archive paths, links or other entries create files on the target host.
+    tar -xOzf "$work/$archive_name" -- "$member" > "$work/$destination" || fail "Cannot read archive member: $member"
+  }
+  extract_binary "$role" "$filename"
+  extract_binary cli "$cli_filename"
+else
+  # Releases before archive-based installation expose individual binaries.
+  fetch "$filename"
+  fetch "$cli_filename"
+fi
+[[ $(wc -c < "$work/$filename" | tr -d ' ') == "$length" && $(sha256 "$work/$filename") == "$checksum" ]] || fail 'Binary checksum mismatch'
 [[ $(wc -c < "$work/$cli_filename" | tr -d ' ') == "$cli_length" && $(sha256 "$work/$cli_filename") == "$cli_checksum" ]] || fail 'CLI checksum mismatch'
+chmod 700 "$work/$filename"
 chmod 700 "$work/$cli_filename"
+[[ $("$work/$filename" --version) == "oss-transfer-$role $version "* ]] || fail 'Binary version or platform check failed'
 [[ $("$work/$cli_filename" --version --json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') == "$version" ]] || fail 'CLI version or platform check failed'
 if ((existed)) || [[ -n "$adopt_config" ]]; then
   source_config=${adopt_config:-$config}

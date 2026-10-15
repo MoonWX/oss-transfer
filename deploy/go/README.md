@@ -24,7 +24,7 @@ Invoke-WebRequest "$ReleaseUrl/Install.ps1" -OutFile Install.ps1
 
 Open the Master URL and enter the setup token printed in its service log. Create an administrator and set the public URL that browsers and Agents will use. The installer prints the log and configuration paths.
 
-To install from downloaded files, use `--package-dir DIR`, or `-PackageDir DIR` on Windows, in place of the release URL. The directory must contain `manifest.tsv` and the release files it names. Use an assembled release directory as described below; the platform binary archive alone is insufficient.
+To install offline, put `manifest.tsv`, the installers and your platform's archive in one directory, then use `--package-dir DIR` (`-PackageDir DIR` on Windows). For Linux amd64, download `install.sh`, `native-install.sh`, `manifest.tsv` and `oss-transfer-linux-amd64.tar.gz` from the same version directory. The installer verifies the archive and extracts the selected service and CLI.
 
 ## Add an Agent
 

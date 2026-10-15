@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract verified native packages into one versioned installer release directory."""
+"""Assemble verified platform archives and the files used by the installer."""
 import argparse
 import hashlib
 import importlib.util
@@ -50,7 +50,7 @@ def members(path):
             result[item.name] = archive.extractfile(item).read()
         return result
 
-def package(source, destination, scripts, require_all=True):
+def package(source, destination, scripts, require_all=True, unpack_binaries=False):
     if destination.exists():
         raise ValueError('release output already exists; use a new directory')
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -59,13 +59,17 @@ def package(source, destination, scripts, require_all=True):
         stage.mkdir()
         rows, identity, found = [], None, 0
         for os_name, arch in PLATFORMS:
-            name = f'oss-transfer-go-{os_name}-{arch}'
-            path = source / (name + ('.zip' if os_name == 'windows' else '.tar.gz'))
+            name = f'oss-transfer-{os_name}-{arch}'
+            path = source / TARGETS.archive_name(os_name, arch)
             if not path.exists():
                 if require_all:
                     raise ValueError(f'missing platform package: {path.name}')
                 continue
-            contents = members(path)
+            # Read checksums, members and size from the same copy even if a
+            # concurrent local build replaces the source archive.
+            staged_archive = stage/path.name
+            shutil.copyfile(path, staged_archive)
+            contents = members(staged_archive)
             prefix = name + '/'
             extension = '.exe' if os_name == 'windows' else ''
             required = {'oss-transfer-' + role + extension for role in ('master', 'agent', 'cli')} | {'VERSION'}
@@ -104,9 +108,12 @@ def package(source, destination, scripts, require_all=True):
                     raise ValueError('binary missing from internal checksum manifest')
                 payload = contents[prefix+original]
                 filename = f'oss-transfer-{role}-{os_name}-{arch}{extension}'
-                (stage/filename).write_bytes(payload)
-                (stage/filename).chmod(0o755)
+                if unpack_binaries:
+                    (stage/filename).write_bytes(payload)
+                    (stage/filename).chmod(0o755)
                 rows.append('\t'.join(('file', os_name, arch, role, filename, hashlib.sha256(payload).hexdigest(), str(len(payload)))))
+            archive_digest = hashlib.sha256(staged_archive.read_bytes()).hexdigest()
+            rows.append('\t'.join(('archive', os_name, arch, path.name, archive_digest, str(staged_archive.stat().st_size))))
             found += 1
         if not found:
             raise ValueError('no native packages found')

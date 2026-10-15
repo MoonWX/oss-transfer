@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import io
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -17,6 +18,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 SHA = "a" * 40
 REPO = "MoonWX/oss-transfer"
+PARENT = "b" * 40
 RUN = {
     "id": 123, "event": "push", "head_branch": "main", "head_sha": SHA,
     "path": ".github/workflows/ci.yml", "head_repository": {"full_name": REPO},
@@ -31,6 +33,15 @@ def artifact(name, artifact_id):
 
 
 ARTIFACTS = [artifact("release-assets", 501), artifact("release-image", 502)]
+ANCESTOR_RUN = dict(RUN, id=122, head_sha=PARENT)
+
+
+def job(name, conclusion="success", **extra):
+    return {"name": name, "run_id": 123, "run_attempt": 1,
+            "status": "completed", "conclusion": conclusion, **extra}
+
+
+BUILD_JOBS = [job("Build packages and test programs"), job("Build container image")]
 
 
 class Clock:
@@ -47,10 +58,13 @@ class Clock:
 
 
 class FakeAPI:
-    def __init__(self, *, listings=None, runs=None, artifacts=None):
+    def __init__(self, *, listings=None, runs=None, artifacts=None,
+                 ancestor_runs=None, jobs=None):
         self.listings = copy.deepcopy(listings if listings is not None else [[RUN]])
         self.runs = copy.deepcopy(runs if runs is not None else [RUN])
         self.artifact_list = copy.deepcopy(ARTIFACTS if artifacts is None else artifacts)
+        self.ancestor_runs = copy.deepcopy(ancestor_runs or {})
+        self.jobs = copy.deepcopy(BUILD_JOBS if jobs is None else jobs)
         self.calls = []
 
     @staticmethod
@@ -60,15 +74,28 @@ class FakeAPI:
     def get(self, path, params=None, *, deadline):
         self.calls.append((path, params, deadline))
         if path.endswith("/workflows/ci.yml/runs"):
+            if params["head_sha"] != SHA:
+                return {"workflow_runs": self.ancestor_runs.get(params["head_sha"], [])}
             return {"workflow_runs": self.consume(self.listings)}
+        if path.endswith("/jobs"):
+            return {"jobs": self.jobs}
         if path.endswith("/artifacts"):
             return {"artifacts": copy.deepcopy(self.artifact_list)}
         if path.endswith("/runs/123"):
             return self.consume(self.runs)
+        for runs in self.ancestor_runs.values():
+            for run in runs:
+                if path.endswith("/runs/{}".format(run["id"])):
+                    return copy.deepcopy(run)
         raise AssertionError("Unexpected API request: " + path)
 
 
 class ResolveTests(unittest.TestCase):
+    def setUp(self):
+        self.ancestry = mock.patch.object(MODULE, "version_only_ancestors", return_value=[])
+        self.ancestors = self.ancestry.start()
+        self.addCleanup(self.ancestry.stop)
+
     def resolve(self, api=None, **kwargs):
         self.clock = Clock()
         self.logs = []
@@ -119,6 +146,93 @@ class ResolveTests(unittest.TestCase):
                     self.resolve(FakeAPI(runs=[dict(RUN, conclusion=conclusion)]))
                 self.assertFalse(any(path.endswith("/artifacts")
                                      for path, _, _ in self.api.calls))
+
+    def cancelled_api(self, **kwargs):
+        self.ancestors.return_value = [PARENT]
+        return FakeAPI(runs=[dict(RUN, conclusion="cancelled")],
+                       ancestor_runs={PARENT: [ANCESTOR_RUN]}, **kwargs)
+
+    def test_version_only_cancelled_ci_uses_current_artifacts_and_green_ancestor(self):
+        result = self.resolve(self.cancelled_api(jobs=BUILD_JOBS + [
+            job("Native linux/amd64", "cancelled"), job("Docker linux/amd64", "success")]))
+        self.assertEqual(result, {
+            "ci_run_id": 123, "package_artifact_id": 501, "image_artifact_id": 502})
+        job_calls = [path for path, _, _ in self.api.calls if path.endswith("/jobs")]
+        self.assertEqual(job_calls, [
+            "/repos/MoonWX/oss-transfer/actions/runs/123/attempts/1/jobs"] * 2)
+        self.assertTrue(any("reusing tests" in line for line in self.logs))
+
+    def test_version_only_reuse_requires_both_builds_completed_in_same_attempt(self):
+        variants = [BUILD_JOBS[:1], [], BUILD_JOBS + [BUILD_JOBS[0]]]
+        for change in ({"conclusion": "cancelled"}, {"conclusion": "failure"},
+                       {"status": "in_progress"}, {"run_attempt": 2}, {"run_id": 999}):
+            variants.append([dict(BUILD_JOBS[0], **change), BUILD_JOBS[1]])
+        for jobs in variants:
+            with self.subTest(jobs=jobs):
+                with self.assertRaisesRegex(MODULE.ResolutionError, "CI finished"):
+                    self.resolve(self.cancelled_api(jobs=jobs))
+
+    def test_version_only_reuse_never_hides_actual_acceptance_failure(self):
+        for conclusion in ("failure", "timed_out", "action_required", "neutral",
+                           "startup_failure", None):
+            with self.subTest(conclusion=conclusion):
+                with self.assertRaisesRegex(MODULE.ResolutionError, "CI finished"):
+                    self.resolve(self.cancelled_api(jobs=BUILD_JOBS + [
+                        job("Native linux/amd64", conclusion)]))
+                self.assertFalse(any(path.endswith("/artifacts")
+                                     for path, _, _ in self.api.calls))
+
+    def test_reuse_revalidates_ancestor_after_artifact_lookup(self):
+        api = self.cancelled_api()
+        original = api.get
+
+        def get(path, params=None, *, deadline):
+            result = original(path, params, deadline=deadline)
+            if path.endswith("/artifacts"):
+                api.ancestor_runs[PARENT][0].update(status="in_progress", conclusion=None,
+                                                   run_attempt=2)
+            return result
+
+        api.get = get
+        with self.assertRaisesRegex(MODULE.ResolutionError, "CI finished"):
+            self.resolve(api)
+
+    def test_cancelled_rerun_cannot_use_previous_attempt_builds(self):
+        api = self.cancelled_api()
+        api.runs = [dict(RUN, conclusion="cancelled"),
+                    dict(RUN, conclusion="cancelled", run_attempt=2)]
+        with self.assertRaisesRegex(MODULE.ResolutionError, "CI finished"):
+            self.resolve(api)
+
+    def check_reuse(self, ancestors=None, **kwargs):
+        self.ancestors.return_value = [PARENT] if ancestors is None else ancestors
+        resolver = MODULE.ArtifactResolver(FakeAPI(**kwargs), REPO, SHA, log=lambda _: None)
+        return resolver.check_reuse()
+
+    def test_check_reuse_needs_git_proof_and_successful_trusted_ancestor(self):
+        self.assertEqual(self.check_reuse(ancestor_runs={PARENT: [ANCESTOR_RUN]}),
+                         {"reuse_tests": "true", "verified_ci_run_id": 122})
+        self.assertEqual(self.check_reuse(ancestors=[],
+                         ancestor_runs={PARENT: [ANCESTOR_RUN]}), {"reuse_tests": "false"})
+        for change in ({"event": "pull_request"}, {"event": "workflow_dispatch"},
+                       {"head_repository": {"full_name": "other/fork"}},
+                       {"head_branch": "feature"}, {"head_sha": "c" * 40},
+                       {"path": ".github/workflows/other.yml"},
+                       {"status": "queued", "conclusion": None},
+                       {"conclusion": "failure"}, {"conclusion": "cancelled"}):
+            with self.subTest(change=change):
+                self.assertEqual(self.check_reuse(ancestor_runs={
+                    PARENT: [dict(ANCESTOR_RUN, **change)]}), {"reuse_tests": "false"})
+
+    def test_check_reuse_does_not_select_older_success_over_newer_failure(self):
+        self.assertEqual(self.check_reuse(ancestor_runs={PARENT: [
+            dict(ANCESTOR_RUN, id=121), dict(ANCESTOR_RUN, conclusion="failure")]}),
+            {"reuse_tests": "false"})
+
+    def test_check_reuse_unavailable_history_or_api_runs_full_tests(self):
+        self.assertEqual(self.check_reuse(), {"reuse_tests": "false"})
+        with mock.patch.object(FakeAPI, "get", side_effect=MODULE.ResolutionError("unavailable")):
+            self.assertEqual(self.check_reuse(), {"reuse_tests": "false"})
 
     def test_untrusted_candidates_never_publish(self):
         cases = [
@@ -230,6 +344,77 @@ class ResolveTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertIn("CI failed", stderr.getvalue())
             self.assertNotIn("test-secret", stderr.getvalue())
+
+    def test_check_mode_writes_boolean_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            with mock.patch.object(MODULE.ArtifactResolver, "check_reuse", return_value={
+                    "reuse_tests": "true", "verified_ci_run_id": 122}), \
+                    mock.patch.object(MODULE.ArtifactResolver, "resolve") as resolve:
+                self.assertEqual(MODULE.main({"GH_TOKEN": "test-secret",
+                    "GITHUB_REPOSITORY": REPO, "GITHUB_SHA": SHA,
+                    "GITHUB_OUTPUT": str(output)}, ["--check-reuse"]), 0)
+            resolve.assert_not_called()
+            self.assertEqual(output.read_text(), "reuse_tests=true\nverified_ci_run_id=122\n")
+
+
+class GitProofTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.git("init", "--initial-branch=main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("config", "commit.gpgsign", "false")
+        (self.root / "VERSION").write_text("4.1.6\n")
+        (self.root / "main.go").write_text("package main\n")
+        self.base = self.commit("initial code")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.root,
+                                       stderr=subprocess.DEVNULL).decode().strip()
+
+    def commit(self, message):
+        self.git("add", ".")
+        self.git("commit", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def test_version_only_chain_has_identical_code(self):
+        (self.root / "VERSION").write_text("4.1.7\n")
+        first = self.commit("bump version")
+        (self.root / "VERSION").write_text("4.1.8\n")
+        second = self.commit("bump version again")
+        # Untracked release tooling does not affect immutable Git proof.
+        (self.root / ".release-tools").mkdir()
+        self.assertEqual(MODULE.version_only_ancestors(second, cwd=self.root),
+                         [first, self.base])
+
+    def test_any_code_or_workflow_change_blocks_reuse(self):
+        for path in ("main.go", ".github/workflows/ci.yml", "nested/VERSION"):
+            with self.subTest(path=path):
+                self.git("reset", "--hard", self.base)
+                target = self.root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("changed\n")
+                (self.root / "VERSION").write_text("4.1.7\n")
+                current = self.commit("version and code")
+                self.assertEqual(MODULE.version_only_ancestors(current, cwd=self.root), [])
+
+    def test_shallow_or_missing_history_blocks_reuse(self):
+        with mock.patch.object(MODULE.subprocess, "check_output", return_value=b"true\n"):
+            self.assertEqual(MODULE.version_only_ancestors(self.base, cwd=self.root), [])
+        self.assertEqual(MODULE.version_only_ancestors("f" * 40, cwd=self.root), [])
+
+    def test_merge_with_version_only_tree_difference_is_not_reused(self):
+        tree = self.git("rev-parse", self.base + "^{tree}")
+        other = self.git("commit-tree", tree, "-p", self.base, "-m", "other parent")
+        (self.root / "VERSION").write_text("4.1.7\n")
+        self.git("add", "VERSION")
+        version_tree = self.git("write-tree")
+        merge = self.git("commit-tree", version_tree, "-p", self.base, "-p", other,
+                         "-m", "merge version")
+        self.assertEqual(MODULE.version_only_ancestors(merge, cwd=self.root), [])
 
 
 class HTTPTests(unittest.TestCase):

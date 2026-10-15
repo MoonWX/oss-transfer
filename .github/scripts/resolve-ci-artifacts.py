@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Resolve immutable artifacts from a successful main CI run for one commit."""
+"""Resolve CI artifacts, reusing tested code only for VERSION-only commits."""
 
+import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -18,6 +20,35 @@ ARTIFACT_NAMES = {
 }
 WAIT_SECONDS = 65 * 60
 POLL_SECONDS = 15
+BUILD_JOBS = {"Build packages and test programs", "Build container image"}
+
+
+def version_only_ancestors(commit, *, cwd=None):
+    """Prove code equivalence from Git objects, never from API file summaries."""
+    def git(*args):
+        return subprocess.check_output(
+            ["git", *args], cwd=cwd, stderr=subprocess.DEVNULL, timeout=10)
+
+    try:
+        if git("rev-parse", "--is-shallow-repository").strip() != b"false":
+            return []
+        ancestors = []
+        current = commit
+        # Bound work; crossing a merge or any non-VERSION change ends reuse.
+        for _ in range(50):
+            parents = git("rev-list", "--parents", "-n", "1", current).decode().split()
+            if len(parents) != 2 or parents[0] != current:
+                break
+            parent = parents[1]
+            changed = git("diff-tree", "--no-commit-id", "--name-only", "-r",
+                          "--no-renames", "-z", parent, current).split(b"\0")
+            if changed != [b"VERSION", b""]:
+                break
+            ancestors.append(parent)
+            current = parent
+        return ancestors
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return []
 
 
 class ResolutionError(Exception):
@@ -107,7 +138,7 @@ class ArtifactResolver:
     def get(self, path, params=None):
         return self.client.get(path, params, deadline=self.deadline)
 
-    def trusted(self, run):
+    def trusted(self, run, commit=None):
         head_repository = run.get("head_repository") or {}
         if not isinstance(head_repository, dict):
             return False
@@ -115,29 +146,81 @@ class ArtifactResolver:
         return (
             run.get("event") == "push"
             and run.get("head_branch") == "main"
-            and run.get("head_sha") == self.commit
+            and run.get("head_sha") == (commit or self.commit)
             and run.get("path") == ".github/workflows/" + self.workflow
             and isinstance(repository_name, str)
             and repository_name.casefold() == self.repository.casefold()
             and type(run.get("id")) is int and run["id"] > 0
         )
 
-    def discover(self):
+    def discover(self, commit=None):
+        commit = commit or self.commit
         candidates = []
         # GitHub limits filtered workflow-run searches to 1,000 results.
         for page in range(1, 11):
             payload = self.get(self.prefix + "/workflows/" + self.workflow + "/runs", {
-                "event": "push", "branch": "main", "head_sha": self.commit,
+                "event": "push", "branch": "main", "head_sha": commit,
                 "exclude_pull_requests": "true", "per_page": 100, "page": page,
             })
             runs = payload.get("workflow_runs")
             if not isinstance(runs, list):
                 raise ResolutionError("GitHub API did not return workflow runs.")
             candidates.extend(run for run in runs
-                              if isinstance(run, dict) and self.trusted(run))
+                              if isinstance(run, dict) and self.trusted(run, commit))
             if len(runs) < 100:
                 break
         return max(candidates, key=lambda run: run["id"]) if candidates else None
+
+    def verified_ancestor(self):
+        for commit in version_only_ancestors(self.commit):
+            run = self.discover(commit)
+            if run is None:
+                continue
+            current = self.get(self.prefix + "/runs/{}".format(run["id"]))
+            if (not self.trusted(current, commit) or current["id"] != run["id"]
+                    or current.get("status") != "completed"
+                    or current.get("conclusion") != "success"
+                    or current.get("run_attempt") != run.get("run_attempt")):
+                # Do not hide a newer failed/running attempt behind an older pass.
+                return None
+            return current["id"]
+        return None
+
+    def check_reuse(self):
+        try:
+            verified = self.verified_ancestor()
+        except (ResolutionError, OSError) as error:
+            self.log("Test reuse unavailable; running acceptance tests: {}".format(error))
+            verified = None
+        if verified is None:
+            return {"reuse_tests": "false"}
+        self.log("VERSION-only change; tests passed at {}".format(self.run_url(verified)))
+        return {"reuse_tests": "true", "verified_ci_run_id": verified}
+
+    def completed_builds(self, run):
+        attempt = run.get("run_attempt")
+        if type(attempt) is not int or attempt < 1:
+            return False
+        builds = set()
+        for page in range(1, 101):
+            payload = self.get(self.prefix + "/runs/{}/attempts/{}/jobs".format(
+                run["id"], attempt), {"per_page": 100, "page": page})
+            jobs = payload.get("jobs")
+            if not isinstance(jobs, list):
+                raise ResolutionError("GitHub API did not return CI jobs.")
+            for job in jobs:
+                if (not isinstance(job, dict) or job.get("run_id") != run["id"]
+                        or job.get("run_attempt") != attempt
+                        or job.get("status") != "completed"
+                        or job.get("conclusion") not in ("success", "cancelled", "skipped")):
+                    return False
+                if job.get("name") in BUILD_JOBS:
+                    if job["name"] in builds or job["conclusion"] != "success":
+                        return False
+                    builds.add(job["name"])
+            if len(jobs) < 100:
+                return builds == BUILD_JOBS
+        raise ResolutionError("Too many CI jobs to validate safely.")
 
     def run_url(self, run_id):
         return "https://github.com/{}/actions/runs/{}".format(
@@ -162,6 +245,13 @@ class ArtifactResolver:
         status = run.get("status")
         if status == "completed":
             if run.get("conclusion") != "success":
+                if run.get("conclusion") == "cancelled":
+                    verified = self.verified_ancestor()
+                    if verified is not None and self.completed_builds(run):
+                        self.report((run_id, "reused", verified),
+                                    "VERSION-only build; reusing tests from {}".format(
+                                        self.run_url(verified)))
+                        return True
                 raise ResolutionError(
                     "CI finished with {}: {}. Fix or rerun this CI run, "
                     "then rerun Release.".format(
@@ -231,7 +321,7 @@ class ArtifactResolver:
                 current = self.get(self.prefix + "/runs/{}".format(run_id))
                 if (self.validate_run(current, run_id)
                         and current.get("run_attempt") == run.get("run_attempt")):
-                    self.log("Using successful main CI: {}".format(self.run_url(run_id)))
+                    self.log("Using verified main CI artifacts: {}".format(self.run_url(run_id)))
                     return {"ci_run_id": run_id, **artifacts}
                 run = current
             self.report((run_id, run.get("status"), run.get("run_attempt")),
@@ -241,8 +331,12 @@ class ArtifactResolver:
         self.wait()
 
 
-def main(environ=None):
+def main(environ=None, argv=None):
     environ = os.environ if environ is None else environ
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-reuse", action="store_true",
+                        help="check VERSION-only test reuse; otherwise resolve release artifacts")
+    args = parser.parse_args([] if argv is None else argv)
     try:
         token = environ.get("GH_TOKEN", "")
         output_path = environ.get("GITHUB_OUTPUT", "")
@@ -251,7 +345,7 @@ def main(environ=None):
         resolver = ArtifactResolver(GitHubClient(token),
                                     environ.get("GITHUB_REPOSITORY", ""),
                                     environ.get("GITHUB_SHA", ""))
-        result = resolver.resolve()
+        result = resolver.check_reuse() if args.check_reuse else resolver.resolve()
         with open(output_path, "a", encoding="utf-8") as output:
             for name, value in result.items():
                 output.write("{}={}\n".format(name, value))
@@ -262,4 +356,4 @@ def main(environ=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(argv=sys.argv[1:]))

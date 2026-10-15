@@ -9,6 +9,14 @@ umask 077
 # BEGIN embedded download source
 # Embedded in the standalone Unix installers by scripts/sync-installer-source.py.
 # Location describes the public egress IP, including a configured HTTPS proxy.
+transfer_release_url() {
+  local url=${1%/} legacy=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
+  case "$url" in
+    "$legacy"|"$legacy"/*) url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer${url#"$legacy"} ;;
+  esac
+  printf '%s\n' "$url"
+}
+
 transfer_country() {
   local response country
   response=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 \
@@ -28,8 +36,8 @@ transfer_source_probe() {
     url=https://api.github.com/repos/MoonWX/oss-transfer/releases/latest
     [[ "$version" == latest ]] || url=https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v$version
   else
-    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/manifest.tsv
-    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$version/manifest.tsv
+    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv
+    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$version/manifest.tsv
   fi
   curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 5 \
     -A OSS-Transfer-Installer "$url" -o /dev/null 2>/dev/null
@@ -385,7 +393,7 @@ fi
 if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then fail 'Invalid port'; fi
 [[ -z "$package_dir" || -z "$release_url" ]] || fail 'Choose --package-dir or --release-url'
 if [[ -n "$release_url" ]]; then
-  release_url=${release_url%/}
+  release_url=$(transfer_release_url "$release_url")
   [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]] || fail 'Release URL must use HTTPS'
 fi
 enrollment_input() {
@@ -412,7 +420,7 @@ if [[ -z "$release_url" && -z "$package_dir" ]]; then
     prepared_github=1
   else
     release_part=$version; [[ "$version" == latest ]] || release_part=v$version
-    release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/$release_part
+    release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$release_part
   fi
 fi
 fetch() {

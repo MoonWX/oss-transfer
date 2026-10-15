@@ -39,10 +39,12 @@ Installers choose OSS for a mainland Chinese public IP and GitHub elsewhere. Git
 
 | Version | OSS location | GitHub | Docker Hub tags |
 | --- | --- | --- | --- |
-| `vX.Y.Z` | `osstransfer/vX.Y.Z/` | Release | `X.Y.Z`, `X.Y`, `latest` |
-| `vX.Y.Z-rc.N` | `osstransfer/vX.Y.Z-rc.N/` | Prerelease | `X.Y.Z-rc.N` |
+| `vX.Y.Z` | `oss-transfer/vX.Y.Z/` | Release | `X.Y.Z`, `X.Y`, `latest` |
+| `vX.Y.Z-rc.N` | `oss-transfer/vX.Y.Z-rc.N/` | Prerelease | `X.Y.Z-rc.N` |
 
-Stable releases update four files under `osstransfer/latest/`: `install.sh`, `Install.ps1`, `manifest.tsv` and `release.json`. Installers resolve this metadata to a fixed version before downloading an archive. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
+Stable releases update four files under `oss-transfer/latest/`: `install.sh`, `Install.ps1`, `manifest.tsv` and `release.json`. Installers resolve this metadata to a fixed version before downloading an archive. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
+
+The old `osstransfer/` tree remains available for clients released before v4.1.8. New releases use `oss-transfer/`.
 
 ## Credentials
 
@@ -50,7 +52,7 @@ Set these repository secrets before releasing:
 
 | Destination | Address | Secrets |
 | --- | --- | --- |
-| JD Cloud OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/` | `JDOSS_AK`, `JDOSS_SK` |
+| JD Cloud OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/` | `JDOSS_AK`, `JDOSS_SK` |
 | Docker Hub | `moonwx/osstransfer` | `DOCKER_USERNAME`, `DOCKER_PAT` |
 
 Publishing uses GitHub-hosted `ubuntu-latest` runners. See [release.yml](workflows/release.yml) for the upload order and timeouts.

@@ -104,7 +104,7 @@ Each Agent must run on its intended execution host. Copy only its private direct
 Use the native installer's [adoption flow](../../deploy/native/README.md#register-existing-data-as-a-service) for service registration. The service name and data path must match the generated configuration. For the Master in this example:
 
 ```sh
-RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest
+RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest
 curl -fSL "$RELEASE_URL/install.sh" -o install.sh
 sudo bash install.sh --role master --method native --release-url "$RELEASE_URL" \
   --adopt-config /export/oss-transfer/master/service.json \

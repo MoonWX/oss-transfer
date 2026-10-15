@@ -90,6 +90,9 @@ jobs:
         run: bash deploy/publish-image.sh "$RELEASE_TAG" output
   oss:
     name: Publish JD Cloud OSS
+    concurrency:
+      group: jdcloud-oss-publication
+      cancel-in-progress: false
     needs: artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 20

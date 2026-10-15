@@ -17,10 +17,19 @@ var artifactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-
 var imageReference = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@-]+$`)
 var artifactBase = regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$`)
 
-const officialAgentArtifactBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer"
+const officialAgentArtifactBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer"
+const legacyAgentArtifactBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer"
+
+func (s *Server) agentArtifactBase() string {
+	base := strings.TrimRight(s.options.AgentArtifactBase, "/")
+	if base == legacyAgentArtifactBase {
+		return officialAgentArtifactBase
+	}
+	return base
+}
 
 func (s *Server) regionalAgentArtifacts() bool {
-	base := strings.TrimRight(s.options.AgentArtifactBase, "/")
+	base := s.agentArtifactBase()
 	if base != officialAgentArtifactBase && base != "https://github.com/MoonWX/oss-transfer/releases/download" {
 		return false
 	}
@@ -78,7 +87,7 @@ func (s *Server) agentReleaseURL() string {
 	if s.options.AgentArtifactBase == "" {
 		return ""
 	}
-	return strings.TrimRight(s.options.AgentArtifactBase, "/") + "/" + s.options.AgentArtifactVersion
+	return s.agentArtifactBase() + "/" + s.options.AgentArtifactVersion
 }
 func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation) map[string]any {
 	data := map[string]any{"id": tokenKey(invite.Token), "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": masterURL + "/api/agents/join", "nativeAgent": map[string]any{"available": false}, "nativeCommand": "OSS_TRANSFER_JOIN_TOKEN=" + shellQuote(invite.Token) + " ./oss-transfer-agent --master-url " + shellQuote(masterURL) + " --data-dir ./agent-data"}

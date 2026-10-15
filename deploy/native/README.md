@@ -10,7 +10,7 @@ On Linux, macOS or FreeBSD:
 curl -fsSL --connect-timeout 3 --max-time 15 \
   https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh -o install.sh ||
 curl -fsSL --connect-timeout 3 --max-time 15 \
-  https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh -o install.sh
+  https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh -o install.sh
 ```
 
 ## Install a service
@@ -45,7 +45,7 @@ Download the installer in an Administrator PowerShell window:
     try {
         Invoke-WebRequest https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/native/Install.ps1 -OutFile Install.ps1 -TimeoutSec 15 -ErrorAction Stop
     } catch {
-        Invoke-WebRequest https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/Install.ps1 -OutFile Install.ps1 -TimeoutSec 15 -ErrorAction Stop
+        Invoke-WebRequest https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/Install.ps1 -OutFile Install.ps1 -TimeoutSec 15 -ErrorAction Stop
     }
 }
 ```
@@ -150,7 +150,7 @@ Stop active tasks before upgrading if they must stay stopped during rollback. Re
 
 ## Install without network access
 
-Use one fixed release from the OSS mirror. For example, [v4.1.6/manifest.tsv](https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v4.1.6/manifest.tsv) lists that release’s filenames and checksums; download its archives and installers from the same `v4.1.6/` directory. To find a newer version, read the `version` row in the [latest manifest](https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/manifest.tsv) and use the matching `v<version>/` directory. Copy the following files into one directory on the target host:
+Use one fixed release from the OSS mirror. For example, [v4.1.6/manifest.tsv](https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.6/manifest.tsv) lists that release’s filenames and checksums; download its archives and installers from the same `v4.1.6/` directory. To find a newer version, read the `version` row in the [latest manifest](https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv) and use the matching `v<version>/` directory. Copy the following files into one directory on the target host:
 
 | Target | Files |
 | --- | --- |

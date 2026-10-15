@@ -148,7 +148,7 @@ case "$url" in
   https://www.cloudflare.com/cdn-cgi/trace) printf 'ip=203.0.113.1\nloc=%s\n' "$MOCK_COUNTRY" ;;
   https://ipinfo.io/country) printf '%s\n' "$MOCK_FALLBACK_COUNTRY" ;;
   https://raw.githubusercontent.com/MoonWX/oss-transfer/v4.1.6/install.sh) if [[ "$MOCK_FAIL_SOURCE" == github || "$MOCK_FAIL_SOURCE" == both ]]; then exit 22; fi; cp "$BOOTSTRAP_STUB" "$out" ;;
-  https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v4.1.6/install.sh) if [[ "$MOCK_FAIL_SOURCE" == jdoss || "$MOCK_FAIL_SOURCE" == both ]]; then exit 22; fi; cp "$BOOTSTRAP_STUB" "$out" ;;
+  https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.6/install.sh) if [[ "$MOCK_FAIL_SOURCE" == jdoss || "$MOCK_FAIL_SOURCE" == both ]]; then exit 22; fi; cp "$BOOTSTRAP_STUB" "$out" ;;
   *) exit 90 ;;
 esac
 `
@@ -199,7 +199,7 @@ esac
 }
 
 func TestAgentBootstrapKeepsCustomSourceAndWindowsVersion(t *testing.T) {
-	for _, base := range []string{officialAgentArtifactBase, "https://downloads.example/osstransfer"} {
+	for _, base := range []string{officialAgentArtifactBase, legacyAgentArtifactBase + "/", "https://downloads.example/osstransfer"} {
 		f := newAgentHTTPFixture(t)
 		f.master.options.AgentArtifactBase = base
 		f.master.options.AgentArtifactVersion = "4.1.6"
@@ -215,11 +215,14 @@ func TestAgentBootstrapKeepsCustomSourceAndWindowsVersion(t *testing.T) {
 			body, _ := io.ReadAll(response.Body)
 			response.Body.Close()
 			text := string(body)
-			if base != officialAgentArtifactBase {
+			if strings.HasPrefix(base, "https://downloads.example/") {
 				if strings.Contains(text, "cloudflare.com") || strings.Contains(text, "ipinfo.io") || strings.Contains(text, "raw.githubusercontent.com") || !strings.Contains(text, base+"/4.1.6/") {
 					t.Fatal("custom source was replaced or sent through location lookup", text)
 				}
 				continue
+			}
+			if !strings.Contains(text, officialAgentArtifactBase+"/v4.1.6/") || strings.Contains(text, legacyAgentArtifactBase+"/") {
+				t.Fatal("official bootstrap did not use the renamed OSS prefix", text)
 			}
 			if strings.Contains(text, "--release-url") || strings.Contains(text, "-ReleaseUrl") || strings.Contains(text, "/latest/") {
 				t.Fatal("official bootstrap does not select a fixed regional source", text)
@@ -227,6 +230,21 @@ func TestAgentBootstrapKeepsCustomSourceAndWindowsVersion(t *testing.T) {
 			if suffix != "" && (!strings.Contains(text, "-Source auto -Version 'v4.1.6'") || (!strings.Contains(text, "/v4.1.6/deploy/native/Install.ps1") || !strings.Contains(text, "/v4.1.6/deploy/go/Install.ps1")) || !strings.Contains(text, "/v4.1.6/Install.ps1") || !strings.Contains(text, "-TimeoutSec 3")) {
 				t.Fatal("Windows source selection or tag pin missing", text)
 			}
+		}
+	}
+}
+
+func TestAgentReleaseURLMigratesOnlyTheOldOfficialBase(t *testing.T) {
+	for _, tc := range []struct{ base, want string }{
+		{legacyAgentArtifactBase, officialAgentArtifactBase},
+		{legacyAgentArtifactBase + "/", officialAgentArtifactBase},
+		{officialAgentArtifactBase, officialAgentArtifactBase},
+		{legacyAgentArtifactBase + "-custom", legacyAgentArtifactBase + "-custom"},
+		{"https://downloads.example/osstransfer", "https://downloads.example/osstransfer"},
+	} {
+		s := &Server{options: Options{AgentArtifactBase: tc.base, AgentArtifactVersion: "v4.1.5"}}
+		if got := s.agentReleaseURL(); got != tc.want+"/v4.1.5" {
+			t.Fatalf("Agent release URL for %s: %s", tc.base, got)
 		}
 	}
 }

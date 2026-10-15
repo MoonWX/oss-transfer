@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 From mainland China:
 
 ```sh
-curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/install.sh | sudo bash
+curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh | sudo bash
 ```
 
 Then open `http://<master-ip>:1685` and create the admin account.

@@ -21,6 +21,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   withdraw:
+    concurrency:
+      group: jdcloud-oss-publication
+      cancel-in-progress: false
     if: github.repository == 'MoonWX/oss-transfer' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 25

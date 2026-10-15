@@ -40,6 +40,14 @@ function Normalize-ReleaseVersion([string]$Value) {
     if ($Value -cnotmatch '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\z') { throw 'Version must be latest or a release such as v4.1.5.' }
     return 'v' + ($Value -replace '^v','')
 }
+function Normalize-ReleaseUrl([string]$Value) {
+    $url = $Value.TrimEnd('/')
+    $legacy = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
+    if ($url -ceq $legacy -or $url.StartsWith($legacy + '/', [StringComparison]::Ordinal)) {
+        return 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer' + $url.Substring($legacy.Length)
+    }
+    return $url
+}
 function Invoke-SourceRequest([string]$Url,[int]$Timeout = 20,[string]$Target) {
     $arguments = @{Uri=$Url; UseBasicParsing=$true; TimeoutSec=$Timeout; Headers=@{'User-Agent'='oss-transfer-installer'; Accept='application/vnd.github+json'}}
     if ($Target) { $arguments.OutFile=$Target; $arguments.PassThru=$true }
@@ -63,7 +71,7 @@ function Get-PublicIPCountry {
 }
 function Get-SourceMetadata([string]$Selected,[string]$RequestedVersion,[string]$Architecture) {
     if ($Selected -eq 'jdoss') {
-        $base = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
+        $base = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer'
         $url = "$base/$RequestedVersion"
         $manifest = Invoke-SourceRequest "$url/manifest.tsv"
         if ([Text.Encoding]::UTF8.GetByteCount($manifest) -ge 65536) { throw 'Manifest too large.' }
@@ -178,7 +186,7 @@ if ($env:OS -ne 'Windows_NT') { throw 'This installer requires Windows.' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run PowerShell as Administrator.' }
 if ($ReleaseUrl -and $PackageDir) { throw 'Choose -ReleaseUrl or -PackageDir.' }
-if ($ReleaseUrl) { $ReleaseUrl = $ReleaseUrl.TrimEnd('/') }
+if ($ReleaseUrl) { $ReleaseUrl = Normalize-ReleaseUrl $ReleaseUrl }
 if ($AdoptConfig -and $Upgrade) { throw 'Choose -AdoptConfig or -Upgrade.' }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $arch = switch ($architecture) { 'x64' {'amd64'} 'arm64' {'arm64'} default {throw 'Unsupported CPU architecture.'} }

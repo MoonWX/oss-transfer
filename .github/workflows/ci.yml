@@ -54,12 +54,13 @@ jobs:
           python3 .github/tests/test-download-source.py -v
           python3 .github/tests/test-packaging.py -v
           python3 .github/tests/test-oss-layout.py -v
+          python3 .github/tests/test-migrate-oss-prefix.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
           python3 .github/tests/test-binaries.py -v
           python3 .github/tests/test-cluster-diagnostics.py -v
       - name: Build all candidate archives once
         env:
-          AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
+          AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then
             git status --short
@@ -257,7 +258,7 @@ jobs:
           "$QA_AGENT" --version
           "$QA_CLI" --version
           python .github/acceptance/runtime-smoke.py --master "$QA_MASTER" --agent "$QA_AGENT" --output output/smoke \
-            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
+            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
             --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
           python .github/acceptance/cli.py --master "$QA_MASTER" --agent "$QA_AGENT" --cli "$QA_CLI" --output output/cli
           python .github/acceptance/cluster.py --master "$QA_MASTER" --agent "$QA_AGENT" --weed "$QA_WEED" --output output/cluster --scenario all --multipart-recovery
@@ -344,7 +345,7 @@ jobs:
         if: matrix.suite == 'transfer'
         run: |
           python .github/acceptance/runtime-smoke.py --master "$QA_MASTER" --agent "$QA_AGENT" --output output/smoke \
-            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
+            --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
             --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
           python .github/acceptance/cluster.py --master "$QA_MASTER" --agent "$QA_AGENT" --weed "$QA_WEED" --output output/cluster \
             --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"
@@ -440,7 +441,7 @@ jobs:
             bin=/tmp/oss-transfer-package
             if [ "$QA_SUITE" = transfer ]; then
               "$py" .github/acceptance/runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/smoke \
-                --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$(cat VERSION)" \
+                --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
                 --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
               "$py" .github/acceptance/cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/cluster \
                 --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"

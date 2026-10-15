@@ -15,7 +15,7 @@ import tempfile
 
 ENDPOINT = "https://s3.cn-north-1.jdcloud-oss.com"
 BUCKET = "moonwx"
-PREFIX = "osstransfer"
+PREFIX = "oss-transfer"
 LATEST = ("install.sh", "Install.ps1", "manifest.tsv", "release.json")
 # Only these obsolete mutable URLs are removed. Old version directories still
 # serve the installers and binaries used by Masters pinned to those releases.

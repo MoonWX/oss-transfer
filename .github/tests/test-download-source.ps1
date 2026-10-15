@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -41,7 +41,7 @@ function Hash-Bytes([byte[]]$Bytes) {
 }
 $utf8 = [Text.UTF8Encoding]::new($false)
 $githubAPI = 'https://api.github.com/repos/MoonWX/oss-transfer/releases/latest'
-$jdoss = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
+$jdoss = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer'
 $githubURL = 'https://github.com/MoonWX/oss-transfer/releases/download/v4.1.5/oss-transfer-windows-amd64.zip'
 $traceURL = 'https://www.cloudflare.com/cdn-cgi/trace'
 $countryURL = 'https://ipinfo.io/country'
@@ -87,6 +87,14 @@ function New-TestArchive([string]$Fault='') {
     return Resolve-DownloadSource 'github' 'latest' 'amd64'
 }
 try {
+    Check 'old official release URLs follow the renamed prefix' {
+        $legacy = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
+        Assert ((Normalize-ReleaseUrl "$legacy/latest/") -ceq "$jdoss/latest") 'Legacy latest URL was not migrated.'
+        Assert ((Normalize-ReleaseUrl "$legacy/v4.1.7") -ceq "$jdoss/v4.1.7") 'Pinned version was not preserved.'
+        foreach ($url in @("$jdoss/v4.1.7", "$legacy-custom/v4.1.7", 'https://mirror.example/osstransfer/v4.1.7')) {
+            Assert ((Normalize-ReleaseUrl $url) -ceq $url) 'Custom or current URL was changed.'
+        }
+    }
     Check 'version validation' {
         Assert ((Normalize-ReleaseVersion '4.1.5') -ceq 'v4.1.5') 'Version normalization failed.'
         foreach ($invalid in @('main','../v4.1.5','v4.1.5?x','V4.1.5',"v4.1.5`n")) { Reject { Normalize-ReleaseVersion $invalid } 'Version must' }

@@ -1,0 +1,44 @@
+name: Migrate OSS release prefix
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: Copy osstransfer/ to oss-transfer/ and retain existing downloads
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  migrate:
+    if: github.repository == 'MoonWX/oss-transfer' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    concurrency:
+      group: jdcloud-oss-publication
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check migration tools and scope
+        run: |
+          command -v aws >/dev/null
+          aws --version 2>&1 | grep -q '^aws-cli/2\.'
+          python3 .github/tests/test-migrate-oss-prefix.py
+      - name: Copy and verify releases
+        env:
+          EXECUTE_MIGRATION: ${{ inputs.execute }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.JDOSS_SK }}
+        run: |
+          set +x
+          args=()
+          if [[ "$EXECUTE_MIGRATION" == true ]]; then args+=(--apply); fi
+          python3 deploy/native/migrate-oss-prefix.py --evidence output/oss-prefix-migration.json "${args[@]}"
+      - name: Save migration evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.1
+        with:
+          name: oss-prefix-migration
+          path: output/oss-prefix-migration.json
+          if-no-files-found: error
+          retention-days: 30

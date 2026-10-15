@@ -105,12 +105,12 @@ class OSSLayout(unittest.TestCase):
 
     def test_remote_listing_requires_the_exact_release_files(self):
         names = PUBLISH.release_names()
-        rows = [{"Key": "osstransfer/v" + VERSION + "/" + name} for name in sorted(names)]
+        rows = [{"Key": "oss-transfer/v" + VERSION + "/" + name} for name in sorted(names)]
         self.assertEqual(PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "v" + VERSION, names), len(names))
         changes = {
             "missing": rows[:-1],
-            "extra": rows + [{"Key": "osstransfer/v" + VERSION + "/stale-binary"}],
-            "out-of-prefix": rows[:-1] + [{"Key": "osstransfer/v4.1.4/" + sorted(names)[-1]}],
+            "extra": rows + [{"Key": "oss-transfer/v" + VERSION + "/stale-binary"}],
+            "out-of-prefix": rows[:-1] + [{"Key": "oss-transfer/v4.1.4/" + sorted(names)[-1]}],
             "duplicate": rows + [rows[0]],
         }
         for problem, altered in changes.items():
@@ -120,9 +120,9 @@ class OSSLayout(unittest.TestCase):
             PUBLISH.verify_listing({"IsTruncated": True, "Contents": rows, "NextContinuationToken": "next"}, "v" + VERSION, names)
 
     def test_latest_listing_rejects_retired_metadata(self):
-        rows = [{"Key": "osstransfer/latest/" + name} for name in PUBLISH.LATEST]
+        rows = [{"Key": "oss-transfer/latest/" + name} for name in PUBLISH.LATEST]
         self.assertEqual(PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", PUBLISH.LATEST), 4)
-        rows.append({"Key": "osstransfer/latest/VERSION"})
+        rows.append({"Key": "oss-transfer/latest/VERSION"})
         with self.assertRaisesRegex(ValueError, "unexpected files"):
             PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", PUBLISH.LATEST)
 

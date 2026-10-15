@@ -8,7 +8,7 @@ revision="$(git rev-parse HEAD)"
 short_revision="$(git rev-parse --short HEAD)"
 branch="$(git branch --show-current)"
 build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-artifact_base="${AGENT_ARTIFACT_BASE:-https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer}"
+artifact_base="${AGENT_ARTIFACT_BASE:-https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer}"
 artifact_version="${AGENT_ARTIFACT_VERSION:-v$version}"
 agent_image="${AGENT_DOCKER_IMAGE:-moonwx/osstransfer:$version}"
 if [[ -n "$artifact_base" || -n "$artifact_version" ]]; then

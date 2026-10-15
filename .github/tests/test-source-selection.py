@@ -46,7 +46,7 @@ else: print(body,end='')
         return {
             'https://www.cloudflare.com/cdn-cgi/trace': [0,'ip=192.0.2.1\nloc='+country+'\n'],
             'https://api.github.com/repos/MoonWX/oss-transfer/releases/latest': [0,'{}'],
-            'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/manifest.tsv': [0,'manifest'],
+            'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv': [0,'manifest'],
         }
 
     def test_cn_uses_oss(self):
@@ -79,7 +79,7 @@ else: print(body,end='')
         data['https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v4.1.6']=[0,'{}']
         source,calls=self.select(data,version='4.1.6')
         self.assertEqual(source,'github')
-        self.assertIn('https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v4.1.6/manifest.tsv',calls)
+        self.assertIn('https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.6/manifest.tsv',calls)
         self.assertFalse(any('/latest' in url for url in calls))
 
     def test_both_sources_unreachable_fails(self):
@@ -91,6 +91,22 @@ else: print(body,end='')
                 selected,calls=self.select({},source=value)
                 self.assertEqual(selected,value)
                 self.assertEqual(calls,[])
+
+    def test_old_official_release_urls_follow_the_renamed_prefix(self):
+        legacy = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
+        official = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer'
+        for url, expected in (
+            (legacy + '/latest/', official + '/latest'),
+            (legacy + '/v4.1.7', official + '/v4.1.7'),
+            (official + '/v4.1.7', official + '/v4.1.7'),
+            (legacy + '-custom/v4.1.7', legacy + '-custom/v4.1.7'),
+            ('https://mirror.example/osstransfer/v4.1.7', 'https://mirror.example/osstransfer/v4.1.7'),
+        ):
+            with self.subTest(url=url):
+                result = subprocess.run(['bash', '-c', 'source "$1"; transfer_release_url "$2"',
+                                         'test', str(ROOT/'deploy/native/select-source.sh'), url],
+                                        check=True, text=True, capture_output=True)
+                self.assertEqual(result.stdout.strip(), expected)
 
 
 if __name__ == '__main__':

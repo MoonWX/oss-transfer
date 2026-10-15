@@ -5,6 +5,14 @@ umask 077
 # BEGIN embedded download source
 # Embedded in the standalone Unix installers by scripts/sync-installer-source.py.
 # Location describes the public egress IP, including a configured HTTPS proxy.
+transfer_release_url() {
+  local url=${1%/} legacy=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer
+  case "$url" in
+    "$legacy"|"$legacy"/*) url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer${url#"$legacy"} ;;
+  esac
+  printf '%s\n' "$url"
+}
+
 transfer_country() {
   local response country
   response=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 \
@@ -24,8 +32,8 @@ transfer_source_probe() {
     url=https://api.github.com/repos/MoonWX/oss-transfer/releases/latest
     [[ "$version" == latest ]] || url=https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v$version
   else
-    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/latest/manifest.tsv
-    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/v$version/manifest.tsv
+    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv
+    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$version/manifest.tsv
   fi
   curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 5 \
     -A OSS-Transfer-Installer "$url" -o /dev/null 2>/dev/null
@@ -315,7 +323,7 @@ if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]] || ((startup_timeout < 10 || startup_t
 [[ "$source" == auto || "$source" == github || "$source" == jdoss ]] || fail '--source must be auto, github or jdoss'
 requested_version=${requested_version#v}
 [[ "$requested_version" == latest || "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid version'
-release_url=${release_url%/}
+release_url=$(transfer_release_url "$release_url")
 [[ -z "$release_url" || -z "$package_dir" ]] || fail 'Choose --release-url or --package-dir'
 os=$(uname -s)
 case "$os" in
@@ -354,7 +362,7 @@ if [[ -z "$release_url" && -z "$package_dir" ]]; then
     exit 0
   fi
   release_part=$requested_version; [[ "$requested_version" == latest ]] || release_part=v$requested_version
-  release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer/$release_part
+  release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$release_part
 fi
 if ((upgrade)); then
   if [[ -z "$install_dir" ]]; then

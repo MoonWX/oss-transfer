@@ -360,7 +360,7 @@ if sys.argv[1:3] == ['release', 'view']:
                 if prefix.endswith('/latest/'):
                     names = PUBLISH.LATEST
                 else:
-                    self.assertEqual(prefix, 'osstransfer/v' + self.version + '/')
+                    self.assertEqual(prefix, 'oss-transfer/v' + self.version + '/')
                     names = [path.name for path in self.output.iterdir()]
                 return subprocess.CompletedProcess(command, 0, stdout=json.dumps({
                     'IsTruncated': False, 'Contents': [{'Key': prefix + name} for name in names]}), stderr='')
@@ -370,7 +370,7 @@ if sys.argv[1:3] == ['release', 'view']:
                 self.assertTrue(path.is_file())
             else:
                 self.assertIn("delete-object", command)
-                self.assertIn(keys[-1], ["osstransfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
+                self.assertIn(keys[-1], ["oss-transfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
             if fail_at == len(keys):
                 raise subprocess.CalledProcessError(1, ["aws"])
         with mock.patch.dict(os.environ, AWS_ACCESS_KEY_ID="test", AWS_SECRET_ACCESS_KEY="test"), mock.patch.object(PUBLISH.subprocess, "run", side_effect=upload):
@@ -391,14 +391,14 @@ if sys.argv[1:3] == ['release', 'view']:
         self.assemble()
         keys = self.uploaded()
         self.assertTrue(keys)
-        self.assertTrue(all(key.startswith("osstransfer/v4.1.0-test/") for key in keys))
+        self.assertTrue(all(key.startswith("oss-transfer/v4.1.0-test/") for key in keys))
 
     def test_latest_advances_only_after_all_versioned_uploads(self):
         self.stable()
         keys = self.uploaded()
-        versioned = ["osstransfer/v4.1.0/" + path.name for path in sorted(self.output.iterdir())]
-        latest = ["osstransfer/latest/" + name for name in PUBLISH.LATEST]
-        self.assertEqual(keys, versioned + latest + ["osstransfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
+        versioned = ["oss-transfer/v4.1.0/" + path.name for path in sorted(self.output.iterdir())]
+        latest = ["oss-transfer/latest/" + name for name in PUBLISH.LATEST]
+        self.assertEqual(keys, versioned + latest + ["oss-transfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
 
     def test_failed_payload_upload_preserves_latest(self):
         self.stable()

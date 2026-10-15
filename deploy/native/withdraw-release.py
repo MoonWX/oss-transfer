@@ -15,7 +15,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 ENDPOINT = "https://s3.cn-north-1.jdcloud-oss.com"
 BUCKET = "moonwx"
-OSS = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer"
+OSS = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer"
 GITHUB = "https://api.github.com/repos/MoonWX/oss-transfer"
 REGISTRY = "https://registry-1.docker.io/v2/moonwx/osstransfer"
 HUB = "https://hub.docker.com"
@@ -54,7 +54,7 @@ def plan(replacement, retired):
     protected = {replacement, ".".join(replacement.split(".")[:2]), "latest"}
     require(not protected.intersection(tags), "Withdrawal overlaps the replacement or its aliases")
     return {"replacement": replacement, "versions": versions,
-            "prefixes": ["osstransfer/v" + version + "/" for version in versions], "tags": tags}
+            "prefixes": ["oss-transfer/v" + version + "/" for version in versions], "tags": tags}
 
 
 class NoRedirect(HTTPRedirectHandler):

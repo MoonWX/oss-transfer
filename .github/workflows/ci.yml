@@ -396,11 +396,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
-        suite: [transfer, management]
         include:
-          - {arch: amd64, vm_arch: x86_64}
-          - {arch: arm64, vm_arch: aarch64}
+          - {arch: amd64, vm_arch: x86_64, suite: transfer}
+          - {arch: amd64, vm_arch: x86_64, suite: management}
+          - {arch: arm64, vm_arch: aarch64, suite: transfer}
+          - {arch: arm64, vm_arch: aarch64, suite: unit}
+          - {arch: arm64, vm_arch: aarch64, suite: control}
+          - {arch: arm64, vm_arch: aarch64, suite: install}
+    # Hosted ARM runners do not expose KVM; changing the host label would still use TCG.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -415,6 +418,23 @@ jobs:
         with:
           name: test-binaries-freebsd-${{ matrix.arch }}
           path: output/test-binaries
+      - name: Keep only the guest platform archive
+        env:
+          QA_ARCH: ${{ matrix.arch }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          archive = 'oss-transfer-freebsd-' + os.environ['QA_ARCH'] + '.tar.gz'
+          keep = {archive, archive + '.sha256'}
+          directory = Path('output/packages')
+          for name in keep:
+              if not (directory / name).is_file():
+                  raise SystemExit('Missing guest archive: ' + name)
+          for path in directory.iterdir():
+              if path.name not in keep:
+                  path.unlink()
+          PYTHON
       - name: Run target acceptance in FreeBSD
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         env:
@@ -425,6 +445,7 @@ jobs:
           cache-after-prepare-key-suffix: ${{ hashFiles('.github/acceptance/requirements.txt') }}
           release: '14.4'
           arch: ${{ matrix.vm_arch }}
+          copyback: false
           envs: QA_ARCH QA_SUITE GITHUB_SHA
           prepare: |
             set -e
@@ -435,29 +456,63 @@ jobs:
             status=0
             sh -e <<'TESTS' || status=$?
             py=/opt/oss-transfer-ci-venv/bin/python
-            "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package
-            "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
+            case "$QA_SUITE" in
+              transfer|management|unit|control|install) ;;
+              *) echo "Unknown FreeBSD suite: $QA_SUITE" >&2; exit 1 ;;
+            esac
+            mkdir -p output
+            run_check() {
+              phase=$1; shift
+              began=$(date +%s)
+              result=0
+              "$@" || result=$?
+              printf '%s\t%s\t%s\n' "$phase" "$(($(date +%s) - began))" "$result" >> output/freebsd-phases.tsv
+              return "$result"
+            }
+            run_check prepare "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package
+            run_check verify "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
             . /tmp/oss-qa-tests.env
             bin=/tmp/oss-transfer-package
             if [ "$QA_SUITE" = transfer ]; then
-              "$py" .github/acceptance/runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/smoke \
+              run_check smoke "$py" .github/acceptance/runtime-smoke.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --output output/smoke \
                 --expect-agent-release-url "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$(cat VERSION)" \
                 --expect-agent-image "moonwx/osstransfer:$(cat VERSION)"
-              "$py" .github/acceptance/cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/cluster \
+              run_check transfer "$py" .github/acceptance/cluster.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --weed "$bin/weed" --output output/cluster \
                 --scenario all --multipart-recovery --multipart-test-binary "$QA_MULTIPART_TEST_BINARY"
             else
-              "$py" .github/tests/test-source-selection.py -v
-              "$py" .github/tests/test-download-source.py -v
-              "$py" .github/acceptance/test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --output output/unit --parallel 2
-              "$py" .github/acceptance/cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/cli
-              "$py" .github/acceptance/inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/inventory
-              "$py" .github/acceptance/install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" \
-                --repo "$PWD" --output "$PWD/output/install" --all-installed \
-                --failure-master-fixture "$QA_FAILURE_MASTER" --rollback-cli-fixture "$QA_ROLLBACK_CLI"
+              if [ "$QA_SUITE" = management ] || [ "$QA_SUITE" = unit ]; then
+                run_check sources "$py" .github/tests/test-source-selection.py -v
+                run_check downloads "$py" .github/tests/test-download-source.py -v
+                run_check unit "$py" .github/acceptance/test-binaries.py run --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --output output/unit --parallel 2
+              fi
+              if [ "$QA_SUITE" = management ] || [ "$QA_SUITE" = control ]; then
+                run_check cli "$py" .github/acceptance/cli.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --output output/cli
+                run_check inventory "$py" .github/acceptance/inventory.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" --weed "$bin/weed" --output output/inventory
+              fi
+              if [ "$QA_SUITE" = management ] || [ "$QA_SUITE" = install ]; then
+                run_check install "$py" .github/acceptance/install.py --master "$bin/oss-transfer-master" --agent "$bin/oss-transfer-agent" --cli "$bin/oss-transfer-cli" \
+                  --repo "$PWD" --output "$PWD/output/install" --all-installed \
+                  --failure-master-fixture "$QA_FAILURE_MASTER" --rollback-cli-fixture "$QA_ROLLBACK_CLI"
+              fi
             fi
             TESTS
             mkdir -p output
             printf '%s\n' "$status" > output/freebsd-exit-code
+      - name: Copy back only acceptance evidence
+        if: always()
+        run: |
+          mkdir -p output
+          rsync -a --timeout=120 --rsync-path=/usr/local/bin/rsync \
+            -e 'ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4' \
+            --include='/freebsd-exit-code' --include='/freebsd-phases.tsv' \
+            --include='/smoke/' --include='/smoke/evidence.json' --include='/smoke/*.log' \
+            --include='/cluster/' --include='/cluster/evidence.json' --include='/cluster/bandwidth-samples.json' --include='/cluster/*.log' \
+            --include='/unit/' --include='/unit/evidence.json' --include='/unit/*.log' \
+            --include='/cli/' --include='/cli/evidence.json' --include='/cli/*.log' \
+            --include='/inventory/' --include='/inventory/evidence.json' --include='/inventory/*.log' \
+            --include='/install/' --include='/install/evidence.json' --include='/install/*-install-*.log' \
+            --exclude='*' \
+            "freebsd:$GITHUB_WORKSPACE/output/" output/
       # Copy diagnostics back before enforcing the test result.
       - name: Require successful FreeBSD acceptance
         run: test "$(cat output/freebsd-exit-code)" = 0
@@ -467,6 +522,7 @@ jobs:
           name: freebsd-evidence-${{ matrix.arch }}-${{ matrix.suite }}
           path: |
             output/freebsd-exit-code
+            output/freebsd-phases.tsv
             output/smoke/evidence.json
             output/smoke/*.log
             output/cluster/evidence.json

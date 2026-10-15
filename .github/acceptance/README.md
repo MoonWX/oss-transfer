@@ -25,14 +25,18 @@ The Linux QEMU jobs install real systemd services on the Ubuntu runner. Only the
 
 The package job builds release archives and cross-compiles the five additional platforms’ test executables, at most two platforms at a time. Test compilation has no separate jobs.
 
-Release archives are built once. A separate five-platform matrix compiles test executables and failure fixtures at the same time, without delaying the six native jobs. Test artifacts record the commit, target architecture and SHA-256 hashes and are not published in releases. The multipart crash test uses the target `agentservice` test executable, including its self-executed crash helper.
+Test artifacts record the commit, target architecture and SHA-256 hashes and are not published in releases. The multipart crash test uses the target `agentservice` test executable, including its self-executed crash helper.
 
-Each additional platform has two parallel jobs on separate runners or VMs:
+Linux emulation and FreeBSD amd64 each have two parallel jobs on separate runners or VMs:
 
 - **Transfer:** setup and enrollment, three transfer directions, reports, shared bandwidth, stop/restart and multipart recovery.
 - **Management:** all Go/CLI test packages, CLI administration, inventory import and recovery, service installation, upgrade and rollback.
 
-Management runs at most two Go test packages at once. Bandwidth measurements have a separate runner so other tests do not compete with their transfer window. FreeBSD caches its Python environment and dependencies; changes to the requirements file invalidate that cache. It does not compile tests inside the VM.
+FreeBSD arm64 uses four independent VMs: transfer, unit tests, CLI and inventory, and service installation. Together they run the same checks. The unit VM also runs the installer source-selection tests. This keeps installation and inventory from waiting behind the Go tests.
+
+Go test packages run at most two at once. Bandwidth measurements have a separate runner so other tests do not compete with their transfer window. FreeBSD caches its Python environment and dependencies; changes to the requirements file invalidate that cache. It receives only its own platform archive and returns only logs and evidence. `freebsd-phases.tsv` records elapsed seconds and exit status for each stage.
+
+FreeBSD arm64 currently uses QEMU software emulation on `ubuntu-latest`. The hosted `ubuntu-26.04-arm` runner did not expose `/dev/kvm` in the capability check, so switching labels would not enable hardware virtualization. Recheck that capability before changing the host.
 
 Release waits for every job. Builds and publication read the same [platform list](../../deploy/native/platforms.json).
 

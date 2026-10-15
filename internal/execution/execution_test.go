@@ -114,7 +114,14 @@ func (f *fixture) acceptStart() {
 }
 func (f *fixture) wait() Record {
 	f.t.Helper()
-	ctx, cancel := context.WithTimeout(bg, 10*time.Second)
+	// Engine.Wait synchronizes with the execution's completion channel. This is
+	// a deadlock guard, not a throughput assertion: real per-file fsyncs can take
+	// longer on virtual disks without changing durability or batching semantics.
+	deadline := time.Now().Add(time.Minute)
+	if testDeadline, ok := f.t.Deadline(); ok && testDeadline.Add(-5*time.Second).Before(deadline) {
+		deadline = testDeadline.Add(-5 * time.Second)
+	}
+	ctx, cancel := context.WithDeadline(bg, deadline)
 	defer cancel()
 	r, err := f.engine.Wait(ctx, f.job.ChildID)
 	if err != nil {

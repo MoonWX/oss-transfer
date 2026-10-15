@@ -29,9 +29,69 @@ func TestStopDoesNotWaitForOfflineScannerBeforeStoppingOnlineMember(t *testing.T
 	if _, err = f.master.tasks.repo.Stop(p.ID); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	if err = f.master.tasks.step(ctx, p.ID); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	stepDone := make(chan struct{})
+	var stepErr error
+	go func() {
+		stepErr = f.master.tasks.step(ctx, p.ID)
+		close(stepDone)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-stepDone:
+		case <-time.After(5 * time.Second):
+			t.Error("stop reconciliation did not finish after cancellation")
+		}
+	}()
+	// Wait for the online Agent's durable fence, not an assumed RPC latency.
+	// The scanner must still be awaiting its stop acknowledgement at that point.
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		policy, policyErr := service.Limits.Parent(p.ID)
+		if policyErr == nil && policy.Stopped {
+			break
+		}
+		select {
+		case <-stepDone:
+			t.Fatalf("reconciliation returned before the online Agent was fenced: %v", stepErr)
+		case <-ctx.Done():
+			t.Fatal("online Agent was not durably fenced", ctx.Err())
+		case <-tick.C:
+		}
+	}
+	// Neither offline command has an Agent to consume it. Taking the scanner's
+	// still-pending command only now proves the online stop did not wait for the
+	// scanner's timeout. Do not acknowledge it; cancellation must leave STOPPING.
+	scannerPending := make(chan error, 1)
+	go func() {
+		for range 2 {
+			command, pollErr := f.master.agents.broker.Poll(ctx, nodeSession(offline))
+			if pollErr != nil {
+				scannerPending <- pollErr
+				return
+			}
+			if command.Operation == "scan_stop" {
+				scannerPending <- nil
+				return
+			}
+		}
+		scannerPending <- errors.New("scanner stop command is missing")
+	}()
+	select {
+	case pollErr := <-scannerPending:
+		if pollErr != nil {
+			t.Fatal("scanner stop was not pending when the online Agent was fenced", pollErr)
+		}
+	case <-stepDone:
+		t.Fatalf("scanner stopped blocking before the online Agent was fenced: %v", stepErr)
+	case <-ctx.Done():
+		t.Fatal("scanner stop command was not queued", ctx.Err())
+	}
+	cancel()
+	<-stepDone
+	if stepErr == nil {
 		t.Fatal("offline scanner falsely acknowledged")
 	}
 	job := execution.Job{ParentID: p.ID, ChildID: "1-1", Number: 1, Generation: 1, Source: execution.Endpoint{Kind: "LOCAL", Root: t.TempDir()}, Destination: execution.Endpoint{Kind: "LOCAL", Root: t.TempDir()}, ConflictPolicy: "OVERWRITE", DiscoveryComplete: true, Items: []execution.Item{{ID: "one", Source: transferstore.Object{Key: "one"}, DestinationKey: "one"}}}

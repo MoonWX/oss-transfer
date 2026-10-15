@@ -183,7 +183,7 @@ def migrate(store, apply=False):
         copied = target not in before
         if not copied:
             verify_object(store, key, target, source_head, store.head(target))
-            if store.public_size(target) != source[key][0]:
+            if not apply and store.public_size(target) != source[key][0]:
                 raise ValueError("Public download size differs: " + target)
         if apply:
             if copied:

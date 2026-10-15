@@ -154,7 +154,14 @@ class MigrationTests(unittest.TestCase):
         source = "osstransfer/v4.1.7/archive.tar.gz"
         target = MIGRATION.destination(source)
         store.copy(source, target, store.head(source))
-        self.run_migration(store)
+
+        def public_size(key):
+            if store.policies[key] != POLICY:
+                raise PermissionError("ACL has not been repaired")
+            return len(store.data[key])
+
+        with mock.patch.object(store, "public_size", side_effect=public_size):
+            self.run_migration(store)
         self.assertEqual(store.policies[target], POLICY)
         self.assertEqual(sum(key == target for _, key in store.copies), 1)
 

@@ -97,6 +97,19 @@ class MigrationTests(unittest.TestCase):
             with mock.patch.object(store, "call", side_effect=[first, second]), self.assertRaises(ValueError):
                 store.listing(MIGRATION.SOURCE)
 
+    def test_listing_ignores_only_empty_root_marker_and_still_rejects_duplicates(self):
+        store = MIGRATION.OSS({})
+        for prefix in (MIGRATION.SOURCE, MIGRATION.TARGET):
+            marker = {"Key": prefix, "Size": 0, "ETag": "empty"}
+            archive = {"Key": prefix + "v4/archive.tar.gz", "Size": 10, "ETag": "archive"}
+            page = {"Contents": [marker, archive], "IsTruncated": False}
+            with self.subTest(prefix=prefix), mock.patch.object(store, "call", return_value=page):
+                self.assertEqual(store.listing(prefix), {archive["Key"]: (10, "archive")})
+            for invalid in ([dict(marker, Size=1), archive], [marker, marker, archive]):
+                with mock.patch.object(store, "call", return_value={"Contents": invalid, "IsTruncated": False}), \
+                        self.assertRaisesRegex(ValueError, prefix):
+                    store.listing(prefix)
+
     def test_copy_preserves_source_and_acl_then_latest_commits_last(self):
         store = MemoryOSS()
         original = deepcopy(store.data)

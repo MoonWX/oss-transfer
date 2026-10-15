@@ -66,17 +66,23 @@ class OSS:
     def listing(self, prefix):
         if prefix not in (SOURCE, TARGET):
             raise ValueError("Unexpected release prefix")
-        objects, tokens, token = {}, set(), None
+        objects, seen, tokens, token = {}, set(), set(), None
         while True:
             arguments = ["--prefix", prefix, "--max-keys", "1000"]
             if token:
                 arguments += ["--continuation-token", token]
             page = self.call("list-objects-v2", *arguments)
             for row in page.get("Contents", []):
-                key = row["Key"]
-                if not key.startswith(prefix) or key in objects or key == prefix:
-                    raise ValueError("Listing contains a duplicate or out-of-prefix object")
-                objects[key] = identity(row)
+                key = row.get("Key")
+                if not isinstance(key, str) or not key.startswith(prefix) or key in seen:
+                    raise ValueError(f"Listing contains a duplicate or out-of-prefix object: {key!r}")
+                seen.add(key)
+                value = identity(row)
+                if key == prefix:
+                    if value[0] != 0:
+                        raise ValueError(f"Prefix marker is not empty: {key!r}")
+                    continue
+                objects[key] = value
                 if len(objects) > 10000:
                     raise ValueError("Release tree exceeds the migration's 10,000-object bound")
             if page.get("IsTruncated") is False:

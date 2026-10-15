@@ -219,7 +219,8 @@ class ResolveTests(unittest.TestCase):
                        {"head_branch": "feature"}, {"head_sha": "c" * 40},
                        {"path": ".github/workflows/other.yml"},
                        {"status": "queued", "conclusion": None},
-                       {"conclusion": "failure"}, {"conclusion": "cancelled"}):
+                       {"conclusion": "failure"}, {"conclusion": "cancelled"},
+                       {"run_attempt": None}, {"run_attempt": 0}):
             with self.subTest(change=change):
                 self.assertEqual(self.check_reuse(ancestor_runs={
                     PARENT: [dict(ANCESTOR_RUN, **change)]}), {"reuse_tests": "false"})

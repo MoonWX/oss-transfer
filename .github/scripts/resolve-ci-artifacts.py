@@ -180,6 +180,8 @@ class ArtifactResolver:
             if (not self.trusted(current, commit) or current["id"] != run["id"]
                     or current.get("status") != "completed"
                     or current.get("conclusion") != "success"
+                    or type(current.get("run_attempt")) is not int
+                    or current["run_attempt"] < 1
                     or current.get("run_attempt") != run.get("run_attempt")):
                 # Do not hide a newer failed/running attempt behind an older pass.
                 return None

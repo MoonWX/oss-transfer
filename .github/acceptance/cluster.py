@@ -233,7 +233,7 @@ class Harness:
         self.streams.append(stream)
         return child, log
 
-    def api(self, path, body=None, method=None, key=None, *, timeout=40, max_bytes=None):
+    def api(self, path, body=None, method=None, key=None, *, timeout=40, max_bytes=None, allow_partial=False):
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
@@ -257,7 +257,7 @@ class Harness:
         data = payload.get("data", payload)
         require(payload.get("success") is not False and data.get("success") is not False,
                 self.scrub(f"API failure {path}: {data}"))
-        require(not data.get("partial") and not data.get("failedCount") and not data.get("failed"),
+        require((allow_partial or not data.get("partial")) and not data.get("failedCount") and not data.get("failed"),
                 self.scrub(f"Incomplete API result {path}: {data}"))
         return data
 
@@ -365,6 +365,33 @@ class Harness:
         nodes = self.api("/api/master/nodes")["nodes"]
         return nodes if len(nodes) == 2 and all(node["online"] for node in nodes) else None
 
+    def restarted_agent_status(self, index, previous_process):
+        node = self.nodes[index]
+        require(bool(previous_process), "Agent settings history omitted its process ID")
+
+        def ready():
+            require(self.master.poll() is None, "Master exited during Agent restart")
+            require(self.agent_processes[index].poll() is None, "Agent exited during restart")
+            status = self.api("/api/master/worker-status", allow_partial=True)
+            workers = status["workers"]
+            require(set(workers) == set(self.nodes), "Worker status omitted a registered node")
+            if status.get("partial"):
+                # Only this deliberate restart may temporarily miss a command.
+                # HTTP errors, peer failures and Agent business errors stay fatal.
+                require(status.get("complete") is False and status.get("failedWorkers") == [node]
+                        and workers[node].get("success") is False
+                        and workers[node].get("message") == "context deadline exceeded"
+                        and all(row.get("success") is True for name, row in workers.items() if name != node),
+                        self.scrub(f"Unexpected response during Agent restart: {status}"))
+                return None
+            require(status.get("complete") is True and all(row.get("success") is True for row in workers.values()),
+                    "Worker status did not confirm both Agents")
+            process = workers[node]["rateLimit"]["autoAdjust"]["processId"]
+            require(bool(process) and process != previous_process, "Worker status did not come from the restarted Agent")
+            return workers
+
+        return eventually(ready, "restarted Agent command channel")
+
     def node_settings(self):
         node = self.nodes[0]
         self.api("/api/master/rate-limit/put/" + node, {"qps": 350})
@@ -378,8 +405,7 @@ class Harness:
         self.agent_processes[0].kill()
         self.agent_processes[0].wait(timeout=10)
         self.start_agent(0)
-        workers = self.api("/api/master/worker-status")["workers"]
-        require(set(workers) == set(self.nodes) and all(row["success"] for row in workers.values()), "Worker status omitted a registered node")
+        workers = self.restarted_agent_status(0, events[0]["processId"])
         limits = workers[node]["rateLimit"]
         require(limits["put"]["limitQps"] == 350 and limits["bandwidth"]["limitBps"] == 16_000_000
                 and workers[self.nodes[1]]["rateLimit"]["put"]["limitQps"] == 1400,

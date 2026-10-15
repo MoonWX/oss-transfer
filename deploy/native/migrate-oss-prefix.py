@@ -34,6 +34,10 @@ def identity(row):
         raise ValueError("Object size is invalid or exceeds CopyObject's 5 GiB limit")
     if not isinstance(etag, str) or not etag:
         raise ValueError("Object has no server ETag")
+    if len(etag) >= 2 and etag.startswith('"') and etag.endswith('"'):
+        etag = etag[1:-1]
+    if not etag:
+        raise ValueError("Object has no server ETag")
     return size, etag
 
 
@@ -128,7 +132,7 @@ def verify_object(store, source, target, source_head, target_head):
     for field in ("ChecksumSHA256", "ChecksumSHA1", "ChecksumCRC32", "ChecksumCRC32C"):
         if source_head.get(field) and target_head.get(field) and source_head[field] != target_head[field]:
             raise ValueError("Destination server checksum differs: " + target)
-    if source_head["ETag"] != target_head["ETag"]:
+    if identity(source_head)[1] != identity(target_head)[1]:
         # A multipart source can acquire a different ETag after CopyObject.
         # Compare bytes in that case; an ETag is not assumed to be an MD5 hash.
         if store.public_sha256(source) != store.public_sha256(target):
@@ -148,7 +152,7 @@ def migrate(store, apply=False):
         target = destination(key)
         source_head = store.head(key)
         if identity(source_head) != source[key]:
-            raise ValueError("Source changed after listing: " + key)
+            raise ValueError(f"Source changed after listing: {key}; listed={source[key]!r}, head={identity(source_head)!r}")
         policy = store.acl(key)
         copied = target not in before
         if not copied:

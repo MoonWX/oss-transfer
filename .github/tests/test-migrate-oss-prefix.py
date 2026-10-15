@@ -110,6 +110,20 @@ class MigrationTests(unittest.TestCase):
                         self.assertRaisesRegex(ValueError, prefix):
                     store.listing(prefix)
 
+    def test_etag_quotes_do_not_change_identity_or_multipart_suffix(self):
+        listed = {"Size": 98621415, "ETag": "fe7bf1eb8e1735337346dae60949fc42-1"}
+        head = {"ContentLength": 98621415, "ETag": '"fe7bf1eb8e1735337346dae60949fc42-1"'}
+        self.assertEqual(MIGRATION.identity(listed), MIGRATION.identity(head))
+        self.assertEqual(MIGRATION.identity(head)[1], listed["ETag"])
+        store = MemoryOSS()
+        for metadata in store.heads.values():
+            metadata["ETag"] = '"' + metadata["ETag"] + '"'
+        with mock.patch.object(store, "public_sha256", wraps=store.public_sha256) as digest:
+            self.run_migration(store)
+            self.assertEqual(digest.call_count, 2 * len(MIGRATION.SAMPLES))
+        with mock.patch.object(store, "public_sha256", side_effect=AssertionError("Unnecessary download")):
+            MIGRATION.verify_object(store, "source", "target", head, listed | {"ContentLength": listed["Size"]})
+
     def test_copy_preserves_source_and_acl_then_latest_commits_last(self):
         store = MemoryOSS()
         original = deepcopy(store.data)

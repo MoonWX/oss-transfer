@@ -3,6 +3,9 @@
 set +x
 set -euo pipefail
 umask 077
+# The brace group is parsed in full before it runs; a truncated piped download
+# therefore fails with a syntax error instead of running a partial script.
+{
 # BEGIN embedded download source
 # Embedded in the standalone Unix installers by scripts/sync-installer-source.py.
 # Location describes the public egress IP, including a configured HTTPS proxy.
@@ -246,7 +249,7 @@ transfer_github_prepare() (
 )
 
 # END embedded download source
-lang=en role='' method='' version=latest source=auto release_url='' package_dir='' yes=0 upgrade=0 user_service=0
+lang='' role='' method='' version=latest source=auto release_url='' package_dir='' yes=0 upgrade=0 user_service=0
 install_dir='' data_dir='' cli_path='' service_name='' master_url='' join_url='' files_dir='' image='' port=1685
 listen='' adopt_config=''
 replace_cli=0 token_stdin=0 no_deps=0
@@ -259,7 +262,7 @@ usage() {
   cat <<'EOF'
 OSS Transfer installer
 Usage: bash install.sh [options]
-  --lang en|zh                   Prompt language
+  --lang en|zh                   Prompt language (default: asked, or system locale)
   --role master|agent            Node role
   --method native|compose        Native service (default) or Docker Compose
   --version latest|VERSION       Release version (default: latest)
@@ -298,7 +301,7 @@ while (($#)); do
     *) fail "Unknown option: $1";;
   esac
 done
-[[ "$lang" == en || "$lang" == zh ]] || fail '--lang must be en or zh'
+[[ -z "$lang" || "$lang" == en || "$lang" == zh ]] || fail '--lang must be en or zh'
 [[ "$source" == auto || "$source" == github || "$source" == jdoss ]] || fail '--source must be auto, github or jdoss'
 version=${version#v}
 [[ "$version" == latest || "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid version'
@@ -306,15 +309,46 @@ os=$(uname -s)
 [[ "$os" == Linux || "$os" == Darwin || "$os" == FreeBSD ]] || fail 'Use Install.ps1 on Windows'
 [[ "$os" == Darwin || "$user_service" == 0 ]] || fail '--user is macOS only'
 if ((user_service == 0)) && [[ $(id -u) != 0 ]]; then
+  # A script read from a pipe cannot be started again; ask for sudo in the pipe.
+  [[ -f "${BASH_SOURCE[0]:-}" ]] || fail 'Run as root: curl ... | sudo bash (macOS user service: curl ... | bash -s -- --user)'
   command -v sudo >/dev/null || fail 'Run as root or use --user on macOS'
   exec sudo bash "${BASH_SOURCE[0]}" "${original_args[@]}"
 fi
 prompt() {
-  local name=$1 label=$2 fallback=$3 answer
+  # The reply must not be named "answer": callers read that global after return.
+  local name=$1 label=$2 fallback=$3 prompt_reply
   printf '%s [%s]: ' "$label" "$fallback" >&2
-  IFS= read -r answer </dev/tty || fail 'Input ended; use --yes with explicit options'
-  printf -v "$name" '%s' "${answer:-$fallback}"
+  IFS= read -r prompt_reply </dev/tty || fail 'Input ended; use --yes with explicit options'
+  printf -v "$name" '%s' "${prompt_reply:-$fallback}"
 }
+interactive=0
+if ((yes == 0)) && { : </dev/tty; } 2>/dev/null; then interactive=1; fi
+if [[ -z "$lang" ]]; then
+  case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in zh*) lang=zh;; *) lang=en;; esac
+  if ((interactive)); then
+    default_lang=1; [[ "$lang" != zh ]] || default_lang=2
+    prompt answer 'Language / 语言: 1 English / 2 中文' "$default_lang"
+    case "$answer" in 2) lang=zh;; *) lang=en;; esac
+  fi
+fi
+default_install_dir() {
+  if [[ "$os" == Linux ]]; then printf '/opt/oss-transfer-go/%s\n' "$1"
+  elif [[ "$os" == FreeBSD ]]; then printf '/usr/local/lib/oss-transfer/%s\n' "$1"
+  elif ((user_service)); then printf '%s\n' "$HOME/Library/Application Support/OSS Transfer/$1/bin"
+  else printf '/usr/local/lib/oss-transfer/%s\n' "$1"; fi
+}
+# Rerunning the same one-line command offers to upgrade what is already installed.
+if ((interactive && upgrade == 0)) && [[ -z "$role$method$package_dir$release_url$adopt_config" ]]; then
+  installed=''
+  for candidate in master agent; do
+    metadata=$(default_install_dir "$candidate")/install.tsv
+    [[ ! -f "$metadata" || -L "$metadata" ]] || installed+=" $candidate"
+  done
+  if [[ -n "$installed" ]]; then
+    prompt answer "$(say "Installed:$installed. 1 Upgrade / 2 Install another role" "已安装：$installed。1 升级 / 2 安装其他角色")" 1
+    [[ "$answer" != 1 ]] || upgrade=1
+  fi
+fi
 # Generated Agent commands and local package installs already chose native mode.
 if [[ -z "$method" && ( -n "$release_url" || -n "$package_dir" || "$upgrade" == 1 ) ]]; then method=native; fi
 if ((yes == 0)); then
@@ -410,12 +444,7 @@ if [[ "$method" == native ]]; then
   fi
   # Match the native installer's default directory to recognize a managed
   # installation. The installer validates all metadata and paths again.
-  if [[ -z "$install_dir" ]]; then
-    if [[ "$os" == Linux ]]; then install_dir=/opt/oss-transfer-go/$role
-    elif [[ "$os" == FreeBSD ]]; then install_dir=/usr/local/lib/oss-transfer/$role
-    elif ((user_service)); then install_dir="$HOME/Library/Application Support/OSS Transfer/$role/bin"
-    else install_dir=/usr/local/lib/oss-transfer/$role; fi
-  fi
+  [[ -n "$install_dir" ]] || install_dir=$(default_install_dir "$role")
   metadata=$install_dir/install.tsv
   owned_cli=''
   if [[ -f "$metadata" && ! -L "$metadata" ]]; then
@@ -565,3 +594,5 @@ else
 fi
 printf 'Compose: %s\n' "$compose_file"
 printf 'docker compose -p %s -f "%s" logs\n' "$service_name" "$compose_file"
+exit 0
+}

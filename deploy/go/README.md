@@ -132,7 +132,7 @@ Use the names and paths printed during installation if you changed the defaults.
 
 ## Upgrade
 
-Stop active tasks. On Linux, use the [upgrade command](../../README.md#upgrade), which downloads the installer and runs it.
+Stop active tasks. On Linux, rerun the [install command](../../README.md#install); it detects existing services and offers to upgrade them.
 
 On macOS, [download the current installer](#download-the-unix-installer) and run `bash install.sh --upgrade`. Add `--user` for a user service. On FreeBSD, run the same upgrade command as root.
 

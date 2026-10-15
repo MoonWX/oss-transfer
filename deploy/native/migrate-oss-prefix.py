@@ -9,8 +9,9 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from threading import Lock
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 ENDPOINT = "https://s3.cn-north-1.jdcloud-oss.com"
 PUBLIC = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/"
@@ -49,9 +50,17 @@ def acl_identity(policy):
     }, sort_keys=True) for grant in policy["Grants"])
 
 
+class OSSError(RuntimeError):
+    def __init__(self, operation, code):
+        self.code = code
+        super().__init__(f"OSS {operation} failed ({code}); no source objects were deleted")
+
+
 class OSS:
     def __init__(self, environment):
         self.environment = environment
+        self.acl_supported = True
+        self.acl_lock = Lock()
 
     def call(self, operation, *arguments):
         result = subprocess.run([
@@ -62,7 +71,7 @@ class OSS:
         if result.returncode:
             error = re.search(rb"An error occurred \(([A-Za-z0-9_.:-]{1,80})\)", result.stderr)
             reason = error.group(1).decode() if error else f"exit {result.returncode}"
-            raise RuntimeError(f"OSS {operation} failed ({reason}); no source objects were deleted")
+            raise OSSError(operation, reason)
         if len(result.stdout) > 4 * 1024 ** 2:
             raise ValueError("OSS response exceeds its bound")
         return json.loads(result.stdout or b"{}")
@@ -100,7 +109,16 @@ class OSS:
         return self.call("head-object", "--key", key)
 
     def acl(self, key):
-        return self.call("get-object-acl", "--key", key)
+        with self.acl_lock:
+            if not self.acl_supported:
+                return None
+            try:
+                return self.call("get-object-acl", "--key", key)
+            except OSSError as error:
+                if error.code != "NotImplemented":
+                    raise
+                self.acl_supported = False
+                return None
 
     def copy(self, source, target, head):
         if target != destination(source):
@@ -122,6 +140,14 @@ class OSS:
             for chunk in iter(lambda: response.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    def public_size(self, key):
+        request = Request(PUBLIC + quote(key, safe="/"), method="HEAD")
+        with urlopen(request, timeout=120) as response:
+            value = response.headers.get("Content-Length", "")
+            if not value.isdigit():
+                raise ValueError("Public download has no content length: " + key)
+            return int(value)
 
 
 def verify_object(store, source, target, source_head, target_head):
@@ -157,15 +183,19 @@ def migrate(store, apply=False):
         copied = target not in before
         if not copied:
             verify_object(store, key, target, source_head, store.head(target))
+            if store.public_size(target) != source[key][0]:
+                raise ValueError("Public download size differs: " + target)
         if apply:
             if copied:
                 store.copy(key, target, source_head)
             # Also repairs ACLs if a prior run stopped between copy and ACL update.
-            if acl_identity(store.acl(target)) != acl_identity(policy):
+            if policy is not None and acl_identity(store.acl(target)) != acl_identity(policy):
                 store.set_acl(target, policy)
             verify_object(store, key, target, source_head, store.head(target))
-            if acl_identity(store.acl(target)) != acl_identity(policy):
+            if policy is not None and acl_identity(store.acl(target)) != acl_identity(policy):
                 raise ValueError("Destination ACL differs: " + target)
+            if store.public_size(target) != source[key][0]:
+                raise ValueError("Public download size differs: " + target)
         return copied
 
     immutable = sorted(key for key in source if not key.startswith(SOURCE + "latest/"))

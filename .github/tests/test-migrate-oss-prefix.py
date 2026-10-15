@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import unittest
 from unittest import mock
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("migrate_oss_prefix", ROOT / "deploy/native/migrate-oss-prefix.py")
@@ -59,6 +60,9 @@ class MemoryOSS:
 
     def public_sha256(self, key):
         return hashlib.sha256(self.data[key]).hexdigest()
+
+    def public_size(self, key):
+        return len(self.data[key])
 
 
 class MigrationTests(unittest.TestCase):
@@ -202,6 +206,32 @@ class MigrationTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"permission denied")
         with mock.patch.object(subprocess, "run", return_value=result), self.assertRaisesRegex(RuntimeError, "copy-object failed"):
             MIGRATION.OSS({}).copy("osstransfer/a", "oss-transfer/a", {"ETag": "etag"})
+
+    def test_only_not_implemented_disables_acl_api_and_is_cached(self):
+        store = MIGRATION.OSS({})
+        with mock.patch.object(store, "call", side_effect=MIGRATION.OSSError("get-object-acl", "NotImplemented")) as call:
+            self.assertIsNone(store.acl("osstransfer/a"))
+            self.assertIsNone(store.acl("osstransfer/b"))
+            self.assertEqual(call.call_count, 1)
+        store = MIGRATION.OSS({})
+        with mock.patch.object(store, "call", side_effect=MIGRATION.OSSError("get-object-acl", "AccessDenied")), \
+                self.assertRaisesRegex(MIGRATION.OSSError, "AccessDenied"):
+            store.acl("osstransfer/a")
+        self.assertTrue(store.acl_supported)
+
+    def test_unsupported_acl_still_requires_public_downloads_without_acl_writes(self):
+        store = MemoryOSS()
+        with mock.patch.object(store, "acl", return_value=None), \
+                mock.patch.object(store, "public_size", wraps=store.public_size) as head:
+            self.run_migration(store)
+            self.assertEqual(store.acl_writes, [])
+            self.assertEqual(head.call_count, len(store.copies))
+        forbidden = HTTPError("https://example.invalid/object", 403, "Forbidden", {}, None)
+        with mock.patch.object(store, "acl", return_value=None), \
+                mock.patch.object(store, "public_size", side_effect=forbidden), self.assertRaises(HTTPError):
+            self.run_migration(store)
+        with mock.patch.object(MIGRATION, "urlopen", side_effect=forbidden), self.assertRaises(HTTPError):
+            MIGRATION.OSS({}).public_size("oss-transfer/a")
 
 
 if __name__ == "__main__":

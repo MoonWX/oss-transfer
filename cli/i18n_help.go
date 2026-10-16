@@ -42,10 +42,10 @@ Tasks
   task stop|resume|start|retry <ID...>
   task delete <ID...>             Move records to trash
   task trash                      List deleted task records
+  task restore <ID...>             Restore selected tasks from the trash
   task purge <ID...> --yes         Permanently remove selected trash records
   task bandwidth <ID> [Mbps|unlimited]
   task report <ID> [--output file.zip]
-  task creation <creationID>      Check asynchronous task creation
 
 Nodes and storage
   node list|show|add|invite|update|remove
@@ -112,10 +112,10 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
   task stop|resume|start|retry <ID...>
   task delete <ID...>             記録をごみ箱に移動
   task trash                      ごみ箱の記録を表示
+  task restore <ID...>             指定したタスクをごみ箱から復元
   task purge <ID...> --yes         指定したごみ箱の記録を完全削除
   task bandwidth <ID> [Mbps|unlimited]
   task report <ID> [--output ファイル.zip]
-  task creation <creationID>      非同期作成の進捗を表示
 
 ノードとストレージ
   node list|show|add|invite|update|remove
@@ -180,7 +180,6 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-N [--node NODE]
   children <ID> [--offset 0] [--limit 25]
-  creation <creationID>
   trash [--task-id ID] [--worker NODE] [--direction DIRECTION] [--search TEXT]
         [--limit 100] [--before-id ID]
 
@@ -188,6 +187,7 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   resume|retry <ID...>             Resume stopped/failed tasks, retaining completed work
   start <ID...>                    Start pending tasks not started automatically
   delete <ID...>                   Move records to trash
+  restore <ID...>                  Restore selected tasks from the trash
   purge <ID...> --yes              Permanently remove selected trash records
   bandwidth <ID>                  Show the task bandwidth limit
   bandwidth <ID> <Mbps|unlimited>  Set/remove the task's additional limit
@@ -204,7 +204,7 @@ Actions accept parent IDs: 224,225 or 224-226. Incomplete node status prevents t
 Child pages default to 25 IDs; --limit is 1–200, --offset skips IDs without renumbering.
 list/trash accept --limit 1–10000; --before-id loads older records.
 --child loads only the selected child. Use --node when the ID exists on multiple nodes.
---watch supports list/show/children/creation/trash and bandwidth without a new value.
+--watch supports list/show/children/trash and bandwidth without a new value.
 Deleting records does not delete source or target objects.
 `, `タスク管理
 使い方: oss-transfer-cli task <サブコマンド> [引数]
@@ -215,7 +215,6 @@ Deleting records does not delete source or target objects.
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-N [--node ノード]
   children <ID> [--offset 0] [--limit 25]
-  creation <creationID>
   trash [--task-id ID] [--worker ノード] [--direction 方向] [--search 文字列]
         [--limit 100] [--before-id ID]
 
@@ -223,6 +222,7 @@ Deleting records does not delete source or target objects.
   resume|retry <ID...>             完了済みの処理を保持して停止・失敗タスクを再開
   start <ID...>                    自動開始していない待機タスクを開始
   delete <ID...>                   記録をごみ箱に移動
+  restore <ID...>                  指定したタスクをごみ箱から復元
   purge <ID...> --yes              ごみ箱の指定記録を完全削除
   bandwidth <ID>                  タスクの帯域幅上限を表示
   bandwidth <ID> <Mbps|unlimited>  タスクの追加上限を設定・解除
@@ -239,7 +239,7 @@ Deleting records does not delete source or target objects.
 子タスクは既定で 25 番号ずつ取得します。--limit は 1～200、--offset は番号を変えずに取得位置を指定します。
 list/trash の --limit は 1～10000、--before-id は指定 ID より古い記録を取得します。
 --child は指定した子タスクのみ取得します。同じ ID が複数ノードにある場合は --node を指定してください。
---watch は list/show/children/creation/trash と、新しい値を指定しない bandwidth に対応します。
+--watch は list/show/children/trash と、新しい値を指定しない bandwidth に対応します。
 記録を削除しても転送元や転送先のオブジェクトは削除されません。
 `},
 	cliTaskCreateHelp: {`Create a transfer task

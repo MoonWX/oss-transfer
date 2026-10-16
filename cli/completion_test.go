@@ -40,6 +40,7 @@ printf '%s\n' "${COMPREPLY[@]}"
 		{[]string{"oss-transfer-cli", "agent", "update", "node-one", "--"}, []string{"--local-root", "--clear-local-roots"}},
 		{[]string{"oss-transfer-cli", "agent", "invite", "--"}, []string{"--label", "--address"}},
 		{[]string{"oss-transfer-cli", "node", ""}, []string{"invite"}},
+		{[]string{"oss-transfer-cli", "task", ""}, []string{"restore", "purge"}},
 		{[]string{"oss-transfer-cli", "task", "children", "224", "--"}, []string{"--offset", "--limit"}},
 		{[]string{"oss-transfer-cli", "task", "show", "224", "--"}, []string{"--child", "--node", "--offset", "--limit"}},
 		{[]string{"oss-transfer-cli", "task", "trash", "--"}, []string{"--task-id", "--worker", "--direction", "--search"}},
@@ -53,6 +54,9 @@ printf '%s\n' "${COMPREPLY[@]}"
 			if !strings.Contains("\n"+string(output), "\n"+want+"\n") {
 				t.Errorf("completion %v missing %s: %s", test.words, want, output)
 			}
+		}
+		if len(test.words) == 3 && test.words[1] == "task" && strings.Contains("\n"+string(output), "\ncreation\n") {
+			t.Fatal("completion still offers unsupported task creation")
 		}
 	}
 }

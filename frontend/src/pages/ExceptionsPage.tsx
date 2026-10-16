@@ -1,6 +1,11 @@
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { useWorkerStatus } from "../lib/workerStatus";
 import {
+  exceptionCsv,
+  exceptionDetails,
+  missingExceptionNodes,
+} from "../lib/exceptionRecords";
+import {
   useCallback,
   useEffect,
   useRef,
@@ -53,6 +58,7 @@ import {
 type Failure = {
   taskIndex?: number;
   parentTaskId?: number;
+  childTaskId?: string;
   workerNode?: string;
   executionNodeIp?: string;
   sourceBucket?: string;
@@ -69,7 +75,6 @@ type Failure = {
   timestampFormatted?: string;
   direction?: string;
   tmpFilePath?: string;
-  storageId?: string;
   [key: string]: unknown;
 };
 type Filters = {
@@ -85,6 +90,8 @@ type Result = {
   items: Failure[];
   total: number;
   partial?: boolean;
+  complete?: boolean;
+  queriedWorkers?: string[];
   unreachableWorkers?: string[];
   failedWorkers?: string[];
   workerErrors?: Record<string, string>;
@@ -109,41 +116,7 @@ const failureTime = (item: Failure) =>
     : item.timestampFormatted || "—";
 
 function exportRows(rows: Failure[], name: string) {
-  const fields = [
-    "workerNode",
-    "taskIndex",
-    "parentTaskId",
-    "direction",
-    "sourceBucket",
-    "destBucket",
-    "key",
-    "destinationKey",
-    "localPath",
-    "stage",
-    "errorCode",
-    "errorMessage",
-    "objectSize",
-    "retryCount",
-    "timestampFormatted",
-    "tmpFilePath",
-    "storageId",
-  ];
-  const cell = (value: unknown) => {
-    let text =
-      value == null
-        ? ""
-        : typeof value === "object"
-          ? JSON.stringify(value)
-          : String(value);
-    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-    return `"${text.replaceAll('"', '""')}"`;
-  };
-  const csv =
-    "\uFEFF" +
-    [
-      fields.map(cell).join(","),
-      ...rows.map((row) => fields.map((field) => cell(row[field])).join(",")),
-    ].join("\r\n");
+  const csv = exceptionCsv(rows);
   const url = URL.createObjectURL(
     new Blob([csv], { type: "text/csv;charset=utf-8;" }),
   );
@@ -232,6 +205,7 @@ export default function ExceptionsPage() {
           limit: Number(filters.limit) || 1000,
         };
         if (filters.task.trim()) body.taskIndex = Number(filters.task);
+        if (filters.node) body.executionNodeIp = filters.node;
         if (filters.source.trim()) body.sourceBucket = filters.source.trim();
         if (filters.destination.trim())
           body.destBucket = filters.destination.trim();
@@ -263,6 +237,11 @@ export default function ExceptionsPage() {
           items,
           total,
           respondingNodes,
+          queriedWorkers: Array.isArray(raw.queriedWorkers)
+            ? (raw.queriedWorkers as string[])
+            : undefined,
+          complete:
+            typeof raw.complete === "boolean" ? raw.complete : undefined,
           partial: raw.partial === true,
           unreachableWorkers: Array.isArray(raw.unreachableWorkers)
             ? (raw.unreachableWorkers as string[])
@@ -295,20 +274,14 @@ export default function ExceptionsPage() {
     const lastPage = Math.max(0, Math.ceil(count / pageSize) - 1);
     if (page > lastPage) setPage(lastPage);
   }, [result, isLocal, page, pageSize]);
-  const expectedNodes = Object.keys(nodes.data?.workers ?? {}).filter(
-    (node) => !filters.node || node === filters.node,
-  );
-  const missingNodes = [
-    ...new Set([
-      ...(!isLocal && result
-        ? expectedNodes.filter(
-            (node) => !result.respondingNodes?.includes(node),
-          )
-        : []),
-      ...(result?.unreachableWorkers ?? []),
-      ...(result?.failedWorkers ?? []),
-    ]),
-  ];
+  const hasMembershipSnapshot = Array.isArray(result?.queriedWorkers);
+  const legacyNodes =
+    !isLocal && !filters.task
+      ? Object.keys(nodes.data?.workers ?? {}).filter(
+          (node) => !filters.node || node === filters.node,
+        )
+      : [];
+  const missingNodes = missingExceptionNodes(result, legacyNodes);
   const visible = result?.items
     ? isLocal
       ? result.items
@@ -576,13 +549,15 @@ export default function ExceptionsPage() {
         </Stack>
       </Paper>
       {error && <Alert severity="error">{error}</Alert>}
-      {nodes.error && (
+      {nodes.error && !hasMembershipSnapshot && (
         <Alert severity="warning">
           {tr("节点清单读取失败，无法确认结果是否覆盖全部节点。")}
         </Alert>
       )}
       {clearError && <Alert severity="warning">{clearError}</Alert>}
-      {(result?.partial || missingNodes.length > 0) && (
+      {(result?.partial ||
+        result?.complete === false ||
+        missingNodes.length > 0) && (
         <Alert severity="warning">
           {missingNodes.length > 0
             ? tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
@@ -913,58 +888,30 @@ export default function ExceptionsPage() {
         <DialogContent>
           <Stack spacing={2}>
             {selected &&
-              Object.entries(selected)
-                .filter(
-                  ([, value]) =>
-                    value !== null && value !== undefined && value !== "",
-                )
-                .map(([key, value]) => (
-                  <Box key={key}>
-                    <Typography variant="caption" color="text.secondary">
-                      {(
-                        {
-                          taskIndex:
-                            selected.parentTaskId != null
-                              ? tr("子任务 ID")
-                              : tr("任务 ID"),
-                          parentTaskId: tr("任务 ID"),
-                          workerNode: tr("执行节点"),
-                          executionNodeIp: tr("执行节点"),
-                          sourceBucket: tr("源 Bucket"),
-                          destBucket: tr("目标 Bucket"),
-                          key: tr("源对象 Key"),
-                          destinationKey: tr("目标对象 Key"),
-                          localPath: tr("本地路径"),
-                          errorMessage: tr("错误信息"),
-                          errorCode: tr("错误代码"),
-                          objectSize: tr("对象大小（字节）"),
-                          stage: tr("失败阶段"),
-                          retryCount: tr("重试次数"),
-                          timestamp: tr("时间戳"),
-                          timestampFormatted: tr("记录时间"),
-                          tmpFilePath: tr("临时文件路径"),
-                          storageId: tr("存储 ID"),
-                          direction: tr("迁移方向"),
-                        } as Record<string, string>
-                      )[key] || key}
-                    </Typography>
-                    <Typography
-                      variant="body2"
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        whiteSpace: "pre-wrap",
-                        overflowWrap: "anywhere",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {typeof value === "object"
-                        ? JSON.stringify(value, null, 2)
+              exceptionDetails(selected).map(({ key, label, value, date }) => (
+                <Box key={key}>
+                  <Typography variant="caption" color="text.secondary">
+                    {tr(label)}
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      whiteSpace: "pre-wrap",
+                      overflowWrap: "anywhere",
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    {typeof value === "boolean"
+                      ? tr(value ? "是" : "否")
+                      : date
+                        ? new Date(String(value)).toLocaleString(getLocale())
                         : String(value)}
-                    </Typography>
-                    <Divider sx={{ mt: 1.5 }} />
-                  </Box>
-                ))}
+                  </Typography>
+                  <Divider sx={{ mt: 1.5 }} />
+                </Box>
+              ))}
           </Stack>
         </DialogContent>
         <DialogActions>

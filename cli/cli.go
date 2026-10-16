@@ -229,7 +229,7 @@ func watchable(args []string) bool {
 	switch args[0] {
 	case "task":
 		switch args[1] {
-		case "list", "show", "children", "creation", "trash":
+		case "list", "show", "children", "trash":
 			return true
 		case "bandwidth":
 			return len(args) == 3

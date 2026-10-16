@@ -32,14 +32,21 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return taskControl(client, action, args)
 	case "trash":
 		return taskTrash(client, args)
-	case "purge":
-		opts, err := parseCommandOptions(args, nil, []string{"yes"})
+	case "purge", "restore":
+		var flags []string
+		if action == "purge" {
+			flags = []string{"yes"}
+		}
+		opts, err := parseCommandOptions(args, nil, flags)
 		if err != nil {
 			return nil, err
 		}
 		ids, err := taskIDs(opts.Positionals)
 		if err != nil {
 			return nil, err
+		}
+		if action == "restore" {
+			return client.Post("/restore", map[string]interface{}{"taskIds": ids})
 		}
 		if !opts.Has("yes") {
 			return nil, cliErrorf("永久删除指定任务记录不可恢复；确认后添加 --yes")
@@ -49,15 +56,6 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return taskBandwidth(client, args)
 	case "report":
 		return taskReport(client, args)
-	case "creation":
-		opts, err := parseCommandOptions(args, nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		if len(opts.Positionals) != 1 || strings.TrimSpace(opts.Positionals[0]) == "" {
-			return nil, cliErrorf("用法: task creation <creationId>")
-		}
-		return client.Get("/task-creations/" + url.PathEscape(opts.Positionals[0]))
 	default:
 		return nil, cliErrorf("未知 task 子命令 %q", action)
 	}

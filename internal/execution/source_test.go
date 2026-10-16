@@ -1,12 +1,13 @@
 package execution
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,14 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
+
+func samePersistedSourceValue(a, b any) bool {
+	// Compare every stored field, without comparing time.Time's in-memory
+	// Location or monotonic clock, which JSON does not persist.
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
+}
 
 func missingInventoryFixture(t *testing.T) *fixture {
 	f := newFixture(t, 2)
@@ -67,7 +76,7 @@ func TestMissingInventoryRetryPinsFirstIdentityAndCounts(t *testing.T) {
 			if done.Status != Completed || done.Counters != (Counters{Total: 2, TotalBytes: int64(len(data)), Succeeded: 2, SucceededBytes: int64(len(data))}) {
 				t.Fatalf("repaired ledger: %+v", done)
 			}
-			if done.Results[0].ResolvedSource != nil || done.Results[1].ResolvedSource == nil || !reflect.DeepEqual(done.Job, f.job) || done.Fingerprint != first.Fingerprint {
+			if done.Results[0].ResolvedSource != nil || done.Results[1].ResolvedSource == nil || !samePersistedSourceValue(done.Job, f.job) || done.Fingerprint != first.Fingerprint {
 				t.Fatal("assignment changed or wrong object rebound")
 			}
 			if err := done.ValidateResolvedSources(true, &first); err != nil {
@@ -94,7 +103,7 @@ func (s *pinCheckingSource) Open(ctx context.Context, key string, opts transfers
 	}
 	for _, result := range record.Results {
 		if result.ResolvedSource != nil && result.ResolvedSource.Key == key {
-			if !reflect.DeepEqual(result.ResolvedSource, opts.Expected) {
+			if !samePersistedSourceValue(result.ResolvedSource, opts.Expected) {
 				return nil, transferstore.Object{}, errors.New("read did not use durable pin")
 			}
 			if s.fail {
@@ -156,7 +165,7 @@ func TestResolvedInventoryIdentitySurvivesRestartAndRejectsChangedSource(t *test
 		t.Fatal(err)
 	}
 	after := f.wait()
-	if after.Status != Failed || !strings.Contains(after.Results[0].Error, "source changed") || !reflect.DeepEqual(after.Results[0].ResolvedSource, first.Results[0].ResolvedSource) {
+	if after.Status != Failed || !strings.Contains(after.Results[0].Error, "source changed") || !samePersistedSourceValue(after.Results[0].ResolvedSource, first.Results[0].ResolvedSource) {
 		t.Fatalf("source rebound after restart: %+v", after)
 	}
 	if _, err := os.Stat(filepath.Join(f.dst, f.job.Items[0].DestinationKey)); !errors.Is(err, os.ErrNotExist) {

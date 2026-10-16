@@ -71,7 +71,7 @@ _oss_transfer_cli_completion() {
             esac ;;
         task)
             case "$action" in
-                "") choices="list show children creation create import stop resume start retry delete trash purge bandwidth report" ;;
+                "") choices="list show children create import stop resume start retry delete trash restore purge bandwidth report" ;;
                 list) flags="--status --source --dest --worker --direction --search --all --before-id --limit" ;;
                 show) flags="--child --node --offset --limit" ;;
                 children) flags="--offset --limit" ;;

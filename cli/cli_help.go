@@ -14,10 +14,10 @@ const cliHelp = `OSS Transfer CLI
   task stop|resume|start|retry <ID...>
   task delete <ID...>            将任务记录移入回收站
   task trash                     查看及筛选回收站任务
+  task restore <ID...>            从回收站恢复指定任务
   task purge <ID...> --yes        永久删除回收站内指定记录
   task bandwidth <ID> [Mbps|unlimited]
   task report <ID> [--output 文件.zip]
-  task creation <创建记录ID>     查看异步创建进度
 
 节点与存储
   node list|show|update|remove    管理执行节点
@@ -87,7 +87,6 @@ const cliTaskHelp = `任务管理
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-序号 [--node 节点]
   children <ID> [--offset 0] [--limit 25]
-  creation <创建记录ID>
   trash [--task-id ID] [--worker 节点] [--direction 方向] [--search 关键词]
 
 操作
@@ -96,6 +95,7 @@ const cliTaskHelp = `任务管理
   retry <ID...>                   与 resume 相同，保留已完成进度
   start <ID...>                   启动尚未自动执行的待执行任务
   delete <ID...>                  将任务记录移入回收站
+  restore <ID...>                 从回收站恢复指定任务
   purge <ID...> --yes             永久删除回收站内指定任务记录
   bandwidth <ID>                 查看任务带宽上限
   bandwidth <ID> <Mbps|unlimited> 设置或移除任务额外带宽上限
@@ -125,7 +125,7 @@ const cliTaskHelp = `任务管理
 子任务默认读取 25 个编号，--limit 为 1–200；--offset 跳过指定数量的编号，不重新编号。
 list/trash 的 --limit 为 1–10000；--before-id 从指定 ID 之前加载更早任务。
 --child 按编号直接读取详情，不加载其他子任务；同编号在多个节点存在时须用 --node。
---watch 仅支持 list/show/children/creation/trash 及不带新值的 bandwidth 查询。
+--watch 仅支持 list/show/children/trash 及不带新值的 bandwidth 查询。
 删除操作只处理迁移记录，源端和目标端的数据对象不受影响。
 `
 

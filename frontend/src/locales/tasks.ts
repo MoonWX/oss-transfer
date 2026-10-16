@@ -1518,6 +1518,38 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Exception details",
     ja: "例外の詳細",
   },
+  源存储连接: {
+    en: "Source connection",
+    ja: "転送元ストレージ接続",
+  },
+  目标存储连接: {
+    en: "Destination connection",
+    ja: "転送先ストレージ接続",
+  },
+  "逻辑 Key": {
+    en: "Logical key",
+    ja: "論理キー",
+  },
+  原因代码: {
+    en: "Reason code",
+    ja: "理由コード",
+  },
+  观测时间: {
+    en: "Observed",
+    ja: "観測日時",
+  },
+  目标已写入: {
+    en: "Destination written",
+    ja: "転送先への書き込み済み",
+  },
+  是: {
+    en: "Yes",
+    ja: "はい",
+  },
+  否: {
+    en: "No",
+    ja: "いいえ",
+  },
   "子任务 ID": {
     en: "Subtask ID",
     ja: "子タスク ID",

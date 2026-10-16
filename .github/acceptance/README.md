@@ -35,7 +35,7 @@ FreeBSD caches its Python environment and dependencies; changes to the requireme
 
 `output/platform/evidence.json` records each stage's time and result. Detailed output is in the adjacent logs. The cluster evidence also records which groups completed before the exclusive transfer window.
 
-FreeBSD arm64 currently uses QEMU software emulation with four virtual CPUs on `ubuntu-latest`. The hosted `ubuntu-26.04-arm` runner did not expose `/dev/kvm` in the capability check, so switching labels would not enable hardware virtualization. Recheck that capability before changing the host.
+FreeBSD arm64 uses QEMU software emulation on `ubuntu-26.04-arm`, with two virtual CPUs and `GOMAXPROCS=2`. This ARM host did not expose `/dev/kvm` in the capability check; the guest still uses TCG, not hardware virtualization. Host and guest diagnostics record CPU counts, the QEMU version and a KVM VM-creation probe. Compare stage timings before drawing a speed conclusion. FreeBSD amd64 keeps the default VM CPU settings on `ubuntu-latest`.
 
 Release waits for every job. Builds and publication read the same [platform list](../../deploy/native/platforms.json).
 

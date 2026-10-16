@@ -385,10 +385,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {arch: amd64, vm_arch: x86_64, cpu: ''}
-          - {arch: arm64, vm_arch: aarch64, cpu: '4'}
-    # Hosted ARM runners do not expose KVM; changing the host label would still use TCG.
-    runs-on: ubuntu-latest
+          - {arch: amd64, vm_arch: x86_64, runner: ubuntu-latest, cpu: '', gomaxprocs: ''}
+          - {arch: arm64, vm_arch: aarch64, runner: ubuntu-26.04-arm, cpu: '2', gomaxprocs: '2'}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -432,6 +431,7 @@ jobs:
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         env:
           QA_ARCH: ${{ matrix.arch }}
+          QA_GOMAXPROCS: ${{ matrix.gomaxprocs }}
         with:
           cache-after-prepare: true
           cache-after-prepare-key-suffix: ${{ hashFiles('.github/acceptance/requirements.txt') }}
@@ -439,7 +439,7 @@ jobs:
           arch: ${{ matrix.vm_arch }}
           cpu: ${{ matrix.cpu }}
           copyback: false
-          envs: QA_ARCH GITHUB_SHA
+          envs: QA_ARCH QA_GOMAXPROCS GITHUB_SHA
           prepare: |
             set -e
             pkg install -y bash curl python311 ca_root_nss
@@ -449,6 +449,16 @@ jobs:
             status=0
             sh -e <<'TESTS' || status=$?
             py=/opt/oss-transfer-ci-venv/bin/python
+            if [ "$QA_ARCH" = arm64 ]; then export GOMAXPROCS="$QA_GOMAXPROCS"; fi
+            "$py" - <<'PYTHON'
+            import json, os, platform, subprocess
+            from pathlib import Path
+            details = {"system": platform.system(), "release": platform.release(),
+                       "architecture": platform.machine(), "cpuCount": os.cpu_count(),
+                       "hwNcpu": int(subprocess.check_output(["sysctl", "-n", "hw.ncpu"], text=True).strip()),
+                       "gomaxprocs": os.environ.get("GOMAXPROCS")}
+            Path("output/freebsd-guest-diagnostics.json").write_text(json.dumps(details, indent=2) + "\n")
+            PYTHON
             export OSS_TRANSFER_QA_S3_CONFIG="$PWD/output/host-s3-config.json"
             "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package --external-s3-fixture
             "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
@@ -457,13 +467,52 @@ jobs:
             TESTS
             mkdir -p output
             printf '%s\n' "$status" > output/freebsd-exit-code
+      - name: Record host virtualization diagnostics
+        if: always()
+        env:
+          QA_VM_ARCH: ${{ matrix.vm_arch }}
+        run: |
+          python3 - <<'PYTHON'
+          import fcntl, json, os, platform, shutil, subprocess
+          from pathlib import Path
+          details = {"system": platform.system(), "release": platform.release(),
+                     "architecture": platform.machine(), "cpuCount": os.cpu_count(),
+                     "nproc": int(subprocess.check_output(["nproc"], text=True).strip())}
+          binary = shutil.which("qemu-system-" + os.environ["QA_VM_ARCH"])
+          details["qemuVersion"] = (subprocess.check_output([binary, "--version"], text=True).splitlines()[0]
+                                    if binary else None)
+          kvm = {"deviceExists": Path("/dev/kvm").exists(), "opened": False, "vmCreated": False}
+          try:
+              with open("/dev/kvm", "r+b", buffering=0) as device:
+                  kvm["opened"] = True
+                  kvm["apiVersion"] = fcntl.ioctl(device, 0xAE00, 0)
+                  vm = fcntl.ioctl(device, 0xAE01, 0)
+                  os.close(vm)
+                  kvm["vmCreated"] = True
+          except OSError as error:
+              kvm["error"] = str(error)
+          details["kvm"] = kvm
+          details["qemuProcesses"] = []
+          for path in Path("/proc").glob("[0-9]*/cmdline"):
+              try:
+                  args = path.read_bytes().decode().rstrip("\0").split("\0")
+              except (OSError, UnicodeError):
+                  continue
+              if not args or not Path(args[0]).name.startswith("qemu-system-"):
+                  continue
+              settings = {key: args[args.index(key) + 1] for key in ("-smp", "-accel", "-cpu", "-machine")
+                          if key in args and args.index(key) + 1 < len(args)}
+              details["qemuProcesses"].append({"executable": Path(args[0]).name, "settings": settings})
+          Path("output").mkdir(exist_ok=True)
+          Path("output/freebsd-host-diagnostics.json").write_text(json.dumps(details, indent=2) + "\n")
+          PYTHON
       - name: Copy back only acceptance evidence
         if: always()
         run: |
           mkdir -p output
           rsync -a --timeout=120 --rsync-path=/usr/local/bin/rsync \
             -e 'ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4' \
-            --include='/freebsd-exit-code' \
+            --include='/freebsd-exit-code' --include='/freebsd-guest-diagnostics.json' \
             --include='/platform/' --include='/platform/evidence.json' --include='/platform/*.log' \
             --include='/smoke/' --include='/smoke/evidence.json' --include='/smoke/*.log' \
             --include='/cluster/' --include='/cluster/evidence.json' --include='/cluster/bandwidth-samples.json' --include='/cluster/*.log' \
@@ -486,6 +535,8 @@ jobs:
           path: |
             output/freebsd-exit-code
             output/freebsd-host-s3.json
+            output/freebsd-host-diagnostics.json
+            output/freebsd-guest-diagnostics.json
             output/platform/evidence.json
             output/platform/*.log
             output/smoke/evidence.json

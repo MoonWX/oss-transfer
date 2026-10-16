@@ -109,6 +109,9 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 	f := &inventoryGateFactory{base: base, reached: make(chan struct{})}
 	scanner, db := newScanner(t, path, f, Options{})
 	root := sourceFiles(t, 131)
+	if err := os.Remove(filepath.Join(root, "0000.txt")); err != nil {
+		t.Fatal(err)
+	}
 	keys := []string{}
 	for i := range 130 {
 		keys = append(keys, fmt.Sprintf("%04d.txt", i))
@@ -147,6 +150,9 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 	if err != nil || stopped.Status != Stopped || stopped.TotalObjects != 128 {
 		t.Fatal(stopped, err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "0000.txt"), []byte("supplied during restart"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = scanner.Resume(ctx, 1, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +161,19 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 		t.Fatal("resumed scan enlarged or duplicated inventory", done)
 	}
 	assertBatches(t, scanner, 2, 130)
+	retained, _, err := scanner.Batch(ctx, 1, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingRetained := false
+	for _, object := range retained.Objects {
+		if object.Key == "0000.txt" {
+			missingRetained = execution.SourceIdentityUnknown(object)
+		}
+	}
+	if !missingRetained {
+		t.Fatal("rescan changed the already assigned missing-key identity")
+	}
 	// Execute a selected object plus a missing key against real local storage.
 	target := t.TempDir()
 	jobs, err := execution.NewRepository(db, execution.RepositoryOptions{})

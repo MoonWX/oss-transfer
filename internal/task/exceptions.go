@@ -62,6 +62,7 @@ func syncExceptionIndex(tx *state.Tx, p Parent, child Child, record execution.Re
 		if !ok {
 			return errors.New("failed ledger references an unknown object")
 		}
+		item.Source = execution.EffectiveSource(item, result)
 		entry := Exception{ParentID: p.ID, ChildID: child.Job.ChildID, Generation: record.Job.Generation, Attempt: record.Attempt, Direction: p.Spec.Direction, Node: child.Node.Address, Source: child.Job.Source, Destination: child.Job.Destination, Key: item.Source.Key, DestinationKey: item.DestinationKey, Size: item.Source.Size, Error: result.Error, TargetCommitted: result.TargetCommitted, ObservedAt: record.UpdatedAt}
 		entry.Identity = digest(struct {
 			Generation, Attempt uint64

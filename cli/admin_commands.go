@@ -263,9 +263,12 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		}
 		return result, err
 	case "add", "update":
-		o, err := adminOptions(args, []string{"endpoint", "access-key-env", "access-key-file", "secret-key-env", "secret-key-file", "validate", "v2-signer", "path-style"}, nil, 1)
+		o, err := adminOptions(args, []string{"endpoint", "region", "access-key-env", "access-key-file", "secret-key-env", "secret-key-file", "session-token-env", "session-token-file", "validate", "v2-signer", "path-style"}, []string{"clear-session-token"}, 1)
 		if err != nil {
 			return nil, err
+		}
+		if o.Has("clear-session-token") && (o.Has("session-token-env") || o.Has("session-token-file")) {
+			return nil, cliErrorf("--clear-session-token 不能与 --session-token-env 或 --session-token-file 同时使用")
 		}
 		alias := o.Positionals[0]
 		if err := adminAlias(alias); err != nil {
@@ -273,7 +276,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		}
 		body := map[string]interface{}{"alias": alias, "validate": true, "useV2SignerType": nil, "pathStyleEnable": nil}
 		if action == "update" {
-			if len(o.Values) == 0 {
+			if len(o.Values) == 0 && !o.Has("clear-session-token") {
 				return nil, cliErrorf("请指定至少一个要修改的字段")
 			}
 			current, err := client.Get("/s3-config")
@@ -284,8 +287,10 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			for _, raw := range adminArray(current["configs"]) {
 				config, _ := raw.(map[string]interface{})
 				if config["alias"] == alias {
-					for _, key := range []string{"endpoint", "accessKey", "secretKey", "useV2SignerType", "pathStyleEnable"} {
-						body[key] = config[key]
+					for _, key := range []string{"endpoint", "region", "accessKey", "secretKey", "sessionToken", "useV2SignerType", "pathStyleEnable"} {
+						if value, exists := config[key]; exists {
+							body[key] = value
+						}
 					}
 					found = true
 					break
@@ -298,7 +303,10 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		if o.Has("endpoint") {
 			body["endpoint"] = strings.TrimSpace(o.Value("endpoint"))
 		}
-		for flag, field := range map[string]string{"access-key": "accessKey", "secret-key": "secretKey"} {
+		if o.Has("region") {
+			body["region"] = strings.TrimSpace(o.Value("region"))
+		}
+		for flag, field := range map[string]string{"access-key": "accessKey", "secret-key": "secretKey", "session-token": "sessionToken"} {
 			value, supplied, err := adminCredential(o, flag)
 			if err != nil {
 				return nil, err
@@ -306,6 +314,9 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			if supplied {
 				body[field] = value
 			}
+		}
+		if o.Has("clear-session-token") {
+			body["sessionToken"] = ""
 		}
 		for flag, field := range map[string]string{"validate": "validate", "v2-signer": "useV2SignerType", "path-style": "pathStyleEnable"} {
 			if o.Has(flag) {

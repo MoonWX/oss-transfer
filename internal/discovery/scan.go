@@ -25,7 +25,7 @@ func objectKey(parentID int64, key string) string {
 }
 
 func sameObject(left, right transferstore.Object) bool {
-	return left.Key == right.Key && left.Size == right.Size && left.ETag == right.ETag &&
+	return left.Key == right.Key && left.Size == right.Size && transferstore.EqualETag(left.ETag, right.ETag) &&
 		left.VersionID == right.VersionID && left.ModifiedAt.Equal(right.ModifiedAt) &&
 		left.ContentType == right.ContentType && left.ContentEncoding == right.ContentEncoding &&
 		left.ContentDisposition == right.ContentDisposition && left.CacheControl == right.CacheControl &&
@@ -69,7 +69,12 @@ func (s *Scanner) commitBatch(ctx context.Context, attempt State, pending []tran
 				return err
 			}
 			if found && !sameObject(prior.Object, object) {
-				return changed(object.Key)
+				if attempt.Spec.InventoryID == "" || !execution.SourceIdentityUnknown(prior.Object) {
+					return changed(object.Key)
+				}
+				// Keep the original missing-key assignment on rescan. Execution
+				// pins its first available identity before reading any data.
+				object = prior.Object
 			}
 			if prior.SeenAttempt == attempt.Attempt {
 				continue

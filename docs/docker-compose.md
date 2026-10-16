@@ -70,6 +70,8 @@ docker run --rm --volumes-from "$(docker compose --profile agent ps -aq agent)" 
 
 Keep `docker-compose.yml` and `.env` with the backup. These archives contain application state and Agent credentials; files in `/files` require their own backup. The commands overwrite earlier archives with the same names.
 
+When retrying a file-list task resolves a previously missing source object, the database records its identity in a format that V4.1.8 and earlier cannot read. Downgrading then requires restoring the matching pre-upgrade Master and Agent data backups as well as the old image.
+
 Pull the new image and start the Master:
 
 ```sh

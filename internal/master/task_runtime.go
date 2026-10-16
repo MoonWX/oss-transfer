@@ -383,7 +383,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 	}
 	s := t.server
 	scanner := nodeSession(p.Spec.Nodes[0])
-	control := agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation, RetryFailed: true}
+	control := agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation, RetryFailed: true, InventorySource: p.Spec.InventoryID != ""}
 	scanControl := agentservice.ScanRequest{ParentID: p.ID, Generation: p.Generation}
 	if p.Status == "STOPPING" {
 		if err := t.stopMembers(ctx, p); err != nil {
@@ -481,7 +481,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 			if err != nil {
 				return err
 			}
-			if err := s.agentCall(ctx, nodeSession(child.Node), "child_accept", true, child.Job, nil); err != nil {
+			if err := s.agentCall(ctx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil); err != nil {
 				return err
 			}
 			p.DispatchedThrough = int(page.Batch.Number)
@@ -506,7 +506,7 @@ func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) err
 			if p.Status != "RUNNING" {
 				continue
 			}
-			if err = t.server.agentCall(ctx, nodeSession(child.Node), "child_accept", true, child.Job, nil); err != nil {
+			if err = t.server.agentCall(ctx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil); err != nil {
 				return err
 			}
 			continue

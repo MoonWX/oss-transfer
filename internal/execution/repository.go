@@ -252,7 +252,7 @@ func (r *Repository) Pending(ctx context.Context, after string, limit int) ([]Re
 
 // Accept is the durable ACK boundary. It neither schedules work nor silently
 // drops it when a memory queue fills. Replays cannot change the work definition.
-func (r *Repository) Accept(ctx context.Context, job Job) (Record, error) {
+func (r *Repository) Accept(ctx context.Context, job Job, inventorySource ...bool) (Record, error) {
 	fingerprint, err := validate(job)
 	if err != nil {
 		return Record{}, err
@@ -296,7 +296,7 @@ func (r *Repository) Accept(ctx context.Context, job Job) (Record, error) {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		result = Record{Job: job, Status: Waiting, Fingerprint: fingerprint, Results: make([]ItemResult, len(job.Items))}
+		result = Record{InventorySource: len(inventorySource) > 0 && inventorySource[0], Job: job, Status: Waiting, Fingerprint: fingerprint, Results: make([]ItemResult, len(job.Items))}
 		for i, item := range job.Items {
 			result.Results[i] = ItemResult{ID: item.ID, Status: ItemPending}
 		}
@@ -430,7 +430,7 @@ func (r *Repository) begin(ctx context.Context, child string, generation uint64,
 		if retryFailed {
 			for i := range j.Results {
 				if j.Results[i].Status == ItemFailed {
-					j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending}
+					j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
 				}
 			}
 			recount(j)
@@ -472,6 +472,7 @@ func (r *Repository) commit(ctx context.Context, child string, generation, attem
 			if j.Results[i].Status != ItemPending {
 				continue
 			}
+			result.ResolvedSource = j.Results[i].ResolvedSource
 			j.Results[i] = result
 		}
 		recount(j)
@@ -492,7 +493,7 @@ func (r *Repository) invalidate(ctx context.Context, child string, generation, a
 		}
 		for i := range j.Results {
 			if wanted[j.Results[i].ID] {
-				j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending}
+				j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
 			}
 		}
 		recount(j)
@@ -535,6 +536,7 @@ func settle(j *Record) {
 func recount(j *Record) {
 	c := Counters{Total: int64(len(j.Job.Items))}
 	for i, item := range j.Job.Items {
+		item.Source = EffectiveSource(item, j.Results[i])
 		c.TotalBytes += item.Source.Size
 		switch j.Results[i].Status {
 		case ItemSucceeded:
@@ -604,7 +606,7 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		})
 	})
 }
-func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, newGeneration uint64, retryFailed bool) error {
+func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, newGeneration uint64, retryFailed bool, inventorySource ...bool) error {
 	return r.db.Update(func(tx *state.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -628,6 +630,9 @@ func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, 
 			return err
 		}
 		return r.changeParentJobs(tx, id, func(j *Record) error {
+			if len(inventorySource) > 0 && inventorySource[0] {
+				j.InventorySource = true
+			}
 			j.Job.Generation = newGeneration
 			j.Attempt++
 			if j.Status != Completed {
@@ -637,7 +642,7 @@ func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, 
 			if retryFailed {
 				for i := range j.Results {
 					if j.Results[i].Status == ItemFailed {
-						j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending}
+						j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
 					}
 				}
 				recount(j)

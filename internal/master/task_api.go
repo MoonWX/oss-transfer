@@ -909,6 +909,7 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 		if rec.Status == execution.Waiting {
 			row["status"] = "PENDING"
 		}
+		row["listObjectSize"] = max(size, rec.Counters.TotalBytes)
 		row["putObjectCount"] = rec.Counters.Succeeded
 		row["putObjectSize"] = rec.Counters.SucceededBytes
 		row["skippedObjectCount"] = rec.Counters.Skipped

@@ -488,8 +488,11 @@ Usage: oss-transfer-cli storage <subcommand> [arguments]
   test <alias>                    Validate connection and bucket-list permission
 
   --endpoint <http[s]://host>
+  --region <region>               S3 signing region
   --access-key-env <NAME>          Or --access-key-file <file>
   --secret-key-env <NAME>          Or --secret-key-file <file>
+  --session-token-env <NAME>       Or --session-token-file <file>
+  --clear-session-token           Remove the saved temporary credential token
   --validate true|false           Validate before saving; default true
   --v2-signer inherit|true|false   Signature mode; new default inherit
   --path-style inherit|true|false  Addressing mode; new default inherit
@@ -513,8 +516,11 @@ Connection tests validate listing; actual operations validate read and write per
   test <接続名>                   接続と一覧取得権限を検証
 
   --endpoint <http[s]://ホスト>
+  --region <リージョン>            S3 署名リージョン
   --access-key-env <NAME>          または --access-key-file <ファイル>
   --secret-key-env <NAME>          または --secret-key-file <ファイル>
+  --session-token-env <NAME>       または --session-token-file <ファイル>
+  --clear-session-token           保存済みの一時認証トークンを削除
   --validate true|false           保存時に検証。既定: true
   --v2-signer inherit|true|false   署名方式。新規の既定: inherit
   --path-style inherit|true|false  アドレス方式。新規の既定: inherit

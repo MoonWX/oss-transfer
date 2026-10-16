@@ -245,7 +245,7 @@ func (s *S3) Open(ctx context.Context, key string, options OpenOptions) (io.Read
 			return nil, Object{}, ErrSourceChanged
 		}
 		if expected.ETag != "" {
-			input.IfMatch = aws.String(expected.ETag)
+			input.IfMatch = aws.String("\"" + unquoteETag(expected.ETag) + "\"")
 		} else if !expected.ModifiedAt.IsZero() {
 			input.IfUnmodifiedSince = aws.Time(expected.ModifiedAt)
 		}

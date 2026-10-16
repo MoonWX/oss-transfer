@@ -79,10 +79,13 @@ type Job struct {
 }
 
 type ItemResult struct {
-	ID     string               `json:"id"`
-	Status ItemStatus           `json:"status"`
-	Target transferstore.Object `json:"target"`
-	Error  string               `json:"error,omitempty"`
+	// ResolvedSource is pinned durably before reading an inventory key that was
+	// absent during discovery. Retries retain this first observed identity.
+	ResolvedSource *transferstore.Object `json:"resolvedSource,omitempty"`
+	ID             string                `json:"id"`
+	Status         ItemStatus            `json:"status"`
+	Target         transferstore.Object  `json:"target"`
+	Error          string                `json:"error,omitempty"`
 	// A write may have published the target before its durability check failed.
 	TargetCommitted bool   `json:"targetCommitted,omitempty"`
 	Reconciliation  string `json:"reconciliation,omitempty"`
@@ -100,17 +103,18 @@ type Counters struct {
 }
 
 type Record struct {
-	Job         Job          `json:"job"`
-	Status      Status       `json:"status"`
-	Attempt     uint64       `json:"attempt"`
-	Results     []ItemResult `json:"results"`
-	Counters    Counters     `json:"counters"`
-	Error       string       `json:"error,omitempty"`
-	UpdatedAt   time.Time    `json:"updatedAt"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	StartedAt   *time.Time   `json:"startedAt,omitempty"`
-	FinishedAt  *time.Time   `json:"finishedAt,omitempty"`
-	Fingerprint string       `json:"fingerprint"`
+	InventorySource bool         `json:"inventorySource,omitempty"`
+	Job             Job          `json:"job"`
+	Status          Status       `json:"status"`
+	Attempt         uint64       `json:"attempt"`
+	Results         []ItemResult `json:"results"`
+	Counters        Counters     `json:"counters"`
+	Error           string       `json:"error,omitempty"`
+	UpdatedAt       time.Time    `json:"updatedAt"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	StartedAt       *time.Time   `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time   `json:"finishedAt,omitempty"`
+	Fingerprint     string       `json:"fingerprint"`
 }
 
 type ParentFence struct {

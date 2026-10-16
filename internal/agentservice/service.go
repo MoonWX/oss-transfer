@@ -223,10 +223,16 @@ func badRequest(err error) (agenttransport.Response, error) {
 	return agenttransport.Response{Status: 400, Payload: data}, nil
 }
 
+type ChildAcceptRequest struct {
+	execution.Job
+	InventorySource bool `json:"inventorySource,omitempty"`
+}
+
 type ParentRequest struct {
-	ParentID    int64  `json:"parentId"`
-	Generation  uint64 `json:"generation"`
-	RetryFailed bool   `json:"retryFailed,omitempty"`
+	InventorySource bool   `json:"inventorySource,omitempty"`
+	ParentID        int64  `json:"parentId"`
+	Generation      uint64 `json:"generation"`
+	RetryFailed     bool   `json:"retryFailed,omitempty"`
 }
 type ChildrenRequest struct {
 	ParentID int64  `json:"parentId"`
@@ -415,14 +421,15 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		}
 		return response(map[string]any{"path": request.Path, "pathType": kind, "size": info.Size(), "exists": true}, nil)
 	case "child_accept":
-		var job execution.Job
-		if err := decode(c.Payload, &job); err != nil {
+		var request ChildAcceptRequest
+		if err := decode(c.Payload, &request); err != nil {
 			return badRequest(err)
 		}
+		job := request.Job
 		if !s.Shared.Allows(job) {
 			return response(nil, ErrSharedVerificationRequired)
 		}
-		record, err := s.Engine.Accept(ctx, job)
+		record, err := s.Engine.Accept(ctx, job, request.InventorySource)
 		if err == nil {
 			s.signal()
 		}
@@ -456,7 +463,7 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		case "parent_stop":
 			err = s.Engine.StopParent(ctx, request.ParentID, request.Generation)
 		case "parent_resume":
-			err = s.Engine.ResumeParent(ctx, request.ParentID, request.Generation, request.RetryFailed)
+			err = s.Engine.ResumeParent(ctx, request.ParentID, request.Generation, request.RetryFailed, request.InventorySource)
 		case "parent_delete":
 			err = s.Engine.DeleteParent(ctx, request.ParentID, request.Generation)
 		}

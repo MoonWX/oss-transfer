@@ -500,8 +500,19 @@ func (r *Repository) Observe(id int64, generation uint64, number int, record exe
 		if child.Record != nil && (record.Attempt < child.Record.Attempt || (record.Attempt == child.Record.Attempt && record.UpdatedAt.Before(child.Record.UpdatedAt))) {
 			return errUnchanged
 		}
+		if err := record.ValidateResolvedSources(p.Spec.InventoryID != "", child.Record); err != nil {
+			return ErrConflict
+		}
 		if child.Accepted && child.Record != nil && reflect.DeepEqual(*child.Record, record) {
 			return errUnchanged
+		}
+		for _, result := range record.Results {
+			if result.ResolvedSource != nil {
+				if err := state.RequireSchema(tx, "master", state.SchemaResolvedSources); err != nil {
+					return err
+				}
+				break
+			}
 		}
 		old := execution.Counters{}
 		if child.Record != nil {

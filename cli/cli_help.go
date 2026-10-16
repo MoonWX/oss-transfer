@@ -282,8 +282,11 @@ const cliStorageHelp = `存储连接
 
 添加/更新选项
   --endpoint <http[s]://地址>
+  --region <区域>                 S3 签名区域
   --access-key-env <环境变量名>    或 --access-key-file <文件>
   --secret-key-env <环境变量名>    或 --secret-key-file <文件>
+  --session-token-env <环境变量名> 或 --session-token-file <文件>
+  --clear-session-token           移除已保存的临时凭据令牌
   --validate true|false           保存时是否校验连接，默认 true
   --v2-signer inherit|true|false   签名方式，新增默认继承
   --path-style inherit|true|false  寻址方式，新增默认继承

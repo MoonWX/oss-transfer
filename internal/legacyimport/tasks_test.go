@@ -202,6 +202,105 @@ func TestPartialWorkerPurgeDoesNotEraseOtherChildrenOrMarkParentCompleted(t *tes
 	}
 }
 
+func TestCreationPurgeRequiresAllExecutionFencesAndNoRetainedRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*preparationFixture, map[string]any)
+		purged bool
+	}{
+		{"stale_creation_with_fences_across_nodes", func(*preparationFixture, map[string]any) {}, true},
+		{"deleted_before_scan_finished", func(_ *preparationFixture, c map[string]any) { c["deleted"], c["scanComplete"] = true, false }, true},
+		{"one_execution_fence_missing", func(f *preparationFixture, _ map[string]any) { delete(f.node, "task:purged:225") }, false},
+		{"execution_fence_false", func(f *preparationFixture, _ map[string]any) { f.node["task:purged:225"] = false }, false},
+		{"execution_list_empty", func(_ *preparationFixture, c map[string]any) { c["taskIds"] = []int{} }, false},
+		{"participating_node_snapshot_missing", func(_ *preparationFixture, c map[string]any) {
+			c["participatingWorkerNodes"] = []string{"master", "node", "removed-worker"}
+		}, false},
+		{"report_fences_only", func(f *preparationFixture, _ map[string]any) {
+			delete(f.master, "task:purged:224")
+			delete(f.node, "task:purged:225")
+		}, false},
+		{"scan_unfinished", func(_ *preparationFixture, c map[string]any) { c["scanComplete"] = false }, false},
+		{"scan_completion_unknown", func(_ *preparationFixture, c map[string]any) { delete(c, "scanComplete") }, false},
+		{"pending_dispatch", func(_ *preparationFixture, c map[string]any) {
+			c["pendingDispatches"] = []any{map[string]any{"taskIndex": 226}}
+		}, false},
+		{"live_record_on_another_node", func(f *preparationFixture, _ map[string]any) {
+			f.worker["task:225"] = map[string]any{"taskIndex": 225, "status": "RUNNING"}
+		}, false},
+		{"recycled_record_on_another_node", func(f *preparationFixture, _ map[string]any) {
+			f.worker["task:deleted:225"] = map[string]any{"taskIndex": 225, "status": "STOPPED"}
+		}, false},
+		{"parent_snapshot_is_not_a_child", func(f *preparationFixture, _ map[string]any) {
+			f.worker["task:224"] = map[string]any{"taskIndex": 224, "parentTaskId": 224, "status": "COMPLETED"}
+		}, false},
+		{"discovery_record_is_not_a_child", func(f *preparationFixture, _ map[string]any) {
+			f.worker["task:224"] = map[string]any{"taskIndex": 224, "parentTaskId": 224, "shardId": "discovery", "status": "STOPPED"}
+		}, false},
+		{"deleted_catalogue_cannot_hide_live_record", func(f *preparationFixture, c map[string]any) {
+			c["deleted"] = true
+			f.worker["task:225"] = map[string]any{"taskIndex": 225, "status": "RUNNING"}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := taskFixture(t)
+			delete(f.master, "task:224")
+			delete(f.node, "task:225")
+			creation := f.master["task_creation:fixture"].(map[string]any)
+			creation["request"], creation["deleted"] = nil, false
+			f.master["task:purged:224"], f.master["report:purged:224"] = true, true
+			f.node["task:purged:225"], f.node["report:purged:225"] = true, true
+			tc.change(f, creation)
+			f.write(t)
+			p, err := Prepare(context.Background(), f.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if _, err := p.ConvertTasks(context.Background(), TaskImportOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			repo := task.New(p.Master)
+			parent, err := repo.Get(224)
+			if err != nil || parent.Purged != tc.purged {
+				t.Fatalf("purge proof: parent=%+v err=%v", parent, err)
+			}
+			if tc.purged {
+				if !parent.Deleted || parent.Status != "STOPPED" {
+					t.Fatal("purged task became visible or executable", parent)
+				}
+				for _, recycled := range []bool{false, true} {
+					rows, err := repo.Recent(0, 100, recycled)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, row := range rows {
+						if row.ID == 224 {
+							t.Fatal("purged task appears in a visible list")
+						}
+					}
+				}
+			} else {
+				found := false
+				for _, code := range parent.Legacy.Blockers {
+					found = found || code == "EXECUTION_PURGE_FENCE_REQUIRES_REVIEW"
+				}
+				if !found {
+					t.Fatal("uncertain purge did not retain review blocker")
+				}
+			}
+			if _, err := repo.Resume(224); err == nil {
+				t.Fatal("legacy purge evidence allowed execution")
+			}
+			raw, err := p.sourceRecord("master", "task_creation:fixture")
+			var retained map[string]any
+			if err != nil || json.Unmarshal(raw.Value, &retained) != nil || retained["deleted"] != creation["deleted"] {
+				t.Fatal("original creation evidence was changed", err)
+			}
+		})
+	}
+}
+
 func TestRealV4RecoveryPreparationIsOfflineAndFenced(t *testing.T) {
 	source := os.Getenv("OSS_TRANSFER_LEGACY_TASK_SNAPSHOT")
 	if source == "" {

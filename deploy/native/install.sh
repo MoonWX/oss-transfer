@@ -662,9 +662,6 @@ if ((yes == 0)); then
   read -r -p 'Continue? [y/N] ' answer </dev/tty
   [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
-if [[ -n "$adopt_config" ]]; then
-  "$work/$filename" --config "$work/service.json" --backup-state "$work/database"
-fi
 active() { if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name"; elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1; else launchctl print "$domain/$service_name" >/dev/null 2>&1; fi; }
 stop_service() {
   local old_pid load_state deadline=$((SECONDS+50))
@@ -698,14 +695,138 @@ service_pid() {
   if [[ "$platform" == linux ]]; then systemctl show "$service_name" -p MainPID --value; elif [[ "$platform" == freebsd ]]; then if [[ -f "$child_pidfile" && ! -L "$child_pidfile" ]]; then cat "$child_pidfile"; fi; else launchctl print "$domain/$service_name" 2>/dev/null | awk '$1=="pid" && $2=="=" {print $3;exit}'; fi
 }
 nonce() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
-prepare_start() { launch_id=$(nonce); mkdir -p "$data_dir/runtime"; chmod 700 "$data_dir/runtime"; printf '%s\n' "$launch_id" > "$ready_file.request"; chmod 600 "$ready_file.request"; }
+# Keep this check before any installation files, backup or service are changed.
+# Socket owners come from the OS, never from an old readiness marker.
+listener_address() {
+  # Normalize compressed IPv6 and IPv4-mapped addresses without a DNS/runtime
+  # dependency. Ordinary IPv4 uses the same representation as ::ffff:a.b.c.d.
+  printf '%s\n' "$1" | awk '
+    { address=tolower($0); zone=""; if (index(address,"%")) { split(address,z,"%"); address=z[1]; zone="%" z[2] }
+      if (index(address,".")) {
+        n=split(address,segments,":"); split(segments[n],v4,".")
+        tail=sprintf("%x:%x",v4[1]*256+v4[2],v4[3]*256+v4[4])
+        if (n==1) address="::ffff:" tail
+        else { sub(/[^:]+$/,tail,address) }
+      }
+      n=split(address,halves,"::"); left=split(halves[1],a,":"); if (halves[1]=="") left=0
+      right=0; if (n==2 && halves[2]!="") right=split(halves[2],b,":")
+      result=""
+      for (i=1;i<=left;i++) { sub(/^0+/,"",a[i]); result=result (result!=""?":":"") (a[i]==""?"0":a[i]) }
+      if (n==2) for (i=0;i<8-left-right;i++) result=result (result!=""?":":"") "0"
+      for (i=1;i<=right;i++) { sub(/^0+/,"",b[i]); result=result (result!=""?":":"") (b[i]==""?"0":b[i]) }
+      print result zone
+    }'
+}
+check_listener() {
+  [[ "$role" == master ]] || return 0
+  local address port host rows pid endpoint owner old_pid=0 raw errors host_addresses item family v6only normalized overlap
+  address=$(awk -F '\t' '$1=="listen"{print $2}' "$work/config.tsv")
+  port=${address##*:}; host=${address%:*}; host=${host#[}; host=${host%]}
+  host_addresses=$host
+  case "$host" in
+    ''|0.0.0.0|::|127.*|*:*|[0-9]*.[0-9]*.[0-9]*.[0-9]*) ;;
+    *)
+      if command -v getent >/dev/null 2>&1; then
+        host_addresses=$(getent ahosts "$host" 2>/dev/null | awk '{print $1}' | sort -u) || true
+        if [[ -z "$host_addresses" ]]; then host_addresses=$(getent hosts "$host" 2>/dev/null | awk '{print $1}' | sort -u) || true; fi
+      elif [[ "$platform" == darwin ]]; then
+        host_addresses=$(dscacheutil -q host -a name "$host" | awk '/ip_address:|ipv6_address:/ {print $2}') || true
+      fi
+      [[ -n "$host_addresses" && "$host_addresses" != "$host" ]] || fail "Cannot resolve listener $address for the port check; use a numeric listen address"
+      ;;
+  esac
+  raw=$work/listeners.raw; rows=$work/listeners.tsv; errors=$work/listeners.error
+  if [[ "$platform" == linux ]] && command -v ss >/dev/null 2>&1; then
+    ss -H -ltnpe "sport = :$port" > "$raw" 2> "$errors" || fail "Cannot inspect listening port $port with ss"
+    awk '{ address=$4; family="unknown"; v6only="unknown"; if (address ~ /^\[/ || /v6only:/) family=6; else if (address ~ /^[0-9]+\./) family=4; if (/v6only:1/) v6only=1; else if (/v6only:0/) v6only=0; owners=0; while (match($0,/pid=[0-9]+/)) { pid=substr($0,RSTART+4,RLENGTH-4); print address "\t" pid "\t" family "\t" v6only; $0=substr($0,RSTART+RLENGTH); owners++ } if (!owners) print address "\tunknown\t" family "\t" v6only }' "$raw" > "$rows"
+  elif [[ "$platform" == freebsd ]]; then
+    sockstat -l -P tcp -p "$port" > "$raw" 2> "$errors" || fail "Cannot inspect listening port $port with sockstat"
+    awk 'NR>1 {family="unknown"; v6only="unknown"; if ($5=="tcp4") family=4; else if ($5=="tcp6") {family=6; v6only=1} else if ($5=="tcp46") {family=6; v6only=0}; print $6 "\t" $3 "\t" family "\t" v6only}' "$raw" > "$rows"
+  elif command -v lsof >/dev/null 2>&1; then
+    if ! lsof -nP -a -iTCP:"$port" -sTCP:LISTEN -Fptn > "$raw" 2> "$errors"; then
+      [[ ! -s "$errors" && ! -s "$raw" ]] || fail "Cannot inspect listening port $port with lsof"
+    fi
+    awk '/^p/ {pid=substr($0,2); family="unknown"} /^tIPv4/ {family=4} /^tIPv6/ {family=6} /^n/ {print substr($0,2) "\t" (pid ? pid : "unknown") "\t" family "\tunknown"}' "$raw" > "$rows"
+  else
+    fail 'Port inspection requires ss (iproute2) or lsof; install either before retrying'
+  fi
+  if ((existed)); then old_pid=$(service_pid || true); fi
+  while IFS=$'\t' read -r endpoint pid family v6only; do
+    [[ -n "$endpoint" ]] || continue
+    endpoint=${endpoint%:*}; endpoint=${endpoint#[}; endpoint=${endpoint%]}
+    # Go's tcp wildcard listeners use both address families when supported.
+    # Specific IPv6 and IPv4 sockets can coexist; a v6-only wildcard must not
+    # block a specific IPv4 listener. Unknown cross-family overlap is left to
+    # the real bind and startup diagnostic instead of refusing a valid setup.
+    if [[ -n "$host" && "$host" != 0.0.0.0 && "$host" != :: ]]; then
+      overlap=0
+      while IFS= read -r item; do
+        normalized=$(listener_address "$item")
+        if [[ "$normalized" == 0:0:0:0:0:ffff:* ]]; then
+          [[ "$family" != 6 || "$v6only" == 0 || "$v6only" == unknown && "$(listener_address "$endpoint")" == 0:0:0:0:0:ffff:* ]] || continue
+        elif [[ "$family" == 4 || "$family" == unknown && "$endpoint" == '*' ]]; then continue
+        fi
+        if [[ "$endpoint" == '*' || "$endpoint" == 0.0.0.0 || "$endpoint" == :: || "$normalized" == "$(listener_address "$endpoint")" ]]; then overlap=1; fi
+      done <<< "$host_addresses"
+      ((overlap)) || continue
+    fi
+    [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" == "$old_pid" ]] && continue
+    owner='unknown process'
+    if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then owner=$(ps -p "$pid" -o comm= 2>/dev/null || true); owner=${owner:-process}; fi
+    fail "Cannot listen on $address: port $port is already in use by $owner (PID $pid). Stop or reconfigure that service, or select another port. No installation files or services were changed."
+  done < "$rows"
+}
+prepare_start() {
+  launch_id=$(nonce)
+  startup_log_lines=0
+  [[ ! -f "$log_file" ]] || startup_log_lines=$(wc -l < "$log_file" | tr -d ' ')
+  startup_previous_attempt=
+  if [[ "$platform" == linux ]]; then startup_previous_attempt=$(systemctl show "$service_name" -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true); fi
+  mkdir -p "$data_dir/runtime"; chmod 700 "$data_dir/runtime"
+  printf '%s\n' "$launch_id" > "$ready_file.request"; chmod 600 "$ready_file.request"
+}
+startup_failure() {
+  local status attempt code value detail
+  if [[ -f "$log_file" ]]; then
+    detail=$(tail -n +$((startup_log_lines+1)) "$log_file" | sed -n '/^Service failed:/p' | tail -n 1)
+    if [[ -n "$detail" ]]; then
+      # Avoid printing arbitrary service errors, which can contain endpoint
+      # credentials. The private log retains the full diagnostic.
+      case "$detail" in
+        *'address already in use'*) printf 'Startup failed: the listen address is already in use.\n' >&2;;
+        *'permission denied'*) printf 'Startup failed: permission denied.\n' >&2;;
+        *) printf 'The service reported a startup failure.\n' >&2;;
+      esac
+      printf 'Service: %s; log: %s\n' "$service_name" "$log_file" >&2
+      return 0
+    fi
+  fi
+  if [[ "$platform" == linux ]]; then
+    status=$(systemctl show "$service_name" -p ExecMainStartTimestampMonotonic -p ExecMainCode -p ExecMainStatus 2>/dev/null) || return 1
+    attempt=$(printf '%s\n' "$status" | sed -n 's/^ExecMainStartTimestampMonotonic=//p')
+    code=$(printf '%s\n' "$status" | sed -n 's/^ExecMainCode=//p')
+    value=$(printf '%s\n' "$status" | sed -n 's/^ExecMainStatus=//p')
+    if [[ -n "$attempt" && "$attempt" != 0 && "$attempt" != "$startup_previous_attempt" && "$code" =~ ^[123]$ && "$value" =~ ^[0-9]+$ && "$value" != 0 ]]; then
+      printf 'Startup failed: %s exited with status %s (code %s). Check %s and journalctl -u %s.\n' "$service_name" "$value" "$code" "$log_file" "$service_name" >&2
+      return 0
+    fi
+  fi
+  return 1
+}
 wait_ready() {
-  local deadline=$((SECONDS+startup_timeout)) pid
+  local started=$SECONDS deadline=$((SECONDS+startup_timeout)) next_notice=$((SECONDS+10)) pid
+  printf 'Waiting for %s to become ready (up to %ss)...\n' "$service_name" "$startup_timeout"
   while ((SECONDS < deadline)); do
     pid=$(service_pid || true)
     if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && "$binary" --config "$config" --check-ready --expect-pid "$pid" --expect-launch-id "$launch_id" >/dev/null 2>&1; then return 0; fi
+    if startup_failure; then return 1; fi
+    if ((SECONDS >= next_notice)); then
+      printf 'Still waiting for %s (%ss elapsed); log: %s\n' "$service_name" "$((SECONDS-started))" "$log_file"
+      next_notice=$((SECONDS+10))
+    fi
     sleep 1
   done
+  printf 'Startup timed out after %ss. Check %s and the %s service status.\n' "$startup_timeout" "$log_file" "$service_name" >&2
   return 1
 }
 rollback() {
@@ -757,6 +878,10 @@ rollback() {
   [[ $result != 0 ]] || result=1
   exit "$result"
 }
+check_listener
+if [[ -n "$adopt_config" ]]; then
+  "$work/$filename" --config "$work/service.json" --backup-state "$work/database"
+fi
 mkdir -p "$install_dir" "$config_dir" "$data_dir" "$backup_dir" "$(dirname "$unit")"
 chmod 700 "$install_dir" "$config_dir" "$data_dir" "$backup_dir"
 if ((existed)); then
@@ -856,6 +981,7 @@ EOF
 fi
 if [[ "$platform" == freebsd ]]; then chmod 755 "$unit"; else chmod 644 "$unit"; fi
 prepare_start
+printf 'Starting %s...\n' "$service_name"
 start_service
 wait_ready
 if [[ "$platform" == linux ]]; then

@@ -292,7 +292,7 @@ func (p *Plan) issue(code, scope, message string) {
 }
 
 func (p *Plan) finish() {
-	p.issue("CONVERSION_NOT_IMPLEMENTED", "", "This is a validation and mapping plan; no runtime database was created. Keep every raw export until conversion and recovery are verified.")
+	p.issue("INSPECTION_ONLY", "", "Inspection has not created a runtime database. Run prepare, convert-tasks and prepare-recovery before finalize; keep every raw export until recovery is verified.")
 	if !p.ConfigurationPresent {
 		p.issue("CONFIGURATION_MISSING", "", "Capture the effective deployment settings; RocksDB does not contain all rate, URL and process defaults.")
 	} else {

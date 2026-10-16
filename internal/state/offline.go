@@ -59,15 +59,12 @@ func BackupOffline(path, role, destination string) error {
 
 func validateOfflineTransaction(raw *bolt.Tx, role, path string) error {
 	tx := &Tx{tx: raw}
-	var metadata struct {
-		Role          string `json:"role"`
-		SchemaVersion int    `json:"schemaVersion"`
-	}
+	var metadata databaseFormat
 	found, err := tx.Get("metadata", "format", &metadata)
 	if err != nil {
 		return err
 	}
-	if !found || metadata.Role != role || metadata.SchemaVersion != 1 {
+	if !found || metadata.Role != role || !supportedSchema(metadata.SchemaVersion) {
 		return errors.New("existing database has no matching role or supported schema")
 	}
 	var migration struct {

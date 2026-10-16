@@ -20,6 +20,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/task"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 type reportTicket struct {
@@ -270,7 +271,7 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child) error {
 	rowType, childID, node, status := "TASK", "", "", p.Status
 	src, dst := p.Spec.Source, p.Spec.Destination
 	counters := p.Counters
-	scanned, scannedBytes := max(p.ScannedObjects, p.DispatchedObjects), max(p.ScannedBytes, p.DispatchedBytes)
+	scanned, scannedBytes := max(p.ScannedObjects, p.DispatchedObjects), max(p.ScannedBytes, p.DispatchedBytes, p.Counters.TotalBytes)
 	created := any(p.CreatedAt)
 	started, finished := any(p.StartedAt), any(p.FinishedAt)
 	if c != nil {
@@ -286,6 +287,7 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child) error {
 		if c.Record != nil {
 			status = string(c.Record.Status)
 			counters = c.Record.Counters
+			scannedBytes = max(scannedBytes, counters.TotalBytes)
 		}
 	}
 	targetRelative := ""
@@ -380,9 +382,19 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				coverage.NodeIssues[node.Address] = "execution Agent is unavailable in its recorded enrollment"
 			}
 		}
+		var resolvedBytes int64
 		err := s.walkReportChildren(ctx, p, func(child task.Child) error {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			resolved := map[string]*transferstore.Object{}
+			if child.Record != nil {
+				for _, result := range child.Record.Results {
+					if result.ResolvedSource != nil {
+						resolved[result.ID] = result.ResolvedSource
+						resolvedBytes += result.ResolvedSource.Size
+					}
+				}
 			}
 			items, observed, readErr := s.reportChild(ctx, p, child, online, coverage.NodeIssues)
 			if readErr != nil {
@@ -391,12 +403,12 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				}
 				coverage.NodeIssues[child.Node.Address] = readErr.Error()
 				for _, item := range child.Job.Items {
-					if err := fileCSV(files, issues, p, child, item, execution.ItemResult{ID: item.ID, Error: readErr.Error()}, "UNKNOWN", "LEDGER_UNAVAILABLE", time.Time{}); err != nil {
+					if err := fileCSV(files, issues, p, child, item, execution.ItemResult{ID: item.ID, Error: readErr.Error(), ResolvedSource: resolved[item.ID]}, "UNKNOWN", "LEDGER_UNAVAILABLE", time.Time{}); err != nil {
 						return err
 					}
 					coverage.FileRows++
 					coverage.ResultCounts["UNKNOWN"]++
-					coverage.ResultBytes["UNKNOWN"] += item.Source.Size
+					coverage.ResultBytes["UNKNOWN"] += execution.EffectiveSource(item, execution.ItemResult{ResolvedSource: resolved[item.ID]}).Size
 				}
 				return nil
 			}
@@ -416,7 +428,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				}
 				coverage.FileRows++
 				coverage.ResultCounts[result]++
-				coverage.ResultBytes[result] += entry.Item.Source.Size
+				coverage.ResultBytes[result] += execution.EffectiveSource(entry.Item, entry.Result).Size
 			}
 			return nil
 		})
@@ -433,7 +445,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		for _, bytes := range coverage.ResultBytes {
 			fileBytes += bytes
 		}
-		coverage.CountsReconciled = coverage.CountsReconciled && fileBytes == p.DispatchedBytes && (!p.ScanComplete || (coverage.FileRows == p.ScannedObjects && fileBytes == p.ScannedBytes))
+		coverage.CountsReconciled = coverage.CountsReconciled && fileBytes == p.DispatchedBytes+resolvedBytes && (!p.ScanComplete || (coverage.FileRows == p.ScannedObjects && fileBytes == p.ScannedBytes+resolvedBytes))
 		if !p.ScanComplete {
 			coverage.PartialReasons = append(coverage.PartialReasons, "SCAN_INCOMPLETE")
 		}
@@ -560,10 +572,18 @@ func (s *Server) reportChild(ctx context.Context, p task.Parent, child task.Chil
 			return nil, time.Time{}, errors.New("Agent returned an unknown object status")
 		}
 	}
+	record := execution.Record{Job: child.Job}
+	for _, entry := range page.Items {
+		record.Results = append(record.Results, entry.Result)
+	}
+	if err := record.ValidateResolvedSources(p.Spec.InventoryID != "", child.Record); err != nil {
+		return nil, time.Time{}, err
+	}
 	return page.Items, page.ObservedAt, nil
 }
 
 func fileCSV(files, issues *csv.Writer, p task.Parent, child task.Child, item execution.Item, result execution.ItemResult, status, reason string, observed time.Time) error {
+	item.Source = execution.EffectiveSource(item, result)
 	if result.Reconciliation != "" {
 		if reason != "" {
 			reason += ";"

@@ -131,12 +131,32 @@ func readCursor(value, kind, scope, prefix, startAfter string) (string, error) {
 	return c.Position, nil
 }
 
+// EqualETag ignores only the enclosing HTTP quotes. Some S3 providers omit
+// them in LIST XML while returning them in HEAD/GET headers. The opaque value
+// remains case-sensitive, including multipart suffixes.
+func EqualETag(left, right string) bool {
+	if left == right {
+		return true
+	}
+	if left == "" || right == "" {
+		return false
+	}
+	return unquoteETag(left) == unquoteETag(right)
+}
+
+func unquoteETag(value string) string {
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
 func checkExpected(actual Object, expected *Object) error {
 	if expected == nil {
 		return nil
 	}
 	if actual.Key != expected.Key || actual.Size != expected.Size ||
-		(expected.ETag != "" && actual.ETag != expected.ETag) ||
+		(expected.ETag != "" && !EqualETag(actual.ETag, expected.ETag)) ||
 		(expected.VersionID != "" && actual.VersionID != expected.VersionID) ||
 		(expected.ETag == "" && expected.VersionID == "" && !expected.ModifiedAt.IsZero() && !actual.ModifiedAt.Equal(expected.ModifiedAt)) {
 		return ErrSourceChanged

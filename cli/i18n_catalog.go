@@ -2,6 +2,8 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"--clear-session-token 不能与 --session-token-env 或 --session-token-file 同时使用": {"--clear-session-token cannot be combined with --session-token-env or --session-token-file", "--clear-session-token は --session-token-env または --session-token-file と併用できません"},
+
 	"不支持的语言 %q；请使用 auto、zh、en 或 ja":                               {"Unsupported language %q; use auto, zh, en or ja", "未対応の言語 %q。auto、zh、en または ja を指定してください"},
 	"CLI 配置文件无效: %s":                                              {"Invalid CLI configuration file: %s", "CLI 設定ファイルが無効です: %s"},
 	"CLI 配置目录无效: %s":                                              {"Invalid CLI configuration directory: %s", "CLI 設定ディレクトリが無効です: %s"},

@@ -56,7 +56,7 @@ async function request(path: string, options: Options = {}) {
       throw error;
     throw new ApiError(t("无法连接服务，请检查网络或主节点状态。"));
   }
-  if (response.status === 401) {
+  if (response.status === 401 && path !== "/api/auth/login") {
     setToken(null);
     window.dispatchEvent(new Event("session-expired"));
     throw new ApiError(t("登录已过期，请重新登录。"), 401);

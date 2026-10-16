@@ -99,7 +99,7 @@ func TestPlanPreservesRecoveryBoundariesAndHidesSecrets(t *testing.T) {
 	if p.Connections[0].Region != "default" || p.Connections[0].Signature != "v4" {
 		t.Fatal("legacy signing region changed")
 	}
-	for _, code := range []string{"CONVERSION_NOT_IMPLEMENTED", "SPLIT_MASTER_EXECUTION", "INVENTORY_NOT_READY", "UNKNOWN_KEYS_RETAINED", "LEGACY_COMPLETION_NEEDS_RECONCILIATION", "OLD_TEMPORARY_FILES", "SHARED_BANDWIDTH_SCOPE"} {
+	for _, code := range []string{"INSPECTION_ONLY", "SPLIT_MASTER_EXECUTION", "INVENTORY_NOT_READY", "UNKNOWN_KEYS_RETAINED", "LEGACY_COMPLETION_NEEDS_RECONCILIATION", "OLD_TEMPORARY_FILES", "SHARED_BANDWIDTH_SCOPE"} {
 		if !hasIssue(p.Issues, code) {
 			t.Fatalf("missing constraint %s", code)
 		}

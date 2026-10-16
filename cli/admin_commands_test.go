@@ -175,6 +175,7 @@ func TestAdminNodeListPreservesOfflineNode(t *testing.T) {
 
 func TestAdminStorageCredentialsAndOptions(t *testing.T) {
 	t.Setenv("CLI_TEST_ACCESS", "test-access")
+	t.Setenv("CLI_TEST_SESSION", "test-session")
 	secretFile := filepath.Join(t.TempDir(), "secret")
 	if err := os.WriteFile(secretFile, []byte("test-secret\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -184,13 +185,13 @@ func TestAdminStorageCredentialsAndOptions(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
 		}
 		body := adminTestBody(t, r)
-		want := map[string]interface{}{"alias": "source", "endpoint": "https://oss.example", "accessKey": "test-access", "secretKey": "test-secret", "validate": true, "useV2SignerType": false, "pathStyleEnable": nil}
+		want := map[string]interface{}{"alias": "source", "endpoint": "https://oss.example", "region": "cn-north-1", "accessKey": "test-access", "secretKey": "test-secret", "sessionToken": "test-session", "validate": true, "useV2SignerType": false, "pathStyleEnable": nil}
 		if !reflect.DeepEqual(body, want) {
 			t.Fatalf("body = %#v", body)
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true, "partial": true, "failedCount": 1})
 	})
-	result, err := runAdminCommand(client, "storage", []string{"add", "source", "--endpoint", "https://oss.example", "--access-key-env", "CLI_TEST_ACCESS", "--secret-key-file", secretFile, "--v2-signer", "false", "--path-style", "inherit"})
+	result, err := runAdminCommand(client, "storage", []string{"add", "source", "--endpoint", "https://oss.example", "--region", "cn-north-1", "--access-key-env", "CLI_TEST_ACCESS", "--secret-key-file", secretFile, "--session-token-env", "CLI_TEST_SESSION", "--v2-signer", "false", "--path-style", "inherit"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,14 +208,14 @@ func TestAdminStorageUpdateMergesAndListRedacts(t *testing.T) {
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.Method == "GET" {
-			adminTestJSON(t, w, map[string]interface{}{"success": true, "configs": []interface{}{map[string]interface{}{"alias": "source", "endpoint": "https://old.example", "accessKey": "keep-access", "secretKey": "keep-secret", "pathStyleEnable": true, "useV2SignerType": false}}})
+			adminTestJSON(t, w, map[string]interface{}{"success": true, "configs": []interface{}{map[string]interface{}{"alias": "source", "endpoint": "https://old.example", "region": "cn-north-1", "accessKey": "keep-access", "secretKey": "keep-secret", "sessionToken": "keep-session", "pathStyleEnable": true, "useV2SignerType": false}}})
 			return
 		}
 		if r.Method != "PUT" || r.URL.Path != "/api/master/s3-config/source" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
 		}
 		body := adminTestBody(t, r)
-		if body["endpoint"] != "https://new.example" || body["secretKey"] != "keep-secret" || body["accessKey"] != "keep-access" || body["pathStyleEnable"] != true || body["useV2SignerType"] != false {
+		if body["endpoint"] != "https://new.example" || body["region"] != "cn-north-1" || body["sessionToken"] != "keep-session" || body["secretKey"] != "keep-secret" || body["accessKey"] != "keep-access" || body["pathStyleEnable"] != true || body["useV2SignerType"] != false {
 			t.Fatalf("update discarded fields: %#v", body)
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true})
@@ -227,11 +228,51 @@ func TestAdminStorageUpdateMergesAndListRedacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(result)
-	if bytes.Contains(encoded, []byte("keep-secret")) || bytes.Contains(encoded, []byte("keep-access")) {
+	if bytes.Contains(encoded, []byte("keep-secret")) || bytes.Contains(encoded, []byte("keep-access")) || bytes.Contains(encoded, []byte("keep-session")) {
 		t.Fatalf("credential leaked: %s", encoded)
 	}
 	if calls != 3 {
 		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestAdminStorageRegionAndTemporaryCredentials(t *testing.T) {
+	t.Setenv("CLI_TEST_SESSION", "rotated-session")
+	file := filepath.Join(t.TempDir(), "session")
+	if err := os.WriteFile(file, []byte("file-session\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name          string
+		flags         []string
+		region, token string
+	}{
+		{"rotate from environment", []string{"--region", "cn-east-2", "--session-token-env", "CLI_TEST_SESSION"}, "cn-east-2", "rotated-session"},
+		{"rotate from file", []string{"--session-token-file", file}, "cn-north-1", "file-session"},
+		{"explicitly clear", []string{"--clear-session-token"}, "cn-north-1", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writes := 0
+			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					adminTestJSON(t, w, map[string]interface{}{"success": true, "configs": []interface{}{map[string]interface{}{
+						"alias": "source", "endpoint": "https://oss.example", "region": "cn-north-1", "accessKey": "keep-access", "secretKey": "keep-secret", "sessionToken": "old-session"}}})
+					return
+				}
+				writes++
+				body := adminTestBody(t, r)
+				if r.Method != "PUT" || body["region"] != test.region || body["sessionToken"] != test.token || body["accessKey"] != "keep-access" || body["secretKey"] != "keep-secret" {
+					t.Fatalf("incorrect storage update: %#v", body)
+				}
+				adminTestJSON(t, w, map[string]interface{}{"success": true})
+			})
+			if _, err := runStorageAdmin(client, "update", append([]string{"source"}, test.flags...)); err != nil {
+				t.Fatal(err)
+			}
+			if writes != 1 {
+				t.Fatalf("writes = %d", writes)
+			}
+		})
 	}
 }
 
@@ -244,6 +285,10 @@ func TestAdminStorageInvalidCredentialSourceDoesNotWrite(t *testing.T) {
 		{"--secret-key-file", "/nonexistent-cli-test-secret"},
 		{"--secret-key-env", "CLI_TEST_EMPTY", "--secret-key-file", "/any"},
 		{"--secret-key", "plain-secret"},
+		{"--session-token-env", "CLI_TEST_EMPTY"},
+		{"--session-token-env", "CLI_TEST_EMPTY", "--session-token-file", "/any"},
+		{"--session-token", "plain-session"},
+		{"--clear-session-token", "--session-token-env", "CLI_TEST_EMPTY"},
 	} {
 		args := append([]string{"add", "source", "--endpoint", "https://oss.example"}, extra...)
 		if _, err := runAdminCommand(client, "storage", args); err == nil {

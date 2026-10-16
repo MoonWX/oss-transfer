@@ -19,6 +19,39 @@ var ErrMigrationPending = errors.New("offline migration is incomplete; finish mi
 type Store struct{ db *bolt.DB }
 type Tx struct{ tx *bolt.Tx }
 
+// SchemaResolvedSources prevents older readers from discarding identities pinned
+// after a missing inventory object becomes available.
+const SchemaResolvedSources = 2
+
+type databaseFormat struct {
+	Role          string `json:"role"`
+	SchemaVersion int    `json:"schemaVersion"`
+}
+
+func supportedSchema(version int) bool { return version >= 1 && version <= SchemaResolvedSources }
+
+// RequireSchema raises the minimum reader version in the same transaction as
+// the data requiring it. A failed transaction preserves both the old format and
+// the old data. Ordinary databases stay at version 1 until a feature needs more.
+func RequireSchema(tx *Tx, role string, minimum int) error {
+	if role != "master" && role != "agent" || !supportedSchema(minimum) {
+		return errors.New("invalid database format requirement")
+	}
+	var metadata databaseFormat
+	found, err := tx.Get("metadata", "format", &metadata)
+	if err != nil {
+		return err
+	}
+	if !found || metadata.Role != role || !supportedSchema(metadata.SchemaVersion) {
+		return errors.New("database has no matching role or supported schema")
+	}
+	if metadata.SchemaVersion >= minimum {
+		return nil
+	}
+	metadata.SchemaVersion = minimum
+	return tx.Put("metadata", "format", metadata)
+}
+
 // ClaimRole prevents either process from opening the other process's database.
 func (s *Store) ClaimRole(role string) error {
 	if role != "master" && role != "agent" {
@@ -37,16 +70,13 @@ func (s *Store) ClaimRole(role string) error {
 		if migrationFound && (migration.Pending == nil || *migration.Pending || migration.MigrationID == "" || migration.ExpectedDatabase != "" && filepath.Clean(migration.ExpectedDatabase) != filepath.Clean(s.db.Path())) {
 			return ErrMigrationPending
 		}
-		var metadata struct {
-			Role          string `json:"role"`
-			SchemaVersion int    `json:"schemaVersion"`
-		}
+		var metadata databaseFormat
 		found, err := tx.Get("metadata", "format", &metadata)
 		if err != nil {
 			return err
 		}
 		if found {
-			if metadata.Role != role || metadata.SchemaVersion != 1 {
+			if metadata.Role != role || !supportedSchema(metadata.SchemaVersion) {
 				return errors.New("database belongs to another role or unsupported schema")
 			}
 			return nil

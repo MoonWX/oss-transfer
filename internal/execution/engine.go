@@ -68,13 +68,13 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 	return &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, slots: make(chan struct{}, opts.MaxConcurrentJobs), active: make(map[string]*activeAttempt)}, nil
 }
 
-func (e *Engine) Accept(ctx context.Context, job Job) (Record, error) {
+func (e *Engine) Accept(ctx context.Context, job Job, inventorySource ...bool) (Record, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return Record{}, ErrClosed
 	}
-	return e.repo.Accept(ctx, job)
+	return e.repo.Accept(ctx, job, inventorySource...)
 }
 func (e *Engine) Get(ctx context.Context, child string) (Record, error) {
 	return e.repo.Get(ctx, child)
@@ -256,7 +256,7 @@ func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint
 
 // ResumeParent advances the ownership generation after every old attempt exits.
 // Children remain WAITING; the Master starts them as capacity becomes available.
-func (e *Engine) ResumeParent(ctx context.Context, parentID int64, newGeneration uint64, retryFailed bool) error {
+func (e *Engine) ResumeParent(ctx context.Context, parentID int64, newGeneration uint64, retryFailed bool, inventorySource ...bool) error {
 	p, err := e.repo.Parent(ctx, parentID)
 	if err != nil {
 		return err
@@ -278,7 +278,7 @@ func (e *Engine) ResumeParent(ctx context.Context, parentID int64, newGeneration
 	if e.closed {
 		return ErrClosed
 	}
-	return e.repo.resumeParent(ctx, parentID, p.Generation, newGeneration, retryFailed)
+	return e.repo.resumeParent(ctx, parentID, p.Generation, newGeneration, retryFailed, inventorySource...)
 }
 
 func (e *Engine) Wait(ctx context.Context, child string) (Record, error) {
@@ -392,7 +392,7 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 					if ctx.Err() != nil {
 						return
 					}
-					result := e.copyItem(ctx, record.Job, item, source, target)
+					result := e.copyResolvedItem(ctx, record, item, source, target)
 					if ctx.Err() != nil {
 						return
 					}
@@ -444,7 +444,7 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 }
 
 func changed(actual, saved transferstore.Object) bool {
-	return actual.Key != saved.Key || actual.Size != saved.Size || (saved.ETag != "" && actual.ETag != saved.ETag) || (saved.VersionID != "" && actual.VersionID != saved.VersionID) || (!saved.ModifiedAt.IsZero() && !actual.ModifiedAt.Equal(saved.ModifiedAt))
+	return actual.Key != saved.Key || actual.Size != saved.Size || (saved.ETag != "" && !transferstore.EqualETag(actual.ETag, saved.ETag)) || (saved.VersionID != "" && actual.VersionID != saved.VersionID) || (!saved.ModifiedAt.IsZero() && !actual.ModifiedAt.Equal(saved.ModifiedAt))
 }
 
 func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, target transferstore.Store) (result ItemResult) {

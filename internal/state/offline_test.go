@@ -102,7 +102,7 @@ func TestOfflineAdoptionRejectsUnsafeState(t *testing.T) {
 					case "wrong-role":
 						return tx.Put("metadata", "format", map[string]any{"role": "agent", "schemaVersion": 1})
 					case "future-schema":
-						return tx.Put("metadata", "format", map[string]any{"role": role, "schemaVersion": 2})
+						return tx.Put("metadata", "format", map[string]any{"role": role, "schemaVersion": 3})
 					case "pending":
 						return tx.Put("migration", "state", map[string]any{"pending": true, "migrationId": "qa"})
 					case "wrong-final-path":

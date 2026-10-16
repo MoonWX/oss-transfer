@@ -80,7 +80,7 @@ func (c *taskCatalogue) group(id int64) (*oldGroup, error) {
 	return c.Groups[id], nil
 }
 func (p *Prepared) collectTasks(ctx context.Context) (*taskCatalogue, error) {
-	c := &taskCatalogue{Groups: map[int64]*oldGroup{}, Tasks: map[string]*oldTaskRef{}, CreationTasks: map[int64]int64{}, Creations: map[string]int64{}, Inventories: map[string][]int64{}, Fences: map[int64]bool{}, AuthoritativeFences: map[int64]bool{}, ScopedParents: map[string][]int64{}, Policies: map[string]oldBandwidth{}}
+	c := &taskCatalogue{Groups: map[int64]*oldGroup{}, Tasks: map[string]*oldTaskRef{}, CreationTasks: map[int64]int64{}, Creations: map[string]int64{}, Inventories: map[string][]int64{}, Fences: map[int64]bool{}, TaskFences: map[int64]bool{}, AuthoritativeFences: map[int64]bool{}, ScopedParents: map[string][]int64{}, Policies: map[string]oldBandwidth{}}
 	for _, source := range p.Manifest.Sources {
 		var batch []oldRawRecord
 		var batchBytes int
@@ -201,6 +201,9 @@ func (p *Prepared) collectTasks(ctx context.Context) (*taskCatalogue, error) {
 				}
 				if yes && id > 0 {
 					c.Fences[id] = true
+					if strings.HasPrefix(k, "task:purged:") {
+						c.TaskFences[id] = true
+					}
 					c.HighWater = max(c.HighWater, uint64(id))
 				}
 			case category(k) == "tasks" || strings.HasPrefix(k, "task:deleted:"):
@@ -244,6 +247,7 @@ func (p *Prepared) collectTasks(ctx context.Context) (*taskCatalogue, error) {
 	}
 	// Master catalogue is authoritative. Node-local identities are paired with the
 	// node; a negative internal ID is never used as a new public parent ID.
+	retainedParents := map[int64]bool{}
 	for _, ref := range c.Tasks {
 		id := c.CreationTasks[ref.Value.TaskIndex]
 		if ref.Value.ParentTaskID != nil && *ref.Value.ParentTaskID > 0 {
@@ -260,6 +264,7 @@ func (p *Prepared) collectTasks(ctx context.Context) (*taskCatalogue, error) {
 			return nil, err
 		}
 		ref.ParentID = id
+		retainedParents[id] = true
 		if ref.Value.TaskIndex == id && ref.Value.ParentTaskID != nil && *ref.Value.ParentTaskID == id && ref.Value.ShardIndex == nil && ref.Value.ShardID == "" {
 			if g.Snapshot == nil {
 				row := ref.Value
@@ -276,11 +281,24 @@ func (p *Prepared) collectTasks(ctx context.Context) (*taskCatalogue, error) {
 		}
 	}
 	for id := range c.Fences {
-		if parent := c.CreationTasks[id]; parent != 0 {
+		parent := c.CreationTasks[id]
+		if parent == 0 && c.Groups[id] != nil && c.Groups[id].Creation != nil {
+			parent = id
+		}
+		if parent != 0 {
 			g := c.Groups[parent]
-			allPurged := g.Deleted && len(g.Creation.TaskIDs) > 0
+			// Older creations may retain deleted=false after every execution was
+			// permanently removed. Accept that stale catalogue only after scanning
+			// finished and no dispatch remains. A report fence alone, or any task
+			// record on any source node, cannot prove an entire creation was purged.
+			scanFinished := g.Creation.ScanComplete != nil && *g.Creation.ScanComplete && len(g.Creation.PendingDispatches) == 0
+			allPurged := len(g.Creation.TaskIDs) > 0 && !retainedParents[parent] && g.Snapshot == nil && (g.Deleted || scanFinished)
 			for _, executionID := range g.Creation.TaskIDs {
-				allPurged = allPurged && c.Fences[executionID]
+				allPurged = allPurged && c.TaskFences[executionID]
+			}
+			for _, node := range g.Creation.ParticipatingWorkerNodes {
+				_, present := p.plans[node]
+				allPurged = allPurged && present
 			}
 			if allPurged {
 				g.Purged, g.Deleted = true, true

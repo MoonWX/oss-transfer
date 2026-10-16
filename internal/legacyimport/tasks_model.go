@@ -92,6 +92,7 @@ type taskCatalogue struct {
 	Creations           map[string]int64
 	Inventories         map[string][]int64
 	Fences              map[int64]bool
+	TaskFences          map[int64]bool
 	AuthoritativeFences map[int64]bool
 	ScopedParents       map[string][]int64
 	Policies            map[string]oldBandwidth

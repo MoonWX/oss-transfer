@@ -148,6 +148,8 @@ The installer stops the service and backs up its programs, configuration, servic
 
 Stop active tasks before upgrading if they must stay stopped during rollback. Restoring a database does not undo objects or files already written. For a separate backup, stop the service and copy its configuration and data directories, or take a consistent filesystem snapshot.
 
+If a file-list task originally included a missing object, retrying after that object appears saves its source identity in a newer database format. V4.1.8 and earlier cannot open that database. To return to an older release, restore its programs and the matching pre-upgrade database backup on the Master and Agents together.
+
 ## Install without network access
 
 Use one fixed release from the OSS mirror. For example, [v4.1.6/manifest.tsv](https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.6/manifest.tsv) lists that release’s filenames and checksums; download its archives and installers from the same `v4.1.6/` directory. To find a newer version, read the `version` row in the [latest manifest](https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv) and use the matching `v<version>/` directory. Copy the following files into one directory on the target host:

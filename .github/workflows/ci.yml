@@ -71,6 +71,7 @@ jobs:
           python3 scripts/sync-installer-source.py --check
           python3 .github/tests/test-source-selection.py -v
           python3 .github/tests/test-download-source.py -v
+          python3 .github/tests/test-installer-startup.py -v
           python3 .github/tests/test-packaging.py -v
           python3 .github/tests/test-oss-layout.py -v
           python3 .github/tests/test-migrate-oss-prefix.py -v

@@ -632,10 +632,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Browsers and agents use this address to connect.",
     ja: "ブラウザーと Agent はこのアドレスに接続します。",
   },
-  数据目录: {
-    en: "Data directory",
-    ja: "データディレクトリ",
-  },
   初始化密钥: {
     en: "Setup key",
     ja: "初期設定キー",

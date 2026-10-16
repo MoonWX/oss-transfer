@@ -24,7 +24,6 @@ import {
 type SetupStatus = {
   success: true;
   configured: boolean;
-  dataDirectory: string;
   tokenRequired: true;
 };
 type FieldErrors = Partial<
@@ -119,12 +118,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
           complete.current();
           return;
         }
-        if (
-          next.configured !== false ||
-          next.tokenRequired !== true ||
-          typeof next.dataDirectory !== "string" ||
-          !next.dataDirectory.trim()
-        ) {
+        if (next.configured !== false || next.tokenRequired !== true) {
           throw new Error(t("初始化状态不完整，请重试。"));
         }
         setStatus(next);
@@ -357,20 +351,6 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                       errors.publicUrl || t("浏览器和 Agent 使用此地址连接。")
                     }
                   />
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      {t("数据目录")}
-                    </Typography>
-                    <Typography
-                      sx={{
-                        mt: 0.5,
-                        overflowWrap: "anywhere",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {status.dataDirectory}
-                    </Typography>
-                  </Box>
                 </>
               )}
               {step === 2 && (
@@ -379,7 +359,6 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                     {[
                       [t("管理员"), username.trim()],
                       [t("主节点地址"), publicUrl],
-                      [t("数据目录"), status.dataDirectory],
                     ].map(([label, value]) => (
                       <Box
                         key={label}

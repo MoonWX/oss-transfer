@@ -39,6 +39,7 @@ type protocolS3 struct {
 	completed, aborted, puts   int
 	signed, conditional, match bool
 	v2Signed                   bool
+	unquotedListETag           bool
 	failFirstPart, collision   bool
 	blockPart                  bool
 	abortDenied                bool
@@ -124,7 +125,11 @@ func (p *protocolS3) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, key := range keys[start:end] {
 			obj := p.objects[key]
-			result.Contents = append(result.Contents, entry{key, len(obj.data), obj.etag, protocolTime.Format(time.RFC3339)})
+			etag := obj.etag
+			if p.unquotedListETag {
+				etag = strings.Trim(etag, "\"")
+			}
+			result.Contents = append(result.Contents, entry{key, len(obj.data), etag, protocolTime.Format(time.RFC3339)})
 		}
 		_ = xml.NewEncoder(w).Encode(result)
 		return
@@ -354,6 +359,49 @@ func TestS3ProtocolSingleWriteReadAndListing(t *testing.T) {
 	stale.Size++
 	if _, _, err = s.Open(ctx, keys[0], OpenOptions{Expected: &stale}); !errors.Is(err, ErrSourceChanged) {
 		t.Fatalf("mismatched content length accepted %v", err)
+	}
+}
+
+func TestS3ListUnquotedETagConditionalRead(t *testing.T) {
+	p := newProtocolS3(t)
+	p.unquotedListETag = true // Observed on JD OSS; HEAD/GET retain HTTP quotes.
+	s := p.store(t)
+	ctx := context.Background()
+	payload := []byte("original object content")
+	if _, err := s.Write(ctx, "object", bytes.NewReader(payload), WriteOptions{Size: int64(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.List(ctx, ListOptions{})
+	if err != nil || len(page.Objects) != 1 {
+		t.Fatalf("list: %+v %v", page, err)
+	}
+	expected := page.Objects[0]
+	if strings.Contains(expected.ETag, "\"") {
+		t.Fatal("fixture did not reproduce the provider's LIST format")
+	}
+	reader, _, err := s.Open(ctx, "object", OpenOptions{Expected: &expected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("read: %q %v", got, err)
+	}
+	p.mu.Lock()
+	conditional := p.match
+	p.mu.Unlock()
+	if !conditional {
+		t.Fatal("read lost its If-Match source condition")
+	}
+	// Same length, different content: formatting compatibility must not disable
+	// the server-side guard or accept a changed source.
+	replacement := bytes.Repeat([]byte("x"), len(payload))
+	if _, err := s.Write(ctx, "object", bytes.NewReader(replacement), WriteOptions{Size: int64(len(replacement)), Overwrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Open(ctx, "object", OpenOptions{Expected: &expected}); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("changed source accepted: %v", err)
 	}
 }
 

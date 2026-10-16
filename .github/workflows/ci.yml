@@ -5,6 +5,12 @@ on:
   pull_request:
     paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build.sh', 'scripts/sync-installer-source.py', '.github/actions/**', 'deploy/native/**', 'docs/migration.md', 'frontend/**', 'cli/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
   workflow_dispatch:
+    inputs:
+      freebsd_arm64:
+        description: Run only the full FreeBSD ARM64 suite
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -12,7 +18,7 @@ env:
   PYTHONUTF8: '1'
   PYTHONDONTWRITEBYTECODE: '1'
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   package:
@@ -32,6 +38,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/resolve-ci-artifacts.py --check-reuse
+      - name: Record FreeBSD ARM64 acceptance scope
+        env:
+          QA_FREEBSD_ARM64: ${{ inputs.freebsd_arm64 && 'true' || 'false' }}
+        run: |
+          if [[ "$QA_FREEBSD_ARM64" = true ]]; then
+            echo 'Only the full FreeBSD ARM64 runtime suite is enabled. Other platform suites and the image build are not scheduled.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'FreeBSD ARM64: runtime acceptance is not scheduled. Its archive remains in the release build matrix.' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
@@ -90,16 +105,21 @@ jobs:
           done
       - name: Compile target tests alongside the release packages
         if: steps.reuse.outputs.reuse_tests != 'true'
+        env:
+          QA_FREEBSD_ARM64: ${{ inputs.freebsd_arm64 && 'true' || 'false' }}
         run: |
           python3 - <<'PYTHON'
           from concurrent.futures import ThreadPoolExecutor
           from pathlib import Path
+          import os
           import runpy
           import subprocess
           import sys
 
           helper = Path('.github/acceptance/test-binaries.py')
           platforms = runpy.run_path(str(helper))['SUPPORTED']
+          arm64_only = os.environ['QA_FREEBSD_ARM64'] == 'true'
+          platforms = [platform for platform in platforms if (platform == 'freebsd/arm64') == arm64_only]
 
           def compile_tests(platform):
               subprocess.run([
@@ -128,41 +148,42 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true'
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
         with:
           name: test-binaries-linux-armv7
           path: output/test-binaries/linux-armv7/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true'
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
         with:
           name: test-binaries-linux-riscv64
           path: output/test-binaries/linux-riscv64/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true'
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
         with:
           name: test-binaries-linux-loong64
           path: output/test-binaries/linux-loong64/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true'
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
         with:
           name: test-binaries-freebsd-amd64
           path: output/test-binaries/freebsd-amd64/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true'
+        if: steps.reuse.outputs.reuse_tests != 'true' && inputs.freebsd_arm64
         with:
           name: test-binaries-freebsd-arm64
           path: output/test-binaries/freebsd-arm64/
           if-no-files-found: error
           retention-days: 7
   image:
+    if: inputs.freebsd_arm64 != true
     name: Build container image
     needs: package
     runs-on: ubuntu-latest
@@ -210,7 +231,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   native:
-    if: needs.package.outputs.reuse_tests != 'true'
+    if: needs.package.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
     name: Native ${{ matrix.platform }}
     needs: [package, image]
     strategy:
@@ -309,7 +330,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
   emulated:
-    if: needs.package.outputs.reuse_tests != 'true'
+    if: needs.package.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
     name: Linux ${{ matrix.arch }}
     needs: package
     strategy:
@@ -384,10 +405,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {arch: amd64, vm_arch: x86_64, runner: ubuntu-latest, cpu: '', gomaxprocs: ''}
-          - {arch: arm64, vm_arch: aarch64, runner: ubuntu-26.04-arm, cpu: '2', gomaxprocs: '2'}
-    runs-on: ${{ matrix.runner }}
+        arch: ${{ fromJSON(inputs.freebsd_arm64 && '["arm64"]' || '["amd64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-26.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -431,15 +450,14 @@ jobs:
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         env:
           QA_ARCH: ${{ matrix.arch }}
-          QA_GOMAXPROCS: ${{ matrix.gomaxprocs }}
         with:
           cache-after-prepare: true
           cache-after-prepare-key-suffix: ${{ hashFiles('.github/acceptance/requirements.txt') }}
           release: '14.4'
-          arch: ${{ matrix.vm_arch }}
-          cpu: ${{ matrix.cpu }}
+          arch: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
+          cpu: ${{ matrix.arch == 'arm64' && '2' || '' }}
           copyback: false
-          envs: QA_ARCH QA_GOMAXPROCS GITHUB_SHA
+          envs: QA_ARCH GITHUB_SHA
           prepare: |
             set -e
             pkg install -y bash curl python311 ca_root_nss
@@ -449,7 +467,7 @@ jobs:
             status=0
             sh -e <<'TESTS' || status=$?
             py=/opt/oss-transfer-ci-venv/bin/python
-            if [ "$QA_ARCH" = arm64 ]; then export GOMAXPROCS="$QA_GOMAXPROCS"; fi
+            if [ "$QA_ARCH" = arm64 ]; then export GOMAXPROCS=2; fi
             "$py" - <<'PYTHON'
             import json, os, platform, subprocess
             from pathlib import Path
@@ -470,7 +488,7 @@ jobs:
       - name: Record host virtualization diagnostics
         if: always()
         env:
-          QA_VM_ARCH: ${{ matrix.vm_arch }}
+          QA_VM_ARCH: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
         run: |
           python3 - <<'PYTHON'
           import fcntl, json, os, platform, shutil, subprocess

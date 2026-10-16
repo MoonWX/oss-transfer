@@ -17,7 +17,15 @@ git push origin "refs/tags/v$version"
 
 The tag must match `VERSION` and point to the commit you intend to publish. Use a new version number when changing a published release.
 
-For a change to `VERSION` alone, CI reuses passing tests from a code-identical ancestor on `main`. It still rebuilds all archives and the image, checks the packaged program versions, and verifies checksums and image identity. Changes to code, dependencies, installers or workflows run the full suite. If no passing baseline can be verified, CI runs the full suite.
+For a change to `VERSION` alone, CI reuses passing tests from a code-identical ancestor on `main`. It still rebuilds all archives and the image, checks the packaged program versions, and verifies checksums and image identity. Changes to code, dependencies, installers or workflows run the default suite. If no passing baseline can be verified, CI runs the default suite.
+
+Default CI tests ten platforms. FreeBSD arm64 archives are built and checked, but their runtime tests are optional. Run the complete FreeBSD arm64 suite separately with:
+
+```sh
+gh workflow run ci.yml --ref main -f freebsd_arm64=true
+```
+
+This runs one FreeBSD arm64 acceptance job without repeating the other platforms. It does not gate publication; releases use the default `main` CI run.
 
 The release workflow selects artifacts by commit and CI run ID. Pull-request and manual CI runs are excluded. A cancelled version-only run can supply artifacts only when both build jobs passed, no test failed, and a code-identical ancestor has passing CI. Artifacts expire after seven days. If they have expired, rerun the matching CI run.
 

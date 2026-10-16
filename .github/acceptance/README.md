@@ -13,9 +13,17 @@ CI builds the release archives once, then runs their Master, Agent and CLI again
 | Windows amd64 | `windows-latest` |
 | Windows arm64 | `windows-11-arm` |
 
-Each platform has one acceptance job. These six platforms run the same application and native installer scenarios. The two Linux jobs also test their Docker image and Compose installer. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
+Each tested platform has one acceptance job. These six platforms run the same application and native installer scenarios. The two Linux jobs also test their Docker image and Compose installer. Go tests enable the race detector except on Windows arm64, where it is unsupported. That runner uses native arm64 application binaries and an emulated x64 SeaweedFS fixture.
 
-Linux ARMv7, riscv64 and loong64 execute the target binaries under QEMU, with an amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 each run in one FreeBSD 14.4 VM; their SeaweedFS fixture runs natively on the Linux host. Master, Agent, CLI and crash-recovery test executables still run inside FreeBSD, using its filesystem and service manager. All five run the same Go/CLI tests and application scenarios as the six platforms above, including shared bandwidth, stop/restart, multipart cleanup, inventory recovery and installation rollback. Their test executables are cross-compiled with `CGO_ENABLED=0`; they do not run the race detector.
+Linux ARMv7, riscv64 and loong64 execute the target binaries under QEMU, with an amd64 SeaweedFS fixture. FreeBSD amd64 and arm64 each run in one FreeBSD 14.4 VM; their SeaweedFS fixture runs natively on the Linux host. Master, Agent, CLI and crash-recovery test executables still run inside FreeBSD, using its filesystem and service manager. When enabled, these five platforms run the same Go/CLI tests and application scenarios as the six platforms above, including shared bandwidth, stop/restart, multipart cleanup, inventory recovery and installation rollback. Their test executables are cross-compiled with `CGO_ENABLED=0`; they do not run the race detector.
+
+Pushes and pull requests run ten platforms. FreeBSD ARM64 is optional because its software-emulated suite takes about sixteen minutes. Its archive is still built and checked with the other ten release archives. To enable its complete runtime suite, select **Run workflow** in CI and enable `freebsd_arm64`, or run:
+
+```sh
+gh workflow run ci.yml --ref main -f freebsd_arm64=true
+```
+
+This builds the archives, then runs only the complete FreeBSD ARM64 suite. It does not repeat the other ten platforms or build the container image. Manual runs do not cancel push runs or supply release artifacts.
 
 The old Java database converter supports Linux and macOS. Other platforms test that publication is rejected before changing migration state; FreeBSD also checks that staged data and the startup fence remain intact.
 
@@ -23,11 +31,11 @@ The Linux QEMU jobs install real systemd services on the Ubuntu runner. Only the
 
 ## Scheduling
 
-The package job builds release archives and cross-compiles the five additional platforms’ test executables, at most two platforms at a time. Test compilation has no separate jobs.
+The package job builds all eleven release archives and cross-compiles the enabled additional platforms' test executables, at most two platforms at a time. Default CI compiles four test bundles; selecting FreeBSD ARM64 compiles only its bundle. Test compilation has no separate jobs.
 
 Test artifacts record the commit, target architecture and SHA-256 hashes and are not published in releases. The multipart crash test uses the target `agentservice` test executable, including its self-executed crash helper.
 
-There are eleven platform jobs, plus the shared package and image builds. Each platform starts four groups internally: unit tests, CLI and inventory checks, installation, and transfers. Go test packages run at most two at once. Native installation and Compose installation run sequentially because both discover installed services.
+Default CI runs ten platform jobs and the shared package and image builds. Selecting FreeBSD ARM64 runs the package job and one FreeBSD ARM64 job. Each tested platform starts four groups internally: unit tests, CLI and inventory checks, installation, and transfers. Go test packages run at most two at once. Native installation and Compose installation run sequentially because both discover installed services.
 
 Transfers can overlap other groups while checking setup, multipart recovery and the three transfer directions. Before measuring bandwidth, the transfer group waits for every other group to pass, exit and finish cleanup. Bandwidth and stop/restart tests then run alone. A failed group prevents this window from opening and fails the job; every run has its own gate identity.
 
@@ -37,7 +45,7 @@ FreeBSD caches its Python environment and dependencies; changes to the requireme
 
 FreeBSD arm64 uses QEMU software emulation on `ubuntu-26.04-arm`, with two virtual CPUs and `GOMAXPROCS=2`. This ARM host did not expose `/dev/kvm` in the capability check; the guest still uses TCG, not hardware virtualization. Host and guest diagnostics record CPU counts, the QEMU version and a KVM VM-creation probe. Compare stage timings before drawing a speed conclusion. FreeBSD amd64 keeps the default VM CPU settings on `ubuntu-latest`.
 
-Release waits for every job. Builds and publication read the same [platform list](../../deploy/native/platforms.json).
+Release waits for the default push CI at its commit. Optional manual FreeBSD ARM64 acceptance is separate and does not gate publication. A successful default CI run does not establish FreeBSD ARM64 runtime acceptance. VERSION-only commits can reuse the same default suite from a code-identical successful push run; manual runs are not reuse baselines. Builds and publication retain all eleven entries in the [platform list](../../deploy/native/platforms.json).
 
 ## Coverage
 

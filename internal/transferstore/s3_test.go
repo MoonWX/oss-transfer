@@ -557,7 +557,9 @@ func TestMultipartConcurrencyAndBackpressure(t *testing.T) {
 	}
 	payload := bytes.Repeat([]byte("p"), int(4*minPartSize+7))
 	input := &countedReader{reader: bytes.NewReader(payload)}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// This checks concurrency and backpressure, not throughput. Allow emulated
+	// CPUs time to finish the roughly 20 MiB upload before the hang guard expires.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {

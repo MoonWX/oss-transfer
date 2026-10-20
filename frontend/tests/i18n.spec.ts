@@ -273,7 +273,7 @@ for (const locale of ["en-US", "ja-JP"] as const) {
   });
 }
 
-test.describe("mobile sign-in and setup", () => {
+test.describe("mobile sign-in and initial password", () => {
   test.use({ locale: "ja-JP", viewport: { width: 390, height: 844 } });
   test("keeps Japanese and English forms usable at 390px without losing input", async ({
     page,
@@ -303,41 +303,41 @@ test.describe("mobile sign-in and setup", () => {
       contentType: "image/png",
     });
 
-    await page.route("**/api/setup/status", (route) =>
+    await page.route("**/api/auth/login", (route) =>
       route.fulfill({
         json: {
           success: true,
-          configured: false,
-          tokenRequired: true,
-          dataDirectory: "/var/lib/osstransfer",
+          token: "first-login-test-token",
+          user: { username: "admin", mustChangePassword: true },
         },
       }),
     );
-    await page.reload();
+    await page.getByLabel(/^Password(?:\s*\*)?$/).fill("initial-test-password");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "Set up OSS Transfer", exact: true }),
+      page.getByRole("heading", { name: "Set your password", exact: true }),
     ).toBeVisible();
     await page
-      .getByRole("textbox", { name: "Username", exact: true })
-      .fill("setup-example");
+      .getByLabel(/^New password(?:\s*\*)?$/)
+      .fill("replacement-test-password");
     await language(page, "日本語");
     await expect(
       page.getByRole("heading", {
-        name: "OSS Transfer の初期設定",
+        name: "パスワードを設定",
         exact: true,
       }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("textbox", { name: "ユーザー名", exact: true }),
-    ).toHaveValue("setup-example");
+    await expect(page.getByLabel(/^新しいパスワード(?:\s*\*)?$/)).toHaveValue(
+      "replacement-test-password",
+    );
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true);
-    await testInfo.attach("setup-ja-390px", {
+    await testInfo.attach("first-password-ja-390px", {
       body: await page.screenshot({
-        path: testInfo.outputPath("setup-ja-390px.png"),
+        path: testInfo.outputPath("first-password-ja-390px.png"),
       }),
       contentType: "image/png",
     });

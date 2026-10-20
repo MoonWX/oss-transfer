@@ -140,7 +140,7 @@ test("node invitation defaults to native installation and keeps Docker available
   await dialog
     .getByRole("textbox", { name: "节点名称", exact: true })
     .fill("Test Agent");
-  await expect(dialog.getByRole("textbox")).toHaveCount(1);
+  await expect(dialog.getByRole("textbox")).toHaveCount(2);
   await dialog
     .getByRole("textbox", { name: "节点名称", exact: true })
     .fill("新增节点");
@@ -164,7 +164,7 @@ test("node invitation defaults to native installation and keeps Docker available
   await expect(dialog.getByText(/加入凭证仅可使用一次/)).toBeVisible();
   expect(state.invitations).toEqual([
     {
-      body: { label: "新增节点" },
+      body: { label: "新增节点", masterUrl: new URL(page.url()).origin },
       internalToken: undefined,
     },
   ]);
@@ -296,7 +296,10 @@ test("invitation generation supports automatic address and preserves errors", as
   await expect(
     dialog.getByLabel("传统部署 指令", { exact: true }),
   ).toBeVisible();
-  expect(state.invitations[1].body).toEqual({ label: "Agent 1" });
+  expect(state.invitations[1].body).toEqual({
+    label: "Agent 1",
+    masterUrl: new URL(page.url()).origin,
+  });
 });
 
 test("Agent invitation dialog fits mobile screens and copies using HTTP fallback", async ({

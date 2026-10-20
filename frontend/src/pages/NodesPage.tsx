@@ -56,7 +56,6 @@ import {
 } from "../lib/refreshPreference";
 import RefreshControls from "../components/RefreshControls";
 import AgentInvitationDialog from "../components/AgentInvitationDialog";
-import NodeConnectionSettings from "../components/NodeConnectionSettings";
 import NodeDetailsDialog from "../components/NodeDetailsDialog";
 import { EmptyState, PageHeader, formatNumber } from "../components/Common";
 import {
@@ -111,7 +110,6 @@ export default function NodesPage() {
   const [nodeSaving, setNodeSaving] = useState(false);
   const [nodeError, setNodeError] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [networkOpen, setNetworkOpen] = useState(false);
   const [detailNode, setDetailNode] = useState<RegisteredNode | null>(null);
   const knownWorkers = workers.data
     ? [
@@ -276,9 +274,6 @@ export default function NodesPage() {
             useFlexGap
             alignItems="center"
           >
-            <Button onClick={() => setNetworkOpen(true)}>
-              {t("连接地址")}
-            </Button>
             <Button
               variant="outlined"
               startIcon={<AddRounded />}
@@ -792,12 +787,6 @@ export default function NodesPage() {
       )}
       {inviteOpen && (
         <AgentInvitationDialog open onClose={() => setInviteOpen(false)} />
-      )}
-      {networkOpen && (
-        <NodeConnectionSettings
-          onClose={() => setNetworkOpen(false)}
-          onSaved={() => void registry.refresh()}
-        />
       )}
       {detailNode && (
         <NodeDetailsDialog

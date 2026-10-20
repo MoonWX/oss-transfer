@@ -106,6 +106,9 @@ func (s *Server) agentReleaseURL() string {
 	return s.agentArtifactBase() + "/" + s.options.AgentArtifactVersion
 }
 func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation) map[string]any {
+	if invite.MasterURL != "" {
+		masterURL = invite.MasterURL
+	}
 	data := map[string]any{"id": tokenKey(invite.Token), "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": masterURL + "/api/agents/join", "nativeAgent": map[string]any{"available": false}, "nativeCommand": "OSS_TRANSFER_JOIN_TOKEN=" + shellQuote(invite.Token) + " ./oss-transfer-agent --master-url " + shellQuote(masterURL) + " --data-dir ./agent-data"}
 	if s.agentReleaseURL() != "" {
 		link := masterURL + "/api/agents/bootstrap/" + invite.Token
@@ -133,25 +136,38 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := r.PathValue("token")
-	if err := s.agents.registry.CheckInvitation(token); err != nil {
+	invite, err := s.agents.registry.Invitation(token)
+	if err != nil {
 		fail(w, 404, "Invalid or expired Agent invitation")
 		return
 	}
-	config, err := s.configuration()
-	if err != nil {
-		fail(w, 500, "Cannot read Master address")
+	masterURL := invite.MasterURL
+	if masterURL == "" {
+		// Invitations created by an earlier version have no saved endpoint.
+		config, err := s.configuration()
+		if err != nil {
+			fail(w, 500, "Cannot read Master address")
+			return
+		}
+		masterURL = config.agentURL()
+		if masterURL == "" {
+			masterURL = requestOrigin(r)
+		}
+	}
+	if !validMasterOrigin(masterURL) {
+		fail(w, 400, "Master URL must be an HTTP or HTTPS origin")
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if s.regionalAgentArtifacts() {
-		s.officialAgentBootstrap(w, r.URL.Query().Get("platform") == "windows", token, config.agentURL())
+		s.officialAgentBootstrap(w, r.URL.Query().Get("platform") == "windows", token, masterURL)
 		return
 	}
 	if r.URL.Query().Get("platform") == "windows" {
-		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & $installer -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(config.agentURL()))
+		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & $installer -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(masterURL))
 		return
 	}
-	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent --method native --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), shellQuote(s.agentReleaseURL()), shellQuote(config.agentURL()))
+	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent --method native --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), shellQuote(s.agentReleaseURL()), shellQuote(masterURL))
 }
 
 func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL string) {

@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,8 +25,12 @@ func readFormat(t *testing.T, db *Store) databaseFormat {
 }
 
 func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
-	for _, role := range []string{"master", "agent"} {
-		t.Run(role, func(t *testing.T) {
+	for _, scenario := range []struct {
+		role    string
+		version int
+	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}} {
+		role, version := scenario.role, scenario.version
+		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), role+".db")
 			db, err := Open(path)
 			if err != nil {
@@ -40,7 +45,7 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 			}
 			abort := errors.New("failed result commit")
 			if err = db.Update(func(tx *Tx) error {
-				if err := RequireSchema(tx, role, SchemaResolvedSources); err != nil {
+				if err := RequireSchema(tx, role, version); err != nil {
 					return err
 				}
 				if err := tx.Put("results", "pin", map[string]string{"etag": "first"}); err != nil {
@@ -64,7 +69,7 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err = db.Update(func(tx *Tx) error {
-				if err := RequireSchema(tx, role, SchemaResolvedSources); err != nil {
+				if err := RequireSchema(tx, role, version); err != nil {
 					return err
 				}
 				return tx.Put("results", "pin", map[string]string{"etag": "first"})
@@ -79,12 +84,12 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err = db.ClaimRole(role); err != nil {
-				t.Fatal("current reader rejected schema2", err)
+				t.Fatal("current reader rejected supported schema", err)
 			}
 			if err = db.Update(func(tx *Tx) error { return RequireSchema(tx, role, 1) }); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db) != (databaseFormat{Role: role, SchemaVersion: SchemaResolvedSources}) {
+			if readFormat(t, db) != (databaseFormat{Role: role, SchemaVersion: version}) {
 				t.Fatal("reader requirement was lost")
 			}
 			if err = db.View(func(tx *Tx) error {
@@ -116,7 +121,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 			case "zero":
 				format.SchemaVersion = 0
 			case "future":
-				format.SchemaVersion = 3
+				format.SchemaVersion = SchemaInitialPassword + 1
 			}
 			if scenario != "unclaimed" {
 				if err = db.Update(func(tx *Tx) error { return tx.Put("metadata", "format", format) }); err != nil {
@@ -128,7 +133,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 				role = "unknown"
 			}
 			if scenario == "future-requirement" {
-				version = 3
+				version = SchemaInitialPassword + 1
 			}
 			before, err := os.ReadFile(db.db.Path())
 			if err != nil {
@@ -153,16 +158,20 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 	}
 }
 
-func TestSchemaTwoOfflineBackupAndRestore(t *testing.T) {
-	for _, role := range []string{"master", "agent"} {
-		t.Run(role, func(t *testing.T) {
+func TestSchemaOfflineBackupAndRestore(t *testing.T) {
+	for _, scenario := range []struct {
+		role    string
+		version int
+	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}} {
+		role, version := scenario.role, scenario.version
+		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path, oldBackup := restoreFixture(t, role)
 			db, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err = db.Update(func(tx *Tx) error {
-				if err := RequireSchema(tx, role, SchemaResolvedSources); err != nil {
+				if err := RequireSchema(tx, role, version); err != nil {
 					return err
 				}
 				return tx.Put("results", "pin", map[string]string{"etag": "first"})
@@ -198,7 +207,7 @@ func TestSchemaTwoOfflineBackupAndRestore(t *testing.T) {
 			if err = db.ClaimRole(role); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db).SchemaVersion != SchemaResolvedSources {
+			if readFormat(t, db).SchemaVersion != version {
 				t.Fatal("pin backup lost reader version")
 			}
 		})

@@ -70,121 +70,72 @@ test("node name is primary and machine details load only when opened", async ({
   expect(detailsCalls).toBeGreaterThan(0);
 });
 
-test("network settings save a private Agent URL without changing the web URL", async ({
+test("node invitation uses the current origin by default and accepts a private endpoint", async ({
   page,
 }) => {
-  await mockApi(page);
-  let saved: unknown;
-  await page.route("**/api/master/network", async (route) => {
-    if (route.request().method() === "PUT")
-      saved = route.request().postDataJSON();
+  const requests = await mockApi(page);
+  const invitations: unknown[] = [];
+  await page.route("**/api/master/agents/invitations", async (route) => {
+    invitations.push(route.request().postDataJSON());
     await route.fulfill({
       json: {
         success: true,
         data: {
-          publicUrl: "https://transfer.example",
-          agentUrl: "",
+          id: "test-invitation",
+          joinUrl: "http://10.1.0.43:1685/api/agents/bootstrap/test",
+          traditionalCommand:
+            "curl -fsSL http://10.1.0.43:1685/api/agents/bootstrap/test | bash",
+          expiresAt: new Date(Date.now() + 1800000).toISOString(),
         },
       },
     });
   });
   await page.goto("/nodes");
-  await page.getByRole("button", { name: "连接地址", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "连接地址" });
-  await expect(dialog.getByLabel("浏览器访问地址")).toHaveValue(
-    "https://transfer.example",
+  await expect(
+    page.getByRole("button", { name: "连接地址", exact: true }),
+  ).toHaveCount(0);
+  expect(
+    requests.some((request) => request.path === "/api/master/network"),
+  ).toBe(false);
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+  await dialog.getByLabel("节点名称").fill("storage-02");
+  await expect(dialog.getByLabel("Agent 连接地址")).toHaveValue(
+    new URL(page.url()).origin,
   );
-  await expect(dialog.getByLabel("Agent 连接地址")).toHaveValue("");
   await dialog.getByLabel("Agent 连接地址").fill("http://10.1.0.43:1685/path");
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
   await expect(
     dialog.getByText("请输入完整的 HTTP 或 HTTPS 地址，不含路径。"),
   ).toBeVisible();
-  expect(saved).toBeUndefined();
-  await dialog.getByLabel("Agent 连接地址").fill("http://10.1.0.43:1685");
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(dialog).toBeHidden();
-  expect(saved).toEqual({
-    publicUrl: "https://transfer.example",
-    agentUrl: "http://10.1.0.43:1685",
-  });
-});
-
-test("an inherited Agent address stays empty after reopening and changing the web URL", async ({
-  page,
-}) => {
-  await mockApi(page);
-  let settings = {
-    publicUrl: "https://transfer.example",
-    agentUrl: "http://10.1.0.43:1685",
-  };
-  await page.route("**/api/master/network", async (route) => {
-    if (route.request().method() === "PUT")
-      settings = route.request().postDataJSON();
-    await route.fulfill({ json: { success: true, data: settings } });
-  });
-  await page.goto("/nodes");
-  await page.getByRole("button", { name: "连接地址", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "连接地址" });
-  await dialog.getByLabel("Agent 连接地址").fill("");
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(dialog).toBeHidden();
-  await page.getByRole("button", { name: "连接地址", exact: true }).click();
-  await expect(dialog.getByLabel("Agent 连接地址")).toHaveValue("");
+  expect(invitations).toHaveLength(0);
+  await dialog.getByLabel("Agent 连接地址").fill("http://10.1.0.43:1685/");
   await dialog
-    .getByLabel("浏览器访问地址")
-    .fill("https://new.transfer.example");
-  await expect(dialog.getByLabel("Agent 连接地址")).toHaveAttribute(
-    "placeholder",
-    "https://new.transfer.example",
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  await expect(dialog.getByLabel("传统部署 指令", { exact: true })).toHaveValue(
+    /10\.1\.0\.43:1685/,
   );
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(dialog).toBeHidden();
-  expect(settings).toEqual({
-    publicUrl: "https://new.transfer.example",
-    agentUrl: "",
+  expect(invitations).toEqual([
+    { label: "storage-02", masterUrl: "http://10.1.0.43:1685" },
+  ]);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  await expect(dialog.getByLabel("Agent 连接地址")).toHaveValue(
+    new URL(page.url()).origin,
+  );
+  await dialog.getByLabel("节点名称").fill("storage-03");
+  await dialog.getByLabel("Agent 连接地址").fill("");
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  await expect(
+    dialog.getByLabel("传统部署 指令", { exact: true }),
+  ).toBeVisible();
+  expect(invitations[1]).toEqual({
+    label: "storage-03",
+    masterUrl: new URL(page.url()).origin,
   });
 });
-
-for (const agentUrl of ["", "http://10.1.0.43:1685"]) {
-  test(`setup preserves Agent address ${agentUrl || "inheritance"}`, async ({
-    page,
-  }) => {
-    await mockApi(page);
-    let body: unknown;
-    await page.route("**/api/setup/status", (route) =>
-      route.fulfill({
-        json: {
-          success: true,
-          configured: false,
-          tokenRequired: true,
-        },
-      }),
-    );
-    await page.route("**/api/setup/complete", (route) => {
-      body = route.request().postDataJSON();
-      return route.fulfill({
-        status: 403,
-        json: { success: false, message: "Invalid setup token" },
-      });
-    });
-    await page.goto("/");
-    await page.getByLabel(/^密码/).fill("only-a-test-password");
-    await page.getByLabel(/^确认密码/).fill("only-a-test-password");
-    await page.getByRole("button", { name: "下一步", exact: true }).click();
-    await page.getByLabel("浏览器访问地址").fill("https://transfer.example");
-    await page.getByLabel("Agent 连接地址").fill(agentUrl);
-    await page.getByRole("button", { name: "下一步", exact: true }).click();
-    await page.getByLabel("初始化密钥").fill("setup-token-test");
-    await page.getByRole("button", { name: "完成并登录", exact: true }).click();
-    await expect
-      .poll(() => body)
-      .toEqual({
-        username: "admin",
-        password: "only-a-test-password",
-        publicUrl: "https://transfer.example",
-        agentUrl,
-        setupToken: "setup-token-test",
-      });
-  });
-}

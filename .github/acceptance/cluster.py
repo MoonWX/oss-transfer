@@ -243,7 +243,7 @@ class Harness:
     def scrub(self, text):
         for value in self.secrets:
             text = text.replace(value, "[redacted]")
-        return re.sub(r"Setup token: \S+", "Setup token: [redacted]", text)
+        return re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
 
     def save(self):
         path = self.root / "evidence.json"
@@ -384,15 +384,18 @@ class Harness:
         found = eventually(ready, "Master readiness")
         if first:
             self.origin = "http://" + found[1]
-            token = eventually(lambda: re.search(r"Setup token: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")), "setup token")[1]
-            credentials = {"username": "cluster-qa", "password": secrets.token_urlsafe(24)}
-            self.secrets.extend([token, credentials["password"]])
-            self.api("/api/setup/complete", dict(credentials, setupToken=token, publicUrl=self.origin))
-            self.token = self.api("/api/auth/login", credentials)["token"]
+            initial_password = eventually(lambda: re.search(r"Initial password: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")), "initial password")[1]
+            credentials = {"username": "admin", "password": secrets.token_urlsafe(24)}
+            self.secrets.extend([initial_password, credentials["password"]])
+            login = self.api("/api/auth/login", dict(credentials, password=initial_password))
+            require(login["user"]["mustChangePassword"], "Initial password did not require replacement")
+            self.token = login["token"]
             self.secrets.append(self.token)
+            changed = self.api("/api/auth/change-password", {"oldPassword": initial_password, "newPassword": credentials["password"]})
+            require(not changed["user"]["mustChangePassword"], "Password change did not unlock the account")
         else:
-            require("Setup token:" not in log.read_text(encoding="utf-8"), "Restart incorrectly reset initial setup")
-            require(self.api("/api/auth/current")["user"]["username"] == "cluster-qa", "Restart lost account/session")
+            require("Initial password:" not in log.read_text(encoding="utf-8"), "Restart incorrectly regenerated the administrator password")
+            require(self.api("/api/auth/current")["user"]["username"] == "admin", "Restart lost account/session")
 
     def start_agent(self, index, first=False):
         arguments = ["--data-dir", str(self.root / f"agent-{index}-data")]

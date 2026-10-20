@@ -155,7 +155,7 @@ class Lifecycle:
         return directory
 
     def scrub(self,text):
-        text=re.sub(r'Setup token: \S+','Setup token: [redacted]',text)
+        text=re.sub(r'((?:Initial password|Setup token):) \S+',r'\1 [redacted]',text)
         for secret in self.secrets:
             text=text.replace(secret,'[redacted]')
         return text
@@ -270,8 +270,8 @@ class Lifecycle:
         log=self.root/f'{len(list(self.root.glob("*-install-*.log"))):02d}-install-{role}.log'
         log.write_text(self.scrub(result.stdout+'\nSCM startup observations:\n'+'\n'.join(observations) if observations else result.stdout), encoding="utf-8")
         if (result.returncode==0)!=(expect==0):
-            # An installer can fail before our test reads its bootstrap token.
-            # Preserve the service's own error with generic token redaction.
+            # An installer can fail before our test reads its initial password.
+            # Preserve the service's own error with credential redaction.
             service_log=paths['data']/'logs/service.log'
             try:
                 if service_log.is_file():
@@ -288,8 +288,8 @@ class Lifecycle:
             require('Login: ' in result.stdout and '--host '+("'" if self.system=='Windows' else '')+self.origin in result.stdout,
                     'Installer did not print a CLI login command for the configured listener')
             if hasattr(self, 'credentials'):
-                require('Setup token:' not in result.stdout,
-                        'Installer reprinted a stale setup token from an initialized installation')
+                require('Initial password:' not in result.stdout,
+                        'Installer reprinted an initial password from an existing installation')
         return result
 
     def windows_install_diagnostics(self,role,paths,log,upgrade):
@@ -486,15 +486,19 @@ func main(){
         self.record('existing_cli_requires_explicit_replacement_and_has_exact_backup')
         before=self.pid('master')
         require(before>0,'Master has no service-owned PID')
-        printed_tokens = re.findall(r'^Setup token: ([A-Za-z0-9_-]+)$', installed.stdout, re.MULTILINE)
-        require(len(printed_tokens) == 1, 'Fresh installation did not print exactly one setup token to the terminal')
-        token = printed_tokens[0]
-        self.secrets.append(token)
-        self.credentials={'username':'qa-admin','password':secrets.token_urlsafe(28)}
+        printed_passwords = re.findall(r'^Initial password: ([A-Za-z0-9_-]+)$', installed.stdout, re.MULTILINE)
+        require(len(printed_passwords) == 1, 'Fresh installation did not print exactly one initial password to the terminal')
+        initial_password = printed_passwords[0]
+        self.secrets.append(initial_password)
+        self.credentials={'username':'admin','password':secrets.token_urlsafe(28)}
         self.secrets.append(self.credentials['password'])
-        self.api('/api/setup/complete',dict(self.credentials,publicUrl=self.origin,setupToken=token))
-        self.login()
-        self.record('fresh_master_service_and_setup_with_terminal_token',pid=before)
+        login=self.api('/api/auth/login',dict(self.credentials,password=initial_password))
+        require(login['user']['mustChangePassword'],'Initial password did not require replacement')
+        self.token=login['token']
+        self.secrets.append(self.token)
+        changed=self.api('/api/auth/change-password',{'oldPassword':initial_password,'newPassword':self.credentials['password']})
+        require(not changed['user']['mustChangePassword'],'Password change did not unlock the account')
+        self.record('fresh_master_service_initial_password_from_terminal_and_required_password_change',pid=before)
         cli_path=self.cli_path
         cli_hash=hashlib.sha256(cli_path.read_bytes()).hexdigest()
         require(cli_hash==self.evidence['cli']['sha256'],'Installed CLI differs from the verified package')

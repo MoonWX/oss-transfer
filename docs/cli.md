@@ -11,15 +11,14 @@ read -r -p 'Master URL: ' OSS_TRANSFER_MASTER_SERVER
 export OSS_TRANSFER_MASTER_SERVER
 ```
 
-Use your console account. These Bash commands read the password without displaying it or putting it in command history:
+Log in as `admin` with the password printed by the installer. Password input is hidden:
 
 ```bash
-read -r -p 'Username: ' TRANSFER_USER
-read -r -s -p 'Password: ' TRANSFER_PASSWORD
-printf '\n'
-printf '%s' "$TRANSFER_PASSWORD" | oss-transfer-cli login --username "$TRANSFER_USER" --password-stdin
-unset TRANSFER_PASSWORD TRANSFER_USER
+oss-transfer-cli login
+oss-transfer-cli change-password
 ```
+
+The first login requires a password change before running other commands. For another account, use `login --username name`. Scripts can supply `--password-env`, `--password-file`, or `--password-stdin`; `change-password` accepts `--old-password-env` and `--new-password-env` (or the corresponding `-file` options).
 
 The session is saved for this Master address. Keep using the same address and port for subsequent commands.
 

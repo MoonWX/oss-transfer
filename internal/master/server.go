@@ -3,7 +3,6 @@ package master
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,11 +25,12 @@ type Configuration struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 type User struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"passwordHash,omitempty"`
-	DisplayName  string `json:"displayName"`
-	Role         string `json:"role"`
-	Revision     uint64 `json:"revision"`
+	Username           string `json:"username"`
+	PasswordHash       string `json:"passwordHash,omitempty"`
+	DisplayName        string `json:"displayName"`
+	Role               string `json:"role"`
+	Revision           uint64 `json:"revision"`
+	MustChangePassword bool   `json:"mustChangePassword"`
 }
 type session struct {
 	Username     string    `json:"username"`
@@ -51,13 +51,12 @@ type Server struct {
 	tasks         *taskRuntime
 	store         *state.Store
 	options       Options
-	setupDigest   [32]byte
 	mux           *http.ServeMux
 	passwordSlots chan struct{}
 }
 
-// New returns a bootstrap token only for an unconfigured database. It is never
-// exposed through HTTP. Restarting before setup rotates this temporary token.
+// New creates the first administrator in an empty database and returns its
+// initial password once. Existing accounts and credentials are left unchanged.
 func New(store *state.Store, options Options) (*Server, string, error) {
 	if err := validateAgentArtifacts(options); err != nil {
 		return nil, "", err
@@ -73,16 +72,11 @@ func New(store *state.Store, options Options) (*Server, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	bootstrap := ""
+	initialPassword := ""
 	if !configured {
 		if err := store.View(requireEmptyAccounts); err != nil {
 			return nil, "", err
 		}
-		bootstrap, err = randomToken()
-		if err != nil {
-			return nil, "", err
-		}
-		s.setupDigest = sha256.Sum256([]byte(bootstrap))
 	}
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"success": true, "role": "master"})
@@ -113,7 +107,14 @@ func New(store *state.Store, options Options) (*Server, string, error) {
 	if options.Assets != nil {
 		s.mux.Handle("/", options.Assets)
 	}
-	return s, bootstrap, nil
+	if !configured {
+		initialPassword, err = s.initializeAdministrator()
+		if err != nil {
+			_ = s.Close()
+			return nil, "", err
+		}
+	}
+	return s, initialPassword, nil
 }
 
 func requireEmptyAccounts(tx *state.Tx) error {
@@ -162,82 +163,13 @@ func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot read setup state")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "configured": configured, "tokenRequired": !configured, "dataDirectory": s.options.DataDirectory})
+	writeJSON(w, 200, map[string]any{"success": true, "configured": configured, "tokenRequired": false})
 }
 
 func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Username   string `json:"username"`
-		Password   string `json:"password"`
-		PublicURL  string `json:"publicUrl"`
-		AgentURL   string `json:"agentUrl"`
-		SetupToken string `json:"setupToken"`
-	}
-	if !readJSON(w, r, &request) {
-		return
-	}
-	configured, err := s.configured()
-	if err != nil {
-		fail(w, 500, "Cannot read setup state")
-		return
-	}
-	if configured {
-		fail(w, 409, "Setup is already complete")
-		return
-	}
-	got := sha256.Sum256([]byte(request.SetupToken))
-	if subtle.ConstantTimeCompare(got[:], s.setupDigest[:]) != 1 {
-		fail(w, 403, "Invalid setup token")
-		return
-	}
-	request.Username = strings.TrimSpace(request.Username)
-	if request.Username == "" || len(request.Username) > 128 || strings.ContainsAny(request.Username, "\r\n\x00") {
-		fail(w, 400, "Invalid username")
-		return
-	}
-	if !validMasterOrigin(request.PublicURL) {
-		fail(w, 400, "Public URL must be an HTTP or HTTPS origin")
-		return
-	}
-	if request.AgentURL != "" && !validMasterOrigin(request.AgentURL) {
-		fail(w, 400, "Agent URL must be an HTTP or HTTPS origin")
-		return
-	}
-	if !s.acquirePasswordSlot(w, r) {
-		return
-	}
-	defer s.releasePasswordSlot()
-	hash, err := auth.HashPassword(request.Password)
-	if err != nil {
-		fail(w, 400, err.Error())
-		return
-	}
-	already := errors.New("already configured")
-	err = s.store.Update(func(tx *state.Tx) error {
-		var prior Configuration
-		if _, err := tx.Get("system", "configuration", &prior); err != nil {
-			return err
-		}
-		if prior.Configured {
-			return already
-		}
-		if err := requireEmptyAccounts(tx); err != nil {
-			return err
-		}
-		if err := tx.Put("users", request.Username, User{Username: request.Username, PasswordHash: hash, DisplayName: request.Username, Role: "admin", Revision: 1}); err != nil {
-			return err
-		}
-		return tx.Put("system", "configuration", Configuration{Configured: true, PublicURL: strings.TrimRight(request.PublicURL, "/"), AgentURL: strings.TrimRight(request.AgentURL, "/"), CreatedAt: s.options.Now().UTC()})
-	})
-	if errors.Is(err, already) {
-		fail(w, 409, "Setup is already complete")
-		return
-	}
-	if err != nil {
-		fail(w, 500, "Cannot save setup; existing data has not been replaced")
-		return
-	}
-	writeJSON(w, 200, map[string]any{"success": true})
+	// Retain an explicit response for older clients; initialization is no longer
+	// an unauthenticated operation exposed on the network.
+	fail(w, 409, "Setup is already complete")
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +318,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Incorrect current password")
 		return
 	}
+	if user.MustChangePassword && request.NewPassword == request.OldPassword {
+		fail(w, 400, "Choose a password different from the initial password")
+		return
+	}
 	hash, err := auth.HashPassword(request.NewPassword)
 	if err != nil {
 		fail(w, 400, err.Error())
@@ -402,6 +338,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		}
 		current.PasswordHash = hash
 		current.Revision++
+		current.MustChangePassword = false
 		if err := tx.Put("users", current.Username, current); err != nil {
 			return err
 		}
@@ -416,7 +353,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot save password")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true})
+	user.PasswordHash = ""
+	user.Revision++
+	user.MustChangePassword = false
+	writeJSON(w, 200, map[string]any{"success": true, "user": user})
 }
 func (s *Server) acquirePasswordSlot(w http.ResponseWriter, r *http.Request) bool {
 	select {

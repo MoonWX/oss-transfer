@@ -38,7 +38,9 @@ export type AgentInvitation = {
   nativeCommand?: string;
   nativeAgent?: { available: boolean };
 };
-export async function createAgentInvitation(change: Partial<NodeChange>) {
+export async function createAgentInvitation(
+  change: Partial<NodeChange> & { masterUrl?: string },
+) {
   const response = await api<AgentInvitation & { data?: AgentInvitation }>(
     "/api/master/agents/invitations",
     { method: "POST", body: change },

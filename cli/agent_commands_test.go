@@ -21,7 +21,7 @@ func TestAgentInvitationUsesConsoleAPI(t *testing.T) {
 				t.Fatalf("unexpected invitation request: %s %s", r.Method, r.URL)
 			}
 			body := adminTestBody(t, r)
-			if body["address"] != "10.0.0.2" || body["label"] != "storage-node" || len(body) != 2 {
+			if body["address"] != "10.0.0.2" || body["label"] != "storage-node" || len(body) != 3 || body["masterUrl"] != "http://"+r.Host {
 				t.Fatalf("unexpected invitation body: %#v", body)
 			}
 			adminTestJSON(t, w, map[string]interface{}{
@@ -198,5 +198,25 @@ func TestAgentConfigurationNeverSendsLocalExecutorCredentialToMaster(t *testing.
 	client.SetAuthToken("test-user-session")
 	if _, err := client.Get("/nodes"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgentInvitationExplicitMasterOrigin(t *testing.T) {
+	for _, origin := range []string{"https://transfer.example", "http://10.0.0.2:1685", "https://[2001:db8::1]:8443"} {
+		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if adminTestBody(t, r)["masterUrl"] != origin {
+				t.Fatal("Master endpoint override was lost")
+			}
+			adminTestJSON(t, w, map[string]any{"success": true})
+		})
+		if _, err := runAgentAdmin(client, "invite", []string{"--master-url", origin + "/"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, origin := range []string{"", "ftp://host", "https://host/path", "https://host:0", "https://host:65536", "https://user:secret@host"} {
+		client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("invalid origin submitted") })
+		if _, err := runAgentAdmin(client, "invite", []string{"--master-url", origin}); err == nil {
+			t.Fatal("invalid origin accepted", origin)
+		}
 	}
 }

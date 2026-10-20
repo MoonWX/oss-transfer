@@ -7,33 +7,11 @@ import (
 	"testing"
 )
 
-func TestSetupUsesBootstrapAndPreservesPasswordWhitespace(t *testing.T) {
-	t.Setenv("QA_SETUP_TOKEN", "test-bootstrap")
-	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/setup/complete" || r.Header.Get("Authorization") != "" || r.Header.Get("X-Internal-Token") != "" {
-			t.Fatal("setup reused administrative credentials")
-		}
-		body := adminTestBody(t, r)
-		if body["setupToken"] != "test-bootstrap" || body["password"] != "  correct password  " || body["publicUrl"] != "https://transfer.example" || body["username"] != "operator" {
-			t.Fatal("setup body was changed")
-		}
-		adminTestJSON(t, w, map[string]interface{}{"success": true})
-	})
-	client.authToken = "old-login"
-	_, err := runSetupCommand(client, []string{"complete", "--username", "operator", "--public-url", "https://transfer.example/", "--setup-token-env", "QA_SETUP_TOKEN", "--password-stdin"}, strings.NewReader("  correct password  \n"))
-	if err != nil {
+func TestRetiredSetupDoesNotSubmitCredentials(t *testing.T) {
+	client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("retired setup must not send credentials") })
+	_, err := runSetupCommand(client, []string{"complete", "--setup-token-env", "OLD_TOKEN"}, strings.NewReader(""))
+	if err == nil || !strings.Contains(err.Error(), "login") {
 		t.Fatal(err)
-	}
-	for _, tail := range [][]string{
-		{"--password-stdin", "--setup-token-stdin"},
-		{"--password-env", "QA_SETUP_TOKEN", "--password-stdin", "--setup-token-env", "QA_SETUP_TOKEN"},
-		{"--password-env", "QA_SETUP_TOKEN", "--setup-token", "unsafe-argv-secret"},
-	} {
-		client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("ambiguous secrets sent") })
-		args := append([]string{"complete", "--username", "admin", "--public-url", "https://transfer.example"}, tail...)
-		if _, err := runSetupCommand(client, args, strings.NewReader("secret")); err == nil {
-			t.Fatal("accepted unsafe secret options")
-		}
 	}
 }
 

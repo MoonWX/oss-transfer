@@ -4,6 +4,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   只读: { en: "Read only", ja: "読み取り専用" },
   浏览器访问地址: { en: "Web address", ja: "ブラウザー用アドレス" },
   "Agent 连接地址": { en: "Agent connection address", ja: "Agent 接続先" },
+  "填写新节点可访问的主节点地址，同一 VPC 可使用内网地址。": {
+    en: "Use a Master address reachable from the new node. A private address works within the same VPC.",
+    ja: "新しいノードから到達できる Master のアドレスを指定します。同じ VPC 内ではプライベートアドレスを使用できます。",
+  },
   "留空使用浏览器地址。同一 VPC 可填写主节点内网地址。": {
     en: "Defaults to the web address. Use the Master's private address within the same VPC.",
     ja: "空欄の場合はブラウザー用アドレスを使用します。同じ VPC 内では Master のプライベートアドレスを指定できます。",

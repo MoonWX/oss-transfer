@@ -8,21 +8,7 @@ import (
 	"testing"
 )
 
-func TestSetupSeparateAgentURLAndNetworkPatch(t *testing.T) {
-	t.Setenv("TEST_SETUP_TOKEN", "setup-token")
-	for _, agentURL := range []string{"http://10.0.0.1:1685/", ""} {
-		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-			body := adminTestBody(t, r)
-			if r.Method != "POST" || r.URL.Path != "/api/setup/complete" || body["agentUrl"] != strings.TrimRight(agentURL, "/") || body["publicUrl"] != "https://transfer.example" {
-				t.Fatalf("setup: %s %s %v", r.Method, r.URL, body)
-			}
-			adminTestJSON(t, w, map[string]any{"success": true})
-		})
-		_, err := runSetupCommand(client, []string{"complete", "--username", "admin", "--public-url", "https://transfer.example/", "--agent-url", agentURL, "--setup-token-env", "TEST_SETUP_TOKEN", "--password-stdin"}, strings.NewReader("secret\n"))
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+func TestLegacyNetworkPatchPreservesOmittedFields(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		body map[string]any
@@ -53,7 +39,6 @@ func TestSetupSeparateAgentURLAndNetworkPatch(t *testing.T) {
 		}
 	}
 }
-
 func TestNetworkAddressesShowInheritanceWithoutChangingJSON(t *testing.T) {
 	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
 		for _, inherited := range []bool{true, false} {
@@ -66,12 +51,12 @@ func TestNetworkAddressesShowInheritanceWithoutChangingJSON(t *testing.T) {
 			result := map[string]any{"success": true, "data": data}
 			var out bytes.Buffer
 			renderCLIResult(&cliLocaleWriter{Writer: &out, locale: locale}, result)
-			for _, want := range []string{locale.text("浏览器访问地址"), locale.text("Agent 连接地址"), address} {
+			for _, want := range []string{locale.text("旧版默认地址"), locale.text("Agent 连接地址"), address} {
 				if !strings.Contains(out.String(), want) {
 					t.Fatalf("missing %q: %s", want, out.String())
 				}
 			}
-			if strings.Contains(out.String(), locale.text("沿用浏览器地址")) != inherited {
+			if strings.Contains(out.String(), locale.text("沿用旧版默认地址")) != inherited {
 				t.Fatalf("wrong address inheritance: %s", out.String())
 			}
 			if data["agentUrl"] != rawAddress || data["effectiveAgentUrl"] != address {

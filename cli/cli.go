@@ -136,6 +136,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 	client := NewApiClient(options.host)
 	client.locale = language
 	client.output = output
+	client.errors = errors
 	client.SetVerbose(options.verbose)
 	ctx := context.Background()
 	stop := func() {}
@@ -346,6 +347,12 @@ func sanitizeOutput(value interface{}) interface{} {
 		copy := map[string]interface{}{}
 		for k, item := range v {
 			key := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(k, "_", ""), "-", ""))
+			if key == "mustchangepassword" {
+				if flag, ok := item.(bool); ok {
+					copy[k] = flag
+					continue
+				}
+			}
 			if strings.Contains(key, "password") || key == "secretkey" || key == "accesskey" || key == "internaltoken" || key == "sessiontoken" || key == "token" {
 				copy[k] = "***"
 			} else {
@@ -432,10 +439,10 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			if agentURL == "" {
 				agentURL = getString(data, "publicUrl")
 			}
-			agentURL += " (" + cliText(out, "沿用浏览器地址") + ")"
+			agentURL += " (" + cliText(out, "沿用旧版默认地址") + ")"
 		}
 		table := newCLITable(out)
-		fmt.Fprintf(table, "%s\t%s\n", cliText(out, "浏览器访问地址"), safeCLIText(data["publicUrl"]))
+		fmt.Fprintf(table, "%s\t%s\n", cliText(out, "旧版默认地址"), safeCLIText(data["publicUrl"]))
 		fmt.Fprintf(table, "%s\t%s\n", cliText(out, "Agent 连接地址"), safeCLIText(agentURL))
 		table.Flush()
 		renderCLIAdminMessage(out, result)
@@ -677,7 +684,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	w.Flush()
 }
 
-var fieldLabels = map[string]string{"success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "浏览器访问地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "允许的本地目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
+var fieldLabels = map[string]string{"success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "允许的本地目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
 
 func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 	keys := make([]string, 0, len(data))

@@ -17,18 +17,26 @@ func masterAddressOptions(opts commandOptions) (map[string]string, error) {
 			body[field.key] = ""
 			continue
 		}
-		u, err := url.Parse(value)
-		valid := err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/") && !strings.ContainsAny(value, "\x00\r\n\t ")
-		if valid && u.Port() != "" {
-			port, err := strconv.Atoi(u.Port())
-			valid = err == nil && port > 0 && port <= 65535
+		origin, err := masterOrigin(value, field.flag)
+		if err != nil {
+			return nil, err
 		}
-		if !valid {
-			return nil, cliErrorf("--%s 须为不含路径的 HTTP 或 HTTPS 地址", field.flag)
-		}
-		body[field.key] = strings.TrimRight(u.String(), "/")
+		body[field.key] = origin
 	}
 	return body, nil
+}
+
+func masterOrigin(value, flag string) (string, error) {
+	u, err := url.Parse(value)
+	valid := err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/") && !strings.ContainsAny(value, "\x00\r\n\t ")
+	if valid && u.Port() != "" {
+		port, err := strconv.Atoi(u.Port())
+		valid = err == nil && port > 0 && port <= 65535
+	}
+	if !valid {
+		return "", cliErrorf("--%s 须为不含路径的 HTTP 或 HTTPS 地址", flag)
+	}
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 func nodeNetwork(client *ApiClient, args []string) (map[string]interface{}, error) {

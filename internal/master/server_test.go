@@ -3,13 +3,11 @@ package master
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -48,49 +46,24 @@ func request(t *testing.T, client *http.Client, method, url, token string, body 
 	return response.StatusCode, result
 }
 
-func TestSetupAuthenticationRestartAndRevocation(t *testing.T) {
+func TestInitialPasswordAuthenticationRestartAndRevocation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master.db")
 	db, err := state.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	s, bootstrap, err := New(db, Options{DataDirectory: filepath.Dir(path), Now: func() time.Time { return now }})
+	s, initial, err := New(db, Options{DataDirectory: filepath.Dir(path), Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(initial) < 20 {
+		t.Fatal("initial password missing or too short")
+	}
 	server := httptest.NewServer(s)
 	client := server.Client()
-	for _, endpoint := range []string{"/api/auth/login", "/api/master/add-buckets", "/api/agents/join"} {
-		status, _ := request(t, client, "POST", server.URL+endpoint, "", map[string]any{})
-		if status != 503 {
-			t.Fatalf("unconfigured %s returned %d", endpoint, status)
-		}
-	}
-	status, body := request(t, client, "GET", server.URL+"/api/setup/status", "", nil)
-	if status != 200 || body["configured"] != false {
-		t.Fatal(status, body)
-	}
-	encoded, _ := json.Marshal(body)
-	if strings.Contains(string(encoded), bootstrap) {
-		t.Fatal("setup token leaked")
-	}
-	setup := map[string]any{"username": "admin", "password": "first password", "publicUrl": server.URL, "setupToken": "wrong"}
-	status, _ = request(t, client, "POST", server.URL+"/api/setup/complete", "", setup)
-	if status != 403 {
-		t.Fatal(status)
-	}
-	setup["setupToken"] = bootstrap
-	status, _ = request(t, client, "POST", server.URL+"/api/setup/complete", "", setup)
-	if status != 200 {
-		t.Fatal(status)
-	}
-	setup["password"] = "hijacked"
-	status, _ = request(t, client, "POST", server.URL+"/api/setup/complete", "", setup)
-	if status != 409 {
-		t.Fatal(status)
-	}
-	login := func(password string) string {
+	login := func(password string, mustChange bool) string {
+		t.Helper()
 		status, result := request(t, client, "POST", server.URL+"/api/auth/login", "", map[string]any{"username": "admin", "password": password})
 		if status != 200 {
 			t.Fatal(status, result)
@@ -99,51 +72,111 @@ func TestSetupAuthenticationRestartAndRevocation(t *testing.T) {
 		if _, ok := user["passwordHash"]; ok {
 			t.Fatal("hash exposed")
 		}
+		if user["mustChangePassword"] != mustChange {
+			t.Fatal("wrong password-change requirement", user)
+		}
 		return result["token"].(string)
 	}
-	token := login("first password")
-	otherToken := login("first password")
-	status, _ = request(t, client, "POST", server.URL+"/api/auth/change-password", token, map[string]any{"oldPassword": "first password", "newPassword": "new password"})
-	if status != 200 {
-		t.Fatal(status)
+	status, body := request(t, client, "GET", server.URL+"/api/setup/status", "", nil)
+	encoded, _ := json.Marshal(body)
+	if status != 200 || body["configured"] != true || body["tokenRequired"] != false || strings.Contains(string(encoded), initial) || body["dataDirectory"] != nil {
+		t.Fatal("setup state leaked a credential or local path", status, body)
 	}
-	status, _ = request(t, client, "GET", server.URL+"/api/auth/current", otherToken, nil)
+	status, _ = request(t, client, "POST", server.URL+"/api/setup/complete", "", map[string]any{"username": "intruder", "password": "takeover", "setupToken": initial})
+	if status != 409 {
+		t.Fatal("legacy setup allowed takeover", status)
+	}
+	token := login(initial, true)
+	for _, endpoint := range []struct {
+		method, path string
+		body         any
+	}{
+		{"GET", "/api/master/nodes", nil},
+		{"GET", "/api/master/status", nil},
+		{"GET", "/api/master/network", nil},
+		{"POST", "/api/master/agents/invitations", map[string]string{"label": "not allowed"}},
+		{"PUT", "/api/master/network", map[string]string{"publicUrl": "https://blocked.example"}},
+	} {
+		status, _ = request(t, client, endpoint.method, server.URL+endpoint.path, token, endpoint.body)
+		if status != 403 {
+			t.Fatalf("initial session bypassed restriction at %s: %d", endpoint.path, status)
+		}
+	}
+	status, _ = request(t, client, "POST", server.URL+"/api/auth/change-password", token, map[string]string{"oldPassword": "wrong", "newPassword": "new password"})
+	if status != 403 {
+		t.Fatal("wrong current password accepted", status)
+	}
+	status, _ = request(t, client, "POST", server.URL+"/api/auth/change-password", token, map[string]string{"oldPassword": initial, "newPassword": initial})
+	if status != 400 {
+		t.Fatal("unchanged initial password accepted", status)
+	}
+	// Restart BEFORE the first change must preserve both the secret and its gate.
+	server.Close()
+	_ = s.Close()
+	_ = db.Close()
+	db, err = state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, reprinted, err := New(db, Options{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reprinted != "" {
+		t.Fatal("restart rotated or reprinted initial password")
+	}
+	server = httptest.NewServer(s)
+	client = server.Client()
+	other := login(initial, true)
+	status, body = request(t, client, "GET", server.URL+"/api/auth/current", token, nil)
+	if status != 200 || body["user"].(map[string]any)["mustChangePassword"] != true {
+		t.Fatal("first-login gate lost after restart", status, body)
+	}
+	status, body = request(t, client, "POST", server.URL+"/api/auth/change-password", token, map[string]string{"oldPassword": initial, "newPassword": "new password"})
+	if status != 200 || body["user"].(map[string]any)["mustChangePassword"] != false {
+		t.Fatal("password change failed", status, body)
+	}
+	status, _ = request(t, client, "GET", server.URL+"/api/auth/current", other, nil)
 	if status != 401 {
 		t.Fatal("other session survived password change", status)
 	}
-	server.Close()
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
+	status, _ = request(t, client, "GET", server.URL+"/api/master/nodes", token, nil)
+	if status != 200 {
+		t.Fatal("same session not unlocked", status)
 	}
+	server.Close()
+	_ = s.Close()
+	_ = db.Close()
 	db, err = state.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	s, bootstrap, err = New(db, Options{Now: func() time.Time { return now }})
+	s, reprinted, err = New(db, Options{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bootstrap != "" {
-		t.Fatal("setup reopened after restart")
+	defer s.Close()
+	if reprinted != "" {
+		t.Fatal("credentials reset after completed first login")
 	}
 	server = httptest.NewServer(s)
 	defer server.Close()
 	client = server.Client()
-	status, _ = request(t, client, "GET", server.URL+"/api/auth/current", token, nil)
+	status, _ = request(t, client, "GET", server.URL+"/api/master/nodes", token, nil)
 	if status != 200 {
 		t.Fatal("committed session missing", status)
 	}
-	status, _ = request(t, client, "POST", server.URL+"/api/auth/login", "", map[string]any{"username": "admin", "password": "first password"})
+	status, _ = request(t, client, "POST", server.URL+"/api/auth/login", "", map[string]string{"username": "admin", "password": initial})
 	if status != 401 {
-		t.Fatal("old password still valid", status)
+		t.Fatal("initial password remains valid", status)
 	}
-	newToken := login("new password")
-	status, _ = request(t, client, "POST", server.URL+"/api/auth/logout", newToken, nil)
+	next := login("new password", false)
+	status, _ = request(t, client, "POST", server.URL+"/api/auth/logout", next, nil)
 	if status != 200 {
 		t.Fatal(status)
 	}
-	status, _ = request(t, client, "GET", server.URL+"/api/auth/current", newToken, nil)
+	status, _ = request(t, client, "GET", server.URL+"/api/auth/current", next, nil)
 	if status != 401 {
 		t.Fatal("logout failed", status)
 	}
@@ -152,51 +185,15 @@ func TestSetupAuthenticationRestartAndRevocation(t *testing.T) {
 	if status != 401 {
 		t.Fatal("expired session accepted", status)
 	}
-}
-
-func TestConcurrentSetupCommitsExactlyOneAccount(t *testing.T) {
-	db, err := state.Open(filepath.Join(t.TempDir(), "master.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	s, token, err := New(db, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(s)
-	defer server.Close()
-	var wg sync.WaitGroup
-	statuses := make(chan int, 4)
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			status, _ := request(t, server.Client(), "POST", server.URL+"/api/setup/complete", "", map[string]any{"username": fmt.Sprintf("admin%d", i), "password": "password", "publicUrl": server.URL, "setupToken": token})
-			statuses <- status
-		}(i)
-	}
-	wg.Wait()
-	close(statuses)
-	success := 0
-	for status := range statuses {
-		if status == 200 {
-			success++
-		} else if status != 409 {
-			t.Fatal("unexpected initialization response", status)
-		}
-	}
-	if success != 1 {
-		t.Fatal("setup committed", success, "times")
-	}
-	count := 0
 	if err := db.View(func(tx *state.Tx) error {
-		return tx.Scan("users", "", "", 10, func(string, json.RawMessage) error { count++; return nil })
+		var user User
+		_, err := tx.Get("users", "admin", &user)
+		if strings.Contains(user.PasswordHash, initial) || user.MustChangePassword {
+			t.Fatal("plaintext credential or stale gate persisted")
+		}
+		return err
 	}); err != nil {
 		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatal("partial accounts committed", count)
 	}
 }
 
@@ -210,12 +207,15 @@ func TestRejectForeignOriginAndMultipleJSONDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	for _, test := range []struct {
 		body, origin string
 		status       int
 	}{{"{} {}", "", 400}, {"{}", "http://evil.example", 403}} {
-		r := httptest.NewRequest("POST", "http://localhost/api/setup/complete", strings.NewReader(test.body))
+		r := httptest.NewRequest("POST", "http://localhost/api/auth/login", strings.NewReader(test.body))
 		r.Header.Set("Origin", test.origin)
+		r.Header.Set("X-Forwarded-Host", "evil.example")
+		r.Header.Set("Forwarded", "host=evil.example;proto=http")
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
 		if w.Code != test.status {

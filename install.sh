@@ -640,11 +640,18 @@ if [[ "$role" == master ]]; then
     sleep 1
   done
   ((ready)) || fail "Master did not become ready; inspect logs in $install_dir"
-  # This is a newly created container; only its current bootstrap token is
-  # printed, never its full log or any credentials from unrelated messages.
-  setup_token=$(docker logs "$container" 2>&1 |
-    sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
-  [[ -z "$setup_token" ]] || printf '\nSetup token: %s\n' "$setup_token"
+  # This is a newly created container. An existing data directory does not
+  # generate a new password, and unrelated log messages are never printed.
+  initial_password=$(docker logs "$container" 2>&1 |
+    sed -n 's/^Initial password: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
+  if [[ -n "$initial_password" ]]; then
+    printf '\nInitial administrator: admin\nInitial password: %s\n' "$initial_password"
+  else
+    # Older image versions still use a one-time setup token.
+    setup_token=$(docker logs "$container" 2>&1 |
+      sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
+    [[ -z "$setup_token" ]] || printf '\nSetup token: %s\n' "$setup_token"
+  fi
 else
   sleep 2
   [[ $(docker inspect "$container" --format '{{.State.Status}}') == running ]] || fail 'Agent container did not stay running'

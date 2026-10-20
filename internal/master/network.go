@@ -33,6 +33,16 @@ func validMasterOrigin(value string) bool {
 	return true
 }
 
+// Request fallback is for old clients without a configured URL. Browser and CLI
+// clients send the intended endpoint explicitly, including reverse-proxy HTTPS.
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
 func networkData(config Configuration) map[string]string {
 	return map[string]string{"publicUrl": config.PublicURL, "agentUrl": config.AgentURL, "effectiveAgentUrl": config.agentURL()}
 }

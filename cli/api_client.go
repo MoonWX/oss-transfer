@@ -20,6 +20,8 @@ import (
 type ApiClient struct {
 	locale             cliLocale
 	output             io.Writer
+	errors             io.Writer
+	passwordPrompt     func(io.Reader, string) (string, error)
 	requestContext     context.Context
 	baseUrl            string
 	client             *http.Client

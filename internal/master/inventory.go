@@ -335,7 +335,7 @@ func (s *Server) inventoryFinalizeCheck(r *http.Request, binding inventoryBindin
 		if err != nil {
 			return err
 		}
-		if !found || user.Revision != login.UserRevision || user.Role != "admin" {
+		if !found || user.Revision != login.UserRevision || user.Role != "admin" || user.MustChangePassword {
 			return fmt.Errorf("%w: authorization changed", inventory.ErrConflict)
 		}
 		for _, node := range binding.Spec.Nodes {

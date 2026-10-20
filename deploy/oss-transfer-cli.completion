@@ -3,7 +3,7 @@ _oss_transfer_cli_completion() {
     local cur prev words cword
     _init_completion -n = || return
     local globals="--lang --host --json --verbose --watch --help --version"
-    local commands="config task node agent setup storage limit exceptions object login logout whoami change-password \
+    local commands="config task node agent storage limit exceptions object login logout whoami change-password \
         list-task status show-task stop resume start retry delete-task clear list-deleted permanent-delete export-report \
         add-task import-tasks list-worker worker-status list-s3-config remove-s3-config \
         list-rate-limit rate-limit list-rate-limit-history rate-limit-history set-rate-limit \
@@ -24,7 +24,7 @@ _oss_transfer_cli_completion() {
         if ((skip)); then skip=0; continue; fi
         case "$word" in
             --*=*) continue ;;
-            --lang|--host|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
+            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
                 skip=1; continue ;;
             -*) continue ;;
         esac
@@ -52,7 +52,7 @@ _oss_transfer_cli_completion() {
         --direction)
             if [[ $command == exceptions ]]; then choices="OSS_TO_LOCAL LOCAL_TO_OSS";
             else choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
-        --host|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
+        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
             return ;;
     esac
     if [[ -n $choices ]]; then
@@ -92,21 +92,16 @@ _oss_transfer_cli_completion() {
                 "") choices="list show details network add invite update remove" ;;
                 add) flags="--label" ;;
                 network) flags="--public-url --agent-url" ;;
-                invite) flags="--label --address" ;;
+                invite) flags="--label --address --master-url" ;;
                 update) flags="--label --address" ;;
                 remove) flags="--yes" ;;
             esac ;;
         agent)
             case "$action" in
                 "") choices="invite list show details update remove" ;;
-                invite) flags="--label --address" ;;
+                invite) flags="--label --address --master-url" ;;
                 update) flags="--label --local-root --clear-local-roots" ;;
                 remove) flags="--yes" ;;
-            esac ;;
-        setup)
-            case "$action" in
-                "") choices="status complete" ;;
-                complete) flags="--username --public-url --agent-url --setup-token-env --setup-token-file --setup-token-stdin --password-env --password-file --password-stdin" ;;
             esac ;;
         storage)
             case "$action" in

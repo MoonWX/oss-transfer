@@ -62,7 +62,7 @@ class Acceptance:
     def scrub(self, text):
         for value in self.secrets:
             text = text.replace(value, "[redacted]")
-        return re.sub(r"Setup token: \S+", "Setup token: [redacted]", text)
+        return re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
 
     def log(self, name, text):
         path = self.output / name
@@ -149,6 +149,7 @@ class Acceptance:
         self.log(log_name or (role + "-install.log"), result.stdout + "\n" + result.stderr)
         require((result.returncode == 0) == expect_success,
                 role + " installer returned unexpected status " + str(result.returncode) + "; see sanitized log")
+        return result
 
     def run(self):
         require(sys.platform.startswith("linux") and os.geteuid() == 0, "Run this acceptance with sudo on Linux")
@@ -182,19 +183,24 @@ class Acceptance:
         gateway = json.loads(self.docker("network", "inspect", "bridge"))[0]["IPAM"]["Config"][0]["Gateway"]
         require(re.fullmatch(r"[0-9.]+", gateway), "Expected an IPv4 Docker bridge gateway")
         master_url = "http://" + gateway + ":" + str(port)
-        self.install("master", ["--port", port])
+        installed = self.install("master", ["--port", port])
         master = self.compose("master", "ps", "-q", "master")
         require(master and "\n" not in master, "Installer did not create exactly one Master container")
-        status = eventually(lambda: self.api("/api/setup/status"), "installed Master setup")
-        require(not status["configured"] and status["tokenRequired"], "Fresh Compose Master bypassed setup")
-        setup_token = eventually(lambda: re.search(r"Setup token: ([A-Za-z0-9_-]+)", self.docker("logs", master)), "setup token")[1]
-        credentials = {"username": "compose-setup-qa", "password": secrets.token_urlsafe(24)}
-        self.secrets += [setup_token, credentials["password"]]
-        self.api("/api/setup/complete", dict(credentials, publicUrl=master_url, setupToken=setup_token))
-        self.token = self.api("/api/auth/login", credentials)["token"]
+        status = eventually(lambda: self.api("/api/setup/status"), "installed Master authentication readiness")
+        require(status["configured"], "Fresh Compose Master did not create an administrator")
+        printed_passwords = re.findall(r"^Initial password: ([A-Za-z0-9_-]+)$", installed.stdout, re.MULTILINE)
+        require(len(printed_passwords) == 1, "Compose installer did not print exactly one initial password")
+        initial_password = printed_passwords[0]
+        credentials = {"username": "admin", "password": secrets.token_urlsafe(24)}
+        self.secrets += [initial_password, credentials["password"]]
+        login = self.api("/api/auth/login", dict(credentials, password=initial_password))
+        require(login["user"]["mustChangePassword"], "Initial password did not require replacement")
+        self.token = login["token"]
         self.secrets.append(self.token)
+        changed = self.api("/api/auth/change-password", {"oldPassword": initial_password, "newPassword": credentials["password"]})
+        require(not changed["user"]["mustChangePassword"], "Password change did not unlock the account")
         require(self.api("/api/master/nodes")["nodes"] == [], "Master unexpectedly registered itself as an Agent")
-        self.record("public Compose installer starts a nonroot Master and completes initial setup")
+        self.record("public Compose installer prints initial credentials; first login changes the password on the nonroot Master")
 
         invitation = self.api("/api/master/agents/invitations", {"address": "compose-setup-agent", "label": "Compose setup QA"})["inviteToken"]
         self.secrets.append(invitation)

@@ -1,4 +1,4 @@
-import { t, useI18n, getLocale } from "./lib/i18n";
+import { t, useI18n } from "./lib/i18n";
 import {
   Component,
   Suspense,
@@ -90,7 +90,7 @@ const NodesPage = lazy(() => import("./pages/NodesPage"));
 const RateAdjustmentPage = lazy(() => import("./pages/RateAdjustmentPage"));
 const ExceptionsPage = lazy(() => import("./pages/ExceptionsPage"));
 const ToolsPage = lazy(() => import("./pages/ToolsPage"));
-const SetupPage = lazy(() => import("./pages/SetupPage"));
+const InitialPasswordPage = lazy(() => import("./pages/InitialPasswordPage"));
 
 class PageErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
@@ -164,9 +164,13 @@ function Brand({
     </Stack>
   );
 }
-function Login({ onLogin }: { onLogin: (user: any) => void }) {
+function Login({
+  onLogin,
+}: {
+  onLogin: (user: any, initialPassword?: string) => void;
+}) {
   useI18n();
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -181,7 +185,10 @@ function Login({ onLogin }: { onLogin: (user: any) => void }) {
         body: { username: username.trim(), password },
       });
       setToken(result.token);
-      onLogin(result.user);
+      onLogin(
+        result.user,
+        result.user.mustChangePassword ? password : undefined,
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1114,15 +1121,15 @@ export default function App() {
     },
   );
   const [user, setUser] = useState<any>();
+  const [initialPassword, setInitialPassword] = useState<string>();
   const [checking, setChecking] = useState(true);
-  const [needsSetup, setNeedsSetup] = useState(false);
   const [sessionError, setSessionError] = useState("");
   const mode =
     preference === "system" ? (systemDark ? "dark" : "light") : preference;
   useEffect(() => {
-    if (!user)
-      document.title = `${t(needsSetup ? "初始化" : "登录")} · OSS Transfer`;
-  }, [user, needsSetup, locale]);
+    if (!user || user.mustChangePassword)
+      document.title = `${t(user ? "设置密码" : "登录")} · OSS Transfer`;
+  }, [user, locale]);
   const theme = useMemo(() => makeTheme(mode, locale), [mode, locale]);
   const setPreference = (value: "light" | "dark" | "system") => {
     updatePreference(value);
@@ -1132,24 +1139,6 @@ export default function App() {
     setChecking(true);
     setSessionError("");
     try {
-      const response = await fetch("/api/setup/status", {
-        cache: "no-store",
-        headers: { "Accept-Language": getLocale() },
-        signal: AbortSignal.timeout(15000),
-      });
-      const setup = await response.json();
-      if (
-        !response.ok ||
-        setup.success !== true ||
-        typeof setup.configured !== "boolean"
-      )
-        throw new Error(t("无法读取初始化状态，请重试。"));
-      setNeedsSetup(!setup.configured);
-      if (!setup.configured) {
-        setToken(null);
-        setUser(undefined);
-        return;
-      }
       if (!getToken()) return;
       const result = await api("/api/auth/current");
       setUser(result.user);
@@ -1165,6 +1154,7 @@ export default function App() {
     void checkSession();
     const expire = () => {
       setUser(undefined);
+      setInitialPassword(undefined);
       setSessionError("");
     };
     window.addEventListener("session-expired", expire);
@@ -1180,7 +1170,7 @@ export default function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <NotifyProvider>
-        {!user && (
+        {(!user || user.mustChangePassword) && (
           <Box
             sx={{
               position: "absolute",
@@ -1208,9 +1198,19 @@ export default function App() {
                 {t("返回登录")}
               </Button>
             </Box>
-          ) : needsSetup ? (
+          ) : user?.mustChangePassword ? (
             <Suspense fallback={<LoadingState />}>
-              <SetupPage onComplete={() => void checkSession()} />
+              <InitialPasswordPage
+                initialPassword={initialPassword}
+                onComplete={(nextUser) => {
+                  setInitialPassword(undefined);
+                  setUser(nextUser);
+                }}
+                onLogout={() => {
+                  setInitialPassword(undefined);
+                  setUser(undefined);
+                }}
+              />
             </Suspense>
           ) : user ? (
             <Workspace
@@ -1220,7 +1220,12 @@ export default function App() {
               setPreference={setPreference}
             />
           ) : (
-            <Login onLogin={setUser} />
+            <Login
+              onLogin={(nextUser, password) => {
+                setInitialPassword(password);
+                setUser(nextUser);
+              }}
+            />
           )}
         </BrowserRouter>
       </NotifyProvider>

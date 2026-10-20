@@ -62,6 +62,13 @@ export const coreMessages: Record<string, { en: string; ja: string }> =
         "コンソールアカウントでログイン",
       ],
       ["保存密码", "Save password", "パスワードを保存"],
+      ["设置密码", "Set your password", "パスワードを設定"],
+      ["保存并继续", "Save and continue", "保存して続行"],
+      [
+        "首次登录，请设置新密码。",
+        "Set a new password to continue.",
+        "新しいパスワードを設定して続行してください。",
+      ],
       ["修改密码", "Change password", "パスワードを変更"],
       ["停止中", "Stopping", "停止処理中"],
       ["关闭", "Close", "閉じる"],

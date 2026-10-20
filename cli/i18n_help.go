@@ -59,7 +59,6 @@ Limits and diagnostics
   object compare ...              Compare source and target metadata
 
 Account
-  setup status|complete           Inspect or complete initial setup
   login --username admin --password-stdin
   logout                          End the session for this service
   whoami                          Show login status
@@ -99,7 +98,7 @@ OSS_TRANSFER_MASTER_SERVER sets the address. Use files or environment variables 
 OSS_TRANSFER_CLI_CONFIG_DIR sets the configuration and session directory; use an absolute path.
 Language follows the system, with English as fallback. Save a preference with config set language en; auto restores system selection.
 --lang and OSS_TRANSFER_LANG override the saved preference. JSON keys, enums and user data remain unchanged.
-Help groups: task, task create, task import, node, agent, setup, storage, limit, exceptions, object, login, config, tools.
+Help groups: task, task create, task import, node, agent, storage, limit, exceptions, object, login, config, tools.
 `, `OSS Transfer CLI
 使い方: oss-transfer-cli [グローバルオプション] <コマンド> [引数]
 
@@ -129,7 +128,6 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
   object compare ...              転送元と転送先のメタデータを比較
 
 アカウント
-  setup status|complete           初期設定を確認・完了
   login --username admin --password-stdin
   logout                          現在のサービスからログアウト
   whoami                          ログイン状態を表示
@@ -382,7 +380,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   details <node>                  Host, interface IPs and mounted directories
   network [--public-url URL] [--agent-url URL]
   add <node> [--label name]        Generate Agent join commands
-  invite [--address node] [--label name]
+  invite [--address node] [--label name] [--master-url URL]
   update <node> [--address new-address] [--label name]
   remove <node> --yes              Remove the registration
 
@@ -392,7 +390,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
 
 Add nodes with agent invite. Names, IPv4 and IPv6 are accepted; Agent detects an omitted address.
 Agent addresses cannot be edited after registration; join again when replacing a node.
-node network reads addresses without flags; --agent-url '' uses the browser address. Changes apply to new enrollments.
+node network retains legacy address settings. New invitations use the current CLI connection address.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
 Use --json for queue/raw rate data; use limit list for limits.
 `, `実行ノード
@@ -403,7 +401,7 @@ Use --json for queue/raw rate data; use limit list for limits.
   details <ノード>                ホスト、インターフェース IP、マウントを表示
   network [--public-url URL] [--agent-url URL]
   add <ノード> [--label 名前]      Agent 参加コマンドを生成
-  invite [--address ノード] [--label 名前]
+  invite [--address ノード] [--label 名前] [--master-url URL]
   update <ノード> [--address 新アドレス] [--label 名前]
   remove <ノード> --yes            登録を解除
 
@@ -413,14 +411,14 @@ Use --json for queue/raw rate data; use limit list for limits.
 
 追加には agent invite を使います。名前、IPv4、IPv6 に対応し、省略時は Agent が自動判定します。
 登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
-node network は引数なしでアドレスを表示し、--agent-url '' でブラウザー用のアドレスに戻します。変更は新規参加に適用されます。
+node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。
 キューや速度の生データは --json、上限は limit list で確認できます。
 `},
 	cliAgentHelp: {`Agent management
 Usage: oss-transfer-cli agent <subcommand> [arguments]
 
-  invite [--label name] [--address node]
+  invite [--label name] [--address node] [--master-url URL]
   list                            List registered Agents
   show <node>                     Connection, queues, roots and limits
   details <node>                  Host, interface IPs and mounted directories
@@ -433,12 +431,13 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   oss-transfer-cli agent update windows-node --local-root 'D:\data'
   oss-transfer-cli agent remove storage-node --yes
 
+--master-url sets the address Agents use to reach Master; it defaults to the current CLI connection address.
 Invitations expire after 30 minutes and can be used once. Run the native installation command for the Agent OS; Docker is optional.
 --local-root uses absolute paths on the Agent OS and replaces the existing root list.
 `, `Agent 管理
 使い方: oss-transfer-cli agent <サブコマンド> [引数]
 
-  invite [--label 名前] [--address ノード]
+  invite [--label 名前] [--address ノード] [--master-url URL]
   list                            登録済み Agent を表示
   show <ノード>                   接続、キュー、ルート、制限を表示
   details <ノード>                ホスト、インターフェース IP、マウントを表示
@@ -451,41 +450,21 @@ Invitations expire after 30 minutes and can be used once. Run the native install
   oss-transfer-cli agent update windows-node --local-root 'D:\data'
   oss-transfer-cli agent remove storage-node --yes
 
+--master-url は Agent が接続する Master の URL です。省略時は CLI の接続先を使用します。
 招待の有効期限は 30 分で、1 回のみ使用できます。Agent の OS に対応するネイティブインストールコマンドを実行してください。Docker は任意です。
 --local-root は Agent の OS 上の絶対パスです。既存のルート一覧を置き換えます。
 `},
-	cliSetupHelp: {`Initial setup
-Usage: oss-transfer-cli setup status|complete
+	cliSetupHelp: {`First login
+  oss-transfer-cli login
+  oss-transfer-cli change-password
 
-  status                          Show whether setup is complete
-  complete --username NAME --public-url URL [--agent-url URL]
-           --setup-token-env NAME|--setup-token-file FILE|--setup-token-stdin
-           --password-env NAME|--password-file FILE|--password-stdin
+Use the admin password printed after installation, then change it.
+setup status remains available for existing scripts. No setup step is needed.
+`, `初回ログイン
+  oss-transfer-cli login
+  oss-transfer-cli change-password
 
-The setup token is printed when installation finishes. Choose one source per secret;
-password and token cannot both use stdin. --public-url is the browser address.
-Use --agent-url for a private network address; if omitted, Agents use --public-url.
-
-  oss-transfer-cli --host http://10.0.0.10:1685 setup status
-  oss-transfer-cli --host http://10.0.0.10:1685 setup complete --username admin \
-    --public-url http://10.0.0.10:1685 --setup-token-file ./setup-token --password-env ADMIN_PASSWORD
-  oss-transfer-cli --host http://10.0.0.10:1685 login --username admin --password-env ADMIN_PASSWORD
-`, `初期設定
-使い方: oss-transfer-cli setup status|complete
-
-  status                          設定の完了状態を表示
-  complete --username ユーザー名 --public-url URL [--agent-url URL]
-           --setup-token-env NAME|--setup-token-file ファイル|--setup-token-stdin
-           --password-env NAME|--password-file ファイル|--password-stdin
-
-設定トークンはインストール完了時にターミナルに表示されます。入力元はそれぞれ 1 つ選択し、
-パスワードとトークンの両方に標準入力を使わないでください。--public-url はブラウザー用の URL です。
---agent-url でプライベートネットワークの URL を指定できます。省略時は --public-url を使用します。
-
-  oss-transfer-cli --host http://10.0.0.10:1685 setup status
-  oss-transfer-cli --host http://10.0.0.10:1685 setup complete --username admin \
-    --public-url http://10.0.0.10:1685 --setup-token-file ./setup-token --password-env ADMIN_PASSWORD
-  oss-transfer-cli --host http://10.0.0.10:1685 login --username admin --password-env ADMIN_PASSWORD
+インストール時に表示された admin の初期パスワードでログインし、変更してください。
 `},
 	cliStorageHelp: {`Storage connections
 Usage: oss-transfer-cli storage <subcommand> [arguments]
@@ -653,6 +632,8 @@ Key は変更せずに渡します。空白やシェル特殊文字を含む場�
 照会の失敗をオブジェクトの不存在として扱いません。
 `},
 	cliAuthHelp: {`Login and account
+  oss-transfer-cli login
+  oss-transfer-cli change-password
   oss-transfer-cli login --username admin --password-stdin
   oss-transfer-cli login --username admin --password-env PASSWORD_ENV
   oss-transfer-cli login --username admin --password-file /path/to/password
@@ -660,12 +641,15 @@ Key は変更せずに渡します。空白やシェル特殊文字を含む場�
   oss-transfer-cli logout
   oss-transfer-cli change-password --old-password-env OLD --new-password-env NEW
 
-Choose one password source; plain-text command-line passwords are not accepted.
+The username defaults to admin; use --username for another account. Terminal password input is hidden.
+After the first login, run change-password. Scripts can select an environment variable, file, or stdin.
 --password-stdin reads standard input; --password-file reads a file.
 Changes also accept --old-password-file / --new-password-file.
 Sessions are saved per --host. OSS_TRANSFER_AUTH_TOKEN supplies a user login token.
 OSS_TRANSFER_INTERNAL_TOKEN is not accepted by the CLI.
 `, `ログインとアカウント
+  oss-transfer-cli login
+  oss-transfer-cli change-password
   oss-transfer-cli login --username admin --password-stdin
   oss-transfer-cli login --username admin --password-env PASSWORD_ENV
   oss-transfer-cli login --username admin --password-file /path/to/password
@@ -673,7 +657,8 @@ OSS_TRANSFER_INTERNAL_TOKEN is not accepted by the CLI.
   oss-transfer-cli logout
   oss-transfer-cli change-password --old-password-env OLD --new-password-env NEW
 
-入力元を 1 つ選択してください。コマンドラインへのパスワード直接入力は未対応です。
+ユーザー名の既定値は admin です。他のアカウントは --username で指定します。入力したパスワードは表示されません。
+初回ログイン後は change-password を実行してください。スクリプトでは環境変数、ファイル、標準入力を選択できます。
 --password-stdin は標準入力、--password-file はファイルから読み取ります。
 変更には --old-password-file / --new-password-file も使用できます。
 セッションは --host ごとに保存します。OSS_TRANSFER_AUTH_TOKEN でログイントークンを指定できます。

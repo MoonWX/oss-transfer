@@ -69,19 +69,18 @@ def main():
         master, log = spawn("master-first", args.master, "--listen", "127.0.0.1:0", "--data-dir", str(root / "master-data"))
         address = eventually(lambda: re.search(r"Master listening on (127\.0\.0\.1:\d+)", log.read_text(encoding="utf-8")))[1]
         origin = "http://" + address
-        token = eventually(lambda: re.search(r"Setup token: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")))[1]
-        private_values.append(token)
-        environment["QA_SETUP_TOKEN"] = token
-        assert cli("setup", "status")["configured"] is False
-        cli("agent", "list", expected=1)
-        cli("setup", "complete", "--username", "cli-qa", "--public-url", origin,
-            "--setup-token-env", "QA_SETUP_TOKEN", "--password-env", "QA_PASSWORD")
+        initial = eventually(lambda: re.search(r"Initial password: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")))[1]
+        private_values.append(initial)
+        environment["QA_INITIAL_PASSWORD"] = initial
         assert cli("setup", "status")["configured"] is True
-        cli("setup", "complete", "--username", "replacement", "--public-url", origin,
-            "--setup-token-env", "QA_SETUP_TOKEN", "--password-env", "QA_PASSWORD", expected=1)
-        cli("login", "--username", "cli-qa", "--password-stdin", input_text=password + "\n")
-        assert cli("whoami")["user"]["username"] == "cli-qa"
-        checks.append("bootstrap-only setup, repeated setup rejection, stdin login and private persisted CLI session")
+        cli("agent", "list", expected=1)
+        login = cli("login", "--password-stdin", input_text=initial + "\n")
+        assert login["user"]["username"] == "admin" and login["user"]["mustChangePassword"] is True
+        cli("agent", "list", expected=1)
+        changed = cli("change-password", "--old-password-env", "QA_INITIAL_PASSWORD", "--new-password-env", "QA_PASSWORD")
+        assert changed["user"]["mustChangePassword"] is False
+        assert cli("whoami")["user"]["username"] == "admin"
+        checks.append("initial-password login requires a password change; stdin login and private persisted CLI session")
 
         invitation = cli("agent", "invite", "--address", "cli-node", "--label", "CLI Agent")["data"]
         private_values.append(invitation["inviteToken"])
@@ -127,14 +126,14 @@ def main():
         master.wait(timeout=10)
         master, restarted = spawn("master-restart", args.master, "--listen", address, "--data-dir", str(root / "master-data"))
         eventually(lambda: "Master listening on " in restarted.read_text(encoding="utf-8"))
-        assert "Setup token:" not in restarted.read_text(encoding="utf-8")
+        assert "Initial password:" not in restarted.read_text(encoding="utf-8")
         agent, _ = spawn("agent-restart", args.agent, "--data-dir", str(root / "agent-data"))
         show = eventually(ready_node)
         assert show["node"]["id"] == node_id
         assert show["node"]["label"] == "Renamed Agent"
         assert show["status"]["localStorage"]["advertisedLocalRoots"] == [str(local_root)]
         assert show["status"]["rateLimit"]["bandwidth"]["limitBps"] == 12_000_000
-        assert cli("whoami")["user"]["username"] == "cli-qa"
+        assert cli("whoami")["user"]["username"] == "admin"
         cli("agent", "update", "cli-node", "--clear-local-roots")
         assert cli("agent", "show", "cli-node")["status"]["localStorage"]["advertisedLocalRoots"] == []
         cli("agent", "remove", "cli-node", "--yes")
@@ -142,8 +141,8 @@ def main():
         assert cli("agent", "list")["data"]["nodes"] == []
         cli("logout")
         cli("whoami", expected=1)
-        cli("login", "--username", "cli-qa", "--password-env", "QA_PASSWORD")
-        assert cli("whoami")["user"]["username"] == "cli-qa"
+        cli("login", "--password-env", "QA_PASSWORD")
+        assert cli("whoami")["user"]["username"] == "admin"
         checks.append("forced restart preserves account/session/node/settings; revocation disconnects Agent; logout invalidates session")
         evidence = {"status": "PASSED", "checks": checks, "platform": os.name,
                     "scope": "CLI administration against real native Master and Agent; transfer content is covered by cluster.py",
@@ -165,7 +164,7 @@ def main():
             content = log.read_text(errors="replace", encoding="utf-8")
             for value in private_values:
                 content = content.replace(value, "[redacted]")
-            log.write_text(re.sub(r"Setup token: \S+", "Setup token: [redacted]", content), encoding="utf-8")
+            log.write_text(re.sub(r"Initial password: \S+", "Initial password: [redacted]", content), encoding="utf-8")
 
 
 if __name__ == "__main__":

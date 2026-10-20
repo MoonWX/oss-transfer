@@ -61,7 +61,7 @@ class Acceptance:
     def scrub(self, text):
         for value in self.secrets:
             text = text.replace(value, "[redacted]")
-        return re.sub(r"Setup token: \S+", "Setup token: [redacted]", text)
+        return re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
 
     def docker(self, *arguments, env=None, timeout=60, check=True):
         result = subprocess.run(["docker", *map(str, arguments)], env=env, text=True,
@@ -168,17 +168,20 @@ class Acceptance:
                     labels.get("org.opencontainers.image.version") == provenance["version"],
                     "Image release identity differs from the tested commit")
         self.evidence["release"] = {"version": provenance["version"], "commit": provenance["commit"]}
-        status = eventually(lambda: self.api("/api/setup/status"), "Master setup API")
-        require(not status["configured"] and status["tokenRequired"], "Fresh Master skipped setup")
+        status = eventually(lambda: self.api("/api/setup/status"), "Master authentication readiness")
+        require(status["configured"], "Fresh Master did not create an administrator")
         html = urlopen(self.origin, timeout=10).read().decode()
-        require('<div id="root"' in html, "Embedded setup UI missing")
-        token = eventually(lambda: re.search(r"Setup token: ([A-Za-z0-9_-]+)", self.docker("logs", master)), "setup token")[1]
-        credentials = {"username": "docker-qa", "password": secrets.token_urlsafe(24)}
-        self.secrets += [token, credentials["password"]]
-        self.api("/api/setup/complete", dict(credentials, setupToken=token, publicUrl="http://master:1685"))
-        self.token = self.api("/api/auth/login", credentials)["token"]
+        require('<div id="root"' in html, "Embedded login UI missing")
+        initial_password = eventually(lambda: re.search(r"Initial password: ([A-Za-z0-9_-]+)", self.docker("logs", master)), "initial administrator password")[1]
+        credentials = {"username": "admin", "password": secrets.token_urlsafe(24)}
+        self.secrets += [initial_password, credentials["password"]]
+        login = self.api("/api/auth/login", dict(credentials, password=initial_password))
+        require(login["user"]["mustChangePassword"], "Initial password did not require replacement")
+        self.token = login["token"]
         self.secrets.append(self.token)
-        self.record("nonroot image serves initial setup and packaged CLI")
+        changed = self.api("/api/auth/change-password", {"oldPassword": initial_password, "newPassword": credentials["password"]})
+        require(not changed["user"]["mustChangePassword"], "Password change did not unlock the account")
+        self.record("nonroot image provides initial administrator login and password replacement; packaged CLI matches release")
         invite = self.api("/api/master/agents/invitations", {"address": "docker-agent", "label": "Docker QA"})["inviteToken"]
         self.secrets.append(invite)
         self.docker("run", "--rm", "--network", self.network, "-e", "OSS_TRANSFER_JOIN_TOKEN", "-v", agent_volume + ":/data",

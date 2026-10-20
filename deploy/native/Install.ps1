@@ -400,16 +400,19 @@ function Wait-Ready {
     }
     throw 'Service did not confirm this startup before the timeout.'
 }
-function Show-SetupToken {
+function Show-InitialCredentials {
     if ($Role -ne 'master' -or -not (Test-Path -LiteralPath $script:logFile -PathType Leaf)) { return }
     $index = 0
+    $password = $null
     $token = $null
-    # Only inspect this launch, not the old token retained after initialization.
+    # Only inspect this launch, not credentials retained in older log lines.
     Get-Content -LiteralPath $script:logFile | ForEach-Object {
         $index++
+        if ($index -gt $script:startupLogLines -and $_ -cmatch '^Initial password: ([A-Za-z0-9_-]+)$') { $password = $Matches[1] }
         if ($index -gt $script:startupLogLines -and $_ -cmatch '^Open the console to complete setup\. Setup token: ([A-Za-z0-9_-]+)$') { $token = $Matches[1] }
     }
-    if ($token) { Write-Host "`nSetup token: $token" }
+    if ($password) { Write-Host "`nInitial administrator: admin`nInitial password: $password" }
+    elseif ($token) { Write-Host "`nSetup token: $token" }
 }
 try {
     if ($ReleaseUrl) {
@@ -573,7 +576,7 @@ try {
         Write-Host ("Login: & '"+$CliPath.Replace("'","''")+"' --host 'http://"+$cliListen+"' login")
     }
     Write-Host ('Log: '+$script:logFile)
-    Show-SetupToken
+    Show-InitialCredentials
 } catch {
     $failure = $_
     # Preserve the Win32 cause before rollback deletes a failed first service.

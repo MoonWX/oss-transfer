@@ -112,6 +112,10 @@ func (s *Server) adminOnly(next http.HandlerFunc) http.HandlerFunc {
 			fail(w, http.StatusUnauthorized, "Sign in required")
 			return
 		}
+		if user.MustChangePassword {
+			fail(w, http.StatusForbidden, "Change the initial password before continuing")
+			return
+		}
 		if user.Role != "admin" {
 			fail(w, http.StatusForbidden, "Administrator access required")
 			return
@@ -131,8 +135,9 @@ func (s *Server) configuration() (Configuration, error) {
 
 func (s *Server) createAgentInvitation(w http.ResponseWriter, r *http.Request) {
 	var change struct {
-		Address string `json:"address"`
-		Label   string `json:"label"`
+		Address   string  `json:"address"`
+		Label     string  `json:"label"`
+		MasterURL *string `json:"masterUrl"`
 	}
 	if !readJSON(w, r, &change) {
 		return
@@ -142,12 +147,23 @@ func (s *Server) createAgentInvitation(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot read Master address")
 		return
 	}
-	invite, err := s.agents.registry.Invite(strings.TrimSpace(change.Address), strings.TrimSpace(change.Label))
+	masterURL := config.agentURL()
+	if change.MasterURL != nil {
+		masterURL = *change.MasterURL
+	} else if masterURL == "" {
+		masterURL = requestOrigin(r)
+	}
+	if !validMasterOrigin(masterURL) {
+		fail(w, 400, "Master URL must be an HTTP or HTTPS origin")
+		return
+	}
+	masterURL = strings.TrimRight(masterURL, "/")
+	invite, err := s.agents.registry.InviteForMaster(strings.TrimSpace(change.Address), strings.TrimSpace(change.Label), masterURL)
 	if err != nil {
 		fail(w, 400, "Cannot create Agent invitation")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": s.agentInvitationData(config.agentURL(), invite)})
+	writeJSON(w, 200, map[string]any{"success": true, "data": s.agentInvitationData(masterURL, invite)})
 }
 
 func (s *Server) joinAgent(w http.ResponseWriter, r *http.Request) {

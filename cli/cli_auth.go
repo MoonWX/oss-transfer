@@ -5,10 +5,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 type cliSession struct {
@@ -159,6 +162,41 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 	}
 	return value, nil
 }
+func hasPasswordSource(opts commandOptions, name string) bool {
+	return opts.Has(name+"-env") || opts.Has(name+"-file") || opts.Has(name+"-stdin")
+}
+
+func (client *ApiClient) promptPassword(input io.Reader, label string) (string, error) {
+	if client.passwordPrompt != nil {
+		return client.passwordPrompt(input, client.text(label))
+	}
+	file, ok := input.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		return "", cliErrorf("非交互终端请使用密码环境变量、文件或 --password-stdin")
+	}
+	output := client.errors
+	if output == nil {
+		output = os.Stderr
+	}
+	fmt.Fprint(output, client.text(label))
+	value, err := term.ReadPassword(int(file.Fd()))
+	fmt.Fprintln(output)
+	if err != nil {
+		return "", err
+	}
+	if len(value) == 0 || len(value) > 65536 {
+		return "", cliErrorf("密码不能为空或超过 65536 字节")
+	}
+	return string(value), nil
+}
+
+func (client *ApiClient) passwordValue(opts commandOptions, name, label string, input io.Reader, allowStdin bool) (string, error) {
+	if hasPasswordSource(opts, name) {
+		return authSecret(opts, name, input, allowStdin)
+	}
+	return client.promptPassword(input, label)
+}
+
 func runAuthCommand(client *ApiClient, command string, args []string, input io.Reader, host string) (map[string]interface{}, error) {
 	switch command {
 	case "login":
@@ -171,9 +209,9 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		}
 		username := strings.TrimSpace(opts.Value("username"))
 		if username == "" {
-			return nil, cliErrorf("请通过 --username 指定 WebUI 用户名")
+			username = "admin"
 		}
-		password, err := authSecret(opts, "password", input, true)
+		password, err := client.passwordValue(opts, "password", "密码：", input, true)
 		if err != nil {
 			return nil, err
 		}
@@ -190,6 +228,9 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 			return result, cliErrorf("登录成功，但保存会话失败: %w", err)
 		}
 		result["message"] = client.text("已登录")
+		if user, ok := result["user"].(map[string]interface{}); ok && user["mustChangePassword"] == true {
+			result["message"] = client.text("请先修改初始密码：oss-transfer-cli change-password")
+		}
 		result["host"] = host
 		return result, nil
 	case "logout", "whoami":
@@ -215,13 +256,22 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		if len(opts.Positionals) > 0 {
 			return nil, cliErrorf("change-password 不接受位置参数")
 		}
-		old, err := authSecret(opts, "old-password", input, false)
+		old, err := client.passwordValue(opts, "old-password", "当前密码：", input, false)
 		if err != nil {
 			return nil, err
 		}
-		next, err := authSecret(opts, "new-password", input, false)
+		next, err := client.passwordValue(opts, "new-password", "新密码：", input, false)
 		if err != nil {
 			return nil, err
+		}
+		if !hasPasswordSource(opts, "new-password") {
+			confirmation, err := client.promptPassword(input, "确认新密码：")
+			if err != nil {
+				return nil, err
+			}
+			if confirmation != next {
+				return nil, cliErrorf("两次输入的密码不一致")
+			}
 		}
 		return client.Request("POST", "/api/auth/change-password", map[string]string{"oldPassword": old, "newPassword": next})
 	}

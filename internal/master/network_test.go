@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
 func TestNetworkSettingsPersistAndRouteNewEnrollment(t *testing.T) {
@@ -107,23 +109,6 @@ func TestInheritedAgentURLRemainsInheritedAcrossEditsAndRestart(t *testing.T) {
 	assertAddresses("https://fourth.example", "", "https://fourth.example")
 }
 
-func TestSetupAcceptsSeparateAgentOrigin(t *testing.T) {
-	f := &agentHTTPFixture{path: filepath.Join(t.TempDir(), "master.db")}
-	token := f.open(t)
-	defer f.close()
-	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/setup/complete", "", map[string]string{
-		"username": "admin", "password": "setup network password", "setupToken": token,
-		"publicUrl": "https://transfer.example", "agentUrl": "http://10.0.0.43:1685",
-	})
-	if status != 200 {
-		t.Fatal(status, body)
-	}
-	config, err := f.master.configuration()
-	if err != nil || config.PublicURL != "https://transfer.example" || config.agentURL() != "http://10.0.0.43:1685" {
-		t.Fatal(config, err)
-	}
-}
-
 func TestNodeDetailsUseAuthenticatedReverseChannel(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	agent := nodeTestAgent(t, f, "details-a")
@@ -180,5 +165,76 @@ func TestDisplayNamesRemainAccessibleThroughPublicNodeKeys(t *testing.T) {
 				t.Fatal("the named Agent could not be queried by its public key", details)
 			}
 		})
+	}
+}
+
+func TestInvitationsPinDifferentEndpointsAcrossRestart(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentArtifactBase = officialAgentArtifactBase
+	f.master.options.AgentArtifactVersion = "v4.1.11"
+	endpoints := []string{"https://transfer.example", "http://10.0.0.43:1685", "https://[2001:db8::1]:8443"}
+	tokens := make([]string, len(endpoints))
+	for i, endpoint := range endpoints {
+		status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/agents/invitations", f.admin, map[string]string{"label": "endpoint-test", "masterUrl": endpoint + "/"})
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		data := body["data"].(map[string]any)
+		tokens[i] = data["inviteToken"].(string)
+		if data["joinUrl"] != endpoint+"/api/agents/bootstrap/"+tokens[i] {
+			t.Fatal("invitation ignored its endpoint", data)
+		}
+	}
+	status, body := request(t, f.http.Client(), "PUT", f.http.URL+"/api/master/network", f.admin, map[string]string{"agentUrl": "https://changed.example"})
+	if status != 200 {
+		t.Fatal(status, body)
+	}
+	f.close()
+	f.open(t)
+	f.master.options.AgentArtifactBase = officialAgentArtifactBase
+	f.master.options.AgentArtifactVersion = "v4.1.11"
+	for i, endpoint := range endpoints {
+		for _, suffix := range []string{"", "?platform=windows"} {
+			response, err := f.http.Client().Get(f.http.URL + "/api/agents/bootstrap/" + tokens[i] + suffix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			script, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.StatusCode != 200 || !strings.Contains(string(script), "'"+endpoint+"'") || strings.Contains(string(script), "changed.example") {
+				t.Fatal("saved invitation endpoint drifted", response.StatusCode, string(script))
+			}
+		}
+	}
+}
+
+func TestInvitationEndpointValidationAndLegacyFallback(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	for _, endpoint := range []string{"", "ftp://host", "https://host/path", "https://user:password@host", "https://host?x=1", "https://host#fragment", "https://host:0", "https://host:65536", "https://host\n"} {
+		status, _ := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/agents/invitations", f.admin, map[string]string{"masterUrl": endpoint})
+		if status != 400 {
+			t.Fatal("invalid invitation endpoint accepted", endpoint, status)
+		}
+	}
+	if err := f.db.Update(func(tx *state.Tx) error { return tx.Put("system", "configuration", Configuration{Configured: true}) }); err != nil {
+		t.Fatal(err)
+	}
+	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/agents/invitations", f.admin, map[string]string{"label": "legacy-client"})
+	if status != 200 || body["data"].(map[string]any)["joinUrl"] != f.http.URL+"/api/agents/join" {
+		t.Fatal("legacy client did not use request origin", status, body)
+	}
+	req, _ := http.NewRequest("POST", f.http.URL+"/api/master/agents/invitations", strings.NewReader(`{"label":"proxy-legacy"}`))
+	req.Header.Set("Authorization", "Bearer "+f.admin)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Host", "untrusted.example")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	response, err := f.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	bytes, _ := io.ReadAll(response.Body)
+	if response.StatusCode != 200 || strings.Contains(string(bytes), "untrusted.example") || !strings.Contains(string(bytes), f.http.URL) {
+		t.Fatal("forwarded headers changed enrollment endpoint", response.StatusCode, string(bytes))
 	}
 }

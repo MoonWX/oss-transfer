@@ -23,16 +23,20 @@ type Tx struct{ tx *bolt.Tx }
 // after a missing inventory object becomes available.
 const SchemaResolvedSources = 2
 
+// SchemaInitialPassword keeps older Masters from ignoring or deleting the
+// mandatory password-change flag when they rewrite an administrator account.
+const SchemaInitialPassword = 3
+
 type databaseFormat struct {
 	Role          string `json:"role"`
 	SchemaVersion int    `json:"schemaVersion"`
 }
 
-func supportedSchema(version int) bool { return version >= 1 && version <= SchemaResolvedSources }
+func supportedSchema(version int) bool { return version >= 1 && version <= SchemaInitialPassword }
 
 // RequireSchema raises the minimum reader version in the same transaction as
 // the data requiring it. A failed transaction preserves both the old format and
-// the old data. Ordinary databases stay at version 1 until a feature needs more.
+// the old data. The reader requirement never decreases.
 func RequireSchema(tx *Tx, role string, minimum int) error {
 	if role != "master" && role != "agent" || !supportedSchema(minimum) {
 		return errors.New("invalid database format requirement")

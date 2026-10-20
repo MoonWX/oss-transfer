@@ -21,7 +21,7 @@ On Linux, install the Master with:
 sudo bash install.sh --role master --yes
 ```
 
-The Master serves the WebUI and schedules tasks. Open its URL on port `1685`, enter the setup token printed by the installer, and create an administrator. Set the web address for browsers; the Agent connection address can use the Master's private IP. Use `--port 1785` during installation if port `1685` is already in use.
+The Master serves the WebUI and schedules tasks. Open its URL on port `1685`, then sign in as `admin` with the initial password printed by the installer. The first login requires a password change. Use `--port 1785` during installation if port `1685` is already in use.
 
 On macOS, the same command installs a system service. To run it under your logged-in account instead:
 
@@ -58,9 +58,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role mast
 
 The installer prints the service name, configuration path and log path. For all available arguments, run `bash install.sh --help` or `Get-Help .\Install.ps1`.
 
+## Use a reverse proxy
+
+Serve the console at the domain root, such as `https://transfer.example.com/`. No browser address needs to be saved in the application. For NGINX, preserve the browser's Host header and allow the Agent's long-poll requests to finish:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:1685;
+    proxy_set_header Host $http_host;
+    proxy_read_timeout 60s;
+}
+```
+
+Add this to the domain's existing server block. Hosting the application under a path such as `/transfer/` is not supported.
+
 ## Add execution hosts
 
-Open **Execution nodes → Add node** on the Master, create an invitation, and run the generated native command on the new host. The Agent connects to the Master and appears in the node list. Use the same process when adding hosts to an existing cluster.
+Open **Execution nodes → Add node** on the Master, create an invitation, and run the generated native command on the new host. The Master address defaults to the current browser address. Change it to the Master's private URL when that Agent will use a private network. Each invitation keeps the address chosen when it was created.
+
+The Agent connects to the Master and appears in the node list. Use the same process when adding hosts to an existing cluster.
 
 Install an Agent on the Master host too if it will transfer files. The two services use separate data directories. Enrollment consumes the invitation once and stores the Agent identity in `agent.db`; restarts and upgrades retain that identity. Keep the Master and Agents on the same release.
 
@@ -130,6 +146,19 @@ Restart-Service OSSTransferMaster
 
 Use the names and paths printed during installation if you changed the defaults.
 
+## Reset the administrator password
+
+Stop the Master before resetting a lost password. For the default Linux installation:
+
+```sh
+sudo systemctl stop oss-transfer-master
+sudo /opt/oss-transfer/master/oss-transfer-master \
+  --config /etc/oss-transfer/master/service.json --reset-admin-password
+sudo systemctl start oss-transfer-master
+```
+
+Use the new password printed by the command, then choose your own password after login. The reset signs out other sessions. On other systems, stop the corresponding service and run its Master binary with the same options.
+
 ## Upgrade
 
 Stop active tasks. On Linux, rerun the [install command](../../README.md#install); it detects existing services and offers to upgrade them.
@@ -149,6 +178,8 @@ The installer stops the service and backs up its programs, configuration, servic
 Stop active tasks before upgrading if they must stay stopped during rollback. Restoring a database does not undo objects or files already written. For a separate backup, stop the service and copy its configuration and data directories, or take a consistent filesystem snapshot.
 
 If a file-list task originally included a missing object, retrying after that object appears saves its source identity in a newer database format. V4.1.8 and earlier cannot open that database. To return to an older release, restore its programs and the matching pre-upgrade database backup on the Master and Agents together.
+
+After a new installation or administrator password reset in V4.1.11, downgrading to V4.1.10 or earlier requires restoring the matching older database backup.
 
 ## Install without network access
 
@@ -207,6 +238,6 @@ The output directory must not already exist. The assembler verifies each package
 
 Linux service installation requires systemd, macOS requires 12 or later, and Windows requires Windows 10 or Server 2016 or later. FreeBSD service installation is tested on 14.4. Linux binaries are built without CGO and do not depend on a particular glibc version.
 
-CPU baselines are amd64 v1, ARM64 v8.0, ARMv7 and RISC-V RVA20U64. For openEuler, Kylin or UOS, choose the package by CPU architecture and check the kernel against the [Go platform requirements](https://go.dev/wiki/MinimumRequirements). `loong64` requires LoongArch and Linux 5.19 or later; it does not support older MIPS-based Loongson processors.
+CPU baselines are amd64 v1, arm64 v8.0, ARMv7 and RISC-V RVA20U64. For openEuler, Kylin or UOS, choose the package by CPU architecture and check the kernel against the [Go platform requirements](https://go.dev/wiki/MinimumRequirements). `loong64` requires LoongArch and Linux 5.19 or later; it does not support older MIPS-based Loongson processors.
 
 ARMv7 has a 32-bit address space, and its metadata database has a roughly 2 GiB mapping limit. Use a 64-bit Master for large task inventories. This limits task metadata, not the size of transferred files. V4.0.x database conversion runs on Linux or macOS; FreeBSD can use data converted on either system.

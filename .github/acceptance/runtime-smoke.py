@@ -64,7 +64,7 @@ def main():
     phase = "Master startup"
 
     def redact(text):
-        text = re.sub(r"Setup token: \S+", "Setup token: [redacted]", text)
+        text = re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
         for secret in secrets:
             if secret:
                 text = text.replace(secret, "[redacted]")
@@ -115,9 +115,9 @@ def main():
         master, log = spawn("master-first", args.master, "--listen", "127.0.0.1:0", "--data-dir", str(root / "master-data"))
         address = eventually(lambda: re.search(r"Master listening on (127\.0\.0\.1:\d+)", log.read_text(encoding="utf-8")))[1]
         origin = "http://" + address
-        phase = "Authenticated setup"
-        setup_token = eventually(lambda: re.search(r"Setup token: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")))[1]
-        secrets.append(setup_token)
+        phase = "Initial administrator login"
+        initial_password = eventually(lambda: re.search(r"Initial password: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")))[1]
+        secrets.append(initial_password)
         with urlopen(origin + "/", timeout=10) as response:
             html = response.read().decode()
             assert response.status == 200
@@ -127,15 +127,20 @@ def main():
             with urlopen(origin + asset, timeout=10) as response:
                 assert response.status == 200 and response.read(), "Embedded asset missing"
                 assert "text/html" not in response.headers.get("Content-Type", ""), "Missing asset served the page HTML"
-        assert api(origin, "/api/setup/status")["configured"] is False
-        api(origin, "/api/master/nodes", expected=503)
-        credentials = {"username": "runtime-qa", "password": "temporary runtime QA password"}
+        assert api(origin, "/api/setup/status")["configured"] is True
+        api(origin, "/api/master/nodes", expected=401)
+        credentials = {"username": "admin", "password": "temporary runtime QA password"}
         secrets.append(credentials["password"])
-        api(origin, "/api/setup/complete", "POST", dict(credentials, publicUrl=origin, setupToken=setup_token))
-        login = api(origin, "/api/auth/login", "POST", credentials)
+        login = api(origin, "/api/auth/login", "POST", dict(credentials, password=initial_password))
+        assert login["user"]["mustChangePassword"] is True
         token = login["token"]
         secrets.append(token)
-        checks.append("embedded console and atomic authenticated setup without external runtime")
+        api(origin, "/api/master/nodes", token=token, expected=403)
+        changed = api(origin, "/api/auth/change-password", "POST",
+                      {"oldPassword": initial_password, "newPassword": credentials["password"]}, token)
+        assert changed["user"]["mustChangePassword"] is False
+        api(origin, "/api/auth/login", "POST", dict(credentials, password=initial_password), expected=401)
+        checks.append("embedded console and generated administrator password; initial session is restricted until password change")
         phase = "Initial Agent enrollment"
         agents = []
         for number in (1, 2):
@@ -191,7 +196,7 @@ def main():
         master.wait(timeout=10)
         master, restarted_log = spawn("master-restart", args.master, "--listen", address, "--data-dir", str(root / "master-data"))
         eventually(lambda: "Master listening on " in restarted_log.read_text(encoding="utf-8"))
-        assert "Setup token:" not in restarted_log.read_text(encoding="utf-8")
+        assert "Initial password:" not in restarted_log.read_text(encoding="utf-8")
         assert api(origin, "/api/setup/status")["configured"] is True
         assert api(origin, "/api/auth/current", token=token)["user"]["username"] == credentials["username"]
         nodes = eventually(nodes_online)
@@ -221,7 +226,7 @@ def main():
                     child.wait(timeout=10)
         for stream in logs:
             stream.close()
-        # The original startup log contains the one-use setup token. Keep only
+        # The original startup log contains the initial password. Keep only
         # sanitized logs as acceptance evidence.
         for log in root.glob("*.log"):
             log.write_text(redact(log.read_text(errors="replace", encoding="utf-8")), encoding="utf-8")

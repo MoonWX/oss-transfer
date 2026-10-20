@@ -29,19 +29,21 @@ type agentHTTPFixture struct {
 func newAgentHTTPFixture(t *testing.T) *agentHTTPFixture {
 	t.Helper()
 	f := &agentHTTPFixture{path: filepath.Join(t.TempDir(), "master.db")}
-	bootstrap := f.open(t)
+	initialPassword := f.open(t)
 	t.Cleanup(f.close)
-	status, _ := request(t, f.http.Client(), "POST", f.http.URL+"/api/setup/complete", "", map[string]any{
-		"username": "admin", "password": "local enrollment test", "publicUrl": "https://master.example:1685", "setupToken": bootstrap,
-	})
-	if status != 200 {
-		t.Fatalf("fixture setup: HTTP %d", status)
-	}
-	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/auth/login", "", map[string]string{"username": "admin", "password": "local enrollment test"})
+	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/auth/login", "", map[string]string{"username": "admin", "password": initialPassword})
 	if status != 200 {
 		t.Fatalf("fixture login: HTTP %d", status)
 	}
 	f.admin = body["token"].(string)
+	status, _ = request(t, f.http.Client(), "POST", f.http.URL+"/api/auth/change-password", f.admin, map[string]string{"oldPassword": initialPassword, "newPassword": "local enrollment test"})
+	if status != 200 {
+		t.Fatalf("fixture password change: HTTP %d", status)
+	}
+	status, _ = request(t, f.http.Client(), "PUT", f.http.URL+"/api/master/network", f.admin, map[string]string{"publicUrl": "https://master.example:1685"})
+	if status != 200 {
+		t.Fatalf("fixture legacy default endpoint: HTTP %d", status)
+	}
 	return f
 }
 

@@ -228,31 +228,46 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
         self.assertIn('Startup timed out after 3s', result.stderr)
         self.assertGreaterEqual(int((self.root/'probes').read_text()), 1)
 
-    def test_setup_token_printed_only_from_this_master_startup(self):
-        old = 'Open the console to complete setup. Setup token: old_token\n'
-        current = 'Open the console to complete setup. Setup token: current_token\n'
+    def test_initial_password_printed_only_from_this_master_startup(self):
+        old = 'Initial administrator: admin\nInitial password: old_password\n'
+        current = 'Initial administrator: admin\nInitial password: current_password\n'
         for platform in ('linux', 'darwin', 'freebsd'):
             with self.subTest(platform=platform):
-                result = self.run_shell('startup_log_lines=1; print_setup_token',
+                result = self.run_shell('startup_log_lines=2; print_initial_credentials',
                                         QA_PLATFORM=platform, QA_LOG=old + current)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout, '\nSetup token: current_token\n')
-                initialized = self.run_shell('startup_log_lines=1; print_setup_token',
+                self.assertEqual(result.stdout, '\nInitial administrator: admin\nInitial password: current_password\n')
+                initialized = self.run_shell('startup_log_lines=2; print_initial_credentials',
                                             QA_PLATFORM=platform, QA_LOG=old + 'Master listening on :1685\n')
                 self.assertEqual(initialized.returncode, 0, initialized.stderr)
                 self.assertEqual(initialized.stdout, '')
-        agent = self.run_shell('role=agent; print_setup_token', QA_LOG=current)
+        agent = self.run_shell('role=agent; print_initial_credentials', QA_LOG=current)
         self.assertEqual(agent.returncode, 0, agent.stderr)
         self.assertEqual(agent.stdout, '')
 
-    def test_setup_token_ignores_other_logs_and_uses_rotated_token(self):
-        result = self.run_shell('print_setup_token', QA_LOG=(
-            'Open the console to complete setup. Setup token: first_token\n'
+    def test_initial_password_ignores_unrelated_and_malformed_logs(self):
+        result = self.run_shell('print_initial_credentials', QA_LOG=(
+            'Initial password: first_password\n'
             's3 error with private-key-value\n'
-            'Open the console to complete setup. Setup token: current-token_2\n'
-            'Open the console to complete setup. Setup token: invalid token\n'))
+            'Initial password: current-password_2\n'
+            'Initial password: invalid password\n'))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, '\nSetup token: current-token_2\n')
+        self.assertEqual(result.stdout, '\nInitial administrator: admin\nInitial password: current-password_2\n')
+
+    def test_fixed_older_release_prints_only_its_current_setup_token(self):
+        old = 'Open the console to complete setup. Setup token: old_token\n'
+        current = 'Open the console to complete setup. Setup token: current_token\n'
+        result = self.run_shell('startup_log_lines=1; print_initial_credentials', QA_LOG=old + current)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '\nSetup token: current_token\n')
+        restarted = self.run_shell('startup_log_lines=1; print_initial_credentials',
+                                   QA_LOG=old + 'Master listening on :1685\n')
+        self.assertEqual(restarted.returncode, 0, restarted.stderr)
+        self.assertEqual(restarted.stdout, '')
+        modern = self.run_shell('print_initial_credentials',
+                               QA_LOG=current + 'Initial password: modern_password\n')
+        self.assertEqual(modern.returncode, 0, modern.stderr)
+        self.assertEqual(modern.stdout, '\nInitial administrator: admin\nInitial password: modern_password\n')
 
 
 if __name__ == '__main__':

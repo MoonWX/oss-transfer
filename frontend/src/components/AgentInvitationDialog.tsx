@@ -54,6 +54,7 @@ export default function AgentInvitationDialog({
   useI18n();
   const notify = useNotify();
   const [label, setLabel] = useState("");
+  const [masterUrl, setMasterUrl] = useState(() => window.location.origin);
   const [invitation, setInvitation] = useState<AgentInvitation | null>(null);
   const [tab, setTab] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -63,11 +64,29 @@ export default function AgentInvitationDialog({
       setError(t("请输入节点名称。"));
       return;
     }
+    let origin: string;
+    try {
+      const url = new URL(masterUrl.trim() || window.location.origin);
+      if (
+        !["http:", "https:"].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        url.pathname !== "/"
+      )
+        throw new Error();
+      origin = url.origin;
+    } catch {
+      setError(t("请输入完整的 HTTP 或 HTTPS 地址，不含路径。"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       const next = await createAgentInvitation({
         label: label.trim(),
+        masterUrl: origin,
       });
       if (
         !next.joinUrl ||
@@ -141,6 +160,17 @@ export default function AgentInvitationDialog({
                 disabled={saving}
                 slotProps={{ htmlInput: { maxLength: 80 } }}
                 onChange={(event) => setLabel(event.target.value)}
+              />
+              <TextField
+                label={t("Agent 连接地址")}
+                fullWidth
+                value={masterUrl}
+                placeholder={window.location.origin}
+                disabled={saving}
+                helperText={t(
+                  "填写新节点可访问的主节点地址，同一 VPC 可使用内网地址。",
+                )}
+                onChange={(event) => setMasterUrl(event.target.value)}
               />
             </>
           ) : (

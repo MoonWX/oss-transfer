@@ -43,6 +43,8 @@ func run() error {
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without starting the service")
 	backupState := flag.String("backup-state", "", "Validate and snapshot a stopped database to a new file")
 	restoreState := flag.String("restore-state", "", "Restore a snapshot into a stopped existing database")
+	resetPassword := flag.Bool("reset-admin-password", false, "Reset an administrator password while the Master is stopped")
+	resetUsername := flag.String("username", "", "Administrator account to reset (required only if there is more than one)")
 	checkReady := flag.Bool("check-ready", false, "Verify an installer startup record")
 	expectPID := flag.Int("expect-pid", 0, "Service manager PID for readiness verification")
 	expectLaunch := flag.String("expect-launch-id", "", "Installer startup ID for readiness verification")
@@ -74,6 +76,15 @@ func run() error {
 	}
 	if err := configureAgentArtifacts(&config); err != nil {
 		return err
+	}
+	if *resetPassword {
+		if *backupState != "" || *restoreState != "" || *checkConfig || *checkReady {
+			return errors.New("--reset-admin-password cannot be combined with database or service checks")
+		}
+		return resetAdministrator(config.DataDirectory, *resetUsername)
+	}
+	if *resetUsername != "" {
+		return errors.New("--username requires --reset-admin-password")
 	}
 	if *backupState != "" || *restoreState != "" {
 		if *configPath == "" || *checkConfig || *checkReady || *backupState != "" && *restoreState != "" {
@@ -115,28 +126,30 @@ func serve(ctx context.Context, config servicehost.Config, ready func() error) e
 	if err != nil {
 		return fmt.Errorf("load console assets (use the release binary or build the frontend): %w", err)
 	}
-	db, err := state.Open(filepath.Join(config.DataDirectory, "master.db"))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	handler, bootstrap, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage})
-	if err != nil {
-		return err
-	}
-	defer handler.Close()
+	// Bind before creating credentials so an occupied port cannot consume the
+	// one-time password output.
 	listener, err := net.Listen("tcp", config.Listen)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
+	db, err := state.Open(filepath.Join(config.DataDirectory, "master.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	handler, initialPassword, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage})
+	if err != nil {
+		return err
+	}
+	defer handler.Close()
 	handler.Start()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32 * 1024}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	fmt.Printf("Master listening on %s\n", listener.Addr())
-	if bootstrap != "" {
-		fmt.Printf("Open the console to complete setup. Setup token: %s\n", bootstrap)
+	if initialPassword != "" {
+		printInitialPassword("admin", initialPassword)
 	}
 	if err := ready(); err != nil {
 		_ = server.Close()
@@ -158,4 +171,28 @@ func serve(ctx context.Context, config servicehost.Config, ready func() error) e
 		}
 		return nil
 	}
+}
+
+func printInitialPassword(username, password string) {
+	fmt.Printf("Initial administrator: %s\nInitial password: %s\n", username, password)
+}
+
+func resetAdministrator(directory, username string) error {
+	path := filepath.Join(directory, "master.db")
+	if info, err := os.Stat(path); err != nil {
+		return err
+	} else if !info.Mode().IsRegular() {
+		return errors.New("Master database is not a regular file")
+	}
+	db, err := state.Open(path)
+	if err != nil {
+		return fmt.Errorf("stop the Master before resetting its password: %w", err)
+	}
+	defer db.Close()
+	account, password, err := master.ResetAdministratorPassword(db, username)
+	if err != nil {
+		return err
+	}
+	printInitialPassword(account, password)
+	return nil
 }

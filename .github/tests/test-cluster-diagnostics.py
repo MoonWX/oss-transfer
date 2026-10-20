@@ -31,6 +31,15 @@ class DiagnosticsTest(unittest.TestCase):
         self.harness.evidence = {}
         self.harness.secrets = ["known-secret"]
 
+    def test_startup_credentials_redacted_before_the_harness_can_read_them(self):
+        output = self.harness.scrub(
+            "Initial administrator: admin\nInitial password: unseen_random-password\n"
+            "Open the console to complete setup. Setup token: unseen_legacy-token\n")
+        self.assertIn("Initial administrator: admin", output)
+        self.assertIn("Initial password: [redacted]", output)
+        self.assertIn("Setup token: [redacted]", output)
+        self.assertNotIn("unseen_", output)
+
     def test_timeout_retains_last_poll_and_only_bounded_safe_fields(self):
         failure = AssertionError("original task completion timeout")
         last = {"taskIndex": 4, "status": "RUNNING", "putObjectCount": 12,

@@ -15,7 +15,7 @@ docker compose up -d master &&
 docker compose logs master
 ```
 
-Open port `1685` on this host in your browser (`http://localhost:1685` when running locally). Enter the setup token from the log and create the administrator account. If Agents connect over a private network, set **Agent connection address** to the Master's private URL.
+Open port `1685` on this host in your browser (`http://localhost:1685` when running locally). Sign in as `admin` with the initial password from the log, then choose your own password.
 
 The `.env` file sets the image, published port and Agent's host directory:
 
@@ -27,7 +27,7 @@ TRANSFER_LOCAL_ROOT=./transfer-files
 
 ## Add an Agent
 
-In **Execution nodes → Add node**, enter a node name and generate an invitation. Run the command from the **Docker** tab on the Agent host. It uses the installer to create a Compose service and join the cluster. The native installation command is available in the same dialog.
+In **Execution nodes → Add node**, enter a node name and generate an invitation. The Master address defaults to your browser address; change it if the Agent will use a private network. Run the command from the **Docker** tab on the Agent host. It uses the installer to create a Compose service and join the cluster. The native installation command is available in the same dialog.
 
 To manage an Agent in the same Compose project as the Master, create its host directory first. The container runs as UID/GID `65532`; that account needs access to the files being transferred. For the default directory:
 

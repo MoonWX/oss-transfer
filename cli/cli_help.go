@@ -31,8 +31,7 @@ const cliHelp = `OSS Transfer CLI
   object compare ...             比对源、目标对象的元数据
 
 账户
-  setup status|complete          查看或完成首次设置
-  login --username admin --password-stdin
+  login                          登录（默认 admin）
   logout                         注销当前服务的会话
   whoami                         查看当前登录状态
   change-password --old-password-env OLD --new-password-env NEW
@@ -217,7 +216,7 @@ const cliNodeHelp = `执行节点
   details <节点>                  查看主机、网卡 IP 和挂载目录
   network [--public-url URL] [--agent-url URL]
   add <节点> [--label 名称]        生成指定地址的 Agent 加入指令
-  invite [--address 节点] [--label 名称]
+  invite [--address 节点] [--label 名称] [--master-url URL]
   update <节点> [--address 新地址] [--label 名称]
   remove <节点> --yes              移除指定节点注册
 
@@ -229,7 +228,7 @@ const cliNodeHelp = `执行节点
 
 新增节点使用 agent invite。节点支持名称、IPv4 和 IPv6；省略时由 Agent 自动识别。
 Agent 地址注册后不能直接修改，替换节点需重新加入。
-node network 无参数时查看地址；--agent-url '' 恢复使用浏览器地址。修改仅用于新加入节点。
+node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `
@@ -237,7 +236,7 @@ node network 无参数时查看地址；--agent-url '' 恢复使用浏览器地�
 const cliAgentHelp = `Agent 管理
 用法：oss-transfer-cli agent <子命令> [参数]
 
-  invite [--label 名称] [--address 节点]
+  invite [--label 名称] [--address 节点] [--master-url URL]
   list                            查看全部 Agent
   show <节点>                     查看连接、队列、根目录和限速
   details <节点>                  查看主机、网卡 IP 和挂载目录
@@ -252,26 +251,17 @@ const cliAgentHelp = `Agent 管理
   oss-transfer-cli agent update windows-node --local-root 'D:\data'
   oss-transfer-cli agent remove storage-node --yes
 
+--master-url 指定 Agent 可访问的 Master 地址；省略时使用 CLI 当前连接地址。
 邀请有效期为 30 分钟，仅可加入一次。在执行节点运行对应系统的原生部署指令；Docker 为可选方式。
 --local-root 使用 Agent 所在系统的绝对路径；配置会替换该节点已有的根目录列表。
 `
 
-const cliSetupHelp = `首次设置
-用法：oss-transfer-cli setup status|complete
+const cliSetupHelp = `首次登录
+  oss-transfer-cli login
+  oss-transfer-cli change-password
 
-  status                          查看是否已完成首次设置
-  complete --username 用户名 --public-url URL [--agent-url URL]
-           --setup-token-env NAME|--setup-token-file 文件|--setup-token-stdin
-           --password-env NAME|--password-file 文件|--password-stdin
-
-设置令牌显示在安装完成后的终端中。密码和令牌各选择一种输入方式，不能同时使用 stdin。
---public-url 填写浏览器地址；--agent-url 可单独指定内网地址，省略时沿用浏览器地址。
-
-示例
-  oss-transfer-cli --host http://10.0.0.10:1685 setup status
-  oss-transfer-cli --host http://10.0.0.10:1685 setup complete --username admin \
-    --public-url http://10.0.0.10:1685 --setup-token-file ./setup-token --password-env ADMIN_PASSWORD
-  oss-transfer-cli --host http://10.0.0.10:1685 login --username admin --password-env ADMIN_PASSWORD
+使用安装完成时显示的 admin 初始密码登录，然后修改密码。
+setup status 仅保留用于旧脚本查询，不再需要初始化步骤。
 `
 
 const cliStorageHelp = `存储连接
@@ -380,6 +370,8 @@ Key 按原值传递，含空格或 shell 特殊字符时请加引号。
 `
 
 const cliAuthHelp = `登录与账户
+  oss-transfer-cli login
+  oss-transfer-cli change-password
   oss-transfer-cli login --username admin --password-stdin
   oss-transfer-cli login --username admin --password-env PASSWORD_ENV
   oss-transfer-cli login --username admin --password-file /path/to/password
@@ -387,7 +379,8 @@ const cliAuthHelp = `登录与账户
   oss-transfer-cli logout
   oss-transfer-cli change-password --old-password-env OLD --new-password-env NEW
 
-密码来源必须选择一种，不接受明文命令行密码。
+默认用户名为 admin；其他账号使用 --username。终端中会隐藏密码输入，首次登录后需修改初始密码。
+脚本可选择环境变量、文件或 stdin 输入密码。
 --password-stdin 从标准输入读取；文件读取使用 --password-file。
 修改密码的来源也可使用 --old-password-file / --new-password-file。
 登录会话按 --host 对应服务保存；切换服务时须使用对应会话。

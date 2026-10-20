@@ -1,9 +1,7 @@
 package agent_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -36,22 +34,13 @@ func TestAgentIdentitySurvivesLostJoinResponseAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer masterDB.Close()
-	s, setupToken, err := master.New(masterDB, master.Options{})
+	s, _, err := master.New(masterDB, master.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	server := httptest.NewServer(s)
 	defer server.Close()
-	setup, _ := json.Marshal(map[string]string{"username": "admin", "password": "test password", "publicUrl": server.URL, "setupToken": setupToken})
-	response, err := http.Post(server.URL+"/api/setup/complete", "application/json", bytes.NewReader(setup))
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != 200 {
-		t.Fatal(response.Status)
-	}
 	registry := cluster.New(masterDB, nil)
 	invite, err := registry.Invite("agent-a", "Agent A")
 	if err != nil {

@@ -189,6 +189,7 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 		}
 		body := map[string]interface{}{"address": address, "label": strings.TrimSpace(label)}
 		if action == "add" {
+			body["masterUrl"] = strings.TrimSuffix(client.baseUrl, "/api/master")
 			return client.Post("/agents/invitations", body)
 		}
 		return client.Put("/nodes/"+url.PathEscape(original), body)
@@ -207,7 +208,7 @@ func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]
 	if action != "invite" {
 		return nil, cliErrorf("未知 agent 子命令: %s", action)
 	}
-	o, err := adminOptions(args, []string{"label", "address"}, nil, 0)
+	o, err := adminOptions(args, []string{"label", "address", "master-url"}, nil, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +221,14 @@ func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]
 	if len([]rune(label)) > 80 || strings.ContainsAny(label, "\r\n") {
 		return nil, cliErrorf("节点名称不能超过 80 个字符或包含换行")
 	}
-	return client.Post("/agents/invitations", map[string]interface{}{"address": address, "label": label})
+	masterURL := strings.TrimSuffix(client.baseUrl, "/api/master")
+	if o.Has("master-url") {
+		masterURL, err = masterOrigin(o.Value("master-url"), "master-url")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return client.Post("/agents/invitations", map[string]interface{}{"address": address, "label": label, "masterUrl": masterURL})
 }
 
 func runStorageAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {

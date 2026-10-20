@@ -39,12 +39,14 @@ func (m Member) Session() agenttransport.Session {
 type invitation struct {
 	Address      string    `json:"address"`
 	Label        string    `json:"label"`
+	MasterURL    string    `json:"masterUrl,omitempty"`
 	ExpiresAt    time.Time `json:"expiresAt"`
 	MemberID     string    `json:"memberId,omitempty"`
 	EnrollmentID string    `json:"enrollmentId,omitempty"`
 }
 type Invitation struct {
 	Token     string    `json:"token"`
+	MasterURL string    `json:"masterUrl,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 type JoinRequest struct {
@@ -104,6 +106,12 @@ func safeAutomaticAddress(value string) bool {
 }
 
 func (r *Registry) Invite(address, label string) (Invitation, error) {
+	return r.InviteForMaster(address, label, "")
+}
+
+// InviteForMaster binds this invitation to the Agent's enrollment endpoint.
+// Later changes to cluster defaults cannot change an already copied command.
+func (r *Registry) InviteForMaster(address, label, masterURL string) (Invitation, error) {
 	if !safeLabel(address, 256) || !safeLabel(label, 128) {
 		return Invitation{}, errors.New("invalid node address or label")
 	}
@@ -113,18 +121,25 @@ func (r *Registry) Invite(address, label string) (Invitation, error) {
 	}
 	expires := r.now().Add(30 * time.Minute)
 	err = r.store.Update(func(tx *state.Tx) error {
-		return tx.Put("agent-invitations", digest(token), invitation{Address: address, Label: label, ExpiresAt: expires})
+		return tx.Put("agent-invitations", digest(token), invitation{Address: address, Label: label, MasterURL: masterURL, ExpiresAt: expires})
 	})
-	return Invitation{Token: token, ExpiresAt: expires}, err
+	return Invitation{Token: token, MasterURL: masterURL, ExpiresAt: expires}, err
 }
 
 // CheckInvitation authorizes fetching an installer without consuming the
 // invitation. Only a successfully enrolled identity consumes it in Join.
 func (r *Registry) CheckInvitation(token string) error {
+	_, err := r.Invitation(token)
+	return err
+}
+
+// Invitation reads an unconsumed invitation without consuming its credential.
+func (r *Registry) Invitation(token string) (Invitation, error) {
 	if !secret(token) {
-		return ErrInvitation
+		return Invitation{}, ErrInvitation
 	}
-	return r.store.View(func(tx *state.Tx) error {
+	var result Invitation
+	err := r.store.View(func(tx *state.Tx) error {
 		var invite invitation
 		found, err := tx.Get("agent-invitations", digest(token), &invite)
 		if err != nil {
@@ -133,8 +148,10 @@ func (r *Registry) CheckInvitation(token string) error {
 		if !found || invite.MemberID != "" || !r.now().Before(invite.ExpiresAt) {
 			return ErrInvitation
 		}
+		result = Invitation{Token: token, MasterURL: invite.MasterURL, ExpiresAt: invite.ExpiresAt}
 		return nil
 	})
+	return result, err
 }
 
 // Join commits invitation consumption and membership together. If the response

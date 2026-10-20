@@ -126,7 +126,7 @@ func (a *reportAPI) consumeTicket(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot validate download session")
 		return
 	}
-	if !valid || user.Role != "admin" {
+	if !valid || user.Role != "admin" || user.MustChangePassword {
 		fail(w, 401, "Sign in required")
 		return
 	}

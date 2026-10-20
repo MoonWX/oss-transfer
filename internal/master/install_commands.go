@@ -85,18 +85,14 @@ func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
 func bootstrapCommand(link, image string, compose bool) string {
-	command := `curl -fsSL "$1" | bash`
+	command := "curl -fsSL " + shellQuote(link) + " | bash"
 	if compose {
 		command += ` -s -- --method compose`
 		if image != "" {
-			command += ` --image "$2"`
+			command += " --image " + shellQuote(image)
 		}
 	}
-	result := "bash -o pipefail -c " + shellQuote(command) + " -- " + shellQuote(link)
-	if compose && image != "" {
-		result += " " + shellQuote(image)
-	}
-	return result
+	return command
 }
 
 func (s *Server) agentReleaseURL() string {

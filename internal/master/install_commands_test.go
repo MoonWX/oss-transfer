@@ -25,7 +25,7 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := f.master.agentInvitationData("https://master.example:1685", invite)
-	if !strings.Contains(data["traditionalCommand"].(string), "/api/agents/bootstrap/"+invite.Token) || !strings.Contains(data["windowsCommand"].(string), "platform=windows") {
+	if data["traditionalCommand"] != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"' | bash" || !strings.Contains(data["windowsCommand"].(string), "platform=windows") {
 		t.Fatal("bootstrap commands missing")
 	}
 	windows := data["windowsCommand"].(string)
@@ -33,15 +33,15 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		t.Fatal("Windows invitation can reuse a stale script after download failure")
 	}
 	docker := data["dockerCommand"].(string)
-	if !strings.Contains(docker, "--method compose") || !strings.Contains(docker, "/api/agents/bootstrap/"+invite.Token) || !strings.Contains(docker, "pipefail") {
+	if !strings.HasPrefix(docker, "curl -fsSL ") || !strings.Contains(docker, "/api/agents/bootstrap/"+invite.Token) || !strings.Contains(docker, " | bash -s -- --method compose") {
 		t.Fatal("Docker enrollment must use the unified installer")
 	}
-	if !strings.Contains(docker, `--image "$2"`) || !strings.HasSuffix(docker, "'moonwx/osstransfer:4.1.0'") {
+	if !strings.HasSuffix(docker, "--image 'moonwx/osstransfer:4.1.0'") {
 		t.Fatal("Docker enrollment must explicitly pin the configured release image")
 	}
 	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
 	custom := f.master.agentInvitationData("https://master.example:1685", invite)
-	if !strings.Contains(custom["dockerCommand"].(string), `--image "$2"`) || !strings.HasSuffix(custom["dockerCommand"].(string), "'registry.example/transfer:custom'") {
+	if !strings.HasSuffix(custom["dockerCommand"].(string), "--image 'registry.example/transfer:custom'") {
 		t.Fatal("configured container registry was not preserved")
 	}
 	link := f.http.URL + "/api/agents/bootstrap/" + invite.Token
@@ -126,7 +126,7 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 		{name: "github-unreachable", country: "US", failSource: "github", source: "jdoss"},
 		{name: "oss-unreachable", country: "CN", failSource: "jdoss", source: "github"},
 		{name: "both-unreachable", country: "CN", failSource: "both", wantError: true},
-		{name: "expired-invitation", failBootstrap: true, wantError: true},
+		{name: "expired-invitation", failBootstrap: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			invite, err := f.master.agents.registry.Invite("regional-bootstrap-"+tc.name, "")
@@ -156,7 +156,10 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "${TRANSFER_JOIN_TOKEN:-}" ]]
 if [[ "$url" == "$BOOTSTRAP_URL" ]]; then
-  [[ "$MOCK_FAIL_BOOTSTRAP" != true ]] || exit 22
+  if [[ "$MOCK_FAIL_BOOTSTRAP" == true ]]; then
+    printf 'curl: (22) The requested URL returned error: 404\n' >&2
+    exit 22
+  fi
   cat "$BOOTSTRAP_SCRIPT"; exit
 fi
 printf '%s\n' "$url" >> "$BOOTSTRAP_LOG"
@@ -199,9 +202,12 @@ esac
 				t.Fatal("secondary lookup did not match missing country", string(requests))
 			}
 			args, argsErr := os.ReadFile(filepath.Join(dir, "args"))
-			if tc.wantError {
+			if tc.wantError || tc.failBootstrap {
 				if !os.IsNotExist(argsErr) {
-					t.Fatal("installer ran after both downloads failed")
+					t.Fatal("installer ran after a download failed")
+				}
+				if tc.failBootstrap && !strings.Contains(string(output), "curl: (22)") {
+					t.Fatal("invitation download error was not shown", string(output))
 				}
 				return
 			}

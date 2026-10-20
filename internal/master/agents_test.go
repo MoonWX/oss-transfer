@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
+	"github.com/MoonWX/oss-transfer/internal/auth"
 	"github.com/MoonWX/oss-transfer/internal/cluster"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
@@ -26,20 +27,57 @@ type agentHTTPFixture struct {
 	admin  string
 }
 
+const agentFixturePassword = "local enrollment test"
+
+var agentFixtureCredential struct {
+	once sync.Once
+	hash string
+	err  error
+}
+
 func newAgentHTTPFixture(t *testing.T) *agentHTTPFixture {
 	t.Helper()
 	f := &agentHTTPFixture{path: filepath.Join(t.TempDir(), "master.db")}
-	initialPassword := f.open(t)
+	// Business tests start with an existing administrator. First-login and
+	// password recovery tests exercise credential creation separately.
+	agentFixtureCredential.once.Do(func() {
+		agentFixtureCredential.hash, agentFixtureCredential.err = auth.HashPassword(agentFixturePassword)
+	})
+	if agentFixtureCredential.err != nil {
+		t.Fatal(agentFixtureCredential.err)
+	}
+	var err error
+	f.db, err = state.Open(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(f.close)
-	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/auth/login", "", map[string]string{"username": "admin", "password": initialPassword})
+	err = f.db.Update(func(tx *state.Tx) error {
+		if err := tx.Put("users", "admin", User{
+			Username: "admin", DisplayName: "admin", Role: "admin",
+			PasswordHash: agentFixtureCredential.hash, Revision: 1,
+		}); err != nil {
+			return err
+		}
+		return tx.Put("system", "configuration", Configuration{
+			Configured: true, CreatedAt: time.Now().UTC(),
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.db = nil
+	if initialPassword := f.open(t); initialPassword != "" {
+		t.Fatal("existing administrator unexpectedly replaced")
+	}
+	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/auth/login", "", map[string]string{"username": "admin", "password": agentFixturePassword})
 	if status != 200 {
 		t.Fatalf("fixture login: HTTP %d", status)
 	}
 	f.admin = body["token"].(string)
-	status, _ = request(t, f.http.Client(), "POST", f.http.URL+"/api/auth/change-password", f.admin, map[string]string{"oldPassword": initialPassword, "newPassword": "local enrollment test"})
-	if status != 200 {
-		t.Fatalf("fixture password change: HTTP %d", status)
-	}
 	status, _ = request(t, f.http.Client(), "PUT", f.http.URL+"/api/master/network", f.admin, map[string]string{"publicUrl": "https://master.example:1685"})
 	if status != 200 {
 		t.Fatalf("fixture legacy default endpoint: HTTP %d", status)

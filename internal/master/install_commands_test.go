@@ -36,6 +36,9 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 	if !strings.Contains(docker, "--method compose") || !strings.Contains(docker, "/api/agents/bootstrap/"+invite.Token) || !strings.Contains(docker, "pipefail") {
 		t.Fatal("Docker enrollment must use the unified installer")
 	}
+	if !strings.Contains(docker, `--image "$2"`) || !strings.HasSuffix(docker, "'moonwx/osstransfer:4.1.0'") {
+		t.Fatal("Docker enrollment must explicitly pin the configured release image")
+	}
 	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
 	custom := f.master.agentInvitationData("https://master.example:1685", invite)
 	if !strings.Contains(custom["dockerCommand"].(string), `--image "$2"`) || !strings.HasSuffix(custom["dockerCommand"].(string), "'registry.example/transfer:custom'") {
@@ -205,8 +208,8 @@ esac
 			if argsErr != nil || !strings.Contains(string(args), "--source\nauto\n--version\nv4.1.6\n") || strings.Contains(string(args), "--release-url") {
 				t.Fatal("source/version not passed to installer", string(args), argsErr)
 			}
-			if tc.method != "" && !strings.HasSuffix(string(args), "--method\n"+tc.method+"\n") {
-				t.Fatal("selected deployment method did not reach unified installer", string(args))
+			if tc.method != "" && !strings.HasSuffix(string(args), "--method\n"+tc.method+"\n--image\nmoonwx/osstransfer:4.1.6\n") {
+				t.Fatal("selected deployment method and pinned image did not reach unified installer", string(args))
 			}
 			requestLines := strings.Split(strings.TrimSpace(string(requests)), "\n")
 			lastURL := requestLines[len(requestLines)-1]

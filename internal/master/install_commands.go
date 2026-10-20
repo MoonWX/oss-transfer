@@ -116,11 +116,7 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 	}
 	if s.agentReleaseURL() != "" && s.options.AgentDockerImage != "" {
 		link := masterURL + "/api/agents/bootstrap/" + invite.Token
-		image := ""
-		if s.options.AgentDockerImage != "moonwx/osstransfer:"+strings.TrimPrefix(s.options.AgentArtifactVersion, "v") {
-			image = s.options.AgentDockerImage
-		}
-		data["dockerCommand"] = bootstrapCommand(link, image, true)
+		data["dockerCommand"] = bootstrapCommand(link, s.options.AgentDockerImage, true)
 	} else if s.options.AgentDockerImage != "" {
 		// The one-time token is supplied to an enrollment container only. The
 		// long-running container mounts the saved identity and contains no token.

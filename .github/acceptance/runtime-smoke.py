@@ -146,9 +146,9 @@ def main():
         for number in (1, 2):
             invitation = api(origin, "/api/master/agents/invitations", "POST", {"address": f"qa-node-{number}", "label": f"Agent {number}"}, token)["data"]
             secrets.append(invitation["inviteToken"])
+            bootstrap = origin + "/api/agents/bootstrap/" + invitation["inviteToken"]
             if number == 1 and args.expect_agent_release_url:
                 assert invitation.get("nativeAgent", {}).get("available") is True, "Published Master has no native Agent installation command"
-                bootstrap = origin + "/api/agents/bootstrap/" + invitation["inviteToken"]
                 assert bootstrap in invitation.get("traditionalCommand", ""), "Native command does not use this Master's invitation"
                 assert bootstrap + "?platform=windows" in invitation.get("windowsCommand", ""), "Windows Agent command is missing"
                 for suffix, installer in (("", "install.sh"), ("?platform=windows", "Install.ps1")):
@@ -157,9 +157,17 @@ def main():
                         assert args.expect_agent_release_url + "/" + installer in script, "Agent bootstrap downloads a different release"
                 checks.append("packaged Master generates Linux/macOS and Windows Agent commands pinned to its release")
             if number == 1 and args.expect_agent_image:
-                assert "'" + args.expect_agent_image + "'" in invitation.get("dockerCommand", ""), "Agent Docker command does not use the matching image"
-                checks.append("packaged Master generates an Agent command with the matching container version")
-            process, _ = spawn(f"agent-{number}", args.agent, "--master-url", origin, "--join-token", invitation["inviteToken"], "--data-dir", str(root / f"agent-{number}-data"))
+                compose_bootstrap = bootstrap + "?method=compose"
+                assert invitation.get("dockerCommand") == "curl -fsSL '" + compose_bootstrap + "' | bash", "Agent Docker command must directly run this Master's Compose bootstrap"
+                with urlopen(compose_bootstrap, timeout=10) as response:
+                    script = response.read().decode()
+                    assert "'" + args.expect_agent_image + "'" in script, "Agent Compose bootstrap does not use the matching image"
+                    if args.expect_agent_release_url:
+                        assert args.expect_agent_release_url + "/install.sh" in script, "Agent Compose bootstrap downloads a different release"
+                        assert "--method compose --image '" + args.expect_agent_image + "'" in script, "Agent Compose bootstrap does not select the matching Compose image"
+                checks.append("short Compose command downloads a bootstrap pinned to the matching installer and container version")
+            enrollment = ("--join-url", bootstrap) if number == 1 else ("--master-url", origin, "--join-token", invitation["inviteToken"])
+            process, _ = spawn(f"agent-{number}", args.agent, *enrollment, "--data-dir", str(root / f"agent-{number}-data"))
             agents.append(process)
 
         def nodes_online():
@@ -170,7 +178,7 @@ def main():
 
         nodes = eventually(nodes_online)
         identities = {node["address"]: node["id"] for node in nodes}
-        checks.append("two separate native Agent processes enroll through outbound connections")
+        checks.append("two separate native Agent processes enroll through --join-url and legacy arguments")
         phase = "Initial Agent command readiness"
 
         def agents_respond():

@@ -2,6 +2,7 @@ package master
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -18,10 +19,11 @@ import (
 type agentControl struct {
 	// Enrollment changes must commit and update the broker in the same order.
 	// Authenticating a request never activates an enrollment.
-	mu       sync.Mutex
-	registry *cluster.Registry
-	broker   *agenttransport.Broker
-	lastSeen map[string]time.Time
+	mu            sync.Mutex
+	registry      *cluster.Registry
+	broker        *agenttransport.Broker
+	lastSeen      map[string]time.Time
+	remoteAddress map[string]string
 }
 
 // Close releases long polls and pending commands before HTTP shutdown. The
@@ -39,9 +41,10 @@ func (s *Server) Close() error {
 
 func installAgentRoutes(s *Server) error {
 	a := &agentControl{
-		registry: cluster.New(s.store, s.options.Now),
-		broker:   agenttransport.NewBroker(agenttransport.BrokerOptions{}),
-		lastSeen: make(map[string]time.Time),
+		registry:      cluster.New(s.store, s.options.Now),
+		broker:        agenttransport.NewBroker(agenttransport.BrokerOptions{}),
+		lastSeen:      make(map[string]time.Time),
+		remoteAddress: make(map[string]string),
 	}
 	members, err := a.registry.Members()
 	if err != nil {
@@ -56,6 +59,9 @@ func installAgentRoutes(s *Server) error {
 	s.agents = a
 	s.mux.HandleFunc("POST /api/master/agents/invitations", s.adminOnly(s.createAgentInvitation))
 	s.mux.HandleFunc("GET /api/master/nodes", s.adminOnly(s.listAgentNodes))
+	s.mux.HandleFunc("GET /api/master/network", s.adminOnly(s.networkSettings))
+	s.mux.HandleFunc("PUT /api/master/network", s.adminOnly(s.updateNetworkSettings))
+	s.mux.HandleFunc("GET /api/master/nodes/{address}/details", s.adminOnly(s.agentNodeDetails))
 	s.mux.HandleFunc("GET /api/master/local-nodes", s.adminOnly(s.localNodesWithSettings))
 	s.mux.HandleFunc("DELETE /api/master/nodes/{address}", s.adminOnly(s.removeAgentNode))
 	// Static workers are not a registration mechanism for the Go Agent.
@@ -141,7 +147,7 @@ func (s *Server) createAgentInvitation(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Cannot create Agent invitation")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": s.agentInvitationData(config.PublicURL, invite)})
+	writeJSON(w, 200, map[string]any{"success": true, "data": s.agentInvitationData(config.agentURL(), invite)})
 }
 
 func (s *Server) joinAgent(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +176,7 @@ func (s *Server) joinAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.lastSeen[member.ID] = s.options.Now().UTC()
+	a.remoteAddress[member.ID] = connectionHost(r.RemoteAddr)
 	writeJSON(w, 200, map[string]any{"success": true, "data": member, "session": member.Session()})
 }
 
@@ -180,8 +187,16 @@ func (s *Server) authenticateAgent(r *http.Request) (agenttransport.Session, err
 	session, err := a.registry.Authenticate(r.Header.Get("X-Agent-Key"))
 	if err == nil {
 		a.lastSeen[session.NodeID] = s.options.Now().UTC()
+		a.remoteAddress[session.NodeID] = connectionHost(r.RemoteAddr)
 	}
 	return session, err
+}
+
+func connectionHost(address string) string {
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		return host
+	}
+	return address
 }
 
 type registeredAgentNode struct {
@@ -230,7 +245,7 @@ func (s *Server) agentNodeData() (map[string]any, error) {
 			return nil, err
 		}
 	}
-	return map[string]any{"nodes": nodes, "port": port, "masterWebUrl": config.PublicURL}, nil
+	return map[string]any{"nodes": nodes, "port": port, "masterWebUrl": config.PublicURL, "masterAgentUrl": config.agentURL()}, nil
 }
 
 func (s *Server) listAgentNodes(w http.ResponseWriter, r *http.Request) {

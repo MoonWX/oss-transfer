@@ -287,6 +287,9 @@ class Lifecycle:
         if expect==0 and role=='master':
             require('Login: ' in result.stdout and '--host '+("'" if self.system=='Windows' else '')+self.origin in result.stdout,
                     'Installer did not print a CLI login command for the configured listener')
+            if hasattr(self, 'credentials'):
+                require('Setup token:' not in result.stdout,
+                        'Installer reprinted a stale setup token from an initialized installation')
         return result
 
     def windows_install_diagnostics(self,role,paths,log,upgrade):
@@ -477,20 +480,21 @@ func main(){
         self.install('master',expect=1)
         require(self.cli_path.read_bytes()==old_cli,'Refusal replaced the existing CLI')
         with self.latest_release() as release_url:
-            self.install('master',release_url=release_url,replace_cli=True)
+            installed = self.install('master',release_url=release_url,replace_cli=True)
         backups=list((self.root/'master/backups').glob('*/'+('cli.exe' if self.system=='Windows' else 'cli')))
         require(len(backups)==1 and backups[0].read_bytes()==old_cli,'Existing CLI was not backed up before replacement')
         self.record('existing_cli_requires_explicit_replacement_and_has_exact_backup')
         before=self.pid('master')
         require(before>0,'Master has no service-owned PID')
-        log=self.root/'master/data/logs/service.log'
-        token=re.search(r'Setup token: ([A-Za-z0-9_-]+)',log.read_text(encoding="utf-8"))[1]
+        printed_tokens = re.findall(r'^Setup token: ([A-Za-z0-9_-]+)$', installed.stdout, re.MULTILINE)
+        require(len(printed_tokens) == 1, 'Fresh installation did not print exactly one setup token to the terminal')
+        token = printed_tokens[0]
         self.secrets.append(token)
         self.credentials={'username':'qa-admin','password':secrets.token_urlsafe(28)}
         self.secrets.append(self.credentials['password'])
         self.api('/api/setup/complete',dict(self.credentials,publicUrl=self.origin,setupToken=token))
         self.login()
-        self.record('fresh_master_service_and_setup',pid=before)
+        self.record('fresh_master_service_and_setup_with_terminal_token',pid=before)
         cli_path=self.cli_path
         cli_hash=hashlib.sha256(cli_path.read_bytes()).hexdigest()
         require(cli_hash==self.evidence['cli']['sha256'],'Installed CLI differs from the verified package')

@@ -48,8 +48,8 @@ Tasks
   task report <ID> [--output file.zip]
 
 Nodes and storage
-  node list|show|add|invite|update|remove
-  agent invite|list|show|update|remove
+  node list|show|details|network|add|invite|update|remove
+  agent invite|list|show|details|update|remove
   storage list|add|update|remove
   storage buckets|test <alias>
 
@@ -118,8 +118,8 @@ Help groups: task, task create, task import, node, agent, setup, storage, limit,
   task report <ID> [--output ファイル.zip]
 
 ノードとストレージ
-  node list|show|add|invite|update|remove
-  agent invite|list|show|update|remove
+  node list|show|details|network|add|invite|update|remove
+  agent invite|list|show|details|update|remove
   storage list|add|update|remove
   storage buckets|test <接続名>
 
@@ -378,7 +378,9 @@ JSON は WebUI API の項目を使用します。buckets の例:
 Usage: oss-transfer-cli node <subcommand> [arguments]
 
   list                            Node configuration and connection status
-  show <node>                     Node details
+  show <node>                     Node runtime status
+  details <node>                  Host, interface IPs and mounted directories
+  network [--public-url URL] [--agent-url URL]
   add <node> [--label name]        Generate Agent join commands
   invite [--address node] [--label name]
   update <node> [--address new-address] [--label name]
@@ -389,14 +391,17 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   oss-transfer-cli node remove 10.0.0.2 --yes
 
 Add nodes with agent invite. Names, IPv4 and IPv6 are accepted; Agent detects an omitted address.
-Go Agent addresses cannot be edited after registration; join again when replacing a node.
+Agent addresses cannot be edited after registration; join again when replacing a node.
+node network reads addresses without flags; --agent-url '' uses the browser address. Changes apply to new enrollments.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
 Use --json for queue/raw rate data; use limit list for limits.
 `, `実行ノード
 使い方: oss-transfer-cli node <サブコマンド> [引数]
 
   list                            ノード設定と接続状態を表示
-  show <ノード>                   詳細を表示
+  show <ノード>                   稼働状態を表示
+  details <ノード>                ホスト、インターフェース IP、マウントを表示
+  network [--public-url URL] [--agent-url URL]
   add <ノード> [--label 名前]      Agent 参加コマンドを生成
   invite [--address ノード] [--label 名前]
   update <ノード> [--address 新アドレス] [--label 名前]
@@ -407,7 +412,8 @@ Use --json for queue/raw rate data; use limit list for limits.
   oss-transfer-cli node remove 10.0.0.2 --yes
 
 追加には agent invite を使います。名前、IPv4、IPv6 に対応し、省略時は Agent が自動判定します。
-登録済み Go Agent のアドレスは直接変更できません。置き換え時は再参加してください。
+登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
+node network は引数なしでアドレスを表示し、--agent-url '' でブラウザー用のアドレスに戻します。変更は新規参加に適用されます。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。
 キューや速度の生データは --json、上限は limit list で確認できます。
 `},
@@ -417,6 +423,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   invite [--label name] [--address node]
   list                            List registered Agents
   show <node>                     Connection, queues, roots and limits
+  details <node>                  Host, interface IPs and mounted directories
   update <node> [--label name] [--local-root path ...]
   update <node> --clear-local-roots
   remove <node> --yes              Revoke registration
@@ -434,6 +441,7 @@ Invitations expire after 30 minutes and can be used once. Run the native install
   invite [--label 名前] [--address ノード]
   list                            登録済み Agent を表示
   show <ノード>                   接続、キュー、ルート、制限を表示
+  details <ノード>                ホスト、インターフェース IP、マウントを表示
   update <ノード> [--label 名前] [--local-root パス ...]
   update <ノード> --clear-local-roots
   remove <ノード> --yes            登録を解除
@@ -450,12 +458,13 @@ Invitations expire after 30 minutes and can be used once. Run the native install
 Usage: oss-transfer-cli setup status|complete
 
   status                          Show whether setup is complete
-  complete --username NAME --public-url URL
+  complete --username NAME --public-url URL [--agent-url URL]
            --setup-token-env NAME|--setup-token-file FILE|--setup-token-stdin
            --password-env NAME|--password-file FILE|--password-stdin
 
-The setup token is printed in the Master's first startup log. Choose one source per secret;
-password and token cannot both use stdin. --public-url must be reachable by browsers and Agents.
+The setup token is printed when installation finishes. Choose one source per secret;
+password and token cannot both use stdin. --public-url is the browser address.
+Use --agent-url for a private network address; if omitted, Agents use --public-url.
 
   oss-transfer-cli --host http://10.0.0.10:1685 setup status
   oss-transfer-cli --host http://10.0.0.10:1685 setup complete --username admin \
@@ -465,12 +474,13 @@ password and token cannot both use stdin. --public-url must be reachable by brow
 使い方: oss-transfer-cli setup status|complete
 
   status                          設定の完了状態を表示
-  complete --username ユーザー名 --public-url URL
+  complete --username ユーザー名 --public-url URL [--agent-url URL]
            --setup-token-env NAME|--setup-token-file ファイル|--setup-token-stdin
            --password-env NAME|--password-file ファイル|--password-stdin
 
-設定トークンは Master の初回起動ログに出力されます。入力元はそれぞれ 1 つ選択し、
-パスワードとトークンの両方に標準入力を使わないでください。--public-url はブラウザーと Agent が接続できる URL です。
+設定トークンはインストール完了時にターミナルに表示されます。入力元はそれぞれ 1 つ選択し、
+パスワードとトークンの両方に標準入力を使わないでください。--public-url はブラウザー用の URL です。
+--agent-url でプライベートネットワークの URL を指定できます。省略時は --public-url を使用します。
 
   oss-transfer-cli --host http://10.0.0.10:1685 setup status
   oss-transfer-cli --host http://10.0.0.10:1685 setup complete --username admin \

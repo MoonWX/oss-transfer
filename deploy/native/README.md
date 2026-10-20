@@ -21,7 +21,7 @@ On Linux, install the Master with:
 sudo bash install.sh --role master --yes
 ```
 
-The Master serves the WebUI and schedules tasks. Open its URL on port `1685`, enter the setup token from the service log, and create an administrator. Set the public URL to an address reachable by browsers and Agent hosts. Use `--port 1785` during installation if port `1685` is already in use.
+The Master serves the WebUI and schedules tasks. Open its URL on port `1685`, enter the setup token printed by the installer, and create an administrator. Set the web address for browsers; the Agent connection address can use the Master's private IP. Use `--port 1785` during installation if port `1685` is already in use.
 
 On macOS, the same command installs a system service. To run it under your logged-in account instead:
 

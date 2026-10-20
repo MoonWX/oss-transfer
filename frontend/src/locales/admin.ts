@@ -1,4 +1,45 @@
 export const adminMessages: Record<string, { en: string; ja: string }> = {
+  保存: { en: "Save", ja: "保存" },
+  权限: { en: "Access", ja: "アクセス" },
+  只读: { en: "Read only", ja: "読み取り専用" },
+  浏览器访问地址: { en: "Web address", ja: "ブラウザー用アドレス" },
+  "Agent 连接地址": { en: "Agent connection address", ja: "Agent 接続先" },
+  "留空使用浏览器地址。同一 VPC 可填写主节点内网地址。": {
+    en: "Defaults to the web address. Use the Master's private address within the same VPC.",
+    ja: "空欄の場合はブラウザー用アドレスを使用します。同じ VPC 内では Master のプライベートアドレスを指定できます。",
+  },
+  连接地址: { en: "Connection addresses", ja: "接続先の設定" },
+  "连接地址已保存。": {
+    en: "Connection addresses saved.",
+    ja: "接続先を保存しました。",
+  },
+  "用于新节点的加入指令。已加入节点继续使用原连接地址。": {
+    en: "Applies to new node invitations. Existing Agents keep their current connection address.",
+    ja: "新しいノードの参加コマンドに適用されます。参加済みの Agent は現在の接続先を維持します。",
+  },
+  "请输入节点名称。": {
+    en: "Enter a node name.",
+    ja: "ノード名を入力してください。",
+  },
+  节点详情: { en: "Node details", ja: "ノードの詳細" },
+  "节点未返回完整信息。": {
+    en: "The node did not return complete details.",
+    ja: "ノードからすべての情報を取得できませんでした。",
+  },
+  主机名: { en: "Hostname", ja: "ホスト名" },
+  "系统 / 架构": { en: "OS / architecture", ja: "OS / アーキテクチャ" },
+  "网卡 IP": { en: "Interface IPs", ja: "インターフェース IP" },
+  "连接来源 IP": { en: "Connection source IP", ja: "接続元 IP" },
+  最后连接: { en: "Last connected", ja: "最終接続" },
+  "内部 ID": { en: "Internal ID", ja: "内部 ID" },
+  "连接来源为 Master 观测到的地址，可能是内网、NAT 或代理地址。": {
+    en: "The source address is observed by the Master and may be a private, NAT or proxy address.",
+    ja: "接続元は Master が確認したアドレスです。プライベート、NAT、プロキシのアドレスの場合があります。",
+  },
+  挂载目录: { en: "Mounts", ja: "マウント" },
+  目录: { en: "Directory", ja: "ディレクトリ" },
+  文件系统: { en: "Filesystem", ja: "ファイルシステム" },
+  读写: { en: "Read/write", ja: "読み書き" },
   本地文件系统: {
     en: "Local filesystem",
     ja: "ローカルファイルシステム",

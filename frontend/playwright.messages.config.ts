@@ -7,6 +7,7 @@ export default defineConfig({
     "i18n-catalog.spec.ts",
     "api-auth.spec.ts",
     "exception-records.spec.ts",
+    "build-age.spec.ts",
   ],
   workers: 1,
   reporter: "list",

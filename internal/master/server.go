@@ -22,6 +22,7 @@ import (
 type Configuration struct {
 	Configured bool      `json:"configured"`
 	PublicURL  string    `json:"publicUrl"`
+	AgentURL   string    `json:"agentUrl,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
 type User struct {
@@ -169,6 +170,7 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 		Username   string `json:"username"`
 		Password   string `json:"password"`
 		PublicURL  string `json:"publicUrl"`
+		AgentURL   string `json:"agentUrl"`
 		SetupToken string `json:"setupToken"`
 	}
 	if !readJSON(w, r, &request) {
@@ -193,9 +195,12 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Invalid username")
 		return
 	}
-	u, err := url.Parse(request.PublicURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if !validMasterOrigin(request.PublicURL) {
 		fail(w, 400, "Public URL must be an HTTP or HTTPS origin")
+		return
+	}
+	if request.AgentURL != "" && !validMasterOrigin(request.AgentURL) {
+		fail(w, 400, "Agent URL must be an HTTP or HTTPS origin")
 		return
 	}
 	if !s.acquirePasswordSlot(w, r) {
@@ -222,7 +227,7 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Put("users", request.Username, User{Username: request.Username, PasswordHash: hash, DisplayName: request.Username, Role: "admin", Revision: 1}); err != nil {
 			return err
 		}
-		return tx.Put("system", "configuration", Configuration{Configured: true, PublicURL: strings.TrimRight(request.PublicURL, "/"), CreatedAt: s.options.Now().UTC()})
+		return tx.Put("system", "configuration", Configuration{Configured: true, PublicURL: strings.TrimRight(request.PublicURL, "/"), AgentURL: strings.TrimRight(request.AgentURL, "/"), CreatedAt: s.options.Now().UTC()})
 	})
 	if errors.Is(err, already) {
 		fail(w, 409, "Setup is already complete")

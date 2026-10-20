@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	f.master.options.AgentArtifactBase = "https://downloads.example/osstransfer"
 	f.master.options.AgentArtifactVersion = "v4.1.0"
-	f.master.options.AgentDockerImage = "moonwx/osstransfer:v4.1.0"
+	f.master.options.AgentDockerImage = "moonwx/osstransfer:4.1.0"
 	invite, err := f.master.agents.registry.Invite("install-test", "Installer test")
 	if err != nil {
 		t.Fatal(err)
@@ -28,12 +29,17 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		t.Fatal("bootstrap commands missing")
 	}
 	windows := data["windowsCommand"].(string)
-	if !strings.Contains(windows, "Invoke-WebRequest -ErrorAction Stop") || !strings.Contains(windows, "[guid]::NewGuid()") || strings.Contains(windows, "./Join-Agent.ps1") {
+	if !strings.Contains(windows, "Invoke-RestMethod -ErrorAction Stop") || !strings.Contains(windows, "[scriptblock]::Create") || strings.Contains(windows, "./Join-Agent.ps1") {
 		t.Fatal("Windows invitation can reuse a stale script after download failure")
 	}
-	docker := strings.Split(data["dockerCommand"].(string), "&&\n")
-	if len(docker) != 3 || !strings.Contains(docker[1], "--enroll-only") || strings.Contains(docker[2], invite.Token) {
-		t.Fatal("join token leaked into long-running container")
+	docker := data["dockerCommand"].(string)
+	if !strings.Contains(docker, "--method compose") || !strings.Contains(docker, "/api/agents/bootstrap/"+invite.Token) || !strings.Contains(docker, "pipefail") {
+		t.Fatal("Docker enrollment must use the unified installer")
+	}
+	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
+	custom := f.master.agentInvitationData("https://master.example:1685", invite)
+	if !strings.Contains(custom["dockerCommand"].(string), `--image "$2"`) || !strings.HasSuffix(custom["dockerCommand"].(string), "'registry.example/transfer:custom'") {
+		t.Fatal("configured container registry was not preserved")
 	}
 	link := f.http.URL + "/api/agents/bootstrap/" + invite.Token
 	for _, suffix := range []string{"", "?platform=windows"} {
@@ -102,12 +108,14 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	f.master.options.AgentArtifactBase = officialAgentArtifactBase
 	f.master.options.AgentArtifactVersion = "v4.1.6"
+	f.master.options.AgentDockerImage = "moonwx/osstransfer:4.1.6"
 	for _, tc := range []struct {
-		name, country, fallbackCountry, failSource, source string
-		wantError, wantIPInfo                              bool
+		name, country, fallbackCountry, failSource, source, method string
+		wantError, wantIPInfo, failBootstrap                       bool
 	}{
 		{name: "mainland", country: "CN", source: "jdoss"},
 		{name: "international", country: "US", source: "github"},
+		{name: "compose", country: "CN", source: "jdoss", method: "compose"},
 		{name: "hong-kong", country: "HK", source: "github"},
 		{name: "secondary-location", fallbackCountry: "CN", source: "jdoss", wantIPInfo: true},
 		{name: "unknown-location", source: "github", wantIPInfo: true},
@@ -115,6 +123,7 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 		{name: "github-unreachable", country: "US", failSource: "github", source: "jdoss"},
 		{name: "oss-unreachable", country: "CN", failSource: "jdoss", source: "github"},
 		{name: "both-unreachable", country: "CN", failSource: "both", wantError: true},
+		{name: "expired-invitation", failBootstrap: true, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			invite, err := f.master.agents.registry.Invite("regional-bootstrap-"+tc.name, "")
@@ -138,11 +147,15 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -o) out=$2; shift 2 ;;
     --connect-timeout|--max-time) shift 2 ;;
-    https://*) url=$1; shift ;;
+    https://*|http://*) url=$1; shift ;;
     *) shift ;;
   esac
 done
 [[ -z "${TRANSFER_JOIN_TOKEN:-}" ]]
+if [[ "$url" == "$BOOTSTRAP_URL" ]]; then
+  [[ "$MOCK_FAIL_BOOTSTRAP" != true ]] || exit 22
+  cat "$BOOTSTRAP_SCRIPT"; exit
+fi
 printf '%s\n' "$url" >> "$BOOTSTRAP_LOG"
 case "$url" in
   https://www.cloudflare.com/cdn-cgi/trace) printf 'ip=203.0.113.1\nloc=%s\n' "$MOCK_COUNTRY" ;;
@@ -153,14 +166,21 @@ case "$url" in
 esac
 `
 			installer := "#!/usr/bin/env bash\nset -eu\nprintf '%s\\n' \"$@\" > \"$BOOTSTRAP_ARGS\"\ncat > \"$BOOTSTRAP_TOKEN\"\n"
-			for name, contents := range map[string]string{"curl": stub, "installer.sh": installer, "join.sh": string(body)} {
+			for name, contents := range map[string]string{"curl": stub, "sudo": "#!/usr/bin/env bash\nprintf 'sudo must not be needed by the bootstrap\\n' >&2\nexit 91\n", "installer.sh": installer, "join.sh": string(body)} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			command := exec.Command("bash", filepath.Join(dir, "join.sh"))
+			invitation := f.master.agentInvitationData(f.http.URL, invite)
+			commandText := invitation["traditionalCommand"].(string)
+			if tc.method != "" {
+				commandText = invitation["dockerCommand"].(string)
+			}
+			command := exec.Command("bash", "-c", commandText)
 			command.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TRANSFER_JOIN_TOKEN=", "MOCK_COUNTRY="+tc.country, "MOCK_FALLBACK_COUNTRY="+tc.fallbackCountry,
+				"MOCK_FAIL_BOOTSTRAP="+strconv.FormatBool(tc.failBootstrap),
+				"BOOTSTRAP_URL="+invitation["joinUrl"].(string), "BOOTSTRAP_SCRIPT="+filepath.Join(dir, "join.sh"),
 				"MOCK_FAIL_SOURCE="+tc.failSource, "BOOTSTRAP_LOG="+filepath.Join(dir, "requests"),
 				"BOOTSTRAP_STUB="+filepath.Join(dir, "installer.sh"), "BOOTSTRAP_ARGS="+filepath.Join(dir, "args"),
 				"BOOTSTRAP_TOKEN="+filepath.Join(dir, "token"))
@@ -184,6 +204,9 @@ esac
 			}
 			if argsErr != nil || !strings.Contains(string(args), "--source\nauto\n--version\nv4.1.6\n") || strings.Contains(string(args), "--release-url") {
 				t.Fatal("source/version not passed to installer", string(args), argsErr)
+			}
+			if tc.method != "" && !strings.HasSuffix(string(args), "--method\n"+tc.method+"\n") {
+				t.Fatal("selected deployment method did not reach unified installer", string(args))
 			}
 			requestLines := strings.Split(strings.TrimSpace(string(requests)), "\n")
 			lastURL := requestLines[len(requestLines)-1]

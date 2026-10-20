@@ -54,18 +54,20 @@ export default function AgentInvitationDialog({
   useI18n();
   const notify = useNotify();
   const [label, setLabel] = useState("");
-  const [address, setAddress] = useState("");
   const [invitation, setInvitation] = useState<AgentInvitation | null>(null);
   const [tab, setTab] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function generate() {
+    if (!label.trim()) {
+      setError(t("请输入节点名称。"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       const next = await createAgentInvitation({
         label: label.trim(),
-        address: address.trim(),
       });
       if (
         !next.joinUrl ||
@@ -95,7 +97,9 @@ export default function AgentInvitationDialog({
   }
   const methods = [
     {
-      label: invitation?.nativeAgent ? "Linux / macOS / FreeBSD" : t("传统部署"),
+      label: invitation?.nativeAgent
+        ? "Linux / macOS / FreeBSD"
+        : t("传统部署"),
       command: invitation?.traditionalCommand,
     },
     { label: "Windows", command: invitation?.windowsCommand },
@@ -113,7 +117,6 @@ export default function AgentInvitationDialog({
     } => !!item.command,
   );
   const command = methods[tab]?.command || "";
-  const showLink = invitation?.nativeAgent?.available !== false;
   const expiry = invitation ? new Date(invitation.expiresAt) : null;
   return (
     <Dialog
@@ -131,19 +134,13 @@ export default function AgentInvitationDialog({
             <>
               <TextField
                 label={t("节点名称")}
+                required
+                autoFocus
                 fullWidth
                 value={label}
                 disabled={saving}
                 slotProps={{ htmlInput: { maxLength: 80 } }}
                 onChange={(event) => setLabel(event.target.value)}
-              />
-              <TextField
-                label={t("节点标识（可选）")}
-                fullWidth
-                value={address}
-                disabled={saving}
-                helperText={t("留空时由 Agent 自动识别。")}
-                onChange={(event) => setAddress(event.target.value)}
               />
             </>
           ) : (
@@ -151,26 +148,6 @@ export default function AgentInvitationDialog({
               <Typography variant="body2" color="text.secondary">
                 {t("在新节点执行以下任一指令，Agent 将自动加入集群。")}
               </Typography>
-              {showLink && (
-                <Stack spacing={1}>
-                  <TextField
-                    label={t("加入链接")}
-                    fullWidth
-                    multiline
-                    minRows={2}
-                    value={invitation.joinUrl}
-                    slotProps={{ input: { readOnly: true } }}
-                  />
-                  <Button
-                    size="small"
-                    startIcon={<ContentCopyRounded />}
-                    sx={{ alignSelf: "flex-end" }}
-                    onClick={() => void copy(invitation.joinUrl)}
-                  >
-                    {t("复制链接")}
-                  </Button>
-                </Stack>
-              )}
               <Box sx={{ minWidth: 0 }}>
                 <Tabs
                   value={tab}
@@ -200,7 +177,7 @@ export default function AgentInvitationDialog({
                   })}
                   fullWidth
                   multiline
-                  minRows={4}
+                  minRows={2}
                   value={command}
                   slotProps={{
                     input: {

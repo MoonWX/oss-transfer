@@ -24,7 +24,7 @@ _oss_transfer_cli_completion() {
         if ((skip)); then skip=0; continue; fi
         case "$word" in
             --*=*) continue ;;
-            --lang|--host|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
+            --lang|--host|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
                 skip=1; continue ;;
             -*) continue ;;
         esac
@@ -89,15 +89,16 @@ _oss_transfer_cli_completion() {
             esac ;;
         node)
             case "$action" in
-                "") choices="list show add invite update remove" ;;
+                "") choices="list show details network add invite update remove" ;;
                 add) flags="--label" ;;
+                network) flags="--public-url --agent-url" ;;
                 invite) flags="--label --address" ;;
                 update) flags="--label --address" ;;
                 remove) flags="--yes" ;;
             esac ;;
         agent)
             case "$action" in
-                "") choices="invite list show update remove" ;;
+                "") choices="invite list show details update remove" ;;
                 invite) flags="--label --address" ;;
                 update) flags="--label --local-root --clear-local-roots" ;;
                 remove) flags="--yes" ;;
@@ -105,7 +106,7 @@ _oss_transfer_cli_completion() {
         setup)
             case "$action" in
                 "") choices="status complete" ;;
-                complete) flags="--username --public-url --setup-token-env --setup-token-file --setup-token-stdin --password-env --password-file --password-stdin" ;;
+                complete) flags="--username --public-url --agent-url --setup-token-env --setup-token-file --setup-token-stdin --password-env --password-file --password-stdin" ;;
             esac ;;
         storage)
             case "$action" in

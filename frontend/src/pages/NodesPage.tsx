@@ -56,6 +56,8 @@ import {
 } from "../lib/refreshPreference";
 import RefreshControls from "../components/RefreshControls";
 import AgentInvitationDialog from "../components/AgentInvitationDialog";
+import NodeConnectionSettings from "../components/NodeConnectionSettings";
+import NodeDetailsDialog from "../components/NodeDetailsDialog";
 import { EmptyState, PageHeader, formatNumber } from "../components/Common";
 import {
   removeNode,
@@ -63,6 +65,7 @@ import {
   type NodeRegistry,
   type NodeChange,
   type RegisteredNode,
+  nodeName,
 } from "../lib/nodeRegistry";
 const queues = [
   { key: "list", label: "对象扫描" },
@@ -108,6 +111,8 @@ export default function NodesPage() {
   const [nodeSaving, setNodeSaving] = useState(false);
   const [nodeError, setNodeError] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [networkOpen, setNetworkOpen] = useState(false);
+  const [detailNode, setDetailNode] = useState<RegisteredNode | null>(null);
   const knownWorkers = workers.data
     ? [
         ...new Set([
@@ -271,6 +276,9 @@ export default function NodesPage() {
             useFlexGap
             alignItems="center"
           >
+            <Button onClick={() => setNetworkOpen(true)}>
+              {t("连接地址")}
+            </Button>
             <Button
               variant="outlined"
               startIcon={<AddRounded />}
@@ -459,14 +467,16 @@ export default function NodesPage() {
                     sx={{ p: 2.5 }}
                   >
                     <Box>
-                      <Typography variant="h6" sx={{ fontFamily: "monospace" }}>
-                        {ip}
+                      <Typography
+                        variant="h6"
+                        sx={{ overflowWrap: "anywhere" }}
+                      >
+                        {nodeName(registered ?? { address: ip, label: "" })}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        {registered?.label ||
-                          (registered?.master
-                            ? t("主节点 · 执行节点")
-                            : t("执行节点"))}
+                        {registered?.master
+                          ? t("主节点 · 执行节点")
+                          : t("执行节点")}
                       </Typography>
                       {registered?.agent &&
                         !registered.online &&
@@ -508,6 +518,14 @@ export default function NodesPage() {
                   </Stack>
                   {registered && (
                     <Stack direction="row" spacing={1} sx={{ px: 2.5, pb: 2 }}>
+                      {registered.agent && (
+                        <Button
+                          size="small"
+                          onClick={() => setDetailNode(registered)}
+                        >
+                          {t("节点详情")}
+                        </Button>
+                      )}
                       <Button
                         size="small"
                         startIcon={<EditOutlined />}
@@ -775,6 +793,18 @@ export default function NodesPage() {
       {inviteOpen && (
         <AgentInvitationDialog open onClose={() => setInviteOpen(false)} />
       )}
+      {networkOpen && (
+        <NodeConnectionSettings
+          onClose={() => setNetworkOpen(false)}
+          onSaved={() => void registry.refresh()}
+        />
+      )}
+      {detailNode && (
+        <NodeDetailsDialog
+          node={detailNode}
+          onClose={() => setDetailNode(null)}
+        />
+      )}
       <Dialog
         open={nodeEdit !== null}
         onClose={() => !nodeSaving && setNodeEdit(null)}
@@ -787,25 +817,28 @@ export default function NodesPage() {
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
-            <TextField
-              label={nodeEdit?.agent ? t("节点标识") : t("节点地址")}
-              required
-              fullWidth
-              value={nodeEdit?.address ?? ""}
-              disabled={nodeSaving || !!nodeEdit?.master || !!nodeEdit?.agent}
-              onChange={(event) =>
-                setNodeEdit(
-                  (value) => value && { ...value, address: event.target.value },
-                )
-              }
-              helperText={
-                nodeEdit?.agent
-                  ? undefined
-                  : t("服务端口：{value1}", {
-                      value1: registry.data?.data?.port ?? t("使用集群配置"),
-                    })
-              }
-            />
+            {!nodeEdit?.agent && (
+              <TextField
+                label={nodeEdit?.agent ? t("节点标识") : t("节点地址")}
+                required
+                fullWidth
+                value={nodeEdit?.address ?? ""}
+                disabled={nodeSaving || !!nodeEdit?.master || !!nodeEdit?.agent}
+                onChange={(event) =>
+                  setNodeEdit(
+                    (value) =>
+                      value && { ...value, address: event.target.value },
+                  )
+                }
+                helperText={
+                  nodeEdit?.agent
+                    ? undefined
+                    : t("服务端口：{value1}", {
+                        value1: registry.data?.data?.port ?? t("使用集群配置"),
+                      })
+                }
+              />
+            )}
             <TextField
               label={t("节点名称")}
               fullWidth
@@ -867,7 +900,9 @@ export default function NodesPage() {
         maxWidth="sm"
       >
         <DialogTitle>
-          {t("移除节点 {node}", { node: nodeDelete?.address || "" })}
+          {t("移除节点 {node}", {
+            node: nodeDelete ? nodeName(nodeDelete) : "",
+          })}
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2}>

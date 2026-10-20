@@ -15,7 +15,7 @@ docker compose up -d master &&
 docker compose logs master
 ```
 
-Open port `1685` on this host in your browser (`http://localhost:1685` when running locally). Enter the setup token from the log and create the administrator account. Set the Master URL to an address reachable by your Agents.
+Open port `1685` on this host in your browser (`http://localhost:1685` when running locally). Enter the setup token from the log and create the administrator account. If Agents connect over a private network, set **Agent connection address** to the Master's private URL.
 
 The `.env` file sets the image, published port and Agent's host directory:
 
@@ -27,22 +27,22 @@ TRANSFER_LOCAL_ROOT=./transfer-files
 
 ## Add an Agent
 
-In **Execution nodes → Add node**, create an invitation. To install a native Agent on another host, run the native installation command shown there. The Agent connects to the Master URL configured during setup.
+In **Execution nodes → Add node**, enter a node name and generate an invitation. Run the command from the **Docker** tab on the Agent host. It uses the installer to create a Compose service and join the cluster. The native installation command is available in the same dialog.
 
-To run an Agent in the same Compose project, create its host directory first. The container runs as UID/GID `65532`; that account needs access to the files being transferred. For the default directory:
+To manage an Agent in the same Compose project as the Master, create its host directory first. The container runs as UID/GID `65532`; that account needs access to the files being transferred. For the default directory:
 
 ```sh
 sudo install -d -o 65532 -g 65532 -m 0750 ./transfer-files
 ```
 
-Copy the invitation URL from the console, then run these commands in Bash. Enrollment saves the Agent's identity in its data volume:
+With the CLI logged in to the Master, run `oss-transfer-cli agent invite --label storage-01 --json`. Enter its `inviteToken` at the prompt below. Enrollment saves the Agent's identity in its data volume:
 
 ```bash
-read -r -s -p 'Agent invitation URL: ' JOIN_URL; printf '\n'
-export OSS_TRANSFER_JOIN_TOKEN="${JOIN_URL##*/}"
+read -r -s -p 'Agent invitation token: ' OSS_TRANSFER_JOIN_TOKEN; printf '\n'
+export OSS_TRANSFER_JOIN_TOKEN
 docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent \
   oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
-unset OSS_TRANSFER_JOIN_TOKEN JOIN_URL
+unset OSS_TRANSFER_JOIN_TOKEN
 docker compose --profile agent up -d agent
 ```
 

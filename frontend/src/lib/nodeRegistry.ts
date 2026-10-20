@@ -1,6 +1,7 @@
 import { api } from "./api";
 
 export type RegisteredNode = {
+  id?: string;
   address: string;
   label: string;
   master: boolean;
@@ -12,7 +13,16 @@ export type NodeRegistry = {
   nodes: RegisteredNode[];
   port: number;
   masterWebUrl: string;
+  masterAgentUrl?: string;
 };
+export function nodeName(node: Pick<RegisteredNode, "address" | "label">) {
+  return (
+    node.label ||
+    (/^[A-Za-z0-9_-]{40,}$/.test(node.address)
+      ? `Agent ${node.address.slice(0, 8)}`
+      : node.address)
+  );
+}
 export type NodeChange = {
   address: string;
   label: string;

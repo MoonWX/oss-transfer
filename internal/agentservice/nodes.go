@@ -42,7 +42,7 @@ func nodeResponse(value any, err error) (agenttransport.Response, error) {
 
 func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Command) (agenttransport.Response, bool, error) {
 	switch command.Operation {
-	case "node_status", "node_config", "node_config_set", "node_rate_set", "node_rate_history", "node_rate_detail":
+	case "node_status", "node_details", "node_config", "node_config_set", "node_rate_set", "node_rate_history", "node_rate_detail":
 	default:
 		return agenttransport.Response{}, false, nil
 	}
@@ -57,6 +57,10 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 		return respond(nil, nodecontrol.ErrInvalid)
 	}
 	switch command.Operation {
+	case "node_details":
+		details := hostDetails()
+		details["advertisedLocalRoots"] = s.Nodes.Config().AdvertisedLocalRoots
+		return respond(details, nil)
 	case "node_status":
 		var request struct{}
 		if err := decode(command.Payload, &request); err != nil {

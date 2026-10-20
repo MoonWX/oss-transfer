@@ -119,8 +119,10 @@ test("Agent address is immutable while its name remains editable", async ({
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await expect(
     dialog.getByRole("textbox", { name: "节点标识", exact: true }),
-  ).toBeDisabled();
-  await dialog.getByLabel("节点名称", { exact: true }).fill("Archive Agent");
+  ).toHaveCount(0);
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Archive Agent");
   await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
   await expect(dialog).toBeHidden();
   expect(state.writes[0].body).toEqual({
@@ -135,17 +137,17 @@ test("node invitation defaults to native installation and keeps Docker available
   const state = await setup(page);
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
-  await expect(dialog.getByRole("textbox")).toHaveCount(2);
   await dialog
-    .getByLabel("节点标识（可选）", { exact: true })
-    .fill("10.0.1.14");
-  await dialog.getByLabel("节点名称", { exact: true }).fill("新增节点");
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Test Agent");
+  await expect(dialog.getByRole("textbox")).toHaveCount(1);
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("新增节点");
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
-  await expect(dialog.getByLabel("加入链接", { exact: true })).toHaveValue(
-    "https://transfer.example/agent/join/test-once",
-  );
+  await expect(dialog.getByLabel("加入链接", { exact: true })).toHaveCount(0);
   await expect(
     dialog.getByRole("tab", { name: "传统部署", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
@@ -162,7 +164,7 @@ test("node invitation defaults to native installation and keeps Docker available
   await expect(dialog.getByText(/加入凭证仅可使用一次/)).toBeVisible();
   expect(state.invitations).toEqual([
     {
-      body: { address: "10.0.1.14", label: "新增节点" },
+      body: { label: "新增节点" },
       internalToken: undefined,
     },
   ]);
@@ -172,7 +174,9 @@ test("node invitation defaults to native installation and keeps Docker available
   ).toHaveCount(2);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
-  await expect(dialog.getByLabel("节点名称", { exact: true })).toHaveValue("");
+  await expect(
+    dialog.getByRole("textbox", { name: "节点名称", exact: true }),
+  ).toHaveValue("");
   await expect(dialog.getByLabel("加入链接", { exact: true })).toHaveCount(0);
 });
 
@@ -191,10 +195,13 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
   await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Test Agent");
+  await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
   await expect(dialog.getByRole("tab")).toHaveText([
-    "Linux / macOS",
+    "Linux / macOS / FreeBSD",
     "Windows",
     "直接运行",
     "Docker",
@@ -204,7 +211,7 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     "true",
   );
   await expect(
-    dialog.getByLabel("Linux / macOS 指令", { exact: true }),
+    dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
   ).toHaveValue(/agent-install.sh/);
   await dialog.getByRole("tab", { name: "Windows", exact: true }).click();
   await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
@@ -215,16 +222,21 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     nativeCommand,
   );
   await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
-  await dialog.getByRole("tab", { name: "Linux / macOS", exact: true }).click();
+  await dialog
+    .getByRole("tab", { name: "Linux / macOS / FreeBSD", exact: true })
+    .click();
   await expect(
-    dialog.getByLabel("Linux / macOS 指令", { exact: true }),
+    dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
   ).toHaveValue(/agent-install.sh/);
   expect(state.invitations).toHaveLength(1);
   expect(state.writes).toHaveLength(0);
 });
 
 for (const [method, commands] of [
-  ["Linux / macOS", { traditionalCommand: "native-install --token test-once" }],
+  [
+    "Linux / macOS / FreeBSD",
+    { traditionalCommand: "native-install --token test-once" },
+  ],
   ["Windows", { windowsCommand: "Install.ps1 -Token test-once" }],
   ["直接运行", { nativeCommand: "./oss-transfer-agent --token test-once" }],
 ] as const) {
@@ -239,6 +251,9 @@ for (const [method, commands] of [
     });
     await page.getByRole("button", { name: "添加节点", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+    await dialog
+      .getByRole("textbox", { name: "节点名称", exact: true })
+      .fill("Test Agent");
     await dialog
       .getByRole("button", { name: "生成加入指令", exact: true })
       .click();
@@ -261,20 +276,27 @@ test("invitation generation supports automatic address and preserves errors", as
   state.reject("无法生成加入链接，请检查主节点地址");
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
-  await dialog.getByLabel("节点名称", { exact: true }).fill("Agent 1");
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Test Agent");
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Agent 1");
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
   await expect(dialog.getByRole("alert")).toContainText("无法生成加入链接");
-  await expect(dialog.getByLabel("节点名称", { exact: true })).toHaveValue(
-    "Agent 1",
-  );
+  await expect(
+    dialog.getByRole("textbox", { name: "节点名称", exact: true }),
+  ).toHaveValue("Agent 1");
   state.reject("");
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
-  await expect(dialog.getByLabel("加入链接", { exact: true })).toBeVisible();
-  expect(state.invitations[1].body).toEqual({ address: "", label: "Agent 1" });
+  await expect(
+    dialog.getByLabel("传统部署 指令", { exact: true }),
+  ).toBeVisible();
+  expect(state.invitations[1].body).toEqual({ label: "Agent 1" });
 });
 
 test("Agent invitation dialog fits mobile screens and copies using HTTP fallback", async ({
@@ -300,13 +322,15 @@ test("Agent invitation dialog fits mobile screens and copies using HTTP fallback
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
   await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Test Agent");
+  await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
-  await dialog.getByRole("button", { name: "复制链接", exact: true }).click();
   await dialog.getByRole("button", { name: "复制指令", exact: true }).click();
   const copies = await page.evaluate(() => (window as any).copiedTexts);
-  expect(copies[0]).toBe("https://transfer.example/agent/join/test-once");
-  expect(copies[1]).toContain("agent-install.sh");
+  expect(copies).toHaveLength(1);
+  expect(copies[0]).toContain("agent-install.sh");
   const bounds = await dialog.boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
@@ -331,7 +355,9 @@ test("master address cannot be changed while its label can be saved", async ({
   ).toBeDisabled();
   await expect(dialog.getByRole("textbox")).toHaveCount(2);
   await expect(dialog.getByText(/展示目录|访问白名单/)).toHaveCount(0);
-  await dialog.getByLabel("节点名称", { exact: true }).fill("主控节点");
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("主控节点");
   await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(state.writes[0]).toEqual({
@@ -354,7 +380,7 @@ test("node removal requires confirmation and retains inaccessible or referenced 
   ).toHaveCount(1);
   await page.getByRole("button", { name: "移除节点", exact: true }).click();
   const dialog = page.getByRole("dialog", {
-    name: "移除节点 10.0.1.13",
+    name: "移除节点 数据节点",
     exact: true,
   });
   await expect(
@@ -401,7 +427,9 @@ test("worker address and name remain editable without sending display directorie
   await dialog
     .getByRole("textbox", { name: "节点地址", exact: true })
     .fill("10.0.1.14");
-  await dialog.getByLabel("节点名称", { exact: true }).fill("归档节点");
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("归档节点");
   await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
   await expect(dialog).toBeHidden();
   expect(state.writes[0]).toEqual({

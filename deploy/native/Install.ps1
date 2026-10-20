@@ -375,6 +375,10 @@ function Stop-OwnedService {
     if ($current -and $current.Status -ne 'Stopped') { Stop-Service -Name $ServiceName; $current.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(50)) }
 }
 function Prepare-Start {
+    $script:startupLogLines = 0
+    if (Test-Path -LiteralPath $script:logFile -PathType Leaf) {
+        $script:startupLogLines = (Get-Content -LiteralPath $script:logFile | Measure-Object).Count
+    }
     Protect-Directory (Join-Path $DataDir 'runtime')
     $bytes = New-Object byte[] 32
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -395,6 +399,17 @@ function Wait-Ready {
         Start-Sleep -Seconds 1
     }
     throw 'Service did not confirm this startup before the timeout.'
+}
+function Show-SetupToken {
+    if ($Role -ne 'master' -or -not (Test-Path -LiteralPath $script:logFile -PathType Leaf)) { return }
+    $index = 0
+    $token = $null
+    # Only inspect this launch, not the old token retained after initialization.
+    Get-Content -LiteralPath $script:logFile | ForEach-Object {
+        $index++
+        if ($index -gt $script:startupLogLines -and $_ -cmatch '^Open the console to complete setup\. Setup token: ([A-Za-z0-9_-]+)$') { $token = $Matches[1] }
+    }
+    if ($token) { Write-Host "`nSetup token: $token" }
 }
 try {
     if ($ReleaseUrl) {
@@ -475,6 +490,7 @@ try {
         foreach ($line in $configLines) { $pair=$line -split "`t",2; $fields[$pair[0]]=$pair[1] }
         if ($fields.serviceName -ne $ServiceName -or $fields.dataDirectory -ne $DataDir) { throw 'Configured service/data paths differ; use matching installer arguments.' }
         $script:readyFile = $fields.readyFile
+        $script:logFile = $fields.logFile
         Assert-RegularFile $database
         if ((Get-Item -LiteralPath $database).Length -eq 0) { throw 'Existing Go database is empty; refusing to initialize a replacement.' }
         if ($AdoptConfig) {
@@ -484,7 +500,8 @@ try {
     } else {
         if ($Role -eq 'agent' -and (-not $MasterUrl -or -not $env:TRANSFER_JOIN_TOKEN)) { throw 'First Agent installation requires -MasterUrl and TRANSFER_JOIN_TOKEN.' }
         $script:readyFile = Join-Path $DataDir 'runtime\ready'
-        $settings = @{ serviceName=$ServiceName; dataDirectory=$DataDir; readyFile=$script:readyFile; logFile=(Join-Path $DataDir 'logs\service.log') }
+        $script:logFile = Join-Path $DataDir 'logs\service.log'
+        $settings = @{ serviceName=$ServiceName; dataDirectory=$DataDir; readyFile=$script:readyFile; logFile=$script:logFile }
         if ($Role -eq 'master') { $settings.listen = $Listen }
         $freshConfig = Join-Path $work 'service.json'
         Write-UTF8 $freshConfig ($settings | ConvertTo-Json)
@@ -555,8 +572,8 @@ try {
         $cliListen = $installedListen -replace '^0\.0\.0\.0:', '127.0.0.1:' -replace '^\[::\]:', '[::1]:' -replace '^:', '127.0.0.1:'
         Write-Host ("Login: & '"+$CliPath.Replace("'","''")+"' --host 'http://"+$cliListen+"' login")
     }
-    Write-Host ('Log: '+(Join-Path $DataDir 'logs\service.log'))
-    if (-not $existing -and -not $AdoptConfig -and $Role -eq 'master') { Write-Host 'Open the Master URL to finish setup. The setup token is in the service log.' }
+    Write-Host ('Log: '+$script:logFile)
+    Show-SetupToken
 } catch {
     $failure = $_
     # Preserve the Win32 cause before rollback deletes a failed first service.

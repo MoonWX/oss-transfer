@@ -18,9 +18,11 @@ From mainland China:
 curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh | sudo bash
 ```
 
-Then open `http://<master-ip>:1685` and create the admin account.
+The installer prints a setup token. Open `http://<master-ip>:1685`, enter it, and create the admin account.
 
 The Master only schedules work. Data moves through Agents, so add at least one under **Execution nodes → Add node** and run the command it gives you on that host. The Master host can run an Agent too.
+
+If Agents connect over a private network, set **Agent connection address** to the Master's private URL during setup or under **Execution nodes → Connection addresses**. The browser address can remain public.
 
 Add a storage connection, create a task, and watch it run.
 

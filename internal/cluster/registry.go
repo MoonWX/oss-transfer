@@ -8,8 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -77,6 +80,27 @@ func safeLabel(value string, max int) bool {
 func secret(value string) bool {
 	b, err := base64.RawURLEncoding.DecodeString(value)
 	return err == nil && len(b) == 32
+}
+
+// Public node keys also appear in CLI arguments, URL paths and comma-separated
+// task node selections. Display names do not have these restrictions.
+func safeAutomaticAddress(value string) bool {
+	if value == "" || len(value) > 256 || !utf8.ValidString(value) || strings.HasPrefix(value, "-") {
+		return false
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		return !ip.IsUnspecified() && !ip.IsMulticast()
+	}
+	onlyNumbers := true
+	for _, char := range value {
+		if char != '.' && (char < '0' || char > '9') {
+			onlyNumbers = false
+		}
+		if !unicode.IsLetter(char) && !unicode.IsDigit(char) && char != '-' && char != '_' && char != '.' {
+			return false
+		}
+	}
+	return !onlyNumbers
 }
 
 func (r *Registry) Invite(address, label string) (Invitation, error) {
@@ -173,8 +197,18 @@ func (r *Registry) Join(request JoinRequest) (Member, error) {
 		if invite.Address != "" {
 			address = invite.Address
 		}
+		label := request.Label
+		if invite.Label != "" {
+			label = invite.Label
+		}
+		automaticAddress := address == ""
+		// Keep the opaque instance ID internal. The stable public node key
+		// defaults to its chosen name; presentation can still be renamed later.
+		if automaticAddress && safeAutomaticAddress(label) {
+			address = label
+		}
 		if address == "" {
-			address = request.InstanceID
+			address = "agent-" + digest(request.InstanceID)[:8]
 		}
 		var addressOwner string
 		found, err = tx.Get("agent-addresses", address, &addressOwner)
@@ -182,11 +216,20 @@ func (r *Registry) Join(request JoinRequest) (Member, error) {
 			return err
 		}
 		if found {
-			return ErrConflict
+			if !automaticAddress {
+				return ErrConflict
+			}
+			address += "-" + digest(request.InstanceID)[:8]
+			found, err = tx.Get("agent-addresses", address, &addressOwner)
+			if err != nil {
+				return err
+			}
+			if found {
+				return ErrConflict
+			}
 		}
-		label := request.Label
-		if invite.Label != "" {
-			label = invite.Label
+		if label == "" {
+			label = address
 		}
 		member = Member{ID: request.InstanceID, EnrollmentID: enrollment, Address: address, Label: label, CredentialHash: digest(request.Credential), JoinedAt: r.now().UTC()}
 		invite.MemberID = member.ID

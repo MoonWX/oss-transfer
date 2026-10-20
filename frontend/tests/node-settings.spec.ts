@@ -85,7 +85,7 @@ test("Go node load uses actual execution fields and root edits preserve absolute
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await expect(
     dialog.getByRole("textbox", { name: "节点标识", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   await expect(dialog.getByLabel("本地根目录", { exact: true })).toHaveValue(
     "/mnt/data\nC:\\Archive",
   );

@@ -106,6 +106,7 @@ export default function StoragePage() {
     buckets: string[];
     error?: string;
   } | null>(null);
+  const [bucketOpen, setBucketOpen] = useState(false);
   const bucketRequest = useRef(0);
   const configs = data?.configs ?? [];
   const filtered = useMemo(
@@ -202,6 +203,7 @@ export default function StoragePage() {
   const testConnection = async (alias: string) => {
     const request = ++bucketRequest.current;
     setBucketState({ alias, loading: true, buckets: [] });
+    setBucketOpen(true);
     try {
       const response = await api<{
         buckets: string[];
@@ -224,7 +226,9 @@ export default function StoragePage() {
   };
   const closeBuckets = () => {
     bucketRequest.current += 1;
-    setBucketState(null);
+    // Keep the result during the closing transition; clearing it renders a
+    // successful empty result for the last visible frames.
+    setBucketOpen(false);
   };
   return (
     <Stack spacing={3}>
@@ -674,12 +678,7 @@ export default function StoragePage() {
           </Button>
         </DialogActions>
       </Dialog>
-      <Dialog
-        open={Boolean(bucketState)}
-        onClose={closeBuckets}
-        fullWidth
-        maxWidth="sm"
-      >
+      <Dialog open={bucketOpen} onClose={closeBuckets} fullWidth maxWidth="sm">
         <DialogTitle>
           {t("连接测试 · {alias}", { alias: bucketState?.alias || "" })}
         </DialogTitle>
@@ -693,11 +692,11 @@ export default function StoragePage() {
             </Stack>
           ) : bucketState?.error ? (
             <Alert severity="error">{bucketState.error}</Alert>
-          ) : (
+          ) : bucketState ? (
             <Stack spacing={2}>
               <Alert severity="success">
                 {t("已获取 {count} 个存储桶。", {
-                  count: bucketState?.buckets.length ?? 0,
+                  count: bucketState.buckets.length,
                 })}
               </Alert>
               <Typography variant="body2" color="text.secondary">
@@ -706,7 +705,7 @@ export default function StoragePage() {
                 )}
               </Typography>
               <Box sx={{ maxHeight: 360, overflowY: "auto" }}>
-                {bucketState?.buckets.map((bucket) => (
+                {bucketState.buckets.map((bucket) => (
                   <Stack
                     key={bucket}
                     direction="row"
@@ -722,7 +721,7 @@ export default function StoragePage() {
                 ))}
               </Box>
             </Stack>
-          )}
+          ) : null}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeBuckets}>{t("关闭")}</Button>

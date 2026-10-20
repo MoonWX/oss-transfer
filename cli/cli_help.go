@@ -20,8 +20,8 @@ const cliHelp = `OSS Transfer CLI
   task report <ID> [--output 文件.zip]
 
 节点与存储
-  node list|show|update|remove    管理执行节点
-  agent invite|list|show|update|remove
+  node list|show|details|network|add|invite|update|remove
+  agent invite|list|show|details|update|remove
   storage list|add|update|remove  管理存储连接
   storage buckets|test <连接名>  列举 Bucket 并验证连接
 
@@ -213,7 +213,9 @@ const cliNodeHelp = `执行节点
 用法：oss-transfer-cli node <子命令> [参数]
 
   list                            查看节点配置及连接状态
-  show <节点>                     查看节点详情
+  show <节点>                     查看节点运行状态
+  details <节点>                  查看主机、网卡 IP 和挂载目录
+  network [--public-url URL] [--agent-url URL]
   add <节点> [--label 名称]        生成指定地址的 Agent 加入指令
   invite [--address 节点] [--label 名称]
   update <节点> [--address 新地址] [--label 名称]
@@ -226,7 +228,8 @@ const cliNodeHelp = `执行节点
   oss-transfer-cli node remove 10.0.0.2 --yes
 
 新增节点使用 agent invite。节点支持名称、IPv4 和 IPv6；省略时由 Agent 自动识别。
-Go Agent 地址注册后不能直接修改，替换节点需重新加入。
+Agent 地址注册后不能直接修改，替换节点需重新加入。
+node network 无参数时查看地址；--agent-url '' 恢复使用浏览器地址。修改仅用于新加入节点。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `
@@ -237,6 +240,7 @@ const cliAgentHelp = `Agent 管理
   invite [--label 名称] [--address 节点]
   list                            查看全部 Agent
   show <节点>                     查看连接、队列、根目录和限速
+  details <节点>                  查看主机、网卡 IP 和挂载目录
   update <节点> [--label 名称] [--local-root 目录 ...]
   update <节点> --clear-local-roots
   remove <节点> --yes              撤销该 Agent 的注册
@@ -256,12 +260,12 @@ const cliSetupHelp = `首次设置
 用法：oss-transfer-cli setup status|complete
 
   status                          查看是否已完成首次设置
-  complete --username 用户名 --public-url URL
+  complete --username 用户名 --public-url URL [--agent-url URL]
            --setup-token-env NAME|--setup-token-file 文件|--setup-token-stdin
            --password-env NAME|--password-file 文件|--password-stdin
 
-设置令牌来自主节点首次启动日志。密码和令牌各选择一种输入方式，不能同时使用 stdin。
---public-url 填写浏览器和 Agent 可以访问的主节点地址。
+设置令牌显示在安装完成后的终端中。密码和令牌各选择一种输入方式，不能同时使用 stdin。
+--public-url 填写浏览器地址；--agent-url 可单独指定内网地址，省略时沿用浏览器地址。
 
 示例
   oss-transfer-cli --host http://10.0.0.10:1685 setup status

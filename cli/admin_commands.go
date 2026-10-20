@@ -93,6 +93,10 @@ func adminData(value map[string]interface{}) map[string]interface{} {
 
 func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	switch action {
+	case "network":
+		return nodeNetwork(client, args)
+	case "details":
+		return nodeDetails(client, args)
 	case "show":
 		return agentShow(client, args)
 	case "invite":
@@ -195,7 +199,7 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 
 func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	switch action {
-	case "list", "show", "remove":
+	case "list", "show", "details", "remove":
 		return runNodeAdmin(client, action, args)
 	case "update":
 		return agentUpdate(client, args)

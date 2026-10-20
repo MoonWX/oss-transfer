@@ -130,7 +130,7 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Validate {
 		if _, err := s.storageBuckets(r.Context(), request.Config); err != nil {
-			fail(w, 400, localize(w, "Storage validation failed: ")+err.Error())
+			fail(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()))
 			return
 		}
 	}

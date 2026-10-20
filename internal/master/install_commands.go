@@ -83,6 +83,22 @@ func validateAgentArtifacts(options Options) error {
 }
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+
+func bootstrapCommand(link, image string, compose bool) string {
+	command := `curl -fsSL "$1" | bash`
+	if compose {
+		command += ` -s -- --method compose`
+		if image != "" {
+			command += ` --image "$2"`
+		}
+	}
+	result := "bash -o pipefail -c " + shellQuote(command) + " -- " + shellQuote(link)
+	if compose && image != "" {
+		result += " " + shellQuote(image)
+	}
+	return result
+}
+
 func (s *Server) agentReleaseURL() string {
 	if s.options.AgentArtifactBase == "" {
 		return ""
@@ -95,10 +111,17 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 		link := masterURL + "/api/agents/bootstrap/" + invite.Token
 		data["joinUrl"] = link
 		data["nativeAgent"] = map[string]any{"available": true}
-		data["traditionalCommand"] = "(umask 077; join_script=$(mktemp) || exit; trap 'rm -f \"$join_script\"' EXIT; curl -fSL " + shellQuote(link) + " -o \"$join_script\" && { if [ \"$(id -u)\" -eq 0 ]; then bash \"$join_script\"; else sudo bash \"$join_script\"; fi; })"
-		data["windowsCommand"] = "$joinScript = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1'); try { Invoke-WebRequest -ErrorAction Stop -Uri " + psQuote(link+"?platform=windows") + " -OutFile $joinScript; & $joinScript } finally { Remove-Item $joinScript -ErrorAction SilentlyContinue }"
+		data["traditionalCommand"] = bootstrapCommand(link, "", false)
+		data["windowsCommand"] = "& ([scriptblock]::Create((Invoke-RestMethod -ErrorAction Stop -Uri " + psQuote(link+"?platform=windows") + ")))"
 	}
-	if s.options.AgentDockerImage != "" {
+	if s.agentReleaseURL() != "" && s.options.AgentDockerImage != "" {
+		link := masterURL + "/api/agents/bootstrap/" + invite.Token
+		image := ""
+		if s.options.AgentDockerImage != "moonwx/osstransfer:"+strings.TrimPrefix(s.options.AgentArtifactVersion, "v") {
+			image = s.options.AgentDockerImage
+		}
+		data["dockerCommand"] = bootstrapCommand(link, image, true)
+	} else if s.options.AgentDockerImage != "" {
 		// The one-time token is supplied to an enrollment container only. The
 		// long-running container mounts the saved identity and contains no token.
 		image := shellQuote(s.options.AgentDockerImage)
@@ -125,14 +148,14 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if s.regionalAgentArtifacts() {
-		s.officialAgentBootstrap(w, r.URL.Query().Get("platform") == "windows", token, config.PublicURL)
+		s.officialAgentBootstrap(w, r.URL.Query().Get("platform") == "windows", token, config.agentURL())
 		return
 	}
 	if r.URL.Query().Get("platform") == "windows" {
-		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & $installer -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(config.PublicURL))
+		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & $installer -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(config.agentURL()))
 		return
 	}
-	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent --method native --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), shellQuote(s.agentReleaseURL()), shellQuote(config.PublicURL))
+	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent --method native --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), shellQuote(s.agentReleaseURL()), shellQuote(config.agentURL()))
 }
 
 func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL string) {

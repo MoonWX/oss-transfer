@@ -2,6 +2,9 @@ package master
 
 // Exact application messages only. Vendor errors and user values are not rewritten.
 var apiMessages = map[string]struct{ en, zh, ja string }{
+	"Agent URL must be an HTTP or HTTPS origin":                                         {"Agent URL must be an HTTP or HTTPS origin", "Agent 连接地址须为 HTTP 或 HTTPS 地址，不含路径", "Agent の接続先はパスを含まない HTTP または HTTPS の URL を指定してください"},
+	"Cannot save Master addresses":                                                      {"Cannot save Master addresses", "无法保存主节点连接地址", "マスターの接続先を保存できません"},
+	"Node details are unavailable":                                                      {"Node details are unavailable", "暂时无法获取节点详情", "ノードの詳細を取得できません"},
 	"ADD_PREFIX requires only targetPrefix":                                             {"ADD_PREFIX requires only targetPrefix", "ADD_PREFIX 只需设置 targetPrefix", "ADD_PREFIX では targetPrefix のみ指定してください"},
 	"Account changed; sign in again":                                                    {"Account changed; sign in again", "账号已变更，请重新登录", "アカウントが変更されました。再度ログインしてください"},
 	"Administrator access required":                                                     {"Administrator access required", "需要管理员权限", "管理者権限が必要です"},
@@ -135,7 +138,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"local transfers select storage through their endpoints":                               {"local transfers select storage through their endpoints", "本地迁移通过端点选择存储", "ローカル転送ではエンドポイントでストレージを選択します"},
 	"local transfers use destination prefix/objectKey or targetRelativePath":               {"local transfers use destination prefix/objectKey or targetRelativePath", "本地迁移使用目标端 prefix/objectKey 或 targetRelativePath", "ローカル転送では転送先の prefix/objectKey または targetRelativePath を使用してください"},
 	"local-transfers requires a local endpoint":                                            {"local-transfers requires a local endpoint", "local-transfers 必须包含本地端点", "local-transfers にはローカルエンドポイントが必要です"},
-	"no Agent is online; join an Agent before validating storage":                          {"no Agent is online; join an Agent before validating storage", "没有在线 Agent，请先添加 Agent 再验证存储", "オンラインの Agent がありません。ストレージを検証する前に Agent を追加してください"},
+	"no Agent is online; join an Agent before validating storage":                          {"No Agent is online. Add an execution node before testing this connection.", "没有在线执行节点，请先添加执行节点再测试连接。", "オンラインの実行ノードがありません。実行ノードを追加してから接続をテストしてください。"},
 	"no online execution Agent":                                                            {"no online execution Agent", "没有在线执行节点", "オンラインの実行ノードがありません"},
 	"objectKey conflicts with local source path":                                           {"objectKey conflicts with local source path", "objectKey 与本地源路径冲突", "objectKey がローカルの転送元パスと競合しています"},
 	"overwrite and conflictPolicy disagree":                                                {"overwrite and conflictPolicy disagree", "overwrite 与 conflictPolicy 不一致", "overwrite と conflictPolicy が一致しません"},

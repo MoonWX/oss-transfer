@@ -2,6 +2,21 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"沿用浏览器地址":                      {"same as browser address", "ブラウザー用アドレスと共通"},
+	"--%s 须为不含路径的 HTTP 或 HTTPS 地址": {"--%s must be an HTTP or HTTPS origin without a path", "--%s はパスを含まない HTTP または HTTPS アドレスにしてください"},
+	"--public-url 须为浏览器访问的主节点地址，如 https://transfer.example.com": {"--public-url must be the browser address of the Master, such as https://transfer.example.com", "--public-url はブラウザー用の Master アドレス（例: https://transfer.example.com）を指定してください"},
+	"浏览器访问地址":    {"Browser address", "ブラウザー用アドレス"},
+	"Agent 连接地址": {"Agent connection address", "Agent 接続用アドレス"},
+	"主机名":        {"Hostname", "ホスト名"},
+	"操作系统":       {"Operating system", "OS"},
+	"架构":         {"Architecture", "アーキテクチャ"},
+	"网卡 IP":      {"Interface IPs", "インターフェース IP"},
+	"连接来源 IP":    {"Connection source IP", "接続元 IP"},
+	"允许的本地目录":    {"Allowed local directories", "許可されたローカルディレクトリ"},
+	"挂载目录":       {"Mounted directories", "マウントディレクトリ"},
+	"文件系统":       {"Filesystem", "ファイルシステム"},
+	"只读":         {"Read-only", "読み取り専用"},
+	"最后连接":       {"Last connected", "最終接続"},
 	"--clear-session-token 不能与 --session-token-env 或 --session-token-file 同时使用": {"--clear-session-token cannot be combined with --session-token-env or --session-token-file", "--clear-session-token は --session-token-env または --session-token-file と併用できません"},
 
 	"不支持的语言 %q；请使用 auto、zh、en 或 ja":                               {"Unsupported language %q; use auto, zh, en or ja", "未対応の言語 %q。auto、zh、en または ja を指定してください"},

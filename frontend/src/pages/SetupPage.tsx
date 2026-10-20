@@ -28,7 +28,12 @@ type SetupStatus = {
 };
 type FieldErrors = Partial<
   Record<
-    "username" | "password" | "confirm" | "publicUrl" | "setupToken",
+    | "username"
+    | "password"
+    | "confirm"
+    | "publicUrl"
+    | "agentUrl"
+    | "setupToken",
     string
   >
 >;
@@ -96,6 +101,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
   const [confirm, setConfirm] = useState("");
   const [visible, setVisible] = useState(false);
   const [publicUrl, setPublicUrl] = useState(() => window.location.origin);
+  const [agentUrl, setAgentUrl] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [error, setError] = useState("");
@@ -150,6 +156,9 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
     const origin = normalizedOrigin(publicUrl);
     if (step >= 1 && !origin)
       next.publicUrl = t("请输入完整的 HTTP 或 HTTPS 地址，不含路径。");
+    const agentOrigin = agentUrl.trim() ? normalizedOrigin(agentUrl) : origin;
+    if (step >= 1 && !agentOrigin)
+      next.agentUrl = t("请输入完整的 HTTP 或 HTTPS 地址，不含路径。");
     if (step === 2 && !setupToken.trim())
       next.setupToken = t("请输入初始化密钥。");
     setErrors(next);
@@ -158,7 +167,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
       setStep(0);
       return;
     }
-    if (next.publicUrl) {
+    if (next.publicUrl || next.agentUrl) {
       setStep(1);
       return;
     }
@@ -180,6 +189,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
           username: username.trim(),
           password,
           publicUrl: origin,
+          agentUrl: agentUrl.trim() ? agentOrigin : "",
           setupToken: setupToken.trim(),
         },
       );
@@ -338,7 +348,7 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
               {step === 1 && (
                 <>
                   <TextField
-                    label={t("主节点地址")}
+                    label={t("浏览器访问地址")}
                     value={publicUrl}
                     required
                     autoFocus
@@ -347,8 +357,19 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                     disabled={saving}
                     onChange={(event) => setPublicUrl(event.target.value)}
                     error={Boolean(errors.publicUrl)}
+                    helperText={errors.publicUrl}
+                  />
+                  <TextField
+                    label={t("Agent 连接地址")}
+                    value={agentUrl}
+                    placeholder={publicUrl}
+                    type="url"
+                    disabled={saving}
+                    onChange={(event) => setAgentUrl(event.target.value)}
+                    error={Boolean(errors.agentUrl)}
                     helperText={
-                      errors.publicUrl || t("浏览器和 Agent 使用此地址连接。")
+                      errors.agentUrl ||
+                      t("留空使用浏览器地址。同一 VPC 可填写主节点内网地址。")
                     }
                   />
                 </>
@@ -358,7 +379,8 @@ export default function SetupPage({ onComplete }: { onComplete: () => void }) {
                   <Stack component="dl" gap={1.5} sx={{ m: 0 }}>
                     {[
                       [t("管理员"), username.trim()],
-                      [t("主节点地址"), publicUrl],
+                      [t("浏览器访问地址"), publicUrl],
+                      [t("Agent 连接地址"), agentUrl.trim() || publicUrl],
                     ].map(([label, value]) => (
                       <Box
                         key={label}

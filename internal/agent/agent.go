@@ -91,6 +91,9 @@ func New(store *state.Store, options Options) (*Agent, error) {
 			identity.EnrollmentID = ""
 			identity.Address = options.Address
 			identity.Label = options.Label
+			if identity.Label == "" {
+				identity.Label, _ = os.Hostname()
+			}
 		}
 		if identity.Credential == "" || (identity.EnrollmentID == "" && identity.PendingToken == "") {
 			return errors.New("Agent identity is incomplete; refusing to generate a replacement identity")

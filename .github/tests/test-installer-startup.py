@@ -10,6 +10,93 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "deploy/native/install.sh"
+PUBLIC_INSTALLER = ROOT / "install.sh"
+
+
+class EnrollmentInputTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="installer-enrollment-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        source = PUBLIC_INSTALLER.read_text()
+        self.functions = self.root / "enrollment.sh"
+        self.functions.write_text(source[source.index("valid_master_origin() {"):source.index("\nstage=$(mktemp")])
+
+    def invoke(self, body, value):
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; ' + body, "test", str(self.functions), value],
+            text=True, capture_output=True, timeout=10)
+
+    def test_master_origins_preserve_dns_ipv4_and_accept_ipv6(self):
+        for origin in (
+            'http://10.1.0.43:1685', 'https://transfer.example', 'http://localhost:80/',
+            'http://[fd00::43]:1685', 'https://[2001:db8:1:2:3:4:5:6]',
+            'http://[::1]:65535/', 'http://[::ffff:192.0.2.43]:1685', 'http://[::]:1685',
+        ):
+            with self.subTest(origin=origin):
+                result = self.invoke('valid_master_origin "$2"', origin)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_master_origins_reject_paths_credentials_invalid_ports_and_literals(self):
+        for origin in (
+            'http://user:secret@10.1.0.43:1685', 'http://10.1.0.43:1685/path',
+            'http://[::1]:1685?secret=1', 'http://[::1]:1685#fragment', 'ftp://[::1]:1685',
+            'http://[::1]:0', 'http://[::1]:65536', 'http://[::1]:99999999999999999999',
+            'http://[::1]:abc', 'http://[::1]:', 'http://fd00::43:1685',
+            'http://[fd00:::43]:1685', 'http://[fd00::1::43]:1685', 'http://[fd00:43]:1685',
+            'http://[1:2:3:4:5:6:7:8:9]', 'http://[::1:2:3:4:5:6:7:8]',
+            'http://[::ffff:192.0.2.999]', 'http://[::ffff:192.0.2]', 'http://[::xyz]',
+            'http://[fe80::1%eth0]', 'http://[::1]\n', 'http:// transfer.example',
+        ):
+            with self.subTest(origin=origin):
+                result = self.invoke('valid_master_origin "$2"', origin)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_invitation_url_extracts_ipv6_master_and_exact_token(self):
+        body = r'''
+fail() { exit 12; }
+role=agent; upgrade=0; adopt_config=; master_url=; join_url=$2; yes=1
+enrollment_input
+printf '%s\n%s\n' "$master_url" "$TRANSFER_JOIN_TOKEN"
+'''
+        origin = 'http://[fd00::43]:1685'
+        token = 'invitation_token-123'
+        result = self.invoke(body, origin + '/api/agents/bootstrap/' + token)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, origin + '\n' + token + '\n')
+        for url in (
+            origin + '//api/agents/bootstrap/' + token,
+            origin + '/api/agents/bootstrap/' + token + '?foo=1',
+            'http://user:secret@[fd00::43]:1685/api/agents/bootstrap/' + token,
+            'http://[fd00::43]:65536/api/agents/bootstrap/' + token,
+            origin + '/api/agents/bootstrap/',
+        ):
+            with self.subTest(url=url):
+                self.assertNotEqual(self.invoke(body, url).returncode, 0)
+
+    def test_real_installer_sudo_reentry_keeps_token_stdin_and_arguments(self):
+        # Stop at the elevation boundary: no sudo privilege, network access,
+        # or service installation is performed by this test.
+        for name, text in {
+            'id': '#!/bin/sh\nprintf 1000\n',
+            'sudo': '#!/bin/sh\nprintf "%s\\n" "$@" > "$ELEVATION_ARGS"\ncat > "$ELEVATION_TOKEN"\n',
+            'curl': '#!/bin/sh\nexit 99\n',
+        }.items():
+            path = self.root / name
+            path.write_text(text)
+            path.chmod(0o755)
+        args = ['--role', 'agent', '--method', 'native', '--master-url', 'http://[fd00::43]:1685',
+                '--token-stdin', '--yes']
+        token = 'invitation-token_kept-exactly'
+        result = subprocess.run(
+            ['bash', str(PUBLIC_INSTALLER), *args], input=token, text=True, capture_output=True,
+            env=dict(os.environ, PATH=str(self.root) + os.pathsep + os.environ['PATH'],
+                     ELEVATION_ARGS=str(self.root / 'args'), ELEVATION_TOKEN=str(self.root / 'token')),
+            timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'args').read_text().splitlines(), ['bash', str(PUBLIC_INSTALLER), *args])
+        self.assertEqual((self.root / 'token').read_text(), token)
+        self.assertNotIn(token, result.stdout + result.stderr)
 
 
 class StartupTests(unittest.TestCase):
@@ -140,6 +227,32 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Startup timed out after 3s', result.stderr)
         self.assertGreaterEqual(int((self.root/'probes').read_text()), 1)
+
+    def test_setup_token_printed_only_from_this_master_startup(self):
+        old = 'Open the console to complete setup. Setup token: old_token\n'
+        current = 'Open the console to complete setup. Setup token: current_token\n'
+        for platform in ('linux', 'darwin', 'freebsd'):
+            with self.subTest(platform=platform):
+                result = self.run_shell('startup_log_lines=1; print_setup_token',
+                                        QA_PLATFORM=platform, QA_LOG=old + current)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, '\nSetup token: current_token\n')
+                initialized = self.run_shell('startup_log_lines=1; print_setup_token',
+                                            QA_PLATFORM=platform, QA_LOG=old + 'Master listening on :1685\n')
+                self.assertEqual(initialized.returncode, 0, initialized.stderr)
+                self.assertEqual(initialized.stdout, '')
+        agent = self.run_shell('role=agent; print_setup_token', QA_LOG=current)
+        self.assertEqual(agent.returncode, 0, agent.stderr)
+        self.assertEqual(agent.stdout, '')
+
+    def test_setup_token_ignores_other_logs_and_uses_rotated_token(self):
+        result = self.run_shell('print_setup_token', QA_LOG=(
+            'Open the console to complete setup. Setup token: first_token\n'
+            's3 error with private-key-value\n'
+            'Open the console to complete setup. Setup token: current-token_2\n'
+            'Open the console to complete setup. Setup token: invalid token\n'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '\nSetup token: current-token_2\n')
 
 
 if __name__ == '__main__':

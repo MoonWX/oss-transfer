@@ -396,13 +396,45 @@ if [[ -n "$release_url" ]]; then
   release_url=$(transfer_release_url "$release_url")
   [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]] || fail 'Release URL must use HTTPS'
 fi
+valid_master_origin() {
+  local host port address
+  [[ "$1" =~ ^https?://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(:([0-9]{1,5}))?/?$ ]] || return 1
+  host=${BASH_REMATCH[1]}; port=${BASH_REMATCH[3]}
+  [[ -z "$port" ]] || ((10#$port >= 1 && 10#$port <= 65535)) || return 1
+  if [[ "$host" == \[* ]]; then
+    address=${host:1:${#host}-2}
+    # Check bracketed IPv6 without requiring Python, DNS, or a live connection.
+    # An embedded IPv4 address counts as the last two 16-bit groups.
+    LC_ALL=C awk -v address="$address" 'BEGIN {
+      if (index(address, ".")) {
+        ipv4=address; sub(/^.*:/, "", ipv4)
+        if (split(ipv4, octets, "\\.")!=4) exit 1
+        for (i=1;i<=4;i++) if (octets[i] !~ /^[0-9]+$/ || length(octets[i])>3 || octets[i]+0>255) exit 1
+        sub(/[^:]*$/, "0:0", address)
+      }
+      compressed=split(address, halves, "::")
+      if (compressed>2) exit 1
+      groups=0
+      for (i=1;i<=compressed;i++) {
+        if (halves[i]=="") { if (compressed==1) exit 1; continue }
+        count=split(halves[i], pieces, ":")
+        for (j=1;j<=count;j++) if (pieces[j] !~ /^[0-9A-Fa-f]+$/ || length(pieces[j])>4) exit 1
+        groups+=count
+      }
+      exit !((compressed==1 && groups==8) || (compressed==2 && groups<8))
+    }' || return 1
+  fi
+}
 enrollment_input() {
+  local join_master join_token
   if [[ "$role" == agent && "$upgrade" == 0 && -z "$adopt_config" && -z "$master_url" && -z "$join_url" && "$yes" == 0 ]]; then
     prompt join_url "$(say 'Agent invitation link from the console' '控制台生成的执行节点邀请链接')" ''
   fi
   if [[ -n "$join_url" ]]; then
-    [[ "$role" == agent && "$join_url" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?/api/agents/bootstrap/[A-Za-z0-9_-]+$ ]] || fail 'Use the Agent invitation link from the console'
-    master_url=${join_url%/api/agents/bootstrap/*}; TRANSFER_JOIN_TOKEN=${join_url##*/}; export TRANSFER_JOIN_TOKEN
+    [[ "$role" == agent && "$join_url" =~ ^(.+)/api/agents/bootstrap/([A-Za-z0-9_-]+)$ ]] || fail 'Use the Agent invitation link from the console'
+    join_master=${BASH_REMATCH[1]}; join_token=${BASH_REMATCH[2]}
+    [[ "$join_master" != */ ]] && valid_master_origin "$join_master" || fail 'Use the Agent invitation link from the console'
+    master_url=$join_master; TRANSFER_JOIN_TOKEN=$join_token; export TRANSFER_JOIN_TOKEN
   fi
 }
 stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-setup.XXXXXX")
@@ -536,7 +568,7 @@ fi
 for path in "$install_dir" "$data_dir"; do [[ ! -e "$path" || -d "$path" && -z $(ls -A "$path") ]] || fail "Existing files in $path; keep the current Compose file when upgrading"; done
 enrollment_input
 if [[ "$role" == agent ]]; then
-  [[ "$master_url" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || fail 'Provide --master-url or --join-url for the Agent'
+  valid_master_origin "$master_url" || fail 'Provide --master-url or --join-url for the Agent'
   if ((token_stdin)); then IFS= read -r TRANSFER_JOIN_TOKEN || [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]]; fi
   [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Provide the Agent invitation with --join-url or --token-stdin'
   [[ -z "$files_dir" || -d "$files_dir" ]] || fail 'Create the local-files directory and grant container UID 65532 access first'
@@ -608,7 +640,11 @@ if [[ "$role" == master ]]; then
     sleep 1
   done
   ((ready)) || fail "Master did not become ready; inspect logs in $install_dir"
-  say 'Open the Master URL and complete setup. Read its setup token from the container log.' '打开主节点地址完成初次设置，设置令牌位于容器日志中。'
+  # This is a newly created container; only its current bootstrap token is
+  # printed, never its full log or any credentials from unrelated messages.
+  setup_token=$(docker logs "$container" 2>&1 |
+    sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
+  [[ -z "$setup_token" ]] || printf '\nSetup token: %s\n' "$setup_token"
 else
   sleep 2
   [[ $(docker inspect "$container" --format '{{.State.Status}}') == running ]] || fail 'Agent container did not stay running'

@@ -829,6 +829,15 @@ wait_ready() {
   printf 'Startup timed out after %ss. Check %s and the %s service status.\n' "$startup_timeout" "$log_file" "$service_name" >&2
   return 1
 }
+print_setup_token() {
+  [[ "$role" == master && -f "$log_file" ]] || return 0
+  local token
+  # Read this startup only: initialized installations retain an old token in
+  # their log, but the Master does not generate one after setup is complete.
+  token=$(tail -n +$((startup_log_lines+1)) "$log_file" |
+    sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
+  [[ -z "$token" ]] || printf '\nSetup token: %s\n' "$token"
+}
 rollback() {
   local result=$?
   trap - ERR INT TERM
@@ -996,4 +1005,4 @@ if [[ "$role" == master ]]; then
   case "$cli_host" in ''|0.0.0.0) cli_host=127.0.0.1;; '[::]') cli_host='[::1]';; esac
   printf 'Login: %q --host %q login\n' "$cli_path" "http://$cli_host:${installed_listen##*:}"
 fi
-if [[ "$role" == master && "$existed" == 0 && -z "$adopt_config" ]]; then printf 'Open the Master URL to finish setup. The setup token is in the service log.\n'; fi
+print_setup_token

@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,65 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
+
+func TestAutomaticNodeKeyUsesNameAndSurvivesRename(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "master.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	registry := New(db, time.Now)
+	enroll := func(label, hostname string) Member {
+		t.Helper()
+		invite, err := registry.Invite("", label)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance, _ := Token()
+		credential, _ := Token()
+		request := JoinRequest{Token: invite.Token, InstanceID: instance, Credential: credential, Label: hostname}
+		member, err := registry.Join(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replay, err := registry.Join(request)
+		if err != nil || replay != member {
+			t.Fatal("enrollment response retry changed stable identity", err)
+		}
+		return member
+	}
+	first := enroll("worker-a", "host-a")
+	second := enroll("worker-a", "host-b")
+	hostname := enroll("", "host-c")
+	unnamed := enroll("", "")
+	if first.Address != "worker-a" || first.Label != "worker-a" ||
+		!strings.HasPrefix(second.Address, "worker-a-") || second.Label != "worker-a" ||
+		first.ID == first.Address || hostname.Address != "host-c" || len(unnamed.Address) != len("agent-")+8 {
+		t.Fatal(first, second, hostname, unnamed)
+	}
+	changed, err := registry.UpdateLabel(first.ID, "renamed")
+	if err != nil || changed.ID != first.ID || changed.Address != first.Address || changed.EnrollmentID != first.EnrollmentID {
+		t.Fatal("display name changed the enrolled identity", changed, err)
+	}
+	for _, name := range []string{"北京 1", "北京/备份", "北京,备份", "1", ".", "..", "-agent", "--help", "0.0.0.0", "239.0.0.1", "node\n"} {
+		if name == "node\n" {
+			if safeAutomaticAddress(name) {
+				t.Fatal("newline accepted as public node key")
+			}
+			continue
+		}
+		member := enroll(name, "host-a")
+		if member.Label != name || !strings.HasPrefix(member.Address, "agent-") || len(member.Address) != len("agent-")+8 || !safeAutomaticAddress(member.Address) {
+			t.Fatal("display name was lost or unsafe node key exposed", member)
+		}
+	}
+	for _, name := range []string{"北京备份", "node-1", "node_a", "node.example", "10.0.0.43", "2001:db8::1"} {
+		member := enroll(name, "")
+		if member.Label != name || member.Address != name {
+			t.Fatal("safe display name must be usable as node key", member)
+		}
+	}
+}
 
 func TestEnrollmentResponseLossRestartAndRevocation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master.db")

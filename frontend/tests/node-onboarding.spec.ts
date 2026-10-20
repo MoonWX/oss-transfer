@@ -84,7 +84,7 @@ test("node invitation uses the current origin by default and accepts a private e
           id: "test-invitation",
           joinUrl: "http://10.1.0.43:1685/api/agents/bootstrap/test",
           traditionalCommand:
-            "curl -fsSL http://10.1.0.43:1685/api/agents/bootstrap/test | bash",
+            "curl -fsSL 'http://10.1.0.43:1685/api/agents/bootstrap/test' | bash",
           expiresAt: new Date(Date.now() + 1800000).toISOString(),
         },
       },

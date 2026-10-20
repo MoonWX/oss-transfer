@@ -2,6 +2,12 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockApi } from "./fixtures";
 import type { AgentInvitation } from "../src/lib/nodeRegistry";
 
+const joinUrl = "https://transfer.example/api/agents/bootstrap/test-once";
+const traditionalCommand = `curl -fsSL '${joinUrl}' | bash`;
+const windowsCommand = `irm '${joinUrl}?platform=windows' | iex`;
+const nativeCommand = `./oss-transfer-agent --join-url '${joinUrl}'`;
+const dockerCommand = `curl -fsSL '${joinUrl}?method=compose' | bash`;
+
 async function setup(
   page: Page,
   useAgent = false,
@@ -41,11 +47,9 @@ async function setup(
             success: true,
             id: "invitation-1",
             expiresAt: new Date(Date.now() + 1800000).toISOString(),
-            joinUrl: "https://transfer.example/agent/join/test-once",
-            dockerCommand:
-              "docker run --rm moonwx/osstransfer:4.0.0 agent --join https://transfer.example/agent/join/test-once",
-            traditionalCommand:
-              "curl -fsSL https://transfer.example/agent/install/test-once -o agent-install.sh && sh agent-install.sh",
+            joinUrl,
+            dockerCommand,
+            traditionalCommand,
             ...installCommands,
           },
     });
@@ -152,11 +156,11 @@ test("node invitation defaults to native installation and keeps Docker available
     dialog.getByRole("tab", { name: "传统部署", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
   await expect(dialog.getByLabel("传统部署 指令", { exact: true })).toHaveValue(
-    /agent-install.sh/,
+    traditionalCommand,
   );
   await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
   await expect(dialog.getByLabel("Docker 指令", { exact: true })).toHaveValue(
-    /moonwx\/osstransfer/,
+    dockerCommand,
   );
   await expect(
     dialog.getByText("访问本地文件前，请将所需目录挂载到容器。"),
@@ -183,10 +187,6 @@ test("node invitation defaults to native installation and keeps Docker available
 test("native Agent commands precede Docker and switching tabs preserves join credentials", async ({
   page,
 }) => {
-  const windowsCommand =
-    "powershell -File Install.ps1 -JoinUrl https://transfer.example/agent/join/test-once";
-  const nativeCommand =
-    "./oss-transfer-agent --join-url https://transfer.example/agent/join/test-once";
   const state = await setup(page, true, {
     nativeAgent: { available: true },
     windowsCommand,
@@ -203,7 +203,6 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   await expect(dialog.getByRole("tab")).toHaveText([
     "Linux / macOS / FreeBSD",
     "Windows",
-    "直接运行",
     "Docker",
   ]);
   await expect(dialog.getByRole("tab").first()).toHaveAttribute(
@@ -212,33 +211,29 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   );
   await expect(
     dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
-  ).toHaveValue(/agent-install.sh/);
+  ).toHaveValue(traditionalCommand);
   await dialog.getByRole("tab", { name: "Windows", exact: true }).click();
   await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
     windowsCommand,
   );
-  await dialog.getByRole("tab", { name: "直接运行", exact: true }).click();
-  await expect(dialog.getByLabel("直接运行 指令", { exact: true })).toHaveValue(
-    nativeCommand,
-  );
+  await expect(
+    dialog.getByRole("tab", { name: "直接运行", exact: true }),
+  ).toHaveCount(0);
   await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
   await dialog
     .getByRole("tab", { name: "Linux / macOS / FreeBSD", exact: true })
     .click();
   await expect(
     dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
-  ).toHaveValue(/agent-install.sh/);
+  ).toHaveValue(traditionalCommand);
   expect(state.invitations).toHaveLength(1);
   expect(state.writes).toHaveLength(0);
 });
 
 for (const [method, commands] of [
-  [
-    "Linux / macOS / FreeBSD",
-    { traditionalCommand: "native-install --token test-once" },
-  ],
-  ["Windows", { windowsCommand: "Install.ps1 -Token test-once" }],
-  ["直接运行", { nativeCommand: "./oss-transfer-agent --token test-once" }],
+  ["Linux / macOS / FreeBSD", { traditionalCommand }],
+  ["Windows", { windowsCommand }],
+  ["直接运行", { nativeCommand }],
 ] as const) {
   test(`native-only invitation supports ${method} without a Docker command`, async ({
     page,
@@ -333,7 +328,7 @@ test("Agent invitation dialog fits mobile screens and copies using HTTP fallback
   await dialog.getByRole("button", { name: "复制指令", exact: true }).click();
   const copies = await page.evaluate(() => (window as any).copiedTexts);
   expect(copies).toHaveLength(1);
-  expect(copies[0]).toContain("agent-install.sh");
+  expect(copies[0]).toBe(traditionalCommand);
   const bounds = await dialog.boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);

@@ -501,7 +501,7 @@ try {
             Copy-Item -LiteralPath $sourceConfig -Destination $freshConfig
         }
     } else {
-        if ($Role -eq 'agent' -and (-not $MasterUrl -or -not $env:TRANSFER_JOIN_TOKEN)) { throw 'First Agent installation requires -MasterUrl and TRANSFER_JOIN_TOKEN.' }
+        if ($Role -eq 'agent' -and (-not $MasterUrl -or -not $env:TRANSFER_JOIN_TOKEN)) { throw 'Copy an Agent join command from Nodes > Add node.' }
         $script:readyFile = Join-Path $DataDir 'runtime\ready'
         $script:logFile = Join-Path $DataDir 'logs\service.log'
         $settings = @{ serviceName=$ServiceName; dataDirectory=$DataDir; readyFile=$script:readyFile; logFile=$script:logFile }

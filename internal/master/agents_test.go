@@ -124,7 +124,7 @@ func (f *agentHTTPFixture) invite(t *testing.T, address string) string {
 		t.Fatalf("invitation: HTTP %d", status)
 	}
 	data := body["data"].(map[string]any)
-	if data["joinUrl"] != "https://master.example:1685/api/agents/join" || data["nativeAgent"].(map[string]any)["available"] != false {
+	if data["joinUrl"] != "https://master.example:1685/api/agents/bootstrap/"+data["inviteToken"].(string) || data["nativeAgent"].(map[string]any)["available"] != false {
 		t.Fatal("invitation address or native availability is incorrect")
 	}
 	for _, key := range []string{"dockerCommand", "traditionalCommand"} {

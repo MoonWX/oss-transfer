@@ -26,6 +26,7 @@ func main() {
 	}
 }
 func run() error {
+	joinURL := flag.String("join-url", "", "Agent invitation link (first enrollment)")
 	masterURL := flag.String("master-url", "", "Master HTTP or HTTPS origin (first enrollment)")
 	joinToken := flag.String("join-token", os.Getenv("OSS_TRANSFER_JOIN_TOKEN"), "One-use enrollment token (first enrollment)")
 	address := flag.String("address", "", "Node address or name")
@@ -45,18 +46,41 @@ func run() error {
 		fmt.Printf("oss-transfer-agent %s (%s, built %s)\n", version, commit, builtAt)
 		return nil
 	}
-	directory, err := filepath.Abs(*data)
+	var explicitJoinURL, explicitMasterURL, explicitJoinToken, explicitData bool
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "join-url":
+			explicitJoinURL = true
+		case "master-url":
+			explicitMasterURL = true
+		case "join-token":
+			explicitJoinToken = true
+		case "data-dir":
+			explicitData = true
+		}
+	})
+	options := agent.Options{MasterURL: *masterURL, JoinToken: *joinToken, Address: *address, Label: *label}
+	if explicitJoinURL {
+		var err error
+		options, err = withJoinURL(*joinURL, options, explicitMasterURL || explicitJoinToken)
+		if err != nil {
+			return err
+		}
+	}
+	selectedData := *data
+	if !explicitData && *configPath == "" {
+		var err error
+		selectedData, err = defaultAgentDataDirectory()
+		if err != nil {
+			return err
+		}
+	}
+	directory, err := filepath.Abs(selectedData)
 	if err != nil {
 		return err
 	}
 	config := servicehost.Config{ServiceName: "oss-transfer-agent", DataDirectory: directory}
 	if *configPath != "" {
-		explicitData := false
-		flag.Visit(func(f *flag.Flag) {
-			if f.Name == "data-dir" {
-				explicitData = true
-			}
-		})
 		if explicitData {
 			return errors.New("use the service configuration for the data directory")
 		}
@@ -83,7 +107,6 @@ func run() error {
 	if *checkReady {
 		return servicehost.CheckReady(config.ReadyFile, *expectLaunch, "agent", version, *expectPID)
 	}
-	options := agent.Options{MasterURL: *masterURL, JoinToken: *joinToken, Address: *address, Label: *label}
 	if *enrollOnly {
 		db, err := state.Open(filepath.Join(config.DataDirectory, "agent.db"))
 		if err != nil {

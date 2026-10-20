@@ -284,7 +284,8 @@ func TestReverseProxyLoginUsesAccessHostWithoutStoredPublicURL(t *testing.T) {
 	token := login["token"].(string)
 	do("/api/auth/change-password", proxy.URL, token, map[string]string{"oldPassword": initial, "newPassword": "behind proxy"}, 200)
 	invite := do("/api/master/agents/invitations", proxy.URL, token, map[string]string{"label": "Private node", "masterUrl": "http://10.0.0.43:1685"}, 200)
-	if invite["data"].(map[string]any)["joinUrl"] != "http://10.0.0.43:1685/api/agents/join" {
+	invitation := invite["data"].(map[string]any)
+	if invitation["joinUrl"] != "http://10.0.0.43:1685/api/agents/bootstrap/"+invitation["inviteToken"].(string) {
 		t.Fatal("browser origin replaced the chosen private endpoint")
 	}
 	do("/api/auth/login", "https://foreign.example", "", map[string]string{"username": "admin", "password": "behind proxy"}, 403)

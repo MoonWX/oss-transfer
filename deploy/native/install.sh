@@ -635,9 +635,9 @@ if ((existed)) || [[ -n "$adopt_config" ]]; then
   cp -p "$source_config" "$work/service.json"
 else
   if [[ "$role" == agent ]]; then
-    [[ -n "$master_url" ]] || fail 'First Agent installation requires --master-url'
+    [[ -n "$master_url" ]] || fail 'Copy an Agent join command from Nodes > Add node'
     if ((token_stdin)); then IFS= read -r TRANSFER_JOIN_TOKEN || [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]]; fi
-    [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Provide the invitation with --token-stdin or TRANSFER_JOIN_TOKEN'
+    [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Copy an Agent join command from Nodes > Add node'
     export TRANSFER_JOIN_TOKEN
   fi
   if [[ "$role" == master ]]; then listen_json=",\"listen\":\"$listen\""; else listen_json=; fi

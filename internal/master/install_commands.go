@@ -84,15 +84,8 @@ func validateAgentArtifacts(options Options) error {
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
-func bootstrapCommand(link, image string, compose bool) string {
-	command := "curl -fsSL " + shellQuote(link) + " | bash"
-	if compose {
-		command += ` -s -- --method compose`
-		if image != "" {
-			command += " --image " + shellQuote(image)
-		}
-	}
-	return command
+func bootstrapCommand(link string) string {
+	return "curl -fsSL " + shellQuote(link) + " | bash"
 }
 
 func (s *Server) agentReleaseURL() string {
@@ -105,29 +98,30 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 	if invite.MasterURL != "" {
 		masterURL = invite.MasterURL
 	}
-	data := map[string]any{"id": tokenKey(invite.Token), "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": masterURL + "/api/agents/join", "nativeAgent": map[string]any{"available": false}, "nativeCommand": "OSS_TRANSFER_JOIN_TOKEN=" + shellQuote(invite.Token) + " ./oss-transfer-agent --master-url " + shellQuote(masterURL) + " --data-dir ./agent-data"}
+	link := masterURL + "/api/agents/bootstrap/" + invite.Token
+	data := map[string]any{"id": tokenKey(invite.Token), "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": link, "nativeAgent": map[string]any{"available": false}, "nativeCommand": "./oss-transfer-agent --join-url " + shellQuote(link)}
 	if s.agentReleaseURL() != "" {
-		link := masterURL + "/api/agents/bootstrap/" + invite.Token
-		data["joinUrl"] = link
 		data["nativeAgent"] = map[string]any{"available": true}
-		data["traditionalCommand"] = bootstrapCommand(link, "", false)
-		data["windowsCommand"] = "& ([scriptblock]::Create((Invoke-RestMethod -ErrorAction Stop -Uri " + psQuote(link+"?platform=windows") + ")))"
+		data["traditionalCommand"] = bootstrapCommand(link)
+		data["windowsCommand"] = "irm " + psQuote(link+"?platform=windows") + " | iex"
 	}
-	if s.agentReleaseURL() != "" && s.options.AgentDockerImage != "" {
-		link := masterURL + "/api/agents/bootstrap/" + invite.Token
-		data["dockerCommand"] = bootstrapCommand(link, s.options.AgentDockerImage, true)
-	} else if s.options.AgentDockerImage != "" {
-		// The one-time token is supplied to an enrollment container only. The
-		// long-running container mounts the saved identity and contains no token.
-		image := shellQuote(s.options.AgentDockerImage)
-		data["dockerCommand"] = "docker volume create oss-transfer-agent-data &&\n" +
-			"docker run --rm -e OSS_TRANSFER_JOIN_TOKEN=" + shellQuote(invite.Token) + " -v oss-transfer-agent-data:/data " + image + " oss-transfer-agent --master-url " + shellQuote(masterURL) + " --data-dir /data --enroll-only &&\n" +
-			"docker run -d --name oss-transfer-agent --restart unless-stopped -v oss-transfer-agent-data:/data " + image + " oss-transfer-agent --data-dir /data"
+	if s.options.AgentDockerImage != "" {
+		data["dockerCommand"] = bootstrapCommand(link + "?method=compose")
 	}
 	return data
 }
 func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
-	if s.agentReleaseURL() == "" {
+	method := r.URL.Query().Get("method")
+	windows := r.URL.Query().Get("platform") == "windows"
+	if method != "" && method != "native" && method != "compose" || windows && method == "compose" {
+		fail(w, http.StatusBadRequest, "Unsupported Agent installation method")
+		return
+	}
+	if method == "compose" && s.options.AgentDockerImage == "" {
+		fail(w, http.StatusServiceUnavailable, "Agent container image is not configured")
+		return
+	}
+	if s.agentReleaseURL() == "" && method != "compose" {
 		fail(w, 503, "Agent release artifacts are not configured")
 		return
 	}
@@ -155,18 +149,44 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if s.agentReleaseURL() == "" {
+		s.containerAgentBootstrap(w, token, masterURL)
+		return
+	}
+	// Keep version/image choices in the downloaded script. Older copied commands
+	// can still pass their installer options through "$@".
+	installerOptions := "--method native"
+	if method == "compose" {
+		installerOptions = "--method compose --image " + shellQuote(s.options.AgentDockerImage)
+	}
 	if s.regionalAgentArtifacts() {
-		s.officialAgentBootstrap(w, r.URL.Query().Get("platform") == "windows", token, masterURL)
+		s.officialAgentBootstrap(w, windows, token, masterURL, installerOptions)
 		return
 	}
-	if r.URL.Query().Get("platform") == "windows" {
-		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & $installer -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(masterURL))
+	if windows {
+		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -UseBasicParsing -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(masterURL))
 		return
 	}
-	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent --method native --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), shellQuote(s.agentReleaseURL()), shellQuote(masterURL))
+	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent %s --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), installerOptions, shellQuote(s.agentReleaseURL()), shellQuote(masterURL))
 }
 
-func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL string) {
+func (s *Server) containerAgentBootstrap(w http.ResponseWriter, token, masterURL string) {
+	// Without release archives, retain the image-only installation path. The
+	// running container uses its saved identity, never the invitation token.
+	image := shellQuote(s.options.AgentDockerImage)
+	fmt.Fprintf(w, `#!/usr/bin/env bash
+set -euo pipefail
+command -v docker >/dev/null || { printf 'Install Docker before joining this Agent.\n' >&2; exit 1; }
+docker volume create oss-transfer-agent-data >/dev/null
+export OSS_TRANSFER_JOIN_TOKEN=%s
+trap 'unset OSS_TRANSFER_JOIN_TOKEN' EXIT
+docker run --rm -e OSS_TRANSFER_JOIN_TOKEN -v oss-transfer-agent-data:/data %s oss-transfer-agent --master-url %s --data-dir /data --enroll-only
+unset OSS_TRANSFER_JOIN_TOKEN
+docker run -d --name oss-transfer-agent --restart unless-stopped -v oss-transfer-agent-data:/data %s oss-transfer-agent --data-dir /data
+`, shellQuote(token), image, shellQuote(masterURL), image)
+}
+
+func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions string) {
 	version := "v" + strings.TrimPrefix(s.options.AgentArtifactVersion, "v")
 	github := "https://raw.githubusercontent.com/MoonWX/oss-transfer/" + version
 	jdoss := officialAgentArtifactBase + "/" + version
@@ -187,7 +207,7 @@ $urls = @{ github = @(%s, %s); jdoss = @(%s) }
 function Download-Installer($sourceName) {
   foreach ($url in $urls[$sourceName]) {
     try {
-      Invoke-WebRequest -Uri $url -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
+      Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
       return
     } catch { $lastError = $_ }
   }
@@ -201,7 +221,7 @@ try {
     Download-Installer $source
   }
   $env:TRANSFER_JOIN_TOKEN = %s
-  & $installer -Role agent -Source auto -Version %s -MasterUrl %s -Yes
+  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -Source auto -Version %s -MasterUrl %s -Yes
 } finally {
   Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
   Remove-Item $installer -ErrorAction SilentlyContinue
@@ -226,6 +246,6 @@ if ! curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max
   if [[ "$source" == jdoss ]]; then source=github; url=$github_url; else source=jdoss; url=$jdoss_url; fi
   curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 "$url" -o "$installer"
 fi
-printf '%%s' %s | bash "$installer" --role agent --method native --source auto --version %s --master-url %s --token-stdin --yes "$@"
-`, shellQuote(github+"/install.sh"), shellQuote(jdoss+"/install.sh"), shellQuote(token), shellQuote(version), shellQuote(masterURL))
+printf '%%s' %s | bash "$installer" --role agent %s --source auto --version %s --master-url %s --token-stdin --yes "$@"
+`, shellQuote(github+"/install.sh"), shellQuote(jdoss+"/install.sh"), shellQuote(token), installerOptions, shellQuote(version), shellQuote(masterURL))
 }

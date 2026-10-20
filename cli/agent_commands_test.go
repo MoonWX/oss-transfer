@@ -10,6 +10,14 @@ import (
 	"testing"
 )
 
+const (
+	testAgentJoinURL        = "https://transfer.example/api/agents/bootstrap/once"
+	testAgentInstallCommand = "curl -fsSL '" + testAgentJoinURL + "' | bash"
+	testAgentWindowsCommand = "irm '" + testAgentJoinURL + "?platform=windows' | iex"
+	testAgentNativeCommand  = "./oss-transfer-agent --join-url '" + testAgentJoinURL + "'"
+	testAgentDockerCommand  = "curl -fsSL '" + testAgentJoinURL + "?method=compose' | bash"
+)
+
 func TestAgentInvitationUsesConsoleAPI(t *testing.T) {
 	for _, args := range [][]string{
 		{"agent", "invite", "--label", "storage-node", "--address", "10.0.0.2"},
@@ -26,8 +34,8 @@ func TestAgentInvitationUsesConsoleAPI(t *testing.T) {
 			}
 			adminTestJSON(t, w, map[string]interface{}{
 				"success": true, "id": "test-invitation", "expiresAt": "2026-10-08T12:30:00Z",
-				"joinUrl": "https://transfer.example/agent/join/once", "dockerCommand": "docker run moonwx/osstransfer agent --join-file ./join.json",
-				"traditionalCommand": "sh ./agent-install.sh",
+				"joinUrl": testAgentJoinURL, "dockerCommand": testAgentDockerCommand,
+				"traditionalCommand": testAgentInstallCommand,
 			})
 		})
 		result, err := dispatchCLI(client, args, strings.NewReader(""), "http://admin-cli-test.invalid")
@@ -36,7 +44,7 @@ func TestAgentInvitationUsesConsoleAPI(t *testing.T) {
 		}
 		var output bytes.Buffer
 		renderCLIResult(&output, result)
-		for _, wanted := range []string{"Agent 加入链接", "2026-10-08T12:30:00Z", "Docker", "docker run moonwx/osstransfer", "原生部署", "sh ./agent-install.sh"} {
+		for _, wanted := range []string{"2026-10-08T12:30:00Z", "Docker", testAgentDockerCommand, "原生部署", testAgentInstallCommand} {
 			if !strings.Contains(output.String(), wanted) {
 				t.Fatalf("invitation output missing %q: %s", wanted, output.String())
 			}
@@ -48,11 +56,11 @@ func TestAgentInvitationShowsNativeCommandsBeforeOptionalDocker(t *testing.T) {
 	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
 		t.Run(string(locale), func(t *testing.T) {
 			data := map[string]interface{}{
-				"joinUrl":            "https://transfer.example/api/agents/bootstrap/once",
-				"traditionalCommand": "sudo bash ./agent-install.sh",
-				"windowsCommand":     "& ./Join-Agent.ps1",
-				"nativeCommand":      "./oss-transfer-agent --master-url https://transfer.example",
-				"dockerCommand":      "docker run moonwx/osstransfer",
+				"joinUrl":            testAgentJoinURL,
+				"traditionalCommand": testAgentInstallCommand,
+				"windowsCommand":     testAgentWindowsCommand,
+				"nativeCommand":      testAgentNativeCommand,
+				"dockerCommand":      testAgentDockerCommand,
 			}
 			var output bytes.Buffer
 			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
@@ -73,7 +81,7 @@ func TestAgentInvitationShowsNativeCommandsBeforeOptionalDocker(t *testing.T) {
 			output.Reset()
 			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
 			text = output.String()
-			if !strings.Contains(text, locale.text("\n原生部署（Linux / macOS）")) || !strings.Contains(text, data["windowsCommand"].(string)) || strings.Contains(text, "Docker") || strings.Contains(text, "<nil>") {
+			if !strings.Contains(text, locale.text("\n原生部署（Linux / macOS / FreeBSD）")) || !strings.Contains(text, data["windowsCommand"].(string)) || strings.Contains(text, "Docker") || strings.Contains(text, "<nil>") {
 				t.Fatalf("native-only invitation does not render cleanly: %s", text)
 			}
 		})
@@ -82,9 +90,9 @@ func TestAgentInvitationShowsNativeCommandsBeforeOptionalDocker(t *testing.T) {
 
 func TestAgentInvitationShowsOnlyAvailableCommands(t *testing.T) {
 	for _, test := range []struct{ field, command, label string }{
-		{"nativeCommand", "./oss-transfer-agent --master-url https://transfer.example", "原生运行"},
-		{"windowsCommand", "& ./Join-Agent.ps1", "Windows PowerShell"},
-		{"dockerCommand", "docker run moonwx/osstransfer", "Docker（可选）"},
+		{"nativeCommand", testAgentNativeCommand, "原生运行"},
+		{"windowsCommand", testAgentWindowsCommand, "Windows PowerShell"},
+		{"dockerCommand", testAgentDockerCommand, "Docker（可选）"},
 	} {
 		t.Run(test.field, func(t *testing.T) {
 			var output bytes.Buffer
@@ -99,30 +107,24 @@ func TestAgentInvitationShowsOnlyAvailableCommands(t *testing.T) {
 	}
 }
 
-func TestAgentInvitationWithoutArtifactsHidesEnrollmentEndpoint(t *testing.T) {
+func TestAgentInvitationDoesNotRepeatJoinURL(t *testing.T) {
 	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
 		t.Run(string(locale), func(t *testing.T) {
-			data := map[string]interface{}{
-				"joinUrl":       "https://transfer.example/api/agents/join",
-				"nativeAgent":   map[string]interface{}{"available": false},
-				"nativeCommand": "./oss-transfer-agent --master-url https://transfer.example",
-				"expiresAt":     "2026-10-08T12:30:00Z",
-			}
-			var output bytes.Buffer
-			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
-			text := output.String()
-			if strings.Contains(text, data["joinUrl"].(string)) || strings.Contains(text, locale.text("Agent 加入链接（仅可加入一次）")) {
-				t.Fatalf("enrollment API was presented as a join link: %s", text)
-			}
-			if !strings.Contains(text, data["nativeCommand"].(string)) || !strings.Contains(text, data["expiresAt"].(string)) {
-				t.Fatalf("native fallback command or expiry missing: %s", text)
-			}
-			for _, availability := range []interface{}{nil, map[string]interface{}{"available": true}} {
-				data["nativeAgent"] = availability
-				output.Reset()
+			for _, availability := range []interface{}{nil, map[string]interface{}{"available": true}, map[string]interface{}{"available": false}} {
+				data := map[string]interface{}{
+					"joinUrl":       testAgentJoinURL,
+					"nativeAgent":   availability,
+					"nativeCommand": testAgentNativeCommand,
+					"expiresAt":     "2026-10-08T12:30:00Z",
+				}
+				var output bytes.Buffer
 				renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
-				if !strings.Contains(output.String(), data["joinUrl"].(string)) {
-					t.Fatalf("available or legacy join link hidden: %s", output.String())
+				text := output.String()
+				if strings.Count(text, testAgentJoinURL) != 1 {
+					t.Fatalf("join URL should appear only in the command: %s", text)
+				}
+				if !strings.Contains(text, testAgentNativeCommand) || !strings.Contains(text, data["expiresAt"].(string)) {
+					t.Fatalf("native fallback command or expiry missing: %s", text)
 				}
 			}
 		})

@@ -63,6 +63,16 @@ oss-transfer-cli help node
 
 Add the global `--json` option for machine-readable output, for example `oss-transfer-cli --json task list`.
 
+## Add an Agent
+
+Generate the join commands:
+
+```sh
+oss-transfer-cli agent invite --label storage-01
+```
+
+Run the command for the Agent host's operating system or Docker. To use a private network address, add `--master-url` when creating the invitation.
+
 ## Language
 
 The CLI follows the system language and supports English, Chinese and Japanese. It uses English for other locales. To save a different preference:

@@ -124,7 +124,9 @@ export default function AgentInvitationDialog({
     { label: "Windows", command: invitation?.windowsCommand },
     {
       label: t("直接运行"),
-      command: invitation?.nativeCommand,
+      command: invitation?.traditionalCommand
+        ? undefined
+        : invitation?.nativeCommand,
     },
     { label: "Docker", command: invitation?.dockerCommand },
   ].filter(

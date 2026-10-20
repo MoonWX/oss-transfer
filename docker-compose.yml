@@ -12,8 +12,8 @@ services:
       - /tmp:mode=1777
     stop_grace_period: 45s
 
-  # Enroll once before starting this profile:
-  # docker compose --profile agent run --rm -e OSS_TRANSFER_JOIN_TOKEN agent oss-transfer-agent --master-url http://master:1685 --data-dir /data --enroll-only
+  # To install an Agent, use the Docker join command from Nodes > Add node.
+  # It creates a separate Compose project; this profile is for a pre-enrolled data volume.
   agent:
     profiles: [agent]
     image: ${OSS_TRANSFER_IMAGE:-moonwx/osstransfer:latest}

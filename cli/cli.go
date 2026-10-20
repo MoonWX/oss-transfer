@@ -449,19 +449,14 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		return true
 	}
 	if getString(data, "joinUrl") != "" && (getString(data, "traditionalCommand") != "" || getString(data, "nativeCommand") != "" || getString(data, "windowsCommand") != "" || getString(data, "dockerCommand") != "") {
-		nativeAgent, _ := data["nativeAgent"].(map[string]interface{})
-		if available, ok := nativeAgent["available"].(bool); !ok || available {
-			fmt.Fprintln(out, cliText(out, "Agent 加入链接（仅可加入一次）"))
-			fmt.Fprintln(out, safeCLIText(data["joinUrl"]))
-		}
 		if expiry := getString(data, "expiresAt"); expiry != "" {
 			fmt.Fprintf(out, cliText(out, "有效至 %s\n"), safeCLIText(expiry))
 		}
 		if command := getString(data, "traditionalCommand"); command != "" {
-			fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS）"))
+			fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD）"))
 			fmt.Fprintln(out, safeCLIText(command))
 		} else if command := getString(data, "nativeCommand"); command != "" {
-			fmt.Fprintln(out, cliText(out, "\n原生运行（Linux / macOS）"))
+			fmt.Fprintln(out, cliText(out, "\n原生运行（Linux / macOS / FreeBSD）"))
 			fmt.Fprintln(out, safeCLIText(command))
 		}
 		if command := getString(data, "windowsCommand"); command != "" {

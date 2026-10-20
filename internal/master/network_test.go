@@ -83,7 +83,7 @@ func TestInheritedAgentURLRemainsInheritedAcrossEditsAndRestart(t *testing.T) {
 			t.Fatal(status, body)
 		}
 		invitation := body["data"].(map[string]any)
-		if invitation["joinUrl"] != effectiveAgent+"/api/agents/join" || !strings.Contains(invitation["nativeCommand"].(string), "--master-url '"+effectiveAgent+"'") {
+		if invitation["joinUrl"] != effectiveAgent+"/api/agents/bootstrap/"+invitation["inviteToken"].(string) || !strings.Contains(invitation["nativeCommand"].(string), "--join-url '"+effectiveAgent+"/api/agents/bootstrap/") {
 			t.Fatal("new invitation used the wrong effective Agent origin", invitation["joinUrl"])
 		}
 	}
@@ -220,7 +220,7 @@ func TestInvitationEndpointValidationAndLegacyFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/agents/invitations", f.admin, map[string]string{"label": "legacy-client"})
-	if status != 200 || body["data"].(map[string]any)["joinUrl"] != f.http.URL+"/api/agents/join" {
+	if status != 200 || body["data"].(map[string]any)["joinUrl"] != f.http.URL+"/api/agents/bootstrap/"+body["data"].(map[string]any)["inviteToken"].(string) {
 		t.Fatal("legacy client did not use request origin", status, body)
 	}
 	req, _ := http.NewRequest("POST", f.http.URL+"/api/master/agents/invitations", strings.NewReader(`{"label":"proxy-legacy"}`))

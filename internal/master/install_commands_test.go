@@ -3,6 +3,7 @@ package master
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,23 +30,16 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		t.Fatal("bootstrap commands missing")
 	}
 	windows := data["windowsCommand"].(string)
-	if !strings.Contains(windows, "Invoke-RestMethod -ErrorAction Stop") || !strings.Contains(windows, "[scriptblock]::Create") || strings.Contains(windows, "./Join-Agent.ps1") {
-		t.Fatal("Windows invitation can reuse a stale script after download failure")
+	if windows != "irm 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?platform=windows' | iex" {
+		t.Fatal("Windows invitation must directly run the downloaded script")
 	}
 	docker := data["dockerCommand"].(string)
-	if !strings.HasPrefix(docker, "curl -fsSL ") || !strings.Contains(docker, "/api/agents/bootstrap/"+invite.Token) || !strings.Contains(docker, " | bash -s -- --method compose") {
+	if docker != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?method=compose' | bash" {
 		t.Fatal("Docker enrollment must use the unified installer")
 	}
-	if !strings.HasSuffix(docker, "--image 'moonwx/osstransfer:4.1.0'") {
-		t.Fatal("Docker enrollment must explicitly pin the configured release image")
-	}
 	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
-	custom := f.master.agentInvitationData("https://master.example:1685", invite)
-	if !strings.HasSuffix(custom["dockerCommand"].(string), "--image 'registry.example/transfer:custom'") {
-		t.Fatal("configured container registry was not preserved")
-	}
 	link := f.http.URL + "/api/agents/bootstrap/" + invite.Token
-	for _, suffix := range []string{"", "?platform=windows"} {
+	for _, suffix := range []string{"", "?platform=windows", "?method=compose"} {
 		response, err := http.Get(link + suffix)
 		if err != nil {
 			t.Fatal(err)
@@ -58,18 +52,23 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		if suffix == "" && (!strings.Contains(string(body), "--method native") || !strings.Contains(string(body), "--token-stdin")) {
 			t.Fatal("bootstrap must explicitly use native installation and stdin enrollment")
 		}
+		if suffix == "?method=compose" && !strings.Contains(string(body), "--method compose --image 'registry.example/transfer:custom'") {
+			t.Fatal("bootstrap did not preserve the configured container image")
+		}
 	}
 	credential, _ := cluster.Token()
 	if _, err = f.master.agents.registry.Join(cluster.JoinRequest{Token: invite.Token, InstanceID: "installed", Credential: credential}); err != nil {
 		t.Fatal(err)
 	}
-	response, err := http.Get(link)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != 404 {
-		t.Fatal("used bootstrap remains accessible", response.StatusCode)
+	for _, suffix := range []string{"", "?platform=windows", "?method=compose"} {
+		response, err := http.Get(link + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 404 {
+			t.Fatal("used bootstrap remains accessible", response.StatusCode)
+		}
 	}
 }
 
@@ -133,7 +132,11 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			response, err := http.Get(f.http.URL + "/api/agents/bootstrap/" + invite.Token)
+			bootstrapURL := f.http.URL + "/api/agents/bootstrap/" + invite.Token
+			if tc.method != "" {
+				bootstrapURL += "?method=" + tc.method
+			}
+			response, err := http.Get(bootstrapURL)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,7 +189,7 @@ esac
 			command.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TRANSFER_JOIN_TOKEN=", "MOCK_COUNTRY="+tc.country, "MOCK_FALLBACK_COUNTRY="+tc.fallbackCountry,
 				"MOCK_FAIL_BOOTSTRAP="+strconv.FormatBool(tc.failBootstrap),
-				"BOOTSTRAP_URL="+invitation["joinUrl"].(string), "BOOTSTRAP_SCRIPT="+filepath.Join(dir, "join.sh"),
+				"BOOTSTRAP_URL="+bootstrapURL, "BOOTSTRAP_SCRIPT="+filepath.Join(dir, "join.sh"),
 				"MOCK_FAIL_SOURCE="+tc.failSource, "BOOTSTRAP_LOG="+filepath.Join(dir, "requests"),
 				"BOOTSTRAP_STUB="+filepath.Join(dir, "installer.sh"), "BOOTSTRAP_ARGS="+filepath.Join(dir, "args"),
 				"BOOTSTRAP_TOKEN="+filepath.Join(dir, "token"))
@@ -214,7 +217,7 @@ esac
 			if argsErr != nil || !strings.Contains(string(args), "--source\nauto\n--version\nv4.1.6\n") || strings.Contains(string(args), "--release-url") {
 				t.Fatal("source/version not passed to installer", string(args), argsErr)
 			}
-			if tc.method != "" && !strings.HasSuffix(string(args), "--method\n"+tc.method+"\n--image\nmoonwx/osstransfer:4.1.6\n") {
+			if tc.method != "" && !strings.Contains(string(args), "--method\n"+tc.method+"\n--image\nmoonwx/osstransfer:4.1.6\n") {
 				t.Fatal("selected deployment method and pinned image did not reach unified installer", string(args))
 			}
 			requestLines := strings.Split(strings.TrimSpace(string(requests)), "\n")
@@ -302,5 +305,119 @@ func TestAgentBootstrapKeepsOlderOfficialInstallerCompatible(t *testing.T) {
 				t.Fatal("older installer received unsupported source selection", text)
 			}
 		}
+	}
+}
+
+func TestImageOnlyAgentBootstrapEnrollsBeforeStartingContainer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Container bootstrap requires Bash")
+	}
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
+	invite, err := f.master.agents.registry.InviteForMaster("container-bootstrap", "", f.http.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := f.master.agentInvitationData(f.http.URL, invite)
+	for _, failedEnrollment := range []bool{false, true} {
+		t.Run(strconv.FormatBool(failedEnrollment), func(t *testing.T) {
+			dir := t.TempDir()
+			stub := `#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$DOCKER_CALLS"
+case "$*" in
+  *--enroll-only)
+    [[ "${OSS_TRANSFER_JOIN_TOKEN:-}" == "$EXPECTED_TOKEN" ]]
+    [[ "$FAIL_ENROLLMENT" != true ]] || exit 17
+    ;;
+  *) [[ -z "${OSS_TRANSFER_JOIN_TOKEN:-}" ]] ;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0700); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("bash", "-c", data["dockerCommand"].(string))
+			command.Env = append(os.Environ(),
+				"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"OSS_TRANSFER_JOIN_TOKEN=", "EXPECTED_TOKEN="+invite.Token,
+				"FAIL_ENROLLMENT="+strconv.FormatBool(failedEnrollment),
+				"DOCKER_CALLS="+filepath.Join(dir, "calls"))
+			output, err := command.CombinedOutput()
+			if (err != nil) != failedEnrollment {
+				t.Fatalf("container bootstrap: %v\n%s", err, output)
+			}
+			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(calls)
+			if strings.Contains(text, invite.Token) || strings.Contains(string(output), invite.Token) {
+				t.Fatal("bootstrap exposed enrollment token in Docker arguments or output")
+			}
+			if !strings.Contains(text, "registry.example/transfer:custom oss-transfer-agent --master-url "+f.http.URL) {
+				t.Fatal("enrollment lost custom image or Master endpoint", text)
+			}
+			if strings.Contains(text, "run -d") == failedEnrollment {
+				t.Fatal("container must start only after successful enrollment", text)
+			}
+		})
+	}
+	for suffix, want := range map[string]int{
+		"": 503, "?method=unknown": 400, "?method=compose&platform=windows": 400,
+	} {
+		response, err := http.Get(data["joinUrl"].(string) + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatal(suffix, response.StatusCode, want)
+		}
+	}
+}
+
+func TestWindowsAgentCommandRunsDownloadedInstaller(t *testing.T) {
+	shell, err := exec.LookPath("pwsh")
+	if err != nil {
+		shell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell is not installed")
+	}
+	dir := t.TempDir()
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v4.1.11/Install.ps1" {
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, `param($Role, $ReleaseUrl, $MasterUrl, [switch]$Yes)
+[IO.File]::WriteAllText($env:INSTALLER_RESULT, "$Role|$ReleaseUrl|$MasterUrl|$env:TRANSFER_JOIN_TOKEN")
+`)
+	}))
+	defer mirror.Close()
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentArtifactBase = mirror.URL
+	f.master.options.AgentArtifactVersion = "v4.1.11"
+	invite, err := f.master.agents.registry.Invite("windows-bootstrap", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := f.master.agentInvitationData(f.http.URL, invite)
+	result := filepath.Join(dir, "result")
+	shellArgs := []string{"-NoProfile", "-NonInteractive"}
+	if runtime.GOOS == "windows" {
+		shellArgs = append(shellArgs, "-ExecutionPolicy", "Restricted")
+	}
+	command := exec.Command(shell, append(shellArgs, "-Command", data["windowsCommand"].(string))...)
+	command.Env = append(os.Environ(), "INSTALLER_RESULT="+result)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("PowerShell bootstrap: %v\n%s", err, output)
+	}
+	got, err := os.ReadFile(result)
+	// Legacy invitations in this fixture inherit the configured Agent endpoint.
+	want := "agent|" + mirror.URL + "/v4.1.11|https://master.example:1685|" + invite.Token
+	if err != nil || string(got) != want {
+		t.Fatal("Windows installer did not receive enrollment settings", err)
 	}
 }

@@ -20,7 +20,7 @@ curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/inst
 
 打开 `http://<master-ip>:1685`，使用 `admin` 和安装完成时终端输出的初始密码登录。首次登录后设置自己的密码。
 
-Master 只负责调度，数据由 Agent 传输。在 **执行节点 → 添加节点** 中生成命令，到对应主机上运行，至少加一个。Master 所在主机也可以运行 Agent。
+Master 只负责调度，数据由 Agent 传输。在 **执行节点 → 添加节点** 中复制一行加入指令，到对应主机上运行，至少加一个。Master 所在主机也可以运行 Agent。
 
 添加节点时，Master 地址默认使用当前浏览器地址。Agent 走内网时，将它改为 Master 的内网 URL。
 

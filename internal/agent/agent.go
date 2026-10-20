@@ -68,7 +68,7 @@ func New(store *state.Store, options Options) (*Agent, error) {
 		}
 		if !found {
 			if options.MasterURL == "" || options.JoinToken == "" {
-				return errors.New("a new Agent requires --master-url and --join-token")
+				return errors.New("a new Agent requires --join-url with an invitation from Nodes > Add node")
 			}
 			identity.InstanceID, err = cluster.Token()
 			if err != nil {

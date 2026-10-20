@@ -74,7 +74,7 @@ Add this to the domain's existing server block. Hosting the application under a 
 
 ## Add execution hosts
 
-Open **Execution nodes → Add node** on the Master, create an invitation, and run the generated native command on the new host. The Master address defaults to the current browser address. Change it to the Master's private URL when that Agent will use a private network. Each invitation keeps the address chosen when it was created.
+Open **Execution nodes → Add node** on the Master, select the new host's operating system, and copy its one-line command. Run it on that host to install and join. The Master address defaults to the current browser address; change it to the Master's private URL if the Agent will connect over a private network.
 
 The Agent connects to the Master and appears in the node list. Use the same process when adding hosts to an existing cluster.
 

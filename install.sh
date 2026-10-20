@@ -568,9 +568,9 @@ fi
 for path in "$install_dir" "$data_dir"; do [[ ! -e "$path" || -d "$path" && -z $(ls -A "$path") ]] || fail "Existing files in $path; keep the current Compose file when upgrading"; done
 enrollment_input
 if [[ "$role" == agent ]]; then
-  valid_master_origin "$master_url" || fail 'Provide --master-url or --join-url for the Agent'
+  valid_master_origin "$master_url" || fail 'Copy an Agent join command from Nodes > Add node'
   if ((token_stdin)); then IFS= read -r TRANSFER_JOIN_TOKEN || [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]]; fi
-  [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Provide the Agent invitation with --join-url or --token-stdin'
+  [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Copy an Agent join command from Nodes > Add node'
   [[ -z "$files_dir" || -d "$files_dir" ]] || fail 'Create the local-files directory and grant container UID 65532 access first'
 fi
 image=${image:-moonwx/osstransfer:$version}

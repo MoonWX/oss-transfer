@@ -1,10 +1,12 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -112,35 +114,65 @@ func TestProgressTimerStillPersistsPartialBatch(t *testing.T) {
 
 func TestRepeatedSealsStopsAndResultsPreserveUpdatedAt(t *testing.T) {
 	f := newFixture(t, 1)
-	accepted, err := f.repo.Accept(bg, f.job)
-	if err != nil {
+	// A zero-offset local time is encoded as Z and decoded as UTC. Reproduce
+	// that representation change regardless of the machine's local timezone.
+	f.job.Items[0].Source.ModifiedAt = f.job.Items[0].Source.ModifiedAt.In(time.FixedZone("fixture-local", 0))
+	if _, err := f.repo.Accept(bg, f.job); err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := f.repo.Seal(bg, f.job.ChildID, 1)
-	if err != nil || !reflect.DeepEqual(accepted, sealed) {
-		t.Fatalf("a repeated seal rewrote the assignment: %v", err)
+	assertNoWrite := func(name string, operation func() (Record, error)) {
+		t.Helper()
+		// Compare persisted snapshots: Accept/commit can return caller-owned
+		// time.Location values that JSON does not retain in the database.
+		before, err := f.repo.Get(bg, f.job.ChildID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeBytes, err := os.ReadFile(f.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		returned, err := operation()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		after, err := f.repo.Get(bg, f.job.ChildID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(before, returned) || !reflect.DeepEqual(before, after) {
+			t.Fatalf("%s changed the persisted record or UpdatedAt", name)
+		}
+		afterBytes, err := os.ReadFile(f.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Include bbolt's meta pages, so even committing identical row values
+		// with a new transaction ID fails this assertion.
+		if !bytes.Equal(beforeBytes, afterBytes) {
+			t.Fatalf("%s wrote database pages", name)
+		}
 	}
+	assertNoWrite("repeated seal", func() (Record, error) {
+		return f.repo.Seal(bg, f.job.ChildID, 1)
+	})
 	running, err := f.repo.begin(bg, f.job.ChildID, 1, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	results := []ItemResult{{ID: f.job.Items[0].ID, Status: ItemSkipped, Target: f.job.Items[0].Source}}
-	first, err := f.repo.commit(bg, f.job.ChildID, 1, running.Attempt, results)
-	if err != nil {
+	if _, err := f.repo.commit(bg, f.job.ChildID, 1, running.Attempt, results); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := f.repo.commit(bg, f.job.ChildID, 1, running.Attempt, results)
-	if err != nil || !reflect.DeepEqual(first, replayed) {
-		t.Fatalf("duplicate results rewrote the record: %v", err)
-	}
-	stopped, err := f.repo.stop(bg, f.job.ChildID, 1)
-	if err != nil {
+	assertNoWrite("duplicate results", func() (Record, error) {
+		return f.repo.commit(bg, f.job.ChildID, 1, running.Attempt, results)
+	})
+	if _, err := f.repo.stop(bg, f.job.ChildID, 1); err != nil {
 		t.Fatal(err)
 	}
-	repeated, err := f.repo.stop(bg, f.job.ChildID, 1)
-	if err != nil || !reflect.DeepEqual(stopped, repeated) {
-		t.Fatalf("duplicate stop rewrote the record: %v", err)
-	}
+	assertNoWrite("duplicate stop", func() (Record, error) {
+		return f.repo.stop(bg, f.job.ChildID, 1)
+	})
 }
 
 type ledgerWriteMeter struct {

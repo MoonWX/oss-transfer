@@ -95,6 +95,7 @@ export const coreMessages: Record<string, { en: string; ja: string }> =
       ],
       ["当前密码", "Current password", "現在のパスワード"],
       ["待执行", "Pending", "待機中"],
+      ["排队中", "Queued", "実行待ち"],
       ["恢复中", "Resuming", "再開中"],
       ["打开主节点控制台", "Open Master console", "Master コンソールを開く"],
       ["打开导航", "Open navigation", "ナビゲーションを開く"],

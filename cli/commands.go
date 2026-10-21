@@ -376,8 +376,7 @@ func printTaskTableDetail(tasks []interface{}) {
 
 func printSummary(result map[string]interface{}) {
 	pending := getInt(result, "pendingTasks")
-	running := getInt(result, "runningTasks")
-	listDone := getInt(result, "listDoneTasks")
+	running := getInt(result, "runningTasks") + getInt(result, "listDoneTasks")
 	completed := getInt(result, "completedTasks")
 	partialFailed := getInt(result, "partialFailedTasks")
 	failed := getInt(result, "failedTasks")
@@ -391,18 +390,11 @@ func printSummary(result map[string]interface{}) {
 	fmt.Print(" 状态分布: ")
 	if pending > 0 {
 		fmt.Printf("%s待执行: %d%s  ", colorYellow, pending, colorReset)
-	} else {
-		fmt.Printf("待执行: %d  ", pending)
 	}
 	if running > 0 {
 		fmt.Printf("%s执行中: %d%s  ", colorBlue, running, colorReset)
 	} else {
 		fmt.Printf("执行中: %d  ", running)
-	}
-	if listDone > 0 {
-		fmt.Printf("%s扫描完成: %d%s  ", colorCyan, listDone, colorReset)
-	} else {
-		fmt.Printf("扫描完成: %d  ", listDone)
 	}
 	if completed > 0 {
 		fmt.Printf("%s已完成: %d%s  ", colorGreen, completed, colorReset)
@@ -460,12 +452,12 @@ func printSummary(result map[string]interface{}) {
 
 func getStatusDisplay(status string) (string, string) {
 	switch status {
-	case "PENDING":
-		return "PENDING", colorYellow
+	case "PENDING", "WAITING":
+		return "WAITING", colorYellow
 	case "RUNNING":
 		return "RUNNING", colorBlue
 	case "LIST_DONE":
-		return "LIST_DONE", colorCyan
+		return "RUNNING", colorBlue
 	case "COMPLETED":
 		return "COMPLETED", colorGreen
 	case "PARTIAL_FAILED":

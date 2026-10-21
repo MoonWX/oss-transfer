@@ -35,6 +35,7 @@ import {
   AddRounded,
   EditOutlined,
   DeleteOutlineRounded,
+  InfoOutlined,
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
 import { useWorkerStatus } from "../lib/workerStatus";
@@ -62,7 +63,6 @@ import {
   removeNode,
   saveNode,
   type NodeRegistry,
-  type NodeChange,
   type RegisteredNode,
   nodeName,
 } from "../lib/nodeRegistry";
@@ -102,9 +102,6 @@ export default function NodesPage() {
     label: string;
     master: boolean;
     agent: boolean;
-    roots: string | null;
-    initialRoots: string | null;
-    goAgent: boolean;
   } | null>(null);
   const [nodeDelete, setNodeDelete] = useState<RegisteredNode | null>(null);
   const [nodeSaving, setNodeSaving] = useState(false);
@@ -136,24 +133,12 @@ export default function NodesPage() {
     Promise.all([workers.refresh(), history.refresh(), registry.refresh()]);
   const openNodeEditor = (node?: RegisteredNode) => {
     setNodeError(null);
-    const status = node ? workers.data?.workers?.[node.address] : undefined;
-    const declaredRoots = status?.localStorage?.advertisedLocalRoots;
-    const roots =
-      status?.success &&
-      !workers.stale &&
-      Array.isArray(declaredRoots) &&
-      declaredRoots.every((root) => typeof root === "string")
-        ? declaredRoots.join("\n")
-        : null;
     setNodeEdit({
       original: node?.address ?? null,
       address: node?.address ?? "",
       label: node?.label ?? "",
       master: !!node?.master,
       agent: !!node?.agent,
-      roots,
-      initialRoots: roots,
-      goAgent: !!status?.executionStatus,
     });
   };
   async function saveNodeEdit() {
@@ -165,28 +150,10 @@ export default function NodesPage() {
     setNodeSaving(true);
     setNodeError(null);
     try {
-      const change: NodeChange = {
+      await saveNode(nodeEdit.original, {
         address: nodeEdit.address.trim(),
         label: nodeEdit.label.trim(),
-      };
-      if (
-        nodeEdit.goAgent &&
-        nodeEdit.roots !== null &&
-        nodeEdit.roots !== nodeEdit.initialRoots
-      ) {
-        const current = workers.data?.workers?.[nodeEdit.original ?? ""];
-        if (!current?.success || workers.stale) {
-          throw new Error(t("节点状态已失效，请刷新后重新编辑根目录。"));
-        }
-        const roots = nodeEdit.roots
-          .split(/\r?\n/)
-          .filter((root) => root !== "");
-        if (new Set(roots).size !== roots.length) {
-          throw new Error(t("本地根目录不能重复。"));
-        }
-        change.advertisedLocalRoots = roots;
-      }
-      await saveNode(nodeEdit.original, change);
+      });
       notify(
         nodeEdit.original ? t("节点设置已保存。") : t("节点已添加。"),
         "success",
@@ -443,7 +410,6 @@ export default function NodesPage() {
                   Number.isFinite(item.capacity) &&
                   item.capacity > 0,
               );
-              const localRoots = worker.localStorage?.advertisedLocalRoots;
               return (
                 <Paper
                   key={ip}
@@ -516,6 +482,7 @@ export default function NodesPage() {
                       {registered.agent && (
                         <Button
                           size="small"
+                          startIcon={<InfoOutlined />}
                           onClick={() => setDetailNode(registered)}
                         >
                           {t("节点详情")}
@@ -611,37 +578,6 @@ export default function NodesPage() {
                                 );
                               })}
                             </Stack>
-                          </Box>
-                        </>
-                      )}
-                      {Array.isArray(localRoots) && (
-                        <>
-                          <Divider />
-                          <Box sx={{ p: 2.5 }}>
-                            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                              {t("本地根目录")}
-                            </Typography>
-                            {localRoots.length > 0 ? (
-                              localRoots.map((root) => (
-                                <Typography
-                                  key={root}
-                                  variant="body2"
-                                  sx={{
-                                    fontFamily: "monospace",
-                                    overflowWrap: "anywhere",
-                                  }}
-                                >
-                                  {root}
-                                </Typography>
-                              ))
-                            ) : (
-                              <Typography
-                                variant="body2"
-                                color="text.secondary"
-                              >
-                                {t("未设置")}
-                              </Typography>
-                            )}
                           </Box>
                         </>
                       )}
@@ -786,7 +722,11 @@ export default function NodesPage() {
         </Stack>
       )}
       {inviteOpen && (
-        <AgentInvitationDialog open onClose={() => setInviteOpen(false)} />
+        <AgentInvitationDialog
+          open
+          onClose={() => setInviteOpen(false)}
+          onJoined={() => void refresh()}
+        />
       )}
       {detailNode && (
         <NodeDetailsDialog
@@ -840,33 +780,6 @@ export default function NodesPage() {
                 )
               }
             />
-            {nodeEdit?.goAgent && (
-              <TextField
-                label={t("本地根目录")}
-                multiline
-                minRows={3}
-                fullWidth
-                value={nodeEdit.roots ?? ""}
-                disabled={
-                  nodeSaving ||
-                  nodeEdit.roots === null ||
-                  workers.stale ||
-                  !workers.data?.workers?.[nodeEdit.original ?? ""]?.success
-                }
-                helperText={
-                  nodeEdit.roots === null
-                    ? t("节点未返回根目录配置，暂时不能编辑。")
-                    : t(
-                        "每行一个绝对路径。用于路径选择提示，不限制节点的文件访问权限。",
-                      )
-                }
-                onChange={(event) =>
-                  setNodeEdit(
-                    (value) => value && { ...value, roots: event.target.value },
-                  )
-                }
-              />
-            )}
           </Stack>
         </DialogContent>
         <DialogActions>

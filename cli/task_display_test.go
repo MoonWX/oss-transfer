@@ -55,3 +55,14 @@ func TestCLIBinaryUnitsMatchConsole(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskDisplayGroupsLegacyStatesWithoutRewritingJSON(t *testing.T) {
+	for state, want := range map[string]string{"PENDING": "WAITING", "WAITING": "WAITING", "LIST_DONE": "RUNNING", "RUNNING": "RUNNING", "RECOVERABLE": "RECOVERABLE"} {
+		row := map[string]interface{}{"taskIndex": 1, "status": state}
+		var output bytes.Buffer
+		renderTaskRows(&output, []map[string]interface{}{row}, false)
+		if !strings.Contains(output.String(), want) || row["status"] != state {
+			t.Fatalf("wrong display or mutated data: %s %#v", output.String(), row)
+		}
+	}
+}

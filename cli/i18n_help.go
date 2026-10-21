@@ -197,7 +197,7 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   import buckets|tasks|local <file> [options]
   See help task create and help task import.
 
-States: PENDING, RUNNING, LIST_DONE, RECOVERABLE, RESUMING, STOPPING, STOPPED, COMPLETED, PARTIAL_FAILED, FAILED.
+States: RUNNING, STOPPING, RESUMING, COMPLETED, PARTIAL_FAILED, FAILED, STOPPED.
 Actions accept parent IDs: 224,225 or 224-226. Incomplete node status prevents task controls.
 Child pages default to 25 IDs; --limit is 1–200, --offset skips IDs without renumbering.
 list/trash accept --limit 1–10000; --before-id loads older records.
@@ -232,7 +232,7 @@ Deleting records does not delete source or target objects.
   import buckets|tasks|local <ファイル> [オプション]
   詳細は help task create と help task import を参照してください。
 
-状態: PENDING、RUNNING、LIST_DONE、RECOVERABLE、RESUMING、STOPPING、STOPPED、COMPLETED、PARTIAL_FAILED、FAILED。
+状態: RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
 操作には親 ID（224,225 または 224-226）を指定します。ノード情報が不完全なら実行しません。
 子タスクは既定で 25 番号ずつ取得します。--limit は 1～200、--offset は番号を変えずに取得位置を指定します。
 list/trash の --limit は 1～10000、--before-id は指定 ID より古い記録を取得します。

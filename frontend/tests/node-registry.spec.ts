@@ -33,6 +33,9 @@ async function setup(
   }[] = [];
   let reject = "";
   const invitations: { body: any; internalToken?: string }[] = [];
+  await page.route("**/api/master/agents/invitations/*", (route) =>
+    route.fulfill({ json: { success: true, data: { status: "pending" } } }),
+  );
   await page.route("**/api/master/agents/invitations", async (route) => {
     const request = route.request();
     invitations.push({
@@ -45,7 +48,7 @@ async function setup(
         ? { success: false, message: reject }
         : {
             success: true,
-            id: "invitation-1",
+            id: `invitation-${invitations.length}`,
             expiresAt: new Date(Date.now() + 1800000).toISOString(),
             joinUrl,
             dockerCommand,
@@ -437,4 +440,137 @@ test("worker address and name remain editable without sending display directorie
     internalToken: undefined,
   });
   await expect(page.getByText("归档节点", { exact: true })).toBeVisible();
+});
+
+async function openInvitation(page: Page, label = "新节点") {
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill(label);
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("button", { name: "复制指令", exact: true }),
+  ).toBeVisible();
+  return dialog;
+}
+
+test("invitation closes only when its node joins and refreshes the node list", async ({
+  page,
+}) => {
+  await setup(page, true);
+  let joined = false;
+  let checks = 0;
+  let refreshes = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/master/nodes") refreshes++;
+  });
+  await page.route("**/api/master/agents/invitations/*", (route) => {
+    checks++;
+    return route.fulfill({
+      json: {
+        success: true,
+        data: joined
+          ? { status: "joined", nodeId: "new-agent" }
+          : { status: "pending" },
+      },
+    });
+  });
+  const dialog = await openInvitation(page);
+  await expect.poll(() => checks).toBeGreaterThan(0);
+  await expect(dialog).toBeVisible();
+  const beforeJoin = refreshes;
+  joined = true;
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("节点已添加。", { exact: true })).toBeVisible();
+  await expect.poll(() => refreshes).toBeGreaterThan(beforeJoin);
+});
+
+for (const status of ["expired", "revoked"]) {
+  test(`invitation stops checking after ${status} without claiming success`, async ({
+    page,
+  }) => {
+    await setup(page);
+    let checks = 0;
+    await page.route("**/api/master/agents/invitations/*", (route) => {
+      checks++;
+      return route.fulfill({ json: { success: true, data: { status } } });
+    });
+    const dialog = await openInvitation(page);
+    await expect.poll(() => checks).toBe(1);
+    await page.waitForTimeout(2300);
+    expect(checks).toBe(1);
+    await expect(dialog).toBeVisible();
+    await expect(page.getByText("节点已添加。", { exact: true })).toHaveCount(
+      0,
+    );
+  });
+}
+
+test("a slow enrollment check does not overlap or close a later invitation", async ({
+  page,
+}) => {
+  await setup(page);
+  let finish!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let oldChecks = 0;
+  let newChecks = 0;
+  await page.route("**/api/master/agents/invitations/*", async (route) => {
+    if (route.request().url().endsWith("/invitation-1")) {
+      oldChecks++;
+      await delayed;
+      await route
+        .fulfill({
+          json: {
+            success: true,
+            data: { status: "joined", nodeId: "old-agent" },
+          },
+        })
+        .catch(() => {});
+    } else {
+      newChecks++;
+      await route.fulfill({
+        json: { success: true, data: { status: "pending" } },
+      });
+    }
+  });
+  const first = await openInvitation(page);
+  await expect.poll(() => oldChecks).toBe(1);
+  await page.waitForTimeout(2300);
+  expect(oldChecks).toBe(1);
+  await first.getByRole("button", { name: "关闭", exact: true }).click();
+  const second = await openInvitation(page, "另一个节点");
+  await expect.poll(() => newChecks).toBeGreaterThan(0);
+  finish();
+  await page.waitForTimeout(300);
+  await expect(second).toBeVisible();
+  await expect(page.getByText("节点已添加。", { exact: true })).toHaveCount(0);
+});
+
+test("invitation retries temporary status failures until the node joins", async ({
+  page,
+}) => {
+  await setup(page);
+  let checks = 0;
+  await page.route("**/api/master/agents/invitations/*", (route) => {
+    checks++;
+    return checks === 1
+      ? route.fulfill({
+          status: 503,
+          json: { success: false, message: "temporary outage" },
+        })
+      : route.fulfill({
+          json: {
+            success: true,
+            data: { status: "joined", nodeId: "new-agent" },
+          },
+        });
+  });
+  const dialog = await openInvitation(page);
+  await expect(dialog).toBeHidden();
+  expect(checks).toBe(2);
 });

@@ -84,7 +84,7 @@ Install an Agent on the Master host too if it will transfer files. The two servi
 
 Task paths refer to the Agent host. Use absolute paths, such as `/mnt/storage/import` or `D:\transfer\import`. Its service account needs read access for uploads and write access for downloads.
 
-**Execution nodes → Edit node** records local roots in the console. Create the directories and configure mounts and permissions on the host. For a local-file task assigned to several Agents, each must access the same shared filesystem at the same absolute path. The tool checks shared access before distributing work.
+Create the directories and configure mounts and permissions on the host. For a local-file task assigned to several Agents, each must access the same shared filesystem at the same absolute path. The tool checks shared access before distributing work.
 
 Configure network filesystems to mount after a restart. A containerized Master can use native Agents; only the Agents need access to transfer directories. See [Docker Compose deployment](../../docs/docker-compose.md) for container setup.
 
@@ -106,7 +106,7 @@ On macOS, configuration and data live under `/Library/Application Support/OSS Tr
 
 The Unix installer puts the Master's CLI at `/usr/local/bin/oss-transfer-cli`, or `~/.local/bin/oss-transfer-cli` for a user installation. An Agent's CLI stays beside its binary. If another installation occupies the CLI path, the interactive installer asks before replacing it. For unattended replacement, `--replace-cli` backs up the old executable first.
 
-Edit `service.json` and restart the service to change startup settings. `--listen` and `-Listen` set the Master's listener on first installation. Change local roots and manual transfer limits in the console. CLI authentication and commands are covered in [CLI usage](../../docs/cli.md).
+Edit `service.json` and restart the service to change startup settings. `--listen` and `-Listen` set the Master's listener on first installation. Change manual transfer limits in the console. CLI authentication and commands are covered in [CLI usage](../../docs/cli.md).
 
 To host Agent downloads yourself, set `agentArtifactBase`, `agentArtifactVersion` and `agentDockerImage` in the Master's `service.json`. Use a fixed release version with matching archives and manifests.
 

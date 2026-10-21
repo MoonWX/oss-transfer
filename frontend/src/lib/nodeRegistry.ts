@@ -40,12 +40,25 @@ export type AgentInvitation = {
 };
 export async function createAgentInvitation(
   change: Partial<NodeChange> & { masterUrl?: string },
+  signal?: AbortSignal,
 ) {
   const response = await api<AgentInvitation & { data?: AgentInvitation }>(
     "/api/master/agents/invitations",
-    { method: "POST", body: change },
+    { method: "POST", body: change, signal },
   );
   return response.data ?? response;
+}
+export async function getAgentInvitationStatus(
+  id: string,
+  signal: AbortSignal,
+) {
+  const response = await api<{
+    data: {
+      status: "pending" | "joined" | "expired" | "revoked";
+      nodeId?: string;
+    };
+  }>(`/api/master/agents/invitations/${encodeURIComponent(id)}`, { signal });
+  return response.data;
 }
 export function saveNode(originalAddress: string | null, change: NodeChange) {
   return api<{ data: NodeRegistry }>(

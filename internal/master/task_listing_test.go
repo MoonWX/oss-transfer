@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
@@ -53,6 +54,37 @@ func TestTaskHTTPNewestPagesRecycleAndDirectDetail(t *testing.T) {
 		status, _ := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/status?"+query, f.admin, nil)
 		if status != 400 {
 			t.Fatal("invalid page accepted", query, status)
+		}
+	}
+}
+
+func TestTaskHTTPStatusAliasesPreserveRecordsAndGroupCounters(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	for _, status := range []string{"PENDING", "WAITING", "RUNNING", "LIST_DONE", "STOPPING", "COMPLETED"} {
+		p := persistAPITask(t, f, status)
+		p.Status = status
+		if err := f.master.store.Update(func(tx *state.Tx) error {
+			return tx.Put("master-tasks", fmt.Sprintf("%020d", p.ID), p)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, filter := range []string{"PENDING", "WAITING", "RUNNING", "LIST_DONE"} {
+		code, body := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/status?status="+filter, f.admin, nil)
+		rows := body["tasks"].([]any)
+		if code != 200 || len(rows) != 2 {
+			t.Fatalf("%s: %d %#v", filter, code, body)
+		}
+		seen := map[string]bool{}
+		for _, row := range rows {
+			seen[row.(map[string]any)["status"].(string)] = true
+		}
+		metric, first, second := "runningTasks", "RUNNING", "LIST_DONE"
+		if filter == "PENDING" || filter == "WAITING" {
+			metric, first, second = "pendingTasks", "PENDING", "WAITING"
+		}
+		if !seen[first] || !seen[second] || body[metric] != float64(2) {
+			t.Fatalf("aliases changed records or counters: %#v", body)
 		}
 	}
 }

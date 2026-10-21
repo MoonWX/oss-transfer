@@ -27,7 +27,6 @@ type NodeDetails = RegisteredNode & {
   os?: string;
   arch?: string;
   localIps?: string[];
-  advertisedLocalRoots?: string[];
   mounts?: {
     path: string;
     source: string;
@@ -61,7 +60,6 @@ export default function NodeDetailsDialog({
       t("最后连接"),
       details?.lastSeen ? formatDate(details.lastSeen) : undefined,
     ],
-    [t("本地根目录"), details?.advertisedLocalRoots?.join("\n")],
     [t("内部 ID"), details?.id ?? node.id],
   ];
   return (

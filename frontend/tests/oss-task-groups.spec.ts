@@ -115,7 +115,7 @@ test("automatically queued OSS migrations can be stopped without exposing a manu
   const requests = await mockApi(page);
   await status(page, [ossGroup(8000, { status: "PENDING", autoStart: true })]);
   await page.goto("/tasks");
-  await expect(page.locator("tbody tr")).toContainText("待执行");
+  await expect(page.locator("tbody tr")).toContainText("排队中");
   await page
     .getByRole("checkbox", { name: "选择任务 8000", exact: true })
     .check();
@@ -137,7 +137,7 @@ test("automatically queued OSS migrations can be stopped without exposing a manu
   ).toHaveLength(0);
 });
 
-test("asynchronous creation opens its public task ID instead of any child ID", async ({
+test("OSS creation opens its public task ID instead of any child ID", async ({
   page,
 }) => {
   // Multiple routes/actions share this total budget; assertions keep their own deadline.
@@ -147,23 +147,8 @@ test("asynchronous creation opens its public task ID instead of any child ID", a
   await status(page, [group]);
   await page.route("**/api/master/add-buckets", (route) =>
     route.fulfill({
-      json: { success: true, addedCount: 1, creationIds: [group.creationId] },
+      json: { success: true, addedCount: 1, taskIds: [group.taskIndex] },
     }),
-  );
-  await page.route(
-    `**/api/master/task-creations/${group.creationId}`,
-    (route) =>
-      route.fulfill({
-        json: {
-          success: true,
-          creation: {
-            id: group.creationId,
-            status: "COMPLETED",
-            publicTaskId: group.taskIndex,
-            taskIds: group.childTaskIds,
-          },
-        },
-      }),
   );
   await configureOss(page);
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
@@ -171,7 +156,7 @@ test("asynchronous creation opens its public task ID instead of any child ID", a
     page.getByText(/任务自动执行，可在“迁移任务”中查看状态/),
   ).toBeVisible();
   await page.getByRole("link", { name: "查看任务", exact: true }).click();
-  await expect(page).toHaveURL(/creationId=creation-8000&taskId=8000$/);
+  await expect(page).toHaveURL(/\/tasks\?taskId=8000$/);
   await expect(drawer(page)).toBeVisible();
   await expect(drawer(page).getByText("本次创建的任务")).toHaveCount(0);
   await expect(drawer(page).getByRole("button", { name: /^#10/ })).toHaveCount(
@@ -252,7 +237,11 @@ for (const creationStatus of ["QUEUED", "RUNNING"]) {
       await expect(
         page.getByRole("button", { name: "继续传输", exact: true }),
       ).toBeDisabled();
-      await expect(page.locator("tbody tr")).toContainText("扫描中");
+      await expect(page.locator("tbody tr")).toContainText(
+        { PENDING: "排队中", STOPPED: "已停止", COMPLETED: "已完成" }[
+          taskStatus
+        ]!,
+      );
       await page.getByRole("button", { name: "#8000", exact: true }).click();
       await expect(
         drawer(page).getByRole("button", { name: "启动任务", exact: true }),

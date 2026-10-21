@@ -58,6 +58,7 @@ func installAgentRoutes(s *Server) error {
 	}
 	s.agents = a
 	s.mux.HandleFunc("POST /api/master/agents/invitations", s.adminOnly(s.createAgentInvitation))
+	s.mux.HandleFunc("GET /api/master/agents/invitations/{id}", s.adminOnly(s.agentInvitationStatus))
 	s.mux.HandleFunc("GET /api/master/nodes", s.adminOnly(s.listAgentNodes))
 	s.mux.HandleFunc("GET /api/master/network", s.adminOnly(s.networkSettings))
 	s.mux.HandleFunc("PUT /api/master/network", s.adminOnly(s.updateNetworkSettings))
@@ -194,6 +195,19 @@ func (s *Server) joinAgent(w http.ResponseWriter, r *http.Request) {
 	a.lastSeen[member.ID] = s.options.Now().UTC()
 	a.remoteAddress[member.ID] = connectionHost(r.RemoteAddr)
 	writeJSON(w, 200, map[string]any{"success": true, "data": member, "session": member.Session()})
+}
+
+func (s *Server) agentInvitationStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := s.agents.registry.InvitationStatus(r.PathValue("id"))
+	if errors.Is(err, cluster.ErrInvitation) {
+		fail(w, http.StatusNotFound, "Invalid or expired Agent invitation")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "Cannot read registered Agents")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": status})
 }
 
 func (s *Server) authenticateAgent(r *http.Request) (agenttransport.Session, error) {

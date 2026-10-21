@@ -159,7 +159,7 @@ V4.0.x uses UTF-8 keys and Fastjson values in RocksDB's default column family. T
 | --- | --- |
 | `user:<username>` | Preserve password hashes, roles and display names in `users`; keep remaining timestamps in migration history. |
 | `s3_config_<alias>` | Write one coordinated storage snapshot to Master and Agents. Preserve credentials, signer and path-style flags; set the old dynamic signing region to `default`. |
-| `node_config` | Map membership, labels and local roots. Split a combined Master/worker into separate roles. Resolve listener and public URL from the plan. |
+| `node_config` | Map membership and labels; preserve recorded directory metadata. Split a combined Master/worker into separate roles. Resolve listener and public URL from the plan. |
 | `agent:member:<address>`, `agent:identity` | Match the Agent's credential with the Master's base64url SHA-256 hash before writing the Go hex SHA-256 index. Preserve instance and enrollment IDs; revoked members stay revoked. |
 | `agent:invite:<token hash>`, `agent:storage-version` | Retain invitation history and storage provenance. New invitations and configuration revisions are issued for the new runtime. |
 | `rate_limit:manual:list`, `:put`, `:head`, `:bandwidth` | Preserve manual overrides in Agent node-control settings. Bandwidth is bits/s. |

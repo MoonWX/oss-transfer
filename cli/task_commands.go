@@ -172,7 +172,7 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 	if opts.Has("status") {
 		status := strings.ToUpper(opts.Value("status"))
 		switch status {
-		case "PENDING", "RUNNING", "LIST_DONE", "RECOVERABLE", "RESUMING", "STOPPING", "STOPPED", "COMPLETED", "PARTIAL_FAILED", "FAILED":
+		case "PENDING", "WAITING", "RUNNING", "LIST_DONE", "RECOVERABLE", "RESUMING", "STOPPING", "STOPPED", "COMPLETED", "PARTIAL_FAILED", "FAILED":
 		default:
 			return nil, cliErrorf("无效任务状态 %q", status)
 		}
@@ -652,14 +652,14 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 		allowed := false
 		switch action {
 		case "stop":
-			allowed = exploring || state == "RUNNING" || state == "LIST_DONE" || state == "PENDING"
+			allowed = exploring || state == "RUNNING" || state == "LIST_DONE" || state == "PENDING" || state == "WAITING" || state == "RESUMING" || state == "RECOVERABLE"
 		case "resume", "retry":
 			allowed = !exploring && (state == "STOPPED" || state == "FAILED" || state == "PARTIAL_FAILED")
 			path = "/resume"
 		case "start":
 			allowed = !localTask(task) && task["autoStart"] != true && state == "PENDING" && !exploring
 		case "delete":
-			allowed = state != "RUNNING" && state != "LIST_DONE" && state != "STOPPING" && !exploring
+			allowed = state != "RUNNING" && state != "LIST_DONE" && state != "STOPPING" && state != "WAITING" && state != "RESUMING" && state != "RECOVERABLE" && !exploring
 			path = "/clear"
 		}
 		if !allowed {

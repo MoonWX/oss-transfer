@@ -338,6 +338,7 @@ func TestAgentHTTPEnrollmentCommandsRestartAndRevocation(t *testing.T) {
 func TestAgentHTTPAdministrativeAuthorization(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	for _, endpoint := range []struct{ method, path string }{
+		{"GET", "/api/master/agents/invitations/example"},
 		{"POST", "/api/master/agents/invitations"}, {"GET", "/api/master/nodes"}, {"POST", "/api/master/nodes"}, {"PUT", "/api/master/nodes/example"}, {"DELETE", "/api/master/nodes/example"},
 	} {
 		status, _ := request(t, f.http.Client(), endpoint.method, f.http.URL+endpoint.path, "", map[string]string{})
@@ -368,6 +369,10 @@ func TestAgentHTTPAdministrativeAuthorization(t *testing.T) {
 	status, _ := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/agents/invitations", f.admin, map[string]string{})
 	if status != 403 {
 		t.Fatalf("non-administrator created invitation: HTTP %d", status)
+	}
+	status, _ = request(t, f.http.Client(), "GET", f.http.URL+"/api/master/agents/invitations/example", f.admin, nil)
+	if status != 403 {
+		t.Fatalf("non-administrator read invitation status: HTTP %d", status)
 	}
 }
 

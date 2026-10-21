@@ -27,11 +27,11 @@ const directions = [
 ];
 const states = [
   {
-    value: "PENDING",
-    label: "待执行",
-    stop: true,
+    value: "STOPPING",
+    label: "停止中",
+    stop: false,
     resume: false,
-    remove: true,
+    remove: false,
   },
   {
     value: "RUNNING",
@@ -41,8 +41,8 @@ const states = [
     remove: false,
   },
   {
-    value: "LIST_DONE",
-    label: "扫描完成",
+    value: "RESUMING",
+    label: "恢复中",
     stop: true,
     resume: false,
     remove: false,
@@ -95,9 +95,7 @@ for (const [i, state] of states.entries()) {
       const table = page.getByRole("table", { name: "迁移任务列表" });
       await select(page, "任务状态", state.label);
       await select(page, "传输方向", direction.label);
-      await page
-        .getByRole("textbox", { name: "执行节点", exact: true })
-        .fill("10.0.1.12");
+      await select(page, "执行节点", "master");
       const id = 2000 + i * 3 + j;
       await expect(table.getByRole("row")).toHaveCount(2);
       await expect(
@@ -108,7 +106,7 @@ for (const [i, state] of states.entries()) {
         .check();
       await expect(
         page.getByRole("button", { name: "启动", exact: true }),
-      ).toBeEnabled({ enabled: state.value === "PENDING" && j === 0 });
+      ).toBeEnabled({ enabled: false });
       await expect(
         page.getByRole("button", { name: "停止", exact: true }),
       ).toBeEnabled({ enabled: state.stop });
@@ -118,9 +116,7 @@ for (const [i, state] of states.entries()) {
       await expect(
         page.getByRole("button", { name: "删除", exact: true }),
       ).toBeEnabled({ enabled: state.remove });
-      await page
-        .getByRole("textbox", { name: "执行节点", exact: true })
-        .fill("10.0.1.13");
+      await select(page, "执行节点", "agent");
       await expect(
         page.getByRole("button", { name: "取消选择", exact: true }),
       ).toHaveCount(0);
@@ -135,8 +131,8 @@ for (const [i, state] of states.entries()) {
       await select(page, "任务状态", "全部状态");
       await select(page, "传输方向", "全部方向");
       await page
-        .getByRole("textbox", { name: "执行节点", exact: true })
-        .fill("not-a-node");
+        .getByRole("textbox", { name: "搜索任务", exact: true })
+        .fill("not-a-task");
       await expect(
         page.getByText("没有匹配的任务", { exact: true }),
       ).toBeVisible();
@@ -164,7 +160,9 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
   );
   await page.goto("/tasks");
   await page.getByRole("checkbox", { name: "选择当前页任务" }).check();
-  await expect(page.getByText("已选 10 项", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("已选 10 项（最多 128 项）", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(page.getByText("11–20 / 27", { exact: true })).toBeVisible();
   await expect(
@@ -173,7 +171,9 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
   await page
     .getByRole("button", { name: "选择全部 27 个结果", exact: true })
     .click();
-  await expect(page.getByText("已选 27 项", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("已选 27 项（最多 128 项）", { exact: true }),
+  ).toBeVisible();
   await select(page, "每页", "25");
   await expect(page.getByText("1–25 / 27", { exact: true })).toBeVisible();
   await expect(
@@ -348,9 +348,7 @@ test("relative paths and duplicate worker bindings fail before precheck or task 
   await page.getByLabel("目标目录绝对路径").fill("relative/path");
   await page.getByRole("button", { name: "运行预检", exact: true }).click();
   await expect(
-    page
-      .getByRole("alert")
-      .filter({ hasText: "本地路径必须是以 / 开头的绝对路径。" }),
+    page.getByRole("alert").filter({ hasText: "请输入执行节点上的绝对路径。" }),
   ).toBeVisible();
   await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/one");
   await page.getByRole("button", { name: /添加共享存储节点/ }).click();

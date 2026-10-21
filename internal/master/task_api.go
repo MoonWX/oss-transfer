@@ -977,6 +977,18 @@ func (s *Server) taskListPage(w http.ResponseWriter, r *http.Request, deleted bo
 	}
 	return parents, next, true
 }
+
+// Old clients use PENDING/LIST_DONE; filtering groups them without rewriting records.
+func taskStatusGroup(status string) string {
+	switch status {
+	case "PENDING":
+		return "WAITING"
+	case "LIST_DONE":
+		return "RUNNING"
+	default:
+		return status
+	}
+}
 func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 	parents, next, ok := s.taskListPage(w, r, false)
 	if !ok {
@@ -991,7 +1003,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.Deleted || p.Purged {
 			continue
 		}
-		if q.Get("status") != "" && q.Get("status") != p.Status {
+		if q.Get("status") != "" && taskStatusGroup(q.Get("status")) != taskStatusGroup(p.Status) {
 			continue
 		}
 		if q.Get("sourceBucket") != "" && q.Get("sourceBucket") != p.Spec.Source.Bucket {
@@ -1013,7 +1025,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		rows = append(rows, s.taskView(p))
-		metric := map[string]string{"RUNNING": "runningTasks", "WAITING": "pendingTasks", "COMPLETED": "completedTasks", "FAILED": "failedTasks", "PARTIAL_FAILED": "partialFailedTasks", "STOPPED": "stoppedTasks"}[p.Status]
+		metric := map[string]string{"RUNNING": "runningTasks", "WAITING": "pendingTasks", "COMPLETED": "completedTasks", "FAILED": "failedTasks", "PARTIAL_FAILED": "partialFailedTasks", "STOPPED": "stoppedTasks"}[taskStatusGroup(p.Status)]
 		if metric != "" {
 			result[metric] = result[metric].(int) + 1
 		}

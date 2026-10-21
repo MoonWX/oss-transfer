@@ -49,6 +49,11 @@ type Invitation struct {
 	MasterURL string    `json:"masterUrl,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
+type InvitationStatus struct {
+	Status    string    `json:"status"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	NodeID    string    `json:"nodeId,omitempty"`
+}
 type JoinRequest struct {
 	Token      string `json:"token"`
 	InstanceID string `json:"instanceId"`
@@ -149,6 +154,42 @@ func (r *Registry) Invitation(token string) (Invitation, error) {
 			return ErrInvitation
 		}
 		result = Invitation{Token: token, MasterURL: invite.MasterURL, ExpiresAt: invite.ExpiresAt}
+		return nil
+	})
+	return result, err
+}
+
+// InvitationStatus is an administrator-only lookup by the public invitation ID.
+// Enrollment and invitation consumption are committed together by Join. Match
+// both IDs so revocation followed by re-enrollment cannot revive an old invite.
+func (r *Registry) InvitationStatus(id string) (InvitationStatus, error) {
+	if decoded, err := hex.DecodeString(id); err != nil || len(decoded) != sha256.Size {
+		return InvitationStatus{}, ErrInvitation
+	}
+	var result InvitationStatus
+	err := r.store.View(func(tx *state.Tx) error {
+		var invite invitation
+		found, err := tx.Get("agent-invitations", id, &invite)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrInvitation
+		}
+		result = InvitationStatus{Status: "pending", ExpiresAt: invite.ExpiresAt}
+		if invite.MemberID != "" {
+			var member Member
+			found, err = tx.Get("agent-members", invite.MemberID, &member)
+			if err != nil {
+				return err
+			}
+			result.Status = "revoked"
+			if found && !member.Revoked && member.EnrollmentID == invite.EnrollmentID {
+				result.Status, result.NodeID = "joined", member.ID
+			}
+		} else if !r.now().Before(invite.ExpiresAt) {
+			result.Status = "expired"
+		}
 		return nil
 	})
 	return result, err

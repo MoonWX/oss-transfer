@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+func cliTaskStatus(status string) string {
+	switch status {
+	case "LIST_DONE":
+		return "RUNNING"
+	case "PENDING":
+		return "WAITING"
+	default:
+		return status
+	}
+}
+
 func renderTaskHistoryPage(out io.Writer, data map[string]interface{}, action string) {
 	if before := getInt(data, "nextBeforeId"); before > 0 {
 		fmt.Fprintf(out, cliText(out, "更早记录：task %s --before-id %d（可沿用原有筛选参数）\n"), action, before)

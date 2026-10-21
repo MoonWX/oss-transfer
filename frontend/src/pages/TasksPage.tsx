@@ -1,6 +1,8 @@
 import { t as tr, useI18n, formatDate } from "../lib/i18n";
 import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import { useWorkerStatus } from "../lib/workerStatus";
+import { nodeName, type NodeRegistry } from "../lib/nodeRegistry";
+import { parentTaskFilterStates, taskStatusGroup } from "../lib/taskStatus";
 import {
   useCallback,
   useEffect,
@@ -97,12 +99,7 @@ const reportAvailable = (task: Task) =>
   !groupIncomplete(task) &&
   ["STOPPED", "COMPLETED", "FAILED", "PARTIAL_FAILED"].includes(task.status);
 function TaskStatus({ task }: { task: Task }) {
-  useI18n();
-  return isExploring(task) ? (
-    <Chip size="small" variant="outlined" color="info" label={tr("扫描中")} />
-  ) : (
-    <StatusChip status={task.status} />
-  );
+  return <StatusChip status={task.status} />;
 }
 const directionLabel = (task: Task) =>
   task.direction === "OSS_TO_LOCAL"
@@ -110,15 +107,14 @@ const directionLabel = (task: Task) =>
     : task.direction === "LOCAL_TO_OSS"
       ? tr("本地 → OSS")
       : "OSS → OSS";
-const workers = (task: Task) =>
+const taskWorkers = (task: Task): string[] =>
   (task.participatingWorkerNodes?.length
     ? task.participatingWorkerNodes
     : task.eligibleWorkerNodes?.length
       ? task.eligibleWorkerNodes
       : [task.executionNodeIp || task.workerNode]
-  )
-    .filter(Boolean)
-    .join(", ") || tr("等待分配");
+  ).filter(Boolean);
+const workers = (task: Task) => taskWorkers(task).join(", ") || tr("等待分配");
 function endpoint(task: Task, source: boolean) {
   const value = source ? task.sourceEndpoint : task.destinationEndpoint;
   if (
@@ -216,9 +212,6 @@ function Metrics({ data }: { data: any }) {
     {
       label: tr("迁移任务"),
       value: formatNumber(data?.totalTasks),
-      detail: tr("{value1} 个待执行", {
-        value1: formatNumber(data?.pendingTasks),
-      }),
       icon: <CloudSyncRounded />,
       color: "primary.main",
     },
@@ -227,7 +220,6 @@ function Metrics({ data }: { data: any }) {
       value: formatNumber(
         (data?.runningTasks || 0) + (data?.listDoneTasks || 0),
       ),
-      detail: tr("含运行中和扫描完成的任务"),
       icon: <PlayArrowRounded />,
       color: "info.main",
     },
@@ -298,9 +290,11 @@ function Metrics({ data }: { data: any }) {
           >
             {data ? card.value : "—"}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {data ? card.detail : tr("等待服务响应")}
-          </Typography>
+          {card.detail && (
+            <Typography variant="caption" color="text.secondary">
+              {data ? card.detail : tr("等待服务响应")}
+            </Typography>
+          )}
         </Paper>
       ))}
     </Box>
@@ -1166,6 +1160,10 @@ export default function TasksPage({
   }
   const health = useWorkerStatus();
   const nodeHealth = useApi("/api/master/local-nodes", refreshMs);
+  const registry = useApi<{ data: NodeRegistry }>(
+    "/api/master/nodes",
+    refreshMs,
+  );
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [direction, setDirection] = useState("");
@@ -1243,6 +1241,32 @@ export default function TasksPage({
     () => mergeTasks(historyTasks ?? [], data?.tasks ?? []),
     [historyTasks, data],
   );
+  const stateOptions = parentTaskFilterStates(tasks, status);
+  const workerOptions = useMemo(() => {
+    const nodes = new Map<string, string>();
+    const registered = registry.data?.data?.nodes ?? [];
+    const nameCounts = new Map<string, number>();
+    for (const node of registered) {
+      const name = nodeName(node);
+      nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+    }
+    for (const node of registered) {
+      const name = nodeName(node);
+      nodes.set(
+        node.address,
+        (nameCounts.get(name) ?? 0) > 1 ? `${name} (${node.address})` : name,
+      );
+    }
+    for (const task of tasks) {
+      for (const address of taskWorkers(task)) {
+        if (!nodes.has(address)) nodes.set(address, address);
+      }
+    }
+    if (worker && !nodes.has(worker)) nodes.set(worker, worker);
+    return [...nodes.entries()].sort((a, b) =>
+      a[1].localeCompare(b[1], locale),
+    );
+  }, [registry.data, tasks, worker, locale]);
   const detailTask = linkedTask || detailFallback.data?.data;
   const actionCandidates = detailTask ? mergeTasks(tasks, [detailTask]) : tasks;
   const filtered = useMemo(
@@ -1250,9 +1274,9 @@ export default function TasksPage({
       tasks
         .filter(
           (t) =>
-            (!status || t.status === status) &&
+            (!status || taskStatusGroup(t.status) === status) &&
             (!direction || (t.direction || "OSS_TO_OSS") === direction) &&
-            (!worker || workers(t).includes(worker)) &&
+            (!worker || taskWorkers(t).includes(worker)) &&
             (!query ||
               `${t.taskIndex} ${endpoint(t, true)} ${endpoint(t, false)} ${workers(t)} ${t.storageId || ""}`
                 .toLowerCase()
@@ -1684,9 +1708,9 @@ export default function TasksPage({
                 onChange={(e) => setStatus(e.target.value)}
               >
                 <MenuItem value="">{tr("全部状态")}</MenuItem>
-                {Object.entries(statusLabels).map(([key, label]) => (
+                {stateOptions.map((key) => (
                   <MenuItem key={key} value={key}>
-                    {label}
+                    {statusLabels[key]}
                   </MenuItem>
                 ))}
               </TextField>
@@ -1702,12 +1726,19 @@ export default function TasksPage({
                 <MenuItem value="LOCAL_TO_OSS">{tr("本地 → OSS")}</MenuItem>
               </TextField>
               <TextField
+                select
                 label={tr("执行节点")}
-                placeholder={tr("IP 地址")}
                 value={worker}
                 onChange={(e) => setWorker(e.target.value)}
                 sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}
-              />
+              >
+                <MenuItem value="">{tr("全部节点")}</MenuItem>
+                {workerOptions.map(([address, label]) => (
+                  <MenuItem key={address} value={address}>
+                    {label}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Box>
             {selected.length > 0 && (
               <Stack

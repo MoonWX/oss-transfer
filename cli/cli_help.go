@@ -119,7 +119,7 @@ const cliTaskHelp = `任务管理
   oss-transfer-cli task report 224 --output ./task-224.zip
   oss-transfer-cli task trash --direction oss-to-local --worker 10.0.0.2
 
-状态：PENDING、RUNNING、LIST_DONE、RECOVERABLE、RESUMING、STOPPING、STOPPED、COMPLETED、PARTIAL_FAILED、FAILED。
+状态：RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
 操作只接受主任务 ID；子任务编号用于详情查询。节点状态不完整时不执行任务控制操作。
 子任务默认读取 25 个编号，--limit 为 1–200；--offset 跳过指定数量的编号，不重新编号。
 list/trash 的 --limit 为 1–10000；--before-id 从指定 ID 之前加载更早任务。

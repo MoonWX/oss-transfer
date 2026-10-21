@@ -1,5 +1,5 @@
 import { t, useI18n, formatDate } from "../lib/i18n";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -17,9 +17,10 @@ import {
 import { ContentCopyRounded } from "@mui/icons-material";
 import {
   createAgentInvitation,
+  getAgentInvitationStatus,
   type AgentInvitation,
 } from "../lib/nodeRegistry";
-import { useNotify } from "../lib/api";
+import { ApiError, useNotify } from "../lib/api";
 async function copyText(value: string) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(value);
@@ -47,9 +48,11 @@ async function copyText(value: string) {
 export default function AgentInvitationDialog({
   open,
   onClose,
+  onJoined,
 }: {
   open: boolean;
   onClose: () => void;
+  onJoined?: () => void;
 }) {
   useI18n();
   const notify = useNotify();
@@ -59,6 +62,49 @@ export default function AgentInvitationDialog({
   const [tab, setTab] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const generation = useRef<AbortController | null>(null);
+  const callbacks = useRef({ onClose, onJoined, notify });
+  useEffect(() => {
+    callbacks.current = { onClose, onJoined, notify };
+  }, [onClose, onJoined, notify]);
+  useEffect(() => {
+    return () => generation.current?.abort();
+  }, [open]);
+  useEffect(() => {
+    if (!open || !invitation) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function checkJoined() {
+      let terminal = false;
+      try {
+        const result = await getAgentInvitationStatus(
+          invitation!.id,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+        );
+        if (controller.signal.aborted) return;
+        terminal = result.status !== "pending";
+        if (result.status === "joined" && result.nodeId) {
+          callbacks.current.notify(t("节点已添加。"), "success");
+          callbacks.current.onJoined?.();
+          callbacks.current.onClose();
+        }
+      } catch (failure) {
+        terminal =
+          failure instanceof ApiError &&
+          [401, 403, 404].includes(failure.status);
+      } finally {
+        // Schedule after completion: slow requests never overlap. A closed or
+        // replaced dialog cannot close a later invitation from a stale response.
+        if (!controller.signal.aborted && !terminal)
+          timer = setTimeout(() => void checkJoined(), 2000);
+      }
+    }
+    void checkJoined();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [open, invitation]);
   async function generate() {
     if (!label.trim()) {
       setError(t("请输入节点名称。"));
@@ -83,11 +129,18 @@ export default function AgentInvitationDialog({
     }
     setSaving(true);
     setError(null);
+    generation.current?.abort();
+    const controller = new AbortController();
+    generation.current = controller;
     try {
-      const next = await createAgentInvitation({
-        label: label.trim(),
-        masterUrl: origin,
-      });
+      const next = await createAgentInvitation(
+        {
+          label: label.trim(),
+          masterUrl: origin,
+        },
+        AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+      );
+      if (controller.signal.aborted) return;
       if (
         !next.joinUrl ||
         ![
@@ -101,9 +154,10 @@ export default function AgentInvitationDialog({
       setTab(0);
       setInvitation(next);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (!controller.signal.aborted)
+        setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      setSaving(false);
+      if (!controller.signal.aborted) setSaving(false);
     }
   }
   async function copy(value: string) {

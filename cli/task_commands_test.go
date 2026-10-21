@@ -455,3 +455,34 @@ func TestWatchSecondsRejectIntegerOverflowBeforeDurationConversion(t *testing.T)
 		}
 	}
 }
+
+func TestTaskListAcceptsCurrentAndCompatibleStatusFilters(t *testing.T) {
+	for _, status := range []string{"RUNNING", "STOPPING", "RESUMING", "COMPLETED", "PARTIAL_FAILED", "FAILED", "STOPPED", "WAITING", "PENDING", "LIST_DONE", "RECOVERABLE"} {
+		t.Run(status, func(t *testing.T) {
+			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("status") != status {
+					t.Fatalf("filter lost: %s", r.URL)
+				}
+				adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(1, "OSS_TO_OSS", status)}})
+			})
+			result, err := taskList(client, []string{"--status", strings.ToLower(status)})
+			if err != nil || objectList(responseData(result)["tasks"])[0]["status"] != status {
+				t.Fatalf("raw status changed: %#v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestTaskDeleteRejectsQueuedAndRecoveringTasksBeforeMutation(t *testing.T) {
+	for _, status := range []string{"WAITING", "RECOVERABLE", "RESUMING"} {
+		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "GET" {
+				t.Fatalf("deleted active task %s", status)
+			}
+			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(1, "OSS_TO_OSS", status)}})
+		})
+		if _, err := runTaskCommand(client, []string{"delete", "1"}); err == nil {
+			t.Fatalf("accepted %s", status)
+		}
+	}
+}

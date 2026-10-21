@@ -639,10 +639,7 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 		if children {
 			id = "#" + getString(task, "childTaskId")
 		}
-		status := getString(task, "status")
-		if task["creationStatus"] == "QUEUED" || task["creationStatus"] == "RUNNING" {
-			status += cliText(out, " (扫描中)")
-		}
+		status := cliTaskStatus(getString(task, "status"))
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkers(task)))
 	}
 	w.Flush()
@@ -659,7 +656,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
 		bandwidth = fmt.Sprint(value, " Mbps")
 	}
-	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), getString(task, "status")}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkers(task)}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskMetric(task, "putObject")}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkers(task)}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskMetric(task, "putObject")}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
 	fields = append(fields, cliTaskScopeFields(task)...)
 	for _, key := range []string{"errorCode", "errorMessage"} {
 		if value := getString(task, key); value != "" {
@@ -679,7 +676,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	w.Flush()
 }
 
-var fieldLabels = map[string]string{"success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "允许的本地目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
+var fieldLabels = map[string]string{"success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
 
 func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 	keys := make([]string, 0, len(data))

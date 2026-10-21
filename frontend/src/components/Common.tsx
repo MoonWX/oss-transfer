@@ -21,10 +21,10 @@ export function formatBytes(value: unknown) {
 }
 export const statusLabels: Record<string, string> = {
   get PENDING() {
-    return t("待执行");
+    return t("排队中");
   },
   get WAITING() {
-    return t("待执行");
+    return t("排队中");
   },
   get RUNNING() {
     return t("执行中");
@@ -39,7 +39,7 @@ export const statusLabels: Record<string, string> = {
     return t("等待恢复");
   },
   get LIST_DONE() {
-    return t("扫描完成");
+    return t("执行中");
   },
   get COMPLETED() {
     return t("已完成");

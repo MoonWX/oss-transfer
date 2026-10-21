@@ -67,7 +67,7 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		seen := map[string]bool{}
 		for _, root := range o.Values["local-root"] {
 			if !agentAbsolutePath(root) || seen[root] {
-				return nil, cliErrorf("本地根目录必须是非重复的节点绝对路径: %s", root)
+				return nil, cliErrorf("登记目录必须是非重复的节点绝对路径: %s", root)
 			}
 			seen[root] = true
 			roots = append(roots, root)

@@ -28,10 +28,9 @@ type TempRecoveryReport struct {
 	Missing  int                 `json:"missing"`
 	Retained []TempRecoveryIssue `json:"retained,omitempty"`
 }
-type tempMutation struct {
-	record *transferstore.LocalTempRecord
-	id     string
-	done   chan error
+type recoveryMutation struct {
+	apply func(*state.Tx) error
+	done  chan error
 }
 
 // LocalTempRegistry belongs to one exclusively opened Agent database. It never
@@ -45,7 +44,7 @@ type LocalTempRegistry struct {
 	namespaceMu sync.Mutex
 	ready       bool
 	closed      bool
-	queue       chan tempMutation
+	queue       chan recoveryMutation
 	done        chan struct{}
 }
 
@@ -78,7 +77,7 @@ func NewLocalTempRegistry(store *state.Store) (*LocalTempRegistry, error) {
 	}); err != nil {
 		return nil, err
 	}
-	r := &LocalTempRegistry{store: store, owner: owner, queue: make(chan tempMutation, 256), done: make(chan struct{})}
+	r := &LocalTempRegistry{store: store, owner: owner, queue: make(chan recoveryMutation, 256), done: make(chan struct{})}
 	go r.commitLoop()
 	return r, nil
 }
@@ -169,14 +168,28 @@ func (r *LocalTempRegistry) Register(ctx context.Context, record transferstore.L
 	if err := transferstore.ValidateLocalTempRecord(record); err != nil {
 		return err
 	}
-	return r.submit(ctx, tempMutation{record: &record, id: record.ID, done: make(chan error, 1)})
+	return r.submit(ctx, func(tx *state.Tx) error {
+		var old transferstore.LocalTempRecord
+		found, err := tx.Get(localTemporaryBucket, record.ID, &old)
+		if err != nil {
+			return err
+		}
+		if found && old != record {
+			return errors.New("temporary-file ID collision")
+		}
+		return tx.Put(localTemporaryBucket, record.ID, record)
+	})
 }
 
 func (r *LocalTempRegistry) Forget(ctx context.Context, id string) error {
-	return r.submit(ctx, tempMutation{id: id, done: make(chan error, 1)})
+	return r.submit(ctx, func(tx *state.Tx) error { return tx.Delete(localTemporaryBucket, id) })
 }
 
-func (r *LocalTempRegistry) submit(ctx context.Context, mutation tempMutation) error {
+func (r *LocalTempRegistry) submit(ctx context.Context, apply func(*state.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	mutation := recoveryMutation{apply: apply, done: make(chan error, 1)}
 	r.mu.RLock()
 	if r.closed || !r.ready {
 		r.mu.RUnlock()
@@ -195,12 +208,14 @@ func (r *LocalTempRegistry) submit(ctx context.Context, mutation tempMutation) e
 	return <-mutation.done
 }
 
-// Group concurrent starts/finishes into one fsynced transaction. The caller gets
-// its acknowledgement only after commit; batching never weakens the write barrier.
+// Group local-file and S3 multipart recovery records in one fsynced transaction.
+// Every caller waits for commit, including callers cancelled after enqueueing;
+// payload I/O cannot pass its registration barrier early. A failed batch is
+// rolled back and fails every caller without replaying any callback.
 func (r *LocalTempRegistry) commitLoop() {
 	defer close(r.done)
 	for first := range r.queue {
-		batch := []tempMutation{first}
+		batch := []recoveryMutation{first}
 		timer := time.NewTimer(2 * time.Millisecond)
 		closed := false
 	collect:
@@ -219,21 +234,7 @@ func (r *LocalTempRegistry) commitLoop() {
 		timer.Stop()
 		err := r.store.Update(func(tx *state.Tx) error {
 			for _, mutation := range batch {
-				if mutation.record == nil {
-					if err := tx.Delete(localTemporaryBucket, mutation.id); err != nil {
-						return err
-					}
-					continue
-				}
-				var old transferstore.LocalTempRecord
-				found, err := tx.Get(localTemporaryBucket, mutation.id, &old)
-				if err != nil {
-					return err
-				}
-				if found && old != *mutation.record {
-					return errors.New("temporary-file ID collision")
-				}
-				if err := tx.Put(localTemporaryBucket, mutation.id, *mutation.record); err != nil {
+				if err := mutation.apply(tx); err != nil {
 					return err
 				}
 			}

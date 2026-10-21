@@ -20,6 +20,11 @@ type discoveredObject struct {
 	SeenAttempt string               `json:"seenAttempt"`
 }
 
+type pendingBatch struct {
+	objects []transferstore.Object
+	missing map[string]bool
+}
+
 func objectKey(parentID int64, key string) string {
 	return parentKey(parentID) + "/" + base64.RawURLEncoding.EncodeToString([]byte(key))
 }
@@ -46,6 +51,14 @@ func copyObject(object transferstore.Object) transferstore.Object {
 func changed(key string) error { return fmt.Errorf("%w: %q", ErrSourceChanged, key) }
 
 func (s *Scanner) commitBatch(ctx context.Context, attempt State, pending []transferstore.Object, missing ...map[string]bool) error {
+	var absent map[string]bool
+	if len(missing) > 0 {
+		absent = missing[0]
+	}
+	return s.commitBatches(ctx, attempt, []pendingBatch{{objects: pending, missing: absent}})
+}
+
+func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pendingBatch) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -60,58 +73,65 @@ func (s *Scanner) commitBatch(ctx context.Context, attempt State, pending []tran
 		if current.Status != Scanning {
 			return ErrStopped
 		}
-		batch := Batch{ParentID: attempt.Spec.ParentID, Generation: current.Generation, Objects: make([]transferstore.Object, 0, len(pending))}
-		for _, object := range pending {
-			key := objectKey(attempt.Spec.ParentID, object.Key)
-			var prior discoveredObject
-			found, err := tx.Get(objects, key, &prior)
-			if err != nil {
-				return err
-			}
-			if found && !sameObject(prior.Object, object) {
-				if attempt.Spec.InventoryID == "" || !execution.SourceIdentityUnknown(prior.Object) {
-					return changed(object.Key)
-				}
-				// Keep the original missing-key assignment on rescan. Execution
-				// pins its first available identity before reading any data.
-				object = prior.Object
-			}
-			if prior.SeenAttempt == attempt.Attempt {
-				continue
-			}
-			if !found {
-				if current.TotalObjects == math.MaxInt64 || object.Size < 0 || object.Size > math.MaxInt64-current.TotalBytes {
-					return ErrInvalid
-				}
-				candidate, err := s.legacyCandidate(tx, attempt.Spec, object, len(missing) > 0 && missing[0][object.Key])
+		modified := false
+		for _, part := range pending {
+			batch := Batch{ParentID: attempt.Spec.ParentID, Generation: current.Generation, Objects: make([]transferstore.Object, 0, len(part.objects))}
+			for _, object := range part.objects {
+				key := objectKey(attempt.Spec.ParentID, object.Key)
+				var prior discoveredObject
+				found, err := tx.Get(objects, key, &prior)
 				if err != nil {
 					return err
 				}
-				if candidate != nil {
-					if batch.Legacy == nil {
-						batch.Legacy = map[string]execution.LegacyCandidate{}
+				if found && !sameObject(prior.Object, object) {
+					if attempt.Spec.InventoryID == "" || !execution.SourceIdentityUnknown(prior.Object) {
+						return changed(object.Key)
 					}
-					batch.Legacy[object.Key] = *candidate
+					// Keep the original missing-key assignment on rescan. Execution
+					// pins its first available identity before reading any data.
+					object = prior.Object
 				}
-				current.TotalObjects++
-				current.TotalBytes += object.Size
-				batch.Objects = append(batch.Objects, object)
-				batch.Bytes += object.Size
+				if prior.SeenAttempt == attempt.Attempt {
+					continue
+				}
+				if !found {
+					if current.TotalObjects == math.MaxInt64 || object.Size < 0 || object.Size > math.MaxInt64-current.TotalBytes {
+						return ErrInvalid
+					}
+					candidate, err := s.legacyCandidate(tx, attempt.Spec, object, part.missing[object.Key])
+					if err != nil {
+						return err
+					}
+					if candidate != nil {
+						if batch.Legacy == nil {
+							batch.Legacy = map[string]execution.LegacyCandidate{}
+						}
+						batch.Legacy[object.Key] = *candidate
+					}
+					current.TotalObjects++
+					current.TotalBytes += object.Size
+					batch.Objects = append(batch.Objects, object)
+					batch.Bytes += object.Size
+				}
+				current.SeenObjects++
+				modified = true
+				if err := tx.Put(objects, key, discoveredObject{Object: object, SeenAttempt: attempt.Attempt}); err != nil {
+					return err
+				}
 			}
-			current.SeenObjects++
-			if err := tx.Put(objects, key, discoveredObject{Object: object, SeenAttempt: attempt.Attempt}); err != nil {
-				return err
+			if len(batch.Objects) > 0 {
+				if current.LastBatch == math.MaxInt64 {
+					return ErrInvalid
+				}
+				current.LastBatch++
+				batch.Number = current.LastBatch
+				if err := tx.Put(batches, batchKey(batch.ParentID, batch.Number), batch); err != nil {
+					return err
+				}
 			}
 		}
-		if len(batch.Objects) > 0 {
-			if current.LastBatch == math.MaxInt64 {
-				return ErrInvalid
-			}
-			current.LastBatch++
-			batch.Number = current.LastBatch
-			if err := tx.Put(batches, batchKey(batch.ParentID, batch.Number), batch); err != nil {
-				return err
-			}
+		if !modified {
+			return nil
 		}
 		current.UpdatedAt = time.Now().UTC()
 		return tx.Put(states, parentKey(current.Spec.ParentID), current)
@@ -119,6 +139,8 @@ func (s *Scanner) commitBatch(ctx context.Context, attempt State, pending []tran
 }
 
 func (s *Scanner) scan(ctx context.Context, attempt State) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	ctx = nodecontrol.WithRequestContext(ctx, nodecontrol.RequestContext{TaskID: attempt.Spec.ParentID, Generation: attempt.Generation})
 	store, err := s.factory.OpenEndpoint(ctx, attempt.Spec.Source)
 	if err != nil {
@@ -137,15 +159,18 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 	missing := map[string]bool{}
 	pending := make([]transferstore.Object, 0, s.options.MaxBatchObjects)
 	var bytes int64
+	committer := newScanCommitter(ctx, cancel, func(batches []pendingBatch) error {
+		return s.commitBatches(ctx, attempt, batches)
+	})
 	flush := func() error {
 		if len(pending) == 0 {
 			return nil
 		}
-		if err := s.commitBatch(ctx, attempt, pending, missing); err != nil {
+		if err := committer.add(pendingBatch{objects: pending, missing: missing}); err != nil {
 			return err
 		}
-		pending, bytes = pending[:0], 0
-		clear(missing)
+		pending, bytes = make([]transferstore.Object, 0, s.options.MaxBatchObjects), 0
+		missing = map[string]bool{}
 		return nil
 	}
 	emitAll := func(object transferstore.Object, retained, absent bool) error {
@@ -224,10 +249,21 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 		err = flush()
 	}
 	if err == nil && attempt.Spec.LegacyManifestID != "" {
-		err = s.appendLegacy(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) })
+		// Legacy reconciliation reads the durable SeenAttempt index to avoid
+		// re-HEADing objects already emitted by LIST. Publish that phase first.
+		err = committer.close()
+		if err == nil {
+			committer = newScanCommitter(ctx, cancel, func(batches []pendingBatch) error {
+				return s.commitBatches(ctx, attempt, batches)
+			})
+			err = s.appendLegacy(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) })
+		}
 	}
 	if err == nil {
 		err = flush()
+	}
+	if commitErr := committer.close(); commitErr != nil {
+		err = commitErr
 	}
 	if closeErr := store.Close(); err == nil {
 		err = closeErr

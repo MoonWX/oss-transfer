@@ -465,40 +465,81 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 	// Keep a bounded amount of queued work in front of Agents. The scanner may
 	// continue writing its manifest on disk while execution applies backpressure.
 	if len(outstanding) < 64*len(p.Spec.Nodes) {
-		for range 16 {
-			var page struct {
-				Batch discovery.Batch `json:"batch"`
-				Found bool            `json:"found"`
-			}
-			scanControl.Number = int64(p.DispatchedThrough)
-			if err := s.agentCall(ctx, scanner, "scan_batch", false, scanControl, &page); err != nil {
-				return err
-			}
-			if !page.Found {
-				break
-			}
-			child, err := t.repo.Assign(p.ID, p.Generation, int(page.Batch.Number), page.Batch.Objects, page.Batch.Legacy)
-			if err != nil {
-				return err
-			}
-			if err := s.agentCall(ctx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil); err != nil {
-				return err
-			}
-			p.DispatchedThrough = int(page.Batch.Number)
-			scanControl.Number = page.Batch.Number
-			if err := s.agentCall(ctx, scanner, "scan_ack", true, scanControl, nil); err != nil {
-				return err
-			}
+		if err := t.dispatch(ctx, p, scanControl); err != nil {
+			return err
 		}
 	}
 	_, err = t.repo.FinishIfReady(p.ID, p.Generation)
 	return err
 }
-func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) error {
+
+// Read a small dispatch page, persist its assignments together, then deliver.
+// The existing outstanding reconciliation retries any undelivered assignments.
+func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agentservice.ScanRequest) error {
+	scanner := nodeSession(p.Spec.Nodes[0])
+	control.Number = int64(p.DispatchedThrough)
+	limit := 16
+	if p.DispatchedThrough == 0 {
+		limit = 1 // Start the first transfer without collecting the rest of a page.
+	}
+	batches := make([]task.Assignment, 0, limit)
+	var collectionErr error
+	for range limit {
+		var page struct {
+			Batch discovery.Batch `json:"batch"`
+			Found bool            `json:"found"`
+		}
+		if err := t.server.agentCall(ctx, scanner, "scan_batch", false, control, &page); err != nil {
+			collectionErr = err
+			break
+		}
+		if !page.Found {
+			break
+		}
+		if page.Batch.ParentID != p.ID || page.Batch.Generation != p.Generation || page.Batch.Number != control.Number+1 {
+			collectionErr = task.ErrConflict
+			break
+		}
+		batches = append(batches, task.Assignment{Number: int(page.Batch.Number), Objects: page.Batch.Objects, Legacy: page.Batch.Legacy})
+		control.Number = page.Batch.Number
+	}
+	if collectionErr == nil {
+		collectionErr = ctx.Err()
+	}
+	if len(batches) == 0 {
+		return collectionErr
+	}
+	// Retain the validated prefix even when a slow or unavailable scanner ends
+	// this collection. Otherwise every retry could reread the same prefix and
+	// never dispatch it. AssignPage still fences stopped/newer generations.
+	children, err := t.repo.AssignPage(p.ID, p.Generation, batches)
+	if err != nil {
+		return errors.Join(collectionErr, err)
+	}
+	if collectionErr != nil {
+		return collectionErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := t.server.agentCall(ctx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil); err != nil {
+			return err
+		}
+	}
+	return t.server.agentCall(ctx, scanner, "scan_ack", true, control, nil)
+}
+
+func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) (err error) {
 	children, err := t.repo.Outstanding(p.ID, 0, limit)
 	if err != nil {
 		return err
 	}
+	observations := make([]task.Observation, 0, len(children))
+	// Keep already collected outcomes even if a later Agent is unavailable.
+	defer func() {
+		err = errors.Join(err, t.repo.ObserveBatch(p.ID, p.Generation, observations))
+	}()
 	for _, child := range children {
 		var record execution.Record
 		err := t.server.agentCall(ctx, nodeSession(child.Node), "child_get", false, map[string]string{"childId": child.Job.ChildID}, &record)
@@ -514,9 +555,7 @@ func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) err
 		if err != nil {
 			return err
 		}
-		if err := t.repo.Observe(p.ID, p.Generation, child.Job.Number, record); err != nil {
-			return err
-		}
+		observations = append(observations, task.Observation{Number: child.Job.Number, Record: record})
 	}
 	return nil
 }
@@ -531,13 +570,15 @@ func (t *taskRuntime) observeStopped(ctx context.Context, p task.Parent) error {
 			if err := t.server.agentCall(ctx, nodeSession(node), "children", false, agentservice.ChildrenRequest{ParentID: p.ID, After: after, Limit: 8}, &rows); err != nil {
 				return err
 			}
+			observations := make([]task.Observation, 0, len(rows))
 			for _, record := range rows {
 				if record.Job.Generation != p.Generation {
 					return task.ErrGeneration
 				}
-				if err := t.repo.Observe(p.ID, p.Generation, record.Job.Number, record); err != nil {
-					return err
-				}
+				observations = append(observations, task.Observation{Number: record.Job.Number, Record: record})
+			}
+			if err := t.repo.ObserveBatch(p.ID, p.Generation, observations); err != nil {
+				return err
 			}
 			if len(rows) < 8 {
 				break

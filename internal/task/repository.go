@@ -241,13 +241,44 @@ func (r *Repository) List(after int64, limit int, activeOnly bool) (result []Par
 	return
 }
 
+// Assignment is one durable scanner batch awaiting node assignment.
+type Assignment struct {
+	Number  int
+	Objects []transferstore.Object
+	Legacy  map[string]execution.LegacyCandidate
+}
+
 // Assign commits the scanner batch and its node assignment before any command
 // can be sent to an Agent. A retried batch returns that original assignment.
-func (r *Repository) Assign(id int64, generation uint64, number int, objects []transferstore.Object, legacy ...map[string]execution.LegacyCandidate) (child Child, err error) {
-	if number < 1 || len(objects) < 1 || len(objects) > 128 || len(legacy) > 1 {
-		return child, errors.New("invalid discovery batch")
+func (r *Repository) Assign(id int64, generation uint64, number int, objects []transferstore.Object, legacy ...map[string]execution.LegacyCandidate) (Child, error) {
+	if len(legacy) > 1 {
+		return Child{}, errors.New("invalid discovery batch")
 	}
-	err = r.store.Update(func(tx *state.Tx) error {
+	batch := Assignment{Number: number, Objects: objects}
+	if len(legacy) == 1 {
+		batch.Legacy = legacy[0]
+	}
+	children, err := r.AssignPage(id, generation, []Assignment{batch})
+	if err != nil {
+		return Child{}, err
+	}
+	return children[0], nil
+}
+
+// AssignPage records a bounded dispatch page in one transaction, before any
+// Agent is called or scanner checkpoint acknowledged. Partial delivery remains
+// recoverable from the outstanding-child index after a crash or disconnection.
+func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignment) ([]Child, error) {
+	if len(batches) == 0 || len(batches) > 16 {
+		return nil, errors.New("assignment page must contain 1 to 16 batches")
+	}
+	for _, batch := range batches {
+		if batch.Number < 1 || len(batch.Objects) < 1 || len(batch.Objects) > 128 {
+			return nil, errors.New("invalid discovery batch")
+		}
+	}
+	children := make([]Child, 0, len(batches))
+	err := r.store.Update(func(tx *state.Tx) error {
 		p, err := get(tx, id)
 		if err != nil {
 			return err
@@ -258,114 +289,128 @@ func (r *Repository) Assign(id int64, generation uint64, number int, objects []t
 		if p.Status != "RUNNING" || p.Deleted {
 			return ErrState
 		}
-		found, err := tx.Get("master-task-children", childKey(id, number), &child)
-		if err != nil {
-			return err
-		}
-		if found {
-			if len(child.Job.Items) != len(objects) {
-				return ErrConflict
+		for _, batch := range batches {
+			child, err := assignChild(tx, &p, batch.Number, batch.Objects, batch.Legacy)
+			if err != nil {
+				return err
 			}
-			for index, item := range child.Job.Items {
-				var candidate *execution.LegacyCandidate
-				if len(legacy) > 0 {
-					if value, ok := legacy[0][objects[index].Key]; ok {
-						candidate = &value
-					}
-				}
-				if digest(item.Source) != digest(objects[index]) || !reflect.DeepEqual(item.Legacy, candidate) {
-					return ErrConflict
-				}
-			}
-			return nil
+			children = append(children, child)
 		}
-		if number != p.DispatchedThrough+1 {
-			return errors.New("discovery batch arrived out of order")
-		}
-		node := p.Spec.Nodes[0]
-		if p.Spec.DistributionMode == "BALANCED" {
-			var minimum int64 = math.MaxInt64
-			for _, candidate := range p.Spec.Nodes {
-				var weight int64
-				if _, err := tx.Get("master-task-load", key(id)+"/"+candidate.ID, &weight); err != nil {
-					return err
-				}
-				if weight < minimum {
-					node = candidate
-					minimum = weight
-				}
-			}
-		}
-		job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", id, number), ParentID: id, Number: number, Generation: generation, Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
-		job.SharedLocalSource = p.Spec.SharedLocalSource
-		if job.Source.Kind == "LOCAL" {
-			job.Source.Root = node.LocalRoot
-		}
-		if job.Destination.Kind == "LOCAL" {
-			job.Destination.Root = node.LocalRoot
-		}
-		var bytes int64
-		for _, object := range objects {
-			if object.Size < 0 || bytes > math.MaxInt64-object.Size {
-				return errors.New("invalid object size")
-			}
-			target := object.Key
-			if p.Spec.TargetKey != "" {
-				target = p.Spec.TargetKey
-			} else if p.Spec.MappingMode == "REPLACE_PREFIX" {
-				if !strings.HasPrefix(object.Key, p.Spec.ReplaceSourcePrefix) {
-					return errors.New("source key does not match replacement prefix")
-				}
-				target = p.Spec.TargetPrefix + strings.TrimPrefix(object.Key, p.Spec.ReplaceSourcePrefix)
-			} else if p.Spec.TargetPrefix != "" {
-				target = p.Spec.TargetPrefix
-				if !strings.HasSuffix(target, "/") {
-					target += "/"
-				}
-				target += object.Key
-			}
-			item := execution.Item{ID: digest(object.Key), Source: object, DestinationKey: target}
-			if len(legacy) > 0 {
-				if candidate, ok := legacy[0][object.Key]; ok {
-					if p.Legacy == nil || !p.Legacy.RecoveryStarted {
-						return ErrConflict
-					}
-					item.Legacy = &candidate
-				}
-			}
-			job.Items = append(job.Items, item)
-			bytes += object.Size
-		}
-		child = Child{Job: job, Node: node}
-		if err := tx.Put("master-task-children", childKey(id, number), child); err != nil {
-			return err
-		}
-		if err := tx.Put("master-task-outstanding", childKey(id, number), number); err != nil {
-			return err
-		}
-		var weight int64
-		loadKey := key(id) + "/" + node.ID
-		if _, err := tx.Get("master-task-load", loadKey, &weight); err != nil {
-			return err
-		}
-		// Include a small per-object cost so zero-byte and tiny objects distribute.
-		cost := bytes + int64(len(objects))*64*1024
-		if cost < bytes || weight > math.MaxInt64-cost {
-			return errors.New("task load overflow")
-		}
-		if err := tx.Put("master-task-load", loadKey, weight+cost); err != nil {
-			return err
-		}
-		p.DispatchedThrough = number
-		p.DispatchedObjects += int64(len(objects))
-		p.DispatchedBytes += bytes
-		p.ScannedObjects = max(p.ScannedObjects, p.DispatchedObjects)
-		p.ScannedBytes = max(p.ScannedBytes, p.DispatchedBytes)
-		p.ScannedBatches = max(p.ScannedBatches, number)
-		p.ChildCount++
 		return save(tx, p)
 	})
-	return
+	if err != nil {
+		return nil, err
+	}
+	return children, nil
+}
+
+func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Object, legacy map[string]execution.LegacyCandidate) (child Child, err error) {
+	found, err := tx.Get("master-task-children", childKey(p.ID, number), &child)
+	if err != nil {
+		return child, err
+	}
+	if found {
+		if len(child.Job.Items) != len(objects) {
+			return child, ErrConflict
+		}
+		for index, item := range child.Job.Items {
+			var candidate *execution.LegacyCandidate
+			if legacy != nil {
+				if value, ok := legacy[objects[index].Key]; ok {
+					candidate = &value
+				}
+			}
+			if digest(item.Source) != digest(objects[index]) || !reflect.DeepEqual(item.Legacy, candidate) {
+				return child, ErrConflict
+			}
+		}
+		return child, nil
+	}
+	if number != p.DispatchedThrough+1 {
+		return child, errors.New("discovery batch arrived out of order")
+	}
+	node := p.Spec.Nodes[0]
+	if p.Spec.DistributionMode == "BALANCED" {
+		var minimum int64 = math.MaxInt64
+		for _, candidate := range p.Spec.Nodes {
+			var weight int64
+			if _, err := tx.Get("master-task-load", key(p.ID)+"/"+candidate.ID, &weight); err != nil {
+				return child, err
+			}
+			if weight < minimum {
+				node = candidate
+				minimum = weight
+			}
+		}
+	}
+	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
+	job.SharedLocalSource = p.Spec.SharedLocalSource
+	if job.Source.Kind == "LOCAL" {
+		job.Source.Root = node.LocalRoot
+	}
+	if job.Destination.Kind == "LOCAL" {
+		job.Destination.Root = node.LocalRoot
+	}
+	var bytes int64
+	for _, object := range objects {
+		if object.Size < 0 || bytes > math.MaxInt64-object.Size {
+			return child, errors.New("invalid object size")
+		}
+		target := object.Key
+		if p.Spec.TargetKey != "" {
+			target = p.Spec.TargetKey
+		} else if p.Spec.MappingMode == "REPLACE_PREFIX" {
+			if !strings.HasPrefix(object.Key, p.Spec.ReplaceSourcePrefix) {
+				return child, errors.New("source key does not match replacement prefix")
+			}
+			target = p.Spec.TargetPrefix + strings.TrimPrefix(object.Key, p.Spec.ReplaceSourcePrefix)
+		} else if p.Spec.TargetPrefix != "" {
+			target = p.Spec.TargetPrefix
+			if !strings.HasSuffix(target, "/") {
+				target += "/"
+			}
+			target += object.Key
+		}
+		item := execution.Item{ID: digest(object.Key), Source: object, DestinationKey: target}
+		if legacy != nil {
+			if candidate, ok := legacy[object.Key]; ok {
+				if p.Legacy == nil || !p.Legacy.RecoveryStarted {
+					return child, ErrConflict
+				}
+				item.Legacy = &candidate
+			}
+		}
+		job.Items = append(job.Items, item)
+		bytes += object.Size
+	}
+	child = Child{Job: job, Node: node}
+	if err := tx.Put("master-task-children", childKey(p.ID, number), child); err != nil {
+		return child, err
+	}
+	if err := tx.Put("master-task-outstanding", childKey(p.ID, number), number); err != nil {
+		return child, err
+	}
+	var weight int64
+	loadKey := key(p.ID) + "/" + node.ID
+	if _, err := tx.Get("master-task-load", loadKey, &weight); err != nil {
+		return child, err
+	}
+	// Include a small per-object cost so zero-byte and tiny objects distribute.
+	cost := bytes + int64(len(objects))*64*1024
+	if cost < bytes || weight > math.MaxInt64-cost {
+		return child, errors.New("task load overflow")
+	}
+	if err := tx.Put("master-task-load", loadKey, weight+cost); err != nil {
+		return child, err
+	}
+	p.DispatchedThrough = number
+	p.DispatchedObjects += int64(len(objects))
+	p.DispatchedBytes += bytes
+	p.ScannedObjects = max(p.ScannedObjects, p.DispatchedObjects)
+	p.ScannedBytes = max(p.ScannedBytes, p.DispatchedBytes)
+	p.ScannedBatches = max(p.ScannedBatches, number)
+	p.ChildCount++
+	return child, nil
 }
 
 func (r *Repository) SetBandwidth(id int64, mbps float64) (p Parent, err error) {
@@ -474,7 +519,27 @@ func (r *Repository) Outstanding(id int64, after int, limit int) (result []Child
 	return
 }
 
+// Observation pairs a requested child with the Agent's durable result.
+type Observation struct {
+	Number int
+	Record execution.Record
+}
+
 func (r *Repository) Observe(id int64, generation uint64, number int, record execution.Record) error {
+	return r.ObserveBatch(id, generation, []Observation{{Number: number, Record: record}})
+}
+
+// ObserveBatch commits one bounded polling page atomically. Results remain in
+// the Agent ledger until collected, so a failed transaction can be retried
+// without losing object outcomes. The parent counters and indexes are written
+// once, rather than once for every child in the page.
+func (r *Repository) ObserveBatch(id int64, generation uint64, observations []Observation) error {
+	if len(observations) == 0 {
+		return nil
+	}
+	if len(observations) > 256 {
+		return errors.New("observation page exceeds 256 children")
+	}
 	return unchangedOK(r.store.Update(func(tx *state.Tx) error {
 		p, err := get(tx, id)
 		if err != nil {
@@ -486,57 +551,72 @@ func (r *Repository) Observe(id int64, generation uint64, number int, record exe
 		if p.Purged {
 			return ErrState
 		}
-		var child Child
-		found, err := tx.Get("master-task-children", childKey(id, number), &child)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return ErrNotFound
-		}
-		if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != generation || digest(record.Job) != digest(child.Job) {
-			return ErrConflict
-		}
-		if child.Record != nil && (record.Attempt < child.Record.Attempt || (record.Attempt == child.Record.Attempt && record.UpdatedAt.Before(child.Record.UpdatedAt))) {
-			return errUnchanged
-		}
-		if err := record.ValidateResolvedSources(p.Spec.InventoryID != "", child.Record); err != nil {
-			return ErrConflict
-		}
-		if child.Accepted && child.Record != nil && reflect.DeepEqual(*child.Record, record) {
-			return errUnchanged
-		}
-		for _, result := range record.Results {
-			if result.ResolvedSource != nil {
-				if err := state.RequireSchema(tx, "master", state.SchemaResolvedSources); err != nil {
-					return err
-				}
-				break
-			}
-		}
-		old := execution.Counters{}
-		if child.Record != nil {
-			old = child.Record.Counters
-			countChild(&p, child.Record.Status, -1)
-		}
-		countChild(&p, record.Status, 1)
-		addCounters(&p.Counters, old, -1)
-		addCounters(&p.Counters, record.Counters, 1)
-		child.Accepted = true
-		child.Record = &record
-		if err := syncExceptionIndex(tx, p, child, record); err != nil {
-			return err
-		}
-		if err := tx.Put("master-task-children", childKey(id, number), child); err != nil {
-			return err
-		}
-		if record.Status == execution.Completed || record.Status == execution.Failed || record.Status == execution.PartialFailed {
-			if err := tx.Delete("master-task-outstanding", childKey(id, number)); err != nil {
+		changed := false
+		for _, observation := range observations {
+			updated, err := observeChild(tx, &p, observation.Number, observation.Record)
+			if err != nil {
 				return err
 			}
+			changed = changed || updated
+		}
+		if !changed {
+			return errUnchanged
 		}
 		return save(tx, p)
 	}))
+}
+
+func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) (bool, error) {
+	var child Child
+	found, err := tx.Get("master-task-children", childKey(p.ID, number), &child)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, ErrNotFound
+	}
+	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(child.Job) {
+		return false, ErrConflict
+	}
+	if child.Record != nil && (record.Attempt < child.Record.Attempt || (record.Attempt == child.Record.Attempt && record.UpdatedAt.Before(child.Record.UpdatedAt))) {
+		return false, nil
+	}
+	if err := record.ValidateResolvedSources(p.Spec.InventoryID != "", child.Record); err != nil {
+		return false, ErrConflict
+	}
+	if child.Accepted && child.Record != nil && reflect.DeepEqual(*child.Record, record) {
+		return false, nil
+	}
+	for _, result := range record.Results {
+		if result.ResolvedSource != nil {
+			if err := state.RequireSchema(tx, "master", state.SchemaResolvedSources); err != nil {
+				return false, err
+			}
+			break
+		}
+	}
+	old := execution.Counters{}
+	if child.Record != nil {
+		old = child.Record.Counters
+		countChild(p, child.Record.Status, -1)
+	}
+	countChild(p, record.Status, 1)
+	addCounters(&p.Counters, old, -1)
+	addCounters(&p.Counters, record.Counters, 1)
+	child.Accepted = true
+	child.Record = &record
+	if err := syncExceptionIndex(tx, *p, child, record); err != nil {
+		return false, err
+	}
+	if err := tx.Put("master-task-children", childKey(p.ID, number), child); err != nil {
+		return false, err
+	}
+	if record.Status == execution.Completed || record.Status == execution.Failed || record.Status == execution.PartialFailed {
+		if err := tx.Delete("master-task-outstanding", childKey(p.ID, number)); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 func countChild(p *Parent, status execution.Status, delta int) {
 	switch status {

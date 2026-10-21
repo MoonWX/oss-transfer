@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -159,6 +160,12 @@ func checkAttempt(tx *state.Tx, r Record, generation, attempt uint64) error {
 }
 
 func (r *Repository) put(tx *state.Tx, before *Record, after *Record) error {
+	// Replayed seals, stops and result acknowledgements are common during
+	// polling/recovery. Do not turn an unchanged record into a write merely to
+	// advance UpdatedAt: each record includes the complete object assignment.
+	if before != nil && reflect.DeepEqual(*before, *after) {
+		return nil
+	}
 	oldPending := before != nil && !terminal(before.Status)
 	newPending := !terminal(after.Status)
 	if oldPending != newPending {
@@ -198,12 +205,15 @@ func (r *Repository) put(tx *state.Tx, before *Record, after *Record) error {
 		after.FinishedAt = nil
 	}
 	key, _ := jobKey(after.Job.ChildID)
-	if runnable(*after) {
+	wasReady := before != nil && runnable(*before)
+	if runnable(*after) && !wasReady {
 		if err := tx.Put(readyBucket, key, after.Job.ChildID); err != nil {
 			return err
 		}
-	} else if err := tx.Delete(readyBucket, key); err != nil {
-		return err
+	} else if !runnable(*after) && wasReady {
+		if err := tx.Delete(readyBucket, key); err != nil {
+			return err
+		}
 	}
 	return tx.Put(jobsBucket, key, after)
 }
@@ -399,6 +409,9 @@ func (r *Repository) Seal(ctx context.Context, child string, generation uint64) 
 		if err := checkParent(tx, j.Job.ParentID, generation); err != nil {
 			return err
 		}
+		if j.Job.DiscoveryComplete {
+			return nil
+		}
 		j.Job.DiscoveryComplete = true
 		if j.Status != Running && j.Status != Stopped {
 			settle(j)
@@ -457,27 +470,31 @@ func (r *Repository) commit(ctx context.Context, child string, generation, attem
 		if err := checkAttempt(tx, *j, generation, attempt); err != nil {
 			return err
 		}
-		index := make(map[string]int, len(j.Results))
-		for i, item := range j.Results {
-			index[item.ID] = i
-		}
-		for _, result := range results {
-			i, ok := index[result.ID]
-			if !ok {
-				return errors.New("unknown result item")
-			}
-			if result.Status != ItemSucceeded && result.Status != ItemSkipped && result.Status != ItemFailed {
-				return errors.New("invalid terminal item result")
-			}
-			if j.Results[i].Status != ItemPending {
-				continue
-			}
-			result.ResolvedSource = j.Results[i].ResolvedSource
-			j.Results[i] = result
-		}
-		recount(j)
-		return nil
+		return applyResults(j, results)
 	})
+}
+
+func applyResults(j *Record, results []ItemResult) error {
+	index := make(map[string]int, len(j.Results))
+	for i, item := range j.Results {
+		index[item.ID] = i
+	}
+	for _, result := range results {
+		i, ok := index[result.ID]
+		if !ok {
+			return errors.New("unknown result item")
+		}
+		if result.Status != ItemSucceeded && result.Status != ItemSkipped && result.Status != ItemFailed {
+			return errors.New("invalid terminal item result")
+		}
+		if j.Results[i].Status != ItemPending {
+			continue
+		}
+		result.ResolvedSource = j.Results[i].ResolvedSource
+		j.Results[i] = result
+	}
+	recount(j)
+	return nil
 }
 
 // invalidate withdraws ledger credit only after a fresh target Stat has proved
@@ -501,7 +518,7 @@ func (r *Repository) invalidate(ctx context.Context, child string, generation, a
 	})
 }
 
-func (r *Repository) finish(ctx context.Context, child string, generation, attempt uint64, runErr error) (Record, error) {
+func (r *Repository) finish(ctx context.Context, child string, generation, attempt uint64, runErr error, finalResults ...ItemResult) (Record, error) {
 	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
 		if err := checkAttempt(tx, *j, generation, attempt); err != nil {
 			return err
@@ -510,6 +527,11 @@ func (r *Repository) finish(ctx context.Context, child string, generation, attem
 			j.Status = Recoverable
 			j.Error = errorText(runErr)
 			return nil
+		}
+		// The final result batch and terminal state share one durable boundary.
+		// A failed commit leaves neither progress credit nor a completed job.
+		if err := applyResults(j, finalResults); err != nil {
+			return err
 		}
 		settle(j)
 		return nil

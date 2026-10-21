@@ -147,7 +147,7 @@ Retry, concurrency and multipart settings use the Go execution profile after con
 | Discovery | Up to 2 scans per Agent; batches of at most 128 objects or 256 MiB of described content; oversized objects use a separate batch |
 | Admission | At most 1,024 unfinished child jobs per Agent; new work waits when the budget is full |
 | Multipart upload | 8 MiB parts, up to 4 concurrent part requests and 32 MiB of payload buffers per write; large request bodies may use spool files |
-| Result persistence | Batches of 32 results or every 250 ms |
+| Result persistence | Batches of 128 results or every 1 second; final results and child completion commit together immediately |
 
 A crash between a destination write and its result commit can cause the object to be handled again under the saved conflict policy. The mapped node-control properties and persisted manual overrides remain effective. Old task QPS and bandwidth fields retain their per-node scope; a logical task bandwidth policy retains its cluster scope. Both apply when present.
 

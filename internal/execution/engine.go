@@ -53,10 +53,10 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 		opts.QueueSize = 16
 	}
 	if opts.CommitBatchSize == 0 {
-		opts.CommitBatchSize = 32
+		opts.CommitBatchSize = 128
 	}
 	if opts.CommitInterval == 0 {
-		opts.CommitInterval = 250 * time.Millisecond
+		opts.CommitInterval = time.Second
 	}
 	if opts.MaxConcurrentJobs < 1 || opts.MaxConcurrentJobs > 1024 || opts.WorkersPerJob < 1 || opts.WorkersPerJob > 128 || opts.QueueSize < 1 || opts.QueueSize > 128 || opts.CommitBatchSize < 1 || opts.CommitBatchSize > 128 || opts.CommitInterval < time.Millisecond {
 		return nil, errors.New("invalid execution bounds")
@@ -184,13 +184,20 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 
 func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeAttempt) {
 	var runErr error
+	var finalResults []ItemResult
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			runErr = fmt.Errorf("execution panic: %v", recovered)
 		}
 		// This uses an independent context so graceful process shutdown records a
 		// recoverable attempt. An explicit stop fence will reject the old attempt.
-		_, _ = e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr)
+		_, finishErr := e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr, finalResults...)
+		if finishErr != nil && runErr == nil && len(finalResults) > 0 {
+			// Keep the same recovery behavior as a failed periodic result commit.
+			// Stop/generation fences also reject this retry, so an old attempt
+			// can never regain ownership by recording its persistence error.
+			_, _ = e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, fmt.Errorf("persist object results: %w", finishErr))
+		}
 		attempt.cancel()
 		e.mu.Lock()
 		delete(e.active, record.Job.ChildID)
@@ -198,7 +205,7 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 		close(attempt.done)
 		e.mu.Unlock()
 	}()
-	runErr = e.run(ctx, record)
+	finalResults, runErr = e.run(ctx, record)
 }
 
 func (e *Engine) Stop(ctx context.Context, child string, generation uint64) error {
@@ -320,7 +327,7 @@ func wait(ctx context.Context, done <-chan struct{}) error {
 	}
 }
 
-func (e *Engine) run(parentCtx context.Context, record Record) error {
+func (e *Engine) run(parentCtx context.Context, record Record) ([]ItemResult, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	source, target, err := e.factory.Open(ctx, record.Job)
@@ -331,10 +338,10 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 		defer target.Close()
 	}
 	if err != nil {
-		return fmt.Errorf("open storage: %w", err)
+		return nil, fmt.Errorf("open storage: %w", err)
 	}
 	if source == nil || target == nil {
-		return errors.New("storage factory returned a nil handle")
+		return nil, errors.New("storage factory returned a nil handle")
 	}
 	var invalid []string
 	for _, result := range record.Results {
@@ -347,7 +354,7 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("verify completed target %q: %w", result.Target.Key, err)
+			return nil, fmt.Errorf("verify completed target %q: %w", result.Target.Key, err)
 		}
 		if changed(actual, result.Target) {
 			invalid = append(invalid, result.ID)
@@ -356,7 +363,7 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 	if len(invalid) > 0 {
 		record, err = e.repo.invalidate(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, invalid)
 		if err != nil {
-			return fmt.Errorf("update recovery ledger: %w", err)
+			return nil, fmt.Errorf("update recovery ledger: %w", err)
 		}
 	}
 	queue := make(chan Item, e.opts.QueueSize)
@@ -409,6 +416,8 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 	ticker := time.NewTicker(e.opts.CommitInterval)
 	defer ticker.Stop()
 	batch := make([]ItemResult, 0, e.opts.CommitBatchSize)
+	pending := record.Counters.Total - record.Counters.Succeeded - record.Counters.Skipped - record.Counters.Failed
+	var received int64
 	var commitErr error
 	flush := func() {
 		if len(batch) == 0 || commitErr != nil || ctx.Err() != nil {
@@ -425,15 +434,20 @@ func (e *Engine) run(parentCtx context.Context, record Record) error {
 		select {
 		case result, ok := <-results:
 			if !ok {
-				flush()
 				if commitErr != nil {
-					return commitErr
+					return nil, commitErr
 				}
-				return ctx.Err()
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return batch, nil
 			}
 			if commitErr == nil {
 				batch = append(batch, result)
-				if len(batch) >= e.opts.CommitBatchSize {
+				received++
+				// Once all pending objects have returned, finish persists the
+				// last batch with the job state instead of rewriting it twice.
+				if len(batch) >= e.opts.CommitBatchSize && received < pending {
 					flush()
 				}
 			}

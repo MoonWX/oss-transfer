@@ -75,6 +75,7 @@ func (r *S3RecoveryRegistry) Recover(ctx context.Context) (S3RecoveryReport, err
 		}); err != nil {
 			return report, err
 		}
+		var cleared []string
 		for _, record := range records {
 			err := r.abort(budget, record)
 			if ctx.Err() != nil {
@@ -84,10 +85,20 @@ func (r *S3RecoveryRegistry) Recover(ctx context.Context) (S3RecoveryReport, err
 				report.Retained = append(report.Retained, S3RecoveryIssue{Record: record, Error: err.Error()})
 				continue
 			}
-			if err := r.store.Update(func(tx *state.Tx) error { return tx.Delete(s3UploadBucket, record.ID) }); err != nil {
+			cleared = append(cleared, record.ID)
+		}
+		if len(cleared) > 0 {
+			if err := r.store.Update(func(tx *state.Tx) error {
+				for _, id := range cleared {
+					if err := tx.Delete(s3UploadBucket, id); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
 				return report, err
 			}
-			report.Removed++
+			report.Removed += len(cleared)
 		}
 		if len(records) < 128 {
 			break
@@ -133,10 +144,7 @@ func (r *S3RecoveryRegistry) RegisterUpload(ctx context.Context, record transfer
 	if !r.ready {
 		return errors.New("multipart recovery has not completed")
 	}
-	return r.store.Update(func(tx *state.Tx) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	return r.temporary.submit(ctx, func(tx *state.Tx) error {
 		var old transferstore.S3UploadRecord
 		found, err := tx.Get(s3UploadBucket, record.ID, &old)
 		if err != nil {
@@ -153,7 +161,7 @@ func (r *S3RecoveryRegistry) ForgetUpload(ctx context.Context, id string) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return r.store.Update(func(tx *state.Tx) error { return tx.Delete(s3UploadBucket, id) })
+	return r.temporary.submit(ctx, func(tx *state.Tx) error { return tx.Delete(s3UploadBucket, id) })
 }
 
 func (r *S3RecoveryRegistry) Factory(base execution.StoreFactory) execution.StoreFactory {

@@ -17,7 +17,12 @@ var ErrLegacyDatabase = errors.New("legacy RocksDB database detected; export and
 var ErrMigrationPending = errors.New("offline migration is incomplete; finish migration before starting this database")
 
 type Store struct{ db *bolt.DB }
-type Tx struct{ tx *bolt.Tx }
+type Tx struct {
+	tx    *bolt.Tx
+	dirty bool
+}
+
+var errNoChanges = errors.New("state transaction has no changes")
 
 // SchemaResolvedSources prevents older readers from discarding identities pinned
 // after a missing inventory object becomes available.
@@ -117,7 +122,23 @@ func (s *Store) View(fn func(*Tx) error) error {
 	return s.db.View(func(tx *bolt.Tx) error { return fn(&Tx{tx: tx}) })
 }
 func (s *Store) Update(fn func(*Tx) error) error {
-	return s.db.Update(func(tx *bolt.Tx) error { return fn(&Tx{tx: tx}) })
+	err := s.db.Update(func(raw *bolt.Tx) error {
+		tx := &Tx{tx: raw}
+		if err := fn(tx); err != nil {
+			return err
+		}
+		// Returning an error rolls back the write transaction without allocating
+		// pages or syncing a new meta page. The callback still runs exactly once,
+		// under the same writer lock; changed transactions retain durable commits.
+		if !tx.dirty {
+			return errNoChanges
+		}
+		return nil
+	})
+	if err == errNoChanges {
+		return nil
+	}
+	return err
 }
 
 func (t *Tx) Get(bucket, key string, into any) (bool, error) {
@@ -136,15 +157,29 @@ func (t *Tx) Get(bucket, key string, into any) (bool, error) {
 }
 
 func (t *Tx) Put(bucket, key string, value any) error {
-	encoded, err := json.Marshal(value)
+	encoded, err := json.Marshal(ForStorage(value))
 	if err != nil {
 		return err
+	}
+	if !t.tx.Writable() {
+		return bolt.ErrTxNotWritable
+	}
+	existing := t.tx.Bucket([]byte(bucket))
+	if existing != nil && bytes.Equal(existing.Get([]byte(key)), encoded) {
+		return nil
 	}
 	b, err := t.tx.CreateBucketIfNotExists([]byte(bucket))
 	if err != nil {
 		return err
 	}
-	return b.Put([]byte(key), encoded)
+	if existing == nil {
+		t.dirty = true
+	}
+	if err := b.Put([]byte(key), encoded); err != nil {
+		return err
+	}
+	t.dirty = true
+	return nil
 }
 
 func (t *Tx) Delete(bucket, key string) error {
@@ -152,7 +187,17 @@ func (t *Tx) Delete(bucket, key string) error {
 	if b == nil {
 		return nil
 	}
-	return b.Delete([]byte(key))
+	if !t.tx.Writable() {
+		return bolt.ErrTxNotWritable
+	}
+	if b.Get([]byte(key)) == nil && b.Bucket([]byte(key)) == nil {
+		return nil
+	}
+	if err := b.Delete([]byte(key)); err != nil {
+		return err
+	}
+	t.dirty = true
+	return nil
 }
 
 func (t *Tx) NextID(bucket string) (uint64, error) {
@@ -160,21 +205,33 @@ func (t *Tx) NextID(bucket string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return b.NextSequence()
+	next, err := b.NextSequence()
+	if err == nil {
+		t.dirty = true
+	}
+	return next, err
 }
 
 // ReserveID advances an allocator without allocating every intervening ID.
 // Importers call it in the same transaction that saves imported rows and indexes.
 // A smaller reservation never moves the allocator backwards.
 func (t *Tx) ReserveID(bucket string, minimum uint64) error {
+	created := t.tx.Bucket([]byte(bucket)) == nil
 	b, err := t.tx.CreateBucketIfNotExists([]byte(bucket))
 	if err != nil {
 		return err
 	}
+	if created {
+		t.dirty = true
+	}
 	if b.Sequence() >= minimum {
 		return nil
 	}
-	return b.SetSequence(minimum)
+	if err := b.SetSequence(minimum); err != nil {
+		return err
+	}
+	t.dirty = true
+	return nil
 }
 
 // Scan visits keys in order. after is exclusive and limit bounds memory use.

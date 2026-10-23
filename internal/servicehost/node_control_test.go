@@ -1,4 +1,4 @@
-package servicehost
+package servicehost_test
 
 import (
 	"context"
@@ -10,17 +10,18 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
+	"github.com/MoonWX/oss-transfer/internal/servicehost"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
 func pointer[T any](value T) *T { return &value }
 
 func TestNodeControlConfigurationDefaultsZeroAndCustomValues(t *testing.T) {
-	defaults, err := (*NodeControlConfig)(nil).Options()
+	defaults, err := (*servicehost.NodeControlConfig)(nil).Options()
 	if err != nil || defaults.ListQPS != 100 || defaults.PutQPS != 1400 || defaults.HeadQPS != 2800 || defaults.BandwidthBitsPerSecond != 2_000_000_000 || defaults.RecoveryInterval != 10*time.Second {
 		t.Fatalf("defaults changed: %+v %v", defaults, err)
 	}
-	config := &NodeControlConfig{ListQPS: pointer(0.0), BandwidthBitsPerSecond: pointer(0.0), AutoAdjust: &AutoAdjustConfig{Consecutive503Threshold: pointer(12), ReduceFactor: pointer(0.75), IncreaseFactor: pointer(1.1), MinQPS: pointer(20.0), RecoveryIntervalMS: pointer(int64(2500))}}
+	config := &servicehost.NodeControlConfig{ListQPS: pointer(0.0), BandwidthBitsPerSecond: pointer(0.0), AutoAdjust: &servicehost.AutoAdjustConfig{Consecutive503Threshold: pointer(12), ReduceFactor: pointer(0.75), IncreaseFactor: pointer(1.1), MinQPS: pointer(20.0), RecoveryIntervalMS: pointer(int64(2500))}}
 	got, err := config.Options()
 	if err != nil || got.ListQPS != 0 || got.BandwidthBitsPerSecond != 0 || got.PutQPS != 1400 || !got.UseZeroDefaults || got.Threshold != 12 || got.ReduceFactor != 0.75 || got.RecoveryInterval != 2500*time.Millisecond {
 		t.Fatalf("zero/default distinction lost: %+v %v", got, err)
@@ -29,12 +30,12 @@ func TestNodeControlConfigurationDefaultsZeroAndCustomValues(t *testing.T) {
 
 func TestNodeControlConfigCheckedBeforeStarting(t *testing.T) {
 	data := t.TempDir()
-	base := Config{ServiceName: "agent", DataDirectory: data, ReadyFile: filepath.Join(data, "runtime", "ready.json"), LogFile: filepath.Join(data, "logs", "service.log")}
-	for _, bad := range []*NodeControlConfig{
+	base := servicehost.Config{ServiceName: "agent", DataDirectory: data, ReadyFile: filepath.Join(data, "runtime", "ready.json"), LogFile: filepath.Join(data, "logs", "service.log")}
+	for _, bad := range []*servicehost.NodeControlConfig{
 		{ListQPS: pointer(-1.0)}, {HeadQPS: pointer(0.001)}, {PutQPS: pointer(1_000_001.0)}, {BandwidthBitsPerSecond: pointer(7.0)},
-		{AutoAdjust: &AutoAdjustConfig{Consecutive503Threshold: pointer(0)}}, {AutoAdjust: &AutoAdjustConfig{ReduceFactor: pointer(1.0)}},
-		{AutoAdjust: &AutoAdjustConfig{IncreaseFactor: pointer(1.0)}}, {AutoAdjust: &AutoAdjustConfig{MinQPS: pointer(0.0)}},
-		{AutoAdjust: &AutoAdjustConfig{RecoveryIntervalMS: pointer(int64(0))}}, {AutoAdjust: &AutoAdjustConfig{RecoveryIntervalMS: pointer(int64(math.MaxInt64))}},
+		{AutoAdjust: &servicehost.AutoAdjustConfig{Consecutive503Threshold: pointer(0)}}, {AutoAdjust: &servicehost.AutoAdjustConfig{ReduceFactor: pointer(1.0)}},
+		{AutoAdjust: &servicehost.AutoAdjustConfig{IncreaseFactor: pointer(1.0)}}, {AutoAdjust: &servicehost.AutoAdjustConfig{MinQPS: pointer(0.0)}},
+		{AutoAdjust: &servicehost.AutoAdjustConfig{RecoveryIntervalMS: pointer(int64(0))}}, {AutoAdjust: &servicehost.AutoAdjustConfig{RecoveryIntervalMS: pointer(int64(math.MaxInt64))}},
 	} {
 		base.NodeControl = bad
 		encoded, _ := json.Marshal(base)
@@ -42,16 +43,16 @@ func TestNodeControlConfigCheckedBeforeStarting(t *testing.T) {
 		if err := os.WriteFile(file, encoded, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadConfig(file, "agent"); err == nil {
+		if _, err := servicehost.LoadConfig(file, "agent"); err == nil {
 			t.Fatalf("invalid settings passed check-config path: %+v", bad)
 		}
 	}
 	for _, value := range []float64{math.NaN(), math.Inf(1)} {
-		if _, err := (&NodeControlConfig{ListQPS: &value}).Options(); err == nil {
+		if _, err := (&servicehost.NodeControlConfig{ListQPS: &value}).Options(); err == nil {
 			t.Fatal("nonfinite setting accepted")
 		}
 	}
-	base.NodeControl = &NodeControlConfig{}
+	base.NodeControl = &servicehost.NodeControlConfig{}
 	if err := base.Validate("master"); err == nil {
 		t.Fatal("Master accepted unused Agent settings")
 	}
@@ -63,7 +64,7 @@ func TestConfiguredNodeLimitsReachActualAgentController(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	config := &NodeControlConfig{ListQPS: pointer(0.0), PutQPS: pointer(123.0), HeadQPS: pointer(456.0), BandwidthBitsPerSecond: pointer(80_000_000.0), AutoAdjust: &AutoAdjustConfig{Consecutive503Threshold: pointer(7)}}
+	config := &servicehost.NodeControlConfig{ListQPS: pointer(0.0), PutQPS: pointer(123.0), HeadQPS: pointer(456.0), BandwidthBitsPerSecond: pointer(80_000_000.0), AutoAdjust: &servicehost.AutoAdjustConfig{Consecutive503Threshold: pointer(7)}}
 	options, err := config.Options()
 	if err != nil {
 		t.Fatal(err)

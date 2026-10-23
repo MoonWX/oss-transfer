@@ -135,7 +135,7 @@ func TestAPILocalizedPreflightPreservesPaths(t *testing.T) {
 		if check["message"] != test.want || check["localPath"] != missing || check["executionNodeIp"] != node.Address || check["pathType"] != "MISSING" {
 			t.Fatalf("localized preflight changed data: %v", check)
 		}
-		if data["validationErrors"].([]any)[0] != node.Address+": "+test.want {
+		if check["displayLabel"] != "QA node (127.0.0.1)" || data["validationErrors"].([]any)[0] != "QA node (127.0.0.1): "+test.want {
 			t.Fatal(data)
 		}
 	}

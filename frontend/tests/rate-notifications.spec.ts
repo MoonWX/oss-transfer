@@ -153,7 +153,7 @@ test("automatic reduction and recovery use brief notices without policy or reque
   await expect(page.locator("main").getByText(/正在恢复请求上限/)).toHaveCount(
     0,
   );
-  await notice(page).getByRole("button", { name: "Close" }).click();
+  await notice(page).getByRole("button", { name: "关闭" }).click();
   await state.refresh();
   await expect(notice(page)).toHaveCount(0);
 });
@@ -233,7 +233,7 @@ test("event gaps retain a brief warning and a restarted process does not replay 
   await expect(
     page.locator("main").getByRole("link", { name: "查看详情" }),
   ).toHaveAttribute("href", /eventId=process-a%3A110/);
-  await notice(page).getByRole("button", { name: "Close" }).click();
+  await notice(page).getByRole("button", { name: "关闭" }).click();
   state.update(worker(1000, 1000, [], "process-b"));
   await state.refresh();
   await expect(notice(page)).toHaveCount(0);

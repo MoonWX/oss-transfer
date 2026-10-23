@@ -3,6 +3,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -17,11 +18,20 @@ import {
   describeRateEvents,
   type WorkerStatusResponse,
 } from "./rateStatus";
+import {
+  displayNode,
+  resolveNodeDisplay,
+  mergeNodeDisplay,
+  type NodeDisplay,
+  type NodeLabels,
+  type NodeRegistry,
+} from "./nodeRegistry";
 
 type State = ReturnType<typeof useApi<WorkerStatusResponse>> & {
   receivedAt: number | null;
   now: number;
   stale: boolean;
+  nodeLabel: NodeLabels;
 };
 const WorkerStatusContext = createContext<State | null>(null);
 
@@ -37,6 +47,26 @@ export function WorkerStatusProvider({
     enabled ? "/api/master/worker-status" : null,
     refreshMs,
   );
+  const registry = useApi<{ data: NodeRegistry }>(
+    enabled ? "/api/master/nodes" : null,
+    refreshMs,
+  );
+  const nodeLabel = useMemo<NodeLabels>(() => {
+    const directory = new Map<string, NodeDisplay>();
+    for (const [identity, worker] of Object.entries(
+      workers.data?.workers ?? {},
+    ))
+      directory.set(identity, worker);
+    for (const node of registry.data?.data?.nodes ?? []) {
+      directory.set(
+        node.address,
+        mergeNodeDisplay(node, directory.get(node.address)),
+      );
+      if (node.id) directory.set(node.id, directory.get(node.address)!);
+    }
+    return (identity, display) =>
+      resolveNodeDisplay(identity, directory.get(identity ?? ""), display);
+  }, [registry.data, workers.data]);
   const notify = useNotify();
   const seen = useRef(
     new Map<string, { processId: string; sequence: number }>(),
@@ -73,7 +103,7 @@ export function WorkerStatusProvider({
           event.sequence > prior.sequence,
       );
       if (!events.length) continue;
-      messages.push(describeRateEvents(ip, events, worker));
+      messages.push(describeRateEvents(nodeLabel(ip, worker), events, worker));
       reduced ||= activeRates(worker).some(
         ([, rate]) => rate.state === "REDUCED",
       );
@@ -84,18 +114,22 @@ export function WorkerStatusProvider({
         messages.join(getLocale() === "en-US" ? "; " : "；"),
         reduced ? "warning" : recovering ? "info" : "success",
       );
-  }, [workers.data, notify]);
+  }, [workers.data, notify, nodeLabel]);
   const stale =
     !!workers.error ||
     receivedAt === null ||
     now - receivedAt > Math.max(30000, refreshMs * 2);
   return (
     <WorkerStatusContext.Provider
-      value={{ ...workers, receivedAt, now, stale }}
+      value={{ ...workers, receivedAt, now, stale, nodeLabel }}
     >
       {children}
     </WorkerStatusContext.Provider>
   );
+}
+
+export function useNodeLabels(): NodeLabels {
+  return useContext(WorkerStatusContext)?.nodeLabel ?? displayNode;
 }
 
 export function useWorkerStatus() {
@@ -106,7 +140,7 @@ export function useWorkerStatus() {
 
 export function RateAdjustmentBanner() {
   useI18n();
-  const { data, stale } = useWorkerStatus();
+  const { data, stale, nodeLabel } = useWorkerStatus();
   const { refreshSeconds } = useRefreshPreference();
   const { pathname } = useLocation();
   // Node cards and the event detail page already show the relevant status.
@@ -153,12 +187,14 @@ export function RateAdjustmentBanner() {
             }
           >
             {uncertain
-              ? t("{p1} 曾触发自动调节，当前状态待更新。", { p1: ip })
+              ? t("{p1} 曾触发自动调节，当前状态待更新。", {
+                  p1: nodeLabel(ip, worker),
+                })
               : reduced
                 ? t("{p1} 可能遭遇存储服务限速，已自动降低请求上限。", {
-                    p1: ip,
+                    p1: nodeLabel(ip, worker),
                   })
-                : t("{p1} 正在恢复请求上限。", { p1: ip })}
+                : t("{p1} 正在恢复请求上限。", { p1: nodeLabel(ip, worker) })}
           </Alert>
         );
       })}

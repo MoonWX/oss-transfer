@@ -2,6 +2,12 @@ package master
 
 // Exact application messages only. Vendor errors and user values are not rewritten.
 var apiMessages = map[string]struct{ en, zh, ja string }{
+	"Recovery confirmation timed out; refresh the child status":                               {"Recovery confirmation timed out; refresh the child status", "恢复请求确认超时，请刷新子任务状态", "再開の確認がタイムアウトしました。サブタスクの状態を更新してください"},
+	"Resume the parent task before recovering a child":                                        {"Resume the parent task before recovering a child", "请先恢复主任务，再恢复子任务", "サブタスクを再開する前に親タスクを再開してください"},
+	"This child is no longer waiting for recovery":                                            {"This child is no longer waiting for recovery", "该子任务已不处于等待恢复状态", "このサブタスクは再開待ちではありません"},
+	"Upgrade this Agent to recover individual child tasks":                                    {"Upgrade this Agent to recover individual child tasks", "请先升级此执行节点，再单独恢复子任务", "個別のサブタスクを再開する前にこの Agent を更新してください"},
+	"Cannot recover child task: %s":                                                           {"Cannot recover child task: %s", "无法恢复子任务：%s", "サブタスクを再開できません：%s"},
+	"Child task not found":                                                                    {"Child task not found", "子任务不存在", "サブタスクが見つかりません"},
 	"Upgrade Agent %s before verifying shared storage":                                        {"Upgrade Agent %s before verifying shared storage", "请先升级执行节点 %s，再验证共享存储", "共有ストレージを検証する前に Agent %s を更新してください"},
 	"Provide both Access Key and Secret Key to replace credentials":                           {"Provide both Access Key and Secret Key to replace credentials", "更换凭据时，请同时填写 Access Key 和 Secret Key", "認証情報の変更には Access Key と Secret Key の両方を入力してください"},
 	"Probe cleanup failed on node %s: %s":                                                     {"Probe cleanup failed on node %s: %s", "节点 %s 的测试文件清理失败：%s", "ノード %s のテストファイルを削除できませんでした：%s"},

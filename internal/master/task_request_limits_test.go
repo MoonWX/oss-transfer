@@ -54,8 +54,12 @@ func TestTaskLimitsExportImportAndReportPreserveScope(t *testing.T) {
 		if err != nil {
 			t.Fatal("summary columns misaligned", err)
 		}
+		columns := map[string]int{}
+		for index, header := range csvRows[0] {
+			columns[header] = index
+		}
 		for _, row := range csvRows[1:] {
-			if row[len(row)-5] != expectedScope || row[len(row)-4] != "100" || row[len(row)-1] != "2000000000" {
+			if row[columns["requestLimitScope"]] != expectedScope || row[columns["listQpsLimit"]] != "100" || row[columns["bandwidthBitsPerSecond"]] != "2000000000" {
 				t.Fatal("report silently changed request caps", row)
 			}
 		}

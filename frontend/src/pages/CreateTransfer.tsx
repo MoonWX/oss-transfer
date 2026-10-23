@@ -42,6 +42,8 @@ import {
   TuneRounded,
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
+import type { NodeDisplay } from "../lib/nodeRegistry";
+import { useNodeLabels } from "../lib/workerStatus";
 import { PageHeader } from "../components/Common";
 import { TaskBandwidthField } from "../components/TaskBandwidthField";
 import { TaskRequestLimitsFields } from "../components/TaskRequestLimitsFields";
@@ -64,7 +66,7 @@ import {
 
 type Direction = "OSS_TO_OSS" | "OSS_TO_LOCAL" | "LOCAL_TO_OSS";
 type Connection = { alias: string; endpoint: string };
-type Node = {
+type Node = NodeDisplay & {
   executionNodeIp: string;
   label?: string;
   hostname?: string;
@@ -134,14 +136,6 @@ type Draft = {
   batchText: string;
   pendingRequest?: { id: string; fingerprint: string };
 };
-function nodeDisplayName(node: Node) {
-  const name =
-    node.label?.trim() || node.hostname?.trim() || node.executionNodeIp;
-  const addresses =
-    node.localIps?.filter((ip) => ip !== "127.0.0.1" && ip !== "::1") ?? [];
-  const address = addresses[0] || node.connectionAddress;
-  return address && address !== name ? `${name} · ${address}` : name;
-}
 
 const DRAFT_KEY = "oss-transfer-create-draft";
 const localUploadMode = (nodeCount: number) =>
@@ -526,9 +520,10 @@ export default function CreateTransfer() {
   }, [form, tab, batchKind, batchFormat, batchText, submitted]);
   const configs = connections.data?.configs ?? [];
   const nodes = localNodes.data?.data?.nodes ?? [];
+  const resolveNode = useNodeLabels();
   const nodeLabel = (id: string) => {
     const node = nodes.find((item) => item.executionNodeIp === id);
-    return node ? nodeDisplayName(node) : id;
+    return resolveNode(id, node);
   };
   const availableLocalNodes = nodes.filter(
     (node) => node.reachable && node.localTransferSupported,

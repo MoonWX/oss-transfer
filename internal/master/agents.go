@@ -24,6 +24,7 @@ type agentControl struct {
 	broker        *agenttransport.Broker
 	lastSeen      map[string]time.Time
 	remoteAddress map[string]string
+	nodeInfo      map[string]nodeRuntimeInfo
 }
 
 // Close releases long polls and pending commands before HTTP shutdown. The
@@ -45,6 +46,7 @@ func installAgentRoutes(s *Server) error {
 		broker:        agenttransport.NewBroker(agenttransport.BrokerOptions{}),
 		lastSeen:      make(map[string]time.Time),
 		remoteAddress: make(map[string]string),
+		nodeInfo:      make(map[string]nodeRuntimeInfo),
 	}
 	members, err := a.registry.Members()
 	if err != nil {
@@ -237,6 +239,7 @@ type registeredAgentNode struct {
 	Agent    bool       `json:"agent"`
 	Online   bool       `json:"online"`
 	LastSeen *time.Time `json:"lastSeen,omitempty"`
+	NodeDisplay
 }
 
 func (s *Server) agentNodeData() (map[string]any, error) {
@@ -244,6 +247,7 @@ func (s *Server) agentNodeData() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	displays := s.nodeDisplaySnapshot()
 	a := s.agents
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -253,7 +257,7 @@ func (s *Server) agentNodeData() (map[string]any, error) {
 	}
 	nodes := make([]registeredAgentNode, 0, len(members))
 	for _, member := range members {
-		node := registeredAgentNode{ID: member.ID, Address: member.Address, Label: member.Label, Agent: true}
+		node := registeredAgentNode{ID: member.ID, Address: member.Address, Label: member.Label, Agent: true, NodeDisplay: displays.lookup(member.ID, member.Address)}
 		if seen, ok := a.lastSeen[member.ID]; ok {
 			node.LastSeen = &seen
 			node.Online = s.options.Now().Sub(seen) < 75*time.Second

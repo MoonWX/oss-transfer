@@ -15,6 +15,8 @@ import (
 // Agent, then reads its exact contents through every selected path. A successful
 // stat of identically named paths on different machines is not such a proof.
 func (s *Server) proveSharedDirectory(ctx context.Context, nodes []task.Node, writer int) (writeFailed bool, failedNode int, resultErr error) {
+	displays := s.nodeDisplaySnapshot()
+	nodeLabel := func(node task.Node) string { return displays.lookup(node.ID, node.Address).DisplayLabel }
 	probe, err := transferstore.NewSharedProbe()
 	if err != nil {
 		return false, writer, err
@@ -39,22 +41,22 @@ func (s *Server) proveSharedDirectory(ctx context.Context, nodes []task.Node, wr
 		defer cancel()
 		if err := call(cleanupCtx, nodes[writer], "remove"); err != nil {
 			writeFailed = false // Do not try another writer with unresolved cleanup.
-			resultErr = errors.Join(resultErr, fmt.Errorf(localizeContext(ctx, "Probe cleanup failed on node %s: %s"), nodes[writer].Address, err.Error()))
+			resultErr = errors.Join(resultErr, fmt.Errorf(localizeContext(ctx, "Probe cleanup failed on node %s: %s"), nodeLabel(nodes[writer]), err.Error()))
 		}
 	}()
 	if err := call(ctx, nodes[writer], "write"); err != nil {
 		if unsupported(err) {
 			needsCleanup = false
-			return false, writer, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s before verifying shared storage"), nodes[writer].Address)
+			return false, writer, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s before verifying shared storage"), nodeLabel(nodes[writer]))
 		}
 		return true, writer, err
 	}
 	for i, node := range nodes {
 		if err := call(ctx, node, "read"); err != nil {
 			if unsupported(err) {
-				return false, i, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s before verifying shared storage"), node.Address)
+				return false, i, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s before verifying shared storage"), nodeLabel(node))
 			}
-			return false, i, fmt.Errorf(localizeContext(ctx, "Node %s could not read the shared test file: %s"), node.Address, err.Error())
+			return false, i, fmt.Errorf(localizeContext(ctx, "Node %s could not read the shared test file: %s"), nodeLabel(node), err.Error())
 		}
 	}
 	return false, -1, nil

@@ -138,7 +138,7 @@ test("node links active adjustments to details and keeps recovery progress conci
   await expect(page.getByText(/实测速率按.*秒窗口统计/)).toHaveCount(0);
   await expect(put.getByText(/最近变化/)).toHaveCount(0);
   await put
-    .getByRole("button", { name: `调整 ${nodeIp} 的 PUT 请求 限速` })
+    .getByRole("button", { name: `调整 master (${nodeIp}) 的 PUT 请求 限速` })
     .click();
   const dialog = page.getByRole("dialog");
   await expect(
@@ -254,14 +254,18 @@ test("legacy nodes and partial history do not invent targets or reasons", async 
   await expect(page.getByTestId(`rate-notice-${nodeIp}`)).toHaveCount(0);
   await expect(put.getByRole("progressbar")).toHaveCount(0);
   await put
-    .getByRole("button", { name: `调整 ${nodeIp} 的 PUT 请求 限速` })
+    .getByRole("button", { name: `调整 master (${nodeIp}) 的 PUT 请求 限速` })
     .click();
   await expect(page.getByRole("dialog").getByRole("spinbutton")).toHaveValue(
     "",
   );
   await page.getByRole("button", { name: "取消", exact: true }).click();
   await page.getByRole("tab", { name: "限速历史", exact: true }).click();
-  await expect(page.getByText(/未获取到节点 10.0.1.13 的记录/)).toBeVisible();
+  await expect(
+    page.getByText("限速历史不完整。未获取到节点 agent (10.0.1.13) 的记录。", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(
     page.getByRole("cell", { name: "历史记录未保存调整原因。", exact: true }),
   ).toBeVisible();
@@ -341,7 +345,7 @@ test("rounded fractional targets do not imply automatic reduction", async ({
   await expect(put.getByRole("progressbar")).toHaveCount(0);
   await expect(page.getByText(/下次恢复计划/)).toHaveCount(0);
   await put
-    .getByRole("button", { name: `调整 ${nodeIp} 的 PUT 请求 限速` })
+    .getByRole("button", { name: `调整 master (${nodeIp}) 的 PUT 请求 限速` })
     .click();
   await expect(page.getByRole("dialog").getByRole("spinbutton")).toHaveValue(
     "1.234",

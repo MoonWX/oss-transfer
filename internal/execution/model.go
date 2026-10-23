@@ -12,15 +12,16 @@ import (
 )
 
 var (
-	ErrNotFound   = errors.New("job not found")
-	ErrGeneration = errors.New("stale or unregistered generation")
-	ErrConflict   = errors.New("child ID already belongs to different work")
-	ErrStopped    = errors.New("job or parent is stopped")
-	ErrDeleted    = errors.New("parent is deleted")
-	ErrCapacity   = errors.New("pending job capacity reached")
-	ErrAttempt    = errors.New("attempt is no longer current")
-	ErrRunning    = errors.New("previous attempt has not exited")
-	ErrClosed     = errors.New("execution engine is closed")
+	ErrNotFound       = errors.New("job not found")
+	ErrGeneration     = errors.New("stale or unregistered generation")
+	ErrConflict       = errors.New("child ID already belongs to different work")
+	ErrStopped        = errors.New("job or parent is stopped")
+	ErrNotRecoverable = errors.New("child task is no longer waiting for recovery")
+	ErrDeleted        = errors.New("parent is deleted")
+	ErrCapacity       = errors.New("pending job capacity reached")
+	ErrAttempt        = errors.New("attempt is no longer current")
+	ErrRunning        = errors.New("previous attempt has not exited")
+	ErrClosed         = errors.New("execution engine is closed")
 )
 
 type Status string

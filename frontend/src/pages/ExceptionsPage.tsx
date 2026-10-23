@@ -1,5 +1,11 @@
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
-import { useWorkerStatus } from "../lib/workerStatus";
+import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
+import {
+  taskNodeLabels,
+  mergeNodeDisplay,
+  type NodeDisplay,
+  type NodeLabels,
+} from "../lib/nodeRegistry";
 import {
   exceptionCsv,
   exceptionDetails,
@@ -96,6 +102,7 @@ type Result = {
   failedWorkers?: string[];
   workerErrors?: Record<string, string>;
   respondingNodes?: string[];
+  nodeDisplays?: Record<string, NodeDisplay>;
 };
 const initialFilters: Filters = {
   task: "",
@@ -115,8 +122,8 @@ const failureTime = (item: Failure) =>
     ? new Date(item.timestamp).toLocaleString(getLocale())
     : item.timestampFormatted || "—";
 
-function exportRows(rows: Failure[], name: string) {
-  const csv = exceptionCsv(rows);
+function exportRows(rows: Failure[], name: string, resolve: NodeLabels) {
+  const csv = exceptionCsv(rows, resolve);
   const url = URL.createObjectURL(
     new Blob([csv], { type: "text/csv;charset=utf-8;" }),
   );
@@ -138,12 +145,15 @@ export default function ExceptionsPage() {
     task: /^\d+$/.test(params.get("taskId") || "") ? params.get("taskId")! : "",
   };
   const nodes = useWorkerStatus();
+  const nodeLabel = useNodeLabels();
   const [tab, setTab] = useState(params.get("type") === "local" ? 2 : 0);
   const [draft, setDraft] = useState<Filters>(linkedFilters);
   const [filters, setFilters] = useState<Filters>(linkedFilters);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [result, setResult] = useState<Result | null>(null);
+  const recordNodeLabel: NodeLabels = (id, display) =>
+    nodeLabel(id, mergeNodeDisplay(result?.nodeDisplays?.[id ?? ""], display));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -250,6 +260,8 @@ export default function ExceptionsPage() {
             ? (raw.failedWorkers as string[])
             : [],
           workerErrors: raw.workerErrors as Record<string, string> | undefined,
+          nodeDisplays: raw.nodeDisplays as
+            Record<string, NodeDisplay> | undefined,
         };
       }
       if (id === loadId.current) setResult(next);
@@ -327,7 +339,7 @@ export default function ExceptionsPage() {
           ...(value?.unreachableWorkers ?? []),
         ]),
       ];
-      const message = `${errorText(cause)}${failedNodes.length ? tr("（未完成节点：{value1}）", { value1: failedNodes.join("、") }) : ""}`;
+      const message = `${errorText(cause)}${failedNodes.length ? tr("（未完成节点：{value1}）", { value1: failedNodes.map((id) => nodeLabel(id, value?.nodeDisplays?.[id])).join("、") }) : ""}`;
       setClearError(message);
       notify(message, value?.partial ? "warning" : "error");
       if (value?.partial) {
@@ -364,7 +376,10 @@ export default function ExceptionsPage() {
           value3: value.failed,
           value4: value.partial
             ? tr("；不可达节点：{value1}", {
-                value1: value.unreachableWorkers?.join("、") || tr("未知"),
+                value1:
+                  value.unreachableWorkers
+                    ?.map((id) => nodeLabel(id))
+                    .join("、") || tr("未知"),
               })
             : "",
         }),
@@ -461,9 +476,18 @@ export default function ExceptionsPage() {
               onChange={(event) => updateDraft("node", event.target.value)}
             >
               <MenuItem value="">{tr("全部节点")}</MenuItem>
-              {Object.keys(nodes.data?.workers ?? {}).map((ip) => (
+              {[
+                ...new Set([
+                  ...Object.keys(nodes.data?.workers ?? {}),
+                  ...Object.keys(result?.nodeDisplays ?? {}),
+                  ...(result?.items ?? [])
+                    .map((item) => item.workerNode || item.executionNodeIp)
+                    .filter((id): id is string => !!id),
+                  ...(draft.node ? [draft.node] : []),
+                ]),
+              ].map((ip) => (
                 <MenuItem key={ip} value={ip}>
-                  {ip}
+                  {nodeLabel(ip, result?.nodeDisplays?.[ip])}
                 </MenuItem>
               ))}
             </TextField>
@@ -561,12 +585,14 @@ export default function ExceptionsPage() {
         <Alert severity="warning">
           {missingNodes.length > 0
             ? tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
-                nodes: missingNodes.join("、"),
+                nodes: missingNodes
+                  .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
+                  .join("、"),
               })
             : tr("部分节点未返回数据，当前结果不完整。")}
           {Object.entries(result?.workerErrors ?? {}).map(([node, message]) => (
             <Typography key={node} variant="body2">
-              {node}：{message}
+              {nodeLabel(node, result?.nodeDisplays?.[node])}：{message}
             </Typography>
           ))}
         </Alert>
@@ -620,7 +646,11 @@ export default function ExceptionsPage() {
               startIcon={<DownloadRounded />}
               disabled={!result?.items.length || loading}
               onClick={() =>
-                exportRows(result?.items ?? [], `${mode}-records.csv`)
+                exportRows(
+                  result?.items ?? [],
+                  `${mode}-records.csv`,
+                  recordNodeLabel,
+                )
               }
             >
               {isLocal ? tr("导出当前页") : tr("导出已加载记录")}
@@ -718,9 +748,9 @@ export default function ExceptionsPage() {
                         color="text.secondary"
                         sx={{ fontFamily: "monospace" }}
                       >
-                        {item.workerNode ||
-                          item.executionNodeIp ||
-                          tr("调度阶段")}
+                        {item.workerNode || item.executionNodeIp
+                          ? taskNodeLabels(item, recordNodeLabel)
+                          : tr("调度阶段")}
                       </Typography>
                       {item.stage && (
                         <Chip
@@ -888,30 +918,32 @@ export default function ExceptionsPage() {
         <DialogContent>
           <Stack spacing={2}>
             {selected &&
-              exceptionDetails(selected).map(({ key, label, value, date }) => (
-                <Box key={key}>
-                  <Typography variant="caption" color="text.secondary">
-                    {tr(label)}
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    component="pre"
-                    sx={{
-                      m: 0,
-                      whiteSpace: "pre-wrap",
-                      overflowWrap: "anywhere",
-                      fontFamily: "monospace",
-                    }}
-                  >
-                    {typeof value === "boolean"
-                      ? tr(value ? "是" : "否")
-                      : date
-                        ? new Date(String(value)).toLocaleString(getLocale())
-                        : String(value)}
-                  </Typography>
-                  <Divider sx={{ mt: 1.5 }} />
-                </Box>
-              ))}
+              exceptionDetails(selected, recordNodeLabel).map(
+                ({ key, label, value, date }) => (
+                  <Box key={key}>
+                    <Typography variant="caption" color="text.secondary">
+                      {tr(label)}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      component="pre"
+                      sx={{
+                        m: 0,
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {typeof value === "boolean"
+                        ? tr(value ? "是" : "否")
+                        : date
+                          ? new Date(String(value)).toLocaleString(getLocale())
+                          : String(value)}
+                    </Typography>
+                    <Divider sx={{ mt: 1.5 }} />
+                  </Box>
+                ),
+              )}
           </Stack>
         </DialogContent>
         <DialogActions>

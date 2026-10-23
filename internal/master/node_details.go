@@ -39,5 +39,7 @@ func (s *Server) agentNodeDetails(w http.ResponseWriter, r *http.Request) {
 		data["complete"] = true
 		data["online"] = true
 	}
+	s.rememberNodeInfo(member.ID, data)
+	addNodeDisplay(data, s.nodeDisplaySnapshot().lookup(member.ID, member.Address))
 	writeJSON(w, 200, map[string]any{"success": true, "data": data})
 }

@@ -163,7 +163,8 @@ func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey 
 	for i, node := range spec.Nodes {
 		member, ok := members[node.ID]
 		if !ok || member.EnrollmentID != node.EnrollmentID {
-			return task.Parent{}, fmt.Errorf("Agent %s is not online in this enrollment", node.Address)
+			name := s.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
+			return task.Parent{}, fmt.Errorf("Agent %s is not online in this enrollment", name)
 		}
 		spec.Nodes[i].Address = member.Address
 	}
@@ -308,9 +309,13 @@ func parentPolicy(p task.Parent, index int) ratelimit.ParentLimit {
 func (t *taskRuntime) policies(ctx context.Context, p task.Parent) error {
 	// Offline members keep their reserved share until their old attempts are fenced.
 	var problems []error
+	var displays nodeDisplaySet
 	for i, node := range p.Spec.Nodes {
 		if err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil); err != nil {
-			problems = append(problems, fmt.Errorf("Agent %s bandwidth: %w", node.Address, err))
+			if len(problems) == 0 {
+				displays = t.server.nodeDisplaySnapshot()
+			}
+			problems = append(problems, fmt.Errorf("Agent %s bandwidth: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err))
 		}
 	}
 	return errors.Join(problems...)
@@ -322,6 +327,7 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 	t.mu.Lock()
 	delete(t.sharedProofs, p.ID)
 	t.mu.Unlock()
+	displays := t.server.nodeDisplaySnapshot()
 	var workers sync.WaitGroup
 	results := make(chan error, len(p.Spec.Nodes)+1)
 	workers.Add(1)
@@ -342,12 +348,12 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 			defer cancel()
 			err := t.server.agentCall(callCtx, nodeSession(node), "parent_stop", true, agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation}, nil)
 			if err != nil {
-				results <- fmt.Errorf("Agent %s stop: %w", node.Address, err)
+				results <- fmt.Errorf("Agent %s stop: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err)
 				return
 			}
 			err = t.server.agentCall(callCtx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
 			if err != nil {
-				results <- fmt.Errorf("Agent %s stopped budget: %w", node.Address, err)
+				results <- fmt.Errorf("Agent %s stopped budget: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err)
 			}
 		}()
 	}
@@ -629,7 +635,8 @@ func (s *Server) checkTaskEnrollments(p task.Parent) error {
 	}
 	for _, node := range p.Spec.Nodes {
 		if enrolled[node.ID] != node.EnrollmentID {
-			return fmt.Errorf("Agent %s has been removed or re-enrolled; the original task cannot resume on that identity", node.Address)
+			name := s.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
+			return fmt.Errorf("Agent %s has been removed or re-enrolled; the original task cannot resume on that identity", name)
 		}
 	}
 	return nil

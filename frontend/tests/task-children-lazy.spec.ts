@@ -3,7 +3,10 @@ import { mockApi, tasks } from "./fixtures";
 import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 import { advanceUntilVisible, installPausedClock } from "./clock";
 
-async function arrange(page: import("@playwright/test").Page) {
+async function arrange(
+  page: import("@playwright/test").Page,
+  priorityOrder = false,
+) {
   const requests = await mockApi(page);
   const children = Array.from({ length: 1000 }, (_, index) => ({
     ...tasks[0],
@@ -26,11 +29,15 @@ async function arrange(page: import("@playwright/test").Page) {
     route.fulfill({ json: { tasks: [parent], totalTasks: 1 } }),
   );
   const reads: string[] = [];
-  await mockTaskChildren(page, (id) => ({
-    parentTaskId: id,
-    items: children,
-    childTaskIds: parent.childTaskIds,
-  }));
+  await mockTaskChildren(
+    page,
+    (id) => ({
+      parentTaskId: id,
+      items: children,
+      childTaskIds: parent.childTaskIds,
+    }),
+    priorityOrder,
+  );
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
     if (path.includes("/tasks/989/children"))
@@ -145,7 +152,7 @@ test("active subtasks use one direct filtered request and preserve both views wi
   ).toBeVisible();
   await expect(page.locator("[data-child-id]")).toHaveCount(2);
   expect(reads.filter((url) => url.includes("view=active"))).toEqual([
-    "/api/master/tasks/989/children?offset=0&limit=25&view=active",
+    "/api/master/tasks/989/children?offset=0&limit=25&view=active&order=priority",
   ]);
   expect(reads.some((url) => url.includes("offset=975"))).toBe(false);
   await page.getByTestId("task-children-region").scrollIntoViewIfNeeded();
@@ -221,6 +228,140 @@ test("active refresh removes completed cached rows even when its cursor advances
   expect(
     reads.filter((url) => url.includes("view=active")).length,
   ).toBeLessThan(10);
+});
+
+test("active pages put later running children first without changing the all view", async ({
+  page,
+}) => {
+  const { children, reads } = await arrange(page, true);
+  for (let index = 0; index < 60; index++)
+    children[index].status = "RECOVERABLE";
+  children[998].status = "RUNNING";
+  children[999].status = "RUNNING";
+  await page.goto("/tasks?taskId=989");
+  await revealChildren(page);
+  await page.getByRole("button", { name: "进行中", exact: true }).click();
+  const ids = () =>
+    page
+      .locator("[data-child-id]")
+      .evaluateAll((rows) =>
+        rows.map((row) => row.getAttribute("data-child-id")),
+      );
+  await expect
+    .poll(async () => (await ids()).slice(0, 3))
+    .toEqual(["989-999", "989-1000", "989-1"]);
+  await page.getByTestId("task-children-more").scrollIntoViewIfNeeded();
+  await expect(
+    page.getByRole("button", { name: "查看子任务 989-24", exact: true }),
+  ).toBeAttached();
+  expect(reads.some((url) => url.includes("cursor=3%2F0000000023"))).toBe(true);
+  const loaded = await ids();
+  expect(new Set(loaded).size).toBe(loaded.length);
+  await page.getByRole("button", { name: "全部", exact: true }).click();
+  await expect
+    .poll(async () => (await ids()).slice(0, 3))
+    .toEqual(["989-1", "989-2", "989-3"]);
+});
+
+test("a visible child promoted behind the first running page stays present and completed neighbors disappear", async ({
+  page,
+}) => {
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  const { children, reads } = await arrange(page, true);
+  for (let index = 0; index < 30; index++) children[index].status = "RUNNING";
+  for (let index = 100; index < 180; index++)
+    children[index].status = "RECOVERABLE";
+  await page.goto("/tasks?taskId=989");
+  await advanceUntilVisible(
+    page,
+    page.getByRole("heading", { name: "迁移任务 #989", exact: true }),
+  );
+  await revealChildren(page);
+  await page.getByRole("button", { name: "进行中", exact: true }).click();
+  await expect(page.locator("[data-child-id]")).toHaveCount(25);
+  await page.getByTestId("task-children-more").scrollIntoViewIfNeeded();
+  await expect(
+    page.getByRole("button", { name: "查看子任务 989-120", exact: true }),
+  ).toBeAttached();
+  await page.getByTestId("task-children-more").scrollIntoViewIfNeeded();
+  const promoted = page.locator('[data-child-id="989-123"]');
+  const completed = page.locator('[data-child-id="989-124"]');
+  await expect(promoted).toBeAttached();
+  await promoted.scrollIntoViewIfNeeded();
+  await page.clock.runFor(200);
+  children[122].status = "RUNNING";
+  children[123].status = "COMPLETED";
+  await page.clock.runFor(1200);
+  await expect(promoted.getByText("执行中", { exact: true })).toBeAttached();
+  await expect(completed).toHaveCount(0);
+  await expect(promoted).toBeInViewport();
+  const ids = await page
+    .locator("[data-child-id]")
+    .evaluateAll((rows) =>
+      rows.map((row) => row.getAttribute("data-child-id")),
+    );
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(ids.indexOf("989-123")).toBeLessThan(ids.indexOf("989-101"));
+  expect(
+    reads.some((url) =>
+      new URL(url, "http://localhost").searchParams
+        .get("known")
+        ?.split(",")
+        .includes("123"),
+    ),
+  ).toBe(true);
+  expect(
+    reads.filter((url) => url.includes("view=active")).length,
+  ).toBeLessThan(12);
+});
+
+test("a newly running head row replaces its offscreen recoverable cache entry", async ({
+  page,
+}) => {
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  const { children, reads } = await arrange(page, true);
+  for (let index = 0; index < 50; index++)
+    children[index].status = "RECOVERABLE";
+  await page.goto("/tasks?taskId=989");
+  await advanceUntilVisible(
+    page,
+    page.getByRole("heading", { name: "迁移任务 #989", exact: true }),
+  );
+  await revealChildren(page);
+  await page.getByRole("button", { name: "进行中", exact: true }).click();
+  await expect(page.locator("[data-child-id]")).toHaveCount(25);
+  const promoted = page.locator('[data-child-id="989-1"]');
+  await page.locator('[data-child-id="989-20"]').scrollIntoViewIfNeeded();
+  await page.clock.runFor(200);
+  await expect(promoted).not.toBeInViewport();
+  // The new head ends inside RUNNING. Its old RECOVERABLE row is beyond that
+  // key range and is not among the visible identities sent in `known`.
+  children[0].status = "RUNNING";
+  for (let index = 100; index < 124; index++)
+    children[index].status = "RUNNING";
+  const before = reads.length;
+  await page.clock.runFor(1200);
+  await expect(promoted.getByText("执行中", { exact: true })).toBeAttached();
+  const refresh = reads
+    .slice(before)
+    .find((url) => url.includes("view=active"));
+  expect(refresh).toBeDefined();
+  expect(
+    new URL(refresh!, "http://localhost").searchParams.get("known")?.split(","),
+  ).not.toContain("1");
+  const ids = await page
+    .locator("[data-child-id]")
+    .evaluateAll((rows) =>
+      rows.map((row) => row.getAttribute("data-child-id")),
+    );
+  expect(ids[0]).toBe("989-1");
+  expect(new Set(ids).size).toBe(ids.length);
 });
 
 test("retrying an appended-page failure requests that same cursor and retains earlier rows", async ({

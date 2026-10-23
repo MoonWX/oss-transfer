@@ -18,6 +18,9 @@ import {
 } from "@mui/icons-material";
 import { formatBytes, formatNumber, LoadingState, StatusChip } from "./Common";
 import { keyMappingLabels, type OssKeyMappingMode } from "../lib/ossKeyMapping";
+import ChildRecovery from "./ChildRecovery";
+import { useNodeLabels } from "../lib/workerStatus";
+import { taskNodeLabels } from "../lib/nodeRegistry";
 type Props = {
   childId: string;
   task?: Record<string, any>;
@@ -27,6 +30,7 @@ type Props = {
   loading: boolean;
   partial: boolean;
   error?: string | null;
+  canRecover?: boolean;
   onBack: () => void;
   onClose: () => void;
   onRefresh: () => void;
@@ -51,18 +55,19 @@ export default function SubtaskDetails({
   loading,
   partial,
   error,
+  canRecover = false,
   onBack,
   onClose,
   onRefresh,
 }: Props) {
   useI18n();
+  const nodeLabel = useNodeLabels();
   const sourceEndpoint = task?.sourceEndpoint;
+  const interrupted =
+    task?.status === "RECOVERABLE" && task.errorMessage === "context canceled";
   const rows = task
     ? [
-        [
-          t("执行节点"),
-          task.executionNodeIp || task.workerNode || t("等待分配"),
-        ],
+        [t("执行节点"), taskNodeLabels(task, nodeLabel)],
         ...taskRequestLimitRows(task.requestLimits),
         [t("当前速度"), speed(task.currentSpeedBytesPerSecond)],
         [t("平均速度"), speed(task.averageSpeedBytesPerSecond)],
@@ -170,9 +175,21 @@ export default function SubtaskDetails({
             <StatusChip status={task.status} />
             <Chip variant="outlined" size="small" label={direction} />
           </Stack>
+          {canRecover && task.status === "RECOVERABLE" && (
+            <ChildRecovery
+              key={childId}
+              childId={childId}
+              onRefresh={onRefresh}
+            />
+          )}
           {(task.errorMessage || task.errorCode) && (
-            <Alert severity="error" sx={{ mb: 3, overflowWrap: "anywhere" }}>
-              {task.errorMessage || task.errorCode}
+            <Alert
+              severity={interrupted ? "warning" : "error"}
+              sx={{ mb: 3, overflowWrap: "anywhere" }}
+            >
+              {interrupted
+                ? t("传输已中断，等待恢复。")
+                : task.errorMessage || task.errorCode}
             </Alert>
           )}
           <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>

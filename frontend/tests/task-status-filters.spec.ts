@@ -114,7 +114,9 @@ test("legacy status aliases share one filter and retained nodes filter by exact 
   await expect(
     page.getByRole("option", { name: "同名节点 (10.0.2.2)", exact: true }),
   ).toBeVisible();
-  await page.getByRole("option", { name: "主机一", exact: true }).click();
+  await page
+    .getByRole("option", { name: "主机一 (10.0.1.1)", exact: true })
+    .click();
   await expect(table.getByRole("row")).toHaveCount(2);
   await expect(
     table.getByRole("button", { name: "#301", exact: true }),
@@ -122,7 +124,7 @@ test("legacy status aliases share one filter and retained nodes filter by exact 
   await select(page, "任务状态", "执行中");
   await select(page, "执行节点", "全部节点");
   await expect(table.getByRole("row")).toHaveCount(3);
-  await select(page, "执行节点", "removed-node");
+  await select(page, "执行节点", "节点标识：removed-node");
   await expect(table.getByRole("row")).toHaveCount(2);
   await expect(
     table.getByRole("button", { name: "#303", exact: true }),

@@ -91,15 +91,22 @@ func (e *Engine) Seal(ctx context.Context, child string, generation uint64) (Rec
 // Start returns after an execution slot and the durable attempt have been
 // acquired. A full slot pool applies backpressure, without deleting the ACKed job.
 func (e *Engine) Start(ctx context.Context, child string, generation uint64) error {
-	return e.start(ctx, child, generation, false, false)
+	return e.start(ctx, child, generation, false, false, false)
 }
 
 // Resume waits for any cancelled old attempt to exit. It rechecks completed
 // object ledger entries against the target before granting them progress credit.
 func (e *Engine) Resume(ctx context.Context, child string, generation uint64, retryFailed bool) error {
-	return e.start(ctx, child, generation, true, retryFailed)
+	return e.start(ctx, child, generation, true, retryFailed, false)
 }
-func (e *Engine) start(ctx context.Context, child string, generation uint64, resume, retryFailed bool) error {
+
+// TryRecover only admits an interrupted job when a normal execution slot is
+// free. It never revives a stopped/finished job or waits behind other transfers.
+func (e *Engine) TryRecover(ctx context.Context, child string, generation uint64) error {
+	return e.start(ctx, child, generation, true, false, true)
+}
+
+func (e *Engine) start(ctx context.Context, child string, generation uint64, resume, retryFailed, recoverOnly bool) error {
 	for {
 		e.mu.Lock()
 		if e.closed {
@@ -126,16 +133,27 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 		if !resume {
 			return ErrRunning
 		}
+		if recoverOnly {
+			return ErrCapacity
+		}
 		if err := wait(ctx, old.done); err != nil {
 			return err
 		}
 	}
-	select {
-	case e.slots <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-e.ctx.Done():
-		return ErrClosed
+	if recoverOnly {
+		select {
+		case e.slots <- struct{}{}:
+		default:
+			return ErrCapacity
+		}
+	} else {
+		select {
+		case e.slots <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-e.ctx.Done():
+			return ErrClosed
+		}
 	}
 	keepSlot := false
 	defer func() {
@@ -163,6 +181,9 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	}
 	if current.Job.Generation != generation {
 		return ErrGeneration
+	}
+	if recoverOnly && current.Status != Recoverable {
+		return ErrNotRecoverable
 	}
 	if terminal(current.Status) && !resume {
 		if current.Status == Deleted {

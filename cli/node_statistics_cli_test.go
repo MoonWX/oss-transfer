@@ -30,10 +30,10 @@ func TestNodeTableOmitsExecutionCountsAndPreservesRawStatistics(t *testing.T) {
 	renderCLIResult(&output, result)
 	normalized := strings.Join(strings.Fields(output.String()), " ")
 	for _, want := range []string{
-		"节点地址 名称 角色 连接状态",
-		"10.0.0.2 执行节点 在线",
-		"10.0.0.3 执行节点 在线",
-		"10.0.0.4 执行节点 无法连接",
+		"节点 节点标识 角色 连接状态",
+		"10.0.0.2 10.0.0.2 执行节点 在线",
+		"10.0.0.3 10.0.0.3 执行节点 在线",
+		"10.0.0.4 10.0.0.4 执行节点 无法连接",
 	} {
 		if !strings.Contains(normalized, want) {
 			t.Errorf("missing %q in %s", want, output.String())

@@ -56,6 +56,9 @@ func (s *Server) nodeReplies(ctx context.Context, operation string) ([]nodeReply
 				return
 			}
 			out[index].Err = s.agentCall(ctx, member.Session(), operation, false, struct{}{}, &out[index].Value)
+			if out[index].Err == nil {
+				s.rememberNodeInfo(member.ID, out[index].Value)
+			}
 		}(index, member)
 	}
 	wg.Wait()
@@ -68,6 +71,7 @@ func (s *Server) workerStatus(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot read registered Agents")
 		return
 	}
+	displays := s.nodeDisplaySnapshot()
 	workers := map[string]any{}
 	missing := []string{}
 	for _, reply := range replies {
@@ -77,9 +81,17 @@ func (s *Server) workerStatus(w http.ResponseWriter, r *http.Request) {
 		} else {
 			workers[reply.Member.Address] = reply.Value
 		}
+		value := workers[reply.Member.Address].(map[string]any)
+		if value == nil {
+			value = map[string]any{"success": false, "message": "Agent returned no node status"}
+			workers[reply.Member.Address] = value
+			missing = append(missing, reply.Member.Address)
+		}
+		value["id"], value["address"], value["label"] = reply.Member.ID, reply.Member.Address, reply.Member.Label
+		addNodeDisplay(value, displays.lookup(reply.Member.ID, reply.Member.Address))
 	}
 	sort.Strings(missing)
-	writeJSON(w, 200, map[string]any{"success": true, "workers": workers, "complete": len(missing) == 0, "partial": len(missing) > 0, "failedWorkers": missing})
+	writeJSON(w, 200, map[string]any{"success": true, "workers": workers, "nodeDisplays": displays.byAddress, "complete": len(missing) == 0, "partial": len(missing) > 0, "failedWorkers": missing})
 }
 
 func (s *Server) localNodesWithSettings(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +100,7 @@ func (s *Server) localNodesWithSettings(w http.ResponseWriter, r *http.Request) 
 		fail(w, 500, "Cannot read registered Agents")
 		return
 	}
+	displays := s.nodeDisplaySnapshot()
 	nodes := make([]map[string]any, 0, len(replies))
 	for _, reply := range replies {
 		s.agents.mu.Lock()
@@ -101,6 +114,7 @@ func (s *Server) localNodesWithSettings(w http.ResponseWriter, r *http.Request) 
 			node["hostname"] = reply.Value["hostname"]
 			node["localIps"] = reply.Value["localIps"]
 		}
+		addNodeDisplay(node, displays.lookup(reply.Member.ID, reply.Member.Address))
 		nodes = append(nodes, node)
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"nodes": nodes}})
@@ -223,6 +237,7 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	displays := s.nodeDisplaySnapshot()
 	results := make([]map[string]any, len(members))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 8)
@@ -231,6 +246,7 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 		go func(index int, member cluster.Member) {
 			defer wg.Done()
 			result := map[string]any{"workerIp": member.Address, "success": false}
+			addNodeDisplay(result, displays.lookup(member.ID, member.Address))
 			results[index] = result
 			select {
 			case slots <- struct{}{}:
@@ -258,11 +274,12 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 	if good != len(members) {
 		message = "Some Agents did not confirm the rate update"
 	}
-	writeJSON(w, 200, map[string]any{"success": good == len(members), "successCount": good, "failedCount": len(members) - good, "results": results, "message": message})
+	writeJSON(w, 200, map[string]any{"success": good == len(members), "successCount": good, "failedCount": len(members) - good, "results": results, "nodeDisplays": displays.byAddress, "message": message})
 }
 
 type workerAdjustment struct {
 	nodecontrol.Adjustment
+	NodeDisplay
 	WorkerIP string `json:"workerIp"`
 }
 
@@ -286,6 +303,7 @@ func (s *Server) nodeRateHistory(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	slots := make(chan struct{}, 8)
+	displays := s.nodeDisplaySnapshot()
 	adjustments := []workerAdjustment{}
 	missing := []string{}
 	for _, member := range members {
@@ -308,7 +326,7 @@ func (s *Server) nodeRateHistory(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, entry := range entries {
-				adjustments = append(adjustments, workerAdjustment{entry, member.Address})
+				adjustments = append(adjustments, workerAdjustment{Adjustment: entry, NodeDisplay: displays.lookup(member.ID, member.Address), WorkerIP: member.Address})
 			}
 		}(member)
 	}
@@ -318,7 +336,7 @@ func (s *Server) nodeRateHistory(w http.ResponseWriter, r *http.Request) {
 		adjustments = adjustments[:limit]
 	}
 	sort.Strings(missing)
-	writeJSON(w, 200, map[string]any{"success": true, "adjustments": adjustments, "partial": len(missing) > 0, "complete": len(missing) == 0, "failedWorkers": missing})
+	writeJSON(w, 200, map[string]any{"success": true, "adjustments": adjustments, "nodeDisplays": displays.byAddress, "partial": len(missing) > 0, "complete": len(missing) == 0, "failedWorkers": missing})
 }
 func (s *Server) nodeRateDetail(w http.ResponseWriter, r *http.Request) {
 	member, err := s.nodeByAddress(r.URL.Query().Get("workerIp"))
@@ -335,7 +353,8 @@ func (s *Server) nodeRateDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, struct {
 		nodecontrol.Detail
+		NodeDisplay
 		Success  bool   `json:"success"`
 		WorkerIP string `json:"workerIp"`
-	}{detail, true, member.Address})
+	}{detail, s.nodeDisplaySnapshot().lookup(member.ID, member.Address), true, member.Address})
 }

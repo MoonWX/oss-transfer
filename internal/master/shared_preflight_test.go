@@ -80,6 +80,9 @@ func preflightTestAgent(t *testing.T, f *agentHTTPFixture, number int, legacy ..
 func TestSharedPreflightRequiresUpgradeOfOlderAgent(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	newNode, oldNode := preflightTestAgent(t, f, 1), preflightTestAgent(t, f, 2, true)
+	if _, err := f.master.agents.registry.UpdateLabel(oldNode.ID, "Legacy worker"); err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	for _, nodes := range [][]task.Node{{oldNode, newNode}, {newNode, oldNode}} {
 		row := taskCreateRequest{Direction: "LOCAL_TO_OSS",
@@ -87,7 +90,7 @@ func TestSharedPreflightRequiresUpgradeOfOlderAgent(t *testing.T) {
 			DestinationEndpoint: &taskEndpoint{Type: "OSS", S3Alias: "qa", Bucket: "destination"}}
 		code, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []taskCreateRequest{row})
 		encoded, _ := json.Marshal(response)
-		if code != 200 || response["data"].(map[string]any)["valid"] != false || !strings.Contains(string(encoded), "Upgrade Agent "+oldNode.Address) || strings.Contains(string(encoded), "cleanup failed") {
+		if code != 200 || response["data"].(map[string]any)["valid"] != false || !strings.Contains(string(encoded), "Upgrade Agent Legacy worker (127.0.0.1)") || strings.Contains(string(encoded), "cleanup failed") {
 			t.Fatalf("old Agent preflight did not give an actionable failure: %d %s", code, encoded)
 		}
 		entries, err := os.ReadDir(root)

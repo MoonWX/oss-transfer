@@ -2,6 +2,16 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"节点\t节点标识\t角色\t连接状态": {"Node\tNode ID\tRole\tConnection", "ノード\tノード ID\t役割\t接続状態"},
+	"节点标识 %s": {"Node ID %s", "ノード ID %s"},
+	"节点标识":    {"Node ID", "ノード ID"},
+	"节点名称":    {"Node name", "ノード名"},
+	"回收节点":    {"Recycle node", "削除元ノード"},
+	"仅有节点标识":  {"Only the node ID is known", "ノード ID のみ判明"},
+	"子任务编号应为 主任务ID-序号，序号从 1 开始": {"Use parentID-number for a subtask, starting at 1", "子タスクは 親タスクID-番号 で指定してください。番号は 1 からです"},
+	"子任务已恢复。":           {"Subtask resumed.", "子タスクを再開しました。"},
+	"子任务已在执行。":          {"The subtask is already running.", "子タスクはすでに実行中です。"},
+	"节点并发已满，有空位后会自动恢复。": {"The node is at its concurrency limit. Recovery will start when a slot is available.", "ノードの同時実行数が上限に達しています。空きができると自動的に再開します。"},
 	"密码：":        {"Password: ", "パスワード: "},
 	"当前密码：":      {"Current password: ", "現在のパスワード: "},
 	"新密码：":       {"New password: ", "新しいパスワード: "},

@@ -309,7 +309,7 @@ test("partial application shows failed nodes without success and retry applies t
   await page.getByRole("button", { name: "应用", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "任务 #1048 限速" });
   await expect(dialog.getByRole("alert")).toContainText("部分节点未生效");
-  await expect(dialog).toContainText("10.0.1.13：节点不可达");
+  await expect(dialog).toContainText("agent (10.0.1.13)：节点不可达");
   await expect(dialog).not.toContainText("10.0.1.12");
   await expect(page.getByText("任务限速已更新。", { exact: true })).toHaveCount(
     0,

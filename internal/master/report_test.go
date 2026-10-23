@@ -194,6 +194,14 @@ func TestReportHTTPStoppedLedgerIdentifiersTicketsAndUnavailableNode(t *testing.
 	if len(rows) != 2 || rows[0]["parentTaskId"] != fmt.Sprint(p.ID) || rows[0]["childTaskId"] != fmt.Sprintf("%d-1", p.ID) || rows[0]["result"] != "UNPROCESSED" || rows[0]["logicalKey"] != "'=SUM(A1)" {
 		t.Fatal("stopped ledger or CSV escaping incorrect", rows)
 	}
+	if rows[0]["node"] != "QA node (127.0.0.1)" || rows[0]["nodeId"] != p.Spec.Nodes[0].Address {
+		t.Fatal("report lost the human-readable node or its stable identity", rows[0])
+	}
+	for _, summary := range reportRows(t, files["task-summary.csv"]) {
+		if summary["rowType"] == "CHILD_TASK" && (summary["node"] != rows[0]["node"] || summary["nodeId"] != rows[0]["nodeId"]) {
+			t.Fatal("summary and object report disagree about the node", summary)
+		}
+	}
 	for _, key := range []string{"taskId", "shardId"} {
 		if _, exists := rows[0][key]; exists {
 			t.Fatal("internal ID leaked", key)
@@ -250,6 +258,11 @@ func TestReportHTTPStoppedLedgerIdentifiersTicketsAndUnavailableNode(t *testing.
 	}
 	if meta["complete"] != false || len(meta["unreachableNodes"].([]any)) != 1 || meta["resultCounts"].(map[string]any)["UNKNOWN"] != float64(2) {
 		t.Fatal("missing ledger not disclosed", meta)
+	}
+	for _, row := range reportRows(t, files["exception-details.csv"]) {
+		if row["node"] != "QA node (127.0.0.1)" || row["nodeId"] == "" {
+			t.Fatal("revoked node label missing from error report", row)
+		}
 	}
 	if len(reportRows(t, files["exception-details.csv"])) != 3 {
 		t.Fatal("offline object details absent")

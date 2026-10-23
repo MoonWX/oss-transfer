@@ -387,6 +387,17 @@ func safeCLIText(value interface{}) string {
 }
 func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	data := responseData(result)
+	if outcome := getString(data, "outcome"); outcome != "" {
+		message := map[string]string{
+			"STARTED":          "子任务已恢复。",
+			"ALREADY_RUNNING":  "子任务已在执行。",
+			"WAITING_CAPACITY": "节点并发已满，有空位后会自动恢复。",
+		}[outcome]
+		if message != "" {
+			fmt.Fprintln(out, cliText(out, message))
+			return
+		}
+	}
 	if renderAdminTable(out, result, data) {
 		return
 	}
@@ -510,7 +521,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		}
 		workers, _ := result["workers"].(map[string]interface{})
 		w := newCLITable(out)
-		fmt.Fprintln(w, cliText(out, "节点地址\t名称\t角色\t连接状态"))
+		fmt.Fprintln(w, cliText(out, "节点\t节点标识\t角色\t连接状态"))
 		for _, node := range nodes {
 			address := getString(node, "address")
 			worker, _ := workers[address].(map[string]interface{})
@@ -532,7 +543,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			if node["master"] == true {
 				role = cliText(out, "主节点 / 执行节点")
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", safeCLIText(address), safeCLIText(getString(node, "label")), role, state)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, address, localeOf(out))), safeCLIText(address), role, state)
 		}
 		w.Flush()
 		fmt.Fprintf(out, cliText(out, "共 %d 个执行节点\n"), len(nodes))
@@ -541,7 +552,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			worker, _ := workers[address].(map[string]interface{})
 			if worker["success"] != true {
 				if message := getString(worker, "message"); message != "" {
-					fmt.Fprintf(out, "%s: %s\n", safeCLIText(address), safeCLIText(message))
+					fmt.Fprintf(out, "%s: %s\n", safeCLIText(cliNodeLabel(node, address, localeOf(out))), safeCLIText(message))
 				}
 			}
 		}
@@ -592,7 +603,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 				if target == nil {
 					source = "—"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(node["workerIp"]), kind, format(target, true), source, format(rate["limit"+suffix], true), format(rate["current"+suffix], false), safeCLIText(state))
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, getString(node, "workerIp"), localeOf(out))), kind, format(target, true), source, format(rate["limit"+suffix], true), format(rate["current"+suffix], false), safeCLIText(state))
 			}
 		}
 		w.Flush()
@@ -646,7 +657,7 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 			id = "#" + getString(task, "childTaskId")
 		}
 		status := cliTaskStatus(getString(task, "status"))
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkers(task)))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkersDisplay(task, localeOf(out))))
 	}
 	w.Flush()
 }
@@ -662,7 +673,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
 		bandwidth = fmt.Sprint(value, " Mbps")
 	}
-	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkers(task)}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskMetric(task, "putObject")}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskMetric(task, "putObject")}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
 	if limits, ok := task["requestLimits"].(map[string]interface{}); ok {
 		scope := cliText(out, "所有执行节点合计")
 		if getString(limits, "scope") == "PER_NODE" {
@@ -696,9 +707,13 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	w.Flush()
 }
 
-var fieldLabels = map[string]string{"requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "地址", "label": "名称", "executionNodeIp": "节点 IP", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
+var fieldLabels = map[string]string{"requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
 
 func renderFields(out io.Writer, data map[string]interface{}, indent string) {
+	renderFieldsWithNodes(out, data, indent, collectCLINodeDisplays(data))
+}
+
+func renderFieldsWithNodes(out io.Writer, data map[string]interface{}, indent string, displays cliNodeDisplays) {
 	keys := make([]string, 0, len(data))
 	for key := range data {
 		keys = append(keys, key)
@@ -706,17 +721,31 @@ func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		value := data[key]
-		if value == nil {
+		if value == nil || redundantCLINodeField(key, data) {
 			continue
 		}
 		label := cliText(out, fieldLabels[key])
 		if label == "" {
 			label = key
 		}
+		if display, ok := displays[key]; ok {
+			label = safeCLIText(cliNodeLabel(display, key, localeOf(out)))
+		}
+		if cliNodeCollectionField(key) {
+			value = cliNodeCollection(value, displays, localeOf(out))
+		}
+		if key == "executionNodeIp" || key == "workerNode" || key == "workerIp" || key == "recycleNode" {
+			if identity, ok := value.(string); ok {
+				value = displays.label(identity, localeOf(out))
+			}
+		}
+		if key == "displayLabel" {
+			value = cliNodeLabel(data, firstNodeString(data, "address", "id"), localeOf(out))
+		}
 		switch v := value.(type) {
 		case map[string]interface{}:
 			fmt.Fprintf(out, "%s%s:\n", indent, label)
-			renderFields(out, v, indent+"  ")
+			renderFieldsWithNodes(out, v, indent+"  ", displays)
 		case []interface{}:
 			if len(v) == 0 {
 				fmt.Fprintf(out, "%s%s: []\n", indent, label)
@@ -726,7 +755,7 @@ func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 			for _, item := range v {
 				if m, ok := item.(map[string]interface{}); ok {
 					fmt.Fprintf(out, "%s  -\n", indent)
-					renderFields(out, m, indent+"    ")
+					renderFieldsWithNodes(out, m, indent+"    ", displays)
 				} else {
 					fmt.Fprintf(out, "%s  %s\n", indent, safeCLIText(item))
 				}
@@ -739,6 +768,7 @@ func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 
 func renderIncomplete(out io.Writer, result map[string]interface{}) {
 	seen := map[string]bool{}
+	displays := collectCLINodeDisplays(result)
 	write := func(context, label string, value interface{}) {
 		line := label + ": " + safeCLIText(value)
 		if context != "" {
@@ -756,6 +786,9 @@ func renderIncomplete(out io.Writer, result map[string]interface{}) {
 		}
 		for _, entry := range [][2]string{{"failedWorkers", cliText(out, "失败节点")}, {"unreachableWorkers", cliText(out, "未响应节点")}, {"unavailableWorkers", cliText(out, "不可用节点")}, {"truncatedWorkers", cliText(out, "记录被截断的节点")}, {"missingTaskIds", cliText(out, "缺失子任务 ID")}, {"errors", cliText(out, "错误详情")}, {"workerErrors", cliText(out, "节点错误")}, {"nodeErrors", cliText(out, "节点错误")}} {
 			if value := current[entry[0]]; nonEmptyCLICollection(value) {
+				if cliNodeCollectionField(entry[0]) {
+					value = cliNodeCollection(value, displays, localeOf(out))
+				}
 				write(context, entry[1], value)
 			}
 		}

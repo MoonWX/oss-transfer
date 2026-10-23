@@ -106,7 +106,9 @@ async function setup(
 
 test("Agent node connection state reflects its heartbeat", async ({ page }) => {
   await setup(page, true);
-  const agent = page.getByRole("region", { name: "执行节点 10.0.1.13" });
+  const agent = page.getByRole("region", {
+    name: "执行节点 数据节点 (10.0.1.13)",
+  });
   await expect(agent.getByText("Agent", { exact: true })).toBeVisible();
   await expect(agent.getByText("离线", { exact: true })).toBeVisible();
   await expect(agent.getByText(/最后连接：/)).toBeVisible();
@@ -381,7 +383,7 @@ test("node removal requires confirmation and retains inaccessible or referenced 
   ).toHaveCount(1);
   await page.getByRole("button", { name: "移除节点", exact: true }).click();
   const dialog = page.getByRole("dialog", {
-    name: "移除节点 数据节点",
+    name: "移除节点 数据节点 (10.0.1.13)",
     exact: true,
   });
   await expect(
@@ -439,7 +441,9 @@ test("worker address and name remain editable without sending display directorie
     body: { address: "10.0.1.14", label: "归档节点" },
     internalToken: undefined,
   });
-  await expect(page.getByText("归档节点", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("归档节点 (10.0.1.14)", { exact: true }),
+  ).toBeVisible();
 });
 
 async function openInvitation(page: Page, label = "新节点") {

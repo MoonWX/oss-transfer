@@ -1,4 +1,32 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "传输已中断，等待恢复。": {
+    en: "Transfer interrupted; waiting to resume.",
+    ja: "転送が中断されました。再開を待っています。",
+  },
+  立即恢复: {
+    en: "Resume now",
+    ja: "今すぐ再開",
+  },
+  "正在检查恢复条件…": {
+    en: "Checking recovery conditions…",
+    ja: "再開条件を確認中…",
+  },
+  "节点并发已满，有空位后会自动恢复。": {
+    en: "The node is at its concurrency limit. Recovery will start when a slot is available.",
+    ja: "ノードの同時実行数が上限に達しています。空きができると自動的に再開します。",
+  },
+  "子任务已恢复。": {
+    en: "Subtask resumed.",
+    ja: "子タスクを再開しました。",
+  },
+  "子任务已在执行。": {
+    en: "The subtask is already running.",
+    ja: "子タスクはすでに実行中です。",
+  },
+  "尚未确认恢复结果，请刷新子任务状态。": {
+    en: "Recovery has not been confirmed. Refresh the subtask status.",
+    ja: "再開結果を確認できませんでした。子タスクの状態を更新してください。",
+  },
   均衡分发: {
     en: "Balanced",
     ja: "均等配分",

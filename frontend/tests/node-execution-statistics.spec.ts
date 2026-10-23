@@ -168,7 +168,7 @@ test("node refresh updates rates and queues without bringing back completed coun
   );
   await page.goto("/nodes");
   const region = page.getByRole("region", {
-    name: "执行节点 10.0.1.12",
+    name: "执行节点 master (10.0.1.12)",
     exact: true,
   });
   const bandwidth = region.getByTestId("rate-10.0.1.12-bandwidth");

@@ -1,4 +1,6 @@
 import { t, useI18n, formatDate } from "../lib/i18n";
+import { useNodeLabels } from "../lib/workerStatus";
+import { taskNodeLabels, type NodeDisplay } from "../lib/nodeRegistry";
 import { useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
@@ -158,6 +160,7 @@ const displayValue = (value: unknown, format?: "bytes" | "date") =>
         : String(value);
 export default function ToolsPage() {
   useI18n();
+  const nodeLabel = useNodeLabels();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "recycle" ? 1 : 0;
   const notify = useNotify();
@@ -197,6 +200,7 @@ export default function ToolsPage() {
     queriedWorkers?: string[];
     truncated?: boolean;
     nextBeforeId?: number;
+    nodeDisplays?: Record<string, NodeDisplay>;
   }>(tab === 1 ? "/api/master/deleted-tasks" : null);
   const [earlierRows, setEarlierRows] = useState<
     (DeletedTask & {
@@ -409,7 +413,11 @@ export default function ToolsPage() {
             value1: detail.message || t("部分记录未删除，请刷新后重试。"),
             value2: failedWorkers.length
               ? t("（未完成节点：{value1}）", {
-                  value1: failedWorkers.join(", "),
+                  value1: failedWorkers
+                    .map((id) =>
+                      nodeLabel(String(id), detail?.nodeDisplays?.[String(id)]),
+                    )
+                    .join(", "),
                 })
               : "",
           }),
@@ -420,13 +428,24 @@ export default function ToolsPage() {
           ? t("部分记录未删除{value1}。", {
               value1: failedWorkers.length
                 ? t("，未响应节点：{value1}", {
-                    value1: failedWorkers.join(", "),
+                    value1: failedWorkers
+                      .map((id) =>
+                        nodeLabel(
+                          String(id),
+                          detail?.nodeDisplays?.[String(id)],
+                        ),
+                      )
+                      .join(", "),
                   })
                 : t("，请刷新后重试"),
             })
           : retained.length
             ? t("任务记录已删除；已移除节点的本地历史保留：{value1}。", {
-                value1: retained.join(", "),
+                value1: retained
+                  .map((id) =>
+                    nodeLabel(String(id), detail?.nodeDisplays?.[String(id)]),
+                  )
+                  .join(", "),
               })
             : t("永久删除请求已提交，正在刷新回收站。"),
         partial ? "warning" : "info",
@@ -449,7 +468,11 @@ export default function ToolsPage() {
         value1: errorText(error),
         value2: failedWorkers.length
           ? t("（未完成节点：{value1}）", {
-              value1: failedWorkers.join(", "),
+              value1: failedWorkers
+                .map((id) =>
+                  nodeLabel(String(id), detail?.nodeDisplays?.[String(id)]),
+                )
+                .join(", "),
             })
           : "",
       });
@@ -879,7 +902,9 @@ export default function ToolsPage() {
           {recycle.data && missingNodes.length > 0 && (
             <Alert severity="warning">
               {t("以下节点未返回回收站数据，当前列表可能不完整：{nodes}", {
-                nodes: missingNodes.join(", "),
+                nodes: missingNodes
+                  .map((id) => nodeLabel(id, recycle.data?.nodeDisplays?.[id]))
+                  .join(", "),
               })}
             </Alert>
           )}
@@ -1081,9 +1106,7 @@ export default function ToolsPage() {
                                 whiteSpace: "nowrap",
                               }}
                             >
-                              {task.participatingWorkerNodes?.join(", ") ||
-                                task.executionNodeIp ||
-                                task.workerNode}
+                              {taskNodeLabels(task, nodeLabel)}
                             </TableCell>
                             <TableCell>
                               <StatusChip status={task.status || "UNKNOWN"} />

@@ -132,6 +132,7 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 			fail(w, 500, "Cannot read exception nodes")
 			return
 		}
+		displays := s.nodeDisplaySnapshot()
 		groups := map[string]any{}
 		counts := map[string]int64{}
 		for node := range nodes {
@@ -146,7 +147,9 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 				}
 				counts[e.Node]++
 				if len(rows) < limit {
-					rows = append(rows, exceptionDTO(e))
+					row := exceptionDTO(e)
+					addExecutionNodeDisplay(row, displays.lookup("", e.Node))
+					rows = append(rows, row)
 				}
 				groups[e.Node] = rows
 				return nil
@@ -169,7 +172,7 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 			name = "fallbackObjects"
 			failed = []string{}
 		}
-		result := map[string]any{"success": true, name: groups, "totalCount": total, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "complete": len(failed) == 0, "partial": len(failed) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
+		result := map[string]any{"success": true, name: groups, "totalCount": total, "nodeDisplays": displays.byAddress, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "complete": len(failed) == 0, "partial": len(failed) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
 		if fallback {
 			result["supported"] = false
 			result["message"] = localize(w, "The Go transfer engine does not use the legacy SDK fallback mechanism")
@@ -198,7 +201,7 @@ func (s *Server) clearExceptions(fallback bool) http.HandlerFunc {
 			return
 		}
 		queried, failed := exceptionNodeLists(nodes)
-		writeJSON(w, 200, map[string]any{"success": true, "clearedCount": count, "complete": len(failed) == 0, "partial": len(failed) > 0, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "scope": "observed-failures", "executionLedgerPreserved": true})
+		writeJSON(w, 200, map[string]any{"success": true, "clearedCount": count, "nodeDisplays": s.nodeDisplaySnapshot().byAddress, "complete": len(failed) == 0, "partial": len(failed) > 0, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "scope": "observed-failures", "executionLedgerPreserved": true})
 	}
 }
 func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
@@ -242,12 +245,15 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []map[string]any{}
 	total := 0
+	displays := s.nodeDisplaySnapshot()
 	err = s.tasks.repo.VisitExceptions(r.Context(), filter, func(e task.Exception) error {
 		if _, found := nodes[e.Node]; !found {
 			nodes[e.Node] = false
 		}
 		if total >= offset && len(items) < limit {
-			items = append(items, exceptionDTO(e))
+			row := exceptionDTO(e)
+			addExecutionNodeDisplay(row, displays.lookup("", e.Node))
+			items = append(items, row)
 		}
 		total++
 		return nil
@@ -257,5 +263,5 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	queried, failed := exceptionNodeLists(nodes)
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "total": total, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}})
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}})
 }

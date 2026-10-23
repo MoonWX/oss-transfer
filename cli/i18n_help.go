@@ -37,6 +37,7 @@ Tasks
   task list                       List parent tasks, status and progress
   task show <ID>                  Show task details and the first child task page
   task children <ID>              Page through child tasks, starting at ID-1
+  task recover-child <ID-N>       Try to resume a recoverable subtask now
   task create <direction> ...     Create an OSS migration, download or upload
   task import <type> <file>       Import tasks in bulk
   task stop|resume|start|retry <ID...>
@@ -107,6 +108,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   task list                       親タスク、状態、進捗を表示
   task show <ID>                  詳細と子タスクの最初のページを表示
   task children <ID>              子タスクをページ取得（ID-1 から）
+  task recover-child <ID-N>       復旧待ちの子タスクの再開を試行
   task create <方向> ...          OSS 間転送、ダウンロード、アップロードを作成
   task import <種別> <ファイル>   タスクを一括インポート
   task stop|resume|start|retry <ID...>
@@ -180,6 +182,7 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-N [--node NODE]
   children <ID> [--offset 0] [--limit 25]
+  recover-child <ID-N>            Try to resume a subtask within the node's concurrency limit
   trash [--task-id ID] [--worker NODE] [--direction DIRECTION] [--search TEXT]
         [--limit 100] [--before-id ID]
 
@@ -219,6 +222,7 @@ Deleting records does not delete source or target objects.
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-N [--node ノード]
   children <ID> [--offset 0] [--limit 25]
+  recover-child <ID-N>            ノードの同時実行数制限内で子タスクの再開を試行
   trash [--task-id ID] [--worker ノード] [--direction 方向] [--search 文字列]
         [--limit 100] [--before-id ID]
 
@@ -402,7 +406,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   oss-transfer-cli node add 10.0.0.2 --label data-node
   oss-transfer-cli node remove 10.0.0.2 --yes
 
-Add nodes with agent invite. Names, IPv4 and IPv6 are accepted; Agent detects an omitted address.
+Use the Node ID column from node list to select a node in commands. Add nodes with agent invite; --address accepts a name, IPv4 or IPv6 and is generated when omitted.
 Agent addresses cannot be edited after registration; join again when replacing a node.
 node network retains legacy address settings. New invitations use the current CLI connection address.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
@@ -423,7 +427,7 @@ Use --json for queue/raw rate data; use limit list for limits.
   oss-transfer-cli node add 10.0.0.2 --label data-node
   oss-transfer-cli node remove 10.0.0.2 --yes
 
-追加には agent invite を使います。名前、IPv4、IPv6 に対応し、省略時は Agent が自動判定します。
+コマンドのノード指定には node list の「ノード ID」列を使います。追加は agent invite を使い、--address は名前、IPv4、IPv6 に対応します。省略時は自動生成されます。
 登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
 node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。

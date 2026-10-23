@@ -5,6 +5,42 @@ type ExecutionSubtask = Record<string, any> & {
   subtaskNumber?: number;
 };
 
+export function activeSubtaskPriority(task: ExecutionSubtask): number {
+  switch (task.status) {
+    case "RUNNING":
+    case "SCAN_COMPLETED":
+      return 0;
+    case "RECOVERING":
+    case "RESUMING":
+      return 1;
+    case "STOPPING":
+      return 2;
+    case "RECOVERABLE":
+    case "WAITING_RECOVERY":
+      return 3;
+    case "WAITING":
+    case "PENDING":
+    case "CREATED":
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+export function activeSubtaskCursor(task: ExecutionSubtask): string {
+  return `${activeSubtaskPriority(task)}/${String(task.subtaskNumber).padStart(10, "0")}`;
+}
+
+export function compareActiveSubtasks(
+  a: ExecutionSubtask,
+  b: ExecutionSubtask,
+): number {
+  return (
+    activeSubtaskPriority(a) - activeSubtaskPriority(b) ||
+    (a.subtaskNumber ?? 0) - (b.subtaskNumber ?? 0)
+  );
+}
+
 // Keep the worker identity unchanged; the displayed number belongs to its parent.
 export function numberSubtasks<T extends ExecutionSubtask>(
   tasks: T[],

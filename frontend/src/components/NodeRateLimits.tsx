@@ -1,3 +1,4 @@
+import { useNodeLabels } from "../lib/workerStatus";
 import { t, useI18n, formatNumber } from "../lib/i18n";
 import { Link as RouterLink } from "react-router-dom";
 import {
@@ -103,6 +104,7 @@ export default function NodeRateLimits({
   onEdit: (ip: string, type: RateType, target?: number) => void;
 }) {
   useI18n();
+  const nodeLabel = useNodeLabels();
   const uncertain = stale || refreshMs === 0;
   const activeAdjustments = [rateLimit?.put, rateLimit?.head].filter(
     (rate) => rate?.state === "REDUCED" || rate?.state === "RECOVERING",
@@ -247,7 +249,7 @@ export default function NodeRateLimits({
                 size="small"
                 onClick={() => onEdit(ip, type, target)}
                 aria-label={t("调整 {value1} 的 {value2} 限速", {
-                  value1: ip,
+                  value1: nodeLabel(ip),
                   value2: rateNames[type],
                 })}
                 sx={{ flexShrink: 0 }}

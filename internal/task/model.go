@@ -74,6 +74,7 @@ type Parent struct {
 	Fingerprint       string             `json:"fingerprint"`
 	Legacy            *LegacyProvenance  `json:"legacy,omitempty"`
 	Scheduling        *SchedulingState   `json:"scheduling,omitempty"`
+	ChildOrder        *ChildOrderState   `json:"childOrder,omitempty"`
 }
 
 type Child struct {

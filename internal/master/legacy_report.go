@@ -91,13 +91,14 @@ func (s *Server) walkLegacyChildren(ctx context.Context, p task.Parent, visit fu
 		}
 	}
 }
-func legacySummaryCSV(writer *csv.Writer, p task.Parent, child task.LegacyChild) error {
+func legacySummaryCSV(writer *csv.Writer, p task.Parent, child task.LegacyChild, sets ...nodeDisplaySet) error {
 	row, err := legacyChildDTO(p, child)
 	if err != nil {
 		return err
 	}
-	values := []any{"CHILD_TASK", p.ID, row["childTaskId"], row["direction"], child.Node, row["legacyOriginalStatus"], reportEndpoint(p.Spec.Source), reportEndpoint(p.Spec.Destination), p.Spec.Prefix, row["startKey"], row["endKey"], row["objectKey"], row["targetRelativePath"], row["dateAfter"], row["dateBefore"], row["overwrite"], row["conflictPolicy"], row["distributionMode"], row["listObjectCount"], row["listObjectSize"], row["putObjectCount"], row["putObjectSize"], row["skippedObjectCount"], row["skippedObjectSize"], row["failedObjectCount"], row["failedObjectSize"], row["createTime"], row["startTime"], row["endTime"], p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
-	return reportCSV(writer, append(values, reportRequestLimits(p.Spec.RequestLimits)...)...)
+	values := []any{"CHILD_TASK", p.ID, row["childTaskId"], row["direction"], reportNodeLabel("", child.Node, sets...), row["legacyOriginalStatus"], reportEndpoint(p.Spec.Source), reportEndpoint(p.Spec.Destination), p.Spec.Prefix, row["startKey"], row["endKey"], row["objectKey"], row["targetRelativePath"], row["dateAfter"], row["dateBefore"], row["overwrite"], row["conflictPolicy"], row["distributionMode"], row["listObjectCount"], row["listObjectSize"], row["putObjectCount"], row["putObjectSize"], row["skippedObjectCount"], row["skippedObjectSize"], row["failedObjectCount"], row["failedObjectSize"], row["createTime"], row["startTime"], row["endTime"], p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
+	values = append(values, reportRequestLimits(p.Spec.RequestLimits)...)
+	return reportCSV(writer, append(values, child.Node)...)
 }
 func (s *Server) walkLegacyHistory(ctx context.Context, p task.Parent, kind string, visit func(task.LegacyHistory) error) error {
 	after := ""
@@ -126,7 +127,7 @@ func legacyTimestamp(value *int64) any {
 	}
 	return time.UnixMilli(*value).UTC()
 }
-func (s *Server) writeLegacyReport(ctx context.Context, p task.Parent, files, issues *csv.Writer) (reportCoverage, error) {
+func (s *Server) writeLegacyReport(ctx context.Context, p task.Parent, files, issues *csv.Writer, sets ...nodeDisplaySet) (reportCoverage, error) {
 	coverage := newCoverage(p)
 	coverage.LegacyHistorical = true
 	coverage.LegacyOriginalStatus = p.Legacy.OriginalStatus
@@ -185,11 +186,11 @@ func (s *Server) writeLegacyReport(ctx context.Context, p task.Parent, files, is
 		} else {
 			allTracked = false
 		}
-		if err := reportCSV(files, p.ID, row.ChildTaskID, saved.Direction, saved.LogicalKey, saved.SourceS3Alias, saved.SourceBucket, saved.SourceKey, saved.SourcePath, saved.DestinationS3Alias, saved.DestinationBucket, saved.DestinationKey, saved.DestinationPath, size, saved.Node, status, saved.ReasonCode, saved.ErrorMessage, legacyTimestamp(saved.DiscoveredAt), legacyTimestamp(saved.CompletedAt), nil, nil); err != nil {
+		if err := reportCSV(files, p.ID, row.ChildTaskID, saved.Direction, saved.LogicalKey, saved.SourceS3Alias, saved.SourceBucket, saved.SourceKey, saved.SourcePath, saved.DestinationS3Alias, saved.DestinationBucket, saved.DestinationKey, saved.DestinationPath, size, reportNodeLabel("", saved.Node, sets...), status, saved.ReasonCode, saved.ErrorMessage, legacyTimestamp(saved.DiscoveredAt), legacyTimestamp(saved.CompletedAt), nil, nil, saved.Node); err != nil {
 			return err
 		}
 		if status == "FAILED" || status == "UNKNOWN" {
-			if err := reportCSV(issues, p.ID, row.ChildTaskID, saved.Direction, saved.LogicalKey, size, saved.Node, saved.ReasonCode, saved.ErrorMessage, legacyTimestamp(saved.CompletedAt)); err != nil {
+			if err := reportCSV(issues, p.ID, row.ChildTaskID, saved.Direction, saved.LogicalKey, size, reportNodeLabel("", saved.Node, sets...), saved.ReasonCode, saved.ErrorMessage, legacyTimestamp(saved.CompletedAt), saved.Node); err != nil {
 				return err
 			}
 		}

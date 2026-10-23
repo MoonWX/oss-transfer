@@ -81,7 +81,8 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 		children, maxChildren := s.Engine.Concurrency()
 		scans, maxScans := s.Scanner.Concurrency()
 		execution := map[string]any{"activeScans": scans, "maxConcurrentScans": maxScans, "activeChildren": children, "maxConcurrentChildren": maxChildren, "unfinishedChildren": unfinished, "maxUnfinishedChildren": maxUnfinished}
-		return respond(map[string]any{"success": true, "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution}, nil)
+		identity := hostIdentity()
+		return respond(map[string]any{"success": true, "hostname": identity["hostname"], "localIps": identity["localIps"], "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution}, nil)
 	case "node_config":
 		var request struct{}
 		if err := decode(command.Payload, &request); err != nil {

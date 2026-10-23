@@ -25,8 +25,10 @@ test("rate dialog displays its all-worker default without overlapping the label"
     .toBe(true);
 
   await scope.click();
-  await page.getByRole("option", { name: "10.0.1.12", exact: true }).click();
-  await expect(scope).toHaveText("10.0.1.12");
+  await page
+    .getByRole("option", { name: "master (10.0.1.12)", exact: true })
+    .click();
+  await expect(scope).toHaveText("master (10.0.1.12)");
   await scope.click();
   await page.getByRole("option", { name: "全部执行节点", exact: true }).click();
   await expect(scope).toHaveText("全部执行节点");

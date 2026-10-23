@@ -15,6 +15,8 @@ import {
 } from "@mui/material";
 import { SpeedRounded } from "@mui/icons-material";
 import { api, ApiError, useNotify } from "../lib/api";
+import { useNodeLabels } from "../lib/workerStatus";
+import type { NodeDisplay } from "../lib/nodeRegistry";
 import {
   formatTaskBandwidth,
   parseTaskBandwidth,
@@ -35,11 +37,11 @@ type BandwidthStatus = {
   applied: boolean;
   sharedTaskCount: number;
   canEdit: boolean;
-  nodes: {
+  nodes: (NodeDisplay & {
     address: string;
     applied: boolean;
     message?: string;
-  }[];
+  })[];
 };
 function readStatus(response: { data?: BandwidthStatus }): BandwidthStatus {
   const status = response.data;
@@ -68,6 +70,7 @@ export default function TaskBandwidth({
   completed?: boolean;
 }) {
   useI18n();
+  const nodeLabel = useNodeLabels();
   const path = `/api/master/tasks/${taskId}/bandwidth-limit`;
   const notify = useNotify();
   const [status, setStatus] = useState<BandwidthStatus>();
@@ -253,7 +256,7 @@ export default function TaskBandwidth({
               variant="body2"
               sx={{ overflowWrap: "anywhere" }}
             >
-              {node.address}：{node.message || t("未生效")}
+              {nodeLabel(node.address, node)}：{node.message || t("未生效")}
             </Typography>
           ))}
         </Stack>

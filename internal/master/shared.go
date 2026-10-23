@@ -84,7 +84,8 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 	}
 	for _, node := range p.Spec.Nodes {
 		if err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_verify", true, request(node), nil); err != nil {
-			return fmt.Errorf("Agent %s does not expose the same source directory: %w", node.Address, err)
+			name := t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
+			return fmt.Errorf("Agent %s does not expose the same source directory: %w", name, err)
 		}
 	}
 	return nil

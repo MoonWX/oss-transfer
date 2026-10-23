@@ -186,7 +186,7 @@ func (s *Service) schedule() {
 // parent fences. They can reconcile a lost reply without a second command ledger.
 func (s *Service) ReplaySafe(operation string) bool {
 	switch operation {
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true
 	}
 	return false
@@ -213,7 +213,7 @@ func response(value any, err error) (agenttransport.Response, error) {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound), errors.Is(err, execution.ErrNotFound), errors.Is(err, discovery.ErrNotFound), errors.Is(err, storageconfig.ErrNotFound), errors.Is(err, os.ErrNotExist), errors.Is(err, transferstore.ErrNotFound), errors.Is(err, ratelimit.ErrMissing):
 		status = 404
-	case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
+	case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, execution.ErrNotRecoverable), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
 		status = 409
 	case errors.Is(err, inventory.ErrCapacity), errors.Is(err, execution.ErrCapacity), errors.Is(err, discovery.ErrCapacity):
 		status = 429
@@ -267,6 +267,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		return badRequest(errors.New("operation requires a mutating command"))
 	}
 	switch c.Operation {
+	case "child_recover":
+		var request ChildRecoverRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		value, err := s.recoverChild(ctx, request)
+		return response(value, err)
 	case "preflight_probe":
 		var request PreflightProbeRequest
 		if err := decode(c.Payload, &request); err != nil {

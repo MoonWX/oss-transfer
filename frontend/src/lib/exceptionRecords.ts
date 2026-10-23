@@ -1,3 +1,5 @@
+import { taskNodeLabels, type NodeLabels } from "./nodeRegistry";
+
 export type ExceptionMembership = {
   queriedWorkers?: string[];
   respondingNodes?: string[];
@@ -56,11 +58,18 @@ function timestamp(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function normalize(item: ExceptionRecord): ExceptionRecord {
+function normalize(
+  item: ExceptionRecord,
+  resolve?: NodeLabels,
+): ExceptionRecord {
   return {
     ...item,
     parentTaskId: item.parentTaskId ?? item.taskIndex,
-    workerNode: item.workerNode || item.executionNodeIp,
+    workerNode:
+      item.workerNode || item.executionNodeIp
+        ? taskNodeLabels(item, resolve)
+        : undefined,
+    nodeId: item.workerNode || item.executionNodeIp,
     timestampFormatted:
       timestamp(item.timestamp) ??
       timestamp(item.timestampFormatted) ??
@@ -69,8 +78,8 @@ function normalize(item: ExceptionRecord): ExceptionRecord {
   };
 }
 
-export function exceptionDetails(item: ExceptionRecord) {
-  const record = normalize(item);
+export function exceptionDetails(item: ExceptionRecord, resolve?: NodeLabels) {
+  const record = normalize(item, resolve);
   return fields.flatMap((field) => {
     const value = record[field.key];
     if (value === undefined || value === null || value === "") return [];
@@ -82,7 +91,11 @@ export function exceptionDetails(item: ExceptionRecord) {
   });
 }
 
-export function exceptionCsv(rows: ExceptionRecord[]): string {
+export function exceptionCsv(
+  rows: ExceptionRecord[],
+  resolve?: NodeLabels,
+): string {
+  const columns = [...fields, { key: "nodeId", label: "节点标识" }];
   const cell = (value: unknown) => {
     let text = value == null ? "" : String(value);
     if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
@@ -91,10 +104,10 @@ export function exceptionCsv(rows: ExceptionRecord[]): string {
   return (
     "\uFEFF" +
     [
-      fields.map(({ key }) => cell(key)).join(","),
+      columns.map(({ key }) => cell(key)).join(","),
       ...rows.map((row) => {
-        const record = normalize(row);
-        return fields.map(({ key }) => cell(record[key])).join(",");
+        const record = normalize(row, resolve);
+        return columns.map(({ key }) => cell(record[key])).join(",");
       }),
     ].join("\r\n")
   );

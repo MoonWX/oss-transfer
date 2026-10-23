@@ -9,6 +9,7 @@ const cliHelp = `OSS Transfer CLI
   task list                      查看三种方向的主任务、状态与进度
   task show <ID>                 查看主任务及首批子任务
   task children <ID>             分页查看子任务，编号从 ID-1 开始
+  task recover-child <ID-序号>   立即尝试恢复等待恢复的子任务
   task create <方向> ...         创建 OSS 间迁移、下载或上传任务
   task import <类型> <文件>      批量导入任务
   task stop|resume|start|retry <ID...>
@@ -87,6 +88,7 @@ const cliTaskHelp = `任务管理
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-序号 [--node 节点]
   children <ID> [--offset 0] [--limit 25]
+  recover-child <ID-序号>         立即尝试恢复子任务，仍遵守节点并发上限
   trash [--task-id ID] [--worker 节点] [--direction 方向] [--search 关键词]
 
 操作
@@ -234,7 +236,7 @@ const cliNodeHelp = `执行节点
   oss-transfer-cli node update 10.0.0.2 --label 备用节点
   oss-transfer-cli node remove 10.0.0.2 --yes
 
-新增节点使用 agent invite。节点支持名称、IPv4 和 IPv6；省略时由 Agent 自动识别。
+命令中的节点使用 node list 的“节点标识”列。新增节点使用 agent invite，--address 支持名称、IPv4 和 IPv6；省略时自动生成。
 Agent 地址注册后不能直接修改，替换节点需重新加入。
 node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。

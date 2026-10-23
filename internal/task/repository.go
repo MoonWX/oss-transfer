@@ -292,6 +292,9 @@ func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignmen
 		if err := ensureScheduling(tx, &p); err != nil {
 			return err
 		}
+		if err := ensureChildOrder(tx, &p); err != nil {
+			return err
+		}
 		var other map[string]PendingLoad
 		if p.Spec.DistributionMode == "BALANCED" && len(p.Spec.Nodes) > 1 {
 			other, err = otherPending(tx, p)
@@ -393,6 +396,9 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 		return child, err
 	}
 	if err := tx.Put("master-task-outstanding", childKey(p.ID, number), number); err != nil {
+		return child, err
+	}
+	if err := syncChildOrder(tx, p, nil, child); err != nil {
 		return child, err
 	}
 	var weight int64
@@ -510,7 +516,7 @@ func (r *Repository) Purge(id int64) (p Parent, err error) {
 			return ErrState
 		}
 		p.Purged = true
-		for _, bucket := range []string{"master-task-children", "master-task-outstanding", "master-task-load", "master-task-exceptions", "master-task-exceptions-hidden", "master-task-legacy-children", "master-task-legacy-history", "master-task-legacy-order"} {
+		for _, bucket := range []string{"master-task-children", "master-task-outstanding", childOrderBucket, "master-task-load", "master-task-exceptions", "master-task-exceptions-hidden", "master-task-legacy-children", "master-task-legacy-history", "master-task-legacy-order"} {
 			for {
 				var keys []string
 				err := tx.Scan(bucket, key(id)+"/", "", 128, func(k string, _ json.RawMessage) error { keys = append(keys, k); return nil })
@@ -604,7 +610,13 @@ func (r *Repository) ObserveBatch(id int64, generation uint64, observations []Ob
 		if err := ensureScheduling(tx, &p); err != nil {
 			return err
 		}
-		changed := false
+		// Persist a rebuilt index even when the Agent returned the same record.
+		// Otherwise errUnchanged would roll it back and every poll would rebuild.
+		rebuiltOrder := p.ChildOrder == nil || p.ChildOrder.Version != 1
+		if err := ensureChildOrder(tx, &p); err != nil {
+			return err
+		}
+		changed := rebuiltOrder
 		for _, observation := range observations {
 			updated, err := observeChild(tx, &p, observation.Number, observation.Record)
 			if err != nil {
@@ -663,6 +675,9 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 		return false, err
 	}
 	if err := syncExceptionIndex(tx, *p, child, record); err != nil {
+		return false, err
+	}
+	if err := syncChildOrder(tx, p, &previous, child); err != nil {
 		return false, err
 	}
 	if err := tx.Put("master-task-children", childKey(p.ID, number), child); err != nil {
@@ -777,6 +792,9 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 		p.FinishedAt = nil
 		p.Error = ""
 		p.Scheduling = nil // Failed children reenter the pending index below.
+		if err := ensureChildOrder(tx, &p); err != nil {
+			return err
+		}
 		after := ""
 		for {
 			var page []Child
@@ -794,6 +812,12 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 				return err
 			}
 			for _, c := range page {
+				previous := c
+				// The old status must survive the in-place record update below.
+				if c.Record != nil {
+					record := *c.Record
+					previous.Record = &record
+				}
 				c.Job.Generation = p.Generation
 				c.Accepted = false
 				if c.Record != nil && c.Record.Status != execution.Completed {
@@ -806,6 +830,9 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 					}
 				}
 				if err := tx.Put("master-task-children", childKey(id, c.Job.Number), c); err != nil {
+					return err
+				}
+				if err := syncChildOrder(tx, &p, &previous, c); err != nil {
 					return err
 				}
 			}

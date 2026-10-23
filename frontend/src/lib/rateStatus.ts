@@ -1,4 +1,5 @@
 import { t as tr, getLocale } from "./i18n";
+import type { NodeDisplay } from "./nodeRegistry";
 export type RateType = "list" | "put" | "head" | "bandwidth";
 export type TriggerRequest = {
   operation?: string | null;
@@ -20,7 +21,7 @@ export type TriggerRequest = {
   contextSource?: string | null;
   handlingStage?: string | null;
 };
-export type Adjustment = {
+export type Adjustment = NodeDisplay & {
   workerIp?: string;
   detailsAvailable?: boolean | null;
   type: RateType;
@@ -76,7 +77,7 @@ export type AutoAdjust = {
 export type RateLimitSnapshot = Partial<Record<RateType, Rate>> & {
   autoAdjust?: AutoAdjust;
 };
-export type Worker = {
+export type Worker = NodeDisplay & {
   success: boolean;
   message?: string;
   queueStatus?: Record<string, number>;

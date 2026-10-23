@@ -28,6 +28,8 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return taskList(client, args)
 	case "show", "children":
 		return taskShow(client, args, action == "children")
+	case "recover-child":
+		return taskRecoverChild(client, args)
 	case "stop", "resume", "start", "retry", "delete":
 		return taskControl(client, action, args)
 	case "trash":
@@ -61,6 +63,21 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 	default:
 		return nil, cliErrorf("未知 task 子命令 %q", action)
 	}
+}
+
+func taskRecoverChild(client *ApiClient, args []string) (map[string]interface{}, error) {
+	opts, err := adminOptions(args, nil, nil, 1)
+	if err != nil {
+		return nil, err
+	}
+	childID := strings.TrimPrefix(opts.Positionals[0], "#")
+	parent, number, ok := strings.Cut(childID, "-")
+	parentID, parentErr := taskID(parent)
+	childNumber, childErr := taskID(number)
+	if !ok || !regexp.MustCompile(`^[1-9][0-9]*-[1-9][0-9]*$`).MatchString(childID) || parentErr != nil || childErr != nil {
+		return nil, cliErrorf("子任务编号应为 主任务ID-序号，序号从 1 开始")
+	}
+	return client.Post(fmt.Sprintf("/tasks/%d/children/%d/recover", parentID, childNumber), map[string]interface{}{})
 }
 
 func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error) {
@@ -103,16 +120,14 @@ func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error)
 	}
 	rows := []map[string]interface{}{}
 	invalidWorkers := []string{}
+	displays := collectCLINodeDisplays(result)
 	for worker, raw := range groups {
 		workerRows, valid := cliObjectRows(raw)
 		if !valid {
 			invalidWorkers = append(invalidWorkers, worker)
 		}
 		for _, original := range workerRows {
-			row := map[string]interface{}{}
-			for key, value := range original {
-				row[key] = value
-			}
+			row := withCLINodeDisplay(original, worker, displays)
 			row["recycleNode"] = worker
 			if getString(row, "workerNode") == "" {
 				row["workerNode"] = worker
@@ -123,7 +138,7 @@ func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error)
 			if opts.Has("worker") && worker != opts.Value("worker") && !cliTaskHasWorker(row, opts.Value("worker")) {
 				continue
 			}
-			if query := strings.ToLower(opts.Value("search")); query != "" && !strings.Contains(strings.ToLower(fmt.Sprint(row["taskIndex"], " ", taskEndpoint(row, true), " ", taskEndpoint(row, false), " ", taskWorkers(row))), query) {
+			if query := strings.ToLower(opts.Value("search")); query != "" && !strings.Contains(strings.ToLower(fmt.Sprint(row["taskIndex"], " ", taskEndpoint(row, true), " ", taskEndpoint(row, false), " ", taskWorkers(row), " ", taskWorkersDisplay(row, client.locale))), query) {
 				continue
 			}
 			rows = append(rows, row)
@@ -193,7 +208,7 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 		if direction != "" && taskDirection(task) != direction {
 			continue
 		}
-		if q := strings.ToLower(opts.Value("search")); q != "" && !strings.Contains(strings.ToLower(fmt.Sprint(task["taskIndex"], " ", taskEndpoint(task, true), " ", taskEndpoint(task, false), " ", taskWorkers(task))), q) {
+		if q := strings.ToLower(opts.Value("search")); q != "" && !strings.Contains(strings.ToLower(fmt.Sprint(task["taskIndex"], " ", taskEndpoint(task, true), " ", taskEndpoint(task, false), " ", taskWorkers(task), " ", taskWorkersDisplay(task, client.locale))), q) {
 			continue
 		}
 		filtered = append(filtered, task)
@@ -325,13 +340,18 @@ func taskEndpoint(task map[string]interface{}, source bool, locales ...cliLocale
 		}
 		paths := []string{}
 		seen := map[string]bool{}
+		displays := collectCLINodeDisplays(task)
+		language := localeZH
+		if len(locales) > 0 {
+			language = locales[0]
+		}
 		for _, binding := range bindings {
 			path := getString(binding, "localPath")
 			if path == "" {
 				continue
 			}
 			if node := getString(binding, "executionNodeIp"); node != "" {
-				path = node + ":" + path
+				path = displays.label(node, language) + ":" + path
 			}
 			if !seen[path] {
 				seen[path] = true
@@ -348,10 +368,6 @@ func taskEndpoint(task map[string]interface{}, source bool, locales ...cliLocale
 		}
 		if path := getString(task, "localPath"); path != "" {
 			return path
-		}
-		language := localeZH
-		if len(locales) > 0 {
-			language = locales[0]
 		}
 		return language.text("本地文件系统")
 	}

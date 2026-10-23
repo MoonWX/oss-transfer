@@ -1,4 +1,5 @@
 export const adminMessages: Record<string, { en: string; ja: string }> = {
+  "节点标识：{value1}": { en: "Node ID: {value1}", ja: "ノード ID：{value1}" },
   保存: { en: "Save", ja: "保存" },
   权限: { en: "Access", ja: "アクセス" },
   只读: { en: "Read only", ja: "読み取り専用" },

@@ -71,7 +71,7 @@ export default function NodeDetailsDialog({
       aria-labelledby="node-details-title"
     >
       <DialogTitle id="node-details-title">
-        {t("节点详情")} · {nodeName(node)}
+        {t("节点详情")} · {nodeName(details ?? node)}
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2}>

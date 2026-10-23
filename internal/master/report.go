@@ -184,9 +184,9 @@ func (a *reportAPI) stream(w http.ResponseWriter, r *http.Request, parents []tas
 	}
 }
 
-var reportFileHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "sourceS3Alias", "sourceBucket", "sourceKey", "sourcePath", "destinationS3Alias", "destinationBucket", "destinationKey", "destinationPath", "size", "node", "result", "reasonCode", "errorMessage", "discoveredAt", "completedAt", "ledgerObservedAt", "targetCommitted"}
-var reportErrorHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "size", "node", "reasonCode", "errorMessage", "timestamp"}
-var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"}
+var reportFileHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "sourceS3Alias", "sourceBucket", "sourceKey", "sourcePath", "destinationS3Alias", "destinationBucket", "destinationKey", "destinationPath", "size", "node", "result", "reasonCode", "errorMessage", "discoveredAt", "completedAt", "ledgerObservedAt", "targetCommitted", "nodeId"}
+var reportErrorHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "size", "node", "reasonCode", "errorMessage", "timestamp", "nodeId"}
+var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond", "nodeId"}
 
 type reportCoverage struct {
 	LegacyHistorical     bool              `json:"legacyHistorical,omitempty"`
@@ -267,15 +267,27 @@ func reportRequestLimits(limits *execution.RequestLimits) []any {
 	return []any{scope, decimal(limits.ListQPS), decimal(limits.HeadQPS), decimal(limits.PutQPS), decimal(limits.BandwidthBitsPerSecond)}
 }
 
-func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child) error {
+func reportNodeLabel(id, address string, sets ...nodeDisplaySet) string {
+	if address == "" {
+		return ""
+	}
+	if len(sets) > 0 {
+		return sets[0].lookup(id, address).DisplayLabel
+	}
+	return makeNodeDisplay(address, "", "", nodeRuntimeInfo{}).DisplayLabel
+}
+
+func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child, sets ...nodeDisplaySet) error {
 	rowType, childID, node, status := "TASK", "", "", p.Status
+	nodeID := ""
 	src, dst := p.Spec.Source, p.Spec.Destination
 	counters := p.Counters
 	scanned, scannedBytes := max(p.ScannedObjects, p.DispatchedObjects), max(p.ScannedBytes, p.DispatchedBytes, p.Counters.TotalBytes)
 	created := any(p.CreatedAt)
 	started, finished := any(p.StartedAt), any(p.FinishedAt)
 	if c != nil {
-		rowType, childID, node, status = "CHILD_TASK", c.Job.ChildID, c.Node.Address, "PENDING"
+		rowType, childID, node, status = "CHILD_TASK", c.Job.ChildID, reportNodeLabel(c.Node.ID, c.Node.Address, sets...), "PENDING"
+		nodeID = c.Node.Address
 		src, dst = c.Job.Source, c.Job.Destination
 		counters = execution.Counters{}
 		scanned = int64(len(c.Job.Items))
@@ -295,7 +307,8 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child) error {
 		targetRelative = p.Spec.TargetKey
 	}
 	values := []any{rowType, p.ID, childID, p.Spec.Direction, node, status, reportEndpoint(src), reportEndpoint(dst), p.Spec.Prefix, p.Spec.StartKey, p.Spec.EndKey, p.Spec.ObjectKey, targetRelative, p.Spec.ModifiedFrom, p.Spec.ModifiedUntil, p.Spec.ConflictPolicy == "OVERWRITE", p.Spec.ConflictPolicy, p.Spec.DistributionMode, scanned, scannedBytes, counters.Succeeded, counters.SucceededBytes, counters.Skipped, counters.SkippedBytes, counters.Failed, counters.FailedBytes, created, started, finished, p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
-	return reportCSV(writer, append(values, reportRequestLimits(p.Spec.RequestLimits)...)...)
+	values = append(values, reportRequestLimits(p.Spec.RequestLimits)...)
+	return reportCSV(writer, append(values, nodeID)...)
 }
 
 func (s *Server) walkReportChildren(ctx context.Context, p task.Parent, visit func(task.Child) error) error {
@@ -321,6 +334,13 @@ func (s *Server) walkReportChildren(ctx context.Context, p task.Parent, visit fu
 }
 
 func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptions *os.File, parents []task.Parent) error {
+	displays := s.nodeDisplaySnapshot()
+	reportNodes := map[string]NodeDisplay{}
+	for _, parent := range parents {
+		for _, node := range parent.Spec.Nodes {
+			reportNodes[node.Address] = displays.lookup(node.ID, node.Address)
+		}
+	}
 	zipper := zip.NewWriter(output)
 	summary, err := reportWriter(zipper, "task-summary.csv")
 	if err != nil {
@@ -330,16 +350,22 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		return err
 	}
 	for _, p := range parents {
-		if err := summaryCSV(summary, p, nil); err != nil {
+		if err := summaryCSV(summary, p, nil, displays); err != nil {
 			return err
 		}
 		if task.Historical(p) {
-			if err := s.walkLegacyChildren(ctx, p, func(c task.LegacyChild) error { return legacySummaryCSV(summary, p, c) }); err != nil {
+			if err := s.walkLegacyChildren(ctx, p, func(c task.LegacyChild) error {
+				reportNodes[c.Node] = displays.lookup("", c.Node)
+				return legacySummaryCSV(summary, p, c, displays)
+			}); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := s.walkReportChildren(ctx, p, func(c task.Child) error { return summaryCSV(summary, p, &c) }); err != nil {
+		if err := s.walkReportChildren(ctx, p, func(c task.Child) error {
+			reportNodes[c.Node.Address] = displays.lookup(c.Node.ID, c.Node.Address)
+			return summaryCSV(summary, p, &c, displays)
+		}); err != nil {
 			return err
 		}
 	}
@@ -369,7 +395,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 	coverages := make([]reportCoverage, 0, len(parents))
 	for _, p := range parents {
 		if task.Historical(p) {
-			coverage, err := s.writeLegacyReport(ctx, p, files, issues)
+			coverage, err := s.writeLegacyReport(ctx, p, files, issues, displays)
 			if err != nil {
 				return err
 			}
@@ -403,7 +429,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				}
 				coverage.NodeIssues[child.Node.Address] = readErr.Error()
 				for _, item := range child.Job.Items {
-					if err := fileCSV(files, issues, p, child, item, execution.ItemResult{ID: item.ID, Error: readErr.Error(), ResolvedSource: resolved[item.ID]}, "UNKNOWN", "LEDGER_UNAVAILABLE", time.Time{}); err != nil {
+					if err := fileCSV(files, issues, p, child, item, execution.ItemResult{ID: item.ID, Error: readErr.Error(), ResolvedSource: resolved[item.ID]}, "UNKNOWN", "LEDGER_UNAVAILABLE", time.Time{}, displays); err != nil {
 						return err
 					}
 					coverage.FileRows++
@@ -423,7 +449,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				case execution.ItemSkipped:
 					reason = "DESTINATION_EXISTS"
 				}
-				if err := fileCSV(files, issues, p, child, entry.Item, entry.Result, result, reason, observed); err != nil {
+				if err := fileCSV(files, issues, p, child, entry.Item, entry.Result, result, reason, observed, displays); err != nil {
 					return err
 				}
 				coverage.FileRows++
@@ -466,12 +492,12 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		}
 		if p.Error != "" {
 			coverage.PartialReasons = append(coverage.PartialReasons, "TASK_ERROR")
-			if err := reportCSV(issues, p.ID, "", p.Spec.Direction, "", "", "", "TASK_ERROR", p.Error, s.options.Now()); err != nil {
+			if err := reportCSV(issues, p.ID, "", p.Spec.Direction, "", "", "", "TASK_ERROR", p.Error, s.options.Now(), ""); err != nil {
 				return err
 			}
 		}
 		for node, message := range coverage.NodeIssues {
-			if err := reportCSV(issues, p.ID, "", p.Spec.Direction, "", "", node, "NODE_REPORT_INCOMPLETE", message, s.options.Now()); err != nil {
+			if err := reportCSV(issues, p.ID, "", p.Spec.Direction, "", "", reportNodeLabel("", node, displays), "NODE_REPORT_INCOMPLETE", message, s.options.Now(), node); err != nil {
 				return err
 			}
 		}
@@ -507,7 +533,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		unreachableNodes = append(unreachableNodes, node)
 	}
 	sort.Strings(unreachableNodes)
-	metadata := map[string]any{"schemaVersion": 3, "generatedAt": s.options.Now().UTC(), "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
+	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": s.options.Now().UTC(), "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
 	for _, coverage := range coverages {
 		if coverage.LegacyHistorical {
 			metadata["containsLegacyHistory"] = true
@@ -582,7 +608,7 @@ func (s *Server) reportChild(ctx context.Context, p task.Parent, child task.Chil
 	return page.Items, page.ObservedAt, nil
 }
 
-func fileCSV(files, issues *csv.Writer, p task.Parent, child task.Child, item execution.Item, result execution.ItemResult, status, reason string, observed time.Time) error {
+func fileCSV(files, issues *csv.Writer, p task.Parent, child task.Child, item execution.Item, result execution.ItemResult, status, reason string, observed time.Time, sets ...nodeDisplaySet) error {
 	item.Source = execution.EffectiveSource(item, result)
 	if result.Reconciliation != "" {
 		if reason != "" {
@@ -600,11 +626,11 @@ func fileCSV(files, issues *csv.Writer, p task.Parent, child task.Child, item ex
 		destinationPath = joinAgentPath(dst.Root, destinationKey)
 		destinationKey = ""
 	}
-	if err := reportCSV(files, p.ID, child.Job.ChildID, p.Spec.Direction, item.Source.Key, src.Ref, src.Bucket, sourceKey, sourcePath, dst.Ref, dst.Bucket, destinationKey, destinationPath, item.Source.Size, child.Node.Address, status, reason, result.Error, nil, nil, observed, strconv.FormatBool(result.TargetCommitted)); err != nil {
+	if err := reportCSV(files, p.ID, child.Job.ChildID, p.Spec.Direction, item.Source.Key, src.Ref, src.Bucket, sourceKey, sourcePath, dst.Ref, dst.Bucket, destinationKey, destinationPath, item.Source.Size, reportNodeLabel(child.Node.ID, child.Node.Address, sets...), status, reason, result.Error, nil, nil, observed, strconv.FormatBool(result.TargetCommitted), child.Node.Address); err != nil {
 		return err
 	}
 	if status == "FAILED" || status == "UNKNOWN" {
-		return reportCSV(issues, p.ID, child.Job.ChildID, p.Spec.Direction, item.Source.Key, item.Source.Size, child.Node.Address, reason, result.Error, observed)
+		return reportCSV(issues, p.ID, child.Job.ChildID, p.Spec.Direction, item.Source.Key, item.Source.Size, reportNodeLabel(child.Node.ID, child.Node.Address, sets...), reason, result.Error, observed, child.Node.Address)
 	}
 	return nil
 }

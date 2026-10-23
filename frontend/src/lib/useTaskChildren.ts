@@ -6,6 +6,7 @@ import {
   type RefObject,
 } from "react";
 import { api } from "./api";
+import { activeSubtaskCursor, compareActiveSubtasks } from "./subtasks";
 
 export type ChildView = "all" | "active";
 type Child = Record<string, any>;
@@ -18,6 +19,11 @@ type ChildPage = {
   nextOffset?: number;
   partial?: boolean;
   legacyHistorical?: boolean;
+  order?: "priority";
+  cursor?: string;
+  nextCursor?: string;
+  updates?: Child[];
+  detached?: boolean;
 };
 type Cache = {
   pages: Map<number, ChildPage>;
@@ -41,6 +47,8 @@ export function useTaskChildren({
   enabled,
   refreshMs,
   visibleOffsets,
+  beforeRowsChange,
+  visibleChildNumbers,
 }: {
   parentId?: number;
   view: ChildView;
@@ -48,6 +56,8 @@ export function useTaskChildren({
   enabled: boolean;
   refreshMs: number;
   visibleOffsets: RefObject<Set<number>>;
+  beforeRowsChange?: () => void;
+  visibleChildNumbers?: () => number[];
 }) {
   const owner = useRef(parentId);
   const caches = useRef(new Map<string, Cache>());
@@ -70,7 +80,7 @@ export function useTaskChildren({
   if (activity.current.cache !== cache || activity.current.enabled !== enabled)
     activity.current = { cache, enabled, epoch: activity.current.epoch + 1 };
   const fetchPage = useCallback(
-    async (offset: number) => {
+    async (offset: number, cursorOverride?: string) => {
       const epoch = activity.current.epoch;
       const isCurrent = () =>
         activity.current.cache === cache &&
@@ -81,8 +91,25 @@ export function useTaskChildren({
       cache.inFlight.set(offset, controller);
       redraw((value) => value + 1);
       try {
+        const cursor =
+          cursorOverride ??
+          cache.pages.get(offset)?.cursor ??
+          [...cache.pages.values()].find((page) => page.nextOffset === offset)
+            ?.nextCursor;
+        const known =
+          view === "active" && cache.pages.size > 0
+            ? [
+                ...new Set(
+                  visibleChildNumbers?.() ??
+                    cache.pages
+                      .get(offset)
+                      ?.items.map((child) => child.subtaskNumber) ??
+                    [],
+                ),
+              ].slice(0, 200)
+            : [];
         const result = await api<{ data: ChildPage }>(
-          `/api/master/tasks/${parentId}/children?offset=${offset}&limit=25${view === "active" ? "&view=active" : ""}`,
+          `/api/master/tasks/${parentId}/children?offset=${offset}&limit=25${view === "active" ? `&view=active&order=priority${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${known.length ? `&known=${known.join(",")}` : ""}` : ""}`,
           {
             signal: AbortSignal.any([
               controller.signal,
@@ -102,7 +129,52 @@ export function useTaskChildren({
         )
           return;
         const page = result.data;
-        if (view === "active" && !page.legacyHistorical) {
+        beforeRowsChange?.();
+        let retained: Child[] = [];
+        if (page.order === "priority") {
+          const updates = new Map(
+            [...(page.updates ?? []), ...page.items].map((child) => [
+              identity(child),
+              child,
+            ]),
+          );
+          // State changes move children between priority groups. Replace the
+          // covered key range, rather than treating a child number as a rank.
+          for (const [cachedOffset, cached] of cache.pages) {
+            const items = cached.items.flatMap((child) => {
+              const current = updates.get(identity(child)) ?? child;
+              if (
+                ["COMPLETED", "FAILED", "PARTIAL_FAILED", "DELETED"].includes(
+                  current.status,
+                )
+              )
+                return [];
+              const key = activeSubtaskCursor(current);
+              return key <= (page.cursor ?? "") ||
+                (page.hasMore !== false && key > (page.nextCursor ?? ""))
+                ? [current]
+                : [];
+            });
+            if (cachedOffset === offset) {
+              retained = items;
+              continue;
+            }
+            const covered =
+              (cached.cursor ?? "") >= (page.cursor ?? "") &&
+              (page.hasMore === false ||
+                (cached.nextCursor ?? "") <= (page.nextCursor ?? ""));
+            if (covered && items.length === 0) {
+              cache.pages.delete(cachedOffset);
+              cache.errors.delete(cachedOffset);
+              continue;
+            }
+            cache.pages.set(cachedOffset, {
+              ...cached,
+              items,
+              detached: cached.detached || covered,
+            });
+          }
+        } else if (view === "active" && !page.legacyHistorical) {
           // A new active page may span completed rows formerly held by later
           // windows. Retire that covered range before merging its live rows.
           const through =
@@ -134,11 +206,24 @@ export function useTaskChildren({
           page.hasMore === false ||
           (page.hasMore == null && offset + 25 >= page.totalCount)
         ) {
-          for (const cachedOffset of cache.pages.keys())
-            if (cachedOffset > offset) cache.pages.delete(cachedOffset);
+          for (const [cachedOffset, cached] of cache.pages)
+            if (
+              page.order === "priority"
+                ? cached.items.length === 0 &&
+                  (cached.cursor ?? "") >= (page.cursor ?? "")
+                : cachedOffset > offset
+            )
+              cache.pages.delete(cachedOffset);
         }
+        const returnedIdentities = new Set(page.items.map(identity));
         cache.pages.set(offset, {
           ...page,
+          items: [
+            ...page.items,
+            ...retained.filter(
+              (child) => !returnedIdentities.has(identity(child)),
+            ),
+          ],
           nextOffset: page.nextOffset ?? offset + 25,
           hasMore: page.hasMore ?? offset + 25 < page.totalCount,
         });
@@ -156,7 +241,7 @@ export function useTaskChildren({
           redraw((value) => value + 1);
       }
     },
-    [cache, enabled, parentId, view],
+    [beforeRowsChange, cache, enabled, parentId, view, visibleChildNumbers],
   );
 
   const refresh = useCallback(async () => {
@@ -169,6 +254,9 @@ export function useTaskChildren({
       return;
     const offsets = [...visibleOffsets.current].filter(
       (offset) => offset !== initialOffset && cache.pages.has(offset),
+    );
+    const cursors = new Map(
+      offsets.map((offset) => [offset, cache.pages.get(offset)?.cursor]),
     );
     // Refresh the head first: its active cursor can move past cached windows.
     // Requests for the visible remainder must use the new coverage boundary.
@@ -184,6 +272,21 @@ export function useTaskChildren({
     const head = cache.pages.get(initialOffset);
     if (cache.errors.has(initialOffset) || !head) return;
     if (view === "active" && !head.legacyHistorical && !head.hasMore) return;
+    if (head.order === "priority") {
+      // Preserve the loaded/visible windows, even when the first page now
+      // crosses their former boundary. Unseen windows refresh on visibility.
+      await Promise.all(
+        offsets.map((offset) =>
+          fetchPage(
+            offset,
+            (cursors.get(offset) ?? "") > (head.nextCursor ?? "")
+              ? cursors.get(offset)
+              : head.nextCursor,
+          ),
+        ),
+      );
+      return;
+    }
     const remainder = new Set(
       offsets.map((offset) =>
         view === "active" && !head.legacyHistorical
@@ -191,11 +294,13 @@ export function useTaskChildren({
           : offset,
       ),
     );
-    await Promise.all([...remainder].map(fetchPage));
+    await Promise.all([...remainder].map((offset) => fetchPage(offset)));
   }, [cache, fetchPage, initialOffset, visibleOffsets, view]);
   const retry = useCallback(async () => {
     if (cache.errors.size === 0) return refresh();
-    await Promise.all([...cache.errors.keys()].map(fetchPage));
+    await Promise.all(
+      [...cache.errors.keys()].map((offset) => fetchPage(offset)),
+    );
   }, [cache, fetchPage, refresh]);
   useEffect(() => {
     activity.current = { cache, enabled, epoch: activity.current.epoch + 1 };
@@ -221,15 +326,19 @@ export function useTaskChildren({
   }, [cache, enabled, refresh, refreshMs]);
 
   const pages = [...cache.pages.values()].sort((a, b) => a.offset - b.offset);
-  const tail = pages.reduce<ChildPage | undefined>(
-    (furthest, page) =>
-      !furthest ||
-      (page.nextOffset ?? page.offset) >
-        (furthest.nextOffset ?? furthest.offset)
-        ? page
-        : furthest,
-    undefined,
-  );
+  const tail = pages
+    .filter((page) => !page.detached)
+    .reduce<ChildPage | undefined>(
+      (furthest, page) =>
+        !furthest ||
+        (page.order === "priority"
+          ? (page.nextCursor ?? "") > (furthest.nextCursor ?? "")
+          : (page.nextOffset ?? page.offset) >
+            (furthest.nextOffset ?? furthest.offset))
+          ? page
+          : furthest,
+      undefined,
+    );
   const rows = new Map<string, Child>();
   const rowOffsets = new Map<string, number>();
   // Map insertion order tracks which response is newest, independent of cursor order.
@@ -242,14 +351,17 @@ export function useTaskChildren({
   const nextOffset = tail?.nextOffset ?? initialOffset;
   const loadMore = useCallback(() => {
     if (tail?.hasMore && nextOffset > tail.offset && cache.inFlight.size === 0)
-      void fetchPage(nextOffset);
+      void fetchPage(nextOffset, tail.nextCursor);
   }, [cache, fetchPage, nextOffset, tail]);
   const latest = [...cache.pages.values()].at(-1);
   return {
     data: latest
       ? {
           ...latest,
-          items: [...rows.values()],
+          items:
+            view === "active"
+              ? [...rows.values()].sort(compareActiveSubtasks)
+              : [...rows.values()],
           partial: pages.some((page) => page.partial),
           hasMore: !!tail?.hasMore,
           nextOffset,

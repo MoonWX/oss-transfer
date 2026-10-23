@@ -117,6 +117,9 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			return result, nil
 		}
 		result["workers"] = status["workers"]
+		if displays, ok := status["nodeDisplays"]; ok {
+			result["nodeDisplays"] = displays
+		}
 		failed := []string{}
 		workers, _ := status["workers"].(map[string]interface{})
 		for _, address := range adminNodeAddresses(result) {
@@ -418,6 +421,7 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 		}
 		result, err := client.Get("/rate-limit")
 		if err == nil {
+			displays := collectCLINodeDisplays(result)
 			if workers, ok := result["workers"].(map[string]interface{}); ok {
 				rates := []interface{}{}
 				addresses := make([]string, 0, len(workers))
@@ -434,6 +438,7 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 					if rate == nil {
 						continue
 					}
+					rate = withCLINodeDisplay(rate, address, displays)
 					rate["workerIp"] = address
 					rates = append(rates, rate)
 				}
@@ -757,9 +762,11 @@ func adminOSSExceptions(client *ApiClient, kind string, o commandOptions) (map[s
 	}
 	sort.Strings(workers)
 	items, total := []interface{}{}, float64(0)
+	displays := collectCLINodeDisplays(result)
 	for _, worker := range workers {
 		for _, raw := range adminArray(grouped[worker]) {
 			if row, ok := raw.(map[string]interface{}); ok {
+				row = withCLINodeDisplay(row, worker, displays)
 				row["workerNode"] = worker
 				items = append(items, row)
 			}
@@ -883,7 +890,7 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 	}
 	writer := csv.NewWriter(file)
 	writer.UseCRLF = true
-	fields := []string{"workerNode", "taskIndex", "parentTaskId", "direction", "sourceBucket", "destBucket", "key", "destinationKey", "localPath", "stage", "errorCode", "errorMessage", "objectSize", "retryCount", "timestamp", "timestampFormatted", "tmpFilePath", "storageId"}
+	fields := []string{"workerNode", "taskIndex", "parentTaskId", "direction", "sourceBucket", "destBucket", "key", "destinationKey", "localPath", "stage", "errorCode", "errorMessage", "objectSize", "retryCount", "timestamp", "timestampFormatted", "tmpFilePath", "storageId", "nodeId"}
 	if err = writer.Write(fields); err != nil {
 		return err
 	}
@@ -894,7 +901,14 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 		}
 		cells := make([]string, len(fields))
 		for i, field := range fields {
-			if value := row[field]; value != nil {
+			value := row[field]
+			identity := firstNodeString(row, "workerNode", "executionNodeIp")
+			if field == "workerNode" {
+				value = cliNodeLabel(row, identity, localeEN)
+			} else if field == "nodeId" {
+				value = firstNodeString(row, "nodeId", "workerNode", "executionNodeIp")
+			}
+			if value != nil {
 				text, ok := value.(string)
 				if !ok {
 					encoded, encodeErr := json.Marshal(value)

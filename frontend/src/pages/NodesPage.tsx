@@ -38,7 +38,7 @@ import {
   InfoOutlined,
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
-import { useWorkerStatus } from "../lib/workerStatus";
+import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
 import type { Worker } from "../lib/rateStatus";
 import NodeRateLimits, {
   adjustmentDetailsPath,
@@ -77,6 +77,7 @@ export default function NodesPage() {
   useI18n();
   const { refreshMs, refreshSeconds } = useRefreshPreference();
   const workers = useWorkerStatus();
+  const nodeLabel = useNodeLabels();
   const registry = useApi<{
     data: NodeRegistry;
   }>("/api/master/nodes", refreshMs);
@@ -415,7 +416,7 @@ export default function NodesPage() {
                   key={ip}
                   component="section"
                   aria-label={t("执行节点 {value1}", {
-                    value1: ip,
+                    value1: nodeLabel(ip, registered ?? worker),
                   })}
                   variant="outlined"
                   sx={{ overflow: "hidden" }}
@@ -432,7 +433,7 @@ export default function NodesPage() {
                         variant="h6"
                         sx={{ overflowWrap: "anywhere" }}
                       >
-                        {nodeName(registered ?? { address: ip, label: "" })}
+                        {nodeLabel(ip, registered ?? worker)}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
                         {registered?.master
@@ -596,7 +597,9 @@ export default function NodesPage() {
             <Alert severity="warning">
               {history.data.failedWorkers?.length
                 ? t("限速历史不完整。未获取到节点 {nodes} 的记录。", {
-                    nodes: history.data.failedWorkers.join(", "),
+                    nodes: history.data.failedWorkers
+                      .map((ip) => nodeLabel(ip))
+                      .join(", "),
                   })
                 : t("限速历史不完整。部分节点未返回记录。")}
             </Alert>
@@ -634,7 +637,7 @@ export default function NodesPage() {
                             : item.timestampFormatted || "—"}
                         </TableCell>
                         <TableCell sx={{ fontFamily: "monospace" }}>
-                          {item.workerIp}
+                          {nodeLabel(item.workerIp, item)}
                         </TableCell>
                         <TableCell>
                           {rateNames[item.type] || item.type}
@@ -864,7 +867,7 @@ export default function NodesPage() {
               <MenuItem value="">{t("全部执行节点")}</MenuItem>
               {entries.map(([ip]) => (
                 <MenuItem key={ip} value={ip}>
-                  {ip}
+                  {nodeLabel(ip)}
                 </MenuItem>
               ))}
             </TextField>

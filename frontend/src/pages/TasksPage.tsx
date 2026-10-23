@@ -1,6 +1,7 @@
 import { t as tr, useI18n, formatDate } from "../lib/i18n";
-import { useWorkerStatus } from "../lib/workerStatus";
-import { nodeName, type NodeRegistry } from "../lib/nodeRegistry";
+import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
+import { taskNodeLabels, type NodeLabels } from "../lib/nodeRegistry";
+import type { NodeRegistry } from "../lib/nodeRegistry";
 import { parentTaskFilterStates, taskStatusGroup } from "../lib/taskStatus";
 import {
   useCallback,
@@ -63,7 +64,7 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { api, saveFile, useApi, useNotify } from "../lib/api";
-import { numberSubtasks } from "../lib/subtasks";
+import { compareActiveSubtasks, numberSubtasks } from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
 import {
@@ -116,7 +117,8 @@ const taskWorkers = (task: Task): string[] =>
       ? task.eligibleWorkerNodes
       : [task.executionNodeIp || task.workerNode]
   ).filter(Boolean);
-const workers = (task: Task) => taskWorkers(task).join(", ") || tr("等待分配");
+const workers = (task: Task, resolve?: NodeLabels) =>
+  taskNodeLabels(task, resolve);
 function endpoint(task: Task, source: boolean) {
   const value = source ? task.sourceEndpoint : task.destinationEndpoint;
   if (
@@ -332,6 +334,7 @@ function TaskDetail({
   onClose: () => void;
 }) {
   useI18n();
+  const nodeLabel = useNodeLabels();
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
   const local = task && isLocal(task);
@@ -377,8 +380,57 @@ function TaskDetail({
   }>({ parentId: taskId, view: "all" });
   const childView =
     childrenFilter.parentId === taskId ? childrenFilter.view : "all";
+  const paperRef = useRef<HTMLDivElement>(null);
+  const activeAnchor = useRef<{
+    taskId?: number;
+    scrollTop: number;
+    rows: { id?: string; node?: string; top: number }[];
+  } | null>(null);
+  const beforeChildrenChange = useCallback(() => {
+    const paper = paperRef.current;
+    if (
+      childView !== "active" ||
+      requestedChildId ||
+      !paper ||
+      activeAnchor.current
+    )
+      return;
+    const bounds = paper.getBoundingClientRect();
+    const rows = Array.from(
+      paper.querySelectorAll<HTMLElement>("[data-child-id]"),
+    )
+      .filter((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.bottom > bounds.top && rect.top < bounds.bottom;
+      })
+      .map((row) => ({
+        id: row.dataset.childId,
+        node: row.dataset.childNode,
+        top: row.getBoundingClientRect().top - bounds.top,
+      }));
+    if (rows.length)
+      activeAnchor.current = { taskId, scrollTop: paper.scrollTop, rows };
+  }, [childView, requestedChildId, taskId]);
   const visibleChildOffsets = useRef(new Set<number>());
   const visibleChildElements = useRef(new Set<Element>());
+  const visibleChildNumbers = useCallback(() => {
+    const numbers = new Set<number>();
+    for (const element of visibleChildElements.current) {
+      if (!element.isConnected) continue;
+      const row = element.querySelector<HTMLElement>("[data-child-id]");
+      const id = row?.dataset.childId || "";
+      const [parent, child] = id.split("-");
+      const number = Number(child);
+      if (
+        parent === String(taskId) &&
+        Number.isSafeInteger(number) &&
+        number > 0
+      )
+        numbers.add(number);
+      if (numbers.size >= 200) break;
+    }
+    return [...numbers];
+  }, [taskId]);
   const childRowsObserver = useRef<IntersectionObserver | undefined>(undefined);
   const observeChildRow = useCallback((element: HTMLDivElement | null) => {
     if (!element) return;
@@ -413,6 +465,8 @@ function TaskDetail({
     enabled: !!taskId && !requestedChildId && pageVisible,
     refreshMs,
     visibleOffsets: visibleChildOffsets,
+    beforeRowsChange: beforeChildrenChange,
+    visibleChildNumbers,
   });
   const [moreVisible, setMoreVisible] = useState(false);
   const moreObserver = useRef<IntersectionObserver | undefined>(undefined);
@@ -524,7 +578,7 @@ function TaskDetail({
     ),
     current?.childTaskIds,
   );
-  const paperRef = useRef<HTMLDivElement>(null);
+  if (childView === "active") shards.sort(compareActiveSubtasks);
   const parentScroll = useRef(0);
   const previousScreen = useRef({ taskId, childId, childNode });
   const parentFocus = useRef<{ id: string; node?: string } | undefined>(
@@ -551,6 +605,38 @@ function TaskDetail({
       : undefined;
   if (selectedChild)
     selectedIdentity.current.identity = subtaskIdentity(selectedChild);
+  useLayoutEffect(() => {
+    const anchor = activeAnchor.current;
+    activeAnchor.current = null;
+    const paper = paperRef.current;
+    if (
+      !anchor ||
+      !paper ||
+      childId ||
+      childView !== "active" ||
+      anchor.taskId !== taskId
+    )
+      return;
+    // Do not undo a user's scroll between the response and the DOM update.
+    if (Math.abs(paper.scrollTop - anchor.scrollTop) > 2) return;
+    const rows = Array.from(
+      paper.querySelectorAll<HTMLElement>("[data-child-id]"),
+    );
+    for (const previous of anchor.rows) {
+      const row = rows.find(
+        (item) =>
+          item.dataset.childId === previous.id &&
+          item.dataset.childNode === previous.node,
+      );
+      if (!row) continue;
+      paper.scrollTop +=
+        row.getBoundingClientRect().top -
+        paper.getBoundingClientRect().top -
+        previous.top;
+      parentScroll.current = paper.scrollTop;
+      break;
+    }
+  });
   useLayoutEffect(() => {
     if (!taskId) {
       parentFocus.current = undefined;
@@ -652,6 +738,15 @@ function TaskDetail({
           loading={!!view?.childLoading}
           partial={!!view?.childPartial}
           error={view?.childError}
+          canRecover={
+            current?.status === "RUNNING" &&
+            !current.legacyHistorical &&
+            !current.migrationRecoveryRequired &&
+            !view?.partial &&
+            !view?.error &&
+            !view?.childPartial &&
+            !view?.childError
+          }
           onBack={() => onSelectChild()}
           onClose={onClose}
           onRefresh={() => {
@@ -901,7 +996,7 @@ function TaskDetail({
           </Typography>
           <Stack gap={2}>
             {[
-              [tr("执行节点"), workers(current)],
+              [tr("执行节点"), workers(current, nodeLabel)],
               [
                 tr("节点分发方式"),
                 current.distributionMode === "balanced"
@@ -1130,7 +1225,7 @@ function TaskDetail({
                               >
                                 {tr("子任务 #")}
                                 {current.taskIndex}-{shard.subtaskNumber} ·{" "}
-                                {shard.executionNodeIp || shard.workerNode}
+                                {taskNodeLabels(shard, nodeLabel)}
                               </Typography>
                               <StatusChip status={shard.status} />
                             </Stack>
@@ -1244,6 +1339,7 @@ export default function TasksPage({
     }
   }
   const health = useWorkerStatus();
+  const nodeLabel = useNodeLabels();
   const nodeHealth = useApi("/api/master/local-nodes", refreshMs);
   const registry = useApi<{ data: NodeRegistry }>(
     "/api/master/nodes",
@@ -1330,28 +1426,28 @@ export default function TasksPage({
   const workerOptions = useMemo(() => {
     const nodes = new Map<string, string>();
     const registered = registry.data?.data?.nodes ?? [];
-    const nameCounts = new Map<string, number>();
     for (const node of registered) {
-      const name = nodeName(node);
-      nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
-    }
-    for (const node of registered) {
-      const name = nodeName(node);
-      nodes.set(
-        node.address,
-        (nameCounts.get(name) ?? 0) > 1 ? `${name} (${node.address})` : name,
-      );
+      nodes.set(node.address, nodeLabel(node.address, node));
     }
     for (const task of tasks) {
       for (const address of taskWorkers(task)) {
-        if (!nodes.has(address)) nodes.set(address, address);
+        if (!nodes.has(address))
+          nodes.set(
+            address,
+            nodeLabel(
+              address,
+              task.executionNodes?.find(
+                (node: any) => node.address === address,
+              ),
+            ),
+          );
       }
     }
-    if (worker && !nodes.has(worker)) nodes.set(worker, worker);
+    if (worker && !nodes.has(worker)) nodes.set(worker, nodeLabel(worker));
     return [...nodes.entries()].sort((a, b) =>
       a[1].localeCompare(b[1], locale),
     );
-  }, [registry.data, tasks, worker, locale]);
+  }, [registry.data, tasks, worker, locale, nodeLabel]);
   const detailTask = linkedTask || detailFallback.data?.data;
   const actionCandidates = detailTask ? mergeTasks(tasks, [detailTask]) : tasks;
   const filtered = useMemo(
@@ -1363,12 +1459,12 @@ export default function TasksPage({
             (!direction || (t.direction || "OSS_TO_OSS") === direction) &&
             (!worker || taskWorkers(t).includes(worker)) &&
             (!query ||
-              `${t.taskIndex} ${endpoint(t, true)} ${endpoint(t, false)} ${workers(t)} ${t.storageId || ""}`
+              `${t.taskIndex} ${endpoint(t, true)} ${endpoint(t, false)} ${workers(t, nodeLabel)} ${t.storageId || ""}`
                 .toLowerCase()
                 .includes(query.toLowerCase())),
         )
         .sort((a, b) => b.taskIndex - a.taskIndex),
-    [tasks, query, status, direction, worker, locale],
+    [tasks, query, status, direction, worker, locale, nodeLabel],
   );
   useEffect(() => {
     setPage(0);
@@ -1466,7 +1562,14 @@ export default function TasksPage({
                 value4: detail.failed ?? 0,
                 value5: unavailable.length
                   ? tr("；未响应节点：{value1}", {
-                      value1: unavailable.join("、"),
+                      value1: unavailable
+                        .map((id) =>
+                          nodeLabel(
+                            String(id),
+                            detail.nodeDisplays?.[String(id)],
+                          ),
+                        )
+                        .join("、"),
                     })
                   : "",
               },
@@ -2053,7 +2156,7 @@ export default function TasksPage({
                             fontFamily: "monospace",
                           }}
                         >
-                          {workers(task)}
+                          {workers(task, nodeLabel)}
                         </Typography>
                         <Typography
                           variant="caption"
@@ -2150,7 +2253,7 @@ export default function TasksPage({
                     alignItems="center"
                   >
                     <Typography variant="caption" color="text.secondary">
-                      {workers(task)} · {task.duration || "—"}
+                      {workers(task, nodeLabel)} · {task.duration || "—"}
                     </Typography>
                     <Button
                       size="small"

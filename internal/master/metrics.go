@@ -108,13 +108,27 @@ func (t *taskRuntime) rate(p task.Parent, child string) (float64, bool) {
 	}
 	return entry.total, true
 }
-func (s *Server) taskView(p task.Parent) map[string]any {
+func (s *Server) taskView(p task.Parent, sets ...nodeDisplaySet) map[string]any {
 	row := taskDTO(p)
+	var displays nodeDisplaySet
+	if len(sets) > 0 {
+		displays = sets[0]
+	} else {
+		displays = s.nodeDisplaySnapshot()
+	}
+	displays.task(row, p.Spec.Nodes)
 	s.addTaskRate(row, p, "")
 	return row
 }
-func (s *Server) childView(p task.Parent, c task.Child) map[string]any {
+func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) map[string]any {
 	row := childTaskDTO(p, c)
+	var displays nodeDisplaySet
+	if len(sets) > 0 {
+		displays = sets[0]
+	} else {
+		displays = s.nodeDisplaySnapshot()
+	}
+	displays.task(row, []task.Node{c.Node})
 	s.addTaskRate(row, p, c.Job.ChildID)
 	return row
 }

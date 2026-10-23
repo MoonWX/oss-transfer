@@ -12,6 +12,7 @@ type Snapshot = {
 export async function mockTaskChildren(
   page: Page,
   read: (id: number) => Snapshot | Promise<Snapshot>,
+  priorityOrder = false,
 ) {
   await page.route("**/api/master/tasks/*/children**", async (route) => {
     const url = new URL(route.request().url());
@@ -27,6 +28,23 @@ export async function mockTaskChildren(
     );
     const node = url.searchParams.get("executionNodeIp");
     const active = url.searchParams.get("view") === "active";
+    const priority =
+      active && priorityOrder && url.searchParams.get("order") === "priority";
+    const rank: Record<string, number> = {
+      RUNNING: 0,
+      SCAN_COMPLETED: 0,
+      RECOVERING: 1,
+      RESUMING: 1,
+      STOPPING: 2,
+      RECOVERABLE: 3,
+      WAITING_RECOVERY: 3,
+      PENDING: 4,
+      WAITING: 4,
+      CREATED: 4,
+    };
+    const position = (item: Record<string, any>) =>
+      `${rank[item.status] ?? 5}/${String(item.subtaskNumber).padStart(10, "0")}`;
+    const cursor = url.searchParams.get("cursor") ?? "";
     const matching = numbered.filter(
       (item) =>
         (!node || (item.executionNodeIp || item.workerNode) === node) &&
@@ -34,6 +52,7 @@ export async function mockTaskChildren(
           [
             "CREATED",
             "PENDING",
+            "WAITING",
             "RUNNING",
             "STOPPING",
             "RESUMING",
@@ -43,14 +62,26 @@ export async function mockTaskChildren(
             "SCAN_COMPLETED",
           ].includes(item.status)),
     );
+    if (priority)
+      matching.sort((a, b) => position(a).localeCompare(position(b)));
     const selected = match[2]
       ? matching.filter((item) => item.subtaskNumber === Number(match[2]))
-      : matching.filter((item) => item.subtaskNumber > offset).slice(0, limit);
+      : matching
+          .filter((item) =>
+            priority ? position(item) > cursor : item.subtaskNumber > offset,
+          )
+          .slice(0, limit);
     const items = selected.map((item) => ({
       ...item,
       childTaskId: `${snapshot.parentTaskId}-${item.subtaskNumber}`,
     }));
-    const nextOffset = items.at(-1)?.subtaskNumber ?? offset;
+    const nextOffset = priority
+      ? offset + items.length
+      : (items.at(-1)?.subtaskNumber ?? offset);
+    const nextCursor = items.length ? position(items.at(-1)!) : cursor;
+    const known = new Set(
+      (url.searchParams.get("known") ?? "").split(",").map(Number),
+    );
     await route.fulfill({
       status: snapshot.error ? 503 : 200,
       json: snapshot.error
@@ -67,9 +98,26 @@ export async function mockTaskChildren(
                 : (snapshot.totalCount ??
                   Math.max(0, ...numbered.map((item) => item.subtaskNumber))),
               nextOffset,
+              ...(priority
+                ? {
+                    order: "priority",
+                    cursor,
+                    nextCursor,
+                    updates: numbered
+                      .filter((item) => known.has(item.subtaskNumber))
+                      .map((item) => ({
+                        ...item,
+                        childTaskId: `${snapshot.parentTaskId}-${item.subtaskNumber}`,
+                      })),
+                  }
+                : {}),
               hasMore:
                 !match[2] &&
-                matching.some((item) => item.subtaskNumber > nextOffset),
+                matching.some((item) =>
+                  priority
+                    ? position(item) > nextCursor
+                    : item.subtaskNumber > nextOffset,
+                ),
               partial: !!snapshot.partial,
               unreachableWorkers: snapshot.partial ? ["10.0.1.13"] : [],
             },

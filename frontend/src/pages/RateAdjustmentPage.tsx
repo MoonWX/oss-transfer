@@ -1,4 +1,6 @@
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
+import type { NodeDisplay } from "../lib/nodeRegistry";
+import { useNodeLabels } from "../lib/workerStatus";
 import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import { ArrowBackRounded } from "@mui/icons-material";
@@ -22,7 +24,7 @@ import { adjustmentPhase } from "../components/NodeRateLimits";
 import { ErrorAlert, LoadingState, PageHeader } from "../components/Common";
 import RefreshControls from "../components/RefreshControls";
 
-type Detail = {
+type Detail = NodeDisplay & {
   workerIp: string;
   event: Adjustment;
   incidentId?: string | null;
@@ -97,6 +99,7 @@ function DetailContent({
 
   useI18n();
   const { refreshMs, refreshSeconds } = useRefreshPreference();
+  const nodeLabel = useNodeLabels();
   const path =
     workerIp && eventId
       ? `/api/master/rate-limit/adjustment?${new URLSearchParams({ workerIp, eventId })}`
@@ -211,7 +214,7 @@ function DetailContent({
       </Button>
       <PageHeader
         title={tr("调节详情")}
-        description={workerIp || undefined}
+        description={nodeLabel(workerIp, data)}
         action={
           <RefreshControls
             onRefresh={refreshDetail}

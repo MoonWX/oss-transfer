@@ -68,7 +68,7 @@ test("node workload remains visible and renaming preserves legacy directory sett
   const state = await fixture(page);
   await page.goto("/nodes");
   const region = page.getByRole("region", {
-    name: "执行节点 storage-node",
+    name: "执行节点 Storage",
     exact: true,
   });
   await expect(region.getByText("80 / 1,024", { exact: true })).toBeVisible();

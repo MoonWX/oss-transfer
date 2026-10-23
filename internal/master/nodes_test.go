@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -127,6 +128,11 @@ func TestNodeHTTPSettingsReachEachAgentAndSurviveRestart(t *testing.T) {
 	if len(workers) != 2 {
 		t.Fatal("lost a registered Agent", workers)
 	}
+	worker := workers[a.address].(map[string]any)
+	address, _ := worker["displayAddress"].(string)
+	if worker["displayName"] != "Storage A" || net.ParseIP(address) == nil || worker["displayLabel"] != "Storage A ("+address+")" || worker["address"] != a.address {
+		t.Fatal("node status failed to separate presentation from routing identity", worker)
+	}
 	arate := workers[a.address].(map[string]any)["rateLimit"].(map[string]any)["put"].(map[string]any)
 	brate := workers[b.address].(map[string]any)["rateLimit"].(map[string]any)["put"].(map[string]any)
 	if arate["limitQps"] != float64(1400) || arate["limitSource"] != "CONFIG" || brate["limitQps"] != float64(100) {
@@ -140,6 +146,9 @@ func TestNodeHTTPSettingsReachEachAgentAndSurviveRestart(t *testing.T) {
 	for _, raw := range body["data"].(map[string]any)["nodes"].([]any) {
 		row := raw.(map[string]any)
 		if row["executionNodeIp"] == a.address {
+			if row["displayLabel"] != worker["displayLabel"] {
+				t.Fatal("local node selector and node status disagree", row, worker)
+			}
 			got := row["advertisedLocalRoots"].([]any)
 			found = row["reachable"] == true && len(got) == 1 && got[0] == roots[0]
 		}

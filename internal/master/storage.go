@@ -267,6 +267,7 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	displays := s.nodeDisplaySnapshot()
 	details := make([]string, len(members))
 	success := make([]bool, len(members))
 	slots := make(chan struct{}, 8)
@@ -279,14 +280,14 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
 			case <-ctx.Done():
-				details[i] = member.Address + ": " + localize(w, "等待同步")
+				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
 				return
 			}
 			if err := s.syncStorage(ctx, member, snapshot); err != nil {
-				details[i] = member.Address + ": " + localize(w, "等待同步")
+				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
 			} else {
 				success[i] = true
-				details[i] = member.Address + ": " + localize(w, "同步成功")
+				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "同步成功")
 			}
 		}()
 	}

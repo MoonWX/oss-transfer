@@ -33,7 +33,7 @@ async function prepare(page: Page, direction: string) {
       .click();
     await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
     await page
-      .getByRole("option", { name: /训练存储 A · 10\.1\.0\.43/ })
+      .getByRole("option", { name: /训练存储 A \(10\.1\.0\.43\)/ })
       .click();
     await page
       .getByLabel(
@@ -80,7 +80,7 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
       .fill("50");
     if (direction === "OSS_TO_OSS") {
       await expect(
-        page.getByText("训练存储 A · 10.1.0.43", { exact: true }),
+        page.getByText("训练存储 A (10.1.0.43)", { exact: true }),
       ).toBeVisible();
       await expect(page.getByText("agent-a12b", { exact: true })).toHaveCount(
         0,
@@ -88,7 +88,7 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
     } else {
       await expect(
         page.getByRole("combobox", { name: "执行节点", exact: true }),
-      ).toHaveValue("训练存储 A · 10.1.0.43");
+      ).toHaveValue("训练存储 A (10.1.0.43)");
       await page.getByRole("button", { name: "运行预检", exact: true }).click();
       await expect(
         page.getByText("节点预检通过", { exact: true }),
@@ -141,7 +141,7 @@ test("shared storage rows prevent duplicate choices and use restrained nested co
   await prepare(page, "LOCAL_TO_OSS");
   await page.getByRole("button", { name: "添加共享存储节点" }).click();
   const inputs = page.getByRole("combobox", { name: "执行节点", exact: true });
-  await expect(inputs.nth(1)).toHaveValue("训练存储 B · 10.1.0.170");
+  await expect(inputs.nth(1)).toHaveValue("训练存储 B (10.1.0.170)");
   await expect(page.getByLabel("源文件或目录绝对路径").nth(1)).toHaveValue(
     "/mnt/data",
   );

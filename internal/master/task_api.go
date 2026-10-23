@@ -70,6 +70,7 @@ type taskCreateRequest struct {
 }
 type bindingCheck struct {
 	taskBinding
+	NodeDisplay
 	Valid    bool   `json:"valid"`
 	PathType string `json:"pathType,omitempty"`
 	Code     string `json:"code,omitempty"`
@@ -90,6 +91,7 @@ func installTaskRoutes(s *Server) error {
 	s.mux.HandleFunc("GET /api/master/local-transfers", s.adminOnly(s.taskStatusHTTP))
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children", s.adminOnly(s.taskChildrenHTTP))
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children/{number}", s.adminOnly(s.taskChildrenHTTP))
+	s.mux.HandleFunc("POST /api/master/tasks/{id}/children/{number}/recover", s.adminOnly(s.recoverChildHTTP))
 	s.mux.HandleFunc("GET /api/master/deleted-tasks", s.adminOnly(s.deletedTasksHTTP))
 	for route, action := range map[string]string{"start": "resume", "stop": "stop", "resume": "resume", "retry": "retry", "retry-task": "retry", "clear": "clear", "restore": "restore", "permanent-delete": "permanent-delete", "local-transfers/stop": "stop", "local-transfers/resume": "resume", "local-transfers/retry-failures": "retry"} {
 		s.mux.HandleFunc("POST /api/master/"+route, s.adminOnly(s.controlTaskHTTP(action)))
@@ -135,7 +137,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -590,7 +592,7 @@ func joinAgentPath(root, key string) string {
 	return strings.TrimRight(root, "/\\") + sep + strings.ReplaceAll(key, "/", sep)
 }
 
-func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kind string) (task.Spec, []bindingCheck, error) {
+func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kind string, sets ...nodeDisplaySet) (task.Spec, []bindingCheck, error) {
 	spec, bindings, requested, err := normalizeTaskRequest(row, kind)
 	if err != nil {
 		return spec, nil, err
@@ -598,6 +600,12 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 	members, err := s.onlineAgents()
 	if err != nil {
 		return spec, nil, err
+	}
+	var displays nodeDisplaySet
+	if len(sets) > 0 {
+		displays = sets[0]
+	} else {
+		displays = s.nodeDisplaySnapshot()
 	}
 	byAddress := map[string]cluster.Member{}
 	for _, member := range members {
@@ -617,7 +625,7 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 		for _, address := range requested {
 			member, ok := byAddress[address]
 			if !ok {
-				return spec, nil, fmt.Errorf(localizeContext(ctx, "execution Agent %q is unavailable"), address)
+				return spec, nil, fmt.Errorf(localizeContext(ctx, "execution Agent %q is unavailable"), displays.lookup(address, address).DisplayLabel)
 			}
 			if seen[member.ID] {
 				return spec, nil, errors.New("duplicate execution Agent")
@@ -633,7 +641,7 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 	checks := make([]bindingCheck, 0, len(bindings))
 	var firstErr error
 	for _, binding := range bindings {
-		check := bindingCheck{taskBinding: binding}
+		check := bindingCheck{taskBinding: binding, NodeDisplay: displays.lookup(binding.ExecutionNodeIP, binding.ExecutionNodeIP)}
 		member, ok := byAddress[binding.ExecutionNodeIP]
 		if !ok {
 			check.Message = localizeContext(ctx, "执行节点未连接")
@@ -675,7 +683,7 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 			}
 		}
 		if !check.Valid && firstErr == nil {
-			firstErr = fmt.Errorf("%s: %s", binding.ExecutionNodeIP, check.Message)
+			firstErr = fmt.Errorf("%s: %s", check.DisplayLabel, check.Message)
 		}
 		checks = append(checks, check)
 	}
@@ -714,8 +722,9 @@ func (s *Server) createTaskHTTP(kind string) http.HandlerFunc {
 		ids := []int64{}
 		problems := []string{}
 		acceptedBindings := []map[string]any{}
+		displays := s.nodeDisplaySnapshot()
 		for i, row := range rows {
-			spec, checks, err := s.resolveTaskSpec(r.Context(), row, kind)
+			spec, checks, err := s.resolveTaskSpec(r.Context(), row, kind, displays)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("%d: %s", i+1, localize(w, err.Error())))
 				continue
@@ -751,10 +760,11 @@ func (s *Server) validateTaskHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	checks := []bindingCheck{}
+	displays := s.nodeDisplaySnapshot()
 	valid := true
 	problems := []string{}
 	for _, row := range rows {
-		_, items, err := s.resolveTaskSpec(r.Context(), row, "local-transfers")
+		_, items, err := s.resolveTaskSpec(r.Context(), row, "local-transfers", displays)
 		checks = append(checks, items...)
 		if err != nil {
 			valid = false
@@ -1002,6 +1012,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 	rows := []map[string]any{}
 	result := map[string]any{"success": true, "partial": partial, "pageComplete": true, "hasMore": truncated, "tasks": rows, "pendingTasks": 0, "runningTasks": 0, "listDoneTasks": 0, "completedTasks": 0, "failedTasks": 0, "partialFailedTasks": 0, "stoppedTasks": 0, "totalPutObjectCount": int64(0), "totalPutObjectSize": int64(0), "totalFailedObjectCount": int64(0)}
 	q := r.URL.Query()
+	displays := s.nodeDisplaySnapshot()
 	for _, p := range parents {
 		if p.Deleted || p.Purged {
 			continue
@@ -1027,7 +1038,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/master/local-transfers" && p.Spec.Direction == "OSS_TO_OSS" {
 			continue
 		}
-		rows = append(rows, s.taskView(p))
+		rows = append(rows, s.taskView(p, displays))
 		metric := map[string]string{"RUNNING": "runningTasks", "WAITING": "pendingTasks", "COMPLETED": "completedTasks", "FAILED": "failedTasks", "PARTIAL_FAILED": "partialFailedTasks", "STOPPED": "stoppedTasks"}[taskStatusGroup(p.Status)]
 		if metric != "" {
 			result[metric] = result[metric].(int) + 1
@@ -1036,6 +1047,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 		result["totalPutObjectSize"] = result["totalPutObjectSize"].(int64) + p.Counters.SucceededBytes
 		result["totalFailedObjectCount"] = result["totalFailedObjectCount"].(int64) + p.Counters.Failed
 	}
+	result["nodeDisplays"] = displays.byAddress
 	result["tasks"] = rows
 	result["totalTasks"] = len(rows)
 	if truncated {
@@ -1075,6 +1087,7 @@ func taskPathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
+	displays := s.nodeDisplaySnapshot()
 	id, ok := taskPathID(w, r)
 	if !ok {
 		return
@@ -1113,6 +1126,29 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = 1
 	}
 	active := r.URL.Query().Get("view") == "active" && r.PathValue("number") == ""
+	priorityOrder := active && r.URL.Query().Get("order") == "priority"
+	cursor := r.URL.Query().Get("cursor")
+	var known []int
+	if priorityOrder && cursor != "" && !task.ValidChildOrderCursor(cursor) {
+		fail(w, 400, "Invalid active child cursor")
+		return
+	}
+	if raw := r.URL.Query().Get("known"); priorityOrder && raw != "" {
+		parts := strings.Split(raw, ",")
+		if len(parts) > 200 {
+			fail(w, 400, "Too many visible child tasks")
+			return
+		}
+		seen := map[int]bool{}
+		for _, part := range parts {
+			number, err := strconv.Atoi(part)
+			if err != nil || number < 1 || seen[number] {
+				fail(w, 400, "Invalid visible child task")
+				return
+			}
+			known, seen[number] = append(known, number), true
+		}
+	}
 	if view := r.URL.Query().Get("view"); view != "" && view != "all" && view != "active" {
 		fail(w, 400, "Invalid child view")
 		return
@@ -1143,6 +1179,7 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 				fail(w, 500, "Cannot read historical child metadata")
 				return
 			}
+			addExecutionNodeDisplay(row, displays.lookup("", child.Node))
 			items = append(items, row)
 		}
 		writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": parent.ChildCount, "items": items, "partial": false, "cached": true, "legacyHistorical": true, "hasMore": offset+len(children) < parent.ChildCount, "nextOffset": offset + len(children)}})
@@ -1152,7 +1189,13 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 	if active {
 		fetch = s.tasks.repo.Outstanding
 	}
-	children, err := fetch(id, offset, limit+1)
+	var children []task.Child
+	var updates []task.Child
+	if priorityOrder {
+		children, updates, err = s.tasks.repo.ActiveChildren(id, cursor, limit+1, known)
+	} else {
+		children, err = fetch(id, offset, limit+1)
+	}
 	if err != nil {
 		fail(w, 500, "Cannot read child tasks")
 		return
@@ -1167,16 +1210,30 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 		total = max(0, parent.ChildCount-parent.FinishedChildren)
 	}
 	items := []map[string]any{}
+	nextCursor := cursor
 	for _, child := range children {
 		nextOffset = child.Job.Number
+		nextCursor = task.ChildOrderCursor(child)
 		if selected := r.URL.Query().Get("executionNodeIp"); selected != "" && selected != child.Node.Address {
 			continue
 		}
-		items = append(items, s.childView(parent, child))
+		items = append(items, s.childView(parent, child, displays))
 	}
 	// observedAt belongs to each persisted Agent record. Generating a current
 	// snapshotAt here would make offline observations appear fresh.
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": total, "items": items, "hasMore": hasMore, "nextOffset": nextOffset, "partial": false, "cached": true}})
+	data := map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": total, "items": items, "hasMore": hasMore, "nextOffset": nextOffset, "partial": false, "cached": true}
+	if priorityOrder {
+		data["order"], data["cursor"], data["nextCursor"] = "priority", cursor, nextCursor
+		// The offset identifies a loaded UI window; only the composite cursor
+		// determines which children follow it in the current priority order.
+		data["nextOffset"] = offset + len(children)
+		updated := []map[string]any{}
+		for _, child := range updates {
+			updated = append(updated, s.childView(parent, child, displays))
+		}
+		data["updates"] = updated
+	}
+	writeJSON(w, 200, map[string]any{"success": true, "data": data})
 }
 func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1198,6 +1255,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			}
 			seen[id] = true
 		}
+		displays := s.nodeDisplaySnapshot()
 		accepted, failed := 0, 0
 		details := []map[string]any{}
 		for _, id := range request.TaskIDs {
@@ -1210,14 +1268,16 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 				accepted++
 				if action == "permanent-delete" {
 					retained := []string{}
+					retainedLabels := []string{}
 					for _, node := range p.Spec.Nodes {
 						if retired, _ := s.agents.registry.IsRevoked(nodeSession(node)); retired {
 							retained = append(retained, node.Address)
+							retainedLabels = append(retainedLabels, displays.lookup(node.ID, node.Address).DisplayLabel)
 						}
 					}
 					if len(retained) > 0 {
 						item["retainedAgentHistory"] = retained
-						item["message"] = localize(w, "已删除任务记录；已移除节点的本地历史保留：") + strings.Join(retained, "、")
+						item["message"] = localize(w, "已删除任务记录；已移除节点的本地历史保留：") + strings.Join(retainedLabels, "、")
 					}
 				}
 			}
@@ -1233,6 +1293,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 }
 
 func (s *Server) deletedTasksHTTP(w http.ResponseWriter, r *http.Request) {
+	displays := s.nodeDisplaySnapshot()
 	parents, next, ok := s.taskListPage(w, r, true)
 	if !ok {
 		return
@@ -1263,10 +1324,10 @@ func (s *Server) deletedTasksHTTP(w http.ResponseWriter, r *http.Request) {
 			groups[address] = []map[string]any{}
 			queried = append(queried, address)
 		}
-		groups[address] = append(groups[address], taskDTO(p))
+		groups[address] = append(groups[address], s.taskView(p, displays))
 		total++
 	}
-	result := map[string]any{"success": true, "deletedTasks": groups, "totalCount": total, "queriedWorkers": queried, "complete": !partial, "partial": partial, "pageComplete": true, "hasMore": truncated, "truncated": truncated, "failedWorkers": []string{}, "unreachableWorkers": []string{}}
+	result := map[string]any{"success": true, "deletedTasks": groups, "nodeDisplays": displays.byAddress, "totalCount": total, "queriedWorkers": queried, "complete": !partial, "partial": partial, "pageComplete": true, "hasMore": truncated, "truncated": truncated, "failedWorkers": []string{}, "unreachableWorkers": []string{}}
 	if next > 0 {
 		result["nextBeforeId"] = next
 	}
@@ -1372,6 +1433,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, member := range members {
 		online[member.ID] = member.EnrollmentID
 	}
+	displays := s.nodeDisplaySnapshot()
 	nodes := make([]map[string]any, len(parent.Spec.Nodes))
 	// All lookups share one deadline, and a bounded set of workers. A dead
 	// Agent must not hold the UI open for thirty seconds per selected node.
@@ -1389,6 +1451,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				node := parent.Spec.Nodes[index]
 				if online[node.ID] != node.EnrollmentID {
 					nodes[index] = map[string]any{"address": node.Address, "applied": false, "message": localize(w, "执行节点未连接")}
+					addNodeDisplay(nodes[index], displays.lookup(node.ID, node.Address))
 					continue
 				}
 				var policy ratelimit.ParentLimit
@@ -1396,6 +1459,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				expected := parentPolicy(parent, index)
 				matches := err == nil && policy.Generation == expected.Generation && policy.Revision == expected.Revision && policy.BandwidthBytesPerSecond == expected.BandwidthBytesPerSecond && policy.ListQPS == expected.ListQPS && policy.HeadQPS == expected.HeadQPS && policy.PutQPS == expected.PutQPS && policy.Stopped == expected.Stopped
 				item := map[string]any{"address": node.Address, "applied": matches}
+				addNodeDisplay(item, displays.lookup(node.ID, node.Address))
 				if err != nil {
 					item["message"] = err.Error()
 				}

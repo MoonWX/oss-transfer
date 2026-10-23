@@ -12,6 +12,7 @@ import csv
 import hashlib
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -668,14 +669,34 @@ class Harness:
         require(len(indexed) == len(files) and set(indexed) == {source_prefix + key for key in manifest},
                 "Report source inventory differs from the real fixture")
         children = {row["childTaskId"]: row for row in self.children_for(task_id)}
+        registered = {node["address"]: node for node in self.api("/api/master/nodes")["nodes"]}
+        require(set(registered) == set(self.nodes), "Report verification lost a registered Agent")
+        labels = {}
+        for address, node in registered.items():
+            name, display_address = node["label"].strip(), node["displayAddress"]
+            require(name and display_address, "Registered Agent is missing its name or display address")
+            ipaddress.ip_address(display_address)
+            labels[address] = name if name == display_address else f"{name} ({display_address})"
+            require(node["displayLabel"] == labels[address], "Registered Agent display differs from its name and address")
+        for child in children.values():
+            owner = child["executionNodeIp"]
+            require(owner in registered and child["executionNodeLabel"] == labels[owner],
+                    "Child display differs from its assigned registered Agent")
+            assignment = child["executionNodes"]
+            require(len(assignment) == 1 and assignment[0]["id"] == registered[owner]["id"]
+                    and assignment[0]["address"] == owner,
+                    "Child task lost its assigned Agent enrollment identity")
         counts = {child_id: 0 for child_id in children}
         for key, expected in manifest.items():
             row = indexed[source_prefix + key]
             require("taskId" not in row and "shardId" not in row, "Report leaked obsolete task/shard IDs")
             require(row["parentTaskId"] == str(task_id) and row["direction"] == direction
-                    and row["childTaskId"] in children and row["node"] in self.nodes
+                    and row["childTaskId"] in children
                     and row["result"] == "SUCCESS" and int(row["size"]) == expected["size"],
                     "Report row identity/result/size differs from the verified task")
+            owner = children[row["childTaskId"]]["executionNodeIp"]
+            require(row["nodeId"] == owner and row["node"] == labels[owner],
+                    "Report row Agent identity or display differs from its actual child task owner")
             counts[row["childTaskId"]] += 1
             if source_directory is None:
                 require(row["sourceKey"] == source_prefix + key and not row["sourcePath"], "Report source key is incorrect")
@@ -688,6 +709,18 @@ class Harness:
                         "Report target path is incorrect")
         require(all(counts[child_id] == child["putObjectCount"] for child_id, child in children.items()),
                 "Report assigned file rows to the wrong child task")
+        child_summaries = [row for row in summary if row["rowType"] == "CHILD_TASK"]
+        require(len(child_summaries) == len(children)
+                and {row["childTaskId"] for row in child_summaries} == set(children),
+                "Report child summary has missing or duplicate rows")
+        for row in child_summaries:
+            child = children[row["childTaskId"]]
+            owner = child["executionNodeIp"]
+            require(row["parentTaskId"] == str(task_id) and row["direction"] == direction
+                    and row["nodeId"] == owner and row["node"] == labels[owner]
+                    and int(row["successCount"]) == child["putObjectCount"]
+                    and int(row["successBytes"]) == child["putObjectSize"],
+                    "Report child summary identity or totals differ from its actual child task")
         parents = [row for row in summary if row["rowType"] == "TASK"]
         require(len(parents) == 1 and parents[0]["parentTaskId"] == str(task_id)
                 and int(parents[0]["successCount"]) == len(manifest) and int(parents[0]["successBytes"]) == total,

@@ -152,14 +152,6 @@ func (m *Manager) Start(r Request, factories ...execution.StoreFactory) (Progres
 
 func (m *Manager) run(ctx context.Context, p Progress, factory execution.StoreFactory) {
 	defer m.workers.Done()
-	defer func() {
-		m.mu.Lock()
-		if m.stop != nil {
-			m.stop()
-		}
-		m.active, m.stop = "", nil
-		m.mu.Unlock()
-	}()
 	rows := make([]Row, 0, 128)
 	last := time.Now()
 	flush := func() error {
@@ -186,8 +178,6 @@ func (m *Manager) run(ctx context.Context, p Progress, factory execution.StoreFa
 	}
 	source, dest, err := factory.Open(ctx, execution.Job{Source: p.Source, Destination: p.Destination})
 	if err == nil {
-		defer source.Close()
-		defer dest.Close()
 		err = Run(ctx, p.Request, source, dest, m.wrap, func(row Row) error {
 			p.Compared++
 			switch row.Status {
@@ -218,6 +208,14 @@ func (m *Manager) run(ctx context.Context, p Progress, factory execution.StoreFa
 			}
 			return nil
 		})
+		// A terminal result also promises that this comparison no longer owns
+		// storage resources. Keep its admission slot until both ends close.
+		err = errors.Join(err, dest.Close(), source.Close())
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		err = ctx.Err()
 	}
 	p.Status = "COMPLETED"
 	if errors.Is(err, context.Canceled) {
@@ -229,11 +227,22 @@ func (m *Manager) run(ctx context.Context, p Progress, factory execution.StoreFa
 		p.Status = "FAILED"
 		p.Error = "Comparison could not finish; check storage access and retry."
 	}
+	if m.stop != nil {
+		m.stop()
+	}
+	m.active, m.stop = "", nil
+	// Start/Delete share this lock. Once Get can observe the terminal commit,
+	// either operation can proceed without racing deferred slot cleanup.
 	if e := flush(); e != nil {
 		// A failed durable write cannot be reported as a successful comparison.
 		p.Status = "FAILED"
 		p.Error = "Cannot save comparison results"
-		_ = m.db.Update(func(tx *state.Tx) error { return tx.Put("comparisons", p.ID, p) })
+		_ = m.db.Update(func(tx *state.Tx) error {
+			if err := tx.Put("comparisons", p.ID, p); err != nil {
+				return err
+			}
+			return tx.Delete("comparison_runtime", "active")
+		})
 	}
 }
 

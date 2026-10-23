@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,6 +53,136 @@ func (s generatedStore) Stat(_ context.Context, key string) (transferstore.Objec
 	return transferstore.Object{Key: key, Size: 1, ETag: "stable"}, nil
 }
 func (s generatedStore) Close() error { return nil }
+
+type heldCloseStore struct {
+	generatedStore
+	entered  chan struct{}
+	release  chan struct{}
+	closed   atomic.Bool
+	once     sync.Once
+	closeErr error
+}
+
+func (s *heldCloseStore) Close() error {
+	close(s.entered)
+	<-s.release
+	s.closed.Store(true)
+	return s.closeErr
+}
+
+func (s *heldCloseStore) unblock() { s.once.Do(func() { close(s.release) }) }
+
+func TestTerminalStatusWaitsForStoresAndReleasesActiveSlot(t *testing.T) {
+	for _, mode := range []string{"completed", "failed", "canceled", "shutdown"} {
+		t.Run(mode, func(t *testing.T) {
+			db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			source := &heldCloseStore{entered: make(chan struct{}), release: make(chan struct{})}
+			dest := &heldCloseStore{entered: make(chan struct{}), release: make(chan struct{})}
+			if mode == "failed" {
+				source.closeErr = errors.New("storage close failed")
+			}
+			var opens atomic.Int32
+			m, err := New(db, execution.StoreFactoryFunc(func(context.Context, execution.Job) (transferstore.Store, transferstore.Store, error) {
+				if opens.Add(1) == 1 {
+					return source, dest, nil
+				}
+				return generatedStore{}, generatedStore{}, nil
+			}), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { dest.unblock(); source.unblock(); m.Close() }()
+			if _, err = m.Start(request()); err != nil {
+				t.Fatal(err)
+			}
+			wait := func(done <-chan struct{}) {
+				t.Helper()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("resource close did not reach its gate")
+				}
+			}
+			wait(dest.entered)
+			next := request()
+			next.ID = "next"
+			assertClosing := func() {
+				t.Helper()
+				p, err := m.Get("test", 0, 1)
+				if err != nil || p.Status != "RUNNING" {
+					t.Fatalf("published a terminal status while resources are open: %+v %v", p.Progress, err)
+				}
+				if err := m.Delete("test"); !errors.Is(err, ErrBusy) {
+					t.Fatalf("deleted a comparison while its resources are open: %v", err)
+				}
+			}
+			assertClosing()
+			if _, err := m.Start(next); !errors.Is(err, ErrBusy) {
+				t.Fatalf("admitted another comparison before resources closed: %v", err)
+			}
+			want := "COMPLETED"
+			var stopped chan struct{}
+			switch mode {
+			case "failed":
+				want = "FAILED"
+			case "canceled":
+				want = "CANCELED"
+				if p, err := m.Cancel("test"); err != nil || p.Status != "CANCELING" {
+					t.Fatal(p, err)
+				}
+			case "shutdown":
+				want = "INTERRUPTED"
+				stopped = make(chan struct{})
+				go func() { m.Close(); close(stopped) }()
+				wait(m.ctx.Done())
+				select {
+				case <-stopped:
+					t.Fatal("Manager.Close returned before storage resources closed")
+				default:
+				}
+			}
+			dest.unblock()
+			wait(source.entered)
+			assertClosing()
+			source.unblock()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				p, err := m.Get("test", 0, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if p.Status == want {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("terminal status missing: %+v", p.Progress)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !source.closed.Load() || !dest.closed.Load() {
+				t.Fatal("terminal status preceded resource closure")
+			}
+			// No retry: observing a terminal state must make deletion and the
+			// next admission immediately valid, not depend on another defer.
+			if err := m.Delete("test"); err != nil {
+				t.Fatalf("terminal comparison retained its active slot: %v", err)
+			}
+			_, err = m.Start(next)
+			if mode == "shutdown" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("shutdown admitted another comparison", err)
+				}
+				wait(stopped)
+			} else if err != nil {
+				t.Fatal("completed resource cleanup did not release admission", err)
+			}
+		})
+	}
+}
 
 func TestManagerCapsStoredDifferencesKeepsFullCountsAndPrunesOldRuns(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))

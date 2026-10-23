@@ -9,10 +9,7 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
   正在安装更新: { en: "Installing update", ja: "更新をインストール中" },
   更新完成: { en: "Update complete", ja: "更新完了" },
   更新失败: { en: "Update failed", ja: "更新失敗" },
-  "节点离线或当前版本不支持在线升级。": {
-    en: "This node is offline or its current version does not support online updates.",
-    ja: "ノードがオフライン、または現在のバージョンはオンライン更新に対応していません。",
-  },
+
   "Docker 部署请更新镜像后重新创建容器。": {
     en: "For Docker, pull the new image and recreate the container.",
     ja: "Docker の場合は新しいイメージを取得し、コンテナを再作成してください。",
@@ -48,8 +45,8 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
   版本不一致: { en: "Version differs", ja: "バージョンが異なります" },
   更新: { en: "Update", ja: "更新" },
   "更新 {name}": { en: "Update {name}", ja: "{name} を更新" },
-  "将安装 {version}，服务会短暂重启。安装器会备份当前版本，启动失败时回退。": {
-    en: "Install {version} with a brief service restart. The installer backs up the current version and restores it if startup fails.",
+  "将安装 {version}，服务会重启。安装器会备份当前版本，启动失败时回退。": {
+    en: "Install {version} and restart the service. The installer backs up the current version and restores it if startup fails.",
     ja: "{version} をインストールし、サービスを再起動します。現在のバージョンをバックアップし、起動に失敗した場合は復元します。",
   },
   "正在执行的子任务会中断，节点重新连接后自动恢复。": {
@@ -58,4 +55,39 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
   },
   正在提交: { en: "Submitting", ja: "送信中" },
   确认更新: { en: "Confirm update", ja: "更新を実行" },
+  "节点离线，重新连接后可更新。": {
+    en: "This node is offline. Update it after it reconnects.",
+    ja: "ノードはオフラインです。再接続後に更新できます。",
+  },
+  "此版本需先用安装脚本升级一次，之后可在这里更新。": {
+    en: "Update this version once with the installer to enable online updates.",
+    ja: "まずインストールスクリプトで一度更新すると、以降はここから更新できます。",
+  },
+  "正在更新，等待节点重新连接…": {
+    en: "Updating; waiting for the node to reconnect\u2026",
+    ja: "更新中。ノードの再接続を待っています…",
+  },
+  "前一节点更新失败，尚未更新": {
+    en: "Not updated: the previous node failed",
+    ja: "前のノードの更新に失敗したため未更新",
+  },
+  执行节点更新: { en: "Agent updates", ja: "実行ノードの更新" },
+  "更新至 Master {version}，逐台重启并恢复任务。": {
+    en: "Update to Master {version}, restarting one node at a time and resuming its tasks.",
+    ja: "Master {version} に更新します。1 台ずつ再起動し、タスクを再開します。",
+  },
+  待升级节点: { en: "outdated nodes", ja: "更新対象ノード" },
+  更新全部节点: { en: "Update all nodes", ja: "すべてのノードを更新" },
+  "节点正在逐台更新，关闭页面不影响进度。": {
+    en: "Nodes are updating one at a time. You can close this page.",
+    ja: "ノードを 1 台ずつ更新しています。ページを閉じても処理は続きます。",
+  },
+  "节点更新已停止，请处理失败原因后重试。": {
+    en: "Node updates stopped. Resolve the failure before retrying.",
+    ja: "ノードの更新が停止しました。失敗の原因を解消してから再試行してください。",
+  },
+  "共 {count} 个可升级节点。前一台恢复后再更新下一台，失败时停止。": {
+    en: "{count} nodes can be updated. Each must recover before the next starts; a failure stops the queue.",
+    ja: "更新可能なノードは {count} 台です。前のノードの復旧後に次へ進み、失敗した場合は停止します。",
+  },
 };

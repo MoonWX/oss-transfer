@@ -365,11 +365,34 @@ function Fetch([string]$Name) {
     return $target
 }
 function Invoke-Native([string]$Executable,[string[]]$Arguments) {
-    $output = & $Executable @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Native command failed (exit $LASTEXITCODE)." }
+    # Windows PowerShell 5.1 treats native stderr as an ErrorRecord. Progress
+    # messages must not abort an upgrade; the process exit code decides success.
+    $savedPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $LASTEXITCODE = $null
+        $output = & $Executable @Arguments
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $savedPreference }
+    if ($null -eq $exitCode -or $exitCode -ne 0) { throw "Native command failed (exit $exitCode)." }
     return $output
 }
 function Service-Record { Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue }
+function Assert-BackupSpace([long]$Required,[long]$Available) {
+    if ($Available -lt $Required) {
+        throw ("Not enough space for the upgrade backup: {0} needs {1} MiB; {2} MiB available. Free space or choose -BackupDir on another disk. The service has not been stopped." -f $BackupDir,[Math]::Ceiling($Required/1MB),[Math]::Floor($Available/1MB))
+    }
+}
+function Test-BackupSpace {
+    $required = [long](64MB)
+    foreach ($path in @($database,$binary,$CliPath)) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) { $required += (Get-Item -LiteralPath $path).Length }
+    }
+    $driveRoot = [IO.Path]::GetPathRoot($BackupDir)
+    $drive = [IO.DriveInfo]::new($driveRoot)
+    $available = $drive.AvailableFreeSpace
+    Assert-BackupSpace $required $available
+}
 function Stop-OwnedService {
     $current = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($current -and $current.Status -ne 'Stopped') { Stop-Service -Name $ServiceName; $current.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(50)) }
@@ -512,6 +535,7 @@ try {
     }
     if ((Test-Path (Join-Path $DataDir 'CURRENT')) -or (Test-Path (Join-Path $DataDir 'rocksdb\CURRENT'))) { throw 'RocksDB requires an explicit migration.' }
     if (-not $Yes -and (Read-Host "Install $Role $version? [y/N]") -notmatch '^[yY]$') { return }
+    if ($existing) { Test-BackupSpace }
     if ($AdoptConfig) { Invoke-Native $candidate @('--config',$freshConfig,'--backup-state',(Join-Path $work 'database')) | Out-Null }
     foreach ($path in $directories) { Protect-Directory $path }
     if ($existing) {
@@ -528,6 +552,7 @@ try {
             $wasRunning = $oldService.State -ne 'Stopped'
         }
         $changed = $true
+        Write-Host "Stopping $ServiceName before the database backup..."
         Stop-OwnedService
         Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--backup-state',(Join-Path $backup 'database')) | Out-Null
         $hadDatabaseBackup = $true
@@ -548,6 +573,7 @@ try {
         Copy-Item -LiteralPath $CliPath -Destination (Join-Path $backup 'cli.exe')
     }
     $changed = $true
+    Write-Host "Installing $Role $version..."
     Copy-Item -LiteralPath $candidate -Destination ($binary+'.new')
     Move-Item -LiteralPath ($binary+'.new') -Destination $binary -Force
     [IO.Directory]::CreateDirectory((Split-Path $CliPath -Parent)) | Out-Null

@@ -29,7 +29,13 @@ func (j Job) MarshalStateJSON() ([]byte, error) {
 
 // MarshalStateJSON leaves the public Record representation and its immutable
 // fingerprint unchanged. Missing targets decode to the same zero Object.
-func (r Record) MarshalStateJSON() ([]byte, error) {
+func (r Record) MarshalStateJSON() ([]byte, error) { return r.marshalStateJSON(true) }
+
+// MarshalStateJSONWithoutJob lets the Master store its existing Child.Job once.
+// The containing record must carry an explicit reference and restore that Job.
+func (r Record) MarshalStateJSONWithoutJob() ([]byte, error) { return r.marshalStateJSON(false) }
+
+func (r Record) marshalStateJSON(includeJob bool) ([]byte, error) {
 	type fields Record
 	type resultFields ItemResult
 	type storedResult struct {
@@ -50,9 +56,13 @@ func (r Record) MarshalStateJSON() ([]byte, error) {
 			}
 		}
 	}
+	var job json.Marshaler
+	if includeJob {
+		job = state.ForStorage(r.Job)
+	}
 	return json.Marshal(struct {
 		fields
-		Job     json.Marshaler `json:"job"`
+		Job     json.Marshaler `json:"job,omitempty"`
 		Results []storedResult `json:"results"`
-	}{fields(r), state.ForStorage(r.Job), results})
+	}{fields(r), job, results})
 }

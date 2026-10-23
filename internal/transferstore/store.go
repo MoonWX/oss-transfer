@@ -62,8 +62,12 @@ type OpenOptions struct {
 
 type WriteOptions struct {
 	// Size must be exact and nonnegative. Unknown-length streams are rejected.
-	Size               int64
-	Overwrite          bool
+	Size      int64
+	Overwrite bool
+	// DestinationAbsent avoids a redundant S3 HEAD after the caller checked the
+	// destination. It is only a hint: conditional publication still prevents
+	// replacing a concurrently created object when Overwrite is false.
+	DestinationAbsent  bool
 	ContentType        string
 	ContentEncoding    string
 	ContentDisposition string

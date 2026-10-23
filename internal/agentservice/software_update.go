@@ -5,7 +5,12 @@ import (
 	"errors"
 
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 )
+
+func (s *Service) softwareUpdating() bool {
+	return s.Updater != nil && softwareupdate.InProgress(s.Updater.Status().Phase)
+}
 
 func (s *Service) softwareCommand(ctx context.Context, command agenttransport.Command) (agenttransport.Response, bool, error) {
 	if command.Operation != "software_info" && command.Operation != "software_update" {
@@ -35,6 +40,8 @@ func (s *Service) softwareCommand(ctx context.Context, command agenttransport.Co
 	if err := decode(command.Payload, &request); err != nil {
 		return finish(nil, err)
 	}
+	s.softwareMu.Lock()
+	defer s.softwareMu.Unlock()
 	status, err := s.Updater.Start(ctx, request.Version)
 	return finish(status, err)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/agentstate"
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
@@ -21,11 +22,16 @@ type nodeFixture struct {
 	service                   *agentservice.Service
 	cancel                    context.CancelFunc
 	done                      chan error
+	updater                   softwareupdate.Controller
 }
 
 func nodeTestAgent(t *testing.T, f *agentHTTPFixture, name string) *nodeFixture {
+	return nodeTestAgentWithUpdater(t, f, name, nil)
+}
+
+func nodeTestAgentWithUpdater(t *testing.T, f *agentHTTPFixture, name string, updater softwareupdate.Controller) *nodeFixture {
 	t.Helper()
-	n := &nodeFixture{master: f, path: filepath.Join(t.TempDir(), "agent.db"), address: name + ".example", credential: agentCredential(t)}
+	n := &nodeFixture{master: f, path: filepath.Join(t.TempDir(), "agent.db"), address: name + ".example", credential: agentCredential(t), updater: updater}
 	if status, _ := f.join(t, f.invite(t, n.address), name, n.credential); status != 200 {
 		t.Fatal("join failed", status)
 	}
@@ -40,7 +46,7 @@ func (n *nodeFixture) open(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n.service, err = agentservice.New(n.db, agentservice.Options{})
+	n.service, err = agentservice.New(n.db, agentservice.Options{Updater: n.updater})
 	if err != nil {
 		t.Fatal(err)
 	}

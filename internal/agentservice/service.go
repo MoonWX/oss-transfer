@@ -48,6 +48,7 @@ type Service struct {
 	wake         chan struct{}
 	workers      sync.WaitGroup
 	nodeConfigMu sync.Mutex
+	softwareMu   sync.RWMutex
 }
 type Options struct {
 	Updater        softwareupdate.Controller
@@ -168,6 +169,9 @@ func (s *Service) Close(ctx context.Context) error {
 	nodeErr := s.Nodes.Close()
 	s.Limits.Close()
 	s.Temporary.Close()
+	if s.Factory.HTTPClient != nil {
+		s.Factory.HTTPClient.CloseIdleConnections()
+	}
 	return errors.Join(scanErr, err, nodeErr)
 }
 func (s *Service) signal() {
@@ -181,15 +185,31 @@ func (s *Service) schedule() {
 	timer := time.NewTicker(200 * time.Millisecond)
 	defer timer.Stop()
 	var after string
+	capacityChanged := s.Engine.CapacityChanged()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-s.wake:
+		case <-capacityChanged:
 		case <-timer.C:
+		}
+		// Subscribe before admission; an attempt may finish while this batch is
+		// still being started. Replacing this channel after admission loses it.
+		capacityChanged = s.Engine.CapacityChanged()
+		s.softwareMu.RLock()
+		if s.softwareUpdating() {
+			s.softwareMu.RUnlock()
+			continue
+		}
+		active, capacity := s.Engine.Concurrency()
+		if active >= capacity {
+			s.softwareMu.RUnlock()
+			continue
 		}
 		jobs, err := s.Jobs.Pending(s.ctx, after, 16)
 		if err != nil {
+			s.softwareMu.RUnlock()
 			continue
 		}
 		if len(jobs) < 16 {
@@ -202,12 +222,20 @@ func (s *Service) schedule() {
 				continue
 			}
 			if s.ctx.Err() != nil {
+				s.softwareMu.RUnlock()
 				return
 			}
 			if record.Status == execution.Recoverable {
-				_ = s.Engine.Resume(s.ctx, record.Job.ChildID, record.Job.Generation, false)
+				_ = s.Engine.TryRecover(s.ctx, record.Job.ChildID, record.Job.Generation)
 			} else {
-				_ = s.Engine.Start(s.ctx, record.Job.ChildID, record.Job.Generation)
+				_ = s.Engine.TryStart(s.ctx, record.Job.ChildID, record.Job.Generation)
+			}
+		}
+		s.softwareMu.RUnlock()
+		if len(jobs) == 16 {
+			active, capacity := s.Engine.Concurrency()
+			if active < capacity {
+				s.signal()
 			}
 		}
 	}
@@ -249,7 +277,7 @@ func response(value any, err error) (agenttransport.Response, error) {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound), errors.Is(err, execution.ErrNotFound), errors.Is(err, discovery.ErrNotFound), errors.Is(err, storageconfig.ErrNotFound), errors.Is(err, os.ErrNotExist), errors.Is(err, transferstore.ErrNotFound), errors.Is(err, ratelimit.ErrMissing):
 		status = 404
-	case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, execution.ErrNotRecoverable), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
+	case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, execution.ErrNotRecoverable), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, discovery.ErrDeleted), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
 		status = 409
 	case errors.Is(err, inventory.ErrCapacity), errors.Is(err, execution.ErrCapacity), errors.Is(err, discovery.ErrCapacity):
 		status = 429
@@ -296,8 +324,21 @@ type ScanRequest struct {
 }
 
 func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agenttransport.Response, error) {
+	if c.Operation == "children_get" {
+		return s.childRecords(ctx, c)
+	}
+	if c.Operation == "scan_batches" {
+		return s.scanBatches(ctx, c)
+	}
 	if result, handled, err := s.softwareCommand(ctx, c); handled {
 		return result, err
+	}
+	if softwareupdate.StartsWork(c.Operation) {
+		s.softwareMu.RLock()
+		defer s.softwareMu.RUnlock()
+		if s.softwareUpdating() {
+			return agenttransport.Response{Status: 409, Payload: json.RawMessage(`{"code":"updating","message":"Agent update is in progress"}`)}, nil
+		}
 	}
 	if response, handled, err := s.comparisonCommand(ctx, c); handled {
 		return response, err
@@ -529,6 +570,9 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			err = s.Engine.ResumeParent(ctx, request.ParentID, request.Generation, request.RetryFailed, request.InventorySource)
 		case "parent_delete":
 			err = s.Engine.DeleteParent(ctx, request.ParentID, request.Generation)
+			if err == nil {
+				err = s.Scanner.DeleteParent(ctx, request.ParentID, request.Generation)
+			}
 		}
 		if err == nil {
 			if c.Operation != "parent_resume" {

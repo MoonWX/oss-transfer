@@ -13,6 +13,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/cluster"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/storageconfig"
 )
 
@@ -26,6 +27,9 @@ func (e *AgentError) Error() string { return e.Message }
 // agentCall carries only commands and metadata. In particular it must not turn
 // the Master into a fallback S3 client when no Agent is available.
 func (s *Server) agentCall(ctx context.Context, session agenttransport.Session, operation string, mutation bool, value any, into any) error {
+	if softwareupdate.StartsWork(operation) && s.softwareUpdateBlocksNode(session.NodeID) {
+		return &AgentError{Status: 409, Message: "Agent update is in progress"}
+	}
 	requestID, err := cluster.Token()
 	if err != nil {
 		return err

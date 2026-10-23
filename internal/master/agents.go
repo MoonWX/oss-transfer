@@ -30,6 +30,7 @@ type agentControl struct {
 // Close releases long polls and pending commands before HTTP shutdown. The
 // caller owns the database and closes it after all HTTP handlers have exited.
 func (s *Server) Close() error {
+	s.closeSoftwareUpdates()
 	var err error
 	if s.agents != nil {
 		err = s.agents.broker.Close()

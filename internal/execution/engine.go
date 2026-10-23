@@ -41,6 +41,14 @@ func (e *Engine) Concurrency() (active, capacity int) {
 	return len(e.active), e.opts.MaxConcurrentJobs
 }
 
+// CapacityChanged closes when an attempt exits or the concurrency limit changes.
+// Schedulers take the channel before checking capacity to avoid losing a wakeup.
+func (e *Engine) CapacityChanged() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.changed
+}
+
 func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, error) {
 	if repo == nil || factory == nil {
 		return nil, errors.New("repository and storage factory are required")
@@ -93,22 +101,28 @@ func (e *Engine) Seal(ctx context.Context, child string, generation uint64) (Rec
 // Start returns after an execution slot and the durable attempt have been
 // acquired. A full slot pool applies backpressure, without deleting the ACKed job.
 func (e *Engine) Start(ctx context.Context, child string, generation uint64) error {
-	return e.start(ctx, child, generation, false, false, false)
+	return e.start(ctx, child, generation, false, false, false, false)
+}
+
+// TryStart admits waiting work without waiting behind occupied execution slots.
+// Schedulers use it while holding short admission fences, such as an upgrade.
+func (e *Engine) TryStart(ctx context.Context, child string, generation uint64) error {
+	return e.start(ctx, child, generation, false, false, false, true)
 }
 
 // Resume waits for any cancelled old attempt to exit. It rechecks completed
 // object ledger entries against the target before granting them progress credit.
 func (e *Engine) Resume(ctx context.Context, child string, generation uint64, retryFailed bool) error {
-	return e.start(ctx, child, generation, true, retryFailed, false)
+	return e.start(ctx, child, generation, true, retryFailed, false, false)
 }
 
 // TryRecover only admits an interrupted job when a normal execution slot is
 // free. It never revives a stopped/finished job or waits behind other transfers.
 func (e *Engine) TryRecover(ctx context.Context, child string, generation uint64) error {
-	return e.start(ctx, child, generation, true, false, true)
+	return e.start(ctx, child, generation, true, false, true, true)
 }
 
-func (e *Engine) start(ctx context.Context, child string, generation uint64, resume, retryFailed, recoverOnly bool) error {
+func (e *Engine) start(ctx context.Context, child string, generation uint64, resume, retryFailed, recoverOnly, nonblocking bool) error {
 	for {
 		e.mu.Lock()
 		if e.closed {
@@ -135,7 +149,7 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 			if !resume {
 				return ErrRunning
 			}
-			if recoverOnly {
+			if nonblocking {
 				return ErrCapacity
 			}
 			if err := wait(ctx, old.done); err != nil {
@@ -148,7 +162,7 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 		}
 		changed := e.changed
 		e.mu.Unlock()
-		if recoverOnly {
+		if nonblocking {
 			return ErrCapacity
 		}
 		select {
@@ -263,6 +277,9 @@ func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint
 			return err
 		}
 	}
+	if deleted {
+		return e.repo.purgeDeleted(ctx, parentID, generation)
+	}
 	return nil
 }
 
@@ -348,22 +365,9 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	if source == nil || target == nil {
 		return nil, errors.New("storage factory returned a nil handle")
 	}
-	var invalid []string
-	for _, result := range record.Results {
-		if result.Status != ItemSucceeded && result.Status != ItemSkipped {
-			continue
-		}
-		actual, err := target.Stat(ctx, result.Target.Key)
-		if errors.Is(err, transferstore.ErrNotFound) {
-			invalid = append(invalid, result.ID)
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("verify completed target %q: %w", result.Target.Key, err)
-		}
-		if changed(actual, result.Target) {
-			invalid = append(invalid, result.ID)
-		}
+	invalid, err := e.verifyCompleted(ctx, record, attempt, target)
+	if err != nil {
+		return nil, err
 	}
 	if len(invalid) > 0 {
 		record, err = e.repo.invalidate(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, invalid)
@@ -497,6 +501,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 			result.Reconciliation = "LEGACY_REPROCESSED"
 		}
 	}
+	destinationAbsent := false
 	if job.ConflictPolicy == "SKIP" {
 		existing, err := target.Stat(ctx, item.DestinationKey)
 		if err == nil {
@@ -506,6 +511,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		if !errors.Is(err, transferstore.ErrNotFound) {
 			return fail("check destination", err)
 		}
+		destinationAbsent = true
 	}
 	input, metadata, err := source.Open(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
 	if err != nil {
@@ -527,7 +533,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 		defer reader.Close()
 	}
-	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata})
+	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata})
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {

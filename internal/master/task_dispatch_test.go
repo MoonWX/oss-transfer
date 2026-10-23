@@ -87,6 +87,8 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 			status := 200
 			var response any = map[string]any{}
 			switch command.Operation {
+			case "scan_batches", "children_get":
+				status, response = 404, map[string]string{"code": "unknown_operation"}
 			case "scan_batch":
 				var control agentservice.ScanRequest
 				err = json.Unmarshal(command.Payload, &control)

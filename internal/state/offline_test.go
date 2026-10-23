@@ -3,9 +3,13 @@ package state
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestOfflineAdoptionSnapshotsWithoutMutatingSource(t *testing.T) {
@@ -38,8 +42,12 @@ func TestOfflineAdoptionSnapshotsWithoutMutatingSource(t *testing.T) {
 				t.Fatal(err)
 			}
 			backup := filepath.Join(dir, "backup.db")
-			if err := BackupOffline(path, role, backup); err != nil {
+			var progress bytes.Buffer
+			if err := BackupOfflineWithProgress(path, role, backup, &progress); err != nil {
 				t.Fatal(err)
+			}
+			if !strings.Contains(progress.String(), "Backing up database:") || !strings.Contains(progress.String(), "Database backup complete:") || strings.Contains(progress.String(), "stored-secret") {
+				t.Fatalf("missing or unsafe backup progress: %s", progress.String())
 			}
 			after, _ := os.ReadFile(path)
 			if !bytes.Equal(before, after) {
@@ -69,6 +77,54 @@ func TestOfflineAdoptionSnapshotsWithoutMutatingSource(t *testing.T) {
 				t.Fatal("failed backup changed an existing snapshot")
 			}
 		})
+	}
+}
+
+type lockedBackupOutput struct {
+	sync.Mutex
+	bytes.Buffer
+}
+
+func (w *lockedBackupOutput) Write(data []byte) (int, error) {
+	w.Lock()
+	defer w.Unlock()
+	return w.Buffer.Write(data)
+}
+
+func (w *lockedBackupOutput) text() string {
+	w.Lock()
+	defer w.Unlock()
+	return w.Buffer.String()
+}
+
+type shortBackupWriter struct{}
+
+func (shortBackupWriter) Write([]byte) (int, error) { return 2, io.ErrShortWrite }
+
+func TestBackupProgressReportsActualWritesAndDiskFlush(t *testing.T) {
+	var output lockedBackupOutput
+	monitor := newBackupProgress(&output, 20, time.Millisecond)
+	defer monitor.stop()
+	writer := backupWriter{shortBackupWriter{}, monitor}
+	if n, err := writer.Write([]byte("12345")); n != 2 || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write was hidden: %d, %v", n, err)
+	}
+	waitFor := func(fragment string) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for !strings.Contains(output.text(), fragment) {
+			if time.Now().After(deadline) {
+				t.Fatalf("missing %q in %q", fragment, output.text())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitFor("(10%;")
+	monitor.syncing.Store(true)
+	waitFor("syncing to disk")
+	monitor.stop()
+	if strings.Contains(output.text(), "complete") {
+		t.Fatal("progress timer falsely reported a completed backup")
 	}
 }
 
@@ -102,7 +158,7 @@ func TestOfflineAdoptionRejectsUnsafeState(t *testing.T) {
 					case "wrong-role":
 						return tx.Put("metadata", "format", map[string]any{"role": "agent", "schemaVersion": 1})
 					case "future-schema":
-						return tx.Put("metadata", "format", map[string]any{"role": role, "schemaVersion": SchemaInitialPassword + 1})
+						return tx.Put("metadata", "format", map[string]any{"role": role, "schemaVersion": SchemaCompressedValues + 1})
 					case "pending":
 						return tx.Put("migration", "state", map[string]any{"pending": true, "migrationId": "qa"})
 					case "wrong-final-path":

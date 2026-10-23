@@ -35,6 +35,44 @@ func schedulingReport(child Child, succeeded int) execution.Record {
 	return r
 }
 
+func TestAvailablePlacementPreservesAssignmentsAndSelectedNodes(t *testing.T) {
+	db, repo := openTest(t, filepath.Join(t.TempDir(), "master.db"))
+	defer db.Close()
+	p, _, err := repo.Create(testSpec(), "available")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.Assign(p.ID, p.Generation, 1, objects("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	available := map[string]bool{"b": true, "outside-task": true}
+	page := []Assignment{{Number: 1, Objects: objects("one")}, {Number: 2, Objects: objects("two")}}
+	children, err := repo.AssignPageAvailable(p.ID, p.Generation, page, available)
+	if err != nil || len(children) != 2 || children[0].Node != first.Node || children[1].Node.ID != "b" {
+		t.Fatalf("existing work moved or new work escaped available selected nodes: %+v %v", children, err)
+	}
+	for _, set := range []map[string]bool{nil, {}, {"outside-task": true}} {
+		if _, err := repo.AssignPageAvailable(p.ID, p.Generation, []Assignment{{Number: 3, Objects: objects("three")}}, set); err == nil {
+			t.Fatal("empty or unselected availability admitted work", set)
+		}
+	}
+	current, err := repo.Get(p.ID)
+	if err != nil || current.ChildCount != 2 || current.Spec.Nodes[0] != p.Spec.Nodes[0] || len(current.Spec.Nodes) != 2 {
+		t.Fatal("rejected assignment changed task or its membership", current, err)
+	}
+	// Affinity does not silently become balanced when its designated node is down.
+	spec := testSpec()
+	spec.DistributionMode = "AFFINITY"
+	affinity, _, err := repo.Create(spec, "affinity-available")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AssignPageAvailable(affinity.ID, affinity.Generation, []Assignment{{Number: 1, Objects: objects("one")}}, available); err == nil {
+		t.Fatal("affinity task was moved to a different node")
+	}
+}
+
 func TestBalancedPlacementUsesRemainingWorkAcrossRestartAndLegacyRebuild(t *testing.T) {
 	for _, rebuild := range []bool{false, true} {
 		t.Run(fmt.Sprintf("legacy=%v", rebuild), func(t *testing.T) {

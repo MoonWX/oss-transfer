@@ -17,7 +17,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
-func schedulingFixture(t *testing.T, nodes int) (*taskRuntime, task.Parent, *agenttransport.Broker) {
+func schedulingFixture(t testing.TB, nodes int) (*taskRuntime, task.Parent, *agenttransport.Broker) {
 	t.Helper()
 	db, err := state.Open(filepath.Join(t.TempDir(), "master.db"))
 	if err != nil {
@@ -41,7 +41,7 @@ func schedulingFixture(t *testing.T, nodes int) (*taskRuntime, task.Parent, *age
 	return runtime, p, broker
 }
 
-func assignSchedulingChildren(t *testing.T, runtime *taskRuntime, p task.Parent, count int) []task.Child {
+func assignSchedulingChildren(t testing.TB, runtime *taskRuntime, p task.Parent, count int) []task.Child {
 	t.Helper()
 	var all []task.Child
 	for start := 1; start <= count; start += 16 {
@@ -85,6 +85,13 @@ func TestObservationRotatesPastSlowChildrenAndUnavailableFirstChild(t *testing.T
 					if err := broker.Confirm(nodeSession(p.Spec.Nodes[0]), agenttransport.Receipt{RequestID: command.RequestID, DeliveryID: command.DeliveryID}); err != nil {
 						done <- err
 						return
+					}
+					if command.Operation == "children_get" {
+						if err := broker.Complete(nodeSession(p.Spec.Nodes[0]), agenttransport.Result{RequestID: command.RequestID, DeliveryID: command.DeliveryID, Response: agenttransport.Response{Status: 404, Payload: json.RawMessage(`{"code":"unknown_operation"}`)}}); err != nil {
+							done <- err
+							return
+						}
+						continue
 					}
 					var request map[string]string
 					if command.Operation != "child_get" {

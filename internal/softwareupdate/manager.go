@@ -144,6 +144,18 @@ func active(phase string) bool {
 	return phase == "QUEUED" || phase == "DOWNLOADING" || phase == "APPLYING"
 }
 
+// StartsWork identifies commands which create or resume data-plane work. Read
+// and stop commands remain available while a native upgrade is in progress.
+func StartsWork(operation string) bool {
+	switch operation {
+	case "child_accept", "child_recover", "scan_start", "scan_resume", "parent_resume", "comparison_start", "inventory_begin":
+		return true
+	}
+	return false
+}
+
+func InProgress(phase string) bool { return active(phase) }
+
 func (m *Manager) Start(ctx context.Context, version string) (Status, error) {
 	if err := ctx.Err(); err != nil {
 		return Status{}, err

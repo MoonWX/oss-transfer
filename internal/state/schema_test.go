@@ -40,8 +40,12 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 			if err = db.ClaimRole(role); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db).SchemaVersion != 1 {
-				t.Fatal("ordinary database was upgraded")
+			if readFormat(t, db).SchemaVersion != SchemaCompressedValues {
+				t.Fatal("current reader did not establish compression fence")
+			}
+			// Exercise feature fences on a database written by an old reader.
+			if err = db.Update(func(tx *Tx) error { return tx.Put("metadata", "format", databaseFormat{Role: role, SchemaVersion: 1}) }); err != nil {
+				t.Fatal(err)
 			}
 			abort := errors.New("failed result commit")
 			if err = db.Update(func(tx *Tx) error {
@@ -76,6 +80,9 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			if readFormat(t, db).SchemaVersion != version {
+				t.Fatal("committed feature did not establish its reader requirement")
+			}
 			if err = db.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -89,7 +96,7 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 			if err = db.Update(func(tx *Tx) error { return RequireSchema(tx, role, 1) }); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db) != (databaseFormat{Role: role, SchemaVersion: version}) {
+			if readFormat(t, db) != (databaseFormat{Role: role, SchemaVersion: SchemaCompressedValues}) {
 				t.Fatal("reader requirement was lost")
 			}
 			if err = db.View(func(tx *Tx) error {
@@ -121,7 +128,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 			case "zero":
 				format.SchemaVersion = 0
 			case "future":
-				format.SchemaVersion = SchemaInitialPassword + 1
+				format.SchemaVersion = SchemaCompressedValues + 1
 			}
 			if scenario != "unclaimed" {
 				if err = db.Update(func(tx *Tx) error { return tx.Put("metadata", "format", format) }); err != nil {
@@ -133,7 +140,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 				role = "unknown"
 			}
 			if scenario == "future-requirement" {
-				version = SchemaInitialPassword + 1
+				version = SchemaCompressedValues + 1
 			}
 			before, err := os.ReadFile(db.db.Path())
 			if err != nil {
@@ -204,11 +211,14 @@ func TestSchemaOfflineBackupAndRestore(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
+			if readFormat(t, db).SchemaVersion != version {
+				t.Fatal("restored backup lost its original reader requirement")
+			}
 			if err = db.ClaimRole(role); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db).SchemaVersion != version {
-				t.Fatal("pin backup lost reader version")
+			if readFormat(t, db).SchemaVersion != SchemaCompressedValues {
+				t.Fatal("current reader lost compression fence")
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // ScanReverse visits the newest keys first. before is exclusive; an empty
@@ -27,7 +28,11 @@ func (t *Tx) ScanReverse(bucket, before string, limit int, fn func(string, json.
 	}
 	for count := 0; k != nil && count < limit; count++ {
 		if v != nil {
-			if err := fn(string(k), append(json.RawMessage(nil), v...)); err != nil {
+			decoded, err := copyDecodedValue(v)
+			if err != nil {
+				return fmt.Errorf("decode %s/%s: %w", bucket, k, err)
+			}
+			if err := fn(string(k), json.RawMessage(decoded)); err != nil {
 				return err
 			}
 		}

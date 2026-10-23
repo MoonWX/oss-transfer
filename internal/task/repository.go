@@ -269,6 +269,20 @@ func (r *Repository) Assign(id int64, generation uint64, number int, objects []t
 // Agent is called or scanner checkpoint acknowledged. Partial delivery remains
 // recoverable from the outstanding-child index after a crash or disconnection.
 func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignment) ([]Child, error) {
+	return r.assignPage(id, generation, batches, nil)
+}
+
+// AssignPageAvailable restricts new assignments to selected nodes that have
+// acknowledged the current configuration. Existing assignments remain immutable.
+// An empty set intentionally admits no new work.
+func (r *Repository) AssignPageAvailable(id int64, generation uint64, batches []Assignment, available map[string]bool) ([]Child, error) {
+	if available == nil {
+		available = map[string]bool{}
+	}
+	return r.assignPage(id, generation, batches, available)
+}
+
+func (r *Repository) assignPage(id int64, generation uint64, batches []Assignment, available map[string]bool) ([]Child, error) {
 	if len(batches) == 0 || len(batches) > 16 {
 		return nil, errors.New("assignment page must contain 1 to 16 batches")
 	}
@@ -303,7 +317,7 @@ func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignmen
 			}
 		}
 		for _, batch := range batches {
-			child, err := assignChild(tx, &p, batch.Number, batch.Objects, batch.Legacy, other)
+			child, err := assignChild(tx, &p, batch.Number, batch.Objects, batch.Legacy, other, available)
 			if err != nil {
 				return err
 			}
@@ -317,7 +331,7 @@ func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignmen
 	return children, nil
 }
 
-func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Object, legacy map[string]execution.LegacyCandidate, other map[string]PendingLoad) (child Child, err error) {
+func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Object, legacy map[string]execution.LegacyCandidate, other map[string]PendingLoad, available map[string]bool) (child Child, err error) {
 	found, err := tx.Get("master-task-children", childKey(p.ID, number), &child)
 	if err != nil {
 		return child, err
@@ -342,7 +356,7 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	if number != p.DispatchedThrough+1 {
 		return child, errors.New("discovery batch arrived out of order")
 	}
-	node, err := chooseNode(tx, *p, other)
+	node, err := chooseNode(tx, *p, other, available)
 	if err != nil {
 		return child, err
 	}

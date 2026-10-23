@@ -28,13 +28,16 @@ type running struct {
 }
 
 type Scanner struct {
-	store   *state.Store
-	factory EndpointFactory
-	options Options
-	mu      sync.Mutex
-	active  map[int64]*running
-	faults  sync.Map // parent ID -> terminal-state persistence error; requires recovery.
-	closed  bool
+	store         *state.Store
+	factory       EndpointFactory
+	options       Options
+	mu            sync.Mutex
+	active        map[int64]*running
+	faults        sync.Map // parent ID -> terminal-state persistence error; requires recovery.
+	closed        bool
+	cleanupCancel context.CancelFunc
+	cleanupDone   chan struct{}
+	cleanupWake   chan struct{}
 }
 
 func (s *Scanner) Concurrency() (active, capacity int) {
@@ -74,7 +77,12 @@ func New(store *state.Store, factory EndpointFactory, options Options) (*Scanner
 					current.Status = Recoverable
 					current.Error = "Discovery process stopped before the scan completed"
 					current.UpdatedAt = time.Now().UTC()
-					return tx.Put(states, key, current)
+					if err := tx.Put(states, key, current); err != nil {
+						return err
+					}
+				}
+				if cleanupNeeded(current) {
+					return tx.Put(cleanupBucket, key, current.Spec.ParentID)
 				}
 				return nil
 			})
@@ -83,6 +91,7 @@ func New(store *state.Store, factory EndpointFactory, options Options) (*Scanner
 			return nil, err
 		}
 		if count < 128 {
+			s.startCleanup()
 			return s, nil
 		}
 	}
@@ -177,6 +186,9 @@ func (s *Scanner) Start(ctx context.Context, spec Spec) (State, error) {
 	}
 	current, err := s.Status(ctx, spec.ParentID)
 	if err == nil {
+		if current.Deleted {
+			return State{}, ErrDeleted
+		}
 		if current.Generation != spec.Generation {
 			return State{}, ErrGeneration
 		}
@@ -277,6 +289,9 @@ func (s *Scanner) Stop(ctx context.Context, parentID int64, generation uint64) (
 		} else if err != nil {
 			return err
 		}
+		if current.Deleted {
+			return ErrDeleted
+		}
 		// A cluster Resume can reach only some Agents before a new Stop arrives.
 		// A newer stop closes that generation without ever starting discovery.
 		if generation < current.Generation {
@@ -311,6 +326,10 @@ func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64)
 	if err != nil {
 		s.mu.Unlock()
 		return State{}, err
+	}
+	if current.Deleted {
+		s.mu.Unlock()
+		return State{}, ErrDeleted
 	}
 	if generation == current.Generation && (current.Status == Scanning || current.Status == Completed || (emptyFence(current) && current.Status == Recoverable)) {
 		s.mu.Unlock()
@@ -348,6 +367,9 @@ func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64)
 	latest, err := s.Status(ctx, parentID)
 	if err != nil {
 		return State{}, err
+	}
+	if latest.Deleted {
+		return State{}, ErrDeleted
 	}
 	if generation == latest.Generation && (latest.Status == Scanning || latest.Status == Completed || (emptyFence(latest) && latest.Status == Recoverable)) {
 		return latest, nil
@@ -387,6 +409,9 @@ func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, 
 		if err != nil {
 			return err
 		}
+		if current.Deleted {
+			return ErrDeleted
+		}
 		if generation != current.Generation {
 			return ErrGeneration
 		}
@@ -420,6 +445,9 @@ func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, th
 		if err != nil {
 			return err
 		}
+		if current.Deleted {
+			return ErrDeleted
+		}
 		if generation != current.Generation {
 			return ErrGeneration
 		}
@@ -438,6 +466,9 @@ func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, th
 func (s *Scanner) Close() error {
 	s.mu.Lock()
 	s.closed = true
+	if s.cleanupCancel != nil {
+		s.cleanupCancel()
+	}
 	active := make([]*running, 0, len(s.active))
 	for _, run := range s.active {
 		run.cancel()
@@ -446,6 +477,9 @@ func (s *Scanner) Close() error {
 	s.mu.Unlock()
 	for _, run := range active {
 		<-run.done
+	}
+	if s.cleanupDone != nil {
+		<-s.cleanupDone
 	}
 	var failures []error
 	s.faults.Range(func(_, value any) bool {

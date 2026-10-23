@@ -16,6 +16,19 @@ import (
 // multipart requests all spend the same Agent-wide request budget. The SDK
 // remains responsible for V2/V4 signing.
 func configureNodeFactory(factory *storageconfig.Factory, nodes *nodecontrol.Controller) {
+	if factory.HTTPClient == nil {
+		base := http.DefaultTransport
+		if transport, ok := base.(*http.Transport); ok {
+			pool := transport.Clone()
+			// The standard two idle connections per host cause small-object
+			// batches to reconnect repeatedly. Keep a bounded Agent-wide pool;
+			// request and byte admission still happen above this transport.
+			pool.MaxIdleConns = max(pool.MaxIdleConns, 1024)
+			pool.MaxIdleConnsPerHost = max(pool.MaxIdleConnsPerHost, 256)
+			base = pool
+		}
+		factory.HTTPClient = &http.Client{Transport: base}
+	}
 	factory.HTTPClientForEndpoint = func(ctx context.Context, endpoint execution.Endpoint, config storageconfig.Config) *http.Client {
 		info := nodecontrol.RequestContextFrom(ctx)
 		info.ConnectionAlias, info.Bucket = endpoint.Ref, endpoint.Bucket

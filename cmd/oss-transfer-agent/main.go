@@ -40,6 +40,7 @@ func run() error {
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without starting the service")
 	backupState := flag.String("backup-state", "", "Validate and snapshot a stopped database to a new file")
 	restoreState := flag.String("restore-state", "", "Restore a snapshot into a stopped existing database")
+	compactState := flag.String("compact-state", "", "Write a compact, verified copy of a stopped database to a new file")
 	checkReady := flag.Bool("check-ready", false, "Verify an installer startup record")
 	expectPID := flag.Int("expect-pid", 0, "Service manager PID for readiness verification")
 	expectLaunch := flag.String("expect-launch-id", "", "Installer startup ID for readiness verification")
@@ -93,14 +94,17 @@ func run() error {
 			return err
 		}
 	}
-	if *backupState != "" || *restoreState != "" {
-		if *configPath == "" || *checkConfig || *checkReady || *enrollOnly || *backupState != "" && *restoreState != "" {
-			return errors.New("choose --backup-state or --restore-state with --config and no other checks or enrollment")
+	if *backupState != "" || *restoreState != "" || *compactState != "" {
+		if *configPath == "" || *checkConfig || *checkReady || *enrollOnly || (*backupState != "" && *restoreState != "" || *backupState != "" && *compactState != "" || *restoreState != "" && *compactState != "") {
+			return errors.New("choose one of --backup-state, --restore-state or --compact-state with --config and no other checks or enrollment")
+		}
+		if *compactState != "" {
+			return compactAgentDatabase(filepath.Join(config.DataDirectory, "agent.db"), *compactState, os.Stderr)
 		}
 		if *restoreState != "" {
 			return state.RestoreOffline(filepath.Join(config.DataDirectory, "agent.db"), "agent", *restoreState)
 		}
-		return state.BackupOffline(filepath.Join(config.DataDirectory, "agent.db"), "agent", *backupState)
+		return state.BackupOfflineWithProgress(filepath.Join(config.DataDirectory, "agent.db"), "agent", *backupState, os.Stderr)
 	}
 	if *checkConfig {
 		if *configPath == "" {

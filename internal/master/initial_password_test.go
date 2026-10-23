@@ -29,6 +29,9 @@ func TestExistingAdministratorUpgradePreservesAccountAndConfiguration(t *testing
 	config := Configuration{Configured: true, PublicURL: "https://console.example", AgentURL: "http://10.0.0.1:1685", CreatedAt: time.Now().UTC()}
 	// This is the pre-upgrade record shape, with no mustChangePassword field.
 	err = db.Update(func(tx *state.Tx) error {
+		if err := tx.Put("metadata", "format", map[string]any{"role": "master", "schemaVersion": 1}); err != nil {
+			return err
+		}
 		if err := tx.Put("users", "operator", map[string]any{
 			"username": "operator", "displayName": "Existing operator", "passwordHash": hash, "role": "admin", "revision": 7,
 		}); err != nil {
@@ -39,6 +42,7 @@ func TestExistingAdministratorUpgradePreservesAccountAndConfiguration(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertMasterSchema(t, db, 1)
 	s, password, err := New(db, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +51,7 @@ func TestExistingAdministratorUpgradePreservesAccountAndConfiguration(t *testing
 	if password != "" {
 		t.Fatal("upgrade replaced the administrator")
 	}
-	assertMasterSchema(t, db, 1)
+	assertMasterSchema(t, db, state.SchemaCompressedValues)
 	httpServer := httptest.NewServer(s)
 	defer httpServer.Close()
 	status, result := request(t, httpServer.Client(), "POST", httpServer.URL+"/api/auth/login", "", map[string]string{"username": "operator", "password": "existing password"})
@@ -83,7 +87,7 @@ func TestExistingAdministratorUpgradePreservesAccountAndConfiguration(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertMasterSchema(t, db, 1)
+	assertMasterSchema(t, db, state.SchemaCompressedValues)
 }
 
 func assertMasterSchema(t *testing.T, db *state.Store, want int) {
@@ -118,14 +122,14 @@ func TestNewAdministratorRequiresPasswordAwareReaderAfterPasswordChange(t *testi
 		t.Fatal(err)
 	}
 	defer server.Close()
-	assertMasterSchema(t, db, state.SchemaInitialPassword)
+	assertMasterSchema(t, db, state.SchemaCompressedValues)
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 	status, login := request(t, httpServer.Client(), "POST", httpServer.URL+"/api/auth/login", "", map[string]string{
 		"username": "admin", "password": initial,
 	})
-	if status != http.StatusOK {
-		t.Fatal("initial login failed", status)
+	if status != http.StatusOK || login["user"].(map[string]any)["mustChangePassword"] != true {
+		t.Fatal("initial login failed or bypassed password change", status, login)
 	}
 	status, _ = request(t, httpServer.Client(), "POST", httpServer.URL+"/api/auth/change-password", login["token"].(string), map[string]string{
 		"oldPassword": initial, "newPassword": "permanent password",
@@ -133,10 +137,16 @@ func TestNewAdministratorRequiresPasswordAwareReaderAfterPasswordChange(t *testi
 	if status != http.StatusOK {
 		t.Fatal("password change failed", status)
 	}
-	assertMasterSchema(t, db, state.SchemaInitialPassword)
+	assertMasterSchema(t, db, state.SchemaCompressedValues)
+	status, login = request(t, httpServer.Client(), "POST", httpServer.URL+"/api/auth/login", "", map[string]string{
+		"username": "admin", "password": "permanent password",
+	})
+	if status != http.StatusOK || login["user"].(map[string]any)["mustChangePassword"] != false {
+		t.Fatal("permanent password did not clear the restriction", status, login)
+	}
 }
 
-func TestPasswordResetRaisesLegacySchemaOnlyAfterSuccessfulSelection(t *testing.T) {
+func TestPasswordResetUpgradesLegacySchemaWithoutChangingUnselectedAccounts(t *testing.T) {
 	for _, version := range []int{1, state.SchemaResolvedSources} {
 		t.Run(fmt.Sprintf("schema%d", version), func(t *testing.T) {
 			db, err := state.Open(filepath.Join(t.TempDir(), "master.db"))
@@ -144,37 +154,55 @@ func TestPasswordResetRaisesLegacySchemaOnlyAfterSuccessfulSelection(t *testing.
 				t.Fatal(err)
 			}
 			defer db.Close()
-			if err := db.ClaimRole("master"); err != nil {
-				t.Fatal(err)
-			}
 			hash, err := auth.HashPassword("existing password")
 			if err != nil {
 				t.Fatal(err)
 			}
+			original := User{
+				Username: "operator", DisplayName: "Existing operator", Role: "admin",
+				PasswordHash: hash, Revision: 7,
+			}
+			config := Configuration{Configured: true}
 			err = db.Update(func(tx *state.Tx) error {
-				if err := state.RequireSchema(tx, "master", version); err != nil {
+				// Build the old format without ClaimRole, which upgrades it on open.
+				if err := tx.Put("metadata", "format", map[string]any{"role": "master", "schemaVersion": version}); err != nil {
 					return err
 				}
-				if err := tx.Put("users", "operator", User{
-					Username: "operator", DisplayName: "Existing operator", Role: "admin",
-					PasswordHash: hash, Revision: 7,
-				}); err != nil {
+				if err := tx.Put("users", "operator", original); err != nil {
 					return err
 				}
-				return tx.Put("system", "configuration", Configuration{Configured: true})
+				return tx.Put("system", "configuration", config)
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
+			assertMasterSchema(t, db, version)
 			if _, _, err := ResetAdministratorPassword(db, "missing"); err == nil {
 				t.Fatal("reset accepted a missing administrator")
 			}
-			assertMasterSchema(t, db, version)
+			assertMasterSchema(t, db, state.SchemaCompressedValues)
+			if err := db.View(func(tx *state.Tx) error {
+				var user User
+				if found, err := tx.Get("users", "operator", &user); err != nil || !found || user != original {
+					t.Fatalf("failed reset changed the existing account: found=%v user=%+v err=%v", found, user, err)
+				}
+				var current Configuration
+				if found, err := tx.Get("system", "configuration", &current); err != nil || !found || current != config {
+					t.Fatalf("failed reset changed configuration: found=%v config=%+v err=%v", found, current, err)
+				}
+				var missing User
+				if found, err := tx.Get("users", "missing", &missing); err != nil || found {
+					t.Fatalf("failed reset created the missing account: found=%v err=%v", found, err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 			name, password, err := ResetAdministratorPassword(db, "operator")
 			if err != nil || name != "operator" || password == "" {
 				t.Fatal("reset failed", err)
 			}
-			assertMasterSchema(t, db, state.SchemaInitialPassword)
+			assertMasterSchema(t, db, state.SchemaCompressedValues)
 			err = db.View(func(tx *state.Tx) error {
 				var user User
 				_, err := tx.Get("users", name, &user)

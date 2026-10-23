@@ -261,6 +261,12 @@ func TestResolutionCommitFailureNeverOpensOrPublishesSource(t *testing.T) {
 	defer dst.Close()
 	var opens atomic.Int64
 	source := &pinCheckingSource{Store: src, repo: f.repo, child: f.job.ChildID, opens: &opens}
+	var beforeFormat struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err := f.db.View(func(tx *state.Tx) error { _, err := tx.Get("metadata", "format", &beforeFormat); return err }); err != nil {
+		t.Fatal(err)
+	}
 	observed.failAll.Store(true)
 	result := f.engine.copyResolvedItem(bg, record, f.job.Items[0], source, dst)
 	observed.failAll.Store(false)
@@ -277,7 +283,7 @@ func TestResolutionCommitFailureNeverOpensOrPublishesSource(t *testing.T) {
 	if err := f.db.View(func(tx *state.Tx) error { _, err := tx.Get("metadata", "format", &format); return err }); err != nil {
 		t.Fatal(err)
 	}
-	if format.SchemaVersion != 1 {
+	if format != beforeFormat {
 		t.Fatalf("failed pin upgraded format: %+v", format)
 	}
 	if saved.Results[0].ResolvedSource != nil || saved.Counters.TotalBytes != 0 {

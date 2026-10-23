@@ -47,6 +47,7 @@ func run() error {
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without starting the service")
 	backupState := flag.String("backup-state", "", "Validate and snapshot a stopped database to a new file")
 	restoreState := flag.String("restore-state", "", "Restore a snapshot into a stopped existing database")
+	compactState := flag.String("compact-state", "", "Write a compact, verified copy of a stopped database to a new file")
 	resetPassword := flag.Bool("reset-admin-password", false, "Reset an administrator password while the Master is stopped")
 	resetUsername := flag.String("username", "", "Administrator account to reset (required only if there is more than one)")
 	checkReady := flag.Bool("check-ready", false, "Verify an installer startup record")
@@ -82,7 +83,7 @@ func run() error {
 		return err
 	}
 	if *resetPassword {
-		if *backupState != "" || *restoreState != "" || *checkConfig || *checkReady {
+		if *backupState != "" || *restoreState != "" || *compactState != "" || *checkConfig || *checkReady {
 			return errors.New("--reset-admin-password cannot be combined with database or service checks")
 		}
 		return resetAdministrator(config.DataDirectory, *resetUsername)
@@ -90,14 +91,17 @@ func run() error {
 	if *resetUsername != "" {
 		return errors.New("--username requires --reset-admin-password")
 	}
-	if *backupState != "" || *restoreState != "" {
-		if *configPath == "" || *checkConfig || *checkReady || *backupState != "" && *restoreState != "" {
-			return errors.New("choose --backup-state or --restore-state with --config and no other checks")
+	if *backupState != "" || *restoreState != "" || *compactState != "" {
+		if *configPath == "" || *checkConfig || *checkReady || (*backupState != "" && *restoreState != "" || *backupState != "" && *compactState != "" || *restoreState != "" && *compactState != "") {
+			return errors.New("choose one of --backup-state, --restore-state or --compact-state with --config and no other checks")
+		}
+		if *compactState != "" {
+			return state.CompactOfflineWithProgress(filepath.Join(config.DataDirectory, "master.db"), "master", *compactState, os.Stderr)
 		}
 		if *restoreState != "" {
 			return state.RestoreOffline(filepath.Join(config.DataDirectory, "master.db"), "master", *restoreState)
 		}
-		return state.BackupOffline(filepath.Join(config.DataDirectory, "master.db"), "master", *backupState)
+		return state.BackupOfflineWithProgress(filepath.Join(config.DataDirectory, "master.db"), "master", *backupState, os.Stderr)
 	}
 	if *checkConfig {
 		if *configPath == "" {

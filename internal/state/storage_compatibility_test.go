@@ -76,13 +76,15 @@ func assertStorageRoundTrip(t *testing.T, value any) {
 	if err != nil || !bytes.Equal(apiBefore, apiAfter) {
 		t.Fatalf("storage encoding mutated API representation: %v", err)
 	}
-	// A regular decoder is the old-reader path: none of these types may acquire
-	// a custom public JSON decoder/encoder just to read the compact database.
+	// Public JSON writers remain unchanged. Child now reconstructs a storage-only
+	// deduplicated job; schema 4 prevents older readers from opening those rows.
 	if _, ok := value.(json.Marshaler); ok {
 		t.Fatalf("%T now changes public JSON via MarshalJSON", value)
 	}
-	if _, ok := reflect.New(reflect.TypeOf(value)).Interface().(json.Unmarshaler); ok {
-		t.Fatalf("%T unexpectedly requires a new JSON decoder", value)
+	if _, child := value.(task.Child); !child {
+		if _, ok := reflect.New(reflect.TypeOf(value)).Interface().(json.Unmarshaler); ok {
+			t.Fatalf("%T unexpectedly requires a new JSON decoder", value)
+		}
 	}
 }
 

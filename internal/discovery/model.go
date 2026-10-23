@@ -20,6 +20,7 @@ var (
 	ErrRunning       = errors.New("stop discovery before resuming it")
 	ErrCapacity      = errors.New("concurrent discovery capacity reached")
 	ErrClosed        = errors.New("discovery scanner is closed")
+	ErrDeleted       = errors.New("discovery was permanently deleted")
 	ErrSourceChanged = errors.New("previously discovered source object changed")
 	ErrCorrupt       = errors.New("discovery records are inconsistent")
 )
@@ -65,6 +66,11 @@ type State struct {
 	// They are durable bookkeeping, not a source cursor or completion checkpoint.
 	Attempt     string `json:"attempt,omitempty"`
 	SeenObjects int64  `json:"seenObjects"`
+	// A completed scan never consults its deduplication index again. Cleanup is
+	// resumable and independent of the retained, acknowledged batch history.
+	ObjectsReleased bool `json:"objectsReleased,omitempty"`
+	Deleted         bool `json:"deleted,omitempty"`
+	Purged          bool `json:"purged,omitempty"`
 }
 
 type Batch struct {

@@ -147,14 +147,20 @@ func otherPending(tx *state.Tx, p Parent) (map[string]PendingLoad, error) {
 	}
 }
 
-func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad) (Node, error) {
+func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad, available map[string]bool) (Node, error) {
 	node := p.Spec.Nodes[0]
 	if p.Spec.DistributionMode != "BALANCED" {
+		if available != nil && !available[node.ID] {
+			return Node{}, errors.New("the selected execution node is unavailable")
+		}
 		return node, nil
 	}
 	bestCost, bestHistory := math.Inf(1), int64(math.MaxInt64)
 	bestChildren := int64(math.MaxInt64)
 	for _, candidate := range p.Spec.Nodes {
+		if available != nil && !available[candidate.ID] {
+			continue
+		}
 		pending, err := addLoad(p.Scheduling.Nodes[candidate.ID], other[candidate.ID], 1)
 		if err != nil {
 			return node, err
@@ -170,6 +176,9 @@ func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad) (Node, err
 		if cost < bestCost || cost == bestCost && (pending.Children < bestChildren || pending.Children == bestChildren && history < bestHistory) {
 			node, bestCost, bestChildren, bestHistory = candidate, cost, pending.Children, history
 		}
+	}
+	if math.IsInf(bestCost, 1) {
+		return Node{}, errors.New("no selected execution node is available")
 	}
 	return node, nil
 }

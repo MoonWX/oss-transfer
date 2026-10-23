@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,35 @@ func commitFixture(t *testing.T) (*Scanner, *state.Store, State) {
 	return scanner, db, attempt
 }
 
+func TestScanCommitBoundsMetadataAndRetainsOversizedBatchOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var numbers []string
+	writer := newScanCommitter(ctx, cancel, func(group []pendingBatch) error {
+		var bytes int64
+		for _, part := range group {
+			bytes += batchMetadataBytes(part)
+			numbers = append(numbers, part.objects[0].Key)
+		}
+		if len(group) > scanCommitBatches || len(group) > 1 && bytes > scanCommitMetadataBytes {
+			t.Errorf("unbounded metadata group: %d batches, %d bytes", len(group), bytes)
+		}
+		return nil
+	})
+	for i, length := range []int{0, 400 << 10, 400 << 10, 2 << 20, 0, 0} {
+		batch := pendingBatch{objects: []transferstore.Object{{Key: fmt.Sprint(i), Metadata: map[string]string{"value": strings.Repeat("\x00", length)}}}}
+		if err := writer.add(batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.close(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(numbers, ",") != "0,1,2,3,4,5" {
+		t.Fatalf("metadata overflow changed batch order or lost a batch: %v", numbers)
+	}
+}
+
 func scanTestBatch(number int) pendingBatch {
 	batch := pendingBatch{objects: make([]transferstore.Object, 128)}
 	for i := range batch.objects {
@@ -34,7 +64,7 @@ func TestScanGroupKeepsFirstBatchImmediateAndPublicBatchBoundaries(t *testing.T)
 	scanner, _, attempt := commitFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	commits := make(chan int, 16)
+	commits := make(chan int, scanCommitBatches+1)
 	writer := newScanCommitter(ctx, cancel, func(batch []pendingBatch) error {
 		err := scanner.commitBatches(ctx, attempt, batch)
 		commits <- len(batch)
@@ -63,14 +93,14 @@ func TestScanGroupKeepsFirstBatchImmediateAndPublicBatchBoundaries(t *testing.T)
 	}
 	// Actual scheduling may split a burst at the 20ms deadline, but it must
 	// coalesce some writes instead of persisting each public batch separately.
-	if !grouped || calls >= 9 {
-		t.Fatalf("nine scan batches used %d ungrouped transactions", calls)
+	if !grouped || calls >= scanCommitBatches+1 {
+		t.Fatalf("%d scan batches used %d ungrouped transactions", scanCommitBatches+1, calls)
 	}
 	status, err := scanner.Status(ctx, 1)
-	if err != nil || status.LastBatch != 9 || status.TotalObjects != 9*128 {
+	if err != nil || status.LastBatch != scanCommitBatches+1 || status.TotalObjects != (scanCommitBatches+1)*128 {
 		t.Fatalf("grouping changed durable discovery totals: %+v, %v", status, err)
 	}
-	for i := int64(0); i < 9; i++ {
+	for i := int64(0); i < scanCommitBatches+1; i++ {
 		batch, found, err := scanner.Batch(ctx, 1, 1, i)
 		if err != nil || !found || batch.Number != i+1 || len(batch.Objects) != 128 {
 			t.Fatalf("public batch %d changed: %+v %v", i+1, batch, err)

@@ -662,6 +662,23 @@ if ((yes == 0)); then
   read -r -p 'Continue? [y/N] ' answer </dev/tty
   [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
+check_backup_space() {
+  local ancestor=$backup_dir path size required=65536 available
+  # Check before stopping the service. Keep every previous rollback copy;
+  # choosing a different backup directory is safer than deleting one here.
+  while [[ ! -d "$ancestor" ]]; do ancestor=$(dirname "$ancestor"); done
+  for path in "$database" "$binary" "$cli_path"; do
+    [[ -f "$path" ]] || continue
+    size=$(LC_ALL=C ls -ln "$path" | awk '{print $5}')
+    [[ "$size" =~ ^[0-9]+$ ]] || fail "Cannot determine backup size: $path"
+    required=$((required+(size+1023)/1024))
+  done
+  available=$(LC_ALL=C df -Pk "$ancestor" | awk 'END {print $4}')
+  [[ "$available" =~ ^[0-9]+$ ]] || fail "Cannot determine available backup space: $backup_dir"
+  if ((available < required)); then
+    fail "Not enough space for the upgrade backup: $backup_dir needs $(((required+1023)/1024)) MiB; $((available/1024)) MiB available. Free space or choose --backup-dir on another disk. The service has not been stopped."
+  fi
+}
 active() { if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name"; elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1; else launchctl print "$domain/$service_name" >/dev/null 2>&1; fi; }
 stop_service() {
   local old_pid load_state deadline=$((SECONDS+50))
@@ -895,6 +912,7 @@ rollback() {
   exit "$result"
 }
 check_listener
+if ((existed)); then check_backup_space; fi
 if [[ -n "$adopt_config" ]]; then
   "$work/$filename" --config "$work/service.json" --backup-state "$work/database"
 fi
@@ -910,6 +928,7 @@ if ((existed)); then
   if active; then was_active=1; fi
   if [[ "$platform" == linux ]] && systemctl is-enabled --quiet "$service_name"; then was_enabled=1; fi
   trap rollback ERR INT TERM
+  printf 'Stopping %s before the database backup...\n' "$service_name"
   stop_service
   # Recheck the database lock after stopping the service; a manual process may
   # still own it. Take a consistent snapshot only when all writers are stopped.
@@ -928,6 +947,7 @@ if ((had_cli)); then
   cp -p "$cli_path" "$backup/cli"
 fi
 trap rollback ERR INT TERM
+printf 'Installing %s %s...\n' "$role" "$version"
 cp "$work/$filename" "$binary.new"
 chmod 755 "$binary.new"
 mv -f "$binary.new" "$binary"

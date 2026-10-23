@@ -22,6 +22,10 @@ func restoreFixture(t *testing.T, role string) (string, string) {
 		t.Fatal(err)
 	}
 	err = db.Update(func(tx *Tx) error {
+		// Preserve coverage for rollback into a pre-compression database.
+		if err := tx.Put("metadata", "format", databaseFormat{Role: role, SchemaVersion: 1}); err != nil {
+			return err
+		}
 		if role == "agent" {
 			if err := tx.Put("agent-identity", "self", map[string]string{"instanceId": "node", "credential": "qa-local", "enrollmentId": "original", "masterUrl": "https://qa.example"}); err != nil {
 				return err
@@ -187,7 +191,7 @@ func TestRestoreOfflineRejectsInvalidSourceAndDestination(t *testing.T) {
 					case "role":
 						return tx.Put("metadata", "format", map[string]any{"role": "other", "schemaVersion": 1})
 					case "schema":
-						return tx.Put("metadata", "format", map[string]any{"role": role, "schemaVersion": SchemaInitialPassword + 1})
+						return tx.Put("metadata", "format", map[string]any{"role": role, "schemaVersion": SchemaCompressedValues + 1})
 					case "pending":
 						return tx.Put("migration", "state", map[string]any{"pending": true, "migrationId": "qa"})
 					case "missing-pending":

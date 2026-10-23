@@ -136,3 +136,32 @@ func TestDefaultConcurrencyIsEightChildrenAndFourObjects(t *testing.T) {
 		t.Fatal(children, f.engine.ObjectConcurrency())
 	}
 }
+
+func TestCapacityChangedNotifiesCompletionAndRaisedLimit(t *testing.T) {
+	f := newFixture(t, 1)
+	f.startEngine(nil, Options{MaxConcurrentJobs: 1})
+	completed := f.engine.CapacityChanged()
+	f.acceptStart()
+	if record := f.wait(); record.Status != Completed {
+		t.Fatal(record.Status)
+	}
+	select {
+	case <-completed:
+	default:
+		t.Fatal("completion did not wake admission")
+	}
+	raised := f.engine.CapacityChanged()
+	select {
+	case <-raised:
+		t.Fatal("new capacity subscription already closed")
+	default:
+	}
+	if err := f.engine.SetConcurrency(8, 4); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-raised:
+	default:
+		t.Fatal("raised concurrency did not wake admission")
+	}
+}

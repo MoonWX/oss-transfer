@@ -18,6 +18,7 @@ import (
 type discoveredObject struct {
 	Object      transferstore.Object `json:"object"`
 	SeenAttempt string               `json:"seenAttempt"`
+	keyOmitted  bool
 }
 
 type pendingBatch struct {
@@ -62,6 +63,7 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	objectPrefix := parentKey(attempt.Spec.ParentID) + "/"
 	return s.store.Update(func(tx *state.Tx) error {
 		current, err := get(tx, attempt.Spec.ParentID)
 		if err != nil {
@@ -77,9 +79,8 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 		for _, part := range pending {
 			batch := Batch{ParentID: attempt.Spec.ParentID, Generation: current.Generation, Objects: make([]transferstore.Object, 0, len(part.objects))}
 			for _, object := range part.objects {
-				key := objectKey(attempt.Spec.ParentID, object.Key)
-				var prior discoveredObject
-				found, err := tx.Get(objects, key, &prior)
+				key := objectPrefix + base64.RawURLEncoding.EncodeToString([]byte(object.Key))
+				prior, found, err := getDiscoveredObjectAtKey(tx, key, object.Key)
 				if err != nil {
 					return err
 				}
@@ -202,8 +203,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 			(!attempt.Spec.ModifiedUntil.IsZero() && !object.ModifiedAt.Before(attempt.Spec.ModifiedUntil))
 		if outside && !manifest.Exact && !absent {
 			return s.store.View(func(tx *state.Tx) error {
-				var prior discoveredObject
-				found, err := tx.Get(objects, objectKey(attempt.Spec.ParentID, object.Key), &prior)
+				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, object.Key)
 				if err != nil {
 					return err
 				}
@@ -297,11 +297,19 @@ func (s *Scanner) finish(attempt State, scanErr error) {
 				current.Warning = fmt.Sprintf("%d previously discovered source objects were absent during rescan; retained batches are unchanged", current.MissingObjects)
 			}
 		}
-		return tx.Put(states, parentKey(current.Spec.ParentID), current)
+		if err := tx.Put(states, parentKey(current.Spec.ParentID), current); err != nil {
+			return err
+		}
+		if cleanupNeeded(current) {
+			return tx.Put(cleanupBucket, parentKey(current.Spec.ParentID), current.Spec.ParentID)
+		}
+		return nil
 	})
 	if err != nil {
 		// Returning stale SCANNING or claiming completion after a failed commit
 		// would conceal a broken durable checkpoint. Recovery reopens the database.
 		s.faults.Store(attempt.Spec.ParentID, fmt.Errorf("persist discovery state: %w", err))
+	} else {
+		s.signalCleanup()
 	}
 }

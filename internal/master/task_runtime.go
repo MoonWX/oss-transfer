@@ -47,6 +47,7 @@ func newTaskRuntime(s *Server) *taskRuntime {
 // create background work, making lifecycle ownership explicit in both binaries
 // and integration tests.
 func (s *Server) Start() {
+	s.startSoftwareUpdates()
 	t := s.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -381,7 +382,57 @@ func (t *taskRuntime) scanSpec(p task.Parent) discovery.Spec {
 	}
 	return spec
 }
-func (t *taskRuntime) step(ctx context.Context, id int64) error {
+
+// Prepare peers independently: one unavailable Agent must not consume the
+// entire reconciliation deadline before healthy peers can report or accept work.
+func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapshot storageconfig.Snapshot) (map[string]bool, error) {
+	available := map[string]bool{}
+	var mu sync.Mutex
+	var workers sync.WaitGroup
+	var problems []error
+	slots := make(chan struct{}, 8)
+	displays := t.server.nodeDisplaySnapshot()
+	for i, node := range p.Spec.Nodes {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if t.server.softwareUpdateBlocksNode(node.ID) {
+				mu.Lock()
+				problems = append(problems, fmt.Errorf("Agent %s is updating; its assigned work remains on that node", displays.lookup(node.ID, node.Address).DisplayLabel))
+				mu.Unlock()
+				return
+			}
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return
+			}
+			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			err := t.server.syncStorage(callCtx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}, snapshot)
+			if err == nil {
+				// Keep the original member index/count so an isolated peer keeps
+				// its reserved budget rather than accidentally exceeding a limit.
+				err = t.server.agentCall(callCtx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
+			}
+			if err == nil && p.Spec.Destination.Kind == "LOCAL" {
+				err = t.server.agentCall(callCtx, nodeSession(node), "local_prepare", true, agentservice.PathRequest{Path: node.LocalRoot}, nil)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				problems = append(problems, fmt.Errorf("Agent %s is unavailable; its assigned work remains on that node: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err))
+			} else {
+				available[node.ID] = true
+			}
+		}()
+	}
+	workers.Wait()
+	return available, errors.Join(problems...)
+}
+
+func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	p, err := t.repo.Get(id)
 	if err != nil {
 		return err
@@ -407,28 +458,45 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	for _, node := range p.Spec.Nodes {
-		if err := s.syncStorage(ctx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}, snapshot); err != nil {
-			return err
+	available, memberErr := t.prepareMembers(ctx, p, snapshot)
+	defer func() { resultErr = errors.Join(memberErr, resultErr) }()
+	// Observations do not require the scanner. Preserve healthy peers' progress
+	// even when the original scanner is down or a shared-mount check must wait.
+	if p.Status == "RUNNING" {
+		if err := t.observeAvailable(ctx, p, 64, available); err != nil {
+			memberErr = errors.Join(memberErr, err)
 		}
 	}
-	if err := t.policies(ctx, p); err != nil {
-		return err
+	if !available[p.Spec.Nodes[0].ID] {
+		// A completed persisted manifest and confirmed child outcomes are
+		// sufficient to finish; the scanner need not reconnect just to repeat them.
+		finished, err := t.repo.FinishIfReady(p.ID, p.Generation)
+		if err != nil {
+			return err
+		}
+		if finished {
+			memberErr = nil
+			return nil
+		}
+		return errors.New("Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes")
+	}
+	if p.Status == "RESUMING" && len(available) != len(p.Spec.Nodes) {
+		return errors.New("Waiting for all task nodes to acknowledge recovery")
 	}
 	if ready, err := t.syncInventory(ctx, p); err != nil {
 		return err
 	} else if !ready {
 		return nil
 	}
-	if err := t.ensureSharedSource(ctx, p); err != nil {
-		return err
-	}
-	if p.Spec.Destination.Kind == "LOCAL" {
-		for _, node := range p.Spec.Nodes {
-			if err := s.agentCall(ctx, nodeSession(node), "local_prepare", true, agentservice.PathRequest{Path: node.LocalRoot}, nil); err != nil {
-				return err
-			}
+	proofParent := p
+	proofParent.Spec.Nodes = nil
+	for _, node := range p.Spec.Nodes {
+		if available[node.ID] {
+			proofParent.Spec.Nodes = append(proofParent.Spec.Nodes, node)
 		}
+	}
+	if err := t.ensureSharedSource(ctx, proofParent); err != nil {
+		return err
 	}
 	if p.Status == "RESUMING" {
 		for _, node := range p.Spec.Nodes {
@@ -455,15 +523,15 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 			return err
 		}
 		p.Status = "RUNNING"
+		if err := t.observeAvailable(ctx, p, 64, available); err != nil {
+			memberErr = errors.Join(memberErr, err)
+		}
 	}
 	var scan discovery.State
 	if err := s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &scan); err != nil {
 		return err
 	}
 	if err := t.repo.ScanProgress(p.ID, p.Generation, scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error); err != nil {
-		return err
-	}
-	if err := t.observe(ctx, p, 64); err != nil {
 		return err
 	}
 	p, err = t.repo.Get(p.ID)
@@ -473,17 +541,24 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 	// Keep a bounded amount of queued work in front of Agents. The scanner may
 	// continue writing its manifest on disk while execution applies backpressure.
 	if pendingDispatchCapacity(p) > 0 {
-		if err := t.dispatch(ctx, p, scanControl); err != nil {
+		if err := t.dispatchAvailable(ctx, p, scanControl, available); err != nil {
 			return err
 		}
 	}
-	_, err = t.repo.FinishIfReady(p.ID, p.Generation)
+	finished, err := t.repo.FinishIfReady(p.ID, p.Generation)
+	if finished {
+		memberErr = nil
+	}
 	return err
 }
 
 // Read a small dispatch page, persist its assignments together, then deliver.
 // The existing outstanding reconciliation retries any undelivered assignments.
 func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agentservice.ScanRequest) error {
+	return t.dispatchAvailable(ctx, p, control, nil)
+}
+
+func (t *taskRuntime) dispatchAvailable(ctx context.Context, p task.Parent, control agentservice.ScanRequest, available map[string]bool) error {
 	scanner := nodeSession(p.Spec.Nodes[0])
 	control.Number = int64(p.DispatchedThrough)
 	limit := min(16, pendingDispatchCapacity(p))
@@ -493,26 +568,9 @@ func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agent
 	if p.DispatchedThrough == 0 {
 		limit = 1 // Start the first transfer without collecting the rest of a page.
 	}
-	batches := make([]task.Assignment, 0, limit)
-	var collectionErr error
-	for range limit {
-		var page struct {
-			Batch discovery.Batch `json:"batch"`
-			Found bool            `json:"found"`
-		}
-		if err := t.server.agentCall(ctx, scanner, "scan_batch", false, control, &page); err != nil {
-			collectionErr = err
-			break
-		}
-		if !page.Found {
-			break
-		}
-		if page.Batch.ParentID != p.ID || page.Batch.Generation != p.Generation || page.Batch.Number != control.Number+1 {
-			collectionErr = task.ErrConflict
-			break
-		}
-		batches = append(batches, task.Assignment{Number: int(page.Batch.Number), Objects: page.Batch.Objects, Legacy: page.Batch.Legacy})
-		control.Number = page.Batch.Number
+	batches, collectionErr := t.collectBatches(ctx, p, control, limit)
+	if len(batches) > 0 {
+		control.Number = int64(batches[len(batches)-1].Number)
 	}
 	if collectionErr == nil {
 		collectionErr = ctx.Err()
@@ -523,7 +581,13 @@ func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agent
 	// Retain the validated prefix even when a slow or unavailable scanner ends
 	// this collection. Otherwise every retry could reread the same prefix and
 	// never dispatch it. AssignPage still fences stopped/newer generations.
-	children, err := t.repo.AssignPage(p.ID, p.Generation, batches)
+	var children []task.Child
+	var err error
+	if available == nil {
+		children, err = t.repo.AssignPage(p.ID, p.Generation, batches)
+	} else {
+		children, err = t.repo.AssignPageAvailable(p.ID, p.Generation, batches, available)
+	}
 	if err != nil {
 		return errors.Join(collectionErr, err)
 	}
@@ -533,10 +597,8 @@ func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agent
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	for _, child := range children {
-		if err := t.server.agentCall(ctx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil); err != nil {
-			return err
-		}
+	if err := t.deliverChildren(ctx, p, children); err != nil {
+		return err
 	}
 	return t.server.agentCall(ctx, scanner, "scan_ack", true, control, nil)
 }
@@ -548,6 +610,10 @@ func pendingDispatchCapacity(p task.Parent) int {
 }
 
 func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) (err error) {
+	return t.observeAvailable(ctx, p, limit, nil)
+}
+
+func (t *taskRuntime) observeAvailable(ctx context.Context, p task.Parent, limit int, available map[string]bool) (err error) {
 	t.mu.Lock()
 	after := t.observeAfter[p.ID]
 	t.mu.Unlock()
@@ -558,37 +624,39 @@ func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) (er
 	if err != nil {
 		return err
 	}
-	observations := make([]task.Observation, 0, len(children))
-	// Keep already collected outcomes even if a later Agent is unavailable.
-	defer func() {
-		err = errors.Join(err, t.repo.ObserveBatch(p.ID, p.Generation, observations))
-	}()
-	for _, child := range children {
-		// Move past slow or unavailable children as well: one node must not
-		// prevent later children from reporting progress on the next pass.
-		t.mu.Lock()
-		if t.observeAfter == nil {
-			t.observeAfter = map[int64]int{}
-		}
-		t.observeAfter[p.ID] = child.Job.Number
-		t.mu.Unlock()
-		var record execution.Record
-		err := t.server.agentCall(ctx, nodeSession(child.Node), "child_get", false, map[string]string{"childId": child.Job.ChildID}, &record)
-		if agentStatus(err, 404) {
-			if p.Status != "RUNNING" {
-				continue
-			}
-			if err = t.server.agentCall(ctx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil); err != nil {
-				return err
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		observations = append(observations, task.Observation{Number: child.Job.Number, Record: record})
+	if len(children) == 0 {
+		return nil
 	}
-	return nil
+	// Advance the whole bounded page, including unavailable peers. A slow
+	// member must not keep the next reconciliation at the same prefix.
+	t.mu.Lock()
+	if t.observeAfter == nil {
+		t.observeAfter = map[int64]int{}
+	}
+	t.observeAfter[p.ID] = children[len(children)-1].Job.Number
+	t.mu.Unlock()
+	groups := groupChildrenByNode(children)
+	observed := make([][]task.Observation, len(groups))
+	unavailable := make([]bool, len(groups))
+	err = parallelChildNodes(ctx, groups, func(index int, children []task.Child) error {
+		if available != nil && !available[children[0].Node.ID] {
+			return nil
+		}
+		var nodeErr error
+		observed[index], nodeErr = t.observeNode(ctx, p, children, available != nil)
+		unavailable[index] = nodeErr != nil
+		return nodeErr
+	})
+	observations := make([]task.Observation, 0, len(children))
+	for index, group := range groups {
+		observations = append(observations, observed[index]...)
+		if available != nil && unavailable[index] {
+			delete(available, group[0].Node.ID)
+		}
+	}
+	// Persist healthy peers' reports even when a different peer times out.
+	err = errors.Join(err, t.repo.ObserveBatch(p.ID, p.Generation, observations))
+	return err
 }
 
 // Page through the Agent ledger after every stop fence has been acknowledged.

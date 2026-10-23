@@ -20,6 +20,8 @@ const jobsBucket = "execution_jobs"
 const parentsBucket = "execution_parents"
 const metaBucket = "execution_meta"
 const readyBucket = "execution_ready"
+const runningBucket = "execution_running"
+const purgesBucket = "execution_purges"
 
 // Database permits fault injection around real transactions. Update must be
 // atomic and durable before it returns nil, as state.Store.Update is.
@@ -54,7 +56,11 @@ func NewRepository(db Database, opts RepositoryOptions) (*Repository, error) {
 	if opts.MaxPendingJobs < 1 {
 		return nil, errors.New("MaxPendingJobs must be positive")
 	}
-	return &Repository{db: db, maxPending: opts.MaxPendingJobs}, nil
+	r := &Repository{db: db, maxPending: opts.MaxPendingJobs}
+	if err := r.ensureRunningIndex(context.Background()); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func jobKey(childID string) (string, error) {
@@ -212,6 +218,16 @@ func (r *Repository) put(tx *state.Tx, before *Record, after *Record) error {
 		}
 	} else if !runnable(*after) && wasReady {
 		if err := tx.Delete(readyBucket, key); err != nil {
+			return err
+		}
+	}
+	wasRunning := before != nil && before.Status == Running
+	if after.Status == Running && !wasRunning {
+		if err := tx.Put(runningBucket, key, after.Job.ChildID); err != nil {
+			return err
+		}
+	} else if after.Status != Running && wasRunning {
+		if err := tx.Delete(runningBucket, key); err != nil {
 			return err
 		}
 	}
@@ -603,6 +619,9 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		if ok && generation < p.Generation {
 			return ErrGeneration
 		}
+		if p.Deleted && !deleted {
+			return ErrDeleted
+		}
 		if !ok {
 			p = ParentFence{ParentID: id, Generation: generation}
 		}
@@ -612,13 +631,15 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		if err := tx.Put(parentsBucket, parentKey(id), p); err != nil {
 			return err
 		}
+		if deleted {
+			// The parent fence rejects every old attempt immediately. Do not
+			// rewrite large result ledgers merely to delete them after I/O exits.
+			return tx.Put(purgesBucket, parentKey(id), generation)
+		}
 		return r.changeParentJobs(tx, id, func(j *Record) error {
 			advanced := j.Job.Generation != generation
 			j.Job.Generation = generation
-			if deleted {
-				j.Status = Deleted
-				j.Attempt++
-			} else if !terminal(j.Status) && j.Status != Stopped {
+			if !terminal(j.Status) && j.Status != Stopped {
 				j.Status = Stopped
 				j.Attempt++
 			} else if advanced {
@@ -711,9 +732,12 @@ func (r *Repository) changeParentJobs(tx *state.Tx, id int64, fn func(*Record) e
 // Recover is a startup operation. There must be only one live Engine per Agent
 // database. It invalidates prior attempt tokens; stopped jobs stay stopped.
 func (r *Repository) Recover(ctx context.Context) error {
+	if err := r.purgePending(ctx); err != nil {
+		return err
+	}
 	after := ""
 	for {
-		page, err := r.List(ctx, 0, after, 128)
+		page, err := r.running(ctx, after, 128)
 		if err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,11 @@ type softwareUpdateState struct {
 	checkedAt time.Time
 	checking  bool
 	error     string
+	queueMu   sync.Mutex
+	lifecycle sync.Mutex
+	cancel    context.CancelFunc
+	done      chan struct{}
+	closed    bool
 }
 
 func installSoftwareUpdateRoutes(s *Server) {
@@ -24,6 +30,7 @@ func installSoftwareUpdateRoutes(s *Server) {
 	s.mux.HandleFunc("POST /api/master/software-updates/check", s.adminOnly(s.checkSoftwareUpdatesHTTP))
 	s.mux.HandleFunc("POST /api/master/software-updates/master", s.adminOnly(s.updateMasterSoftwareHTTP))
 	s.mux.HandleFunc("POST /api/master/software-updates/agents/{address}", s.adminOnly(s.updateAgentSoftwareHTTP))
+	s.mux.HandleFunc("POST /api/master/software-updates/agents", s.adminOnly(s.updateAgentSoftwareHTTP))
 }
 
 func (s *Server) localSoftware() (softwareupdate.Info, softwareupdate.Status) {
@@ -46,19 +53,56 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 		row := map[string]any{"address": reply.Member.Address, "info": nil, "update": nil}
 		addNodeDisplay(row, displays.lookup(reply.Member.ID, reply.Member.Address))
 		if reply.Err != nil {
-			row["unavailable"] = true
+			// Older Agents do not implement software_info. Establish reachability
+			// independently so an unsupported updater is not labelled offline.
+			var remoteError *AgentError
+			if !errors.As(reply.Err, &remoteError) {
+				row["unavailable"], row["upgradeReason"] = true, "OFFLINE"
+				nodes = append(nodes, row)
+				continue
+			}
+			var legacy map[string]any
+			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			err := s.agentCall(ctx, reply.Member.Session(), "node_status", false, struct{}{}, &legacy)
+			cancel()
+			if err == nil {
+				row["info"] = softwareupdate.Info{Role: "agent", Reason: "LEGACY"}
+				if info, ok := legacy["software"].(map[string]any); ok {
+					row["info"] = info
+				}
+				row["upgradeReason"] = "LEGACY"
+			} else {
+				row["unavailable"], row["upgradeReason"] = true, "OFFLINE"
+			}
 		} else {
 			row["info"], row["update"] = reply.Value["info"], reply.Value["update"]
+			if agent, ok := reply.Value["info"].(map[string]any); ok {
+				version, _ := agent["version"].(string)
+				row["updateAvailable"] = newerSoftware(info.Version, version)
+				row["upgradeReason"] = agent["reason"]
+			}
 		}
 		nodes = append(nodes, row)
 	}
 	s.updates.mu.Lock()
 	latest, checked, checking, checkError := s.updates.latest, s.updates.checkedAt, s.updates.checking, s.updates.error
 	s.updates.mu.Unlock()
+	queue, _ := s.softwareQueue()
+	for i := range queue.Items {
+		queue.Items[i].Error = localize(w, queue.Items[i].Error)
+	}
+	for _, row := range nodes {
+		for _, item := range queue.Items {
+			if row["address"] == item.Address {
+				row["queuePhase"] = item.Phase
+			}
+		}
+	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{
 		"master": map[string]any{"info": info, "update": status}, "agents": nodes,
-		"latest": latest, "checkedAt": checked, "checking": checking, "checkError": checkError,
+		"latest": latest, "checkedAt": checked, "checking": checking, "checkError": localize(w, checkError),
 		"available": latest != nil && newerSoftware(latest.Version, info.Version),
+		"queue":     queue,
 	}})
 }
 
@@ -111,6 +155,12 @@ func (s *Server) updateMasterSoftwareHTTP(w http.ResponseWriter, r *http.Request
 		fail(w, 409, "Check the latest version before updating")
 		return
 	}
+	s.updates.queueMu.Lock()
+	defer s.updates.queueMu.Unlock()
+	if queue, err := s.softwareQueue(); err != nil || queue.Phase == "RUNNING" {
+		fail(w, 409, "Wait for Agent updates to finish before updating the Master")
+		return
+	}
 	result, err := s.options.Updater.Start(r.Context(), request.Version)
 	if err != nil {
 		fail(w, 409, err.Error())
@@ -131,18 +181,13 @@ func (s *Server) updateAgentSoftwareHTTP(w http.ResponseWriter, r *http.Request)
 		fail(w, 409, "Update Agents to the current Master version after the Master update finishes")
 		return
 	}
-	member, err := s.nodeByAddress(r.PathValue("address"))
+	result, err := s.enqueueAgentUpdates(r.Context(), request.Version, r.PathValue("address"))
 	if err != nil {
-		nodeHTTPError(w, err)
+		fail(w, 409, err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	var result softwareupdate.Status
-	err = s.agentCall(ctx, member.Session(), "software_update", true, request, &result)
-	if err != nil {
-		fail(w, 409, "Cannot start the Agent update; check its connection and update support")
-		return
+	for i := range result.Items {
+		result.Items[i].Error = localize(w, result.Items[i].Error)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"success": true, "data": result})
 }

@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -87,6 +87,32 @@ function New-TestArchive([string]$Fault='') {
     return Resolve-DownloadSource 'github' 'latest' 'amd64'
 }
 try {
+    Check 'backup space arithmetic exceeds 32-bit file sizes' {
+        $BackupDir = Join-Path $work 'backups'
+        Assert-BackupSpace ([long](5GB+64MB)) ([long](6GB))
+        Reject { Assert-BackupSpace ([long](5GB+64MB)) ([long](2GB)) } '5184 MiB'
+        Reject { Assert-BackupSpace ([long](5GB+64MB)) ([long](2GB)) } 'The service has not been stopped'
+    }
+    Check 'Windows PowerShell 5 accepts native progress and rejects nonzero exits' {
+        $definition = $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Native'},$true)[0].Extent.Text
+        $testScript = Join-Path $work 'native-stderr.ps1'
+        $testBody = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$result = Invoke-Native $env:ComSpec @('/d','/c','echo backup-progress 1>&2 & echo payload & exit /b 0')
+if ($result.Trim() -ne 'payload') { throw 'Native stdout was not preserved.' }
+$rejected = $false
+try { Invoke-Native $env:ComSpec @('/d','/c','echo actual-failure 1>&2 & exit /b 7') } catch {
+    if ($_.Exception.Message -notlike '*exit 7*') { throw }
+    $rejected = $true
+}
+if (-not $rejected) { throw 'Native failure was accepted.' }
+if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was changed.' }
+'@
+        [IO.File]::WriteAllText($testScript,$definition+"`n"+$testBody,$utf8)
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $testScript
+        if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell native stderr regression.' }
+    }
     Check 'old official release URLs follow the renamed prefix' {
         $legacy = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer'
         Assert ((Normalize-ReleaseUrl "$legacy/latest/") -ceq "$jdoss/latest") 'Legacy latest URL was not migrated.'

@@ -2,6 +2,16 @@ package master
 
 // Exact application messages only. Vendor errors and user values are not rewritten.
 var apiMessages = map[string]struct{ en, zh, ja string }{
+	"Wait for Agent updates to finish before updating the Master":         {"Wait for Agent updates to finish before updating the Master", "请等待节点更新完成，再更新 Master", "Agent の更新完了後に Master を更新してください"},
+	"Another Agent update is already in progress":                         {"Another Agent update is already in progress", "已有节点更新正在进行，请稍候", "別の Agent 更新が実行中です"},
+	"No registered Agents match this update":                              {"No registered Agents match this update", "没有可更新的已注册节点", "更新対象の登録済み Agent がありません"},
+	"Agent update is in progress":                                         {"Agent update is in progress", "节点正在更新，暂不接收新任务", "Agent の更新中は新しいタスクを受け付けません"},
+	"The Master version changed; start a new Agent update":                {"The Master version changed; start a new Agent update", "Master 版本已变化，请重新发起节点更新", "Master のバージョンが変更されました。Agent の更新を再実行してください"},
+	"The registered Agent changed; start a new update":                    {"The registered Agent changed; start a new update", "节点注册信息已变化，请重新发起更新", "Agent の登録情報が変更されました。更新を再実行してください"},
+	"Agent update did not finish; inspect its service before retrying":    {"Agent update did not finish; inspect its service before retrying", "节点更新未完成，请检查节点服务后重试", "Agent の更新が完了していません。サービスを確認してから再試行してください"},
+	"Upgrade this Agent once with the installer to enable online updates": {"Upgrade this Agent once with the installer to enable online updates", "此节点需先用安装脚本升级一次，之后即可在线更新", "この Agent はインストーラーで一度更新すると、オンライン更新を利用できます"},
+	"Agent is offline": {"Agent is offline", "节点离线", "Agent がオフラインです"},
+	"Only older stable Agent releases can be updated":                                         {"Only older stable Agent releases can be updated", "仅支持将较旧的稳定版节点更新到 Master 版本", "Master より古い安定版の Agent のみ更新できます"},
 	"Version checking is unavailable":                                                         {"Version checking is unavailable", "当前不支持版本检测", "バージョンの確認は利用できません"},
 	"A version check is already running":                                                      {"A version check is already running", "正在检测版本，请稍候", "バージョンを確認中です"},
 	"Version check failed; try again":                                                         {"Version check failed; try again", "版本检测失败，请重试", "バージョンの確認に失敗しました。再試行してください"},

@@ -491,18 +491,22 @@ func TestS3ProtocolCancellationAbortsUsingFreshContext(t *testing.T) {
 }
 
 func TestS3ProtocolConcurrentSkipAtMultipartCommit(t *testing.T) {
-	p := newProtocolS3(t)
-	p.collision = true
-	s := p.store(t)
-	payload := bytes.Repeat([]byte("x"), int(minPartSize+1))
-	result, err := s.Write(context.Background(), "collision", bytes.NewReader(payload), WriteOptions{Size: int64(len(payload))})
-	if err != nil || !result.Skipped || result.Committed {
-		t.Fatalf("concurrent skip %+v %v", result, err)
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if string(p.objects["collision"].data) != "concurrent" || p.aborted != 1 {
-		t.Fatalf("concurrent object overwritten or upload leaked")
+	for _, hint := range []bool{false, true} {
+		t.Run(fmt.Sprint(hint), func(t *testing.T) {
+			p := newProtocolS3(t)
+			p.collision = true
+			s := p.store(t)
+			payload := bytes.Repeat([]byte("x"), int(minPartSize+1))
+			result, err := s.Write(context.Background(), "collision", bytes.NewReader(payload), WriteOptions{Size: int64(len(payload)), DestinationAbsent: hint})
+			if err != nil || !result.Skipped || result.Committed {
+				t.Fatalf("concurrent skip %+v %v", result, err)
+			}
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if string(p.objects["collision"].data) != "concurrent" || p.aborted != 1 {
+				t.Fatalf("concurrent object overwritten or upload leaked")
+			}
+		})
 	}
 }
 

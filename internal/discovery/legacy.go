@@ -159,8 +159,7 @@ func (s *Scanner) appendLegacy(ctx context.Context, attempt State, store transfe
 			}
 			var already bool
 			err = s.store.View(func(tx *state.Tx) error {
-				var prior discoveredObject
-				found, err := tx.Get(objects, objectKey(attempt.Spec.ParentID, row.Key), &prior)
+				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, row.Key)
 				already = found && prior.SeenAttempt == attempt.Attempt
 				return err
 			})

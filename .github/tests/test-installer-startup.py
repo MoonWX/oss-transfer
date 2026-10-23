@@ -270,5 +270,54 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
         self.assertEqual(modern.stdout, '\nInitial administrator: admin\nInitial password: modern_password\n')
 
 
+class BackupSpaceTests(unittest.TestCase):
+    def test_space_checked_before_stop_and_existing_backups_retained(self):
+        source = INSTALLER.read_text()
+        self.assertLess(source.index('\nif ((existed)); then check_backup_space; fi'),
+                        source.index('\n  stop_service\n'))
+        functions = source[source.index('check_backup_space() {'):source.index('\nactive() {')]
+        with tempfile.TemporaryDirectory(prefix='installer-backup-space-') as directory:
+            root = Path(directory)
+            (root/'bin').mkdir()
+            database = root/'agent.db'
+            # Sparse file catches accidental 32-bit size arithmetic without
+            # allocating a large fixture or reading its contents.
+            with database.open('wb') as stream:
+                stream.truncate(5 * 1024**3)
+            (root/'agent').write_text('binary')
+            (root/'cli').write_text('cli')
+            (root/'backups').mkdir()
+            previous = root/'backups'/'previous'
+            previous.write_text('only rollback copy')
+            shim = root/'bin'/'df'
+            shim.write_text('#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/test 50000000 1 %s 90%% /\\n" "$TEST_AVAILABLE"\n')
+            shim.chmod(0o755)
+            body = '''set -euo pipefail
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+''' + functions + '''
+backup_dir=$TEST_ROOT/backups/new; database=$TEST_ROOT/agent.db
+binary=$TEST_ROOT/agent; cli_path=$TEST_ROOT/cli
+check_backup_space
+printf 'can stop service\\n'
+'''
+            env = dict(os.environ, PATH=str(root/'bin')+os.pathsep+os.environ['PATH'], TEST_ROOT=str(root))
+            insufficient = subprocess.run(['bash','-c',body], env=dict(env,TEST_AVAILABLE=str(2*1024**2)),
+                                          text=True,capture_output=True,timeout=5)
+            self.assertNotEqual(insufficient.returncode, 0)
+            self.assertIn('The service has not been stopped', insufficient.stderr)
+            self.assertIn('5185 MiB', insufficient.stderr)
+            self.assertNotIn('can stop service', insufficient.stdout)
+            self.assertEqual(previous.read_text(), 'only rollback copy')
+            self.assertFalse((root/'backups'/'new').exists())
+            enough = subprocess.run(['bash','-c',body], env=dict(env,TEST_AVAILABLE=str(6*1024**2)),
+                                    text=True,capture_output=True,timeout=5)
+            self.assertEqual(enough.returncode, 0, enough.stderr)
+            self.assertIn('can stop service', enough.stdout)
+            invalid = subprocess.run(['bash','-c',body], env=dict(env,TEST_AVAILABLE='unknown'),
+                                      text=True,capture_output=True,timeout=5)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn('Cannot determine available backup space', invalid.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

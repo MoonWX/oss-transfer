@@ -31,6 +31,7 @@ import {
   DnsRounded,
   HistoryRounded,
   SpeedRounded,
+  SystemUpdateAltRounded,
   TuneRounded,
   AddRounded,
   EditOutlined,
@@ -57,6 +58,7 @@ import {
 } from "../lib/refreshPreference";
 import RefreshControls from "../components/RefreshControls";
 import AgentInvitationDialog from "../components/AgentInvitationDialog";
+import SoftwareUpdates from "../components/SoftwareUpdates";
 import NodeDetailsDialog from "../components/NodeDetailsDialog";
 import { EmptyState, PageHeader, formatNumber } from "../components/Common";
 import {
@@ -369,6 +371,8 @@ export default function NodesPage() {
         value={tab}
         onChange={(_, value) => setTab(value)}
         aria-label={t("节点视图")}
+        variant="scrollable"
+        scrollButtons="auto"
         sx={{ borderBottom: 1, borderColor: "divider" }}
       >
         <Tab
@@ -381,7 +385,13 @@ export default function NodesPage() {
           iconPosition="start"
           label={t("限速历史")}
         />
+        <Tab
+          icon={<SystemUpdateAltRounded fontSize="small" />}
+          iconPosition="start"
+          label={t("版本更新")}
+        />
       </Tabs>
+      {tab === 2 && <SoftwareUpdates agentsOnly />}
       {workers.loading && !workers.data && <LinearProgress />}
       {tab === 0 && (
         <>

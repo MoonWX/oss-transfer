@@ -305,8 +305,10 @@ func (s *S3) Write(ctx context.Context, key string, input io.Reader, options Wri
 	if options.Size < 0 || input == nil {
 		return WriteResult{}, errors.New("nonnegative size and input are required")
 	}
-	if result, found, err := s.existing(ctx, key, options.Overwrite); err != nil || found {
-		return result, err
+	if !options.DestinationAbsent {
+		if result, found, err := s.existing(ctx, key, options.Overwrite); err != nil || found {
+			return result, err
+		}
 	}
 	stop := interruptInput(ctx, input)
 	defer stop()

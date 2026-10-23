@@ -32,12 +32,16 @@ const SchemaResolvedSources = 2
 // mandatory password-change flag when they rewrite an administrator account.
 const SchemaInitialPassword = 3
 
+// SchemaCompressedValues prevents JSON-only readers from silently discarding
+// compressed records and the indexes maintained alongside them.
+const SchemaCompressedValues = 4
+
 type databaseFormat struct {
 	Role          string `json:"role"`
 	SchemaVersion int    `json:"schemaVersion"`
 }
 
-func supportedSchema(version int) bool { return version >= 1 && version <= SchemaInitialPassword }
+func supportedSchema(version int) bool { return version >= 1 && version <= SchemaCompressedValues }
 
 // RequireSchema raises the minimum reader version in the same transaction as
 // the data requiring it. A failed transaction preserves both the old format and
@@ -57,8 +61,12 @@ func RequireSchema(tx *Tx, role string, minimum int) error {
 	if metadata.SchemaVersion >= minimum {
 		return nil
 	}
-	metadata.SchemaVersion = minimum
-	return tx.Put("metadata", "format", metadata)
+	var fields map[string]json.RawMessage
+	if _, err := tx.Get("metadata", "format", &fields); err != nil {
+		return err
+	}
+	fields["schemaVersion"] = json.RawMessage(fmt.Sprint(minimum))
+	return tx.Put("metadata", "format", fields)
 }
 
 // ClaimRole prevents either process from opening the other process's database.
@@ -88,10 +96,10 @@ func (s *Store) ClaimRole(role string) error {
 			if metadata.Role != role || !supportedSchema(metadata.SchemaVersion) {
 				return errors.New("database belongs to another role or unsupported schema")
 			}
-			return nil
+			return RequireSchema(tx, role, SchemaCompressedValues)
 		}
 		metadata.Role = role
-		metadata.SchemaVersion = 1
+		metadata.SchemaVersion = SchemaCompressedValues
 		return tx.Put("metadata", "format", metadata)
 	})
 }
@@ -150,7 +158,11 @@ func (t *Tx) Get(bucket, key string, into any) (bool, error) {
 	if value == nil {
 		return false, nil
 	}
-	if err := json.Unmarshal(value, into); err != nil {
+	decoded, err := decodeValue(value)
+	if err != nil {
+		return false, fmt.Errorf("decode %s/%s: %w", bucket, key, err)
+	}
+	if err := json.Unmarshal(decoded, into); err != nil {
 		return false, fmt.Errorf("decode %s/%s: %w", bucket, key, err)
 	}
 	return true, nil
@@ -163,6 +175,12 @@ func (t *Tx) Put(bucket, key string, value any) error {
 	}
 	if !t.tx.Writable() {
 		return bolt.ErrTxNotWritable
+	}
+	if len(encoded) >= minimumCompressionSize && len(encoded) <= maximumDecodedSize && !(bucket == "metadata" && key == "format") && t.compressionEnabled() {
+		encoded, err = encodeValue(encoded)
+		if err != nil {
+			return err
+		}
 	}
 	existing := t.tx.Bucket([]byte(bucket))
 	if existing != nil && bytes.Equal(existing.Get([]byte(key)), encoded) {
@@ -255,7 +273,11 @@ func (t *Tx) Scan(bucket, prefix, after string, limit int, fn func(string, json.
 	}
 	for count := 0; k != nil && bytes.HasPrefix(k, []byte(prefix)) && count < limit; count++ {
 		if v != nil {
-			if err := fn(string(k), append(json.RawMessage(nil), v...)); err != nil {
+			decoded, err := copyDecodedValue(v)
+			if err != nil {
+				return fmt.Errorf("decode %s/%s: %w", bucket, k, err)
+			}
+			if err := fn(string(k), json.RawMessage(decoded)); err != nil {
 				return err
 			}
 		}

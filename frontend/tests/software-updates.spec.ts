@@ -7,6 +7,16 @@ async function fixture(page: Page, container = false) {
     localStorage.setItem("oss-transfer-locale", "zh"),
   );
   const state = {
+    queue: {
+      phase: "IDLE",
+      version: "",
+      items: [] as {
+        address: string;
+        phase: string;
+        reason?: string;
+        error?: string;
+      }[],
+    },
     master: {
       info: {
         role: "master",
@@ -49,10 +59,22 @@ async function fixture(page: Page, container = false) {
       phase: "QUEUED",
       version: route.request().postDataJSON().version,
     };
+    const agentUpdate = path.includes("/agents");
     if (path.endsWith("/master")) state.master.update = update;
+    if (agentUpdate)
+      state.queue = {
+        phase: "RUNNING",
+        version: update.version,
+        items: state.agents
+          .filter(
+            (node) =>
+              path.endsWith("/agents") || path.endsWith("/" + node.address),
+          )
+          .map((node) => ({ address: node.address, phase: "QUEUED" })),
+      };
     return route.fulfill({
       status: 202,
-      json: { success: true, data: update },
+      json: { success: true, data: agentUpdate ? state.queue : update },
     });
   });
   return {
@@ -134,4 +156,88 @@ test("container installation shows Compose commands and never offers in-containe
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
+});
+
+test("node page queues updates once and restores progress after reopening", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto("/nodes");
+  await page.getByRole("tab", { name: "版本更新", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "检测新版本", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "更新全部节点", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("共 1 个可升级节点");
+  await dialog.getByRole("button", { name: "确认更新", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "更新全部节点", exact: true }),
+  ).toBeDisabled();
+  expect(f.requests).toEqual([
+    {
+      path: "/api/master/software-updates/agents",
+      body: { version: "4.1.14" },
+    },
+  ]);
+  f.state.queue.items[0].phase = "UPDATING";
+  Object.assign(f.state.agents[0], { unavailable: true });
+  await page.reload();
+  await page.getByRole("tab", { name: "版本更新", exact: true }).click();
+  await expect(
+    page.getByText("正在更新，等待节点重新连接…", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "更新全部节点", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("节点正在逐台更新，关闭页面不影响进度。", { exact: true }),
+  ).toBeVisible();
+  f.state.queue.phase = "FAILED";
+  f.state.queue.items[0] = {
+    address: "agent-a",
+    phase: "FAILED",
+    error: "Not enough free space",
+  };
+  f.state.queue.items[1] = {
+    address: "agent-b",
+    phase: "SKIPPED",
+    reason: "PREVIOUS_FAILED",
+  };
+  Object.assign(f.state.agents[0], { unavailable: false });
+  await expect(
+    page.getByText("节点更新已停止，请处理失败原因后重试。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Not enough free space", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("前一节点更新失败，尚未更新", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "更新全部节点", exact: true }),
+  ).toBeEnabled();
+});
+
+test("legacy Agent instructions differ from an offline Agent", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  Object.assign(f.state.agents[0], {
+    info: { role: "agent", version: "", supported: false, reason: "LEGACY" },
+    upgradeReason: "LEGACY",
+  });
+  await page.goto("/tools?tab=updates");
+  await expect(
+    page.getByText("此版本需先用安装脚本升级一次，之后可在这里更新。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("节点离线，重新连接后可更新。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "更新全部节点", exact: true }),
+  ).toBeDisabled();
 });

@@ -202,7 +202,9 @@ func TestManagerCapsStoredDifferencesKeepsFullCountsAndPrunesOldRuns(t *testing.
 		t.Helper()
 		r := request()
 		r.ID = id
-		deadline := time.Now().Add(5 * time.Second)
+		// This checks durable retention of 10,003 differences, not disk speed.
+		// Shared Windows runners can need more than five seconds for the writes.
+		deadline := time.Now().Add(30 * time.Second)
 		for {
 			_, err = m.Start(r)
 			if err == nil {

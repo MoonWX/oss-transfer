@@ -581,6 +581,8 @@ class Harness:
         return body
 
     def download_body(self, bucket, prefix, directory, bandwidth=None):
+        # Multi-Agent preflight writes and reads a probe in the existing shared directory.
+        directory.mkdir(parents=True, exist_ok=True)
         body = {"direction": "OSS_TO_LOCAL", "sourceEndpoint": {"type": "OSS", "s3Alias": "cluster-qa", "bucket": bucket, "prefix": prefix},
                 "destinationEndpoint": {"type": "LOCAL", "nodeBindings": [
                     {"executionNodeIp": node, "localPath": str(directory)} for node in self.nodes]},

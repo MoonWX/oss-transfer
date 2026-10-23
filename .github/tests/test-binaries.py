@@ -189,7 +189,7 @@ class TestArtifacts(unittest.TestCase):
         manifest["tests"] = manifest["tests"][:1]
         for platform in TESTS.SUPPORTED:
             with self.subTest(platform=platform):
-                timeout = 300 if platform == "freebsd/arm64" else 180
+                timeout = {"linux/armv7": 300, "freebsd/arm64": 300}.get(platform, 180)
                 process = mock.Mock(pid=123456, wait=mock.Mock(return_value=0))
 
                 def start(command, **kwargs):

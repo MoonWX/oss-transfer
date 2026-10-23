@@ -99,6 +99,7 @@ try {
         $testBody = @'
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$global:LASTEXITCODE = 73
 $result = Invoke-Native $env:ComSpec @('/d','/c','echo backup-progress 1>&2 & echo payload & exit /b 0')
 if ($result.Trim() -ne 'payload') { throw 'Native stdout was not preserved.' }
 $rejected = $false
@@ -107,6 +108,8 @@ try { Invoke-Native $env:ComSpec @('/d','/c','echo actual-failure 1>&2 & exit /b
     $rejected = $true
 }
 if (-not $rejected) { throw 'Native failure was accepted.' }
+$result = Invoke-Native $env:ComSpec @('/d','/c','echo recovered & exit /b 0')
+if ($result.Trim() -ne 'recovered') { throw 'Native success inherited a previous failure.' }
 if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was changed.' }
 '@
         [IO.File]::WriteAllText($testScript,$definition+"`n"+$testBody,$utf8)

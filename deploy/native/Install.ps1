@@ -370,9 +370,11 @@ function Invoke-Native([string]$Executable,[string[]]$Arguments) {
     $savedPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $LASTEXITCODE = $null
+        # Native commands update the global automatic variable. A local value
+        # would shadow it in Windows PowerShell 5.1.
+        $global:LASTEXITCODE = $null
         $output = & $Executable @Arguments
-        $exitCode = $LASTEXITCODE
+        $exitCode = $global:LASTEXITCODE
     } finally { $ErrorActionPreference = $savedPreference }
     if ($null -eq $exitCode -or $exitCode -ne 0) { throw "Native command failed (exit $exitCode)." }
     return $output

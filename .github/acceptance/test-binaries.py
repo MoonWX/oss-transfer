@@ -300,10 +300,10 @@ def run(platform, directory, repo, output, parallel):
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     evidence = {"platform": platform, "result": "failed", "phase": "verify", "packages": []}
-    # The ARM64 FreeBSD VM runs under full-system emulation. The complete
-    # Master package can exceed three minutes even with every test progressing;
-    # individual operation deadlines inside those tests remain unchanged.
-    package_timeout = 300 if platform == "freebsd/arm64" else 180
+    # The complete Master suite can exceed three minutes under armv7 or
+    # FreeBSD arm64 emulation while individual tests continue to progress.
+    # Their operation deadlines remain unchanged.
+    package_timeout = 300 if platform in ("linux/armv7", "freebsd/arm64") else 180
     started = time.monotonic()
     try:
         manifest = verify(platform, directory, repo, publish_env=False)

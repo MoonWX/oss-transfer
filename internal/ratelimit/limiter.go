@@ -76,6 +76,7 @@ type Limiter struct {
 	node       NodeLimit
 	nodeBudget bucket
 	parents    map[int64]*parentState
+	nodeOnly   *parentState
 	changed    chan struct{}
 	closed     bool
 }
@@ -94,6 +95,7 @@ func New(db Database, opts Options) (*Limiter, error) {
 		return nil, errors.New("invalid limiter bounds")
 	}
 	l := &Limiter{db: db, opts: opts, parents: make(map[int64]*parentState), changed: make(chan struct{})}
+	l.nodeOnly = newParent(ParentLimit{})
 	err := db.View(func(tx *state.Tx) error {
 		ok, err := tx.Get(settingsBucket, "node", &l.node)
 		if err != nil {
@@ -283,6 +285,7 @@ func (l *Limiter) Close() {
 		return
 	}
 	l.closed = true
+	l.nodeOnly.cancel(ErrClosed)
 	for _, p := range l.parents {
 		p.cancel(ErrClosed)
 	}
@@ -293,6 +296,9 @@ func (l *Limiter) notify() { close(l.changed); l.changed = make(chan struct{}) }
 func (l *Limiter) checkParent(id int64, generation uint64) (*parentState, error) {
 	if l.closed {
 		return nil, ErrClosed
+	}
+	if id == 0 && generation == 0 {
+		return l.nodeOnly, nil
 	}
 	p := l.parents[id]
 	if p == nil {

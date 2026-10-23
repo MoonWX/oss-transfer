@@ -26,12 +26,13 @@ When adding a node, the Master address defaults to the current browser address. 
 
 Add a storage connection, create a task, and watch it run.
 
-Run the install command again whenever you want to upgrade.
+For native installations, open **Operations → Software updates** to check for a release and update the Master, then its Agents. Older versions without this page need one installer upgrade first. You can also rerun the install command. Docker deployments upgrade through Compose.
 
 ## Docs
 
 - [Deployment](deploy/native/README.md): Windows, offline install, custom paths
 - [Docker Compose](docs/docker-compose.md)
 - [CLI](docs/cli.md)
+- [Concurrency, comparison and updates](docs/operations.md)
 
 To build from source, run `./build.sh`.

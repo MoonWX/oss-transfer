@@ -59,6 +59,9 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 	switch command.Operation {
 	case "node_details":
 		details := hostDetails()
+		if s.Updater != nil {
+			details["software"] = s.Updater.Info()
+		}
 		details["advertisedLocalRoots"] = s.Nodes.Config().AdvertisedLocalRoots
 		return respond(details, nil)
 	case "node_status":
@@ -81,8 +84,13 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 		children, maxChildren := s.Engine.Concurrency()
 		scans, maxScans := s.Scanner.Concurrency()
 		execution := map[string]any{"activeScans": scans, "maxConcurrentScans": maxScans, "activeChildren": children, "maxConcurrentChildren": maxChildren, "unfinishedChildren": unfinished, "maxUnfinishedChildren": maxUnfinished}
+		execution["objectsPerChild"] = s.Engine.ObjectConcurrency()
 		identity := hostIdentity()
-		return respond(map[string]any{"success": true, "hostname": identity["hostname"], "localIps": identity["localIps"], "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution}, nil)
+		result := map[string]any{"success": true, "hostname": identity["hostname"], "localIps": identity["localIps"], "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution}
+		if s.Updater != nil {
+			result["software"] = s.Updater.Info()
+		}
+		return respond(result, nil)
 	case "node_config":
 		var request struct{}
 		if err := decode(command.Payload, &request); err != nil {
@@ -96,14 +104,23 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 			LocalIPs any `json:"localIps"`
 		}{config, identity["hostname"], identity["localIps"]}, nil)
 	case "node_config_set":
-		var request nodecontrol.Config
+		s.nodeConfigMu.Lock()
+		defer s.nodeConfigMu.Unlock()
+		var request nodecontrol.ConfigChange
 		if err := decode(command.Payload, &request); err != nil {
 			return respond(nil, nodecontrol.ErrInvalid)
 		}
-		if err := s.Nodes.SetRoots(ctx, request.AdvertisedLocalRoots); err != nil {
+		config, err := s.Nodes.UpdateConfig(ctx, request)
+		if err != nil {
 			return respond(nil, err)
 		}
-		return respond(s.Nodes.Config(), nil)
+		if request.MaxConcurrentChildren != nil || request.ObjectsPerChild != nil {
+			if err := s.Engine.SetConcurrency(config.MaxConcurrentChildren, config.ObjectsPerChild); err != nil {
+				return respond(nil, err)
+			}
+			s.signal()
+		}
+		return respond(config, nil)
 	case "node_rate_set":
 		var request struct {
 			Type string   `json:"type"`

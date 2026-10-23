@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -41,12 +42,12 @@ func agentShow(client *ApiClient, args []string) (map[string]interface{}, error)
 }
 
 func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, error) {
-	o, err := parseCommandOptions(args, []string{"label", "local-root"}, []string{"clear-local-roots"})
+	o, err := parseCommandOptions(args, []string{"label", "local-root", "child-concurrency", "object-concurrency"}, []string{"clear-local-roots"})
 	if err != nil {
 		return nil, err
 	}
-	if len(o.Positionals) != 1 || len(o.Values["label"]) > 1 || !o.Has("label") && !o.Has("local-root") && !o.Has("clear-local-roots") {
-		return nil, cliErrorf("用法: agent update <节点> [--label 名称] [--local-root 目录 ... | --clear-local-roots]")
+	if len(o.Positionals) != 1 || len(o.Values["label"]) > 1 || !o.Has("label") && !o.Has("local-root") && !o.Has("clear-local-roots") && !o.Has("child-concurrency") && !o.Has("object-concurrency") {
+		return nil, cliErrorf("用法: agent update <节点> [--label 名称] [--child-concurrency 数量] [--object-concurrency 数量] [--local-root 目录 ... | --clear-local-roots]")
 	}
 	if err := adminNodeAddress(o.Positionals[0]); err != nil {
 		return nil, err
@@ -73,6 +74,26 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 			roots = append(roots, root)
 		}
 		body["advertisedLocalRoots"] = roots
+	}
+	for _, field := range []struct {
+		flag, key string
+		max       int
+	}{
+		{"child-concurrency", "maxConcurrentChildren", 64}, {"object-concurrency", "objectsPerChild", 32},
+	} {
+		if !o.Has(field.flag) {
+			continue
+		}
+		value, err := strconv.Atoi(o.Value(field.flag))
+		if err != nil || len(o.Values[field.flag]) != 1 || value < 1 || value > field.max {
+			return nil, cliErrorf("--%s 必须是 1–%d 的整数", field.flag, field.max)
+		}
+		body[field.key] = value
+	}
+	if children, ok := body["maxConcurrentChildren"].(int); ok {
+		if objects, ok := body["objectsPerChild"].(int); ok && children*objects > 256 {
+			return nil, cliErrorf("子任务并发与对象并发的乘积不能超过 256")
+		}
 	}
 	return client.Put("/nodes/"+url.PathEscape(o.Positionals[0]), body)
 }

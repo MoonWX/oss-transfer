@@ -149,9 +149,11 @@ func nodeHTTPError(w http.ResponseWriter, err error) {
 }
 func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 	var change struct {
-		Address string    `json:"address"`
-		Label   *string   `json:"label"`
-		Roots   *[]string `json:"advertisedLocalRoots"`
+		Address  string    `json:"address"`
+		Label    *string   `json:"label"`
+		Roots    *[]string `json:"advertisedLocalRoots"`
+		Children *int      `json:"maxConcurrentChildren"`
+		Objects  *int      `json:"objectsPerChild"`
 	}
 	if !readJSON(w, r, &change) {
 		return
@@ -169,18 +171,27 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Invalid node label")
 		return
 	}
-	if change.Roots != nil {
+	if change.Children != nil && (*change.Children < 1 || *change.Children > 64) || change.Objects != nil && (*change.Objects < 1 || *change.Objects > 32) {
+		fail(w, 400, "Child concurrency must be 1–64 and objects per child must be 1–32")
+		return
+	}
+	if change.Children != nil && change.Objects != nil && *change.Children**change.Objects > 256 {
+		fail(w, 400, "Child concurrency × objects per child must not exceed 256")
+		return
+	}
+	settingsChanged := change.Roots != nil || change.Children != nil || change.Objects != nil
+	if settingsChanged {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		if err := s.agentCall(ctx, member.Session(), "node_config_set", true, nodecontrol.Config{AdvertisedLocalRoots: *change.Roots}, nil); err != nil {
+		if err := s.agentCall(ctx, member.Session(), "node_config_set", true, nodecontrol.ConfigChange{AdvertisedLocalRoots: change.Roots, MaxConcurrentChildren: change.Children, ObjectsPerChild: change.Objects}, nil); err != nil {
 			nodeHTTPError(w, err)
 			return
 		}
 	}
 	if change.Label != nil {
 		if _, err := s.agents.registry.UpdateLabel(member.ID, *change.Label); err != nil {
-			if change.Roots != nil {
-				fail(w, 500, "Local roots were saved, but the node label could not be saved")
+			if settingsChanged {
+				fail(w, 500, "Node settings were saved, but the node label could not be saved")
 			} else {
 				fail(w, 500, "Cannot save node label")
 			}

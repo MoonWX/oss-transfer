@@ -103,6 +103,12 @@ export default function NodesPage() {
     label: string;
     master: boolean;
     agent: boolean;
+    children: string;
+    objects: string;
+    initialChildren?: number;
+    initialObjects?: number;
+    concurrencyEditable: boolean;
+    online: boolean;
   } | null>(null);
   const [nodeDelete, setNodeDelete] = useState<RegisteredNode | null>(null);
   const [nodeSaving, setNodeSaving] = useState(false);
@@ -134,12 +140,21 @@ export default function NodesPage() {
     Promise.all([workers.refresh(), history.refresh(), registry.refresh()]);
   const openNodeEditor = (node?: RegisteredNode) => {
     setNodeError(null);
+    const worker = workers.data?.workers?.[node?.address ?? ""];
+    const execution = worker?.executionStatus;
     setNodeEdit({
       original: node?.address ?? null,
       address: node?.address ?? "",
       label: node?.label ?? "",
       master: !!node?.master,
       agent: !!node?.agent,
+      children: String(execution?.maxConcurrentChildren ?? ""),
+      objects: String(execution?.objectsPerChild ?? ""),
+      initialChildren: execution?.maxConcurrentChildren,
+      initialObjects: execution?.objectsPerChild,
+      concurrencyEditable:
+        !!worker?.success && typeof execution?.objectsPerChild === "number",
+      online: !!worker?.success,
     });
   };
   async function saveNodeEdit() {
@@ -148,12 +163,34 @@ export default function NodesPage() {
       setNodeError(t("请输入节点标识。"));
       return;
     }
+    const children = Number(nodeEdit.children);
+    const objects = Number(nodeEdit.objects);
+    if (
+      nodeEdit.concurrencyEditable &&
+      (!Number.isInteger(children) ||
+        children < 1 ||
+        children > 64 ||
+        !Number.isInteger(objects) ||
+        objects < 1 ||
+        objects > 32 ||
+        children * objects > 256)
+    ) {
+      setNodeError(
+        t("子任务并发为 1–64，对象并发为 1–32，两者乘积不能超过 256。"),
+      );
+      return;
+    }
     setNodeSaving(true);
     setNodeError(null);
     try {
       await saveNode(nodeEdit.original, {
         address: nodeEdit.address.trim(),
         label: nodeEdit.label.trim(),
+        ...(nodeEdit.concurrencyEditable &&
+        (children !== nodeEdit.initialChildren ||
+          objects !== nodeEdit.initialObjects)
+          ? { maxConcurrentChildren: children, objectsPerChild: objects }
+          : {}),
       });
       notify(
         nodeEdit.original ? t("节点设置已保存。") : t("节点已添加。"),
@@ -358,7 +395,7 @@ export default function NodesPage() {
             sx={{
               display: "grid",
               gridTemplateColumns: {
-                xs: "1fr",
+                xs: "minmax(0, 1fr)",
                 lg: "repeat(2, minmax(0, 1fr))",
               },
               gap: 3,
@@ -380,7 +417,7 @@ export default function NodesPage() {
                     },
                     {
                       key: "children",
-                      label: t("传输并发"),
+                      label: t("子任务并发"),
                       size: execution.activeChildren,
                       capacity: execution.maxConcurrentChildren,
                     },
@@ -479,7 +516,13 @@ export default function NodesPage() {
                     </Stack>
                   </Stack>
                   {registered && (
-                    <Stack direction="row" spacing={1} sx={{ px: 2.5, pb: 2 }}>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      flexWrap="wrap"
+                      useFlexGap
+                      sx={{ px: 2.5, pb: 2 }}
+                    >
                       {registered.agent && (
                         <Button
                           size="small"
@@ -783,6 +826,50 @@ export default function NodesPage() {
                 )
               }
             />
+            {nodeEdit?.agent &&
+              (nodeEdit.concurrencyEditable ? (
+                <Stack spacing={1.5}>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                    <TextField
+                      label={t("子任务并发")}
+                      type="number"
+                      fullWidth
+                      value={nodeEdit.children}
+                      disabled={nodeSaving}
+                      slotProps={{ htmlInput: { min: 1, max: 64, step: 1 } }}
+                      onChange={(event) =>
+                        setNodeEdit(
+                          (value) =>
+                            value && { ...value, children: event.target.value },
+                        )
+                      }
+                    />
+                    <TextField
+                      label={t("每个子任务的对象并发")}
+                      type="number"
+                      fullWidth
+                      value={nodeEdit.objects}
+                      disabled={nodeSaving}
+                      slotProps={{ htmlInput: { min: 1, max: 32, step: 1 } }}
+                      onChange={(event) =>
+                        setNodeEdit(
+                          (value) =>
+                            value && { ...value, objects: event.target.value },
+                        )
+                      }
+                    />
+                  </Stack>
+                  <Typography variant="body2" color="text.secondary">
+                    {t("保存后立即生效；调低并发不会中断正在传输的对象。")}
+                  </Typography>
+                </Stack>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  {nodeEdit.online
+                    ? t("升级节点后可调整并发。")
+                    : t("节点离线时无法调整并发。")}
+                </Typography>
+              ))}
           </Stack>
         </DialogContent>
         <DialogActions>

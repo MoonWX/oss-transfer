@@ -26,6 +26,7 @@ type NodeDetails = RegisteredNode & {
   hostname?: string;
   os?: string;
   arch?: string;
+  software?: { version?: string; commit?: string };
   localIps?: string[];
   mounts?: {
     path: string;
@@ -49,6 +50,7 @@ export default function NodeDetailsDialog({
   );
   const details = result.data?.data;
   const fields = [
+    [t("当前版本"), details?.software?.version],
     [t("主机名"), details?.hostname],
     [
       t("系统 / 架构"),

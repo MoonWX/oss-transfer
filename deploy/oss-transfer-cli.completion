@@ -94,14 +94,14 @@ _oss_transfer_cli_completion() {
                 add) flags="--label" ;;
                 network) flags="--public-url --agent-url" ;;
                 invite) flags="--label --address --master-url" ;;
-                update) flags="--label --address" ;;
+                update) flags="--label --address --child-concurrency --object-concurrency" ;;
                 remove) flags="--yes" ;;
             esac ;;
         agent)
             case "$action" in
                 "") choices="invite list show details update remove" ;;
                 invite) flags="--label --address --master-url" ;;
-                update) flags="--label --local-root --clear-local-roots" ;;
+                update) flags="--label --local-root --clear-local-roots --child-concurrency --object-concurrency" ;;
                 remove) flags="--yes" ;;
             esac ;;
         storage)
@@ -132,8 +132,9 @@ _oss_transfer_cli_completion() {
                     if ((${#positional[@]} == 2)); then choices="failed fallback"; fi ;;
             esac ;;
         object)
-            if [[ -z $action ]]; then choices="compare";
-            else flags="--source-bucket --source-key --dest-bucket --dest-key"; fi ;;
+            if [[ -z $action ]]; then choices="compare status cancel delete";
+            elif [[ $action == status ]]; then flags="--after --limit";
+            elif [[ $action == compare ]]; then flags="--source-bucket --source-key --dest-bucket --dest-key --source-prefix --dest-prefix --scope --mode"; fi ;;
         login) flags="--username --password-stdin --password-env --password-file" ;;
         change-password) flags="--old-password-env --old-password-file --new-password-env --new-password-file" ;;
         add-task) flags="$create_flags --dateAfter --dateBefore" ;;

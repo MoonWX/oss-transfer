@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/auth"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
@@ -38,6 +39,7 @@ type session struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 type Options struct {
+	Updater              softwareupdate.Controller
 	DataDirectory        string
 	AgentArtifactBase    string
 	AgentArtifactVersion string
@@ -46,6 +48,7 @@ type Options struct {
 	Now                  func() time.Time
 }
 type Server struct {
+	updates       softwareUpdateState
 	topologyMu    sync.Mutex
 	agents        *agentControl
 	tasks         *taskRuntime
@@ -99,6 +102,7 @@ func New(store *state.Store, options Options) (*Server, string, error) {
 	installReportRoutes(s)
 	installToolRoutes(s)
 	installNodeRoutes(s)
+	installSoftwareUpdateRoutes(s)
 	if err := installExceptionRoutes(s); err != nil {
 		_ = s.agents.broker.Close()
 		return nil, "", err

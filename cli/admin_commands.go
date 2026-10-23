@@ -92,6 +92,13 @@ func adminData(value map[string]interface{}) map[string]interface{} {
 }
 
 func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
+	if action == "update" {
+		for _, arg := range args {
+			if arg == "--child-concurrency" || strings.HasPrefix(arg, "--child-concurrency=") || arg == "--object-concurrency" || strings.HasPrefix(arg, "--object-concurrency=") {
+				return agentUpdate(client, args)
+			}
+		}
+	}
 	switch action {
 	case "network":
 		return nodeNetwork(client, args)
@@ -547,13 +554,67 @@ func adminInteger(o commandOptions, name string, fallback, min, max int) (int, e
 }
 
 func runObjectAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
+	if action == "status" || action == "cancel" || action == "delete" {
+		o, err := adminOptions(args, []string{"after", "limit"}, nil, 1)
+		if err != nil {
+			return nil, err
+		}
+		path := "/comparisons/" + url.PathEscape(o.Positionals[0])
+		if action == "delete" {
+			return client.Delete(path)
+		}
+		if action == "cancel" {
+			return client.Post(path+"/cancel", nil)
+		}
+		after, err := adminInteger(o, "after", 0, 0, math.MaxInt32)
+		if err != nil {
+			return nil, err
+		}
+		limit, err := adminInteger(o, "limit", 50, 1, 200)
+		if err != nil {
+			return nil, err
+		}
+		return client.Get(path + "?" + url.Values{"after": {strconv.Itoa(after)}, "limit": {strconv.Itoa(limit)}}.Encode())
+	}
 	if action != "compare" {
 		return nil, cliErrorf("未知 object 子命令: %s", action)
 	}
 	fields := map[string]string{"source-bucket": "sourceBucket", "source-key": "sourceKey", "dest-bucket": "destBucket", "dest-key": "destKey"}
-	o, err := adminOptions(args, []string{"source-bucket", "source-key", "dest-bucket", "dest-key"}, nil, 0)
+	o, err := adminOptions(args, []string{"source-bucket", "source-key", "dest-bucket", "dest-key", "source-prefix", "dest-prefix", "scope", "mode"}, nil, 0)
 	if err != nil {
 		return nil, err
+	}
+	if o.Has("scope") || o.Has("mode") || o.Has("source-prefix") || o.Has("dest-prefix") {
+		scope, mode := o.Value("scope"), o.Value("mode")
+		if scope == "" {
+			scope = "prefix"
+			if o.Has("source-key") || o.Has("dest-key") {
+				scope = "object"
+			}
+		}
+		if mode == "" {
+			mode = "metadata"
+		}
+		if scope != "prefix" && scope != "object" || mode != "metadata" && mode != "content" {
+			return nil, cliErrorf("比对范围须为 prefix 或 object，模式须为 metadata 或 content")
+		}
+		if scope == "prefix" && (o.Has("source-key") || o.Has("dest-key")) || scope == "object" && (o.Has("source-prefix") || o.Has("dest-prefix")) {
+			return nil, cliErrorf("范围比对使用 --source-prefix/--dest-prefix，单对象使用 --source-key/--dest-key")
+		}
+		source, dest := o.Value("source-prefix"), o.Value("dest-prefix")
+		if scope == "object" {
+			source, dest = o.Value("source-key"), o.Value("dest-key")
+			if source == "" || dest == "" {
+				return nil, cliErrorf("单对象比对须同时指定源和目标 Key")
+			}
+		}
+		for _, flag := range []string{"source-bucket", "dest-bucket"} {
+			parts := strings.Split(o.Value(flag), "/")
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return nil, cliErrorf("--%s 必须使用 连接名称/Bucket 格式", flag)
+			}
+		}
+		return client.Post("/comparisons", map[string]interface{}{"sourceBucket": o.Value("source-bucket"), "destBucket": o.Value("dest-bucket"), "sourcePrefix": source, "destPrefix": dest, "mode": mode, "scope": scope})
 	}
 	query := url.Values{}
 	for flag, field := range fields {

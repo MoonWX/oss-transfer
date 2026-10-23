@@ -13,10 +13,12 @@ import (
 )
 
 type activeAttempt struct {
-	parentID   int64
-	generation uint64
-	cancel     context.CancelFunc
-	done       chan struct{}
+	parentID       int64
+	generation     uint64
+	cancel         context.CancelFunc
+	done           chan struct{}
+	objects        int
+	objectsChanged chan struct{}
 }
 
 // Engine owns task lifetimes, independently of the short-lived RPC contexts
@@ -27,7 +29,7 @@ type Engine struct {
 	opts    Options
 	ctx     context.Context
 	cancel  context.CancelFunc
-	slots   chan struct{}
+	changed chan struct{}
 	mu      sync.Mutex
 	active  map[string]*activeAttempt
 	closed  bool
@@ -44,10 +46,10 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 		return nil, errors.New("repository and storage factory are required")
 	}
 	if opts.MaxConcurrentJobs == 0 {
-		opts.MaxConcurrentJobs = 4
+		opts.MaxConcurrentJobs = DefaultChildConcurrency
 	}
 	if opts.WorkersPerJob == 0 {
-		opts.WorkersPerJob = 4
+		opts.WorkersPerJob = DefaultObjectConcurrency
 	}
 	if opts.QueueSize == 0 {
 		opts.QueueSize = 16
@@ -65,7 +67,7 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, slots: make(chan struct{}, opts.MaxConcurrentJobs), active: make(map[string]*activeAttempt)}, nil
+	return &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, changed: make(chan struct{}), active: make(map[string]*activeAttempt)}, nil
 }
 
 func (e *Engine) Accept(ctx context.Context, job Job, inventorySource ...bool) (Record, error) {
@@ -113,68 +115,51 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 			e.mu.Unlock()
 			return ErrClosed
 		}
-		old := e.active[child]
-		if old == nil {
+		if err := ctx.Err(); err != nil {
 			e.mu.Unlock()
-			break
-		}
-		if old.generation != generation {
-			e.mu.Unlock()
-			return ErrGeneration
-		}
-		record, err := e.repo.Get(ctx, child)
-		e.mu.Unlock()
-		if err != nil {
 			return err
 		}
-		if record.Status == Running {
-			return nil
+		if old := e.active[child]; old != nil {
+			if old.generation != generation {
+				e.mu.Unlock()
+				return ErrGeneration
+			}
+			record, err := e.repo.Get(ctx, child)
+			e.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			if record.Status == Running {
+				return nil
+			}
+			if !resume {
+				return ErrRunning
+			}
+			if recoverOnly {
+				return ErrCapacity
+			}
+			if err := wait(ctx, old.done); err != nil {
+				return err
+			}
+			continue
 		}
-		if !resume {
-			return ErrRunning
+		if len(e.active) < e.opts.MaxConcurrentJobs {
+			break // Hold the lock through the durable start and slot reservation.
 		}
+		changed := e.changed
+		e.mu.Unlock()
 		if recoverOnly {
 			return ErrCapacity
 		}
-		if err := wait(ctx, old.done); err != nil {
-			return err
-		}
-	}
-	if recoverOnly {
 		select {
-		case e.slots <- struct{}{}:
-		default:
-			return ErrCapacity
-		}
-	} else {
-		select {
-		case e.slots <- struct{}{}:
+		case <-changed:
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-e.ctx.Done():
 			return ErrClosed
 		}
 	}
-	keepSlot := false
-	defer func() {
-		if !keepSlot {
-			<-e.slots
-		}
-	}()
-	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
-		return ErrClosed
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if old := e.active[child]; old != nil {
-		if old.generation != generation {
-			return ErrGeneration
-		}
-		return nil
-	}
 	current, err := e.repo.Get(ctx, child)
 	if err != nil {
 		return err
@@ -196,9 +181,8 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 		return err
 	}
 	ioCtx, cancel := context.WithCancel(e.ctx)
-	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{})}
+	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{}), objectsChanged: make(chan struct{})}
 	e.active[child] = attempt
-	keepSlot = true
 	go e.runAttempt(ioCtx, record, attempt)
 	return nil
 }
@@ -222,11 +206,11 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 		attempt.cancel()
 		e.mu.Lock()
 		delete(e.active, record.Job.ChildID)
-		<-e.slots
+		e.wakeConcurrency()
 		close(attempt.done)
 		e.mu.Unlock()
 	}()
-	finalResults, runErr = e.run(ctx, record)
+	finalResults, runErr = e.run(ctx, record, attempt)
 }
 
 func (e *Engine) Stop(ctx context.Context, child string, generation uint64) error {
@@ -348,7 +332,7 @@ func wait(ctx context.Context, done <-chan struct{}) error {
 	}
 }
 
-func (e *Engine) run(parentCtx context.Context, record Record) ([]ItemResult, error) {
+func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAttempt) ([]ItemResult, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	source, target, err := e.factory.Open(ctx, record.Job)
@@ -387,52 +371,36 @@ func (e *Engine) run(parentCtx context.Context, record Record) ([]ItemResult, er
 			return nil, fmt.Errorf("update recovery ledger: %w", err)
 		}
 	}
-	queue := make(chan Item, e.opts.QueueSize)
 	results := make(chan ItemResult, e.opts.QueueSize)
 	var workers sync.WaitGroup
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		defer close(queue)
 		for i, item := range record.Job.Items {
 			if record.Results[i].Status != ItemPending {
 				continue
 			}
-			select {
-			case queue <- item:
-			case <-ctx.Done():
+			if err := e.acquireObject(ctx, attempt); err != nil {
 				return
 			}
+			workers.Add(1)
+			go func(item Item) {
+				defer workers.Done()
+				defer e.releaseObject(attempt)
+				if ctx.Err() != nil {
+					return
+				}
+				result := e.copyResolvedItem(ctx, record, item, source, target)
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case results <- result:
+				case <-ctx.Done():
+				}
+			}(item)
 		}
 	}()
-	for range e.opts.WorkersPerJob {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case item, ok := <-queue:
-					if !ok {
-						return
-					}
-					if ctx.Err() != nil {
-						return
-					}
-					result := e.copyResolvedItem(ctx, record, item, source, target)
-					if ctx.Err() != nil {
-						return
-					}
-					select {
-					case results <- result:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}()
-	}
 	go func() { workers.Wait(); close(results) }()
 	ticker := time.NewTicker(e.opts.CommitInterval)
 	defer ticker.Stop()

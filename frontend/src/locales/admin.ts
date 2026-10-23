@@ -818,9 +818,26 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Scan concurrency",
     ja: "スキャン並列数",
   },
-  传输并发: {
-    en: "Transfer concurrency",
-    ja: "転送並列数",
+  子任务并发: { en: "Subtask concurrency", ja: "サブタスク並列数" },
+  每个子任务的对象并发: {
+    en: "Objects per subtask",
+    ja: "サブタスクごとのオブジェクト並列数",
+  },
+  "保存后立即生效；调低并发不会中断正在传输的对象。": {
+    en: "Changes apply immediately. Lowering concurrency lets active transfers finish.",
+    ja: "保存するとすぐに適用されます。並列数を減らしても転送中のオブジェクトは完了まで続行します。",
+  },
+  "子任务并发为 1–64，对象并发为 1–32，两者乘积不能超过 256。": {
+    en: "Use 1–64 subtasks and 1–32 objects per subtask, with a combined limit of 256 objects.",
+    ja: "サブタスクは 1–64、各サブタスクのオブジェクトは 1–32、両者の積は 256 以下にしてください。",
+  },
+  "升级节点后可调整并发。": {
+    en: "Update this node to adjust concurrency.",
+    ja: "ノードを更新すると並列数を変更できます。",
+  },
+  "节点离线时无法调整并发。": {
+    en: "Concurrency cannot be changed while the node is offline.",
+    ja: "オフラインのノードでは並列数を変更できません。",
   },
   未完成子任务: {
     en: "Unfinished subtasks",

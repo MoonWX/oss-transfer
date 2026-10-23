@@ -20,6 +20,7 @@ type Factory struct {
 	// Transfer options are process settings, not part of connection identity.
 	PartSize              int64
 	PartConcurrency       int
+	UploadMemory          *transferstore.UploadMemoryBudget
 	SpoolDirectory        string
 	RetryMaxAttempts      int
 	HTTPClient            *http.Client
@@ -125,6 +126,7 @@ func (f *Factory) open(ctx context.Context, snapshot Snapshot, endpoint executio
 				return nil, err
 			}
 			settings.PartSize, settings.PartConcurrency = f.PartSize, f.PartConcurrency
+			settings.UploadMemory = f.UploadMemory
 			settings.SpoolDirectory, settings.RetryMaxAttempts = f.SpoolDirectory, f.RetryMaxAttempts
 			settings.HTTPClient = f.HTTPClient
 			if f.HTTPClientForEndpoint != nil {

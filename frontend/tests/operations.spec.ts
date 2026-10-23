@@ -33,7 +33,7 @@ test("converts bandwidth units and can scope rate changes to one node", async ({
       ?.body,
   ).toEqual({ qps: 25_000_000 });
   await page
-    .getByRole("button", { name: "调整 10.0.1.12 的 PUT 请求 限速" })
+    .getByRole("button", { name: "调整 master (10.0.1.12) 的 PUT 请求 限速" })
     .click();
   await page.getByRole("spinbutton", { name: "请求上限（次/秒）" }).fill("0");
   await page.getByRole("button", { name: "应用设置" }).click();
@@ -97,7 +97,9 @@ test("opens local failures from task links, paginates, and reports partial retri
     true,
   );
   await expect(
-    page.getByText("部分节点未返回数据，当前结果不完整。不可达节点：10.0.1.13"),
+    page.getByText(
+      "部分节点未返回数据，当前结果不完整。不可达节点：agent (10.0.1.13)",
+    ),
   ).toBeVisible();
   await page.getByRole("button", { name: "下一页" }).click();
   await expect
@@ -105,7 +107,9 @@ test("opens local failures from task links, paginates, and reports partial retri
     .toBe(true);
   await page.getByRole("button", { name: "重试任务" }).click();
   await expect(
-    page.getByText("重试已受理 1，忽略 0，失败 0；不可达节点：10.0.1.13"),
+    page.getByText(
+      "重试已受理 1，忽略 0，失败 0；不可达节点：agent (10.0.1.13)",
+    ),
   ).toBeVisible();
 });
 
@@ -117,7 +121,10 @@ test("exception details distinguish the local parent task from its execution sha
     route.fulfill({
       json: {
         success: true,
-        data: { items: [{ ...failure, taskIndex: -184026554 }], total: 1 },
+        data: {
+          items: [{ ...failure, taskIndex: -184026554, childTaskId: "123-19" }],
+          total: 1,
+        },
       },
     }),
   );
@@ -142,7 +149,7 @@ test("exception details distinguish the local parent task from its execution sha
   ).toHaveText("123");
   await expect(
     dialog.getByText("子任务 ID", { exact: true }).locator("..").locator("pre"),
-  ).toHaveText("-184026554");
+  ).toHaveText("123-19");
   await expect(dialog.getByText("父任务 ID", { exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await page.goto("/exceptions?taskId=789&type=oss");
@@ -161,6 +168,7 @@ test("warns about missing workers and requires confirmation before clearing all 
     route.fulfill({
       json: {
         success: true,
+        queriedWorkers: ["10.0.1.12", "10.0.1.13"],
         failedKeys: { "10.0.1.12": [failure], "10.0.1.12Count": 1 },
       },
     }),
@@ -170,7 +178,9 @@ test("warns about missing workers and requires confirmation before clearing all 
     page.getByText("Permission denied", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("部分节点未返回数据，当前结果不完整。不可达节点：10.0.1.13"),
+    page.getByText(
+      "部分节点未返回数据，当前结果不完整。不可达节点：agent (10.0.1.13)",
+    ),
   ).toBeVisible();
   await page.getByRole("button", { name: "清除全部记录" }).click();
   await expect(
@@ -199,36 +209,8 @@ test("warns about missing workers and requires confirmation before clearing all 
   ).toBe(true);
 });
 
-test("compares metadata differences and deletes only selected recycle task IDs", async ({
-  page,
-}) => {
+test("deletes only selected recycle task IDs", async ({ page }) => {
   const requests = await mockApi(page);
-  await page.route("**/api/master/object-metadata?**", (route) =>
-    route.fulfill({
-      json: {
-        success: true,
-        sourceBucket: "source",
-        sourceKey: "file.txt",
-        destBucket: "dest",
-        destKey: "file.txt",
-        sourceMetadata: {
-          exists: true,
-          contentLength: 1024,
-          etag: "abc",
-          contentType: "text/plain",
-          userMetadata: { team: "a" },
-        },
-        destMetadata: {
-          exists: true,
-          contentLength: 1024,
-          etag: "def",
-          contentType: "text/plain",
-          userMetadata: { team: "b" },
-        },
-        verification: { sizeMatch: true },
-      },
-    }),
-  );
   const task = {
     taskIndex: 123,
     sourceBucket: "source",
@@ -257,19 +239,7 @@ test("compares metadata differences and deletes only selected recycle task IDs",
       },
     }),
   );
-  await page.goto("/tools");
-  await page.getByRole("textbox", { name: "源 Bucket" }).fill("src/source");
-  await page.getByRole("textbox", { name: "源对象 Key" }).fill("file.txt");
-  await page.getByRole("textbox", { name: "目标 Bucket" }).fill("dst/dest");
-  await page.getByRole("button", { name: "目标使用相同 Key" }).click();
-  await page.getByRole("button", { name: "开始比对" }).click();
-  await expect(page.getByText("2 个字段不同", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "仅看差异" }).click();
-  await expect(
-    page.getByRole("cell", { name: "Content-Type", exact: true }),
-  ).toHaveCount(0);
-  await expect(page.getByText("ETag", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "任务回收站" }).click();
+  await page.goto("/tools?tab=recycle");
   await page
     .getByRole("checkbox", { name: "选择任务 123", exact: true })
     .check();

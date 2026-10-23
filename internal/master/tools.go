@@ -24,6 +24,10 @@ func installToolRoutes(s *Server) {
 		writeJSON(w, 200, map[string]any{"isMaster": true, "role": "master", "masterWebUrl": config.PublicURL, "localTransferSupported": false})
 	}))
 	s.mux.HandleFunc("GET /api/master/object-metadata", s.adminOnly(s.compareMetadata))
+	s.mux.HandleFunc("POST /api/master/comparisons", s.adminOnly(s.startComparison))
+	s.mux.HandleFunc("GET /api/master/comparisons/{id}", s.adminOnly(s.getComparison))
+	s.mux.HandleFunc("POST /api/master/comparisons/{id}/cancel", s.adminOnly(s.cancelComparison))
+	s.mux.HandleFunc("DELETE /api/master/comparisons/{id}", s.adminOnly(s.deleteComparison))
 }
 func comparisonEndpoint(value string, snapshot storageconfig.Snapshot) (execution.Endpoint, error) {
 	alias, bucket, hasAlias := strings.Cut(value, "/")

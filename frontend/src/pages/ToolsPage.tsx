@@ -2,7 +2,7 @@ import { t, useI18n, formatDate } from "../lib/i18n";
 import { useNodeLabels } from "../lib/workerStatus";
 import { taskNodeLabels, type NodeDisplay } from "../lib/nodeRegistry";
 import { useSearchParams } from "react-router-dom";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -31,13 +31,14 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  ArrowForwardRounded,
   CompareArrowsRounded,
   DeleteForeverRounded,
   RefreshRounded,
-  TravelExploreRounded,
+  SystemUpdateAltRounded,
 } from "@mui/icons-material";
 import { api, ApiError, useApi, useNotify } from "../lib/api";
+import ObjectComparison from "../components/ObjectComparison";
+import SoftwareUpdates from "../components/SoftwareUpdates";
 import type { NodeRegistry } from "../lib/nodeRegistry";
 import {
   EmptyState,
@@ -46,37 +47,6 @@ import {
   formatBytes,
   formatNumber,
 } from "../components/Common";
-type ObjectMetadata = {
-  exists?: boolean | null;
-  queryStatus?: "FOUND" | "NOT_FOUND" | "UNAVAILABLE";
-  statusCode?: number;
-  errorCode?: string;
-  error?: string;
-  contentLength?: number;
-  contentType?: string;
-  lastModified?: number | string;
-  etag?: string;
-  userMetadata?: Record<string, string>;
-  storageClass?: string;
-  contentEncoding?: string;
-  contentDisposition?: string;
-  cacheControl?: string;
-  expirationTime?: number | string;
-  httpExpiresDate?: number | string;
-};
-type Comparison = {
-  partial?: boolean;
-  sourceMetadata: ObjectMetadata;
-  destMetadata: ObjectMetadata;
-  verification?: {
-    sizeMatch?: boolean | null;
-    message?: string;
-  };
-  sourceBucket?: string;
-  sourceKey?: string;
-  destBucket?: string;
-  destKey?: string;
-};
 type DeletedTask = {
   taskIndex: number;
   sourceBucket?: string;
@@ -123,73 +93,19 @@ function deletedEndpoint(task: DeletedTask, source: boolean) {
       .join("/") || "—"
   );
 }
-type ObjectQuery = {
-  sourceBucket: string;
-  sourceKey: string;
-  destBucket: string;
-  destKey: string;
-};
-const metadataFields: {
-  key: keyof ObjectMetadata;
-  label: string;
-  format?: "bytes" | "date";
-}[] = [
-  { key: "contentLength", label: "对象大小", format: "bytes" },
-  { key: "etag", label: "ETag" },
-  { key: "contentType", label: "Content-Type" },
-  { key: "lastModified", label: "最后修改时间", format: "date" },
-  { key: "storageClass", label: "存储类型" },
-  { key: "contentEncoding", label: "Content-Encoding" },
-  { key: "contentDisposition", label: "Content-Disposition" },
-  { key: "cacheControl", label: "Cache-Control" },
-  { key: "expirationTime", label: "生命周期过期时间", format: "date" },
-  { key: "httpExpiresDate", label: "HTTP 过期时间", format: "date" },
-];
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-const displayValue = (value: unknown, format?: "bytes" | "date") =>
-  value == null || value === ""
-    ? "—"
-    : format === "bytes"
-      ? t("{value1}（{value2} 字节）", {
-          value1: formatBytes(Number(value)),
-          value2: formatNumber(Number(value)),
-        })
-      : format === "date"
-        ? formatDate(value)
-        : String(value);
 export default function ToolsPage() {
   useI18n();
   const nodeLabel = useNodeLabels();
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") === "recycle" ? 1 : 0;
+  const tab =
+    params.get("tab") === "recycle"
+      ? 1
+      : params.get("tab") === "updates"
+        ? 2
+        : 0;
   const notify = useNotify();
-  const [query, setQuery] = useState<ObjectQuery>({
-    sourceBucket: params.get("sourceBucket") || "",
-    sourceKey: params.get("sourceKey") || "",
-    destBucket: params.get("destBucket") || "",
-    destKey: params.get("destKey") || "",
-  });
-  const [comparison, setComparison] = useState<Comparison | null>(null);
-  const [comparing, setComparing] = useState(false);
-  const [compareError, setCompareError] = useState<string | null>(null);
-  const [onlyDifferences, setOnlyDifferences] = useState(false);
-  const linkedParams = useRef(params);
-  useEffect(() => {
-    const previous = linkedParams.current;
-    linkedParams.current = params;
-    const fields = ["sourceBucket", "sourceKey", "destBucket", "destKey"];
-    if (fields.every((field) => previous.get(field) === params.get(field)))
-      return;
-    setQuery({
-      sourceBucket: params.get("sourceBucket") || "",
-      sourceKey: params.get("sourceKey") || "",
-      destBucket: params.get("destBucket") || "",
-      destKey: params.get("destKey") || "",
-    });
-    setComparison(null);
-    setCompareError(null);
-  }, [params]);
   const recycle = useApi<{
     deletedTasks: Record<string, DeletedTask[] | number>;
     totalCount: number;
@@ -294,88 +210,6 @@ export default function ToolsPage() {
       ...(recycle.data?.unreachableWorkers || []),
     ]),
   ];
-  const userMetadataKeys = [
-    ...new Set([
-      ...Object.keys(comparison?.sourceMetadata.userMetadata ?? {}),
-      ...Object.keys(comparison?.destMetadata.userMetadata ?? {}),
-    ]),
-  ].sort();
-  const same = (a: unknown, b: unknown) => (a ?? null) === (b ?? null);
-  const comparable =
-    comparison?.sourceMetadata.exists === true &&
-    comparison?.destMetadata.exists === true &&
-    comparison.sourceMetadata.queryStatus !== "UNAVAILABLE" &&
-    comparison.destMetadata.queryStatus !== "UNAVAILABLE";
-  const differences = comparison
-    ? metadataFields.filter(
-        (field) =>
-          !same(
-            comparison.sourceMetadata[field.key],
-            comparison.destMetadata[field.key],
-          ),
-      ).length +
-      userMetadataKeys.filter(
-        (key) =>
-          !same(
-            comparison.sourceMetadata.userMetadata?.[key],
-            comparison.destMetadata.userMetadata?.[key],
-          ),
-      ).length
-    : 0;
-  const visibleFields = metadataFields.filter(
-    (field) =>
-      !comparable ||
-      !onlyDifferences ||
-      !same(
-        comparison?.sourceMetadata[field.key],
-        comparison?.destMetadata[field.key],
-      ),
-  );
-  const visibleUserKeys = userMetadataKeys.filter(
-    (key) =>
-      !comparable ||
-      !onlyDifferences ||
-      !same(
-        comparison?.sourceMetadata.userMetadata?.[key],
-        comparison?.destMetadata.userMetadata?.[key],
-      ),
-  );
-  async function compare(event: FormEvent) {
-    event.preventDefault();
-    setComparing(true);
-    setCompareError(null);
-    setComparison(null);
-    setOnlyDifferences(false);
-    try {
-      const values = {
-        ...query,
-        sourceBucket: query.sourceBucket.trim(),
-        destBucket: query.destBucket.trim(),
-      };
-      if (
-        !values.sourceBucket ||
-        !values.destBucket ||
-        !values.sourceKey ||
-        !values.destKey
-      )
-        throw new Error(t("请填写源、目标对象的 Bucket 和 Key。"));
-      setComparison(
-        await api<Comparison>(
-          `/api/master/object-metadata?${new URLSearchParams(values)}`,
-        ),
-      );
-    } catch (error) {
-      if (
-        error instanceof ApiError &&
-        error.response?.sourceMetadata &&
-        error.response?.destMetadata
-      )
-        setComparison(error.response as Comparison);
-      else setCompareError(errorText(error));
-    } finally {
-      setComparing(false);
-    }
-  }
   async function deleteTasks() {
     setDeleting(true);
     setDeleteError(null);
@@ -492,13 +326,18 @@ export default function ToolsPage() {
     <Stack spacing={3}>
       <PageHeader
         title={t("运维工具")}
-        description={t("比对对象元数据，管理回收站任务记录。")}
+        description={t("比对存储桶或对象，管理回收站和软件更新。")}
       />
       <Tabs
         value={tab}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
         onChange={(_, value) => {
           const next = new URLSearchParams(params);
-          value === 1 ? next.set("tab", "recycle") : next.delete("tab");
+          if (value === 1) next.set("tab", "recycle");
+          else if (value === 2) next.set("tab", "updates");
+          else next.delete("tab");
           setParams(next, { replace: true });
         }}
         aria-label={t("运维工具")}
@@ -514,377 +353,14 @@ export default function ToolsPage() {
           iconPosition="start"
           label={t("任务回收站")}
         />
+        <Tab
+          icon={<SystemUpdateAltRounded fontSize="small" />}
+          iconPosition="start"
+          label={t("版本更新")}
+        />
       </Tabs>
-      {tab === 0 && (
-        <>
-          <Paper
-            component="form"
-            variant="outlined"
-            onSubmit={compare}
-            sx={{ p: { xs: 2, md: 3 } }}
-          >
-            <Stack spacing={3}>
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: { xs: "1fr", md: "1fr 36px 1fr" },
-                  gap: 2.5,
-                  alignItems: "center",
-                }}
-              >
-                <Stack spacing={2}>
-                  <Typography variant="h6">{t("源对象")}</Typography>
-                  <TextField
-                    required
-                    fullWidth
-                    label={t("源 Bucket")}
-                    placeholder={t("连接名称/bucket-name")}
-                    value={query.sourceBucket}
-                    onChange={(event) =>
-                      setQuery((value) => ({
-                        ...value,
-                        sourceBucket: event.target.value,
-                      }))
-                    }
-                    helperText={t(
-                      "使用已配置的连接名称，例如 storage/my-bucket。",
-                    )}
-                  />
-                  <TextField
-                    required
-                    fullWidth
-                    label={t("源对象 Key")}
-                    placeholder="path/to/object"
-                    value={query.sourceKey}
-                    onChange={(event) =>
-                      setQuery((value) => ({
-                        ...value,
-                        sourceKey: event.target.value,
-                      }))
-                    }
-                  />
-                </Stack>
-                <ArrowForwardRounded
-                  color="disabled"
-                  sx={{ display: { xs: "none", md: "block" } }}
-                />
-                <Stack spacing={2}>
-                  <Typography variant="h6">{t("目标对象")}</Typography>
-                  <TextField
-                    required
-                    fullWidth
-                    label={t("目标 Bucket")}
-                    placeholder={t("连接名称/bucket-name")}
-                    value={query.destBucket}
-                    onChange={(event) =>
-                      setQuery((value) => ({
-                        ...value,
-                        destBucket: event.target.value,
-                      }))
-                    }
-                    helperText={t(
-                      "填写连接名称和存储桶，例如 storage/my-bucket。",
-                    )}
-                  />
-                  <TextField
-                    required
-                    fullWidth
-                    label={t("目标对象 Key")}
-                    placeholder="path/to/object"
-                    value={query.destKey}
-                    onChange={(event) =>
-                      setQuery((value) => ({
-                        ...value,
-                        destKey: event.target.value,
-                      }))
-                    }
-                  />
-                </Stack>
-              </Box>
-              <Stack
-                direction={{ xs: "column", sm: "row" }}
-                spacing={1.5}
-                justifyContent="space-between"
-                alignItems={{ sm: "center" }}
-              >
-                <Button
-                  onClick={() =>
-                    setQuery((value) => ({
-                      ...value,
-                      destKey: value.sourceKey,
-                    }))
-                  }
-                  disabled={!query.sourceKey || comparing}
-                >
-                  {t("目标使用相同 Key")}
-                </Button>
-                <Button
-                  type="submit"
-                  variant="contained"
-                  disabled={comparing}
-                  startIcon={
-                    comparing ? (
-                      <CircularProgress size={18} color="inherit" />
-                    ) : (
-                      <TravelExploreRounded />
-                    )
-                  }
-                >
-                  {comparing ? t("正在读取元数据…") : t("开始比对")}
-                </Button>
-              </Stack>
-            </Stack>
-          </Paper>
-          {compareError && <Alert severity="error">{compareError}</Alert>}
-          {!comparison && !comparing && !compareError && (
-            <EmptyState
-              title={t("对象元数据比对")}
-              description={t(
-                "比较对象大小、ETag、存储类型和自定义元数据，不修改对象。",
-              )}
-            />
-          )}
-          {comparison && (
-            <Stack spacing={2.5}>
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: {
-                    xs: "1fr",
-                    md: "repeat(2, minmax(0, 1fr))",
-                  },
-                  gap: 2,
-                }}
-              >
-                {[
-                  {
-                    title: t("源对象"),
-                    meta: comparison.sourceMetadata,
-                    bucket: comparison.sourceBucket,
-                    key: comparison.sourceKey,
-                  },
-                  {
-                    title: t("目标对象"),
-                    meta: comparison.destMetadata,
-                    bucket: comparison.destBucket,
-                    key: comparison.destKey,
-                  },
-                ].map((item) => (
-                  <Paper key={item.title} variant="outlined" sx={{ p: 2.5 }}>
-                    <Stack
-                      direction="row"
-                      justifyContent="space-between"
-                      alignItems="center"
-                      sx={{ mb: 1.5 }}
-                    >
-                      <Typography variant="subtitle1">{item.title}</Typography>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        color={
-                          item.meta.exists === true
-                            ? "success"
-                            : item.meta.exists === false
-                              ? "default"
-                              : "warning"
-                        }
-                        label={
-                          item.meta.queryStatus === "UNAVAILABLE"
-                            ? t("查询失败，存在状态未知")
-                            : item.meta.exists === true
-                              ? t("读取成功")
-                              : item.meta.exists === false
-                                ? t("对象不存在")
-                                : t("存在状态未知")
-                        }
-                      />
-                    </Stack>
-                    <Typography
-                      variant="body2"
-                      sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
-                    >
-                      {item.bucket}/{item.key}
-                    </Typography>
-                    {item.meta.error && (
-                      <Alert severity="error" sx={{ mt: 2 }}>
-                        {item.meta.error}
-                      </Alert>
-                    )}
-                    {(item.meta.statusCode || item.meta.errorCode) && (
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{ mt: 1 }}
-                      >
-                        {[
-                          item.meta.statusCode &&
-                            `HTTP ${item.meta.statusCode}`,
-                          item.meta.errorCode,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </Typography>
-                    )}
-                  </Paper>
-                ))}
-              </Box>
-              <Alert
-                severity={
-                  comparable && comparison.verification?.sizeMatch === true
-                    ? "success"
-                    : "warning"
-                }
-              >
-                {comparable && comparison.verification?.sizeMatch === true
-                  ? t("两个对象的大小一致。")
-                  : comparable && comparison.verification?.sizeMatch === false
-                    ? t("两个对象的大小不一致，请检查迁移结果。")
-                    : comparison.verification?.message ||
-                      t("元数据不完整，无法完成比对。")}{" "}
-                {t("对象大小和 ETag 的比较不等同于完整内容校验。")}
-              </Alert>
-              <Paper variant="outlined" sx={{ overflow: "hidden" }}>
-                <Stack
-                  direction={{ xs: "column", sm: "row" }}
-                  spacing={1}
-                  alignItems={{ sm: "center" }}
-                  justifyContent="space-between"
-                  sx={{ p: 2.5 }}
-                >
-                  <Box>
-                    <Typography variant="h6">{t("元数据差异")}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {comparable
-                        ? t("{value1} 个字段不同", {
-                            value1: differences,
-                          })
-                        : t("元数据不完整，无法统计差异")}
-                    </Typography>
-                  </Box>
-                  <Button
-                    size="small"
-                    variant={onlyDifferences ? "contained" : "outlined"}
-                    disabled={!comparable}
-                    onClick={() => setOnlyDifferences((value) => !value)}
-                  >
-                    {onlyDifferences ? t("显示全部字段") : t("仅看差异")}
-                  </Button>
-                </Stack>
-                <TableContainer>
-                  <Table sx={{ minWidth: 560 }}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ width: "24%" }}>{t("字段")}</TableCell>
-                        <TableCell sx={{ width: "38%" }}>
-                          {t("源对象")}
-                        </TableCell>
-                        <TableCell sx={{ width: "38%" }}>
-                          {t("目标对象")}
-                        </TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {visibleFields.map((field) => {
-                        const different =
-                          comparable &&
-                          !same(
-                            comparison.sourceMetadata[field.key],
-                            comparison.destMetadata[field.key],
-                          );
-                        return (
-                          <TableRow
-                            key={field.key}
-                            sx={{
-                              bgcolor: different
-                                ? "action.selected"
-                                : undefined,
-                            }}
-                          >
-                            <TableCell>
-                              <Typography variant="body2">
-                                {t(field.label)}
-                              </Typography>
-                              {different && (
-                                <Typography
-                                  variant="caption"
-                                  color="warning.main"
-                                >
-                                  {t("存在差异")}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell sx={{ overflowWrap: "anywhere" }}>
-                              {displayValue(
-                                comparison.sourceMetadata[field.key],
-                                field.format,
-                              )}
-                            </TableCell>
-                            <TableCell sx={{ overflowWrap: "anywhere" }}>
-                              {displayValue(
-                                comparison.destMetadata[field.key],
-                                field.format,
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                      {visibleUserKeys.length > 0 && (
-                        <TableRow>
-                          <TableCell colSpan={3}>
-                            <Typography variant="subtitle2">
-                              {t("自定义元数据")}
-                            </Typography>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                      {visibleUserKeys.map((key) => (
-                        <TableRow
-                          key={`user-${key}`}
-                          sx={{
-                            bgcolor:
-                              comparable &&
-                              !same(
-                                comparison.sourceMetadata.userMetadata?.[key],
-                                comparison.destMetadata.userMetadata?.[key],
-                              )
-                                ? "action.selected"
-                                : undefined,
-                          }}
-                        >
-                          <TableCell
-                            sx={{
-                              overflowWrap: "anywhere",
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            {key}
-                          </TableCell>
-                          <TableCell sx={{ overflowWrap: "anywhere" }}>
-                            {displayValue(
-                              comparison.sourceMetadata.userMetadata?.[key],
-                            )}
-                          </TableCell>
-                          <TableCell sx={{ overflowWrap: "anywhere" }}>
-                            {displayValue(
-                              comparison.destMetadata.userMetadata?.[key],
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-                {comparable && onlyDifferences && differences === 0 && (
-                  <EmptyState
-                    title={t("没有元数据差异")}
-                    description={t("本次返回的元数据字段一致。")}
-                  />
-                )}
-              </Paper>
-            </Stack>
-          )}
-        </>
-      )}
+      {tab === 0 && <ObjectComparison />}
+      {tab === 2 && <SoftwareUpdates />}
       {tab === 1 && (
         <>
           <Alert severity="info">

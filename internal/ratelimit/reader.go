@@ -16,6 +16,12 @@ func (l *Limiter) Decorator(ctx context.Context, job execution.Job, item executi
 	return l.Wrap(ctx, job.ParentID, job.Generation, input, item.Source.Size)
 }
 
+// WrapNode shares the node byte budget with transfers, without creating a task
+// allocation. Read-only maintenance operations use this path.
+func (l *Limiter) WrapNode(ctx context.Context, input io.ReadCloser, size int64) (io.ReadCloser, error) {
+	return l.Wrap(ctx, 0, 0, input, size)
+}
+
 func (l *Limiter) Wrap(ctx context.Context, parentID int64, generation uint64, input io.ReadCloser, size int64) (io.ReadCloser, error) {
 	if input == nil || size < 0 {
 		return nil, errors.New("input and exact nonnegative size are required")

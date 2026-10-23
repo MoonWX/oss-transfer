@@ -58,7 +58,7 @@ Nodes and storage
 Limits and diagnostics
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
-  object compare ...              Compare source and target metadata
+  object compare ...              Compare buckets, prefixes or objects
 
 Account
   login --username admin --password-stdin
@@ -129,7 +129,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
 制限と診断
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
-  object compare ...              転送元と転送先のメタデータを比較
+  object compare ...              バケット、プレフィックス、オブジェクトの比較
 
 アカウント
   login --username admin --password-stdin
@@ -400,6 +400,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   add <node> [--label name]        Generate Agent join commands
   invite [--address node] [--label name] [--master-url URL]
   update <node> [--address new-address] [--label name]
+  update <node> --child-concurrency 8 --object-concurrency 4
   remove <node> --yes              Remove the registration
 
   oss-transfer-cli node list --watch 5
@@ -421,6 +422,7 @@ Use --json for queue/raw rate data; use limit list for limits.
   add <ノード> [--label 名前]      Agent 参加コマンドを生成
   invite [--address ノード] [--label 名前] [--master-url URL]
   update <ノード> [--address 新アドレス] [--label 名前]
+  update <ノード> --child-concurrency 8 --object-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli node list --watch 5
@@ -442,6 +444,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   details <node>                  Host, interface IPs and mounted directories
   update <node> [--label name] [--local-root path ...]
   update <node> --clear-local-roots
+  update <node> --child-concurrency 8 --object-concurrency 4
   remove <node> --yes              Revoke registration
 
   oss-transfer-cli agent invite --address storage-node --label transfer-node
@@ -461,6 +464,7 @@ Invitations expire after 30 minutes and can be used once. Run the native install
   details <ノード>                ホスト、インターフェース IP、マウントを表示
   update <ノード> [--label 名前] [--local-root パス ...]
   update <ノード> --clear-local-roots
+  update <ノード> --child-concurrency 8 --object-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli agent invite --address storage-node --label transfer-node
@@ -629,25 +633,33 @@ truncatedWorkers が返された場合、詳細には ZIP レポートを使用�
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
 `},
 	cliObjectHelp: {`Compare objects
-Usage: oss-transfer-cli object compare
-       --source-bucket <source-alias/bucket> --source-key <source-key>
-       --dest-bucket <target-alias/bucket> --dest-key <target-key>
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
+  oss-transfer-cli object status <comparison-id> [--after 50 --limit 100]
+  oss-transfer-cli object cancel <comparison-id>
+  oss-transfer-cli object delete <comparison-id>
 
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg'
-
-Keys are passed unchanged. Quote keys containing spaces or shell metacharacters.
-Shows existence, metadata, query availability and the server comparison result.
-A failed query is not treated as a missing object.
+Empty prefixes compare whole buckets. Keys are matched after removing each prefix.
+metadata checks size, Content-Type, Content-Encoding, Content-Disposition, Cache-Control and custom metadata without reading content.
+content streams both complete objects into SHA-256 without writing object files locally. Read traffic is charged by your provider.
+ETag, modification time and storage class do not determine equality across stores. Objects changed during comparison are reported separately.
+Comparisons run in the background. status returns counts and paged differences; matching objects are counted only.
+Each node retains 10 comparisons, with up to 10,000 difference rows each. All objects are counted. delete removes finished comparison records only.
+Keys and prefixes are passed unchanged. Quote shell metacharacters and spaces.
 `, `オブジェクトの比較
-使い方: oss-transfer-cli object compare
-        --source-bucket <転送元接続名/バケット> --source-key <転送元 Key>
-        --dest-bucket <転送先接続名/バケット> --dest-key <転送先 Key>
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
+  oss-transfer-cli object status <比較 ID> [--after 50 --limit 100]
+  oss-transfer-cli object cancel <比較 ID>
+  oss-transfer-cli object delete <比較 ID>
 
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg'
-
-Key は変更せずに渡します。空白やシェル特殊文字を含む場合は引用符で囲んでください。
-存在、メタデータ、照会可否、サーバーの比較結果を表示します。
-照会の失敗をオブジェクトの不存在として扱いません。
+プレフィックスが空の場合はバケット全体を比較します。それぞれのプレフィックスを除いた Key で対応付けます。
+metadata はサイズ、Content-Type、Content-Encoding、Content-Disposition、Cache-Control、カスタムメタデータを確認し、内容を読み取りません。
+content は両側の内容を最後までストリームで読み、SHA-256 を計算します。ローカルファイルは作成しません。読み取り通信が発生します。
+ETag、更新日時、ストレージクラスは一致判定に使用しません。比較中に変更されたオブジェクトは別途表示します。
+比較はバックグラウンドで実行されます。status は集計と差分ページを返し、一致したオブジェクトは件数のみ保存します。
+各ノードは直近 10 回の比較結果と、各比較の先頭 10,000 件の差分を保存します。集計は全件を含みます。delete は終了した比較記録のみ削除します。
+Key とプレフィックスは変更せず渡します。空白やシェル特殊文字を含む場合は引用符で囲んでください。
 `},
 	cliAuthHelp: {`Login and account
   oss-transfer-cli login

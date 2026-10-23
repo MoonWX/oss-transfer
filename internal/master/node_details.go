@@ -33,7 +33,7 @@ func (s *Server) agentNodeDetails(w http.ResponseWriter, r *http.Request) {
 		// An older Agent may not implement details yet.
 		data["message"] = localize(w, "Node details are unavailable")
 	} else {
-		for _, key := range []string{"hostname", "os", "arch", "localIps", "advertisedLocalRoots", "mounts"} {
+		for _, key := range []string{"hostname", "os", "arch", "localIps", "advertisedLocalRoots", "mounts", "software"} {
 			data[key] = details[key]
 		}
 		data["complete"] = true

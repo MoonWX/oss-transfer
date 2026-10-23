@@ -85,6 +85,14 @@ oss-transfer-cli agent invite --label storage-01
 
 Run the command for the Agent host's operating system or Docker. To use a private network address, add `--master-url` when creating the invitation.
 
+Node settings accept `--child-concurrency` and `--object-concurrency` on `node update`. They apply immediately and remain saved after restart. See `oss-transfer-cli help node` for the syntax.
+
+## Compare a bucket or prefix
+
+`object compare` accepts `--scope prefix` for a bucket or prefix, and `--scope object` for one object. Choose `--mode metadata` for HEAD-only checks or `--mode content` for streaming SHA-256. Supply `--source-bucket` and `--dest-bucket` as `connection/bucket`; prefixes use `--source-prefix` and `--dest-prefix`.
+
+The command returns a comparison ID. Use `object status`, `object cancel` or `object delete` with that ID to read results, stop a comparison or remove a finished result. `oss-transfer-cli help object` lists the options. [Comparison details](operations.md#compare-objects) explain what each mode verifies.
+
 ## Language
 
 The CLI follows the system language and supports English, Chinese and Japanese. It uses English for other locales. To save a different preference:

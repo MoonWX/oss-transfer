@@ -679,7 +679,7 @@ function Workspace({
         sx={{
           width: { xs: 0, md: sidebarWidth },
           flexShrink: { md: 0 },
-          transition: sidebarTransition,
+          transition: { xs: "none", md: sidebarTransition },
         }}
       >
         <Drawer

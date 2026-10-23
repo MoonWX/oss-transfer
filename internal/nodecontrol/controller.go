@@ -109,6 +109,11 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 		if _, err := validatedRoots(c.data.Roots); err != nil {
 			return err
 		}
+		if value := c.data.Concurrency; value != nil {
+			if err := ValidateConcurrency(value.MaxConcurrentChildren, value.ObjectsPerChild); err != nil {
+				return errors.New("invalid saved node concurrency")
+			}
+		}
 		for kind := range configured {
 			target := c.target(c.data, kind)
 			actual, ok := c.data.Effective[kind]
@@ -292,7 +297,7 @@ func (c *Controller) SetRoots(ctx context.Context, roots []string) error {
 func (c *Controller) Config() Config {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return Config{AdvertisedLocalRoots: append([]string{}, c.data.Roots...)}
+	return c.config()
 }
 
 func kindIndex(kind string) int {

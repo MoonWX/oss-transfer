@@ -7,12 +7,17 @@ async function fixture(page: Page) {
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
   );
   let reachable = true;
+  let children = 16;
+  let objects = 4;
   const roots = ["/mnt/data", "C:\\Archive"];
   const writes: Record<string, unknown>[] = [];
   await page.route("**/api/master/nodes**", async (route) => {
     if (route.request().method() === "PUT") {
       const body = route.request().postDataJSON();
       writes.push(body);
+      if (body.maxConcurrentChildren !== undefined)
+        children = body.maxConcurrentChildren;
+      if (body.objectsPerChild !== undefined) objects = body.objectsPerChild;
     }
     await route.fulfill({
       json: {
@@ -43,7 +48,8 @@ async function fixture(page: Page) {
                   activeScans: 1,
                   maxConcurrentScans: 2,
                   activeChildren: 4,
-                  maxConcurrentChildren: 16,
+                  maxConcurrentChildren: children,
+                  objectsPerChild: objects,
                   unfinishedChildren: 80,
                   maxUnfinishedChildren: 1024,
                 },
@@ -72,7 +78,7 @@ test("node workload remains visible and renaming preserves legacy directory sett
     exact: true,
   });
   await expect(region.getByText("80 / 1,024", { exact: true })).toBeVisible();
-  for (const label of ["扫描并发", "传输并发", "未完成子任务"]) {
+  for (const label of ["扫描并发", "子任务并发", "未完成子任务"]) {
     await expect(
       region.getByRole("progressbar", { name: label, exact: true }),
     ).toBeVisible();
@@ -130,4 +136,77 @@ test("renaming and unavailable-node editing do not send an empty root replacemen
     address: "storage-node",
     label: "Offline name",
   });
+});
+
+test("node concurrency applies through the settings dialog and is retained when reopened", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.goto("/nodes");
+  await page.getByRole("button", { name: "编辑节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
+  await expect(
+    dialog.getByRole("spinbutton", { name: "子任务并发", exact: true }),
+  ).toHaveValue("16");
+  await expect(
+    dialog.getByRole("spinbutton", {
+      name: "每个子任务的对象并发",
+      exact: true,
+    }),
+  ).toHaveValue("4");
+  await dialog
+    .getByRole("spinbutton", { name: "子任务并发", exact: true })
+    .fill("12");
+  await dialog
+    .getByRole("spinbutton", { name: "每个子任务的对象并发", exact: true })
+    .fill("6");
+  await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(state.writes).toEqual([
+    {
+      address: "storage-node",
+      label: "Storage",
+      maxConcurrentChildren: 12,
+      objectsPerChild: 6,
+    },
+  ]);
+  await expect(page.getByText("4 / 12", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "编辑节点", exact: true }).click();
+  await expect(
+    dialog.getByRole("spinbutton", { name: "子任务并发", exact: true }),
+  ).toHaveValue("12");
+  await expect(
+    dialog.getByRole("spinbutton", {
+      name: "每个子任务的对象并发",
+      exact: true,
+    }),
+  ).toHaveValue("6");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    dialog.getByRole("spinbutton", {
+      name: "每个子任务的对象并发",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});
+
+test("invalid combined concurrency stays in the editor without submitting", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.goto("/nodes");
+  await page.getByRole("button", { name: "编辑节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
+  await dialog
+    .getByRole("spinbutton", { name: "子任务并发", exact: true })
+    .fill("64");
+  await dialog
+    .getByRole("spinbutton", { name: "每个子任务的对象并发", exact: true })
+    .fill("32");
+  await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("两者乘积不能超过 256");
+  expect(state.writes).toEqual([]);
 });

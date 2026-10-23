@@ -42,6 +42,10 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
       components: {
         MuiCssBaseline: {
           styleOverrides: {
+            // Reserve the viewport scrollbar between short and long tabs.
+            // MUI's scroll lock compensates this html scroll container when a
+            // dialog or menu opens; scrollbar-gutter would compensate twice.
+            html: { overflowY: "scroll" },
             body: { margin: 0 },
             "*": { boxSizing: "border-box" },
             a: { color: "inherit" },

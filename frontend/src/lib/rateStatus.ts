@@ -86,6 +86,7 @@ export type Worker = NodeDisplay & {
     maxConcurrentScans: number;
     activeChildren: number;
     maxConcurrentChildren: number;
+    objectsPerChild?: number;
     unfinishedChildren: number;
     maxUnfinishedChildren: number;
   };

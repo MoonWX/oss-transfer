@@ -14,6 +14,33 @@ import (
 )
 
 func (s *S3) readPart(ctx context.Context, reader io.Reader, size, memoryLimit int64) (*partBody, error) {
+	resident := size
+	if size > memoryLimit {
+		resident = 256 * 1024
+	}
+	release, err := s.uploadMemory.acquire(ctx, resident)
+	if err != nil {
+		return nil, err
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			release()
+		}
+	}()
+	body, err := s.readPartPayload(ctx, reader, size, memoryLimit)
+	if err != nil {
+		return nil, err
+	}
+	if size <= memoryLimit {
+		body.release = release
+		retained = true
+	}
+	// Disk parts retain no payload buffer after the copy has finished.
+	return body, nil
+}
+
+func (s *S3) readPartPayload(ctx context.Context, reader io.Reader, size, memoryLimit int64) (*partBody, error) {
 	if size <= memoryLimit || s.tempRegistry == nil {
 		return readPartWithLimit(reader, size, s.spoolDirectory, memoryLimit)
 	}

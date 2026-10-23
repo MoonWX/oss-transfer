@@ -205,6 +205,8 @@ export type NodeChange = {
   address: string;
   label: string;
   advertisedLocalRoots?: string[];
+  maxConcurrentChildren?: number;
+  objectsPerChild?: number;
 };
 export type AgentInvitation = {
   id: string;

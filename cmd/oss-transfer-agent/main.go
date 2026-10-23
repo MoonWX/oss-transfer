@@ -12,6 +12,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/agent"
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/servicehost"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
@@ -26,6 +27,9 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "__apply-update" {
+		return softwareupdate.RunHelper(os.Args[2])
+	}
 	joinURL := flag.String("join-url", "", "Agent invitation link (first enrollment)")
 	masterURL := flag.String("master-url", "", "Master HTTP or HTTPS origin (first enrollment)")
 	joinToken := flag.String("join-token", os.Getenv("OSS_TRANSFER_JOIN_TOKEN"), "One-use enrollment token (first enrollment)")
@@ -126,10 +130,11 @@ func run() error {
 		return nil
 	}
 	return servicehost.Run(servicehost.Options{Name: config.ServiceName, Role: "agent", Version: version, ReadyFile: config.ReadyFile, LogFile: config.LogFile}, func(ctx context.Context, ready func() error) error {
-		return serve(ctx, config, options, ready)
+		updater := softwareupdate.New(softwareupdate.Options{Role: "agent", Version: version, Commit: commit, DataDirectory: config.DataDirectory, ConfigPath: *configPath, ServiceName: config.ServiceName})
+		return serve(ctx, config, options, updater, ready)
 	})
 }
-func serve(ctx context.Context, config servicehost.Config, options agent.Options, ready func() error) error {
+func serve(ctx context.Context, config servicehost.Config, options agent.Options, updater softwareupdate.Controller, ready func() error) error {
 	nodeOptions, err := config.NodeControl.Options()
 	if err != nil {
 		return err
@@ -139,7 +144,7 @@ func serve(ctx context.Context, config servicehost.Config, options agent.Options
 		return err
 	}
 	defer db.Close()
-	service, err := agentservice.New(db, agentservice.Options{SpoolDirectory: filepath.Join(config.DataDirectory, "spool"), NodeControl: nodeOptions})
+	service, err := agentservice.New(db, agentservice.Options{SpoolDirectory: filepath.Join(config.DataDirectory, "spool"), NodeControl: nodeOptions, Updater: updater})
 	if err != nil {
 		return err
 	}

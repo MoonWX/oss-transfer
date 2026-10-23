@@ -1,7 +1,9 @@
 import { useSyncExternalStore } from "react";
+import { comparisonMessages } from "../locales/comparison";
 import { coreMessages } from "../locales/core";
 import { adminMessages } from "../locales/admin";
 import { tasksMessages } from "../locales/tasks";
+import { updatesMessages } from "../locales/updates";
 
 export type Locale = "zh-CN" | "en-US" | "ja-JP";
 export type Message = { en: string; ja: string };
@@ -13,7 +15,9 @@ export const languages: { locale: Locale; label: string }[] = [
   { locale: "ja-JP", label: "日本語" },
 ];
 export const messages: Record<string, Message> = {
+  ...updatesMessages,
   ...tasksMessages,
+  ...comparisonMessages,
   ...adminMessages,
   ...coreMessages,
 };

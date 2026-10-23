@@ -14,17 +14,21 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
+	"github.com/MoonWX/oss-transfer/internal/comparison"
 	"github.com/MoonWX/oss-transfer/internal/discovery"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/inventory"
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 	"github.com/MoonWX/oss-transfer/internal/ratelimit"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/storageconfig"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 type Service struct {
+	Updater      softwareupdate.Controller
+	Comparisons  *comparison.Manager
 	Inventory    *inventory.Repository
 	Rates        *TaskRates
 	Nodes        *nodecontrol.Controller
@@ -43,8 +47,10 @@ type Service struct {
 	cancel       context.CancelFunc
 	wake         chan struct{}
 	workers      sync.WaitGroup
+	nodeConfigMu sync.Mutex
 }
 type Options struct {
+	Updater        softwareupdate.Controller
 	NodeControl    nodecontrol.Options
 	Execution      execution.Options
 	SpoolDirectory string
@@ -59,7 +65,11 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	configs := storageconfig.NewAgent(store)
-	factory := &storageconfig.Factory{Source: configs, SpoolDirectory: options.SpoolDirectory}
+	uploadMemory, err := transferstore.NewUploadMemoryBudget(transferstore.DefaultUploadMemoryBytes)
+	if err != nil {
+		return nil, err
+	}
+	factory := &storageconfig.Factory{Source: configs, SpoolDirectory: options.SpoolDirectory, UploadMemory: uploadMemory}
 	limits, err := ratelimit.New(store, ratelimit.Options{})
 	if err != nil {
 		return nil, err
@@ -106,6 +116,10 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	shared := NewSharedVerifier()
+	if concurrency, saved := nodes.SavedConcurrency(); saved {
+		options.Execution.MaxConcurrentJobs = concurrency.MaxConcurrentChildren
+		options.Execution.WorkersPerJob = concurrency.ObjectsPerChild
+	}
 	engine, err := execution.NewEngine(jobs, mpu.Factory(temporary.Factory(shared.Factory(factory))), options.Execution)
 	if err != nil {
 		temporary.Close()
@@ -123,7 +137,21 @@ func New(store *state.Store, options Options) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	s.Updater = options.Updater
 	s.preflight = preflight
+	comparisons, err := comparison.New(store, factory, func(ctx context.Context, input io.ReadCloser, size int64) (io.ReadCloser, error) {
+		return nodes.Decorator(limits.Decorator)(ctx, execution.Job{}, execution.Item{Source: transferstore.Object{Size: size}}, input)
+	})
+	if err != nil {
+		cancel()
+		_ = scanner.Close()
+		_ = engine.Close(context.Background())
+		temporary.Close()
+		nodes.Close()
+		limits.Close()
+		return nil, err
+	}
+	s.Comparisons = comparisons
 	s.workers.Add(1)
 	go s.schedule()
 	go preflight.run(ctx)
@@ -131,6 +159,9 @@ func New(store *state.Store, options Options) (*Service, error) {
 }
 func (s *Service) Close(ctx context.Context) error {
 	s.cancel()
+	if s.Comparisons != nil {
+		s.Comparisons.Close()
+	}
 	s.workers.Wait()
 	scanErr := s.Scanner.Close()
 	err := s.Engine.Close(ctx)
@@ -185,7 +216,12 @@ func (s *Service) schedule() {
 // These operations commit their own immutable IDs, configuration revisions or
 // parent fences. They can reconcile a lost reply without a second command ledger.
 func (s *Service) ReplaySafe(operation string) bool {
+	if operation == "software_update" {
+		return true
+	}
 	switch operation {
+	case "comparison_start", "comparison_cancel", "comparison_delete":
+		return true
 	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true
 	}
@@ -260,6 +296,12 @@ type ScanRequest struct {
 }
 
 func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agenttransport.Response, error) {
+	if result, handled, err := s.softwareCommand(ctx, c); handled {
+		return result, err
+	}
+	if response, handled, err := s.comparisonCommand(ctx, c); handled {
+		return response, err
+	}
 	if response, handled, err := s.nodeCommand(ctx, c); handled {
 		return response, err
 	}

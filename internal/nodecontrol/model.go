@@ -74,16 +74,30 @@ type Adjustment struct {
 }
 
 type persisted struct {
-	Overrides map[string]float64    `json:"overrides"`
-	Effective map[string]float64    `json:"effective"`
-	Last      map[string]Adjustment `json:"last"`
-	Incidents map[string]string     `json:"incidents"`
-	Roots     []string              `json:"advertisedLocalRoots"`
-	Sequence  uint64                `json:"sequence"`
+	Overrides   map[string]float64    `json:"overrides"`
+	Effective   map[string]float64    `json:"effective"`
+	Last        map[string]Adjustment `json:"last"`
+	Incidents   map[string]string     `json:"incidents"`
+	Roots       []string              `json:"advertisedLocalRoots"`
+	Sequence    uint64                `json:"sequence"`
+	Concurrency *ConcurrencyConfig    `json:"concurrency,omitempty"`
 }
 
 type Config struct {
 	AdvertisedLocalRoots []string `json:"advertisedLocalRoots"`
+	ConcurrencyConfig
+}
+
+type ConcurrencyConfig struct {
+	MaxConcurrentChildren int `json:"maxConcurrentChildren"`
+	ObjectsPerChild       int `json:"objectsPerChild"`
+}
+
+// ConfigChange preserves settings omitted by older clients and rename-only edits.
+type ConfigChange struct {
+	AdvertisedLocalRoots  *[]string `json:"advertisedLocalRoots,omitempty"`
+	MaxConcurrentChildren *int      `json:"maxConcurrentChildren,omitempty"`
+	ObjectsPerChild       *int      `json:"objectsPerChild,omitempty"`
 }
 
 type Detail struct {

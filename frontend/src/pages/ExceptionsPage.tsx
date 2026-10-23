@@ -33,6 +33,7 @@ import {
   LinearProgress,
   MenuItem,
   Paper,
+  Skeleton,
   Stack,
   Tab,
   Table,
@@ -114,6 +115,13 @@ const initialFilters: Filters = {
   limit: "1000",
 };
 const modes = ["failed", "fallback", "local"] as const;
+type Mode = (typeof modes)[number];
+type QueryState = {
+  key: string;
+  result: Result | null;
+  error: string | null;
+  loading: boolean;
+};
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -151,16 +159,19 @@ export default function ExceptionsPage() {
   const [filters, setFilters] = useState<Filters>(linkedFilters);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
-  const [result, setResult] = useState<Result | null>(null);
-  const recordNodeLabel: NodeLabels = (id, display) =>
-    nodeLabel(id, mergeNodeDisplay(result?.nodeDisplays?.[id ?? ""], display));
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [queries, setQueries] = useState<Partial<Record<Mode, QueryState>>>({});
   const [busy, setBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Failure | null>(null);
   const loadId = useRef(0);
+  const mounted = useRef(false);
+  const inFlight = useRef(
+    new Map<string, { id: number; promise: Promise<void> }>(),
+  );
+  const latestQuery = useRef<
+    Partial<Record<Mode, { key: string; id: number }>>
+  >({});
   const linkedParams = useRef(params);
   useEffect(() => {
     const previous = linkedParams.current;
@@ -180,7 +191,6 @@ export default function ExceptionsPage() {
     setDraft(nextFilters);
     setFilters(nextFilters);
     setPage(0);
-    setResult(null);
     setSelected(null);
   }, [params]);
   const mode = modes[tab];
@@ -188,96 +198,162 @@ export default function ExceptionsPage() {
   const isLocal = mode === "local";
   const localPage = isLocal ? page : 0;
   const localSize = isLocal ? pageSize : 25;
+  const queryKey = JSON.stringify([mode, filters, localPage, localSize]);
+  const query = queries[mode]?.key === queryKey ? queries[mode] : undefined;
+  // A new tab/filter is loading from its very first render. Cached rows belong
+  // to one exact query and can remain visible while that query is refreshed.
+  const result = query?.result ?? null;
+  const loading = query?.loading ?? true;
+  const error = query?.error ?? null;
+  const recordNodeLabel: NodeLabels = (id, display) =>
+    nodeLabel(id, mergeNodeDisplay(result?.nodeDisplays?.[id ?? ""], display));
 
-  const load = useCallback(async () => {
-    const id = ++loadId.current;
-    setLoading(true);
-    setError(null);
-    try {
-      let next: Result;
-      if (mode === "local") {
-        const params = new URLSearchParams({
-          offset: String(localPage * localSize),
-          limit: String(localSize),
-        });
-        if (filters.task.trim()) params.set("taskId", filters.task.trim());
-        if (filters.node) params.set("executionNodeIp", filters.node);
-        if (filters.direction) params.set("direction", filters.direction);
-        if (filters.endpoint.trim())
-          params.set("endpoint", filters.endpoint.trim());
-        next = (
-          await api<{ data: Result }>(
-            `/api/master/local-transfers/failures?${params}`,
-          )
-        ).data;
-      } else {
-        const body: Record<string, unknown> = {
-          limit: Number(filters.limit) || 1000,
-        };
-        if (filters.task.trim()) body.taskIndex = Number(filters.task);
-        if (filters.node) body.executionNodeIp = filters.node;
-        if (filters.source.trim()) body.sourceBucket = filters.source.trim();
-        if (filters.destination.trim())
-          body.destBucket = filters.destination.trim();
-        const raw = await api<Record<string, unknown>>(`/api/master/${mode}`, {
-          method: "POST",
-          body,
-        });
-        const grouped = (raw[
-          mode === "failed" ? "failedKeys" : "fallbackObjects"
-        ] ?? {}) as Record<string, Failure[] | number>;
-        const respondingNodes = Object.entries(grouped)
-          .filter(([, value]) => Array.isArray(value))
-          .map(([worker]) => worker);
-        const items = Object.entries(grouped).flatMap(([worker, value]) =>
-          Array.isArray(value) && (!filters.node || worker === filters.node)
-            ? value.map((row) => ({ ...row, workerNode: worker }))
-            : [],
-        );
-        const total = Object.entries(grouped).reduce(
-          (sum, [key, value]) =>
-            key.endsWith("Count") &&
-            typeof value === "number" &&
-            (!filters.node || key === `${filters.node}Count`)
-              ? sum + value
-              : sum,
-          0,
-        );
-        next = {
-          items,
-          total,
-          respondingNodes,
-          queriedWorkers: Array.isArray(raw.queriedWorkers)
-            ? (raw.queriedWorkers as string[])
-            : undefined,
-          complete:
-            typeof raw.complete === "boolean" ? raw.complete : undefined,
-          partial: raw.partial === true,
-          unreachableWorkers: Array.isArray(raw.unreachableWorkers)
-            ? (raw.unreachableWorkers as string[])
-            : [],
-          failedWorkers: Array.isArray(raw.failedWorkers)
-            ? (raw.failedWorkers as string[])
-            : [],
-          workerErrors: raw.workerErrors as Record<string, string> | undefined,
-          nodeDisplays: raw.nodeDisplays as
-            Record<string, NodeDisplay> | undefined,
-        };
+  const load = useCallback(
+    (force = false): Promise<void> => {
+      const pending = inFlight.current.get(queryKey);
+      if (pending && !force) {
+        latestQuery.current[mode] = { key: queryKey, id: pending.id };
+        setQueries((previous) => ({
+          ...previous,
+          [mode]: {
+            key: queryKey,
+            result:
+              previous[mode]?.key === queryKey ? previous[mode]!.result : null,
+            loading: true,
+            error: null,
+          },
+        }));
+        return pending.promise;
       }
-      if (id === loadId.current) setResult(next);
-    } catch (cause) {
-      if (id === loadId.current) {
-        setError(errorText(cause));
-        setResult(null);
-      }
-    } finally {
-      if (id === loadId.current) setLoading(false);
-    }
-  }, [mode, filters, localPage, localSize]);
+      const id = ++loadId.current;
+      latestQuery.current[mode] = { key: queryKey, id };
+      setQueries((previous) => ({
+        ...previous,
+        [mode]: {
+          key: queryKey,
+          result:
+            previous[mode]?.key === queryKey ? previous[mode]!.result : null,
+          loading: true,
+          error: null,
+        },
+      }));
+      const request = (async () => {
+        try {
+          let next: Result;
+          if (mode === "local") {
+            const params = new URLSearchParams({
+              offset: String(localPage * localSize),
+              limit: String(localSize),
+            });
+            if (filters.task.trim()) params.set("taskId", filters.task.trim());
+            if (filters.node) params.set("executionNodeIp", filters.node);
+            if (filters.direction) params.set("direction", filters.direction);
+            if (filters.endpoint.trim())
+              params.set("endpoint", filters.endpoint.trim());
+            next = (
+              await api<{ data: Result }>(
+                `/api/master/local-transfers/failures?${params}`,
+              )
+            ).data;
+          } else {
+            const body: Record<string, unknown> = {
+              limit: Number(filters.limit) || 1000,
+            };
+            if (filters.task.trim()) body.taskIndex = Number(filters.task);
+            if (filters.node) body.executionNodeIp = filters.node;
+            if (filters.source.trim())
+              body.sourceBucket = filters.source.trim();
+            if (filters.destination.trim())
+              body.destBucket = filters.destination.trim();
+            const raw = await api<Record<string, unknown>>(
+              `/api/master/${mode}`,
+              {
+                method: "POST",
+                body,
+              },
+            );
+            const grouped = (raw[
+              mode === "failed" ? "failedKeys" : "fallbackObjects"
+            ] ?? {}) as Record<string, Failure[] | number>;
+            const respondingNodes = Object.entries(grouped)
+              .filter(([, value]) => Array.isArray(value))
+              .map(([worker]) => worker);
+            const items = Object.entries(grouped).flatMap(([worker, value]) =>
+              Array.isArray(value) && (!filters.node || worker === filters.node)
+                ? value.map((row) => ({ ...row, workerNode: worker }))
+                : [],
+            );
+            const total = Object.entries(grouped).reduce(
+              (sum, [key, value]) =>
+                key.endsWith("Count") &&
+                typeof value === "number" &&
+                (!filters.node || key === `${filters.node}Count`)
+                  ? sum + value
+                  : sum,
+              0,
+            );
+            next = {
+              items,
+              total,
+              respondingNodes,
+              queriedWorkers: Array.isArray(raw.queriedWorkers)
+                ? (raw.queriedWorkers as string[])
+                : undefined,
+              complete:
+                typeof raw.complete === "boolean" ? raw.complete : undefined,
+              partial: raw.partial === true,
+              unreachableWorkers: Array.isArray(raw.unreachableWorkers)
+                ? (raw.unreachableWorkers as string[])
+                : [],
+              failedWorkers: Array.isArray(raw.failedWorkers)
+                ? (raw.failedWorkers as string[])
+                : [],
+              workerErrors: raw.workerErrors as
+                Record<string, string> | undefined,
+              nodeDisplays: raw.nodeDisplays as
+                Record<string, NodeDisplay> | undefined,
+            };
+          }
+          if (mounted.current && latestQuery.current[mode]?.id === id)
+            setQueries((previous) => ({
+              ...previous,
+              [mode]: {
+                key: queryKey,
+                result: next,
+                error: null,
+                loading: false,
+              },
+            }));
+        } catch (cause) {
+          if (mounted.current && latestQuery.current[mode]?.id === id)
+            setQueries((previous) => ({
+              ...previous,
+              [mode]: {
+                key: queryKey,
+                result:
+                  previous[mode]?.key === queryKey
+                    ? previous[mode]!.result
+                    : null,
+                error: errorText(cause),
+                loading: false,
+              },
+            }));
+        }
+      })();
+      inFlight.current.set(queryKey, { id, promise: request });
+      void request.finally(() => {
+        if (inFlight.current.get(queryKey)?.promise === request)
+          inFlight.current.delete(queryKey);
+      });
+      return request;
+    },
+    [mode, filters, localPage, localSize, queryKey],
+  );
   useEffect(() => {
+    mounted.current = true;
     void load();
     return () => {
-      loadId.current++;
+      mounted.current = false;
     };
   }, [load]);
   useEffect(() => {
@@ -330,7 +406,7 @@ export default function ExceptionsPage() {
       } else notify(tr("清除请求已提交，正在刷新各节点记录。"), "info");
       setConfirmClear(false);
       setPage(0);
-      await load();
+      await load(true);
     } catch (cause) {
       const value = cause instanceof ApiError ? cause.response : undefined;
       const failedNodes = [
@@ -345,7 +421,7 @@ export default function ExceptionsPage() {
       if (value?.partial) {
         setConfirmClear(false);
         setPage(0);
-        await load();
+        await load(true);
       }
     } finally {
       setBusy(false);
@@ -385,7 +461,7 @@ export default function ExceptionsPage() {
         }),
         value.partial || value.failed > 0 ? "warning" : "success",
       );
-      await load();
+      await load(true);
     } catch (cause) {
       notify(errorText(cause), "error");
     } finally {
@@ -429,7 +505,8 @@ export default function ExceptionsPage() {
         onChange={(_, value) => {
           setTab(value);
           setPage(0);
-          setResult(null);
+          setSelected(null);
+          setClearError(null);
           setDraft(initialFilters);
           setFilters(initialFilters);
         }}
@@ -439,7 +516,7 @@ export default function ExceptionsPage() {
         sx={{ borderBottom: 1, borderColor: "divider" }}
       >
         {labels.map((label) => (
-          <Tab key={label} label={label} />
+          <Tab key={label} label={label} disabled={busy} />
         ))}
       </Tabs>
       <Paper
@@ -615,7 +692,13 @@ export default function ExceptionsPage() {
           )}
         </Alert>
       )}
-      <Paper variant="outlined" sx={{ overflow: "hidden" }}>
+      <Paper
+        variant="outlined"
+        role="region"
+        aria-label={labels[tab]}
+        aria-busy={loading}
+        sx={{ overflow: "hidden" }}
+      >
         <Stack
           direction={{ xs: "column", sm: "row" }}
           spacing={2}
@@ -678,163 +761,179 @@ export default function ExceptionsPage() {
             )}
           </Stack>
         </Stack>
-        {loading && <LinearProgress />}
-        {visible.length > 0 ? (
-          <TableContainer>
-            <Table size="small" sx={{ minWidth: 780 }}>
-              <TableHead>
-                <TableRow>
-                  <TableCell>{tr("对象 / 路径")}</TableCell>
-                  <TableCell>{tr("任务与节点")}</TableCell>
-                  <TableCell>{tr("原因")}</TableCell>
-                  <TableCell>{tr("记录时间")}</TableCell>
-                  <TableCell align="right">{tr("操作")}</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {visible.map((item, index) => (
-                  <TableRow
-                    key={`${item.workerNode}-${item.taskIndex}-${item.key}-${index}`}
-                    hover
-                  >
-                    <TableCell sx={{ maxWidth: 310 }}>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          overflowWrap: "anywhere",
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {item.key || item.localPath || "—"}
-                      </Typography>
-                      {item.destinationKey != null &&
-                        item.destinationKey !== item.key && (
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontFamily: "monospace",
-                              overflowWrap: "anywhere",
-                              whiteSpace: "pre-wrap",
-                            }}
-                          >
-                            {tr("目标：")}
-                            {item.destinationKey}
-                          </Typography>
-                        )}
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ overflowWrap: "anywhere" }}
-                      >
-                        {item.sourceBucket || "—"} →{" "}
-                        {item.destBucket || item.localPath || "—"}
-                      </Typography>
-                      {item.objectSize !== undefined && (
+        <Box sx={{ height: 4 }}>
+          {loading && <LinearProgress aria-label={tr("正在读取记录")} />}
+        </Box>
+        <Box sx={{ minHeight: 240 }}>
+          {loading && !result ? (
+            <Stack spacing={2} sx={{ p: 2.5 }} aria-hidden="true">
+              {[0, 1, 2].map((row) => (
+                <Skeleton
+                  key={row}
+                  variant="rounded"
+                  height={48}
+                  animation={false}
+                />
+              ))}
+            </Stack>
+          ) : visible.length > 0 ? (
+            <TableContainer>
+              <Table size="small" sx={{ minWidth: 780 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>{tr("对象 / 路径")}</TableCell>
+                    <TableCell>{tr("任务与节点")}</TableCell>
+                    <TableCell>{tr("原因")}</TableCell>
+                    <TableCell>{tr("记录时间")}</TableCell>
+                    <TableCell align="right">{tr("操作")}</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {visible.map((item, index) => (
+                    <TableRow
+                      key={`${item.workerNode}-${item.taskIndex}-${item.key}-${index}`}
+                      hover
+                    >
+                      <TableCell sx={{ maxWidth: 310 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            overflowWrap: "anywhere",
+                            fontFamily: "monospace",
+                          }}
+                        >
+                          {item.key || item.localPath || "—"}
+                        </Typography>
+                        {item.destinationKey != null &&
+                          item.destinationKey !== item.key && (
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontFamily: "monospace",
+                                overflowWrap: "anywhere",
+                                whiteSpace: "pre-wrap",
+                              }}
+                            >
+                              {tr("目标：")}
+                              {item.destinationKey}
+                            </Typography>
+                          )}
                         <Typography
                           variant="caption"
                           color="text.secondary"
-                          display="block"
+                          sx={{ overflowWrap: "anywhere" }}
                         >
-                          {formatBytes(item.objectSize)}
+                          {item.sourceBucket || "—"} →{" "}
+                          {item.destBucket || item.localPath || "—"}
                         </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell sx={{ whiteSpace: "nowrap" }}>
-                      <Typography variant="body2">
-                        #{item.parentTaskId ?? item.taskIndex ?? "—"}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ fontFamily: "monospace" }}
-                      >
-                        {item.workerNode || item.executionNodeIp
-                          ? taskNodeLabels(item, recordNodeLabel)
-                          : tr("调度阶段")}
-                      </Typography>
-                      {item.stage && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={item.stage}
-                          sx={{
-                            display: "flex",
-                            width: "fit-content",
-                            mt: 0.5,
-                          }}
-                        />
-                      )}
-                    </TableCell>
-                    <TableCell sx={{ maxWidth: 300 }}>
-                      <Typography
-                        variant="body2"
-                        color="error.main"
-                        sx={{
-                          overflowWrap: "anywhere",
-                          display: "-webkit-box",
-                          WebkitLineClamp: 3,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {item.errorMessage ||
-                          item.errorCode ||
-                          tr("未提供原因")}
-                      </Typography>
-                      {item.errorCode && (
-                        <Typography variant="caption" color="text.secondary">
-                          {item.errorCode}
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell sx={{ whiteSpace: "nowrap" }}>
-                      <Typography variant="body2">
-                        {failureTime(item)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Button size="small" onClick={() => setSelected(item)}>
-                        {tr("详情")}
-                      </Button>
-                      {isLocal &&
-                        (item.parentTaskId !== undefined ||
-                          item.taskIndex !== undefined) && (
-                          <Button
-                            size="small"
-                            startIcon={<ReplayRounded />}
-                            onClick={() => void retry(item)}
-                            disabled={busy}
+                        {item.objectSize !== undefined && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
                           >
-                            {tr("重试任务")}
-                          </Button>
+                            {formatBytes(item.objectSize)}
+                          </Typography>
                         )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        ) : (
-          !loading &&
-          !error && (
-            <EmptyState
-              title={
-                result && result.total > 0
-                  ? tr("当前页无记录")
-                  : tr("暂无匹配记录")
-              }
-              description={
-                result && result.total > 0
-                  ? tr(
-                      "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。",
-                    )
-                  : tr("请调整筛选条件，或在任务执行后刷新。")
-              }
-            />
-          )
-        )}
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>
+                        <Typography variant="body2">
+                          #{item.parentTaskId ?? item.taskIndex ?? "—"}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontFamily: "monospace" }}
+                        >
+                          {item.workerNode || item.executionNodeIp
+                            ? taskNodeLabels(item, recordNodeLabel)
+                            : tr("调度阶段")}
+                        </Typography>
+                        {item.stage && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={item.stage}
+                            sx={{
+                              display: "flex",
+                              width: "fit-content",
+                              mt: 0.5,
+                            }}
+                          />
+                        )}
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 300 }}>
+                        <Typography
+                          variant="body2"
+                          color="error.main"
+                          sx={{
+                            overflowWrap: "anywhere",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {item.errorMessage ||
+                            item.errorCode ||
+                            tr("未提供原因")}
+                        </Typography>
+                        {item.errorCode && (
+                          <Typography variant="caption" color="text.secondary">
+                            {item.errorCode}
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>
+                        <Typography variant="body2">
+                          {failureTime(item)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Button size="small" onClick={() => setSelected(item)}>
+                          {tr("详情")}
+                        </Button>
+                        {isLocal &&
+                          (item.parentTaskId !== undefined ||
+                            item.taskIndex !== undefined) && (
+                            <Button
+                              size="small"
+                              startIcon={<ReplayRounded />}
+                              onClick={() => void retry(item)}
+                              disabled={busy}
+                            >
+                              {tr("重试任务")}
+                            </Button>
+                          )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          ) : (
+            result &&
+            !error && (
+              <EmptyState
+                title={
+                  result && result.total > 0
+                    ? tr("当前页无记录")
+                    : tr("暂无匹配记录")
+                }
+                description={
+                  result && result.total > 0
+                    ? tr(
+                        "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。",
+                      )
+                    : tr("请调整筛选条件，或在任务执行后刷新。")
+                }
+              />
+            )
+          )}
+        </Box>
         <TablePagination
           component="div"
+          sx={{ visibility: result ? "visible" : "hidden" }}
           count={isLocal ? (result?.total ?? 0) : (result?.items.length ?? 0)}
           page={page}
           onPageChange={(_, value) => setPage(value)}

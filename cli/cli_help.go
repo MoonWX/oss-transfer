@@ -30,7 +30,7 @@ const cliHelp = `OSS Transfer CLI
 限速与排障
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
-  object compare ...             比对源、目标对象的元数据
+  object compare ...             比对存储桶、前缀或单个对象
 
 账户
   login                          登录（默认 admin）
@@ -228,6 +228,7 @@ const cliNodeHelp = `执行节点
   add <节点> [--label 名称]        生成指定地址的 Agent 加入指令
   invite [--address 节点] [--label 名称] [--master-url URL]
   update <节点> [--address 新地址] [--label 名称]
+  update <节点> --child-concurrency 8 --object-concurrency 4
   remove <节点> --yes              移除指定节点注册
 
 示例
@@ -252,6 +253,7 @@ const cliAgentHelp = `Agent 管理
   details <节点>                  查看主机、网卡 IP 和挂载目录
   update <节点> [--label 名称] [--local-root 目录 ...]
   update <节点> --clear-local-roots
+  update <节点> --child-concurrency 8 --object-concurrency 4
   remove <节点> --yes              撤销该 Agent 的注册
 
 示例
@@ -368,15 +370,19 @@ complete/partial 表示节点返回是否完整；truncated 表示记录被数�
 `
 
 const cliObjectHelp = `对象比对
-用法：oss-transfer-cli object compare
-      --source-bucket <源连接/桶> --source-key <源Key>
-      --dest-bucket <目标连接/桶> --dest-key <目标Key>
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
+  oss-transfer-cli object status <比对ID> [--after 50 --limit 100]
+  oss-transfer-cli object cancel <比对ID>
+  oss-transfer-cli object delete <比对ID>
 
-示例
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg'
-
-Key 按原值传递，含空格或 shell 特殊字符时请加引号。
-显示两端存在性、元数据、查询可用性及服务端的比对结论；查询失败不会当成对象不存在。
+prefix 范围不填前缀时比对整个桶；两端按去掉前缀后的 Key 对应。
+metadata 检查大小、Content-Type、Content-Encoding、Content-Disposition、Cache-Control 和自定义元数据，不读取内容。
+content 完整流式读取两端对象，计算 SHA-256，不将对象写入本地文件。会产生读取流量。
+ETag、修改时间和存储类型不作为跨存储一致依据。比对期间变化的对象单独列出。
+比对异步执行，status 返回总计和分页差异；一致的对象只计数。保存 ID 可在离开页面后继续查询。
+每节点保留最近 10 次结果；每次保存前 10,000 条差异，全部对象仍计数。delete 只删除已结束的比对记录。
+Key 和前缀按原值传递，含空格或 shell 特殊字符时请加引号。
 `
 
 const cliAuthHelp = `登录与账户

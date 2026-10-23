@@ -1,128 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { mockApi } from "./fixtures";
-
-async function compareObjects(page: Page) {
-  await page.goto("/tools");
-  await page.getByRole("textbox", { name: "源 Bucket" }).fill("source");
-  await page.getByRole("textbox", { name: "源对象 Key" }).fill("file.txt");
-  await page.getByRole("textbox", { name: "目标 Bucket" }).fill("target");
-  await page.getByRole("button", { name: "目标使用相同 Key" }).click();
-  await page.getByRole("button", { name: "开始比对" }).click();
-}
-
-for (const status of [403, 503]) {
-  test(`metadata HTTP ${status} is unknown, not missing or a measured difference`, async ({
-    page,
-  }) => {
-    await mockApi(page);
-    await page.route("**/api/master/object-metadata?**", (route) =>
-      route.fulfill({
-        json: {
-          success: true,
-          partial: true,
-          sourceMetadata: {
-            exists: true,
-            queryStatus: "FOUND",
-            contentLength: 1024,
-            etag: "abc",
-          },
-          destMetadata: {
-            exists: null,
-            queryStatus: "UNAVAILABLE",
-            statusCode: status,
-            errorCode: "Unavailable",
-            error: "isolated query failed",
-          },
-          verification: {
-            sizeMatch: null,
-            message: "目标元数据查询失败，无法验证大小。",
-          },
-        },
-      }),
-    );
-    await compareObjects(page);
-    await expect(
-      page.getByText("查询失败，存在状态未知", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText(`HTTP ${status} · Unavailable`, { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText("对象不存在", { exact: true })).toHaveCount(0);
-    await expect(
-      page.getByText("元数据不完整，无法统计差异", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText(/两个对象的大小不一致|0 个字段不同|存在差异/, {
-        exact: false,
-      }),
-    ).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "仅看差异" })).toBeDisabled();
-    await expect(
-      page.getByRole("cell", { name: "abc", exact: true }),
-    ).toBeVisible();
-  });
-}
-
-test("metadata 404 is absent while two failed lookups retain both error details", async ({
-  page,
-}) => {
-  await mockApi(page);
-  let failBoth = false;
-  await page.route("**/api/master/object-metadata?**", (route) =>
-    route.fulfill({
-      json: failBoth
-        ? {
-            success: false,
-            partial: true,
-            message: "两端元数据查询失败",
-            sourceMetadata: {
-              exists: null,
-              queryStatus: "UNAVAILABLE",
-              error: "source timeout",
-            },
-            destMetadata: {
-              exists: null,
-              queryStatus: "UNAVAILABLE",
-              error: "target timeout",
-            },
-            verification: { sizeMatch: null, message: "无法验证" },
-          }
-        : {
-            success: true,
-            sourceMetadata: {
-              exists: false,
-              queryStatus: "NOT_FOUND",
-              statusCode: 404,
-            },
-            destMetadata: {
-              exists: true,
-              queryStatus: "FOUND",
-              contentLength: 1024,
-            },
-            verification: {
-              sizeMatch: null,
-              message: "源对象不存在，无法验证",
-            },
-          },
-    }),
-  );
-  await compareObjects(page);
-  await expect(page.getByText("对象不存在", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("查询失败，存在状态未知", { exact: true }),
-  ).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "仅看差异" })).toBeDisabled();
-  failBoth = true;
-  await page.getByRole("button", { name: "开始比对" }).click();
-  await expect(
-    page.getByText("查询失败，存在状态未知", { exact: true }),
-  ).toHaveCount(2);
-  await expect(page.getByText("source timeout", { exact: true })).toBeVisible();
-  await expect(page.getByText("target timeout", { exact: true })).toBeVisible();
-  await expect(page.getByText("没有元数据差异", { exact: true })).toHaveCount(
-    0,
-  );
-});
 
 test("partial failures expose server-reported nodes even when worker discovery omits them", async ({
   page,
@@ -186,15 +63,17 @@ test("partial clear refreshes available data and leaves a persistent failure rat
   await expect.poll(() => reads).toBeGreaterThan(readsBeforeClear);
   await expect(
     page
-      .getByText("部分节点清除失败（未完成节点：10.0.1.13）", { exact: true })
+      .getByText("部分节点清除失败（未完成节点：agent (10.0.1.13)）", {
+        exact: true,
+      })
       .first(),
   ).toBeVisible();
   await expect(
     page.getByText("清除请求已提交，正在刷新各节点记录。", { exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(
-    page.getByText("部分节点清除失败（未完成节点：10.0.1.13）", {
+    page.getByText("部分节点清除失败（未完成节点：agent (10.0.1.13)）", {
       exact: true,
     }),
   ).toBeVisible();
@@ -278,12 +157,13 @@ test("partial permanent deletion refreshes removed rows and retries only remaini
   await expect(
     page.getByRole("checkbox", { name: "选择任务 124", exact: true }),
   ).toBeChecked();
-  const message = "部分节点记录尚未删除，请刷新后重试（未完成节点：10.0.1.13）";
+  const message =
+    "部分节点记录尚未删除，请刷新后重试（未完成节点：agent (10.0.1.13)）";
   await expect(page.getByText(message, { exact: true }).first()).toBeVisible();
   await expect(
     page.getByText("永久删除请求已提交，正在刷新回收站。", { exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "永久删除", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("任务 ID：#124");

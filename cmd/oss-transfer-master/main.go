@@ -13,6 +13,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/master"
 	"github.com/MoonWX/oss-transfer/internal/servicehost"
+	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/webui"
 )
@@ -31,6 +32,9 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "__apply-update" {
+		return softwareupdate.RunHelper(os.Args[2])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		return migrate(context.Background(), os.Args[2:], os.Stdout, os.Stderr)
 	}
@@ -105,7 +109,8 @@ func run() error {
 		return servicehost.CheckReady(config.ReadyFile, *expectLaunch, "master", version, *expectPID)
 	}
 	return servicehost.Run(servicehost.Options{Name: config.ServiceName, Role: "master", Version: version, ReadyFile: config.ReadyFile, LogFile: config.LogFile}, func(ctx context.Context, ready func() error) error {
-		return serve(ctx, config, ready)
+		updater := softwareupdate.New(softwareupdate.Options{Role: "master", Version: version, Commit: commit, DataDirectory: config.DataDirectory, ConfigPath: *configPath, ServiceName: config.ServiceName})
+		return serve(ctx, config, updater, ready)
 	})
 }
 
@@ -121,7 +126,7 @@ func configureAgentArtifacts(config *servicehost.Config) error {
 	}
 	return master.ValidateAgentArtifacts(master.Options{AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage})
 }
-func serve(ctx context.Context, config servicehost.Config, ready func() error) error {
+func serve(ctx context.Context, config servicehost.Config, updater softwareupdate.Controller, ready func() error) error {
 	assets, err := webui.Assets()
 	if err != nil {
 		return fmt.Errorf("load console assets (use the release binary or build the frontend): %w", err)
@@ -138,7 +143,7 @@ func serve(ctx context.Context, config servicehost.Config, ready func() error) e
 		return err
 	}
 	defer db.Close()
-	handler, initialPassword, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage})
+	handler, initialPassword, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater})
 	if err != nil {
 		return err
 	}

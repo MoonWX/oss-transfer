@@ -43,6 +43,9 @@ type S3Config struct {
 	// MaxBufferedBytes bounds part payload buffers per Write; default 32 MiB.
 	// Larger parts use disk spooling; source reads remain sequential.
 	MaxBufferedBytes int64
+	// UploadMemory is shared by all S3 clients on one Agent. A full budget waits
+	// before reading payloads; it never changes a memory part into a disk part.
+	UploadMemory *UploadMemoryBudget
 	// Parts exceeding their buffer share or 64 MiB are spooled here for retries.
 	SpoolDirectory   string
 	RetryMaxAttempts int
@@ -55,6 +58,7 @@ type S3 struct {
 	partSize                      int64
 	partConcurrency               int
 	maxBufferedBytes              int64
+	uploadMemory                  *UploadMemoryBudget
 	connection                    S3ConnectionIdentity
 	alias                         string
 	uploadRegistry                S3UploadRegistry
@@ -128,7 +132,7 @@ func NewS3(config S3Config) (*S3, error) {
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
-	return &S3{client: client, bucket: config.Bucket, scope: config.Endpoint + "/" + config.Region + "/" + config.Bucket, partSize: config.PartSize, partConcurrency: config.PartConcurrency, maxBufferedBytes: config.MaxBufferedBytes, spoolDirectory: config.SpoolDirectory, connection: s3ConnectionIdentity(config)}, nil
+	return &S3{client: client, bucket: config.Bucket, scope: config.Endpoint + "/" + config.Region + "/" + config.Bucket, partSize: config.PartSize, partConcurrency: config.PartConcurrency, maxBufferedBytes: config.MaxBufferedBytes, uploadMemory: config.UploadMemory, spoolDirectory: config.SpoolDirectory, connection: s3ConnectionIdentity(config)}, nil
 }
 
 func (s *S3) Close() error { return nil }
@@ -309,7 +313,7 @@ func (s *S3) Write(ctx context.Context, key string, input io.Reader, options Wri
 	reader := contextReader{ctx, input}
 	// Even an unusually large configured part must not cause a whole-file buffer.
 	if options.Size <= s.partSize && options.Size <= min(maxMemoryPart, s.maxBufferedBytes) {
-		body, err := readPart(reader, options.Size, "")
+		body, err := s.readPart(ctx, reader, options.Size, min(maxMemoryPart, s.maxBufferedBytes))
 		if err != nil {
 			return WriteResult{}, err
 		}
@@ -350,20 +354,28 @@ func setPutMetadata(request *s3.PutObjectInput, options WriteOptions) {
 }
 
 type partBody struct {
-	reader  io.ReadSeeker
-	file    *os.File
-	name    string
-	cleanup func() error
+	reader    io.ReadSeeker
+	file      *os.File
+	name      string
+	cleanup   func() error
+	release   func()
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (p *partBody) close() error {
-	if p.cleanup != nil {
-		return p.cleanup()
-	}
-	if p.file == nil {
-		return nil
-	}
-	return errors.Join(p.file.Close(), os.Remove(p.name))
+	p.closeOnce.Do(func() {
+		if p.cleanup != nil {
+			p.closeErr = p.cleanup()
+		} else if p.file != nil {
+			p.closeErr = errors.Join(p.file.Close(), os.Remove(p.name))
+		}
+		p.reader = nil
+		if p.release != nil {
+			p.release()
+		}
+	})
+	return p.closeErr
 }
 
 func readPart(reader io.Reader, size int64, spool string) (*partBody, error) {

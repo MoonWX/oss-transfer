@@ -26,12 +26,13 @@ Master 只负责调度，数据由 Agent 传输。在 **执行节点 → 添加�
 
 添加存储连接，创建任务，即可开始迁移。
 
-需要升级时，重新运行安装命令即可。
+原生部署可在 **运维工具 → 版本更新** 中检测版本，先更新 Master，再更新 Agent。尚无此入口的旧版本需要先通过安装脚本升级一次。也可重新运行安装命令；Docker 部署通过 Compose 更新。
 
 ## 文档
 
 - [部署](deploy/native/README.md)：Windows、离线安装、自定义路径
 - [Docker Compose](docs/docker-compose.md)
 - [CLI](docs/cli.md)
+- [并发、对象比对与升级](docs/operations.md)
 
 从源码构建：运行 `./build.sh`。

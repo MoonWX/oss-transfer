@@ -91,6 +91,16 @@ func (m *Master) Create(config Config) (Snapshot, error) {
 // Update replaces one connection. Renaming requires an explicit delete/create;
 // an endpoint referring to the old alias must never silently change identity.
 func (m *Master) Update(alias string, config Config) (Snapshot, error) {
+	return m.update(alias, config, nil)
+}
+
+// UpdateAtRevision prevents an edit which retained undisclosed credentials from
+// restoring an older credential pair after a concurrent rotation.
+func (m *Master) UpdateAtRevision(alias string, config Config, revision uint64) (Snapshot, error) {
+	return m.update(alias, config, &revision)
+}
+
+func (m *Master) update(alias string, config Config, revision *uint64) (Snapshot, error) {
 	if !validAlias(alias) || config.Alias != alias {
 		return Snapshot{}, invalid("update alias must match the existing alias")
 	}
@@ -99,6 +109,9 @@ func (m *Master) Update(alias string, config Config) (Snapshot, error) {
 	}
 	config = cloneConfig(config)
 	return m.mutate(func(current *Snapshot) error {
+		if revision != nil && current.Revision != *revision {
+			return ErrRevisionConflict
+		}
 		for index := range current.Connections {
 			if current.Connections[index].Alias == alias {
 				current.Connections[index] = config

@@ -157,7 +157,7 @@ test("create-page connection and local-node retries target their own reads and r
   await expect(
     page.getByRole("combobox", { name: "源存储连接" }),
   ).toContainText("production");
-  await page.getByRole("combobox", { name: "执行节点 IP" }).click();
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
   await expect(
     page.getByRole("option", { name: /10\.0\.1\.12/ }),
   ).toBeVisible();

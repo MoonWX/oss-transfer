@@ -41,6 +41,8 @@ printf '%s\n' "${COMPREPLY[@]}"
 		{[]string{"oss-transfer-cli", "agent", ""}, []string{"details"}},
 		{[]string{"oss-transfer-cli", "node", "network", "--"}, []string{"--public-url", "--agent-url"}},
 		{[]string{"oss-transfer-cli", "task", ""}, []string{"restore", "purge"}},
+		{[]string{"oss-transfer-cli", "task", "limits", "224", "--"}, []string{"--list-qps", "--head-qps", "--put-qps", "--bandwidth-mbps"}},
+		{[]string{"oss-transfer-cli", "task", "create", "oss-to-oss", "source/src", "target/dst", "--"}, []string{"--list-qps", "--head-qps", "--put-qps"}},
 		{[]string{"oss-transfer-cli", "task", "children", "224", "--"}, []string{"--offset", "--limit"}},
 		{[]string{"oss-transfer-cli", "task", "show", "224", "--"}, []string{"--child", "--node", "--offset", "--limit"}},
 		{[]string{"oss-transfer-cli", "task", "trash", "--"}, []string{"--task-id", "--worker", "--direction", "--search"}},

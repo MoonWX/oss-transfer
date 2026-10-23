@@ -35,11 +35,12 @@ type taskRuntime struct {
 	closed       bool
 	sharedProofs map[int64]string
 	rates        map[int64]taskRateCache
+	observeAfter map[int64]int
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}}
+	return &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}, observeAfter: map[int64]int{}}
 }
 
 // Start launches control-plane reconciliation. HTTP construction alone does not
@@ -277,19 +278,20 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	return current, err
 }
 func (s *Server) changeTaskBandwidth(ctx context.Context, id int64, mbps float64) (task.Parent, error) {
-	p, err := s.tasks.repo.Get(id)
-	if err != nil {
-		return p, err
-	}
-	if mbps > 0 && math.Floor(mbps*125000) < float64(len(p.Spec.Nodes)) {
-		return p, errors.New("bandwidth budget is too small for the selected Agents")
-	}
-	p, err = s.tasks.repo.SetBandwidth(id, mbps)
-	if err != nil {
-		return p, err
-	}
-	err = s.tasks.exclusive(ctx, id, func() error { return s.tasks.policies(ctx, p) })
-	return p, err
+	return s.changeTaskLimits(ctx, id, &mbps, nil, false, nil)
+}
+func (s *Server) changeTaskLimits(ctx context.Context, id int64, mbps *float64, limits *execution.RequestLimits, replaceRequests bool, patch *task.RequestLimitsPatch) (p task.Parent, err error) {
+	// Serialize persistence and delivery with task lifecycle operations. A late
+	// delivery must not restore limits from before a concurrent edit or stop.
+	err = s.tasks.exclusive(ctx, id, func() error {
+		var updateErr error
+		p, updateErr = s.tasks.repo.UpdateLimits(id, mbps, limits, replaceRequests, patch)
+		if updateErr != nil {
+			return updateErr
+		}
+		return s.tasks.policies(ctx, p)
+	})
+	return
 }
 func parentPolicy(p task.Parent, index int) ratelimit.ParentLimit {
 	total := int64(math.Floor(p.Spec.BandwidthMbps * 125000))
@@ -458,13 +460,13 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 	if err := t.observe(ctx, p, 64); err != nil {
 		return err
 	}
-	outstanding, err := t.repo.Outstanding(p.ID, 0, 256)
+	p, err = t.repo.Get(p.ID)
 	if err != nil {
 		return err
 	}
 	// Keep a bounded amount of queued work in front of Agents. The scanner may
 	// continue writing its manifest on disk while execution applies backpressure.
-	if len(outstanding) < 64*len(p.Spec.Nodes) {
+	if pendingDispatchCapacity(p) > 0 {
 		if err := t.dispatch(ctx, p, scanControl); err != nil {
 			return err
 		}
@@ -478,7 +480,10 @@ func (t *taskRuntime) step(ctx context.Context, id int64) error {
 func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agentservice.ScanRequest) error {
 	scanner := nodeSession(p.Spec.Nodes[0])
 	control.Number = int64(p.DispatchedThrough)
-	limit := 16
+	limit := min(16, pendingDispatchCapacity(p))
+	if limit <= 0 {
+		return nil
+	}
 	if p.DispatchedThrough == 0 {
 		limit = 1 // Start the first transfer without collecting the rest of a page.
 	}
@@ -530,8 +535,20 @@ func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agent
 	return t.server.agentCall(ctx, scanner, "scan_ack", true, control, nil)
 }
 
+func pendingDispatchCapacity(p task.Parent) int {
+	// Counters cover the entire task; a 256-row query cannot enforce this
+	// bound once five or more nodes have outstanding assignments.
+	return max(0, 64*len(p.Spec.Nodes)-(p.ChildCount-p.FinishedChildren))
+}
+
 func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) (err error) {
-	children, err := t.repo.Outstanding(p.ID, 0, limit)
+	t.mu.Lock()
+	after := t.observeAfter[p.ID]
+	t.mu.Unlock()
+	children, err := t.repo.Outstanding(p.ID, after, limit)
+	if err == nil && len(children) == 0 && after > 0 {
+		children, err = t.repo.Outstanding(p.ID, 0, limit)
+	}
 	if err != nil {
 		return err
 	}
@@ -541,6 +558,14 @@ func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) (er
 		err = errors.Join(err, t.repo.ObserveBatch(p.ID, p.Generation, observations))
 	}()
 	for _, child := range children {
+		// Move past slow or unavailable children as well: one node must not
+		// prevent later children from reporting progress on the next pass.
+		t.mu.Lock()
+		if t.observeAfter == nil {
+			t.observeAfter = map[int64]int{}
+		}
+		t.observeAfter[p.ID] = child.Job.Number
+		t.mu.Unlock()
 		var record execution.Record
 		err := t.server.agentCall(ctx, nodeSession(child.Node), "child_get", false, map[string]string{"childId": child.Job.ChildID}, &record)
 		if agentStatus(err, 404) {

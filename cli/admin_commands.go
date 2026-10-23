@@ -299,7 +299,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			for _, raw := range adminArray(current["configs"]) {
 				config, _ := raw.(map[string]interface{})
 				if config["alias"] == alias {
-					for _, key := range []string{"endpoint", "region", "accessKey", "secretKey", "sessionToken", "useV2SignerType", "pathStyleEnable"} {
+					for _, key := range []string{"endpoint", "region", "useV2SignerType", "pathStyleEnable"} {
 						if value, exists := config[key]; exists {
 							body[key] = value
 						}
@@ -347,7 +347,16 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 				}
 			}
 		}
-		for _, field := range []string{"endpoint", "accessKey", "secretKey"} {
+		access, _ := body["accessKey"].(string)
+		secret, _ := body["secretKey"].(string)
+		if (access == "") != (secret == "") {
+			return nil, cliErrorf("更换凭据时，请同时提供 Access Key 和 Secret Key")
+		}
+		required := []string{"endpoint"}
+		if action == "add" || access != "" || secret != "" {
+			required = append(required, "accessKey", "secretKey")
+		}
+		for _, field := range required {
 			value, _ := body[field].(string)
 			if strings.TrimSpace(value) == "" || (field != "endpoint" && value == "********") {
 				return nil, cliErrorf("缺少 %s，请提供 Endpoint 或对应密钥的环境变量/文件", field)

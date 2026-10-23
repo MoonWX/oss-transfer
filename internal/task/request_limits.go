@@ -34,3 +34,10 @@ func ApplyRequestLimits(policy ratelimit.ParentLimit, spec Spec) ratelimit.Paren
 	}
 	return policy
 }
+
+// RequestLimitsPatch edits only supplied rates; zero removes that extra cap.
+type RequestLimitsPatch struct {
+	ListQPS *float64 `json:"listQps,omitempty"`
+	HeadQPS *float64 `json:"headQps,omitempty"`
+	PutQPS  *float64 `json:"putQps,omitempty"`
+}

@@ -44,6 +44,11 @@ import {
 import { api, useApi, useNotify } from "../lib/api";
 import { PageHeader } from "../components/Common";
 import { TaskBandwidthField } from "../components/TaskBandwidthField";
+import { TaskRequestLimitsFields } from "../components/TaskRequestLimitsFields";
+import {
+  parseTaskRequestLimits,
+  validateTaskRequestLimits,
+} from "../lib/taskRequestLimits";
 import {
   formatTaskBandwidth,
   parseTaskBandwidth,
@@ -61,6 +66,10 @@ type Direction = "OSS_TO_OSS" | "OSS_TO_LOCAL" | "LOCAL_TO_OSS";
 type Connection = { alias: string; endpoint: string };
 type Node = {
   executionNodeIp: string;
+  label?: string;
+  hostname?: string;
+  localIps?: string[];
+  connectionAddress?: string;
   reachable: boolean;
   localTransferSupported: boolean;
 };
@@ -93,6 +102,9 @@ type TransferForm = {
   dateAfter: string;
   dateBefore: string;
   taskBandwidthLimitMbps: string;
+  listQps: string;
+  headQps: string;
+  putQps: string;
 };
 type Precheck = {
   valid: boolean;
@@ -122,6 +134,15 @@ type Draft = {
   batchText: string;
   pendingRequest?: { id: string; fingerprint: string };
 };
+function nodeDisplayName(node: Node) {
+  const name =
+    node.label?.trim() || node.hostname?.trim() || node.executionNodeIp;
+  const addresses =
+    node.localIps?.filter((ip) => ip !== "127.0.0.1" && ip !== "::1") ?? [];
+  const address = addresses[0] || node.connectionAddress;
+  return address && address !== name ? `${name} · ${address}` : name;
+}
+
 const DRAFT_KEY = "oss-transfer-create-draft";
 const localUploadMode = (nodeCount: number) =>
   nodeCount > 1 ? "balanced" : "affinity";
@@ -152,6 +173,9 @@ const freshForm = (): TransferForm => ({
   dateAfter: "",
   dateBefore: "",
   taskBandwidthLimitMbps: "",
+  listQps: "",
+  headQps: "",
+  putQps: "",
 });
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -279,7 +303,7 @@ function EndpointCard({
         <Box
           sx={{
             p: 1.25,
-            borderRadius: 3,
+            borderRadius: "12px",
             display: "flex",
             bgcolor: "action.selected",
             color: "primary.main",
@@ -502,6 +526,19 @@ export default function CreateTransfer() {
   }, [form, tab, batchKind, batchFormat, batchText, submitted]);
   const configs = connections.data?.configs ?? [];
   const nodes = localNodes.data?.data?.nodes ?? [];
+  const nodeLabel = (id: string) => {
+    const node = nodes.find((item) => item.executionNodeIp === id);
+    return node ? nodeDisplayName(node) : id;
+  };
+  const availableLocalNodes = nodes.filter(
+    (node) => node.reachable && node.localTransferSupported,
+  );
+  const nextLocalNode = availableLocalNodes.find(
+    (node) =>
+      !form.bindings.some(
+        (binding) => binding.executionNodeIp === node.executionNodeIp,
+      ),
+  );
   useEffect(() => {
     if (!localNodes.data || form.eligibleWorkerNodes !== null) return;
     const available = (localNodes.data.data?.nodes ?? [])
@@ -586,6 +623,7 @@ export default function CreateTransfer() {
       dateAfter: optional(dateValue(form.dateAfter)),
       dateBefore: optional(dateValue(form.dateBefore)),
       distributionMode: effectiveDistributionMode,
+      requestLimits: parseTaskRequestLimits(form),
       taskBandwidthLimitMbps:
         parseTaskBandwidth(form.taskBandwidthLimitMbps) ?? undefined,
     };
@@ -638,6 +676,15 @@ export default function CreateTransfer() {
         .size !== form.bindings.length
     )
       throw new Error(tr("同一个执行节点只能绑定一次。"));
+    if (
+      form.bindings.some(
+        (binding) =>
+          !availableLocalNodes.some(
+            (node) => node.executionNodeIp === binding.executionNodeIp,
+          ),
+      )
+    )
+      throw new Error(tr("所选执行节点不可用，请刷新节点列表或重新选择。"));
     if (
       !sourceOss &&
       form.destinationMode !== "original" &&
@@ -752,6 +799,7 @@ export default function CreateTransfer() {
         );
       try {
         validateTaskBandwidth(row.taskBandwidthLimitMbps);
+        validateTaskRequestLimits(row.requestLimits);
       } catch (error) {
         throw new Error(
           tr("第 {value1} 项：{value2}", {
@@ -1091,7 +1139,7 @@ export default function CreateTransfer() {
               sx={{
                 border: "1px solid",
                 borderColor: "divider",
-                borderRadius: 3,
+                borderRadius: "12px",
                 p: 2,
               }}
             >
@@ -1122,23 +1170,37 @@ export default function CreateTransfer() {
               </Stack>
               <Stack spacing={2}>
                 <Autocomplete
-                  freeSolo
-                  options={nodes.map((node) => node.executionNodeIp)}
-                  value={binding.executionNodeIp}
-                  inputValue={binding.executionNodeIp}
-                  onInputChange={(_, value) =>
-                    setBinding(index, { executionNodeIp: value })
+                  options={Array.from(
+                    new Set([
+                      ...nodes.map((node) => node.executionNodeIp),
+                      ...(binding.executionNodeIp
+                        ? [binding.executionNodeIp]
+                        : []),
+                    ]),
+                  )}
+                  value={binding.executionNodeIp || null}
+                  getOptionLabel={nodeLabel}
+                  getOptionDisabled={(id) =>
+                    !availableLocalNodes.some(
+                      (node) => node.executionNodeIp === id,
+                    ) ||
+                    form.bindings.some(
+                      (other, otherIndex) =>
+                        otherIndex !== index && other.executionNodeIp === id,
+                    )
                   }
                   onChange={(_, value) =>
                     setBinding(index, { executionNodeIp: value || "" })
                   }
+                  noOptionsText={tr("暂无可用节点")}
                   renderOption={(props, ip) => {
                     const node = nodes.find(
                       (item) => item.executionNodeIp === ip,
                     );
+                    const { key, ...optionProps } = props;
                     return (
-                      <li {...props} key={ip}>
-                        <Box sx={{ flex: 1 }}>{ip}</Box>
+                      <li {...optionProps} key={key}>
+                        <Box sx={{ flex: 1 }}>{nodeLabel(ip)}</Box>
                         <Chip
                           size="small"
                           label={
@@ -1159,8 +1221,8 @@ export default function CreateTransfer() {
                     <TextField
                       {...params}
                       required
-                      label={tr("执行节点 IP")}
-                      placeholder={tr("选择或输入执行节点 IP")}
+                      label={tr("执行节点")}
+                      placeholder={tr("选择执行节点")}
                     />
                   )}
                 />
@@ -1192,23 +1254,30 @@ export default function CreateTransfer() {
         <Button
           variant="outlined"
           startIcon={<AddRounded />}
-          onClick={() =>
+          sx={{ borderRadius: "12px" }}
+          disabled={
+            !nextLocalNode ||
+            form.bindings.some((binding) => !binding.executionNodeIp)
+          }
+          onClick={() => {
+            if (!nextLocalNode) return;
             update({
               bindings: [
                 ...form.bindings,
-                { executionNodeIp: "", localPath: "" },
+                {
+                  executionNodeIp: nextLocalNode.executionNodeIp,
+                  localPath: form.bindings[0]?.localPath || "",
+                },
               ],
-            })
-          }
+            });
+          }}
         >
           {tr("添加共享存储节点")}
         </Button>
       </Stack>
       {form.bindings.length > 1 && (
         <Alert severity="info">
-          {tr(
-            "多个节点必须访问同一共享存储中的同一份数据，挂载路径可以不同。预检检查可访问性，不验证是否属于同一共享卷。",
-          )}
+          {tr("多个节点必须访问同一共享存储中的同一份数据，挂载路径可以不同。")}
         </Alert>
       )}
       {form.direction === "OSS_TO_LOCAL" && form.sourceMode === "object" && (
@@ -1412,13 +1481,6 @@ export default function CreateTransfer() {
     </EndpointCard>
   );
 
-  const bandwidthField = (
-    <TaskBandwidthField
-      value={form.taskBandwidthLimitMbps}
-      onChange={(taskBandwidthLimitMbps) => update({ taskBandwidthLimitMbps })}
-    />
-  );
-
   const examples = () => {
     const uploadNodes = nodes
       .filter((node) => node.reachable)
@@ -1608,7 +1670,7 @@ export default function CreateTransfer() {
                         p: 2,
                         justifyContent: "flex-start",
                         textAlign: "left",
-                        borderRadius: 3,
+                        borderRadius: "12px",
                         borderColor:
                           form.direction === direction.value
                             ? "primary.main"
@@ -1669,7 +1731,7 @@ export default function CreateTransfer() {
                           {tr("迁移选项")}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {tr("冲突处理、节点分发、时间与带宽")}
+                          {tr("冲突处理、节点分发、时间与限速")}
                         </Typography>
                       </Box>
                     </Stack>
@@ -1699,6 +1761,7 @@ export default function CreateTransfer() {
                               ]),
                             )}
                             value={selectedWorkerNodes}
+                            getOptionLabel={nodeLabel}
                             loading={localNodes.loading}
                             getOptionDisabled={(ip) =>
                               !nodes.some(
@@ -1719,7 +1782,7 @@ export default function CreateTransfer() {
                               return (
                                 <li key={key} {...optionProps}>
                                   <Checkbox checked={selected} sx={{ mr: 1 }} />
-                                  {ip}
+                                  {nodeLabel(ip)}
                                   {!available && tr(" · 不可用")}
                                 </li>
                               );
@@ -1782,9 +1845,7 @@ export default function CreateTransfer() {
                           {tr("覆盖同名对象或文件")}
                         </MenuItem>
                       </TextField>
-                      {form.direction === "LOCAL_TO_OSS" ? (
-                        bandwidthField
-                      ) : (
+                      {form.direction !== "LOCAL_TO_OSS" && (
                         <TextField
                           select
                           label={tr("节点分发方式")}
@@ -1824,7 +1885,44 @@ export default function CreateTransfer() {
                         onChange={(e) => update({ dateBefore: e.target.value })}
                         slotProps={{ inputLabel: { shrink: true } }}
                       />
-                      {form.direction !== "LOCAL_TO_OSS" && bandwidthField}
+                      <Box sx={{ gridColumn: "1 / -1" }}>
+                        <Divider sx={{ mb: 2.5 }} />
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          alignItems="baseline"
+                          sx={{ mb: 2 }}
+                        >
+                          <Typography variant="subtitle2">
+                            {tr("任务限速")}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {tr("所有执行节点合计")}
+                          </Typography>
+                        </Stack>
+                        <Box
+                          sx={{
+                            display: "grid",
+                            gridTemplateColumns: {
+                              xs: "1fr",
+                              sm: "1fr 1fr",
+                              lg: "repeat(4, minmax(0, 1fr))",
+                            },
+                            gap: 2,
+                          }}
+                        >
+                          <TaskBandwidthField
+                            value={form.taskBandwidthLimitMbps}
+                            onChange={(taskBandwidthLimitMbps) =>
+                              update({ taskBandwidthLimitMbps })
+                            }
+                          />
+                          <TaskRequestLimitsFields
+                            value={form}
+                            onChange={(values) => update(values)}
+                          />
+                        </Box>
+                      </Box>
                     </Box>
                   </AccordionDetails>
                 </Accordion>
@@ -2026,7 +2124,7 @@ export default function CreateTransfer() {
                     >
                       <Box>
                         <Typography variant="body2" fontWeight={600}>
-                          {binding.executionNodeIp}
+                          {nodeLabel(binding.executionNodeIp)}
                         </Typography>
                         <Typography
                           variant="caption"
@@ -2214,9 +2312,7 @@ export default function CreateTransfer() {
                   color="text.secondary"
                   sx={{ display: "block", mt: 1.5 }}
                 >
-                  {tr(
-                    "预检检查本地路径和访问权限，必要时创建目标目录。任务创建后自动分发。",
-                  )}
+                  {tr("多节点预检会读写临时文件，验证共享目录。")}
                 </Typography>
               )}
               <Typography

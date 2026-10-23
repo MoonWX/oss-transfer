@@ -10,7 +10,7 @@ _oss_transfer_cli_completion() {
         list-failed-objs failed list-fallback-objs fallback delete-failed-objs clear-failed \
         delete-fallback-objs clear-fallback diff-objects import-inventory count-lines help"
     local create_flags="--node --binding --prefix --object-key --mapping --target-prefix --target-key \
-        --target-relative-path --conflict --distribution --date-after --date-before --bandwidth-mbps \
+        --target-relative-path --conflict --distribution --date-after --date-before --bandwidth-mbps --list-qps --head-qps --put-qps \
         --overwrite --balanced --validate-only --request-id"
     local storage_flags="--endpoint --region --session-token-env --session-token-file --clear-session-token --access-key-env --access-key-file --secret-key-env --secret-key-file \
         --validate --v2-signer --path-style"
@@ -24,7 +24,7 @@ _oss_transfer_cli_completion() {
         if ((skip)); then skip=0; continue; fi
         case "$word" in
             --*=*) continue ;;
-            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
+            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
                 skip=1; continue ;;
             -*) continue ;;
         esac
@@ -52,7 +52,7 @@ _oss_transfer_cli_completion() {
         --direction)
             if [[ $command == exceptions ]]; then choices="OSS_TO_LOCAL LOCAL_TO_OSS";
             else choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
-        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
+        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
             return ;;
     esac
     if [[ -n $choices ]]; then
@@ -71,7 +71,7 @@ _oss_transfer_cli_completion() {
             esac ;;
         task)
             case "$action" in
-                "") choices="list show children create import stop resume start retry delete trash restore purge bandwidth report" ;;
+                "") choices="list show children create import stop resume start retry delete trash restore purge bandwidth limits report" ;;
                 list) flags="--status --source --dest --worker --direction --search --all --before-id --limit" ;;
                 show) flags="--child --node --offset --limit" ;;
                 children) flags="--offset --limit" ;;
@@ -85,6 +85,7 @@ _oss_transfer_cli_completion() {
                     elif [[ $cur != -* ]]; then _filedir; return; fi ;;
                 purge) flags="--yes" ;;
                 report) flags="--output" ;;
+                limits) flags="--list-qps --head-qps --put-qps --bandwidth-mbps" ;;
                 bandwidth) if ((${#positional[@]} == 3)); then choices="unlimited"; fi ;;
             esac ;;
         node)

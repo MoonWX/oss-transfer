@@ -38,6 +38,7 @@ type Service struct {
 	Temporary    *LocalTempRegistry
 	TempRecovery TempRecoveryReport
 	MPURecovery  S3RecoveryReport
+	preflight    *preflightProbes
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wake         chan struct{}
@@ -51,6 +52,10 @@ type Options struct {
 
 func New(store *state.Store, options Options) (*Service, error) {
 	if err := store.ClaimRole("agent"); err != nil {
+		return nil, err
+	}
+	preflight := &preflightProbes{store: store}
+	if err := preflight.fencePending(); err != nil {
 		return nil, err
 	}
 	configs := storageconfig.NewAgent(store)
@@ -118,8 +123,10 @@ func New(store *state.Store, options Options) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	s.preflight = preflight
 	s.workers.Add(1)
 	go s.schedule()
+	go preflight.run(ctx)
 	return s, nil
 }
 func (s *Service) Close(ctx context.Context) error {
@@ -179,7 +186,7 @@ func (s *Service) schedule() {
 // parent fences. They can reconcile a lost reply without a second command ledger.
 func (s *Service) ReplaySafe(operation string) bool {
 	switch operation {
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true
 	}
 	return false
@@ -260,6 +267,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		return badRequest(errors.New("operation requires a mutating command"))
 	}
 	switch c.Operation {
+	case "preflight_probe":
+		var request PreflightProbeRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		err := s.preflight.execute(ctx, request)
+		return response(map[string]any{"verified": err == nil}, err)
 	case "task_metrics":
 		var request struct {
 			ParentID   int64  `json:"parentId"`

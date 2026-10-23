@@ -33,16 +33,14 @@ import {
   RefreshRounded,
   SearchRounded,
   ShieldOutlined,
-  VisibilityOffOutlined,
-  VisibilityOutlined,
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
 import { EmptyState, PageHeader } from "../components/Common";
 type Connection = {
   alias: string;
   endpoint: string;
-  accessKey: string;
-  secretKey: string;
+  region?: string;
+  credentialsConfigured?: boolean;
   useV2SignerType?: boolean | null;
   pathStyleEnable?: boolean | null;
 };
@@ -64,6 +62,8 @@ const partialResult = (result?: SaveResult | null) => {
   return result?.success === false;
 };
 type Form = Connection & {
+  accessKey: string;
+  secretKey: string;
   validate: boolean;
 };
 const blankForm = (): Form => ({
@@ -90,7 +90,6 @@ export default function StoragePage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(blankForm);
-  const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
@@ -119,25 +118,38 @@ export default function StoragePage() {
   const partial = partialResult(result);
   const edit = (connection?: Connection) => {
     setEditing(connection?.alias ?? null);
-    setForm(connection ? { ...connection, validate: true } : blankForm());
+    setForm(
+      connection
+        ? {
+            ...blankForm(),
+            alias: connection.alias,
+            endpoint: connection.endpoint,
+            region: connection.region,
+            useV2SignerType: connection.useV2SignerType,
+            pathStyleEnable: connection.pathStyleEnable,
+          }
+        : blankForm(),
+    );
     setFormError(null);
-    setReveal(false);
     setEditorOpen(true);
   };
   const closeEditor = () => {
     if (!busy) {
       setEditorOpen(false);
       setForm(blankForm());
-      setReveal(false);
     }
   };
   const save = async () => {
     if (
-      ![form.alias, form.endpoint, form.accessKey, form.secretKey].every(
-        (value) => value.trim(),
-      )
+      ![form.alias, form.endpoint].every((value) => value.trim()) ||
+      (!editing &&
+        ![form.accessKey, form.secretKey].every((value) => value.trim()))
     ) {
       setFormError(t("请填写连接名称、Endpoint、Access Key 和 Secret Key。"));
+      return;
+    }
+    if (Boolean(form.accessKey) !== Boolean(form.secretKey)) {
+      setFormError(t("更换凭据时，请同时填写 Access Key 和 Secret Key。"));
       return;
     }
     if (
@@ -166,7 +178,6 @@ export default function StoragePage() {
       setResult({ ...response, action: editing ? "UPDATE" : "ADD" });
       setEditorOpen(false);
       setForm(blankForm());
-      setReveal(false);
       notify(
         response.message ||
           (editing ? t("存储连接已更新") : t("存储连接已添加")),
@@ -537,43 +548,24 @@ export default function StoragePage() {
               onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
             />
             <TextField
-              required
+              required={!editing || Boolean(form.secretKey)}
               label="Access Key"
-              type={reveal ? "text" : "password"}
+              type="password"
+              placeholder={editing ? t("留空保留现有凭据") : undefined}
               autoComplete="off"
               value={form.accessKey}
               disabled={busy}
               onChange={(e) => setForm({ ...form, accessKey: e.target.value })}
             />
             <TextField
-              required
+              required={!editing || Boolean(form.accessKey)}
               label="Secret Key"
-              type={reveal ? "text" : "password"}
+              type="password"
+              placeholder={editing ? t("留空保留现有凭据") : undefined}
               autoComplete="new-password"
               value={form.secretKey}
               disabled={busy}
               onChange={(e) => setForm({ ...form, secretKey: e.target.value })}
-              slotProps={{
-                input: {
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton
-                        onClick={() => setReveal(!reveal)}
-                        aria-label={
-                          reveal ? t("隐藏访问凭据") : t("显示访问凭据")
-                        }
-                        edge="end"
-                      >
-                        {reveal ? (
-                          <VisibilityOffOutlined />
-                        ) : (
-                          <VisibilityOutlined />
-                        )}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                },
-              }}
             />
             <Box
               sx={{

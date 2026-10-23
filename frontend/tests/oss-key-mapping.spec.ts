@@ -381,7 +381,8 @@ test("LOCAL upload naming remains independent and retains its existing request s
   await page
     .getByRole("textbox", { name: "目标对象 Key", exact: true })
     .fill("local.txt");
-  await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+  await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("源文件或目录绝对路径").fill("/mnt/data/source.txt");
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
   await expect

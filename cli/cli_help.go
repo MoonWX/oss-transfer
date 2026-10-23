@@ -17,6 +17,7 @@ const cliHelp = `OSS Transfer CLI
   task restore <ID...>            从回收站恢复指定任务
   task purge <ID...> --yes        永久删除回收站内指定记录
   task bandwidth <ID> [Mbps|unlimited]
+  task limits <ID> [--list-qps 值 --head-qps 值 --put-qps 值]
   task report <ID> [--output 文件.zip]
 
 节点与存储
@@ -96,6 +97,10 @@ const cliTaskHelp = `任务管理
   delete <ID...>                  将任务记录移入回收站
   restore <ID...>                 从回收站恢复指定任务
   purge <ID...> --yes             永久删除回收站内指定任务记录
+  limits <ID> [选项]              查看或调整请求 QPS 与带宽
+      --list-qps 值 --head-qps 值 --put-qps 值 --bandwidth-mbps 值
+      --list-qps 同时限制 LIST 列举与 GET 对象读取
+      QPS 支持 0 或 unlimited 解除单项限制；未填写的字段保持不变
   bandwidth <ID>                 查看任务带宽上限
   bandwidth <ID> <Mbps|unlimited> 设置或移除任务额外带宽上限
   report <ID> [--output 文件.zip] 导出已结束或已停止任务的 ZIP 报告
@@ -116,6 +121,7 @@ const cliTaskHelp = `任务管理
   oss-transfer-cli task resume 224-226
   oss-transfer-cli task bandwidth 224 200
   oss-transfer-cli task bandwidth 224 unlimited
+  oss-transfer-cli task limits 224 --list-qps 100 --head-qps 500 --put-qps 200
   oss-transfer-cli task report 224 --output ./task-224.zip
   oss-transfer-cli task trash --direction oss-to-local --worker 10.0.0.2
 
@@ -124,7 +130,7 @@ const cliTaskHelp = `任务管理
 子任务默认读取 25 个编号，--limit 为 1–200；--offset 跳过指定数量的编号，不重新编号。
 list/trash 的 --limit 为 1–10000；--before-id 从指定 ID 之前加载更早任务。
 --child 按编号直接读取详情，不加载其他子任务；同编号在多个节点存在时须用 --node。
---watch 仅支持 list/show/children/trash 及不带新值的 bandwidth 查询。
+--watch 仅支持 list/show/children/trash 及不带新值的 bandwidth/limits 查询。
 删除操作只处理迁移记录，源端和目标端的数据对象不受影响。
 `
 
@@ -142,6 +148,8 @@ const cliTaskCreateHelp = `创建迁移任务
   --date-after YYYY-MM-DDTHH:mm:ss  对象更新时间起点
   --date-before YYYY-MM-DDTHH:mm:ss 对象更新时间终点，须晚于起点
   --bandwidth-mbps <值>            任务带宽上限，0.1–1000000 Mbps
+  --list-qps/--head-qps/--put-qps <值>  所有执行节点合计的任务请求上限
+      --list-qps 同时限制 LIST 列举与 GET 对象读取
   --request-id <标识>              复用同一次创建请求；省略时自动生成
 
 OSS 间迁移

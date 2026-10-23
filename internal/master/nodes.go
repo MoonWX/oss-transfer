@@ -90,11 +90,16 @@ func (s *Server) localNodesWithSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	nodes := make([]map[string]any, 0, len(replies))
 	for _, reply := range replies {
-		node := map[string]any{"executionNodeIp": reply.Member.Address, "reachable": reply.Err == nil, "localTransferSupported": true, "agent": true}
+		s.agents.mu.Lock()
+		remote := s.agents.remoteAddress[reply.Member.ID]
+		s.agents.mu.Unlock()
+		node := map[string]any{"executionNodeIp": reply.Member.Address, "id": reply.Member.ID, "label": reply.Member.Label, "connectionAddress": remote, "reachable": reply.Err == nil, "localTransferSupported": true, "agent": true}
 		if reply.Err != nil {
 			node["message"] = reply.Err.Error()
 		} else {
 			node["advertisedLocalRoots"] = reply.Value["advertisedLocalRoots"]
+			node["hostname"] = reply.Value["hostname"]
+			node["localIps"] = reply.Value["localIps"]
 		}
 		nodes = append(nodes, node)
 	}

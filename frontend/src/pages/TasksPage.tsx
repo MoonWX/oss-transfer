@@ -1,5 +1,4 @@
 import { t as tr, useI18n, formatDate } from "../lib/i18n";
-import { taskRequestLimitRows } from "../lib/taskRequestLimits";
 import { useWorkerStatus } from "../lib/workerStatus";
 import { nodeName, type NodeRegistry } from "../lib/nodeRegistry";
 import { parentTaskFilterStates, taskStatusGroup } from "../lib/taskStatus";
@@ -40,6 +39,8 @@ import {
   TableContainer,
   TableHead,
   TablePagination,
+  ToggleButton,
+  ToggleButtonGroup,
   TableRow,
   TextField,
   Tooltip,
@@ -63,6 +64,7 @@ import {
 } from "@mui/icons-material";
 import { api, saveFile, useApi, useNotify } from "../lib/api";
 import { numberSubtasks } from "../lib/subtasks";
+import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
 import {
   keyMappingLabels,
@@ -369,11 +371,78 @@ function TaskDetail({
     },
     [taskId],
   );
-  const children = useApi(
-    taskId && !requestedChildId && pageVisible
-      ? `/api/master/tasks/${taskId}/children?offset=${offset}&limit=25`
-      : null,
-    pageVisible ? refreshMs : 0,
+  const [childrenFilter, setChildrenFilter] = useState<{
+    parentId?: number;
+    view: ChildView;
+  }>({ parentId: taskId, view: "all" });
+  const childView =
+    childrenFilter.parentId === taskId ? childrenFilter.view : "all";
+  const visibleChildOffsets = useRef(new Set<number>());
+  const visibleChildElements = useRef(new Set<Element>());
+  const childRowsObserver = useRef<IntersectionObserver | undefined>(undefined);
+  const observeChildRow = useCallback((element: HTMLDivElement | null) => {
+    if (!element) return;
+    childRowsObserver.current ??= new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting)
+          visibleChildElements.current.add(entry.target);
+        else visibleChildElements.current.delete(entry.target);
+      }
+      visibleChildOffsets.current = new Set(
+        [...visibleChildElements.current].map((row) =>
+          Number(row.getAttribute("data-child-offset")),
+        ),
+      );
+    });
+    const observer = childRowsObserver.current;
+    observer.observe(element);
+    return () => {
+      observer.unobserve(element);
+      visibleChildElements.current.delete(element);
+      visibleChildOffsets.current = new Set(
+        [...visibleChildElements.current].map((row) =>
+          Number(row.getAttribute("data-child-offset")),
+        ),
+      );
+    };
+  }, []);
+  const children = useTaskChildren({
+    parentId: taskId,
+    view: childView,
+    initialOffset: childView === "active" ? 0 : offset,
+    enabled: !!taskId && !requestedChildId && pageVisible,
+    refreshMs,
+    visibleOffsets: visibleChildOffsets,
+  });
+  const [moreVisible, setMoreVisible] = useState(false);
+  const moreObserver = useRef<IntersectionObserver | undefined>(undefined);
+  const attachMore = useCallback(
+    (element: HTMLDivElement | null) => {
+      moreObserver.current?.disconnect();
+      setMoreVisible(false);
+      if (element) {
+        moreObserver.current = new IntersectionObserver(
+          ([entry]) => setMoreVisible(entry.isIntersecting),
+          { rootMargin: "0px 0px 160px 0px" },
+        );
+        moreObserver.current.observe(element);
+      }
+    },
+    [taskId, childView],
+  );
+  useEffect(() => {
+    if (moreVisible && !children.loading && !children.error) {
+      setMoreVisible(false);
+      children.loadMore();
+    }
+  }, [moreVisible, children.loading, children.error, children.loadMore]);
+  useEffect(
+    () => () => {
+      regionObserver.current?.disconnect();
+      childRowsObserver.current?.disconnect();
+      moreObserver.current?.disconnect();
+    },
+    [],
   );
   const validChild =
     !!taskId &&
@@ -386,25 +455,7 @@ function TaskDetail({
       : null,
     refreshMs,
   );
-  const cachedPage = useRef<
-    { parentId: number; offset: number; data: any } | undefined
-  >(undefined);
-  if (
-    taskId != null &&
-    children.data?.data?.parentTaskId === taskId &&
-    children.data.data.offset === offset
-  )
-    cachedPage.current = {
-      parentId: taskId!,
-      offset,
-      data: children.data.data,
-    };
-  const pageData =
-    cachedPage.current &&
-    cachedPage.current.parentId === taskId &&
-    cachedPage.current.offset === offset
-      ? cachedPage.current.data
-      : undefined;
+  const pageData = children.data;
   const childData =
     taskId != null &&
     child.data?.data?.parentTaskId === taskId &&
@@ -421,7 +472,6 @@ function TaskDetail({
         shardsLoading: boolean;
         shardsComplete: boolean;
         childrenTotal: number;
-        childrenOffset: number;
         childShards: any[];
         childLoading: boolean;
         childPartial: boolean;
@@ -443,14 +493,13 @@ function TaskDetail({
       shardsLoading: !pageData && !children.error,
       shardsComplete: !!pageData && !children.error && !pageData.partial,
       childrenTotal: pageData?.totalCount || 0,
-      childrenOffset: offset,
       childShards: childData?.items || [],
       childLoading: validChild && !childData && !child.error,
       childPartial: !!childData?.partial,
       childError: child.error,
       loading,
       operationError,
-      error: children.error || loadError || null,
+      error: loadError || null,
       partial: loadPartial || !!task?.partial || !!pageData?.partial,
     };
   }
@@ -542,7 +591,7 @@ function TaskDetail({
       }
     }
     previousScreen.current = { taskId, childId, childNode };
-  }, [taskId, childId, childNode, pageData]);
+  }, [taskId, childId, childNode, pageData?.items.length]);
   const exportReport = async () => {
     if (!current || !reportAvailable(current)) return;
     const taskId = current.taskIndex;
@@ -732,7 +781,7 @@ function TaskDetail({
             active={!!taskId}
             refreshMs={refreshMs}
           />
-          <ErrorAlert error={view?.error || null} onRetry={children.refresh} />
+          <ErrorAlert error={view?.error || null} onRetry={onRefresh} />
           {view?.partial && (
             <Alert severity="warning" sx={{ mb: 2 }}>
               {tr("任务信息不完整，请刷新或检查执行节点。")}
@@ -853,7 +902,6 @@ function TaskDetail({
           <Stack gap={2}>
             {[
               [tr("执行节点"), workers(current)],
-              ...taskRequestLimitRows(current.requestLimits),
               [
                 tr("节点分发方式"),
                 current.distributionMode === "balanced"
@@ -976,9 +1024,39 @@ function TaskDetail({
                 ref={attachChildrenRegion}
                 data-testid="task-children-region"
               >
-                <Typography variant="h6" sx={{ mb: 2 }}>
-                  {tr("子任务")}
-                </Typography>
+                <Stack
+                  direction="row"
+                  justifyContent="space-between"
+                  alignItems="center"
+                  spacing={1}
+                  sx={{ mb: 2 }}
+                >
+                  <Typography variant="h6">{tr("子任务")}</Typography>
+                  <ToggleButtonGroup
+                    value={childView}
+                    exclusive
+                    size="small"
+                    aria-label={tr("子任务筛选")}
+                    onChange={(_, value: ChildView | null) => {
+                      if (value)
+                        setChildrenFilter({ parentId: taskId, view: value });
+                    }}
+                  >
+                    <ToggleButton value="all">{tr("全部")}</ToggleButton>
+                    <ToggleButton value="active">{tr("进行中")}</ToggleButton>
+                  </ToggleButtonGroup>
+                </Stack>
+                {childView === "all" && offset > 0 && (
+                  <Button
+                    size="small"
+                    sx={{ mb: 1 }}
+                    onClick={() =>
+                      setPageWindow({ parentId: taskId, offset: 0 })
+                    }
+                  >
+                    {tr("从头查看子任务")}
+                  </Button>
+                )}
                 {view?.shardsLoading ? (
                   <Stack
                     direction="row"
@@ -994,17 +1072,21 @@ function TaskDetail({
                 ) : shards.length === 0 ? (
                   view?.shardsComplete ? (
                     <Typography variant="body2" color="text.secondary">
-                      {view?.childrenTotal
-                        ? tr("此范围暂无子任务")
-                        : tr("尚未生成子任务")}
+                      {childView === "active"
+                        ? tr("暂无进行中的子任务")
+                        : view?.childrenTotal
+                          ? tr("此范围暂无子任务")
+                          : tr("尚未生成子任务")}
                     </Typography>
                   ) : null
                 ) : (
                   <Stack gap={1.5}>
-                    {shards.map((shard: any, index: number) => (
+                    {shards.map((shard: any) => (
                       <Paper
                         variant="outlined"
-                        key={`${shard.shardId || shard.taskIndex}-${index}`}
+                        key={subtaskIdentity(shard)}
+                        ref={observeChildRow}
+                        data-child-offset={children.pageOffset(shard)}
                         sx={{ overflow: "hidden" }}
                       >
                         <ButtonBase
@@ -1070,28 +1152,31 @@ function TaskDetail({
                     ))}
                   </Stack>
                 )}
-                {((view?.childrenTotal || 0) > 25 ||
-                  (view?.childrenOffset || 0) > 0) && (
-                  <TablePagination
-                    component="div"
-                    count={view?.childrenTotal || 0}
-                    page={Math.floor((view?.childrenOffset || 0) / 25)}
-                    rowsPerPage={25}
-                    rowsPerPageOptions={[]}
-                    labelDisplayedRows={({ from, to, count }) =>
-                      `${from}–${to} / ${count}`
-                    }
-                    getItemAriaLabel={(type) =>
-                      type === "next" ? tr("下一页子任务") : tr("上一页子任务")
-                    }
-                    onPageChange={(_, page) =>
-                      setPageWindow({ parentId: taskId, offset: page * 25 })
-                    }
-                    sx={{
-                      ".MuiTablePagination-toolbar": { px: 0 },
-                      ".MuiTablePagination-spacer": { flex: 1 },
-                    }}
-                  />
+                {(pageData || children.error) && (
+                  <Box
+                    ref={attachMore}
+                    data-testid="task-children-more"
+                    sx={{ pt: 2, minHeight: 32, textAlign: "center" }}
+                  >
+                    {children.error ? (
+                      <ErrorAlert
+                        error={children.error}
+                        onRetry={children.retry}
+                      />
+                    ) : children.loadingMore ? (
+                      <CircularProgress size={18} />
+                    ) : pageData?.hasMore ? (
+                      <Typography variant="caption" color="text.secondary">
+                        {tr("向下滚动加载更多")}
+                      </Typography>
+                    ) : shards.length > 0 ? (
+                      <Typography variant="caption" color="text.secondary">
+                        {tr("已加载全部 {count} 个子任务", {
+                          count: shards.length,
+                        })}
+                      </Typography>
+                    ) : null}
+                  </Box>
                 )}
               </Box>
             </>

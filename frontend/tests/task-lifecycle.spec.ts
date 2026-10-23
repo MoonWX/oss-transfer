@@ -216,7 +216,8 @@ test("local creation uses its parent ID instead of a worker shard ID", async ({
   await page.getByRole("combobox", { name: "源存储连接" }).click();
   await page.getByRole("option", { name: "production", exact: true }).click();
   await page.getByRole("combobox", { name: "源存储桶" }).fill("media-archive");
-  await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+  await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/media");
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
   await expect(

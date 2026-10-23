@@ -18,14 +18,16 @@ async function configureUpload(
     savedMode === "balanced" ? "均衡分发" : "亲和分发",
   );
   await page.getByRole("button", { name: /本地 → 对象存储/ }).click();
-  await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+  await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("源文件或目录绝对路径").fill("/mnt/datasets");
   if (nodeCount === 2) {
     await page.getByRole("button", { name: "添加共享存储节点" }).click();
     await page
-      .getByRole("combobox", { name: "执行节点 IP" })
+      .getByRole("combobox", { name: "执行节点", exact: true })
       .nth(1)
-      .fill("10.0.1.13");
+      .click();
+    await page.getByRole("option", { name: /10\.0\.1\.13/ }).click();
     await page
       .getByLabel("源文件或目录绝对路径")
       .nth(1)
@@ -177,7 +179,7 @@ for (const manualPrecheck of [true, false]) {
         .first(),
     ).toBeVisible();
     await expect(
-      page.getByRole("combobox", { name: "执行节点 IP" }),
+      page.getByRole("combobox", { name: "执行节点", exact: true }),
     ).toHaveCount(2);
     await expect(
       page.getByRole("button", { name: "创建迁移任务", exact: true }),
@@ -187,7 +189,7 @@ for (const manualPrecheck of [true, false]) {
       .getByRole("button", { name: "移除执行节点 1", exact: true })
       .click();
     await expect(
-      page.getByRole("combobox", { name: "执行节点 IP" }),
+      page.getByRole("combobox", { name: "执行节点", exact: true }),
     ).toHaveValue("10.0.1.13");
     await expect(
       page.getByText("跳过同名对象或文件 · 单节点执行", { exact: true }),

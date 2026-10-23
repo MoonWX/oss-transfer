@@ -19,7 +19,7 @@ type mountInfo struct {
 
 // Addresses belong to this host. The Master separately records the peer
 // address it sees; NAT addresses must not be guessed from local interfaces.
-func hostDetails() map[string]any {
+func hostIdentity() map[string]any {
 	hostname, _ := os.Hostname()
 	addresses := make([]string, 0)
 	seen := map[string]bool{}
@@ -39,6 +39,11 @@ func hostDetails() map[string]any {
 		}
 	}
 	sort.Strings(addresses)
+	return map[string]any{"hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "localIps": addresses}
+}
+
+func hostDetails() map[string]any {
+	details := hostIdentity()
 	mounts := make([]mountInfo, 0)
 	if runtime.GOOS == "linux" {
 		if file, err := os.Open("/proc/self/mountinfo"); err == nil {
@@ -46,7 +51,8 @@ func hostDetails() map[string]any {
 			_ = file.Close()
 		}
 	}
-	return map[string]any{"hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "localIps": addresses, "mounts": mounts}
+	details["mounts"] = mounts
+	return details
 }
 
 func parseMountInfo(reader io.Reader) []mountInfo {

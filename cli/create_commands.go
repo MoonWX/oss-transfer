@@ -15,7 +15,7 @@ import (
 func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, error) {
 	opts, err := parseCommandOptions(args, []string{
 		"node", "binding", "prefix", "object-key", "mapping", "target-prefix", "target-key",
-		"target-relative-path", "conflict", "distribution", "date-after", "date-before", "bandwidth-mbps", "request-id",
+		"target-relative-path", "conflict", "distribution", "date-after", "date-before", "bandwidth-mbps", "request-id", "list-qps", "head-qps", "put-qps",
 	}, []string{"overwrite", "balanced", "validate-only"})
 	if err != nil {
 		return nil, err
@@ -88,6 +88,14 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 			return nil, cliErrorf("任务带宽须为 0.1–1,000,000 Mbps")
 		}
 		row["taskBandwidthLimitMbps"] = limit
+	}
+	limits, err := taskRequestLimitOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(limits) > 0 {
+		limits["scope"] = "CLUSTER"
+		row["requestLimits"] = limits
 	}
 	alias, bucket, err := createParseOssEndpoint(opts.Positionals[1])
 	if err != nil {

@@ -673,9 +673,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Import tasks",
     ja: "タスクをインポート",
   },
-  "预检检查本地路径和访问权限，必要时创建目标目录。任务创建后自动分发。": {
-    en: "Preflight checks local paths and permissions and creates the destination directory if needed. Tasks are distributed automatically after creation.",
-    ja: "事前チェックではローカルパスと権限を確認し、必要に応じて転送先ディレクトリを作成します。タスク作成後は自動配分されます。",
+  "多节点预检会读写临时文件，验证共享目录。": {
+    en: "Multi-node preflight writes and reads temporary files to verify the shared directory.",
+    ja: "複数ノードの事前チェックでは、一時ファイルを読み書きして共有ディレクトリを確認します。",
   },
   "未提交的配置自动保存在当前标签页，切换页面后可继续填写。": {
     en: "Unsubmitted settings are saved in this tab and remain available when you navigate away.",
@@ -1951,4 +1951,57 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
       en: "Cleared records cannot be restored. Only exception records are deleted; tasks are not retried. Export any records you need first.",
       ja: "削除した記録は復元できません。エラー記録のみ削除し、タスクは再試行しません。必要な記録は先にエクスポートしてください。",
     },
+  "QPS 必须为 0 或 0.000001–1,000,000,000 之间的数值。": {
+    en: "QPS must be 0 or between 0.000001 and 1,000,000,000.",
+    ja: "QPS は 0、または 0.000001〜1,000,000,000 の範囲で指定してください。",
+  },
+  "requestLimits 必须是对象。": {
+    en: "requestLimits must be an object.",
+    ja: "requestLimits はオブジェクトで指定してください。",
+  },
+  "requestLimits.scope 必须为 CLUSTER 或 PER_NODE。": {
+    en: "requestLimits.scope must be CLUSTER or PER_NODE.",
+    ja: "requestLimits.scope は CLUSTER または PER_NODE を指定してください。",
+  },
+  选择执行节点: { en: "Select an execution node", ja: "実行ノードを選択" },
+  "冲突处理、节点分发、时间与限速": {
+    en: "Conflicts, node distribution, dates and limits",
+    ja: "競合処理、ノード割り当て、日時と速度制限",
+  },
+  任务限速: { en: "Task limits", ja: "タスクの速度制限" },
+  所有执行节点合计: {
+    en: "Shared across execution nodes",
+    ja: "全実行ノードの合計",
+  },
+  "多个节点必须访问同一共享存储中的同一份数据，挂载路径可以不同。": {
+    en: "All nodes must access the same data on shared storage. Mount paths may differ.",
+    ja: "すべてのノードから同じ共有ストレージ上の同じデータにアクセスできる必要があります。マウントパスは異なっていても構いません。",
+  },
+  "任务限速已更新。": {
+    en: "Task limits updated.",
+    ja: "タスクの速度制限を更新しました。",
+  },
+  "已核对：任务限速已生效。": {
+    en: "Verified: task limits are in effect.",
+    ja: "確認済み：タスクの速度制限が適用されています。",
+  },
+  子任务筛选: { en: "Filter subtasks", ja: "サブタスクの絞り込み" },
+  进行中: { en: "Active", ja: "進行中" },
+  从头查看子任务: {
+    en: "Show subtasks from the start",
+    ja: "最初のサブタスクから表示",
+  },
+  暂无进行中的子任务: {
+    en: "No active subtasks",
+    ja: "進行中のサブタスクはありません",
+  },
+  向下滚动加载更多: {
+    en: "Scroll down to load more",
+    ja: "下にスクロールして続きを表示",
+  },
+  "已加载全部 {count} 个子任务": {
+    en: "All {count} subtasks loaded",
+    ja: "全 {count} 件のサブタスクを表示中",
+  },
+  全部: { en: "All", ja: "すべて" },
 };

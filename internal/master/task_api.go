@@ -679,6 +679,9 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 		}
 		checks = append(checks, check)
 	}
+	if firstErr == nil {
+		firstErr = s.validateSharedBindings(ctx, &spec, checks)
+	}
 	if len(spec.Nodes) > 0 {
 		if spec.Direction == "LOCAL_TO_OSS" {
 			spec.Source.Root = spec.Nodes[0].LocalRoot
@@ -1109,6 +1112,15 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 		offset = number - 1
 		limit = 1
 	}
+	active := r.URL.Query().Get("view") == "active" && r.PathValue("number") == ""
+	if view := r.URL.Query().Get("view"); view != "" && view != "all" && view != "active" {
+		fail(w, 400, "Invalid child view")
+		return
+	}
+	if active && task.Ended(parent.Status) {
+		writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": 0, "items": []any{}, "hasMore": false, "nextOffset": offset, "partial": false, "cached": true}})
+		return
+	}
 	if parent.Legacy != nil {
 		children, err := s.tasks.repo.LegacyChildrenPage(id, offset, limit)
 		if r.PathValue("number") != "" {
@@ -1133,16 +1145,30 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			items = append(items, row)
 		}
-		writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": parent.ChildCount, "items": items, "partial": false, "cached": true, "legacyHistorical": true}})
+		writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": parent.ChildCount, "items": items, "partial": false, "cached": true, "legacyHistorical": true, "hasMore": offset+len(children) < parent.ChildCount, "nextOffset": offset + len(children)}})
 		return
 	}
-	children, err := s.tasks.repo.Children(id, offset, limit)
+	fetch := s.tasks.repo.Children
+	if active {
+		fetch = s.tasks.repo.Outstanding
+	}
+	children, err := fetch(id, offset, limit+1)
 	if err != nil {
 		fail(w, 500, "Cannot read child tasks")
 		return
 	}
+	hasMore := len(children) > limit
+	if hasMore {
+		children = children[:limit]
+	}
+	nextOffset := offset
+	total := parent.ChildCount
+	if active {
+		total = max(0, parent.ChildCount-parent.FinishedChildren)
+	}
 	items := []map[string]any{}
 	for _, child := range children {
+		nextOffset = child.Job.Number
 		if selected := r.URL.Query().Get("executionNodeIp"); selected != "" && selected != child.Node.Address {
 			continue
 		}
@@ -1150,7 +1176,7 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// observedAt belongs to each persisted Agent record. Generating a current
 	// snapshotAt here would make offline observations appear fresh.
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": parent.ChildCount, "items": items, "partial": false, "cached": true}})
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": total, "items": items, "hasMore": hasMore, "nextOffset": nextOffset, "partial": false, "cached": true}})
 }
 func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1263,21 +1289,71 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPut {
 		var request struct {
-			LimitMbps *float64 `json:"limitMbps"`
+			LimitMbps          json.RawMessage          `json:"limitMbps"`
+			RequestLimits      json.RawMessage          `json:"requestLimits"`
+			RequestLimitsPatch *task.RequestLimitsPatch `json:"requestLimitsPatch"`
 		}
 		if !readJSON(w, r, &request) {
 			return
 		}
-		limit, err := taskBandwidthValue(request.LimitMbps)
-		if err != nil {
-			fail(w, 400, err.Error())
+		var limit *float64
+		if len(request.LimitMbps) > 0 {
+			var value *float64
+			if err := json.Unmarshal(request.LimitMbps, &value); err != nil {
+				fail(w, 400, "Invalid bandwidth limit")
+				return
+			}
+			parsed, err := taskBandwidthValue(value)
+			if err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+			limit = &parsed
+		}
+		var limits *execution.RequestLimits
+		replaceRequests := len(request.RequestLimits) > 0
+		if replaceRequests {
+			decoder := json.NewDecoder(bytes.NewReader(request.RequestLimits))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&limits); err != nil {
+				fail(w, 400, "Invalid request limits")
+				return
+			}
+			if err := execution.ValidateRequestLimits(limits); err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+		}
+		if request.RequestLimitsPatch != nil {
+			patch := request.RequestLimitsPatch
+			if replaceRequests {
+				fail(w, 400, "Cannot replace and patch request limits together")
+				return
+			}
+			value := execution.RequestLimits{}
+			if patch.ListQPS != nil {
+				value.ListQPS = *patch.ListQPS
+			}
+			if patch.HeadQPS != nil {
+				value.HeadQPS = *patch.HeadQPS
+			}
+			if patch.PutQPS != nil {
+				value.PutQPS = *patch.PutQPS
+			}
+			if err := execution.ValidateRequestLimits(&value); err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+		}
+		if limit == nil && !replaceRequests && request.RequestLimitsPatch == nil {
+			fail(w, 400, "No task limits provided")
 			return
 		}
 		if task.Ended(parent.Status) {
 			fail(w, 409, "Bandwidth cannot be changed after the task ends")
 			return
 		}
-		parent, err = s.changeTaskBandwidth(r.Context(), id, limit)
+		parent, err = s.changeTaskLimits(r.Context(), id, limit, limits, replaceRequests, request.RequestLimitsPatch)
 		if err != nil {
 			fail(w, 409, err.Error())
 			return
@@ -1317,16 +1393,8 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				var policy ratelimit.ParentLimit
 				err := s.agentCall(ctx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}.Session(), "bandwidth_parent_status", false, map[string]any{"parentId": parent.ID}, &policy)
-				total := int64(math.Floor(parent.Spec.BandwidthMbps * 125000))
-				share := int64(0)
-				if total > 0 {
-					share = total / int64(len(parent.Spec.Nodes))
-					if int64(index) < total%int64(len(parent.Spec.Nodes)) {
-						share++
-					}
-				}
-				stopped := parent.Status == "STOPPED" || parent.Status == "STOPPING"
-				matches := err == nil && policy.Generation == parent.Generation && policy.Revision == parent.BudgetRevision && policy.BandwidthBytesPerSecond == share && policy.Stopped == stopped
+				expected := parentPolicy(parent, index)
+				matches := err == nil && policy.Generation == expected.Generation && policy.Revision == expected.Revision && policy.BandwidthBytesPerSecond == expected.BandwidthBytesPerSecond && policy.ListQPS == expected.ListQPS && policy.HeadQPS == expected.HeadQPS && policy.PutQPS == expected.PutQPS && policy.Stopped == expected.Stopped
 				item := map[string]any{"address": node.Address, "applied": matches}
 				if err != nil {
 					item["message"] = err.Error()
@@ -1340,5 +1408,5 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, node := range nodes {
 		applied = applied && node["applied"] == true
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "applied": applied, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
 }

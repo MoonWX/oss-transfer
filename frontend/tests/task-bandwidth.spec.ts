@@ -27,7 +27,8 @@ async function configure(page: Page, direction = "OSS_TO_OSS") {
       .fill("media-backup");
   }
   if (direction !== "OSS_TO_OSS") {
-    await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+    await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+    await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
     await page
       .getByLabel(
         direction === "OSS_TO_LOCAL"
@@ -269,7 +270,10 @@ test("running task bandwidth adjusts down and up, cancel does not write, and cle
     await expect(
       page.getByRole("dialog", { name: "任务 #1048 限速" }),
     ).toHaveCount(0);
-    expect(writes.at(-1)).toEqual({ limitMbps: value ? Number(value) : null });
+    expect(writes.at(-1)).toEqual({
+      limitMbps: value ? Number(value) : null,
+      requestLimits: null,
+    });
   }
   await expect(
     page.getByRole("button", { name: "限速", exact: true }),
@@ -307,14 +311,17 @@ test("partial application shows failed nodes without success and retry applies t
   await expect(dialog.getByRole("alert")).toContainText("部分节点未生效");
   await expect(dialog).toContainText("10.0.1.13：节点不可达");
   await expect(dialog).not.toContainText("10.0.1.12");
-  await expect(
-    page.getByText("任务带宽上限已更新。", { exact: true }),
-  ).toHaveCount(0);
+  await expect(page.getByText("任务限速已更新。", { exact: true })).toHaveCount(
+    0,
+  );
   await page.getByRole("button", { name: "重试应用", exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  expect(writes).toEqual([{ limitMbps: 25 }, { limitMbps: 25 }]);
+  expect(writes).toEqual([
+    { limitMbps: 25, requestLimits: null },
+    { limitMbps: 25, requestLimits: null },
+  ]);
   await expect(
-    page.getByText("任务带宽上限已更新。", { exact: true }),
+    page.getByText("任务限速已更新。", { exact: true }),
   ).toBeVisible();
 });
 
@@ -471,18 +478,6 @@ test("switching related task IDs with a delayed read cannot reuse or save anothe
   page,
 }) => {
   await mockApi(page);
-  await page.route("**/api/master/task-creations/bandwidth-pair", (route) =>
-    route.fulfill({
-      json: {
-        success: true,
-        creation: {
-          id: "bandwidth-pair",
-          status: "COMPLETED",
-          taskIds: [1048, 1047],
-        },
-      },
-    }),
-  );
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
@@ -505,10 +500,11 @@ test("switching related task IDs with a delayed read cannot reuse or save anothe
       json: { success: true, data: status(path.includes("/1047/") ? 25 : 100) },
     });
   });
-  await page.goto("/tasks?creationId=bandwidth-pair&taskId=1048");
+  await page.goto("/tasks?taskId=1048");
   await expect(
     page.getByText("带宽上限 100 Mbps", { exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("button", { name: "#1047", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "迁移任务 #1047", exact: true }),
@@ -520,6 +516,7 @@ test("switching related task IDs with a delayed read cannot reuse or save anothe
   await expect(
     page.getByRole("button", { name: "调整", exact: true }),
   ).toHaveCount(0);
+  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("button", { name: "#1048", exact: true }).click();
   await expect(
     page.getByText("带宽上限 100 Mbps", { exact: true }),
@@ -528,6 +525,7 @@ test("switching related task IDs with a delayed read cannot reuse or save anothe
   await expect(page.getByText("带宽上限 25 Mbps", { exact: true })).toHaveCount(
     0,
   );
+  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("button", { name: "#1047", exact: true }).click();
   await expect(
     page.getByText("带宽上限 25 Mbps", { exact: true }),
@@ -542,7 +540,7 @@ test("switching related task IDs with a delayed read cannot reuse or save anothe
   expect(writes).toEqual([
     {
       path: "/api/master/tasks/1047/bandwidth-limit",
-      value: { limitMbps: 40 },
+      value: { limitMbps: 40, requestLimits: null },
     },
   ]);
 });
@@ -589,14 +587,14 @@ test("a lost PUT response rechecks actual state and confirms success only when a
   ).toHaveCount(0);
   expect(reads).toBeGreaterThan(before);
   await expect(
-    page.getByText("已核对：任务带宽上限已生效。", { exact: true }),
+    page.getByText("已核对：任务限速已生效。", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText("带宽上限 60 Mbps", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("alert", { includeHidden: true })
-    .getByRole("button", { name: "Close", includeHidden: true })
+    .getByRole("button", { name: /Close|关闭/, includeHidden: true })
     .click();
   applied = false;
   await page.getByRole("button", { name: "调整", exact: true }).click();
@@ -607,7 +605,7 @@ test("a lost PUT response rechecks actual state and confirms success only when a
   await expect(dialog).toContainText("应用结果未确认");
   await expect(limitField(page)).toHaveValue("30");
   await expect(
-    page.getByText("已核对：任务带宽上限已生效。", { exact: true }),
+    page.getByText("已核对：任务限速已生效。", { exact: true }),
   ).toHaveCount(0);
   expect(writes).toEqual([60, 30]);
 });

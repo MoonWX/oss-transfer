@@ -45,6 +45,7 @@ Tasks
   task restore <ID...>             Restore selected tasks from the trash
   task purge <ID...> --yes         Permanently remove selected trash records
   task bandwidth <ID> [Mbps|unlimited]
+  task limits <ID> [--list-qps N --head-qps N --put-qps N]
   task report <ID> [--output file.zip]
 
 Nodes and storage
@@ -114,6 +115,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   task restore <ID...>             指定したタスクをごみ箱から復元
   task purge <ID...> --yes         指定したごみ箱の記録を完全削除
   task bandwidth <ID> [Mbps|unlimited]
+  task limits <ID> [--list-qps N --head-qps N --put-qps N]
   task report <ID> [--output ファイル.zip]
 
 ノードとストレージ
@@ -187,6 +189,10 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   delete <ID...>                   Move records to trash
   restore <ID...>                  Restore selected tasks from the trash
   purge <ID...> --yes              Permanently remove selected trash records
+  limits <ID> [options]            Show or update request QPS and bandwidth
+      --list-qps N --head-qps N --put-qps N --bandwidth-mbps N
+      --list-qps covers both LIST operations and GET object reads.
+      Use 0 or unlimited to remove a QPS limit; omitted fields stay unchanged.
   bandwidth <ID>                  Show the task bandwidth limit
   bandwidth <ID> <Mbps|unlimited>  Set/remove the task's additional limit
   report <ID> [--output file.zip]  Export an ended or stopped task's ZIP report
@@ -202,7 +208,7 @@ Actions accept parent IDs: 224,225 or 224-226. Incomplete node status prevents t
 Child pages default to 25 IDs; --limit is 1–200, --offset skips IDs without renumbering.
 list/trash accept --limit 1–10000; --before-id loads older records.
 --child loads only the selected child. Use --node when the ID exists on multiple nodes.
---watch supports list/show/children/trash and bandwidth without a new value.
+--watch supports list/show/children/trash and bandwidth/limits without a new value.
 Deleting records does not delete source or target objects.
 `, `タスク管理
 使い方: oss-transfer-cli task <サブコマンド> [引数]
@@ -222,6 +228,10 @@ Deleting records does not delete source or target objects.
   delete <ID...>                   記録をごみ箱に移動
   restore <ID...>                  指定したタスクをごみ箱から復元
   purge <ID...> --yes              ごみ箱の指定記録を完全削除
+  limits <ID> [オプション]         リクエスト QPS と帯域幅を表示・変更
+      --list-qps N --head-qps N --put-qps N --bandwidth-mbps N
+      --list-qps は LIST 列挙と GET オブジェクト読み取りの両方に適用。
+      QPS は 0 または unlimited で解除。未指定の項目は保持します。
   bandwidth <ID>                  タスクの帯域幅上限を表示
   bandwidth <ID> <Mbps|unlimited>  タスクの追加上限を設定・解除
   report <ID> [--output file.zip]  終了・停止したタスクの ZIP レポートを出力
@@ -237,7 +247,7 @@ Deleting records does not delete source or target objects.
 子タスクは既定で 25 番号ずつ取得します。--limit は 1～200、--offset は番号を変えずに取得位置を指定します。
 list/trash の --limit は 1～10000、--before-id は指定 ID より古い記録を取得します。
 --child は指定した子タスクのみ取得します。同じ ID が複数ノードにある場合は --node を指定してください。
---watch は list/show/children/trash と、新しい値を指定しない bandwidth に対応します。
+--watch は list/show/children/trash と、新しい値を指定しない bandwidth/limits に対応します。
 記録を削除しても転送元や転送先のオブジェクトは削除されません。
 `},
 	cliTaskCreateHelp: {`Create a transfer task
@@ -252,6 +262,8 @@ list/trash の --limit は 1～10000、--before-id は指定 ID より古い記�
   --date-after YYYY-MM-DDTHH:mm:ss   Modified after this time
   --date-before YYYY-MM-DDTHH:mm:ss  Modified before this time; later than the start
   --bandwidth-mbps <value>           Additional task limit, 0.1–1000000 Mbps
+  --list-qps/--head-qps/--put-qps <value>  Task request limits across all selected nodes
+      --list-qps covers both LIST operations and GET object reads.
   --request-id <ID>                  Reuse an attempt; generated when omitted
 
 OSS-to-OSS
@@ -290,6 +302,8 @@ check its task list before retrying. Creation is never retried automatically.
   --date-after YYYY-MM-DDTHH:mm:ss   更新日時の開始条件
   --date-before YYYY-MM-DDTHH:mm:ss  更新日時の終了条件。開始より後を指定
   --bandwidth-mbps <値>              タスクの追加上限。0.1～1000000 Mbps
+  --list-qps/--head-qps/--put-qps <値>  選択した全ノード合計のタスクリクエスト上限
+      --list-qps は LIST 列挙と GET オブジェクト読み取りの両方に適用。
   --request-id <ID>                  同じ作成試行の ID を使用。省略時は自動生成
 
 OSS 間転送

@@ -73,6 +73,7 @@ type Parent struct {
 	Purged            bool               `json:"purged"`
 	Fingerprint       string             `json:"fingerprint"`
 	Legacy            *LegacyProvenance  `json:"legacy,omitempty"`
+	Scheduling        *SchedulingState   `json:"scheduling,omitempty"`
 }
 
 type Child struct {

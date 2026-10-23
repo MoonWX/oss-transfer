@@ -45,6 +45,50 @@ func probeContents(probe SharedProbe) ([]byte, error) {
 	return []byte("oss-transfer-shared-probe-v1\n" + probe.Nonce + "\n"), nil
 }
 
+func ValidateSharedProbe(probe SharedProbe) error {
+	_, err := probeContents(probe)
+	return err
+}
+
+// SharedProbeRoot pins the directory used by a preflight probe. Its persistent
+// identity prevents a temporarily unmounted path from being mistaken for the
+// original directory when deciding whether cleanup has finished.
+type SharedProbeRoot struct {
+	root     *os.Root
+	identity string
+}
+
+func OpenSharedProbeRoot(directory string) (*SharedProbeRoot, error) {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, err
+	}
+	info, err := root.Stat(".")
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	identity, err := storageIdentity(root, ".", info)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	return &SharedProbeRoot{root: root, identity: identity}, nil
+}
+
+func (r *SharedProbeRoot) Identity() string { return r.identity }
+func (r *SharedProbeRoot) Close() error     { return r.root.Close() }
+
+// The owner must serialize mutations of a probe identity. Different probes do
+// not share a lock, so a stalled mount does not block unrelated preflights.
+func (r *SharedProbeRoot) Ensure(ctx context.Context, probe SharedProbe) error {
+	return ensureSharedProbe(ctx, r.root, probe)
+}
+
+func (r *SharedProbeRoot) Cleanup(ctx context.Context, probe SharedProbe) error {
+	return cleanupSharedProbe(ctx, r.root, probe)
+}
+
 // isSharedProbeFile hides only authentic-format tool markers from a concurrent
 // scan, including when a task scans an ancestor of another task's shared root.
 // Files that merely resemble the prefix remain normal user objects.
@@ -113,10 +157,6 @@ func CreateSharedProbe(ctx context.Context, directory string) (SharedProbe, erro
 // verifies the exact existing marker on RPC replay. It does not create roots or
 // replace any existing content. Mutating retries within this process serialize.
 func EnsureSharedProbe(ctx context.Context, directory string, probe SharedProbe) error {
-	contents, err := probeContents(probe)
-	if err != nil {
-		return err
-	}
 	sharedProbeMutation.Lock()
 	defer sharedProbeMutation.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -127,6 +167,17 @@ func EnsureSharedProbe(ctx context.Context, directory string, probe SharedProbe)
 		return err
 	}
 	defer root.Close()
+	return ensureSharedProbe(ctx, root, probe)
+}
+
+func ensureSharedProbe(ctx context.Context, root *os.Root, probe SharedProbe) error {
+	contents, err := probeContents(probe)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Readable across Agent users; the random nonce is a probe, not a credential.
 	file, err := root.OpenFile(probe.Key, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if errors.Is(err, fs.ErrExist) {
@@ -226,6 +277,10 @@ func CleanupSharedProbe(ctx context.Context, directory string, probe SharedProbe
 		return err
 	}
 	defer root.Close()
+	return cleanupSharedProbe(ctx, root, probe)
+}
+
+func cleanupSharedProbe(ctx context.Context, root *os.Root, probe SharedProbe) error {
 	verified, err := readSharedProbe(ctx, root, probe)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

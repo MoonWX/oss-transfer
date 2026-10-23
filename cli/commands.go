@@ -1508,13 +1508,9 @@ func printS3ConfigTable(result map[string]interface{}) {
 
 		alias := getString(c, "alias")
 		endpoint := getString(c, "endpoint")
-		accessKey := getString(c, "accessKey")
-		secretKey := getString(c, "secretKey")
 
 		fmt.Printf("%s\n", alias)
 		fmt.Printf("  URL       : %s\n", endpoint)
-		fmt.Printf("  AccessKey : %s\n", accessKey)
-		fmt.Printf("  SecretKey : %s\n", secretKey)
 		fmt.Printf("  API       : s3v4\n")
 		fmt.Println()
 	}

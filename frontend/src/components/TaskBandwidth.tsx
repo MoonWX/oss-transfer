@@ -21,8 +21,17 @@ import {
   validateTaskBandwidth,
 } from "../lib/taskBandwidth";
 import { TaskBandwidthField } from "./TaskBandwidthField";
+import { TaskRequestLimitsFields } from "./TaskRequestLimitsFields";
+import {
+  emptyTaskRequestLimits,
+  parseTaskRequestLimits,
+  taskRequestLimitRows,
+  validateTaskRequestLimits,
+  type RequestLimits,
+} from "../lib/taskRequestLimits";
 type BandwidthStatus = {
   limitMbps: number | null;
+  requestLimits?: RequestLimits | null;
   applied: boolean;
   sharedTaskCount: number;
   canEdit: boolean;
@@ -44,6 +53,7 @@ function readStatus(response: { data?: BandwidthStatus }): BandwidthStatus {
   )
     throw new Error(t("限速设置响应无效，请重试。"));
   validateTaskBandwidth(status.limitMbps);
+  validateTaskRequestLimits(status.requestLimits);
   return status;
 }
 export default function TaskBandwidth({
@@ -65,6 +75,7 @@ export default function TaskBandwidth({
   const [readError, setReadError] = useState("");
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
+  const [requestValues, setRequestValues] = useState(emptyTaskRequestLimits);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const sequence = useRef(0);
@@ -131,14 +142,39 @@ export default function TaskBandwidth({
     reading.current = false;
     setLoading(false);
     setValue(status.limitMbps == null ? "" : String(status.limitMbps));
+    setRequestValues({
+      listQps: status.requestLimits?.listQps
+        ? String(status.requestLimits.listQps)
+        : "",
+      headQps: status.requestLimits?.headQps
+        ? String(status.requestLimits.headQps)
+        : "",
+      putQps: status.requestLimits?.putQps
+        ? String(status.requestLimits.putQps)
+        : "",
+    });
     setSaveError("");
     setOpen(true);
   };
   async function save() {
     if (completed || !active || !status?.canEdit || saving) return;
     let limitMbps: number | null;
+    let requestLimits: RequestLimits | null;
     try {
       limitMbps = parseTaskBandwidth(value);
+      const parsed = parseTaskRequestLimits(
+        requestValues,
+        status.requestLimits?.scope || "CLUSTER",
+      );
+      // Preserve legacy per-node scope and its bandwidth constraint on edits.
+      requestLimits =
+        parsed ||
+        (status.requestLimits?.bandwidthBitsPerSecond
+          ? { scope: status.requestLimits.scope || "CLUSTER" }
+          : null);
+      if (requestLimits && status.requestLimits?.bandwidthBitsPerSecond)
+        requestLimits.bandwidthBitsPerSecond =
+          status.requestLimits.bandwidthBitsPerSecond;
     } catch (error) {
       setSaveError((error as Error).message);
       return;
@@ -153,17 +189,13 @@ export default function TaskBandwidth({
       const next = readStatus(
         await api(path, {
           method: "PUT",
-          body: { limitMbps },
+          body: { limitMbps, requestLimits },
           signal: AbortSignal.timeout(120000),
         }),
       );
       setStatus(next);
       if (next.applied) {
-        notify(
-          limitMbps == null
-            ? t("已清除任务带宽上限。")
-            : t("任务带宽上限已更新。"),
-        );
+        notify(t("任务限速已更新。"));
         setOpen(false);
       }
     } catch (error) {
@@ -176,14 +208,14 @@ export default function TaskBandwidth({
       }
       setSaveError(t("正在核对应用结果…"));
       const confirmed = await load();
-      if (confirmed?.applied && confirmed.limitMbps === limitMbps) {
+      if (
+        confirmed?.applied &&
+        confirmed.limitMbps === limitMbps &&
+        sameRequestLimits(confirmed.requestLimits, requestLimits)
+      ) {
         setSaveError("");
         setOpen(false);
-        notify(
-          limitMbps == null
-            ? t("已核对：任务带宽上限已清除。")
-            : t("已核对：任务带宽上限已生效。"),
-        );
+        notify(t("已核对：任务限速已生效。"));
       } else {
         setSaveError(
           t("应用结果未确认：{value1}", {
@@ -245,6 +277,13 @@ export default function TaskBandwidth({
                 limit: formatTaskBandwidth(status.limitMbps),
               })}
             </Typography>
+          )}
+          {taskRequestLimitRows(status.requestLimits || undefined).map(
+            ([label, value]) => (
+              <Typography key={label} variant="body2">
+                {label} {value}
+              </Typography>
+            ),
           )}
           <Tooltip
             title={
@@ -324,6 +363,25 @@ export default function TaskBandwidth({
                 autoFocus
               />
             </Box>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mt: 2, mb: 1.5 }}
+            >
+              {status?.requestLimits?.scope === "PER_NODE"
+                ? t("每节点")
+                : t("任务总计")}
+            </Typography>
+            <Stack spacing={2}>
+              <TaskRequestLimitsFields
+                value={requestValues}
+                onChange={(next) => {
+                  setRequestValues(next);
+                  setSaveError("");
+                }}
+                disabled={completed || saving || !status?.canEdit}
+              />
+            </Stack>
             {(status?.sharedTaskCount || 0) > 1 && (
               <Typography
                 variant="caption"
@@ -362,5 +420,17 @@ export default function TaskBandwidth({
         </Box>
       </Dialog>
     </Box>
+  );
+}
+
+function sameRequestLimits(
+  left?: RequestLimits | null,
+  right?: RequestLimits | null,
+) {
+  return (
+    (left?.scope || "CLUSTER") === (right?.scope || "CLUSTER") &&
+    (["listQps", "headQps", "putQps", "bandwidthBitsPerSecond"] as const).every(
+      (key) => (left?.[key] || 0) === (right?.[key] || 0),
+    )
   );
 }

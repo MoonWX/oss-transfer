@@ -289,8 +289,18 @@ func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignmen
 		if p.Status != "RUNNING" || p.Deleted {
 			return ErrState
 		}
+		if err := ensureScheduling(tx, &p); err != nil {
+			return err
+		}
+		var other map[string]PendingLoad
+		if p.Spec.DistributionMode == "BALANCED" && len(p.Spec.Nodes) > 1 {
+			other, err = otherPending(tx, p)
+			if err != nil {
+				return err
+			}
+		}
 		for _, batch := range batches {
-			child, err := assignChild(tx, &p, batch.Number, batch.Objects, batch.Legacy)
+			child, err := assignChild(tx, &p, batch.Number, batch.Objects, batch.Legacy, other)
 			if err != nil {
 				return err
 			}
@@ -304,7 +314,7 @@ func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignmen
 	return children, nil
 }
 
-func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Object, legacy map[string]execution.LegacyCandidate) (child Child, err error) {
+func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Object, legacy map[string]execution.LegacyCandidate, other map[string]PendingLoad) (child Child, err error) {
 	found, err := tx.Get("master-task-children", childKey(p.ID, number), &child)
 	if err != nil {
 		return child, err
@@ -329,19 +339,9 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	if number != p.DispatchedThrough+1 {
 		return child, errors.New("discovery batch arrived out of order")
 	}
-	node := p.Spec.Nodes[0]
-	if p.Spec.DistributionMode == "BALANCED" {
-		var minimum int64 = math.MaxInt64
-		for _, candidate := range p.Spec.Nodes {
-			var weight int64
-			if _, err := tx.Get("master-task-load", key(p.ID)+"/"+candidate.ID, &weight); err != nil {
-				return child, err
-			}
-			if weight < minimum {
-				node = candidate
-				minimum = weight
-			}
-		}
+	node, err := chooseNode(tx, *p, other)
+	if err != nil {
+		return child, err
 	}
 	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
 	job.SharedLocalSource = p.Spec.SharedLocalSource
@@ -384,6 +384,11 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 		bytes += object.Size
 	}
 	child = Child{Job: job, Node: node}
+	pending, err := addLoad(p.Scheduling.Nodes[node.ID], childPending(child), 1)
+	if err != nil {
+		return child, err
+	}
+	p.Scheduling.Nodes[node.ID] = pending
 	if err := tx.Put("master-task-children", childKey(p.ID, number), child); err != nil {
 		return child, err
 	}
@@ -413,20 +418,65 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	return child, nil
 }
 
-func (r *Repository) SetBandwidth(id int64, mbps float64) (p Parent, err error) {
-	if math.IsNaN(mbps) || math.IsInf(mbps, 0) || mbps < 0 || mbps > 1e9 {
-		return p, errors.New("invalid bandwidth limit")
-	}
+func (r *Repository) SetBandwidth(id int64, mbps float64) (Parent, error) {
+	return r.SetLimits(id, &mbps, nil, false)
+}
+
+// SetLimits commits one revision for all task limits. Absent fields preserve
+// their stored value, so bandwidth-only clients cannot discard request limits.
+func (r *Repository) SetLimits(id int64, mbps *float64, limits *execution.RequestLimits, replaceRequests bool) (Parent, error) {
+	return r.UpdateLimits(id, mbps, limits, replaceRequests, nil)
+}
+
+func (r *Repository) UpdateLimits(id int64, mbps *float64, limits *execution.RequestLimits, replaceRequests bool, patch *RequestLimitsPatch) (p Parent, err error) {
 	err = r.store.Update(func(tx *state.Tx) error {
 		p, err = get(tx, id)
 		if err != nil {
 			return err
 		}
-		if Ended(p.Status) || p.Deleted {
+		if Ended(p.Status) || p.Deleted || p.Purged {
 			return ErrState
 		}
-		if p.Spec.BandwidthMbps != mbps {
-			p.Spec.BandwidthMbps = mbps
+		before := p.Spec
+		if mbps != nil {
+			p.Spec.BandwidthMbps = *mbps
+		}
+		if replaceRequests {
+			p.Spec.RequestLimits = nil
+			if limits != nil {
+				copy := *limits
+				if copy.Scope == "" {
+					copy.Scope = "CLUSTER"
+				}
+				p.Spec.RequestLimits = &copy
+			}
+		}
+		if patch != nil {
+			if replaceRequests {
+				return errors.New("cannot replace and patch request limits together")
+			}
+			value := execution.RequestLimits{Scope: "CLUSTER"}
+			if p.Spec.RequestLimits != nil {
+				value = *p.Spec.RequestLimits
+			}
+			if patch.ListQPS != nil {
+				value.ListQPS = *patch.ListQPS
+			}
+			if patch.HeadQPS != nil {
+				value.HeadQPS = *patch.HeadQPS
+			}
+			if patch.PutQPS != nil {
+				value.PutQPS = *patch.PutQPS
+			}
+			p.Spec.RequestLimits = &value
+		}
+		if err := validate(p.Spec); err != nil {
+			return err
+		}
+		if p.Spec.BandwidthMbps > 0 && math.Floor(p.Spec.BandwidthMbps*125000) < float64(len(p.Spec.Nodes)) {
+			return errors.New("bandwidth budget is too small for the selected Agents")
+		}
+		if !reflect.DeepEqual(before, p.Spec) {
 			p.BudgetRevision++
 		}
 		return save(tx, p)
@@ -551,6 +601,9 @@ func (r *Repository) ObserveBatch(id int64, generation uint64, observations []Ob
 		if p.Purged {
 			return ErrState
 		}
+		if err := ensureScheduling(tx, &p); err != nil {
+			return err
+		}
 		changed := false
 		for _, observation := range observations {
 			updated, err := observeChild(tx, &p, observation.Number, observation.Record)
@@ -603,8 +656,12 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	countChild(p, record.Status, 1)
 	addCounters(&p.Counters, old, -1)
 	addCounters(&p.Counters, record.Counters, 1)
+	previous := child
 	child.Accepted = true
 	child.Record = &record
+	if err := changePending(p, previous, child); err != nil {
+		return false, err
+	}
 	if err := syncExceptionIndex(tx, *p, child, record); err != nil {
 		return false, err
 	}
@@ -719,6 +776,7 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 		p.Status = "RESUMING"
 		p.FinishedAt = nil
 		p.Error = ""
+		p.Scheduling = nil // Failed children reenter the pending index below.
 		after := ""
 		for {
 			var page []Child

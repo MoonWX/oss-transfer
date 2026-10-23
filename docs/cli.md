@@ -63,6 +63,18 @@ oss-transfer-cli help node
 
 Add the global `--json` option for machine-readable output, for example `oss-transfer-cli --json task list`.
 
+## Set task limits
+
+Read the current limits or change individual fields while a task is running:
+
+```sh
+oss-transfer-cli task limits "$TRANSFER_TASK"
+oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --put-qps 200 --bandwidth-mbps 100
+oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
+```
+
+Unspecified fields keep their current values. `--list-qps` covers both object listing and GET reads; PUT includes multipart upload requests. New tasks share these limits across their selected Agents, and node limits still apply. The command prints the scope for older tasks that use per-node limits. These QPS flags also work with `task create`.
+
 ## Add an Agent
 
 Generate the join commands:

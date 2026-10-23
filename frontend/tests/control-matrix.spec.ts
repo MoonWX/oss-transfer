@@ -260,6 +260,8 @@ for (const signature of [
           method: "PUT",
           body: {
             ...storageConfigs[0],
+            accessKey: "",
+            secretKey: "",
             useV2SignerType: signature.value,
             pathStyleEnable: addressing.value,
             validate,
@@ -285,8 +287,9 @@ test("storage duplicate names are rejected and Escape discards unsaved credentia
   await expect(
     dialog.getByText("连接名称已存在，请更换名称或编辑现有连接。"),
   ).toBeVisible();
-  await dialog.getByRole("button", { name: "显示访问凭据" }).click();
-  await expect(dialog.getByLabel("Secret Key")).toHaveAttribute("type", "text");
+  await expect(
+    dialog.getByRole("button", { name: "显示访问凭据" }),
+  ).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await page.getByRole("button", { name: "添加连接", exact: true }).click();
@@ -344,7 +347,8 @@ test("relative paths and duplicate worker bindings fail before precheck or task 
   await page.goto("/create");
   await page.getByRole("button", { name: /对象存储 → 本地/ }).click();
   await fillSource(page);
-  await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+  await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("目标目录绝对路径").fill("relative/path");
   await page.getByRole("button", { name: "运行预检", exact: true }).click();
   await expect(
@@ -353,9 +357,22 @@ test("relative paths and duplicate worker bindings fail before precheck or task 
   await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/one");
   await page.getByRole("button", { name: /添加共享存储节点/ }).click();
   await page
-    .getByRole("combobox", { name: "执行节点 IP" })
+    .getByRole("combobox", { name: "执行节点", exact: true })
     .nth(1)
-    .fill("10.0.1.12");
+    .click();
+  await expect(
+    page.getByRole("option", { name: /10\.0\.1\.12/ }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    const draft = JSON.parse(
+      sessionStorage.getItem("oss-transfer-create-draft")!,
+    );
+    draft.form.bindings[1].executionNodeIp =
+      draft.form.bindings[0].executionNodeIp;
+    sessionStorage.setItem("oss-transfer-create-draft", JSON.stringify(draft));
+  });
+  await page.reload();
   await page.getByLabel("目标目录绝对路径").nth(1).fill("/mnt/datasets/two");
   await page.getByRole("button", { name: "运行预检", exact: true }).click();
   await expect(

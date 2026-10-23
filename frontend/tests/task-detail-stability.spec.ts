@@ -164,3 +164,86 @@ test("delayed and failed child refresh keeps the loaded page until a successful 
     page.getByText("执行节点暂时不可达，请重试。", { exact: true }),
   ).toHaveCount(0);
 });
+
+test("a failed first child page can be retried inside the visible child region", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.setViewportSize({ width: 1280, height: 650 });
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
+  await page.route("**/api/master/status", (route) =>
+    route.fulfill({ json: { totalTasks: 1, tasks: [parent] } }),
+  );
+  let reads = 0;
+  await mockTaskChildren(page, () => ({
+    parentTaskId: 1900,
+    items: [child],
+    ...(++reads === 1 ? { error: "首次读取子任务失败" } : {}),
+  }));
+  await page.goto("/tasks?taskId=1900");
+  await revealChildren(page);
+  const region = page.getByTestId("task-children-region");
+  await expect(
+    region.getByText("首次读取子任务失败", { exact: true }),
+  ).toBeVisible();
+  await expect(region.getByText("正在加载子任务…")).toHaveCount(0);
+  await region.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(
+    region.getByRole("button", { name: "查看子任务 1900-1", exact: true }),
+  ).toBeVisible();
+  expect(reads).toBe(2);
+  await expect(
+    region.getByText("首次读取子任务失败", { exact: true }),
+  ).toHaveCount(0);
+});
+
+test("a parent detail error retries the parent while children remain offscreen", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.setViewportSize({ width: 1280, height: 650 });
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  await installPausedClock(page);
+  let fail = false;
+  let reads = 0;
+  await page.route("**/api/master/status", (route) => {
+    reads++;
+    return route.fulfill(
+      fail
+        ? {
+            status: 503,
+            json: { success: false, message: "主任务状态读取失败" },
+          }
+        : { json: { totalTasks: 1, tasks: [parent] } },
+    );
+  });
+  let childReads = 0;
+  await mockTaskChildren(page, () => {
+    childReads++;
+    return { parentTaskId: 1900, items: [child] };
+  });
+  await page.goto("/tasks?taskId=1900");
+  const panel = page.getByRole("dialog");
+  await advanceUntilVisible(
+    page,
+    panel.getByRole("heading", { name: "迁移任务 #1900", exact: true }),
+  );
+  fail = true;
+  await page.clock.runFor(1200);
+  await expect(
+    panel.getByText("主任务状态读取失败", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("task-children-region")).not.toBeInViewport();
+  const before = reads;
+  fail = false;
+  await panel.getByRole("button", { name: "重试", exact: true }).click();
+  await expect.poll(() => reads).toBe(before + 1);
+  await expect(
+    panel.getByText("主任务状态读取失败", { exact: true }),
+  ).toHaveCount(0);
+  expect(childReads).toBe(0);
+});

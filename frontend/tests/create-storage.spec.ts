@@ -15,7 +15,8 @@ async function fillOssToLocal(page: Page) {
   await page.goto("/create");
   await page.getByRole("button", { name: /对象存储 → 本地/ }).click();
   await fillOssSource(page);
-  await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+  await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/media");
 }
 
@@ -185,9 +186,10 @@ test("shared local migration prechecks and submits all bindings without a storag
     .fill("photos/original.jpg");
   await page.getByRole("button", { name: "添加共享存储节点" }).click();
   await page
-    .getByRole("combobox", { name: "执行节点 IP" })
+    .getByRole("combobox", { name: "执行节点", exact: true })
     .nth(1)
-    .fill("10.0.1.13");
+    .click();
+  await page.getByRole("option", { name: /10\.0\.1\.13/ }).click();
   await page.getByLabel("目标目录绝对路径").nth(1).fill("/mnt/shared/media");
   await page.evaluate(() => {
     const draft = JSON.parse(
@@ -244,14 +246,16 @@ for (const nodeCount of [1, 2]) {
     const requests = await mockApi(page);
     await page.goto("/create");
     await page.getByRole("button", { name: /本地 → 对象存储/ }).click();
-    await page.getByRole("combobox", { name: "执行节点 IP" }).fill("10.0.1.12");
+    await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+    await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
     await page.getByLabel("源文件或目录绝对路径").fill("/mnt/datasets");
     if (nodeCount === 2) {
       await page.getByRole("button", { name: "添加共享存储节点" }).click();
       await page
-        .getByRole("combobox", { name: "执行节点 IP" })
+        .getByRole("combobox", { name: "执行节点", exact: true })
         .nth(1)
-        .fill("10.0.1.13");
+        .click();
+      await page.getByRole("option", { name: /10\.0\.1\.13/ }).click();
       await page
         .getByLabel("源文件或目录绝对路径")
         .nth(1)
@@ -363,7 +367,7 @@ test("continuing a submitted batch preserves its draft without creating duplicat
   expect(imports()[1].body).toEqual(JSON.parse(editedBatch));
 });
 
-test("storage CRUD preserves hidden credentials and reports partial worker synchronization", async ({
+test("storage CRUD never reloads saved credentials and reports partial worker synchronization", async ({
   page,
 }) => {
   await mockApi(page);
@@ -374,7 +378,14 @@ test("storage CRUD preserves hidden credentials and reports partial worker synch
     const path = new URL(request.url()).pathname;
     const method = request.method();
     if (method === "GET") {
-      await route.fulfill({ json: { success: true, configs } });
+      await route.fulfill({
+        json: {
+          success: true,
+          configs: configs.map(
+            ({ accessKey: _ak, secretKey: _sk, ...config }) => config,
+          ),
+        },
+      });
       return;
     }
     const body = request.postDataJSON();
@@ -393,6 +404,9 @@ test("storage CRUD preserves hidden credentials and reports partial worker synch
     await route.fulfill({
       json: {
         success: true,
+        partial: true,
+        successCount: 1,
+        failedCount: 1,
         message: `${method === "POST" ? "添加" : method === "PUT" ? "更新" : "删除"}结果：成功 1 个节点，失败 1 个节点`,
         details: [
           `10.0.1.13: ${method === "POST" ? "添加" : method === "PUT" ? "更新" : "删除"}失败`,
@@ -418,9 +432,9 @@ test("storage CRUD preserves hidden credentials and reports partial worker synch
     "type",
     "password",
   );
-  await dialog.getByRole("button", { name: "显示访问凭据" }).click();
-  await expect(dialog.getByLabel("Secret Key")).toHaveAttribute("type", "text");
-  await dialog.getByRole("button", { name: "隐藏访问凭据" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "显示访问凭据" }),
+  ).toHaveCount(0);
   await dialog.getByRole("button", { name: "保存连接" }).click();
   await expect(page.getByText("部分节点添加失败")).toBeVisible();
   await expect(
@@ -447,7 +461,8 @@ test("storage CRUD preserves hidden credentials and reports partial worker synch
     "type",
     "password",
   );
-  await expect(dialog.getByLabel("Secret Key")).toHaveValue("NEW_SECRET_KEY");
+  await expect(dialog.getByLabel("Access Key")).toHaveValue("");
+  await expect(dialog.getByLabel("Secret Key")).toHaveValue("");
   await dialog.getByLabel("Endpoint").fill("https://updated.example.test");
   await dialog.getByRole("button", { name: "保存连接" }).click();
   await expect(
@@ -457,7 +472,8 @@ test("storage CRUD preserves hidden credentials and reports partial worker synch
     path: "/api/master/s3-config/new-archive",
     method: "PUT",
     body: {
-      secretKey: "NEW_SECRET_KEY",
+      accessKey: "",
+      secretKey: "",
       endpoint: "https://updated.example.test",
     },
   });
@@ -517,7 +533,15 @@ test("unsent migration and batch drafts survive adding a storage connection with
       await route.fulfill({
         json: { success: true, message: "连接已添加", details: [] },
       });
-    } else await route.fulfill({ json: { success: true, configs } });
+    } else
+      await route.fulfill({
+        json: {
+          success: true,
+          configs: configs.map(
+            ({ accessKey: _ak, secretKey: _sk, ...config }) => config,
+          ),
+        },
+      });
   });
   await fillOssToLocal(page);
   await page.getByRole("button", { name: "运行预检" }).click();
@@ -544,9 +568,9 @@ test("unsent migration and batch drafts survive adding a storage connection with
   await expect(page.getByRole("combobox", { name: "源存储桶" })).toHaveValue(
     "media-archive",
   );
-  await expect(page.getByRole("combobox", { name: "执行节点 IP" })).toHaveValue(
-    "10.0.1.12",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "执行节点", exact: true }),
+  ).toHaveValue("10.0.1.12");
   await expect(page.getByLabel("目标目录绝对路径")).toHaveValue(
     "/mnt/datasets/media",
   );

@@ -54,6 +54,8 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return client.Post("/permanent-delete", map[string]interface{}{"taskIds": ids})
 	case "bandwidth":
 		return taskBandwidth(client, args)
+	case "limits":
+		return taskLimits(client, args)
 	case "report":
 		return taskReport(client, args)
 	default:

@@ -87,7 +87,13 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 		if err := decode(command.Payload, &request); err != nil {
 			return respond(nil, nodecontrol.ErrInvalid)
 		}
-		return respond(s.Nodes.Config(), nil)
+		config := s.Nodes.Config()
+		identity := hostIdentity()
+		return respond(struct {
+			nodecontrol.Config
+			Hostname any `json:"hostname"`
+			LocalIPs any `json:"localIps"`
+		}{config, identity["hostname"], identity["localIps"]}, nil)
 	case "node_config_set":
 		var request nodecontrol.Config
 		if err := decode(command.Payload, &request); err != nil {

@@ -377,6 +377,14 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Delete permanently",
     ja: "完全に削除",
   },
+  留空保留现有凭据: {
+    en: "Leave blank to keep current credentials",
+    ja: "空欄の場合は現在の認証情報を保持します",
+  },
+  "更换凭据时，请同时填写 Access Key 和 Secret Key。": {
+    en: "Enter both Access Key and Secret Key to replace credentials.",
+    ja: "認証情報を変更するには Access Key と Secret Key の両方を入力してください。",
+  },
   "请填写连接名称、Endpoint、Access Key 和 Secret Key。": {
     en: "Enter the connection name, endpoint, access key and secret key.",
     ja: "接続名、Endpoint、Access Key、Secret Key を入力してください。",

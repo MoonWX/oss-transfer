@@ -113,7 +113,7 @@ func (s *Server) compareMetadata(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = s.agentCall(ctx, nodes[0].Session(), "object_stat", false, requests[i], &objects[i])
+			results[i] = redactStorageError(s.agentCall(ctx, nodes[0].Session(), "object_stat", false, requests[i], &objects[i]), snapshot.Connections)
 		}()
 	}
 	wg.Wait()

@@ -26,6 +26,31 @@ export async function mockTaskChildren(
       snapshot.childTaskIds,
     );
     const node = url.searchParams.get("executionNodeIp");
+    const active = url.searchParams.get("view") === "active";
+    const matching = numbered.filter(
+      (item) =>
+        (!node || (item.executionNodeIp || item.workerNode) === node) &&
+        (!active ||
+          [
+            "CREATED",
+            "PENDING",
+            "RUNNING",
+            "STOPPING",
+            "RESUMING",
+            "RECOVERING",
+            "RECOVERABLE",
+            "WAITING_RECOVERY",
+            "SCAN_COMPLETED",
+          ].includes(item.status)),
+    );
+    const selected = match[2]
+      ? matching.filter((item) => item.subtaskNumber === Number(match[2]))
+      : matching.filter((item) => item.subtaskNumber > offset).slice(0, limit);
+    const items = selected.map((item) => ({
+      ...item,
+      childTaskId: `${snapshot.parentTaskId}-${item.subtaskNumber}`,
+    }));
+    const nextOffset = items.at(-1)?.subtaskNumber ?? offset;
     await route.fulfill({
       status: snapshot.error ? 503 : 200,
       json: snapshot.error
@@ -36,21 +61,15 @@ export async function mockTaskChildren(
               parentTaskId: snapshot.parentTaskId,
               offset,
               limit,
-              items: numbered
-                .filter(
-                  (item) =>
-                    item.subtaskNumber > offset &&
-                    item.subtaskNumber <= offset + limit &&
-                    (!node ||
-                      (item.executionNodeIp || item.workerNode) === node),
-                )
-                .map((item) => ({
-                  ...item,
-                  childTaskId: `${snapshot.parentTaskId}-${item.subtaskNumber}`,
-                })),
-              totalCount:
-                snapshot.totalCount ??
-                Math.max(0, ...numbered.map((item) => item.subtaskNumber)),
+              items,
+              totalCount: active
+                ? matching.length
+                : (snapshot.totalCount ??
+                  Math.max(0, ...numbered.map((item) => item.subtaskNumber))),
+              nextOffset,
+              hasMore:
+                !match[2] &&
+                matching.some((item) => item.subtaskNumber > nextOffset),
               partial: !!snapshot.partial,
               unreachableWorkers: snapshot.partial ? ["10.0.1.13"] : [],
             },

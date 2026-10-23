@@ -215,7 +215,7 @@ func TestAdminStorageUpdateMergesAndListRedacts(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
 		}
 		body := adminTestBody(t, r)
-		if body["endpoint"] != "https://new.example" || body["region"] != "cn-north-1" || body["sessionToken"] != "keep-session" || body["secretKey"] != "keep-secret" || body["accessKey"] != "keep-access" || body["pathStyleEnable"] != true || body["useV2SignerType"] != false {
+		if body["endpoint"] != "https://new.example" || body["region"] != "cn-north-1" || body["sessionToken"] != nil || body["secretKey"] != nil || body["accessKey"] != nil || body["pathStyleEnable"] != true || body["useV2SignerType"] != false {
 			t.Fatalf("update discarded fields: %#v", body)
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true})
@@ -261,7 +261,7 @@ func TestAdminStorageRegionAndTemporaryCredentials(t *testing.T) {
 				}
 				writes++
 				body := adminTestBody(t, r)
-				if r.Method != "PUT" || body["region"] != test.region || body["sessionToken"] != test.token || body["accessKey"] != "keep-access" || body["secretKey"] != "keep-secret" {
+				if r.Method != "PUT" || body["region"] != test.region || body["sessionToken"] != test.token || body["accessKey"] != nil || body["secretKey"] != nil {
 					t.Fatalf("incorrect storage update: %#v", body)
 				}
 				adminTestJSON(t, w, map[string]interface{}{"success": true})

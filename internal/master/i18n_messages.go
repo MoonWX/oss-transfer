@@ -2,6 +2,15 @@ package master
 
 // Exact application messages only. Vendor errors and user values are not rewritten.
 var apiMessages = map[string]struct{ en, zh, ja string }{
+	"Upgrade Agent %s before verifying shared storage":                                        {"Upgrade Agent %s before verifying shared storage", "请先升级执行节点 %s，再验证共享存储", "共有ストレージを検証する前に Agent %s を更新してください"},
+	"Provide both Access Key and Secret Key to replace credentials":                           {"Provide both Access Key and Secret Key to replace credentials", "更换凭据时，请同时填写 Access Key 和 Secret Key", "認証情報の変更には Access Key と Secret Key の両方を入力してください"},
+	"Probe cleanup failed on node %s: %s":                                                     {"Probe cleanup failed on node %s: %s", "节点 %s 的测试文件清理失败：%s", "ノード %s のテストファイルを削除できませんでした：%s"},
+	"Node %s could not read the shared test file: %s":                                         {"Node %s could not read the shared test file: %s", "节点 %s 无法读取同一测试文件：%s", "ノード %s から共有テストファイルを読み取れません：%s"},
+	"Create the shared directory on all selected nodes before preflight":                      {"Create the shared directory on all selected nodes before preflight", "请先在所有选定节点上准备好共享目录，再进行预检", "事前チェックの前に、選択した全ノードの共有ディレクトリを準備してください"},
+	"Shared source verification needs one writable node; use one node for a read-only source": {"Shared source verification needs one writable node; use one node for a read-only source", "共享源目录验证需要至少一个节点可写；只读源可改用单节点迁移", "共有元の検証には書き込み可能なノードが必要です。読み取り専用の転送元は単一ノードで転送できます"},
+	"Shared storage verification did not pass":                                                {"Shared storage verification did not pass", "共享存储验证未通过", "共有ストレージの検証に失敗しました"},
+	"Shared test file was written, read by every node, and removed":                           {"Shared test file was written, read by every node, and removed", "已写入测试文件，所有节点读取校验通过并已清理", "テストファイルの書き込み、全ノードからの読み取り検証、削除が完了しました"},
+
 	"Master URL must be an HTTP or HTTPS origin":                                        {"Master URL must be an HTTP or HTTPS origin", "Master 连接地址须为不含路径的 HTTP 或 HTTPS 地址", "Master の接続先はパスを含まない HTTP または HTTPS の URL を指定してください"},
 	"Agent URL must be an HTTP or HTTPS origin":                                         {"Agent URL must be an HTTP or HTTPS origin", "Agent 连接地址须为 HTTP 或 HTTPS 地址，不含路径", "Agent の接続先はパスを含まない HTTP または HTTPS の URL を指定してください"},
 	"Cannot save Master addresses":                                                      {"Cannot save Master addresses", "无法保存主节点连接地址", "マスターの接続先を保存できません"},

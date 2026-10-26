@@ -116,6 +116,25 @@ test("opens local failures from task links, paginates, and reports partial retri
   await expect
     .poll(() => queries.some((url) => url.searchParams.get("offset") === "25"))
     .toBe(true);
+  const pagination = page.getByRole("navigation", {
+    name: "分页",
+    exact: true,
+  });
+  await expect(pagination).toContainText("26–26 / 26");
+  await pagination.getByRole("combobox", { name: "每页" }).click();
+  await page.getByRole("option", { name: "10", exact: true }).click();
+  await expect(pagination).toContainText("21–26 / 26");
+  expect(queries.at(-1)?.searchParams.get("offset")).toBe("20");
+  expect(queries.at(-1)?.searchParams.get("limit")).toBe("10");
+  await pagination.getByRole("spinbutton", { name: "跳至页码" }).fill("1");
+  await pagination.getByRole("spinbutton", { name: "跳至页码" }).press("Enter");
+  await expect(pagination).toContainText("1–10 / 26");
+  expect(queries.at(-1)?.searchParams.get("offset")).toBe("0");
+  expect(queries.at(-1)?.searchParams.get("taskId")).toBe("123");
+  await page.reload();
+  await expect(pagination.getByRole("combobox", { name: "每页" })).toHaveText(
+    "10",
+  );
   await page.getByRole("button", { name: "重试任务" }).click();
   await expect(
     page

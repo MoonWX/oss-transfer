@@ -24,7 +24,6 @@ import {
   TableCell,
   TableContainer,
   TableHead,
-  TablePagination,
   TableRow,
   Tabs,
   TextField,
@@ -37,6 +36,10 @@ import {
   SystemUpdateAltRounded,
 } from "@mui/icons-material";
 import { api, ApiError, useApi, useNotify } from "../lib/api";
+import ListPagination, {
+  rememberPageSize,
+  savedPageSize,
+} from "../components/ListPagination";
 import ObjectComparison from "../components/ObjectComparison";
 import SoftwareUpdates from "../components/SoftwareUpdates";
 import type { NodeRegistry } from "../lib/nodeRegistry";
@@ -170,7 +173,9 @@ export default function ToolsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(() =>
+    savedPageSize("oss-transfer-recycle-page-size", 25),
+  );
   const rows = useMemo(
     () =>
       [
@@ -612,30 +617,16 @@ export default function ToolsPage() {
                     </TableBody>
                   </Table>
                 </TableContainer>
-                <TablePagination
-                  component="div"
+                <ListPagination
                   count={rows.length}
                   page={page}
-                  onPageChange={(_, next) => setPage(next)}
-                  rowsPerPage={pageSize}
-                  onRowsPerPageChange={(event) => {
-                    setPageSize(Number(event.target.value));
-                    setPage(0);
+                  pageSize={pageSize}
+                  onPageChange={setPage}
+                  onPageSizeChange={(size) => {
+                    rememberPageSize("oss-transfer-recycle-page-size", size);
+                    setPage(Math.floor((page * pageSize) / size));
+                    setPageSize(size);
                   }}
-                  rowsPerPageOptions={[25, 50, 100]}
-                  labelRowsPerPage={t("每页")}
-                  labelDisplayedRows={({ from, to, count }) =>
-                    `${from}–${to} / ${count}`
-                  }
-                  getItemAriaLabel={(type) =>
-                    type === "next"
-                      ? t("下一页")
-                      : type === "previous"
-                        ? t("上一页")
-                        : type === "first"
-                          ? t("第一页")
-                          : t("最后一页")
-                  }
                 />
               </>
             ) : (

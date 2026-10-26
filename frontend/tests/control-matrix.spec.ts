@@ -152,12 +152,22 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
   const matrix = Array.from({ length: 27 }, (_, i) => ({
     ...tasks[1],
     taskIndex: 2100 + i,
+    generation: 1,
     sourceBucket: `source-${i}`,
     workerNode: i % 2 ? "10.0.1.13" : "10.0.1.12",
   }));
   await page.route("**/api/master/status", (route) =>
     route.fulfill({ json: { totalTasks: matrix.length, tasks: matrix } }),
   );
+  await page.route(/\/api\/master\/tasks\/\d+$/, (route) => {
+    const id = Number(new URL(route.request().url()).pathname.split("/").pop());
+    return route.fulfill({
+      json: {
+        success: true,
+        data: matrix.find((task) => task.taskIndex === id),
+      },
+    });
+  });
   await page.goto("/tasks");
   await page.getByRole("checkbox", { name: "选择当前页任务" }).check();
   await expect(
@@ -203,7 +213,7 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
     .toBe(1);
   expect(
     requests.find((request) => request.path === "/api/master/start")?.body,
-  ).toEqual({ taskIds: [2126] });
+  ).toEqual({ taskIds: [2126], expectedGenerations: { "2126": 1 } });
 });
 
 for (const signature of [

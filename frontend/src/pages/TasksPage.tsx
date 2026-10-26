@@ -39,7 +39,6 @@ import {
   TableCell,
   TableContainer,
   TableHead,
-  TablePagination,
   ToggleButton,
   ToggleButtonGroup,
   TableRow,
@@ -82,6 +81,10 @@ import {
   useRefreshPreference,
 } from "../lib/refreshPreference";
 import RefreshControls from "../components/RefreshControls";
+import ListPagination, {
+  savedPageSize,
+  rememberPageSize,
+} from "../components/ListPagination";
 import TaskBandwidth from "../components/TaskBandwidth";
 import SubtaskDetails from "../components/SubtaskDetails";
 import {
@@ -1335,7 +1338,9 @@ export default function TasksPage({
   const [worker, setWorker] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(() =>
+    savedPageSize("oss-transfer-task-page-size"),
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const childId = searchParams.get("childTaskId") || undefined;
   const childNode = searchParams.get("childNode") || undefined;
@@ -2342,31 +2347,16 @@ export default function TasksPage({
           </>
         )}
         {!overview && filtered.length > 0 && (
-          <TablePagination
-            component="div"
+          <ListPagination
+            ariaLabel={tr("任务分页")}
             count={filtered.length}
             page={page}
-            onPageChange={(_, p) => setPage(p)}
-            rowsPerPage={pageSize}
-            onRowsPerPageChange={(e) => {
-              setPageSize(Number(e.target.value));
-              setPage(0);
-            }}
-            rowsPerPageOptions={[10, 25, 50]}
-            labelRowsPerPage={tr("每页")}
-            labelDisplayedRows={({ from, to, count }) =>
-              `${from}–${to} / ${count}`
-            }
-            getItemAriaLabel={(type) =>
-              type === "next" ? tr("下一页") : tr("上一页")
-            }
-            sx={{
-              borderTop: "1px solid",
-              borderColor: "divider",
-              ".MuiTablePagination-toolbar": {
-                flexWrap: "wrap",
-                justifyContent: "flex-end",
-              },
+            onPageChange={setPage}
+            pageSize={pageSize}
+            onPageSizeChange={(size) => {
+              setPage(Math.floor((page * pageSize) / size));
+              setPageSize(size);
+              rememberPageSize("oss-transfer-task-page-size", size);
             }}
           />
         )}

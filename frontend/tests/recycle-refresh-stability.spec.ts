@@ -222,4 +222,30 @@ test("reordered recycle responses preserve row identity selection pagination and
   expect(await selected.boundingBox()).toEqual(before);
   expect(await page.evaluate(() => window.scrollY)).toBe(scroll);
   await expect(page.getByText("26–40 / 40", { exact: true })).toBeVisible();
+  const pagination = page.getByRole("navigation", {
+    name: "分页",
+    exact: true,
+  });
+  await pagination.getByRole("combobox", { name: "每页" }).click();
+  await page.getByRole("option", { name: "10", exact: true }).click();
+  await expect(pagination).toContainText("21–30 / 40");
+  await expect(selected).toBeChecked();
+  await pagination
+    .getByRole("button", { name: "最后一页", exact: true })
+    .click();
+  await expect(pagination).toContainText("31–40 / 40");
+  await page
+    .getByRole("checkbox", { name: "选择任务 10", exact: true })
+    .check();
+  await pagination.getByRole("spinbutton", { name: "跳至页码" }).fill("3");
+  await pagination.getByRole("button", { name: "跳转", exact: true }).click();
+  await expect(selected).toBeChecked();
+  await expect(
+    page.getByText("已选择 2 个任务 ID", { exact: false }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(pagination.getByRole("combobox", { name: "每页" })).toHaveText(
+    "10",
+  );
+  await expect(pagination).toContainText("1–10 / 40");
 });

@@ -41,7 +41,6 @@ import {
   TableCell,
   TableContainer,
   TableHead,
-  TablePagination,
   TableRow,
   Tabs,
   TextField,
@@ -56,6 +55,10 @@ import {
   ReplayRounded,
 } from "@mui/icons-material";
 import { api, ApiError, download, useApi, useNotify } from "../lib/api";
+import ListPagination, {
+  rememberPageSize,
+  savedPageSize,
+} from "../components/ListPagination";
 import {
   canRetrySnapshot,
   useTaskRecovery,
@@ -164,7 +167,9 @@ export default function ExceptionsPage() {
   const [draft, setDraft] = useState<Filters>(linkedFilters);
   const [filters, setFilters] = useState<Filters>(linkedFilters);
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(() =>
+    savedPageSize("oss-transfer-exceptions-page-size", 25),
+  );
   const [queries, setQueries] = useState<Partial<Record<Mode, QueryState>>>({});
   const [busy, setBusy] = useState(false);
   const retryInFlight = useRef(false);
@@ -1087,32 +1092,19 @@ export default function ExceptionsPage() {
             )
           )}
         </Box>
-        <TablePagination
-          component="div"
-          sx={{ visibility: result ? "visible" : "hidden" }}
-          count={isLocal ? (result?.total ?? 0) : (result?.items.length ?? 0)}
-          page={page}
-          onPageChange={(_, value) => setPage(value)}
-          rowsPerPage={pageSize}
-          onRowsPerPageChange={(event) => {
-            setPageSize(Number(event.target.value));
-            setPage(0);
-          }}
-          rowsPerPageOptions={[25, 50, 100]}
-          labelRowsPerPage={tr("每页")}
-          labelDisplayedRows={({ from, to, count }) =>
-            `${from}–${to} / ${count}`
-          }
-          getItemAriaLabel={(type) =>
-            type === "next"
-              ? tr("下一页")
-              : type === "previous"
-                ? tr("上一页")
-                : type === "first"
-                  ? tr("第一页")
-                  : tr("最后一页")
-          }
-        />
+        <Box sx={{ visibility: result ? "visible" : "hidden" }}>
+          <ListPagination
+            count={isLocal ? (result?.total ?? 0) : (result?.items.length ?? 0)}
+            page={page}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              rememberPageSize("oss-transfer-exceptions-page-size", size);
+              setPage(Math.floor((page * pageSize) / size));
+              setPageSize(size);
+            }}
+          />
+        </Box>
       </Paper>
       {isLocal && (
         <Typography variant="caption" color="text.secondary">

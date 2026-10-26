@@ -1,4 +1,9 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  分页: { en: "Pagination", ja: "ページ切り替え" },
+  任务分页: { en: "Task pagination", ja: "タスクのページ切り替え" },
+  "第 {page} 页": { en: "Page {page}", ja: "{page} ページ" },
+  跳至页码: { en: "Go to page", ja: "移動先ページ" },
+  跳转: { en: "Go", ja: "移動" },
   "检查状态…": { en: "Checking status…", ja: "状態を確認中…" },
   状态暂不可用: { en: "Status unavailable", ja: "状態を取得できません" },
   "处理中…": {

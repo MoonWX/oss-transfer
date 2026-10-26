@@ -142,6 +142,7 @@ func TestStopAndResumeWithRetiredCompletedScannerPreservesTransferredBytes(t *te
 	runtime.leases.ttl, runtime.leases.margin = time.Second, 100*time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	startTakeoverLeaseLoop(t, ctx, runtime)
 	for {
 		lastErr := runtime.step(ctx, p.ID)
 		current, err := runtime.repo.Get(p.ID)

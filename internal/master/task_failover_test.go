@@ -64,9 +64,23 @@ func takeoverParent(t *testing.T, f *agentHTTPFixture, nodes ...task.Node) task.
 	return p
 }
 
+func startTakeoverLeaseLoop(t *testing.T, ctx context.Context, runtime *taskRuntime) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		runtime.leases.loop(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
 // Real Agent lease protocol over authenticated outbound HTTP. The test moves
-// the Master's monotonic fence independently of Agent execution: the latter
-// must already have cancelled itself when the coordinator permits migration.
+// ownership only after the disconnected Agent has cancelled itself and the
+// Master's conservative lease fence permits migration.
 func TestFailoverLeaseFenceMigrationAndReturningOwner(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	a, b := takeoverTestAgent(t, f, "failover-a"), takeoverTestAgent(t, f, "failover-b")
@@ -84,6 +98,7 @@ func TestFailoverLeaseFenceMigrationAndReturningOwner(t *testing.T) {
 	runtime.leases.margin = 50 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	startTakeoverLeaseLoop(t, ctx, runtime)
 	available := map[string]bool{a.node.ID: true, b.node.ID: true}
 	p, err = runtime.reconcileFailover(ctx, p, available)
 	if err != nil {
@@ -92,11 +107,13 @@ func TestFailoverLeaseFenceMigrationAndReturningOwner(t *testing.T) {
 	if p.Failover == nil || !p.Failover.Enabled {
 		t.Fatal("new Agents did not enable leases")
 	}
-	if _, err := owner.service.Leases.ParentContext(p.ID, p.Generation); err != nil {
+	ownerCtx, err := owner.service.Leases.ParentContext(p.ID, p.Generation)
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Unavailable control channel does not itself revoke I/O. Before expiry,
 	// ownership and budget must remain unchanged.
+	owner.cancel()
 	available = map[string]bool{other.node.ID: true}
 	p, err = runtime.reconcileFailover(ctx, p, available)
 	if err != nil {
@@ -105,9 +122,27 @@ func TestFailoverLeaseFenceMigrationAndReturningOwner(t *testing.T) {
 	if p.NodeRetired(owner.node.ID) {
 		t.Fatal("task moved before its lease expired")
 	}
-	time.Sleep(1200 * time.Millisecond)
+	select {
+	case <-ownerCtx.Done():
+	case <-ctx.Done():
+		t.Fatal("disconnected owner's lease did not expire")
+	}
 	if _, err := owner.service.Leases.ParentContext(p.ID, p.Generation); err == nil {
 		t.Fatal("old Agent still authorized after expiry")
+	}
+	for {
+		expired, err := runtime.leases.expired(p, owner.node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("Master's conservative lease fence did not expire")
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 	p, err = runtime.reconcileFailover(ctx, p, available)
 	if err != nil {

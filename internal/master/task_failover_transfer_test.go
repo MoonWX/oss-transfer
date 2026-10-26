@@ -177,6 +177,7 @@ func TestFailoverScannerAndInFlightTransferFinishWithIdenticalBytes(t *testing.T
 	runtime.leases.ttl, runtime.leases.margin = time.Second, 100*time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	startTakeoverLeaseLoop(t, ctx, runtime)
 	var lastErr error
 	for {
 		lastErr = runtime.step(ctx, p.ID)
@@ -203,6 +204,20 @@ func TestFailoverScannerAndInFlightTransferFinishWithIdenticalBytes(t *testing.T
 	ownerCtx, err := a.service.Leases.ParentContext(p.ID, p.Generation)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// No scheduler steps run during this interval. The production renewal loop
+	// must keep both blocked S3 requests alive beyond their initial lease.
+	alive := time.NewTimer(runtime.leases.ttl + runtime.leases.margin)
+	defer alive.Stop()
+	select {
+	case <-ownerCtx.Done():
+		t.Fatal("healthy owner expired while the independent renewer was running")
+	case <-ctx.Done():
+		t.Fatal("timed out while checking independent renewal")
+	case <-alive.C:
+	}
+	if ownerCtx.Err() != nil {
+		t.Fatal("healthy owner lost its execution lease", ownerCtx.Err())
 	}
 	a.cancel() // Disconnect only the control channel; leave data-plane services alive.
 	select {

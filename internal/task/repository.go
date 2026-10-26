@@ -17,9 +17,12 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
-type Repository struct{ store *state.Store }
+type Repository struct {
+	store *state.Store
+	now   func() time.Time
+}
 
-func New(store *state.Store) *Repository   { return &Repository{store} }
+func New(store *state.Store) *Repository   { return &Repository{store: store, now: time.Now} }
 func key(id int64) string                  { return fmt.Sprintf("%020d", id) }
 func childKey(id int64, number int) string { return fmt.Sprintf("%020d/%010d", id, number) }
 func digest(value any) string {
@@ -55,7 +58,7 @@ func (r *Repository) RuntimeProblem(id int64, generation uint64, message string)
 			return errUnchanged
 		}
 		p.RuntimeError = message
-		return save(tx, p)
+		return r.save(tx, p)
 	}))
 }
 func validate(spec Spec) error {
@@ -179,14 +182,14 @@ func (r *Repository) CreateChecked(spec Spec, requestKey string, check func(*sta
 		if next > 1<<53-1 {
 			return errors.New("task ID space exhausted")
 		}
-		now := time.Now().UTC()
-		p = Parent{ID: int64(next), Spec: spec, Generation: 1, BudgetRevision: 1, Status: "RUNNING", CreatedAt: now, StartedAt: &now, Fingerprint: fingerprint}
+		now := r.now().UTC()
+		p = Parent{ID: int64(next), Spec: spec, Generation: 1, BudgetRevision: 1, Status: "RUNNING", CreatedAt: now, StartedAt: &now, Fingerprint: fingerprint, ActiveTime: &execution.ActiveTime{StartedAt: &now}}
 		if spec.InventoryID != "" {
 			if err := inventory.BindTaskTx(tx, spec.InventoryID, p.ID, fingerprint); err != nil {
 				return err
 			}
 		}
-		if err := save(tx, p); err != nil {
+		if err := r.save(tx, p); err != nil {
 			return err
 		}
 		if err := tx.Put("master-task-requests", digest(requestKey), p.ID); err != nil {
@@ -198,7 +201,18 @@ func (r *Repository) CreateChecked(spec Spec, requestKey string, check func(*sta
 	return
 }
 
-func save(tx *state.Tx, p Parent) error {
+func save(tx *state.Tx, p Parent) error { return saveAt(tx, p, time.Now().UTC()) }
+
+func (r *Repository) save(tx *state.Tx, p Parent) error { return saveAt(tx, p, r.now().UTC()) }
+
+func saveAt(tx *state.Tx, p Parent, now time.Time) error {
+	// Leave older accepted recoveries identifiable until PrepareResume derives
+	// their prior end from child history. Index maintenance must not erase this.
+	if p.ActiveTime != nil || p.Status != "RESUMING" {
+		timing := p.ExecutionTime()
+		timing.Transition(executionActive(p.Status), now)
+		p.ActiveTime = &timing
+	}
 	if err := tx.Put("master-tasks", key(p.ID), p); err != nil {
 		return err
 	}
@@ -323,7 +337,7 @@ func (r *Repository) assignPage(id int64, generation uint64, batches []Assignmen
 			}
 			children = append(children, child)
 		}
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	if err != nil {
 		return nil, err
@@ -499,7 +513,7 @@ func (r *Repository) UpdateLimits(id int64, mbps *float64, limits *execution.Req
 		if !reflect.DeepEqual(before, p.Spec) {
 			p.BudgetRevision++
 		}
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	return
 }
@@ -513,7 +527,7 @@ func (r *Repository) Recycle(id int64, deleted bool) (p Parent, err error) {
 			return ErrState
 		}
 		p.Deleted = deleted
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	return
 }
@@ -530,7 +544,7 @@ func (r *Repository) Purge(id int64) (p Parent, err error) {
 			return ErrState
 		}
 		p.Purged = true
-		for _, bucket := range []string{"master-task-children", "master-task-outstanding", childOrderBucket, "master-task-load", "master-task-exceptions", "master-task-exceptions-hidden", "master-task-legacy-children", "master-task-legacy-history", "master-task-legacy-order"} {
+		for _, bucket := range []string{"master-task-children", "master-task-outstanding", childOrderBucket, allChildOrderBucket, "master-task-load", "master-task-exceptions", "master-task-exceptions-hidden", "master-task-legacy-children", "master-task-legacy-history", "master-task-legacy-order"} {
 			for {
 				var keys []string
 				err := tx.Scan(bucket, key(id)+"/", "", 128, func(k string, _ json.RawMessage) error { keys = append(keys, k); return nil })
@@ -547,7 +561,7 @@ func (r *Repository) Purge(id int64) (p Parent, err error) {
 				}
 			}
 		}
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	return
 }
@@ -641,7 +655,7 @@ func (r *Repository) ObserveBatch(id int64, generation uint64, observations []Ob
 		if !changed {
 			return errUnchanged
 		}
-		return save(tx, p)
+		return r.save(tx, p)
 	}))
 }
 
@@ -654,7 +668,9 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	if !found {
 		return false, ErrNotFound
 	}
-	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(child.Job) {
+	expectedJob := child.Job
+	expectedJob.Generation = p.Generation
+	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(expectedJob) {
 		return false, ErrConflict
 	}
 	if child.Record != nil && (record.Attempt < child.Record.Attempt || (record.Attempt == child.Record.Attempt && record.UpdatedAt.Before(child.Record.UpdatedAt))) {
@@ -684,6 +700,7 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	addCounters(&p.Counters, record.Counters, 1)
 	previous := child
 	child.Accepted = true
+	child.Job.Generation = record.Job.Generation
 	child.Record = &record
 	if err := changePending(p, previous, child); err != nil {
 		return false, err
@@ -747,7 +764,7 @@ func (r *Repository) ScanProgress(id int64, generation uint64, objects, bytes in
 		p.ScannedBatches = max(p.ScannedBatches, batches)
 		p.ScanComplete = complete
 		p.Error = scanErr
-		return save(tx, p)
+		return r.save(tx, p)
 	}))
 }
 func (r *Repository) Stop(id int64) (p Parent, err error) {
@@ -763,7 +780,7 @@ func (r *Repository) Stop(id int64) (p Parent, err error) {
 			p.BudgetRevision++
 		}
 		p.Status = "STOPPING"
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	return
 }
@@ -780,19 +797,35 @@ func (r *Repository) Stopped(id int64, generation uint64) error {
 			return ErrState
 		}
 		p.Status = "STOPPED"
-		now := time.Now().UTC()
+		now := r.now().UTC()
 		p.FinishedAt = &now
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 }
 
-// Resume retains immutable assignments and completed object ledgers. Agents must
-// acknowledge the new parent generation before any child is dispatched again.
+// Resume durably accepts recovery without scanning child history or calling an
+// Agent. Replaying an uncertain request while preparation is running is idempotent.
 func (r *Repository) Resume(id int64) (p Parent, err error) {
 	err = r.store.Update(func(tx *state.Tx) error {
 		p, err = get(tx, id)
 		if err != nil {
 			return err
+		}
+		if !p.Deleted && p.Status == "RESUMING" {
+			// Older releases committed RESUMING after rewriting all children, but
+			// could then stall at Agent admission. Rebuild their missing derived load
+			// in the same bounded preparation path without advancing the generation.
+			if p.ActiveTime == nil || (p.ResumeAfter == nil && p.Scheduling == nil) {
+				if p.ActiveTime == nil {
+					p.ResumeTiming = &ResumeTiming{}
+					p.ActiveTime = &execution.ActiveTime{Incomplete: true}
+				}
+				after := 0
+				p.ResumeAfter = &after
+				p.Scheduling = &SchedulingState{Nodes: map[string]PendingLoad{}}
+				return r.save(tx, p)
+			}
+			return nil
 		}
 		if p.Deleted || p.Status == "COMPLETED" || !Ended(p.Status) {
 			return ErrState
@@ -800,62 +833,98 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 		if p.Legacy != nil && p.Legacy.NeedsReconciliation {
 			return ErrLegacyRecovery
 		}
+		if p.Generation == ^uint64(0) || p.BudgetRevision == ^uint64(0) {
+			return ErrGeneration
+		}
+		timing := p.ExecutionTime()
+		if p.ActiveTime == nil && p.FinishedAt == nil {
+			p.ResumeTiming = &ResumeTiming{}
+			timing = execution.ActiveTime{Incomplete: true}
+		}
+		p.ActiveTime = &timing
 		p.Generation++
 		p.BudgetRevision++
 		p.Status = "RESUMING"
 		p.FinishedAt = nil
-		p.Error = ""
-		p.Scheduling = nil // Failed children reenter the pending index below.
-		if err := ensureChildOrder(tx, &p); err != nil {
+		p.Error, p.RuntimeError = "", ""
+		after := 0
+		p.ResumeAfter = &after
+		p.Scheduling = &SchedulingState{Nodes: map[string]PendingLoad{}}
+		return r.save(tx, p)
+	})
+	return
+}
+
+// PrepareResume advances a bounded transaction. Its cursor, counters and index
+// updates commit together, so shutdown or a retry cannot skip or double-count a
+// child. Completed assignments retain their original generation and ledger.
+func (r *Repository) PrepareResume(id int64, generation uint64) (ready bool, err error) {
+	err = r.store.Update(func(tx *state.Tx) error {
+		p, err := get(tx, id)
+		if err != nil {
 			return err
 		}
+		if p.Generation != generation {
+			return ErrGeneration
+		}
+		if p.Status != "RESUMING" {
+			return ErrState
+		}
+		if p.ResumeAfter == nil {
+			ready = true
+			return nil
+		}
 		after := ""
-		for {
-			var page []Child
-			var last string
-			err := tx.Scan("master-task-children", key(id)+"/", after, 128, func(k string, raw json.RawMessage) error {
-				var c Child
-				if err := json.Unmarshal(raw, &c); err != nil {
-					return err
-				}
-				page = append(page, c)
-				last = k
-				return nil
-			})
+		if *p.ResumeAfter > 0 {
+			after = childKey(id, *p.ResumeAfter)
+		}
+		var page []Child
+		if err := tx.Scan("master-task-children", key(id)+"/", after, 128, func(_ string, raw json.RawMessage) error {
+			var c Child
+			if err := json.Unmarshal(raw, &c); err != nil {
+				return err
+			}
+			page = append(page, c)
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, c := range page {
+			p.captureResumeFinish(c)
+			*p.ResumeAfter = c.Job.Number
+			if c.Record != nil && c.Record.Status == execution.Completed {
+				continue
+			}
+			previous := c
+			if c.Record != nil {
+				record := *c.Record
+				c.Record = &record
+				countChild(&p, c.Record.Status, -1)
+				c.Record.Status = execution.Waiting
+			}
+			c.Job.Generation = p.Generation
+			c.Accepted = false
+			if err := tx.Put("master-task-outstanding", childKey(id, c.Job.Number), c.Job.Number); err != nil {
+				return err
+			}
+			if err := tx.Put("master-task-children", childKey(id, c.Job.Number), c); err != nil {
+				return err
+			}
+			if err := syncChildOrder(tx, &p, &previous, c); err != nil {
+				return err
+			}
+			load, err := addLoad(p.Scheduling.Nodes[c.Node.ID], childPending(c), 1)
 			if err != nil {
 				return err
 			}
-			for _, c := range page {
-				previous := c
-				// The old status must survive the in-place record update below.
-				if c.Record != nil {
-					record := *c.Record
-					previous.Record = &record
-				}
-				c.Job.Generation = p.Generation
-				c.Accepted = false
-				if c.Record != nil && c.Record.Status != execution.Completed {
-					countChild(&p, c.Record.Status, -1)
-					c.Record.Status = execution.Waiting
-				}
-				if c.Record == nil || c.Record.Status != execution.Completed {
-					if err := tx.Put("master-task-outstanding", childKey(id, c.Job.Number), c.Job.Number); err != nil {
-						return err
-					}
-				}
-				if err := tx.Put("master-task-children", childKey(id, c.Job.Number), c); err != nil {
-					return err
-				}
-				if err := syncChildOrder(tx, &p, &previous, c); err != nil {
-					return err
-				}
-			}
-			if len(page) < 128 {
-				break
-			}
-			after = last
+			p.Scheduling.Nodes[c.Node.ID] = load
 		}
-		return save(tx, p)
+		if len(page) < 128 || *p.ResumeAfter >= p.ChildCount {
+			p.finishResumeTiming()
+			p.ResumeAfter = nil
+			ready = true
+		}
+		return r.save(tx, p)
 	})
 	return
 }
@@ -868,11 +937,11 @@ func (r *Repository) Resumed(id int64, generation uint64) error {
 		if p.Generation != generation {
 			return ErrGeneration
 		}
-		if p.Status != "RESUMING" {
+		if p.Status != "RESUMING" || p.ResumeAfter != nil {
 			return ErrState
 		}
 		p.Status = "RUNNING"
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 }
 
@@ -897,10 +966,10 @@ func (r *Repository) FinishIfReady(id int64, generation uint64) (bool, error) {
 				p.Status = "FAILED"
 			}
 		}
-		now := time.Now().UTC()
+		now := r.now().UTC()
 		p.FinishedAt = &now
 		finished = true
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	return finished, unchangedOK(err)
 }

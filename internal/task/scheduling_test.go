@@ -206,6 +206,7 @@ func TestResumedLoadRetainsSuccessesAndRequeuesFailedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prepareResume(t, repo, p)
 	if err := repo.Resumed(p.ID, p.Generation); err != nil {
 		t.Fatal(err)
 	}

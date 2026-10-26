@@ -238,7 +238,7 @@ test("local task details exclude the parent discovery record from execution shar
     route.fulfill({ json: { totalTasks: 1, tasks: [parent] } }),
   );
   await page.route(
-    "**/api/master/tasks/1050/children?offset=0&limit=25",
+    "**/api/master/tasks/1050/children?offset=0&limit=25&**",
     (route) =>
       route.fulfill({
         json: {
@@ -280,7 +280,9 @@ test("local task details exclude the parent discovery record from execution shar
   await expect(
     drawer.getByRole("heading", { name: "子任务", exact: true }),
   ).toBeVisible();
-  await expect(drawer.getByText("子任务 #1050-1 · 10.0.1.12")).toBeVisible();
+  await expect(
+    drawer.getByText("子任务 #1050-1 · master (10.0.1.12)"),
+  ).toBeVisible();
   await expect(drawer.getByText(/子任务 #-/)).toHaveCount(0);
   await expect(drawer.getByText("部分失败", { exact: true })).toHaveCount(2);
   await expect(drawer.getByText("已完成", { exact: true })).toHaveCount(0);
@@ -295,7 +297,7 @@ test("local task details retain a legacy execution record with the parent task I
     route.fulfill({ json: { totalTasks: 1, tasks: [parent] } }),
   );
   await page.route(
-    "**/api/master/tasks/1050/children?offset=0&limit=25",
+    "**/api/master/tasks/1050/children?offset=0&limit=25&**",
     (route) =>
       route.fulfill({
         json: {
@@ -318,7 +320,9 @@ test("local task details retain a legacy execution record with the parent task I
   await expect(
     page.getByRole("heading", { name: "子任务", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("子任务 #1050-1 · 10.0.1.12")).toBeVisible();
+  await expect(
+    page.getByText("子任务 #1050-1 · master (10.0.1.12)"),
+  ).toBeVisible();
 });
 
 for (const result of ["populated", "empty", "partial", "failed"] as const) {
@@ -334,7 +338,7 @@ for (const result of ["populated", "empty", "partial", "failed"] as const) {
       release = resolve;
     });
     await page.route(
-      "**/api/master/tasks/1050/children?offset=0&limit=25",
+      "**/api/master/tasks/1050/children?offset=0&limit=25&**",
       async (route) => {
         await responseReady;
         await route.fulfill({
@@ -385,7 +389,7 @@ for (const result of ["populated", "empty", "partial", "failed"] as const) {
         drawer.getByRole("heading", { name: "子任务", exact: true }),
       ).toBeVisible();
       await expect(
-        drawer.getByText("子任务 #1050-1 · 10.0.1.12"),
+        drawer.getByText("子任务 #1050-1 · master (10.0.1.12)"),
       ).toBeVisible();
     } else if (result === "empty") {
       await expect(
@@ -621,7 +625,7 @@ test("partially accepted stop keeps failed nodes visible and never reports full 
     page
       .locator("main")
       .getByText(
-        /部分请求未完成：执行项已受理 1，忽略 0，失败 1；未响应节点：10.0.1.13/,
+        /部分请求未完成：执行项已受理 1，忽略 0，失败 1；未响应节点：agent \(10\.0\.1\.13\)/,
       ),
   ).toBeVisible();
   await expect(page.getByText(/停止请求已提交/)).toHaveCount(0);

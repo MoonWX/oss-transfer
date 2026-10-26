@@ -104,6 +104,7 @@ type Counters struct {
 }
 
 type Record struct {
+	ActiveTime      *ActiveTime  `json:"activeTime,omitempty"`
 	InventorySource bool         `json:"inventorySource,omitempty"`
 	Job             Job          `json:"job"`
 	Status          Status       `json:"status"`
@@ -119,10 +120,12 @@ type Record struct {
 }
 
 type ParentFence struct {
-	ParentID   int64  `json:"parentId"`
-	Generation uint64 `json:"generation"`
-	Stopped    bool   `json:"stopped"`
-	Deleted    bool   `json:"deleted"`
+	RetryFailed     bool   `json:"retryFailed,omitempty"`
+	InventorySource bool   `json:"inventorySource,omitempty"`
+	ParentID        int64  `json:"parentId"`
+	Generation      uint64 `json:"generation"`
+	Stopped         bool   `json:"stopped"`
+	Deleted         bool   `json:"deleted"`
 }
 
 // Each Open owns two independent handles, closed after all attempt workers exit.

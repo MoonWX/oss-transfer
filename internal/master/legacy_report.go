@@ -18,6 +18,9 @@ func legacyChildDTO(p task.Parent, child task.LegacyChild) (map[string]any, erro
 		return nil, err
 	}
 	row := taskDTO(p)
+	for _, field := range []string{"duration", "activeDurationMillis", "activeStartedAt", "durationEstimated", "durationIncomplete"} {
+		delete(row, field)
+	}
 	for _, name := range []string{"direction", "status", "sourceS3Alias", "sourceBucket", "destS3Alias", "destBucket", "objectKey", "targetRelativePath", "localPath", "startKey", "endKey", "marker", "scanComplete", "conflictPolicy", "overwrite", "distributionMode", "dateAfter", "dateBefore", "listObjectCount", "listObjectSize", "putObjectCount", "putObjectSize", "skippedObjectCount", "skippedObjectSize", "failedObjectCount", "failedObjectSize", "createTime", "startTime", "endTime", "errorCode", "errorMessage", "attempt"} {
 		if value, ok := raw[name]; ok {
 			var out any
@@ -68,6 +71,19 @@ func legacyChildDTO(p task.Parent, child task.LegacyChild) (map[string]any, erro
 	delete(row, "childCount")
 	delete(row, "averageSpeedBytesPerSecond")
 	delete(row, "currentSpeedBytesPerSecond")
+	// Imported child timestamps belong to the child, never its parent.
+	start, startOK := row["startTime"].(json.Number)
+	end, endOK := row["endTime"].(json.Number)
+	if startOK && endOK {
+		from, fromErr := start.Int64()
+		to, toErr := end.Int64()
+		if fromErr == nil && toErr == nil && from > 0 && to >= from {
+			row["activeDurationMillis"] = to - from
+			row["duration"] = (time.Duration(to-from) * time.Millisecond).Round(time.Second).String()
+		}
+	}
+	row["durationEstimated"] = true
+	row["durationIncomplete"] = row["activeDurationMillis"] == nil
 	return row, nil
 }
 func (s *Server) walkLegacyChildren(ctx context.Context, p task.Parent, visit func(task.LegacyChild) error) error {
@@ -98,7 +114,7 @@ func legacySummaryCSV(writer *csv.Writer, p task.Parent, child task.LegacyChild,
 	}
 	values := []any{"CHILD_TASK", p.ID, row["childTaskId"], row["direction"], reportNodeLabel("", child.Node, sets...), row["legacyOriginalStatus"], reportEndpoint(p.Spec.Source), reportEndpoint(p.Spec.Destination), p.Spec.Prefix, row["startKey"], row["endKey"], row["objectKey"], row["targetRelativePath"], row["dateAfter"], row["dateBefore"], row["overwrite"], row["conflictPolicy"], row["distributionMode"], row["listObjectCount"], row["listObjectSize"], row["putObjectCount"], row["putObjectSize"], row["skippedObjectCount"], row["skippedObjectSize"], row["failedObjectCount"], row["failedObjectSize"], row["createTime"], row["startTime"], row["endTime"], p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
 	values = append(values, reportRequestLimits(p.Spec.RequestLimits)...)
-	return reportCSV(writer, append(values, child.Node)...)
+	return reportCSV(writer, append(values, child.Node, row["activeDurationMillis"], row["durationEstimated"], row["durationIncomplete"])...)
 }
 func (s *Server) walkLegacyHistory(ctx context.Context, p task.Parent, kind string, visit func(task.LegacyHistory) error) error {
 	after := ""

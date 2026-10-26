@@ -48,6 +48,10 @@ type Spec struct {
 }
 
 type Parent struct {
+	ActiveTime   *execution.ActiveTime `json:"activeTime,omitempty"`
+	ResumeTiming *ResumeTiming         `json:"resumeTiming,omitempty"`
+	// ResumeAfter is a durable cursor while old child assignments are prepared.
+	ResumeAfter       *int               `json:"resumeAfter,omitempty"`
 	ID                int64              `json:"id"`
 	Spec              Spec               `json:"spec"`
 	Generation        uint64             `json:"generation"`

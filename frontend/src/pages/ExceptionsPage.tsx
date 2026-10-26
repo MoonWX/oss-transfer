@@ -18,7 +18,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -161,6 +161,12 @@ export default function ExceptionsPage() {
   const [pageSize, setPageSize] = useState(25);
   const [queries, setQueries] = useState<Partial<Record<Mode, QueryState>>>({});
   const [busy, setBusy] = useState(false);
+  const retryInFlight = useRef(false);
+  const [retryingTaskId, setRetryingTaskId] = useState<number | null>(null);
+  const [retryAcceptedTaskId, setRetryAcceptedTaskId] = useState<number | null>(
+    null,
+  );
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Failure | null>(null);
@@ -429,7 +435,11 @@ export default function ExceptionsPage() {
   }
   async function retry(item: Failure) {
     const taskId = item.parentTaskId ?? item.taskIndex;
-    if (taskId === undefined) return;
+    if (taskId === undefined || busy || retryInFlight.current) return;
+    retryInFlight.current = true;
+    setRetryingTaskId(taskId);
+    setRetryAcceptedTaskId(null);
+    setRetryError(null);
     setBusy(true);
     try {
       const response = await api<{
@@ -439,32 +449,54 @@ export default function ExceptionsPage() {
           failed: number;
           partial?: boolean;
           unreachableWorkers?: string[];
+          details?: Array<{
+            success?: boolean;
+            message?: string;
+            error?: string;
+          }>;
         };
       }>("/api/master/local-transfers/retry-failures", {
         method: "POST",
         body: { taskIds: [taskId] },
       });
       const value = response.data;
-      notify(
-        tr("重试已受理 {value1}，忽略 {value2}，失败 {value3}{value4}", {
+      if (value.accepted > 0) setRetryAcceptedTaskId(taskId);
+      const reasons = [
+        ...new Set(
+          (value.details ?? [])
+            .filter((item) => item.success === false || item.error)
+            .map((item) => item.message || item.error)
+            .filter((message): message is string => !!message),
+        ),
+      ];
+      const unavailable =
+        value.unreachableWorkers?.map((id) => nodeLabel(id)) ?? [];
+      const message = tr(
+        "重试已受理 {value1}，忽略 {value2}，失败 {value3}{value4}",
+        {
           value1: value.accepted,
           value2: value.ignored,
           value3: value.failed,
-          value4: value.partial
-            ? tr("；不可达节点：{value1}", {
-                value1:
-                  value.unreachableWorkers
-                    ?.map((id) => nodeLabel(id))
-                    .join("、") || tr("未知"),
-              })
-            : "",
-        }),
-        value.partial || value.failed > 0 ? "warning" : "success",
+          value4: reasons.length
+            ? `；${reasons.join("；")}`
+            : unavailable.length
+              ? tr("；不可达节点：{value1}", {
+                  value1: unavailable.join("、"),
+                })
+              : "",
+        },
       );
-      await load(true);
+      const failed = value.partial || value.failed > 0;
+      if (failed) setRetryError(message);
+      notify(message, failed ? "warning" : "success");
+      void load(true);
     } catch (cause) {
-      notify(errorText(cause), "error");
+      const message = errorText(cause);
+      setRetryError(message);
+      notify(message, "error");
     } finally {
+      retryInFlight.current = false;
+      setRetryingTaskId(null);
       setBusy(false);
     }
   }
@@ -500,6 +532,29 @@ export default function ExceptionsPage() {
           </Button>
         }
       />
+      {retryAcceptedTaskId !== null && (
+        <Alert
+          severity="info"
+          onClose={() => setRetryAcceptedTaskId(null)}
+          action={
+            <Button
+              component={RouterLink}
+              to={`/tasks?taskId=${retryAcceptedTaskId}`}
+              color="inherit"
+              size="small"
+            >
+              {tr("查看任务")}
+            </Button>
+          }
+        >
+          {tr("任务 #{taskId} 的重试已受理。", { taskId: retryAcceptedTaskId })}
+        </Alert>
+      )}
+      {retryError && (
+        <Alert severity="warning" onClose={() => setRetryError(null)}>
+          {retryError}
+        </Alert>
+      )}
       <Tabs
         value={tab}
         onChange={(_, value) => {
@@ -898,11 +953,21 @@ export default function ExceptionsPage() {
                             item.taskIndex !== undefined) && (
                             <Button
                               size="small"
-                              startIcon={<ReplayRounded />}
+                              startIcon={
+                                retryingTaskId ===
+                                (item.parentTaskId ?? item.taskIndex) ? (
+                                  <CircularProgress size={16} color="inherit" />
+                                ) : (
+                                  <ReplayRounded />
+                                )
+                              }
                               onClick={() => void retry(item)}
                               disabled={busy}
                             >
-                              {tr("重试任务")}
+                              {retryingTaskId ===
+                              (item.parentTaskId ?? item.taskIndex)
+                                ? tr("提交中…")
+                                : tr("重试任务")}
                             </Button>
                           )}
                       </TableCell>

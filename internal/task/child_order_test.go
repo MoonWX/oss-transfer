@@ -134,6 +134,7 @@ func TestActiveChildOrderPagesTransitionsAndRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prepareResume(t, repo, resumed)
 	first, _ = page("", 2)
 	if !reflect.DeepEqual(numbers(first), []int{1, 2}) || childStatus(first[0]) != execution.Waiting {
 		t.Fatal("resume did not reindex waiting children", numbers(first))

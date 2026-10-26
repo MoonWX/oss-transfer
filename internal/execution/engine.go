@@ -178,7 +178,7 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	if err != nil {
 		return err
 	}
-	if current.Job.Generation != generation {
+	if current.Job.Generation != generation && !(resume && current.Job.Generation < generation) {
 		return ErrGeneration
 	}
 	if recoverOnly && current.Status != Recoverable {
@@ -254,19 +254,26 @@ func (e *Engine) StopParent(ctx context.Context, parentID int64, generation uint
 func (e *Engine) DeleteParent(ctx context.Context, parentID int64, generation uint64) error {
 	return e.stopParent(ctx, parentID, generation, true)
 }
-func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint64, deleted bool) error {
+func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint64, deleted bool, fenceOnly ...bool) error {
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
 		return ErrClosed
 	}
-	if err := e.repo.fenceParent(ctx, parentID, generation, deleted); err != nil {
+	if err := e.repo.fenceParent(ctx, parentID, generation, deleted, fenceOnly...); err != nil {
 		e.mu.Unlock()
 		return err
 	}
 	var pending []chan struct{}
-	for _, a := range e.active {
+	var stopErr error
+	for child, a := range e.active {
 		if a.parentID == parentID {
+			if len(fenceOnly) > 0 && fenceOnly[0] {
+				// Recovery fences history lazily, but each live attempt must stop
+				// its execution clock when it is canceled, before queueing again.
+				_, err := e.repo.stop(ctx, child, generation)
+				stopErr = errors.Join(stopErr, err)
+			}
 			a.cancel()
 			pending = append(pending, a.done)
 		}
@@ -277,6 +284,9 @@ func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint
 			return err
 		}
 	}
+	if stopErr != nil {
+		return stopErr
+	}
 	if deleted {
 		return e.repo.purgeDeleted(ctx, parentID, generation)
 	}
@@ -284,7 +294,7 @@ func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint
 }
 
 // ResumeParent advances the ownership generation after every old attempt exits.
-// Children remain WAITING; the Master starts them as capacity becomes available.
+// Child ledgers stay untouched until the Master readmits each unfinished child.
 func (e *Engine) ResumeParent(ctx context.Context, parentID int64, newGeneration uint64, retryFailed bool, inventorySource ...bool) error {
 	p, err := e.repo.Parent(ctx, parentID)
 	if err != nil {
@@ -299,7 +309,15 @@ func (e *Engine) ResumeParent(ctx context.Context, parentID int64, newGeneration
 	if newGeneration <= p.Generation {
 		return ErrGeneration
 	}
-	if err := e.StopParent(ctx, parentID, p.Generation); err != nil {
+	if err := e.stopParent(ctx, parentID, p.Generation, false, true); err != nil {
+		// A replay can race with the first acknowledgement after its fence was
+		// advanced. It must acknowledge that same generation, not stop it again.
+		if errors.Is(err, ErrGeneration) {
+			current, readErr := e.repo.Parent(ctx, parentID)
+			if readErr == nil && current.Generation == newGeneration && !current.Stopped && !current.Deleted {
+				return nil
+			}
+		}
 		return err
 	}
 	e.mu.Lock()

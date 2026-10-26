@@ -161,6 +161,7 @@ func TestStopResumeFencesLateAssignmentsAndCallbacks(t *testing.T) {
 	if err := repo.Stopped(p.ID, 1); !errors.Is(err, ErrGeneration) {
 		t.Fatal("late stop killed resumed task", err)
 	}
+	prepareResume(t, repo, p)
 	if err := repo.Resumed(p.ID, 2); err != nil {
 		t.Fatal(err)
 	}

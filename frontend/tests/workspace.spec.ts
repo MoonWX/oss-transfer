@@ -65,7 +65,7 @@ test("tasks filter, scoped start, partial failure and local detail", async ({
     false,
   );
   const childrenRequest = page.waitForRequest(
-    "**/api/master/tasks/1046/children?offset=0&limit=25",
+    "**/api/master/tasks/1046/children?offset=0&limit=25&**",
   );
   await revealChildren(page);
   await childrenRequest;

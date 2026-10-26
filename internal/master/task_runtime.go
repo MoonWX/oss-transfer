@@ -270,7 +270,7 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	if err != nil {
 		return p, err
 	}
-	if p.Status == "STOPPING" || p.Status == "RESUMING" {
+	if p.Status == "STOPPING" {
 		err = s.tasks.exclusive(ctx, id, func() error { return s.tasks.step(ctx, id) })
 	}
 	current, readErr := s.tasks.repo.Get(id)
@@ -439,6 +439,31 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	}
 	if p.Deleted || task.Ended(p.Status) {
 		return nil
+	}
+	if p.Status == "RESUMING" && (p.ActiveTime == nil || (p.ResumeAfter == nil && p.Scheduling == nil)) {
+		p, err = t.repo.Resume(p.ID)
+		if err != nil {
+			return err
+		}
+	}
+	if p.Status == "RESUMING" && p.ResumeAfter != nil {
+		ready := false
+		for pages := 0; pages < 16 && !ready; pages++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			ready, err = t.repo.PrepareResume(p.ID, p.Generation)
+			if err != nil {
+				return err
+			}
+		}
+		if !ready {
+			return nil
+		}
+		p, err = t.repo.Get(id)
+		if err != nil {
+			return err
+		}
 	}
 	s := t.server
 	scanner := nodeSession(p.Spec.Nodes[0])
@@ -672,6 +697,10 @@ func (t *taskRuntime) observeStopped(ctx context.Context, p task.Parent) error {
 			observations := make([]task.Observation, 0, len(rows))
 			for _, record := range rows {
 				if record.Job.Generation != p.Generation {
+					// Successful historical children are not rewritten for every retry.
+					if record.Job.Generation < p.Generation && record.Status == execution.Completed {
+						continue
+					}
 					return task.ErrGeneration
 				}
 				observations = append(observations, task.Observation{Number: record.Job.Number, Record: record})

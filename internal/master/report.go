@@ -186,7 +186,7 @@ func (a *reportAPI) stream(w http.ResponseWriter, r *http.Request, parents []tas
 
 var reportFileHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "sourceS3Alias", "sourceBucket", "sourceKey", "sourcePath", "destinationS3Alias", "destinationBucket", "destinationKey", "destinationPath", "size", "node", "result", "reasonCode", "errorMessage", "discoveredAt", "completedAt", "ledgerObservedAt", "targetCommitted", "nodeId"}
 var reportErrorHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "size", "node", "reasonCode", "errorMessage", "timestamp", "nodeId"}
-var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond", "nodeId"}
+var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond", "nodeId", "executionDurationMillis", "executionDurationEstimated", "executionDurationIncomplete"}
 
 type reportCoverage struct {
 	LegacyHistorical     bool              `json:"legacyHistorical,omitempty"`
@@ -285,6 +285,7 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child, sets ...nodeDi
 	scanned, scannedBytes := max(p.ScannedObjects, p.DispatchedObjects), max(p.ScannedBytes, p.DispatchedBytes, p.Counters.TotalBytes)
 	created := any(p.CreatedAt)
 	started, finished := any(p.StartedAt), any(p.FinishedAt)
+	timing := p.ExecutionTime()
 	if c != nil {
 		rowType, childID, node, status = "CHILD_TASK", c.Job.ChildID, reportNodeLabel(c.Node.ID, c.Node.Address, sets...), "PENDING"
 		nodeID = c.Node.Address
@@ -296,10 +297,13 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child, sets ...nodeDi
 			scannedBytes += item.Source.Size
 		}
 		created, started, finished = nil, nil, nil
+		timing = execution.ActiveTime{}
 		if c.Record != nil {
 			status = string(c.Record.Status)
 			counters = c.Record.Counters
 			scannedBytes = max(scannedBytes, counters.TotalBytes)
+			created, started, finished = c.Record.CreatedAt, c.Record.StartedAt, c.Record.FinishedAt
+			timing = c.Record.ExecutionTime()
 		}
 	}
 	targetRelative := ""
@@ -308,7 +312,7 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child, sets ...nodeDi
 	}
 	values := []any{rowType, p.ID, childID, p.Spec.Direction, node, status, reportEndpoint(src), reportEndpoint(dst), p.Spec.Prefix, p.Spec.StartKey, p.Spec.EndKey, p.Spec.ObjectKey, targetRelative, p.Spec.ModifiedFrom, p.Spec.ModifiedUntil, p.Spec.ConflictPolicy == "OVERWRITE", p.Spec.ConflictPolicy, p.Spec.DistributionMode, scanned, scannedBytes, counters.Succeeded, counters.SucceededBytes, counters.Skipped, counters.SkippedBytes, counters.Failed, counters.FailedBytes, created, started, finished, p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
 	values = append(values, reportRequestLimits(p.Spec.RequestLimits)...)
-	return reportCSV(writer, append(values, nodeID)...)
+	return reportCSV(writer, append(values, nodeID, timing.Duration(time.Now()).Milliseconds(), timing.Estimated, timing.Incomplete)...)
 }
 
 func (s *Server) walkReportChildren(ctx context.Context, p task.Parent, visit func(task.Child) error) error {

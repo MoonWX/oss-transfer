@@ -3,7 +3,6 @@ package task
 import (
 	"errors"
 	"reflect"
-	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -26,7 +25,7 @@ func (r *Repository) ReadyLegacyRecovery(id int64, migrationID string) error {
 			return ErrConflict
 		}
 		p.Legacy.RecoveryReady = true
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 }
 
@@ -100,12 +99,13 @@ func (r *Repository) BeginLegacyRecovery(id int64, resolved Spec) (p Parent, err
 		p.Counters = execution.Counters{}
 		p.Error = ""
 		p.RuntimeError = ""
-		now := time.Now().UTC()
+		now := r.now().UTC()
 		p.StartedAt = &now
+		p.ActiveTime = &execution.ActiveTime{} // Earlier imported timing stays in the archived original.
 		p.FinishedAt = nil
 		p.Legacy.NeedsReconciliation = false
 		p.Legacy.RecoveryStarted = true
-		return save(tx, p)
+		return r.save(tx, p)
 	})
 	return
 }

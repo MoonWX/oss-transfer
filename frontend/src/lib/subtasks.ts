@@ -5,6 +5,53 @@ type ExecutionSubtask = Record<string, any> & {
   subtaskNumber?: number;
 };
 
+// The full list puts items needing attention before current work and history.
+export function allSubtaskPriority(task: ExecutionSubtask): number {
+  switch (task.status) {
+    case "FAILED":
+      return 0;
+    case "PARTIAL_FAILED":
+      return 1;
+    case "RECOVERABLE":
+    case "WAITING_RECOVERY":
+      return 2;
+    case "RUNNING":
+    case "SCAN_COMPLETED":
+      return 3;
+    case "RECOVERING":
+    case "RESUMING":
+      return 4;
+    case "STOPPING":
+      return 5;
+    case "WAITING":
+    case "PENDING":
+    case "CREATED":
+      return 6;
+    case "STOPPED":
+      return 7;
+    case "COMPLETED":
+      return 9;
+    case "DELETED":
+      return 10;
+    default:
+      return 8;
+  }
+}
+
+export function allSubtaskCursor(task: ExecutionSubtask): string {
+  return `${String(allSubtaskPriority(task)).padStart(2, "0")}/${String(task.subtaskNumber).padStart(10, "0")}`;
+}
+
+export function compareAllSubtasks(
+  a: ExecutionSubtask,
+  b: ExecutionSubtask,
+): number {
+  return (
+    allSubtaskPriority(a) - allSubtaskPriority(b) ||
+    (a.subtaskNumber ?? 0) - (b.subtaskNumber ?? 0)
+  );
+}
+
 export function activeSubtaskPriority(task: ExecutionSubtask): number {
   switch (task.status) {
     case "RUNNING":

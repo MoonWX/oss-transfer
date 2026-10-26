@@ -29,21 +29,41 @@ export async function mockTaskChildren(
     const node = url.searchParams.get("executionNodeIp");
     const active = url.searchParams.get("view") === "active";
     const priority =
-      active && priorityOrder && url.searchParams.get("order") === "priority";
-    const rank: Record<string, number> = {
-      RUNNING: 0,
-      SCAN_COMPLETED: 0,
-      RECOVERING: 1,
-      RESUMING: 1,
-      STOPPING: 2,
-      RECOVERABLE: 3,
-      WAITING_RECOVERY: 3,
-      PENDING: 4,
-      WAITING: 4,
-      CREATED: 4,
-    };
+      !match[2] &&
+      (active ? priorityOrder : true) &&
+      url.searchParams.get("order") === "priority";
+    const rank: Record<string, number> = active
+      ? {
+          RUNNING: 0,
+          SCAN_COMPLETED: 0,
+          RECOVERING: 1,
+          RESUMING: 1,
+          STOPPING: 2,
+          RECOVERABLE: 3,
+          WAITING_RECOVERY: 3,
+          PENDING: 4,
+          WAITING: 4,
+          CREATED: 4,
+        }
+      : {
+          FAILED: 0,
+          PARTIAL_FAILED: 1,
+          RECOVERABLE: 2,
+          WAITING_RECOVERY: 2,
+          RUNNING: 3,
+          SCAN_COMPLETED: 3,
+          RECOVERING: 4,
+          RESUMING: 4,
+          STOPPING: 5,
+          WAITING: 6,
+          PENDING: 6,
+          CREATED: 6,
+          STOPPED: 7,
+          COMPLETED: 9,
+          DELETED: 10,
+        };
     const position = (item: Record<string, any>) =>
-      `${rank[item.status] ?? 5}/${String(item.subtaskNumber).padStart(10, "0")}`;
+      `${String(rank[item.status] ?? (active ? 5 : 8)).padStart(active ? 1 : 2, "0")}/${String(item.subtaskNumber).padStart(10, "0")}`;
     const cursor = url.searchParams.get("cursor") ?? "";
     const matching = numbered.filter(
       (item) =>

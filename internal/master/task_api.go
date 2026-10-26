@@ -137,7 +137,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -836,20 +836,11 @@ func taskDTO(p task.Parent) map[string]any {
 	} else {
 		row["taskBandwidthLimitMbps"] = nil
 	}
-	if p.StartedAt != nil {
-		row["startTime"] = p.StartedAt.UnixMilli()
-		end := time.Now()
-		if p.FinishedAt != nil {
-			end = *p.FinishedAt
-		}
-		duration := max(time.Duration(0), end.Sub(*p.StartedAt))
-		row["duration"] = duration.Round(time.Second).String()
-		if duration > 0 {
-			row["averageSpeedBytesPerSecond"] = float64(p.Counters.SucceededBytes) / duration.Seconds()
-		}
-	}
-	if p.FinishedAt != nil {
-		row["endTime"] = p.FinishedAt.UnixMilli()
+	executionTimeDTO(row, p.ExecutionTime(), p.StartedAt, p.FinishedAt, p.Counters.SucceededBytes, time.Now())
+	if p.ResumeTiming != nil || (p.Status == "RESUMING" && p.ActiveTime == nil && p.FinishedAt == nil) {
+		delete(row, "duration")
+		delete(row, "averageSpeedBytesPerSecond")
+		row["durationIncomplete"] = true
 	}
 	if spec.Direction == "OSS_TO_OSS" {
 		row["ossTaskGroup"] = true
@@ -904,6 +895,10 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 	delete(row, "startTime")
 	delete(row, "endTime")
 	delete(row, "duration")
+	delete(row, "activeDurationMillis")
+	delete(row, "activeStartedAt")
+	delete(row, "durationEstimated")
+	delete(row, "durationIncomplete")
 	delete(row, "averageSpeedBytesPerSecond")
 	row["errorMessage"] = ""
 	if c.Node.LocalRoot != "" {
@@ -934,21 +929,7 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 		if !rec.CreatedAt.IsZero() {
 			row["createTime"] = rec.CreatedAt.UnixMilli()
 		}
-		if rec.StartedAt != nil {
-			row["startTime"] = rec.StartedAt.UnixMilli()
-			end := time.Now()
-			if rec.FinishedAt != nil {
-				end = *rec.FinishedAt
-			}
-			duration := max(time.Duration(0), end.Sub(*rec.StartedAt))
-			row["duration"] = duration.Round(time.Second).String()
-			if duration > 0 {
-				row["averageSpeedBytesPerSecond"] = float64(rec.Counters.SucceededBytes) / duration.Seconds()
-			}
-		}
-		if rec.FinishedAt != nil {
-			row["endTime"] = rec.FinishedAt.UnixMilli()
-		}
+		executionTimeDTO(row, rec.ExecutionTime(), rec.StartedAt, rec.FinishedAt, rec.Counters.SucceededBytes, time.Now())
 	}
 	return row
 }
@@ -1126,11 +1107,15 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = 1
 	}
 	active := r.URL.Query().Get("view") == "active" && r.PathValue("number") == ""
-	priorityOrder := active && r.URL.Query().Get("order") == "priority"
+	priorityOrder := r.PathValue("number") == "" && r.URL.Query().Get("order") == "priority"
 	cursor := r.URL.Query().Get("cursor")
 	var known []int
-	if priorityOrder && cursor != "" && !task.ValidChildOrderCursor(cursor) {
-		fail(w, 400, "Invalid active child cursor")
+	validCursor := task.ValidAllChildOrderCursor
+	if active {
+		validCursor = task.ValidChildOrderCursor
+	}
+	if priorityOrder && cursor != "" && !validCursor(cursor) {
+		fail(w, 400, "Invalid child cursor")
 		return
 	}
 	if raw := r.URL.Query().Get("known"); priorityOrder && raw != "" {
@@ -1191,13 +1176,22 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var children []task.Child
 	var updates []task.Child
+	ready := true
 	if priorityOrder {
-		children, updates, err = s.tasks.repo.ActiveChildren(id, cursor, limit+1, known)
+		if active {
+			children, updates, err = s.tasks.repo.ActiveChildren(id, cursor, limit+1, known)
+		} else {
+			children, updates, ready, err = s.tasks.repo.PriorityChildren(r.Context(), id, cursor, limit+1, known)
+		}
 	} else {
 		children, err = fetch(id, offset, limit+1)
 	}
 	if err != nil {
 		fail(w, 500, "Cannot read child tasks")
+		return
+	}
+	if !ready {
+		writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"parentTaskId": id, "offset": offset, "limit": limit, "totalCount": parent.ChildCount, "items": []any{}, "updates": []any{}, "hasMore": false, "nextOffset": offset, "partial": true, "cached": true, "order": "priority", "cursor": cursor, "nextCursor": cursor, "indexing": true}})
 		return
 	}
 	hasMore := len(children) > limit
@@ -1213,7 +1207,11 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 	nextCursor := cursor
 	for _, child := range children {
 		nextOffset = child.Job.Number
-		nextCursor = task.ChildOrderCursor(child)
+		if active {
+			nextCursor = task.ChildOrderCursor(child)
+		} else {
+			nextCursor = task.AllChildOrderCursor(child)
+		}
 		if selected := r.URL.Query().Get("executionNodeIp"); selected != "" && selected != child.Node.Address {
 			continue
 		}

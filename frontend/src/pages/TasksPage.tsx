@@ -64,7 +64,11 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { api, saveFile, useApi, useNotify } from "../lib/api";
-import { compareActiveSubtasks, numberSubtasks } from "../lib/subtasks";
+import {
+  compareActiveSubtasks,
+  compareAllSubtasks,
+  numberSubtasks,
+} from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
 import {
@@ -340,19 +344,6 @@ function TaskDetail({
   const local = task && isLocal(task);
   const { refreshMs } = useRefreshPreference();
   const childNumber = Number(requestedChildId?.split("-")[1]);
-  const [pageWindow, setPageWindow] = useState({
-    parentId: taskId,
-    offset:
-      Number.isInteger(childNumber) && childNumber > 0
-        ? Math.floor((childNumber - 1) / 25) * 25
-        : 0,
-  });
-  const offset =
-    pageWindow.parentId === taskId
-      ? pageWindow.offset
-      : Number.isInteger(childNumber) && childNumber > 0
-        ? Math.floor((childNumber - 1) / 25) * 25
-        : 0;
   const [visibility, setVisibility] = useState({
     parentId: taskId,
     visible: false,
@@ -388,13 +379,7 @@ function TaskDetail({
   } | null>(null);
   const beforeChildrenChange = useCallback(() => {
     const paper = paperRef.current;
-    if (
-      childView !== "active" ||
-      requestedChildId ||
-      !paper ||
-      activeAnchor.current
-    )
-      return;
+    if (requestedChildId || !paper || activeAnchor.current) return;
     const bounds = paper.getBoundingClientRect();
     const rows = Array.from(
       paper.querySelectorAll<HTMLElement>("[data-child-id]"),
@@ -461,7 +446,7 @@ function TaskDetail({
   const children = useTaskChildren({
     parentId: taskId,
     view: childView,
-    initialOffset: childView === "active" ? 0 : offset,
+    initialOffset: 0,
     enabled: !!taskId && !requestedChildId && pageVisible,
     refreshMs,
     visibleOffsets: visibleChildOffsets,
@@ -578,7 +563,9 @@ function TaskDetail({
     ),
     current?.childTaskIds,
   );
-  if (childView === "active") shards.sort(compareActiveSubtasks);
+  shards.sort(
+    childView === "active" ? compareActiveSubtasks : compareAllSubtasks,
+  );
   const parentScroll = useRef(0);
   const previousScreen = useRef({ taskId, childId, childNode });
   const parentFocus = useRef<{ id: string; node?: string } | undefined>(
@@ -609,14 +596,7 @@ function TaskDetail({
     const anchor = activeAnchor.current;
     activeAnchor.current = null;
     const paper = paperRef.current;
-    if (
-      !anchor ||
-      !paper ||
-      childId ||
-      childView !== "active" ||
-      anchor.taskId !== taskId
-    )
-      return;
+    if (!anchor || !paper || childId || anchor.taskId !== taskId) return;
     // Do not undo a user's scroll between the response and the DOM update.
     if (Math.abs(paper.scrollTop - anchor.scrollTop) > 2) return;
     const rows = Array.from(
@@ -1141,17 +1121,6 @@ function TaskDetail({
                     <ToggleButton value="active">{tr("进行中")}</ToggleButton>
                   </ToggleButtonGroup>
                 </Stack>
-                {childView === "all" && offset > 0 && (
-                  <Button
-                    size="small"
-                    sx={{ mb: 1 }}
-                    onClick={() =>
-                      setPageWindow({ parentId: taskId, offset: 0 })
-                    }
-                  >
-                    {tr("从头查看子任务")}
-                  </Button>
-                )}
                 {view?.shardsLoading ? (
                   <Stack
                     direction="row"
@@ -1418,6 +1387,7 @@ export default function TasksPage({
   const [confirmationTasks, setConfirmationTasks] = useState<Task[]>([]);
   const [busy, setBusy] = useState(false);
   const [actionResult, setActionResult] = useState("");
+  const actionInFlight = useRef(false);
   const tasks: Task[] = useMemo(
     () => mergeTasks(historyTasks ?? [], data?.tasks ?? []),
     [historyTasks, data],
@@ -1515,133 +1485,145 @@ export default function TasksPage({
       s.includes(id) ? s.filter((i) => i !== id) : [...s, id].slice(0, 128),
     );
   async function execute() {
-    if (!actionTasks.length) return;
+    if (!actionTasks.length || actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setActionResult("");
-    const ids = (local: boolean) =>
-      actionTasks.filter((t) => isLocal(t) === local).map((t) => t.taskIndex);
-    const requests: [string, number[]][] =
-      operation === "启动"
-        ? [["/start", ids(false)]]
-        : operation === "停止"
-          ? [
-              ["/stop", ids(false)],
-              ["/local-transfers/stop", ids(true)],
-            ]
-          : operation === "继续传输"
+    try {
+      const ids = (local: boolean) =>
+        actionTasks.filter((t) => isLocal(t) === local).map((t) => t.taskIndex);
+      const requests: [string, number[]][] =
+        operation === "启动"
+          ? [["/start", ids(false)]]
+          : operation === "停止"
             ? [
-                ["/resume", ids(false)],
-                ["/local-transfers/resume", ids(true)],
+                ["/stop", ids(false)],
+                ["/local-transfers/stop", ids(true)],
               ]
-            : [["/clear", actionTasks.map((task) => task.taskIndex)]];
-    const issues: string[] = [];
-    const summaries: string[] = [];
-    for (const [path, taskIds] of requests) {
-      if (!taskIds.length) continue;
-      try {
-        const result = await api(`/api/master${path}`, {
-          method: "POST",
-          body: { taskIds },
-        });
-        const detail = result.data || result;
-        const unavailable = [
-          ...new Set([
-            ...(detail.unreachableWorkers || []),
-            ...(detail.failedWorkers || []),
-          ]),
-        ];
-        const operationSummary = Number.isFinite(detail.accepted)
-          ? tr(
-              "{value1}已受理 {value2}，忽略 {value3}，失败 {value4}{value5}",
-              {
-                value1: path.startsWith("/local-transfers/")
-                  ? tr("本地执行项")
-                  : tr("执行项"),
-                value2: detail.accepted,
-                value3: detail.ignored ?? 0,
-                value4: detail.failed ?? 0,
-                value5: unavailable.length
-                  ? tr("；未响应节点：{value1}", {
-                      value1: unavailable
-                        .map((id) =>
-                          nodeLabel(
-                            String(id),
-                            detail.nodeDisplays?.[String(id)],
-                          ),
-                        )
-                        .join("、"),
-                    })
-                  : "",
-              },
+            : operation === "继续传输"
+              ? [
+                  ["/resume", ids(false)],
+                  ["/local-transfers/resume", ids(true)],
+                ]
+              : [["/clear", actionTasks.map((task) => task.taskIndex)]];
+      const issues: string[] = [];
+      const summaries: string[] = [];
+      for (const [path, taskIds] of requests) {
+        if (!taskIds.length) continue;
+        try {
+          const result = await api(`/api/master${path}`, {
+            method: "POST",
+            body: { taskIds },
+          });
+          const detail = result.data || result;
+          const unavailable = [
+            ...new Set([
+              ...(detail.unreachableWorkers || []),
+              ...(detail.failedWorkers || []),
+            ]),
+          ];
+          const operationSummary = Number.isFinite(detail.accepted)
+            ? tr(
+                "{value1}已受理 {value2}，忽略 {value3}，失败 {value4}{value5}",
+                {
+                  value1: path.startsWith("/local-transfers/")
+                    ? tr("本地执行项")
+                    : tr("执行项"),
+                  value2: detail.accepted,
+                  value3: detail.ignored ?? 0,
+                  value4: detail.failed ?? 0,
+                  value5: unavailable.length
+                    ? tr("；未响应节点：{value1}", {
+                        value1: unavailable
+                          .map((id) =>
+                            nodeLabel(
+                              String(id),
+                              detail.nodeDisplays?.[String(id)],
+                            ),
+                          )
+                          .join("、"),
+                      })
+                    : "",
+                },
+              )
+            : "";
+          if (
+            detail.partial ||
+            detail.failed?.length ||
+            Number(detail.failed) > 0 ||
+            unavailable.length
+          )
+            issues.push(
+              operationSummary || detail.message || JSON.stringify(detail),
+            );
+          else if (operationSummary) summaries.push(operationSummary);
+          const resultDetails = detail.details ?? result.details;
+          const workerResults = resultDetails
+            ? Array.isArray(resultDetails)
+              ? resultDetails
+              : Object.values(resultDetails)
+            : [];
+          for (const item of workerResults) {
+            if (
+              typeof item === "object" &&
+              item &&
+              ((item as any).success === false || (item as any).error)
             )
-          : "";
-        if (
-          detail.partial ||
-          detail.failed?.length ||
-          Number(detail.failed) > 0 ||
-          unavailable.length
-        )
-          issues.push(
-            operationSummary || detail.message || JSON.stringify(detail),
-          );
-        else if (operationSummary) summaries.push(operationSummary);
-        const workerResults = result.details
-          ? Array.isArray(result.details)
-            ? result.details
-            : Object.values(result.details)
-          : [];
-        for (const item of workerResults) {
-          if (
-            typeof item === "object" &&
-            item &&
-            ((item as any).success === false || (item as any).error)
-          )
-            issues.push((item as any).message || JSON.stringify(item));
-          if (
-            typeof item === "string" &&
-            /失败|错误|拒绝|异常|不支持/.test(item)
-          )
-            issues.push(item);
+              issues.push((item as any).message || JSON.stringify(item));
+            if (
+              typeof item === "string" &&
+              /失败|错误|拒绝|异常|不支持/.test(item)
+            )
+              issues.push(item);
+          }
+          if (/失败[:：]\s*[1-9]/.test(result.message || ""))
+            issues.push(result.message);
+        } catch (e) {
+          issues.push((e as Error).message);
         }
-        if (/失败[:：]\s*[1-9]/.test(result.message || ""))
-          issues.push(result.message);
-      } catch (e) {
-        issues.push((e as Error).message);
       }
-    }
-    setOperationOpen(false);
-    if (
-      !issues.length &&
-      operation === "删除" &&
-      actionTasks.some((task) => task.taskIndex === detailId)
-    )
-      setDetailId(undefined);
-    await Promise.all([refresh(), detailFallback.refresh()]);
-    if (!issues.length && operation === "删除")
-      setHistoryTasks(
-        (previous) =>
-          previous?.filter(
-            (task) =>
-              !actionTasks.some(
-                (removed) => removed.taskIndex === task.taskIndex,
-              ),
-          ) ?? null,
-      );
-    setBusy(false);
-    if (issues.length) {
-      setActionResult(
-        tr("部分请求未完成：{value1}", { value1: issues.join("；") }),
-      );
-      notify(tr("部分操作未完成，详见列表上方的结果。"), "warning");
-    } else {
-      notify(
-        tr("{value1}请求已提交{value2}。请以刷新后的任务状态为准。", {
-          value1: tr(operation),
-          value2: summaries.length ? `，${summaries.join("；")}` : "",
-        }),
-        "info",
-      );
-      setSelected([]);
+      setOperationOpen(false);
+      if (
+        !issues.length &&
+        operation === "删除" &&
+        actionTasks.some((task) => task.taskIndex === detailId)
+      )
+        setDetailId(undefined);
+      // Refreshing a large task must not keep the accepted operation locked.
+      void Promise.allSettled([refresh(), detailFallback.refresh()]);
+      if (!issues.length && operation === "删除")
+        setHistoryTasks(
+          (previous) =>
+            previous?.filter(
+              (task) =>
+                !actionTasks.some(
+                  (removed) => removed.taskIndex === task.taskIndex,
+                ),
+            ) ?? null,
+        );
+      if (issues.length) {
+        setActionResult(
+          tr("部分请求未完成：{value1}", { value1: issues.join("；") }),
+        );
+        notify(tr("部分操作未完成，详见列表上方的结果。"), "warning");
+      } else {
+        notify(
+          tr("{value1}请求已提交{value2}。请以刷新后的任务状态为准。", {
+            value1: tr(operation),
+            value2: summaries.length ? `，${summaries.join("；")}` : "",
+          }),
+          "info",
+        );
+        setSelected([]);
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setOperationOpen(false);
+      setActionResult(message);
+      notify(message, "error");
+    } finally {
+      actionInFlight.current = false;
+      setBusy(false);
     }
   }
   const rowRoute = (task: Task) => (

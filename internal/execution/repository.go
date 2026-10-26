@@ -33,6 +33,7 @@ type RepositoryOptions struct{ MaxPendingJobs int64 }
 type Repository struct {
 	db         Database
 	maxPending int64
+	now        func() time.Time
 }
 type usage struct {
 	Pending int64 `json:"pending"`
@@ -56,7 +57,7 @@ func NewRepository(db Database, opts RepositoryOptions) (*Repository, error) {
 	if opts.MaxPendingJobs < 1 {
 		return nil, errors.New("MaxPendingJobs must be positive")
 	}
-	r := &Repository{db: db, maxPending: opts.MaxPendingJobs}
+	r := &Repository{db: db, maxPending: opts.MaxPendingJobs, now: time.Now}
 	if err := r.ensureRunningIndex(context.Background()); err != nil {
 		return nil, err
 	}
@@ -194,7 +195,14 @@ func (r *Repository) put(tx *state.Tx, before *Record, after *Record) error {
 			return err
 		}
 	}
-	after.UpdatedAt = time.Now().UTC()
+	now := r.now().UTC()
+	timing := after.ExecutionTime()
+	if after.ActiveTime == nil && before != nil {
+		timing = before.ExecutionTime()
+	}
+	timing.Transition(after.Status == Running, now)
+	after.ActiveTime = &timing
+	after.UpdatedAt = now
 	if before == nil {
 		after.CreatedAt = after.UpdatedAt
 	}
@@ -303,21 +311,24 @@ func (r *Repository) Accept(ctx context.Context, job Job, inventorySource ...boo
 		}
 		existing, err := load(tx, job.ChildID)
 		if err == nil {
-			if existing.Job.Generation != job.Generation {
+			if existing.Job.Generation > job.Generation {
 				return ErrGeneration
 			}
 			if existing.Fingerprint != fingerprint {
 				return ErrConflict
 			}
 			result = existing
+			if existing.Job.Generation < job.Generation {
+				result.Results = append([]ItemResult(nil), existing.Results...)
+				activateGeneration(&result, p)
+			}
 			if job.DiscoveryComplete && !existing.Job.DiscoveryComplete {
 				result.Job.DiscoveryComplete = true
 				if result.Status != Running && result.Status != Stopped {
 					settle(&result)
 				}
-				return r.put(tx, &existing, &result)
 			}
-			return nil
+			return r.put(tx, &existing, &result)
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
@@ -438,11 +449,18 @@ func (r *Repository) Seal(ctx context.Context, child string, generation uint64) 
 
 func (r *Repository) begin(ctx context.Context, child string, generation uint64, resume, retryFailed bool) (Record, error) {
 	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
-		if j.Job.Generation != generation {
-			return ErrGeneration
-		}
 		if err := checkParent(tx, j.Job.ParentID, generation); err != nil {
 			return err
+		}
+		if j.Job.Generation < generation && resume {
+			p, _, err := parent(tx, j.Job.ParentID)
+			if err != nil {
+				return err
+			}
+			activateGeneration(j, p)
+		}
+		if j.Job.Generation != generation {
+			return ErrGeneration
 		}
 		if j.Status == Running {
 			return ErrRunning
@@ -604,7 +622,7 @@ func errorText(err error) string {
 // fenceParent also works before the first Accept and can advance a lagging
 // Agent's generation after a partial cluster resume. Advancing only stops work;
 // it never grants ownership or resumes an attempt. Older fences are rejected.
-func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint64, deleted bool) error {
+func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint64, deleted bool, fenceOnly ...bool) error {
 	if id < 1 || generation == 0 {
 		return ErrGeneration
 	}
@@ -630,6 +648,9 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		p.Deleted = p.Deleted || deleted
 		if err := tx.Put(parentsBucket, parentKey(id), p); err != nil {
 			return err
+		}
+		if !deleted && len(fenceOnly) > 0 && fenceOnly[0] {
+			return nil
 		}
 		if deleted {
 			// The parent fence rejects every old attempt immediately. Do not
@@ -664,36 +685,47 @@ func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, 
 		if p.Deleted {
 			return ErrDeleted
 		}
+		if p.Generation == newGeneration && !p.Stopped {
+			return nil
+		}
 		if p.Generation != oldGeneration || newGeneration <= oldGeneration || !p.Stopped {
 			return ErrGeneration
 		}
 		p.Generation = newGeneration
 		p.Stopped = false
-		if err := tx.Put(parentsBucket, parentKey(id), p); err != nil {
-			return err
-		}
-		return r.changeParentJobs(tx, id, func(j *Record) error {
-			if len(inventorySource) > 0 && inventorySource[0] {
-				j.InventorySource = true
-			}
-			j.Job.Generation = newGeneration
-			j.Attempt++
-			if j.Status != Completed {
-				j.Status = Waiting
-				j.Error = ""
-			}
-			if retryFailed {
-				for i := range j.Results {
-					if j.Results[i].Status == ItemFailed {
-						j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
-					}
-				}
-				recount(j)
-			}
-			return nil
-		})
+		p.RetryFailed = retryFailed
+		p.InventorySource = len(inventorySource) > 0 && inventorySource[0]
+		return tx.Put(parentsBucket, parentKey(id), p)
 	})
 }
+
+// activateGeneration touches only the child being admitted. Failed history
+// consumes queue capacity only when the Master actually redispatches that child.
+func activateGeneration(j *Record, p ParentFence) {
+	if j.Status == Running {
+		// A fenced attempt without a durable stop can prove work only through
+		// its last checkpoint, not the time spent waiting for readmission.
+		timing := j.ExecutionTime()
+		timing.Transition(false, j.UpdatedAt)
+		j.ActiveTime = &timing
+	}
+	j.Job.Generation = p.Generation
+	j.Attempt++
+	j.InventorySource = j.InventorySource || p.InventorySource
+	if j.Status != Completed {
+		j.Status = Waiting
+		j.Error = ""
+	}
+	if p.RetryFailed {
+		for i := range j.Results {
+			if j.Results[i].Status == ItemFailed {
+				j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
+			}
+		}
+		recount(j)
+	}
+}
+
 func (r *Repository) changeParentJobs(tx *state.Tx, id int64, fn func(*Record) error) error {
 	prefix := fmt.Sprintf("%020d/", id)
 	after := ""
@@ -747,6 +779,9 @@ func (r *Repository) Recover(ctx context.Context) error {
 					if j.Status != Running {
 						return nil
 					}
+					timing := j.ExecutionTime()
+					timing.Transition(false, j.UpdatedAt)
+					j.ActiveTime = &timing
 					j.Attempt++
 					j.Status = Recoverable
 					j.Error = "agent restarted before the attempt completed"

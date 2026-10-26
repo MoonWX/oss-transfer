@@ -83,7 +83,10 @@ func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.
 	} else {
 		record = *row.Record
 	}
-	if !agentStatus(err, 404) {
+	if err == nil && (record.Job.ChildID != child.Job.ChildID || record.Job.Generation == 0) {
+		return nil, task.ErrConflict
+	}
+	if !agentStatus(err, 404) && !(err == nil && record.Job.Generation < p.Generation) {
 		if err != nil {
 			return nil, err
 		}

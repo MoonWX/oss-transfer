@@ -68,7 +68,9 @@ test("children append on scroll, retain earlier rows and stop polling outside th
     page.getByRole("button", { name: "查看子任务 989-1", exact: true }),
   ).toBeVisible();
   await expect(page.locator("[data-child-id]")).toHaveCount(25);
-  expect(reads).toEqual(["/api/master/tasks/989/children?offset=0&limit=25"]);
+  expect(reads).toEqual([
+    "/api/master/tasks/989/children?offset=0&limit=25&view=all&order=priority",
+  ]);
   await expect(page.getByRole("button", { name: "下一页子任务" })).toHaveCount(
     0,
   );
@@ -80,8 +82,8 @@ test("children append on scroll, retain earlier rows and stop polling outside th
     page.getByRole("button", { name: "查看子任务 989-1", exact: true }),
   ).toBeAttached();
   await expect(page.locator("[data-child-id]")).toHaveCount(50);
-  expect(reads.at(-1)).toBe(
-    "/api/master/tasks/989/children?offset=25&limit=25",
+  expect(reads.at(-1)).toContain(
+    "offset=25&limit=25&view=all&order=priority&cursor=09%2F0000000025",
   );
   await page.getByRole("dialog").evaluate((element) => {
     element.scrollTop = 0;
@@ -92,7 +94,7 @@ test("children append on scroll, retain earlier rows and stop polling outside th
   expect(reads).toHaveLength(afterScroll);
 });
 
-test("far child deep links use a precise query and returning loads its own page", async ({
+test("far child deep links use a precise query and returning starts the priority list", async ({
   page,
 }) => {
   const { reads } = await arrange(page);
@@ -113,10 +115,10 @@ test("far child deep links use a precise query and returning loads its own page"
   await page.getByRole("button", { name: "返回主任务" }).click();
   await revealChildren(page);
   await expect(
-    page.getByRole("button", { name: "查看子任务 989-77", exact: true }),
+    page.getByRole("button", { name: "查看子任务 989-1", exact: true }),
   ).toBeAttached();
   expect(reads.at(-1)).toBe(
-    "/api/master/tasks/989/children?offset=75&limit=25",
+    "/api/master/tasks/989/children?offset=0&limit=25&view=all&order=priority",
   );
   await expect(page.locator("[data-child-id]")).toHaveCount(25);
 });
@@ -144,7 +146,7 @@ test("active subtasks use one direct filtered request and preserve both views wi
   await page.goto("/tasks?taskId=989");
   await revealChildren(page);
   await expect(
-    page.getByRole("button", { name: "查看子任务 989-1", exact: true }),
+    page.getByRole("button", { name: "查看子任务 989-999", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "进行中", exact: true }).click();
   await expect(
@@ -161,7 +163,7 @@ test("active subtasks use one direct filtered request and preserve both views wi
   });
   await page.getByRole("button", { name: "全部", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "查看子任务 989-1", exact: true }),
+    page.getByRole("button", { name: "查看子任务 989-999", exact: true }),
   ).toBeVisible();
   await expect(page.locator("[data-child-id]")).toHaveCount(25);
 });
@@ -230,7 +232,7 @@ test("active refresh removes completed cached rows even when its cursor advances
   ).toBeLessThan(10);
 });
 
-test("active pages put later running children first without changing the all view", async ({
+test("active and all views keep their distinct global status priorities", async ({
   page,
 }) => {
   const { children, reads } = await arrange(page, true);
@@ -370,7 +372,7 @@ test("retrying an appended-page failure requests that same cursor and retains ea
   const { reads } = await arrange(page);
   let attempts = 0;
   await page.route(
-    "**/api/master/tasks/989/children?offset=25&limit=25",
+    "**/api/master/tasks/989/children?offset=25&limit=25&**",
     (route) => {
       attempts++;
       if (attempts === 1)
@@ -391,9 +393,12 @@ test("retrying an appended-page failure requests that same cursor and retains ea
     .click();
   await expect(page.locator("[data-child-id]")).toHaveCount(50);
   expect(attempts).toBe(2);
-  expect(reads.filter((url) => url.endsWith("offset=0&limit=25"))).toHaveLength(
-    1,
-  );
+  expect(
+    reads.filter(
+      (url) =>
+        new URL(url, "http://localhost").searchParams.get("offset") === "0",
+    ),
+  ).toHaveLength(1);
   await expect(
     page.getByRole("button", { name: "查看子任务 989-1", exact: true }),
   ).toBeAttached();
@@ -413,7 +418,7 @@ test("leaving the child region cancels the whole refresh before its remaining pa
   });
   let hold = false;
   await page.route(
-    "**/api/master/tasks/989/children?offset=0&limit=25",
+    "**/api/master/tasks/989/children?offset=0&limit=25&**",
     async (route) => {
       if (hold) await blocked;
       await route.fallback();
@@ -438,7 +443,7 @@ test("leaving the child region cancels the whole refresh before its remaining pa
   await expect.poll(() => reads.length).toBe(before + 1);
   const cancelled = page.waitForEvent("requestfailed", {
     predicate: (request) =>
-      request.url().endsWith("/tasks/989/children?offset=0&limit=25"),
+      request.url().includes("/tasks/989/children?offset=0&limit=25&view=all"),
   });
   await page.getByRole("dialog").evaluate((element) => {
     element.scrollTop = 0;
@@ -447,7 +452,148 @@ test("leaving the child region cancels the whole refresh before its remaining pa
   release();
   await page.clock.runFor(1200);
   await expect(page.getByTestId("task-children-region")).not.toBeInViewport();
-  expect(reads.slice(before)).toEqual([
-    "/api/master/tasks/989/children?offset=0&limit=25",
+  expect(reads.slice(before)).toHaveLength(1);
+  expect(reads[before]).toContain(
+    "/api/master/tasks/989/children?offset=0&limit=25&view=all&order=priority",
+  );
+});
+
+test("all subtasks put failures from the end first and retain completed known rows during refresh", async ({
+  page,
+}) => {
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  const { children, reads } = await arrange(page, true);
+  children[998].status = "FAILED";
+  children[999].status = "PARTIAL_FAILED";
+  children[997].status = "RECOVERABLE";
+  children[996].status = "RUNNING";
+  children[995].status = "RESUMING";
+  children[994].status = "WAITING";
+  await page.goto("/tasks?taskId=989");
+  await advanceUntilVisible(
+    page,
+    page.getByRole("heading", { name: "迁移任务 #989", exact: true }),
+  );
+  await revealChildren(page);
+  const ids = () =>
+    page
+      .locator("[data-child-id]")
+      .evaluateAll((rows) =>
+        rows.map((row) => row.getAttribute("data-child-id")),
+      );
+  await expect
+    .poll(async () => (await ids()).slice(0, 7))
+    .toEqual([
+      "989-999",
+      "989-1000",
+      "989-998",
+      "989-997",
+      "989-996",
+      "989-995",
+      "989-1",
+    ]);
+  expect(reads).toEqual([
+    "/api/master/tasks/989/children?offset=0&limit=25&view=all&order=priority",
   ]);
+  const completed = page.locator('[data-child-id="989-999"]');
+  await completed.scrollIntoViewIfNeeded();
+  await page.clock.runFor(200);
+  children[998].status = "COMPLETED";
+  children[699].status = "FAILED";
+  await page.clock.runFor(1200);
+  await expect(completed.getByText("已完成", { exact: true })).toBeAttached();
+  await expect.poll(async () => (await ids())[0]).toBe("989-700");
+  const loaded = await ids();
+  expect(new Set(loaded).size).toBe(loaded.length);
+  expect(loaded.at(-1)).toBe("989-999");
+  expect(
+    reads.some((url) =>
+      new URL(url, "http://localhost").searchParams
+        .get("known")
+        ?.split(",")
+        .includes("999"),
+    ),
+  ).toBe(true);
+});
+
+test("an all-view index build keeps loading and retries while visible even with automatic refresh disabled", async ({
+  page,
+}) => {
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
+  await arrange(page, true);
+  let builds = 0;
+  let releaseBuild!: () => void;
+  const heldBuild = new Promise<void>((resolve) => {
+    releaseBuild = resolve;
+  });
+  await page.route("**/api/master/tasks/989/children?**", async (route) => {
+    if (++builds <= 2) {
+      if (builds === 2) await heldBuild;
+      await route.fulfill({
+        json: {
+          success: true,
+          data: {
+            parentTaskId: 989,
+            offset: 0,
+            items: [],
+            totalCount: 1000,
+            indexing: true,
+            order: "priority",
+            hasMore: false,
+          },
+        },
+      });
+    } else await route.fallback();
+  });
+  await page.goto("/tasks?taskId=989");
+  await advanceUntilVisible(
+    page,
+    page.getByRole("heading", { name: "迁移任务 #989", exact: true }),
+  );
+  await revealChildren(page);
+  await expect(
+    page.getByText("正在加载子任务…", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("尚未生成子任务", { exact: true })).toHaveCount(
+    0,
+  );
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.clock.runFor(5000);
+  expect(builds).toBe(1);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(100);
+      return builds;
+    })
+    .toBe(2);
+  await page.clock.runFor(2000);
+  expect(builds).toBe(2);
+  releaseBuild();
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(100);
+      return builds;
+    })
+    .toBe(3);
+  await expect(page.locator("[data-child-id]")).toHaveCount(25);
+  expect(builds).toBe(3);
 });

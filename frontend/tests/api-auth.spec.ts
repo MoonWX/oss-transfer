@@ -87,3 +87,17 @@ for (const [locale, message] of [
     expect(stored.has("oss-transfer-create-draft")).toBe(false);
   });
 }
+
+test("a timed out action asks the user to check state without discarding the session", async () => {
+  setLocale("zh-CN");
+  globalThis.fetch = async () => {
+    throw new DOMException("Timed out", "TimeoutError");
+  };
+  await expect(
+    api("/api/master/local-transfers/resume", {
+      method: "POST",
+      body: { taskIds: [1] },
+    }),
+  ).rejects.toMatchObject({ message: "请求超时，请刷新后查看最新状态。" });
+  expect(stored.get("oss-transfer-token")).toBe("existing-session");
+});

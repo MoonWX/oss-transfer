@@ -10,6 +10,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 	"github.com/MoonWX/oss-transfer/internal/storageconfig"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 // configureNodeFactory installs a transport below the S3 SDK so retries and
@@ -29,6 +30,9 @@ func configureNodeFactory(factory *storageconfig.Factory, nodes *nodecontrol.Con
 		}
 		factory.HTTPClient = &http.Client{Transport: base}
 	}
+	// Share both protocol pools across children; keep request admission above
+	// protocol selection so the JDCloud compatibility path spends its budget.
+	storageTransport := transferstore.S3CompatibleTransport(factory.HTTPClient.Transport)
 	factory.HTTPClientForEndpoint = func(ctx context.Context, endpoint execution.Endpoint, config storageconfig.Config) *http.Client {
 		info := nodecontrol.RequestContextFrom(ctx)
 		info.ConnectionAlias, info.Bucket = endpoint.Ref, endpoint.Bucket
@@ -37,7 +41,7 @@ func configureNodeFactory(factory *storageconfig.Factory, nodes *nodecontrol.Con
 		if factory.HTTPClient != nil {
 			client = *factory.HTTPClient
 		}
-		client.Transport = nodes.Transport(client.Transport, info)
+		client.Transport = nodes.Transport(storageTransport, info)
 		return &client
 	}
 }

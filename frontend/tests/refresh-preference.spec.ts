@@ -152,7 +152,8 @@ test("changing cadence retains task data and in-flight work without overlapping 
   ).toBeVisible();
   await page.clock.runFor(400);
   await page.getByTestId("task-children-region").scrollIntoViewIfNeeded();
-  const detailPath = "/api/master/tasks/1046/children?offset=0&limit=25";
+  const detailPath =
+    "/api/master/tasks/1046/children?offset=0&limit=25&view=all&order=priority";
   await expect
     .poll(
       () => requests.filter((request) => request.path === detailPath).length,

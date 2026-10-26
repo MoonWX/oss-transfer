@@ -6,7 +6,12 @@ import {
   type RefObject,
 } from "react";
 import { api } from "./api";
-import { activeSubtaskCursor, compareActiveSubtasks } from "./subtasks";
+import {
+  activeSubtaskCursor,
+  allSubtaskCursor,
+  compareActiveSubtasks,
+  compareAllSubtasks,
+} from "./subtasks";
 
 export type ChildView = "all" | "active";
 type Child = Record<string, any>;
@@ -24,11 +29,13 @@ type ChildPage = {
   nextCursor?: string;
   updates?: Child[];
   detached?: boolean;
+  indexing?: boolean;
 };
 type Cache = {
   pages: Map<number, ChildPage>;
   errors: Map<number, string>;
   inFlight: Map<number, AbortController>;
+  indexing: boolean;
 };
 const identity = (child: Child) =>
   JSON.stringify([
@@ -74,6 +81,7 @@ export function useTaskChildren({
       pages: new Map(),
       errors: new Map(),
       inFlight: new Map(),
+      indexing: false,
     });
   const cache = caches.current.get(key)!;
   const activity = useRef({ cache, enabled, epoch: 0 });
@@ -97,7 +105,7 @@ export function useTaskChildren({
           [...cache.pages.values()].find((page) => page.nextOffset === offset)
             ?.nextCursor;
         const known =
-          view === "active" && cache.pages.size > 0
+          cache.pages.size > 0
             ? [
                 ...new Set(
                   visibleChildNumbers?.() ??
@@ -109,7 +117,7 @@ export function useTaskChildren({
               ].slice(0, 200)
             : [];
         const result = await api<{ data: ChildPage }>(
-          `/api/master/tasks/${parentId}/children?offset=${offset}&limit=25${view === "active" ? `&view=active&order=priority${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${known.length ? `&known=${known.join(",")}` : ""}` : ""}`,
+          `/api/master/tasks/${parentId}/children?offset=${offset}&limit=25&view=${view}&order=priority${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${known.length ? `&known=${known.join(",")}` : ""}`,
           {
             signal: AbortSignal.any([
               controller.signal,
@@ -129,6 +137,11 @@ export function useTaskChildren({
         )
           return;
         const page = result.data;
+        cache.indexing = page.indexing === true;
+        if (cache.indexing) {
+          cache.errors.delete(offset);
+          return;
+        }
         beforeRowsChange?.();
         let retained: Child[] = [];
         if (page.order === "priority") {
@@ -144,12 +157,16 @@ export function useTaskChildren({
             const items = cached.items.flatMap((child) => {
               const current = updates.get(identity(child)) ?? child;
               if (
+                view === "active" &&
                 ["COMPLETED", "FAILED", "PARTIAL_FAILED", "DELETED"].includes(
                   current.status,
                 )
               )
                 return [];
-              const key = activeSubtaskCursor(current);
+              const key =
+                view === "active"
+                  ? activeSubtaskCursor(current)
+                  : allSubtaskCursor(current);
               return key <= (page.cursor ?? "") ||
                 (page.hasMore !== false && key > (page.nextCursor ?? ""))
                 ? [current]
@@ -270,8 +287,13 @@ export function useTaskChildren({
     )
       return;
     const head = cache.pages.get(initialOffset);
-    if (cache.errors.has(initialOffset) || !head) return;
-    if (view === "active" && !head.legacyHistorical && !head.hasMore) return;
+    if (cache.indexing || cache.errors.has(initialOffset) || !head) return;
+    if (
+      (head.order === "priority" || view === "active") &&
+      !head.legacyHistorical &&
+      !head.hasMore
+    )
+      return;
     if (head.order === "priority") {
       // Preserve the loaded/visible windows, even when the first page now
       // crosses their former boundary. Unseen windows refresh on visibility.
@@ -325,6 +347,39 @@ export function useTaskChildren({
     };
   }, [cache, enabled, refresh, refreshMs]);
 
+  // An older database may need a resumable index build before its first
+  // sorted page is ready. Continue only while this list is actually visible.
+  useEffect(() => {
+    if (
+      !enabled ||
+      !cache.indexing ||
+      cache.inFlight.size > 0 ||
+      cache.errors.size > 0
+    )
+      return;
+    let timer: number | undefined;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      if (!document.hidden)
+        timer = window.setTimeout(() => {
+          if (!document.hidden) void refresh();
+        }, 200);
+    };
+    document.addEventListener("visibilitychange", schedule);
+    schedule();
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", schedule);
+    };
+  }, [
+    cache,
+    cache.indexing,
+    cache.inFlight.size,
+    cache.errors.size,
+    enabled,
+    refresh,
+  ]);
+
   const pages = [...cache.pages.values()].sort((a, b) => a.offset - b.offset);
   const tail = pages
     .filter((page) => !page.detached)
@@ -358,10 +413,9 @@ export function useTaskChildren({
     data: latest
       ? {
           ...latest,
-          items:
-            view === "active"
-              ? [...rows.values()].sort(compareActiveSubtasks)
-              : [...rows.values()],
+          items: [...rows.values()].sort(
+            view === "active" ? compareActiveSubtasks : compareAllSubtasks,
+          ),
           partial: pages.some((page) => page.partial),
           hasMore: !!tail?.hasMore,
           nextOffset,
@@ -370,7 +424,8 @@ export function useTaskChildren({
     pageOffset: (child: Child) =>
       rowOffsets.get(identity(child)) ?? initialOffset,
     error: cache.errors.values().next().value ?? null,
-    loading: cache.inFlight.size > 0,
+    loading:
+      cache.inFlight.size > 0 || (cache.indexing && cache.errors.size === 0),
     loadingMore: [...cache.inFlight.keys()].some(
       (offset) => !cache.pages.has(offset),
     ),

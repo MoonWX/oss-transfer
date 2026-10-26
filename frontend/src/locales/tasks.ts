@@ -1,4 +1,12 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "任务 #{taskId} 的重试已受理。": {
+    en: "Retry accepted for task #{taskId}.",
+    ja: "タスク #{taskId} の再試行を受け付けました。",
+  },
+  "请求超时，请刷新后查看最新状态。": {
+    en: "The request timed out. Refresh to check the latest status.",
+    ja: "リクエストがタイムアウトしました。更新して最新の状態を確認してください。",
+  },
   "传输已中断，等待恢复。": {
     en: "Transfer interrupted; waiting to resume.",
     ja: "転送が中断されました。再開を待っています。",

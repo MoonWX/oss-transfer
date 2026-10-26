@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -113,9 +114,21 @@ func NewS3(config S3Config) (*S3, error) {
 		},
 	}
 	if config.HTTPClient != nil {
-		sdkConfig.HTTPClient = config.HTTPClient
+		httpClient := *config.HTTPClient
+		httpClient.Transport = S3CompatibleTransport(httpClient.Transport)
+		sdkConfig.HTTPClient = &httpClient
 	}
 	client := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
+		if config.HTTPClient == nil {
+			endpoint, _ := url.Parse(config.Endpoint)
+			if jdOSSHTTPS(endpoint) {
+				if sdkClient, ok := o.HTTPClient.(*awshttp.BuildableClient); ok {
+					o.HTTPClient = sdkClient.WithTransportOptions(configureS3HTTP1)
+				}
+			}
+		}
+		o.HTTPClient = &s3DiagnosticClient{next: o.HTTPClient, credentials: []string{config.AccessKey, config.SecretKey, config.SessionToken}}
+		o.APIOptions = append(o.APIOptions, addS3RequestReplay)
 		if config.Endpoint != "" {
 			o.BaseEndpoint = aws.String(config.Endpoint)
 		}
@@ -172,6 +185,7 @@ func s3Error(err error) error {
 	if err == nil {
 		return nil
 	}
+	err = withS3ResponseDiagnostics(err)
 	var apiError smithy.APIError
 	if errors.As(err, &apiError) {
 		switch apiError.ErrorCode() {

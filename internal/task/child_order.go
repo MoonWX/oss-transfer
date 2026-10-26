@@ -16,7 +16,8 @@ const childOrderBucket = "master-task-child-order"
 // ChildOrderState is derived from the child records. An older writer drops this
 // field when it saves the parent, so a subsequent upgrade rebuilds stale indexes.
 type ChildOrderState struct {
-	Version int `json:"version"`
+	Version int                 `json:"version"`
+	All     *AllChildOrderState `json:"all,omitempty"`
 }
 
 func childStatus(c Child) execution.Status {
@@ -110,7 +111,10 @@ func ensureChildOrder(tx *state.Tx, p *Parent) error {
 			break
 		}
 	}
-	p.ChildOrder = &ChildOrderState{Version: 1}
+	if p.ChildOrder == nil {
+		p.ChildOrder = &ChildOrderState{}
+	}
+	p.ChildOrder.Version = 1
 	return nil
 }
 
@@ -129,7 +133,7 @@ func syncChildOrder(tx *state.Tx, p *Parent, previous *Child, current Child) err
 			return err
 		}
 	}
-	return nil
+	return syncAllChildOrder(tx, p, previous, current)
 }
 
 // ActiveChildren reads only one indexed window, regardless of how many older

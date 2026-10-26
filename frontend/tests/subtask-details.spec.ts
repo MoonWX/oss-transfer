@@ -539,7 +539,7 @@ test("manual recovery targets one child and blocks duplicate clicks while pendin
   await expect(page.getByText("context canceled", { exact: true })).toHaveCount(
     0,
   );
-  await page.getByRole("button", { name: "立即恢复", exact: true }).click();
+  await page.getByRole("button", { name: "立即恢复", exact: true }).dblclick();
   await expect(
     page.getByRole("button", { name: "正在检查恢复条件…", exact: true }),
   ).toBeDisabled();
@@ -552,42 +552,127 @@ test("manual recovery targets one child and blocks duplicate clicks while pendin
   expect(calls).toBe(1);
 });
 
-test("manual recovery keeps capacity waits and real failures distinct", async ({
+test("capacity-wait recovery stays locked across navigation until a new interrupted attempt", async ({
+  page,
+}) => {
+  const { data } = await arrange(page, "LOCAL_TO_OSS");
+  data.parent.status = "RUNNING";
+  data.children[1].status = "RECOVERABLE";
+  data.children[1].observedAt = 10;
+  data.children[1].attempt = 1;
+  let calls = 0,
+    runningReads = 0;
+  await page.route(/\/api\/master\/tasks\/821\/children\/2$/, (route) => {
+    if (data.children[1].status === "RUNNING") runningReads++;
+    return route.fulfill({
+      json: {
+        success: true,
+        data: {
+          parentTaskId: 821,
+          items: [data.children[1]],
+          partial: false,
+        },
+      },
+    });
+  });
+  await page.route(
+    "**/api/master/tasks/821/children/2/recover",
+    async (route) => {
+      calls++;
+      await route.fulfill({
+        json: {
+          success: true,
+          data: {
+            outcome: "WAITING_CAPACITY",
+            child: { ...data.children[1] },
+          },
+        },
+      });
+    },
+  );
+  await page.goto("/tasks?taskId=821&childTaskId=821-2&childNode=10.0.1.13");
+  await page.getByRole("button", { name: "立即恢复", exact: true }).click();
+  await expect(
+    page.getByText("节点并发已满，有空位后会自动恢复。", { exact: true }),
+  ).toBeVisible();
+  const processing = page.getByRole("button", { name: "处理中…", exact: true });
+  await expect(processing).toBeDisabled();
+  await expect(page.getByText("子任务已恢复。", { exact: true })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "返回主任务", exact: true }).click();
+  await page.goBack();
+  await expect(processing).toBeDisabled();
+  expect(calls).toBe(1);
+  data.children[1].status = "RUNNING";
+  data.children[1].observedAt = 20;
+  data.children[1].attempt = 2;
+  await expect.poll(() => runningReads, { timeout: 10000 }).toBeGreaterThan(0);
+  data.children[1].status = "RECOVERABLE";
+  data.children[1].observedAt = 30;
+  // Fresh evidence of a later interruption permits another recovery.
+  await expect(
+    page.getByRole("button", { name: "立即恢复", exact: true }),
+  ).toBeEnabled({ timeout: 10000 });
+  expect(calls).toBe(1);
+});
+
+test("a quickly interrupted new child attempt can be recovered again without observing its running state", async ({
+  page,
+}) => {
+  const { data } = await arrange(page, "LOCAL_TO_OSS");
+  data.parent.status = "RUNNING";
+  data.children[1].status = "RECOVERABLE";
+  data.children[1].attempt = 1;
+  data.children[1].observedAt = 10;
+  let calls = 0;
+  await page.route("**/api/master/tasks/821/children/2/recover", (route) => {
+    calls++;
+    data.children[1].attempt++;
+    data.children[1].observedAt += 10;
+    return route.fulfill({
+      json: {
+        success: true,
+        data: { outcome: "STARTED", child: { ...data.children[1] } },
+      },
+    });
+  });
+  await page.goto("/tasks?taskId=821&childTaskId=821-2&childNode=10.0.1.13");
+  const recover = page.getByRole("button", { name: "立即恢复", exact: true });
+  await recover.click();
+  await expect(
+    page.getByRole("button", { name: "处理中…", exact: true }),
+  ).toBeDisabled();
+  await expect(recover).toBeEnabled({ timeout: 10000 });
+  expect(calls).toBe(1);
+  await recover.click();
+  await expect.poll(() => calls).toBe(2);
+});
+
+test("a definite child recovery rejection releases its lock", async ({
   page,
 }) => {
   const { data } = await arrange(page, "LOCAL_TO_OSS");
   data.parent.status = "RUNNING";
   data.children[1].status = "RECOVERABLE";
   let calls = 0;
-  await page.route(
-    "**/api/master/tasks/821/children/2/recover",
-    async (route) => {
-      calls++;
-      await route.fulfill(
-        calls === 1
-          ? { json: { success: true, data: { outcome: "WAITING_CAPACITY" } } }
-          : {
-              status: 409,
-              json: { success: false, message: "共享目录验证失败" },
-            },
-      );
-    },
-  );
+  await page.route("**/api/master/tasks/821/children/2/recover", (route) => {
+    calls++;
+    return route.fulfill({
+      status: 409,
+      json: { success: false, message: "共享目录验证失败" },
+    });
+  });
   await page.goto("/tasks?taskId=821&childTaskId=821-2&childNode=10.0.1.13");
   const recover = page.getByRole("button", { name: "立即恢复", exact: true });
-  await recover.click();
-  await expect(
-    page.getByText("节点并发已满，有空位后会自动恢复。", { exact: true }),
-  ).toBeVisible();
-  await expect(recover).toBeEnabled();
-  await expect(page.getByText("子任务已恢复。", { exact: true })).toHaveCount(
-    0,
-  );
   await recover.click();
   await expect(
     page.getByText("共享目录验证失败", { exact: true }),
   ).toBeVisible();
   await expect(recover).toBeEnabled();
+  await recover.click();
+  await expect(recover).toBeEnabled();
+  expect(calls).toBe(2);
 });
 
 test("completed children and stopped parents do not offer manual child recovery", async ({

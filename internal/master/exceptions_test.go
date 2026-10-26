@@ -68,8 +68,9 @@ func TestExceptionsHTTPFiltersClearAndLocalEnvelope(t *testing.T) {
 		t.Fatal("legacy fallback invented an event", code, body)
 	}
 	code, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/retry-failures", f.admin, map[string]any{"taskIds": []int64{ids[1]}})
-	if code != 200 || body["data"].(map[string]any)["failed"] != float64(1) {
-		t.Fatal("local control envelope incompatible", code, body)
+	result := body["data"].(map[string]any)
+	if code != 200 || result["failed"] != float64(0) || result["ignored"] != float64(1) || result["accepted"] != float64(0) {
+		t.Fatal("running task retry was not ignored in the local envelope", code, body)
 	}
 	if code, _ := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/failed/clear", "", nil); code != 401 {
 		t.Fatal("unauthenticated clear", code)

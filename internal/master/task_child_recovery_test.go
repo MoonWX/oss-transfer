@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,6 +127,10 @@ func TestChildRecoveryHTTPUsesCurrentPoliciesAndIsIdempotent(t *testing.T) {
 	if err != nil || first.Status != execution.Running || first.Counters.Succeeded != 0 {
 		t.Fatal("recovery did not admit existing job", first, err)
 	}
+	responseChild := body["data"].(map[string]any)["child"].(map[string]any)
+	if responseChild["attempt"] != float64(first.Attempt) || responseChild["observedAt"] != float64(first.UpdatedAt.UnixMilli()) {
+		t.Fatal("recovery response does not identify the admitted attempt", responseChild, first)
+	}
 	policy, err := agent.Limits.Parent(parent.ID)
 	if err != nil || policy.BandwidthBytesPerSecond != 1000000 || policy.ListQPS != 3 || policy.HeadQPS != 5 || policy.PutQPS != 7 {
 		t.Fatal("manual recovery bypassed latest policy", policy, err)
@@ -209,5 +214,61 @@ func TestChildRecoveryHTTPReportsCapacityWithoutStartingAnotherAttempt(t *testin
 	active, limit := agent.Engine.Concurrency()
 	if active != 1 || limit != 1 {
 		t.Fatal("manual recovery exceeded concurrency", active, limit)
+	}
+}
+
+func TestChildRecoveryHTTPConcurrentClicksAdmitOnlyOneAttempt(t *testing.T) {
+	f, agent, parent, child, opens := recoveryHTTPFixture(t, false, false)
+	before, err := agent.Jobs.Get(context.Background(), child.Job.ChildID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := fmt.Sprintf("%s/api/master/tasks/%d/children/1/recover", f.http.URL, parent.ID)
+	type response struct {
+		code int
+		body map[string]any
+	}
+	results := make(chan response, 8)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			code, body := request(t, f.http.Client(), "POST", url, f.admin, nil)
+			results <- response{code, body}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	started, running := 0, 0
+	for result := range results {
+		if result.code != 200 {
+			t.Fatal(result.code, result.body)
+		}
+		switch result.body["data"].(map[string]any)["outcome"] {
+		case "STARTED":
+			started++
+		case "ALREADY_RUNNING":
+			running++
+		default:
+			t.Fatal(result.body)
+		}
+	}
+	if started != 1 || running != 7 {
+		t.Fatal(started, running)
+	}
+	after, err := agent.Jobs.Get(context.Background(), child.Job.ChildID)
+	if err != nil || after.Attempt != before.Attempt+1 || after.Job.Generation != before.Job.Generation {
+		t.Fatal(after, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for opens.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if opens.Load() != 1 {
+		t.Fatal("duplicate data-plane execution", opens.Load())
 	}
 }

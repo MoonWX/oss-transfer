@@ -2,6 +2,7 @@ package master
 
 // Exact application messages only. Vendor errors and user values are not rewritten.
 var apiMessages = map[string]struct{ en, zh, ja string }{
+	"Expected generations must match the selected tasks":                  {"Expected generations must match the selected tasks", "任务状态已变化，请刷新后重试", "タスクの状態が変更されました。更新してから再試行してください"},
 	"Wait for Agent updates to finish before updating the Master":         {"Wait for Agent updates to finish before updating the Master", "请等待节点更新完成，再更新 Master", "Agent の更新完了後に Master を更新してください"},
 	"Another Agent update is already in progress":                         {"Another Agent update is already in progress", "已有节点更新正在进行，请稍候", "別の Agent 更新が実行中です"},
 	"No registered Agents match this update":                              {"No registered Agents match this update", "没有可更新的已注册节点", "更新対象の登録済み Agent がありません"},

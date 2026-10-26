@@ -807,7 +807,7 @@ func taskDTO(p task.Parent) map[string]any {
 		}
 		return out
 	}
-	row := map[string]any{"taskIndex": p.ID, "parentTaskId": p.ID, "direction": spec.Direction, "status": p.Status, "autoStart": true, "sourceS3Alias": spec.Source.Ref, "sourceBucket": spec.Source.Bucket, "destS3Alias": spec.Destination.Ref, "destBucket": spec.Destination.Bucket, "sourceEndpoint": endpoint(spec.Source, true), "destinationEndpoint": endpoint(spec.Destination, false), "eligibleWorkerNodes": nodes, "participatingWorkerNodes": nodes, "nodeBindings": bindings, "conflictPolicy": spec.ConflictPolicy, "overwrite": spec.ConflictPolicy == "OVERWRITE", "distributionMode": strings.ToLower(spec.DistributionMode), "prefix": spec.Prefix, "objectKey": spec.ObjectKey, "startKey": spec.StartKey, "endKey": spec.EndKey, "scanComplete": p.ScanComplete, "listObjectCount": max(p.ScannedObjects, p.Counters.Total), "listObjectSize": max(p.ScannedBytes, p.Counters.TotalBytes), "putObjectCount": p.Counters.Succeeded, "putObjectSize": p.Counters.SucceededBytes, "skippedObjectCount": p.Counters.Skipped, "skippedObjectSize": p.Counters.SkippedBytes, "failedObjectCount": p.Counters.Failed, "failedObjectSize": p.Counters.FailedBytes, "createTime": p.CreatedAt.UnixMilli(), "errorMessage": p.Error, "childCount": p.ChildCount, "partial": false}
+	row := map[string]any{"taskIndex": p.ID, "parentTaskId": p.ID, "generation": p.Generation, "direction": spec.Direction, "status": p.Status, "autoStart": true, "sourceS3Alias": spec.Source.Ref, "sourceBucket": spec.Source.Bucket, "destS3Alias": spec.Destination.Ref, "destBucket": spec.Destination.Bucket, "sourceEndpoint": endpoint(spec.Source, true), "destinationEndpoint": endpoint(spec.Destination, false), "eligibleWorkerNodes": nodes, "participatingWorkerNodes": nodes, "nodeBindings": bindings, "conflictPolicy": spec.ConflictPolicy, "overwrite": spec.ConflictPolicy == "OVERWRITE", "distributionMode": strings.ToLower(spec.DistributionMode), "prefix": spec.Prefix, "objectKey": spec.ObjectKey, "startKey": spec.StartKey, "endKey": spec.EndKey, "scanComplete": p.ScanComplete, "listObjectCount": max(p.ScannedObjects, p.Counters.Total), "listObjectSize": max(p.ScannedBytes, p.Counters.TotalBytes), "putObjectCount": p.Counters.Succeeded, "putObjectSize": p.Counters.SucceededBytes, "skippedObjectCount": p.Counters.Skipped, "skippedObjectSize": p.Counters.SkippedBytes, "failedObjectCount": p.Counters.Failed, "failedObjectSize": p.Counters.FailedBytes, "createTime": p.CreatedAt.UnixMilli(), "errorMessage": p.Error, "childCount": p.ChildCount, "partial": false}
 	if spec.InventoryID != "" {
 		row["inventoryManifestId"] = spec.InventoryID
 	}
@@ -925,6 +925,7 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 		row["failedObjectCount"] = rec.Counters.Failed
 		row["failedObjectSize"] = rec.Counters.FailedBytes
 		row["errorMessage"] = rec.Error
+		row["attempt"] = rec.Attempt
 		row["observedAt"] = rec.UpdatedAt.UnixMilli()
 		if !rec.CreatedAt.IsZero() {
 			row["createTime"] = rec.CreatedAt.UnixMilli()
@@ -1236,7 +1237,8 @@ func (s *Server) taskChildrenHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
-			TaskIDs []int64 `json:"taskIds"`
+			TaskIDs             []int64          `json:"taskIds"`
+			ExpectedGenerations map[int64]uint64 `json:"expectedGenerations,omitempty"`
 		}
 		if !readJSON(w, r, &request) {
 			return
@@ -1253,15 +1255,42 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			}
 			seen[id] = true
 		}
+		resuming := action == "resume" || action == "retry"
+		if request.ExpectedGenerations != nil {
+			if !resuming || len(request.ExpectedGenerations) != len(request.TaskIDs) {
+				fail(w, 400, "Expected generations must match the selected tasks")
+				return
+			}
+			for id, generation := range request.ExpectedGenerations {
+				if !seen[id] || generation == 0 {
+					fail(w, 400, "Expected generations must match the selected tasks")
+					return
+				}
+			}
+		}
 		displays := s.nodeDisplaySnapshot()
-		accepted, failed := 0, 0
+		accepted, failed, ignored := 0, 0, 0
 		details := []map[string]any{}
 		for _, id := range request.TaskIDs {
-			p, err := s.controlTask(r.Context(), id, action)
-			item := map[string]any{"taskId": id, "status": p.Status, "success": err == nil}
+			var p task.Parent
+			var err error
+			admitted := true
+			if resuming {
+				var expected *uint64
+				if request.ExpectedGenerations != nil {
+					value := request.ExpectedGenerations[id]
+					expected = &value
+				}
+				p, admitted, err = s.requestTaskResume(r.Context(), id, expected)
+			} else {
+				p, err = s.controlTask(r.Context(), id, action)
+			}
+			item := map[string]any{"taskId": id, "status": p.Status, "generation": p.Generation, "success": err == nil, "accepted": err == nil && admitted, "ignored": err == nil && !admitted}
 			if err != nil {
 				failed++
 				item["message"] = err.Error()
+			} else if !admitted {
+				ignored++
 			} else {
 				accepted++
 				if action == "permanent-delete" {
@@ -1281,7 +1310,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			}
 			details = append(details, item)
 		}
-		result := map[string]any{"success": true, "accepted": accepted, "failed": failed, "ignored": 0, "partial": failed > 0, "details": details}
+		result := map[string]any{"success": true, "accepted": accepted, "failed": failed, "ignored": ignored, "partial": failed > 0, "details": details}
 		if strings.HasPrefix(r.URL.Path, "/api/master/local-transfers/") {
 			writeJSON(w, 200, map[string]any{"success": true, "data": result})
 		} else {

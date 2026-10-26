@@ -33,11 +33,22 @@ func (r *Repository) ReadyLegacyRecovery(id int64, migrationID string) error {
 // execution generation. The original parent remains in a separate history row.
 // Retrying an uncertain response returns the same generation without resetting
 // newly observed counters or resurrecting a subsequent stop.
-func (r *Repository) BeginLegacyRecovery(id int64, resolved Spec) (p Parent, err error) {
+func (r *Repository) BeginLegacyRecovery(id int64, resolved Spec) (Parent, error) {
+	p, _, err := r.RequestLegacyRecovery(id, resolved, nil)
+	return p, err
+}
+
+func (r *Repository) RequestLegacyRecovery(id int64, resolved Spec, expected *uint64) (p Parent, accepted bool, err error) {
 	err = r.store.Update(func(tx *state.Tx) error {
 		p, err = get(tx, id)
 		if err != nil {
 			return err
+		}
+		if p.Deleted || p.Purged {
+			return ErrState
+		}
+		if expected != nil && p.Generation != *expected {
+			return nil
 		}
 		if p.Legacy == nil || !p.Legacy.RecoveryReady {
 			return ErrLegacyRecovery
@@ -105,6 +116,7 @@ func (r *Repository) BeginLegacyRecovery(id int64, resolved Spec) (p Parent, err
 		p.FinishedAt = nil
 		p.Legacy.NeedsReconciliation = false
 		p.Legacy.RecoveryStarted = true
+		accepted = true
 		return r.save(tx, p)
 	})
 	return

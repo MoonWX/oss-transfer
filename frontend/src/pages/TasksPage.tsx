@@ -63,7 +63,8 @@ import {
   StorageRounded,
   WarningAmberRounded,
 } from "@mui/icons-material";
-import { api, saveFile, useApi, useNotify } from "../lib/api";
+import { api, ApiError, saveFile, useApi, useNotify } from "../lib/api";
+import { useTaskRecovery } from "../lib/taskRecovery";
 import {
   compareActiveSubtasks,
   compareAllSubtasks,
@@ -341,6 +342,9 @@ function TaskDetail({
   const nodeLabel = useNodeLabels();
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
+  const recovery = useTaskRecovery();
+  const recoveryState =
+    taskId === undefined ? undefined : recovery.states[taskId];
   const local = task && isLocal(task);
   const { refreshMs } = useRefreshPreference();
   const childNumber = Number(requestedChildId?.split("-")[1]);
@@ -804,8 +808,11 @@ function TaskDetail({
                 <Button
                   variant="contained"
                   startIcon={<PlayArrowRounded />}
-                  disabled={busy}
+                  disabled={busy || !!recoveryState}
                   onClick={() => onAction(current, "启动")}
+                  loading={
+                    !!recoveryState && recoveryState.phase !== "completed"
+                  }
                 >
                   {tr("启动任务")}
                 </Button>
@@ -825,10 +832,14 @@ function TaskDetail({
                 <Button
                   variant="contained"
                   startIcon={<PlayArrowRounded />}
-                  disabled={busy}
+                  disabled={busy || !!recoveryState}
                   onClick={() => onAction(current, "继续传输")}
                 >
-                  {tr("继续传输")}
+                  {recoveryState?.phase === "completed"
+                    ? tr("已完成")
+                    : recoveryState
+                      ? tr("处理中…")
+                      : tr("继续传输")}
                 </Button>
               )}
               {canDeleteTask(current) && (
@@ -836,7 +847,10 @@ function TaskDetail({
                   variant="text"
                   color="error"
                   startIcon={<DeleteOutlineRounded />}
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    (!!recoveryState && recoveryState.phase !== "completed")
+                  }
                   onClick={() => onAction(current, "删除")}
                 >
                   {tr("删除任务")}
@@ -1257,6 +1271,7 @@ export default function TasksPage({
 }) {
   const { locale } = useI18n();
   const notify = useNotify();
+  const recovery = useTaskRecovery();
   const { refreshMs, refreshSeconds } = useRefreshPreference();
   const { data, loading, error, refresh } = useApi(
     "/api/master/status",
@@ -1459,6 +1474,13 @@ export default function TasksPage({
       ? chosen
       : actionCandidates.filter((t) => operationIds.includes(t.taskIndex));
   const openOperation = (next: string, ids: number[] | null) => {
+    if (
+      (next === "启动" || next === "继续传输") &&
+      (ids ?? chosen.map((task) => task.taskIndex)).some(
+        (id) => recovery.states[id],
+      )
+    )
+      return;
     setOperationIds(ids);
     setConfirmationTasks(
       ids === null
@@ -1468,9 +1490,17 @@ export default function TasksPage({
     setOperation(next);
     setOperationOpen(true);
   };
-  const canStart = chosen.length > 0 && chosen.every(canStartTask);
+  const canStart =
+    chosen.length > 0 &&
+    chosen.every(
+      (task) => canStartTask(task) && !recovery.states[task.taskIndex],
+    );
   const canStop = chosen.length > 0 && chosen.every(canStopTask);
-  const canResume = chosen.length > 0 && chosen.every(canResumeTask);
+  const canResume =
+    chosen.length > 0 &&
+    chosen.every(
+      (task) => canResumeTask(task) && !recovery.states[task.taskIndex],
+    );
   const canDelete = chosen.length > 0 && chosen.every(canDeleteTask);
   const offline = Object.values(health.data?.workers || {}).filter(
     (w: any) => w.success === false || w.error || w.reachable === false,
@@ -1486,12 +1516,21 @@ export default function TasksPage({
     );
   async function execute() {
     if (!actionTasks.length || actionInFlight.current) return;
+    const recovering = operation === "启动" || operation === "继续传输";
+    const submittedTasks = confirmationTasks;
+    if (
+      recovering &&
+      !recovery.begin(submittedTasks.map((task) => task.taskIndex))
+    )
+      return;
     actionInFlight.current = true;
     setBusy(true);
     setActionResult("");
     try {
       const ids = (local: boolean) =>
-        actionTasks.filter((t) => isLocal(t) === local).map((t) => t.taskIndex);
+        submittedTasks
+          .filter((t) => isLocal(t) === local)
+          .map((t) => t.taskIndex);
       const requests: [string, number[]][] =
         operation === "启动"
           ? [["/start", ids(false)]]
@@ -1509,13 +1548,56 @@ export default function TasksPage({
       const issues: string[] = [];
       const summaries: string[] = [];
       for (const [path, taskIds] of requests) {
+        if (!recovery.isCurrent()) return;
         if (!taskIds.length) continue;
         try {
+          const expectedGenerations: Record<number, number> = {};
+          if (recovering) {
+            for (const id of taskIds) {
+              const snapshot = submittedTasks.find(
+                (task) => task.taskIndex === id,
+              )!;
+              const generation =
+                snapshot.generation ??
+                (await api<{ data: Task }>(`/api/master/tasks/${id}`)).data
+                  .generation;
+              if (!recovery.isCurrent()) return;
+              if (Number.isSafeInteger(generation) && generation > 0)
+                expectedGenerations[id] = generation;
+            }
+          }
           const result = await api(`/api/master${path}`, {
             method: "POST",
-            body: { taskIds },
+            body: {
+              taskIds,
+              ...(recovering &&
+              Object.keys(expectedGenerations).length === taskIds.length
+                ? { expectedGenerations }
+                : {}),
+            },
           });
           const detail = result.data || result;
+          if (!recovery.isCurrent()) return;
+          if (recovering) {
+            for (const id of taskIds) {
+              const item = detail.details?.find?.(
+                (entry: any) => entry.taskId === id,
+              );
+              if (item?.success === false || item?.error) recovery.release(id);
+              else if (
+                item?.success ||
+                (!detail.failed && (detail.accepted || detail.ignored))
+              )
+                recovery.accept(
+                  id,
+                  item?.generation ??
+                    (expectedGenerations[id]
+                      ? expectedGenerations[id] + 1
+                      : undefined),
+                );
+              else recovery.check(id);
+            }
+          }
           const unavailable = [
             ...new Set([
               ...(detail.unreachableWorkers || []),
@@ -1579,6 +1661,13 @@ export default function TasksPage({
           if (/失败[:：]\s*[1-9]/.test(result.message || ""))
             issues.push(result.message);
         } catch (e) {
+          if (!recovery.isCurrent()) return;
+          if (recovering)
+            for (const id of taskIds) {
+              if (e instanceof ApiError && e.status >= 400 && e.status < 500)
+                recovery.release(id);
+              else recovery.check(id);
+            }
           issues.push((e as Error).message);
         }
       }
@@ -1589,7 +1678,8 @@ export default function TasksPage({
         actionTasks.some((task) => task.taskIndex === detailId)
       )
         setDetailId(undefined);
-      // Refreshing a large task must not keep the accepted operation locked.
+      // Close the dialog immediately; recovery controls keep their task-scoped
+      // guard until a fresh task state confirms the new attempt has ended.
       void Promise.allSettled([refresh(), detailFallback.refresh()]);
       if (!issues.length && operation === "删除")
         setHistoryTasks(
@@ -1617,6 +1707,8 @@ export default function TasksPage({
         setSelected([]);
       }
     } catch (cause) {
+      if (recovering)
+        for (const task of submittedTasks) recovery.check(task.taskIndex);
       const message = cause instanceof Error ? cause.message : String(cause);
       setOperationOpen(false);
       setActionResult(message);

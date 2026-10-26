@@ -219,23 +219,7 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	case "stop":
 		p, err = s.tasks.repo.Stop(id)
 	case "resume", "retry":
-		s.topologyMu.Lock()
-		p, err = s.tasks.repo.Get(id)
-		if err == nil {
-			err = s.checkTaskEnrollments(p)
-		}
-		if err == nil {
-			if task.Historical(p) && p.Legacy.NeedsReconciliation {
-				var resolved task.Spec
-				resolved, err = s.resolveLegacySource(ctx, p)
-				if err == nil {
-					p, err = s.tasks.repo.BeginLegacyRecovery(id, resolved)
-				}
-			} else {
-				p, err = s.tasks.repo.Resume(id)
-			}
-		}
-		s.topologyMu.Unlock()
+		p, _, err = s.requestTaskResume(ctx, id, nil)
 	case "clear":
 		return s.tasks.repo.Recycle(id, true)
 	case "restore":
@@ -284,6 +268,34 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	}
 	return current, err
 }
+
+// requestTaskResume serializes membership validation with task admission; the
+// repository compares the expected generation inside the durable transaction.
+func (s *Server) requestTaskResume(ctx context.Context, id int64, expected *uint64) (task.Parent, bool, error) {
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
+	p, err := s.tasks.repo.Get(id)
+	if err != nil {
+		return p, false, err
+	}
+	legacyRecovery := task.Historical(p) && p.Legacy.NeedsReconciliation
+	if p.Deleted || p.Purged || (expected != nil && p.Generation != *expected) ||
+		p.Status == "RESUMING" || p.Status == "RUNNING" || p.Status == "LIST_DONE" || (p.Status == "COMPLETED" && !legacyRecovery) {
+		return s.tasks.repo.RequestResume(id, expected)
+	}
+	if err = s.checkTaskEnrollments(p); err != nil {
+		return p, false, err
+	}
+	if legacyRecovery {
+		resolved, err := s.resolveLegacySource(ctx, p)
+		if err != nil {
+			return p, false, err
+		}
+		return s.tasks.repo.RequestLegacyRecovery(id, resolved, expected)
+	}
+	return s.tasks.repo.RequestResume(id, expected)
+}
+
 func (s *Server) changeTaskBandwidth(ctx context.Context, id int64, mbps float64) (task.Parent, error) {
 	return s.changeTaskLimits(ctx, id, &mbps, nil, false, nil)
 }

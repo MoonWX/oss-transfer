@@ -48,6 +48,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  CheckCircleOutlineRounded,
   DeleteOutlineRounded,
   DownloadRounded,
   FilterAltRounded,
@@ -55,6 +56,7 @@ import {
   ReplayRounded,
 } from "@mui/icons-material";
 import { api, ApiError, download, useApi, useNotify } from "../lib/api";
+import { useTaskRecovery } from "../lib/taskRecovery";
 import {
   EmptyState,
   PageHeader,
@@ -162,7 +164,7 @@ export default function ExceptionsPage() {
   const [queries, setQueries] = useState<Partial<Record<Mode, QueryState>>>({});
   const [busy, setBusy] = useState(false);
   const retryInFlight = useRef(false);
-  const [retryingTaskId, setRetryingTaskId] = useState<number | null>(null);
+  const recovery = useTaskRecovery();
   const [retryAcceptedTaskId, setRetryAcceptedTaskId] = useState<number | null>(
     null,
   );
@@ -435,13 +437,35 @@ export default function ExceptionsPage() {
   }
   async function retry(item: Failure) {
     const taskId = item.parentTaskId ?? item.taskIndex;
-    if (taskId === undefined || busy || retryInFlight.current) return;
+    if (
+      taskId === undefined ||
+      busy ||
+      retryInFlight.current ||
+      !recovery.begin([taskId])
+    )
+      return;
     retryInFlight.current = true;
-    setRetryingTaskId(taskId);
     setRetryAcceptedTaskId(null);
     setRetryError(null);
     setBusy(true);
+    let submitted = false;
     try {
+      const current = await api<{
+        data: { status: string; generation?: number };
+      }>(`/api/master/tasks/${taskId}`);
+      if (!recovery.isCurrent()) return;
+      const generation = current.data.generation;
+      if (
+        ["RUNNING", "RESUMING", "LIST_DONE", "COMPLETED"].includes(
+          current.data.status,
+        )
+      ) {
+        recovery.accept(taskId, generation);
+        notify(tr("任务状态已更新，请查看任务详情。"), "info");
+        void load(true);
+        return;
+      }
+      submitted = true;
       const response = await api<{
         data: {
           accepted: number;
@@ -450,6 +474,10 @@ export default function ExceptionsPage() {
           partial?: boolean;
           unreachableWorkers?: string[];
           details?: Array<{
+            taskId?: number;
+            generation?: number;
+            accepted?: boolean;
+            ignored?: boolean;
             success?: boolean;
             message?: string;
             error?: string;
@@ -457,10 +485,20 @@ export default function ExceptionsPage() {
         };
       }>("/api/master/local-transfers/retry-failures", {
         method: "POST",
-        body: { taskIds: [taskId] },
+        body: {
+          taskIds: [taskId],
+          ...(Number.isSafeInteger(generation) && Number(generation) > 0
+            ? { expectedGenerations: { [taskId]: generation } }
+            : {}),
+        },
       });
       const value = response.data;
-      if (value.accepted > 0) setRetryAcceptedTaskId(taskId);
+      if (!recovery.isCurrent()) return;
+      const detail = value.details?.find((row) => row.taskId === taskId);
+      if (value.accepted > 0 || value.ignored > 0) {
+        recovery.accept(taskId, detail?.generation);
+        if (value.accepted > 0) setRetryAcceptedTaskId(taskId);
+      } else recovery.release(taskId);
       const reasons = [
         ...new Set(
           (value.details ?? [])
@@ -491,15 +529,25 @@ export default function ExceptionsPage() {
       notify(message, failed ? "warning" : "success");
       void load(true);
     } catch (cause) {
+      if (!recovery.isCurrent()) return;
+      if (
+        submitted &&
+        (!(cause instanceof ApiError) ||
+          cause.status === 0 ||
+          cause.status >= 500)
+      )
+        recovery.check(taskId);
+      else recovery.release(taskId);
       const message = errorText(cause);
       setRetryError(message);
       notify(message, "error");
     } finally {
       retryInFlight.current = false;
-      setRetryingTaskId(null);
       setBusy(false);
     }
   }
+  const retryPhase = (item: Failure) =>
+    recovery.states[item.parentTaskId ?? item.taskIndex ?? -1]?.phase;
   async function report() {
     setBusy(true);
     try {
@@ -954,20 +1002,24 @@ export default function ExceptionsPage() {
                             <Button
                               size="small"
                               startIcon={
-                                retryingTaskId ===
-                                (item.parentTaskId ?? item.taskIndex) ? (
+                                retryPhase(item) === "completed" ? (
+                                  <CheckCircleOutlineRounded />
+                                ) : retryPhase(item) ? (
                                   <CircularProgress size={16} color="inherit" />
                                 ) : (
                                   <ReplayRounded />
                                 )
                               }
                               onClick={() => void retry(item)}
-                              disabled={busy}
+                              disabled={busy || !!retryPhase(item)}
                             >
-                              {retryingTaskId ===
-                              (item.parentTaskId ?? item.taskIndex)
+                              {retryPhase(item) === "submitting"
                                 ? tr("提交中…")
-                                : tr("重试任务")}
+                                : retryPhase(item) === "completed"
+                                  ? tr("已完成")
+                                  : retryPhase(item)
+                                    ? tr("处理中…")
+                                    : tr("重试任务")}
                             </Button>
                           )}
                       </TableCell>

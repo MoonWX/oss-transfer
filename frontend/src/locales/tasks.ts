@@ -1,4 +1,12 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "处理中…": {
+    en: "Processing…",
+    ja: "処理中…",
+  },
+  "任务状态已更新，请查看任务详情。": {
+    en: "The task status has changed. Open the task for details.",
+    ja: "タスクの状態が変わりました。詳細を確認してください。",
+  },
   "任务 #{taskId} 的重试已受理。": {
     en: "Retry accepted for task #{taskId}.",
     ja: "タスク #{taskId} の再試行を受け付けました。",

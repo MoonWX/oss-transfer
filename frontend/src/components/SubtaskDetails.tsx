@@ -179,6 +179,8 @@ export default function SubtaskDetails({
             <ChildRecovery
               key={childId}
               childId={childId}
+              attempt={task.attempt}
+              observedAt={task.observedAt}
               onRefresh={onRefresh}
             />
           )}

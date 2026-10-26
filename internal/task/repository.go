@@ -827,13 +827,31 @@ func (r *Repository) Stopped(id int64, generation uint64) error {
 
 // Resume durably accepts recovery without scanning child history or calling an
 // Agent. Replaying an uncertain request while preparation is running is idempotent.
-func (r *Repository) Resume(id int64) (p Parent, err error) {
+func (r *Repository) Resume(id int64) (Parent, error) {
+	p, _, err := r.resume(id, nil, false)
+	return p, err
+}
+
+// RequestResume compares the displayed generation and accepts at most one new
+// attempt. A delayed click must not restart a newer attempt that has already
+// finished with another failure. Older callers may omit the generation.
+func (r *Repository) RequestResume(id int64, expected *uint64) (Parent, bool, error) {
+	return r.resume(id, expected, true)
+}
+
+func (r *Repository) resume(id int64, expected *uint64, ignoreActive bool) (p Parent, accepted bool, err error) {
 	err = r.store.Update(func(tx *state.Tx) error {
 		p, err = get(tx, id)
 		if err != nil {
 			return err
 		}
-		if !p.Deleted && p.Status == "RESUMING" {
+		if p.Deleted || p.Purged {
+			return ErrState
+		}
+		if expected != nil && p.Generation != *expected {
+			return nil
+		}
+		if p.Status == "RESUMING" {
 			// Older releases committed RESUMING after rewriting all children, but
 			// could then stall at Agent admission. Rebuild their missing derived load
 			// in the same bounded preparation path without advancing the generation.
@@ -849,7 +867,10 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 			}
 			return nil
 		}
-		if p.Deleted || p.Status == "COMPLETED" || !Ended(p.Status) {
+		if ignoreActive && (p.Status == "RUNNING" || p.Status == "LIST_DONE" || p.Status == "COMPLETED") {
+			return nil
+		}
+		if p.Status == "COMPLETED" || !Ended(p.Status) {
 			return ErrState
 		}
 		if p.Legacy != nil && p.Legacy.NeedsReconciliation {
@@ -872,6 +893,7 @@ func (r *Repository) Resume(id int64) (p Parent, err error) {
 		after := 0
 		p.ResumeAfter = &after
 		p.Scheduling = &SchedulingState{Nodes: map[string]PendingLoad{}}
+		accepted = true
 		return r.save(tx, p)
 	})
 	return

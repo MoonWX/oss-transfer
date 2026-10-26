@@ -52,7 +52,7 @@ test("object retry results refresh without losing original failures or replaying
       });
     },
   );
-  await page.route("**/api/master/local-transfers/retry-failures", (route) => {
+  await page.route("**/api/master/retry", (route) => {
     sent++;
     expect(route.request().postDataJSON()).toEqual({
       taskIds: [1],
@@ -67,20 +67,18 @@ test("object retry results refresh without losing original failures or replaying
     return route.fulfill({
       json: {
         success: true,
-        data: {
-          accepted: 1,
-          ignored: 0,
-          failed: 0,
-          details: [
-            {
-              taskId: 1,
-              status: "RUNNING",
-              generation: 2,
-              accepted: true,
-              success: true,
-            },
-          ],
-        },
+        accepted: 1,
+        ignored: 0,
+        failed: 0,
+        details: [
+          {
+            taskId: 1,
+            status: "RUNNING",
+            generation: 2,
+            accepted: true,
+            success: true,
+          },
+        ],
       },
     });
   });
@@ -100,8 +98,10 @@ test("object retry results refresh without losing original failures or replaying
       .getByRole("row", { includeHidden: true })
       .filter({ hasText: "skipped.bin" });
     await expect(region.getByText("未重试", { exact: true })).toHaveCount(3);
-    await recovered
-      .getByRole("button", { name: "重试任务", exact: true })
+    const actions = page.getByRole("region", { name: "任务操作" });
+    await expect(actions.getByText("任务 #1", { exact: true })).toBeVisible();
+    await actions
+      .getByRole("button", { name: "重试失败项", exact: true })
       .dblclick();
     await expect(region.getByText("重试中", { exact: true })).toHaveCount(3);
     await recovered.getByRole("button", { name: "详情", exact: true }).click();
@@ -140,8 +140,9 @@ test("object retry results refresh without losing original failures or replaying
       skipped.getByRole("button", { name: "重试任务", exact: true }),
     ).toHaveCount(0);
     await expect(
-      failed.getByRole("button", { name: "重试任务", exact: true }),
+      actions.getByRole("button", { name: "重试失败项", exact: true }),
     ).toBeEnabled({ timeout: 10000 });
+    await expect(failed.getByRole("button", { name: /重试/ })).toHaveCount(0);
     expect(sent).toBe(1);
     await failed.getByRole("button", { name: "详情", exact: true }).click();
     await expect(
@@ -193,7 +194,9 @@ test("a completed parent does not invent a recovered object result", async ({
   await expect(row.getByText("未重试", { exact: true })).toBeVisible();
   await expect(row.getByText("已恢复", { exact: true })).toHaveCount(0);
   await expect(
-    row.getByRole("button", { name: "任务已完成", exact: true }),
+    page
+      .getByRole("region", { name: "任务操作" })
+      .getByRole("button", { name: "任务已完成", exact: true }),
   ).toBeDisabled();
 });
 
@@ -231,42 +234,40 @@ for (const retryStatus of ["INTERRUPTED", "PENDING"]) {
         },
       }),
     );
-    await page.route(
-      "**/api/master/local-transfers/retry-failures",
-      (route) => {
-        sent++;
-        expect(route.request().postDataJSON()).toEqual({
-          taskIds: [1],
-          expectedGenerations: { "1": 2 },
-        });
-        parent = { ...parent, status: "RUNNING", generation: 3 };
-        return route.fulfill({
-          json: {
-            success: true,
-            data: {
-              accepted: 1,
-              ignored: 0,
-              failed: 0,
-              details: [
-                { taskId: 1, generation: 3, status: "RUNNING", accepted: true },
-              ],
-            },
-          },
-        });
-      },
-    );
+    await page.route("**/api/master/resume", (route) => {
+      sent++;
+      expect(route.request().postDataJSON()).toEqual({
+        taskIds: [1],
+        expectedGenerations: { "1": 2 },
+      });
+      parent = { ...parent, status: "RUNNING", generation: 3 };
+      return route.fulfill({
+        json: {
+          success: true,
+          accepted: 1,
+          ignored: 0,
+          failed: 0,
+          details: [
+            { taskId: 1, generation: 3, status: "RUNNING", accepted: true },
+          ],
+        },
+      });
+    });
     await page.goto("/exceptions?type=local&taskId=1");
     const row = page
       .getByRole("row", { includeHidden: true })
       .filter({ hasText: "unfinished.bin" });
+    const actions = page.getByRole("region", { name: "任务操作" });
     await expect(
-      row.getByRole("button", { name: "重试任务", exact: true }),
+      actions.getByRole("button", { name: "继续传输", exact: true }),
     ).toBeEnabled();
     if (retryStatus === "INTERRUPTED")
       await expect(row.getByText("重试未完成", { exact: true })).toBeVisible();
-    await row.getByRole("button", { name: "重试任务", exact: true }).dblclick();
+    await actions
+      .getByRole("button", { name: "继续传输", exact: true })
+      .dblclick();
     await expect(
-      row.getByRole("button", { name: "处理中…", exact: true }),
+      actions.getByRole("button", { name: "处理中…", exact: true }),
     ).toBeDisabled();
     expect(sent).toBe(1);
   });

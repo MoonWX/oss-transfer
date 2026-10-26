@@ -75,20 +75,18 @@ test("opens local failures from task links, paginates, and reports partial retri
       });
     },
   );
-  await page.route("**/api/master/local-transfers/retry-failures", (route) =>
+  await page.route("**/api/master/retry", (route) =>
     route.fulfill({
       json: {
         success: true,
-        data: {
-          accepted: 1,
-          ignored: 0,
-          failed: 0,
-          details: [
-            { taskId: 123, generation: 2, status: "RESUMING", accepted: true },
-          ],
-          partial: true,
-          unreachableWorkers: ["10.0.1.13"],
-        },
+        accepted: 1,
+        ignored: 0,
+        failed: 0,
+        details: [
+          { taskId: 123, generation: 2, status: "RESUMING", accepted: true },
+        ],
+        partial: true,
+        unreachableWorkers: ["10.0.1.13"],
       },
     }),
   );
@@ -135,7 +133,10 @@ test("opens local failures from task links, paginates, and reports partial retri
   await expect(pagination.getByRole("combobox", { name: "每页" })).toHaveText(
     "10",
   );
-  await page.getByRole("button", { name: "重试任务" }).click();
+  await page
+    .getByRole("region", { name: "任务操作", exact: true })
+    .getByRole("button", { name: "重试失败项", exact: true })
+    .click();
   await expect(
     page
       .getByRole("main")

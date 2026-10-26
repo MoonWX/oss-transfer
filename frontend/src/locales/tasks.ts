@@ -1,4 +1,16 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "任务 #{taskId} 的继续传输请求已受理。": {
+    en: "Resume accepted for task #{taskId}.",
+    ja: "タスク #{taskId} の転送再開を受け付けました。",
+  },
+  "继续传输已受理 {value1}，忽略 {value2}，失败 {value3}{value4}": {
+    en: "Resume: {value1} accepted, {value2} ignored, {value3} failed{value4}",
+    ja: "転送再開：受理 {value1}件、無視 {value2}件、失敗 {value3}件{value4}",
+  },
+  任务操作: { en: "Task actions", ja: "タスク操作" },
+  所属任务: { en: "Task", ja: "対象タスク" },
+  "任务 #{id}": { en: "Task #{id}", ja: "タスク #{id}" },
+  重试失败项: { en: "Retry failed items", ja: "失敗した項目を再試行" },
   "查看异常及重试结果，导出记录。": {
     en: "Review exceptions and retry results, and export records.",
     ja: "例外と再試行の結果を確認し、記録をエクスポートします。",

@@ -52,6 +52,7 @@ import {
   DeleteOutlineRounded,
   DownloadRounded,
   FilterAltRounded,
+  PlayArrowRounded,
   RefreshRounded,
   ReplayRounded,
 } from "@mui/icons-material";
@@ -68,6 +69,7 @@ import {
 import {
   EmptyState,
   PageHeader,
+  StatusChip,
   formatBytes,
   formatNumber,
 } from "../components/Common";
@@ -141,8 +143,6 @@ type QueryState = {
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-const isResolved = (item: Failure) =>
-  item.retryStatus === "RECOVERED" || item.retryStatus === "SKIPPED";
 const sameFailure = (a: Failure, b: Failure) =>
   (a.parentTaskId ?? a.taskIndex) === (b.parentTaskId ?? b.taskIndex) &&
   a.childTaskId === b.childTaskId &&
@@ -190,10 +190,15 @@ export default function ExceptionsPage() {
   const [retryAcceptedTaskId, setRetryAcceptedTaskId] = useState<number | null>(
     null,
   );
+  const [resumeAccepted, setResumeAccepted] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Failure | null>(null);
+  const [actionSelection, setActionSelection] = useState<{
+    scope: string;
+    id: number;
+  } | null>(null);
   const loadId = useRef(0);
   const mounted = useRef(false);
   const inFlight = useRef(
@@ -420,16 +425,35 @@ export default function ExceptionsPage() {
       ? result.items
       : result.items.slice(page * pageSize, page * pageSize + pageSize)
     : [];
-  const visibleTasks = useVisibleRecoveryTasks(
-    isLocal
-      ? visible.flatMap((item) => {
-          const id = item.parentTaskId ?? item.taskIndex;
-          return typeof id === "number" && id > 0 ? [id] : [];
-        })
-      : [],
-    queryKey,
-    result,
-  );
+  const actionTaskIds =
+    mode !== "fallback"
+      ? [
+          ...new Set(
+            visible.flatMap((item) => {
+              const id = item.parentTaskId ?? item.taskIndex;
+              return Number.isSafeInteger(id) && Number(id) > 0
+                ? [Number(id)]
+                : [];
+            }),
+          ),
+        ]
+      : [];
+  const actionScope = JSON.stringify([queryKey, page, pageSize]);
+  const latestActionScope = useRef(actionScope);
+  latestActionScope.current = actionScope;
+  useEffect(() => {
+    setRetryAcceptedTaskId(null);
+    setResumeAccepted(false);
+    setRetryError(null);
+  }, [actionScope]);
+  const actionTaskId =
+    actionSelection?.scope === actionScope &&
+    actionTaskIds.includes(actionSelection.id)
+      ? actionSelection.id
+      : actionTaskIds.includes(Number(filters.task))
+        ? Number(filters.task)
+        : actionTaskIds[0];
+  const visibleTasks = useVisibleRecoveryTasks(actionTaskIds, queryKey, result);
   const hasPendingResults = visible.some(
     (item) => item.retryStatus === "PENDING",
   );
@@ -502,13 +526,12 @@ export default function ExceptionsPage() {
       setBusy(false);
     }
   }
-  async function retry(item: Failure) {
-    const taskId = item.parentTaskId ?? item.taskIndex;
+  async function retry(taskId: number) {
     const displayed =
       taskId === undefined ? undefined : visibleTasks.tasks[taskId];
     if (
       taskId === undefined ||
-      isResolved(item) ||
+      !actionTaskIds.includes(taskId) ||
       !canRetrySnapshot(displayed ?? undefined) ||
       busy ||
       retryInFlight.current ||
@@ -520,11 +543,20 @@ export default function ExceptionsPage() {
     setRetryError(null);
     setBusy(true);
     let submitted = false;
+    const scope = actionScope;
+    const stillHere = () =>
+      mounted.current && latestActionScope.current === scope;
     try {
       const current = await api<{
         data: { status: string; generation?: number };
-      }>(`/api/master/tasks/${taskId}`);
+      }>(`/api/master/tasks/${taskId}`, {
+        signal: AbortSignal.timeout(10000),
+      });
       if (!recovery.isCurrent()) return;
+      if (!stillHere()) {
+        recovery.release(taskId);
+        return;
+      }
       const generation = displayed!.generation!;
       if (
         current.data.generation !== generation ||
@@ -543,32 +575,35 @@ export default function ExceptionsPage() {
         return;
       }
       submitted = true;
-      const response = await api<{
-        data: {
-          accepted: number;
-          ignored: number;
-          failed: number;
-          partial?: boolean;
-          unreachableWorkers?: string[];
-          details?: Array<{
-            taskId?: number;
-            generation?: number;
-            status?: string;
-            accepted?: boolean;
-            ignored?: boolean;
-            success?: boolean;
-            message?: string;
-            error?: string;
-          }>;
-        };
-      }>("/api/master/local-transfers/retry-failures", {
-        method: "POST",
-        body: {
-          taskIds: [taskId],
-          expectedGenerations: { [taskId]: generation },
+      const value = await api<{
+        accepted: number;
+        ignored: number;
+        failed: number;
+        partial?: boolean;
+        unreachableWorkers?: string[];
+        details?: Array<{
+          taskId?: number;
+          generation?: number;
+          status?: string;
+          accepted?: boolean;
+          ignored?: boolean;
+          success?: boolean;
+          message?: string;
+          error?: string;
+        }>;
+      }>(
+        current.data.status === "STOPPED"
+          ? "/api/master/resume"
+          : "/api/master/retry",
+        {
+          method: "POST",
+          signal: AbortSignal.timeout(30000),
+          body: {
+            taskIds: [taskId],
+            expectedGenerations: { [taskId]: generation },
+          },
         },
-      });
-      const value = response.data;
+      );
       if (!recovery.isCurrent()) return;
       const detail = value.details?.find((row) => row.taskId === taskId);
       if (value.accepted > 0 || value.ignored > 0) {
@@ -577,8 +612,12 @@ export default function ExceptionsPage() {
           status: detail?.status ?? "RESUMING",
           generation: detail?.generation,
         });
-        if (value.accepted > 0) setRetryAcceptedTaskId(taskId);
+        if (value.accepted > 0 && stillHere()) {
+          setRetryAcceptedTaskId(taskId);
+          setResumeAccepted(current.data.status === "STOPPED");
+        }
       } else recovery.release(taskId);
+      if (!stillHere()) return;
       const reasons = [
         ...new Set(
           (value.details ?? [])
@@ -590,7 +629,9 @@ export default function ExceptionsPage() {
       const unavailable =
         value.unreachableWorkers?.map((id) => nodeLabel(id)) ?? [];
       const message = tr(
-        "重试已受理 {value1}，忽略 {value2}，失败 {value3}{value4}",
+        current.data.status === "STOPPED"
+          ? "继续传输已受理 {value1}，忽略 {value2}，失败 {value3}{value4}"
+          : "重试已受理 {value1}，忽略 {value2}，失败 {value3}{value4}",
         {
           value1: value.accepted,
           value2: value.ignored,
@@ -618,6 +659,7 @@ export default function ExceptionsPage() {
       )
         recovery.check(taskId);
       else recovery.release(taskId);
+      if (!stillHere()) return;
       const message = errorText(cause);
       setRetryError(message);
       notify(message, "error");
@@ -626,8 +668,7 @@ export default function ExceptionsPage() {
       setBusy(false);
     }
   }
-  const retryPhase = (item: Failure) => {
-    const id = item.parentTaskId ?? item.taskIndex ?? -1;
+  const retryPhase = (id: number) => {
     const phase = recovery.states[id]?.phase;
     if (phase) return phase;
     const snapshot = visibleTasks.tasks[id];
@@ -636,6 +677,24 @@ export default function ExceptionsPage() {
     if (snapshot.status === "COMPLETED") return "completed";
     return canRetrySnapshot(snapshot) ? undefined : "accepted";
   };
+  const actionSnapshot = visibleTasks.tasks[actionTaskId];
+  const actionPhase = retryPhase(actionTaskId);
+  const actionLabel =
+    actionPhase === "submitting"
+      ? tr("提交中…")
+      : actionPhase === "completed"
+        ? tr("任务已完成")
+        : actionPhase === "loading"
+          ? tr("检查状态…")
+          : actionPhase === "unavailable"
+            ? tr("状态暂不可用")
+            : actionPhase
+              ? tr("处理中…")
+              : actionSnapshot?.status === "STOPPED"
+                ? tr("继续传输")
+                : actionSnapshot?.status === "PARTIAL_FAILED"
+                  ? tr("重试失败项")
+                  : tr("重试任务");
   async function report() {
     setBusy(true);
     try {
@@ -683,7 +742,12 @@ export default function ExceptionsPage() {
             </Button>
           }
         >
-          {tr("任务 #{taskId} 的重试已受理。", { taskId: retryAcceptedTaskId })}
+          {tr(
+            resumeAccepted
+              ? "任务 #{taskId} 的继续传输请求已受理。"
+              : "任务 #{taskId} 的重试已受理。",
+            { taskId: retryAcceptedTaskId },
+          )}
         </Alert>
       )}
       {retryError && (
@@ -952,6 +1016,72 @@ export default function ExceptionsPage() {
             )}
           </Stack>
         </Stack>
+        {actionTaskId !== undefined && (
+          <Stack
+            role="region"
+            aria-label={tr("任务操作")}
+            direction="row"
+            alignItems="center"
+            spacing={1.5}
+            flexWrap="wrap"
+            useFlexGap
+            sx={{ px: 2.5, pb: 2.5 }}
+          >
+            {actionTaskIds.length > 1 ? (
+              <TextField
+                select
+                label={tr("所属任务")}
+                size="small"
+                value={actionTaskId}
+                disabled={busy}
+                onChange={(event) =>
+                  setActionSelection({
+                    scope: actionScope,
+                    id: Number(event.target.value),
+                  })
+                }
+                sx={{ minWidth: 180 }}
+              >
+                {actionTaskIds.map((id) => (
+                  <MenuItem key={id} value={id}>
+                    {tr("任务 #{id}", { id })}
+                  </MenuItem>
+                ))}
+              </TextField>
+            ) : (
+              <Typography variant="body2" fontWeight={600}>
+                {tr("任务 #{id}", { id: actionTaskId })}
+              </Typography>
+            )}
+            {actionSnapshot && <StatusChip status={actionSnapshot.status} />}
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={
+                actionPhase === "completed" ? (
+                  <CheckCircleOutlineRounded />
+                ) : actionPhase && actionPhase !== "unavailable" ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : actionSnapshot?.status === "STOPPED" ? (
+                  <PlayArrowRounded />
+                ) : (
+                  <ReplayRounded />
+                )
+              }
+              onClick={() => void retry(actionTaskId)}
+              disabled={busy || !!actionPhase}
+            >
+              {actionLabel}
+            </Button>
+            <Button
+              size="small"
+              component={RouterLink}
+              to={`/tasks?taskId=${actionTaskId}`}
+            >
+              {tr("查看任务")}
+            </Button>
+          </Stack>
+        )}
         <Box sx={{ height: 4 }}>
           {loading && <LinearProgress aria-label={tr("正在读取记录")} />}
         </Box>
@@ -990,7 +1120,16 @@ export default function ExceptionsPage() {
                         {tr("重试结果")}
                       </TableCell>
                     )}
-                    <TableCell align="right" sx={{ width: "16%" }}>
+                    <TableCell
+                      align="right"
+                      sx={{
+                        width: 96,
+                        position: "sticky",
+                        right: 0,
+                        zIndex: 1,
+                        bgcolor: "background.paper",
+                      }}
+                    >
                       {tr("操作")}
                     </TableCell>
                   </TableRow>
@@ -1209,42 +1348,17 @@ export default function ExceptionsPage() {
                           )}
                         </TableCell>
                       )}
-                      <TableCell align="right">
+                      <TableCell
+                        align="right"
+                        sx={{
+                          position: "sticky",
+                          right: 0,
+                          bgcolor: "background.paper",
+                        }}
+                      >
                         <Button size="small" onClick={() => setSelected(item)}>
                           {tr("详情")}
                         </Button>
-                        {isLocal &&
-                          !isResolved(item) &&
-                          (item.parentTaskId !== undefined ||
-                            item.taskIndex !== undefined) && (
-                            <Button
-                              size="small"
-                              startIcon={
-                                retryPhase(item) === "completed" ? (
-                                  <CheckCircleOutlineRounded />
-                                ) : retryPhase(item) &&
-                                  retryPhase(item) !== "unavailable" ? (
-                                  <CircularProgress size={16} color="inherit" />
-                                ) : (
-                                  <ReplayRounded />
-                                )
-                              }
-                              onClick={() => void retry(item)}
-                              disabled={busy || !!retryPhase(item)}
-                            >
-                              {retryPhase(item) === "submitting"
-                                ? tr("提交中…")
-                                : retryPhase(item) === "completed"
-                                  ? tr("任务已完成")
-                                  : retryPhase(item) === "loading"
-                                    ? tr("检查状态…")
-                                    : retryPhase(item) === "unavailable"
-                                      ? tr("状态暂不可用")
-                                      : retryPhase(item)
-                                        ? tr("处理中…")
-                                        : tr("重试任务")}
-                            </Button>
-                          )}
                       </TableCell>
                     </TableRow>
                   ))}

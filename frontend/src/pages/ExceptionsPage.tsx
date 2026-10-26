@@ -9,6 +9,7 @@ import {
 import {
   exceptionCsv,
   exceptionDetails,
+  retryResultLabel,
   missingExceptionNodes,
 } from "../lib/exceptionRecords";
 import {
@@ -54,7 +55,7 @@ import {
   RefreshRounded,
   ReplayRounded,
 } from "@mui/icons-material";
-import { api, ApiError, download, useApi, useNotify } from "../lib/api";
+import { api, ApiError, download, getToken, useNotify } from "../lib/api";
 import ListPagination, {
   rememberPageSize,
   savedPageSize,
@@ -87,6 +88,12 @@ type Failure = {
   objectSize?: number;
   stage?: string;
   retryCount?: number;
+  retryStatus?: string;
+  retryUpdatedAt?: number;
+  retryError?: string;
+  retryGeneration?: number;
+  retryExecutionNodeIp?: string;
+  retryExecutionNodeDisplay?: NodeDisplay;
   timestamp?: number;
   timestampFormatted?: string;
   direction?: string;
@@ -134,6 +141,12 @@ type QueryState = {
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+const isResolved = (item: Failure) =>
+  item.retryStatus === "RECOVERED" || item.retryStatus === "SKIPPED";
+const sameFailure = (a: Failure, b: Failure) =>
+  (a.parentTaskId ?? a.taskIndex) === (b.parentTaskId ?? b.taskIndex) &&
+  a.childTaskId === b.childTaskId &&
+  a.key === b.key;
 const failureTime = (item: Failure) =>
   item.timestamp
     ? new Date(item.timestamp).toLocaleString(getLocale())
@@ -226,10 +239,29 @@ export default function ExceptionsPage() {
     nodeLabel(id, mergeNodeDisplay(result?.nodeDisplays?.[id ?? ""], display));
 
   const load = useCallback(
-    (force = false): Promise<void> => {
+    (force = false, quiet = false): Promise<void> => {
+      const token = getToken();
       const pending = inFlight.current.get(queryKey);
       if (pending && !force) {
         latestQuery.current[mode] = { key: queryKey, id: pending.id };
+        if (!quiet)
+          setQueries((previous) => ({
+            ...previous,
+            [mode]: {
+              key: queryKey,
+              result:
+                previous[mode]?.key === queryKey
+                  ? previous[mode]!.result
+                  : null,
+              loading: true,
+              error: null,
+            },
+          }));
+        return pending.promise;
+      }
+      const id = ++loadId.current;
+      latestQuery.current[mode] = { key: queryKey, id };
+      if (!quiet)
         setQueries((previous) => ({
           ...previous,
           [mode]: {
@@ -240,20 +272,6 @@ export default function ExceptionsPage() {
             error: null,
           },
         }));
-        return pending.promise;
-      }
-      const id = ++loadId.current;
-      latestQuery.current[mode] = { key: queryKey, id };
-      setQueries((previous) => ({
-        ...previous,
-        [mode]: {
-          key: queryKey,
-          result:
-            previous[mode]?.key === queryKey ? previous[mode]!.result : null,
-          loading: true,
-          error: null,
-        },
-      }));
       const request = (async () => {
         try {
           let next: Result;
@@ -270,6 +288,7 @@ export default function ExceptionsPage() {
             next = (
               await api<{ data: Result }>(
                 `/api/master/local-transfers/failures?${params}`,
+                { signal: AbortSignal.timeout(10000) },
               )
             ).data;
           } else {
@@ -287,6 +306,7 @@ export default function ExceptionsPage() {
               {
                 method: "POST",
                 body,
+                signal: AbortSignal.timeout(10000),
               },
             );
             const grouped = (raw[
@@ -331,7 +351,11 @@ export default function ExceptionsPage() {
                 Record<string, NodeDisplay> | undefined,
             };
           }
-          if (mounted.current && latestQuery.current[mode]?.id === id)
+          if (
+            mounted.current &&
+            getToken() === token &&
+            latestQuery.current[mode]?.id === id
+          )
             setQueries((previous) => ({
               ...previous,
               [mode]: {
@@ -342,7 +366,11 @@ export default function ExceptionsPage() {
               },
             }));
         } catch (cause) {
-          if (mounted.current && latestQuery.current[mode]?.id === id)
+          if (
+            mounted.current &&
+            getToken() === token &&
+            latestQuery.current[mode]?.id === id
+          )
             setQueries((previous) => ({
               ...previous,
               [mode]: {
@@ -402,6 +430,26 @@ export default function ExceptionsPage() {
     queryKey,
     result,
   );
+  const hasPendingResults = visible.some(
+    (item) => item.retryStatus === "PENDING",
+  );
+  useEffect(() => {
+    if (mode === "fallback" || !result) return;
+    // Refresh object results independently of the parent status: the last ledger
+    // update can arrive after the parent has already left RUNNING.
+    const refresh = () => {
+      if (document.visibilityState === "visible") void load(false, true);
+    };
+    const timer = window.setInterval(refresh, hasPendingResults ? 3000 : 10000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [mode, load, !!result, hasPendingResults]);
+  const selectedRecord = selected
+    ? (result?.items.find((item) => sameFailure(item, selected)) ?? selected)
+    : null;
   const updateDraft = (field: keyof Filters, value: string) =>
     setDraft((previous) => ({ ...previous, [field]: value }));
   const applyFilters = (event: FormEvent) => {
@@ -460,6 +508,7 @@ export default function ExceptionsPage() {
       taskId === undefined ? undefined : visibleTasks.tasks[taskId];
     if (
       taskId === undefined ||
+      isResolved(item) ||
       !canRetrySnapshot(displayed ?? undefined) ||
       busy ||
       retryInFlight.current ||
@@ -605,7 +654,7 @@ export default function ExceptionsPage() {
     <Stack spacing={3}>
       <PageHeader
         title={tr("异常记录")}
-        description={tr("查看失败对象和降级记录，导出异常明细。")}
+        description={tr("查看异常及重试结果，导出记录。")}
         action={
           <Button
             startIcon={<RefreshRounded />}
@@ -920,14 +969,30 @@ export default function ExceptionsPage() {
             </Stack>
           ) : visible.length > 0 ? (
             <TableContainer>
-              <Table size="small" sx={{ minWidth: 780 }}>
+              <Table
+                size="small"
+                sx={{
+                  tableLayout: "fixed",
+                  minWidth: mode === "fallback" ? 860 : 1060,
+                }}
+              >
                 <TableHead>
                   <TableRow>
-                    <TableCell>{tr("对象 / 路径")}</TableCell>
-                    <TableCell>{tr("任务与节点")}</TableCell>
+                    <TableCell sx={{ width: "26%" }}>
+                      {tr("对象 / 路径")}
+                    </TableCell>
+                    <TableCell sx={{ width: "17%" }}>
+                      {tr("任务与节点")}
+                    </TableCell>
                     <TableCell>{tr("原因")}</TableCell>
-                    <TableCell>{tr("记录时间")}</TableCell>
-                    <TableCell align="right">{tr("操作")}</TableCell>
+                    {mode !== "fallback" && (
+                      <TableCell sx={{ width: "20%" }}>
+                        {tr("重试结果")}
+                      </TableCell>
+                    )}
+                    <TableCell align="right" sx={{ width: "16%" }}>
+                      {tr("操作")}
+                    </TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -936,12 +1001,17 @@ export default function ExceptionsPage() {
                       key={`${item.workerNode}-${item.taskIndex}-${item.key}-${index}`}
                       hover
                     >
-                      <TableCell sx={{ maxWidth: 310 }}>
+                      <TableCell sx={{ minWidth: 220 }}>
                         <Typography
                           variant="body2"
+                          title={item.key || item.localPath || "—"}
                           sx={{
                             overflowWrap: "anywhere",
                             fontFamily: "monospace",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
                           }}
                         >
                           {item.key || item.localPath || "—"}
@@ -950,10 +1020,15 @@ export default function ExceptionsPage() {
                           item.destinationKey !== item.key && (
                             <Typography
                               variant="body2"
+                              title={item.destinationKey}
                               sx={{
                                 fontFamily: "monospace",
                                 overflowWrap: "anywhere",
                                 whiteSpace: "pre-wrap",
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
                               }}
                             >
                               {tr("目标：")}
@@ -963,7 +1038,14 @@ export default function ExceptionsPage() {
                         <Typography
                           variant="caption"
                           color="text.secondary"
-                          sx={{ overflowWrap: "anywhere" }}
+                          title={`${item.sourceBucket || "—"} → ${item.destBucket || item.localPath || "—"}`}
+                          sx={{
+                            overflowWrap: "anywhere",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
                         >
                           {item.sourceBucket || "—"} →{" "}
                           {item.destBucket || item.localPath || "—"}
@@ -978,14 +1060,26 @@ export default function ExceptionsPage() {
                           </Typography>
                         )}
                       </TableCell>
-                      <TableCell sx={{ whiteSpace: "nowrap" }}>
+                      <TableCell>
                         <Typography variant="body2">
                           #{item.parentTaskId ?? item.taskIndex ?? "—"}
                         </Typography>
                         <Typography
                           variant="caption"
                           color="text.secondary"
-                          sx={{ fontFamily: "monospace" }}
+                          title={
+                            item.workerNode || item.executionNodeIp
+                              ? taskNodeLabels(item, recordNodeLabel)
+                              : tr("调度阶段")
+                          }
+                          sx={{
+                            fontFamily: "monospace",
+                            overflowWrap: "anywhere",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
                         >
                           {item.workerNode || item.executionNodeIp
                             ? taskNodeLabels(item, recordNodeLabel)
@@ -1008,6 +1102,11 @@ export default function ExceptionsPage() {
                         <Typography
                           variant="body2"
                           color="error.main"
+                          title={
+                            item.errorMessage ||
+                            item.errorCode ||
+                            tr("未提供原因")
+                          }
                           sx={{
                             overflowWrap: "anywhere",
                             display: "-webkit-box",
@@ -1025,17 +1124,97 @@ export default function ExceptionsPage() {
                             {item.errorCode}
                           </Typography>
                         )}
-                      </TableCell>
-                      <TableCell sx={{ whiteSpace: "nowrap" }}>
-                        <Typography variant="body2">
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          display="block"
+                          sx={{ mt: 0.5 }}
+                        >
                           {failureTime(item)}
                         </Typography>
                       </TableCell>
+                      {mode !== "fallback" && (
+                        <TableCell sx={{ minWidth: 140, maxWidth: 280 }}>
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            color={
+                              item.retryStatus === "INTERRUPTED"
+                                ? "warning"
+                                : item.retryStatus === "RECOVERED"
+                                  ? "success"
+                                  : item.retryStatus === "FAILED"
+                                    ? "error"
+                                    : item.retryStatus === "PENDING"
+                                      ? "info"
+                                      : "default"
+                            }
+                            label={tr(retryResultLabel(item.retryStatus))}
+                          />
+                          {!!item.retryCount && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                              sx={{ mt: 0.5 }}
+                            >
+                              {tr("重试 {count} 次", {
+                                count: formatNumber(item.retryCount),
+                              })}
+                            </Typography>
+                          )}
+                          {item.retryExecutionNodeIp &&
+                            item.retryExecutionNodeIp !==
+                              (item.executionNodeIp || item.workerNode) && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                display="block"
+                                sx={{ overflowWrap: "anywhere" }}
+                              >
+                                {tr("重试节点")}：
+                                {recordNodeLabel(
+                                  item.retryExecutionNodeIp,
+                                  item.retryExecutionNodeDisplay,
+                                )}
+                              </Typography>
+                            )}
+                          {!!item.retryUpdatedAt && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                            >
+                              {new Date(item.retryUpdatedAt).toLocaleString(
+                                getLocale(),
+                              )}
+                            </Typography>
+                          )}
+                          {item.retryStatus === "FAILED" && item.retryError && (
+                            <Typography
+                              variant="caption"
+                              color="error.main"
+                              display="block"
+                              title={item.retryError}
+                              sx={{
+                                overflowWrap: "anywhere",
+                                display: "-webkit-box",
+                                WebkitLineClamp: 3,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {item.retryError}
+                            </Typography>
+                          )}
+                        </TableCell>
+                      )}
                       <TableCell align="right">
                         <Button size="small" onClick={() => setSelected(item)}>
                           {tr("详情")}
                         </Button>
                         {isLocal &&
+                          !isResolved(item) &&
                           (item.parentTaskId !== undefined ||
                             item.taskIndex !== undefined) && (
                             <Button
@@ -1056,7 +1235,7 @@ export default function ExceptionsPage() {
                               {retryPhase(item) === "submitting"
                                 ? tr("提交中…")
                                 : retryPhase(item) === "completed"
-                                  ? tr("已完成")
+                                  ? tr("任务已完成")
                                   : retryPhase(item) === "loading"
                                     ? tr("检查状态…")
                                     : retryPhase(item) === "unavailable"
@@ -1164,8 +1343,8 @@ export default function ExceptionsPage() {
         <DialogTitle>{tr("异常详情")}</DialogTitle>
         <DialogContent>
           <Stack spacing={2}>
-            {selected &&
-              exceptionDetails(selected, recordNodeLabel).map(
+            {selectedRecord &&
+              exceptionDetails(selectedRecord, recordNodeLabel).map(
                 ({ key, label, value, date }) => (
                   <Box key={key}>
                     <Typography variant="caption" color="text.secondary">
@@ -1181,11 +1360,15 @@ export default function ExceptionsPage() {
                         fontFamily: "monospace",
                       }}
                     >
-                      {typeof value === "boolean"
-                        ? tr(value ? "是" : "否")
-                        : date
-                          ? new Date(String(value)).toLocaleString(getLocale())
-                          : String(value)}
+                      {key === "retryStatus"
+                        ? tr(retryResultLabel(String(value)))
+                        : typeof value === "boolean"
+                          ? tr(value ? "是" : "否")
+                          : date
+                            ? new Date(String(value)).toLocaleString(
+                                getLocale(),
+                              )
+                            : String(value)}
                     </Typography>
                     <Divider sx={{ mt: 1.5 }} />
                   </Box>

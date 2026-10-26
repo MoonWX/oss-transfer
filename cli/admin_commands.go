@@ -951,7 +951,7 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 	}
 	writer := csv.NewWriter(file)
 	writer.UseCRLF = true
-	fields := []string{"workerNode", "taskIndex", "parentTaskId", "direction", "sourceBucket", "destBucket", "key", "destinationKey", "localPath", "stage", "errorCode", "errorMessage", "objectSize", "retryCount", "timestamp", "timestampFormatted", "tmpFilePath", "storageId", "nodeId"}
+	fields := []string{"workerNode", "taskIndex", "parentTaskId", "direction", "sourceBucket", "destBucket", "key", "destinationKey", "localPath", "stage", "errorCode", "errorMessage", "objectSize", "retryCount", "timestamp", "timestampFormatted", "tmpFilePath", "storageId", "nodeId", "retryStatus", "retryUpdatedAt", "retryError", "retryGeneration", "retryExecutionNode", "retryExecutionNodeIp"}
 	if err = writer.Write(fields); err != nil {
 		return err
 	}
@@ -968,6 +968,11 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 				value = cliNodeLabel(row, identity, localeEN)
 			} else if field == "nodeId" {
 				value = firstNodeString(row, "nodeId", "workerNode", "executionNodeIp")
+			} else if field == "retryExecutionNode" {
+				if identity := getString(row, "retryExecutionNodeIp"); identity != "" {
+					display, _ := row["retryExecutionNodeDisplay"].(map[string]interface{})
+					value = cliNodeLabel(display, identity, localeEN)
+				}
 			}
 			if value != nil {
 				text, ok := value.(string)

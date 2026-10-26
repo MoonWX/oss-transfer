@@ -63,11 +63,28 @@ func exceptionDTO(e task.Exception) map[string]any {
 	} else if e.Destination.Kind == "LOCAL" {
 		local = joinAgentPath(e.Destination.Root, e.DestinationKey)
 	}
-	return map[string]any{"taskIndex": e.ParentID, "parentTaskId": e.ParentID, "childTaskId": e.ChildID, "direction": e.Direction, "sourceS3Alias": e.Source.Ref, "sourceBucket": e.Source.Bucket, "destS3Alias": e.Destination.Ref, "destBucket": e.Destination.Bucket, "key": e.Key, "logicalKey": e.Key, "destinationKey": e.DestinationKey, "localPath": local, "objectSize": e.Size, "workerNode": e.Node, "executionNodeIp": e.Node, "stage": "TRANSFER", "errorCode": "TRANSFER_FAILED", "reasonCode": "TRANSFER_FAILED", "errorMessage": e.Error, "retryCount": max(int64(0), int64(e.Attempt)-1), "timestamp": e.ObservedAt.UnixMilli(), "timestampFormatted": e.ObservedAt.UTC().Format(time.RFC3339), "observedAt": e.ObservedAt.UnixMilli(), "targetCommitted": e.TargetCommitted}
+	status := e.RetryStatus
+	if status == "" {
+		status = task.ExceptionNotRetried
+	}
+	result := map[string]any{"taskIndex": e.ParentID, "parentTaskId": e.ParentID, "childTaskId": e.ChildID, "direction": e.Direction, "sourceS3Alias": e.Source.Ref, "sourceBucket": e.Source.Bucket, "destS3Alias": e.Destination.Ref, "destBucket": e.Destination.Bucket, "key": e.Key, "logicalKey": e.Key, "destinationKey": e.DestinationKey, "localPath": local, "objectSize": e.Size, "workerNode": e.Node, "executionNodeIp": e.Node, "stage": "TRANSFER", "errorCode": "TRANSFER_FAILED", "reasonCode": "TRANSFER_FAILED", "errorMessage": e.Error, "retryCount": e.RetryCount, "retryStatus": status, "timestamp": e.ObservedAt.UnixMilli(), "timestampFormatted": e.ObservedAt.UTC().Format(time.RFC3339), "observedAt": e.ObservedAt.UnixMilli(), "targetCommitted": e.TargetCommitted}
+	if e.RetryGeneration > 0 {
+		result["retryGeneration"] = e.RetryGeneration
+	}
+	if !e.RetryUpdatedAt.IsZero() {
+		result["retryUpdatedAt"] = e.RetryUpdatedAt.UnixMilli()
+	}
+	if e.RetryError != "" {
+		result["retryError"] = e.RetryError
+	}
+	if e.RetryNode != "" {
+		result["retryExecutionNodeIp"] = e.RetryNode
+	}
+	return result
 }
 
-// The index contains the latest observed ledger. A disconnected Agent may have
-// newer results, so cached failures remain visible with explicit incompleteness.
+// The index retains failed objects and their latest observed retry outcomes.
+// A disconnected Agent may have newer results, so cached evidence remains visible.
 func (s *Server) exceptionNodes(filter task.ExceptionFilter) (map[string]bool, error) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
@@ -149,6 +166,9 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 				if len(rows) < limit {
 					row := exceptionDTO(e)
 					addExecutionNodeDisplay(row, displays.lookup("", e.Node))
+					if e.RetryNode != "" {
+						row["retryExecutionNodeDisplay"] = displays.lookup("", e.RetryNode)
+					}
 					rows = append(rows, row)
 				}
 				groups[e.Node] = rows
@@ -253,6 +273,9 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		if total >= offset && len(items) < limit {
 			row := exceptionDTO(e)
 			addExecutionNodeDisplay(row, displays.lookup("", e.Node))
+			if e.RetryNode != "" {
+				row["retryExecutionNodeDisplay"] = displays.lookup("", e.RetryNode)
+			}
 			items = append(items, row)
 		}
 		total++

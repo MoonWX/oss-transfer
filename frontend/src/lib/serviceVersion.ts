@@ -3,7 +3,8 @@ import { useSyncExternalStore } from "react";
 declare const __BUILD_INFO__: { commit: string; builtAt: string };
 
 const commitPattern = /^[0-9a-f]{7,40}(?:-dirty)?$/i;
-const clientCommit = __BUILD_INFO__.commit;
+const clientCommit =
+  typeof __BUILD_INFO__ === "undefined" ? "" : __BUILD_INFO__.commit;
 const listeners = new Set<() => void>();
 let updated = false;
 

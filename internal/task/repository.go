@@ -716,7 +716,7 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	if err := changePending(p, previous, child); err != nil {
 		return false, err
 	}
-	if err := syncExceptionIndex(tx, *p, child, record); err != nil {
+	if err := syncExceptionIndex(tx, *p, child, record, previous.Record); err != nil {
 		return false, err
 	}
 	if err := syncChildOrder(tx, p, &previous, child); err != nil {

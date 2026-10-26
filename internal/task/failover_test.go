@@ -140,8 +140,14 @@ func TestFailoverBatchesPreserveResultsCountersAndResumeAfterRestart(t *testing.
 		t.Fatal("accepted late old-owner result", err)
 	}
 	var exceptionCount int
-	if err := repo.VisitExceptions(context.Background(), ExceptionFilter{ParentID: p.ID}, func(Exception) error { exceptionCount++; return nil }); err != nil || exceptionCount != 0 {
-		t.Fatal("old failures remained indexed", exceptionCount, err)
+	if err := repo.VisitExceptions(context.Background(), ExceptionFilter{ParentID: p.ID}, func(e Exception) error {
+		exceptionCount++
+		if e.RetryStatus != ExceptionPending || e.RetryCount != 1 || e.RetryAssignment != 1 || e.Error != "upload failed" {
+			t.Fatal("takeover lost failure history or retry state", e)
+		}
+		return nil
+	}); err != nil || exceptionCount != 259 {
+		t.Fatal("takeover did not retain failure history", exceptionCount, err)
 	}
 	active, _, err := repo.ActiveChildren(p.ID, "", 256, nil)
 	all, _, ready, allErr := repo.PriorityChildren(context.Background(), p.ID, "", 256, nil)

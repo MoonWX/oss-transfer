@@ -95,11 +95,24 @@ func TestExceptionIndexAtomicityClearReplayRestartAndPurge(t *testing.T) {
 		t.Fatal("failed index update partially changed counters")
 	}
 	records[0].Attempt = 2
+	records[0].Status = execution.Running
+	records[0].Results[0].Status = execution.ItemPending
+	records[0].Results[0].Error = ""
 	records[0].UpdatedAt = records[0].UpdatedAt.Add(time.Second)
 	if err := r.Observe(p.ID, p.Generation, 1, records[0]); err != nil {
 		t.Fatal(err)
 	}
-	if rows := exceptionRows(t, r, filter); len(rows) != 1 || rows[0].Attempt != 2 {
+	if rows := exceptionRows(t, r, filter); len(rows) != 0 {
+		t.Fatal("pending retry recreated hidden failure", rows)
+	}
+	records[0].Status = execution.Failed
+	records[0].Results[0].Status = execution.ItemFailed
+	records[0].Results[0].Error = "destination permission denied again"
+	records[0].UpdatedAt = records[0].UpdatedAt.Add(time.Second)
+	if err := r.Observe(p.ID, p.Generation, 1, records[0]); err != nil {
+		t.Fatal(err)
+	}
+	if rows := exceptionRows(t, r, filter); len(rows) != 1 || rows[0].RetryCount != 1 || rows[0].RetryAttempt != 2 || rows[0].RetryStatus != ExceptionRetryFailed || rows[0].Error != "destination permission denied" {
 		t.Fatal("new failed attempt remained hidden", rows)
 	}
 	if _, err := r.Stop(p.ID); err != nil {

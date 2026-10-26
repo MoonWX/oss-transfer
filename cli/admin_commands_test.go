@@ -334,7 +334,7 @@ func TestAdminExceptionCSVExportProtectsFormulaAndExistingFiles(t *testing.T) {
 			adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"address": "10.0.0.2"}}}})
 			return
 		}
-		adminTestJSON(t, w, map[string]interface{}{"success": true, "complete": true, "failedKeys": map[string]interface{}{"10.0.0.2": []interface{}{map[string]interface{}{"key": "=malicious()", "errorMessage": "message,\"quoted\"\nnext"}}, "10.0.0.2Count": 1}})
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "complete": true, "failedKeys": map[string]interface{}{"10.0.0.2": []interface{}{map[string]interface{}{"key": "=malicious()", "errorMessage": "message,\"quoted\"\nnext", "retryStatus": "FAILED", "retryCount": 2, "retryUpdatedAt": 1793011200000, "retryError": "retry,\"failed\"\nagain", "retryGeneration": 3, "retryExecutionNodeIp": "agent-next", "retryExecutionNodeDisplay": map[string]interface{}{"displayName": "Next", "displayAddress": "10.0.0.3"}}}, "10.0.0.2Count": 1}})
 	})
 	path := filepath.Join(t.TempDir(), "failures.csv")
 	args := []string{"export", "failed", "--output", path}
@@ -355,6 +355,15 @@ func TestAdminExceptionCSVExportProtectsFormulaAndExistingFiles(t *testing.T) {
 	}
 	if rows[1][6] != "'=malicious()" || rows[1][11] != "message,\"quoted\"\nnext" {
 		t.Fatalf("CSV did not preserve safe content: %#v", rows[1])
+	}
+	columns := map[string]string{}
+	for i, name := range rows[0] {
+		columns[name] = rows[1][i]
+	}
+	for key, expected := range map[string]string{"retryStatus": "FAILED", "retryCount": "2", "retryUpdatedAt": "1793011200000", "retryError": "retry,\"failed\"\nagain", "retryGeneration": "3", "retryExecutionNode": "Next (10.0.0.3)", "retryExecutionNodeIp": "agent-next"} {
+		if columns[key] != expected {
+			t.Fatalf("CSV lost retry result %s: %#v", key, columns)
+		}
 	}
 	if _, err := runAdminCommand(client, "exceptions", args); err == nil {
 		t.Fatal("existing export silently overwritten")

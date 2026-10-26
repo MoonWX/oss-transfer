@@ -502,7 +502,7 @@ for (const status of ["COMPLETED", "RUNNING"] as const) {
       await expect(checking.first()).toBeDisabled();
       inspected.release();
       const action = page.getByRole("button", {
-        name: status === "COMPLETED" ? "已完成" : "处理中…",
+        name: status === "COMPLETED" ? "任务已完成" : "处理中…",
         exact: true,
       });
       await expect(action).toHaveCount(2);

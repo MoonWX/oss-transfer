@@ -1,4 +1,19 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "查看异常及重试结果，导出记录。": {
+    en: "Review exceptions and retry results, and export records.",
+    ja: "例外と再試行の結果を確認し、記録をエクスポートします。",
+  },
+  重试节点: { en: "Retry node", ja: "再試行ノード" },
+  重试未完成: { en: "Retry incomplete", ja: "再試行未完了" },
+  重试结果: { en: "Retry result", ja: "再試行の結果" },
+  重试结果时间: { en: "Retry result time", ja: "再試行の結果日時" },
+  重试错误: { en: "Retry error", ja: "再試行のエラー" },
+  未重试: { en: "Not retried", ja: "未再試行" },
+  重试中: { en: "Retrying", ja: "再試行中" },
+  已恢复: { en: "Recovered", ja: "復旧済み" },
+  再次失败: { en: "Failed again", ja: "再失敗" },
+  "重试 {count} 次": { en: "{count} retries", ja: "再試行 {count} 回" },
+  任务已完成: { en: "Task completed", ja: "タスク完了" },
   "未响应节点：{value1}": {
     en: "Unresponsive nodes: {value1}",
     ja: "応答していないノード：{value1}",

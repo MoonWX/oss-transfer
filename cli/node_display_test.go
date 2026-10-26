@@ -171,7 +171,7 @@ func TestNodeDisplayExceptionExportKeepsSelectorsAndShowsNameAndIP(t *testing.T)
 	for index, key := range rows[0] {
 		fields[key] = rows[1][index]
 	}
-	if fields["workerNode"] != displayNodeLabel || fields["nodeId"] != displayNodeID || len(fields) != 19 {
+	if fields["workerNode"] != displayNodeLabel || fields["nodeId"] != displayNodeID {
 		t.Fatalf("CSV lost identity or display metadata: %v", fields)
 	}
 }

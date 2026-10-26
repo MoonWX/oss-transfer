@@ -1,4 +1,9 @@
-import { taskNodeLabels, type NodeLabels } from "./nodeRegistry";
+import {
+  displayNode,
+  taskNodeLabels,
+  type NodeLabels,
+  type NodeDisplay,
+} from "./nodeRegistry";
 
 export type ExceptionMembership = {
   queriedWorkers?: string[];
@@ -44,7 +49,11 @@ const fields: Field[] = [
   { key: "errorCode", label: "错误代码" },
   { key: "reasonCode", label: "原因代码" },
   { key: "errorMessage", label: "错误信息" },
+  { key: "retryStatus", label: "重试结果" },
   { key: "retryCount", label: "重试次数" },
+  { key: "retryExecutionNodeIp", label: "重试节点" },
+  { key: "retryUpdatedAt", label: "重试结果时间", date: true },
+  { key: "retryError", label: "重试错误" },
   { key: "timestampFormatted", label: "记录时间", date: true },
   { key: "observedAt", label: "观测时间", date: true },
   { key: "targetCommitted", label: "目标已写入" },
@@ -75,6 +84,14 @@ function normalize(
       timestamp(item.timestampFormatted) ??
       timestamp(item.observedAt),
     observedAt: timestamp(item.observedAt),
+    retryUpdatedAt: timestamp(item.retryUpdatedAt),
+    retryExecutionNodeIp:
+      typeof item.retryExecutionNodeIp === "string"
+        ? (resolve ?? displayNode)(
+            item.retryExecutionNodeIp,
+            item.retryExecutionNodeDisplay as NodeDisplay | undefined,
+          )
+        : undefined,
   };
 }
 
@@ -111,4 +128,21 @@ export function exceptionCsv(
       }),
     ].join("\r\n")
   );
+}
+
+export function retryResultLabel(status: string | undefined): string {
+  switch (status) {
+    case "PENDING":
+      return "重试中";
+    case "INTERRUPTED":
+      return "重试未完成";
+    case "RECOVERED":
+      return "已恢复";
+    case "FAILED":
+      return "再次失败";
+    case "SKIPPED":
+      return "已跳过";
+    default:
+      return "未重试";
+  }
 }

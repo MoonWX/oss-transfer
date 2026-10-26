@@ -137,3 +137,41 @@ test("all displayed diagnostic labels have English and Japanese translations", (
   expect(translate("en-US", "目标已写入")).toBe("Destination written");
   expect(translate("ja-JP", "否")).toBe("いいえ");
 });
+
+test("retry exports retain the original failure and the latest per-object outcome", () => {
+  const row = {
+    ...failure,
+    retryStatus: "FAILED",
+    retryCount: 2,
+    retryUpdatedAt: 1792130590972,
+    retryError: "UploadPart: permission denied",
+    retryExecutionNodeIp: "agent-replacement",
+    retryExecutionNodeDisplay: {
+      displayName: "backup",
+      displayAddress: "192.0.2.11",
+    },
+  };
+  const values = Object.fromEntries(
+    exceptionDetails(row).map(({ key, value }) => [key, value]),
+  );
+  expect(values).toMatchObject({
+    errorMessage: failure.errorMessage,
+    retryStatus: "FAILED",
+    retryCount: 2,
+    retryExecutionNodeIp: "backup (192.0.2.11)",
+    retryUpdatedAt: "2026-10-16T06:03:10.972Z",
+    retryError: "UploadPart: permission denied",
+  });
+  const csv = exceptionCsv([row]);
+  expect(csv).toContain(
+    '"retryStatus","retryCount","retryExecutionNodeIp","retryUpdatedAt","retryError"',
+  );
+  expect(csv).toContain(
+    '"FAILED","2","backup (192.0.2.11)","2026-10-16T06:03:10.972Z","UploadPart: permission denied"',
+  );
+  expect(csv).toContain(failure.errorMessage);
+  for (const field of exceptionDetails(row)) {
+    expect(translate("en-US", field.label)).not.toBe(field.label);
+    expect(translate("ja-JP", field.label)).not.toBe(field.label);
+  }
+});

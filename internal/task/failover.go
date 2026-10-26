@@ -251,7 +251,7 @@ func (r *Repository) PrepareFailover(id int64, generation uint64, nodeID string,
 				addCounters(&p.Counters, child.Record.Counters, -1)
 				addCounters(&p.Counters, seed.Counters, 1)
 				child.Record = &seed
-				if err := syncExceptionIndex(tx, p, child, seed); err != nil {
+				if err := syncExceptionIndex(tx, p, child, seed, previous.Record); err != nil {
 					return err
 				}
 			}

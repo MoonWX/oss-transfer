@@ -74,6 +74,7 @@ import { makeTheme } from "./theme";
 import { LoadingState } from "./components/Common";
 import LanguageSelector from "./components/LanguageSelector";
 import { BuildInfo } from "./components/BuildInfo";
+import { ServiceUpdateBanner } from "./components/ServiceUpdateBanner";
 import {
   SIDEBAR_COLLAPSED_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
@@ -922,6 +923,7 @@ function Workspace({
             outline: "none",
           }}
         >
+          <ServiceUpdateBanner />
           <WorkerStatusProvider
             enabled={!!node && node.isMaster !== false && !nodeError}
           >

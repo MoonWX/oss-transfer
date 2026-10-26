@@ -360,8 +360,16 @@ test("a retry preflight from an old login cannot submit using the new login", as
   await failures(page);
   const preflight = gate();
   let started = false,
-    sent = 0;
+    sent = 0,
+    reads = 0;
   await page.route("**/api/master/tasks/1", async (route) => {
+    if (
+      ++reads === 1 ||
+      route.request().headers().authorization !== "Bearer test-token"
+    ) {
+      await route.fulfill({ json: { success: true, data: failedTask() } });
+      return;
+    }
     expect(route.request().headers().authorization).toBe("Bearer test-token");
     started = true;
     await preflight.promise;
@@ -408,6 +416,15 @@ test("a delayed 401 from recovery polling cannot clear a newer login", async ({
       await route.fulfill({ json: { success: true, data: failedTask() } });
       return;
     }
+    if (route.request().headers().authorization === "Bearer new-login-token") {
+      await route.fulfill({
+        json: {
+          success: true,
+          data: { ...failedTask(), status: "RUNNING", generation: 2 },
+        },
+      });
+      return;
+    }
     expect(route.request().headers().authorization).toBe("Bearer test-token");
     pollStarted = true;
     await polling.promise;
@@ -449,4 +466,130 @@ test("a delayed 401 from recovery polling cannot clear a newer login", async ({
   } finally {
     polling.release();
   }
+});
+
+for (const status of ["COMPLETED", "RUNNING"] as const) {
+  test(`a fresh exception page disables historical failures for a ${status} task`, async ({
+    page,
+  }) => {
+    await mockApi(page);
+    await failures(page);
+    const inspected = gate();
+    let sent = 0;
+    await page.route("**/api/master/tasks/1", async (route) => {
+      await inspected.promise;
+      await route.fulfill({
+        json: {
+          success: true,
+          data: { ...failedTask(), status, generation: 2 },
+        },
+      });
+    });
+    await page.route(
+      "**/api/master/local-transfers/retry-failures",
+      async (route) => {
+        sent++;
+        await route.fulfill({ json: acceptedResult() });
+      },
+    );
+    try {
+      await page.goto("/exceptions?type=local&taskId=1");
+      const checking = page.getByRole("button", {
+        name: "检查状态…",
+        exact: true,
+      });
+      await expect(checking).toHaveCount(2);
+      await expect(checking.first()).toBeDisabled();
+      inspected.release();
+      const action = page.getByRole("button", {
+        name: status === "COMPLETED" ? "已完成" : "处理中…",
+        exact: true,
+      });
+      await expect(action).toHaveCount(2);
+      await expect(action.first()).toBeDisabled();
+      await expect(action.last()).toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "重试任务", exact: true }),
+      ).toHaveCount(0);
+      expect(sent).toBe(0);
+    } finally {
+      inspected.release();
+    }
+  });
+}
+
+test("an older exception tab cannot silently retry a newer failed generation", async ({
+  page,
+  context,
+}) => {
+  const second = await context.newPage();
+  let latest = failedTask(),
+    sent = 0;
+  for (const tab of [page, second]) {
+    await mockApi(tab);
+    await failures(tab);
+    await tab.route("**/api/master/tasks/1", (route) =>
+      route.fulfill({ json: { success: true, data: latest } }),
+    );
+    await tab.route("**/api/master/local-transfers/retry-failures", (route) => {
+      sent++;
+      expect(route.request().postDataJSON().expectedGenerations).toEqual({
+        "1": 1,
+      });
+      latest = { ...failedTask(), generation: 2 };
+      return route.fulfill({ json: acceptedResult(2) });
+    });
+    await tab.goto("/exceptions?type=local&taskId=1");
+    await expect(
+      tab.getByRole("button", { name: "重试任务", exact: true }).first(),
+    ).toBeEnabled();
+  }
+  await page
+    .getByRole("button", { name: "重试任务", exact: true })
+    .first()
+    .click();
+  await expect.poll(() => sent).toBe(1);
+  await second
+    .getByRole("button", { name: "重试任务", exact: true })
+    .first()
+    .click();
+  await expect(
+    second
+      .getByRole("alert")
+      .filter({ hasText: "任务状态已更新，请查看任务详情。" }),
+  ).toBeVisible();
+  expect(sent).toBe(1);
+  await second.close();
+});
+
+test("an unavailable task status disables retry and recovers on the next status check", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await failures(page);
+  let unavailable = true,
+    sent = 0;
+  await page.route("**/api/master/tasks/1", (route) =>
+    route.fulfill(
+      unavailable
+        ? { status: 503, json: { message: "Temporarily unavailable" } }
+        : { json: { success: true, data: failedTask() } },
+    ),
+  );
+  await page.route("**/api/master/local-transfers/retry-failures", (route) => {
+    sent++;
+    return route.fulfill({ json: acceptedResult() });
+  });
+  await page.goto("/exceptions?type=local&taskId=1");
+  const action = page.getByRole("button", {
+    name: "状态暂不可用",
+    exact: true,
+  });
+  await expect(action).toHaveCount(2);
+  await expect(action.first()).toBeDisabled();
+  unavailable = false;
+  await expect(
+    page.getByRole("button", { name: "重试任务", exact: true }).first(),
+  ).toBeEnabled({ timeout: 10000 });
+  expect(sent).toBe(0);
 });

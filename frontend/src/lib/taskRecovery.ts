@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, ApiError, getToken } from "./api";
 
 type Recovery = {
@@ -188,5 +188,115 @@ export function useTaskRecovery() {
       update(id, () => accept(id, generation)),
     release: (id: number) => update(id, () => release(id)),
     check: (id: number) => update(id, () => check(id)),
+  };
+}
+
+export type RecoveryTaskSnapshot = { status: string; generation?: number };
+export function canRetrySnapshot(snapshot?: RecoveryTaskSnapshot) {
+  return (
+    !!snapshot &&
+    ["PARTIAL_FAILED", "FAILED", "STOPPED"].includes(snapshot.status) &&
+    Number.isSafeInteger(snapshot.generation) &&
+    Number(snapshot.generation) > 0
+  );
+}
+
+// Inspect only tasks represented on the current page. Failed snapshots stay at
+// the generation the user saw; a later click must not silently retry a new one.
+export function useVisibleRecoveryTasks(
+  ids: number[],
+  query: string,
+  revision: unknown,
+) {
+  type View = {
+    scope: string;
+    tasks: Record<number, RecoveryTaskSnapshot | null>;
+  };
+  const token = getToken();
+  const idsKey = JSON.stringify([...new Set(ids)].sort((a, b) => a - b));
+  const scope = JSON.stringify([token, query, idsKey]);
+  const current = useRef<View>({ scope: "", tasks: {} });
+  const [view, setView] = useState(current.current);
+  const update = (id: number, snapshot: RecoveryTaskSnapshot | null) => {
+    if (token !== getToken() || current.current.scope !== scope) return;
+    current.current = {
+      scope,
+      tasks: { ...current.current.tasks, [id]: snapshot },
+    };
+    setView(current.current);
+  };
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true,
+      fetching = false;
+    const selected = JSON.parse(idsKey) as number[];
+    current.current = {
+      scope,
+      tasks: current.current.scope === scope ? current.current.tasks : {},
+    };
+    setView(current.current);
+    const refresh = async (selectedIds: number[]) => {
+      if (fetching || !active || token !== getToken()) return;
+      fetching = true;
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(4, selectedIds.length) }, async () => {
+          while (active && token === getToken() && next < selectedIds.length) {
+            const id = selectedIds[next++];
+            try {
+              const { data } = await api<{ data: RecoveryTaskSnapshot }>(
+                `/api/master/tasks/${id}`,
+                {
+                  signal: AbortSignal.any([
+                    controller.signal,
+                    AbortSignal.timeout(10000),
+                  ]),
+                },
+              );
+              if (
+                !data ||
+                typeof data.status !== "string" ||
+                !Number.isSafeInteger(data.generation) ||
+                Number(data.generation) <= 0
+              )
+                throw new Error("Invalid task status");
+              if (active && token === getToken()) update(id, data);
+            } catch {
+              if (active && token === getToken()) update(id, null);
+            }
+          }
+        }),
+      );
+      fetching = false;
+    };
+    void refresh(selected);
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      const pending = selected.filter((id) => {
+        const value = current.current.tasks[id];
+        return (
+          !value ||
+          [
+            "RUNNING",
+            "RESUMING",
+            "LIST_DONE",
+            "STOPPING",
+            "PENDING",
+            "CREATED",
+            "AWAITING_RECOVERY",
+          ].includes(value.status)
+        );
+      });
+      if (pending.length) void refresh(pending);
+    }, 3000);
+    return () => {
+      active = false;
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [scope, revision]);
+  return {
+    tasks: view.scope === scope && token === getToken() ? view.tasks : {},
+    update,
   };
 }

@@ -1,4 +1,5 @@
 import { t, useI18n, getLocale } from "./i18n";
+import { observeServerCommit } from "./serviceVersion";
 import {
   createContext,
   useCallback,
@@ -59,6 +60,7 @@ async function request(path: string, options: Options = {}) {
       throw new ApiError(t("请求超时，请刷新后查看最新状态。"));
     throw new ApiError(t("无法连接服务，请检查网络或主节点状态。"));
   }
+  observeServerCommit(response.headers.get("X-OSS-Transfer-Commit"));
   if (response.status === 401 && path !== "/api/auth/login") {
     if (token === getToken()) {
       setToken(null);

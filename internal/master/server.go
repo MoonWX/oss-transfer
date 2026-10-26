@@ -137,6 +137,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
 	if strings.HasPrefix(r.URL.Path, "/api/") {
+		if s.options.Updater != nil {
+			if commit := s.options.Updater.Info().Commit; commit != "" && commit != "unknown" {
+				w.Header().Set("X-OSS-Transfer-Commit", commit)
+			}
+		}
 		w, r = localizedAPI(w, r)
 		w.Header().Set("Cache-Control", "no-store")
 		// There is no cookie authentication or permissive CORS. Also reject

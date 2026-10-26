@@ -56,7 +56,11 @@ import {
   ReplayRounded,
 } from "@mui/icons-material";
 import { api, ApiError, download, useApi, useNotify } from "../lib/api";
-import { useTaskRecovery } from "../lib/taskRecovery";
+import {
+  canRetrySnapshot,
+  useTaskRecovery,
+  useVisibleRecoveryTasks,
+} from "../lib/taskRecovery";
 import {
   EmptyState,
   PageHeader,
@@ -383,6 +387,16 @@ export default function ExceptionsPage() {
       ? result.items
       : result.items.slice(page * pageSize, page * pageSize + pageSize)
     : [];
+  const visibleTasks = useVisibleRecoveryTasks(
+    isLocal
+      ? visible.flatMap((item) => {
+          const id = item.parentTaskId ?? item.taskIndex;
+          return typeof id === "number" && id > 0 ? [id] : [];
+        })
+      : [],
+    queryKey,
+    result,
+  );
   const updateDraft = (field: keyof Filters, value: string) =>
     setDraft((previous) => ({ ...previous, [field]: value }));
   const applyFilters = (event: FormEvent) => {
@@ -437,8 +451,11 @@ export default function ExceptionsPage() {
   }
   async function retry(item: Failure) {
     const taskId = item.parentTaskId ?? item.taskIndex;
+    const displayed =
+      taskId === undefined ? undefined : visibleTasks.tasks[taskId];
     if (
       taskId === undefined ||
+      !canRetrySnapshot(displayed ?? undefined) ||
       busy ||
       retryInFlight.current ||
       !recovery.begin([taskId])
@@ -454,13 +471,19 @@ export default function ExceptionsPage() {
         data: { status: string; generation?: number };
       }>(`/api/master/tasks/${taskId}`);
       if (!recovery.isCurrent()) return;
-      const generation = current.data.generation;
+      const generation = displayed!.generation!;
       if (
-        ["RUNNING", "RESUMING", "LIST_DONE", "COMPLETED"].includes(
-          current.data.status,
-        )
+        current.data.generation !== generation ||
+        !canRetrySnapshot(current.data)
       ) {
-        recovery.accept(taskId, generation);
+        visibleTasks.update(taskId, current.data);
+        if (
+          ["RUNNING", "RESUMING", "LIST_DONE", "COMPLETED"].includes(
+            current.data.status,
+          )
+        )
+          recovery.accept(taskId, current.data.generation);
+        else recovery.release(taskId);
         notify(tr("任务状态已更新，请查看任务详情。"), "info");
         void load(true);
         return;
@@ -476,6 +499,7 @@ export default function ExceptionsPage() {
           details?: Array<{
             taskId?: number;
             generation?: number;
+            status?: string;
             accepted?: boolean;
             ignored?: boolean;
             success?: boolean;
@@ -487,9 +511,7 @@ export default function ExceptionsPage() {
         method: "POST",
         body: {
           taskIds: [taskId],
-          ...(Number.isSafeInteger(generation) && Number(generation) > 0
-            ? { expectedGenerations: { [taskId]: generation } }
-            : {}),
+          expectedGenerations: { [taskId]: generation },
         },
       });
       const value = response.data;
@@ -497,6 +519,10 @@ export default function ExceptionsPage() {
       const detail = value.details?.find((row) => row.taskId === taskId);
       if (value.accepted > 0 || value.ignored > 0) {
         recovery.accept(taskId, detail?.generation);
+        visibleTasks.update(taskId, {
+          status: detail?.status ?? "RESUMING",
+          generation: detail?.generation,
+        });
         if (value.accepted > 0) setRetryAcceptedTaskId(taskId);
       } else recovery.release(taskId);
       const reasons = [
@@ -546,8 +572,16 @@ export default function ExceptionsPage() {
       setBusy(false);
     }
   }
-  const retryPhase = (item: Failure) =>
-    recovery.states[item.parentTaskId ?? item.taskIndex ?? -1]?.phase;
+  const retryPhase = (item: Failure) => {
+    const id = item.parentTaskId ?? item.taskIndex ?? -1;
+    const phase = recovery.states[id]?.phase;
+    if (phase) return phase;
+    const snapshot = visibleTasks.tasks[id];
+    if (snapshot === undefined) return "loading";
+    if (snapshot === null) return "unavailable";
+    if (snapshot.status === "COMPLETED") return "completed";
+    return canRetrySnapshot(snapshot) ? undefined : "accepted";
+  };
   async function report() {
     setBusy(true);
     try {
@@ -1004,7 +1038,8 @@ export default function ExceptionsPage() {
                               startIcon={
                                 retryPhase(item) === "completed" ? (
                                   <CheckCircleOutlineRounded />
-                                ) : retryPhase(item) ? (
+                                ) : retryPhase(item) &&
+                                  retryPhase(item) !== "unavailable" ? (
                                   <CircularProgress size={16} color="inherit" />
                                 ) : (
                                   <ReplayRounded />
@@ -1017,9 +1052,13 @@ export default function ExceptionsPage() {
                                 ? tr("提交中…")
                                 : retryPhase(item) === "completed"
                                   ? tr("已完成")
-                                  : retryPhase(item)
-                                    ? tr("处理中…")
-                                    : tr("重试任务")}
+                                  : retryPhase(item) === "loading"
+                                    ? tr("检查状态…")
+                                    : retryPhase(item) === "unavailable"
+                                      ? tr("状态暂不可用")
+                                      : retryPhase(item)
+                                        ? tr("处理中…")
+                                        : tr("重试任务")}
                             </Button>
                           )}
                       </TableCell>

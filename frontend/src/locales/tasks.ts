@@ -1,4 +1,6 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "检查状态…": { en: "Checking status…", ja: "状態を確認中…" },
+  状态暂不可用: { en: "Status unavailable", ja: "状態を取得できません" },
   "处理中…": {
     en: "Processing…",
     ja: "処理中…",

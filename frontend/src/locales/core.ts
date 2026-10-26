@@ -76,6 +76,12 @@ export const coreMessages: Record<string, { en: string; ja: string }> =
       ["创建迁移", "Create transfer", "転送を作成"],
       ["创建迁移任务", "Create a transfer task", "転送タスクを作成"],
       ["刷新", "Refresh", "更新"],
+      ["刷新页面", "Refresh page", "ページを再読み込み"],
+      [
+        "服务已更新，请刷新页面",
+        "The server has been updated. Refresh this page.",
+        "サーバーが更新されました。ページを再読み込みしてください。",
+      ],
       ["加载失败", "Failed to load", "読み込みに失敗しました"],
       ["取消", "Cancel", "キャンセル"],
       ["失败", "Failed", "失敗"],

@@ -50,6 +50,14 @@ test("opens local failures from task links, paginates, and reports partial retri
 }) => {
   await mockApi(page);
   const queries: URL[] = [];
+  await page.route("**/api/master/tasks/123", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: { status: "PARTIAL_FAILED", generation: 1 },
+      },
+    }),
+  );
   await page.route(
     "**/api/master/local-transfers/failures?**",
     async (route) => {
@@ -75,6 +83,9 @@ test("opens local failures from task links, paginates, and reports partial retri
           accepted: 1,
           ignored: 0,
           failed: 0,
+          details: [
+            { taskId: 123, generation: 2, status: "RESUMING", accepted: true },
+          ],
           partial: true,
           unreachableWorkers: ["10.0.1.13"],
         },
@@ -107,9 +118,9 @@ test("opens local failures from task links, paginates, and reports partial retri
     .toBe(true);
   await page.getByRole("button", { name: "重试任务" }).click();
   await expect(
-    page.getByText(
-      "重试已受理 1，忽略 0，失败 0；不可达节点：agent (10.0.1.13)",
-    ),
+    page
+      .getByRole("main")
+      .getByText("重试已受理 1，忽略 0，失败 0；不可达节点：agent (10.0.1.13)"),
   ).toBeVisible();
 });
 

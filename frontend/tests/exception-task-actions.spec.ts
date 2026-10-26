@@ -13,14 +13,34 @@ const failure = (id: number, key: string, retryStatus = "NOT_RETRIED") => ({
 });
 
 async function ossFailures(page: Page, rows: ReturnType<typeof failure>[]) {
-  await page.route("**/api/master/failed", (route) =>
+  await page.route("**/api/master/failed", (route) => {
+    const taskId = route.request().postDataJSON()?.taskIndex;
+    const items = taskId
+      ? rows.filter((row) => row.parentTaskId === taskId)
+      : rows;
+    return route.fulfill({
+      json: {
+        success: true,
+        failedKeys: { "10.0.1.12": items, "10.0.1.12Count": items.length },
+        queriedWorkers: ["10.0.1.12"],
+        complete: true,
+        totalCount: items.length,
+      },
+    });
+  });
+  await page.route("**/api/master/status?**", (route) =>
     route.fulfill({
       json: {
         success: true,
-        failedKeys: { "10.0.1.12": rows, "10.0.1.12Count": rows.length },
-        queriedWorkers: ["10.0.1.12"],
-        complete: true,
-        totalCount: rows.length,
+        pageComplete: true,
+        hasMore: false,
+        tasks: [...new Set(rows.map((row) => row.parentTaskId))].map(
+          (taskIndex) => ({
+            taskIndex,
+            status: "PARTIAL_FAILED",
+            generation: 1,
+          }),
+        ),
       },
     }),
   );
@@ -66,15 +86,22 @@ test("OSS exception actions deduplicate parents, keep task scope, and stay outsi
   });
   await page.goto("/exceptions");
   const actions = page.getByRole("region", { name: "任务操作", exact: true });
+  await expect(actions).toHaveCount(0);
+  const taskFilter = page.getByRole("combobox", {
+    name: "所属任务",
+    exact: true,
+  });
+  await taskFilter.fill("41");
+  await page.getByRole("option", { name: "任务 #41", exact: true }).click();
   await expect(
     actions.getByRole("button", { name: "重试失败项", exact: true }),
   ).toBeEnabled();
   await expect(
     page.getByRole("table").getByRole("button", { name: /重试|继续传输/ }),
   ).toHaveCount(0);
-  await actions.getByRole("combobox", { name: /^所属任务/ }).click();
-  await expect(page.getByRole("option")).toHaveCount(3);
-  await page.getByRole("option", { name: "任务 #41", exact: true }).click();
+  await expect(page.getByRole("table")).toContainText("already-recovered.bin");
+  await expect(page.getByRole("table")).not.toContainText("stopped.bin");
+  await expect(page.getByRole("table")).not.toContainText("completed.bin");
 
   const retry = actions.getByRole("button", {
     name: "重试失败项",
@@ -106,8 +133,12 @@ test("OSS exception actions deduplicate parents, keep task scope, and stay outsi
     page.getByText("重试已受理 1，忽略 0，失败 0", { exact: true }),
   ).toBeVisible();
 
-  await actions.getByRole("combobox", { name: /^所属任务/ }).click();
+  await taskFilter.fill("42");
   await page.getByRole("option", { name: "任务 #42", exact: true }).click();
+  await expect(page.getByRole("table")).not.toContainText(
+    "already-recovered.bin",
+  );
+  await expect(page.getByRole("table")).toContainText("stopped.bin");
   await actions.getByRole("button", { name: "继续传输", exact: true }).click();
   await expect.poll(() => submissions.length).toBe(2);
   expect(submissions[1]).toEqual({
@@ -117,12 +148,16 @@ test("OSS exception actions deduplicate parents, keep task scope, and stay outsi
   await expect(
     page.getByText("任务 #42 的继续传输请求已受理。", { exact: true }),
   ).toBeVisible();
-  await actions.getByRole("combobox", { name: /^所属任务/ }).click();
+  await taskFilter.fill("43");
   await page.getByRole("option", { name: "任务 #43", exact: true }).click();
   await expect(
     actions.getByRole("button", { name: "任务已完成", exact: true }),
   ).toBeDisabled();
   expect(submissions).toHaveLength(2);
+  await taskFilter.fill("");
+  await expect(page.getByRole("table")).toContainText("already-recovered.bin");
+  await expect(page.getByRole("table")).toContainText("stopped.bin");
+  await expect(actions).toHaveCount(0);
 });
 
 test("page and tab changes scope actions to the newly displayed parent", async ({
@@ -192,6 +227,13 @@ test("page and tab changes scope actions to the newly displayed parent", async (
   });
   await page.goto("/exceptions");
   const actions = page.getByRole("region", { name: "任务操作", exact: true });
+  await expect(actions).toHaveCount(0);
+  const taskFilter = page.getByRole("combobox", {
+    name: "所属任务",
+    exact: true,
+  });
+  await taskFilter.fill("101");
+  await page.getByRole("option", { name: "任务 #101", exact: true }).click();
   await expect(actions).toContainText("任务 #101");
   await actions
     .getByRole("button", { name: "重试失败项", exact: true })
@@ -200,12 +242,14 @@ test("page and tab changes scope actions to the newly displayed parent", async (
     exact: true,
   });
   await expect(retryBanner).toBeVisible();
+  await taskFilter.fill("");
+  await expect(retryBanner).toHaveCount(0);
   await page
     .getByRole("navigation", { name: "分页", exact: true })
     .getByRole("button", { name: "下一页", exact: true })
     .click();
-  await expect(actions).toContainText("任务 #102");
-  await expect(actions).not.toContainText("任务 #101");
+  await expect(page.getByRole("table")).toContainText("next-page.bin");
+  await expect(actions).toHaveCount(0);
   await expect(retryBanner).toHaveCount(0);
   await page.getByRole("tab", { name: "本地迁移失败", exact: true }).click();
   await expect(actions).toContainText("任务 #201");
@@ -288,4 +332,91 @@ test("changing the exception tab during preflight does not submit a stale task a
   } finally {
     release();
   }
+});
+
+test("local task filtering resets pagination and rejects IDs that could broaden the query", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-exceptions-page-size", "10"),
+  );
+  const queries: URL[] = [];
+  await page.route("**/api/master/status?**", (route) =>
+    route.fulfill({
+      json: {
+        tasks: [
+          { taskIndex: 101, status: "PARTIAL_FAILED", generation: 1 },
+          { taskIndex: 102, status: "PARTIAL_FAILED", generation: 1 },
+        ],
+        hasMore: false,
+        pageComplete: true,
+      },
+    }),
+  );
+  const records = [
+    ...Array.from({ length: 12 }, (_, i) =>
+      failure(101, `parent-101-${i}.bin`),
+    ),
+    ...Array.from({ length: 18 }, (_, i) =>
+      failure(102, `parent-102-${i}.bin`),
+    ),
+  ];
+  await page.route("**/api/master/local-transfers/failures?**", (route) => {
+    const url = new URL(route.request().url());
+    queries.push(url);
+    const id = Number(url.searchParams.get("taskId"));
+    const items = id
+      ? records.filter((row) => row.parentTaskId === id)
+      : records;
+    const offset = Number(url.searchParams.get("offset"));
+    const limit = Number(url.searchParams.get("limit"));
+    return route.fulfill({
+      json: {
+        success: true,
+        data: {
+          items: items.slice(offset, offset + limit),
+          total: items.length,
+        },
+      },
+    });
+  });
+  await page.route(/\/api\/master\/tasks\/(101|102)$/, (route) =>
+    route.fulfill({
+      json: { data: { status: "PARTIAL_FAILED", generation: 1 } },
+    }),
+  );
+  await page.goto("/exceptions?type=local");
+  const pagination = page.getByRole("navigation", {
+    name: "分页",
+    exact: true,
+  });
+  await pagination.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(pagination).toContainText("11–20 / 30");
+  const filter = page.getByRole("combobox", { name: "所属任务", exact: true });
+  await filter.fill("102");
+  await page.getByRole("option", { name: "任务 #102", exact: true }).click();
+  await expect(pagination).toContainText("1–10 / 18");
+  await expect(page.getByRole("table")).not.toContainText("parent-101");
+  await expect(page.getByRole("table")).toContainText("parent-102");
+  expect(queries.at(-1)?.searchParams.get("taskId")).toBe("102");
+  expect(queries.at(-1)?.searchParams.get("offset")).toBe("0");
+  const count = queries.length;
+  for (const value of ["0", "1e2", "9007199254740993"]) {
+    await filter.fill(value);
+    await filter.press("Escape");
+    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
+    await expect(
+      page.getByText("任务 ID 必须是正整数。", { exact: true }),
+    ).toBeVisible();
+    expect(queries.length).toBe(count);
+  }
+  await filter.fill("00101");
+  await filter.press("Enter");
+  await expect(pagination).toContainText("1–10 / 12");
+  await expect(filter).toHaveValue("101");
+  expect(queries.at(-1)?.searchParams.get("taskId")).toBe("101");
+  await filter.fill("");
+  await expect(pagination).toContainText("1–10 / 30");
+  expect(queries.at(-1)?.searchParams.has("taskId")).toBe(false);
 });

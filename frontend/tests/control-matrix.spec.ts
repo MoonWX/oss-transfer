@@ -95,7 +95,7 @@ for (const [i, state] of states.entries()) {
       const table = page.getByRole("table", { name: "迁移任务列表" });
       await select(page, "任务状态", state.label);
       await select(page, "传输方向", direction.label);
-      await select(page, "执行节点", "master");
+      await select(page, "执行节点", "master (10.0.1.12)");
       const id = 2000 + i * 3 + j;
       await expect(table.getByRole("row")).toHaveCount(2);
       await expect(
@@ -111,12 +111,20 @@ for (const [i, state] of states.entries()) {
         page.getByRole("button", { name: "停止", exact: true }),
       ).toBeEnabled({ enabled: state.stop });
       await expect(
-        page.getByRole("button", { name: "继续传输", exact: true }),
+        page.getByRole("button", {
+          name:
+            state.value === "PARTIAL_FAILED"
+              ? "重试失败项"
+              : state.value === "FAILED"
+                ? "重试任务"
+                : "继续传输",
+          exact: true,
+        }),
       ).toBeEnabled({ enabled: state.resume });
       await expect(
         page.getByRole("button", { name: "删除", exact: true }),
       ).toBeEnabled({ enabled: state.remove });
-      await select(page, "执行节点", "agent");
+      await select(page, "执行节点", "agent (10.0.1.13)");
       await expect(
         page.getByRole("button", { name: "取消选择", exact: true }),
       ).toHaveCount(0);
@@ -466,7 +474,7 @@ test("unknown task details have no actions and refresh the same requested ID wit
   await expect(panel).toContainText("当前列表中未找到此任务，请刷新任务状态。");
   await expect(
     panel.getByRole("button", {
-      name: /启动任务|停止任务|继续传输|删除任务|导出任务报告/,
+      name: /启动任务|停止任务|继续传输|重试失败项|重试任务|删除任务|导出任务报告/,
     }),
   ).toHaveCount(0);
   const before = reads;

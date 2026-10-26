@@ -1,4 +1,67 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "无法完整读取任务列表，请刷新后重试。": {
+    en: "Could not load the complete task list. Refresh and try again.",
+    ja: "タスク一覧をすべて読み込めませんでした。更新して再試行してください。",
+  },
+  批量重试失败任务: { en: "Retry failed tasks", ja: "失敗タスクの一括再試行" },
+  "所有失败和部分失败的任务，不受异常记录筛选条件影响。": {
+    en: "All failed and partially failed tasks, regardless of the exception filters.",
+    ja: "例外一覧のフィルターに関係なく、失敗・一部失敗の全タスクが対象です。",
+  },
+  "重试失败和未完成的对象，保留已完成的传输进度。": {
+    en: "Retry failed and unfinished objects, keeping completed progress.",
+    ja: "転送済みの進捗を保持し、失敗または未完了のオブジェクトを再試行します。",
+  },
+  "正在读取全部任务…": {
+    en: "Loading all tasks…",
+    ja: "すべてのタスクを読み込み中…",
+  },
+  "已处理 {processed} / {total}": {
+    en: "Processed {processed} / {total}",
+    ja: "処理済み {processed} / {total}",
+  },
+  "没有需要重试的失败任务。": {
+    en: "No failed tasks need retrying.",
+    ja: "再試行が必要な失敗タスクはありません。",
+  },
+  失败任务: { en: "Failed tasks", ja: "失敗タスク" },
+  选择全部失败任务: {
+    en: "Select all failed tasks",
+    ja: "すべての失敗タスクを選択",
+  },
+  "选择任务 #{id}": { en: "Select task #{id}", ja: "タスク #{id} を選択" },
+  结果待确认: { en: "Result unconfirmed", ja: "結果未確認" },
+  已提交: { en: "Submitted", ja: "送信済み" },
+  失败任务分页: { en: "Failed task pages", ja: "失敗タスクのページ切り替え" },
+  "重试全部（{count}）": {
+    en: "Retry all ({count})",
+    ja: "すべて再試行（{count}）",
+  },
+  "重试所选（{count}）": {
+    en: "Retry selected ({count})",
+    ja: "選択項目を再試行（{count}）",
+  },
+  "任务 ID 必须是正整数。": {
+    en: "Task ID must be a positive integer.",
+    ja: "タスク ID は正の整数を指定してください。",
+  },
+  正在读取任务: { en: "Loading tasks", ja: "タスクを読み込み中" },
+  批量重试: { en: "Batch retry", ja: "一括再試行" },
+  恢复任务: { en: "Recover tasks", ja: "タスクを再開" },
+  恢复: { en: "Recover", ja: "再開" },
+  "重试 {count} 个任务的失败项？": {
+    en: "Retry failed items in {count} tasks?",
+    ja: "{count} 件のタスクの失敗項目を再試行しますか？",
+  },
+  "重试失败或未完成的对象，已完成的对象不重复传输。": {
+    en: "Retry failed or unfinished objects. Completed objects are not transferred again.",
+    ja: "失敗または未完了のオブジェクトを再試行します。完了済みのオブジェクトは再転送しません。",
+  },
+  "失败任务重试失败或未完成的对象；已停止任务继续扫描和传输。已完成的对象不重复传输。":
+    {
+      en: "Retry failed or unfinished objects in failed tasks, and resume scanning and transfer in stopped tasks. Completed objects are not transferred again.",
+      ja: "失敗したタスクは失敗または未完了のオブジェクトを再試行し、停止中のタスクはスキャンと転送を再開します。完了済みのオブジェクトは再転送しません。",
+    },
   "任务 #{taskId} 的继续传输请求已受理。": {
     en: "Resume accepted for task #{taskId}.",
     ja: "タスク #{taskId} の転送再開を受け付けました。",

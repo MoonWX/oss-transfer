@@ -136,6 +136,8 @@ async function expectReadOnly(child: Locator) {
     "停止",
     "删除",
     "继续传输",
+    "重试失败项",
+    "重试任务",
     "启动",
     "导出任务报告",
     "调整",

@@ -96,7 +96,7 @@ test("opens local failures from task links, paginates, and reports partial retri
     "true",
   );
   await expect(page.getByLabel("共享存储 ID")).toHaveCount(0);
-  await expect(page.getByRole("spinbutton", { name: "任务 ID" })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "所属任务" })).toHaveValue(
     "123",
   );
   await expect(

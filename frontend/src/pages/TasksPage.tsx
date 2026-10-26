@@ -58,6 +58,7 @@ import {
   FolderOutlined,
   PauseRounded,
   PlayArrowRounded,
+  ReplayRounded,
   SearchRounded,
   StorageRounded,
   WarningAmberRounded,
@@ -210,6 +211,36 @@ const canStopTask = (task: Task) =>
 const canResumeTask = (task: Task) =>
   !isExploring(task) &&
   ["FAILED", "PARTIAL_FAILED", "STOPPED"].includes(task.status);
+const recoveryLabel = (tasks: Task[]) => {
+  const stopped = tasks.some((task) => task.status === "STOPPED");
+  const failed = tasks.some((task) =>
+    ["FAILED", "PARTIAL_FAILED"].includes(task.status),
+  );
+  if (stopped && failed) return "恢复任务";
+  if (stopped || !failed) return "继续传输";
+  return tasks.length > 0 &&
+    tasks.every((task) => task.status === "PARTIAL_FAILED")
+    ? "重试失败项"
+    : "重试任务";
+};
+const recoveryVerb = (tasks: Task[]) => {
+  const label = recoveryLabel(tasks);
+  return label === "恢复任务"
+    ? "恢复"
+    : label === "继续传输"
+      ? "继续传输"
+      : "重试";
+};
+const recoveryDescription = (tasks: Task[]) => {
+  const label = recoveryLabel(tasks);
+  if (label === "继续传输")
+    return tr("继续扫描和处理未完成的对象，保留已有传输进度。");
+  if (label === "恢复任务")
+    return tr(
+      "失败任务重试失败或未完成的对象；已停止任务继续扫描和传输。已完成的对象不重复传输。",
+    );
+  return tr("重试失败或未完成的对象，已完成的对象不重复传输。");
+};
 const canDeleteTask = (task: Task) =>
   ![
     "RUNNING",
@@ -835,7 +866,13 @@ function TaskDetail({
               {canResumeTask(current) && (
                 <Button
                   variant="contained"
-                  startIcon={<PlayArrowRounded />}
+                  startIcon={
+                    current.status === "STOPPED" ? (
+                      <PlayArrowRounded />
+                    ) : (
+                      <ReplayRounded />
+                    )
+                  }
                   disabled={busy || !!recoveryState}
                   onClick={() => onAction(current, "继续传输")}
                 >
@@ -843,7 +880,7 @@ function TaskDetail({
                     ? tr("已完成")
                     : recoveryState
                       ? tr("处理中…")
-                      : tr("继续传输")}
+                      : tr(recoveryLabel([current]))}
                 </Button>
               )}
               {canDeleteTask(current) && (
@@ -1710,7 +1747,11 @@ export default function TasksPage({
         setActionResult(summary);
         notify(
           tr("{value1}请求已提交{value2}。请以刷新后的任务状态为准。", {
-            value1: tr(operation),
+            value1: tr(
+              operation === "继续传输"
+                ? recoveryLabel(submittedTasks)
+                : operation,
+            ),
             value2: `，${summary}`,
           }),
           "info",
@@ -2103,14 +2144,26 @@ export default function TasksPage({
                 {[
                   ["启动", canStart, <PlayArrowRounded />],
                   ["停止", canStop, <PauseRounded />],
-                  ["继续传输", canResume, <PlayArrowRounded />],
+                  [
+                    "继续传输",
+                    canResume,
+                    chosen.every((task) => task.status === "STOPPED") ? (
+                      <PlayArrowRounded />
+                    ) : (
+                      <ReplayRounded />
+                    ),
+                  ],
                   ["删除", canDelete, <DeleteOutlineRounded />],
                 ].map(([label, enabled, icon]) => (
                   <Tooltip
                     key={String(label)}
                     title={
                       enabled
-                        ? tr("{value1}选中任务", { value1: tr(String(label)) })
+                        ? label === "继续传输"
+                          ? recoveryDescription(chosen)
+                          : tr("{value1}选中任务", {
+                              value1: tr(String(label)),
+                            })
                         : label === "启动"
                           ? tr("请选择待启动的 OSS→OSS 任务")
                           : label === "停止"
@@ -2127,7 +2180,11 @@ export default function TasksPage({
                         disabled={!enabled || busy}
                         onClick={() => openOperation(String(label), null)}
                       >
-                        {tr(String(label))}
+                        {tr(
+                          label === "继续传输"
+                            ? recoveryLabel(chosen)
+                            : String(label),
+                        )}
                       </Button>
                     </span>
                   </Tooltip>
@@ -2473,10 +2530,19 @@ export default function TasksPage({
         maxWidth="xs"
       >
         <DialogTitle>
-          {tr("{operation} {count} 个任务？", {
-            operation: tr(operation),
-            count: formatNumber(confirmationTasks.length),
-          })}
+          {operation === "继续传输" &&
+          recoveryLabel(confirmationTasks) === "重试失败项"
+            ? tr("重试 {count} 个任务的失败项？", {
+                count: formatNumber(confirmationTasks.length),
+              })
+            : tr("{operation} {count} 个任务？", {
+                operation: tr(
+                  operation === "继续传输"
+                    ? recoveryVerb(confirmationTasks)
+                    : operation,
+                ),
+                count: formatNumber(confirmationTasks.length),
+              })}
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
@@ -2485,7 +2551,7 @@ export default function TasksPage({
               : operation === "停止"
                 ? tr("停止扫描和传输，保留已完成的对象与进度。")
                 : operation === "继续传输"
-                  ? tr("继续扫描和处理未完成的对象，保留已有传输进度。")
+                  ? recoveryDescription(confirmationTasks)
                   : tr("任务将开始传输，请确认来源和目标配置。")}
           </Typography>
           <Typography variant="body2" sx={{ mt: 2 }}>
@@ -2513,7 +2579,13 @@ export default function TasksPage({
           >
             {busy
               ? tr("提交中…")
-              : tr("确认{value1}", { value1: tr(operation) })}
+              : tr("确认{value1}", {
+                  value1: tr(
+                    operation === "继续传输"
+                      ? recoveryVerb(confirmationTasks)
+                      : operation,
+                  ),
+                })}
           </Button>
         </DialogActions>
       </Dialog>

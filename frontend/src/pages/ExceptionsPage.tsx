@@ -22,6 +22,7 @@ import {
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -57,6 +58,8 @@ import {
   ReplayRounded,
 } from "@mui/icons-material";
 import { api, ApiError, download, getToken, useNotify } from "../lib/api";
+import FailedTaskRetryDialog from "../components/FailedTaskRetryDialog";
+import { loadTaskCatalog } from "../lib/taskCatalog";
 import ListPagination, {
   rememberPageSize,
   savedPageSize,
@@ -141,6 +144,16 @@ type QueryState = {
   loading: boolean;
 };
 
+const normalizeTaskFilter = (value: string) => {
+  const task = value.trim();
+  if (!task) return "";
+  return /^\d+$/.test(task) &&
+    Number.isSafeInteger(Number(task)) &&
+    Number(task) > 0
+    ? String(Number(task))
+    : null;
+};
+
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 const sameFailure = (a: Failure, b: Failure) =>
@@ -172,7 +185,7 @@ export default function ExceptionsPage() {
   const [params] = useSearchParams();
   const linkedFilters = {
     ...initialFilters,
-    task: /^\d+$/.test(params.get("taskId") || "") ? params.get("taskId")! : "",
+    task: normalizeTaskFilter(params.get("taskId") || "") ?? "",
   };
   const nodes = useWorkerStatus();
   const nodeLabel = useNodeLabels();
@@ -195,10 +208,29 @@ export default function ExceptionsPage() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Failure | null>(null);
-  const [actionSelection, setActionSelection] = useState<{
-    scope: string;
-    id: number;
-  } | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [catalogIds, setCatalogIds] = useState<number[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const catalogRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => catalogRequest.current?.abort(), []);
+  async function loadTaskOptions() {
+    if (catalogRequest.current) return;
+    const controller = new AbortController();
+    catalogRequest.current = controller;
+    const token = getToken();
+    setCatalogLoading(true);
+    try {
+      const tasks = await loadTaskCatalog(controller.signal);
+      if (!controller.signal.aborted && token === getToken())
+        setCatalogIds(tasks.map((task) => task.taskIndex));
+    } catch (cause) {
+      if (!controller.signal.aborted && token === getToken())
+        notify(errorText(cause), "warning");
+    } finally {
+      if (!controller.signal.aborted) setCatalogLoading(false);
+      if (catalogRequest.current === controller) catalogRequest.current = null;
+    }
+  }
   const loadId = useRef(0);
   const mounted = useRef(false);
   const inFlight = useRef(
@@ -218,9 +250,7 @@ export default function ExceptionsPage() {
       return;
     const nextFilters = {
       ...initialFilters,
-      task: /^\d+$/.test(params.get("taskId") || "")
-        ? params.get("taskId")!
-        : "",
+      task: normalizeTaskFilter(params.get("taskId") || "") ?? "",
     };
     setTab(params.get("type") === "local" ? 2 : 0);
     setDraft(nextFilters);
@@ -425,19 +455,6 @@ export default function ExceptionsPage() {
       ? result.items
       : result.items.slice(page * pageSize, page * pageSize + pageSize)
     : [];
-  const actionTaskIds =
-    mode !== "fallback"
-      ? [
-          ...new Set(
-            visible.flatMap((item) => {
-              const id = item.parentTaskId ?? item.taskIndex;
-              return Number.isSafeInteger(id) && Number(id) > 0
-                ? [Number(id)]
-                : [];
-            }),
-          ),
-        ]
-      : [];
   const actionScope = JSON.stringify([queryKey, page, pageSize]);
   const latestActionScope = useRef(actionScope);
   latestActionScope.current = actionScope;
@@ -446,14 +463,50 @@ export default function ExceptionsPage() {
     setResumeAccepted(false);
     setRetryError(null);
   }, [actionScope]);
+  // Only infer a task when the complete result belongs to it. A page with
+  // one parent does not mean the other pages belong to that parent as well.
+  const resultTaskIds = [
+    ...new Set(
+      (result?.items ?? []).flatMap((item) => {
+        const id = item.parentTaskId ?? item.taskIndex;
+        return Number.isSafeInteger(id) && Number(id) > 0 ? [Number(id)] : [];
+      }),
+    ),
+  ];
   const actionTaskId =
-    actionSelection?.scope === actionScope &&
-    actionTaskIds.includes(actionSelection.id)
-      ? actionSelection.id
-      : actionTaskIds.includes(Number(filters.task))
+    mode === "fallback"
+      ? undefined
+      : Number(filters.task) > 0
         ? Number(filters.task)
-        : actionTaskIds[0];
-  const visibleTasks = useVisibleRecoveryTasks(actionTaskIds, queryKey, result);
+        : result &&
+            !result.partial &&
+            result.total <= result.items.length &&
+            resultTaskIds.length === 1
+          ? resultTaskIds[0]
+          : undefined;
+  const taskOptionIds = [
+    ...new Set([
+      ...catalogIds,
+      ...resultTaskIds,
+      ...(Number(filters.task) > 0 ? [Number(filters.task)] : []),
+    ]),
+  ].sort((a, b) => b - a);
+  const applyTaskFilter = (value: string | null) => {
+    const task = normalizeTaskFilter(value ?? "");
+    if (task === null) {
+      notify(tr("任务 ID 必须是正整数。"), "error");
+      return;
+    }
+    setDraft((previous) => ({ ...previous, task }));
+    setFilters((previous) => ({ ...previous, task }));
+    setPage(0);
+    setSelected(null);
+  };
+  const visibleTasks = useVisibleRecoveryTasks(
+    !result || actionTaskId === undefined ? [] : [actionTaskId],
+    queryKey,
+    result,
+  );
   const hasPendingResults = visible.some(
     (item) => item.retryStatus === "PENDING",
   );
@@ -478,15 +531,14 @@ export default function ExceptionsPage() {
     setDraft((previous) => ({ ...previous, [field]: value }));
   const applyFilters = (event: FormEvent) => {
     event.preventDefault();
-    if (
-      draft.task &&
-      (!Number.isInteger(Number(draft.task)) || Number(draft.task) < 0)
-    ) {
-      notify(tr("任务 ID 必须是非负整数。"), "error");
+    const task = normalizeTaskFilter(draft.task);
+    if (task === null) {
+      notify(tr("任务 ID 必须是正整数。"), "error");
       return;
     }
     setPage(0);
-    setFilters({ ...draft });
+    setDraft((previous) => ({ ...previous, task }));
+    setFilters({ ...draft, task });
   };
   async function clearRecords() {
     setBusy(true);
@@ -531,7 +583,7 @@ export default function ExceptionsPage() {
       taskId === undefined ? undefined : visibleTasks.tasks[taskId];
     if (
       taskId === undefined ||
-      !actionTaskIds.includes(taskId) ||
+      taskId !== actionTaskId ||
       !canRetrySnapshot(displayed ?? undefined) ||
       busy ||
       retryInFlight.current ||
@@ -677,8 +729,10 @@ export default function ExceptionsPage() {
     if (snapshot.status === "COMPLETED") return "completed";
     return canRetrySnapshot(snapshot) ? undefined : "accepted";
   };
-  const actionSnapshot = visibleTasks.tasks[actionTaskId];
-  const actionPhase = retryPhase(actionTaskId);
+  const actionSnapshot =
+    actionTaskId === undefined ? undefined : visibleTasks.tasks[actionTaskId];
+  const actionPhase =
+    actionTaskId === undefined ? undefined : retryPhase(actionTaskId);
   const actionLabel =
     actionPhase === "submitting"
       ? tr("提交中…")
@@ -715,16 +769,28 @@ export default function ExceptionsPage() {
         title={tr("异常记录")}
         description={tr("查看异常及重试结果，导出记录。")}
         action={
-          <Button
-            startIcon={<RefreshRounded />}
-            onClick={() => {
-              void load();
-              void nodes.refresh();
-            }}
-            disabled={loading}
-          >
-            {tr("刷新")}
-          </Button>
+          <Stack direction="row" spacing={1}>
+            {mode !== "fallback" && (
+              <Button
+                variant="contained"
+                startIcon={<ReplayRounded />}
+                onClick={() => setBulkOpen(true)}
+                disabled={busy}
+              >
+                {tr("批量重试")}
+              </Button>
+            )}
+            <Button
+              startIcon={<RefreshRounded />}
+              onClick={() => {
+                void load();
+                void nodes.refresh();
+              }}
+              disabled={loading}
+            >
+              {tr("刷新")}
+            </Button>
+          </Stack>
         }
       />
       {retryAcceptedTaskId !== null && (
@@ -792,13 +858,34 @@ export default function ExceptionsPage() {
               gap: 2,
             }}
           >
-            <TextField
-              label={tr("任务 ID")}
-              size="small"
-              type="number"
-              value={draft.task}
-              onChange={(event) => updateDraft("task", event.target.value)}
-              slotProps={{ htmlInput: { min: 0, step: 1 } }}
+            <Autocomplete
+              freeSolo
+              forcePopupIcon
+              openOnFocus
+              options={["", ...taskOptionIds.map(String)]}
+              value={filters.task || null}
+              inputValue={draft.task}
+              loading={catalogLoading}
+              loadingText={tr("正在读取任务")}
+              onOpen={() => void loadTaskOptions()}
+              onInputChange={(_, value, reason) => {
+                if (reason === "input") updateDraft("task", value);
+              }}
+              onChange={(_, value) => applyTaskFilter(value)}
+              getOptionLabel={(value) => value}
+              renderOption={(props, id) => (
+                <li {...props} key={id || "all"}>
+                  {id ? tr("任务 #{id}", { id }) : tr("全部任务")}
+                </li>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label={tr("所属任务")}
+                  placeholder={tr("全部任务")}
+                  size="small"
+                />
+              )}
             />
             <TextField
               select
@@ -1027,32 +1114,9 @@ export default function ExceptionsPage() {
             useFlexGap
             sx={{ px: 2.5, pb: 2.5 }}
           >
-            {actionTaskIds.length > 1 ? (
-              <TextField
-                select
-                label={tr("所属任务")}
-                size="small"
-                value={actionTaskId}
-                disabled={busy}
-                onChange={(event) =>
-                  setActionSelection({
-                    scope: actionScope,
-                    id: Number(event.target.value),
-                  })
-                }
-                sx={{ minWidth: 180 }}
-              >
-                {actionTaskIds.map((id) => (
-                  <MenuItem key={id} value={id}>
-                    {tr("任务 #{id}", { id })}
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : (
-              <Typography variant="body2" fontWeight={600}>
-                {tr("任务 #{id}", { id: actionTaskId })}
-              </Typography>
-            )}
+            <Typography variant="body2" fontWeight={600}>
+              {tr("任务 #{id}", { id: actionTaskId })}
+            </Typography>
             {actionSnapshot && <StatusChip status={actionSnapshot.status} />}
             <Button
               size="small"
@@ -1406,6 +1470,11 @@ export default function ExceptionsPage() {
           )}
         </Typography>
       )}
+      <FailedTaskRetryDialog
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        onSubmitted={() => void load(true)}
+      />
       <Dialog
         open={confirmClear}
         onClose={() => !busy && setConfirmClear(false)}

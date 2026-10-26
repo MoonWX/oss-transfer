@@ -98,10 +98,14 @@ for (const accepted of [true, false]) {
     });
     try {
       await page.goto("/tasks?taskId=1");
-      await page.getByRole("button", { name: "继续传输", exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: "继续传输 1 个任务？" });
+      await page
+        .getByRole("button", { name: "重试失败项", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "重试 1 个任务的失败项？",
+      });
       await dialog
-        .getByRole("button", { name: "确认继续传输", exact: true })
+        .getByRole("button", { name: "确认重试", exact: true })
         .dblclick();
       await expect(
         dialog.getByRole("button", { name: "提交中…", exact: true }),
@@ -110,10 +114,12 @@ for (const accepted of [true, false]) {
       submitted.release();
       await expect(dialog).toBeHidden();
       // The stale list still says failed; only the accepted operation remains locked.
-      const resume = page.getByRole("button", { name: /^(继续传输|处理中…)$/ });
+      const resume = page.getByRole("button", {
+        name: /^(重试失败项|处理中…)$/,
+      });
       if (accepted) {
         await expect(resume).toBeDisabled();
-        await expect(page.getByText(/^继续传输请求已提交/)).toBeVisible();
+        await expect(page.getByText(/^重试失败项请求已提交/)).toBeVisible();
       } else {
         await expect(resume).toBeEnabled();
         await expect(
@@ -200,7 +206,7 @@ test("one exception task action stays locked across rows, navigation, and reload
     const detail = page.locator(".MuiDrawer-paper");
     await expect(detail).toBeVisible();
     await expect(
-      detail.getByRole("button", { name: /^(继续传输|处理中…)$/ }),
+      detail.getByRole("button", { name: /^(重试失败项|处理中…)$/ }),
     ).toBeDisabled();
     await page.goBack();
     await expect(processing).toHaveCount(1);
@@ -274,16 +280,16 @@ for (const surface of ["tasks", "exceptions"] as const) {
     const submit = async () => {
       if (surface === "tasks") {
         await page
-          .getByRole("button", { name: "继续传输", exact: true })
+          .getByRole("button", { name: "重试失败项", exact: true })
           .click();
         await page
-          .getByRole("button", { name: "确认继续传输", exact: true })
+          .getByRole("button", { name: "确认重试", exact: true })
           .click();
         await expect(
-          page.getByRole("dialog", { name: "继续传输 1 个任务？" }),
+          page.getByRole("dialog", { name: "重试 1 个任务的失败项？" }),
         ).toBeHidden();
         await expect(
-          page.getByRole("button", { name: "继续传输", exact: true }),
+          page.getByRole("button", { name: "重试失败项", exact: true }),
         ).toBeEnabled();
       } else {
         const retry = page
@@ -301,7 +307,7 @@ for (const surface of ["tasks", "exceptions"] as const) {
     await expect(
       page.getByText("任务 #1 的重试已受理。", { exact: true }),
     ).toHaveCount(0);
-    await expect(page.getByText(/^继续传输请求已提交/)).toHaveCount(0);
+    await expect(page.getByText(/^重试失败项请求已提交/)).toHaveCount(0);
     await submit();
     expect(sent).toBe(2);
   });

@@ -39,7 +39,7 @@ async function setup(page: Page, rows: ReturnType<typeof records>) {
     .getByRole("button", { name: "选择全部 130 个结果", exact: true })
     .click();
   await expect(page.getByText("已选 130 项", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "继续传输", exact: true }).click();
+  await page.getByRole("button", { name: "重试失败项", exact: true }).click();
 }
 function accept(
   rows: ReturnType<typeof records>,
@@ -87,7 +87,7 @@ test("130 selected tasks show progress, reject duplicate clicks and keep only fa
   await setup(page, rows);
   const dialog = page.getByRole("dialog");
   await dialog
-    .getByRole("button", { name: "确认继续传输", exact: true })
+    .getByRole("button", { name: "确认重试", exact: true })
     .evaluate((button: HTMLButtonElement) => {
       button.click();
       button.click();
@@ -128,7 +128,7 @@ test("a lost second response is not replayed and leaves the final batch unsubmit
   await setup(page, rows);
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "确认继续传输", exact: true })
+    .getByRole("button", { name: "确认重试", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(requests).toHaveLength(2);
@@ -159,7 +159,7 @@ test("missing task generation leaves every selected task unsubmitted without byp
   await setup(page, rows);
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "确认继续传输", exact: true })
+    .getByRole("button", { name: "确认重试", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(requests).toHaveLength(0);

@@ -184,12 +184,12 @@ class TestArtifacts(unittest.TestCase):
         self.assertEqual(result["passedTests"], 0)
         self.assertEqual(result["result"], "failed")
 
-    def test_platform_budget_keeps_outer_deadline_after_go_timeout(self):
+    def test_all_platforms_use_native_package_timeout_with_cleanup_grace(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["tests"] = manifest["tests"][:1]
         for platform in TESTS.SUPPORTED:
             with self.subTest(platform=platform):
-                timeout = {"linux/armv7": 300, "freebsd/arm64": 300}.get(platform, 180)
+                timeout = 600
                 process = mock.Mock(pid=123456, wait=mock.Mock(return_value=0))
 
                 def start(command, **kwargs):

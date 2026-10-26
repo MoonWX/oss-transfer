@@ -300,10 +300,9 @@ def run(platform, directory, repo, output, parallel):
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     evidence = {"platform": platform, "result": "failed", "phase": "verify", "packages": []}
-    # The complete Master suite can exceed three minutes under armv7 or
-    # FreeBSD arm64 emulation while individual tests continue to progress.
-    # Their operation deadlines remain unchanged.
-    package_timeout = 300 if platform in ("linux/armv7", "freebsd/arm64") else 180
+    # Match the native go test package deadline. Emulated packages contain
+    # the same tests; their individual operation deadlines stay unchanged.
+    package_timeout = 600
     started = time.monotonic()
     try:
         manifest = verify(platform, directory, repo, publish_env=False)

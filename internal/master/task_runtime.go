@@ -274,6 +274,9 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 func (s *Server) requestTaskResume(ctx context.Context, id int64, expected *uint64) (task.Parent, bool, error) {
 	s.topologyMu.Lock()
 	defer s.topologyMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return task.Parent{}, false, err
+	}
 	p, err := s.tasks.repo.Get(id)
 	if err != nil {
 		return p, false, err

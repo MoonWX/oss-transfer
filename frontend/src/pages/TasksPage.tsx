@@ -63,6 +63,7 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { api, ApiError, saveFile, useApi, useNotify } from "../lib/api";
+import { runTaskBatches, type BatchProgress } from "../lib/taskBatches";
 import { useTaskRecovery } from "../lib/taskRecovery";
 import {
   compareActiveSubtasks,
@@ -1337,6 +1338,7 @@ export default function TasksPage({
   const [direction, setDirection] = useState("");
   const [worker, setWorker] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(() =>
     savedPageSize("oss-transfer-task-page-size"),
@@ -1402,11 +1404,17 @@ export default function TasksPage({
     });
   };
   const [operation, setOperation] = useState("");
-  const [operationIds, setOperationIds] = useState<number[] | null>(null);
   const [operationOpen, setOperationOpen] = useState(false);
   const [confirmationTasks, setConfirmationTasks] = useState<Task[]>([]);
   const [busy, setBusy] = useState(false);
   const [actionResult, setActionResult] = useState("");
+  const [actionFailed, setActionFailed] = useState(false);
+  const [actionIssues, setActionIssues] = useState<
+    { taskIds: number[]; message: string }[]
+  >([]);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(
+    null,
+  );
   const actionInFlight = useRef(false);
   const tasks: Task[] = useMemo(
     () => mergeTasks(historyTasks ?? [], data?.tasks ?? []),
@@ -1462,9 +1470,8 @@ export default function TasksPage({
   }, [query, status, direction, worker]);
   useEffect(() => {
     if (data) {
-      setSelected((s) =>
-        s.filter((id) => tasks.some((t: Task) => t.taskIndex === id)),
-      );
+      const available = new Set(tasks.map((task) => task.taskIndex));
+      setSelected((s) => s.filter((id) => available.has(id)));
       setPage((p) =>
         Math.min(p, Math.max(0, Math.ceil(filtered.length / pageSize) - 1)),
       );
@@ -1473,11 +1480,7 @@ export default function TasksPage({
   const shown = overview
     ? filtered.slice(0, 5)
     : filtered.slice(page * pageSize, (page + 1) * pageSize);
-  const chosen = tasks.filter((t) => selected.includes(t.taskIndex));
-  const actionTasks =
-    operationIds === null
-      ? chosen
-      : actionCandidates.filter((t) => operationIds.includes(t.taskIndex));
+  const chosen = tasks.filter((t) => selectedSet.has(t.taskIndex));
   const openOperation = (next: string, ids: number[] | null) => {
     if (
       (next === "启动" || next === "继续传输") &&
@@ -1486,11 +1489,12 @@ export default function TasksPage({
       )
     )
       return;
-    setOperationIds(ids);
+    const idSet = ids ? new Set(ids) : null;
+    setBatchProgress(null);
     setConfirmationTasks(
       ids === null
         ? chosen
-        : actionCandidates.filter((task) => ids.includes(task.taskIndex)),
+        : actionCandidates.filter((task) => idSet?.has(task.taskIndex)),
     );
     setOperation(next);
     setOperationOpen(true);
@@ -1517,212 +1521,251 @@ export default function TasksPage({
   );
   const toggle = (id: number) =>
     setSelected((s) =>
-      s.includes(id) ? s.filter((i) => i !== id) : [...s, id].slice(0, 128),
+      s.includes(id) ? s.filter((i) => i !== id) : [...s, id],
     );
   async function execute() {
-    if (!actionTasks.length || actionInFlight.current) return;
+    if (!confirmationTasks.length || actionInFlight.current) return;
     const recovering = operation === "启动" || operation === "继续传输";
     const submittedTasks = confirmationTasks;
-    if (
-      recovering &&
-      !recovery.begin(submittedTasks.map((task) => task.taskIndex))
-    )
-      return;
+    const snapshots = new Map(
+      submittedTasks.map((task) => [task.taskIndex, task]),
+    );
+    if (recovering && !recovery.begin([...snapshots.keys()])) return;
     actionInFlight.current = true;
     setBusy(true);
     setActionResult("");
+    setActionFailed(false);
+    setActionIssues([]);
+    const issues: { taskIds: number[]; message: string }[] = [];
+    const sent = new Set<number>();
     try {
       const ids = (local: boolean) =>
         submittedTasks
-          .filter((t) => isLocal(t) === local)
-          .map((t) => t.taskIndex);
-      const requests: [string, number[]][] =
+          .filter((task) => isLocal(task) === local)
+          .map((task) => task.taskIndex);
+      const requests =
         operation === "启动"
-          ? [["/start", ids(false)]]
+          ? [{ path: "/api/master/start", taskIds: ids(false) }]
           : operation === "停止"
             ? [
-                ["/stop", ids(false)],
-                ["/local-transfers/stop", ids(true)],
+                { path: "/api/master/stop", taskIds: ids(false) },
+                {
+                  path: "/api/master/local-transfers/stop",
+                  taskIds: ids(true),
+                },
               ]
             : operation === "继续传输"
               ? [
-                  ["/resume", ids(false)],
-                  ["/local-transfers/resume", ids(true)],
+                  { path: "/api/master/resume", taskIds: ids(false) },
+                  {
+                    path: "/api/master/local-transfers/resume",
+                    taskIds: ids(true),
+                  },
                 ]
-              : [["/clear", actionTasks.map((task) => task.taskIndex)]];
-      const issues: string[] = [];
-      const summaries: string[] = [];
-      for (const [path, taskIds] of requests) {
-        if (!recovery.isCurrent()) return;
-        if (!taskIds.length) continue;
-        try {
+              : [{ path: "/api/master/clear", taskIds: [...snapshots.keys()] }];
+      const result = await runTaskBatches(requests, {
+        isCurrent: recovery.isCurrent,
+        onProgress: (progress) => {
+          if (recovery.isCurrent()) setBatchProgress(progress);
+        },
+        prepare: async (taskIds) => {
+          if (!recovering) return {};
           const expectedGenerations: Record<number, number> = {};
-          if (recovering) {
-            for (const id of taskIds) {
-              const snapshot = submittedTasks.find(
-                (task) => task.taskIndex === id,
-              )!;
-              const generation =
-                snapshot.generation ??
-                (await api<{ data: Task }>(`/api/master/tasks/${id}`)).data
-                  .generation;
-              if (!recovery.isCurrent()) return;
-              if (Number.isSafeInteger(generation) && generation > 0)
-                expectedGenerations[id] = generation;
-            }
-          }
-          const result = await api(`/api/master${path}`, {
-            method: "POST",
-            body: {
-              taskIds,
-              ...(recovering &&
-              Object.keys(expectedGenerations).length === taskIds.length
-                ? { expectedGenerations }
-                : {}),
-            },
-          });
-          const detail = result.data || result;
-          if (!recovery.isCurrent()) return;
-          if (recovering) {
-            for (const id of taskIds) {
-              const item = detail.details?.find?.(
-                (entry: any) => entry.taskId === id,
+          for (const id of taskIds) {
+            const generation =
+              snapshots.get(id)?.generation ??
+              (await api<{ data: Task }>(`/api/master/tasks/${id}`)).data
+                .generation;
+            if (!recovery.isCurrent()) return {};
+            if (!Number.isSafeInteger(generation) || generation <= 0)
+              throw new Error(
+                tr("无法确认任务 #{id} 的当前状态，请刷新后重试。", { id }),
               );
-              if (item?.success === false || item?.error) recovery.release(id);
-              else if (
-                item?.success ||
-                (!detail.failed && (detail.accepted || detail.ignored))
-              )
-                recovery.accept(
-                  id,
-                  item?.generation ??
-                    (expectedGenerations[id]
-                      ? expectedGenerations[id] + 1
-                      : undefined),
-                );
-              else recovery.check(id);
-            }
+            expectedGenerations[id] = generation;
+          }
+          return { expectedGenerations };
+        },
+        onResult: (detail, taskIds, body) => {
+          taskIds.forEach((id) => sent.add(id));
+          const entries = Array.isArray(detail.details) ? detail.details : [];
+          const byId = new Map<number, any>(
+            entries.map((item: any) => [item.taskId, item]),
+          );
+          if (recovering)
+            recovery.settle(
+              taskIds.map((id) => {
+                const item = byId.get(id);
+                const expected = (
+                  body.expectedGenerations as Record<number, number> | undefined
+                )?.[id];
+                if (item?.success === false || item?.error)
+                  return { id, phase: "release" as const };
+                if (
+                  item?.success === true ||
+                  (!entries.length &&
+                    !detail.partial &&
+                    !Number(detail.failed) &&
+                    Number(detail.accepted ?? 0) +
+                      Number(detail.ignored ?? 0) ===
+                      taskIds.length)
+                )
+                  return {
+                    id,
+                    phase: "accepted" as const,
+                    generation:
+                      item?.generation ??
+                      (expected
+                        ? expected + (Number(detail.ignored) > 0 ? 0 : 1)
+                        : undefined),
+                  };
+                return { id, phase: "checking" as const, generation: expected };
+              }),
+            );
+          for (const item of entries) {
+            if (item?.success === false || item?.error)
+              issues.push({
+                taskIds: Number.isSafeInteger(item.taskId)
+                  ? [item.taskId]
+                  : taskIds,
+                message: item.message || item.error || tr("请求失败"),
+              });
           }
           const unavailable = [
-            ...new Set([
+            ...new Set<string>([
               ...(detail.unreachableWorkers || []),
               ...(detail.failedWorkers || []),
             ]),
           ];
-          const operationSummary = Number.isFinite(detail.accepted)
-            ? tr(
-                "{value1}已受理 {value2}，忽略 {value3}，失败 {value4}{value5}",
-                {
-                  value1: path.startsWith("/local-transfers/")
-                    ? tr("本地执行项")
-                    : tr("执行项"),
-                  value2: detail.accepted,
-                  value3: detail.ignored ?? 0,
-                  value4: detail.failed ?? 0,
-                  value5: unavailable.length
-                    ? tr("；未响应节点：{value1}", {
-                        value1: unavailable
-                          .map((id) =>
-                            nodeLabel(
-                              String(id),
-                              detail.nodeDisplays?.[String(id)],
-                            ),
-                          )
-                          .join("、"),
-                      })
-                    : "",
-                },
-              )
-            : "";
+          if (unavailable.length)
+            issues.push({
+              taskIds,
+              message: tr("未响应节点：{value1}", {
+                value1: unavailable
+                  .map((id) => nodeLabel(id, detail.nodeDisplays?.[id]))
+                  .join("、"),
+              }),
+            });
           if (
-            detail.partial ||
-            detail.failed?.length ||
-            Number(detail.failed) > 0 ||
-            unavailable.length
+            (detail.partial || Number(detail.failed) > 0) &&
+            !entries.some((item: any) => item?.success === false || item?.error)
           )
-            issues.push(
-              operationSummary || detail.message || JSON.stringify(detail),
-            );
-          else if (operationSummary) summaries.push(operationSummary);
-          const resultDetails = detail.details ?? result.details;
-          const workerResults = resultDetails
-            ? Array.isArray(resultDetails)
-              ? resultDetails
-              : Object.values(resultDetails)
-            : [];
-          for (const item of workerResults) {
-            if (
-              typeof item === "object" &&
-              item &&
-              ((item as any).success === false || (item as any).error)
-            )
-              issues.push((item as any).message || JSON.stringify(item));
-            if (
-              typeof item === "string" &&
-              /失败|错误|拒绝|异常|不支持/.test(item)
-            )
-              issues.push(item);
-          }
-          if (/失败[:：]\s*[1-9]/.test(result.message || ""))
-            issues.push(result.message);
-        } catch (e) {
-          if (!recovery.isCurrent()) return;
+            issues.push({
+              taskIds,
+              message:
+                detail.message || tr("部分操作未完成，详见列表上方的结果。"),
+            });
+        },
+        onError: (error, taskIds, submitted) => {
+          if (submitted) taskIds.forEach((id) => sent.add(id));
           if (recovering)
-            for (const id of taskIds) {
-              if (e instanceof ApiError && e.status >= 400 && e.status < 500)
-                recovery.release(id);
-              else recovery.check(id);
-            }
-          issues.push((e as Error).message);
-        }
-      }
+            recovery.settle(
+              taskIds.map((id) => ({
+                id,
+                phase:
+                  !submitted ||
+                  (error instanceof ApiError &&
+                    error.status >= 400 &&
+                    error.status < 500 &&
+                    error.status !== 408)
+                    ? "release"
+                    : "checking",
+                generation: snapshots.get(id)?.generation,
+              })),
+            );
+        },
+      });
+      if (recovering)
+        recovery.settle(
+          result.unsubmittedIds.map((id) => ({ id, phase: "release" })),
+        );
+      if (!recovery.isCurrent()) return;
+      issues.push(...result.issues);
       setOperationOpen(false);
-      if (
-        !issues.length &&
-        operation === "删除" &&
-        actionTasks.some((task) => task.taskIndex === detailId)
-      )
-        setDetailId(undefined);
-      // Close the dialog immediately; recovery controls keep their task-scoped
-      // guard until a fresh task state confirms the new attempt has ended.
-      void Promise.allSettled([refresh(), detailFallback.refresh()]);
-      if (!issues.length && operation === "删除")
+      const successful = new Set(result.successfulIds);
+      setSelected((previous) => previous.filter((id) => !successful.has(id)));
+      if (operation === "删除") {
+        if (detailId !== undefined && successful.has(detailId))
+          setDetailId(undefined);
         setHistoryTasks(
           (previous) =>
-            previous?.filter(
-              (task) =>
-                !actionTasks.some(
-                  (removed) => removed.taskIndex === task.taskIndex,
-                ),
-            ) ?? null,
+            previous?.filter((task) => !successful.has(task.taskIndex)) ?? null,
         );
-      if (issues.length) {
+      }
+      void Promise.allSettled([refresh(), detailFallback.refresh()]);
+      setActionIssues(issues);
+      const pending = result.progress.uncertain + result.progress.unsubmitted;
+      const summary = tr(
+        "已受理 {accepted}，忽略 {ignored}，失败 {failed}",
+        result.progress,
+      );
+      if (issues.length || pending) {
+        setActionFailed(true);
         setActionResult(
-          tr("部分请求未完成：{value1}", { value1: issues.join("；") }),
+          issues.length
+            ? tr("部分请求未完成：{value1}", { value1: issues[0].message })
+            : tr("部分结果待确认，请刷新任务状态。"),
         );
         notify(tr("部分操作未完成，详见列表上方的结果。"), "warning");
       } else {
+        setActionResult(summary);
         notify(
           tr("{value1}请求已提交{value2}。请以刷新后的任务状态为准。", {
             value1: tr(operation),
-            value2: summaries.length ? `，${summaries.join("；")}` : "",
+            value2: `，${summary}`,
           }),
           "info",
         );
-        setSelected([]);
       }
     } catch (cause) {
       if (recovering)
-        for (const task of submittedTasks) recovery.check(task.taskIndex);
+        recovery.settle(
+          submittedTasks.map((task) => ({
+            id: task.taskIndex,
+            phase: sent.has(task.taskIndex) ? "checking" : "release",
+          })),
+        );
+      if (!recovery.isCurrent()) return;
       const message = cause instanceof Error ? cause.message : String(cause);
       setOperationOpen(false);
       setActionResult(message);
+      setActionFailed(true);
       notify(message, "error");
     } finally {
       actionInFlight.current = false;
       setBusy(false);
     }
   }
+  const renderBatchProgress = () =>
+    batchProgress && (
+      <Stack spacing={1} sx={{ mt: 2 }} aria-label={tr("批量操作进度")}>
+        <Typography variant="body2">
+          {tr("已处理 {done} / {total}", {
+            done: batchProgress.processed,
+            total: batchProgress.total,
+          })}
+        </Typography>
+        <LinearProgress
+          variant="determinate"
+          value={
+            batchProgress.total
+              ? (batchProgress.processed / batchProgress.total) * 100
+              : 0
+          }
+        />
+        <Typography variant="caption">
+          {tr(
+            "已受理 {accepted}，忽略 {ignored}，失败 {failed}",
+            batchProgress,
+          )}
+        </Typography>
+        {(batchProgress.uncertain > 0 ||
+          (!busy && batchProgress.unsubmitted > 0)) && (
+          <Typography variant="caption">
+            {tr("待确认 {uncertain}，未提交 {unsubmitted}", batchProgress)}
+          </Typography>
+        )}
+      </Stack>
+    );
   const rowRoute = (task: Task) => (
     <Stack spacing={0.5} sx={{ minWidth: 0 }}>
       <Typography
@@ -1899,11 +1942,36 @@ export default function TasksPage({
       )}
       {actionResult && (
         <Alert
-          severity="warning"
+          severity={actionFailed ? "warning" : "info"}
           onClose={() => setActionResult("")}
           sx={{ mb: 2 }}
         >
           {actionResult}
+          {renderBatchProgress()}
+          {actionIssues.length > 0 && (
+            <Box component="details" sx={{ mt: 1 }}>
+              <Box component="summary" sx={{ cursor: "pointer" }}>
+                {tr("查看失败详情")}
+              </Box>
+              <Typography
+                component="pre"
+                variant="body2"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  maxHeight: 240,
+                  overflow: "auto",
+                }}
+              >
+                {actionIssues
+                  .map(
+                    (issue) =>
+                      `${issue.taskIds.map((id) => `#${id}`).join(", ")}: ${issue.message}`,
+                  )
+                  .join("\n")}
+              </Typography>
+            </Box>
+          )}
         </Alert>
       )}
       <Paper
@@ -2016,26 +2084,20 @@ export default function TasksPage({
                 sx={{ p: 2, bgcolor: "action.selected" }}
               >
                 <Typography variant="body2" sx={{ mr: 1 }}>
-                  {tr("已选 {count} 项（最多 128 项）", {
+                  {tr("已选 {count} 项", {
                     count: formatNumber(selected.length),
                   })}
                 </Typography>
-                {filtered.some(
-                  (task) => !selected.includes(task.taskIndex),
-                ) && (
+                {filtered.some((task) => !selectedSet.has(task.taskIndex)) && (
                   <Button
                     size="small"
                     onClick={() =>
-                      setSelected(
-                        filtered.slice(0, 128).map((task) => task.taskIndex),
-                      )
+                      setSelected(filtered.map((task) => task.taskIndex))
                     }
                   >
-                    {filtered.length > 128
-                      ? tr("选择前 128 个结果")
-                      : tr("选择全部 {value1} 个结果", {
-                          value1: filtered.length,
-                        })}
+                    {tr("选择全部 {value1} 个结果", {
+                      value1: filtered.length,
+                    })}
                   </Button>
                 )}
                 {[
@@ -2134,13 +2196,14 @@ export default function TasksPage({
                       <TableCell padding="checkbox" sx={{ width: 48 }}>
                         <Checkbox
                           size="small"
+                          disabled={busy}
                           checked={
                             shown.length > 0 &&
-                            shown.every((t) => selected.includes(t.taskIndex))
+                            shown.every((t) => selectedSet.has(t.taskIndex))
                           }
                           indeterminate={
-                            shown.some((t) => selected.includes(t.taskIndex)) &&
-                            !shown.every((t) => selected.includes(t.taskIndex))
+                            shown.some((t) => selectedSet.has(t.taskIndex)) &&
+                            !shown.every((t) => selectedSet.has(t.taskIndex))
                           }
                           slotProps={{
                             input: { "aria-label": tr("选择当前页任务") },
@@ -2153,7 +2216,7 @@ export default function TasksPage({
                                       ...s,
                                       ...shown.map((t) => t.taskIndex),
                                     ]),
-                                  ].slice(0, 128)
+                                  ]
                                 : s.filter(
                                     (id) =>
                                       !shown.some((t) => t.taskIndex === id),
@@ -2183,17 +2246,14 @@ export default function TasksPage({
                     <TableRow
                       key={task.taskIndex}
                       hover
-                      selected={selected.includes(task.taskIndex)}
+                      selected={selectedSet.has(task.taskIndex)}
                     >
                       {!overview && (
                         <TableCell padding="checkbox">
                           <Checkbox
                             size="small"
-                            checked={selected.includes(task.taskIndex)}
-                            disabled={
-                              selected.length >= 128 &&
-                              !selected.includes(task.taskIndex)
-                            }
+                            checked={selectedSet.has(task.taskIndex)}
+                            disabled={busy}
                             onChange={() => toggle(task.taskIndex)}
                             slotProps={{
                               input: {
@@ -2295,11 +2355,8 @@ export default function TasksPage({
                     <Stack direction="row" alignItems="center">
                       {!overview && (
                         <Checkbox
-                          checked={selected.includes(task.taskIndex)}
-                          disabled={
-                            selected.length >= 128 &&
-                            !selected.includes(task.taskIndex)
-                          }
+                          checked={selectedSet.has(task.taskIndex)}
+                          disabled={busy}
                           onChange={() => toggle(task.taskIndex)}
                           slotProps={{
                             input: {
@@ -2397,7 +2454,7 @@ export default function TasksPage({
         onRefresh={() =>
           void Promise.all([refresh(), detailFallback.refresh()])
         }
-        operationError={actionResult}
+        operationError={actionFailed ? actionResult : ""}
         onAction={(task, next) => openOperation(next, [task.taskIndex])}
         onClose={() => setDetailId(undefined)}
       />
@@ -2408,7 +2465,6 @@ export default function TasksPage({
           transition: {
             onExited: () => {
               setOperation("");
-              setOperationIds(null);
               setConfirmationTasks([]);
             },
           },
@@ -2434,8 +2490,16 @@ export default function TasksPage({
           </Typography>
           <Typography variant="body2" sx={{ mt: 2 }}>
             {tr("任务：")}
-            {confirmationTasks.map((task) => `#${task.taskIndex}`).join("、")}
+            {confirmationTasks
+              .slice(0, 10)
+              .map((task) => `#${task.taskIndex}`)
+              .join("、")}
+            {confirmationTasks.length > 10 &&
+              tr("等 {count} 个任务", {
+                count: formatNumber(confirmationTasks.length),
+              })}
           </Typography>
+          {busy && renderBatchProgress()}
         </DialogContent>
         <DialogActions sx={{ p: 3 }}>
           <Button onClick={() => setOperationOpen(false)} disabled={busy}>

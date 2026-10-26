@@ -520,9 +520,16 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
       status: "RUNNING",
       scanComplete: false,
     };
-    const sent: { path: string; ids: number[] }[] = [];
+    const sent: {
+      path: string;
+      ids: number[];
+      expectedGenerations?: Record<number, number>;
+    }[] = [];
     await page.route("**/api/master/status", (route) =>
       route.fulfill({ json: { totalTasks: 1, tasks: [task] } }),
+    );
+    await page.route("**/api/master/tasks/1048", (route) =>
+      route.fulfill({ json: { success: true, data: task } }),
     );
     const prefix =
       direction === "OSS_TO_OSS"
@@ -530,16 +537,44 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
         : "/api/master/local-transfers";
     for (const action of ["stop", "resume"]) {
       await page.route(`**${prefix}/${action}`, (route) => {
+        const body = route.request().postDataJSON();
         sent.push({
           path: new URL(route.request().url()).pathname,
-          ids: route.request().postDataJSON().taskIds,
+          ids: body.taskIds,
+          ...(body.expectedGenerations
+            ? { expectedGenerations: body.expectedGenerations }
+            : {}),
         });
-        task = { ...task, status: action === "stop" ? "STOPPED" : "RUNNING" };
+        if (action === "resume")
+          expect(body.expectedGenerations).toEqual({ 1048: task.generation });
+        task = {
+          ...task,
+          status: action === "stop" ? "STOPPED" : "RUNNING",
+          generation:
+            action === "resume" ? task.generation + 1 : task.generation,
+        };
+        const result = {
+          success: true,
+          accepted: 1,
+          ignored: 0,
+          failed: 0,
+          partial: false,
+          details: [
+            {
+              taskId: task.taskIndex,
+              generation: task.generation,
+              status: task.status,
+              success: true,
+              accepted: true,
+              ignored: false,
+            },
+          ],
+        };
         return route.fulfill({
-          json: {
-            success: true,
-            data: { accepted: 1, ignored: 0, failed: 0, partial: false },
-          },
+          json:
+            direction === "OSS_TO_OSS"
+              ? result
+              : { success: true, data: result },
         });
       });
     }
@@ -557,9 +592,16 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
     await expect(
       page.getByRole("button", { name: "停止任务", exact: true }),
     ).toBeVisible();
+    await expect(page.getByText("124,200").last()).toBeVisible();
+    expect(task.generation).toBe(2);
+    expect(task.putObjectCount).toBe(tasks[0].putObjectCount);
     expect(sent).toEqual([
       { path: `${prefix}/stop`, ids: [1048] },
-      { path: `${prefix}/resume`, ids: [1048] },
+      {
+        path: `${prefix}/resume`,
+        ids: [1048],
+        expectedGenerations: { 1048: 1 },
+      },
     ]);
   });
 }
@@ -601,33 +643,82 @@ test("partially accepted stop keeps failed nodes visible and never reports full 
   page,
 }) => {
   await mockApi(page);
-  await page.route("**/api/master/stop", (route) =>
+  let stopped = false;
+  await page.route("**/api/master/status", (route) =>
     route.fulfill({
+      json: {
+        tasks: [
+          { ...tasks[0], status: stopped ? "STOPPED" : "RUNNING" },
+          {
+            ...tasks[0],
+            taskIndex: 1051,
+            workerNode: "10.0.1.13",
+            status: stopped ? "STOPPING" : "RUNNING",
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/master/stop", (route) => {
+    expect(
+      route
+        .request()
+        .postDataJSON()
+        .taskIds.slice()
+        .sort((a: number, b: number) => a - b),
+    ).toEqual([1048, 1051]);
+    stopped = true;
+    return route.fulfill({
       json: {
         success: true,
         partial: true,
         accepted: 1,
         ignored: 0,
         failed: 1,
-        failedWorkers: ["10.0.1.13"],
+        details: [
+          {
+            taskId: 1048,
+            generation: 1,
+            status: "STOPPED",
+            success: true,
+            accepted: true,
+            ignored: false,
+          },
+          {
+            taskId: 1051,
+            generation: 1,
+            status: "STOPPING",
+            success: false,
+            accepted: false,
+            ignored: false,
+            message: "Agent unavailable: 10.0.1.13",
+          },
+        ],
       },
-    }),
-  );
-  await detail(page, 1048);
-  await page.getByRole("button", { name: "停止任务", exact: true }).click();
+    });
+  });
+  await page.goto("/tasks");
+  for (const id of [1048, 1051])
+    await page
+      .getByRole("checkbox", { name: `选择任务 ${id}`, exact: true })
+      .check();
+  await page.getByRole("button", { name: "停止", exact: true }).click();
   await page.getByRole("button", { name: "确认停止", exact: true }).click();
   await expect(page.getByText(/部分操作未完成/)).toBeVisible();
-  await page.getByRole("button", { name: "关闭详情" }).click();
-  await expect(
-    page.getByRole("heading", { name: "迁移任务 #1048" }),
-  ).toBeHidden();
   await expect(
     page
       .locator("main")
-      .getByText(
-        /部分请求未完成：执行项已受理 1，忽略 0，失败 1；未响应节点：agent \(10\.0\.1\.13\)/,
-      ),
+      .getByText(/部分请求未完成：Agent unavailable: 10\.0\.1\.13/),
   ).toBeVisible();
+  await expect(
+    page.locator("main").getByText("已受理 1，忽略 0，失败 1", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("checkbox", { name: "选择任务 1048", exact: true }),
+  ).not.toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "选择任务 1051", exact: true }),
+  ).toBeChecked();
   await expect(page.getByText(/停止请求已提交/)).toHaveCount(0);
 });
 

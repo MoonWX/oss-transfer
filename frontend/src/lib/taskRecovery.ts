@@ -176,8 +176,41 @@ export function useTaskRecovery() {
     if (states[id]) owned.set(id, states[id]);
     else owned.delete(id);
   };
+  const updateMany = (
+    changes: {
+      id: number;
+      phase: "accepted" | "checking" | "release";
+      generation?: number;
+    }[],
+  ) => {
+    if (!isCurrent()) return;
+    const next = { ...states };
+    let changed = false;
+    for (const change of changes) {
+      if (!owned.has(change.id) || owned.get(change.id) !== states[change.id])
+        continue;
+      changed = true;
+      if (change.phase === "release") {
+        delete next[change.id];
+        nextCheck.delete(change.id);
+        owned.delete(change.id);
+      } else {
+        next[change.id] = {
+          phase: change.phase,
+          generation: change.generation,
+        };
+        nextCheck.set(
+          change.id,
+          Date.now() + (change.phase === "accepted" ? 2000 : 0),
+        );
+        owned.set(change.id, next[change.id]);
+      }
+    }
+    if (changed) publish(next);
+  };
   return {
     states: snapshot,
+    settle: updateMany,
     isCurrent,
     begin: (ids: number[]) => {
       if (!isCurrent() || !begin(ids)) return false;

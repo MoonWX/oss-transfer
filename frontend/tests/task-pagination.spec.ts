@@ -74,21 +74,15 @@ test("selecting and deselecting another page preserves earlier selections and su
   await selectPage.check();
   await page.getByRole("button", { name: "第 3 页", exact: true }).click();
   await selectPage.check();
-  await expect(
-    page.getByText("已选 20 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 20 项", { exact: true })).toBeVisible();
   await selectPage.uncheck();
-  await expect(
-    page.getByText("已选 10 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 10 项", { exact: true })).toBeVisible();
   await page
     .getByRole("checkbox", { name: "选择任务 12", exact: true })
     .check();
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
   await expect(page.getByText("21–30 / 32", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("已选 11 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 11 项", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "启动", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认启动", exact: true }).click();
@@ -114,9 +108,7 @@ test("refresh clamps a vanished last page and filters clear selections without o
   rows = records(13);
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
   await expect(pagination).toContainText("11–13 / 13");
-  await expect(
-    page.getByText("已选 1 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 1 项", { exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(

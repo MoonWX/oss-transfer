@@ -151,7 +151,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"PRESERVE does not accept mapping fields":                                           {"PRESERVE does not accept mapping fields", "PRESERVE 不接受命名映射字段", "PRESERVE では命名マッピングのフィールドは指定できません"},
 	"Public URL must be an HTTP or HTTPS origin":                                        {"Public URL must be an HTTP or HTTPS origin", "公开地址必须为不含路径的 HTTP 或 HTTPS 地址", "公開 URL はパスを含まない HTTP または HTTPS アドレスにしてください"},
 	"REPLACE_PREFIX sourcePrefix must equal the source filter prefix":                   {"REPLACE_PREFIX sourcePrefix must equal the source filter prefix", "REPLACE_PREFIX 的 sourcePrefix 必须等于源筛选前缀", "REPLACE_PREFIX の sourcePrefix は転送元のフィルタープレフィックスと一致させてください"},
-	"Select 1 to 128 tasks":                                                             {"Select 1 to 128 tasks", "请选择 1 到 128 个任务", "1 から 128 件のタスクを選択してください"},
+	"Select at least one task":                                                          {"Select at least one task", "请至少选择一个任务", "タスクを 1 件以上選択してください"},
 	"Setup is already complete":                                                         {"Setup is already complete", "初始化已完成", "初期設定は完了しています"},
 	"Shared storage IDs are not supported; filter by execution node or endpoint":        {"Shared storage IDs are not supported; filter by execution node or endpoint", "不支持共享存储 ID，请按执行节点或端点筛选", "共有ストレージ ID は使用できません。実行ノードまたはエンドポイントで絞り込んでください"},
 	"Sign in required":                                                                  {"Sign in required", "请先登录", "ログインしてください"},

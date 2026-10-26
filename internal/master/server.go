@@ -48,14 +48,15 @@ type Options struct {
 	Now                  func() time.Time
 }
 type Server struct {
-	updates       softwareUpdateState
-	topologyMu    sync.Mutex
-	agents        *agentControl
-	tasks         *taskRuntime
-	store         *state.Store
-	options       Options
-	mux           *http.ServeMux
-	passwordSlots chan struct{}
+	updates          softwareUpdateState
+	topologyMu       sync.Mutex
+	agents           *agentControl
+	tasks            *taskRuntime
+	store            *state.Store
+	options          Options
+	mux              *http.ServeMux
+	passwordSlots    chan struct{}
+	taskControlSlots chan struct{}
 }
 
 // New creates the first administrator in an empty database and returns its
@@ -70,7 +71,7 @@ func New(store *state.Store, options Options) (*Server, string, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	s := &Server{store: store, options: options, mux: http.NewServeMux(), passwordSlots: make(chan struct{}, 4)}
+	s := &Server{store: store, options: options, mux: http.NewServeMux(), passwordSlots: make(chan struct{}, 4), taskControlSlots: make(chan struct{}, taskControlConcurrency)}
 	configured, err := s.configured()
 	if err != nil {
 		return nil, "", err

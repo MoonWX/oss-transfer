@@ -1243,8 +1243,8 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 		if !readJSON(w, r, &request) {
 			return
 		}
-		if len(request.TaskIDs) == 0 || len(request.TaskIDs) > 128 {
-			fail(w, 400, "Select 1 to 128 tasks")
+		if len(request.TaskIDs) == 0 {
+			fail(w, 400, "Select at least one task")
 			return
 		}
 		seen := map[int64]bool{}
@@ -1269,22 +1269,23 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			}
 		}
 		displays := s.nodeDisplaySnapshot()
-		accepted, failed, ignored := 0, 0, 0
-		details := []map[string]any{}
-		for _, id := range request.TaskIDs {
-			var p task.Parent
-			var err error
-			admitted := true
+		outcomes := s.runTaskControls(r.Context(), request.TaskIDs, func(ctx context.Context, id int64) (task.Parent, bool, error) {
 			if resuming {
 				var expected *uint64
 				if request.ExpectedGenerations != nil {
 					value := request.ExpectedGenerations[id]
 					expected = &value
 				}
-				p, admitted, err = s.requestTaskResume(r.Context(), id, expected)
-			} else {
-				p, err = s.controlTask(r.Context(), id, action)
+				return s.requestTaskResume(ctx, id, expected)
 			}
+			p, err := s.controlTask(ctx, id, action)
+			return p, true, err
+		})
+		accepted, failed, ignored := 0, 0, 0
+		details := make([]map[string]any, 0, len(request.TaskIDs))
+		for index, id := range request.TaskIDs {
+			outcome := outcomes[index]
+			p, admitted, err := outcome.parent, outcome.admitted, outcome.err
 			item := map[string]any{"taskId": id, "status": p.Status, "generation": p.Generation, "success": err == nil, "accepted": err == nil && admitted, "ignored": err == nil && !admitted}
 			if err != nil {
 				failed++

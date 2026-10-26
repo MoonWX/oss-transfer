@@ -1,4 +1,8 @@
 export const adminMessages: Record<string, { en: string; ja: string }> = {
+  请求失败: { en: "Request failed", ja: "リクエストに失敗しました" },
+  批量删除进度: { en: "Bulk deletion progress", ja: "一括削除の進捗" },
+  查看失败详情: { en: "Show failures", ja: "失敗の詳細を表示" },
+  收起失败详情: { en: "Hide failures", ja: "失敗の詳細を閉じる" },
   "节点标识：{value1}": { en: "Node ID: {value1}", ja: "ノード ID：{value1}" },
   保存: { en: "Save", ja: "保存" },
   权限: { en: "Access", ja: "アクセス" },
@@ -266,9 +270,9 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Deleted tasks",
     ja: "削除済みタスク",
   },
-  " · 已选择 {value1} 个任务 ID（最多 128 个）": {
-    en: " · {value1} task IDs selected (maximum 128)",
-    ja: " · タスク ID を {value1} 件選択中（最大 128 件）",
+  " · 已选择 {value1} 个任务 ID": {
+    en: " · {value1} task IDs selected",
+    ja: " · タスク ID を {value1} 件選択中",
   },
   "{value1} 条节点任务记录{value2}": {
     en: "{value1} node task records{value2}",
@@ -289,10 +293,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   刷新回收站: {
     en: "Refresh recycle bin",
     ja: "ごみ箱を更新",
-  },
-  "选择前 128 个已删除任务": {
-    en: "Select the first 128 deleted tasks",
-    ja: "先頭の削除済みタスク 128 件を選択",
   },
   选择全部已删除任务: {
     en: "Select all deleted tasks",

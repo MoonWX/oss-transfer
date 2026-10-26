@@ -170,9 +170,7 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
   });
   await page.goto("/tasks");
   await page.getByRole("checkbox", { name: "选择当前页任务" }).check();
-  await expect(
-    page.getByText("已选 10 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 10 项", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(page.getByText("11–20 / 27", { exact: true })).toBeVisible();
   await expect(
@@ -181,9 +179,7 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
   await page
     .getByRole("button", { name: "选择全部 27 个结果", exact: true })
     .click();
-  await expect(
-    page.getByText("已选 27 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 27 项", { exact: true })).toBeVisible();
   await select(page, "每页", "25");
   await expect(page.getByText("1–25 / 27", { exact: true })).toBeVisible();
   await expect(

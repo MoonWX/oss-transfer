@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 export const tasks = [
   {
     taskIndex: 1048,
+    generation: 1,
     sourceS3Alias: "production",
     sourceBucket: "media-archive",
     destS3Alias: "backup",
@@ -20,6 +21,7 @@ export const tasks = [
   },
   {
     taskIndex: 1047,
+    generation: 1,
     sourceS3Alias: "production",
     sourceBucket: "analytics-2026",
     destS3Alias: "backup",
@@ -34,6 +36,7 @@ export const tasks = [
   },
   {
     taskIndex: 1046,
+    generation: 1,
     sourceS3Alias: "production",
     sourceBucket: "training-datasets",
     direction: "OSS_TO_LOCAL",
@@ -55,6 +58,7 @@ export const tasks = [
   },
   {
     taskIndex: 1045,
+    generation: 1,
     sourceS3Alias: "production",
     sourceBucket: "application-logs",
     destS3Alias: "backup",

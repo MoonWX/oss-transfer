@@ -2,7 +2,13 @@ import { t, useI18n, formatDate } from "../lib/i18n";
 import { useNodeLabels } from "../lib/workerStatus";
 import { taskNodeLabels, type NodeDisplay } from "../lib/nodeRegistry";
 import { useSearchParams } from "react-router-dom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   Alert,
   Box,
@@ -35,7 +41,8 @@ import {
   RefreshRounded,
   SystemUpdateAltRounded,
 } from "@mui/icons-material";
-import { api, ApiError, useApi, useNotify } from "../lib/api";
+import { api, getToken, useApi, useNotify } from "../lib/api";
+import { runTaskBatches, type BatchProgress } from "../lib/taskBatches";
 import ListPagination, {
   rememberPageSize,
   savedPageSize,
@@ -98,6 +105,20 @@ function deletedEndpoint(task: DeletedTask, source: boolean) {
 }
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+// A confirmed operation keeps running across SPA navigation. Share the guard
+// across page instances so navigating back cannot submit the same batch again.
+let deletingSession: string | null = null;
+const deletionListeners = new Set<() => void>();
+function subscribeDeletion(listener: () => void) {
+  deletionListeners.add(listener);
+  return () => {
+    deletionListeners.delete(listener);
+  };
+}
+function setDeletingSession(token: string | null) {
+  deletingSession = token;
+  deletionListeners.forEach((listener) => listener());
+}
 export default function ToolsPage() {
   useI18n();
   const nodeLabel = useNodeLabels();
@@ -170,8 +191,24 @@ export default function ToolsPage() {
   const membershipKnown = hasMembershipSnapshot || !!nodes.data?.data?.nodes;
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const deletionSession = useSyncExternalStore(
+    subscribeDeletion,
+    () => deletingSession,
+  );
+  const deleting = deletionSession !== null && deletionSession === getToken();
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteProgress, setDeleteProgress] = useState<BatchProgress | null>(
+    null,
+  );
+  const [confirmedIds, setConfirmedIds] = useState<number[]>([]);
+  const [showDeleteDetails, setShowDeleteDetails] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(() =>
     savedPageSize("oss-transfer-recycle-page-size", 25),
@@ -202,8 +239,9 @@ export default function ToolsPage() {
     if (page > lastPage) setPage(lastPage);
   }, [rows.length, page, pageSize]);
   const uniqueIds = [...new Set(rows.map((task) => task.taskIndex))];
-  const selectableIds = uniqueIds.slice(0, 128);
-  const activeSelection = selectedIds.filter((id) => uniqueIds.includes(id));
+  const availableIds = new Set(uniqueIds);
+  const activeSelection = selectedIds.filter((id) => availableIds.has(id));
+  const selectedSet = new Set(activeSelection);
   const missingNodes = [
     ...new Set([
       ...(
@@ -216,117 +254,167 @@ export default function ToolsPage() {
     ]),
   ];
   async function deleteTasks() {
-    setDeleting(true);
+    const token = getToken();
+    if (!token || deletingSession === token || !confirmedIds.length) return;
+    setDeletingSession(token);
+    const taskIds = [...confirmedIds];
+    const isCurrent = () => token === getToken();
+    const canUpdateView = () => mounted.current && isCurrent();
     setDeleteError(null);
+    setShowDeleteDetails(false);
+    const issues: string[] = [];
+    const retained = new Set<string>();
     try {
-      const result = await api("/api/master/permanent-delete", {
-        method: "POST",
-        body: { taskIds: activeSelection },
-      });
-      setConfirmDelete(false);
-      const detail = result.data || result;
-      const failedWorkers = [
-        ...new Set([
-          ...(detail.failedWorkers || []),
-          ...(detail.unreachableWorkers || []),
-        ]),
-      ];
-      const partial =
-        detail.partial || Number(detail.failed) > 0 || failedWorkers.length > 0;
-      const details = Array.isArray(detail.details) ? detail.details : [];
-      const removedIds = details
-        .filter((item: any) => item.success)
-        .map((item: any) => item.taskId);
-      setEarlierRows((previous) =>
-        previous.filter((task) => !removedIds.includes(task.taskIndex)),
-      );
-      const retained = [
-        ...new Set(
-          details.flatMap((item: any) => item.retainedAgentHistory ?? []),
-        ),
-      ];
-      if (!partial) setSelectedIds([]);
-      else
-        setDeleteError(
-          t("{value1}{value2}", {
-            value1: detail.message || t("部分记录未删除，请刷新后重试。"),
-            value2: failedWorkers.length
-              ? t("（未完成节点：{value1}）", {
-                  value1: failedWorkers
-                    .map((id) =>
-                      nodeLabel(String(id), detail?.nodeDisplays?.[String(id)]),
-                    )
+      const result = await runTaskBatches(
+        [{ path: "/api/master/permanent-delete", taskIds }],
+        {
+          isCurrent,
+          onProgress: (progress) => {
+            if (canUpdateView()) setDeleteProgress(progress);
+          },
+          onResult: (detail, ids) => {
+            const entries = Array.isArray(detail.details) ? detail.details : [];
+            for (const item of entries) {
+              if (item.success === false || item.error)
+                issues.push(
+                  `#${item.taskId}: ${item.message || item.error || t("请求失败")}`,
+                );
+              for (const id of item.retainedAgentHistory ?? [])
+                retained.add(
+                  nodeLabel(String(id), detail.nodeDisplays?.[String(id)]),
+                );
+            }
+            const unavailable = [
+              ...new Set<string>([
+                ...(detail.failedWorkers || []),
+                ...(detail.unreachableWorkers || []),
+              ]),
+            ];
+            if (unavailable.length)
+              issues.push(
+                t("（未完成节点：{value1}）", {
+                  value1: unavailable
+                    .map((id) => nodeLabel(id, detail.nodeDisplays?.[id]))
                     .join(", "),
-                })
-              : "",
-          }),
+                }),
+              );
+            if (detail.message && (detail.partial || Number(detail.failed) > 0))
+              issues.push(detail.message);
+            // Drop confirmed removals immediately, even if a later batch fails.
+            const removed = new Set(
+              entries
+                .filter((item: any) => item.success)
+                .map((item: any) => item.taskId),
+            );
+            if (
+              !entries.length &&
+              !detail.partial &&
+              !detail.failed &&
+              !detail.failedWorkers?.length &&
+              !detail.unreachableWorkers?.length &&
+              Number(detail.accepted) === ids.length
+            )
+              ids.forEach((id) => removed.add(id));
+            if (canUpdateView()) {
+              setSelectedIds((previous) =>
+                previous.filter((id) => !removed.has(id)),
+              );
+              setEarlierRows((previous) =>
+                previous.filter((task) => !removed.has(task.taskIndex)),
+              );
+            }
+          },
+        },
+      );
+      if (!isCurrent()) return;
+      const successful = new Set(result.successfulIds);
+      if (canUpdateView()) {
+        setSelectedIds((previous) =>
+          previous.filter((id) => !successful.has(id)),
         );
-      setPage(0);
+        setEarlierRows((previous) =>
+          previous.filter((task) => !successful.has(task.taskIndex)),
+        );
+      }
+      for (const issue of result.issues)
+        issues.push(
+          `${issue.taskIds
+            .slice(0, 5)
+            .map((id) => `#${id}`)
+            .join(
+              ", ",
+            )}${issue.taskIds.length > 5 ? "…" : ""}: ${issue.message}`,
+        );
+      const partial =
+        result.failedIds.length > 0 ||
+        result.uncertainIds.length > 0 ||
+        result.unsubmittedIds.length > 0 ||
+        issues.length > 0;
+      if (partial) {
+        if (result.uncertainIds.length || result.unsubmittedIds.length)
+          issues.push(
+            t("待确认 {uncertain}，未提交 {unsubmitted}", {
+              uncertain: result.uncertainIds.length,
+              unsubmitted: result.unsubmittedIds.length,
+            }),
+          );
+        if (canUpdateView())
+          setDeleteError(
+            issues.join("\n") || t("部分记录未删除，请刷新后重试。"),
+          );
+      }
+      if (canUpdateView()) setConfirmDelete(false);
       notify(
         partial
-          ? t("部分记录未删除{value1}。", {
-              value1: failedWorkers.length
-                ? t("，未响应节点：{value1}", {
-                    value1: failedWorkers
-                      .map((id) =>
-                        nodeLabel(
-                          String(id),
-                          detail?.nodeDisplays?.[String(id)],
-                        ),
-                      )
-                      .join(", "),
-                  })
-                : t("，请刷新后重试"),
-            })
-          : retained.length
+          ? t("部分记录未删除，请刷新后重试。")
+          : retained.size
             ? t("任务记录已删除；已移除节点的本地历史保留：{value1}。", {
-                value1: retained
-                  .map((id) =>
-                    nodeLabel(String(id), detail?.nodeDisplays?.[String(id)]),
-                  )
-                  .join(", "),
+                value1: [...retained].join(", "),
               })
             : t("永久删除请求已提交，正在刷新回收站。"),
         partial ? "warning" : "info",
       );
-      await Promise.all([recycle.refresh(), nodes.refresh()]);
+      if (canUpdateView())
+        void Promise.allSettled([recycle.refresh(), nodes.refresh()]);
     } catch (error) {
-      const response = error instanceof ApiError ? error.response : undefined;
-      const detail = response?.data || response;
-      const failedWorkers: string[] = [
-        ...new Set<string>([
-          ...(detail?.failedWorkers || []),
-          ...(detail?.unreachableWorkers || []),
-        ]),
-      ];
-      const partial =
-        detail?.partial ||
-        Number(detail?.failed) > 0 ||
-        failedWorkers.length > 0;
-      const message = t("{value1}{value2}", {
-        value1: errorText(error),
-        value2: failedWorkers.length
-          ? t("（未完成节点：{value1}）", {
-              value1: failedWorkers
-                .map((id) =>
-                  nodeLabel(String(id), detail?.nodeDisplays?.[String(id)]),
-                )
-                .join(", "),
-            })
-          : "",
-      });
-      setDeleteError(message);
-      notify(message, partial ? "warning" : "error");
-      if (partial) {
-        setConfirmDelete(false);
-        setPage(0);
-        // Keep the selection; activeSelection excludes IDs removed by the fresh response.
-        await Promise.all([recycle.refresh(), nodes.refresh()]);
+      if (isCurrent()) {
+        notify(errorText(error), "error");
+        if (canUpdateView()) {
+          setDeleteError(errorText(error));
+          setConfirmDelete(false);
+          void recycle.refresh();
+        }
       }
     } finally {
-      setDeleting(false);
+      if (deletingSession === token) setDeletingSession(null);
     }
   }
+  const deletionProgress = deleteProgress && (
+    <Stack spacing={1} role="status" aria-live="polite">
+      <Typography variant="body2">
+        {t("已处理 {done} / {total}", {
+          done: deleteProgress.processed,
+          total: deleteProgress.total,
+        })}
+      </Typography>
+      <LinearProgress
+        aria-label={t("批量删除进度")}
+        variant="determinate"
+        value={
+          deleteProgress.total
+            ? (deleteProgress.processed / deleteProgress.total) * 100
+            : 0
+        }
+      />
+      <Typography variant="body2" color="text.secondary">
+        {t("已受理 {accepted}，忽略 {ignored}，失败 {failed}", deleteProgress)}
+        {!deleting &&
+        (deleteProgress.uncertain > 0 || deleteProgress.unsubmitted > 0)
+          ? ` · ${t("待确认 {uncertain}，未提交 {unsubmitted}", deleteProgress)}`
+          : ""}
+      </Typography>
+    </Stack>
+  );
   return (
     <Stack spacing={3}>
       <PageHeader
@@ -374,7 +462,38 @@ export default function ToolsPage() {
             )}
           </Alert>
           {recycle.error && <Alert severity="error">{recycle.error}</Alert>}
-          {deleteError && <Alert severity="warning">{deleteError}</Alert>}
+          {!deleting && deleteProgress && (
+            <Alert severity={deleteError ? "warning" : "success"}>
+              {deletionProgress}
+              {deleteError && (
+                <>
+                  <Button
+                    size="small"
+                    onClick={() => setShowDeleteDetails((value) => !value)}
+                  >
+                    {showDeleteDetails ? t("收起失败详情") : t("查看失败详情")}
+                  </Button>
+                  {showDeleteDetails && (
+                    <Typography
+                      component="pre"
+                      variant="body2"
+                      sx={{
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                        maxHeight: 240,
+                        overflow: "auto",
+                      }}
+                    >
+                      {deleteError}
+                    </Typography>
+                  )}
+                </>
+              )}
+            </Alert>
+          )}
+          {deleteError && !deleteProgress && (
+            <Alert severity="warning">{deleteError}</Alert>
+          )}
           {nodeDiscoveryFailed && (
             <Alert severity="warning">
               {t("节点清单读取失败，无法确认回收站是否覆盖全部节点。")}
@@ -429,7 +548,7 @@ export default function ToolsPage() {
                     ? t("{value1} 条节点任务记录{value2}", {
                         value1: formatNumber(rows.length),
                         value2: activeSelection.length
-                          ? t(" · 已选择 {value1} 个任务 ID（最多 128 个）", {
+                          ? t(" · 已选择 {value1} 个任务 ID", {
                               value1: activeSelection.length,
                             })
                           : "",
@@ -440,7 +559,7 @@ export default function ToolsPage() {
               <Stack direction="row" spacing={1}>
                 <Button
                   startIcon={<RefreshRounded />}
-                  disabled={recycle.loading}
+                  disabled={recycle.loading || deleting}
                   onClick={() => {
                     earlierRequest.current?.abort();
                     earlierRequest.current = null;
@@ -461,7 +580,10 @@ export default function ToolsPage() {
                   disabled={
                     !activeSelection.length || deleting || recycle.loading
                   }
-                  onClick={() => setConfirmDelete(true)}
+                  onClick={() => {
+                    setConfirmedIds([...activeSelection]);
+                    setConfirmDelete(true);
+                  }}
                 >
                   {t("永久删除")}
                 </Button>
@@ -482,26 +604,20 @@ export default function ToolsPage() {
                         <TableCell padding="checkbox">
                           <Checkbox
                             inputProps={{
-                              "aria-label":
-                                uniqueIds.length > 128
-                                  ? t("选择前 128 个已删除任务")
-                                  : t("选择全部已删除任务"),
+                              "aria-label": t("选择全部已删除任务"),
                             }}
+                            disabled={deleting}
                             checked={
-                              selectableIds.length > 0 &&
-                              selectableIds.every((id) =>
-                                activeSelection.includes(id),
-                              )
+                              uniqueIds.length > 0 &&
+                              uniqueIds.every((id) => selectedSet.has(id))
                             }
                             indeterminate={
                               activeSelection.length > 0 &&
-                              !selectableIds.every((id) =>
-                                activeSelection.includes(id),
-                              )
+                              !uniqueIds.every((id) => selectedSet.has(id))
                             }
                             onChange={(event) =>
                               setSelectedIds(
-                                event.target.checked ? selectableIds : [],
+                                event.target.checked ? uniqueIds : [],
                               )
                             }
                           />
@@ -519,7 +635,7 @@ export default function ToolsPage() {
                         .map((task) => (
                           <TableRow
                             hover
-                            selected={activeSelection.includes(task.taskIndex)}
+                            selected={selectedSet.has(task.taskIndex)}
                             key={`${task.workerNode}-${task.taskIndex}`}
                           >
                             <TableCell padding="checkbox">
@@ -529,19 +645,12 @@ export default function ToolsPage() {
                                     value1: task.taskIndex,
                                   }),
                                 }}
-                                checked={activeSelection.includes(
-                                  task.taskIndex,
-                                )}
-                                disabled={
-                                  activeSelection.length >= 128 &&
-                                  !activeSelection.includes(task.taskIndex)
-                                }
+                                checked={selectedSet.has(task.taskIndex)}
+                                disabled={deleting}
                                 onChange={(event) =>
                                   setSelectedIds((ids) =>
                                     event.target.checked
-                                      ? [
-                                          ...new Set([...ids, task.taskIndex]),
-                                        ].slice(0, 128)
+                                      ? [...new Set([...ids, task.taskIndex])]
                                       : ids.filter(
                                           (id) => id !== task.taskIndex,
                                         ),
@@ -652,7 +761,7 @@ export default function ToolsPage() {
           >
             <DialogTitle>
               {t("永久删除 {count} 个任务？", {
-                count: activeSelection.length,
+                count: confirmedIds.length,
               })}
             </DialogTitle>
             <DialogContent>
@@ -663,9 +772,14 @@ export default function ToolsPage() {
               </Alert>
               <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
                 {t("任务 ID：{ids}", {
-                  ids: activeSelection.map((id) => `#${id}`).join(", "),
+                  ids:
+                    confirmedIds
+                      .slice(0, 20)
+                      .map((id) => `#${id}`)
+                      .join(", ") + (confirmedIds.length > 20 ? "…" : ""),
                 })}
               </Typography>
+              {deleting && <Box sx={{ mt: 2 }}>{deletionProgress}</Box>}
               <Divider sx={{ my: 2 }} />
               <Typography variant="body2" color="text.secondary">
                 {t("源端和目标端的数据对象不受影响。")}

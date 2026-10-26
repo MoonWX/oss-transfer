@@ -1,4 +1,38 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "未响应节点：{value1}": {
+    en: "Unresponsive nodes: {value1}",
+    ja: "応答していないノード：{value1}",
+  },
+  "无法确认任务 #{id} 的当前状态，请刷新后重试。": {
+    en: "Cannot confirm the current state of task #{id}. Refresh before trying again.",
+    ja: "タスク #{id} の現在の状態を確認できません。更新後に再試行してください。",
+  },
+  "已选 {count} 项": { en: "{count} selected", ja: "{count} 件選択中" },
+  "等 {count} 个任务": {
+    en: " and others ({count} tasks)",
+    ja: " ほか、計 {count} 件",
+  },
+  批量操作进度: { en: "Batch operation progress", ja: "一括操作の進捗" },
+  "已处理 {done} / {total}": {
+    en: "Processed {done} / {total}",
+    ja: "処理済み {done} / {total}",
+  },
+  "已受理 {accepted}，忽略 {ignored}，失败 {failed}": {
+    en: "Accepted {accepted}, ignored {ignored}, failed {failed}",
+    ja: "受付済み {accepted}、対象外 {ignored}、失敗 {failed}",
+  },
+  "待确认 {uncertain}，未提交 {unsubmitted}": {
+    en: "Unconfirmed {uncertain}, not submitted {unsubmitted}",
+    ja: "結果未確認 {uncertain}、未送信 {unsubmitted}",
+  },
+  "部分结果待确认，请刷新任务状态。": {
+    en: "Some results are unconfirmed. Refresh task status before trying again.",
+    ja: "一部の結果は未確認です。タスクの状態を更新してください。",
+  },
+  "所选任务正在处理，请勿重复提交。": {
+    en: "The selected tasks are being processed. Do not submit them again.",
+    ja: "選択したタスクは処理中です。再送信しないでください。",
+  },
   分页: { en: "Pagination", ja: "ページ切り替え" },
   任务分页: { en: "Task pagination", ja: "タスクのページ切り替え" },
   "第 {page} 页": { en: "Page {page}", ja: "{page} ページ" },
@@ -1152,14 +1186,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Selected",
     ja: "選択済み",
   },
-  "项（最多 128 项）": {
-    en: "items (up to 128)",
-    ja: "件（最大128件）",
-  },
-  "选择前 128 个结果": {
-    en: "Select first 128 results",
-    ja: "最初の128件を選択",
-  },
   "选择全部 {value1} 个结果": {
     en: "Select all {value1} results",
     ja: "全 {value1}件を選択",
@@ -1945,10 +1971,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "已加载 {count} 个任务。统计仅包含最近一页。": {
     en: "Loaded {count} tasks. Statistics cover only the most recent page.",
     ja: "{count}件のタスクを読み込みました。統計には直近のページのみ含まれます。",
-  },
-  "已选 {count} 项（最多 128 项）": {
-    en: "{count} selected (up to 128)",
-    ja: "{count}件選択済み（最大128件）",
   },
   "{count} 个可选": {
     en: "{count} available",

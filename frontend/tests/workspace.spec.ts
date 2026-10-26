@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
-import { revealChildren } from "./task-children-fixture";
+import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 
 test("login, persistent theme, logout and authenticated requests", async ({
   page,
@@ -34,8 +34,21 @@ test("tasks filter, scoped start, partial failure and local detail", async ({
     route.fulfill({
       json: {
         success: true,
-        message: "启动任务已提交，成功: 1, 失败: 1",
-        details: ["节点 10.0.1.12: 转发失败"],
+        accepted: 0,
+        ignored: 0,
+        failed: 1,
+        partial: true,
+        details: [
+          {
+            taskId: 1047,
+            generation: 1,
+            status: "PENDING",
+            success: false,
+            accepted: false,
+            ignored: false,
+            message: "节点 10.0.1.13: 注册凭证失效",
+          },
+        ],
       },
     }),
   );
@@ -44,7 +57,10 @@ test("tasks filter, scoped start, partial failure and local detail", async ({
   await page.getByRole("button", { name: "启动", exact: true }).click();
   const requestPromise = page.waitForRequest("**/api/master/start");
   await page.getByRole("button", { name: "确认启动" }).click();
-  expect((await requestPromise).postDataJSON()).toEqual({ taskIds: [1047] });
+  expect((await requestPromise).postDataJSON()).toEqual({
+    taskIds: [1047],
+    expectedGenerations: { 1047: 1 },
+  });
   await expect(page.getByText(/部分请求未完成/)).toBeVisible();
   await page.getByRole("button", { name: "取消选择", exact: true }).click();
   await page.getByRole("checkbox", { name: "选择任务 1048" }).check();
@@ -94,29 +110,69 @@ test("stopping a local parent with completed shards is not reported as a partial
 }) => {
   await mockApi(page);
   let stopped = false;
+  const parent = () => ({
+    ...tasks[2],
+    status: stopped ? "STOPPED" : "RUNNING",
+    childCount: 2,
+    failedObjectCount: 0,
+  });
   await page.route("**/api/master/status", (route) =>
     route.fulfill({
       json: {
         totalTasks: tasks.length,
-        tasks: tasks.map((task) =>
-          task.taskIndex === 1046
-            ? { ...task, status: stopped ? "STOPPED" : "RUNNING" }
-            : task,
-        ),
+        tasks: tasks.map((task) => (task.taskIndex === 1046 ? parent() : task)),
       },
     }),
   );
+  await page.route("**/api/master/tasks/1046", (route) =>
+    route.fulfill({ json: { success: true, data: parent() } }),
+  );
+  await mockTaskChildren(page, () => ({
+    parentTaskId: 1046,
+    items: [
+      {
+        taskIndex: -1,
+        shardId: "1046-1",
+        subtaskNumber: 1,
+        status: "COMPLETED",
+        executionNodeIp: "10.0.1.12",
+        listObjectCount: 100,
+        putObjectCount: 100,
+        failedObjectCount: 0,
+      },
+      {
+        taskIndex: -2,
+        shardId: "1046-2",
+        subtaskNumber: 2,
+        status: stopped ? "STOPPED" : "RUNNING",
+        executionNodeIp: "10.0.1.12",
+        listObjectCount: 45100,
+        putObjectCount: 45082,
+        failedObjectCount: 0,
+      },
+    ],
+  }));
   await page.route("**/api/master/local-transfers/stop", (route) => {
     stopped = true;
     return route.fulfill({
       json: {
         success: true,
         data: {
-          accepted: 107,
-          ignored: 11,
+          accepted: 1,
+          ignored: 0,
           failed: 0,
           partial: false,
           unreachableWorkers: [],
+          details: [
+            {
+              taskId: 1046,
+              generation: 1,
+              status: "STOPPED",
+              success: true,
+              accepted: true,
+              ignored: false,
+            },
+          ],
         },
       },
     });
@@ -136,12 +192,22 @@ test("stopping a local parent with completed shards is not reported as a partial
     }),
   ).toContainText("已停止");
   await expect(
-    page.getByText(/停止请求已提交，本地执行项已受理 107，忽略 11，失败 0/),
+    page.getByText(/停止请求已提交，已受理 1，忽略 0，失败 0/),
   ).toBeVisible();
   await expect(page.getByText(/部分请求未完成/)).toHaveCount(0);
   await expect(
     page.getByRole("checkbox", { name: "选择任务 1046" }),
   ).not.toBeChecked();
+  await page.getByRole("button", { name: "查看任务 1046" }).click();
+  await revealChildren(page);
+  const children = page.getByTestId("task-children-region");
+  await expect(
+    children.getByRole("button", { name: "查看子任务 1046-1", exact: true }),
+  ).toContainText("已完成");
+  await expect(
+    children.getByRole("button", { name: "查看子任务 1046-2", exact: true }),
+  ).toContainText("已停止");
+  await expect(children.getByText("已加载全部 2 个子任务")).toBeVisible();
 });
 
 test("all routes render without errors and desktop/mobile fit", async ({

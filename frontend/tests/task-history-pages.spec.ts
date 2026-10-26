@@ -130,7 +130,7 @@ test("recycle history loads earlier records without claiming a node is missing",
   ).toHaveCount(0);
 });
 
-test("bulk stop selects at most 128 parents and allows a later explicit selection", async ({
+test("bulk stop selects all parents and submits bounded batches without duplicates", async ({
   page,
 }) => {
   await mockApi(page);
@@ -154,26 +154,27 @@ test("bulk stop selects at most 128 parents and allows a later explicit selectio
     .getByRole("checkbox", { name: "选择任务 130", exact: true })
     .check();
   await page
-    .getByRole("button", { name: "选择前 128 个结果", exact: true })
+    .getByRole("button", { name: "选择全部 130 个结果", exact: true })
     .click();
-  await expect(
-    page.getByText("已选 128 项（最多 128 项）", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("已选 130 项", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await page.getByRole("button", { name: "确认停止", exact: true }).click();
-  await expect.poll(() => requests.length).toBe(1);
-  expect(requests[0]).toEqual(
-    Array.from({ length: 128 }, (_, index) => 130 - index),
+  await expect.poll(() => requests.length).toBe(3);
+  expect(requests.map((ids) => ids.length)).toEqual([64, 64, 2]);
+  expect(requests.flat()).toEqual(
+    Array.from({ length: 130 }, (_, index) => 130 - index),
   );
   await page.getByPlaceholder("搜索任务、存储桶或路径").fill("remaining-one");
   await page.getByRole("checkbox", { name: "选择任务 1", exact: true }).check();
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await page.getByRole("button", { name: "确认停止", exact: true }).click();
-  await expect.poll(() => requests.length).toBe(2);
-  expect(requests[1]).toEqual([1]);
+  await expect.poll(() => requests.length).toBe(4);
+  expect(requests[3]).toEqual([1]);
 });
 
-test("recycle bulk deletion is limited to 128 parents", async ({ page }) => {
+test("recycle bulk deletion selects every parent and submits all IDs once", async ({
+  page,
+}) => {
   await mockApi(page);
   const records = Array.from({ length: 130 }, (_, index) => ({
     ...task(130 - index),
@@ -190,24 +191,26 @@ test("recycle bulk deletion is limited to 128 parents", async ({ page }) => {
       },
     }),
   );
-  let submitted: number[] | undefined;
+  const submitted: number[][] = [];
   await page.route("**/api/master/permanent-delete", (route) => {
-    submitted = route.request().postDataJSON().taskIds;
+    const ids = route.request().postDataJSON().taskIds as number[];
+    submitted.push(ids);
     return route.fulfill({
-      json: { success: true, accepted: submitted?.length, failed: 0 },
+      json: { success: true, accepted: ids.length, failed: 0 },
     });
   });
   await page.goto("/tools?tab=recycle");
   await page
-    .getByRole("checkbox", { name: "选择前 128 个已删除任务", exact: true })
+    .getByRole("checkbox", { name: "选择全部已删除任务", exact: true })
     .check();
   await expect(
-    page.getByText("已选择 128 个任务 ID（最多 128 个）", { exact: false }),
+    page.getByText("已选择 130 个任务 ID", { exact: false }),
   ).toBeVisible();
   await page.getByRole("button", { name: "永久删除", exact: true }).click();
   await page.getByRole("button", { name: "确认永久删除", exact: true }).click();
-  await expect.poll(() => submitted?.length).toBe(128);
-  expect(submitted).toEqual(
-    Array.from({ length: 128 }, (_, index) => 130 - index),
+  await expect.poll(() => submitted.flat().length).toBe(130);
+  expect(submitted.flat()).toEqual(
+    Array.from({ length: 130 }, (_, index) => 130 - index),
   );
+  expect(submitted.map((ids) => ids.length)).toEqual([64, 64, 2]);
 });

@@ -203,7 +203,13 @@ func (e runtimeExecutor) Execute(ctx context.Context, command agenttransport.Com
 		if err != nil {
 			return agenttransport.Response{}, err
 		}
-		payload, err := json.Marshal(map[string]any{"nodeId": a.identity.InstanceID, "bootId": a.bootID, "hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "protocolVersion": 1})
+		capabilities := map[string]any{"nodeId": a.identity.InstanceID, "bootId": a.bootID, "hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "protocolVersion": 1}
+		if provider, ok := a.options.Executor.(interface{ LeaseCapabilities() map[string]any }); ok {
+			for key, value := range provider.LeaseCapabilities() {
+				capabilities[key] = value
+			}
+		}
+		payload, err := json.Marshal(capabilities)
 		return agenttransport.Response{Status: 200, Payload: payload}, err
 	}
 	if a.options.Executor != nil {

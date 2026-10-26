@@ -50,10 +50,11 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 		rate  agentservice.TaskRateSnapshot
 		valid bool
 	}
-	results := make([]result, len(p.Spec.Nodes))
+	nodes := p.ActiveNodes()
+	results := make([]result, len(nodes))
 	var workers sync.WaitGroup
 	slots := make(chan struct{}, 8)
-	for i, node := range p.Spec.Nodes {
+	for i, node := range nodes {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()

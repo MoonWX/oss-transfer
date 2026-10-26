@@ -48,7 +48,8 @@ func (t *Tx) compressionEnabled() bool {
 	}
 	var format databaseFormat
 	return json.Unmarshal(bucket.Get([]byte("format")), &format) == nil &&
-		(format.Role == "master" || format.Role == "agent") && format.SchemaVersion == SchemaCompressedValues
+		(format.Role == "master" || format.Role == "agent") &&
+		format.SchemaVersion >= SchemaCompressedValues && supportedSchema(format.SchemaVersion)
 }
 
 func encodeValue(raw []byte) ([]byte, error) {

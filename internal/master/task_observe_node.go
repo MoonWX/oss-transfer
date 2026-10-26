@@ -86,7 +86,7 @@ func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.
 	if err == nil && (record.Job.ChildID != child.Job.ChildID || record.Job.Generation == 0) {
 		return nil, task.ErrConflict
 	}
-	if !agentStatus(err, 404) && !(err == nil && record.Job.Generation < p.Generation) {
+	if !agentStatus(err, 404) && !(err == nil && (record.Job.Generation < p.Generation || record.Job.Assignment < child.Job.Assignment)) {
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +95,7 @@ func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.
 	if p.Status != "RUNNING" {
 		return nil, nil
 	}
-	err = t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil)
+	err = t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, childAcceptance(p, child), nil)
 	var agentErr *AgentError
 	if child.Job.SharedLocalSource && errors.As(err, &agentErr) && agentErr.Message == agentservice.ErrSharedVerificationRequired.Error() {
 		return nil, nil

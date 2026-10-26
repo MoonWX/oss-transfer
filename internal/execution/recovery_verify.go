@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -42,7 +43,7 @@ func (e *Engine) verifyCompleted(parent context.Context, record Record, attempt 
 			go func(result ItemResult) {
 				defer workers.Done()
 				defer e.releaseObject(attempt)
-				invalid, err := verifyCompletedObject(ctx, target, result)
+				invalid, err := verifyCompletedObjectForJob(ctx, target, result, record.Job)
 				out := checked{invalid: invalid, err: err}
 				select {
 				case results <- out:
@@ -73,6 +74,10 @@ func (e *Engine) verifyCompleted(parent context.Context, record Record, attempt 
 }
 
 func verifyCompletedObject(ctx context.Context, target transferstore.Store, result ItemResult) (invalid string, err error) {
+	return verifyCompletedObjectForJob(ctx, target, result, Job{})
+}
+
+func verifyCompletedObjectForJob(ctx context.Context, target transferstore.Store, result ItemResult, job Job) (invalid string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("verify completed target %q: panic: %v", result.Target.Key, recovered)
@@ -85,7 +90,16 @@ func verifyCompletedObject(ctx context.Context, target transferstore.Store, resu
 	if err != nil {
 		return "", fmt.Errorf("verify completed target %q: %w", result.Target.Key, err)
 	}
-	if changed(actual, result.Target) {
+	expected := result.Target
+	if job.SharedLocalDestination && job.Destination.Kind == "LOCAL" {
+		if !strings.HasPrefix(expected.ETag, "local:") || expected.ModifiedAt.IsZero() || expected.VersionID != "" {
+			return "", errors.New("shared local target requires a complete local result fingerprint")
+		}
+		// The Agent has proved this is the same shared destination. Device and
+		// inode numbers may differ across mounts; size and mtime remain checked.
+		expected.ETag = ""
+	}
+	if changed(actual, expected) {
 		return result.ID, nil
 	}
 	return "", nil

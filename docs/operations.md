@@ -28,9 +28,11 @@ The first upgrade from a version without online updates still uses the installat
 
 ## Disconnected nodes
 
-An Agent can keep transferring accepted work while its connection to the Master is down. The Master continues collecting progress and assigning newly discovered work to available selected nodes. It leaves already assigned children on their original node to avoid duplicate transfers. If the scanner is offline, discovery waits for its saved cursor to become available again.
+Multi-node tasks can move unfinished child tasks to another selected node after an Agent loses contact. All participating Agents must support task leases. The Master renews execution permission every 20 seconds; an isolated Agent stops starting work and cancels active transfers when its 60-second lease expires. Reassignment waits another 10 seconds. A returning node stays out of that task, but remains available for new tasks.
 
-Restarting an Agent with its original database resumes interrupted children. A permanently lost node is not automatically replaced: safe reassignment also requires stopping or fencing its old process and preserving access to the source data. A stop request remains pending until the affected Agent acknowledges it.
+Takeover supports OSS-to-OSS and verified shared directories. A small hidden marker stays in each shared directory so another node can verify that it still sees the original volume. A private local directory, a missing marker, or an older Agent prevents automatic reassignment. Completed children stay unchanged; incomplete children keep their numbers and saved file results. The new owner checks already completed objects before continuing. If the scanner fails, the replacement rebuilds its scan index from the Master's saved assignments and rescans metadata; it does not download the dataset for this check.
+
+A request already accepted by object storage may finish after its client is cancelled. Takeover therefore cannot promise exactly-once writes across arbitrary S3 services. Sources should remain stable during a transfer. Enabling task leases raises the database format to schema 5; downgrading requires the matching pre-upgrade database backups for both Master and Agents.
 
 ## Database space
 
@@ -51,6 +53,10 @@ Completed scans release their deduplication indexes in the background. Permanent
 
 安装器在停服务前检查备份空间，空间不足时保留运行中的服务。数据库备份每 10 秒显示进度，落盘同步也会提示；大数据库可能需要几分钟。历史备份不会自动删除。
 
-Agent 与 Master 断线时，已经接收的任务可能仍在执行。Master 继续汇总健康节点的进度，并将新发现的工作分配给所选的可用节点；已分配的子任务留在原节点，避免重复传输。扫描节点离线时，等待原扫描游标恢复。Agent 使用原数据库重启后会恢复中断的子任务。永久丢失的节点目前不会自动接管，停止任务也必须等待原 Agent 确认。
+多节点任务中的 Agent 失联后，未完成子任务会自动交给原先选定的健康节点。参与节点都需要支持任务租约：Master 每 20 秒续期，失联 Agent 在 60 秒授权到期后停止启动新工作并取消当前传输；Master 再等待 10 秒后重新分配。原节点回来后不再参与这个任务，仍可用于新任务。
+
+接管支持 OSS→OSS 和已验证的共享目录。共享目录保留一个很小的隐藏校验文件，接管前通过它确认候选节点仍能访问原来的卷。独占本地目录、校验文件丢失或旧版 Agent 都不会自动接管。已完成子任务保持不变，未完成子任务保留编号和文件结果，新节点校验已完成对象后继续。扫描节点故障时，新节点根据 Master 保存的已分发清单重建去重索引，再扫描源端元数据，无需下载全部数据。
+
+对象存储已经接收的请求可能在客户端取消后才完成，因此不能保证任意 S3 服务上绝无重复写入。迁移期间应保持源数据稳定。启用租约后数据库格式升级为 schema 5；降级需要同时恢复 Master 和 Agent 升级前的配套数据库备份。
 
 扫描完成后会在后台回收去重索引，永久删除任务时也会清理扫描和执行记录。释放的页面可再次使用；缩小已有数据库文件的方法见[数据库维护](database-maintenance.md)。

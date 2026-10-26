@@ -1432,7 +1432,8 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 		online[member.ID] = member.EnrollmentID
 	}
 	displays := s.nodeDisplaySnapshot()
-	nodes := make([]map[string]any, len(parent.Spec.Nodes))
+	activeNodes := parent.ActiveNodes()
+	nodes := make([]map[string]any, len(activeNodes))
 	// All lookups share one deadline, and a bounded set of workers. A dead
 	// Agent must not hold the UI open for thirty seconds per selected node.
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -1446,7 +1447,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < min(8, len(nodes)); i++ {
 		workers.Go(func() {
 			for index := range indexes {
-				node := parent.Spec.Nodes[index]
+				node := activeNodes[index]
 				if online[node.ID] != node.EnrollmentID {
 					nodes[index] = map[string]any{"address": node.Address, "applied": false, "message": localize(w, "执行节点未连接")}
 					addNodeDisplay(nodes[index], displays.lookup(node.ID, node.Address))

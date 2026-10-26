@@ -290,7 +290,7 @@ func (t *taskRuntime) syncInventory(ctx context.Context, p task.Parent) (bool, e
 	}
 	descriptor := h.Descriptor
 	descriptor.ParentID = p.ID
-	scanner := nodeSession(p.Spec.Nodes[0])
+	scanner := nodeSession(p.ScannerNode())
 	var remote inventory.Header
 	if err = t.server.agentCall(ctx, scanner, "inventory_begin", true, descriptor, &remote); err != nil {
 		return false, err

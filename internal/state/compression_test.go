@@ -199,7 +199,7 @@ func TestClaimRoleRejectsFutureSchemaWithoutWriting(t *testing.T) {
 	}
 	defer db.Close()
 	if err := db.Update(func(tx *Tx) error {
-		return tx.Put("metadata", "format", databaseFormat{Role: "master", SchemaVersion: SchemaCompressedValues + 1})
+		return tx.Put("metadata", "format", databaseFormat{Role: "master", SchemaVersion: SchemaTaskLeases + 1})
 	}); err != nil {
 		t.Fatal(err)
 	}

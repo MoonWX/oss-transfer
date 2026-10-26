@@ -31,7 +31,7 @@ func (s *Service) scanBatches(ctx context.Context, command agenttransport.Comman
 	result := ScanBatchesResponse{Batches: make([]discovery.Batch, 0, request.Limit)}
 	size := 32
 	for range request.Limit {
-		batch, found, err := s.Scanner.Batch(ctx, request.ParentID, request.Generation, request.Number)
+		batch, found, err := s.Scanner.Batch(ctx, request.ParentID, request.Generation, request.Number, request.Epoch)
 		if err != nil {
 			return response(nil, err)
 		}

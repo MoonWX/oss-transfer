@@ -148,7 +148,7 @@ func active(phase string) bool {
 // and stop commands remain available while a native upgrade is in progress.
 func StartsWork(operation string) bool {
 	switch operation {
-	case "child_accept", "child_recover", "scan_start", "scan_resume", "parent_resume", "comparison_start", "inventory_begin":
+	case "lease_prepare", "lease_grant", "scan_takeover_seed", "scan_takeover_finalize", "child_accept", "child_recover", "scan_start", "scan_resume", "parent_resume", "comparison_start", "inventory_begin":
 		return true
 	}
 	return false

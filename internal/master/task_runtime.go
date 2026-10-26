@@ -36,11 +36,14 @@ type taskRuntime struct {
 	sharedProofs map[int64]string
 	rates        map[int64]taskRateCache
 	observeAfter map[int64]int
+	leases       *taskLeases
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}, observeAfter: map[int64]int{}}
+	t := &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}, observeAfter: map[int64]int{}}
+	t.leases = newTaskLeases(t)
+	return t
 }
 
 // Start launches control-plane reconciliation. HTTP construction alone does not
@@ -57,6 +60,8 @@ func (s *Server) Start() {
 	t.started = true
 	t.workers.Add(1)
 	go t.loop()
+	t.workers.Add(1)
+	go func() { defer t.workers.Done(); t.leases.loop(t.ctx) }()
 }
 func (t *taskRuntime) close() {
 	t.mu.Lock()
@@ -244,7 +249,7 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 			return p, task.ErrState
 		}
 		err = s.tasks.exclusive(ctx, id, func() error {
-			for _, node := range p.Spec.Nodes {
+			for _, node := range p.ActiveNodes() {
 				retired, err := s.agents.registry.IsRevoked(nodeSession(node))
 				if err != nil {
 					return err
@@ -297,6 +302,7 @@ func (s *Server) changeTaskLimits(ctx context.Context, id int64, mbps *float64, 
 }
 func parentPolicy(p task.Parent, index int) ratelimit.ParentLimit {
 	total := int64(math.Floor(p.Spec.BandwidthMbps * 125000))
+	p.Spec.Nodes = p.ActiveNodes()
 	members := int64(len(p.Spec.Nodes))
 	rate := int64(0)
 	if total > 0 {
@@ -311,7 +317,7 @@ func (t *taskRuntime) policies(ctx context.Context, p task.Parent) error {
 	// Offline members keep their reserved share until their old attempts are fenced.
 	var problems []error
 	var displays nodeDisplaySet
-	for i, node := range p.Spec.Nodes {
+	for i, node := range p.ActiveNodes() {
 		if err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil); err != nil {
 			if len(problems) == 0 {
 				displays = t.server.nodeDisplaySnapshot()
@@ -336,18 +342,34 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 		defer workers.Done()
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		err := t.server.agentCall(callCtx, nodeSession(p.Spec.Nodes[0]), "scan_stop", true, agentservice.ScanRequest{ParentID: p.ID, Generation: p.Generation}, nil)
+		stopped, err := t.nodeLeaseStopped(p, p.ScannerNode())
+		if err != nil {
+			results <- err
+			return
+		}
+		if stopped {
+			return
+		}
+		err = t.server.agentCall(callCtx, nodeSession(p.ScannerNode()), "scan_stop", true, agentservice.ScanRequest{ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch()}, nil)
 		if err != nil {
 			results <- fmt.Errorf("scanner stop: %w", err)
 		}
 	}()
-	for i, node := range p.Spec.Nodes {
+	for i, node := range p.ActiveNodes() {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			err := t.server.agentCall(callCtx, nodeSession(node), "parent_stop", true, agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation}, nil)
+			stopped, err := t.nodeLeaseStopped(p, node)
+			if err != nil {
+				results <- err
+				return
+			}
+			if stopped {
+				return
+			}
+			err = t.server.agentCall(callCtx, nodeSession(node), "parent_stop", true, agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation}, nil)
 			if err != nil {
 				results <- fmt.Errorf("Agent %s stop: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err)
 				return
@@ -367,12 +389,12 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 	return errors.Join(problems...)
 }
 func (t *taskRuntime) scanSpec(p task.Parent) discovery.Spec {
-	spec := discovery.Spec{InventoryID: p.Spec.InventoryID, ParentID: p.ID, Generation: p.Generation, Source: p.Spec.Source, Prefix: p.Spec.Prefix, SingleKey: p.Spec.ObjectKey, StartKey: p.Spec.StartKey, EndKey: p.Spec.EndKey}
+	spec := discovery.Spec{InventoryID: p.Spec.InventoryID, ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch(), Source: p.Spec.Source, Prefix: p.Spec.Prefix, SingleKey: p.Spec.ObjectKey, StartKey: p.Spec.StartKey, EndKey: p.Spec.EndKey}
 	if p.Legacy != nil && p.Legacy.RecoveryStarted {
 		spec.LegacyManifestID = p.Legacy.MigrationID
 	}
 	if spec.Source.Kind == "LOCAL" {
-		spec.Source.Root = p.Spec.Nodes[0].LocalRoot
+		spec.Source.Root = p.ScannerNode().LocalRoot
 	}
 	if p.Spec.ModifiedFrom != nil {
 		spec.ModifiedFrom = *p.Spec.ModifiedFrom
@@ -392,7 +414,7 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 	var problems []error
 	slots := make(chan struct{}, 8)
 	displays := t.server.nodeDisplaySnapshot()
-	for i, node := range p.Spec.Nodes {
+	for i, node := range p.ActiveNodes() {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -466,9 +488,9 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		}
 	}
 	s := t.server
-	scanner := nodeSession(p.Spec.Nodes[0])
+	scanner := nodeSession(p.ScannerNode())
 	control := agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation, RetryFailed: true, InventorySource: p.Spec.InventoryID != ""}
-	scanControl := agentservice.ScanRequest{ParentID: p.ID, Generation: p.Generation}
+	scanControl := agentservice.ScanRequest{ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch()}
 	if p.Status == "STOPPING" {
 		if err := t.stopMembers(ctx, p); err != nil {
 			return err
@@ -484,6 +506,21 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		return err
 	}
 	available, memberErr := t.prepareMembers(ctx, p, snapshot)
+	p, err = t.reconcileFailover(ctx, p, available)
+	if err != nil {
+		return err
+	}
+	scanner = nodeSession(p.ScannerNode())
+	scanControl.Epoch = p.ScannerEpoch()
+	if p.Failover != nil && p.Failover.Enabled {
+		// Retired peers are no longer required for progress or control ACKs.
+		memberErr = nil
+		for _, node := range p.ActiveNodes() {
+			if !available[node.ID] {
+				memberErr = errors.New("Waiting for an unavailable node's execution lease to expire")
+			}
+		}
+	}
 	defer func() { resultErr = errors.Join(memberErr, resultErr) }()
 	// Observations do not require the scanner. Preserve healthy peers' progress
 	// even when the original scanner is down or a shared-mount check must wait.
@@ -492,7 +529,20 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			memberErr = errors.Join(memberErr, err)
 		}
 	}
-	if !available[p.Spec.Nodes[0].ID] {
+	if p.Failover != nil && p.Failover.ScannerSeeding {
+		ready, seedErr := t.seedTakeoverScanner(ctx, p)
+		if seedErr != nil {
+			return seedErr
+		}
+		if !ready {
+			return nil
+		}
+		p, err = t.repo.Get(p.ID)
+		if err != nil {
+			return err
+		}
+	}
+	if !available[p.ScannerNode().ID] {
 		// A completed persisted manifest and confirmed child outcomes are
 		// sufficient to finish; the scanner need not reconnect just to repeat them.
 		finished, err := t.repo.FinishIfReady(p.ID, p.Generation)
@@ -505,7 +555,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		}
 		return errors.New("Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes")
 	}
-	if p.Status == "RESUMING" && len(available) != len(p.Spec.Nodes) {
+	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {
 		return errors.New("Waiting for all task nodes to acknowledge recovery")
 	}
 	if ready, err := t.syncInventory(ctx, p); err != nil {
@@ -515,16 +565,20 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	}
 	proofParent := p
 	proofParent.Spec.Nodes = nil
-	for _, node := range p.Spec.Nodes {
+	for _, node := range p.ActiveNodes() {
 		if available[node.ID] {
 			proofParent.Spec.Nodes = append(proofParent.Spec.Nodes, node)
 		}
 	}
-	if err := t.ensureSharedSource(ctx, proofParent); err != nil {
+	if p.Failover != nil && p.Failover.Enabled {
+		if err := t.verifyTaskStorage(ctx, p, proofParent.Spec.Nodes, false); err != nil {
+			return err
+		}
+	} else if err := t.ensureSharedSource(ctx, proofParent); err != nil {
 		return err
 	}
 	if p.Status == "RESUMING" {
-		for _, node := range p.Spec.Nodes {
+		for _, node := range p.ActiveNodes() {
 			err := s.agentCall(ctx, nodeSession(node), "parent_resume", true, control, nil)
 			if agentStatus(err, 404) {
 				old := control
@@ -556,7 +610,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if err := s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &scan); err != nil {
 		return err
 	}
-	if err := t.repo.ScanProgress(p.ID, p.Generation, scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error); err != nil {
+	if err := t.repo.ScanProgressForScanner(p.ID, p.Generation, p.ScannerEpoch(), scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error); err != nil {
 		return err
 	}
 	p, err = t.repo.Get(p.ID)
@@ -584,7 +638,7 @@ func (t *taskRuntime) dispatch(ctx context.Context, p task.Parent, control agent
 }
 
 func (t *taskRuntime) dispatchAvailable(ctx context.Context, p task.Parent, control agentservice.ScanRequest, available map[string]bool) error {
-	scanner := nodeSession(p.Spec.Nodes[0])
+	scanner := nodeSession(p.ScannerNode())
 	control.Number = int64(p.DispatchedThrough)
 	limit := min(16, pendingDispatchCapacity(p))
 	if limit <= 0 {
@@ -609,10 +663,12 @@ func (t *taskRuntime) dispatchAvailable(ctx context.Context, p task.Parent, cont
 	var children []task.Child
 	var err error
 	if available == nil {
-		children, err = t.repo.AssignPage(p.ID, p.Generation, batches)
-	} else {
-		children, err = t.repo.AssignPageAvailable(p.ID, p.Generation, batches, available)
+		available = map[string]bool{}
+		for _, node := range p.ActiveNodes() {
+			available[node.ID] = true
+		}
 	}
+	children, err = t.repo.AssignPageForScanner(p.ID, p.Generation, p.ScannerEpoch(), batches, available)
 	if err != nil {
 		return errors.Join(collectionErr, err)
 	}
@@ -631,7 +687,7 @@ func (t *taskRuntime) dispatchAvailable(ctx context.Context, p task.Parent, cont
 func pendingDispatchCapacity(p task.Parent) int {
 	// Counters cover the entire task; a 256-row query cannot enforce this
 	// bound once five or more nodes have outstanding assignments.
-	return max(0, 64*len(p.Spec.Nodes)-(p.ChildCount-p.FinishedChildren))
+	return max(0, 64*len(p.ActiveNodes())-(p.ChildCount-p.FinishedChildren))
 }
 
 func (t *taskRuntime) observe(ctx context.Context, p task.Parent, limit int) (err error) {
@@ -687,7 +743,14 @@ func (t *taskRuntime) observeAvailable(ctx context.Context, p task.Parent, limit
 // Page through the Agent ledger after every stop fence has been acknowledged.
 // This avoids dropping final counters when more than one page of children exists.
 func (t *taskRuntime) observeStopped(ctx context.Context, p task.Parent) error {
-	for _, node := range p.Spec.Nodes {
+	for _, node := range p.ActiveNodes() {
+		stopped, err := t.nodeLeaseStopped(p, node)
+		if err != nil {
+			return err
+		}
+		if stopped {
+			continue
+		}
 		after := ""
 		for {
 			var rows []execution.Record
@@ -730,7 +793,7 @@ func (s *Server) checkTaskEnrollments(p task.Parent) error {
 	for _, m := range members {
 		enrolled[m.ID] = m.EnrollmentID
 	}
-	for _, node := range p.Spec.Nodes {
+	for _, node := range p.ActiveNodes() {
 		if enrolled[node.ID] != node.EnrollmentID {
 			name := s.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
 			return fmt.Errorf("Agent %s has been removed or re-enrolled; the original task cannot resume on that identity", name)

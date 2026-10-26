@@ -23,6 +23,8 @@ var (
 	ErrDeleted       = errors.New("discovery was permanently deleted")
 	ErrSourceChanged = errors.New("previously discovered source object changed")
 	ErrCorrupt       = errors.New("discovery records are inconsistent")
+	ErrEpoch         = errors.New("discovery epoch is not current")
+	ErrSeeding       = errors.New("discovery takeover manifest is incomplete")
 )
 
 type Status string
@@ -33,9 +35,11 @@ const (
 	Recoverable Status = "RECOVERABLE"
 	Completed   Status = "COMPLETED"
 	Failed      Status = "FAILED"
+	Seeding     Status = "SEEDING"
 )
 
 type Spec struct {
+	Epoch            uint64             `json:"epoch,omitempty"`
 	InventoryID      string             `json:"inventoryId,omitempty"`
 	LegacyManifestID string             `json:"legacyManifestId,omitempty"`
 	ParentID         int64              `json:"parentId"`
@@ -50,18 +54,20 @@ type Spec struct {
 }
 
 type State struct {
-	Spec           Spec      `json:"spec"`
-	Generation     uint64    `json:"generation"`
-	Status         Status    `json:"status"`
-	AckedThrough   int64     `json:"ackedThrough"`
-	LastBatch      int64     `json:"lastBatch"`
-	ScanComplete   bool      `json:"scanComplete"`
-	TotalObjects   int64     `json:"totalObjects"`
-	TotalBytes     int64     `json:"totalBytes"`
-	MissingObjects int64     `json:"missingObjects,omitempty"`
-	Error          string    `json:"error,omitempty"`
-	Warning        string    `json:"warning,omitempty"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	Epoch          uint64         `json:"epoch,omitempty"`
+	Takeover       *TakeoverState `json:"takeover,omitempty"`
+	Spec           Spec           `json:"spec"`
+	Generation     uint64         `json:"generation"`
+	Status         Status         `json:"status"`
+	AckedThrough   int64          `json:"ackedThrough"`
+	LastBatch      int64          `json:"lastBatch"`
+	ScanComplete   bool           `json:"scanComplete"`
+	TotalObjects   int64          `json:"totalObjects"`
+	TotalBytes     int64          `json:"totalBytes"`
+	MissingObjects int64          `json:"missingObjects,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	Warning        string         `json:"warning,omitempty"`
+	UpdatedAt      time.Time      `json:"updatedAt"`
 	// Attempt and SeenObjects fence callbacks and reconcile source deletions.
 	// They are durable bookkeeping, not a source cursor or completion checkpoint.
 	Attempt     string `json:"attempt,omitempty"`
@@ -74,6 +80,7 @@ type State struct {
 }
 
 type Batch struct {
+	Epoch      uint64                               `json:"epoch,omitempty"`
 	Legacy     map[string]execution.LegacyCandidate `json:"legacy,omitempty"`
 	ParentID   int64                                `json:"parentId"`
 	Generation uint64                               `json:"generation"`
@@ -87,6 +94,8 @@ type EndpointFactory interface {
 }
 
 type Options struct {
+	// ParentContext is a durable parent lease's lifetime, never an HTTP request.
+	ParentContext      func(int64, uint64) (context.Context, error)
 	MaxConcurrentScans int
 	MaxBatchObjects    int
 	MaxBatchBytes      int64

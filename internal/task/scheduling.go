@@ -91,10 +91,13 @@ func ensureScheduling(tx *state.Tx, p *Parent) error {
 
 func changePending(p *Parent, old, current Child) error {
 	node := current.Node.ID
-	load, err := addLoad(p.Scheduling.Nodes[node], childPending(old), -1)
+	oldNode := old.Node.ID
+	load, err := addLoad(p.Scheduling.Nodes[oldNode], childPending(old), -1)
 	if err != nil {
 		return err
 	}
+	p.Scheduling.Nodes[oldNode] = load
+	load = p.Scheduling.Nodes[node]
 	load, err = addLoad(load, childPending(current), 1)
 	if err == nil {
 		p.Scheduling.Nodes[node] = load
@@ -148,7 +151,11 @@ func otherPending(tx *state.Tx, p Parent) (map[string]PendingLoad, error) {
 }
 
 func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad, available map[string]bool) (Node, error) {
-	node := p.Spec.Nodes[0]
+	nodes := p.ActiveNodes()
+	if len(nodes) == 0 {
+		return Node{}, errors.New("no selected execution node is available")
+	}
+	node := nodes[0]
 	if p.Spec.DistributionMode != "BALANCED" {
 		if available != nil && !available[node.ID] {
 			return Node{}, errors.New("the selected execution node is unavailable")
@@ -157,7 +164,7 @@ func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad, available 
 	}
 	bestCost, bestHistory := math.Inf(1), int64(math.MaxInt64)
 	bestChildren := int64(math.MaxInt64)
-	for _, candidate := range p.Spec.Nodes {
+	for _, candidate := range nodes {
 		if available != nil && !available[candidate.ID] {
 			continue
 		}

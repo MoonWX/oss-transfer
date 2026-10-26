@@ -24,27 +24,28 @@ type Node struct {
 }
 
 type Spec struct {
-	InventoryID         string                   `json:"inventoryId,omitempty"`
-	RequestLimits       *execution.RequestLimits `json:"requestLimits,omitempty"`
-	Direction           string                   `json:"direction"`
-	Source              execution.Endpoint       `json:"source"`
-	Destination         execution.Endpoint       `json:"destination"`
-	Nodes               []Node                   `json:"nodes"`
-	Prefix              string                   `json:"prefix,omitempty"`
-	ObjectKey           string                   `json:"objectKey,omitempty"`
-	TargetPrefix        string                   `json:"targetPrefix,omitempty"`
-	TargetKey           string                   `json:"targetKey,omitempty"`
-	MappingMode         string                   `json:"mappingMode,omitempty"`
-	ReplaceSourcePrefix string                   `json:"replaceSourcePrefix,omitempty"`
-	StartKey            string                   `json:"startKey,omitempty"`
-	EndKey              string                   `json:"endKey,omitempty"`
-	Marker              string                   `json:"marker,omitempty"`
-	SharedLocalSource   bool                     `json:"sharedLocalSource,omitempty"`
-	ModifiedFrom        *time.Time               `json:"modifiedFrom,omitempty"`
-	ModifiedUntil       *time.Time               `json:"modifiedUntil,omitempty"`
-	ConflictPolicy      string                   `json:"conflictPolicy"`
-	DistributionMode    string                   `json:"distributionMode"`
-	BandwidthMbps       float64                  `json:"bandwidthMbps"`
+	InventoryID            string                   `json:"inventoryId,omitempty"`
+	RequestLimits          *execution.RequestLimits `json:"requestLimits,omitempty"`
+	Direction              string                   `json:"direction"`
+	Source                 execution.Endpoint       `json:"source"`
+	Destination            execution.Endpoint       `json:"destination"`
+	Nodes                  []Node                   `json:"nodes"`
+	Prefix                 string                   `json:"prefix,omitempty"`
+	ObjectKey              string                   `json:"objectKey,omitempty"`
+	TargetPrefix           string                   `json:"targetPrefix,omitempty"`
+	TargetKey              string                   `json:"targetKey,omitempty"`
+	MappingMode            string                   `json:"mappingMode,omitempty"`
+	ReplaceSourcePrefix    string                   `json:"replaceSourcePrefix,omitempty"`
+	StartKey               string                   `json:"startKey,omitempty"`
+	EndKey                 string                   `json:"endKey,omitempty"`
+	Marker                 string                   `json:"marker,omitempty"`
+	SharedLocalSource      bool                     `json:"sharedLocalSource,omitempty"`
+	SharedLocalDestination bool                     `json:"sharedLocalDestination,omitempty"`
+	ModifiedFrom           *time.Time               `json:"modifiedFrom,omitempty"`
+	ModifiedUntil          *time.Time               `json:"modifiedUntil,omitempty"`
+	ConflictPolicy         string                   `json:"conflictPolicy"`
+	DistributionMode       string                   `json:"distributionMode"`
+	BandwidthMbps          float64                  `json:"bandwidthMbps"`
 }
 
 type Parent struct {
@@ -79,6 +80,7 @@ type Parent struct {
 	Legacy            *LegacyProvenance  `json:"legacy,omitempty"`
 	Scheduling        *SchedulingState   `json:"scheduling,omitempty"`
 	ChildOrder        *ChildOrderState   `json:"childOrder,omitempty"`
+	Failover          *FailoverState     `json:"failover,omitempty"`
 }
 
 type Child struct {

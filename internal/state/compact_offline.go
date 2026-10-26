@@ -346,6 +346,15 @@ func compactFormat(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, err
 	}
-	fields["schemaVersion"] = json.RawMessage(fmt.Sprint(SchemaCompressedValues))
+	var version int
+	if err := json.Unmarshal(fields["schemaVersion"], &version); err != nil {
+		return nil, err
+	}
+	if !supportedSchema(version) {
+		return nil, errors.New("cannot compact an unsupported database schema")
+	}
+	// Compaction changes record encoding, not task ownership semantics. Keep
+	// newer reader requirements such as leases when rewriting the format row.
+	fields["schemaVersion"] = json.RawMessage(fmt.Sprint(max(version, SchemaCompressedValues)))
 	return json.Marshal(fields)
 }

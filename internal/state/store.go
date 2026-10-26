@@ -36,12 +36,16 @@ const SchemaInitialPassword = 3
 // compressed records and the indexes maintained alongside them.
 const SchemaCompressedValues = 4
 
+// SchemaTaskLeases fences older binaries which do not understand task ownership.
+// Only tasks using automatic takeover require this format.
+const SchemaTaskLeases = 5
+
 type databaseFormat struct {
 	Role          string `json:"role"`
 	SchemaVersion int    `json:"schemaVersion"`
 }
 
-func supportedSchema(version int) bool { return version >= 1 && version <= SchemaCompressedValues }
+func supportedSchema(version int) bool { return version >= 1 && version <= SchemaTaskLeases }
 
 // RequireSchema raises the minimum reader version in the same transaction as
 // the data requiring it. A failed transaction preserves both the old format and

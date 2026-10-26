@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
@@ -56,7 +55,7 @@ func (t *taskRuntime) deliverChildren(ctx context.Context, p task.Parent, childr
 	return parallelChildNodes(ctx, groupChildrenByNode(children), func(_ int, group []task.Child) error {
 		for _, child := range group {
 			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}, nil)
+			err := t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, childAcceptance(p, child), nil)
 			cancel()
 			if err != nil {
 				return err

@@ -363,8 +363,12 @@ jobs:
           QA_INTERPRETER: ${{ matrix.interpreter }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support
-          sudo update-binfmts --enable "qemu-$QA_INTERPRETER"
+          sudo apt-get install -y --no-install-recommends qemu-user qemu-user-binfmt binfmt-support
+          if [[ -f "/var/lib/binfmts/qemu-$QA_INTERPRETER" ]]; then
+            sudo update-binfmts --enable "qemu-$QA_INTERPRETER"
+          else
+            sudo systemctl restart systemd-binfmt
+          fi
           grep -q enabled "/proc/sys/fs/binfmt_misc/qemu-$QA_INTERPRETER"
           python -m pip install -r .github/acceptance/requirements.txt
       - name: Verify target application and test binaries

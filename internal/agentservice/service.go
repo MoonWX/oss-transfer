@@ -39,6 +39,7 @@ type Service struct {
 	Scanner      *discovery.Scanner
 	Limits       *ratelimit.Limiter
 	Shared       *SharedVerifier
+	Leases       *Leases
 	Temporary    *LocalTempRegistry
 	TempRecovery TempRecoveryReport
 	MPURecovery  S3RecoveryReport
@@ -117,6 +118,14 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	shared := NewSharedVerifier()
+	leases, err := NewLeases(store)
+	if err != nil {
+		temporary.Close()
+		nodes.Close()
+		limits.Close()
+		return nil, err
+	}
+	options.Execution.ParentContext = leases.ParentContext
 	if concurrency, saved := nodes.SavedConcurrency(); saved {
 		options.Execution.MaxConcurrentJobs = concurrency.MaxConcurrentChildren
 		options.Execution.WorkersPerJob = concurrency.ObjectsPerChild
@@ -128,7 +137,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 		limits.Close()
 		return nil, err
 	}
-	scanner, err := discovery.New(store, factory, discovery.Options{})
+	scanner, err := discovery.New(store, factory, discovery.Options{ParentContext: leases.ParentContext})
 	if err != nil {
 		_ = engine.Close(context.Background())
 		temporary.Close()
@@ -138,6 +147,10 @@ func New(store *state.Store, options Options) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	s.Leases = leases
+	leases.quiesce = func(ctx context.Context, parentID int64) error {
+		return errors.Join(engine.QuiesceParent(ctx, parentID), scanner.QuiesceParent(ctx, parentID))
+	}
 	s.Updater = options.Updater
 	s.preflight = preflight
 	comparisons, err := comparison.New(store, factory, func(ctx context.Context, input io.ReadCloser, size int64) (io.ReadCloser, error) {
@@ -159,6 +172,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 	return s, nil
 }
 func (s *Service) Close(ctx context.Context) error {
+	s.Leases.Close()
 	s.cancel()
 	if s.Comparisons != nil {
 		s.Comparisons.Close()
@@ -218,6 +232,9 @@ func (s *Service) schedule() {
 			after = jobs[len(jobs)-1].Job.ChildID
 		}
 		for _, record := range jobs {
+			if s.Leases.Admission(record.Job.ParentID, record.Job.Generation) != nil {
+				continue
+			}
 			if !s.Shared.Allows(record.Job) {
 				continue
 			}
@@ -248,6 +265,8 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	}
 	switch operation {
+	case "lease_prepare", "lease_grant", "lease_retire", "scan_takeover_seed", "scan_takeover_finalize":
+		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete":
 		return true
 	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
@@ -277,13 +296,13 @@ func response(value any, err error) (agenttransport.Response, error) {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound), errors.Is(err, execution.ErrNotFound), errors.Is(err, discovery.ErrNotFound), errors.Is(err, storageconfig.ErrNotFound), errors.Is(err, os.ErrNotExist), errors.Is(err, transferstore.ErrNotFound), errors.Is(err, ratelimit.ErrMissing):
 		status = 404
-	case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, execution.ErrNotRecoverable), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, discovery.ErrDeleted), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
+	case errors.Is(err, discovery.ErrEpoch), errors.Is(err, discovery.ErrSeeding), errors.Is(err, discovery.ErrRunning), errors.Is(err, execution.ErrAssignment), errors.Is(err, execution.ErrRunning), errors.Is(err, ErrLeaseRequired), errors.Is(err, ErrLeaseExpired), errors.Is(err, ErrLeaseRetired), errors.Is(err, ErrLeaseConflict), errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, execution.ErrNotRecoverable), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, discovery.ErrDeleted), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
 		status = 409
 	case errors.Is(err, inventory.ErrCapacity), errors.Is(err, execution.ErrCapacity), errors.Is(err, discovery.ErrCapacity):
 		status = 429
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		status = 408
-	case errors.Is(err, inventory.ErrInvalid), errors.Is(err, storageconfig.ErrInvalid), errors.Is(err, transferstore.ErrInvalidKey), errors.Is(err, discovery.ErrInvalid):
+	case errors.Is(err, ErrInvalidLease), errors.Is(err, inventory.ErrInvalid), errors.Is(err, storageconfig.ErrInvalid), errors.Is(err, transferstore.ErrInvalidKey), errors.Is(err, discovery.ErrInvalid):
 		status = 400
 	}
 	data, _ := json.Marshal(map[string]any{"code": "operation_failed", "message": err.Error()})
@@ -296,7 +315,8 @@ func badRequest(err error) (agenttransport.Response, error) {
 
 type ChildAcceptRequest struct {
 	execution.Job
-	InventorySource bool `json:"inventorySource,omitempty"`
+	InventorySource bool              `json:"inventorySource,omitempty"`
+	Seed            *execution.Record `json:"seed,omitempty"`
 }
 
 type ParentRequest struct {
@@ -321,6 +341,7 @@ type ScanRequest struct {
 	ParentID   int64  `json:"parentId"`
 	Generation uint64 `json:"generation"`
 	Number     int64  `json:"number,omitempty"`
+	Epoch      uint64 `json:"epoch,omitempty"`
 }
 
 func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agenttransport.Response, error) {
@@ -349,7 +370,34 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 	if s.ReplaySafe(c.Operation) && !c.Mutating {
 		return badRequest(errors.New("operation requires a mutating command"))
 	}
+	if result, handled, err := s.scanTakeoverCommand(ctx, c); handled {
+		return result, err
+	}
 	switch c.Operation {
+	case "lease_prepare":
+		var request LeasePrepareRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		value, err := s.Leases.Prepare(ctx, request)
+		return response(value, err)
+	case "lease_grant":
+		var request LeaseGrantRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		err := s.Leases.Grant(ctx, request)
+		if err == nil {
+			s.signal()
+		}
+		return response(map[string]any{"parentId": request.ParentID, "sequence": request.Sequence}, err)
+	case "lease_retire":
+		var request LeaseRetireRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		err := s.Leases.Retire(ctx, request.ParentID)
+		return response(map[string]any{"parentId": request.ParentID, "retired": err == nil}, err)
 	case "child_recover":
 		var request ChildRecoverRequest
 		if err := decode(c.Payload, &request); err != nil {
@@ -447,20 +495,20 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(err)
 		}
 		if c.Operation == "scan_batch" {
-			batch, found, err := s.Scanner.Batch(ctx, request.ParentID, request.Generation, request.Number)
+			batch, found, err := s.Scanner.Batch(ctx, request.ParentID, request.Generation, request.Number, request.Epoch)
 			return response(map[string]any{"batch": batch, "found": found}, err)
 		}
 		var value discovery.State
 		var err error
 		switch c.Operation {
 		case "scan_status":
-			value, err = s.Scanner.Status(ctx, request.ParentID)
+			value, err = s.Scanner.StatusEpoch(ctx, request.ParentID, request.Generation, request.Epoch)
 		case "scan_ack":
-			value, err = s.Scanner.Ack(ctx, request.ParentID, request.Generation, request.Number)
+			value, err = s.Scanner.Ack(ctx, request.ParentID, request.Generation, request.Number, request.Epoch)
 		case "scan_stop":
-			value, err = s.Scanner.Stop(ctx, request.ParentID, request.Generation)
+			value, err = s.Scanner.Stop(ctx, request.ParentID, request.Generation, request.Epoch)
 		case "scan_resume":
-			value, err = s.Scanner.Resume(ctx, request.ParentID, request.Generation)
+			value, err = s.Scanner.Resume(ctx, request.ParentID, request.Generation, request.Epoch)
 		}
 		return response(value, err)
 	case "storage_apply":
@@ -530,10 +578,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(err)
 		}
 		job := request.Job
+		if err := s.Leases.Admission(job.ParentID, job.Generation); err != nil {
+			return response(nil, err)
+		}
 		if !s.Shared.Allows(job) {
 			return response(nil, ErrSharedVerificationRequired)
 		}
-		record, err := s.Engine.Accept(ctx, job, request.InventorySource)
+		record, err := s.Engine.AcceptSeed(ctx, job, request.Seed, request.InventorySource)
 		if err == nil {
 			s.signal()
 		}
@@ -567,6 +618,9 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		case "parent_stop":
 			err = s.Engine.StopParent(ctx, request.ParentID, request.Generation)
 		case "parent_resume":
+			if err := s.Leases.Admission(request.ParentID, request.Generation); err != nil {
+				return response(nil, err)
+			}
 			err = s.Engine.ResumeParent(ctx, request.ParentID, request.Generation, request.RetryFailed, request.InventorySource)
 		case "parent_delete":
 			err = s.Engine.DeleteParent(ctx, request.ParentID, request.Generation)

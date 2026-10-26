@@ -9,7 +9,7 @@ import (
 )
 
 func (t *taskRuntime) collectBatches(ctx context.Context, p task.Parent, control agentservice.ScanRequest, limit int) ([]task.Assignment, error) {
-	scanner := nodeSession(p.Spec.Nodes[0])
+	scanner := nodeSession(p.ScannerNode())
 	var batches []discovery.Batch
 	if limit > 1 {
 		var result agentservice.ScanBatchesResponse
@@ -31,7 +31,7 @@ func (t *taskRuntime) collectBatches(ctx context.Context, p task.Parent, control
 	}
 	assignments := make([]task.Assignment, 0, len(batches))
 	for _, batch := range batches {
-		if batch.ParentID != p.ID || batch.Generation != p.Generation || batch.Number != control.Number+1 {
+		if batch.ParentID != p.ID || batch.Generation != p.Generation || batch.Epoch != p.ScannerEpoch() || batch.Number != control.Number+1 {
 			return assignments, task.ErrConflict
 		}
 		assignments = append(assignments, task.Assignment{Number: int(batch.Number), Objects: batch.Objects, Legacy: batch.Legacy})
@@ -47,13 +47,13 @@ func (t *taskRuntime) collectSingleBatches(ctx context.Context, p task.Parent, c
 			Batch discovery.Batch `json:"batch"`
 			Found bool            `json:"found"`
 		}
-		if err := t.server.agentCall(ctx, nodeSession(p.Spec.Nodes[0]), "scan_batch", false, control, &page); err != nil {
+		if err := t.server.agentCall(ctx, nodeSession(p.ScannerNode()), "scan_batch", false, control, &page); err != nil {
 			return batches, err
 		}
 		if !page.Found {
 			break
 		}
-		if page.Batch.ParentID != p.ID || page.Batch.Generation != p.Generation || page.Batch.Number != control.Number+1 {
+		if page.Batch.ParentID != p.ID || page.Batch.Generation != p.Generation || page.Batch.Epoch != p.ScannerEpoch() || page.Batch.Number != control.Number+1 {
 			return batches, task.ErrConflict
 		}
 		batches = append(batches, task.Assignment{Number: int(page.Batch.Number), Objects: page.Batch.Objects, Legacy: page.Batch.Legacy})

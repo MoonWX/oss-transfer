@@ -167,7 +167,7 @@ func (s *Scanner) cleanupPage(ctx context.Context, parentID int64) (done bool, e
 			current.ObjectsReleased = true
 		}
 		if current.Deleted {
-			for _, bucket := range []string{batches, legacyKeys} {
+			for _, bucket := range []string{batches, legacyKeys, takeoverBatches} {
 				cleared, err := deleteCleanupPage(tx, bucket, parentKey(parentID)+"/")
 				if err != nil || !cleared {
 					if err == nil {
@@ -180,7 +180,7 @@ func (s *Scanner) cleanupPage(ctx context.Context, parentID int64) (done bool, e
 				return err
 			}
 			// Keep only the fence: old requests cannot recreate a purged scan.
-			current = State{Spec: Spec{ParentID: parentID, Generation: current.Generation}, Generation: current.Generation,
+			current = State{Spec: Spec{ParentID: parentID, Generation: current.Generation, Epoch: current.Epoch}, Generation: current.Generation, Epoch: current.Epoch,
 				Status: Stopped, Deleted: true, Purged: true, ObjectsReleased: true, UpdatedAt: time.Now().UTC()}
 		}
 		if err := tx.Put(states, parentKey(parentID), current); err != nil {

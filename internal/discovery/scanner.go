@@ -173,6 +173,9 @@ func (s *Scanner) Start(ctx context.Context, spec Spec) (State, error) {
 	if !validSpec(spec) {
 		return State{}, ErrInvalid
 	}
+	if _, err := s.parentContext(spec.ParentID, spec.Generation); err != nil {
+		return State{}, err
+	}
 	if spec.InventoryID != "" {
 		if err := inventory.New(s.store).Require(ctx, spec.InventoryID, spec.ParentID); err != nil {
 			return State{}, err
@@ -191,6 +194,9 @@ func (s *Scanner) Start(ctx context.Context, spec Spec) (State, error) {
 		}
 		if current.Generation != spec.Generation {
 			return State{}, ErrGeneration
+		}
+		if current.Epoch != spec.Epoch {
+			return State{}, ErrEpoch
 		}
 		if current.Status == Stopped {
 			return State{}, ErrStopped
@@ -215,7 +221,7 @@ func (s *Scanner) Start(ctx context.Context, spec Spec) (State, error) {
 	if len(s.active) >= s.options.MaxConcurrentScans {
 		return State{}, ErrCapacity
 	}
-	return s.launchLocked(State{Spec: spec, Generation: spec.Generation})
+	return s.launchLocked(State{Spec: spec, Generation: spec.Generation, Epoch: spec.Epoch})
 }
 
 func emptyFence(current State) bool {
@@ -239,18 +245,27 @@ func (s *Scanner) isActiveLocked(parentID int64) bool {
 // launchLocked publishes the attempt before spawning it. Its context belongs to
 // Scanner, so the short Start/Resume HTTP request can finish independently.
 func (s *Scanner) launchLocked(current State) (State, error) {
+	parent, err := s.parentContext(current.Spec.ParentID, current.Generation)
+	if err != nil {
+		return State{}, err
+	}
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		return State{}, err
 	}
 	current.Attempt = hex.EncodeToString(token[:])
 	current.Status, current.ScanComplete, current.SeenObjects = Scanning, false, 0
+	if current.Takeover != nil {
+		// Identical historical duplicate assignments remain in Master counters,
+		// while the recovery index stores each source key only once.
+		current.SeenObjects = current.Takeover.DuplicateObjects
+	}
 	current.Error, current.Warning, current.MissingObjects = "", "", 0
 	current.UpdatedAt = time.Now().UTC()
 	if err := s.store.Update(func(tx *state.Tx) error { return tx.Put(states, parentKey(current.Spec.ParentID), current) }); err != nil {
 		return State{}, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	run := &running{cancel: cancel, done: make(chan struct{})}
 	s.active[current.Spec.ParentID] = run
 	go func() {
@@ -268,7 +283,7 @@ func (s *Scanner) launchLocked(current State) (State, error) {
 	return current, nil
 }
 
-func (s *Scanner) Stop(ctx context.Context, parentID int64, generation uint64) (State, error) {
+func (s *Scanner) Stop(ctx context.Context, parentID int64, generation uint64, epochs ...uint64) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err
 	}
@@ -285,12 +300,15 @@ func (s *Scanner) Stop(ctx context.Context, parentID int64, generation uint64) (
 		var err error
 		current, err = get(tx, parentID)
 		if errors.Is(err, ErrNotFound) {
-			current = State{Spec: Spec{ParentID: parentID, Generation: generation}, Generation: generation}
+			current = State{Spec: Spec{ParentID: parentID, Generation: generation, Epoch: requestedEpoch(epochs)}, Generation: generation, Epoch: requestedEpoch(epochs)}
 		} else if err != nil {
 			return err
 		}
 		if current.Deleted {
 			return ErrDeleted
+		}
+		if current.Epoch != requestedEpoch(epochs) {
+			return ErrEpoch
 		}
 		// A cluster Resume can reach only some Agents before a new Stop arrives.
 		// A newer stop closes that generation without ever starting discovery.
@@ -313,8 +331,11 @@ func (s *Scanner) Stop(ctx context.Context, parentID int64, generation uint64) (
 	return current, nil
 }
 
-func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64) (State, error) {
+func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64, epochs ...uint64) (State, error) {
 	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
+	if _, err := s.parentContext(parentID, generation); err != nil {
 		return State{}, err
 	}
 	s.mu.Lock()
@@ -331,7 +352,11 @@ func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64)
 		s.mu.Unlock()
 		return State{}, ErrDeleted
 	}
-	if generation == current.Generation && (current.Status == Scanning || current.Status == Completed || (emptyFence(current) && current.Status == Recoverable)) {
+	if current.Epoch != requestedEpoch(epochs) {
+		s.mu.Unlock()
+		return State{}, ErrEpoch
+	}
+	if generation == current.Generation && (current.Status == Scanning || current.Status == Seeding || current.Status == Completed || (emptyFence(current) && current.Status == Recoverable)) {
 		s.mu.Unlock()
 		return current, nil
 	}
@@ -371,6 +396,9 @@ func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64)
 	if latest.Deleted {
 		return State{}, ErrDeleted
 	}
+	if latest.Epoch != requestedEpoch(epochs) {
+		return State{}, ErrEpoch
+	}
 	if generation == latest.Generation && (latest.Status == Scanning || latest.Status == Completed || (emptyFence(latest) && latest.Status == Recoverable)) {
 		return latest, nil
 	}
@@ -378,7 +406,10 @@ func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64)
 		return State{}, ErrGeneration
 	}
 	latest.Spec.Generation, latest.Generation = generation, generation
-	if emptyFence(latest) || latest.ScanComplete {
+	if emptyFence(latest) || latest.ScanComplete || latest.Takeover != nil && !latest.Takeover.Sealed {
+		if latest.Takeover != nil && !latest.Takeover.Sealed {
+			latest.Status = Seeding
+		}
 		if emptyFence(latest) {
 			latest.Status = Recoverable
 		}
@@ -395,7 +426,7 @@ func (s *Scanner) Resume(ctx context.Context, parentID int64, generation uint64)
 	return s.launchLocked(latest)
 }
 
-func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, afterNumber int64) (Batch, bool, error) {
+func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, afterNumber int64, epochs ...uint64) (Batch, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Batch{}, false, err
 	}
@@ -415,6 +446,12 @@ func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, 
 		if generation != current.Generation {
 			return ErrGeneration
 		}
+		if current.Epoch != requestedEpoch(epochs) {
+			return ErrEpoch
+		}
+		if current.Takeover != nil && (!current.Takeover.Sealed || afterNumber < current.Takeover.ThroughBatch) {
+			return ErrSeeding
+		}
 		if afterNumber >= current.LastBatch {
 			return nil
 		}
@@ -426,12 +463,13 @@ func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, 
 			return ErrCorrupt
 		}
 		result.Generation = current.Generation
+		result.Epoch = current.Epoch
 		return nil
 	})
 	return result, found, err
 }
 
-func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, throughNumber int64) (State, error) {
+func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, throughNumber int64, epochs ...uint64) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err
 	}
@@ -450,6 +488,9 @@ func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, th
 		}
 		if generation != current.Generation {
 			return ErrGeneration
+		}
+		if current.Epoch != requestedEpoch(epochs) {
+			return ErrEpoch
 		}
 		if throughNumber > current.LastBatch {
 			return ErrInvalid

@@ -24,15 +24,16 @@ type activeAttempt struct {
 // Engine owns task lifetimes, independently of the short-lived RPC contexts
 // passed to Accept and Start. One Engine may own a given Agent database at a time.
 type Engine struct {
-	repo    *Repository
-	factory StoreFactory
-	opts    Options
-	ctx     context.Context
-	cancel  context.CancelFunc
-	changed chan struct{}
-	mu      sync.Mutex
-	active  map[string]*activeAttempt
-	closed  bool
+	repo      *Repository
+	factory   StoreFactory
+	opts      Options
+	ctx       context.Context
+	cancel    context.CancelFunc
+	changed   chan struct{}
+	mu        sync.Mutex
+	active    map[string]*activeAttempt
+	lifetimes sync.Map // child ID -> activeAttempt; cancellation never waits for DB admission.
+	closed    bool
 }
 
 func (e *Engine) Concurrency() (active, capacity int) {
@@ -190,13 +191,27 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 		}
 		return nil
 	}
+	parentCtx := e.ctx
+	if e.opts.ParentContext != nil {
+		parentCtx, err = e.opts.ParentContext(current.Job.ParentID, generation)
+		if err != nil {
+			return err
+		}
+	}
 	record, err := e.repo.begin(ctx, child, generation, resume, retryFailed)
 	if err != nil {
 		return err
 	}
 	ioCtx, cancel := context.WithCancel(e.ctx)
+	stopLease := context.AfterFunc(parentCtx, cancel)
+	if parentCtx.Err() != nil {
+		cancel()
+	}
+	baseCancel := cancel
+	cancel = func() { stopLease(); baseCancel() }
 	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{}), objectsChanged: make(chan struct{})}
 	e.active[child] = attempt
+	e.lifetimes.Store(child, attempt)
 	go e.runAttempt(ioCtx, record, attempt)
 	return nil
 }
@@ -218,6 +233,7 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 			_, _ = e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, fmt.Errorf("persist object results: %w", finishErr))
 		}
 		attempt.cancel()
+		e.lifetimes.Delete(record.Job.ChildID)
 		e.mu.Lock()
 		delete(e.active, record.Job.ChildID)
 		e.wakeConcurrency()
@@ -225,6 +241,26 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 		e.mu.Unlock()
 	}()
 	finalResults, runErr = e.run(ctx, record, attempt)
+}
+
+// QuiesceParent only interrupts live work. The lease gate already prevents new
+// attempts; ledgers settle as Recoverable and retain their committed results.
+func (e *Engine) QuiesceParent(ctx context.Context, parentID int64) error {
+	var pending []chan struct{}
+	e.lifetimes.Range(func(_, value any) bool {
+		a := value.(*activeAttempt)
+		if a.parentID == parentID {
+			a.cancel()
+			pending = append(pending, a.done)
+		}
+		return true
+	})
+	for _, done := range pending {
+		if err := wait(ctx, done); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *Engine) Stop(ctx context.Context, child string, generation uint64) error {
@@ -370,6 +406,9 @@ func wait(ctx context.Context, done <-chan struct{}) error {
 func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAttempt) ([]ItemResult, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	source, target, err := e.factory.Open(ctx, record.Job)
 	if source != nil {
 		defer source.Close()

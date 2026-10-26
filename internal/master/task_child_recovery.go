@@ -115,7 +115,7 @@ func (s *Server) recoverChild(ctx context.Context, id int64, number int) (parent
 		err = readErr
 		return
 	}
-	for _, node := range parent.Spec.Nodes {
+	for _, node := range parent.ActiveNodes() {
 		if err = s.syncStorage(ctx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}, snapshot); err != nil {
 			return
 		}
@@ -128,10 +128,22 @@ func (s *Server) recoverChild(ctx context.Context, id int64, number int) (parent
 	s.tasks.mu.Lock()
 	delete(s.tasks.sharedProofs, id)
 	s.tasks.mu.Unlock()
-	if err = s.tasks.ensureSharedSource(ctx, parent); err != nil {
+	if parent.Failover != nil && parent.Failover.Enabled {
+		if parent.NodeRetired(child.Node.ID) {
+			err = errors.New("this child task is waiting for reassignment")
+			return
+		}
+		if err = s.tasks.leases.renew(ctx, parent, child.Node); err != nil {
+			return
+		}
+		err = s.tasks.verifyTaskStorage(ctx, parent, []task.Node{child.Node}, false)
+	} else {
+		err = s.tasks.ensureSharedSource(ctx, parent)
+	}
+	if err != nil {
 		return
 	}
-	if parent.Spec.Destination.Kind == "LOCAL" && len(parent.Spec.Nodes) > 1 {
+	if parent.Spec.Destination.Kind == "LOCAL" && len(parent.ActiveNodes()) > 1 && (parent.Failover == nil || !parent.Failover.Enabled) {
 		for writer := range parent.Spec.Nodes {
 			if _, _, err = s.proveSharedDirectory(ctx, parent.Spec.Nodes, writer); err != nil {
 				return

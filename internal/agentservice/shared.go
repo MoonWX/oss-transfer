@@ -84,10 +84,13 @@ func (s *SharedVerifier) Forget(parentID int64, generation uint64) {
 }
 
 func (s *SharedVerifier) Allows(job execution.Job) bool {
-	if !job.SharedLocalSource {
-		return true
+	if job.SharedLocalSource && (job.Source.Kind != "LOCAL" || !s.Verified(job.ParentID, job.Generation, job.Source.Root)) {
+		return false
 	}
-	return job.Source.Kind == "LOCAL" && s.Verified(job.ParentID, job.Generation, job.Source.Root)
+	if job.SharedLocalDestination && (job.Destination.Kind != "LOCAL" || !s.Verified(job.ParentID, job.Generation, job.Destination.Root)) {
+		return false
+	}
+	return true
 }
 
 // Factory adds a second guard at actual I/O startup, after scheduler admission.

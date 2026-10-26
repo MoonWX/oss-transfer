@@ -28,7 +28,7 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 	for _, scenario := range []struct {
 		role    string
 		version int
-	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}} {
+	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}, {"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}} {
 		role, version := scenario.role, scenario.version
 		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), role+".db")
@@ -96,7 +96,7 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 			if err = db.Update(func(tx *Tx) error { return RequireSchema(tx, role, 1) }); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db) != (databaseFormat{Role: role, SchemaVersion: SchemaCompressedValues}) {
+			if readFormat(t, db) != (databaseFormat{Role: role, SchemaVersion: max(version, SchemaCompressedValues)}) {
 				t.Fatal("reader requirement was lost")
 			}
 			if err = db.View(func(tx *Tx) error {
@@ -128,7 +128,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 			case "zero":
 				format.SchemaVersion = 0
 			case "future":
-				format.SchemaVersion = SchemaCompressedValues + 1
+				format.SchemaVersion = SchemaTaskLeases + 1
 			}
 			if scenario != "unclaimed" {
 				if err = db.Update(func(tx *Tx) error { return tx.Put("metadata", "format", format) }); err != nil {
@@ -140,7 +140,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 				role = "unknown"
 			}
 			if scenario == "future-requirement" {
-				version = SchemaCompressedValues + 1
+				version = SchemaTaskLeases + 1
 			}
 			before, err := os.ReadFile(db.db.Path())
 			if err != nil {
@@ -169,7 +169,7 @@ func TestSchemaOfflineBackupAndRestore(t *testing.T) {
 	for _, scenario := range []struct {
 		role    string
 		version int
-	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}} {
+	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}, {"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}} {
 		role, version := scenario.role, scenario.version
 		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path, oldBackup := restoreFixture(t, role)
@@ -217,7 +217,7 @@ func TestSchemaOfflineBackupAndRestore(t *testing.T) {
 			if err = db.ClaimRole(role); err != nil {
 				t.Fatal(err)
 			}
-			if readFormat(t, db).SchemaVersion != SchemaCompressedValues {
+			if readFormat(t, db).SchemaVersion != max(version, SchemaCompressedValues) {
 				t.Fatal("current reader lost compression fence")
 			}
 		})

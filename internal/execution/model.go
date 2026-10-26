@@ -69,14 +69,16 @@ type Job struct {
 	ParentID       int64          `json:"parentId"`
 	Number         int            `json:"number"`
 	Generation     uint64         `json:"generation"`
+	Assignment     uint64         `json:"assignment,omitempty"`
 	Source         Endpoint       `json:"source"`
 	Destination    Endpoint       `json:"destination"`
 	ConflictPolicy string         `json:"conflictPolicy"`
 	// SharedLocalSource is only scheduled after Agent-local shared-root proof.
 	// Local device/inode identity differs between mounts on different nodes.
-	SharedLocalSource bool   `json:"sharedLocalSource,omitempty"`
-	Items             []Item `json:"items"`
-	DiscoveryComplete bool   `json:"discoveryComplete"`
+	SharedLocalSource      bool   `json:"sharedLocalSource,omitempty"`
+	SharedLocalDestination bool   `json:"sharedLocalDestination,omitempty"`
+	Items                  []Item `json:"items"`
+	DiscoveryComplete      bool   `json:"discoveryComplete"`
 }
 
 type ItemResult struct {
@@ -142,6 +144,7 @@ func (f StoreFactoryFunc) Open(ctx context.Context, j Job) (transferstore.Store,
 type ReaderDecorator func(context.Context, Job, Item, io.ReadCloser) (io.ReadCloser, error)
 
 type Options struct {
+	ParentContext     func(int64, uint64) (context.Context, error)
 	MaxConcurrentJobs int
 	WorkersPerJob     int
 	QueueSize         int

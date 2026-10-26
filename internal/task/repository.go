@@ -283,7 +283,7 @@ func (r *Repository) Assign(id int64, generation uint64, number int, objects []t
 // Agent is called or scanner checkpoint acknowledged. Partial delivery remains
 // recoverable from the outstanding-child index after a crash or disconnection.
 func (r *Repository) AssignPage(id int64, generation uint64, batches []Assignment) ([]Child, error) {
-	return r.assignPage(id, generation, batches, nil)
+	return r.assignPage(id, generation, 0, batches, nil)
 }
 
 // AssignPageAvailable restricts new assignments to selected nodes that have
@@ -293,10 +293,17 @@ func (r *Repository) AssignPageAvailable(id int64, generation uint64, batches []
 	if available == nil {
 		available = map[string]bool{}
 	}
-	return r.assignPage(id, generation, batches, available)
+	return r.assignPage(id, generation, 0, batches, available)
 }
 
-func (r *Repository) assignPage(id int64, generation uint64, batches []Assignment, available map[string]bool) ([]Child, error) {
+func (r *Repository) AssignPageForScanner(id int64, generation, epoch uint64, batches []Assignment, available map[string]bool) ([]Child, error) {
+	if available == nil {
+		available = map[string]bool{}
+	}
+	return r.assignPage(id, generation, epoch, batches, available)
+}
+
+func (r *Repository) assignPage(id int64, generation, epoch uint64, batches []Assignment, available map[string]bool) ([]Child, error) {
 	if len(batches) == 0 || len(batches) > 16 {
 		return nil, errors.New("assignment page must contain 1 to 16 batches")
 	}
@@ -314,7 +321,10 @@ func (r *Repository) assignPage(id int64, generation uint64, batches []Assignmen
 		if p.Generation != generation {
 			return ErrGeneration
 		}
-		if p.Status != "RUNNING" || p.Deleted {
+		if p.ScannerEpoch() != epoch {
+			return ErrGeneration
+		}
+		if p.Status != "RUNNING" || p.Deleted || p.Failover != nil && p.Failover.ScannerSeeding {
 			return ErrState
 		}
 		if err := ensureScheduling(tx, &p); err != nil {
@@ -376,6 +386,7 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	}
 	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
 	job.SharedLocalSource = p.Spec.SharedLocalSource
+	job.SharedLocalDestination = p.Spec.SharedLocalDestination
 	if job.Source.Kind == "LOCAL" {
 		job.Source.Root = node.LocalRoot
 	}
@@ -742,6 +753,14 @@ func addCounters(to *execution.Counters, value execution.Counters, sign int64) {
 }
 
 func (r *Repository) ScanProgress(id int64, generation uint64, objects, bytes int64, batches int, complete bool, scanErr string) error {
+	return r.scanProgress(id, generation, nil, objects, bytes, batches, complete, scanErr)
+}
+
+func (r *Repository) ScanProgressForScanner(id int64, generation, epoch uint64, objects, bytes int64, batches int, complete bool, scanErr string) error {
+	return r.scanProgress(id, generation, &epoch, objects, bytes, batches, complete, scanErr)
+}
+
+func (r *Repository) scanProgress(id int64, generation uint64, epoch *uint64, objects, bytes int64, batches int, complete bool, scanErr string) error {
 	return unchangedOK(r.store.Update(func(tx *state.Tx) error {
 		p, err := get(tx, id)
 		if err != nil {
@@ -750,7 +769,10 @@ func (r *Repository) ScanProgress(id int64, generation uint64, objects, bytes in
 		if p.Generation != generation {
 			return ErrGeneration
 		}
-		if p.Status != "RUNNING" {
+		if epoch == nil && p.ScannerEpoch() != 0 || epoch != nil && p.ScannerEpoch() != *epoch {
+			return ErrGeneration
+		}
+		if p.Status != "RUNNING" || p.Failover != nil && p.Failover.ScannerSeeding {
 			return ErrState
 		}
 		if objects < 0 || bytes < 0 || batches < 0 {
@@ -955,7 +977,7 @@ func (r *Repository) FinishIfReady(id int64, generation uint64) (bool, error) {
 		if p.Generation != generation {
 			return ErrGeneration
 		}
-		if p.Status != "RUNNING" || (!p.ScanComplete && p.Error == "") || p.DispatchedThrough != p.ScannedBatches || p.FinishedChildren != p.ChildCount {
+		if p.Status != "RUNNING" || p.FailoverPending() || (!p.ScanComplete && p.Error == "") || p.DispatchedThrough != p.ScannedBatches || p.FinishedChildren != p.ChildCount {
 			return errUnchanged
 		}
 		failed := p.Error != "" || p.FailedChildren > 0

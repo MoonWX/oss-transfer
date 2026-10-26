@@ -1,10 +1,11 @@
 package execution
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -15,7 +16,6 @@ func TestResumeParentDoesNotAdmitAllFailedHistory(t *testing.T) {
 	f := newFixture(t, 2)
 	f.startEngine(nil, Options{})
 	const count = 1100
-	var original Record
 	if err := f.db.Update(func(tx *state.Tx) error {
 		if err := tx.Put(parentsBucket, parentKey(224), ParentFence{ParentID: 224, Generation: 1}); err != nil {
 			return err
@@ -34,13 +34,30 @@ func TestResumeParentDoesNotAdmitAllFailedHistory(t *testing.T) {
 			if err := tx.Put(jobsBucket, key, r); err != nil {
 				return err
 			}
-			if n == 1 {
-				original = r
-			}
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	// Compare persisted records on both sides of recovery. A round trip can
+	// normalize time.Time's Location without changing any stored field.
+	// Keep every ledger, so a rewrite outside the first child is also caught.
+	snapshot := func() map[string][]byte {
+		t.Helper()
+		rows := map[string][]byte{}
+		if err := f.db.View(func(tx *state.Tx) error {
+			return tx.Scan(jobsBucket, "", "", count+1, func(key string, raw json.RawMessage) error {
+				rows[key] = append([]byte(nil), raw...)
+				return nil
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	original := snapshot()
+	if len(original) != count {
+		t.Fatal("failed history fixture is incomplete", len(original))
 	}
 	if err := f.engine.ResumeParent(bg, 224, 2, true); err != nil {
 		t.Fatal("more failed children than capacity prevented recovery", err)
@@ -48,9 +65,14 @@ func TestResumeParentDoesNotAdmitAllFailedHistory(t *testing.T) {
 	if err := f.engine.ResumeParent(bg, 224, 2, true); err != nil {
 		t.Fatal("resume replay failed", err)
 	}
-	stale, err := f.repo.Get(bg, "224-1")
-	if err != nil || !reflect.DeepEqual(stale, original) {
-		t.Fatal("parent resume rewrote terminal ledgers", err)
+	stale := snapshot()
+	if len(stale) != len(original) {
+		t.Fatal("parent resume added or removed terminal ledgers", len(stale), len(original))
+	}
+	for key, before := range original {
+		if !bytes.Equal(stale[key], before) {
+			t.Fatal("parent resume rewrote terminal ledger", key)
+		}
 	}
 	if pending, _, err := f.repo.Unfinished(); err != nil || pending != 0 {
 		t.Fatal(pending, err)

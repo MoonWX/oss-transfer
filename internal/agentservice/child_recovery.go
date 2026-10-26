@@ -19,6 +19,9 @@ type ChildRecoverResult struct {
 }
 
 func (s *Service) recoverChild(ctx context.Context, request ChildRecoverRequest) (ChildRecoverResult, error) {
+	if err := s.Leases.Admission(request.ParentID, request.Generation); err != nil {
+		return ChildRecoverResult{}, err
+	}
 	record, err := s.Engine.Get(ctx, request.ChildID)
 	if err != nil {
 		return ChildRecoverResult{}, err

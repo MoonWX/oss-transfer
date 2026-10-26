@@ -108,6 +108,7 @@ func validate(job Job) (string, error) {
 	}
 	// The generation is the ownership fence, not the identity of the work.
 	job.Generation = 0
+	job.Assignment = 0
 	job.DiscoveryComplete = false
 	data, err := json.Marshal(job)
 	if err != nil {
@@ -287,6 +288,10 @@ func (r *Repository) Pending(ctx context.Context, after string, limit int) ([]Re
 // Accept is the durable ACK boundary. It neither schedules work nor silently
 // drops it when a memory queue fills. Replays cannot change the work definition.
 func (r *Repository) Accept(ctx context.Context, job Job, inventorySource ...bool) (Record, error) {
+	return r.accept(ctx, job, nil, inventorySource...)
+}
+
+func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventorySource ...bool) (Record, error) {
 	fingerprint, err := validate(job)
 	if err != nil {
 		return Record{}, err
@@ -314,6 +319,20 @@ func (r *Repository) Accept(ctx context.Context, job Job, inventorySource ...boo
 			if existing.Job.Generation > job.Generation {
 				return ErrGeneration
 			}
+			if existing.Job.Assignment > job.Assignment {
+				return ErrAssignment
+			}
+			if existing.Job.Assignment < job.Assignment {
+				if seed == nil {
+					return ErrAssignment
+				}
+				result, err = importedRecord(job, seed, fingerprint, len(inventorySource) > 0 && inventorySource[0])
+				if err != nil {
+					return err
+				}
+				result.Attempt = max(result.Attempt, existing.Attempt) + 1
+				return r.put(tx, &existing, &result)
+			}
 			if existing.Fingerprint != fingerprint {
 				return ErrConflict
 			}
@@ -332,6 +351,13 @@ func (r *Repository) Accept(ctx context.Context, job Job, inventorySource ...boo
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
+		}
+		if seed != nil {
+			result, err = importedRecord(job, seed, fingerprint, len(inventorySource) > 0 && inventorySource[0])
+			if err != nil {
+				return err
+			}
+			return r.put(tx, nil, &result)
 		}
 		result = Record{InventorySource: len(inventorySource) > 0 && inventorySource[0], Job: job, Status: Waiting, Fingerprint: fingerprint, Results: make([]ItemResult, len(job.Items))}
 		for i, item := range job.Items {

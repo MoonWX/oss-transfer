@@ -65,11 +65,14 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 	}
 	objectPrefix := parentKey(attempt.Spec.ParentID) + "/"
 	return s.store.Update(func(tx *state.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		current, err := get(tx, attempt.Spec.ParentID)
 		if err != nil {
 			return err
 		}
-		if current.Generation != attempt.Generation || current.Attempt != attempt.Attempt {
+		if current.Generation != attempt.Generation || current.Epoch != attempt.Epoch || current.Attempt != attempt.Attempt {
 			return ErrGeneration
 		}
 		if current.Status != Scanning {
@@ -77,14 +80,14 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 		}
 		modified := false
 		for _, part := range pending {
-			batch := Batch{ParentID: attempt.Spec.ParentID, Generation: current.Generation, Objects: make([]transferstore.Object, 0, len(part.objects))}
+			batch := Batch{ParentID: attempt.Spec.ParentID, Generation: current.Generation, Epoch: current.Epoch, Objects: make([]transferstore.Object, 0, len(part.objects))}
 			for _, object := range part.objects {
 				key := objectPrefix + base64.RawURLEncoding.EncodeToString([]byte(object.Key))
 				prior, found, err := getDiscoveredObjectAtKey(tx, key, object.Key)
 				if err != nil {
 					return err
 				}
-				if found && !sameObject(prior.Object, object) {
+				if found && !sameScanObject(attempt, prior, object) {
 					if attempt.Spec.InventoryID == "" || !execution.SourceIdentityUnknown(prior.Object) {
 						return changed(object.Key)
 					}
@@ -207,7 +210,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 				if err != nil {
 					return err
 				}
-				if found && !sameObject(prior.Object, object) {
+				if found && !sameScanObject(attempt, prior, object) {
 					return changed(object.Key)
 				}
 				return nil
@@ -280,7 +283,7 @@ func (s *Scanner) finish(attempt State, scanErr error) {
 		if err != nil {
 			return err
 		}
-		if current.Generation != attempt.Generation || current.Attempt != attempt.Attempt || current.Status != Scanning {
+		if current.Generation != attempt.Generation || current.Epoch != attempt.Epoch || current.Attempt != attempt.Attempt || current.Status != Scanning {
 			return nil
 		}
 		current.UpdatedAt = time.Now().UTC()

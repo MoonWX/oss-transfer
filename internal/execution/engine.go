@@ -19,6 +19,7 @@ type activeAttempt struct {
 	done           chan struct{}
 	objects        int
 	objectsChanged chan struct{}
+	progress       *attemptProgress
 }
 
 // Engine owns task lifetimes, independently of the short-lived RPC contexts
@@ -210,6 +211,7 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	baseCancel := cancel
 	cancel = func() { stopLease(); baseCancel() }
 	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{}), objectsChanged: make(chan struct{})}
+	attempt.progress = newAttemptProgress(ioCtx, record)
 	e.active[child] = attempt
 	e.lifetimes.Store(child, attempt)
 	go e.runAttempt(ioCtx, record, attempt)
@@ -432,6 +434,7 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 			return nil, fmt.Errorf("update recovery ledger: %w", err)
 		}
 	}
+	attempt.progress.initialize(record.Counters.SucceededBytes)
 	results := make(chan ItemResult, e.opts.QueueSize)
 	var workers sync.WaitGroup
 	workers.Add(1)
@@ -451,7 +454,7 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				if ctx.Err() != nil {
 					return
 				}
-				result := e.copyResolvedItem(ctx, record, item, source, target)
+				result := e.copyResolvedItem(ctx, record, item, source, target, attempt.progress)
 				if ctx.Err() != nil {
 					return
 				}
@@ -511,7 +514,7 @@ func changed(actual, saved transferstore.Object) bool {
 	return actual.Key != saved.Key || actual.Size != saved.Size || (saved.ETag != "" && !transferstore.EqualETag(actual.ETag, saved.ETag)) || (saved.VersionID != "" && actual.VersionID != saved.VersionID) || (!saved.ModifiedAt.IsZero() && !actual.ModifiedAt.Equal(saved.ModifiedAt))
 }
 
-func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, target transferstore.Store) (result ItemResult) {
+func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, target transferstore.Store, progress ...*objectProgress) (result ItemResult) {
 	result = ItemResult{ID: item.ID, Status: ItemFailed}
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -589,6 +592,9 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 			return fail("prepare reader", errors.New("nil decorated reader"))
 		}
 		defer reader.Close()
+	}
+	if len(progress) > 0 && progress[0] != nil {
+		reader = &progressReader{ReadCloser: reader, progress: progress[0]}
 	}
 	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata})
 	result.TargetCommitted = write.Committed

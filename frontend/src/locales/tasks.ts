@@ -1,4 +1,27 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  正在传输: { en: "Transferring", ja: "転送中" },
+  刷新文件进度: { en: "Refresh file progress", ja: "ファイルの進捗を更新" },
+  更新执行节点后可查看文件进度: {
+    en: "Update the execution node to view file progress",
+    ja: "実行ノードを更新すると、ファイルの進捗を表示できます",
+  },
+  进度暂未更新: {
+    en: "Progress has not updated",
+    ja: "進捗が更新されていません",
+  },
+  正在获取文件进度: {
+    en: "Loading file progress",
+    ja: "ファイルの進捗を取得中",
+  },
+  确认中: { en: "Finalizing", ja: "確定中" },
+  "文件进度：{key}": {
+    en: "File progress: {key}",
+    ja: "ファイルの進捗：{key}",
+  },
+  在子任务中查看其他文件: {
+    en: "View other files in subtasks",
+    ja: "他のファイルはサブタスクで表示",
+  },
   "无法完整读取任务列表，请刷新后重试。": {
     en: "Could not load the complete task list. Refresh and try again.",
     ja: "タスク一覧をすべて読み込めませんでした。更新して再試行してください。",

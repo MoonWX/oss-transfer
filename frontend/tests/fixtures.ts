@@ -160,7 +160,24 @@ export async function mockApi(
         totalFailedObjectCount: 18,
         tasks: options.empty ? [] : tasks,
       };
-    else if (/^\/api\/master\/tasks\/\d+\/children(?:\/\d+)?$/.test(path)) {
+    else if (/^\/api\/master\/tasks\/\d+\/progress$/.test(path)) {
+      result = {
+        success: true,
+        data: {
+          parentTaskId: Number(path.split("/")[4]),
+          generation: Number(url.searchParams.get("generation") || 1),
+          childNumber: url.searchParams.has("childNumber")
+            ? Number(url.searchParams.get("childNumber"))
+            : undefined,
+          supported: true,
+          partial: false,
+          observedAt: Date.now(),
+          items: [],
+          total: 0,
+          hasMore: false,
+        },
+      };
+    } else if (/^\/api\/master\/tasks\/\d+\/children(?:\/\d+)?$/.test(path)) {
       const parts = path.split("/");
       result = {
         success: true,

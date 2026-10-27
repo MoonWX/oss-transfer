@@ -11,12 +11,14 @@ import (
 )
 
 type taskRateCache struct {
-	generation uint64
-	attempted  time.Time
-	observed   time.Time
-	valid      bool
-	total      float64
-	children   map[string]float64
+	generation        uint64
+	attempted         time.Time
+	observed          time.Time
+	valid             bool
+	total             float64
+	children          map[string]float64
+	progressSupported bool
+	progress          *task.ProgressProjection
 }
 
 // Missing Agent responses invalidate the aggregate. Showing a partial sum as
@@ -79,14 +81,30 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	}
 	workers.Wait()
 	entry.valid = len(results) > 0
-	for _, result := range results {
+	entry.progressSupported = entry.valid
+	var progressReports []task.ProgressReport
+	progressTruncated := false
+	for index, result := range results {
 		if !result.valid {
 			entry.valid = false
 			break
 		}
+		entry.progressSupported = entry.progressSupported && result.rate.ProgressSupported
+		for _, child := range result.rate.Progress {
+			if len(progressReports) >= task.MaxProgressReports {
+				progressTruncated = true
+				break
+			}
+			progressReports = append(progressReports, task.ProgressReport{NodeID: nodes[index].ID, EnrollmentID: nodes[index].EnrollmentID, Child: child})
+		}
 		entry.total += result.rate.BytesPerSecond
 		for child, rate := range result.rate.Children {
 			entry.children[child] += rate
+		}
+	}
+	if entry.valid && entry.progressSupported && !progressTruncated {
+		if projection, err := t.repo.ProjectProgress(p.ID, p.Generation, progressReports); err == nil {
+			entry.progress = &projection
 		}
 	}
 	entry.observed = time.Now()
@@ -119,6 +137,7 @@ func (s *Server) taskView(p task.Parent, sets ...nodeDisplaySet) map[string]any 
 	}
 	displays.task(row, p.Spec.Nodes)
 	s.addTaskRate(row, p, "")
+	s.addLiveAverage(row, p, nil)
 	return row
 }
 func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) map[string]any {
@@ -131,6 +150,7 @@ func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) 
 	}
 	displays.task(row, []task.Node{c.Node})
 	s.addTaskRate(row, p, c.Job.ChildID)
+	s.addLiveAverage(row, p, &c)
 	return row
 }
 func (s *Server) addTaskRate(row map[string]any, p task.Parent, child string) {

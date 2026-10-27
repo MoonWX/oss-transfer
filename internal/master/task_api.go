@@ -88,6 +88,7 @@ func installTaskRoutes(s *Server) error {
 	s.mux.HandleFunc("POST /api/master/local-transfers/validate", s.adminOnly(s.validateTaskHTTP))
 	s.mux.HandleFunc("GET /api/master/status", s.adminOnly(s.taskStatusHTTP))
 	s.mux.HandleFunc("GET /api/master/tasks/{id}", s.adminOnly(s.taskDetailHTTP))
+	s.mux.HandleFunc("GET /api/master/tasks/{id}/progress", s.adminOnly(s.taskProgressHTTP))
 	s.mux.HandleFunc("GET /api/master/local-transfers", s.adminOnly(s.taskStatusHTTP))
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children", s.adminOnly(s.taskChildrenHTTP))
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children/{number}", s.adminOnly(s.taskChildrenHTTP))
@@ -137,7 +138,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {

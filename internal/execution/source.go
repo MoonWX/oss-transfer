@@ -114,7 +114,7 @@ func (r *Repository) pinSource(ctx context.Context, child string, generation, at
 	return pinned, err
 }
 
-func (e *Engine) copyResolvedItem(ctx context.Context, record Record, item Item, source, target transferstore.Store) ItemResult {
+func (e *Engine) copyResolvedItem(ctx context.Context, record Record, item Item, source, target transferstore.Store, progress ...*attemptProgress) ItemResult {
 	var pinned *transferstore.Object
 	for _, result := range record.Results {
 		if result.ID == item.ID {
@@ -135,7 +135,14 @@ func (e *Engine) copyResolvedItem(ctx context.Context, record Record, item Item,
 	if pinned != nil {
 		item.Source = *pinned
 	}
-	result := e.copyItem(ctx, record.Job, item, source, target)
+	var object *objectProgress
+	if len(progress) > 0 && progress[0] != nil {
+		object = progress[0].begin(item)
+	}
+	result := e.copyItem(ctx, record.Job, item, source, target, object)
+	if object != nil {
+		progress[0].finish(object, result.Status == ItemSucceeded)
+	}
 	result.ResolvedSource = pinned
 	return result
 }

@@ -32,10 +32,12 @@ type rateSeries struct {
 	last    int64
 }
 type TaskRateSnapshot struct {
-	ParentID       int64              `json:"parentId"`
-	Generation     uint64             `json:"generation"`
-	BytesPerSecond float64            `json:"bytesPerSecond"`
-	Children       map[string]float64 `json:"children"`
+	ParentID          int64                     `json:"parentId"`
+	Generation        uint64                    `json:"generation"`
+	BytesPerSecond    float64                   `json:"bytesPerSecond"`
+	Children          map[string]float64        `json:"children"`
+	ProgressSupported bool                      `json:"progressSupported"`
+	Progress          []execution.ChildProgress `json:"progress,omitempty"`
 }
 
 func NewTaskRates() *TaskRates {

@@ -19,6 +19,7 @@ import {
 import { formatBytes, formatNumber, LoadingState, StatusChip } from "./Common";
 import { keyMappingLabels, type OssKeyMappingMode } from "../lib/ossKeyMapping";
 import ChildRecovery from "./ChildRecovery";
+import LiveFileProgress from "./LiveFileProgress";
 import { useNodeLabels } from "../lib/workerStatus";
 import { taskNodeLabels } from "../lib/nodeRegistry";
 type Props = {
@@ -31,6 +32,8 @@ type Props = {
   partial: boolean;
   error?: string | null;
   canRecover?: boolean;
+  refreshMs?: number;
+  liveProgressEnabled?: boolean;
   onBack: () => void;
   onClose: () => void;
   onRefresh: () => void;
@@ -56,6 +59,8 @@ export default function SubtaskDetails({
   partial,
   error,
   canRecover = false,
+  refreshMs = 0,
+  liveProgressEnabled = true,
   onBack,
   onClose,
   onRefresh,
@@ -246,6 +251,14 @@ export default function SubtaskDetails({
               </Box>
             ))}
           </Box>
+          <LiveFileProgress
+            taskId={Number(childId.split("-")[0])}
+            childNumber={Number(childId.split("-")[1])}
+            generation={task.generation}
+            status={task.status}
+            refreshMs={refreshMs}
+            enabled={liveProgressEnabled}
+          />
           <Divider sx={{ mb: 3 }} />
           <Typography variant="h6" sx={{ mb: 2 }}>
             {t("执行信息")}

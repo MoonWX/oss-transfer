@@ -423,7 +423,31 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if request.ParentID < 1 || request.Generation == 0 {
 			return badRequest(errors.New("parent and generation are required"))
 		}
-		return response(s.Rates.Snapshot(request.ParentID, request.Generation), nil)
+		snapshot := s.Rates.Snapshot(request.ParentID, request.Generation)
+		snapshot.ProgressSupported = true
+		snapshot.Progress = s.Engine.Progress(request.ParentID, request.Generation)
+		return response(snapshot, nil)
+	case "task_progress":
+		var request struct {
+			ParentID   int64  `json:"parentId"`
+			Generation uint64 `json:"generation"`
+			ChildID    string `json:"childId"`
+		}
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		if request.ParentID < 1 || request.Generation == 0 || request.ChildID == "" || len(request.ChildID) > 256 {
+			return badRequest(errors.New("parent, generation and child are required"))
+		}
+		child, items, found := s.Engine.ProgressObjects(request.ParentID, request.Generation, request.ChildID)
+		var summary *execution.ChildProgress
+		if found {
+			summary = &child
+		}
+		if items == nil {
+			items = []execution.ObjectProgress{}
+		}
+		return response(map[string]any{"supported": true, "child": summary, "items": items}, nil)
 	case "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup":
 		var request struct {
 			ParentID   int64                     `json:"parentId"`

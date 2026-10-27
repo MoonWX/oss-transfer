@@ -334,7 +334,7 @@ func TestAdminExceptionCSVExportProtectsFormulaAndExistingFiles(t *testing.T) {
 			adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"address": "10.0.0.2"}}}})
 			return
 		}
-		adminTestJSON(t, w, map[string]interface{}{"success": true, "complete": true, "failedKeys": map[string]interface{}{"10.0.0.2": []interface{}{map[string]interface{}{"key": "=malicious()", "errorMessage": "message,\"quoted\"\nnext", "retryStatus": "FAILED", "retryCount": 2, "retryUpdatedAt": 1793011200000, "retryError": "retry,\"failed\"\nagain", "retryGeneration": 3, "retryExecutionNodeIp": "agent-next", "retryExecutionNodeDisplay": map[string]interface{}{"displayName": "Next", "displayAddress": "10.0.0.3"}}}, "10.0.0.2Count": 1}})
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "complete": true, "failedKeys": map[string]interface{}{"10.0.0.2": []interface{}{map[string]interface{}{"key": "=malicious()", "errorMessage": "message,\"quoted\"\nnext", "retryStatus": "FAILED", "retryCount": 2, "retryUpdatedAt": int64(1793011200000), "retryError": "retry,\"failed\"\nagain", "retryGeneration": 3, "retryExecutionNodeIp": "agent-next", "retryExecutionNodeDisplay": map[string]interface{}{"displayName": "Next", "displayAddress": "10.0.0.3"}}}, "10.0.0.2Count": 1}})
 	})
 	path := filepath.Join(t.TempDir(), "failures.csv")
 	args := []string{"export", "failed", "--output", path}

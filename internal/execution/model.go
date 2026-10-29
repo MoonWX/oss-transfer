@@ -122,6 +122,10 @@ type Record struct {
 }
 
 type ParentFence struct {
+	CleanupDone     bool   `json:"cleanupDone,omitempty"`
+	CleanupDeleted  int64  `json:"cleanupDeleted,omitempty"`
+	CleanupAfter    string `json:"cleanupAfter,omitempty"`
+	CleanupError    string `json:"cleanupError,omitempty"`
 	RetryFailed     bool   `json:"retryFailed,omitempty"`
 	InventorySource bool   `json:"inventorySource,omitempty"`
 	ParentID        int64  `json:"parentId"`

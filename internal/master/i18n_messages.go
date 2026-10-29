@@ -224,6 +224,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"同步成功":    {"Synced", "同步成功", "同期済み"},
 	"存储连接已保存": {"Storage connection saved", "存储连接已保存", "ストレージ接続を保存しました"},
 	"已删除任务记录；已移除节点的本地历史保留：": {"Task records deleted; local history remains on removed nodes: ", "已删除任务记录；已移除节点的本地历史保留：", "タスクレコードを削除しました。削除済みノードのローカル履歴は残ります："},
+	"已受理清理；已移除节点的本地历史保留：":   {"Cleanup accepted; local history remains on removed nodes: ", "已受理清理；已移除节点的本地历史保留：", "クリーンアップを受け付けました。削除済みノードのローカル履歴は残ります："},
 	"执行节点未连接":                                                               {"Worker is not connected", "执行节点未连接", "実行ノードが接続されていません"},
 	"执行节点重复":                                                                {"Duplicate worker", "执行节点重复", "実行ノードが重複しています"},
 	"本地路径必须为绝对路径":                                                           {"Local path must be absolute", "本地路径必须为绝对路径", "ローカルパスは絶対パスにしてください"},

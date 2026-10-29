@@ -94,6 +94,7 @@ func installTaskRoutes(s *Server) error {
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children/{number}", s.adminOnly(s.taskChildrenHTTP))
 	s.mux.HandleFunc("POST /api/master/tasks/{id}/children/{number}/recover", s.adminOnly(s.recoverChildHTTP))
 	s.mux.HandleFunc("GET /api/master/deleted-tasks", s.adminOnly(s.deletedTasksHTTP))
+	s.mux.HandleFunc("POST /api/master/cleanup-status", s.adminOnly(s.cleanupStatusHTTP))
 	for route, action := range map[string]string{"start": "resume", "stop": "stop", "resume": "resume", "retry": "retry", "retry-task": "retry", "clear": "clear", "restore": "restore", "permanent-delete": "permanent-delete", "local-transfers/stop": "stop", "local-transfers/resume": "resume", "local-transfers/retry-failures": "retry"} {
 		s.mux.HandleFunc("POST /api/master/"+route, s.adminOnly(s.controlTaskHTTP(action)))
 	}
@@ -812,6 +813,9 @@ func taskDTO(p task.Parent) map[string]any {
 	if spec.InventoryID != "" {
 		row["inventoryManifestId"] = spec.InventoryID
 	}
+	if p.Cleanup != nil {
+		row["cleanup"] = cleanupDTO(p.Cleanup)
+	}
 	if spec.RequestLimits != nil {
 		row["requestLimits"] = spec.RequestLimits
 	}
@@ -1271,6 +1275,9 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 		}
 		displays := s.nodeDisplaySnapshot()
 		outcomes := s.runTaskControls(r.Context(), request.TaskIDs, func(ctx context.Context, id int64) (task.Parent, bool, error) {
+			if action == "permanent-delete" {
+				return s.requestTaskPurge(ctx, id)
+			}
 			if resuming {
 				var expected *uint64
 				if request.ExpectedGenerations != nil {
@@ -1288,6 +1295,12 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			outcome := outcomes[index]
 			p, admitted, err := outcome.parent, outcome.admitted, outcome.err
 			item := map[string]any{"taskId": id, "status": p.Status, "generation": p.Generation, "success": err == nil, "accepted": err == nil && admitted, "ignored": err == nil && !admitted}
+			if action == "permanent-delete" && err == nil {
+				item["purged"] = p.Purged
+				if p.Cleanup != nil {
+					item["cleanup"] = cleanupDTO(p.Cleanup)
+				}
+			}
 			if err != nil {
 				failed++
 				item["message"] = err.Error()
@@ -1306,7 +1319,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 					}
 					if len(retained) > 0 {
 						item["retainedAgentHistory"] = retained
-						item["message"] = localize(w, "已删除任务记录；已移除节点的本地历史保留：") + strings.Join(retainedLabels, "、")
+						item["message"] = localize(w, "已受理清理；已移除节点的本地历史保留：") + strings.Join(retainedLabels, "、")
 					}
 				}
 			}

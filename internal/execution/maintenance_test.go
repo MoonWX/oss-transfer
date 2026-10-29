@@ -18,7 +18,7 @@ func ledgerPayload(t *testing.T, db *state.Store, parentID int64) int64 {
 	t.Helper()
 	var size int64
 	if err := db.View(func(tx *state.Tx) error {
-		return tx.Scan(jobsBucket, fmt.Sprintf("%020d/", parentID), "", 4096, func(_ string, raw json.RawMessage) error {
+		return tx.Scan(jobsBucket, fmt.Sprintf("%020d/", parentID), "", 100000, func(_ string, raw json.RawMessage) error {
 			size += int64(len(raw))
 			return nil
 		})
@@ -149,7 +149,8 @@ func seedHistory(t *testing.T, f *fixture, count int, status Status) {
 
 func TestHistoricalDeletedCleanupResumesAfterCommittedPage(t *testing.T) {
 	f := newFixture(t, 1)
-	seedHistory(t, f, 300, Deleted)
+	const total = 2050
+	seedHistory(t, f, total, Deleted)
 	// This is an old database that never had a running index or purge queue.
 	if err := f.db.Update(func(tx *state.Tx) error { return tx.Delete(metaBucket, "running-index-v1") }); err != nil {
 		t.Fatal(err)
@@ -167,9 +168,14 @@ func TestHistoricalDeletedCleanupResumesAfterCommittedPage(t *testing.T) {
 	if err := f.repo.Recover(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cleanup did not respect interruption: %v", err)
 	}
-	page, err := f.repo.List(bg, 224, "", 256)
-	if err != nil || len(page) != 300-maintenancePageSize {
-		t.Fatalf("cleanup transaction was not bounded: %d %v", len(page), err)
+	remainingRows := 0
+	if err := f.db.View(func(tx *state.Tx) error {
+		return tx.ScanKeys(jobsBucket, "00000000000000000224/", "", total, func(string, int64) error { remainingRows++; return nil })
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if removed := total - remainingRows; removed < 1 || removed > state.DefaultCleanupBudget().MaxRecords || remainingRows == 0 {
+		t.Fatalf("cleanup transaction was not bounded: removed=%d remaining=%d", removed, remainingRows)
 	}
 	if remaining := ledgerPayload(t, f.db, 224); remaining == 0 || remaining >= before {
 		t.Fatalf("partial cleanup did not reclaim committed pages: before=%d after=%d", before, remaining)

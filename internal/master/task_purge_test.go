@@ -79,8 +79,17 @@ func TestPurgeRetiredEnrollmentDoesNotContactReplacementOrReviveCredential(t *te
 		t.Fatal("purge concealed retained retired-Agent history", item)
 	}
 	purged, err := f.master.tasks.repo.Get(p.ID)
-	if err != nil || !purged.Purged || !purged.Deleted {
-		t.Fatal("durable Master tombstone missing", purged, err)
+	if err != nil || purged.Purged || !purged.Deleted || purged.Cleanup == nil {
+		t.Fatal("durable cleanup admission missing", purged, err)
+	}
+	for !purged.Purged {
+		if err := f.master.tasks.cleanup.step(context.Background(), p.ID); err != nil {
+			t.Fatal(err)
+		}
+		purged, err = f.master.tasks.repo.Get(p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	unchanged, err := f.master.tasks.repo.Get(newTask.ID)
 	if err != nil || !reflect.DeepEqual(newTask, unchanged) {
@@ -107,13 +116,17 @@ func TestPurgeOfflineOrUnknownEnrollmentRequiresCleanupAcknowledgement(t *testin
 		t.Run(name, func(t *testing.T) {
 			p := purgeFixtureTask(t, f, session, name)
 			stopAndRecyclePurgeFixture(t, f, p)
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if _, err := f.master.controlTask(ctx, p.ID, "permanent-delete"); err == nil {
-				t.Fatal("missing cleanup acknowledgement was ignored")
+			if _, err := f.master.controlTask(ctx, p.ID, "permanent-delete"); err != nil {
+				t.Fatal("offline node prevented durable admission", err)
+			}
+			f.master.tasks.cleanup.nodeTimeout = 20 * time.Millisecond
+			if err := f.master.tasks.cleanup.step(ctx, p.ID); err != nil {
+				t.Fatal(err)
 			}
 			retained, err := f.master.tasks.repo.Get(p.ID)
-			if err != nil || retained.Purged || !retained.Deleted {
+			if err != nil || retained.Purged || !retained.Deleted || retained.Cleanup == nil || retained.Cleanup.Status != "WAITING" {
 				t.Fatal("unconfirmed cleanup lost recycle-bin task", retained, err)
 			}
 		})

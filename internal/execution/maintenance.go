@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
@@ -103,70 +104,117 @@ func (r *Repository) running(ctx context.Context, after string, limit int) ([]Re
 	return records, err
 }
 
-// Only call after every attempt has exited, or during startup before execution
-// begins. The small parent tombstone remains durable to reject late commands.
-func (r *Repository) purgeDeleted(ctx context.Context, id int64, generation uint64) error {
-	for {
-		done := false
-		err := r.db.Update(func(tx *state.Tx) error {
+// Only call after every attempt has exited, or during offline recovery. A page
+// commits its cursor, counters and deletions together, so restarts never rescan
+// already removed data. Status-only decoding avoids allocating object ledgers.
+func (r *Repository) purgeDeletedPage(ctx context.Context, id int64, generation uint64) (done bool, err error) {
+	err = r.db.Update(func(tx *state.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		fence, found, err := parent(tx, id)
+		if err != nil {
+			return err
+		}
+		if !found || fence.Generation != generation {
+			return ErrGeneration
+		}
+		if !fence.Deleted {
+			return errors.New("cannot purge an undeleted parent")
+		}
+		if fence.CleanupDone {
+			done = true
+			return tx.Delete(purgesBucket, parentKey(id))
+		}
+		budget := state.DefaultCleanupBudget()
+		started := time.Now()
+		var rows []string
+		var storedBytes int64
+		full := false
+		err = tx.ScanKeys(jobsBucket, fmt.Sprintf("%020d/", id), fence.CleanupAfter, budget.MaxRecords+1, func(key string, size int64) error {
+			if len(rows) > 0 && (len(rows) >= budget.MaxRecords || storedBytes+int64(size) > budget.MaxBytes || time.Since(started) >= budget.MaxDuration) {
+				full = true
+				return errPurgePageFull
+			}
+			rows = append(rows, key)
+			storedBytes += int64(size)
+			return nil
+		})
+		if err != nil && !errors.Is(err, errPurgePageFull) {
+			return err
+		}
+		var u usage
+		if _, err := tx.Get(metaBucket, "usage", &u); err != nil {
+			return err
+		}
+		if u.Pending < 0 {
+			return errors.New("invalid pending job counter during purge")
+		}
+		var removedPending, removed int64
+		for _, row := range rows {
+			if removed > 0 && time.Since(started) >= budget.MaxDuration {
+				full = true
+				break
+			}
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			fence, found, err := parent(tx, id)
-			if err != nil {
-				return err
-			}
-			if !found || fence.Generation != generation {
-				return ErrGeneration
-			}
-			if !fence.Deleted {
-				return errors.New("cannot purge an undeleted parent")
-			}
-			type row struct {
-				key     string
-				pending bool
-			}
-			var rows []row
-			if err := tx.Scan(jobsBucket, fmt.Sprintf("%020d/", id), "", maintenancePageSize, func(key string, raw json.RawMessage) error {
-				var record Record
-				if err := json.Unmarshal(raw, &record); err != nil {
+			// The admission counter is maintained atomically with every job.
+			// Once no unfinished jobs remain, all history can be removed by key
+			// without inflating any object ledger. Busy Agents still inspect the
+			// small status field to debit only this parent's pending jobs.
+			if u.Pending > removedPending {
+				var status struct {
+					Status Status `json:"status"`
+				}
+				found, err := tx.Get(jobsBucket, row, &status)
+				if err != nil {
 					return err
 				}
-				rows = append(rows, row{key, !terminal(record.Status)})
-				return nil
-			}); err != nil {
-				return err
-			}
-			var removedPending int64
-			for _, row := range rows {
-				for _, bucket := range []string{jobsBucket, readyBucket, runningBucket} {
-					if err := tx.Delete(bucket, row.key); err != nil {
-						return err
-					}
+				if !found {
+					return ErrNotFound
 				}
-				if row.pending {
+				if !terminal(status.Status) {
 					removedPending++
 				}
 			}
-			if removedPending > 0 {
-				var u usage
-				if _, err := tx.Get(metaBucket, "usage", &u); err != nil {
-					return err
-				}
-				if u.Pending < removedPending {
-					return errors.New("invalid pending job counter during purge")
-				}
-				u.Pending -= removedPending
-				if err := tx.Put(metaBucket, "usage", u); err != nil {
+			for _, bucket := range []string{jobsBucket, readyBucket, runningBucket} {
+				if err := tx.Delete(bucket, row); err != nil {
 					return err
 				}
 			}
-			done = len(rows) < maintenancePageSize
-			if done {
-				return tx.Delete(purgesBucket, parentKey(id))
+			fence.CleanupAfter = row
+			removed++
+		}
+		if removedPending > 0 {
+			if u.Pending < removedPending {
+				return errors.New("invalid pending job counter during purge")
 			}
-			return nil
-		})
+			u.Pending -= removedPending
+			if err := tx.Put(metaBucket, "usage", u); err != nil {
+				return err
+			}
+		}
+		fence.CleanupDeleted += removed
+		fence.CleanupError = ""
+		done = !full && removed == int64(len(rows))
+		if done {
+			fence.CleanupDone = true
+			fence.CleanupAfter = ""
+			if err := tx.Delete(purgesBucket, parentKey(id)); err != nil {
+				return err
+			}
+		}
+		return tx.Put(parentsBucket, parentKey(id), fence)
+	})
+	return
+}
+
+var errPurgePageFull = errors.New("execution cleanup page full")
+
+func (r *Repository) purgeDeleted(ctx context.Context, id int64, generation uint64) error {
+	for {
+		done, err := r.purgeDeletedPage(ctx, id, generation)
 		if err != nil || done {
 			return err
 		}

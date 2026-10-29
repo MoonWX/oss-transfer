@@ -25,16 +25,18 @@ type activeAttempt struct {
 // Engine owns task lifetimes, independently of the short-lived RPC contexts
 // passed to Accept and Start. One Engine may own a given Agent database at a time.
 type Engine struct {
-	repo      *Repository
-	factory   StoreFactory
-	opts      Options
-	ctx       context.Context
-	cancel    context.CancelFunc
-	changed   chan struct{}
-	mu        sync.Mutex
-	active    map[string]*activeAttempt
-	lifetimes sync.Map // child ID -> activeAttempt; cancellation never waits for DB admission.
-	closed    bool
+	repo        *Repository
+	factory     StoreFactory
+	opts        Options
+	ctx         context.Context
+	cancel      context.CancelFunc
+	changed     chan struct{}
+	mu          sync.Mutex
+	active      map[string]*activeAttempt
+	lifetimes   sync.Map // child ID -> activeAttempt; cancellation never waits for DB admission.
+	closed      bool
+	cleanupWake chan struct{}
+	cleanupDone chan struct{}
 }
 
 func (e *Engine) Concurrency() (active, capacity int) {
@@ -73,11 +75,13 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 	if opts.MaxConcurrentJobs < 1 || opts.MaxConcurrentJobs > 1024 || opts.WorkersPerJob < 1 || opts.WorkersPerJob > 128 || opts.QueueSize < 1 || opts.QueueSize > 128 || opts.CommitBatchSize < 1 || opts.CommitBatchSize > 128 || opts.CommitInterval < time.Millisecond {
 		return nil, errors.New("invalid execution bounds")
 	}
-	if err := repo.Recover(context.Background()); err != nil {
+	if err := repo.recoverRunning(context.Background()); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, changed: make(chan struct{}), active: make(map[string]*activeAttempt)}, nil
+	e := &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, changed: make(chan struct{}), active: make(map[string]*activeAttempt), cleanupWake: make(chan struct{}, 1), cleanupDone: make(chan struct{})}
+	go e.cleanupLoop()
+	return e, nil
 }
 
 func (e *Engine) Accept(ctx context.Context, job Job, inventorySource ...bool) (Record, error) {
@@ -290,7 +294,27 @@ func (e *Engine) StopParent(ctx context.Context, parentID int64, generation uint
 	return e.stopParent(ctx, parentID, generation, false)
 }
 func (e *Engine) DeleteParent(ctx context.Context, parentID int64, generation uint64) error {
-	return e.stopParent(ctx, parentID, generation, true)
+	if err := e.RequestDeleteParent(ctx, parentID, generation); err != nil {
+		return err
+	}
+	timer := time.NewTicker(20 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		progress, err := e.DeletionProgress(ctx, parentID, generation)
+		if err != nil || progress.Done {
+			return err
+		}
+		if progress.Error != "" {
+			return errors.New(progress.Error)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-e.ctx.Done():
+			return ErrClosed
+		case <-timer.C:
+		}
+	}
 }
 func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint64, deleted bool, fenceOnly ...bool) error {
 	e.mu.Lock()
@@ -394,7 +418,7 @@ func (e *Engine) Close(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return wait(ctx, e.cleanupDone)
 }
 func wait(ctx context.Context, done <-chan struct{}) error {
 	select {

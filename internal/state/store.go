@@ -44,7 +44,11 @@ const SchemaTaskLeases = 5
 // to remain present. It is required atomically with the first batch release.
 const SchemaReleasedScanBatches = 6
 
-const latestSchema = SchemaReleasedScanBatches
+// SchemaBackgroundCleanup prevents older writers from restoring tasks whose
+// records are being removed by a durable background cleanup operation.
+const SchemaBackgroundCleanup = 7
+
+const latestSchema = SchemaBackgroundCleanup
 
 type databaseFormat struct {
 	Role          string `json:"role"`

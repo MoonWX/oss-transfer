@@ -228,7 +228,7 @@ func (r *Repository) PutLegacyHistory(migrationID string, rows []LegacyHistory) 
 			if p.Legacy == nil || p.Legacy.MigrationID != migrationID {
 				return ErrConflict
 			}
-			if p.Purged {
+			if p.Purged || p.Cleanup != nil {
 				// Source raw snapshots still retain deletion evidence. Never revive
 				// a purged public report by indexing stale worker history.
 				continue

@@ -6,6 +6,8 @@ An unfinished scan keeps an index for deduplication and source-change detection 
 
 New writes use compact object records and compress larger values when compression saves space. Existing plain records remain readable. Cleanup makes pages reusable, but does not reduce the database file's size on disk.
 
+Permanent deletion runs in the background. The recycle bin shows the cleanup stage, deleted record count and completed nodes until cleanup finishes. Closing the page or restarting a service does not discard the operation. An offline node is retried automatically when it returns; an explicitly removed node's local history is retained. In the CLI, use `oss-transfer-cli task trash` to check progress. Cleanup removes task records, not source or destination files.
+
 Managed installations authorize release only after the installer commits a successful startup. This retains the scan copy if an upgrade rolls back the Master's database. Older Masters and installers do not authorize release, so their acknowledged batches remain; tasks already finished before authorization also retain those batches.
 
 ## Reclaim disk space
@@ -35,7 +37,7 @@ Check that the node reconnects and its tasks and reports are present before dele
 
 The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
 
-Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
+Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion raises the participating databases to schema 7. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
 
 ## 中文说明
 
@@ -47,8 +49,10 @@ Compact storage uses database schema 4, automatic task takeover requires schema 
 
 新写入会减少重复字段，并对较大的记录进行无损压缩。旧记录仍可读取。清理后，数据库可以复用空闲页，但文件本身不会自动缩小。
 
+永久删除在后台执行。回收站会显示清理阶段、已清理记录数和已完成节点数，清理完成后才移除任务。关闭页面或重启服务不会丢失清理进度；离线节点恢复后自动继续，已经明确移除的节点保留其本地历史。CLI 可通过 `oss-transfer-cli task trash` 查看进度。清理只删除任务记录，不删除源文件或目标文件。
+
 要把空间归还给文件系统，先停止对应服务，再执行上面的 `--compact-state` 命令。它生成并逐条验证一个新文件，不改动原库；成功后才执行第二组命令替换文件、启动服务。默认 Linux 安装可以直接使用示例，Master 将其中的 `agent` 替换为 `master`；自定义安装使用实际路径和服务名。
 
 操作期间需要额外空间容纳副本。程序每批写入前检查剩余空间，至少保留 256 MiB 和下一次扩展所需空间；失败时清理临时副本，原库不变。启动后确认节点、任务和报告正常，再删除保留的原库。
 
-压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。
+压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。受理后台删除后，参与清理的数据库升级到 schema 7。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。

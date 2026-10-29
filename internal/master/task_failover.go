@@ -25,6 +25,9 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 	key := fmt.Sprint(p.ID)
 	var proof taskStorageProof
 	if err := t.server.store.Update(func(tx *state.Tx) error {
+		if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
+			return err
+		}
 		found, err := tx.Get("master-task-storage-proofs", key, &proof)
 		if err != nil {
 			return err
@@ -69,7 +72,12 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 		return nil
 	}
 	proof.Ready = true
-	return t.server.store.Update(func(tx *state.Tx) error { return tx.Put("master-task-storage-proofs", key, proof) })
+	return t.server.store.Update(func(tx *state.Tx) error {
+		if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
+			return err
+		}
+		return tx.Put("master-task-storage-proofs", key, proof)
+	})
 }
 
 func (t *taskRuntime) enableFailover(ctx context.Context, p task.Parent, available map[string]bool) (task.Parent, error) {

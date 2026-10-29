@@ -387,6 +387,9 @@ func safeCLIText(value interface{}) string {
 }
 func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	data := responseData(result)
+	if renderTaskCleanupAdmission(out, data) {
+		return
+	}
 	if outcome := getString(data, "outcome"); outcome != "" {
 		message := map[string]string{
 			"STARTED":          "子任务已恢复。",
@@ -657,11 +660,22 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 			id = "#" + getString(task, "childTaskId")
 		}
 		status := cliTaskStatus(getString(task, "status"))
+		if cleanup := taskCleanup(task); cleanup != nil {
+			status = taskCleanupLabel(out, cleanup)
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkersDisplay(task, localeOf(out))))
 	}
 	w.Flush()
+	for _, task := range tasks {
+		if cleanup := taskCleanup(task); cleanup != nil {
+			renderTaskCleanup(out, getInt(task, "taskIndex"), cleanup)
+		}
+	}
 }
 func renderTaskDetail(out io.Writer, task map[string]interface{}) {
+	if cleanup := taskCleanup(task); cleanup != nil {
+		renderTaskCleanup(out, getInt(task, "taskIndex"), cleanup)
+	}
 	policy := getString(task, "conflictPolicy")
 	if policy == "" {
 		policy = "SKIP"

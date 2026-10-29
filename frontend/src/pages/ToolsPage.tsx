@@ -57,7 +57,17 @@ import {
   formatBytes,
   formatNumber,
 } from "../components/Common";
+type CleanupProgress = {
+  status: "QUEUED" | "RUNNING" | "WAITING" | "DONE";
+  phase: "AGENTS" | "MASTER";
+  recordsDeleted: number;
+  completedNodes: number;
+  totalNodes: number;
+  updatedAt?: string;
+  error?: string;
+};
 type DeletedTask = {
+  cleanup?: CleanupProgress;
   taskIndex: number;
   sourceBucket?: string;
   destBucket?: string;
@@ -101,6 +111,53 @@ function deletedEndpoint(task: DeletedTask, source: boolean) {
     ]
       .filter(Boolean)
       .join("/") || "—"
+  );
+}
+type RecycleRow = DeletedTask & { workerNode: string };
+type CleanupUpdate = {
+  row: RecycleRow;
+  cleanup: CleanupProgress;
+  purged?: boolean;
+};
+function CleanupStatus({ task }: { task: RecycleRow }) {
+  const cleanup = task.cleanup!;
+  const waiting = cleanup.status === "WAITING";
+  return (
+    <Stack
+      spacing={0.5}
+      aria-label={t("任务 {id} 清理进度", { id: task.taskIndex })}
+    >
+      <Typography
+        variant="body2"
+        color={waiting ? "warning.main" : "primary.main"}
+      >
+        {cleanup.status === "DONE"
+          ? t("已清理")
+          : cleanup.status === "QUEUED"
+            ? t("等待清理")
+            : waiting
+              ? t("等待自动继续")
+              : cleanup.phase === "MASTER"
+                ? t("清理主节点记录")
+                : t("清理执行节点记录")}
+      </Typography>
+      <Typography variant="caption" color="text.secondary">
+        {t("已清理 {count} 条记录", {
+          count: formatNumber(cleanup.recordsDeleted),
+        })}
+        {cleanup.totalNodes > 0 &&
+          ` · ${t("节点 {done}/{total}", { done: cleanup.completedNodes, total: cleanup.totalNodes })}`}
+      </Typography>
+      {cleanup.error && (
+        <Typography
+          variant="caption"
+          color="warning.main"
+          sx={{ maxWidth: 320, overflowWrap: "anywhere" }}
+        >
+          {cleanup.error}
+        </Typography>
+      )}
+    </Stack>
   );
 }
 const errorText = (error: unknown) =>
@@ -190,6 +247,10 @@ export default function ToolsPage() {
   const nodeDiscoveryFailed = !hasMembershipSnapshot && !!nodes.error;
   const membershipKnown = hasMembershipSnapshot || !!nodes.data?.data?.nodes;
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [cleanupUpdates, setCleanupUpdates] = useState<
+    Record<number, CleanupUpdate>
+  >({});
+  const [cleanupPollError, setCleanupPollError] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const deletionSession = useSyncExternalStore(
     subscribeDeletion,
@@ -197,6 +258,7 @@ export default function ToolsPage() {
   );
   const deleting = deletionSession !== null && deletionSession === getToken();
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [backgroundCleanup, setBackgroundCleanup] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState<BatchProgress | null>(
     null,
   );
@@ -213,7 +275,7 @@ export default function ToolsPage() {
   const [pageSize, setPageSize] = useState(() =>
     savedPageSize("oss-transfer-recycle-page-size", 25),
   );
-  const rows = useMemo(
+  const snapshotRows = useMemo(
     () =>
       [
         ...new Map(
@@ -234,12 +296,123 @@ export default function ToolsPage() {
       ),
     [recycle.data, earlierRows],
   );
+  // Keep admitted records visible until the server confirms cleanup completion,
+  // including records loaded from an earlier history page.
+  useEffect(() => {
+    const pending = snapshotRows.filter((row) => row.cleanup);
+    if (!pending.length) return;
+    setCleanupUpdates((previous) => {
+      let next = previous;
+      for (const row of pending) {
+        if (previous[row.taskIndex]) continue;
+        if (next === previous) next = { ...previous };
+        next[row.taskIndex] = { row, cleanup: row.cleanup! };
+      }
+      return next;
+    });
+  }, [snapshotRows]);
+  const rows = useMemo(() => {
+    const items = new Map(
+      [
+        ...Object.values(cleanupUpdates).map((item) => item.row),
+        ...snapshotRows,
+      ].map((row) => [`${row.taskIndex}:${row.workerNode}`, row]),
+    );
+    return [...items.values()]
+      .filter((row) => !cleanupUpdates[row.taskIndex]?.purged)
+      .map((row) =>
+        cleanupUpdates[row.taskIndex]
+          ? { ...row, cleanup: cleanupUpdates[row.taskIndex].cleanup }
+          : row,
+      )
+      .sort(
+        (left, right) =>
+          right.taskIndex - left.taskIndex ||
+          left.workerNode.localeCompare(right.workerNode),
+      );
+  }, [snapshotRows, cleanupUpdates]);
+  const cleanupIDs = [
+    ...new Set(rows.filter((row) => row.cleanup).map((row) => row.taskIndex)),
+  ]
+    .sort((a, b) => a - b)
+    .join(",");
+  useEffect(() => {
+    if (tab !== 1 || !cleanupIDs) return;
+    const ids = cleanupIDs.split(",").map(Number);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (document.hidden) {
+        timer = setTimeout(() => void poll(), 1000);
+        return;
+      }
+      try {
+        let completed = 0;
+        for (let start = 0; start < ids.length; start += 128) {
+          const value = await api<{
+            tasks: {
+              taskId: number;
+              cleanup?: CleanupProgress;
+              purged: boolean;
+              missing?: boolean;
+            }[];
+          }>("/api/master/cleanup-status", {
+            method: "POST",
+            body: { taskIds: ids.slice(start, start + 128) },
+            signal: AbortSignal.any([
+              controller.signal,
+              AbortSignal.timeout(15000),
+            ]),
+          });
+          if (controller.signal.aborted) return;
+          if (
+            !Array.isArray(value.tasks) ||
+            value.tasks.some((item) => item.missing)
+          )
+            throw new Error("Cleanup status unavailable");
+          completed += value.tasks.filter((item) => item.purged).length;
+          setCleanupUpdates((previous) => {
+            const next = { ...previous };
+            for (const item of value.tasks) {
+              const known = previous[item.taskId];
+              if (!known) continue;
+              next[item.taskId] = {
+                ...known,
+                cleanup: item.cleanup ?? known.cleanup,
+                purged: item.purged,
+              };
+            }
+            return next;
+          });
+        }
+        setCleanupPollError(false);
+        if (completed) {
+          notify(t("已完成 {count} 个任务的清理。", { count: completed }));
+          void recycle.refresh();
+        }
+      } catch {
+        if (!controller.signal.aborted) setCleanupPollError(true);
+      } finally {
+        if (!controller.signal.aborted)
+          timer = setTimeout(() => void poll(), 1000);
+      }
+    };
+    timer = setTimeout(() => void poll(), 1000);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [tab, cleanupIDs, notify, recycle.refresh]);
   useEffect(() => {
     const lastPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
     if (page > lastPage) setPage(lastPage);
   }, [rows.length, page, pageSize]);
   const uniqueIds = [...new Set(rows.map((task) => task.taskIndex))];
-  const availableIds = new Set(uniqueIds);
+  const cleaningIds = new Set(
+    rows.filter((task) => task.cleanup).map((task) => task.taskIndex),
+  );
+  const availableIds = new Set(uniqueIds.filter((id) => !cleaningIds.has(id)));
+  const selectableIds = uniqueIds.filter((id) => availableIds.has(id));
   const activeSelection = selectedIds.filter((id) => availableIds.has(id));
   const selectedSet = new Set(activeSelection);
   const missingNodes = [
@@ -256,14 +429,20 @@ export default function ToolsPage() {
   async function deleteTasks() {
     const token = getToken();
     if (!token || deletingSession === token || !confirmedIds.length) return;
+    const taskIds = confirmedIds.filter((id) => availableIds.has(id));
+    if (!taskIds.length) {
+      setConfirmDelete(false);
+      return;
+    }
     setDeletingSession(token);
-    const taskIds = [...confirmedIds];
     const isCurrent = () => token === getToken();
     const canUpdateView = () => mounted.current && isCurrent();
     setDeleteError(null);
+    setBackgroundCleanup(false);
     setShowDeleteDetails(false);
     const issues: string[] = [];
     const retained = new Set<string>();
+    const queued = new Set<number>();
     try {
       const result = await runTaskBatches(
         [{ path: "/api/master/permanent-delete", taskIds }],
@@ -300,10 +479,37 @@ export default function ToolsPage() {
               );
             if (detail.message && (detail.partial || Number(detail.failed) > 0))
               issues.push(detail.message);
-            // Drop confirmed removals immediately, even if a later batch fails.
+            // New servers acknowledge admission; older servers delete synchronously.
+            const admitted = entries.filter(
+              (item: any) =>
+                item.success &&
+                item.cleanup &&
+                !item.purged &&
+                item.cleanup.status !== "DONE",
+            );
+            admitted.forEach((item: any) => queued.add(item.taskId));
+            if (canUpdateView()) {
+              if (admitted.length) setBackgroundCleanup(true);
+              setCleanupUpdates((previous) => {
+                const next = { ...previous };
+                for (const item of admitted) {
+                  const row = rows.find(
+                    (candidate) => candidate.taskIndex === item.taskId,
+                  );
+                  if (row) next[item.taskId] = { row, cleanup: item.cleanup };
+                }
+                return next;
+              });
+            }
             const removed = new Set(
               entries
-                .filter((item: any) => item.success)
+                .filter(
+                  (item: any) =>
+                    item.success &&
+                    (!item.cleanup ||
+                      item.purged ||
+                      item.cleanup.status === "DONE"),
+                )
                 .map((item: any) => item.taskId),
             );
             if (
@@ -317,7 +523,7 @@ export default function ToolsPage() {
               ids.forEach((id) => removed.add(id));
             if (canUpdateView()) {
               setSelectedIds((previous) =>
-                previous.filter((id) => !removed.has(id)),
+                previous.filter((id) => !removed.has(id) && !queued.has(id)),
               );
               setEarlierRows((previous) =>
                 previous.filter((task) => !removed.has(task.taskIndex)),
@@ -333,7 +539,10 @@ export default function ToolsPage() {
           previous.filter((id) => !successful.has(id)),
         );
         setEarlierRows((previous) =>
-          previous.filter((task) => !successful.has(task.taskIndex)),
+          previous.filter(
+            (task) =>
+              !successful.has(task.taskIndex) || queued.has(task.taskIndex),
+          ),
         );
       }
       for (const issue of result.issues)
@@ -367,11 +576,17 @@ export default function ToolsPage() {
       notify(
         partial
           ? t("部分记录未删除，请刷新后重试。")
-          : retained.size
-            ? t("任务记录已删除；已移除节点的本地历史保留：{value1}。", {
-                value1: [...retained].join(", "),
-              })
-            : t("永久删除请求已提交，正在刷新回收站。"),
+          : queued.size
+            ? retained.size
+              ? t("已受理清理；已移除节点的本地历史保留：{value1}。", {
+                  value1: [...retained].join(", "),
+                })
+              : t("已开始后台清理，可离开此页面。")
+            : retained.size
+              ? t("任务记录已删除；已移除节点的本地历史保留：{value1}。", {
+                  value1: [...retained].join(", "),
+                })
+              : t("永久删除请求已提交，正在刷新回收站。"),
         partial ? "warning" : "info",
       );
       if (canUpdateView())
@@ -462,35 +677,44 @@ export default function ToolsPage() {
             )}
           </Alert>
           {recycle.error && <Alert severity="error">{recycle.error}</Alert>}
-          {!deleting && deleteProgress && (
-            <Alert severity={deleteError ? "warning" : "success"}>
-              {deletionProgress}
-              {deleteError && (
-                <>
-                  <Button
-                    size="small"
-                    onClick={() => setShowDeleteDetails((value) => !value)}
-                  >
-                    {showDeleteDetails ? t("收起失败详情") : t("查看失败详情")}
-                  </Button>
-                  {showDeleteDetails && (
-                    <Typography
-                      component="pre"
-                      variant="body2"
-                      sx={{
-                        whiteSpace: "pre-wrap",
-                        overflowWrap: "anywhere",
-                        maxHeight: 240,
-                        overflow: "auto",
-                      }}
-                    >
-                      {deleteError}
-                    </Typography>
-                  )}
-                </>
-              )}
+          {cleanupPollError && (
+            <Alert severity="warning">
+              {t("暂时无法获取清理进度，恢复连接后自动刷新。")}
             </Alert>
           )}
+          {!deleting &&
+            deleteProgress &&
+            (!backgroundCleanup || !!deleteError) && (
+              <Alert severity={deleteError ? "warning" : "success"}>
+                {deletionProgress}
+                {deleteError && (
+                  <>
+                    <Button
+                      size="small"
+                      onClick={() => setShowDeleteDetails((value) => !value)}
+                    >
+                      {showDeleteDetails
+                        ? t("收起失败详情")
+                        : t("查看失败详情")}
+                    </Button>
+                    {showDeleteDetails && (
+                      <Typography
+                        component="pre"
+                        variant="body2"
+                        sx={{
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                          maxHeight: 240,
+                          overflow: "auto",
+                        }}
+                      >
+                        {deleteError}
+                      </Typography>
+                    )}
+                  </>
+                )}
+              </Alert>
+            )}
           {deleteError && !deleteProgress && (
             <Alert severity="warning">{deleteError}</Alert>
           )}
@@ -606,18 +830,18 @@ export default function ToolsPage() {
                             inputProps={{
                               "aria-label": t("选择全部已删除任务"),
                             }}
-                            disabled={deleting}
+                            disabled={deleting || !selectableIds.length}
                             checked={
-                              uniqueIds.length > 0 &&
-                              uniqueIds.every((id) => selectedSet.has(id))
+                              selectableIds.length > 0 &&
+                              selectableIds.every((id) => selectedSet.has(id))
                             }
                             indeterminate={
                               activeSelection.length > 0 &&
-                              !uniqueIds.every((id) => selectedSet.has(id))
+                              !selectableIds.every((id) => selectedSet.has(id))
                             }
                             onChange={(event) =>
                               setSelectedIds(
-                                event.target.checked ? uniqueIds : [],
+                                event.target.checked ? selectableIds : [],
                               )
                             }
                           />
@@ -625,7 +849,7 @@ export default function ToolsPage() {
                         <TableCell>{t("任务")}</TableCell>
                         <TableCell>{t("迁移路径")}</TableCell>
                         <TableCell>{t("节点")}</TableCell>
-                        <TableCell>{t("最终状态")}</TableCell>
+                        <TableCell>{t("状态")}</TableCell>
                         <TableCell align="right">{t("已传输")}</TableCell>
                       </TableRow>
                     </TableHead>
@@ -646,7 +870,9 @@ export default function ToolsPage() {
                                   }),
                                 }}
                                 checked={selectedSet.has(task.taskIndex)}
-                                disabled={deleting}
+                                disabled={
+                                  deleting || cleaningIds.has(task.taskIndex)
+                                }
                                 onChange={(event) =>
                                   setSelectedIds((ids) =>
                                     event.target.checked
@@ -699,7 +925,11 @@ export default function ToolsPage() {
                               {taskNodeLabels(task, nodeLabel)}
                             </TableCell>
                             <TableCell>
-                              <StatusChip status={task.status || "UNKNOWN"} />
+                              {task.cleanup ? (
+                                <CleanupStatus task={task} />
+                              ) : (
+                                <StatusChip status={task.status || "UNKNOWN"} />
+                              )}
                             </TableCell>
                             <TableCell
                               align="right"

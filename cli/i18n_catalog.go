@@ -2,6 +2,14 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"已清理":         {"Cleaned up", "クリーンアップ済み"},
+	"等待清理":        {"Queued for cleanup", "クリーンアップ待ち"},
+	"等待自动继续":      {"Waiting to continue", "自動再開を待機中"},
+	"清理主节点记录":     {"Cleaning Master records", "Master の記録を削除中"},
+	"清理执行节点记录":    {"Cleaning Agent records", "Agent の記録を削除中"},
+	"已清理 %s 条记录":  {"%s records removed", "%s 件の記録を削除済み"},
+	" · 节点 %d/%d": {" · Nodes %d/%d", " · ノード %d/%d"},
+	"清理请求已受理，将在后台继续。使用 task trash 查看进度。":                                 {"Cleanup accepted and continuing in the background. Use task trash to view progress.", "クリーンアップを受理しました。バックグラウンドで続行します。task trash で進捗を確認できます。"},
 	"比对范围须为 prefix 或 object，模式须为 metadata 或 content":                     {"Scope must be prefix or object; mode must be metadata or content", "比較範囲は prefix または object、モードは metadata または content を指定してください"},
 	"范围比对使用 --source-prefix/--dest-prefix，单对象使用 --source-key/--dest-key": {"Use --source-prefix/--dest-prefix for ranges and --source-key/--dest-key for objects", "範囲比較には --source-prefix/--dest-prefix、単一オブジェクトには --source-key/--dest-key を指定してください"},
 	"单对象比对须同时指定源和目标 Key":                                                 {"Object comparison requires both source and destination keys", "単一オブジェクトの比較には転送元と転送先の Key が必要です"},

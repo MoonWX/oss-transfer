@@ -21,6 +21,22 @@ func openTest(t *testing.T, path string) (*state.Store, *Repository) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Model the role claim performed by Master startup, while still allowing
+	// offline repository tests to reopen a pending legacy migration.
+	var format any
+	var claimed bool
+	if err := db.View(func(tx *state.Tx) error {
+		var err error
+		claimed, err = tx.Get("metadata", "format", &format)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !claimed {
+		if err := db.ClaimRole("master"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return db, New(db)
 }
 func objects(k string) []transferstore.Object {

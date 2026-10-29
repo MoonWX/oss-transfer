@@ -97,6 +97,9 @@ func (l *taskLeases) entry(p task.Parent, node task.Node) (*taskLeaseEntry, erro
 }
 func (l *taskLeases) save(e *taskLeaseEntry) error {
 	return l.runtime.server.store.Update(func(tx *state.Tx) error {
+		if err := allowTaskMetadataWrite(tx, e.record.ParentID); err != nil {
+			return err
+		}
 		return tx.Put("master-task-leases", taskLeaseKey(e.record.ParentID, e.record.Node.ID), e.record)
 	})
 }

@@ -27,6 +27,7 @@ import (
 )
 
 type Service struct {
+	store        *state.Store
 	Updater      softwareupdate.Controller
 	Comparisons  *comparison.Manager
 	Inventory    *inventory.Repository
@@ -146,7 +147,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	s := &Service{store: store, Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
 	s.Leases = leases
 	leases.quiesce = func(ctx context.Context, parentID int64) error {
 		return errors.Join(engine.QuiesceParent(ctx, parentID), scanner.QuiesceParent(ctx, parentID))
@@ -269,7 +270,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete":
 		return true
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true
 	}
 	return false
@@ -640,6 +641,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		}
 		records, err := s.Jobs.List(ctx, request.ParentID, request.After, request.Limit)
 		return response(records, err)
+	case "parent_cleanup":
+		var request ParentRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		progress, err := s.cleanupParent(ctx, request)
+		return response(progress, err)
 	case "parent_stop", "parent_resume", "parent_delete":
 		var request ParentRequest
 		if err := decode(c.Payload, &request); err != nil {

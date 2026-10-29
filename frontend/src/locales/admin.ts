@@ -1,5 +1,44 @@
 export const adminMessages: Record<string, { en: string; ja: string }> = {
+  已清理: { en: "Cleaned up", ja: "クリーンアップ済み" },
+  "已受理清理；已移除节点的本地历史保留：{value1}。": {
+    en: "Cleanup accepted. Local history remains on removed nodes: {value1}.",
+    ja: "クリーンアップを受理しました。削除済みノードのローカル履歴は残ります：{value1}。",
+  },
   请求失败: { en: "Request failed", ja: "リクエストに失敗しました" },
+  "任务 {id} 清理进度": {
+    en: "Task {id} cleanup progress",
+    ja: "タスク {id} のクリーンアップ進捗",
+  },
+  等待清理: { en: "Queued for cleanup", ja: "クリーンアップ待ち" },
+  等待自动继续: { en: "Waiting to continue", ja: "自動再開を待機中" },
+  清理主节点记录: {
+    en: "Cleaning Master records",
+    ja: "Master の記録を削除中",
+  },
+  清理执行节点记录: {
+    en: "Cleaning Agent records",
+    ja: "Agent の記録を削除中",
+  },
+  "已清理 {count} 条记录": {
+    en: "{count} records removed",
+    ja: "{count} 件の記録を削除済み",
+  },
+  "节点 {done}/{total}": {
+    en: "Nodes {done}/{total}",
+    ja: "ノード {done}/{total}",
+  },
+  "已完成 {count} 个任务的清理。": {
+    en: "Cleanup finished for {count} tasks.",
+    ja: "{count} 件のタスクのクリーンアップが完了しました。",
+  },
+  "已开始后台清理，可离开此页面。": {
+    en: "Cleanup is running in the background. You can leave this page.",
+    ja: "バックグラウンドでクリーンアップを開始しました。このページを閉じても処理は続行されます。",
+  },
+  "暂时无法获取清理进度，恢复连接后自动刷新。": {
+    en: "Cleanup progress is unavailable. It will refresh when the connection returns.",
+    ja: "クリーンアップの進捗を取得できません。接続が復旧すると自動更新します。",
+  },
   批量删除进度: { en: "Bulk deletion progress", ja: "一括削除の進捗" },
   查看失败详情: { en: "Show failures", ja: "失敗の詳細を表示" },
   收起失败详情: { en: "Hide failures", ja: "失敗の詳細を閉じる" },

@@ -534,7 +534,7 @@ func (r *Repository) Recycle(id int64, deleted bool) (p Parent, err error) {
 		if err != nil {
 			return err
 		}
-		if !Ended(p.Status) || p.Purged {
+		if !Ended(p.Status) || p.Purged || p.Cleanup != nil {
 			return ErrState
 		}
 		p.Deleted = deleted
@@ -543,39 +543,6 @@ func (r *Repository) Recycle(id int64, deleted bool) (p Parent, err error) {
 	return
 }
 
-// Purge retains a compact tombstone to reject late events and creation replays.
-// It removes only task metadata; source and destination data are never deleted.
-func (r *Repository) Purge(id int64) (p Parent, err error) {
-	err = r.store.Update(func(tx *state.Tx) error {
-		p, err = get(tx, id)
-		if err != nil {
-			return err
-		}
-		if !p.Deleted || !Ended(p.Status) {
-			return ErrState
-		}
-		p.Purged = true
-		for _, bucket := range []string{"master-task-children", "master-task-outstanding", childOrderBucket, allChildOrderBucket, "master-task-load", "master-task-exceptions", "master-task-exceptions-hidden", "master-task-legacy-children", "master-task-legacy-history", "master-task-legacy-order"} {
-			for {
-				var keys []string
-				err := tx.Scan(bucket, key(id)+"/", "", 128, func(k string, _ json.RawMessage) error { keys = append(keys, k); return nil })
-				if err != nil {
-					return err
-				}
-				for _, k := range keys {
-					if err := tx.Delete(bucket, k); err != nil {
-						return err
-					}
-				}
-				if len(keys) < 128 {
-					break
-				}
-			}
-		}
-		return r.save(tx, p)
-	})
-	return
-}
 func (r *Repository) Children(id int64, after int, limit int) (result []Child, err error) {
 	if limit < 1 || limit > 256 {
 		return nil, errors.New("page size must be between 1 and 256")
@@ -643,7 +610,7 @@ func (r *Repository) ObserveBatch(id int64, generation uint64, observations []Ob
 		if p.Generation != generation {
 			return ErrGeneration
 		}
-		if p.Purged {
+		if p.Purged || p.Cleanup != nil {
 			return ErrState
 		}
 		if err := ensureScheduling(tx, &p); err != nil {

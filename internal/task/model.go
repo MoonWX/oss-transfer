@@ -76,6 +76,7 @@ type Parent struct {
 	RuntimeError      string             `json:"runtimeError,omitempty"`
 	Deleted           bool               `json:"deleted"`
 	Purged            bool               `json:"purged"`
+	Cleanup           *CleanupProgress   `json:"cleanup,omitempty"`
 	Fingerprint       string             `json:"fingerprint"`
 	Legacy            *LegacyProvenance  `json:"legacy,omitempty"`
 	Scheduling        *SchedulingState   `json:"scheduling,omitempty"`

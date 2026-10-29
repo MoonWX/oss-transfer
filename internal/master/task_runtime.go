@@ -37,12 +37,14 @@ type taskRuntime struct {
 	rates        map[int64]taskRateCache
 	observeAfter map[int64]int
 	leases       *taskLeases
+	cleanup      *taskCleanupRuntime
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}, observeAfter: map[int64]int{}}
 	t.leases = newTaskLeases(t)
+	t.cleanup = newTaskCleanupRuntime(t)
 	return t
 }
 
@@ -62,6 +64,8 @@ func (s *Server) Start() {
 	go t.loop()
 	t.workers.Add(1)
 	go func() { defer t.workers.Done(); t.leases.loop(t.ctx) }()
+	t.workers.Add(1)
+	go t.cleanup.loop()
 }
 func (t *taskRuntime) close() {
 	t.mu.Lock()
@@ -225,33 +229,7 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	case "restore":
 		return s.tasks.repo.Recycle(id, false)
 	case "permanent-delete":
-		p, err = s.tasks.repo.Get(id)
-		if err != nil {
-			return p, err
-		}
-		if !p.Deleted || !task.Ended(p.Status) {
-			return p, task.ErrState
-		}
-		err = s.tasks.exclusive(ctx, id, func() error {
-			for _, node := range p.ActiveNodes() {
-				retired, err := s.agents.registry.IsRevoked(nodeSession(node))
-				if err != nil {
-					return err
-				}
-				if retired {
-					// Enrollment credentials are permanently fenced. Its old
-					// local history cannot be cleaned through a replacement
-					// enrollment; retain that data and purge the Master record.
-					continue
-				}
-				if err := s.agentCall(ctx, nodeSession(node), "parent_delete", true, agentservice.ParentRequest{ParentID: id, Generation: p.Generation}, nil); err != nil {
-					return err
-				}
-			}
-			var err error
-			p, err = s.tasks.repo.Purge(id)
-			return err
-		})
+		p, _, err = s.requestTaskPurge(ctx, id)
 		return p, err
 	default:
 		return p, errors.New("unsupported task operation")

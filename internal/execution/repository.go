@@ -666,6 +666,19 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		if p.Deleted && !deleted {
 			return ErrDeleted
 		}
+		if p.Deleted && deleted && p.Generation == generation {
+			if p.CleanupDone {
+				return nil
+			}
+			// Legacy tombstones lack completion progress. An empty page upgrades
+			// them safely, while repeated polls leave an existing queue untouched.
+			var queued uint64
+			found, err := tx.Get(purgesBucket, parentKey(id), &queued)
+			if err != nil || found {
+				return err
+			}
+			return tx.Put(purgesBucket, parentKey(id), generation)
+		}
 		if !ok {
 			p = ParentFence{ParentID: id, Generation: generation}
 		}
@@ -793,6 +806,11 @@ func (r *Repository) Recover(ctx context.Context) error {
 	if err := r.purgePending(ctx); err != nil {
 		return err
 	}
+	return r.recoverRunning(ctx)
+}
+
+// A live Engine resumes deletion separately; startup only fences interrupted I/O.
+func (r *Repository) recoverRunning(ctx context.Context) error {
 	after := ""
 	for {
 		page, err := r.running(ctx, after, 128)

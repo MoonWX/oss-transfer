@@ -127,8 +127,8 @@ func TestCleanupResumesOldCompletedManifestsAfterPartialCommit(t *testing.T) {
 	if done, err := manual.cleanupPage(context.Background(), 1); err != nil || done {
 		t.Fatalf("cleanup was not bounded: done=%v error=%v", done, err)
 	}
-	if n := countCleanupRows(t, db, objects, 1); n != total-cleanupPageKeys {
-		t.Fatalf("first cleanup commit removed %d rows; want %d", total-n, cleanupPageKeys)
+	if n := countCleanupRows(t, db, objects, 1); total-n < 1 || total-n > cleanupPageKeys {
+		t.Fatalf("first cleanup commit removed %d rows; limit %d", total-n, cleanupPageKeys)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -244,8 +244,11 @@ func TestDeleteUnknownScanFencesFutureStartAndPreservesOtherParents(t *testing.T
 	assertBatches(t, scanner, 1, 128)
 }
 
-func TestCleanupByteBoundAllowsOneOversizedRowAndRetainsOtherPrefixes(t *testing.T) {
+func TestCleanupUsesEncodedBytesAndRetainsOtherPrefixes(t *testing.T) {
 	_, db, _ := commitFixture(t)
+	if err := db.ClaimRole("agent"); err != nil {
+		t.Fatal(err)
+	}
 	const bucket = "cleanup-byte-fixture"
 	if err := db.Update(func(tx *state.Tx) error {
 		for key, value := range map[string]string{"1/a": strings.Repeat("x", cleanupPageBytes+1), "1/b": "remaining", "2/a": "other-parent"} {
@@ -259,8 +262,8 @@ func TestCleanupByteBoundAllowsOneOversizedRowAndRetainsOtherPrefixes(t *testing
 	}
 	if err := db.Update(func(tx *state.Tx) error {
 		done, err := deleteCleanupPage(tx, bucket, "1/")
-		if done {
-			t.Fatal("oversized row exceeded the page budget")
+		if !done {
+			t.Fatal("key-only cleanup inflated a highly compressed value")
 		}
 		return err
 	}); err != nil {
@@ -271,7 +274,7 @@ func TestCleanupByteBoundAllowsOneOversizedRowAndRetainsOtherPrefixes(t *testing
 		if found, err := tx.Get(bucket, "1/a", &value); err != nil || found {
 			t.Fatalf("oversized first row made no progress: %v", err)
 		}
-		for _, key := range []string{"1/b", "2/a"} {
+		for _, key := range []string{"2/a"} {
 			if found, err := tx.Get(bucket, key, &value); err != nil || !found {
 				t.Fatalf("cleanup deleted beyond its page or prefix: %s %v", key, err)
 			}

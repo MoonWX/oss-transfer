@@ -55,6 +55,10 @@ type Spec struct {
 }
 
 type State struct {
+	CleanupPhase      int            `json:"cleanupPhase,omitempty"`
+	CleanupAfter      string         `json:"cleanupAfter,omitempty"`
+	CleanupDeleted    int64          `json:"cleanupDeleted,omitempty"`
+	CleanupError      string         `json:"cleanupError,omitempty"`
 	Epoch             uint64         `json:"epoch,omitempty"`
 	Takeover          *TakeoverState `json:"takeover,omitempty"`
 	Spec              Spec           `json:"spec"`

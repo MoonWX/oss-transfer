@@ -175,6 +175,8 @@ The installer lists discovered services and reuses their paths, including older 
 
 The installer stops the service and backs up its programs, configuration, service definition and database. Accounts, settings and Agent identities remain. If the new service fails its startup check, the installer restores the backup and restarts the previous service if it was running. Older installations that did not record a custom backup directory use the platform default.
 
+After a successful upgrade, it keeps the two most recent upgrade backups and removes backups older than 30 days, always keeping at least one rollback copy. It also checks for eligible backups before the next upgrade's disk-space check. Backups from failed upgrades and older installers are left for manual review.
+
 Stop active tasks before upgrading if they must stay stopped during rollback. Restoring a database does not undo objects or files already written. For a separate backup, stop the service and copy its configuration and data directories, or take a consistent filesystem snapshot.
 
 If a file-list task originally included a missing object, retrying after that object appears saves its source identity in a newer database format. V4.1.8 and earlier cannot open that database. To return to an older release, restore its programs and the matching pre-upgrade database backup on the Master and Agents together.

@@ -1,4 +1,48 @@
 export const updatesMessages: Record<string, { en: string; ja: string }> = {
+  升级备份: { en: "Upgrade backups", ja: "更新時のバックアップ" },
+  刷新备份: { en: "Refresh backups", ja: "バックアップ情報を再読み込み" },
+  "成功升级的备份保留最近 {count} 份、最多 {days} 天，至少保留一份。": {
+    en: "After successful upgrades, keep the latest {count} backups for up to {days} days, retaining at least one.",
+    ja: "更新成功時のバックアップは最新 {count} 件、最大 {days} 日間保存し、最低 1 件は残します。",
+  },
+  读取备份信息: {
+    en: "Loading backup information",
+    ja: "バックアップ情報を読み込み中",
+  },
+  备份数量: { en: "Backups", ja: "バックアップ数" },
+  占用空间: { en: "Disk usage", ja: "使用容量" },
+  可清理: { en: "Can be removed", ja: "削除可能" },
+  清理过期备份: { en: "Clean up old backups", ja: "古いバックアップを削除" },
+  "清理 {name} 的过期备份？": {
+    en: "Clean up old backups on {name}?",
+    ja: "{name} の古いバックアップを削除しますか？",
+  },
+  "将删除 {count} 份备份，释放约 {size}。最新备份会保留。": {
+    en: "Delete {count} backups and free about {size}. The newest backup will be kept.",
+    ja: "バックアップ {count} 件を削除し、約 {size} を解放します。最新のバックアップは残します。",
+  },
+  正在清理: { en: "Cleaning up", ja: "削除中" },
+  确认清理: { en: "Confirm cleanup", ja: "削除を実行" },
+  "已清理 {count} 份备份，释放 {size}。": {
+    en: "Removed {count} backups and freed {size}.",
+    ja: "バックアップ {count} 件を削除し、{size} を解放しました。",
+  },
+  "节点离线，无法读取备份。": {
+    en: "This node is offline. Backup information is unavailable.",
+    ja: "ノードがオフラインのため、バックアップ情報を取得できません。",
+  },
+  "升级节点后可管理备份。": {
+    en: "Update this node to manage its backups.",
+    ja: "ノードを更新するとバックアップを管理できます。",
+  },
+  "此安装未启用备份管理。": {
+    en: "Backup management is not enabled for this installation.",
+    ja: "このインストールではバックアップ管理が有効になっていません。",
+  },
+  "节点正在更新或清理备份，请稍后刷新。": {
+    en: "This node is updating or cleaning up backups. Refresh after it finishes.",
+    ja: "ノードの更新またはバックアップの削除中です。完了後に再読み込みしてください。",
+  },
   "版本检测失败，请重试。": {
     en: "Version check failed. Try again.",
     ja: "バージョンの確認に失敗しました。再試行してください。",

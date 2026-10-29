@@ -662,10 +662,25 @@ if ((yes == 0)); then
   read -r -p 'Continue? [y/N] ' answer </dev/tty
   [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
+maintain_backups() {
+  local action=$1 result count
+  local args=(--backup-maintenance "$action" --backup-dir "$backup_dir" --config "$config")
+  if [[ "$action" == complete ]]; then args+=(--backup-entry "$(basename "$backup")"); fi
+  if ! result=$(trap - ERR; "$work/$filename" "${args[@]}"); then
+    printf 'Warning: could not finish upgrade backup maintenance (%s). Check %s.\n' "$action" "$backup_dir" >&2
+    return 0
+  fi
+  if [[ "$action" == prune ]]; then
+    count=$(printf '%s\n' "$result" | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+    if [[ "$count" =~ ^[0-9]+$ ]] && ((count > 0)); then
+      printf 'Removed %s expired upgrade backup(s).\n' "$count"
+    fi
+  fi
+}
 check_backup_space() {
   local ancestor=$backup_dir path size required=65536 available
-  # Check before stopping the service. Keep every previous rollback copy;
-  # choosing a different backup directory is safer than deleting one here.
+  # Only completed, managed backups are pruned before this check. Unrecognized
+  # or failed upgrade backups must not be removed to make room.
   while [[ ! -d "$ancestor" ]]; do ancestor=$(dirname "$ancestor"); done
   for path in "$database" "$binary" "$cli_path"; do
     [[ -f "$path" ]] || continue
@@ -912,7 +927,10 @@ rollback() {
   exit "$result"
 }
 check_listener
-if ((existed)); then check_backup_space; fi
+if ((existed)); then
+  maintain_backups prune
+  check_backup_space
+fi
 if [[ -n "$adopt_config" ]]; then
   "$work/$filename" --config "$work/service.json" --backup-state "$work/database"
 fi
@@ -1024,6 +1042,10 @@ if [[ "$platform" == linux ]]; then
   if ((existed == 0 || had_unit == 0 || was_enabled)); then systemctl enable "$service_name" >/dev/null; fi
 fi
 trap - ERR INT TERM
+if ((existed)); then
+  maintain_backups complete
+  maintain_backups prune
+fi
 printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
 printf 'CLI: %s\n' "$cli_path"
 if [[ "$role" == master ]]; then

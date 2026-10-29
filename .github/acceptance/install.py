@@ -553,13 +553,29 @@ func main(){
             require(metadata['cliPath']==str(expected_cli), 'Discovered upgrade changed the custom CLI location')
             require(metadata['backupDir']==str(self.root/role/'backups'), 'Discovered upgrade changed the custom backup directory')
             require(any((self.root/role/'backups').iterdir()), 'Upgrade did not retain a backup in the custom directory')
+            completed=list((self.root/role/'backups').glob('*/backup.json'))
+            require(len(completed)==1, 'Successful upgrade did not mark exactly one complete rollback backup')
+            marker=json.loads(completed[0].read_text())
+            require(marker['state']=='COMPLETED' and marker['identity']['role']==role and
+                    marker['identity']['serviceName']==self.names[role], 'Upgrade backup marker belongs to the wrong installation')
         if self.args.all_installed: self.record('unfiltered_upgrade_discovers_both_roles_and_preserves_configuration_password_membership_and_cli_paths')
+        old_marker=next((self.root/'master/backups').glob('*/backup.json'))
+        old_backup=old_marker.parent
+        protected_backups=[path for path in (self.root/'master/backups').iterdir()
+                           if path.is_dir() and not (path/'backup.json').exists()]
+        marker=json.loads(old_marker.read_text())
+        marker['completedAt']='2000-01-01T00:00:00Z'
+        old_marker.write_text(json.dumps(marker)+'\n')
         legacy_before=self.pid('master')
         self.install('master',upgrade=True,release=self.legacy_release(),discover=True)
         require(self.pid('master')!=legacy_before and config.read_bytes()==config_bytes,'Legacy-format upgrade did not preserve the installed service')
         self.login()
         require(self.api('/api/master/nodes')['nodes'][0]['id']==member_id,'Legacy-format upgrade lost membership')
         self.record('legacy_manifest_without_archive_still_upgrades_existing_service')
+        require(not old_backup.exists(), 'Expired completed backup was not removed after successful replacement')
+        require(len(list((self.root/'master/backups').glob('*/backup.json')))==1, 'Retention removed the newest rollback backup')
+        require(all(path.exists() for path in protected_backups), 'Retention removed an unrecognized or CLI-only backup')
+        self.record('successful_upgrade_expires_old_backup_and_preserves_newest_and_unmanaged_backups')
         tampered=self.root/'tampered'
         shutil.copytree(self.release,tampered)
         archive=next(entry for entry in tampered.iterdir() if entry.name.endswith(('.tar.gz','.zip')))
@@ -578,6 +594,7 @@ func main(){
         require(self.pid('master')==before and hashlib.sha256(cli_path.read_bytes()).hexdigest()==cli_hash,'Corrupt CLI disturbed installed service or CLI')
         self.record('cli_checksum_failure_refused_before_service_stop')
         failed=self.failure_release()
+        backups_before=set((self.root/'master/backups').iterdir())
         self.install('master',upgrade=True,release=failed,expect=1,timeout=10)
         require(hashlib.sha256(cli_path.read_bytes()).hexdigest()==cli_hash,'Startup rollback did not restore the previous CLI')
         require(config.read_bytes()==config_bytes,'Rollback changed configuration')
@@ -585,6 +602,9 @@ func main(){
         nodes=self.api('/api/master/nodes')['nodes']
         require(len(nodes)==1 and nodes[0]['id']==member_id,'Rollback lost committed membership')
         require((self.root/'master/data/master.db').stat().st_size>0,'Rollback lost Master database')
+        failed_backups=set((self.root/'master/backups').iterdir())-backups_before
+        require(len(failed_backups)==1 and all(path.is_dir() and not (path/'backup.json').exists()
+                                             for path in failed_backups), 'Failed upgrade backup was marked for automatic cleanup')
         self.record('failed_start_rolls_back_binary_database_config_and_running_service',pid=self.pid('master'))
         # Simulate a stopped manual installation or finalized V4 import: retain
         # databases/configuration, but remove this test's service registrations

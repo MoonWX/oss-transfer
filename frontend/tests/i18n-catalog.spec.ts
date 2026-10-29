@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { coreMessages } from "../src/locales/core";
 import { adminMessages } from "../src/locales/admin";
 import { tasksMessages } from "../src/locales/tasks";
+import { updatesMessages } from "../src/locales/updates";
 import { messages, normalizeLocale, translate } from "../src/lib/i18n";
 
 const parameters = (value: string) =>
@@ -15,7 +16,12 @@ const parameters = (value: string) =>
   ].sort();
 
 test("all catalog entries have both translations and preserve interpolation parameters", () => {
-  for (const catalog of [coreMessages, adminMessages, tasksMessages]) {
+  for (const catalog of [
+    coreMessages,
+    adminMessages,
+    tasksMessages,
+    updatesMessages,
+  ]) {
     for (const [source, translations] of Object.entries(catalog)) {
       for (const locale of ["en", "ja"] as const) {
         expect(translations[locale].trim(), `${locale}: ${source}`).not.toBe(

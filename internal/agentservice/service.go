@@ -261,7 +261,7 @@ func (s *Service) schedule() {
 // These operations commit their own immutable IDs, configuration revisions or
 // parent fences. They can reconcile a lost reply without a second command ledger.
 func (s *Service) ReplaySafe(operation string) bool {
-	if operation == "software_update" {
+	if operation == "software_update" || operation == "backup_prune" {
 		return true
 	}
 	switch operation {

@@ -350,6 +350,7 @@ if ($hadCli -and (-not $existing -or -not $installed.PSObject.Properties['cliPat
 $work = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-install-'+[Guid]::NewGuid().ToString('N'))
 Protect-Directory $work
 $changed = $false
+$installationSucceeded = $false
 $backup = $null
 $hadDatabaseBackup = $false
 $wasRunning = $false
@@ -380,6 +381,18 @@ function Invoke-Native([string]$Executable,[string[]]$Arguments) {
     return $output
 }
 function Service-Record { Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue }
+function Maintain-Backups([string]$Action) {
+    try {
+        $arguments = @('--backup-maintenance',$Action,'--backup-dir',$BackupDir,'--config',$config)
+        if ($Action -eq 'complete') { $arguments += @('--backup-entry',[IO.Path]::GetFileName($backup)) }
+        $result = (Invoke-Native $candidate $arguments | Out-String) | ConvertFrom-Json
+        if ($Action -eq 'prune' -and $result.count -gt 0) {
+            Write-Host ("Removed {0} expired upgrade backup(s)." -f $result.count)
+        }
+    } catch {
+        Write-Warning ("Could not finish upgrade backup maintenance ({0}). Check {1}. {2}" -f $Action,$BackupDir,$_.Exception.Message) -WarningAction Continue
+    }
+}
 function Assert-BackupSpace([long]$Required,[long]$Available) {
     if ($Available -lt $Required) {
         throw ("Not enough space for the upgrade backup: {0} needs {1} MiB; {2} MiB available. Free space or choose -BackupDir on another disk. The service has not been stopped." -f $BackupDir,[Math]::Ceiling($Required/1MB),[Math]::Floor($Available/1MB))
@@ -537,7 +550,7 @@ try {
     }
     if ((Test-Path (Join-Path $DataDir 'CURRENT')) -or (Test-Path (Join-Path $DataDir 'rocksdb\CURRENT'))) { throw 'RocksDB requires an explicit migration.' }
     if (-not $Yes -and (Read-Host "Install $Role $version? [y/N]") -notmatch '^[yY]$') { return }
-    if ($existing) { Test-BackupSpace }
+    if ($existing) { Maintain-Backups 'prune'; Test-BackupSpace }
     if ($AdoptConfig) { Invoke-Native $candidate @('--config',$freshConfig,'--backup-state',(Join-Path $work 'database')) | Out-Null }
     foreach ($path in $directories) { Protect-Directory $path }
     if ($existing) {
@@ -605,6 +618,7 @@ try {
     }
     Write-Host ('Log: '+$script:logFile)
     Show-InitialCredentials
+    $installationSucceeded = $true
 } catch {
     $failure = $_
     # Preserve the Win32 cause before rollback deletes a failed first service.
@@ -660,6 +674,7 @@ try {
     }
     throw $failure
 } finally {
+    if ($installationSucceeded -and $existing) { Maintain-Backups 'complete'; Maintain-Backups 'prune' }
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

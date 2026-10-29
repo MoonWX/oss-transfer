@@ -2,6 +2,8 @@ package master
 
 // Exact application messages only. Vendor errors and user values are not rewritten.
 var apiMessages = map[string]struct{ en, zh, ja string }{
+	"Backup maintenance is unavailable":                                   {"Backup maintenance is unavailable", "此节点暂不支持备份清理", "このノードではバックアップの整理を利用できません"},
+	"Backup cleanup could not finish; refresh and try again":              {"Backup cleanup could not finish; refresh and try again", "备份清理未完成，请刷新后重试", "バックアップの整理が完了しませんでした。更新してから再試行してください"},
 	"Expected generations must match the selected tasks":                  {"Expected generations must match the selected tasks", "任务状态已变化，请刷新后重试", "タスクの状態が変更されました。更新してから再試行してください"},
 	"Wait for Agent updates to finish before updating the Master":         {"Wait for Agent updates to finish before updating the Master", "请等待节点更新完成，再更新 Master", "Agent の更新完了後に Master を更新してください"},
 	"Another Agent update is already in progress":                         {"Another Agent update is already in progress", "已有节点更新正在进行，请稍候", "別の Agent 更新が実行中です"},

@@ -26,6 +26,9 @@ type softwareUpdateState struct {
 }
 
 func installSoftwareUpdateRoutes(s *Server) {
+	s.mux.HandleFunc("GET /api/master/software-updates/backups", s.adminOnly(s.backupsHTTP))
+	s.mux.HandleFunc("POST /api/master/software-updates/backups/master/prune", s.adminOnly(s.pruneMasterBackupsHTTP))
+	s.mux.HandleFunc("POST /api/master/software-updates/backups/agents/{address}/prune", s.adminOnly(s.pruneAgentBackupsHTTP))
 	s.mux.HandleFunc("GET /api/master/software-updates", s.adminOnly(s.softwareUpdatesHTTP))
 	s.mux.HandleFunc("POST /api/master/software-updates/check", s.adminOnly(s.checkSoftwareUpdatesHTTP))
 	s.mux.HandleFunc("POST /api/master/software-updates/master", s.adminOnly(s.updateMasterSoftwareHTTP))

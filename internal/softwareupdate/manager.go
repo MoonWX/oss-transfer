@@ -52,6 +52,7 @@ type installation struct {
 	CLIPath     string `json:"cliPath"`
 	Unit        string `json:"unit"`
 	Version     string `json:"version"`
+	BackupDir   string `json:"backupDir"`
 }
 
 type request struct {
@@ -238,8 +239,7 @@ func inspectInstallation(options Options, executable string) (installation, erro
 	metadata := filepath.Join(filepath.Dir(executable), "install.tsv")
 	if runtime.GOOS == "windows" {
 		metadata = filepath.Join(filepath.Dir(executable), "install.json")
-		// Existing Windows metadata includes backupDir; its unknown fields are
-		// harmless, but identities below are always validated against the host.
+		// Identities below are always validated against the running service.
 		raw, err := readLimited(metadata, 65536)
 		if err != nil {
 			return installed, errors.New("No managed installation metadata found")
@@ -260,7 +260,7 @@ func inspectInstallation(options Options, executable string) (installation, erro
 			}
 			fields[key] = value
 		}
-		installed = installation{Role: fields["role"], ServiceName: fields["serviceName"], Config: fields["config"], DataDir: fields["dataDir"], CLIPath: fields["cliPath"], Unit: fields["unit"], Version: fields["version"]}
+		installed = installation{Role: fields["role"], ServiceName: fields["serviceName"], Config: fields["config"], DataDir: fields["dataDir"], CLIPath: fields["cliPath"], Unit: fields["unit"], Version: fields["version"], BackupDir: fields["backupDir"]}
 	}
 	if err := regular(options.ConfigPath); err != nil {
 		return installed, err

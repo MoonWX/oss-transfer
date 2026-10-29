@@ -22,7 +22,7 @@ Open **Operations → Software updates** to update the Master. Then open **Execu
 
 Online replacement supports managed native installations. The updater verifies the release archive, downloads it before stopping the service, and runs the native installer in a separate process. The installer backs up the binary, configuration and stopped database, checks the new service, and attempts to restore the backup if startup fails. Agent transfers interrupted by the restart resume after it reconnects.
 
-Before stopping the service, the installer checks whether the backup volume has room for the current database and binaries. Database backup progress is printed every 10 seconds, including the final disk sync. A large database can take minutes; existing backups are retained.
+Before stopping the service, the installer cleans eligible backups and checks space for the current database and binaries. It keeps up to two completed upgrade backups for 30 days, always retaining the newest rollback copy; failed and unrecognized backups are left alone. It applies the same policy after a successful upgrade. Database backup progress is printed every 10 seconds, including the final disk sync. A large database can take minutes.
 
 The first upgrade from a version without online updates still uses the installation script. Containers use [Docker Compose updates](docker-compose.md); replacing a binary inside a running container would be lost when the container is recreated.
 
@@ -51,7 +51,7 @@ Completed scans release their deduplication indexes in the background. Permanent
 **运维工具 → 版本更新** 更新 Master 后，在 **执行节点 → 版本更新** 点击“更新全部节点”，即可逐台更新可升级的 Agent。前一台重新连接、版本一致且安装完成后，才更新下一台；失败时停止队列。队列保存在 Master，关闭页面或重启 Master 后继续，也可以单独更新某个节点。原生安装会先下载并校验安装包，再由独立进程运行安装器，备份、重启并检查服务；启动失败时尝试恢复备份。Agent 重启导致中断的子任务会在重新连接后恢复。尚不支持在线升级的旧版本需先通过安装脚本升级一次；Docker 部署通过 Compose 更新。
 
 
-安装器在停服务前检查备份空间，空间不足时保留运行中的服务。数据库备份每 10 秒显示进度，落盘同步也会提示；大数据库可能需要几分钟。历史备份不会自动删除。
+安装器在停服务前清理符合条件的旧备份并检查空间，不足时保留运行中的服务。成功升级的备份最多保留 2 份、30 天，但始终保留最新 1 份；失败和无法识别的备份不自动删除。升级成功后也按此规则清理。数据库备份每 10 秒显示进度，落盘同步也会提示；大数据库可能需要几分钟。
 
 多节点任务中的 Agent 失联后，未完成子任务会自动交给原先选定的健康节点。参与节点都需要支持任务租约：Master 每 20 秒续期，失联 Agent 在 60 秒授权到期后停止启动新工作并取消当前传输；Master 再等待 10 秒后重新分配。原节点回来后不再参与这个任务，仍可用于新任务。
 

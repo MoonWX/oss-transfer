@@ -23,6 +23,7 @@ import { RefreshRounded, SystemUpdateAltRounded } from "@mui/icons-material";
 import { api } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
 import { displayNode, type NodeDisplay } from "../lib/nodeRegistry";
+import BackupManagement from "./BackupManagement";
 
 type SoftwareInfo = {
   role: string;
@@ -465,6 +466,12 @@ export default function SoftwareUpdates({
       )}
       {snapshot && !snapshot.agents.length && agentsOnly && (
         <Typography color="text.secondary">{t("暂无执行节点")}</Typography>
+      )}
+      {snapshot && (
+        <BackupManagement
+          agentsOnly={agentsOnly}
+          updateBusy={masterBusy || queueBusy}
+        />
       )}
       <Dialog
         open={!!target}

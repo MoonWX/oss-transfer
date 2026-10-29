@@ -270,10 +270,75 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
         self.assertEqual(modern.stdout, '\nInitial administrator: admin\nInitial password: modern_password\n')
 
 
+class BackupRetentionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-retention-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        source = INSTALLER.read_text()
+        self.functions = source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
+        candidate = self.root/'candidate'
+        candidate.write_text('''#!/bin/sh
+printf '%s\\n' "$@" >> "$TEST_ROOT/arguments"
+if [ "$TEST_FAIL" = 1 ]; then exit 7; fi
+case "$2" in
+  complete) printf '{"completed":"upgrade-1"}\\n';;
+  prune) printf '{"removed":["upgrade-old"],"count":1,"freedBytes":4096}\\n';;
+esac
+''')
+        candidate.chmod(0o755)
+
+    def invoke(self, action, fail=False):
+        body = '''set -eEuo pipefail
+trap 'printf rollback >> "$TEST_ROOT/rollback"' ERR
+''' + self.functions + '''
+work=$TEST_ROOT; filename=candidate
+config="$TEST_ROOT/config directory/service.json"
+backup_dir="$TEST_ROOT/backup directory"; backup="$backup_dir/upgrade-1"
+maintain_backups "$1"
+printf 'installation continues\\n'
+'''
+        return subprocess.run(['bash','-c',body,'test',action],
+                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL='1' if fail else '0'),
+                              text=True,capture_output=True,timeout=5)
+
+    def test_candidate_completes_only_the_named_backup(self):
+        result = self.invoke('complete')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'arguments').read_text().splitlines(), [
+            '--backup-maintenance','complete','--backup-dir',str(self.root/'backup directory'),
+            '--config',str(self.root/'config directory/service.json'),'--backup-entry','upgrade-1'])
+        self.assertEqual(result.stdout, 'installation continues\n')
+
+    def test_prune_reports_removals_without_printing_internal_json(self):
+        result = self.invoke('prune')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Removed 1 expired upgrade backup(s).', result.stdout)
+        self.assertNotIn('freedBytes', result.stdout)
+        self.assertNotIn('--backup-entry', (self.root/'arguments').read_text())
+
+    def test_maintenance_failure_does_not_abort_or_roll_back_service(self):
+        for action in ('prune','complete'):
+            with self.subTest(action=action):
+                result = self.invoke(action, fail=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('installation continues', result.stdout)
+                self.assertIn('could not finish upgrade backup maintenance', result.stderr)
+                self.assertFalse((self.root/'rollback').exists())
+
+    def test_retention_runs_before_space_check_and_after_startup_success(self):
+        source = INSTALLER.read_text()
+        preflight = source.index('\n  maintain_backups prune\n  check_backup_space')
+        self.assertLess(preflight, source.index('\n  stop_service\n'))
+        completion = source.index('\n  maintain_backups complete\n')
+        self.assertGreater(completion, source.rindex('\nwait_ready\n'))
+        self.assertGreater(completion, source.rindex('\ntrap - ERR INT TERM\n'))
+
+
 class BackupSpaceTests(unittest.TestCase):
     def test_space_checked_before_stop_and_existing_backups_retained(self):
         source = INSTALLER.read_text()
-        self.assertLess(source.index('\nif ((existed)); then check_backup_space; fi'),
+        self.assertLess(source.index('\n  check_backup_space\n'),
                         source.index('\n  stop_service\n'))
         functions = source[source.index('check_backup_space() {'):source.index('\nactive() {')]
         with tempfile.TemporaryDirectory(prefix='installer-backup-space-') as directory:

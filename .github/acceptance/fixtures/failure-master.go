@@ -13,7 +13,7 @@ import (
 func main() {
 	for _, argument := range os.Args[1:] {
 		switch argument {
-		case "--version", "--check-config", "--backup-state", "--restore-state":
+		case "--version", "--check-config", "--backup-state", "--restore-state", "--backup-maintenance":
 			delegate := os.Getenv("QA_REAL_MASTER")
 			if !filepath.IsAbs(delegate) {
 				fmt.Fprintln(os.Stderr, "QA_REAL_MASTER must be an absolute executable path")

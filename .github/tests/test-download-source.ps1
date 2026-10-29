@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace','Maintain-Backups')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -87,6 +87,35 @@ function New-TestArchive([string]$Fault='') {
     return Resolve-DownloadSource 'github' 'latest' 'amd64'
 }
 try {
+    Check 'backup maintenance uses the candidate and failures do not abort installation' {
+        $candidate = Join-Path $work 'candidate.exe'
+        $BackupDir = Join-Path $work 'backup directory'
+        $backup = Join-Path $BackupDir 'upgrade-1'
+        $config = Join-Path $work 'config directory\service.json'
+        $script:maintenanceCalls = [Collections.Generic.List[object]]::new()
+        $script:maintenanceFailure = $false
+        $savedWarningPreference = $WarningPreference
+        function Invoke-Native([string]$Executable,[string[]]$Arguments) {
+            $script:maintenanceCalls.Add(@{Executable=$Executable; Arguments=$Arguments})
+            if ($script:maintenanceFailure) { throw 'Native command failed (exit 7).' }
+            if ($Arguments[1] -eq 'complete') { return '{"completed":"upgrade-1"}' }
+            return '{"removed":[],"count":0,"freedBytes":0}'
+        }
+        try {
+            Maintain-Backups 'complete'
+            $call = $script:maintenanceCalls[0]
+            Assert ($call.Executable -ceq $candidate) 'Maintenance did not use the candidate binary.'
+            Assert (($call.Arguments -join '|') -ceq (@('--backup-maintenance','complete','--backup-dir',$BackupDir,'--config',$config,'--backup-entry','upgrade-1') -join '|')) 'Maintenance arguments or backup entry changed.'
+            Maintain-Backups 'prune'
+            Assert ($script:maintenanceCalls[1].Arguments -notcontains '--backup-entry') 'Prune was limited to one backup.'
+            $script:maintenanceFailure = $true
+            $WarningPreference = 'Stop'
+            $maintenanceWarning = Maintain-Backups 'complete' 3>&1 | Out-String
+            Assert ($maintenanceWarning -match 'Could not finish upgrade backup maintenance') 'Maintenance failure did not warn.'
+            $maintenanceWarning = Maintain-Backups 'prune' 3>&1 | Out-String
+            Assert ($maintenanceWarning -match 'Could not finish upgrade backup maintenance') 'Cleanup failure did not warn.'
+        } finally { $WarningPreference = $savedWarningPreference; Remove-Item function:Invoke-Native }
+    }
     Check 'backup space arithmetic exceeds 32-bit file sizes' {
         $BackupDir = Join-Path $work 'backups'
         Assert-BackupSpace ([long](5GB+64MB)) ([long](6GB))

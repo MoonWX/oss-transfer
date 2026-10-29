@@ -38,6 +38,9 @@ func run() error {
 	data := flag.String("data-dir", "./data/agent", "Agent data directory")
 	configPath := flag.String("config", "", "Service JSON configuration")
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without starting the service")
+	backupMaintenance := flag.String("backup-maintenance", "", "Manage upgrade backups: list, prune or complete")
+	backupDirectory := flag.String("backup-dir", "", "Managed upgrade backup directory")
+	backupEntry := flag.String("backup-entry", "", "Backup directory name to mark complete")
 	backupState := flag.String("backup-state", "", "Validate and snapshot a stopped database to a new file")
 	restoreState := flag.String("restore-state", "", "Restore a snapshot into a stopped existing database")
 	compactState := flag.String("compact-state", "", "Write a compact, verified copy of a stopped database to a new file")
@@ -50,6 +53,23 @@ func run() error {
 	if *showVersion {
 		fmt.Printf("oss-transfer-agent %s (%s, built %s)\n", version, commit, builtAt)
 		return nil
+	}
+	if *backupMaintenance != "" {
+		invalid := false
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "backup-maintenance", "backup-dir", "backup-entry", "config":
+			default:
+				invalid = true
+			}
+		})
+		if invalid {
+			return errors.New("backup maintenance cannot be combined with other operations")
+		}
+		return softwareupdate.RunBackupMaintenance("agent", *configPath, *backupDirectory, *backupMaintenance, *backupEntry, os.Stdout)
+	}
+	if *backupDirectory != "" || *backupEntry != "" {
+		return errors.New("--backup-dir and --backup-entry require --backup-maintenance")
 	}
 	var explicitJoinURL, explicitMasterURL, explicitJoinToken, explicitData bool
 	flag.Visit(func(f *flag.Flag) {

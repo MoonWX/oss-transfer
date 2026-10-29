@@ -70,6 +70,10 @@ func (t *Tx) ScanKeys(bucket, prefix, after string, limit int, fn func(string, i
 // A fresh transaction per page rebalances the tree; the cursor also avoids
 // repeatedly traversing leaf pages already emptied by a previous page.
 func (t *Tx) DeletePrefixPage(ctx context.Context, bucket, prefix, after string, budget CleanupBudget) (CleanupPage, error) {
+	return t.deletePrefixPage(ctx, bucket, prefix, after, budget, time.Now)
+}
+
+func (t *Tx) deletePrefixPage(ctx context.Context, bucket, prefix, after string, budget CleanupBudget, now func() time.Time) (CleanupPage, error) {
 	result := CleanupPage{After: after}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -88,7 +92,7 @@ func (t *Tx) DeletePrefixPage(ctx context.Context, bucket, prefix, after string,
 		result.Done = true
 		return result, nil
 	}
-	started := time.Now()
+	started := now()
 	type item struct {
 		key   []byte
 		bytes int64
@@ -113,7 +117,7 @@ func (t *Tx) DeletePrefixPage(ctx context.Context, bucket, prefix, after string,
 			return result, errors.New("cleanup prefix contains a nested bucket")
 		}
 		size := int64(len(k)) + int64(len(v))
-		if len(keys) > 0 && (len(keys) >= budget.MaxRecords || size > budget.MaxBytes-gathered || time.Since(started) >= budget.MaxDuration) {
+		if len(keys) > 0 && (len(keys) >= budget.MaxRecords || size > budget.MaxBytes-gathered || now().Sub(started) >= budget.MaxDuration) {
 			break
 		}
 		keys = append(keys, item{key: bytes.Clone(k), bytes: size})
@@ -125,7 +129,7 @@ func (t *Tx) DeletePrefixPage(ctx context.Context, bucket, prefix, after string,
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if result.Deleted > 0 && time.Since(started) >= budget.MaxDuration {
+		if result.Deleted > 0 && now().Sub(started) >= budget.MaxDuration {
 			break
 		}
 		if err := b.Delete(row.key); err != nil {

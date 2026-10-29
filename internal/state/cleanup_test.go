@@ -90,7 +90,9 @@ func TestCleanupDoesNotDecodeValuesAndResumesWithoutTouchingNeighbors(t *testing
 		if result.Done {
 			break
 		}
-		if pageNumber > 10 {
+		// Even if the time budget yields after one record, every page must
+		// make progress and this fixed fixture must finish within 40 pages.
+		if pageNumber >= 39 {
 			t.Fatal("cleanup did not converge")
 		}
 	}
@@ -140,26 +142,69 @@ func TestCleanupBudgetsCancellationAndTransactionRollback(t *testing.T) {
 	if transactionID(t, db) != before {
 		t.Fatal("canceled cleanup committed")
 	}
-	for _, budget := range []CleanupBudget{
-		{MaxRecords: 1, MaxBytes: 1 << 20, MaxDuration: time.Second},
-		{MaxRecords: 50, MaxBytes: 1, MaxDuration: time.Second},
-		{MaxRecords: 50, MaxBytes: 1 << 20, MaxDuration: time.Nanosecond},
+	for _, test := range []struct {
+		name        string
+		budget      CleanupBudget
+		wantDeleted int64
+		wantDone    bool
+	}{
+		{"records", CleanupBudget{MaxRecords: 1, MaxBytes: 1 << 20, MaxDuration: 25 * time.Millisecond}, 1, false},
+		{"bytes", CleanupBudget{MaxRecords: 50, MaxBytes: 1, MaxDuration: 25 * time.Millisecond}, 1, false},
+		{"gather_deadline", CleanupBudget{MaxRecords: 50, MaxBytes: 1 << 20, MaxDuration: 25 * time.Millisecond}, 1, false},
+		{"delete_deadline", CleanupBudget{MaxRecords: 50, MaxBytes: 1 << 20, MaxDuration: 25 * time.Millisecond}, 1, false},
+		{"before_deadline", CleanupBudget{MaxRecords: 50, MaxBytes: 1 << 20, MaxDuration: 25 * time.Millisecond}, 8, true},
 	} {
-		rollback := errors.New("simulated operation cancellation before commit")
-		if err := db.Update(func(tx *Tx) error {
-			page, err := tx.DeletePrefixPage(context.Background(), "rows", "p/", "", budget)
-			if err != nil {
-				return err
+		t.Run(test.name, func(t *testing.T) {
+			rollback := errors.New("simulated operation cancellation before commit")
+			if err := db.Update(func(tx *Tx) error {
+				// OS clock precision must not decide which budget stops this page.
+				// For delete_deadline, time advances only after the first mutation,
+				// so all keys are gathered before the deletion loop must yield.
+				base := time.Unix(0, 0)
+				clockReads := 0
+				checkedBeforeMutation := false
+				now := func() time.Time {
+					clockReads++
+					if clockReads > 1 && !tx.dirty {
+						checkedBeforeMutation = true
+					}
+					if test.name == "gather_deadline" && clockReads > 1 || test.name == "delete_deadline" && tx.dirty {
+						return base.Add(test.budget.MaxDuration)
+					}
+					return base
+				}
+				page, err := tx.deletePrefixPage(context.Background(), "rows", "p/", "", test.budget, now)
+				if err != nil {
+					return err
+				}
+				if page.Deleted != test.wantDeleted || page.Done != test.wantDone || page.After != fmt.Sprintf("p/%d", test.wantDeleted-1) {
+					t.Fatalf("budget was not respected: %+v", page)
+				}
+				// A deletion-loop deadline can also produce one deleted row.
+				// Prove collection itself stopped at its first elapsed-time check,
+				// before writing anything or gathering further keys.
+				if test.name == "gather_deadline" && (!checkedBeforeMutation || clockReads != 2) {
+					t.Fatalf("collection ignored its deadline: checked before mutation=%v clock reads=%d", checkedBeforeMutation, clockReads)
+				}
+				return rollback
+			}); !errors.Is(err, rollback) {
+				t.Fatal(err)
 			}
-			if page.Deleted != 1 || page.Done || page.After != "p/0" {
-				t.Fatalf("budget was not respected: %+v", page)
+			if transactionID(t, db) != before {
+				t.Fatal("partial cleanup escaped rollback")
 			}
-			return rollback
-		}); !errors.Is(err, rollback) {
-			t.Fatal(err)
-		}
-		if transactionID(t, db) != before {
-			t.Fatal("partial cleanup escaped rollback")
-		}
+			if err := db.View(func(tx *Tx) error {
+				for i := range 8 {
+					var value string
+					found, err := tx.Get("rows", fmt.Sprintf("p/%d", i), &value)
+					if err != nil || !found || value != string(bytes.Repeat([]byte{'x'}, 256)) {
+						t.Fatalf("rollback lost row %d: found=%v error=%v", i, found, err)
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

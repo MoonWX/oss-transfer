@@ -452,6 +452,9 @@ func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, 
 		if current.Takeover != nil && (!current.Takeover.Sealed || afterNumber < current.Takeover.ThroughBatch) {
 			return ErrSeeding
 		}
+		if afterNumber < current.ReleasedThrough {
+			return ErrBatchReleased
+		}
 		if afterNumber >= current.LastBatch {
 			return nil
 		}
@@ -469,12 +472,29 @@ func (s *Scanner) Batch(ctx context.Context, parentID int64, generation uint64, 
 	return result, found, err
 }
 
+// Ack confirms delivery to Master without authorizing removal. A Master may
+// still roll back its database until it has durably fenced that possibility.
 func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, throughNumber int64, epochs ...uint64) (State, error) {
+	return s.advanceBatchWatermark(ctx, parentID, generation, throughNumber, false, epochs...)
+}
+
+// Release authorizes cleanup of an already acknowledged prefix. Callers must
+// first make that prefix survive Master rollback; old Masters never send this.
+func (s *Scanner) Release(ctx context.Context, parentID int64, generation uint64, throughNumber int64, epochs ...uint64) (State, error) {
+	return s.advanceBatchWatermark(ctx, parentID, generation, throughNumber, true, epochs...)
+}
+
+func (s *Scanner) advanceBatchWatermark(ctx context.Context, parentID int64, generation uint64, throughNumber int64, release bool, epochs ...uint64) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err
 	}
 	if throughNumber < 0 {
 		return State{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return State{}, ErrClosed
 	}
 	var current State
 	err := s.store.Update(func(tx *state.Tx) error {
@@ -492,15 +512,28 @@ func (s *Scanner) Ack(ctx context.Context, parentID int64, generation uint64, th
 		if current.Epoch != requestedEpoch(epochs) {
 			return ErrEpoch
 		}
-		if throughNumber > current.LastBatch {
+		watermark, limit := &current.AckedThrough, current.LastBatch
+		if release {
+			watermark, limit = &current.ReleasableThrough, current.AckedThrough
+		}
+		if throughNumber > limit {
 			return ErrInvalid
 		}
-		if throughNumber <= current.AckedThrough {
+		if throughNumber <= *watermark {
 			return nil
 		}
-		current.AckedThrough, current.UpdatedAt = throughNumber, time.Now().UTC()
-		return tx.Put(states, parentKey(parentID), current)
+		*watermark, current.UpdatedAt = throughNumber, time.Now().UTC()
+		if err := tx.Put(states, parentKey(parentID), current); err != nil {
+			return err
+		}
+		if release {
+			return tx.Put(cleanupBucket, parentKey(parentID), parentID)
+		}
+		return nil
 	})
+	if err == nil && release {
+		s.signalCleanup()
+	}
 	return current, err
 }
 

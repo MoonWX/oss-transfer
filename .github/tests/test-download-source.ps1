@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace','Maintain-Backups')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Protect-File')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -87,6 +87,36 @@ function New-TestArchive([string]$Fault='') {
     return Resolve-DownloadSource 'github' 'latest' 'amd64'
 }
 try {
+    Check 'startup commit is atomic and failures only pause scan cleanup' {
+        $script:readyFile = Join-Path $work 'ready'
+        $script:launchId = 'a' * 64
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        Commit-Start
+        $committed = $script:readyFile+'.committed'
+        Assert ([IO.File]::ReadAllText($committed) -ceq ($script:launchId+"`n")) 'Startup nonce was not committed.'
+        $script:launchId = 'b' * 64
+        Commit-Start
+        Assert ([IO.File]::ReadAllText($committed) -ceq ($script:launchId+"`n")) 'Previous startup commit was not replaced.'
+        $savedWarningPreference = $WarningPreference
+        $savedWrite = ${function:Write-UTF8}
+        function Write-UTF8([string]$Path,[string]$Text) { throw 'Injected disk write failure.' }
+        try {
+            $script:launchId = 'c' * 64
+            $WarningPreference = 'Stop'
+            $message = Commit-Start 3>&1 | Out-String
+            Assert ($message -match 'service remains available') 'Commit failure did not warn.'
+            Assert ([IO.File]::ReadAllText($committed) -ceq (('b' * 64)+"`n")) 'Failed commit altered the old marker.'
+        } finally {
+            $WarningPreference = $savedWarningPreference
+            Set-Item function:Write-UTF8 $savedWrite
+        }
+        Remove-Item -LiteralPath $committed
+        [IO.Directory]::CreateDirectory($committed) | Out-Null
+        $message = Commit-Start 3>&1 | Out-String
+        Assert ($message -match 'service remains available') 'Non-file commit target was not rejected.'
+        Assert (Test-Path -LiteralPath $committed -PathType Container) 'Non-file commit target was replaced.'
+        Remove-Item -LiteralPath $committed
+    }
     Check 'backup maintenance uses the candidate and failures do not abort installation' {
         $candidate = Join-Path $work 'candidate.exe'
         $BackupDir = Join-Path $work 'backup directory'

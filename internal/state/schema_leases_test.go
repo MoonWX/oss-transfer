@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestTaskLeaseSchemaKeepsCompressionAndFencesAcrossMaintenance(t *testing.T) {
-	for _, role := range []string{"master", "agent"} {
-		t.Run(role, func(t *testing.T) {
+func TestFeatureSchemasKeepCompressionAndFencesAcrossMaintenance(t *testing.T) {
+	for _, scenario := range []struct {
+		role    string
+		version int
+	}{{"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}, {"agent", SchemaReleasedScanBatches}} {
+		role, version := scenario.role, scenario.version
+		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path, _ := restoreFixture(t, role)
 			db, err := Open(path)
 			if err != nil {
@@ -23,11 +28,11 @@ func TestTaskLeaseSchemaKeepsCompressionAndFencesAcrossMaintenance(t *testing.T)
 				t.Fatal(err)
 			}
 			if readFormat(t, db).SchemaVersion != SchemaCompressedValues {
-				t.Fatal("ordinary databases should not require takeover support")
+				t.Fatal("ordinary databases should not require unused feature schemas")
 			}
 			lease := map[string]any{"parentId": float64(1), "generation": float64(2), "required": true, "retired": true, "leaseId": "persisted-owner"}
 			writeLease := func(tx *Tx) error {
-				if err := RequireSchema(tx, role, SchemaTaskLeases); err != nil {
+				if err := RequireSchema(tx, role, version); err != nil {
 					return err
 				}
 				return tx.Put("leases", "1", lease)
@@ -72,8 +77,8 @@ func TestTaskLeaseSchemaKeepsCompressionAndFencesAcrossMaintenance(t *testing.T)
 					if err := json.Unmarshal(tx.tx.Bucket([]byte("metadata")).Get([]byte("format")), &format); err != nil {
 						return err
 					}
-					if format.Role != role || format.SchemaVersion != SchemaTaskLeases || format.SchemaVersion <= SchemaCompressedValues {
-						t.Fatal("maintenance lost the old-reader ownership fence", format)
+					if format.Role != role || format.SchemaVersion != version || format.SchemaVersion <= SchemaCompressedValues {
+						t.Fatal("maintenance lost the old-reader feature fence", format)
 					}
 					var saved map[string]any
 					found, err := tx.Get("leases", "1", &saved)

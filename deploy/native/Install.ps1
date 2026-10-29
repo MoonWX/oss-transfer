@@ -438,6 +438,27 @@ function Wait-Ready {
     }
     throw 'Service did not confirm this startup before the timeout.'
 }
+function Commit-Start {
+    $temporary = $null
+    try {
+        if ($script:launchId -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid startup confirmation.' }
+        $committed = $script:readyFile+'.committed'
+        Assert-DirectoryPath (Split-Path $committed -Parent)
+        if (Test-Path -LiteralPath $committed) { Assert-RegularFile $committed }
+        $temporary = $committed+'.'+[guid]::NewGuid().ToString('N')
+        Write-UTF8 $temporary ($script:launchId+"`n")
+        Protect-File $temporary
+        if (Test-Path -LiteralPath $committed) { [IO.File]::Replace($temporary,$committed,$null) }
+        else { [IO.File]::Move($temporary,$committed) }
+    } catch {
+        Write-Warning 'Could not confirm the installation for scan cleanup; the service remains available.' -WarningAction Continue
+    } finally {
+        if ($temporary) {
+            try { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+            catch { Write-Warning 'Could not remove the temporary startup confirmation file.' -WarningAction Continue }
+        }
+    }
+}
 function Show-InitialCredentials {
     if ($Role -ne 'master' -or -not (Test-Path -LiteralPath $script:logFile -PathType Leaf)) { return }
     $index = 0
@@ -674,6 +695,8 @@ try {
     }
     throw $failure
 } finally {
+    # This finally block is outside the catch that restores the old database.
+    if ($installationSucceeded) { Commit-Start }
     if ($installationSucceeded -and $existing) { Maintain-Backups 'complete'; Maintain-Backups 'prune' }
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue

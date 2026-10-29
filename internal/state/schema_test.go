@@ -28,7 +28,7 @@ func TestSchemaRequirementCommitsWithDataAndNeverLowersVersion(t *testing.T) {
 	for _, scenario := range []struct {
 		role    string
 		version int
-	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}, {"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}} {
+	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}, {"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}, {"agent", SchemaReleasedScanBatches}} {
 		role, version := scenario.role, scenario.version
 		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), role+".db")
@@ -128,7 +128,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 			case "zero":
 				format.SchemaVersion = 0
 			case "future":
-				format.SchemaVersion = SchemaTaskLeases + 1
+				format.SchemaVersion = latestSchema + 1
 			}
 			if scenario != "unclaimed" {
 				if err = db.Update(func(tx *Tx) error { return tx.Put("metadata", "format", format) }); err != nil {
@@ -140,7 +140,7 @@ func TestSchemaRequirementRejectsUnclaimedWrongAndFutureFormats(t *testing.T) {
 				role = "unknown"
 			}
 			if scenario == "future-requirement" {
-				version = SchemaTaskLeases + 1
+				version = latestSchema + 1
 			}
 			before, err := os.ReadFile(db.db.Path())
 			if err != nil {
@@ -169,7 +169,7 @@ func TestSchemaOfflineBackupAndRestore(t *testing.T) {
 	for _, scenario := range []struct {
 		role    string
 		version int
-	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}, {"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}} {
+	}{{"master", SchemaResolvedSources}, {"agent", SchemaResolvedSources}, {"master", SchemaInitialPassword}, {"master", SchemaTaskLeases}, {"agent", SchemaTaskLeases}, {"agent", SchemaReleasedScanBatches}} {
 		role, version := scenario.role, scenario.version
 		t.Run(fmt.Sprintf("%s-schema%d", role, version), func(t *testing.T) {
 			path, oldBackup := restoreFixture(t, role)

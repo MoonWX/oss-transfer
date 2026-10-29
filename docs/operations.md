@@ -36,7 +36,7 @@ A request already accepted by object storage may finish after its client is canc
 
 ## Database space
 
-Completed scans release their deduplication indexes in the background. Permanently deleted tasks also release their scan and execution records. Freed pages are reused; to shrink an existing database file, follow [database maintenance](database-maintenance.md).
+Agents release scan batches after the Master durably saves, acknowledges and authorizes their release. Completed scans also release their deduplication indexes in the background. Permanently deleted tasks also release their scan and execution records. Freed pages are reused; to shrink an existing database file, follow [database maintenance](database-maintenance.md).
 
 ## 中文说明
 
@@ -59,4 +59,4 @@ Completed scans release their deduplication indexes in the background. Permanent
 
 对象存储已经接收的请求可能在客户端取消后才完成，因此不能保证任意 S3 服务上绝无重复写入。迁移期间应保持源数据稳定。启用租约后数据库格式升级为 schema 5；降级需要同时恢复 Master 和 Agent 升级前的配套数据库备份。
 
-扫描完成后会在后台回收去重索引，永久删除任务时也会清理扫描和执行记录。释放的页面可再次使用；缩小已有数据库文件的方法见[数据库维护](database-maintenance.md)。
+Master 持久保存、确认接收并授权释放扫描批次后，Agent 会在后台释放这些批次；扫描完成后也会回收去重索引，永久删除任务时也会清理扫描和执行记录。释放的页面可再次使用；缩小已有数据库文件的方法见[数据库维护](database-maintenance.md)。

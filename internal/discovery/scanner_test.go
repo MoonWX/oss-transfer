@@ -133,8 +133,12 @@ func waitStatus(t *testing.T, scanner *Scanner, wanted Status) State {
 
 func assertBatches(t *testing.T, scanner *Scanner, generation uint64, expected int) {
 	t.Helper()
+	assertBatchesFrom(t, scanner, generation, 0, expected)
+}
+
+func assertBatchesFrom(t *testing.T, scanner *Scanner, generation uint64, after int64, expected int) {
+	t.Helper()
 	seen := map[string]bool{}
-	var after int64
 	for {
 		batch, found, err := scanner.Batch(context.Background(), 1, generation, after)
 		if err != nil {
@@ -164,10 +168,13 @@ func assertBatches(t *testing.T, scanner *Scanner, generation uint64, expected i
 	}
 }
 
-func TestRealLocalScanStopResumeAndRetainedAcknowledgements(t *testing.T) {
+func TestRealLocalScanStopResumeAfterReleasingAcknowledgedBatches(t *testing.T) {
 	root := sourceFiles(t, 260)
 	factory := &localFactory{gateAfter: 128, reached: make(chan struct{}), release: make(chan struct{}), allowExit: make(chan struct{})}
-	scanner, _ := newScanner(t, filepath.Join(t.TempDir(), "agent.db"), factory, Options{})
+	scanner, db := newScanner(t, filepath.Join(t.TempDir(), "agent.db"), factory, Options{})
+	if err := db.ClaimRole("agent"); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		select {
 		case <-factory.allowExit:
@@ -194,6 +201,16 @@ func TestRealLocalScanStopResumeAndRetainedAcknowledgements(t *testing.T) {
 	}
 	if _, err := scanner.Ack(context.Background(), 1, 1, 1); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := scanner.Release(context.Background(), 1, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	waitBatchesReleased(t, scanner, 1, 1)
+	if n := countCleanupRows(t, db, objects, 1); n != 128 {
+		t.Fatalf("active scan lost its recovery index: %d", n)
+	}
+	if _, _, err := scanner.Batch(context.Background(), 1, 1, 0); !errors.Is(err, ErrBatchReleased) {
+		t.Fatalf("released batch read: %v", err)
 	}
 	if _, err := scanner.Stop(context.Background(), 1, 1); err != nil {
 		t.Fatal(err)
@@ -226,10 +243,17 @@ func TestRealLocalScanStopResumeAndRetainedAcknowledgements(t *testing.T) {
 	if _, err := scanner.Ack(context.Background(), 1, 1, 3); !errors.Is(err, ErrGeneration) {
 		t.Fatal("old-generation acknowledgement was accepted", err)
 	}
+	assertBatchesFrom(t, scanner, 2, 1, 132) // The resumed scan did not re-publish the first 128 objects.
 	if _, err := scanner.Ack(context.Background(), 1, 2, 3); err != nil {
 		t.Fatal(err)
 	}
-	assertBatches(t, scanner, 2, 260) // ACK does not delete audit or retry data.
+	if _, err := scanner.Release(context.Background(), 1, 2, 3); err != nil {
+		t.Fatal(err)
+	}
+	waitBatchesReleased(t, scanner, 1, 3)
+	if n := countCleanupRows(t, db, batches, 1); n != 0 {
+		t.Fatalf("acknowledged batches retained: %d", n)
+	}
 }
 
 func TestResumeReportsChangedAndMissingSources(t *testing.T) {

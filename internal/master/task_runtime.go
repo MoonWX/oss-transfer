@@ -632,6 +632,9 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	if err := t.reconcileScanAck(ctx, p, scan); err != nil {
+		return err
+	}
 	// Keep a bounded amount of queued work in front of Agents. The scanner may
 	// continue writing its manifest on disk while execution applies backpressure.
 	if pendingDispatchCapacity(p) > 0 {
@@ -696,7 +699,11 @@ func (t *taskRuntime) dispatchAvailable(ctx context.Context, p task.Parent, cont
 	if err := t.deliverChildren(ctx, p, children); err != nil {
 		return err
 	}
-	return t.server.agentCall(ctx, scanner, "scan_ack", true, control, nil)
+	var acknowledged discovery.State
+	if err := t.server.agentCall(ctx, scanner, "scan_ack", true, control, &acknowledged); err != nil {
+		return err
+	}
+	return t.releaseScanPrefix(ctx, p, acknowledged)
 }
 
 func pendingDispatchCapacity(p task.Parent) int {

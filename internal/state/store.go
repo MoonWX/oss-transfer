@@ -40,12 +40,18 @@ const SchemaCompressedValues = 4
 // Only tasks using automatic takeover require this format.
 const SchemaTaskLeases = 5
 
+// SchemaReleasedScanBatches fences readers that expect acknowledged scan batches
+// to remain present. It is required atomically with the first batch release.
+const SchemaReleasedScanBatches = 6
+
+const latestSchema = SchemaReleasedScanBatches
+
 type databaseFormat struct {
 	Role          string `json:"role"`
 	SchemaVersion int    `json:"schemaVersion"`
 }
 
-func supportedSchema(version int) bool { return version >= 1 && version <= SchemaTaskLeases }
+func supportedSchema(version int) bool { return version >= 1 && version <= latestSchema }
 
 // RequireSchema raises the minimum reader version in the same transaction as
 // the data requiring it. A failed transaction preserves both the old format and

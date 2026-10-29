@@ -486,6 +486,9 @@ func main(){
         self.record('existing_cli_requires_explicit_replacement_and_has_exact_backup')
         before=self.pid('master')
         require(before>0,'Master has no service-owned PID')
+        ready=self.root/'master/data/runtime/ready'
+        require(ready.with_name('ready.request').read_text()==ready.with_name('ready.committed').read_text(),
+                'Successful installation did not commit its startup for scan cleanup')
         printed_passwords = re.findall(r'^Initial password: ([A-Za-z0-9_-]+)$', installed.stdout, re.MULTILINE)
         require(len(printed_passwords) == 1, 'Fresh installation did not print exactly one initial password to the terminal')
         initial_password = printed_passwords[0]
@@ -533,6 +536,8 @@ func main(){
             self.install('master',upgrade=True,discover=True)
         after=self.pid('master')
         require(after>0 and after!=before,'Master upgrade did not replace the service process')
+        require(ready.with_name('ready.request').read_text()==ready.with_name('ready.committed').read_text(),
+                'Successful upgrade retained an uncommitted startup')
         require(config.read_bytes()==config_bytes,'Upgrade modified configuration')
         self.login()
         nodes=self.api('/api/master/nodes')['nodes']
@@ -596,6 +601,8 @@ func main(){
         failed=self.failure_release()
         backups_before=set((self.root/'master/backups').iterdir())
         self.install('master',upgrade=True,release=failed,expect=1,timeout=10)
+        require(ready.with_name('ready.request').read_text()!=ready.with_name('ready.committed').read_text(),
+                'Failed upgrade or rollback incorrectly committed remote scan cleanup')
         require(hashlib.sha256(cli_path.read_bytes()).hexdigest()==cli_hash,'Startup rollback did not restore the previous CLI')
         require(config.read_bytes()==config_bytes,'Rollback changed configuration')
         self.login()

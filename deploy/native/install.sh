@@ -647,7 +647,7 @@ else
 fi
 ready_file=$(awk -F '\t' '$1=="readyFile"{print $2}' "$work/config.tsv")
 log_file=$(awk -F '\t' '$1=="logFile"{print $2}' "$work/config.tsv")
-for path in "$ready_file" "$ready_file.request" "$log_file"; do
+for path in "$ready_file" "$ready_file.request" "$ready_file.committed" "$log_file"; do
   safe_path "$(dirname "$path")"
   [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) ]] || fail "Service file is a link or non-file: $path"
 done
@@ -861,6 +861,20 @@ wait_ready() {
   printf 'Startup timed out after %ss. Check %s and the %s service status.\n' "$startup_timeout" "$log_file" "$service_name" >&2
   return 1
 }
+commit_start() {
+  local committed_file="$ready_file.committed" temporary_file=
+  # Remote scan copies may be reclaimed only after database rollback is no
+  # longer possible. Failure leaves reclamation paused, not the installation.
+  if [[ "$launch_id" =~ ^[a-f0-9]{64}$ && ! -L "$committed_file" && ( ! -e "$committed_file" || -f "$committed_file" ) ]] &&
+     temporary_file=$(mktemp "$committed_file.XXXXXX") &&
+     printf '%s\n' "$launch_id" > "$temporary_file" &&
+     chmod 600 "$temporary_file" && mv -f "$temporary_file" "$committed_file"; then
+    return 0
+  fi
+  [[ -z "$temporary_file" ]] || rm -f "$temporary_file" || true
+  printf 'Warning: could not confirm the installation for scan cleanup; the service remains available.\n' >&2
+  return 0
+}
 print_initial_credentials() {
   [[ "$role" == master && -f "$log_file" ]] || return 0
   local password token
@@ -1042,6 +1056,7 @@ if [[ "$platform" == linux ]]; then
   if ((existed == 0 || had_unit == 0 || was_enabled)); then systemctl enable "$service_name" >/dev/null; fi
 fi
 trap - ERR INT TERM
+commit_start
 if ((existed)); then
   maintain_backups complete
   maintain_backups prune

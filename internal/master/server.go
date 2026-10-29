@@ -39,6 +39,9 @@ type session struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 type Options struct {
+	// ScanReleaseAllowed is false while an installer may restore older Master state.
+	// A nil callback allows release for unmanaged processes and tests.
+	ScanReleaseAllowed   func() bool
 	Updater              softwareupdate.Controller
 	DataDirectory        string
 	AgentArtifactBase    string

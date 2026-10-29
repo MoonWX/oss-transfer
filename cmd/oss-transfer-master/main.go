@@ -167,7 +167,7 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 		return err
 	}
 	defer db.Close()
-	handler, initialPassword, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater})
+	handler, initialPassword, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater, ScanReleaseAllowed: servicehost.ScanReleasePermission(config.ReadyFile)})
 	if err != nil {
 		return err
 	}

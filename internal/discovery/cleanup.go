@@ -16,7 +16,7 @@ const cleanupPageBytes = 1 << 20
 const cleanupInterval = 50 * time.Millisecond
 
 func cleanupNeeded(current State) bool {
-	return current.Deleted && !current.Purged || current.ScanComplete && !current.ObjectsReleased
+	return current.Deleted && !current.Purged || current.ScanComplete && !current.ObjectsReleased || current.ReleasedThrough < current.ReleasableThrough
 }
 
 func (s *Scanner) startCleanup() {
@@ -65,10 +65,16 @@ func (s *Scanner) cleanupLoop(ctx context.Context) {
 		if err != nil || !found {
 			delay = time.Second
 		}
+		// Coalesce ACKs arriving during an active sweep. Only an idle worker
+		// may skip its delay; otherwise every ACK could add a durable commit.
+		var wake <-chan struct{}
+		if !found {
+			wake = s.cleanupWake
+		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-		case <-s.cleanupWake:
+		case <-wake:
 		case <-timer.C:
 		}
 		timer.Stop()
@@ -142,11 +148,10 @@ func (s *Scanner) cleanupPage(ctx context.Context, parentID int64) (done bool, e
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	active := s.isActiveLocked(parentID)
-	s.mu.Unlock()
-	if active {
-		return false, nil
-	}
+	// Lifecycle methods snapshot State under this mutex before publishing a
+	// new attempt. Keep their read/write window separate from batch deletion.
 	err = s.store.Update(func(tx *state.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -159,7 +164,25 @@ func (s *Scanner) cleanupPage(ctx context.Context, parentID int64) (done bool, e
 			done = true
 			return tx.Delete(cleanupBucket, parentKey(parentID))
 		}
-		if !current.ObjectsReleased {
+		// Master explicitly permits this acknowledged prefix to be released.
+		// Discovery may still be using its source recovery index.
+		if !current.Deleted && current.ReleasedThrough < current.ReleasableThrough {
+			if err := releaseAckedBatchesPage(tx, &current); err != nil {
+				return err
+			}
+			if err := tx.Put(states, parentKey(parentID), current); err != nil {
+				return err
+			}
+			if cleanupNeeded(current) {
+				return nil // Keep each write transaction bounded to one batch page.
+			}
+			done = true
+			return tx.Delete(cleanupBucket, parentKey(parentID))
+		}
+		if active {
+			return nil
+		}
+		if !current.ObjectsReleased && (current.ScanComplete || current.Deleted) {
 			cleared, err := deleteCleanupPage(tx, objects, parentKey(parentID)+"/")
 			if err != nil || !cleared {
 				return err
@@ -221,4 +244,60 @@ func deleteCleanupPage(tx *state.Tx, bucket, prefix string) (bool, error) {
 		}
 	}
 	return !full, nil
+}
+
+// releaseAckedBatchesPage only touches the prefix explicitly released by
+// Master. The watermark and deletions commit together, including the
+// minimum reader version: an interrupted transaction cannot lose its cursor.
+func releaseAckedBatchesPage(tx *state.Tx, current *State) error {
+	through := current.ReleasedThrough
+	if current.Takeover != nil && current.Takeover.Sealed {
+		// Seeded assignments live on Master, not in this scanner's batch bucket.
+		through = max(through, min(current.Takeover.ThroughBatch, current.ReleasableThrough))
+	}
+	if through > current.ReleasableThrough || current.ReleasableThrough > current.AckedThrough || current.AckedThrough > current.LastBatch {
+		return ErrCorrupt
+	}
+	keys := make([]string, 0, cleanupPageKeys)
+	var bytes int
+	err := tx.Scan(batches, parentKey(current.Spec.ParentID)+"/", batchKey(current.Spec.ParentID, through), cleanupPageKeys+1, func(key string, raw json.RawMessage) error {
+		if through == current.ReleasableThrough {
+			return errCleanupPageFull
+		}
+		if key != batchKey(current.Spec.ParentID, through+1) {
+			return ErrCorrupt
+		}
+		remaining := cleanupPageBytes - bytes
+		fits := len(key) <= remaining && len(raw) <= remaining-len(key)
+		if len(keys) == cleanupPageKeys || len(keys) > 0 && !fits {
+			return errCleanupPageFull
+		}
+		keys = append(keys, key)
+		through++
+		if fits {
+			bytes += len(key) + len(raw)
+		} else {
+			bytes = cleanupPageBytes
+		}
+		return nil
+	})
+	full := errors.Is(err, errCleanupPageFull)
+	if err != nil && !full {
+		return err
+	}
+	if !full && through < current.ReleasableThrough {
+		return ErrCorrupt
+	}
+	if len(keys) > 0 {
+		if err := state.RequireSchema(tx, "agent", state.SchemaReleasedScanBatches); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if err := tx.Delete(batches, key); err != nil {
+				return err
+			}
+		}
+	}
+	current.ReleasedThrough = through
+	return nil
 }

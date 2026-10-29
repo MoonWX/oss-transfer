@@ -269,7 +269,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete":
 		return true
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true
 	}
 	return false
@@ -289,11 +289,17 @@ func decode(data json.RawMessage, into any) error {
 }
 func response(value any, err error) (agenttransport.Response, error) {
 	if err == nil {
+		if scan, ok := value.(discovery.State); ok {
+			scan.ReleaseProtocol = 1
+			value = scan
+		}
 		data, e := json.Marshal(value)
 		return agenttransport.Response{Status: 200, Payload: data}, e
 	}
-	status := 500
+	status, code := 500, "operation_failed"
 	switch {
+	case errors.Is(err, discovery.ErrBatchReleased):
+		status, code = 409, "scan_batch_released"
 	case errors.Is(err, inventory.ErrNotFound), errors.Is(err, execution.ErrNotFound), errors.Is(err, discovery.ErrNotFound), errors.Is(err, storageconfig.ErrNotFound), errors.Is(err, os.ErrNotExist), errors.Is(err, transferstore.ErrNotFound), errors.Is(err, ratelimit.ErrMissing):
 		status = 404
 	case errors.Is(err, discovery.ErrEpoch), errors.Is(err, discovery.ErrSeeding), errors.Is(err, discovery.ErrRunning), errors.Is(err, execution.ErrAssignment), errors.Is(err, execution.ErrRunning), errors.Is(err, ErrLeaseRequired), errors.Is(err, ErrLeaseExpired), errors.Is(err, ErrLeaseRetired), errors.Is(err, ErrLeaseConflict), errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrUnsealed), errors.Is(err, execution.ErrGeneration), errors.Is(err, execution.ErrConflict), errors.Is(err, execution.ErrStopped), errors.Is(err, execution.ErrDeleted), errors.Is(err, execution.ErrNotRecoverable), errors.Is(err, storageconfig.ErrStaleRevision), errors.Is(err, storageconfig.ErrRevisionConflict), errors.Is(err, discovery.ErrGeneration), errors.Is(err, discovery.ErrConflict), errors.Is(err, discovery.ErrStopped), errors.Is(err, discovery.ErrDeleted), errors.Is(err, ratelimit.ErrStale), errors.Is(err, ratelimit.ErrConflict), errors.Is(err, ErrSharedVerificationRequired), errors.Is(err, ErrSharedVerificationStale):
@@ -305,7 +311,7 @@ func response(value any, err error) (agenttransport.Response, error) {
 	case errors.Is(err, ErrInvalidLease), errors.Is(err, inventory.ErrInvalid), errors.Is(err, storageconfig.ErrInvalid), errors.Is(err, transferstore.ErrInvalidKey), errors.Is(err, discovery.ErrInvalid):
 		status = 400
 	}
-	data, _ := json.Marshal(map[string]any{"code": "operation_failed", "message": err.Error()})
+	data, _ := json.Marshal(map[string]any{"code": code, "message": err.Error()})
 	return agenttransport.Response{Status: status, Payload: data}, nil
 }
 func badRequest(err error) (agenttransport.Response, error) {
@@ -513,7 +519,7 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		}
 		value, err := s.Scanner.Start(ctx, spec)
 		return response(value, err)
-	case "scan_status", "scan_batch", "scan_ack", "scan_stop", "scan_resume":
+	case "scan_status", "scan_batch", "scan_ack", "scan_release", "scan_stop", "scan_resume":
 		var request ScanRequest
 		if err := decode(c.Payload, &request); err != nil {
 			return badRequest(err)
@@ -529,6 +535,8 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			value, err = s.Scanner.StatusEpoch(ctx, request.ParentID, request.Generation, request.Epoch)
 		case "scan_ack":
 			value, err = s.Scanner.Ack(ctx, request.ParentID, request.Generation, request.Number, request.Epoch)
+		case "scan_release":
+			value, err = s.Scanner.Release(ctx, request.ParentID, request.Generation, request.Number, request.Epoch)
 		case "scan_stop":
 			value, err = s.Scanner.Stop(ctx, request.ParentID, request.Generation, request.Epoch)
 		case "scan_resume":

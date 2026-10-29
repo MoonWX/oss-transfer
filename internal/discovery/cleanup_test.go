@@ -42,10 +42,13 @@ func waitReleased(t *testing.T, scanner *Scanner, parentID int64) State {
 	return State{}
 }
 
-func TestCompletedScanReleasesOnlyRecoveryIndexAndNeverRescans(t *testing.T) {
+func TestCompletedScanRetainsUnacknowledgedBatchesAndNeverRescans(t *testing.T) {
 	ctx := context.Background()
 	factory := &localFactory{}
 	scanner, db := newScanner(t, filepath.Join(t.TempDir(), "agent.db"), factory, Options{})
+	if err := db.ClaimRole("agent"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := scanner.Start(ctx, localSpec(sourceFiles(t, 260))); err != nil {
 		t.Fatal(err)
 	}
@@ -56,17 +59,26 @@ func TestCompletedScanReleasesOnlyRecoveryIndexAndNeverRescans(t *testing.T) {
 	if n := countCleanupRows(t, db, objects, 1); n != 0 {
 		t.Fatalf("completed recovery index retained %d objects", n)
 	}
+	assertBatches(t, scanner, 1, 260)
 	if _, err := scanner.Ack(ctx, 1, 1, 3); err != nil {
 		t.Fatal(err)
 	}
-	assertBatches(t, scanner, 1, 260)
+	if _, err := scanner.Release(ctx, 1, 1, 3); err != nil {
+		t.Fatal(err)
+	}
+	waitBatchesReleased(t, scanner, 1, 3)
 	if _, err := scanner.Resume(ctx, 1, 2); err != nil {
 		t.Fatal(err)
 	}
 	if factory.opens.Load() != 1 || factory.scans.Load() != 1 {
 		t.Fatal("resuming a completed scan reopened its source")
 	}
-	assertBatches(t, scanner, 2, 260)
+	if _, _, err := scanner.Batch(ctx, 1, 2, 0); !errors.Is(err, ErrBatchReleased) {
+		t.Fatalf("resume forgot released batch watermark: %v", err)
+	}
+	if _, found, err := scanner.Batch(ctx, 1, 2, 3); err != nil || found {
+		t.Fatalf("read after the final batch: found=%v err=%v", found, err)
+	}
 }
 
 func TestCleanupPreservesFailedAndInterruptedRecoveryIndexes(t *testing.T) {

@@ -270,6 +270,69 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
         self.assertEqual(modern.stdout, '\nInitial administrator: admin\nInitial password: modern_password\n')
 
 
+class StartupCommitTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-commit-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = INSTALLER.read_text()
+        self.function = self.source[self.source.index('commit_start() {'):self.source.index('\nprint_initial_credentials() {')]
+
+    def invoke(self, body='', fail=''):
+        start = self.source.rindex('\nprepare_start\n')
+        end = self.source.index('\nif ((existed)); then\n  maintain_backups complete', start)
+        finish = self.source[start:end]
+        script = '''set -eEuo pipefail
+trap 'printf rolled-back > "$TEST_ROOT/rollback"; exit 7' ERR
+ready_file=$TEST_ROOT/ready; launch_id=''' + 'a' * 64 + '''
+platform=linux; existed=1; had_unit=1; was_enabled=1; service_name=test
+prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }
+start_service() { return 0; }
+wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
+systemctl() { [[ "$TEST_FAIL" != enable ]]; }
+''' + self.function + '\n' + body + '\n' + finish + '\nprintf installed\n'
+        return subprocess.run(['bash', '-c', script], text=True, capture_output=True, timeout=5,
+                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL=fail))
+
+    def test_commit_is_written_only_after_readiness_and_rollback_region(self):
+        for phase in ('ready', 'enable'):
+            with self.subTest(phase=phase):
+                result = self.invoke(fail=phase)
+                self.assertEqual(result.returncode, 7, result.stderr)
+                self.assertTrue((self.root/'rollback').exists())
+                self.assertFalse((self.root/'ready.committed').exists())
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        committed = self.root/'ready.committed'
+        self.assertEqual(committed.read_text(), (self.root/'ready.request').read_text())
+        self.assertEqual(committed.stat().st_mode & 0o777, 0o600)
+
+    def test_commit_failure_warns_without_rolling_back(self):
+        result = self.invoke('mv() { return 7; }')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('installed', result.stdout)
+        self.assertIn('service remains available', result.stderr)
+        self.assertFalse((self.root/'rollback').exists())
+        self.assertFalse((self.root/'ready.committed').exists())
+        self.assertEqual(list(self.root.glob('ready.committed.*')), [])
+
+    def test_commit_refuses_symlink_or_nonregular_target(self):
+        target = self.root/'unchanged'
+        target.write_text('unchanged')
+        committed = self.root/'ready.committed'
+        for kind in ('symlink', 'directory'):
+            with self.subTest(kind=kind):
+                if kind == 'symlink': committed.symlink_to(target)
+                else: committed.mkdir()
+                result = self.invoke()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('service remains available', result.stderr)
+                self.assertEqual(target.read_text(), 'unchanged')
+                self.assertFalse((self.root/'rollback').exists())
+                if kind == 'symlink': committed.unlink()
+                else: committed.rmdir()
+
+
 class BackupRetentionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='installer-retention-')

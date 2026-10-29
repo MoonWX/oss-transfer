@@ -35,8 +35,13 @@ func TestDispatchPagePersistsValidatedPrefixWhenCollectionFails(t *testing.T) {
 	}
 }
 
+func TestDispatchPageReconcilesLostFinalAcknowledgement(t *testing.T) {
+	testDispatchPage(t, false, "ack")
+}
+
 func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	t.Helper()
+	collectionFault := scanFault != "" && scanFault != "ack"
 	path := filepath.Join(t.TempDir(), "master.db")
 	db, err := state.Open(path)
 	if err != nil {
@@ -70,7 +75,7 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	defer cancel()
 	var mu sync.Mutex
 	reads, acknowledgements, acknowledgedThrough := 0, 0, int64(0)
-	failedDelivery, failedScan := false, false
+	failedDelivery, failedScan, failedACK := false, false, false
 	dispatchCtx := ctx
 	serveDone := make(chan error, 1)
 	go func() {
@@ -95,7 +100,7 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 				mu.Lock()
 				reads++
 				mu.Unlock()
-				if scanFault != "" && !failedScan && control.Number == 3 {
+				if collectionFault && !failedScan && control.Number == 3 {
 					failedScan = true
 					if scanFault == "deadline" {
 						<-dispatchCtx.Done()
@@ -141,7 +146,12 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 				err = json.Unmarshal(command.Payload, &control)
 				mu.Lock()
 				acknowledgements++
-				acknowledgedThrough = control.Number
+				if scanFault == "ack" && control.Number == 17 && !failedACK {
+					failedACK, status = true, 503
+					response = map[string]string{"message": "injected lost scan acknowledgement"}
+				} else {
+					acknowledgedThrough = control.Number
+				}
 				mu.Unlock()
 			default:
 				err = fmt.Errorf("unexpected operation %s", command.Operation)
@@ -192,7 +202,7 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	if scanFault == "deadline" && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("scan deadline was ignored", err)
 	}
-	if (scanFault == "rpc" || scanFault == "stop-fence") && !agentStatus(err, 503) {
+	if (scanFault == "rpc" || scanFault == "stop-fence" || scanFault == "ack") && !agentStatus(err, 503) {
 		t.Fatal("scan failure was ignored", err)
 	}
 	if scanFault == "stop-fence" && !errors.Is(err, task.ErrState) {
@@ -201,8 +211,11 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	mu.Lock()
 	acksAfterPage, throughAfterPage := acknowledgements, acknowledgedThrough
 	mu.Unlock()
-	if (failDelivery || scanFault != "") && (acksAfterPage != 1 || throughAfterPage != 1) {
+	if (failDelivery || collectionFault) && (acksAfterPage != 1 || throughAfterPage != 1) {
 		t.Fatal("partially delivered page was acknowledged as complete")
+	}
+	if scanFault == "ack" && (acksAfterPage != 2 || throughAfterPage != 1) {
+		t.Fatal("lost final acknowledgement was not simulated")
 	}
 	if !failDelivery && scanFault == "" && (acksAfterPage != 2 || throughAfterPage != 17) {
 		t.Fatalf("sixteen-child page should send one cumulative ACK: calls=%d through=%d", acksAfterPage, throughAfterPage)
@@ -219,7 +232,7 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	server.store, runtime.repo = db, task.New(db)
 	p, err = runtime.repo.Get(p.ID)
 	wantChildren := 17
-	if scanFault != "" {
+	if collectionFault {
 		wantChildren = 3
 	}
 	if scanFault == "stop-fence" {
@@ -228,7 +241,7 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	if err != nil || p.DispatchedThrough != wantChildren || p.ChildCount != wantChildren {
 		t.Fatalf("interrupted dispatch lost assignments or crossed a fence: %+v %v", p, err)
 	}
-	if scanFault != "" {
+	if collectionFault {
 		for number := 2; number <= 3; number++ {
 			if _, err := jobs.Get(ctx, fmt.Sprintf("%d-%d", p.ID, number)); !errors.Is(err, execution.ErrNotFound) {
 				t.Fatalf("collection error still delivered child %d: %v", number, err)
@@ -241,6 +254,32 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 		}
 		return
 	}
+	// The Master was reopened after its durable assignments survived a failed
+	// collection, delivery or tail ACK. Reconcile without fetching another page
+	// or requiring child acceptance: every object already lives in those jobs.
+	mu.Lock()
+	readsBeforeACK := reads
+	mu.Unlock()
+	scan := discovery.State{Spec: discovery.Spec{ParentID: p.ID}, Generation: p.Generation, LastBatch: 17, AckedThrough: throughAfterPage}
+	if err := runtime.reconcileScanAck(ctx, p, scan); err != nil {
+		t.Fatal("durable assignment ACK was not recovered after restart", err)
+	}
+	mu.Lock()
+	ackedAfterRecovery, readsAfterACK, ackCalls := acknowledgedThrough, reads, acknowledgements
+	mu.Unlock()
+	if ackedAfterRecovery != int64(wantChildren) || readsAfterACK != readsBeforeACK {
+		t.Fatal("ACK reconciliation lost the durable cursor or reread the scanner", ackedAfterRecovery, readsAfterACK)
+	}
+	scan.AckedThrough = ackedAfterRecovery
+	if err := runtime.reconcileScanAck(ctx, p, scan); err != nil {
+		t.Fatal("acknowledged prefix was not idempotent", err)
+	}
+	mu.Lock()
+	duplicateACKs := acknowledgements - ackCalls
+	mu.Unlock()
+	if duplicateACKs != 0 {
+		t.Fatal("unchanged scan status sent a redundant ACK")
+	}
 	if err := runtime.observe(ctx, p, 64); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +288,7 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 			t.Fatalf("assigned child %d was not recovered: %v", number, err)
 		}
 	}
-	if scanFault != "" {
+	if collectionFault {
 		if err := runtime.dispatch(ctx, p, control); err != nil {
 			t.Fatal("next collection could not advance beyond its saved prefix", err)
 		}

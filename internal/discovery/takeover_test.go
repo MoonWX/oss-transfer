@@ -53,7 +53,8 @@ func takeoverRequest(spec Spec, batches ...Batch) TakeoverRequest {
 
 func seedTakeover(t *testing.T, scanner *Scanner, request TakeoverRequest) State {
 	t.Helper()
-	for range 32 {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		current, err := scanner.SeedTakeover(context.Background(), request)
 		if err != nil {
 			t.Fatal(err)
@@ -247,13 +248,15 @@ func TestTakeoverInventoryRetainsExactKeysAndRequiresSeal(t *testing.T) {
 func TestTakeoverCleanupIsBoundedAndResumesAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agent.db")
-	scanner, db := newScanner(t, path, &localFactory{}, Options{})
+	factory := &localFactory{}
+	scanner, db := newScanner(t, path, factory, Options{})
 	root := sourceFiles(t, 1)
+	const total = cleanupPageKeys + 200
 	if err := db.Update(func(tx *state.Tx) error {
 		if err := tx.Put(states, parentKey(1), State{Spec: localSpec(root), Generation: 1, Status: Stopped}); err != nil {
 			return err
 		}
-		for index := range cleanupPageKeys + 200 {
+		for index := range total {
 			key := fmt.Sprintf("old-%06d", index)
 			if err := tx.Put(objects, objectKey(1, key), discoveredObject{Object: transferstore.Object{Key: key}, SeenAttempt: "old"}); err != nil {
 				return err
@@ -263,11 +266,33 @@ func TestTakeoverCleanupIsBoundedAndResumesAfterRestart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	remainingKeys := func() []string {
+		t.Helper()
+		var keys []string
+		if err := db.View(func(tx *state.Tx) error {
+			return tx.ScanKeys(objects, parentKey(1)+"/", "", total+1, func(key string, _ int64) error {
+				keys = append(keys, key)
+				return nil
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return keys
+	}
+	before := remainingKeys()
 	request := takeoverRequest(localSpec(root))
 	request.Spec.Generation = 2 // This Agent last scanned an older task generation.
 	current, err := scanner.SeedTakeover(ctx, request)
-	if err != nil || !current.Takeover.Cleaning || countCleanupRows(t, db, objects, 1) != 200 {
-		t.Fatal(current, err)
+	if err != nil || current.Takeover == nil || !current.Takeover.Cleaning {
+		t.Fatalf("takeover did not retain partial cleanup: %+v err=%v", current, err)
+	}
+	after := remainingKeys()
+	removed := len(before) - len(after)
+	if removed < 1 || removed > cleanupPageKeys || !slices.Equal(after, before[removed:]) {
+		t.Fatalf("first cleanup did not remove a bounded prefix: removed=%d limit=%d", removed, cleanupPageKeys)
+	}
+	if _, err := scanner.FinalizeTakeover(ctx, 1, 2, 1); !errors.Is(err, ErrSeeding) {
+		t.Fatalf("partially cleaned takeover started scanning: %v", err)
 	}
 	if err := scanner.Close(); err != nil {
 		t.Fatal(err)
@@ -275,8 +300,32 @@ func TestTakeoverCleanupIsBoundedAndResumesAfterRestart(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	scanner, db = newScanner(t, path, &localFactory{}, Options{})
-	seedTakeover(t, scanner, request)
+	scanner, db = newScanner(t, path, factory, Options{})
+	reopened, err := scanner.StatusEpoch(ctx, 1, 2, 1)
+	if err != nil || reopened.Takeover == nil || !reopened.Takeover.Cleaning || !slices.Equal(remainingKeys(), after) {
+		t.Fatalf("restart lost committed cleanup state: %+v err=%v", reopened, err)
+	}
+	// Check every resumed page, not a fixed number of calls: the time budget
+	// can produce smaller pages on emulated or busy machines.
+	deadline := time.Now().Add(5 * time.Second)
+	for current.Takeover.Cleaning && time.Now().Before(deadline) {
+		before = after
+		current, err = scanner.SeedTakeover(ctx, request)
+		if err != nil || current.Takeover == nil {
+			t.Fatalf("resumed cleanup failed: %+v err=%v", current, err)
+		}
+		after = remainingKeys()
+		removed = len(before) - len(after)
+		if removed < 0 || removed > cleanupPageKeys || len(before) > 0 && removed == 0 || !slices.Equal(after, before[removed:]) {
+			t.Fatalf("resumed cleanup did not remove a bounded prefix: removed=%d limit=%d", removed, cleanupPageKeys)
+		}
+		if countCleanupRows(t, db, objects, 2) != 1 || factory.opens.Load() != 0 {
+			t.Fatal("cleanup touched another parent or opened the source before finalization")
+		}
+	}
+	if current.Takeover.Cleaning {
+		t.Fatal("takeover cleanup did not complete")
+	}
 	if countCleanupRows(t, db, objects, 1) != 0 || countCleanupRows(t, db, objects, 2) != 1 {
 		t.Fatal("cleanup crossed parent boundary")
 	}

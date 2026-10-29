@@ -91,12 +91,15 @@ try {
         $script:readyFile = Join-Path $work 'ready'
         $script:launchId = 'a' * 64
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-        Commit-Start
+        $message = Commit-Start 3>&1 | Out-String
+        Assert ([string]::IsNullOrWhiteSpace($message)) 'First startup commit emitted a warning.'
         $committed = $script:readyFile+'.committed'
         Assert ([IO.File]::ReadAllText($committed) -ceq ($script:launchId+"`n")) 'Startup nonce was not committed.'
         $script:launchId = 'b' * 64
-        Commit-Start
+        $message = Commit-Start 3>&1 | Out-String
+        Assert ([string]::IsNullOrWhiteSpace($message)) 'Replacing the startup commit emitted a warning.'
         Assert ([IO.File]::ReadAllText($committed) -ceq ($script:launchId+"`n")) 'Previous startup commit was not replaced.'
+        Assert (@(Get-ChildItem -LiteralPath $work | Where-Object { $_.Name.StartsWith('ready.committed.',[StringComparison]::Ordinal) }).Count -eq 0) 'Successful commit left temporary files.'
         $savedWarningPreference = $WarningPreference
         $savedWrite = ${function:Write-UTF8}
         function Write-UTF8([string]$Path,[string]$Text) { throw 'Injected disk write failure.' }
@@ -116,6 +119,30 @@ try {
         Assert ($message -match 'service remains available') 'Non-file commit target was not rejected.'
         Assert (Test-Path -LiteralPath $committed -PathType Container) 'Non-file commit target was replaced.'
         Remove-Item -LiteralPath $committed
+    }
+    Check 'Windows PowerShell 5 commits the first startup and consecutive upgrades' {
+        $commitFunctions = @('Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Protect-File')
+        $definitions = @($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $commitFunctions},$true) | ForEach-Object { $_.Extent.Text }) -join "`n"
+        $testScript = Join-Path $work 'startup-commit.ps1'
+        $testBody = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$script:readyFile = Join-Path $PSScriptRoot 'legacy-ready'
+$committed = $script:readyFile+'.committed'
+try {
+    foreach ($nonce in @('a','b','c')) {
+        $script:launchId = $nonce * 64
+        $message = Commit-Start 3>&1 | Out-String
+        if (-not [string]::IsNullOrWhiteSpace($message)) { throw ('Startup confirmation warned: '+$message) }
+        if ([IO.File]::ReadAllText($committed) -cne ($script:launchId+"`n")) { throw 'Startup commit did not contain the current launch nonce.' }
+        if (@(Get-ChildItem -LiteralPath $PSScriptRoot | Where-Object { $_.Name.StartsWith('legacy-ready.committed.',[StringComparison]::Ordinal) }).Count -ne 0) { throw 'Startup commit left temporary files.' }
+    }
+} finally { Remove-Item -LiteralPath $committed -Force -ErrorAction SilentlyContinue }
+'@
+        [IO.File]::WriteAllText($testScript,$definitions+"`n"+$testBody,$utf8)
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $testScript
+        if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell startup commit regression.' }
     }
     Check 'backup maintenance uses the candidate and failures do not abort installation' {
         $candidate = Join-Path $work 'candidate.exe'

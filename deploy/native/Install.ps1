@@ -448,10 +448,11 @@ function Commit-Start {
         $temporary = $committed+'.'+[guid]::NewGuid().ToString('N')
         Write-UTF8 $temporary ($script:launchId+"`n")
         Protect-File $temporary
-        if (Test-Path -LiteralPath $committed) { [IO.File]::Replace($temporary,$committed,$null) }
+        # PowerShell converts $null to an empty backup filename for this overload.
+        if (Test-Path -LiteralPath $committed) { [IO.File]::Replace($temporary,$committed,[NullString]::Value) }
         else { [IO.File]::Move($temporary,$committed) }
     } catch {
-        Write-Warning 'Could not confirm the installation for scan cleanup; the service remains available.' -WarningAction Continue
+        Write-Warning ("Could not confirm the installation for scan cleanup; the service remains available. {0}" -f $_.Exception.GetBaseException().Message) -WarningAction Continue
     } finally {
         if ($temporary) {
             try { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }

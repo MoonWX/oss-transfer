@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -64,13 +65,52 @@ func TestBatchReleaseResumesBoundedCleanupAndRetainsUnacknowledgedTail(t *testin
 	if done, err := manual.cleanupPage(context.Background(), 1); err != nil || done {
 		t.Fatalf("cleanup was not bounded: done=%v err=%v", done, err)
 	}
-	if n := countCleanupRows(t, db, batches, 1); n != total-cleanupPageKeys {
-		t.Fatalf("first cleanup removed %d rows", total-n)
+	removed := total - countCleanupRows(t, db, batches, 1)
+	if removed < 1 || removed > cleanupPageKeys {
+		t.Fatalf("first cleanup removed %d rows; limit %d", removed, cleanupPageKeys)
+	}
+	// Time and byte limits may end a page before its record limit. The
+	// durable watermark must describe the exact contiguous prefix removed.
+	first, err := manual.Status(context.Background(), 1)
+	if err != nil || first.ReleasedThrough != int64(removed) || first.ReleasableThrough != acknowledged {
+		t.Fatalf("cleanup watermark does not match deleted rows: %+v err=%v", first, err)
+	}
+	if err := db.View(func(tx *state.Tx) error {
+		next := int64(removed + 1)
+		if err := tx.ScanKeys(batches, parentKey(1)+"/", "", total, func(key string, _ int64) error {
+			if key != batchKey(1, next) {
+				return fmt.Errorf("remaining batch key %q; want %q", key, batchKey(1, next))
+			}
+			next++
+			return nil
+		}); err != nil {
+			return err
+		}
+		if next != total+1 {
+			return fmt.Errorf("remaining prefix ends at %d; want %d", next-1, total)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	scanner, db := newScanner(t, path, &localFactory{}, Options{})
+	db, err = state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	manual = &Scanner{store: db, active: make(map[int64]*running)}
+	reopened, err := manual.Status(context.Background(), 1)
+	if err != nil || reopened.ReleasedThrough != first.ReleasedThrough || reopened.ReleasableThrough != first.ReleasableThrough {
+		t.Fatalf("restart lost the committed release cursor: %+v err=%v", reopened, err)
+	}
+	scanner, err := New(db, &localFactory{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scanner.Close() })
 	current := waitBatchesReleased(t, scanner, 1, acknowledged)
 	if current.AckedThrough != acknowledged || current.LastBatch != total || current.TotalObjects != total {
 		t.Fatalf("release changed scanner accounting: %+v", current)
@@ -80,6 +120,9 @@ func TestBatchReleaseResumesBoundedCleanupAndRetainsUnacknowledgedTail(t *testin
 	}
 	if n := countCleanupRows(t, db, batches, 2); n != 1 {
 		t.Fatal("cleanup crossed parent boundary")
+	}
+	if n := countCleanupRows(t, db, batches, 1); n != total-acknowledged {
+		t.Fatalf("release retained %d batches; want only the unacknowledged tail", n)
 	}
 	for _, n := range []int64{0, acknowledged - 1} {
 		if _, _, err := scanner.Batch(context.Background(), 1, 1, n); !errors.Is(err, ErrBatchReleased) {

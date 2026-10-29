@@ -83,8 +83,28 @@ func TestFailoverBatchesPreserveResultsCountersAndResumeAfterRestart(t *testing.
 	if err := repo.ScanProgress(p.ID, p.Generation, 780, 78000, 260, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ready, err := repo.PriorityChildren(context.Background(), p.ID, "", 5, nil); err != nil || !ready {
-		t.Fatal("priority index", ready, err)
+	// Index construction yields after its request budget. Slow runners may
+	// need one request per page; require durable progress, not a fast machine.
+	indexAfter := ""
+	for attempt := 0; ; attempt++ {
+		_, _, ready, err := repo.PriorityChildren(context.Background(), p.ID, "", 5, nil)
+		if err != nil {
+			t.Fatal("priority index", err)
+		}
+		if ready {
+			break
+		}
+		if attempt >= len(children)/allChildOrderPage {
+			t.Fatal("priority index did not finish within its page bound")
+		}
+		current, err := repo.Get(p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.ChildOrder == nil || current.ChildOrder.All == nil || current.ChildOrder.All.After <= indexAfter {
+			t.Fatal("priority index did not persist progress", current.ChildOrder)
+		}
+		indexAfter = current.ChildOrder.All.After
 	}
 	before, _ := repo.Get(p.ID)
 	p = enableFailoverTest(t, db, repo, p, false)

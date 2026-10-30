@@ -95,12 +95,11 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
         drawer.getByRole("heading", {
           name: "子任务",
           exact: true,
-          exact: true,
         }),
       ).toBeVisible();
       await expect(drawer.getByText(/^子任务 #/)).toHaveText([
-        `子任务 #${id}-1 · 10.0.1.12`,
-        `子任务 #${id}-2 · 10.0.1.12`,
+        `子任务 #${id}-1 · master (10.0.1.12)`,
+        `子任务 #${id}-2 · master (10.0.1.12)`,
       ]);
       await expect(drawer.getByText(/子任务 #-|分片/)).toHaveCount(0);
     }
@@ -161,7 +160,9 @@ test("selected OSS execution nodes persist through refresh navigation and reload
   const requests = await mockApi(page);
   await configureOss(page);
   await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
-  await page.getByRole("option", { name: "10.0.1.12", exact: true }).click();
+  await page
+    .getByRole("option", { name: "master (10.0.1.12)", exact: true })
+    .click();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "刷新执行节点", exact: true }).click();
   await page
@@ -176,10 +177,10 @@ test("selected OSS execution nodes persist through refresh navigation and reload
   await page.getByRole("button", { name: /迁移选项/ }).click();
   await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
   await expect(
-    page.getByRole("option", { name: "10.0.1.13", exact: true }),
+    page.getByRole("option", { name: "agent (10.0.1.13)", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
   await expect(
-    page.getByRole("option", { name: "10.0.1.12", exact: true }),
+    page.getByRole("option", { name: "master (10.0.1.12)", exact: true }),
   ).toHaveAttribute("aria-selected", "false");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
@@ -200,8 +201,8 @@ test("empty OSS node selection is rejected and refreshing does not silently rest
   const requests = await mockApi(page);
   await configureOss(page);
   await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
-  for (const ip of ["10.0.1.12", "10.0.1.13"])
-    await page.getByRole("option", { name: ip, exact: true }).click();
+  for (const label of ["master (10.0.1.12)", "agent (10.0.1.13)"])
+    await page.getByRole("option", { name: label, exact: true }).click();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "刷新执行节点", exact: true }).click();
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
@@ -248,7 +249,9 @@ test("refresh preserves an unavailable selected node and blocks submission until
   const field = page
     .getByRole("combobox", { name: "执行节点", exact: true })
     .locator("..");
-  await expect(field.getByText("10.0.1.13", { exact: true })).toBeVisible();
+  await expect(
+    field.getByText("agent (10.0.1.13)", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "所选执行节点不可用，请刷新节点列表或重新选择。",

@@ -138,12 +138,21 @@ test("partial permanent deletion refreshes removed rows and retries only remaini
       json:
         requests.length === 1
           ? {
-              success: false,
+              success: true,
               partial: true,
-              accepted: 0,
+              accepted: 1,
               failed: 1,
               failedWorkers: ["10.0.1.13"],
               message: "部分节点记录尚未删除，请刷新后重试",
+              details: [
+                { taskId: 123, success: true, accepted: true },
+                {
+                  taskId: 124,
+                  success: false,
+                  accepted: false,
+                  message: "节点暂不可达",
+                },
+              ],
             }
           : { success: true, partial: false, accepted: 1, failed: 0 },
     });
@@ -161,14 +170,20 @@ test("partial permanent deletion refreshes removed rows and retries only remaini
   await expect(
     page.getByRole("checkbox", { name: "选择任务 124", exact: true }),
   ).toBeChecked();
-  const message =
-    "部分节点记录尚未删除，请刷新后重试（未完成节点：agent (10.0.1.13)）";
-  await expect(page.getByText(message, { exact: true }).first()).toBeVisible();
+  const result = page.getByRole("alert").filter({ hasText: "已处理 2 / 2" });
+  await expect(result).toContainText("已受理 1，忽略 0，失败 1");
+  await expect(result).not.toContainText("节点暂不可达");
+  await result
+    .getByRole("button", { name: "查看失败详情", exact: true })
+    .click();
+  await expect(result).toContainText("#124: 节点暂不可达");
+  await expect(result).toContainText("未完成节点：agent (10.0.1.13)");
+  await expect(result).toContainText("部分节点记录尚未删除，请刷新后重试");
   await expect(
     page.getByText("永久删除请求已提交，正在刷新回收站。", { exact: true }),
   ).toHaveCount(0);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await expect(result).toContainText("#124: 节点暂不可达");
   await page.getByRole("button", { name: "永久删除", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("任务 ID：#124");
   await page.getByRole("button", { name: "确认永久删除", exact: true }).click();

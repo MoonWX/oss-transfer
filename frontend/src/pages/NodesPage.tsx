@@ -65,7 +65,6 @@ import { EmptyState, PageHeader, formatNumber } from "../components/Common";
 import {
   removeNode,
   saveNode,
-  type NodeRegistry,
   type RegisteredNode,
   nodeName,
 } from "../lib/nodeRegistry";
@@ -81,9 +80,7 @@ export default function NodesPage() {
   const { refreshMs, refreshSeconds } = useRefreshPreference();
   const workers = useWorkerStatus();
   const nodeLabel = useNodeLabels();
-  const registry = useApi<{
-    data: NodeRegistry;
-  }>("/api/master/nodes", refreshMs);
+  const registry = workers.registry;
   const history = useApi<{
     adjustments: Adjustment[];
     partial?: boolean;

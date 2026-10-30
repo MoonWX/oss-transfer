@@ -164,8 +164,11 @@ test.describe("locale changes preserve transfer input and API values", () => {
       .getByRole("combobox", { name: "Destination bucket", exact: true })
       .fill("media-backup");
     await page
-      .getByRole("combobox", { name: "Agent IP", exact: true })
-      .fill("10.0.1.12");
+      .getByRole("combobox", { name: "Execution nodes", exact: true })
+      .click();
+    await page
+      .getByRole("option", { name: /^master \(10\.0\.1\.12\)/ })
+      .click();
     const path = "/mnt/日本語/data with spaces/{count}";
     await page
       .getByRole("textbox", {
@@ -174,6 +177,9 @@ test.describe("locale changes preserve transfer input and API values", () => {
       })
       .fill(path);
     await language(page, "日本語");
+    await expect(
+      page.getByRole("combobox", { name: "実行ノード", exact: true }),
+    ).toHaveValue("master (10.0.1.12)");
     await expect(
       page.getByRole("textbox", {
         name: "転送元ファイルまたはディレクトリの絶対パス",

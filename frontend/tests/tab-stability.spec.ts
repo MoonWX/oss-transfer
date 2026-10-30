@@ -138,7 +138,9 @@ test("exception filters isolate rows and failed refreshes retain only matching c
   await page.goto("/exceptions");
   await expect(page.getByText("all-tasks.txt", { exact: true })).toBeVisible();
   await watchEmptyFlashes(page);
-  await page.getByRole("spinbutton", { name: "任务 ID" }).fill("42");
+  await page
+    .getByRole("combobox", { name: "所属任务", exact: true })
+    .fill("42");
   await page.getByRole("button", { name: "应用筛选", exact: true }).click();
   await expect.poll(() => filteredRequests).toBe(1);
   await expect(page.getByText("all-tasks.txt", { exact: true })).toHaveCount(0);

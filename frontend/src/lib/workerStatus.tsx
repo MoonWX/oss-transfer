@@ -32,6 +32,7 @@ type State = ReturnType<typeof useApi<WorkerStatusResponse>> & {
   now: number;
   stale: boolean;
   nodeLabel: NodeLabels;
+  registry: ReturnType<typeof useApi<{ data: NodeRegistry }>>;
 };
 const WorkerStatusContext = createContext<State | null>(null);
 
@@ -121,7 +122,7 @@ export function WorkerStatusProvider({
     now - receivedAt > Math.max(30000, refreshMs * 2);
   return (
     <WorkerStatusContext.Provider
-      value={{ ...workers, receivedAt, now, stale, nodeLabel }}
+      value={{ ...workers, receivedAt, now, stale, nodeLabel, registry }}
     >
       {children}
     </WorkerStatusContext.Provider>

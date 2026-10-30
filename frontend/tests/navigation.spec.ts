@@ -114,7 +114,7 @@ test("browser back and forward restore pages and query parameters without replac
 }) => {
   await mockApi(page);
   await page.goto("/exceptions?taskId=1046&type=local");
-  await expect(page.getByRole("spinbutton", { name: "任务 ID" })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "所属任务" })).toHaveValue(
     "1046",
   );
   const toolbar = await page
@@ -135,7 +135,7 @@ test("browser back and forward restore pages and query parameters without replac
   ).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/\/exceptions\?taskId=1046&type=local$/);
-  await expect(page.getByRole("spinbutton", { name: "任务 ID" })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "所属任务" })).toHaveValue(
     "1046",
   );
   await expect(page.getByRole("tab", { name: "本地迁移失败" })).toHaveAttribute(

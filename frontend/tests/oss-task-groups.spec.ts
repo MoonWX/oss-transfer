@@ -77,7 +77,9 @@ test("one OSS migration with 128 execution shards occupies one row and opens agg
   await expect(page.getByText("共 1 个任务", { exact: false })).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(1);
   await expect(page.locator("tbody tr")).toContainText("16,384 / 16,384");
-  await expect(page.locator("tbody tr")).toContainText("10.0.1.12, 10.0.1.13");
+  await expect(page.locator("tbody tr")).toContainText(
+    "master (10.0.1.12), agent (10.0.1.13)",
+  );
   await page.getByRole("button", { name: "#8000", exact: true }).click();
   await revealChildren(page);
   await expect(
@@ -89,7 +91,7 @@ test("one OSS migration with 128 execution shards occupies one row and opens agg
     0,
   );
   await expect(
-    drawer(page).getByText("子任务 #8000-1 · 10.0.1.12"),
+    drawer(page).getByText("子任务 #8000-1 · master (10.0.1.12)"),
   ).toBeVisible();
   await page.getByRole("button", { name: "关闭详情" }).click();
   await expect(page.locator("tbody tr")).toHaveCount(1);
@@ -179,13 +181,37 @@ test("OSS group start stop resume and delete submit only the stable public ID", 
   await page.route("**/api/master/status", (route) =>
     route.fulfill({ json: { totalTasks: 1, tasks: [group] } }),
   );
+  await page.route("**/api/master/tasks/8000", (route) =>
+    route.fulfill({ json: { success: true, data: group } }),
+  );
   const sent: { action: string; ids: number[] }[] = [];
   for (const action of ["start", "stop", "resume", "clear"]) {
     await page.route(`**/api/master/${action}`, (route) => {
-      sent.push({ action, ids: route.request().postDataJSON().taskIds });
-      group = { ...group, status: action === "stop" ? "STOPPED" : "RUNNING" };
+      const body = route.request().postDataJSON();
+      sent.push({ action, ids: body.taskIds });
+      const recovering = action === "start" || action === "resume";
+      if (recovering)
+        expect(body.expectedGenerations).toEqual({ 8000: group.generation });
+      group = {
+        ...group,
+        status: action === "stop" ? "STOPPED" : "RUNNING",
+        generation: group.generation + (recovering ? 1 : 0),
+      };
       return route.fulfill({
-        json: { success: true, accepted: 1, ignored: 0, failed: 0 },
+        json: {
+          success: true,
+          accepted: 1,
+          ignored: 0,
+          failed: 0,
+          details: [
+            {
+              taskId: group.taskIndex,
+              success: true,
+              status: group.status,
+              generation: group.generation,
+            },
+          ],
+        },
       });
     });
   }

@@ -93,7 +93,13 @@ test("task and subtask names include real IPs while links keep the node identity
     .click();
   await expect(page).toHaveURL(new RegExp(`childNode=${identity}`));
   await expect(
-    page.getByRole("dialog").getByText(node.displayLabel, { exact: true }),
+    page.getByRole("heading", { name: "子任务 #989-26", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("dialog")
+      .getByText(node.displayLabel, { exact: true })
+      .filter({ visible: true }),
   ).toBeVisible();
   expect(
     requests.some((request) =>

@@ -139,7 +139,7 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
   await expect(page.getByText("node-a.bin", { exact: true })).toBeVisible();
   const before = queries.length;
   await page
-    .getByRole("spinbutton", { name: "任务 ID", exact: true })
+    .getByRole("combobox", { name: "所属任务", exact: true })
     .fill("700");
   await page
     .getByRole("textbox", { name: "源 Bucket", exact: true })
@@ -147,7 +147,7 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
   await page
     .getByRole("textbox", { name: "目标 Bucket", exact: true })
     .fill(" target ");
-  await select(page, "执行节点", "10.0.1.13");
+  await select(page, "执行节点", "agent (10.0.1.13)");
   await select(page, "每节点读取上限", "5,000 条");
   expect(queries).toHaveLength(before);
   await page.getByRole("button", { name: "应用筛选", exact: true }).click();
@@ -155,6 +155,7 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
   await expect(page.getByText("node-b.bin", { exact: true })).toBeVisible();
   expect(queries.at(-1)).toEqual({
     taskIndex: 700,
+    executionNodeIp: "10.0.1.13",
     sourceBucket: "source",
     destBucket: "target",
     limit: 5000,
@@ -163,7 +164,7 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
   await expect(page.getByText("node-a.bin", { exact: true })).toBeVisible();
   expect(queries.at(-1)).toEqual({ limit: 1000 });
   await expect(
-    page.getByRole("spinbutton", { name: "任务 ID", exact: true }),
+    page.getByRole("combobox", { name: "所属任务", exact: true }),
   ).toHaveValue("");
 });
 
@@ -202,9 +203,9 @@ test("local exception filters bind task node direction and encoded endpoint only
   await expect(page.getByText("matched.bin", { exact: true })).toBeVisible();
   const before = queries.length;
   await page
-    .getByRole("spinbutton", { name: "任务 ID", exact: true })
+    .getByRole("combobox", { name: "所属任务", exact: true })
     .fill("700");
-  await select(page, "执行节点", "10.0.1.13");
+  await select(page, "执行节点", "agent (10.0.1.13)");
   await select(page, "迁移方向", "本地 → OSS");
   await page
     .getByRole("textbox", { name: "端点 / 路径", exact: true })
@@ -293,7 +294,8 @@ test("local current-page CSV contains only that server page with UTF-8 quoting a
   const records = rows.map((row) =>
     Object.fromEntries(header.map((key, i) => [key, row[i]])),
   );
-  expect(records.map((record) => record.taskIndex)).toEqual(["700", "701"]);
+  expect(header).not.toContain("taskIndex");
+  expect(records.map((record) => record.parentTaskId)).toEqual(["700", "701"]);
   expect(records[0]).toMatchObject({
     key: pageTwo[0].key,
     errorMessage: pageTwo[0].errorMessage,

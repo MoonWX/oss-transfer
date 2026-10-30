@@ -1790,7 +1790,7 @@ export default function TasksPage({
         );
         notify(tr("部分操作未完成，详见列表上方的结果。"), "warning");
       } else {
-        setActionResult(summary);
+        setActionResult("");
         notify(
           tr("{value1}请求已提交{value2}。请以刷新后的任务状态为准。", {
             value1: tr(
@@ -1835,14 +1835,12 @@ export default function TasksPage({
             total: batchProgress.total,
           })}
         </Typography>
-        <LinearProgress
-          variant="determinate"
-          value={
-            batchProgress.total
-              ? (batchProgress.processed / batchProgress.total) * 100
-              : 0
-          }
-        />
+        {busy && batchProgress.total > 1 && (
+          <LinearProgress
+            variant="determinate"
+            value={(batchProgress.processed / batchProgress.total) * 100}
+          />
+        )}
         <Typography variant="caption">
           {tr(
             "已受理 {accepted}，忽略 {ignored}，失败 {failed}",
@@ -2038,6 +2036,7 @@ export default function TasksPage({
       )}
       {actionResult && (
         <Alert
+          variant="outlined"
           severity={actionFailed ? "warning" : "info"}
           icon={
             stopSubmittingIds.length > 0 ? (
@@ -2045,7 +2044,11 @@ export default function TasksPage({
             ) : undefined
           }
           onClose={busy ? undefined : () => setActionResult("")}
-          sx={{ mb: 2 }}
+          sx={{
+            mb: 2,
+            bgcolor: "background.paper",
+            "& .MuiAlert-message": { flex: 1 },
+          }}
         >
           {actionResult}
           {(actionFailed || (busy && (batchProgress?.total ?? 0) > 1)) &&

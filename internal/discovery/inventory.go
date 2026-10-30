@@ -40,10 +40,16 @@ func (s *Scanner) scanInventory(ctx context.Context, attempt State, source trans
 		if err := scanInventoryPage(ctx, source, keys, parallelism, emit); err != nil {
 			return err
 		}
-		if err := checkpoint(next, len(keys) < inventory.MaxBatchKeys); err != nil {
+		done := len(keys) < inventory.MaxBatchKeys
+		if done {
+			// A completed scan has no resume position. The final partial page
+			// still returns its last key, which is not a valid terminal cursor.
+			next = ""
+		}
+		if err := checkpoint(next, done); err != nil {
 			return err
 		}
-		if len(keys) < inventory.MaxBatchKeys {
+		if done {
 			return nil
 		}
 		after = next

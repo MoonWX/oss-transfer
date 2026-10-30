@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/MoonWX/oss-transfer/internal/execution"
-	"github.com/MoonWX/oss-transfer/internal/transferstore"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +13,82 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/inventory"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 func inventorySHA(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+func assertInventoryRecoveryCheckpoints(t *testing.T, scanner *Scanner, completed State) {
+	t.Helper()
+	checkpoint := completed.TransferCheckpoint
+	if checkpoint == nil || !checkpoint.Valid() || !checkpoint.SourceDone || checkpoint.Cursor != "" || checkpoint.Objects != completed.TotalObjects || checkpoint.ThroughBatch != completed.LastBatch {
+		t.Fatalf("completed inventory cannot be accepted by the Master: %+v", checkpoint)
+	}
+	var after int64
+	for {
+		batch, found, err := scanner.Batch(context.Background(), completed.Spec.ParentID, completed.Generation, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			break
+		}
+		if batch.Checkpoint != nil && !batch.Checkpoint.Valid() {
+			t.Fatalf("batch %d has an invalid recovery checkpoint: %+v", batch.Number, batch.Checkpoint)
+		}
+		after = batch.Number
+	}
+}
+
+func TestInventoryFinalCheckpointAcrossPageBoundaries(t *testing.T) {
+	for _, count := range []int{0, 128, 256, 260} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			ctx := context.Background()
+			factory := &localFactory{}
+			scanner, db := newScanner(t, filepath.Join(t.TempDir(), "agent.db"), factory, Options{})
+			keys := make([]string, count)
+			for i := range keys {
+				keys[i] = fmt.Sprintf("%04d.txt", i)
+			}
+			content := strings.Join(keys, "\n")
+			if count > 0 {
+				content += "\n"
+			}
+			descriptor := inventory.Descriptor{ID: inventorySHA("pages"), Name: "pages.incr", ContentSHA256: inventorySHA(content), Binding: inventorySHA("binding"), SpecSHA256: inventorySHA("spec"), ParentID: 1}
+			repo := inventory.New(db)
+			if _, err := repo.Begin(ctx, descriptor); err != nil {
+				t.Fatal(err)
+			}
+			batchCount := 0
+			for offset := 0; offset < count; offset += inventory.MaxBatchKeys {
+				batchCount++
+				if _, err := repo.Put(ctx, inventory.Batch{ID: descriptor.ID, Number: batchCount, Keys: keys[offset:min(offset+inventory.MaxBatchKeys, count)]}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := repo.Seal(ctx, inventory.Seal{ID: descriptor.ID, BatchCount: batchCount, UniqueCount: int64(count)}); err != nil {
+				t.Fatal(err)
+			}
+			spec := localSpec(sourceFiles(t, count))
+			spec.InventoryID = descriptor.ID
+			if _, err := scanner.Start(ctx, spec); err != nil {
+				t.Fatal(err)
+			}
+			done := waitStatus(t, scanner, Completed)
+			if done.TotalObjects != int64(count) || factory.stats.Load() != int32(count) || factory.scans.Load() != 0 {
+				t.Fatalf("inventory scope changed: %+v", done)
+			}
+			assertBatches(t, scanner, 1, count)
+			assertInventoryRecoveryCheckpoints(t, scanner, done)
+		})
+	}
+}
+
 func TestInventoryRequiresSealedMatchingParentAndNeverScansBucket(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agent.db")
@@ -185,6 +252,7 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 		t.Fatalf("resume reread metadata from the committed inventory page: %d metadata reads, want 2", resumedStats)
 	}
 	assertBatches(t, scanner, 2, 130)
+	assertInventoryRecoveryCheckpoints(t, scanner, done)
 	retained, _, err := scanner.Batch(ctx, 1, 2, 0)
 	if err != nil {
 		t.Fatal(err)

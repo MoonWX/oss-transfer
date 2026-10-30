@@ -49,6 +49,8 @@ def plan(args, gate, run_id):
                         "--expect-agent-release-url", "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v" + version,
                         "--expect-agent-image", "moonwx/osstransfer:" + version], repo),
         phase("cli", [py, scripts / "cli.py", *cli, "--output", output / "cli"], repo),
+        phase("local-cli", [py, scripts / "local-cli.py", *cli, "--output", output / "local-cli"], repo,
+              evidence=output / "local-cli/evidence.json"),
         phase("inventory", [py, scripts / "inventory.py", *cli, *storage, "--output", output / "inventory"], repo),
     ]
     install = [*privileged, scripts / "install.py", *cli, "--repo", repo, "--output", output / "install",

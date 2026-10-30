@@ -159,6 +159,8 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Setup is already complete":                                                         {"Setup is already complete", "初始化已完成", "初期設定は完了しています"},
 	"Shared storage IDs are not supported; filter by execution node or endpoint":        {"Shared storage IDs are not supported; filter by execution node or endpoint", "不支持共享存储 ID，请按执行节点或端点筛选", "共有ストレージ ID は使用できません。実行ノードまたはエンドポイントで絞り込んでください"},
 	"Sign in required":                                                                  {"Sign in required", "请先登录", "ログインしてください"},
+	"Sign in with a user account to change its password":                                {"Sign in with a user account to change its password", "请登录用户账号后修改其密码", "パスワードを変更するにはユーザーアカウントでログインしてください"},
+	"Invalid Agent credential":                                                          {"Invalid Agent credential", "节点凭据无效", "ノードの認証情報が無効です"},
 	"Change the initial password before continuing":                                     {"Change the initial password before continuing", "请先修改初始密码", "初期パスワードを変更してください"},
 	"Choose a password different from the initial password":                             {"Choose a password different from the initial password", "新密码不能与初始密码相同", "初期パスワードとは異なるパスワードを設定してください"},
 	"Specify a storage connection and bucket as alias/bucket":                           {"Specify a storage connection and bucket as alias/bucket", "请按 alias/bucket 格式填写存储连接和存储桶", "ストレージ接続とバケットを alias/bucket の形式で指定してください"},

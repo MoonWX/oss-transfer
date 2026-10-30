@@ -360,7 +360,7 @@ class PlatformPlanTests(unittest.TestCase):
                     self.assertEqual("-race" in command, self.args.race)
                     self.assertEqual(command[command.index("-p") + 1], "2")
                     self.assertFalse(any(arg.startswith(("-run", "-skip")) for arg in command))
-        self.assertEqual({step["name"] for step in groups["control"]}, {"smoke", "cli", "inventory"})
+        self.assertEqual({step["name"] for step in groups["control"]}, {"smoke", "cli", "local-cli", "inventory"})
         transfer = groups["transfer"][0]["command"]
         self.assertEqual(transfer[transfer.index("--scenario") + 1], "all")
         self.assertIn("--multipart-recovery", transfer)

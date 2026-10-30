@@ -267,6 +267,8 @@ adopt_config=
 cli_path=
 replace_cli=0
 had_cli=0
+had_cli_sidecars=0
+had_data_cli_connections=0
 cli_changed=0
 cli_migrated=0
 install_dir=
@@ -523,7 +525,7 @@ if [[ -f "$metadata" && ! -L "$metadata" ]]; then previous_cli=$(metadata_field 
 
 default_cli_path() {
   local installed=$1
-  if [[ ! -e "$global_cli" && ! -L "$global_cli" && ! -e "$global_cli.cluster.json" && ! -L "$global_cli.cluster.json" ]]; then
+  if [[ ! -e "$global_cli" && ! -L "$global_cli" && ! -e "$global_cli.cluster.json" && ! -L "$global_cli.cluster.json" && ! -e "$global_cli.local-auth.json" && ! -L "$global_cli.local-auth.json" ]]; then
     if [[ -z "$installed" || "$role" == agent && "$installed" == "$install_dir/oss-transfer-cli" ]]; then
       printf '%s\n' "$global_cli"
       return
@@ -538,6 +540,14 @@ for path in "$config_dir" "$data_dir" "$backup_dir"; do
   [[ "$cli_path" != "$path" && "$cli_path" != "$path/"* ]] || fail 'CLI must be outside configuration, data and backup directories'
 done
 [[ ! -L "$cli_path" && ( ! -e "$cli_path" || -f "$cli_path" ) ]] || fail 'CLI path must be a regular file'
+for path in "$cli_path.cluster.json" "$cli_path.local-auth.json"; do
+  [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) ]] || fail "CLI connection must be a regular file: $path"
+  if [[ -f "$path" ]]; then had_cli_sidecars=1; fi
+done
+for path in "$data_dir/cli-cluster.json" "$data_dir/cli-local-auth.json"; do
+  [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) ]] || fail "CLI connection must be a regular file: $path"
+  if [[ -f "$path" ]]; then had_data_cli_connections=1; fi
+done
 existed=0
 if [[ -f "$metadata" && ! -L "$metadata" ]]; then
   existed=1
@@ -552,8 +562,8 @@ else
   done
   [[ ! -e "$unit" && ! -L "$unit" ]] || fail "Service already exists: $service_name"
 fi
-if [[ -f "$cli_path" ]]; then
-  had_cli=1
+if [[ -f "$cli_path" ]]; then had_cli=1; fi
+if ((had_cli || had_cli_sidecars)); then
   if ((existed == 0)) || [[ $(awk -F '\t' '$1=="cliPath"{print $2}' "$metadata") != "$cli_path" ]]; then
     ((replace_cli)) || fail "CLI already exists: $cli_path; use --replace-cli to back it up and replace it, or choose --cli-path"
   fi
@@ -562,8 +572,11 @@ if ((existed)); then
   if [[ -n "$previous_cli" && "$previous_cli" != "$cli_path" ]]; then
     # Only move this Agent's own CLI into an unused global slot. In particular,
     # an existing Master's CLI is never adopted or replaced by an Agent upgrade.
-    [[ "$role" == agent && "$previous_cli" == "$install_dir/oss-transfer-cli" && "$cli_path" == "$global_cli" && ! -e "$cli_path" && ! -L "$cli_path" && ! -e "$cli_path.cluster.json" && ! -L "$cli_path.cluster.json" ]] || fail 'CLI relocation requires this Agent own CLI and an unused global path'
+    [[ "$role" == agent && "$previous_cli" == "$install_dir/oss-transfer-cli" && "$cli_path" == "$global_cli" && ! -e "$cli_path" && ! -L "$cli_path" && ! -e "$cli_path.cluster.json" && ! -L "$cli_path.cluster.json" && ! -e "$cli_path.local-auth.json" && ! -L "$cli_path.local-auth.json" ]] || fail 'CLI relocation requires this Agent own CLI and an unused global path'
     [[ -f "$previous_cli" && ! -L "$previous_cli" ]] || fail 'Installed CLI is missing or symlinked'
+    for path in "$previous_cli.cluster.json" "$previous_cli.local-auth.json"; do
+      [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) ]] || fail "CLI connection must be a regular file: $path"
+    done
     cli_migrated=1
   fi
 fi
@@ -719,12 +732,12 @@ finish_backup() {
     for path in "$backup"/* "$backup"/.[!.]* "$backup"/..?*; do
       [[ -e "$path" || -L "$path" ]] || continue
       name=${path##*/}
-      if [[ "$name" != database && "$name" != service.json && "$name" != cli || ! -f "$path" || -L "$path" ]]; then
+      if [[ "$name" != database && "$name" != service.json && "$name" != cli && "$name" != cli.cluster.json && "$name" != cli.local-auth.json && "$name" != data-cli.cluster.json && "$name" != data-cli.local-auth.json || ! -f "$path" || -L "$path" ]]; then
         printf 'Warning: unexpected temporary backup contents; retained %s.\n' "$backup" >&2
         return 0
       fi
     done
-    if ! rm -f -- "$backup/database" "$backup/service.json" "$backup/cli" || ! rmdir -- "$backup"; then
+    if ! rm -f -- "$backup/database" "$backup/service.json" "$backup/cli" "$backup/cli.cluster.json" "$backup/cli.local-auth.json" "$backup/data-cli.cluster.json" "$backup/data-cli.local-auth.json" || ! rmdir -- "$backup"; then
       printf 'Warning: could not remove temporary backup: %s\n' "$backup" >&2
     fi
   fi
@@ -740,7 +753,7 @@ check_backup_space() {
     fail "Cannot write to backup directory: $backup_dir. The service has not been stopped."
   fi
   rm -f -- "$probe" || fail "Cannot remove backup directory probe: $backup_dir. The service has not been stopped."
-  for path in "$database" "$binary" "$cli_path"; do
+  for path in "$database" "$binary" "$cli_path" "$cli_path.cluster.json" "$cli_path.local-auth.json" "$data_dir/cli-cluster.json" "$data_dir/cli-local-auth.json"; do
     [[ -f "$path" ]] || continue
     size=$(LC_ALL=C ls -ln "$path" | awk '{print $5}')
     [[ "$size" =~ ^[0-9]+$ ]] || fail "Cannot determine backup size: $path"
@@ -949,6 +962,39 @@ print_initial_credentials() {
     [[ -z "$token" ]] || printf '\nSetup token: %s\n' "$token"
   fi
 }
+backup_cli_sidecars() {
+  local suffix kind path name
+  for suffix in cluster.json local-auth.json; do
+    for kind in cli data-cli; do
+      path=$cli_path.$suffix
+      if [[ "$kind" == data-cli ]]; then path=$data_dir/cli-$suffix; fi
+      [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) ]] || return 1
+      [[ -f "$path" ]] || continue
+      name=$kind.$suffix
+      # The backup is private before any credential bytes are copied.
+      (umask 077; set -C; cat "$path" > "$backup/$name") || return 1
+    done
+  done
+}
+restore_cli_sidecars() {
+  local suffix kind path saved temporary
+  for suffix in cluster.json local-auth.json; do
+    for kind in cli data-cli; do
+      path=$cli_path.$suffix
+      if [[ "$kind" == data-cli ]]; then path=$data_dir/cli-$suffix; fi
+      saved=${backup:+$backup/$kind.$suffix}
+      [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) && ! -L "$saved" && ( ! -e "$saved" || -f "$saved" ) ]] || return 1
+      if [[ -f "$saved" ]]; then
+        temporary=$(mktemp "$path.restore.XXXXXX") || return 1
+        if ! chmod 600 "$temporary" || ! cat "$saved" > "$temporary"; then rm -f "$temporary"; return 1; fi
+        if [[ "$suffix" == cluster.json ]] && ! chmod 644 "$temporary"; then rm -f "$temporary"; return 1; fi
+        if ! mv -f "$temporary" "$path"; then rm -f "$temporary"; return 1; fi
+      else
+        rm -f "$path" || return 1
+      fi
+    done
+  done
+}
 rollback() {
   local result=$?
   trap - ERR INT TERM
@@ -965,8 +1011,8 @@ rollback() {
       fi
     else
       rm -f "$cli_path"
-      if ((cli_migrated)); then rm -f "$cli_path.cluster.json"; fi
     fi
+    if ! restore_cli_sidecars; then printf 'CLI connection rollback failed; backup: %s\n' "$backup" >&2; exit 1; fi
   fi
   if ((existed)); then
     if [[ -f "$backup/database" ]] && ! "$work/$filename" --config "$backup/service.json" --restore-state "$backup/database"; then
@@ -1003,7 +1049,7 @@ check_listener
 if ((existed)); then
   maintain_backups prune || true
 fi
-if ((existed || had_cli)) || [[ -n "$adopt_config" ]]; then
+if ((existed || had_cli || had_cli_sidecars || had_data_cli_connections)) || [[ -n "$adopt_config" ]]; then
   check_backup_space
 fi
 mkdir -p "$install_dir" "$config_dir" "$data_dir" "$backup_dir" "$(dirname "$unit")"
@@ -1031,13 +1077,14 @@ elif [[ -n "$adopt_config" ]]; then
   cp -p "$work/service.json" "$backup/service.json"
   "$work/$filename" --config "$backup/service.json" --backup-state "$backup/database"
 fi
-if ((had_cli)); then
+if ((had_cli || had_cli_sidecars || had_data_cli_connections)); then
   if [[ -z "$backup" ]]; then
     backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
     owned_backup=$backup
     printf 'Backup: %s\n' "$backup"
   fi
-  cp -p "$cli_path" "$backup/cli"
+  if ((had_cli)); then cp -p "$cli_path" "$backup/cli"; fi
+  backup_cli_sidecars
 fi
 trap rollback ERR INT TERM
 printf 'Installing %s %s...\n' "$role" "$version"
@@ -1122,9 +1169,9 @@ fi
 trap - ERR INT TERM
 if commit_start; then
   finish_backup
-  if ((cli_migrated)); then rm -f "$previous_cli" "$previous_cli.cluster.json"; fi
+  if ((cli_migrated)); then rm -f "$previous_cli" "$previous_cli.cluster.json" "$previous_cli.local-auth.json"; fi
 fi
 printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
 printf 'CLI: %s\n' "$cli_path"
-printf 'Login: %q login\n' "$cli_path"
+printf 'Tasks: %q task list\n' "$cli_path"
 print_initial_credentials

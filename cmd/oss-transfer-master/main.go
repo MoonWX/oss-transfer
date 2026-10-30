@@ -167,7 +167,7 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 		return err
 	}
 	defer db.Close()
-	handler, initialPassword, err := master.New(db, master.Options{DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater, ScanReleaseAllowed: servicehost.ScanReleasePermission(config.ReadyFile)})
+	handler, initialPassword, err := master.New(db, master.Options{LocalCLIEnabled: true, DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater, ScanReleaseAllowed: servicehost.ScanReleasePermission(config.ReadyFile)})
 	if err != nil {
 		return err
 	}
@@ -180,6 +180,9 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 	if origin, err := servicehost.LocalMasterOrigin(listener.Addr().String()); err == nil {
 		if err := servicehost.PublishCLIConnection("master", origin, config); err != nil {
 			fmt.Fprintf(os.Stderr, "CLI connection discovery: %v\n", err)
+		}
+		if err := servicehost.PublishCLILocalAuth("master", origin, handler.LocalCLIToken(), config); err != nil {
+			fmt.Fprintf(os.Stderr, "CLI local access publication: %v\n", err)
 		}
 	}
 	if initialPassword != "" {

@@ -97,6 +97,8 @@ For service installation tests, run `install.py` with `--master`, `--agent`, `--
 
 `docker.py` checks a prepared image. `setup.py` tests the public installer against a local release directory. [ci.yml](../workflows/ci.yml) contains their full commands.
 
+The `local-cli.py` check starts separate installed Master and Agent processes. It verifies automatic local access, remote login isolation, credential file permissions, restart persistence and revocation after removing an Agent. It uses its own data and does not change an existing cluster.
+
 ## Results
 
 Scenarios write `evidence.json` and sanitized logs under their output directory. Bandwidth tests also save samples; package and image checks record artifact identities. CI retains the uploaded results for seven days.

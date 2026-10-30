@@ -166,7 +166,14 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 	defer stop()
 	client.requestContext = ctx
 	if os.Getenv("OSS_TRANSFER_AUTH_TOKEN") == "" && normalized[0] != "login" && normalized[0] != "setup" {
-		token, err := loadSession(options.host)
+		var token string
+		var err error
+		if normalized[0] != "logout" && normalized[0] != "change-password" {
+			token, err = loadLocalCLIAuth(options.host)
+		}
+		if err == nil && token == "" {
+			token, err = loadSession(options.host)
+		}
 		if err != nil {
 			if normalized[0] == "logout" && len(normalized) == 1 {
 				if removeErr := removeSession(options.host); removeErr == nil {

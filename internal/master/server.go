@@ -32,6 +32,8 @@ type User struct {
 	Role               string `json:"role"`
 	Revision           uint64 `json:"revision"`
 	MustChangePassword bool   `json:"mustChangePassword"`
+	Authentication     string `json:"authentication,omitempty"`
+	LocalCLI           bool   `json:"-"`
 }
 type session struct {
 	Username     string    `json:"username"`
@@ -39,6 +41,9 @@ type session struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 type Options struct {
+	// LocalCLIEnabled trusts the service owner and enrolled Agent hosts to
+	// administer their cluster through private local CLI credentials.
+	LocalCLIEnabled bool
 	// ScanReleaseAllowed is false while an installer may restore older Master state.
 	// A nil callback allows release for unmanaged processes and tests.
 	ScanReleaseAllowed   func() bool
@@ -51,6 +56,7 @@ type Options struct {
 	Now                  func() time.Time
 }
 type Server struct {
+	localCLIKey      []byte
 	updates          softwareUpdateState
 	topologyMu       sync.Mutex
 	agents           *agentControl
@@ -75,6 +81,9 @@ func New(store *state.Store, options Options) (*Server, string, error) {
 		options.Now = time.Now
 	}
 	s := &Server{store: store, options: options, mux: http.NewServeMux(), passwordSlots: make(chan struct{}, 4), taskControlSlots: make(chan struct{}, taskControlConcurrency)}
+	if err := s.initializeLocalCLI(); err != nil {
+		return nil, "", err
+	}
 	configured, err := s.configured()
 	if err != nil {
 		return nil, "", err
@@ -264,6 +273,12 @@ func randomToken() (string, error) {
 }
 
 func (s *Server) authenticated(r *http.Request) (User, bool, error) {
+	if strings.HasPrefix(bearer(r), localCLIPrefix) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			return User{}, false, nil
+		}
+		return s.localCLIUser(bearer(r))
+	}
 	var user User
 	valid := false
 	err := s.store.View(func(tx *state.Tx) error {
@@ -299,6 +314,19 @@ func (s *Server) current(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"success": true, "user": user})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(bearer(r), localCLIPrefix) {
+		_, valid, err := s.authenticated(r)
+		if err != nil {
+			fail(w, 500, "Cannot read session")
+			return
+		}
+		if !valid {
+			fail(w, 401, "Sign in required")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"success": true, "authentication": "local"})
+		return
+	}
 	if err := s.store.Update(func(tx *state.Tx) error { return tx.Delete("sessions", tokenKey(bearer(r))) }); err != nil {
 		fail(w, 500, "Cannot end session")
 		return
@@ -314,6 +342,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if !valid {
 		fail(w, 401, "Sign in required")
+		return
+	}
+	if user.LocalCLI {
+		fail(w, 403, "Sign in with a user account to change its password")
 		return
 	}
 	var request struct {

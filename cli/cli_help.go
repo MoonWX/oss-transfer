@@ -70,6 +70,7 @@ const cliHelp = `OSS Transfer CLI
   oss-transfer-cli help task create
 
 说明
+  在本机 Master 或 Agent 上，服务运行用户或系统管理员无需登录。连接其他集群使用 login。
   批量操作须明确指定主任务 ID，可用 224,225 或 224-226；不会默认操作全部任务。
   新任务受理后自动执行；已受理、预检通过均不代表迁移完成。
   删除节点、存储连接、永久删除任务及清空异常需要 --yes。
@@ -407,6 +408,8 @@ const cliAuthHelp = `登录与账户
   oss-transfer-cli logout
   oss-transfer-cli change-password --old-password-env OLD --new-password-env NEW
 
+本机服务运行用户或系统管理员可直接管理所属集群，无需 login。其他用户或集群使用账号登录。
+logout 仅注销账号会话，不移除本机服务访问权限；修改账号密码需先 login。
 默认用户名为 admin；其他账号使用 --username。终端中会隐藏密码输入，首次登录后需修改初始密码。
 脚本可选择环境变量、文件或 stdin 输入密码。
 --password-stdin 从标准输入读取；文件读取使用 --password-file。

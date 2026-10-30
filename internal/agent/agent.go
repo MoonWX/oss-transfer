@@ -43,6 +43,9 @@ type Options struct {
 	Executor      agenttransport.Executor
 	// OnReady is called after an authenticated Master poll succeeds.
 	OnReady func() error
+	// OnCLIAuth publishes a dedicated cluster administration grant to private
+	// local storage. Its failures never stop Agent execution or readiness.
+	OnCLIAuth func(token string) error
 }
 type Agent struct {
 	store    *state.Store
@@ -178,6 +181,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	executor := runtimeExecutor{agent: a}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if a.options.OnCLIAuth != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.publishCLIAuth(ctx)
+		}()
+		defer func() { cancel(); <-done }()
+	}
 	readyFailures := make(chan error, 1)
 	connected := &readyTransport{Transport: transport, ready: a.options.OnReady, failed: func(err error) { readyFailures <- err; cancel() }}
 	err = agenttransport.NewRunner(connected, executor, journal, agenttransport.RunnerOptions{}).Run(ctx)

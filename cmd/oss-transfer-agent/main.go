@@ -185,10 +185,19 @@ func serve(ctx context.Context, config servicehost.Config, options agent.Options
 	}()
 	options.Executor = service
 	options.OnReady = ready
+	var clusterOrigin string
+	options.OnCLIAuth = func(token string) error {
+		if err := servicehost.PublishCLILocalAuth("agent", clusterOrigin, token, config); err != nil {
+			fmt.Fprintf(os.Stderr, "CLI local access publication: %v\n", err)
+			return err
+		}
+		return nil
+	}
 	runner, err := agent.New(db, options)
 	if err != nil {
 		return err
 	}
+	clusterOrigin = runner.MasterURL()
 	if err := servicehost.PublishCLIConnection("agent", runner.MasterURL(), config); err != nil {
 		fmt.Fprintf(os.Stderr, "CLI connection discovery: %v\n", err)
 	}

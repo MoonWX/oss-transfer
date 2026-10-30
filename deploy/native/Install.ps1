@@ -331,6 +331,22 @@ foreach ($path in @($ConfigDir,$DataDir,$BackupDir)) {
 }
 $hadCli = Test-Path -LiteralPath $CliPath
 if ($hadCli) { Assert-RegularFile $CliPath }
+$hadCliSidecars = $false
+foreach ($suffix in @('cluster.json','local-auth.json')) {
+    $sidecar = $CliPath+'.'+$suffix
+    if (Get-Item -LiteralPath $sidecar -Force -ErrorAction SilentlyContinue) {
+        Assert-RegularFile $sidecar
+        $hadCliSidecars = $true
+    }
+}
+$hadDataCLIConnections = $false
+foreach ($name in @('cli-cluster.json','cli-local-auth.json')) {
+    $connection = Join-Path $DataDir $name
+    if (Get-Item -LiteralPath $connection -Force -ErrorAction SilentlyContinue) {
+        Assert-RegularFile $connection
+        $hadDataCLIConnections = $true
+    }
+}
 $cliChanged = $false
 $database = Join-Path $DataDir "$Role.db"
 $existing = Test-Path -LiteralPath $metadata
@@ -349,7 +365,7 @@ if ($existing) {
     }
 }
 if ($existing -and $installed.PSObject.Properties['cliPath'] -and $installed.cliPath -ne $CliPath) { throw 'CLI path differs from the installed path; keep -CliPath unchanged during upgrade.' }
-if ($hadCli -and (-not $existing -or -not $installed.PSObject.Properties['cliPath'] -or $installed.cliPath -ne $CliPath) -and -not $ReplaceCli) { throw "CLI already exists: $CliPath; use -ReplaceCli to back it up and replace it, or choose -CliPath." }
+if (($hadCli -or $hadCliSidecars) -and (-not $existing -or -not $installed.PSObject.Properties['cliPath'] -or $installed.cliPath -ne $CliPath) -and -not $ReplaceCli) { throw "CLI already exists: $CliPath; use -ReplaceCli to back it up and replace it, or choose -CliPath." }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-install-'+[Guid]::NewGuid().ToString('N'))
 Protect-Directory $work
 $changed = $false
@@ -407,7 +423,7 @@ function Assert-BackupSpace([long]$Required,[long]$Available) {
 }
 function Test-BackupSpace {
     $required = [long](64MB)
-    foreach ($path in @($database,$binary,$CliPath)) {
+    foreach ($path in @($database,$binary,$CliPath,($CliPath+'.cluster.json'),($CliPath+'.local-auth.json'),(Join-Path $DataDir 'cli-cluster.json'),(Join-Path $DataDir 'cli-local-auth.json'))) {
         if (Test-Path -LiteralPath $path -PathType Leaf) { $required += (Get-Item -LiteralPath $path).Length }
     }
     $driveRoot = [IO.Path]::GetPathRoot($BackupDir)
@@ -450,7 +466,7 @@ function Remove-TemporaryBackup {
         # First-time CLI replacement and adoption do not have complete managed
         # installation metadata. Only remove their exact, newly created files.
         foreach ($file in @(Get-ChildItem -LiteralPath $backup -Force)) {
-            if ($file.Name -notin @('database','service.json','cli.exe')) { throw 'Unexpected temporary backup contents.' }
+            if ($file.Name -notin @('database','service.json','cli.exe','cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json')) { throw 'Unexpected temporary backup contents.' }
             Assert-RegularFile $file.FullName
         }
         Remove-Item -LiteralPath $backup -Recurse -Force
@@ -472,6 +488,45 @@ function Finish-TemporaryBackup {
         if ($script:backupMaintenanceSucceeded) { Maintain-Backups 'prune' }
         if (Test-Path -LiteralPath $backup) { Write-Warning "Temporary backup retained at $backup" -WarningAction Continue }
     } else { Remove-TemporaryBackup }
+}
+function Copy-CLIConnection([string]$Source,[string]$Destination,[bool]$Private) {
+    Assert-RegularFile $Source
+    if (Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue) { Assert-RegularFile $Destination }
+    $temporary = $Destination+'.restore-'+[Guid]::NewGuid().ToString('N')
+    try {
+        $empty = [IO.File]::Open($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $empty.Dispose()
+        # Protect the empty file before copying any private credential bytes.
+        if ($Private) { Protect-File $temporary }
+        [IO.File]::WriteAllBytes($temporary,[IO.File]::ReadAllBytes($Source))
+        Move-Item -LiteralPath $temporary -Destination $Destination -Force
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
+}
+function Backup-CLIConnections {
+    foreach ($suffix in @('cluster.json','local-auth.json')) {
+        foreach ($kind in @('cli','data-cli')) {
+            $source = if ($kind -eq 'cli') { $CliPath+'.'+$suffix } else { Join-Path $DataDir ('cli-'+$suffix) }
+            if (Get-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue) {
+                Copy-CLIConnection $source (Join-Path $backup ($kind+'.'+$suffix)) $true
+            }
+        }
+    }
+}
+function Restore-CLIConnections {
+    foreach ($suffix in @('cluster.json','local-auth.json')) {
+        foreach ($kind in @('cli','data-cli')) {
+            $destination = if ($kind -eq 'cli') { $CliPath+'.'+$suffix } else { Join-Path $DataDir ('cli-'+$suffix) }
+            if (Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue) { Assert-RegularFile $destination }
+            $saved = if ($backup) { Join-Path $backup ($kind+'.'+$suffix) } else { $null }
+            if ($saved -and (Get-Item -LiteralPath $saved -Force -ErrorAction SilentlyContinue)) {
+                Copy-CLIConnection $saved $destination ($suffix -eq 'local-auth.json')
+            } elseif (Test-Path -LiteralPath $destination) {
+                Remove-Item -LiteralPath $destination -Force
+            }
+        }
+    }
 }
 function Stop-OwnedService {
     $current = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -639,7 +694,7 @@ try {
     }
     if ((Test-Path (Join-Path $DataDir 'CURRENT')) -or (Test-Path (Join-Path $DataDir 'rocksdb\CURRENT'))) { throw 'RocksDB requires an explicit migration.' }
     if (-not $Yes -and (Read-Host "Install $Role $version? [y/N]") -notmatch '^[yY]$') { return }
-    if ($existing -or $AdoptConfig -or $hadCli) {
+    if ($existing -or $AdoptConfig -or $hadCli -or $hadCliSidecars -or $hadDataCLIConnections) {
         Prepare-BackupDirectory
         if ($existing) { Maintain-Backups 'prune' }
         Test-BackupSpace
@@ -667,11 +722,12 @@ try {
         Invoke-Native $candidate @('--config',$freshConfig,'--backup-state',(Join-Path $backup 'database')) | Out-Null
         $hadDatabaseBackup = $true
     }
-    if ($hadCli) {
+    if ($hadCli -or $hadCliSidecars -or $hadDataCLIConnections) {
         if (-not $backup) {
             $backup = New-TemporaryBackup
         }
-        Copy-Item -LiteralPath $CliPath -Destination (Join-Path $backup 'cli.exe')
+        if ($hadCli) { Copy-Item -LiteralPath $CliPath -Destination (Join-Path $backup 'cli.exe') }
+        Backup-CLIConnections
     }
     $changed = $true
     Write-Host "Installing $Role $version..."
@@ -697,7 +753,7 @@ try {
     Write-Host "Installed $Role $version. Service: $ServiceName"
     Write-Host "Configuration: $config"
     Write-Host "CLI: $CliPath"
-    Write-Host ("Login: & '"+$CliPath.Replace("'","''")+"' login")
+    Write-Host ("Tasks: & '"+$CliPath.Replace("'","''")+"' task list")
     Write-Host ('Log: '+$script:logFile)
     Show-InitialCredentials
     $installationSucceeded = $true
@@ -728,6 +784,7 @@ try {
             if ($cliChanged) {
                 if ($hadCli) { Copy-Item -LiteralPath (Join-Path $backup 'cli.exe') -Destination $CliPath -Force }
                 else { Remove-Item -LiteralPath $CliPath -Force }
+                Restore-CLIConnections
             }
             if ($existing) {
                 if ($hadDatabaseBackup) { Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--restore-state',(Join-Path $backup 'database')) | Out-Null }

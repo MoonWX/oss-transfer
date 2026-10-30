@@ -1,13 +1,13 @@
 # Use the CLI
 
-The command-line interface (CLI) uses the same account, tasks and settings as the web console. On an installed Master or Agent, it detects that installation's cluster address and port.
+The command-line interface (CLI) manages the same tasks and settings as the web console. On an installed Master or Agent, run it as the service owner or system administrator: it uses the local cluster without a login or address argument.
 
 ```sh
-oss-transfer-cli login
 oss-transfer-cli task list
+oss-transfer-cli node list
 ```
 
-Login asks for the password without displaying it. In Docker Compose, use `docker compose exec master oss-transfer-cli login`.
+In Docker Compose, use `docker compose exec master oss-transfer-cli task list`. Administrators of enrolled Agent hosts can manage the cluster through this local access. Other OS users use `login` with a web-console account.
 
 ## Choose another Master
 
@@ -116,4 +116,6 @@ The CLI follows the system language, with English as the fallback. Save a prefer
 
 Use `--json` for structured output. Exit codes are 0 for success, 1 for a failed operation, 2 for invalid arguments, 3 for an incomplete or uncertain result, and 130 for interruption. Read-only commands support `--watch 5`.
 
-Scripts can log in with `--password-env`, `--password-file` or `--password-stdin`. `change-password` accepts `--old-password-env` and `--new-password-env`, or the corresponding file options. `logout` closes the current Master's session.
+Account login asks for the password without displaying it. Changing an account password requires that account's login; local service access does not change web-console passwords. `logout` closes an account session and does not remove the installed service's local access.
+
+Scripts can log in with `--password-env`, `--password-file` or `--password-stdin`. `change-password` accepts `--old-password-env` and `--new-password-env`, or the corresponding file options.

@@ -466,6 +466,8 @@ rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
         self.assert_unknown_preserved()
 
     def test_successful_cli_replacement_or_adoption_removes_current_backup(self):
+        for name in ('cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json'):
+            (self.backup/name).write_text('saved connection')
         result = self.invoke(0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.backup.exists())
@@ -573,7 +575,7 @@ class BackupSpaceTests(unittest.TestCase):
                     body = '''set -euo pipefail
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
 backup_dir=$TEST_BACKUP_DIR
-database=$TEST_ROOT/missing.db; binary=$TEST_ROOT/missing-binary; cli_path=$TEST_ROOT/missing-cli
+database=$TEST_ROOT/missing.db; binary=$TEST_ROOT/missing-binary; cli_path=$TEST_ROOT/missing-cli; data_dir=$TEST_ROOT/data
 ''' + functions + '\n' + shim + '\ncheck_backup_space\nprintf stopped > "$TEST_ROOT/stopped"\n'
                     result = subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
                                             env=dict(os.environ,TEST_ROOT=str(root),TEST_BACKUP_DIR=str(backup_dir)))
@@ -608,7 +610,7 @@ database=$TEST_ROOT/missing.db; binary=$TEST_ROOT/missing-binary; cli_path=$TEST
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
 ''' + functions + '''
 backup_dir=$TEST_ROOT/backups/new; database=$TEST_ROOT/agent.db
-binary=$TEST_ROOT/agent; cli_path=$TEST_ROOT/cli
+binary=$TEST_ROOT/agent; cli_path=$TEST_ROOT/cli; data_dir=$TEST_ROOT/data
 check_backup_space
 printf 'can stop service\\n'
 '''
@@ -643,6 +645,8 @@ class CLIPlacementTests(unittest.TestCase):
         self.old = self.install/'oss-transfer-cli'
         self.global_cli = self.root/'global'/'oss-transfer-cli'
         self.global_cli.parent.mkdir()
+        self.data = self.root/'data'
+        self.data.mkdir(mode=0o700)
         self.source = INSTALLER.read_text()
         self.function = self.source[self.source.index('default_cli_path() {'):self.source.index('\ncli_path=${cli_path:-$(default_cli_path')]
 
@@ -669,6 +673,9 @@ class CLIPlacementTests(unittest.TestCase):
         self.global_cli.unlink()
         Path(str(self.global_cli)+'.cluster.json').write_text('existing cluster')
         self.assertEqual(self.selection(self.old),str(self.old))
+        Path(str(self.global_cli)+'.cluster.json').unlink()
+        Path(str(self.global_cli)+'.local-auth.json').write_text('existing private grant')
+        self.assertEqual(self.selection(self.old),str(self.old))
 
     def test_custom_cli_and_master_existing_role_path_stay_unchanged(self):
         custom=self.root/'custom'/'oss-transfer-cli'
@@ -677,12 +684,14 @@ class CLIPlacementTests(unittest.TestCase):
 
     def test_failed_migration_removes_only_new_global_files(self):
         self.old.write_text('previous agent CLI')
+        Path(str(self.old)+'.local-auth.json').write_text('previous private grant')
         self.global_cli.write_text('new CLI')
         Path(str(self.global_cli)+'.cluster.json').write_text('new cluster')
-        rollback=self.source[self.source.index('rollback() {'):self.source.index('\ncheck_listener\n')]
+        Path(str(self.global_cli)+'.local-auth.json').write_text('new private grant')
+        rollback=self.source[self.source.index('backup_cli_sidecars() {'):self.source.index('\ncheck_listener\n')]
         body=r"""set -euo pipefail
 existed=0; cli_changed=1; had_cli=0; cli_migrated=1; platform=linux; adopt_config=
-cli_path=$1; previous_cli=$2; unit=$3/unit; backup=$3/backup; log_file=$3/log; database=$3/missing.db
+cli_path=$1; previous_cli=$2; unit=$3/unit; backup=$3/backup; log_file=$3/log; database=$3/missing.db; data_dir=$3/data
 systemctl() { return 0; }
 stop_service() { return 0; }
 """+rollback+'\nfalse || rollback\n'
@@ -692,16 +701,80 @@ stop_service() { return 0; }
         self.assertEqual(self.old.read_text(),'previous agent CLI')
         self.assertFalse(self.global_cli.exists())
         self.assertFalse(Path(str(self.global_cli)+'.cluster.json').exists())
+        self.assertFalse(Path(str(self.global_cli)+'.local-auth.json').exists())
+        self.assertEqual(Path(str(self.old)+'.local-auth.json').read_text(),'previous private grant')
+
+    def connection_functions(self):
+        return self.source[self.source.index('backup_cli_sidecars() {'):self.source.index('\nrollback() {')]
+
+    def run_connections(self, body):
+        return subprocess.run(['bash','-c','set -euo pipefail\ncli_path=$1; backup=$2; data_dir=$3\n'+self.connection_functions()+'\n'+body,
+                               'test',str(self.global_cli),str(self.root/'backup'),str(self.data)],
+                              text=True,capture_output=True,timeout=5)
+
+    def test_failed_upgrade_restores_connections_and_private_permissions(self):
+        (self.root/'backup').mkdir(mode=0o700)
+        public=Path(str(self.global_cli)+'.cluster.json')
+        private=Path(str(self.global_cli)+'.local-auth.json')
+        public.write_text('previous cluster')
+        private.write_text('previous private grant')
+        (self.data/'cli-cluster.json').write_text('previous data cluster')
+        (self.data/'cli-local-auth.json').write_text('previous data grant')
+        result=self.run_connections('backup_cli_sidecars\nprintf new-cluster > "$cli_path.cluster.json"\nprintf new-grant > "$cli_path.local-auth.json"\nprintf new-cluster > "$data_dir/cli-cluster.json"\nprintf new-grant > "$data_dir/cli-local-auth.json"\nrestore_cli_sidecars')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(public.read_text(),'previous cluster')
+        self.assertEqual(private.read_text(),'previous private grant')
+        self.assertEqual(private.stat().st_mode & 0o777,0o600)
+        self.assertEqual((self.root/'backup'/'cli.local-auth.json').stat().st_mode & 0o777,0o600)
+        self.assertEqual((self.root/'backup'/'data-cli.local-auth.json').stat().st_mode & 0o777,0o600)
+        self.assertEqual((self.data/'cli-cluster.json').read_text(),'previous data cluster')
+        self.assertEqual((self.data/'cli-local-auth.json').read_text(),'previous data grant')
+        self.assertEqual((self.data/'cli-local-auth.json').stat().st_mode & 0o777,0o600)
+        self.assertEqual(list(self.global_cli.parent.glob('*.restore.*')),[])
+
+    def test_rollback_to_pre_auth_version_removes_only_new_private_grant(self):
+        (self.root/'backup').mkdir(mode=0o700)
+        public=Path(str(self.global_cli)+'.cluster.json')
+        private=Path(str(self.global_cli)+'.local-auth.json')
+        public.write_text('previous cluster')
+        result=self.run_connections('backup_cli_sidecars\nprintf new-cluster > "$cli_path.cluster.json"\nprintf new-grant > "$cli_path.local-auth.json"\nprintf new-cluster > "$data_dir/cli-cluster.json"\nprintf new-grant > "$data_dir/cli-local-auth.json"\nrestore_cli_sidecars')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(public.read_text(),'previous cluster')
+        self.assertFalse(private.exists())
+        self.assertFalse((self.data/'cli-cluster.json').exists())
+        self.assertFalse((self.data/'cli-local-auth.json').exists())
+
+    def test_sidecar_backup_and_restore_reject_symlinks(self):
+        (self.root/'backup').mkdir(mode=0o700)
+        target=self.root/'unrelated'
+        target.write_text('must stay untouched')
+        private=Path(str(self.global_cli)+'.local-auth.json')
+        private.symlink_to(target)
+        for action in ('backup_cli_sidecars','restore_cli_sidecars'):
+            result=self.run_connections(action)
+            self.assertNotEqual(result.returncode,0)
+            self.assertTrue(private.is_symlink())
+            self.assertEqual(target.read_text(),'must stay untouched')
+        private.unlink()
+        (self.root/'backup'/'cli.local-auth.json').symlink_to(target)
+        result=self.run_connections('restore_cli_sidecars')
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse(private.exists())
+        self.assertEqual(target.read_text(),'must stay untouched')
 
     def test_old_cli_removed_only_after_startup_is_committed(self):
         start=self.source.index('\nif commit_start; then\n')
         finish=self.source[start:self.source.index("\nprintf 'Installed ",start)]
         for committed in (False,True):
             self.old.write_text('previous agent CLI')
+            Path(str(self.old)+'.cluster.json').write_text('previous cluster')
+            Path(str(self.old)+'.local-auth.json').write_text('previous private grant')
             body='set -euo pipefail\ncli_migrated=1; previous_cli=$1\ncommit_start() { return '+('0' if committed else '1')+'; }\nfinish_backup() { return 0; }\n'+finish
             result=subprocess.run(['bash','-c',body,'test',str(self.old)],text=True,capture_output=True,timeout=5)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(self.old.exists(),not committed)
+            self.assertEqual(Path(str(self.old)+'.cluster.json').exists(),not committed)
+            self.assertEqual(Path(str(self.old)+'.local-auth.json').exists(),not committed)
 
 
 if __name__ == '__main__':

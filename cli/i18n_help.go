@@ -142,6 +142,7 @@ Select parent IDs explicitly: 224,225 or 224-226. Commands never default to all 
 New tasks start automatically. Acceptance or prechecks do not confirm completion.
 Removing nodes/connections, purging tasks and clearing exceptions require --yes.
 Exit codes: 0 success, 1 operation failed, 2 command error, 3 incomplete, 130 interrupted.
+On an installed Master or Agent, the service owner or system administrator can use the local cluster without login. Other clusters require login.
 OSS_TRANSFER_MASTER_SERVER sets the address. Use files or environment variables for credentials.
 OSS_TRANSFER_CLI_CONFIG_DIR sets the configuration and session directory; use an absolute path.
 Language follows the system, with English as fallback. Save a preference with config set language en; auto restores system selection.
@@ -214,6 +215,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   oss-transfer-cli task report 224 --output task-224-report.zip
   oss-transfer-cli help task create
 
+Master または Agent の実行ユーザーやシステム管理者は、本機のクラスタをログインなしで利用できます。別クラスタには login が必要です。
 親 ID は 224,225 や 224-226 のように明示してください。既定で全タスクを選択しません。
 新規タスクは自動開始します。受理や事前チェックの成功は転送完了を示しません。
 ノード・接続の削除、タスクの完全削除、例外記録のクリアには --yes が必要です。
@@ -734,6 +736,8 @@ Key とプレフィックスは変更せず渡します。空白やシェル特�
   oss-transfer-cli logout
   oss-transfer-cli change-password --old-password-env OLD --new-password-env NEW
 
+The service owner or system administrator can use the installed cluster without login. Other users or clusters use account login.
+logout ends only an account session, not local service access. Log in before changing an account password.
 The username defaults to admin; use --username for another account. Terminal password input is hidden.
 After the first login, run change-password. Scripts can select an environment variable, file, or stdin.
 --password-stdin reads standard input; --password-file reads a file.
@@ -750,6 +754,8 @@ OSS_TRANSFER_INTERNAL_TOKEN is not accepted by the CLI.
   oss-transfer-cli logout
   oss-transfer-cli change-password --old-password-env OLD --new-password-env NEW
 
+サービス実行ユーザーやシステム管理者は、本機のクラスタをログインなしで利用できます。他のユーザーやクラスタにはアカウントでログインします。
+logout はアカウントのセッションのみを終了します。パスワード変更には login が必要です。
 ユーザー名の既定値は admin です。他のアカウントは --username で指定します。入力したパスワードは表示されません。
 初回ログイン後は change-password を実行してください。スクリプトでは環境変数、ファイル、標準入力を選択できます。
 --password-stdin は標準入力、--password-file はファイルから読み取ります。

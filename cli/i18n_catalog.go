@@ -2,6 +2,9 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"本机 CLI 凭据文件无效: %s":                                                                             {"Invalid local CLI credential file: %s", "ローカル CLI 認証情報ファイルが無効です: %s"},
+	"本机 CLI 凭据文件权限不安全: %s":                                                                          {"Unsafe local CLI credential permissions: %s", "ローカル CLI 認証情報のアクセス権が安全ではありません: %s"},
+	"本机 CLI 凭据与集群地址不匹配: %s":                                                                         {"Local CLI credential does not match the cluster address: %s", "ローカル CLI 認証情報がクラスタのアドレスと一致しません: %s"},
 	"正在整理子任务，请稍后重试。":                                                                                {"Subtasks are being organized; retry shortly.", "子タスクを整理中です。しばらくしてから再試行してください。"},
 	"本页 %d 个子任务\n":                                                                                  {"%d subtasks on this page\n", "このページには %d 件の子タスクがあります\n"},
 	"下一页：%s\n":                                                                                      {"Next page: %s\n", "次のページ: %s\n"},

@@ -455,13 +455,41 @@ class Workflows(cluster.Harness):
         recovered = self.wait(capacity_bound, "interrupted child waiting behind occupied recovery capacity", 45)
         waiting = next(row for row in recovered if row["status"] == "RECOVERABLE")
         child_id = waiting["childTaskId"]
+        recovery_evidence = {"beforeRestart": [{key: row.get(key) for key in ("childTaskId", "status", "attempt")} for row in before],
+                             "observedAfterRestart": [{key: row.get(key) for key in ("childTaskId", "status", "attempt")} for row in recovered],
+                             "parentGenerations": generations, "requests": []}
+        self.evidence["childRecovery"] = recovery_evidence
+        admitted_attempt = None
         for _ in range(2):
             result = data(self.cli("task", "recover-child", child_id))
-            require(result["outcome"] == "WAITING_CAPACITY" and result["child"]["status"] == "RECOVERABLE",
-                    "Manual child recovery bypassed the configured execution limit")
-            require(result["child"]["attempt"] == waiting["attempt"], "Capacity rejection started a duplicate attempt")
+            snapshot = {"outcome": result["outcome"], **{key: result["child"].get(key) for key in ("childTaskId", "generation", "status", "attempt")}}
+            snapshot["agentExecution"] = self.cli("agent", "show", self.nodes[0])["status"]["executionStatus"]
+            recovery_evidence["requests"].append(snapshot)
+            self.save()
+            require(snapshot["agentExecution"]["maxConcurrentChildren"] == 1 and
+                    snapshot["agentExecution"]["activeChildren"] <= 1,
+                    "Recovery exceeded the Agent's actual execution capacity: " + json.dumps(snapshot))
+            require(snapshot["childTaskId"] == child_id and snapshot["generation"] == waiting["generation"],
+                    "Recovery changed the child identity or generation")
+            # The listing and POST are separate calls. Automatic recovery may
+            # admit this child between them; validate the authoritative response
+            # and execution limit rather than requiring the older listing state.
+            if snapshot["outcome"] == "WAITING_CAPACITY":
+                require(admitted_attempt is None and snapshot["status"] == "RECOVERABLE" and
+                        snapshot["attempt"] == waiting["attempt"],
+                        "Capacity rejection changed an attempt: " + json.dumps(snapshot))
+            elif snapshot["outcome"] in {"STARTED", "ALREADY_RUNNING"}:
+                require(snapshot["status"] == "RUNNING" and snapshot["attempt"] == waiting["attempt"] + 1,
+                        "Recovery did not admit exactly one attempt: " + json.dumps(snapshot))
+                require(admitted_attempt is None or snapshot["outcome"] == "ALREADY_RUNNING",
+                        "Repeated recovery started the running attempt again")
+                admitted_attempt = snapshot["attempt"]
+            else:
+                raise AssertionError("Unknown child recovery response: " + json.dumps(snapshot))
         self.cli("agent", "update", self.nodes[0], "--child-concurrency", "2")
         result = data(self.cli("task", "recover-child", child_id))
+        recovery_evidence["afterCapacityIncrease"] = {"outcome": result["outcome"], **{key: result["child"].get(key) for key in ("childTaskId", "generation", "status", "attempt")}}
+        self.save()
         require(result["outcome"] in {"STARTED", "ALREADY_RUNNING"} and result["child"]["status"] == "RUNNING",
                 "Available capacity did not recover the interrupted child")
         require(result["child"]["attempt"] == waiting["attempt"] + 1, "Recovery did not start exactly one new attempt")

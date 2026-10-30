@@ -41,8 +41,12 @@ func publicConnectionACL(path string) error {
 	if err != nil {
 		return err
 	}
+	return checkPublicConnectionACL(sd, user.User.Sid)
+}
+
+func checkPublicConnectionACL(sd *windows.SECURITY_DESCRIPTOR, user *windows.SID) error {
 	trusted := func(sid *windows.SID) bool {
-		return sid != nil && (sid.Equals(user.User.Sid) || sid.String() == "S-1-5-18" || sid.String() == "S-1-5-32-544")
+		return sid != nil && (sid.Equals(user) || sid.String() == "S-1-5-18" || sid.String() == "S-1-5-32-544")
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || !trusted(owner) {
@@ -63,8 +67,13 @@ func publicConnectionACL(path string) error {
 		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
 			continue
 		}
-		if ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && uint32(ace.Mask)&writeMask != 0 && !trusted((*windows.SID)(unsafe.Pointer(&ace.SidStart))) {
-			return os.ErrPermission
+		if ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && uint32(ace.Mask)&writeMask != 0 {
+			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+			// Python 3.13's mode-0700 directories grant access through OWNER
+			// RIGHTS. That SID is safe only after verifying the actual owner above.
+			if !trusted(sid) && !sid.IsWellKnown(windows.WinCreatorOwnerRightsSid) {
+				return os.ErrPermission
+			}
 		}
 	}
 	return nil

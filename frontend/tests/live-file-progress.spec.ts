@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
 import { mockTaskChildren } from "./task-children-fixture";
 
-async function arrange(page: Page) {
+async function arrange(page: Page, expanded = true) {
   await mockApi(page);
   await page.addInitScript(() =>
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
@@ -29,6 +29,8 @@ async function arrange(page: Page) {
       hasMore: false,
     },
     error: false,
+    fileCount: 1,
+    totalFiles: 1,
     reads: [] as string[],
   };
   await page.route("**/api/master/status", (route) =>
@@ -65,25 +67,30 @@ async function arrange(page: Page) {
                 : undefined,
               ...state.progress,
               observedAt: state.progress.observedAt || Date.now(),
-              total: 1,
-              items: [
-                {
-                  childTaskId: "51-1",
-                  subtaskNumber: 1,
-                  executionNodeLabel: "worker-one (10.0.1.12)",
-                  itemId: "big",
-                  sourceKey: "training/big.bin",
-                  destinationKey: "training/big.bin",
-                  size: state.parent.listObjectSize,
-                  transferredBytes: state.progress.transferredBytes,
-                  stage: state.progress.stage,
-                },
-              ],
+              total: state.totalFiles,
+              items: Array.from({ length: state.fileCount }, (_, index) => ({
+                childTaskId: "51-1",
+                subtaskNumber: 1,
+                executionNodeLabel: "worker-one (10.0.1.12)",
+                itemId: index === 0 ? "big" : `file-${index}`,
+                sourceKey:
+                  index === 0
+                    ? "training/big.bin"
+                    : `tiny/0002/735/2735${index}.bin`,
+                destinationKey: "training/big.bin",
+                size: state.parent.listObjectSize,
+                transferredBytes: state.progress.transferredBytes,
+                stage: state.progress.stage,
+              })),
             },
           },
     });
   });
   await page.goto("/tasks?taskId=51");
+  if (expanded)
+    await page
+      .getByRole("button", { name: "文件传输详情", exact: true })
+      .click();
   return state;
 }
 
@@ -118,6 +125,7 @@ test("a large unfinished file advances before completed counters and stays final
   await expect(page.locator("[data-subtask-heading]")).toHaveText(
     "子任务 #51-1",
   );
+  await page.getByRole("button", { name: "文件传输详情", exact: true }).click();
   await expect(progress).toHaveAttribute("aria-valuetext", "确认中");
   await expect
     .poll(() =>
@@ -174,6 +182,9 @@ test("unsupported agents and stale generations do not show misleading file progr
   await expect(progress).toHaveAttribute("aria-valuenow", "25");
   state.progress.supported = false;
   await expect(section.getByText("更新执行节点后可查看文件进度")).toBeVisible();
+  await expect(
+    section.getByRole("button", { name: "文件传输详情", exact: true }),
+  ).toBeDisabled();
   await expect(progress).toBeHidden();
   state.progress.supported = true;
   state.parent.generation = 2;
@@ -186,7 +197,53 @@ test("unsupported agents and stale generations do not show misleading file progr
   ).toBeVisible();
   state.progress.generation = 2;
   state.progress.transferredBytes = 5 * 1024 ** 3;
+  await page.getByRole("button", { name: "文件传输详情", exact: true }).click();
   await expect(progress).toHaveAttribute("aria-valuenow", "5");
+});
+
+test("many small files stay collapsed and expand into a bounded list", async ({
+  page,
+}, testInfo) => {
+  const state = await arrange(page, false);
+  state.fileCount = 20;
+  state.totalFiles = 37;
+  state.parent.listObjectSize = 6 * 1024;
+  state.progress.transferredBytes = 0;
+  state.progress.hasMore = true;
+  const section = page.getByRole("region", { name: "正在传输", exact: true });
+  const toggle = section.getByRole("button", {
+    name: "文件传输详情",
+    exact: true,
+  });
+  await expect(section).toContainText("37 个文件");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(section.locator("[data-file-progress]")).toHaveCount(0);
+  await expect
+    .poll(async () => (await section.boundingBox())!.height)
+    .toBeLessThan(60);
+  await section.screenshot({ path: testInfo.outputPath("collapsed.png") });
+  await toggle.click();
+  await expect(section.locator("[data-file-progress]")).toHaveCount(20);
+  await expect(section.getByRole("progressbar").first()).toHaveAttribute(
+    "aria-valuenow",
+    "0",
+  );
+  await expect
+    .poll(async () => (await section.boundingBox())!.height)
+    .toBeLessThan(390);
+  await expect(
+    section.getByRole("button", { name: "在子任务中查看其他文件" }),
+  ).toBeEnabled();
+  await section.screenshot({ path: testInfo.outputPath("expanded.png") });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect
+    .poll(async () =>
+      section.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await section.screenshot({ path: testInfo.outputPath("mobile.png") });
+  await toggle.click();
+  await expect(section.locator("[data-file-progress]")).toHaveCount(0);
 });
 
 test("changing tasks does not carry over the previous file while the next response is delayed", async ({

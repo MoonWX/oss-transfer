@@ -1,5 +1,7 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
   正在传输: { en: "Transferring", ja: "転送中" },
+  文件传输详情: { en: "File transfer details", ja: "ファイル転送の詳細" },
+  "{count} 个文件": { en: "{count} files", ja: "{count} ファイル" },
   刷新文件进度: { en: "Refresh file progress", ja: "ファイルの進捗を更新" },
   更新执行节点后可查看文件进度: {
     en: "Update the execution node to view file progress",

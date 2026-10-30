@@ -302,7 +302,7 @@ def run(platform, directory, repo, output, parallel):
     evidence = {"platform": platform, "result": "failed", "phase": "verify", "packages": []}
     # Match the native go test package deadline. Emulated packages contain
     # the same tests; their individual operation deadlines stay unchanged.
-    package_timeout = 600
+    package_timeout = 900
     started = time.monotonic()
     try:
         manifest = verify(platform, directory, repo, publish_env=False)

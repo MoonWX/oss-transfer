@@ -357,6 +357,7 @@ class PlatformPlanTests(unittest.TestCase):
                     command = step["command"]
                     self.assertEqual(command[1], "test")
                     self.assertIn("./...", command)
+                    self.assertIn("-timeout=15m", command)
                     self.assertEqual("-race" in command, self.args.race)
                     self.assertEqual(command[command.index("-p") + 1], "2")
                     self.assertFalse(any(arg.startswith(("-run", "-skip")) for arg in command))

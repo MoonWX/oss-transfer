@@ -189,7 +189,7 @@ class TestArtifacts(unittest.TestCase):
         manifest["tests"] = manifest["tests"][:1]
         for platform in TESTS.SUPPORTED:
             with self.subTest(platform=platform):
-                timeout = 600
+                timeout = 900
                 process = mock.Mock(pid=123456, wait=mock.Mock(return_value=0))
 
                 def start(command, **kwargs):

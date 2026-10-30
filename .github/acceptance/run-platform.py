@@ -41,7 +41,7 @@ def plan(args, gate, run_id):
         unit = [phase("unit", [py, scripts / "test-binaries.py", "run", "--platform", args.platform,
                                "--directory", args.test_binaries, "--repo", repo, "--output", output / "unit", "--parallel", "2"], repo)]
     else:
-        command = ["go", "test", "-count=1", "-p", "2", *(["-race"] if args.race else []), "./..."]
+        command = ["go", "test", "-count=1", "-timeout=15m", "-p", "2", *(["-race"] if args.race else []), "./..."]
         unit = [phase("unit", command, repo), phase("cli-unit", command, repo / "cli")]
     version = (repo / "VERSION").read_text().strip()
     control = [

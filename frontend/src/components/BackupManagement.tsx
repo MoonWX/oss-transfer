@@ -98,10 +98,8 @@ export default function BackupManagement({
       const response = await api<{ data: Snapshot }>(
         "/api/master/software-updates/backups",
         {
-          signal: AbortSignal.any([
-            controller.current.signal,
-            AbortSignal.timeout(120000),
-          ]),
+          signal: controller.current.signal,
+          timeoutMs: 120000,
         },
       );
       if (mounted.current) {

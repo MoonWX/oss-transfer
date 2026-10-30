@@ -118,7 +118,7 @@ async function reconcile(id: number) {
   try {
     const { data } = await api<{
       data: { status: string; generation?: number };
-    }>(`/api/master/tasks/${id}`, { signal: AbortSignal.timeout(10000) });
+    }>(`/api/master/tasks/${id}`, { timeoutMs: 10000 });
     if (token !== getToken() || states[id] !== entry) return;
     const finished = [
       "COMPLETED",
@@ -280,10 +280,8 @@ export function useVisibleRecoveryTasks(
               const { data } = await api<{ data: RecoveryTaskSnapshot }>(
                 `/api/master/tasks/${id}`,
                 {
-                  signal: AbortSignal.any([
-                    controller.signal,
-                    AbortSignal.timeout(10000),
-                  ]),
+                  signal: controller.signal,
+                  timeoutMs: 10000,
                 },
               );
               if (

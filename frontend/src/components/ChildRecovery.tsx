@@ -44,7 +44,7 @@ function observeRecovery(id: string, recovery: Recovery) {
           }>;
         };
       }>(`/api/master/tasks/${parent}/children/${child}`, {
-        signal: AbortSignal.timeout(15000),
+        timeoutMs: 15000,
       });
       const current = result.data.items[0];
       if (current) {
@@ -124,7 +124,7 @@ export default function ChildRecovery({
       }>(`/api/master/tasks/${match[1]}/children/${match[2]}/recover`, {
         method: "POST",
         body: {},
-        signal: AbortSignal.timeout(120000),
+        timeoutMs: 120000,
       });
       if (getToken() !== recovery.token) {
         clearRecovery(childId, recovery);

@@ -1,4 +1,5 @@
 import { api, getToken } from "./api";
+import { throwIfAborted } from "./abort";
 import { t } from "./i18n";
 
 type Endpoint = {
@@ -31,7 +32,7 @@ export async function loadTaskCatalog(
   const tasks = new Map<number, TaskCatalogEntry>();
   let before: number | undefined;
   for (;;) {
-    signal.throwIfAborted();
+    throwIfAborted(signal);
     if (token !== getToken()) throw new Error(t("登录已过期，请重新登录。"));
     const query = new URLSearchParams({ limit: "1000" });
     if (before !== undefined) query.set("beforeId", String(before));
@@ -43,9 +44,10 @@ export async function loadTaskCatalog(
       pageComplete?: boolean;
       truncated?: boolean;
     }>(`/api/master/status?${query}`, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
+      signal,
+      timeoutMs: 15000,
     });
-    signal.throwIfAborted();
+    throwIfAborted(signal);
     if (token !== getToken()) throw new Error(t("登录已过期，请重新登录。"));
     if (
       !Array.isArray(page.tasks) ||

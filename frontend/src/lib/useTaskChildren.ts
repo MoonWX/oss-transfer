@@ -119,10 +119,8 @@ export function useTaskChildren({
         const result = await api<{ data: ChildPage }>(
           `/api/master/tasks/${parentId}/children?offset=${offset}&limit=25&view=${view}&order=priority${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${known.length ? `&known=${known.join(",")}` : ""}`,
           {
-            signal: AbortSignal.any([
-              controller.signal,
-              AbortSignal.timeout(120000),
-            ]),
+            signal: controller.signal,
+            timeoutMs: 120000,
           },
         );
         if (

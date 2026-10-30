@@ -323,7 +323,7 @@ export default function ExceptionsPage() {
             next = (
               await api<{ data: Result }>(
                 `/api/master/local-transfers/failures?${params}`,
-                { signal: AbortSignal.timeout(10000) },
+                { timeoutMs: 10000 },
               )
             ).data;
           } else {
@@ -341,7 +341,7 @@ export default function ExceptionsPage() {
               {
                 method: "POST",
                 body,
-                signal: AbortSignal.timeout(10000),
+                timeoutMs: 10000,
               },
             );
             const grouped = (raw[
@@ -602,7 +602,7 @@ export default function ExceptionsPage() {
       const current = await api<{
         data: { status: string; generation?: number };
       }>(`/api/master/tasks/${taskId}`, {
-        signal: AbortSignal.timeout(10000),
+        timeoutMs: 10000,
       });
       if (!recovery.isCurrent()) return;
       if (!stillHere()) {
@@ -649,7 +649,7 @@ export default function ExceptionsPage() {
           : "/api/master/retry",
         {
           method: "POST",
-          signal: AbortSignal.timeout(30000),
+          timeoutMs: 30000,
           body: {
             taskIds: [taskId],
             expectedGenerations: { [taskId]: generation },

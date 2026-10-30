@@ -359,10 +359,8 @@ export default function ToolsPage() {
           }>("/api/master/cleanup-status", {
             method: "POST",
             body: { taskIds: ids.slice(start, start + 128) },
-            signal: AbortSignal.any([
-              controller.signal,
-              AbortSignal.timeout(15000),
-            ]),
+            signal: controller.signal,
+            timeoutMs: 15000,
           });
           if (controller.signal.aborted) return;
           if (

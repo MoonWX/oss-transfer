@@ -237,7 +237,10 @@ export async function getAgentInvitationStatus(
       status: "pending" | "joined" | "expired" | "revoked";
       nodeId?: string;
     };
-  }>(`/api/master/agents/invitations/${encodeURIComponent(id)}`, { signal });
+  }>(`/api/master/agents/invitations/${encodeURIComponent(id)}`, {
+    signal,
+    timeoutMs: 10000,
+  });
   return response.data;
 }
 export function saveNode(originalAddress: string | null, change: NodeChange) {

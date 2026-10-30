@@ -79,7 +79,7 @@ export default function AgentInvitationDialog({
       try {
         const result = await getAgentInvitationStatus(
           invitation!.id,
-          AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+          controller.signal,
         );
         if (controller.signal.aborted) return;
         terminal = result.status !== "pending";
@@ -138,7 +138,7 @@ export default function AgentInvitationDialog({
           label: label.trim(),
           masterUrl: origin,
         },
-        AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+        controller.signal,
       );
       if (controller.signal.aborted) return;
       if (

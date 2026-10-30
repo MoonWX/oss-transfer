@@ -94,10 +94,8 @@ export default function TaskBandwidth({
     try {
       const next = readStatus(
         await api(path, {
-          signal: AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(120000),
-          ]),
+          signal: controller.signal,
+          timeoutMs: 120000,
         }),
       );
       if (current === sequence.current) {
@@ -193,7 +191,7 @@ export default function TaskBandwidth({
         await api(path, {
           method: "PUT",
           body: { limitMbps, requestLimits },
-          signal: AbortSignal.timeout(120000),
+          timeoutMs: 120000,
         }),
       );
       setStatus(next);

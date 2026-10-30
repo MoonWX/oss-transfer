@@ -1,5 +1,6 @@
 import { t, useI18n, getLocale } from "./i18n";
 import { observeServerCommit } from "./serviceVersion";
+import { createRequestAbort } from "./abort";
 import {
   createContext,
   useCallback,
@@ -34,9 +35,14 @@ type Options = {
   method?: string;
   body?: unknown;
   signal?: AbortSignal;
+  timeoutMs?: number;
   headers?: Record<string, string>;
 };
-async function request(path: string, options: Options = {}) {
+async function request<T>(
+  path: string,
+  options: Options,
+  consume: (response: Response) => Promise<T>,
+): Promise<T> {
   const headers: Record<string, string> = {
     "Accept-Language": getLocale(),
     ...options.headers,
@@ -44,64 +50,75 @@ async function request(path: string, options: Options = {}) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  let response: Response;
+  const abort = createRequestAbort(options.signal, options.timeoutMs ?? 120000);
   try {
-    response = await fetch(path, {
+    if (abort.signal.aborted) throw abort.reason;
+    const response = await fetch(path, {
       method: options.method || "GET",
       headers,
       body:
         options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: options.signal ?? AbortSignal.timeout(120000),
+      signal: abort.signal,
     });
+    observeServerCommit(response.headers.get("X-OSS-Transfer-Commit"));
+    if (response.status === 401 && path !== "/api/auth/login") {
+      if (token === getToken()) {
+        setToken(null);
+        window.dispatchEvent(new Event("session-expired"));
+      }
+      throw new ApiError(t("登录已过期，请重新登录。"), 401);
+    }
+    return await consume(response);
   } catch (error) {
+    // Some older fetch implementations report every cancellation as AbortError.
+    // Keep our own cause so a timeout still produces the right message, even
+    // when headers have arrived but the JSON/download body is still pending.
+    if (abort.signal.aborted) error = abort.reason;
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
     if (error instanceof DOMException && error.name === "TimeoutError")
       throw new ApiError(t("请求超时，请刷新后查看最新状态。"));
+    if (abort.signal.aborted || error instanceof ApiError) throw error;
     throw new ApiError(t("无法连接服务，请检查网络或主节点状态。"));
+  } finally {
+    abort.dispose();
   }
-  observeServerCommit(response.headers.get("X-OSS-Transfer-Commit"));
-  if (response.status === 401 && path !== "/api/auth/login") {
-    if (token === getToken()) {
-      setToken(null);
-      window.dispatchEvent(new Event("session-expired"));
-    }
-    throw new ApiError(t("登录已过期，请重新登录。"), 401);
-  }
-  return response;
 }
 export async function api<T = any>(
   path: string,
   options: Options = {},
 ): Promise<T> {
-  const response = await request(path, options);
-  const data = await response.json().catch(() => {
-    throw new ApiError(
-      t("服务返回了无效响应（HTTP {p1}）", { p1: response.status }),
-      response.status,
-    );
+  return request(path, options, async (response) => {
+    const data = await response.json().catch(() => {
+      throw new ApiError(
+        t("服务返回了无效响应（HTTP {p1}）", { p1: response.status }),
+        response.status,
+      );
+    });
+    if (!response.ok || data.success === false)
+      throw new ApiError(
+        data.message || t("请求失败（HTTP {p1}）", { p1: response.status }),
+        response.status,
+        data,
+      );
+    return data as T;
   });
-  if (!response.ok || data.success === false)
-    throw new ApiError(
-      data.message || t("请求失败（HTTP {p1}）", { p1: response.status }),
-      response.status,
-      data,
-    );
-  return data as T;
 }
 export async function download(path: string, filename: string) {
-  const response = await request(path);
-  if (
-    !response.ok ||
-    response.headers.get("content-type")?.includes("application/json")
-  ) {
-    const data = await response.json().catch(() => ({}));
-    throw new ApiError(
-      data.message || t("下载失败，请稍后重试。"),
-      response.status,
-    );
-  }
-  saveFile(await response.blob(), filename);
+  const content = await request(path, {}, async (response) => {
+    if (
+      !response.ok ||
+      response.headers.get("content-type")?.includes("application/json")
+    ) {
+      const data = await response.json().catch(() => ({}));
+      throw new ApiError(
+        data.message || t("下载失败，请稍后重试。"),
+        response.status,
+      );
+    }
+    return response.blob();
+  });
+  saveFile(content, filename);
 }
 export function saveFile(
   content: Blob | string,
@@ -139,10 +156,7 @@ export function useApi<T = any>(
     try {
       const next = await api<T>(path, {
         headers: summary ? { "X-Task-View": "summary" } : undefined,
-        signal: AbortSignal.any([
-          controller.current.signal,
-          AbortSignal.timeout(120000),
-        ]),
+        signal: controller.current.signal,
       });
       if (id === sequence.current) {
         setData(next);

@@ -108,19 +108,20 @@ type Counters struct {
 }
 
 type Record struct {
-	ActiveTime      *ActiveTime  `json:"activeTime,omitempty"`
-	InventorySource bool         `json:"inventorySource,omitempty"`
-	Job             Job          `json:"job"`
-	Status          Status       `json:"status"`
-	Attempt         uint64       `json:"attempt"`
-	Results         []ItemResult `json:"results"`
-	Counters        Counters     `json:"counters"`
-	Error           string       `json:"error,omitempty"`
-	UpdatedAt       time.Time    `json:"updatedAt"`
-	CreatedAt       time.Time    `json:"createdAt"`
-	StartedAt       *time.Time   `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time   `json:"finishedAt,omitempty"`
-	Fingerprint     string       `json:"fingerprint"`
+	ReleasedAssignment *uint64      `json:"releasedAssignment,omitempty"`
+	ActiveTime         *ActiveTime  `json:"activeTime,omitempty"`
+	InventorySource    bool         `json:"inventorySource,omitempty"`
+	Job                Job          `json:"job"`
+	Status             Status       `json:"status"`
+	Attempt            uint64       `json:"attempt"`
+	Results            []ItemResult `json:"results"`
+	Counters           Counters     `json:"counters"`
+	Error              string       `json:"error,omitempty"`
+	UpdatedAt          time.Time    `json:"updatedAt"`
+	CreatedAt          time.Time    `json:"createdAt"`
+	StartedAt          *time.Time   `json:"startedAt,omitempty"`
+	FinishedAt         *time.Time   `json:"finishedAt,omitempty"`
+	Fingerprint        string       `json:"fingerprint"`
 }
 
 type ParentFence struct {

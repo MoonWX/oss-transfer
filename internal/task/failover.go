@@ -25,6 +25,8 @@ type FailoverMigration struct {
 }
 
 type FailoverState struct {
+	Rebalance         *RebalanceState              `json:"rebalance,omitempty"`
+	RebalancedEpochs  map[string]uint64            `json:"rebalancedEpochs,omitempty"`
 	NodeEpochs        map[string]uint64            `json:"nodeEpochs,omitempty"`
 	Rejoining         map[string]uint64            `json:"rejoining,omitempty"`
 	Enabled           bool                         `json:"enabled"`

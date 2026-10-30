@@ -41,17 +41,36 @@ func BackupOfflineWithProgress(path, role, destination string, progress io.Write
 		if err := validateOfflineTransaction(raw, role, path); err != nil {
 			return err
 		}
+		credentials, err := offlineCredentialCipher(raw, path)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Lstat(CredentialKeyPath(destination)); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			return errors.New("backup key already exists")
+		}
 		file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err != nil {
 			return err
 		}
-		complete := false
+		complete, keyWritten := false, false
 		defer func() {
 			_ = file.Close()
 			if !complete {
 				_ = os.Remove(destination)
+				if keyWritten {
+					_ = os.Remove(CredentialKeyPath(destination))
+				}
 			}
 		}()
+		if credentials != nil {
+			if err := writeCredentialKey(CredentialKeyPath(destination), credentials.key); err != nil {
+				return err
+			}
+			keyWritten = true
+		}
 		monitor := newBackupProgress(progress, raw.Size(), 10*time.Second)
 		defer monitor.stop()
 		if _, err := raw.WriteTo(backupWriter{file, monitor}); err != nil {

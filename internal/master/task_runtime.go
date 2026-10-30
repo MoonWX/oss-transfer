@@ -503,6 +503,13 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	if err := t.rebalanceQueued(ctx, p, available); err != nil {
+		memberErr = errors.Join(memberErr, err)
+	}
+	p, err = t.repo.Get(p.ID)
+	if err != nil {
+		return err
+	}
 	scanner = nodeSession(p.ScannerNode())
 	scanControl.Epoch = p.ScannerEpoch()
 	if p.Failover != nil && p.Failover.Enabled {
@@ -759,6 +766,9 @@ func (t *taskRuntime) observeStopped(ctx context.Context, p task.Parent) error {
 			}
 			observations := make([]task.Observation, 0, len(rows))
 			for _, record := range rows {
+				if record.ReleasedAssignment != nil {
+					continue
+				}
 				if record.Job.OwnerEpoch != p.NodeEpoch(node.ID) {
 					continue // Historical ownership on a rejoined node is no longer authoritative.
 				}

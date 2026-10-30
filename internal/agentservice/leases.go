@@ -417,5 +417,5 @@ func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	return map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID}
+	return map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1}
 }

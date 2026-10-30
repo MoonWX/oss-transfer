@@ -317,6 +317,9 @@ func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventor
 		}
 		existing, err := load(tx, job.ChildID)
 		if err == nil {
+			if existing.ReleasedAssignment != nil && job.Assignment <= *existing.ReleasedAssignment {
+				return ErrAssignment
+			}
 			if existing.Job.Generation > job.Generation {
 				return ErrGeneration
 			}
@@ -457,6 +460,9 @@ func (r *Repository) mutate(ctx context.Context, child string, fn func(*state.Tx
 
 func (r *Repository) Seal(ctx context.Context, child string, generation uint64) (Record, error) {
 	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
+		if j.ReleasedAssignment != nil {
+			return ErrAssignment
+		}
 		if j.Job.Generation != generation {
 			return ErrGeneration
 		}
@@ -476,6 +482,9 @@ func (r *Repository) Seal(ctx context.Context, child string, generation uint64) 
 
 func (r *Repository) begin(ctx context.Context, child string, generation uint64, resume, retryFailed bool) (Record, error) {
 	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
+		if j.ReleasedAssignment != nil {
+			return ErrAssignment
+		}
 		if err := checkParent(tx, j.Job.ParentID, generation); err != nil {
 			return err
 		}

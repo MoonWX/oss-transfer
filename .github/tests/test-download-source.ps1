@@ -208,7 +208,7 @@ try {
         $retained = Join-Path $BackupDir 'old-incomplete'
         Protect-Directory $retained
         Write-UTF8 (Join-Path $retained 'database') 'old rollback data'
-        foreach ($files in @(@('cli.exe'),@('database','service.json','cli.exe'))) {
+        foreach ($files in @(@('cli.exe'),@('database','database.key','service.json','cli.exe'))) {
             $backup = New-TemporaryBackup
             foreach ($file in $files) { Write-UTF8 (Join-Path $backup $file) 'this attempt' }
             Finish-TemporaryBackup
@@ -231,6 +231,7 @@ try {
         Prepare-BackupDirectory
         $backup = New-TemporaryBackup
         Write-UTF8 (Join-Path $backup 'database') 'recoverable data'
+        Write-UTF8 (Join-Path $backup 'database.key') 'recoverable fixture key'
         $script:finishActions = [Collections.Generic.List[string]]::new()
         $savedMaintenance = ${function:Maintain-Backups}
         $savedWrite = ${function:Write-UTF8}
@@ -242,6 +243,7 @@ try {
             Assert ($script:finishActions.Count -eq 0) 'Unconfirmed installation completed or pruned a backup.'
             Assert ($message.Contains($backup)) 'Retained backup location was not reported.'
             Assert ([IO.File]::ReadAllText((Join-Path $backup 'database')) -ceq 'recoverable data') 'Unconfirmed installation lost its backup.'
+            Assert ([IO.File]::ReadAllText((Join-Path $backup 'database.key')) -ceq 'recoverable fixture key') 'Unconfirmed installation lost its database key.'
             $installationSucceeded = $false
             $message = Finish-TemporaryBackup 3>&1 | Out-String
             Assert ([string]::IsNullOrWhiteSpace($message)) 'Failed installation attempted startup confirmation.'

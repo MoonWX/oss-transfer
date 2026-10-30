@@ -187,6 +187,10 @@ After a new installation or administrator password reset in V4.1.11, downgrading
 
 Use the backup directory printed by the installer. Stop the affected service first. The `database` file is the snapshot, `service.json` records its original data directory, and `binary` (`binary.exe` on Windows) is the previous program. Run a Master or Agent program that supports both the current and backup database formats with `--config <backup-directory>/service.json --restore-state <backup-directory>/database`. This restores the existing database in the data directory recorded in the saved configuration.
 
+Encrypted snapshots also have a `database.key` file. Keep it beside `database`; the restore command reads both. When making your own copies, keep `master.db.key` or `agent.db.key` with its database. The key is required to read saved storage credentials.
+
+If the current database's key is missing, restore its matching key from a backup of that same database before running `--restore-state`. A key from another installation will not work. Keep the restored key readable only by the service account and system administrators.
+
 Restore the saved program and `service.json` to their original locations, along with the saved installation metadata, service definition and CLI if present. Reload the service manager if its definition changed, then start the service and check its log. The backup does not include transferred files, so this does not roll back writes to the source or destination storage.
 
 ## Install without network access

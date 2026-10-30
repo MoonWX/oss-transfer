@@ -424,7 +424,7 @@ function Assert-BackupSpace([long]$Required,[long]$Available) {
 }
 function Test-BackupSpace {
     $required = [long](64MB)
-    foreach ($path in @($database,$binary,$CliPath,($CliPath+'.cluster.json'),($CliPath+'.local-auth.json'),(Join-Path $DataDir 'cli-cluster.json'),(Join-Path $DataDir 'cli-local-auth.json'))) {
+    foreach ($path in @($database,($database+'.key'),$binary,$CliPath,($CliPath+'.cluster.json'),($CliPath+'.local-auth.json'),(Join-Path $DataDir 'cli-cluster.json'),(Join-Path $DataDir 'cli-local-auth.json'))) {
         if (Test-Path -LiteralPath $path -PathType Leaf) { $required += (Get-Item -LiteralPath $path).Length }
     }
     $driveRoot = [IO.Path]::GetPathRoot($BackupDir)
@@ -467,7 +467,7 @@ function Remove-TemporaryBackup {
         # First-time CLI replacement and adoption do not have complete managed
         # installation metadata. Only remove their exact, newly created files.
         foreach ($file in @(Get-ChildItem -LiteralPath $backup -Force)) {
-            if ($file.Name -notin @('database','service.json','cli.exe','cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json')) { throw 'Unexpected temporary backup contents.' }
+            if ($file.Name -notin @('database','database.key','service.json','cli.exe','cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json')) { throw 'Unexpected temporary backup contents.' }
             Assert-RegularFile $file.FullName
         }
         Remove-Item -LiteralPath $backup -Recurse -Force

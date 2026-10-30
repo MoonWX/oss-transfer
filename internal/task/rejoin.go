@@ -64,6 +64,18 @@ func (r *Repository) FinishNodeRejoin(id int64, generation uint64, nodeID string
 		p.Failover.NodeEpochs[nodeID] = epoch
 		delete(p.Failover.Retired, nodeID)
 		delete(p.Failover.Rejoining, nodeID)
+		if p.Failover.Rebalance == nil {
+			p.Failover.Rebalance = &RebalanceState{}
+		}
+		if p.Failover.Rebalance.Targets == nil {
+			p.Failover.Rebalance.Targets = map[string]bool{}
+		}
+		p.Failover.Rebalance.Targets[nodeID] = true
+		if p.Failover.RebalancedEpochs == nil {
+			p.Failover.RebalancedEpochs = map[string]uint64{}
+		}
+		p.Failover.RebalancedEpochs[nodeID] = epoch
+		p.Failover.Rebalance.After, p.Failover.Rebalance.Pass = 0, 0
 		p.BudgetRevision++
 		return r.save(tx, p)
 	}))

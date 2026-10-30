@@ -6,6 +6,10 @@ An unfinished scan keeps an index for deduplication and source-change detection 
 
 New writes use compact object records and compress larger values when compression saves space. Existing plain records remain readable. Cleanup makes pages reusable, but does not reduce the database file's size on disk.
 
+Storage credentials are encrypted with AES-256-GCM in both the Master and Agent databases. Each database has its own adjacent `.key` file, restricted to its service account and system administrators. Keep the key with database backups; copying only the database does not produce a usable credential backup. This protects a database copied without its key, not an account that can read both files.
+
+The first startup migrates existing storage configurations. Old plaintext can remain in unused database pages until one offline compaction rewrites the file. Compaction removes those pages from the new database; it does not erase older backups or guarantee physical disk erasure. Future restarts do not repeat the full rewrite.
+
 Permanent deletion runs in the background. The recycle bin shows the cleanup stage, deleted record count and completed nodes until cleanup finishes. Closing the page or restarting a service does not discard the operation. An offline node is retried automatically when it returns; an explicitly removed node's local history is retained. In the CLI, use `oss-transfer-cli task trash` to check progress. Cleanup removes task records, not source or destination files.
 
 Managed installations authorize release only after the installer commits a successful startup. This retains the scan copy if an upgrade rolls back the Master's database. Older Masters and installers do not authorize release, so their acknowledged batches remain; tasks already finished before authorization also retain those batches.
@@ -35,9 +39,11 @@ sudo systemctl start oss-transfer-agent
 
 Check that the node reconnects and its tasks and reports are present before deleting the retained original. For a Master, substitute `master` for `agent` in these commands. Use the installation's actual paths and service name if they were customized.
 
+For an encrypted database, compaction also writes `agent.compact.db.key` using the same key as `agent.db.key`. Leave `agent.db.key` in place when installing the compacted file. Keep a copy of that key beside any retained database backup; the extra compact key copy can be removed after verifying startup.
+
 The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
 
-Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion raises the participating databases to schema 7. Rejoining a task node after failover requires schema 8 so an older program cannot run its obsolete queue. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
+Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion requires schema 7; rejoining a task node after failover requires schema 8. Credential encryption requires schema 9, and queue handoff requires schema 10. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
 
 ## 中文说明
 
@@ -49,10 +55,16 @@ Compact storage uses database schema 4, automatic task takeover requires schema 
 
 新写入会减少重复字段，并对较大的记录进行无损压缩。旧记录仍可读取。清理后，数据库可以复用空闲页，但文件本身不会自动缩小。
 
+Master 和 Agent 的存储凭证使用 AES-256-GCM 加密，密钥保存在各自数据库旁的 `.key` 文件中，只允许服务账号和系统管理员读取。备份必须同时保留数据库和密钥；只有数据库无法恢复凭证。这能保护单独泄露的数据库，不能防御同时拥有数据库和密钥读取权限的账号。
+
+首次启动会迁移已有存储配置。旧明文可能仍留在数据库空闲页中，需要执行一次离线压缩才能从新数据库中去掉；旧备份不会随之改变，也不等同于物理磁盘擦除。以后启动不会重复整理整库。
+
 永久删除在后台执行。回收站会显示清理阶段、已清理记录数和已完成节点数，清理完成后才移除任务。关闭页面或重启服务不会丢失清理进度；离线节点恢复后自动继续，已经明确移除的节点保留其本地历史。CLI 可通过 `oss-transfer-cli task trash` 查看进度。清理只删除任务记录，不删除源文件或目标文件。
 
 要把空间归还给文件系统，先停止对应服务，再执行上面的 `--compact-state` 命令。它生成并逐条验证一个新文件，不改动原库；成功后才执行第二组命令替换文件、启动服务。默认 Linux 安装可以直接使用示例，Master 将其中的 `agent` 替换为 `master`；自定义安装使用实际路径和服务名。
 
+加密库压缩后还会生成 `agent.compact.db.key`，内容与原来的 `agent.db.key` 相同。换库时保留原来的 `agent.db.key`；保留旧数据库备份时，也要配套保存密钥副本。新服务验证正常后，可以删除多出的压缩副本密钥。
+
 操作期间需要额外空间容纳副本。程序每批写入前检查剩余空间，至少保留 256 MiB 和下一次扩展所需空间；失败时清理临时副本，原库不变。启动后确认节点、任务和报告正常，再删除保留的原库。
 
-压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。受理后台删除后，参与清理的数据库升级到 schema 7。故障节点重新加入任务时使用 schema 8，防止旧程序重新运行已移交的队列。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。
+压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。后台删除使用 schema 7，故障节点重新加入使用 schema 8，凭证加密使用 schema 9，排队任务移交使用 schema 10。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。

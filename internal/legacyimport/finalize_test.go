@@ -67,6 +67,11 @@ func TestFinalizeAtomicPublicationPreservesRawAndAllowsOnlyFinalPath(t *testing.
 	if err := os.CopyFS(copied, os.DirFS(p.Directory)); err != nil {
 		t.Fatal(err)
 	}
+	// CopyFS deliberately gives files default creation permissions. Restore the
+	// private key's permissions before exercising the separate migration fence.
+	if err := os.Chmod(state.CredentialKeyPath(filepath.Join(copied, "master", "master.db")), 0600); err != nil {
+		t.Fatal(err)
+	}
 	db, err = state.Open(filepath.Join(copied, "master", "master.db"))
 	if err != nil {
 		t.Fatal(err)

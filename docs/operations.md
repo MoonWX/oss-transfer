@@ -32,11 +32,13 @@ The first upgrade from a version without online updates still uses the installat
 
 ## Disconnected nodes
 
-Multi-node tasks can move unfinished child tasks to another selected node after an Agent loses contact. All participating Agents must support task leases. The Master renews execution permission every 20 seconds; an isolated Agent stops starting work and cancels active transfers when its 60-second lease expires. Reassignment waits another 10 seconds. A returning node can rejoin when both sides support recovery fencing and the original shared directory is still accessible. Its old execution permission is revoked before it receives a new ownership epoch. Old queued work cannot resume under the new permission; future assignments can use the recovered node. Older Agents remain excluded from that task.
+Multi-node tasks can move unfinished child tasks to another selected node after an Agent loses contact. All participating Agents must support task leases. The Master renews execution permission every 20 seconds; an isolated Agent stops starting work and cancels active transfers when its 60-second lease expires. Reassignment waits another 10 seconds. A returning node can rejoin when both sides support recovery fencing and the original shared directory is still accessible. Its old execution permission is revoked before it receives a new ownership epoch. Older Agents remain excluded from that task.
+
+The recovered node can receive new assignments and queued children from healthy nodes, even after scanning has finished. Redistribution uses the task's existing placement policy and its load estimate of remaining bytes plus 64 KiB per object. Only children that have never started can move: the current owner must atomically revoke their execution permission before the Master changes ownership. Running and interrupted transfers stay with their current owner. Rebalancing runs in bounded batches after recovery; it does not continuously reshuffle the queue.
 
 Takeover supports OSS-to-OSS and verified shared directories. A small hidden marker stays in each shared directory so another node can verify that it still sees the original volume. A private local directory, a missing marker, or an older Agent prevents automatic reassignment. Completed children stay unchanged; incomplete children keep their numbers and saved file results. The new owner checks already completed objects before continuing. If the scanner fails, the replacement rebuilds its scan index from the Master’s saved assignments and resumes from the last source-page checkpoint covered by those assignments. Scan-ahead results that never reached the Master must be discovered again; the dataset contents are not downloaded for this check.
 
-A request already accepted by object storage may finish after its client is cancelled. Takeover therefore cannot promise exactly-once writes across arbitrary S3 services. Sources should remain stable during a transfer. Enabling task leases raises the database format to schema 5; safely rejoining a retired node requires schema 8; downgrading requires the matching pre-upgrade database backups for both Master and Agents.
+A request already accepted by object storage may finish after its client is cancelled. Takeover therefore cannot promise exactly-once writes across arbitrary S3 services. Sources should remain stable during a transfer. Enabling task leases raises the database format to schema 5; safely rejoining a retired node requires schema 8, credential encryption requires schema 9, and queue handoff requires schema 10. Downgrading requires the matching pre-upgrade database backups for both Master and Agents.
 
 ## Database space
 
@@ -68,11 +70,13 @@ This continues the same traversal; changes behind its saved position may not be 
 
 如果计划降级，升级前应另行备份各服务的程序、配置和已停止的数据库；成功升级后不会留下回退副本。自动回滚未完成时，按[手动恢复步骤](../deploy/native/README.md#recover-from-a-failed-upgrade)处理。
 
-多节点任务中的 Agent 失联后，未完成子任务会自动交给原先选定的健康节点。参与节点都需要支持任务租约：Master 每 20 秒续期，失联 Agent 在 60 秒授权到期后停止启动新工作并取消当前传输；Master 再等待 10 秒后重新分配。节点回来后，双方都支持恢复隔离机制且共享目录检查通过，才会重新加入。程序先撤销旧执行授权，再发放新一轮授权；旧队列不能因此重新执行，新分配的工作可以使用恢复的节点。旧版 Agent 仍不重新加入该任务。
+多节点任务中的 Agent 失联后，未完成子任务会自动交给原先选定的健康节点。参与节点都需要支持任务租约：Master 每 20 秒续期，失联 Agent 在 60 秒授权到期后停止启动新工作并取消当前传输；Master 再等待 10 秒后重新分配。节点回来后，双方都支持恢复隔离机制且共享目录检查通过，才会重新加入。程序先撤销旧执行授权，再发放新一轮授权。旧版 Agent 仍不重新加入该任务。
+
+恢复节点既能接收新子任务，也会分担健康节点上尚未开始的队列，扫描已经结束时也适用。分配沿用任务的分发策略，以剩余字节数加每个对象 64 KiB 的权重估算负载。移交前必须由原节点原子撤销执行权；已经开始或中断过的传输继续由当前节点处理。再均衡在恢复后分批进行，不会持续来回搬动队列。
 
 接管支持 OSS→OSS 和已验证的共享目录。共享目录保留一个很小的隐藏校验文件，接管前通过它确认候选节点仍能访问原来的卷。独占本地目录、校验文件丢失或旧版 Agent 都不会自动接管。已完成子任务保持不变，未完成子任务保留编号和文件结果，新节点校验已完成对象后继续。扫描节点故障时，新节点根据 Master 保存的已分发清单重建去重索引，再从这些清单覆盖的源端分页断点继续扫描。原节点尚未交给 Master 的扫描结果仍需重新发现，这个过程不下载对象内容。
 
-对象存储已经接收的请求可能在客户端取消后才完成，因此不能保证任意 S3 服务上绝无重复写入。迁移期间应保持源数据稳定。启用租约后数据库格式升级为 schema 5，已退出节点安全重新加入时升级为 schema 8；降级需要同时恢复 Master 和 Agent 升级前的配套数据库备份。
+对象存储已经接收的请求可能在客户端取消后才完成，因此不能保证任意 S3 服务上绝无重复写入。迁移期间应保持源数据稳定。启用租约后数据库格式升级为 schema 5，节点重新加入使用 schema 8，凭证加密使用 schema 9，排队任务移交使用 schema 10。降级需要同时恢复 Master 和 Agent 升级前的配套数据库备份。
 
 Master 持久保存、确认接收并授权释放扫描批次后，Agent 会在后台释放这些批次；扫描完成后也会回收去重索引，永久删除任务时也会清理扫描和执行记录。释放的页面可再次使用；缩小已有数据库文件的方法见[数据库维护](database-maintenance.md)。
 

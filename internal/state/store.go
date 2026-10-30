@@ -16,10 +16,14 @@ import (
 var ErrLegacyDatabase = errors.New("legacy RocksDB database detected; export and import it before starting the Go service")
 var ErrMigrationPending = errors.New("offline migration is incomplete; finish migration before starting this database")
 
-type Store struct{ db *bolt.DB }
+type Store struct {
+	db          *bolt.DB
+	credentials *credentialCipher
+}
 type Tx struct {
-	tx    *bolt.Tx
-	dirty bool
+	tx          *bolt.Tx
+	dirty       bool
+	credentials *credentialCipher
 }
 
 var errNoChanges = errors.New("state transaction has no changes")
@@ -51,7 +55,13 @@ const SchemaBackgroundCleanup = 7
 // SchemaTaskRejoin fences binaries which could execute a retired node's old queue.
 const SchemaTaskRejoin = 8
 
-const latestSchema = SchemaTaskRejoin
+// SchemaEncryptedCredentials fences readers without credential decryption.
+const SchemaEncryptedCredentials = 9
+
+// SchemaTaskHandoff prevents replaying work revoked for queue rebalancing.
+const SchemaTaskHandoff = 10
+
+const latestSchema = SchemaTaskHandoff
 
 type databaseFormat struct {
 	Role          string `json:"role"`
@@ -139,16 +149,21 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open state database: %w", err)
 	}
 	// Default bbolt commits fsync; disabling it would invalidate stop/ACK fences.
-	return &Store{db: db}, nil
+	store := &Store{db: db}
+	if err := store.initializeCredentials(path); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize storage credentials: %w", err)
+	}
+	return store, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) View(fn func(*Tx) error) error {
-	return s.db.View(func(tx *bolt.Tx) error { return fn(&Tx{tx: tx}) })
+	return s.db.View(func(tx *bolt.Tx) error { return fn(&Tx{tx: tx, credentials: s.credentials}) })
 }
 func (s *Store) Update(fn func(*Tx) error) error {
 	err := s.db.Update(func(raw *bolt.Tx) error {
-		tx := &Tx{tx: raw}
+		tx := &Tx{tx: raw, credentials: s.credentials}
 		if err := fn(tx); err != nil {
 			return err
 		}
@@ -175,7 +190,7 @@ func (t *Tx) Get(bucket, key string, into any) (bool, error) {
 	if value == nil {
 		return false, nil
 	}
-	decoded, err := decodeValue(value)
+	decoded, err := t.decodeStored(bucket, key, value)
 	if err != nil {
 		return false, fmt.Errorf("decode %s/%s: %w", bucket, key, err)
 	}
@@ -200,6 +215,33 @@ func (t *Tx) Put(bucket, key string, value any) error {
 		}
 	}
 	existing := t.tx.Bucket([]byte(bucket))
+	if bucket == credentialBucket {
+		// Compare plaintext before generating a nonce; exact replays remain write-free.
+		if existing != nil && existing.Get([]byte(key)) != nil {
+			previous, err := t.decodeStored(bucket, key, existing.Get([]byte(key)))
+			if err != nil {
+				return err
+			}
+			plain, err := decodeValue(encoded)
+			if err != nil {
+				return err
+			}
+			_, encrypted, err := encryptionInfo(t.tx)
+			if err != nil {
+				return err
+			}
+			if encrypted && bytes.Equal(previous, plain) {
+				return nil
+			}
+		}
+		if err := t.ensureCredentialEncryption(key); err != nil {
+			return err
+		}
+		encoded, err = t.credentials.seal(bucket, key, encoded)
+		if err != nil {
+			return err
+		}
+	}
 	if existing != nil && bytes.Equal(existing.Get([]byte(key)), encoded) {
 		return nil
 	}
@@ -290,7 +332,7 @@ func (t *Tx) Scan(bucket, prefix, after string, limit int, fn func(string, json.
 	}
 	for count := 0; k != nil && bytes.HasPrefix(k, []byte(prefix)) && count < limit; count++ {
 		if v != nil {
-			decoded, err := copyDecodedValue(v)
+			decoded, err := t.copyDecodedStored(bucket, string(k), v)
 			if err != nil {
 				return fmt.Errorf("decode %s/%s: %w", bucket, k, err)
 			}

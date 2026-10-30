@@ -56,7 +56,7 @@ func TestBackupMaintenanceUsesInstallationAndProtectsUpgrade(t *testing.T) {
 		if err = os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
-		files := map[string][]byte{filepath.Base(metadata): raw, "service.json": config, "binary" + executableSuffix(): []byte("saved executable"), "database": []byte("saved state")}
+		files := map[string][]byte{filepath.Base(metadata): raw, "service.json": config, "binary" + executableSuffix(): []byte("saved executable"), "database": []byte("saved state"), "database.key": make([]byte, 32)}
 		for file, content := range files {
 			if err = os.WriteFile(filepath.Join(dir, file), content, 0600); err != nil {
 				t.Fatal(err)

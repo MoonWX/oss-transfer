@@ -187,6 +187,9 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	if err != nil {
 		return err
 	}
+	if current.ReleasedAssignment != nil {
+		return ErrAssignment
+	}
 	if current.Job.Generation != generation && !(resume && current.Job.Generation < generation) {
 		return ErrGeneration
 	}

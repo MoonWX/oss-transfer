@@ -733,12 +733,12 @@ finish_backup() {
     for path in "$backup"/* "$backup"/.[!.]* "$backup"/..?*; do
       [[ -e "$path" || -L "$path" ]] || continue
       name=${path##*/}
-      if [[ "$name" != database && "$name" != service.json && "$name" != cli && "$name" != cli.cluster.json && "$name" != cli.local-auth.json && "$name" != data-cli.cluster.json && "$name" != data-cli.local-auth.json || ! -f "$path" || -L "$path" ]]; then
+      if [[ "$name" != database && "$name" != database.key && "$name" != service.json && "$name" != cli && "$name" != cli.cluster.json && "$name" != cli.local-auth.json && "$name" != data-cli.cluster.json && "$name" != data-cli.local-auth.json || ! -f "$path" || -L "$path" ]]; then
         printf 'Warning: unexpected temporary backup contents; retained %s.\n' "$backup" >&2
         return 0
       fi
     done
-    if ! rm -f -- "$backup/database" "$backup/service.json" "$backup/cli" "$backup/cli.cluster.json" "$backup/cli.local-auth.json" "$backup/data-cli.cluster.json" "$backup/data-cli.local-auth.json" || ! rmdir -- "$backup"; then
+    if ! rm -f -- "$backup/database" "$backup/database.key" "$backup/service.json" "$backup/cli" "$backup/cli.cluster.json" "$backup/cli.local-auth.json" "$backup/data-cli.cluster.json" "$backup/data-cli.local-auth.json" || ! rmdir -- "$backup"; then
       printf 'Warning: could not remove temporary backup: %s\n' "$backup" >&2
     fi
   fi
@@ -754,7 +754,7 @@ check_backup_space() {
     fail "Cannot write to backup directory: $backup_dir. The service has not been stopped."
   fi
   rm -f -- "$probe" || fail "Cannot remove backup directory probe: $backup_dir. The service has not been stopped."
-  for path in "$database" "$binary" "$cli_path" "$cli_path.cluster.json" "$cli_path.local-auth.json" "$data_dir/cli-cluster.json" "$data_dir/cli-local-auth.json"; do
+  for path in "$database" "$database.key" "$binary" "$cli_path" "$cli_path.cluster.json" "$cli_path.local-auth.json" "$data_dir/cli-cluster.json" "$data_dir/cli-local-auth.json"; do
     [[ -f "$path" ]] || continue
     size=$(LC_ALL=C ls -ln "$path" | awk '{print $5}')
     [[ "$size" =~ ^[0-9]+$ ]] || fail "Cannot determine backup size: $path"

@@ -271,7 +271,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	}
 	switch operation {
-	case "lease_prepare", "lease_grant", "lease_retire", "lease_rejoin", "scan_takeover_seed", "scan_takeover_finalize":
+	case "lease_prepare", "lease_grant", "lease_retire", "lease_rejoin", "child_release_queued", "scan_takeover_seed", "scan_takeover_finalize":
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete":
 		return true
@@ -386,6 +386,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		return result, err
 	}
 	switch c.Operation {
+	case "child_release_queued":
+		var request execution.QueueReleaseRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		released, err := s.Engine.ReleaseQueued(ctx, request)
+		return response(map[string]bool{"released": released}, err)
 	case "lease_rejoin":
 		var request LeaseRejoinRequest
 		if err := decode(c.Payload, &request); err != nil {

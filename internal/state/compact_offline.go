@@ -41,8 +41,9 @@ func CompactOffline(path, role, destination string) error {
 // Normalize must be deterministic and must not mutate its inputs. Returning nil
 // is an error: this hook cannot remove records or change bucket identities.
 type CompactOptions struct {
-	Progress  io.Writer
-	Normalize func(bucketPath []string, key string, decoded []byte) ([]byte, error)
+	credentials *credentialCipher
+	Progress    io.Writer
+	Normalize   func(bucketPath []string, key string, decoded []byte) ([]byte, error)
 }
 
 func CompactOfflineWithProgress(path, role, destination string, progress io.Writer) error {
@@ -73,6 +74,17 @@ func CompactOfflineWithOptions(path, role, destination string, options CompactOp
 		if err := validateOfflineTransaction(original, role, path); err != nil {
 			return err
 		}
+		credentials, err := offlineCredentialCipher(original, path)
+		if err != nil {
+			return err
+		}
+		options.credentials = credentials
+		if _, err := os.Lstat(CredentialKeyPath(destination)); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			return errors.New("compact destination key already exists")
+		}
 		available, err := compactFreeBytes(filepath.Dir(destination))
 		if err != nil {
 			return err
@@ -94,7 +106,7 @@ func CompactOfflineWithOptions(path, role, destination string, options CompactOp
 			return err
 		}
 		defer output.Close()
-		writer := compactWriter{db: output, progress: progress, started: time.Now(), reported: time.Now(), normalize: options.Normalize,
+		writer := compactWriter{db: output, credentials: credentials, progress: progress, started: time.Now(), reported: time.Now(), normalize: options.Normalize,
 			available: func() (uint64, error) { return compactFreeBytes(filepath.Dir(destination)) },
 		}
 		defer func() {
@@ -143,7 +155,15 @@ func CompactOfflineWithOptions(path, role, destination string, options CompactOp
 		if err != nil {
 			return err
 		}
+		if credentials != nil {
+			if err := writeCredentialKey(CredentialKeyPath(destination), credentials.key); err != nil {
+				return err
+			}
+		}
 		if err := publishCompact(temporary, destination); err != nil {
+			if credentials != nil {
+				_ = os.Remove(CredentialKeyPath(destination))
+			}
 			return err
 		}
 		if progress != nil {
@@ -154,6 +174,7 @@ func CompactOfflineWithOptions(path, role, destination string, options CompactOp
 }
 
 type compactWriter struct {
+	credentials       *credentialCipher
 	normalize         func([]string, string, []byte) ([]byte, error)
 	available         func() (uint64, error)
 	db                *bolt.DB
@@ -231,7 +252,7 @@ func (w *compactWriter) bucket(path [][]byte, source *bolt.Bucket) error {
 		if stored == nil {
 			return w.bucket(append(path[:len(path):len(path)], key), source.Bucket(key))
 		}
-		decoded, err := decodeValue(stored)
+		decoded, err := decodeCompactCredential(names, string(key), stored, w.credentials)
 		if err != nil {
 			return err
 		}
@@ -247,6 +268,12 @@ func (w *compactWriter) bucket(path [][]byte, source *bolt.Bucket) error {
 		encoded, err := encodeValue(decoded)
 		if err != nil {
 			return err
+		}
+		if len(path) == 1 && string(path[0]) == credentialBucket && w.credentials != nil {
+			encoded, err = w.credentials.seal(credentialBucket, string(key), encoded)
+			if err != nil {
+				return err
+			}
 		}
 		if len(path) == 1 && bytes.Equal(path[0], []byte("metadata")) && bytes.Equal(key, []byte("format")) {
 			encoded = decoded // The format fence must remain readable by old binaries.
@@ -309,11 +336,11 @@ func compareCompactBuckets(source, destination *bolt.Bucket, path []string, opti
 				return err
 			}
 		} else {
-			decodedSource, err := decodeValue(av)
+			decodedSource, err := decodeCompactCredential(path, string(ak), av, options.credentials)
 			if err != nil {
 				return err
 			}
-			decodedTarget, err := decodeValue(bv)
+			decodedTarget, err := decodeCompactCredential(path, string(bk), bv, options.credentials)
 			if err != nil {
 				return err
 			}
@@ -357,4 +384,15 @@ func compactFormat(raw []byte) ([]byte, error) {
 	// newer reader requirements such as leases when rewriting the format row.
 	fields["schemaVersion"] = json.RawMessage(fmt.Sprint(max(version, SchemaCompressedValues)))
 	return json.Marshal(fields)
+}
+
+func decodeCompactCredential(path []string, key string, stored []byte, credentials *credentialCipher) ([]byte, error) {
+	if len(path) == 1 && path[0] == credentialBucket && credentials != nil {
+		var err error
+		stored, err = credentials.open(credentialBucket, key, stored)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return decodeValue(stored)
 }

@@ -72,6 +72,9 @@ func (t *taskRuntime) observeNode(ctx context.Context, p task.Parent, children [
 }
 
 func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.Child, row *agentservice.ChildRecord) (*execution.Record, error) {
+	if p.HandoffPending(child.Job.Number) {
+		return nil, nil
+	}
 	var record execution.Record
 	var err error
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

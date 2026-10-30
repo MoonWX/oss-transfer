@@ -28,7 +28,7 @@ func (t *Tx) ScanReverse(bucket, before string, limit int, fn func(string, json.
 	}
 	for count := 0; k != nil && count < limit; count++ {
 		if v != nil {
-			decoded, err := copyDecodedValue(v)
+			decoded, err := t.copyDecodedStored(bucket, string(k), v)
 			if err != nil {
 				return fmt.Errorf("decode %s/%s: %w", bucket, k, err)
 			}

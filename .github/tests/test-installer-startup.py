@@ -539,6 +539,7 @@ rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
         self.assert_unknown_preserved()
 
     def test_successful_cli_replacement_or_adoption_removes_current_backup(self):
+        (self.backup/'database.key').write_bytes(bytes(range(32)))
         for name in ('cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json'):
             (self.backup/name).write_text('saved connection')
         result = self.invoke(0)
@@ -548,6 +549,8 @@ rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
         self.assert_unknown_preserved()
 
     def test_failed_or_unconfirmed_start_retains_and_prints_backup(self):
+        key = bytes(range(32))
+        (self.backup/'database.key').write_bytes(key)
         for existed in (0, 1):
             for failure in ('ready', 'enable', 'commit'):
                 with self.subTest(existed=existed, failure=failure):
@@ -555,6 +558,7 @@ rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
                     result = self.invoke(existed, failure)
                     self.assertEqual(result.returncode, 0 if failure == 'commit' else 7, result.stderr)
                     self.assertEqual((self.backup/'database').read_text(), 'rollback state')
+                    self.assertEqual((self.backup/'database.key').read_bytes(), key)
                     self.assertIn('Backup retained: '+str(self.backup), result.stderr)
                     self.assertFalse((self.root/'maintenance').exists())
                     self.assert_unknown_preserved()

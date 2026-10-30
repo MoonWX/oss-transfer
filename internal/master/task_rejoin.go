@@ -9,8 +9,9 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
-// Rejoining never takes work back from a healthy replacement. It only makes a
-// verified original member eligible for later assignments under a fresh epoch.
+// Rejoining fences the old queue before restoring membership under a fresh
+// epoch. Queue rebalancing may then move work which has not started; active
+// transfers on healthy replacements retain their assignments.
 func (t *taskRuntime) rejoinAvailableNodes(ctx context.Context, p task.Parent) (task.Parent, error) {
 	if p.Failover == nil || !p.Failover.Enabled || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding {
 		return p, nil

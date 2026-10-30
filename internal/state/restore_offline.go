@@ -1,6 +1,8 @@
 package state
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,6 +40,10 @@ func RestoreOffline(database, role, backup string) error {
 		if err := validateOfflineTransaction(source, role, database); err != nil {
 			return fmt.Errorf("invalid backup: %w", err)
 		}
+		sourceCipher, err := offlineCredentialCipher(source, backup)
+		if err != nil {
+			return fmt.Errorf("invalid backup credentials: %w", err)
+		}
 		current, err := openExistingOffline(database, currentInfo, false)
 		if err != nil {
 			return fmt.Errorf("open offline database (stop every process using it first): %w", err)
@@ -47,7 +53,50 @@ func RestoreOffline(database, role, backup string) error {
 			if err := validateOfflineTransaction(destination, role, database); err != nil {
 				return fmt.Errorf("invalid database: %w", err)
 			}
-			return restoreTransaction(destination, source)
+			destinationCipher, err := offlineCredentialCipher(destination, database)
+			if err != nil {
+				return fmt.Errorf("invalid database credentials: %w", err)
+			}
+			if sourceCipher != nil && destinationCipher == nil {
+				destinationCipher, err = loadCredentialCipher(database, false)
+				if err != nil {
+					return err
+				}
+			}
+			if err := restoreTransaction(destination, source); err != nil {
+				return err
+			}
+			// Keep the destination key immutable. Rewrap only this small bucket when
+			// restoring a snapshot made on a different installation; the database
+			// transaction remains atomic even if the process stops during restoration.
+			if sourceCipher != nil && destinationCipher.id != sourceCipher.id {
+				b := destination.Bucket([]byte(credentialBucket))
+				if b != nil {
+					var entries []struct{ key, value []byte }
+					if err := b.ForEach(func(key, value []byte) error {
+						plain, err := sourceCipher.open(credentialBucket, string(key), value)
+						if err != nil {
+							return err
+						}
+						sealed, err := destinationCipher.seal(credentialBucket, string(key), plain)
+						if err != nil {
+							return err
+						}
+						entries = append(entries, struct{ key, value []byte }{bytes.Clone(key), sealed})
+						return nil
+					}); err != nil {
+						return err
+					}
+					for _, entry := range entries {
+						if err := b.Put(entry.key, entry.value); err != nil {
+							return err
+						}
+					}
+				}
+				metadata, _ := json.Marshal(encryptionMetadata{Version: 1, KeyID: destinationCipher.id})
+				return destination.Bucket([]byte("metadata")).Put([]byte(encryptionMetadataKey), metadata)
+			}
+			return nil
 		})
 	})
 }

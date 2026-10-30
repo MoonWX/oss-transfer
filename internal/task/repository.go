@@ -651,6 +651,9 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	if !found {
 		return false, ErrNotFound
 	}
+	if p.HandoffPending(number) {
+		return false, nil
+	}
 	expectedJob := child.Job
 	expectedJob.Generation = p.Generation
 	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(expectedJob) {

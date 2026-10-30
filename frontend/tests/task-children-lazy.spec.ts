@@ -232,7 +232,7 @@ test("active refresh removes completed cached rows even when its cursor advances
   ).toBeLessThan(10);
 });
 
-test("active and all views keep their distinct global status priorities", async ({
+test("active and all views both put running children before waiting recovery", async ({
   page,
 }) => {
   const { children, reads } = await arrange(page, true);
@@ -262,7 +262,7 @@ test("active and all views keep their distinct global status priorities", async 
   await page.getByRole("button", { name: "全部", exact: true }).click();
   await expect
     .poll(async () => (await ids()).slice(0, 3))
-    .toEqual(["989-1", "989-2", "989-3"]);
+    .toEqual(["989-999", "989-1000", "989-1"]);
 });
 
 test("a visible child promoted behind the first running page stays present and completed neighbors disappear", async ({
@@ -458,7 +458,7 @@ test("leaving the child region cancels the whole refresh before its remaining pa
   );
 });
 
-test("all subtasks put failures from the end first and retain completed known rows during refresh", async ({
+test("all subtasks prioritize active transfers over failures and retain completed known rows during refresh", async ({
   page,
 }) => {
   await installPausedClock(page);
@@ -487,10 +487,10 @@ test("all subtasks put failures from the end first and retain completed known ro
   await expect
     .poll(async () => (await ids()).slice(0, 7))
     .toEqual([
+      "989-997",
       "989-999",
       "989-1000",
       "989-998",
-      "989-997",
       "989-996",
       "989-995",
       "989-1",
@@ -505,7 +505,9 @@ test("all subtasks put failures from the end first and retain completed known ro
   children[699].status = "FAILED";
   await page.clock.runFor(1200);
   await expect(completed.getByText("已完成", { exact: true })).toBeAttached();
-  await expect.poll(async () => (await ids())[0]).toBe("989-700");
+  await expect
+    .poll(async () => (await ids()).slice(0, 2))
+    .toEqual(["989-997", "989-700"]);
   const loaded = await ids();
   expect(new Set(loaded).size).toBe(loaded.length);
   expect(loaded.at(-1)).toBe("989-999");

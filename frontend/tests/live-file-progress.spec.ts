@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
-import { mockTaskChildren } from "./task-children-fixture";
+import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 
-async function arrange(page: Page, expanded = true) {
+async function arrange(page: Page, openChild = true) {
   await mockApi(page);
   await page.addInitScript(() =>
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
@@ -11,6 +11,8 @@ async function arrange(page: Page, expanded = true) {
     parent: {
       ...tasks[0],
       taskIndex: 51,
+      ossTaskGroup: true,
+      shardCount: 2,
       generation: 1,
       status: "RUNNING",
       listObjectCount: 1,
@@ -41,15 +43,13 @@ async function arrange(page: Page, expanded = true) {
   );
   await mockTaskChildren(page, () => ({
     parentTaskId: 51,
-    items: [
-      {
-        ...state.parent,
-        parentTaskId: 51,
-        childTaskId: "51-1",
-        shardId: "51-1",
-        subtaskNumber: 1,
-      },
-    ],
+    items: [1, 2].map((number) => ({
+      ...state.parent,
+      parentTaskId: 51,
+      childTaskId: `51-${number}`,
+      shardId: `51-${number}`,
+      subtaskNumber: number,
+    })),
   }));
   await page.route("**/api/master/tasks/*/progress?*", (route) => {
     const url = new URL(route.request().url());
@@ -87,18 +87,34 @@ async function arrange(page: Page, expanded = true) {
     });
   });
   await page.goto("/tasks?taskId=51");
-  if (expanded)
-    await page
-      .getByRole("button", { name: "文件传输详情", exact: true })
-      .click();
+  if (openChild) await openSubtask(page, 1);
   return state;
 }
 
-test("a large unfinished file advances before completed counters and stays finalizing at 100 percent", async ({
+async function openSubtask(page: Page, number: number) {
+  await revealChildren(page);
+  await page
+    .getByRole("button", { name: `查看子任务 51-${number}`, exact: true })
+    .click();
+  await expect(page.locator("[data-subtask-heading]")).toHaveText(
+    `子任务 #51-${number}`,
+  );
+}
+
+test("file progress is only requested inside the selected subtask and preserves large-file finalization", async ({
   page,
-}) => {
-  const state = await arrange(page);
-  const section = page.getByRole("region", { name: "正在传输", exact: true });
+}, testInfo) => {
+  const state = await arrange(page, false);
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
+  await expect(
+    page.getByRole("heading", { name: "迁移任务 #51", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "正在传输", exact: true }),
+  ).toHaveCount(0);
+  await expect(section).toHaveCount(0);
+  expect(state.reads).toEqual([]);
+  await openSubtask(page, 1);
   const progress = section.getByRole("progressbar", {
     name: "文件进度：training/big.bin",
   });
@@ -108,24 +124,35 @@ test("a large unfinished file advances before completed counters and stays final
   state.parent.averageSpeedBytesPerSecond = 120 * 1024 ** 2;
   await expect(progress).toHaveAttribute("aria-valuenow", "60");
   await expect(section).toContainText("60 GiB / 100 GiB");
+  await section.screenshot({
+    path: testInfo.outputPath("subtask-file-progress.png"),
+  });
   await expect(
-    page.getByText("已迁移", { exact: true }).locator(".."),
+    page
+      .locator("[data-subtask-heading]")
+      .locator("..")
+      .getByText("已迁移", { exact: true })
+      .locator(".."),
   ).toContainText("0 / 0 B");
   await expect(
-    page.getByText("平均速度", { exact: true }).locator(".."),
+    page
+      .locator("[data-subtask-heading]")
+      .locator("..")
+      .getByText("平均速度", { exact: true })
+      .locator(".."),
   ).toContainText("120 MiB/s");
   state.progress.transferredBytes = 100 * 1024 ** 3;
   state.progress.stage = "FINALIZING";
   await expect(progress).toHaveAttribute("aria-valuetext", "确认中");
   await expect(section).toContainText("100 GiB / 100 GiB");
   await expect(section).not.toContainText("已完成");
-  await section
-    .getByRole("button", { name: "子任务 #51-1", exact: true })
-    .click();
-  await expect(page.locator("[data-subtask-heading]")).toHaveText(
-    "子任务 #51-1",
-  );
-  await page.getByRole("button", { name: "文件传输详情", exact: true }).click();
+  expect(state.reads.every((url) => url.includes("childNumber=1"))).toBe(true);
+  await page.getByRole("button", { name: "返回主任务", exact: true }).click();
+  await expect(section).toHaveCount(0);
+  const readsAfterReturn = state.reads.length;
+  await page.waitForTimeout(1200); // Cross a polling interval after leaving the child.
+  expect(state.reads).toHaveLength(readsAfterReturn);
+  await openSubtask(page, 1);
   await expect(progress).toHaveAttribute("aria-valuetext", "确认中");
   await expect
     .poll(() =>
@@ -142,7 +169,7 @@ test("failed and older progress responses keep the last values marked as stale",
   page,
 }) => {
   const state = await arrange(page);
-  const section = page.getByRole("region", { name: "正在传输", exact: true });
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
   const progress = section.getByRole("progressbar", {
     name: "文件进度：training/big.bin",
   });
@@ -175,16 +202,13 @@ test("unsupported agents and stale generations do not show misleading file progr
   page,
 }) => {
   const state = await arrange(page);
-  const section = page.getByRole("region", { name: "正在传输", exact: true });
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
   const progress = section.getByRole("progressbar", {
     name: "文件进度：training/big.bin",
   });
   await expect(progress).toHaveAttribute("aria-valuenow", "25");
   state.progress.supported = false;
   await expect(section.getByText("更新执行节点后可查看文件进度")).toBeVisible();
-  await expect(
-    section.getByRole("button", { name: "文件传输详情", exact: true }),
-  ).toBeDisabled();
   await expect(progress).toBeHidden();
   state.progress.supported = true;
   state.parent.generation = 2;
@@ -197,98 +221,50 @@ test("unsupported agents and stale generations do not show misleading file progr
   ).toBeVisible();
   state.progress.generation = 2;
   state.progress.transferredBytes = 5 * 1024 ** 3;
-  await page.getByRole("button", { name: "文件传输详情", exact: true }).click();
   await expect(progress).toHaveAttribute("aria-valuenow", "5");
 });
 
-test("many small files stay collapsed and expand into a bounded list", async ({
-  page,
-}, testInfo) => {
-  const state = await arrange(page, false);
-  state.fileCount = 20;
-  state.totalFiles = 37;
-  state.parent.listObjectSize = 6 * 1024;
-  state.progress.transferredBytes = 0;
-  state.progress.hasMore = true;
-  const section = page.getByRole("region", { name: "正在传输", exact: true });
-  const toggle = section.getByRole("button", {
-    name: "文件传输详情",
-    exact: true,
-  });
-  await expect(section).toContainText("37 个文件");
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(section.locator("[data-file-progress]")).toHaveCount(0);
-  await expect
-    .poll(async () => (await section.boundingBox())!.height)
-    .toBeLessThan(60);
-  await section.screenshot({ path: testInfo.outputPath("collapsed.png") });
-  await toggle.click();
-  await expect(section.locator("[data-file-progress]")).toHaveCount(20);
-  await expect(section.getByRole("progressbar").first()).toHaveAttribute(
-    "aria-valuenow",
-    "0",
-  );
-  await expect
-    .poll(async () => (await section.boundingBox())!.height)
-    .toBeLessThan(390);
-  await expect(
-    section.getByRole("button", { name: "在子任务中查看其他文件" }),
-  ).toBeEnabled();
-  await section.screenshot({ path: testInfo.outputPath("expanded.png") });
-  await page.setViewportSize({ width: 375, height: 812 });
-  await expect
-    .poll(async () =>
-      section.evaluate((element) => element.scrollWidth <= element.clientWidth),
-    )
-    .toBe(true);
-  await section.screenshot({ path: testInfo.outputPath("mobile.png") });
-  await toggle.click();
-  await expect(section.locator("[data-file-progress]")).toHaveCount(0);
-});
-
-test("changing tasks does not carry over the previous file while the next response is delayed", async ({
+test("switching children never carries over file progress while the next response is delayed", async ({
   page,
 }) => {
   const state = await arrange(page);
   await expect(
     page.getByText("training/big.bin", { exact: true }),
   ).toBeVisible();
-  const second = { ...state.parent, taskIndex: 52 };
-  await page.route("**/api/master/status", (route) =>
-    route.fulfill({ json: { tasks: [state.parent, second] } }),
-  );
-  await page.route("**/api/master/tasks/52", (route) =>
-    route.fulfill({ json: { data: second } }),
-  );
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/master/tasks/52/progress?*", async (route) => {
-    await held;
-    return route.fulfill({
-      json: {
-        success: true,
-        data: {
-          parentTaskId: 52,
-          generation: 1,
-          supported: true,
-          partial: false,
-          observedAt: Date.now(),
-          items: [],
-          total: 0,
-          hasMore: false,
+  await page.route(
+    /\/api\/master\/tasks\/51\/progress\?.*childNumber=2(?:&|$)/,
+    async (route) => {
+      await held;
+      return route.fulfill({
+        json: {
+          success: true,
+          data: {
+            parentTaskId: 51,
+            childNumber: 2,
+            generation: 1,
+            supported: true,
+            partial: false,
+            observedAt: Date.now(),
+            items: [],
+            total: 0,
+            hasMore: false,
+          },
         },
-      },
-    });
-  });
-  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
-  await page.getByRole("button", { name: "#52", exact: true }).click();
-  await expect(
-    page.getByText("training/big.bin", { exact: true }),
-  ).toBeHidden();
+      });
+    },
+  );
+  await page.getByRole("button", { name: "返回主任务", exact: true }).click();
+  await openSubtask(page, 2);
+  await expect(page.getByText("training/big.bin", { exact: true })).toHaveCount(
+    0,
+  );
   release();
   await expect(
-    page.getByRole("region", { name: "正在传输", exact: true }),
+    page.getByRole("region", { name: "文件进度", exact: true }),
   ).toBeHidden();
+  expect(state.reads.every((url) => url.includes("childNumber=1"))).toBe(true);
 });

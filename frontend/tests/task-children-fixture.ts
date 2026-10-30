@@ -46,12 +46,12 @@ export async function mockTaskChildren(
           CREATED: 4,
         }
       : {
-          FAILED: 0,
-          PARTIAL_FAILED: 1,
-          RECOVERABLE: 2,
-          WAITING_RECOVERY: 2,
-          RUNNING: 3,
-          SCAN_COMPLETED: 3,
+          RUNNING: 0,
+          SCAN_COMPLETED: 0,
+          FAILED: 1,
+          PARTIAL_FAILED: 2,
+          RECOVERABLE: 3,
+          WAITING_RECOVERY: 3,
           RECOVERING: 4,
           RESUMING: 4,
           STOPPING: 5,

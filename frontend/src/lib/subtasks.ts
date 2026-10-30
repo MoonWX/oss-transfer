@@ -5,18 +5,18 @@ type ExecutionSubtask = Record<string, any> & {
   subtaskNumber?: number;
 };
 
-// The full list puts items needing attention before current work and history.
+// Keep active transfers visible before failures, queued work and history.
 export function allSubtaskPriority(task: ExecutionSubtask): number {
   switch (task.status) {
-    case "FAILED":
-      return 0;
-    case "PARTIAL_FAILED":
-      return 1;
-    case "RECOVERABLE":
-    case "WAITING_RECOVERY":
-      return 2;
     case "RUNNING":
     case "SCAN_COMPLETED":
+      return 0;
+    case "FAILED":
+      return 1;
+    case "PARTIAL_FAILED":
+      return 2;
+    case "RECOVERABLE":
+    case "WAITING_RECOVERY":
       return 3;
     case "RECOVERING":
     case "RESUMING":

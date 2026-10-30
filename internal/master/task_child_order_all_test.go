@@ -29,6 +29,8 @@ func TestAllChildPriorityHTTPUsesGlobalCursorAndBoundedUpgrade(t *testing.T) {
 			child.Job.Number, child.Job.ChildID = n, fmt.Sprintf("%d-%d", p.ID, n)
 			status := execution.Completed
 			switch n {
+			case 2097:
+				status = execution.Running
 			case 2098:
 				status = execution.Failed
 			case 2099:
@@ -61,16 +63,21 @@ func TestAllChildPriorityHTTPUsesGlobalCursorAndBoundedUpgrade(t *testing.T) {
 		first = get("limit=2")
 	}
 	items := first["items"].([]any)
-	if first["indexing"] == true || first["order"] != "priority" || len(items) != 2 || items[0].(map[string]any)["subtaskNumber"] != float64(2098) || first["nextCursor"] != "01/0000002099" {
+	if first["indexing"] == true || first["order"] != "priority" || len(items) != 2 || items[0].(map[string]any)["subtaskNumber"] != float64(2097) || items[1].(map[string]any)["subtaskNumber"] != float64(2098) || first["nextCursor"] != "01/0000002098" {
 		t.Fatal(first)
 	}
 	next := get("limit=2&offset=2&cursor=" + url.QueryEscape(first["nextCursor"].(string)) + "&known=2098")
 	items = next["items"].([]any)
-	if len(items) != 2 || items[0].(map[string]any)["subtaskNumber"] != float64(2100) || items[1].(map[string]any)["subtaskNumber"] != float64(1) || next["nextCursor"] != "09/0000000001" || next["nextOffset"] != float64(4) {
+	if len(items) != 2 || items[0].(map[string]any)["subtaskNumber"] != float64(2099) || items[1].(map[string]any)["subtaskNumber"] != float64(2100) || next["nextCursor"] != "03/0000002100" || next["nextOffset"] != float64(4) {
 		t.Fatal(next)
 	}
 	if updates := next["updates"].([]any); len(updates) != 1 || updates[0].(map[string]any)["subtaskNumber"] != float64(2098) {
 		t.Fatal(updates)
+	}
+	last := get("limit=2&offset=4&cursor=" + url.QueryEscape(next["nextCursor"].(string)))
+	items = last["items"].([]any)
+	if len(items) != 2 || items[0].(map[string]any)["subtaskNumber"] != float64(1) || items[1].(map[string]any)["subtaskNumber"] != float64(2) || last["nextCursor"] != "09/0000000002" {
+		t.Fatal("completed children appeared before ongoing work", last)
 	}
 	// Direct child links remain identity lookups, independent of list order.
 	code, response := request(t, f.http.Client(), "GET", fmt.Sprintf("%s/api/master/tasks/%d/children/1?order=priority", f.http.URL, p.ID), f.admin, nil)

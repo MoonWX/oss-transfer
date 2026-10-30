@@ -79,15 +79,15 @@ func TestAllChildOrderGlobalPagesStateChangesAndDowngradeRebuild(t *testing.T) {
 		return result
 	}
 	first, _ := page("")
-	if !reflect.DeepEqual(numbers(first), []int{291, 292}) {
+	if !reflect.DeepEqual(numbers(first), []int{295, 291}) {
 		t.Fatal(numbers(first))
 	}
 	second, _ := page(AllChildOrderCursor(first[1]))
-	if !reflect.DeepEqual(numbers(second), []int{293, 294}) {
+	if !reflect.DeepEqual(numbers(second), []int{292, 293}) {
 		t.Fatal(numbers(second))
 	}
 	third, _ := page(AllChildOrderCursor(second[1]))
-	if !reflect.DeepEqual(numbers(third), []int{295, 296}) {
+	if !reflect.DeepEqual(numbers(third), []int{294, 296}) {
 		t.Fatal(numbers(third))
 	}
 	// The first completed child is far earlier numerically, yet comes after
@@ -115,20 +115,28 @@ func TestAllChildOrderGlobalPagesStateChangesAndDowngradeRebuild(t *testing.T) {
 	if err := repo.Observe(p.ID, p.Generation, 298, execution.Record{Job: children[297].Job, Status: execution.Running, UpdatedAt: now.Add(time.Second), Attempt: 2}); err != nil {
 		t.Fatal(err)
 	}
-	rows, updates := page("02/0000000294", 298)
-	if !reflect.DeepEqual(numbers(rows), []int{295, 298}) || len(updates) != 1 || childStatus(updates[0]) != execution.Running {
+	rows, _ := page("")
+	if !reflect.DeepEqual(numbers(rows), []int{295, 298}) {
+		t.Fatal("running child did not move ahead of failures", numbers(rows))
+	}
+	rows, updates := page("03/0000000294", 298)
+	if !reflect.DeepEqual(numbers(rows), []int{296, 297}) || len(updates) != 1 || childStatus(updates[0]) != execution.Running {
 		t.Fatal(numbers(rows), updates)
 	}
 	old, _ := repo.Get(p.ID)
 	oldRevision := old.ChildOrder.All.Revision
-	// Simulate a v4.1.16 writer changing a child without maintaining the new
-	// all-state index, and dropping its unknown metadata field on parent save.
+	// A prior release indexed failed children before running children. Even a
+	// ready index must rebuild when its ordering version changes. Include an
+	// obsolete failed key whose child has since completed to expose stale reads.
 	if err := db.Update(func(tx *state.Tx) error {
 		parent, err := get(tx, p.ID)
 		if err != nil {
 			return err
 		}
-		parent.ChildOrder.All = nil
+		parent.ChildOrder.All.Version = 1
+		if err := tx.Put(allChildOrderBucket, allChildPrefix(parent)+"00/0000000291", 291); err != nil {
+			return err
+		}
 		child := children[290]
 		child.Record = &execution.Record{Job: child.Job, Status: execution.Completed, UpdatedAt: now.Add(2 * time.Second), Attempt: 2}
 		if err := tx.Put("master-task-children", childKey(p.ID, 291), child); err != nil {
@@ -139,11 +147,11 @@ func TestAllChildOrderGlobalPagesStateChangesAndDowngradeRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, _ = page("")
-	if !reflect.DeepEqual(numbers(rows), []int{292, 293}) {
+	if !reflect.DeepEqual(numbers(rows), []int{295, 298}) {
 		t.Fatal("stale index visible", numbers(rows))
 	}
 	current, _ := repo.Get(p.ID)
-	if current.ChildOrder.All.Revision == oldRevision {
+	if current.ChildOrder.All.Version != allChildOrderVersion || current.ChildOrder.All.Revision == oldRevision {
 		t.Fatal("reused stale index revision")
 	}
 	// The original active index must not include entries from the all index.

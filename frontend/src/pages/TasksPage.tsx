@@ -89,7 +89,6 @@ import ListPagination, {
 } from "../components/ListPagination";
 import TaskBandwidth from "../components/TaskBandwidth";
 import SubtaskDetails from "../components/SubtaskDetails";
-import LiveFileProgress from "../components/LiveFileProgress";
 import {
   EmptyState,
   ErrorAlert,
@@ -985,20 +984,6 @@ function TaskDetail({
               </Box>
             ))}
           </Box>
-          <LiveFileProgress
-            taskId={current.taskIndex}
-            generation={current.generation}
-            status={current.status}
-            refreshMs={refreshMs}
-            enabled={taskId === current.taskIndex}
-            onSelectChild={onSelectChild}
-            onShowChildren={() =>
-              childrenRegion.current?.scrollIntoView({
-                block: "start",
-                behavior: "smooth",
-              })
-            }
-          />
           <Box sx={{ mb: 3 }}>
             <Button
               variant="outlined"

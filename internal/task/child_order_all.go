@@ -15,6 +15,7 @@ import (
 
 const allChildOrderPage = 256
 const allChildOrderBucket = "master-task-child-priority"
+const allChildOrderVersion = 2
 
 // Each page and its cursor commit together. A fresh revision makes an older
 // binary's stale index invisible before bounded rebuilding and cleanup begin.
@@ -28,13 +29,13 @@ type AllChildOrderState struct {
 
 func allChildPriority(c Child) int {
 	switch childStatus(c) {
-	case execution.Failed:
-		return 0
-	case execution.PartialFailed:
-		return 1
-	case execution.Recoverable, "WAITING_RECOVERY":
-		return 2
 	case execution.Running, "SCAN_COMPLETED":
+		return 0
+	case execution.Failed:
+		return 1
+	case execution.PartialFailed:
+		return 2
+	case execution.Recoverable, "WAITING_RECOVERY":
 		return 3
 	case "RECOVERING", "RESUMING":
 		return 4
@@ -75,7 +76,7 @@ func allChildPrefix(p Parent) string {
 }
 
 func syncAllChildOrder(tx *state.Tx, p *Parent, previous *Child, current Child) error {
-	if p.ChildOrder == nil || p.ChildOrder.All == nil || p.ChildOrder.All.Version != 1 {
+	if p.ChildOrder == nil || p.ChildOrder.All == nil || p.ChildOrder.All.Version != allChildOrderVersion {
 		return nil
 	}
 	prefix := allChildPrefix(*p)
@@ -91,12 +92,12 @@ func prepareAllChildOrderPage(tx *state.Tx, p *Parent) (ready bool, err error) {
 	if p.ChildOrder == nil {
 		p.ChildOrder = &ChildOrderState{}
 	}
-	if p.ChildOrder.All == nil || p.ChildOrder.All.Version != 1 {
+	if p.ChildOrder.All == nil || p.ChildOrder.All.Version != allChildOrderVersion {
 		revision, err := tx.NextID(allChildOrderBucket)
 		if err != nil {
 			return false, err
 		}
-		p.ChildOrder.All = &AllChildOrderState{Version: 1, Revision: revision}
+		p.ChildOrder.All = &AllChildOrderState{Version: allChildOrderVersion, Revision: revision}
 	}
 	index := p.ChildOrder.All
 	if !index.Ready {
@@ -176,7 +177,7 @@ func (r *Repository) PriorityChildren(ctx context.Context, id int64, after strin
 		if err != nil {
 			return
 		}
-		if p.ChildOrder != nil && p.ChildOrder.All != nil && p.ChildOrder.All.Version == 1 && p.ChildOrder.All.Ready && p.ChildOrder.All.Cleaned {
+		if p.ChildOrder != nil && p.ChildOrder.All != nil && p.ChildOrder.All.Version == allChildOrderVersion && p.ChildOrder.All.Ready && p.ChildOrder.All.Cleaned {
 			ready = true
 			break
 		}
@@ -206,7 +207,7 @@ func (r *Repository) PriorityChildren(ctx context.Context, id int64, after strin
 		if err != nil {
 			return err
 		}
-		if parent.ChildOrder == nil || parent.ChildOrder.All == nil || !parent.ChildOrder.All.Ready {
+		if parent.ChildOrder == nil || parent.ChildOrder.All == nil || parent.ChildOrder.All.Version != allChildOrderVersion || !parent.ChildOrder.All.Ready {
 			ready = false
 			return nil
 		}

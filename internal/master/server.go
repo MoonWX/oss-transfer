@@ -59,6 +59,7 @@ type Server struct {
 	localCLIKey      []byte
 	updates          softwareUpdateState
 	topologyMu       sync.Mutex
+	maintenanceMu    sync.Mutex
 	agents           *agentControl
 	tasks            *taskRuntime
 	store            *state.Store

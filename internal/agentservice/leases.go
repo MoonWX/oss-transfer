@@ -25,6 +25,7 @@ var (
 )
 
 type LeasePrepareRequest struct {
+	OwnerEpoch uint64 `json:"ownerEpoch,omitempty"`
 	ParentID   int64  `json:"parentId"`
 	Generation uint64 `json:"generation"`
 	LeaseID    string `json:"leaseId"`
@@ -37,6 +38,7 @@ type LeasePrepared struct {
 	TTLMillis int64  `json:"ttlMs"`
 }
 type LeaseGrantRequest struct {
+	OwnerEpoch uint64 `json:"ownerEpoch,omitempty"`
 	ParentID   int64  `json:"parentId"`
 	Generation uint64 `json:"generation"`
 	LeaseID    string `json:"leaseId"`
@@ -45,9 +47,12 @@ type LeaseGrantRequest struct {
 	BootID     string `json:"bootId"`
 }
 type LeaseRetireRequest struct {
-	ParentID int64 `json:"parentId"`
+	OwnerEpoch uint64 `json:"ownerEpoch,omitempty"`
+	ParentID   int64  `json:"parentId"`
 }
 type leaseRecord struct {
+	OwnerEpoch uint64 `json:"ownerEpoch,omitempty"`
+	Rejoining  bool   `json:"rejoining,omitempty"`
 	ParentID   int64  `json:"parentId"`
 	Generation uint64 `json:"generation"`
 	LeaseID    string `json:"leaseId"`
@@ -77,14 +82,16 @@ type parentLease struct {
 // Expiry never waits for a database lock. Only required/retired ownership is
 // durable: after restart no persisted lease authorizes execution.
 type Leases struct {
-	store     *state.Store
-	bootID    string
-	mu        sync.Mutex
-	parents   map[int64]*parentLease
-	closed    bool
-	now       func() time.Time
-	afterFunc func(time.Duration, func()) leaseTimer
-	quiesce   func(context.Context, int64) error
+	store         *state.Store
+	bootID        string
+	mu            sync.Mutex
+	parents       map[int64]*parentLease
+	closed        bool
+	now           func() time.Time
+	afterFunc     func(time.Duration, func()) leaseTimer
+	quiesce       func(context.Context, int64) error
+	rejoinCleanup func(context.Context, int64, uint64) error
+	rejoinScanner func(context.Context, LeaseRejoinRequest) error
 }
 
 func NewLeases(store *state.Store) (*Leases, error) {
@@ -154,6 +161,9 @@ func (m *Leases) expireLocked(p *parentLease) {
 	}
 }
 func (m *Leases) ParentContext(parentID int64, generation uint64) (context.Context, error) {
+	return m.ownerContext(parentID, generation, nil)
+}
+func (m *Leases) ownerContext(parentID int64, generation uint64, epoch *uint64) (context.Context, error) {
 	if m == nil {
 		return context.Background(), nil
 	}
@@ -167,8 +177,11 @@ func (m *Leases) ParentContext(parentID int64, generation uint64) (context.Conte
 	}
 	p := m.entryLocked(parentID)
 	m.expireLocked(p)
-	if p.record.Retired {
+	if p.record.Retired || p.record.Rejoining {
 		return nil, ErrLeaseRetired
+	}
+	if epoch != nil && *epoch != p.record.OwnerEpoch {
+		return nil, ErrLeaseConflict
 	}
 	if !p.record.Required {
 		return p.ctx, nil
@@ -187,7 +200,12 @@ func (m *Leases) Admission(parentID int64, generation uint64) error {
 }
 func (m *Leases) persist(row leaseRecord) error {
 	return m.store.Update(func(tx *state.Tx) error {
-		if err := state.RequireSchema(tx, "agent", state.SchemaTaskLeases); err != nil {
+		if err := state.RequireSchema(tx, "agent", func() int {
+			if row.OwnerEpoch > 0 {
+				return state.SchemaTaskRejoin
+			}
+			return state.SchemaTaskLeases
+		}()); err != nil {
 			return err
 		}
 		return tx.Put(leaseBucket, leaseKey(row.ParentID), row)
@@ -207,9 +225,13 @@ func (m *Leases) Prepare(ctx context.Context, request LeasePrepareRequest) (Leas
 	}
 	m.mu.Lock()
 	m.expireLocked(p)
-	if m.closed || p.record.Retired {
+	if m.closed || p.record.Retired || p.record.Rejoining {
 		m.mu.Unlock()
 		return LeasePrepared{}, ErrLeaseRetired
+	}
+	if request.OwnerEpoch != p.record.OwnerEpoch {
+		m.mu.Unlock()
+		return LeasePrepared{}, ErrLeaseConflict
 	}
 	if request.Generation < p.record.Generation {
 		m.mu.Unlock()
@@ -235,7 +257,7 @@ func (m *Leases) Prepare(ctx context.Context, request LeasePrepareRequest) (Leas
 	rearm := !same || !p.active
 	if rearm {
 		m.closeLocked(p)
-		p.record = leaseRecord{ParentID: request.ParentID, Generation: request.Generation, LeaseID: request.LeaseID, Required: true}
+		p.record = leaseRecord{ParentID: request.ParentID, Generation: request.Generation, LeaseID: request.LeaseID, Required: true, OwnerEpoch: request.OwnerEpoch}
 		p.expired, p.pending = false, nil
 	}
 	row := p.record
@@ -258,7 +280,7 @@ func (m *Leases) Prepare(ctx context.Context, request LeasePrepareRequest) (Leas
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if p.record.Retired || m.closed {
+	if p.record.Retired || p.record.Rejoining || m.closed {
 		return LeasePrepared{}, ErrLeaseRetired
 	}
 	m.expireLocked(p)
@@ -289,7 +311,7 @@ func (m *Leases) Grant(ctx context.Context, request LeaseGrantRequest) error {
 	}
 	m.mu.Lock()
 	m.expireLocked(p)
-	if m.closed || p.record.Retired {
+	if m.closed || p.record.Retired || p.record.Rejoining {
 		m.mu.Unlock()
 		return ErrLeaseRetired
 	}
@@ -298,7 +320,7 @@ func (m *Leases) Grant(ctx context.Context, request LeaseGrantRequest) error {
 		return ErrLeaseExpired
 	}
 	candidate := p.pending
-	if candidate == nil || request.BootID != m.bootID || request.Challenge != candidate.result.Challenge || request.LeaseID != candidate.request.LeaseID || request.Generation != candidate.request.Generation || request.Sequence != candidate.request.Sequence {
+	if candidate == nil || request.OwnerEpoch != p.record.OwnerEpoch || request.OwnerEpoch != candidate.request.OwnerEpoch || request.BootID != m.bootID || request.Challenge != candidate.result.Challenge || request.LeaseID != candidate.request.LeaseID || request.Generation != candidate.request.Generation || request.Sequence != candidate.request.Sequence {
 		m.mu.Unlock()
 		return ErrLeaseConflict
 	}
@@ -319,7 +341,7 @@ func (m *Leases) Grant(ctx context.Context, request LeaseGrantRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.expireLocked(p)
-	if p.record.Retired || m.closed {
+	if p.record.Retired || p.record.Rejoining || m.closed {
 		return ErrLeaseRetired
 	}
 	if p.expired || !m.now().Before(candidate.deadline) {
@@ -345,19 +367,31 @@ func (m *Leases) Grant(ctx context.Context, request LeaseGrantRequest) error {
 	})
 	return nil
 }
-func (m *Leases) Retire(ctx context.Context, parentID int64) error {
+func (m *Leases) Retire(ctx context.Context, parentID int64, epochs ...uint64) error {
+	var epoch uint64
+	if len(epochs) > 0 {
+		epoch = epochs[0]
+	}
 	if parentID < 1 {
 		return ErrInvalidLease
 	}
 	// Revoke in memory before contending with grants or the DB writer.
 	m.mu.Lock()
 	p := m.entryLocked(parentID)
+	if p.record.OwnerEpoch != epoch {
+		m.mu.Unlock()
+		return ErrLeaseConflict
+	}
 	p.record.Required, p.record.Retired = true, true
 	m.closeLocked(p)
 	m.mu.Unlock()
 	p.opMu.Lock()
 	defer p.opMu.Unlock()
 	m.mu.Lock()
+	if p.record.OwnerEpoch != epoch {
+		m.mu.Unlock()
+		return ErrLeaseConflict
+	}
 	row := p.record
 	m.mu.Unlock()
 	if err := m.persist(row); err != nil {
@@ -383,5 +417,5 @@ func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	return map[string]any{"leaseProtocol": 1, "leaseBootId": s.Leases.bootID}
+	return map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID}
 }

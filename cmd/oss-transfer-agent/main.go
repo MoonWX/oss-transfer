@@ -41,6 +41,8 @@ func run() error {
 	backupMaintenance := flag.String("backup-maintenance", "", "Manage upgrade backups: list, prune or complete")
 	backupDirectory := flag.String("backup-dir", "", "Managed upgrade backup directory")
 	backupEntry := flag.String("backup-entry", "", "Backup directory name to mark complete")
+	upgradeMaintenance := flag.String("upgrade-maintenance", "", "Protect a native upgrade: begin or end")
+	upgradeMaintenanceFile := flag.String("upgrade-maintenance-file", "", "Installer-owned maintenance receipt")
 	backupState := flag.String("backup-state", "", "Validate and snapshot a stopped database to a new file")
 	restoreState := flag.String("restore-state", "", "Restore a snapshot into a stopped existing database")
 	compactState := flag.String("compact-state", "", "Write a compact, verified copy of a stopped database to a new file")
@@ -53,6 +55,24 @@ func run() error {
 	if *showVersion {
 		fmt.Printf("oss-transfer-agent %s (%s, built %s)\n", version, commit, builtAt)
 		return nil
+	}
+	if *upgradeMaintenance != "" || *upgradeMaintenanceFile != "" {
+		invalid := *configPath == "" || *upgradeMaintenance == "" || *upgradeMaintenanceFile == "" || flag.NArg() != 0
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "upgrade-maintenance", "upgrade-maintenance-file", "config":
+			default:
+				invalid = true
+			}
+		})
+		if invalid {
+			return errors.New("upgrade maintenance requires --config and --upgrade-maintenance-file without other operations")
+		}
+		config, err := servicehost.LoadConfig(*configPath, "agent")
+		if err != nil {
+			return err
+		}
+		return servicehost.AgentUpgradeMaintenance(context.Background(), config, *upgradeMaintenance, *upgradeMaintenanceFile)
 	}
 	if *backupMaintenance != "" {
 		invalid := false

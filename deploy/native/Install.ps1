@@ -370,6 +370,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-install-'+[Guid]::Ne
 Protect-Directory $work
 $changed = $false
 $installationSucceeded = $false
+$agentMaintenanceStarted = $false
 $backup = $null
 $script:ownedBackup = $null
 $script:startupCommitted = $false
@@ -711,6 +712,11 @@ try {
             Write-UTF8 (Join-Path $backup 'service-record.json') ($oldService | Select-Object PathName,StartMode | ConvertTo-Json)
             $wasRunning = $oldService.State -ne 'Stopped'
         }
+        if ($Role -eq 'agent') {
+            Write-Host 'Protecting Agent tasks during the upgrade...'
+            Invoke-Native $candidate @('--config',$config,'--upgrade-maintenance','begin','--upgrade-maintenance-file',(Join-Path $work 'agent-maintenance.json')) | Out-Null
+            $agentMaintenanceStarted = $true
+        }
         $changed = $true
         Write-Host "Stopping $ServiceName before the database backup..."
         Stop-OwnedService
@@ -750,6 +756,12 @@ try {
     Prepare-Start
     Start-Service -Name $ServiceName
     Wait-Ready
+    if ($agentMaintenanceStarted) {
+        try {
+            Invoke-Native $candidate @('--config',$config,'--upgrade-maintenance','end','--upgrade-maintenance-file',(Join-Path $work 'agent-maintenance.json')) | Out-Null
+            $agentMaintenanceStarted = $false
+        } catch { Write-Warning 'Could not end Agent upgrade maintenance; it expires automatically within 30 minutes.' }
+    }
     Write-Host "Installed $Role $version. Service: $ServiceName"
     Write-Host "Configuration: $config"
     Write-Host "CLI: $CliPath"
@@ -798,7 +810,13 @@ try {
                     $created = Service-Record
                     if ($created) { Invoke-CimMethod -InputObject $created -MethodName Delete | Out-Null }
                 }
-                if ($wasRunning) { Prepare-Start; Start-Service -Name $ServiceName; Wait-Ready }
+                if ($wasRunning) {
+                    Prepare-Start; Start-Service -Name $ServiceName; Wait-Ready
+                    if ($agentMaintenanceStarted) {
+                        Invoke-Native $candidate @('--config',$config,'--upgrade-maintenance','end','--upgrade-maintenance-file',(Join-Path $work 'agent-maintenance.json')) | Out-Null
+                        $agentMaintenanceStarted = $false
+                    }
+                }
             } else {
                 $created = Service-Record
                 if ($created) { Invoke-CimMethod -InputObject $created -MethodName Delete | Out-Null }

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/discovery"
+	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/task"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -143,6 +145,13 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 		if available[node.ID] {
 			continue
 		}
+		protected, err := t.server.agentUnderMaintenance(node.ID)
+		if err != nil {
+			return p, err
+		}
+		if protected {
+			continue
+		}
 		expired, err := t.leases.expired(p, node)
 		if err != nil {
 			return p, err
@@ -162,10 +171,7 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 		if err = t.verifyTaskStorage(ctx, p, candidates, false); err != nil {
 			return p, err
 		}
-		if err = t.leases.retire(p, node); err != nil {
-			return p, err
-		}
-		p, err = t.repo.BeginFailover(p.ID, p.Generation, node.ID)
+		p, err = t.retireUnavailableNode(p, node)
 		if err != nil {
 			return p, err
 		}
@@ -190,6 +196,9 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 			}
 		}
 	}
+	if err == nil {
+		p, err = t.rejoinAvailableNodes(ctx, p)
+	}
 	return p, err
 }
 
@@ -204,7 +213,7 @@ func (t *taskRuntime) seedTakeoverScanner(ctx context.Context, p task.Parent) (b
 	if ready, err := t.syncInventory(ctx, p); err != nil || !ready {
 		return false, err
 	}
-	request := discovery.TakeoverRequest{Spec: t.scanSpec(p), Epoch: p.Failover.ScannerEpoch, ThroughBatch: int64(p.Failover.ScannerThrough), Objects: p.DispatchedObjects, Bytes: p.DispatchedBytes}
+	request := discovery.TakeoverRequest{Checkpoint: p.ScanCheckpoint, Spec: t.scanSpec(p), Epoch: p.Failover.ScannerEpoch, ThroughBatch: int64(p.Failover.ScannerThrough), Objects: p.DispatchedObjects, Bytes: p.DispatchedBytes}
 	children, err := t.repo.Children(p.ID, p.Failover.ScannerSeedAfter, 16)
 	if err != nil {
 		return false, err
@@ -253,6 +262,9 @@ func childAcceptance(p task.Parent, child task.Child) agentservice.ChildAcceptRe
 	request := agentservice.ChildAcceptRequest{Job: child.Job, InventorySource: p.Spec.InventoryID != ""}
 	if child.Job.Assignment > 0 {
 		request.Seed = child.Record
+		if request.Seed == nil {
+			request.Seed = &execution.Record{Job: child.Job, CreatedAt: time.Now().UTC()}
+		}
 	}
 	return request
 }

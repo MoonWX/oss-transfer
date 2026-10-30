@@ -591,6 +591,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-install.XXXXXX")
 backup=
 owned_backup=
 was_active=0
+agent_maintenance_started=0
 was_enabled=0
 had_unit=0
 [[ ! -f "$unit" ]] || had_unit=1
@@ -995,6 +996,14 @@ restore_cli_sidecars() {
     done
   done
 }
+finish_agent_maintenance() {
+  ((agent_maintenance_started)) || return 0
+  if "$work/$filename" --config "$config" --upgrade-maintenance end --upgrade-maintenance-file "$work/agent-maintenance.json"; then
+    agent_maintenance_started=0
+  else
+    printf 'Warning: could not end Agent upgrade maintenance; it expires automatically within 30 minutes.\n' >&2
+  fi
+}
 rollback() {
   local result=$?
   trap - ERR INT TERM
@@ -1024,7 +1033,11 @@ rollback() {
     cp -p "$backup/install.tsv" "$metadata"
     if [[ -f "$backup/unit" ]]; then cp -p "$backup/unit" "$unit"; else rm -f "$unit"; fi
     if [[ "$platform" == linux ]]; then systemctl daemon-reload; fi
-    if ((was_active)); then prepare_start; start_service && wait_ready || printf 'Rollback files restored, but the original service did not become ready. Check %s\n' "$log_file" >&2; fi
+    if ((was_active)); then
+      prepare_start
+      if start_service && wait_ready; then finish_agent_maintenance;
+      else printf 'Rollback files restored, but the original service did not become ready. Check %s\n' "$log_file" >&2; fi
+    fi
   else
     rm -f "$unit"
     if [[ "$platform" == linux ]]; then systemctl daemon-reload; fi
@@ -1064,6 +1077,11 @@ if ((existed)); then
   if [[ -f "$unit" ]]; then cp -p "$unit" "$backup/unit"; fi
   if active; then was_active=1; fi
   if [[ "$platform" == linux ]] && systemctl is-enabled --quiet "$service_name"; then was_enabled=1; fi
+  if [[ "$role" == agent ]]; then
+    printf 'Protecting Agent tasks during the upgrade...\n'
+    "$work/$filename" --config "$config" --upgrade-maintenance begin --upgrade-maintenance-file "$work/agent-maintenance.json"
+    agent_maintenance_started=1
+  fi
   trap rollback ERR INT TERM
   printf 'Stopping %s before the database backup...\n' "$service_name"
   stop_service
@@ -1167,6 +1185,7 @@ if [[ "$platform" == linux ]]; then
   if ((existed == 0 || had_unit == 0 || was_enabled)); then systemctl enable "$service_name" >/dev/null; fi
 fi
 trap - ERR INT TERM
+finish_agent_maintenance
 if commit_start; then
   finish_backup
   if ((cli_migrated)); then rm -f "$previous_cli" "$previous_cli.cluster.json" "$previous_cli.local-auth.json"; fi

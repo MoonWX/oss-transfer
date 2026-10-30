@@ -382,7 +382,7 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 	return errors.Join(problems...)
 }
 func (t *taskRuntime) scanSpec(p task.Parent) discovery.Spec {
-	spec := discovery.Spec{InventoryID: p.Spec.InventoryID, ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch(), Source: p.Spec.Source, Prefix: p.Spec.Prefix, SingleKey: p.Spec.ObjectKey, StartKey: p.Spec.StartKey, EndKey: p.Spec.EndKey}
+	spec := discovery.Spec{OwnerEpoch: p.NodeEpoch(p.ScannerNode().ID), InventoryID: p.Spec.InventoryID, ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch(), Source: p.Spec.Source, Prefix: p.Spec.Prefix, SingleKey: p.Spec.ObjectKey, StartKey: p.Spec.StartKey, EndKey: p.Spec.EndKey}
 	if p.Legacy != nil && p.Legacy.RecoveryStarted {
 		spec.LegacyManifestID = p.Legacy.MigrationID
 	}
@@ -603,7 +603,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if err := s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &scan); err != nil {
 		return err
 	}
-	if err := t.repo.ScanProgressForScanner(p.ID, p.Generation, p.ScannerEpoch(), scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error); err != nil {
+	if err := t.repo.ScanProgressForScanner(p.ID, p.Generation, p.ScannerEpoch(), scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error, scan.TransferCheckpoint); err != nil {
 		return err
 	}
 	p, err = t.repo.Get(p.ID)
@@ -759,6 +759,9 @@ func (t *taskRuntime) observeStopped(ctx context.Context, p task.Parent) error {
 			}
 			observations := make([]task.Observation, 0, len(rows))
 			for _, record := range rows {
+				if record.Job.OwnerEpoch != p.NodeEpoch(node.ID) {
+					continue // Historical ownership on a rejoined node is no longer authoritative.
+				}
 				if record.Job.Generation != p.Generation {
 					// Successful historical children are not rewritten for every retry.
 					if record.Job.Generation < p.Generation && record.Status == execution.Completed {

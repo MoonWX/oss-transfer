@@ -49,7 +49,9 @@ func (s *Server) softwareUpdateBlocksNode(nodeID string) bool {
 		return true
 	}
 	for _, item := range q.Items {
-		if item.NodeID == nodeID && item.Phase == "UPDATING" {
+		// Match failover protection even if the queue loop has not reconciled
+		// its expired entry yet. A stale update cannot hide a healthy Agent.
+		if item.NodeID == nodeID && item.Phase == "UPDATING" && !item.StartedAt.IsZero() && s.options.Now().Before(item.StartedAt.Add(agentMaintenanceTTL)) {
 			return true
 		}
 	}
@@ -179,7 +181,7 @@ func (s *Server) stepSoftwareQueue(parent context.Context) {
 			finish("FAILED", "MASTER_CHANGED", "The Master version changed; start a new Agent update")
 			return
 		}
-		expired := item.Phase == "UPDATING" && time.Since(item.StartedAt) > time.Hour
+		expired := item.Phase == "UPDATING" && (item.StartedAt.IsZero() || !s.options.Now().Before(item.StartedAt.Add(agentMaintenanceTTL)))
 		member, err := s.nodeByAddress(item.Address)
 		if err != nil || member.ID != item.NodeID || member.EnrollmentID != item.EnrollmentID {
 			finish("FAILED", "NODE_CHANGED", "The registered Agent changed; start a new update")

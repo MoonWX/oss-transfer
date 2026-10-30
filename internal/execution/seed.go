@@ -17,10 +17,8 @@ func (e *Engine) AcceptSeed(ctx context.Context, job Job, seed *Record, inventor
 	if e.closed {
 		return Record{}, ErrClosed
 	}
-	if e.opts.ParentContext != nil {
-		if _, err := e.opts.ParentContext(job.ParentID, job.Generation); err != nil {
-			return Record{}, err
-		}
+	if _, err := e.jobContext(job); err != nil {
+		return Record{}, err
 	}
 	if seed != nil && e.active[job.ChildID] != nil {
 		current, err := e.repo.Get(ctx, job.ChildID)

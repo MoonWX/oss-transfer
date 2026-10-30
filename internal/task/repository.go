@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/discovery"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/inventory"
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -257,9 +258,10 @@ func (r *Repository) List(after int64, limit int, activeOnly bool) (result []Par
 
 // Assignment is one durable scanner batch awaiting node assignment.
 type Assignment struct {
-	Number  int
-	Objects []transferstore.Object
-	Legacy  map[string]execution.LegacyCandidate
+	Checkpoint *discovery.RecoveryCheckpoint
+	Number     int
+	Objects    []transferstore.Object
+	Legacy     map[string]execution.LegacyCandidate
 }
 
 // Assign commits the scanner batch and its node assignment before any command
@@ -345,6 +347,9 @@ func (r *Repository) assignPage(id int64, generation, epoch uint64, batches []As
 			if err != nil {
 				return err
 			}
+			if err := retainScanCheckpoint(&p, batch.Checkpoint); err != nil {
+				return err
+			}
 			children = append(children, child)
 		}
 		return r.save(tx, p)
@@ -384,7 +389,7 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	if err != nil {
 		return child, err
 	}
-	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
+	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, OwnerEpoch: p.NodeEpoch(node.ID), Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
 	job.SharedLocalSource = p.Spec.SharedLocalSource
 	job.SharedLocalDestination = p.Spec.SharedLocalDestination
 	if job.Source.Kind == "LOCAL" {
@@ -723,11 +728,11 @@ func (r *Repository) ScanProgress(id int64, generation uint64, objects, bytes in
 	return r.scanProgress(id, generation, nil, objects, bytes, batches, complete, scanErr)
 }
 
-func (r *Repository) ScanProgressForScanner(id int64, generation, epoch uint64, objects, bytes int64, batches int, complete bool, scanErr string) error {
-	return r.scanProgress(id, generation, &epoch, objects, bytes, batches, complete, scanErr)
+func (r *Repository) ScanProgressForScanner(id int64, generation, epoch uint64, objects, bytes int64, batches int, complete bool, scanErr string, checkpoints ...*discovery.RecoveryCheckpoint) error {
+	return r.scanProgress(id, generation, &epoch, objects, bytes, batches, complete, scanErr, checkpoints...)
 }
 
-func (r *Repository) scanProgress(id int64, generation uint64, epoch *uint64, objects, bytes int64, batches int, complete bool, scanErr string) error {
+func (r *Repository) scanProgress(id int64, generation uint64, epoch *uint64, objects, bytes int64, batches int, complete bool, scanErr string, checkpoints ...*discovery.RecoveryCheckpoint) error {
 	return unchangedOK(r.store.Update(func(tx *state.Tx) error {
 		p, err := get(tx, id)
 		if err != nil {
@@ -745,7 +750,24 @@ func (r *Repository) scanProgress(id int64, generation uint64, epoch *uint64, ob
 		if objects < 0 || bytes < 0 || batches < 0 {
 			return ErrConflict
 		}
-		if p.ScannedObjects >= objects && p.ScannedBytes >= bytes && p.ScannedBatches >= batches && p.ScanComplete == complete && p.Error == scanErr {
+		if len(checkpoints) > 1 {
+			return ErrConflict
+		}
+		previousCheckpoint := p.ScanCheckpoint
+		if len(checkpoints) == 1 && checkpoints[0] != nil {
+			checkpoint := checkpoints[0]
+			if !checkpoint.Valid() || checkpoint.ThroughBatch > int64(batches) || checkpoint.Objects > objects || checkpoint.Bytes > bytes {
+				return ErrConflict
+			}
+			// This also retains empty/filtered page progress, which has no output
+			// batch of its own. Private scan-ahead remains on the scanner only.
+			if checkpoint.ThroughBatch <= int64(p.DispatchedThrough) {
+				if err := retainScanCheckpoint(&p, checkpoint); err != nil {
+					return err
+				}
+			}
+		}
+		if p.ScannedObjects >= objects && p.ScannedBytes >= bytes && p.ScannedBatches >= batches && p.ScanComplete == complete && p.Error == scanErr && reflect.DeepEqual(previousCheckpoint, p.ScanCheckpoint) {
 			return errUnchanged
 		}
 		p.ScannedObjects = max(p.ScannedObjects, objects)

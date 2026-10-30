@@ -48,7 +48,10 @@ const SchemaReleasedScanBatches = 6
 // records are being removed by a durable background cleanup operation.
 const SchemaBackgroundCleanup = 7
 
-const latestSchema = SchemaBackgroundCleanup
+// SchemaTaskRejoin fences binaries which could execute a retired node's old queue.
+const SchemaTaskRejoin = 8
+
+const latestSchema = SchemaTaskRejoin
 
 type databaseFormat struct {
 	Role          string `json:"role"`

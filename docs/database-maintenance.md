@@ -37,7 +37,7 @@ Check that the node reconnects and its tasks and reports are present before dele
 
 The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
 
-Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion raises the participating databases to schema 7. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
+Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion raises the participating databases to schema 7. Rejoining a task node after failover requires schema 8 so an older program cannot run its obsolete queue. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
 
 ## 中文说明
 
@@ -55,4 +55,4 @@ Compact storage uses database schema 4, automatic task takeover requires schema 
 
 操作期间需要额外空间容纳副本。程序每批写入前检查剩余空间，至少保留 256 MiB 和下一次扩展所需空间；失败时清理临时副本，原库不变。启动后确认节点、任务和报告正常，再删除保留的原库。
 
-压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。受理后台删除后，参与清理的数据库升级到 schema 7。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。
+压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。受理后台删除后，参与清理的数据库升级到 schema 7。故障节点重新加入任务时使用 schema 8，防止旧程序重新运行已移交的队列。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。

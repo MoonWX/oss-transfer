@@ -34,7 +34,7 @@ func (t *taskRuntime) collectBatches(ctx context.Context, p task.Parent, control
 		if batch.ParentID != p.ID || batch.Generation != p.Generation || batch.Epoch != p.ScannerEpoch() || batch.Number != control.Number+1 {
 			return assignments, task.ErrConflict
 		}
-		assignments = append(assignments, task.Assignment{Number: int(batch.Number), Objects: batch.Objects, Legacy: batch.Legacy})
+		assignments = append(assignments, task.Assignment{Checkpoint: batch.Checkpoint, Number: int(batch.Number), Objects: batch.Objects, Legacy: batch.Legacy})
 		control.Number = batch.Number
 	}
 	return assignments, nil
@@ -56,7 +56,7 @@ func (t *taskRuntime) collectSingleBatches(ctx context.Context, p task.Parent, c
 		if page.Batch.ParentID != p.ID || page.Batch.Generation != p.Generation || page.Batch.Epoch != p.ScannerEpoch() || page.Batch.Number != control.Number+1 {
 			return batches, task.ErrConflict
 		}
-		batches = append(batches, task.Assignment{Number: int(page.Batch.Number), Objects: page.Batch.Objects, Legacy: page.Batch.Legacy})
+		batches = append(batches, task.Assignment{Checkpoint: page.Batch.Checkpoint, Number: int(page.Batch.Number), Objects: page.Batch.Objects, Legacy: page.Batch.Legacy})
 		control.Number = page.Batch.Number
 	}
 	return batches, nil

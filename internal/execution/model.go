@@ -35,6 +35,7 @@ const (
 	Failed        Status = "FAILED"
 	PartialFailed Status = "PARTIAL_FAILED"
 	Deleted       Status = "DELETED"
+	Retired       Status = "RETIRED"
 )
 
 type ItemStatus string
@@ -70,6 +71,7 @@ type Job struct {
 	Number         int            `json:"number"`
 	Generation     uint64         `json:"generation"`
 	Assignment     uint64         `json:"assignment,omitempty"`
+	OwnerEpoch     uint64         `json:"ownerEpoch,omitempty"`
 	Source         Endpoint       `json:"source"`
 	Destination    Endpoint       `json:"destination"`
 	ConflictPolicy string         `json:"conflictPolicy"`
@@ -148,6 +150,7 @@ func (f StoreFactoryFunc) Open(ctx context.Context, j Job) (transferstore.Store,
 type ReaderDecorator func(context.Context, Job, Item, io.ReadCloser) (io.ReadCloser, error)
 
 type Options struct {
+	JobContext        func(Job) (context.Context, error)
 	ParentContext     func(int64, uint64) (context.Context, error)
 	MaxConcurrentJobs int
 	WorkersPerJob     int
@@ -158,5 +161,5 @@ type Options struct {
 }
 
 func terminal(s Status) bool {
-	return s == Completed || s == Failed || s == PartialFailed || s == Deleted
+	return s == Completed || s == Failed || s == PartialFailed || s == Deleted || s == Retired
 }

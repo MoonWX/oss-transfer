@@ -19,14 +19,16 @@ const taskLeaseTTL = 60 * time.Second
 const taskLeaseMargin = 10 * time.Second
 
 type taskLeaseRecord struct {
-	ParentID   int64     `json:"parentId"`
-	Node       task.Node `json:"node"`
-	Generation uint64    `json:"generation"`
-	LeaseID    string    `json:"leaseId"`
-	Sequence   uint64    `json:"sequence"`
-	Deadline   time.Time `json:"deadline"`
-	Armed      bool      `json:"armed"`
-	Retired    bool      `json:"retired,omitempty"`
+	BudgetRevision uint64    `json:"budgetRevision,omitempty"`
+	OwnerEpoch     uint64    `json:"ownerEpoch,omitempty"`
+	ParentID       int64     `json:"parentId"`
+	Node           task.Node `json:"node"`
+	Generation     uint64    `json:"generation"`
+	LeaseID        string    `json:"leaseId"`
+	Sequence       uint64    `json:"sequence"`
+	Deadline       time.Time `json:"deadline"`
+	Armed          bool      `json:"armed"`
+	Retired        bool      `json:"retired,omitempty"`
 }
 type taskLeaseEntry struct {
 	mu            sync.Mutex
@@ -136,8 +138,17 @@ func (l *taskLeases) renew(ctx context.Context, p task.Parent, node task.Node) e
 		return task.ErrState
 	}
 	p = current
-	if e.record.Retired || p.NodeRetired(node.ID) {
+	if e.record.Retired || p.NodeRetired(node.ID) || e.record.OwnerEpoch != p.NodeEpoch(node.ID) {
 		return errors.New("task ownership on this node has been retired")
+	}
+	if e.record.OwnerEpoch > 0 && e.record.BudgetRevision == 0 {
+		// A returned member adds another consumer. Existing members must first
+		// acknowledge their reduced share, including when prepareMembers only
+		// partly succeeded, or the combined rate could exceed the task limit.
+		if err := l.runtime.policies(ctx, p); err != nil {
+			return err
+		}
+		e.record.BudgetRevision = p.BudgetRevision
 	}
 	now := l.now()
 	if now.Before(e.renewAt) && e.record.Generation == p.Generation {
@@ -160,7 +171,7 @@ func (l *taskLeases) renew(ctx context.Context, p task.Parent, node task.Node) e
 		}
 		e.record.Generation = p.Generation
 		e.record.Sequence++
-		request := agentservice.LeasePrepareRequest{ParentID: p.ID, Generation: p.Generation, LeaseID: e.record.LeaseID, Sequence: e.record.Sequence, TTLMillis: l.ttl.Milliseconds()}
+		request := agentservice.LeasePrepareRequest{OwnerEpoch: e.record.OwnerEpoch, ParentID: p.ID, Generation: p.Generation, LeaseID: e.record.LeaseID, Sequence: e.record.Sequence, TTLMillis: l.ttl.Milliseconds()}
 		var ready agentservice.LeasePrepared
 		err = l.call(callCtx, nodeSession(node), "lease_prepare", true, request, &ready)
 		if leasePeerExpired(err) && attempt == 0 {
@@ -184,7 +195,7 @@ func (l *taskLeases) renew(ctx context.Context, p task.Parent, node task.Node) e
 		if err = l.save(e); err != nil {
 			return err
 		}
-		grant := agentservice.LeaseGrantRequest{ParentID: p.ID, Generation: p.Generation, LeaseID: e.record.LeaseID, Sequence: e.record.Sequence, Challenge: ready.Challenge, BootID: ready.BootID}
+		grant := agentservice.LeaseGrantRequest{OwnerEpoch: e.record.OwnerEpoch, ParentID: p.ID, Generation: p.Generation, LeaseID: e.record.LeaseID, Sequence: e.record.Sequence, Challenge: ready.Challenge, BootID: ready.BootID}
 		err = l.call(callCtx, nodeSession(node), "lease_grant", true, grant, nil)
 		if leasePeerExpired(err) && attempt == 0 {
 			fresh = true
@@ -290,11 +301,13 @@ func (l *taskLeases) leaseTick(ctx context.Context, e *taskLeaseEntry) (time.Dur
 			return wait, false
 		}
 		callCtx, cancel := context.WithTimeout(ctx, time.Second)
-		err := l.call(callCtx, nodeSession(row.Node), "lease_retire", true, map[string]any{"parentId": row.ParentID}, nil)
+		err := l.call(callCtx, nodeSession(row.Node), "lease_retire", true, agentservice.LeaseRetireRequest{ParentID: row.ParentID, OwnerEpoch: row.OwnerEpoch}, nil)
 		cancel()
 		e.mu.Lock()
-		e.retireAck = err == nil
-		e.renewAt = l.now().Add(15 * time.Second)
+		if e.record.OwnerEpoch == row.OwnerEpoch && e.record.Retired {
+			e.retireAck = err == nil
+			e.renewAt = l.now().Add(15 * time.Second)
+		}
 		e.mu.Unlock()
 		return 15 * time.Second, err == nil
 	}

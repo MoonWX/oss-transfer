@@ -12,8 +12,8 @@ import (
 
 var ErrFailoverTarget = errors.New("no verified task node is available for failover")
 
-// Retirement is permanent within a task. A returning node must not resume its
-// old assignments or receive a renewed execution lease for this task.
+// Retirement fences the old owner. Rejoining requires a higher durable node
+// epoch so no old assignment can become executable again.
 type RetiredNode struct {
 	RetiredAt time.Time `json:"retiredAt"`
 }
@@ -25,6 +25,8 @@ type FailoverMigration struct {
 }
 
 type FailoverState struct {
+	NodeEpochs        map[string]uint64            `json:"nodeEpochs,omitempty"`
+	Rejoining         map[string]uint64            `json:"rejoining,omitempty"`
 	Enabled           bool                         `json:"enabled"`
 	SharedDestination bool                         `json:"sharedDestination,omitempty"`
 	Retired           map[string]RetiredNode       `json:"retired,omitempty"`
@@ -234,6 +236,7 @@ func (r *Repository) PrepareFailover(id int64, generation uint64, nodeID string,
 			}
 			child.Node, child.Accepted = node, false
 			child.Job.Assignment++
+			child.Job.OwnerEpoch = p.NodeEpoch(node.ID)
 			child.Job.Generation = generation
 			child.Job.SharedLocalDestination = p.Failover.SharedDestination
 			if child.Job.Source.Kind == "LOCAL" {

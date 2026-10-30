@@ -40,6 +40,7 @@ const (
 )
 
 type Spec struct {
+	OwnerEpoch       uint64             `json:"ownerEpoch,omitempty"`
 	Epoch            uint64             `json:"epoch,omitempty"`
 	InventoryID      string             `json:"inventoryId,omitempty"`
 	LegacyManifestID string             `json:"legacyManifestId,omitempty"`
@@ -55,28 +56,29 @@ type Spec struct {
 }
 
 type State struct {
-	Checkpoint        *Checkpoint    `json:"checkpoint,omitempty"`
-	CleanupPhase      int            `json:"cleanupPhase,omitempty"`
-	CleanupAfter      string         `json:"cleanupAfter,omitempty"`
-	CleanupDeleted    int64          `json:"cleanupDeleted,omitempty"`
-	CleanupError      string         `json:"cleanupError,omitempty"`
-	Epoch             uint64         `json:"epoch,omitempty"`
-	Takeover          *TakeoverState `json:"takeover,omitempty"`
-	Spec              Spec           `json:"spec"`
-	Generation        uint64         `json:"generation"`
-	Status            Status         `json:"status"`
-	AckedThrough      int64          `json:"ackedThrough"`
-	ReleasableThrough int64          `json:"releasableThrough,omitempty"`
-	ReleaseProtocol   int            `json:"releaseProtocol,omitempty"`
-	ReleasedThrough   int64          `json:"releasedThrough,omitempty"`
-	LastBatch         int64          `json:"lastBatch"`
-	ScanComplete      bool           `json:"scanComplete"`
-	TotalObjects      int64          `json:"totalObjects"`
-	TotalBytes        int64          `json:"totalBytes"`
-	MissingObjects    int64          `json:"missingObjects,omitempty"`
-	Error             string         `json:"error,omitempty"`
-	Warning           string         `json:"warning,omitempty"`
-	UpdatedAt         time.Time      `json:"updatedAt"`
+	Checkpoint         *Checkpoint         `json:"checkpoint,omitempty"`
+	TransferCheckpoint *RecoveryCheckpoint `json:"transferCheckpoint,omitempty"`
+	CleanupPhase       int                 `json:"cleanupPhase,omitempty"`
+	CleanupAfter       string              `json:"cleanupAfter,omitempty"`
+	CleanupDeleted     int64               `json:"cleanupDeleted,omitempty"`
+	CleanupError       string              `json:"cleanupError,omitempty"`
+	Epoch              uint64              `json:"epoch,omitempty"`
+	Takeover           *TakeoverState      `json:"takeover,omitempty"`
+	Spec               Spec                `json:"spec"`
+	Generation         uint64              `json:"generation"`
+	Status             Status              `json:"status"`
+	AckedThrough       int64               `json:"ackedThrough"`
+	ReleasableThrough  int64               `json:"releasableThrough,omitempty"`
+	ReleaseProtocol    int                 `json:"releaseProtocol,omitempty"`
+	ReleasedThrough    int64               `json:"releasedThrough,omitempty"`
+	LastBatch          int64               `json:"lastBatch"`
+	ScanComplete       bool                `json:"scanComplete"`
+	TotalObjects       int64               `json:"totalObjects"`
+	TotalBytes         int64               `json:"totalBytes"`
+	MissingObjects     int64               `json:"missingObjects,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	Warning            string              `json:"warning,omitempty"`
+	UpdatedAt          time.Time           `json:"updatedAt"`
 	// Attempt fences callbacks from old runs; the checkpoint's stable Pass
 	// identifies the traversal across process restarts and task generations.
 	Attempt     string `json:"attempt,omitempty"`
@@ -91,8 +93,8 @@ type State struct {
 // Checkpoint advances only after its source page and output batches commit.
 // SourceDone distinguishes a committed terminal page from an initial cursor.
 // LegacyAfter is separate because imported manifests have a reconciliation
-// phase after source enumeration. These cursors are private to this scanner;
-// takeover replays Master's assigned work instead of inheriting scan-ahead.
+// phase after source enumeration. RecoveryCheckpoint separately identifies the
+// completed page boundary safe for another scanner to resume.
 type Checkpoint struct {
 	Version     int    `json:"version"`
 	Pass        string `json:"pass"`
@@ -102,7 +104,22 @@ type Checkpoint struct {
 	LegacyDone  bool   `json:"legacyDone,omitempty"`
 }
 
+// RecoveryCheckpoint identifies a whole committed source page. Master may use
+// it only after every batch through ThroughBatch is durably assigned.
+type RecoveryCheckpoint struct {
+	Epoch        uint64 `json:"epoch,omitempty"`
+	Sequence     uint64 `json:"sequence"`
+	Version      int    `json:"version"`
+	ThroughBatch int64  `json:"throughBatch"`
+	Objects      int64  `json:"objects"`
+	Bytes        int64  `json:"bytes"`
+	Cursor       string `json:"cursor,omitempty"`
+	SourceDone   bool   `json:"sourceDone,omitempty"`
+	SourceRoot   string `json:"sourceRoot,omitempty"`
+}
+
 type Batch struct {
+	Checkpoint *RecoveryCheckpoint                  `json:"checkpoint,omitempty"`
 	Epoch      uint64                               `json:"epoch,omitempty"`
 	Legacy     map[string]execution.LegacyCandidate `json:"legacy,omitempty"`
 	ParentID   int64                                `json:"parentId"`
@@ -117,6 +134,7 @@ type EndpointFactory interface {
 }
 
 type Options struct {
+	SpecContext func(Spec) (context.Context, error)
 	// ParentContext is a durable parent lease's lifetime, never an HTTP request.
 	ParentContext      func(int64, uint64) (context.Context, error)
 	MaxConcurrentScans int

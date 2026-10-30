@@ -88,7 +88,7 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 		}
 		modified := false
 		for _, part := range pending {
-			batch := Batch{ParentID: attempt.Spec.ParentID, Generation: current.Generation, Epoch: current.Epoch, Objects: make([]transferstore.Object, 0, len(part.objects))}
+			batch := Batch{Checkpoint: current.TransferCheckpoint, ParentID: attempt.Spec.ParentID, Generation: current.Generation, Epoch: current.Epoch, Objects: make([]transferstore.Object, 0, len(part.objects))}
 			for _, object := range part.objects {
 				key := objectPrefix + base64.RawURLEncoding.EncodeToString([]byte(object.Key))
 				prior, found, err := getDiscoveredObjectAtKey(tx, key, object.Key)
@@ -125,7 +125,10 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 					batch.Objects = append(batch.Objects, object)
 					batch.Bytes += object.Size
 				}
-				current.SeenObjects++
+				seededResume := attempt.Takeover != nil && attempt.Takeover.Checkpoint != nil && prior.SeenAttempt == seedAttempt(attempt.Epoch)
+				if !seededResume {
+					current.SeenObjects++
+				}
 				modified = true
 				if err := tx.Put(objects, key, discoveredObject{Object: object, SeenAttempt: scanIdentity(attempt)}); err != nil {
 					return err
@@ -147,6 +150,36 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 				}
 				checkpoint := *part.checkpoint
 				current.Checkpoint = &checkpoint
+				if attempt.Spec.LegacyManifestID == "" {
+					sequence := uint64(1)
+					if current.TransferCheckpoint != nil {
+						sequence = current.TransferCheckpoint.Sequence + 1
+					}
+					if sequence == 0 {
+						return ErrCorrupt
+					}
+					recovery := &RecoveryCheckpoint{Version: 1, Epoch: current.Epoch, Sequence: sequence, ThroughBatch: current.LastBatch,
+						Objects: current.TotalObjects, Bytes: current.TotalBytes, Cursor: checkpoint.Cursor,
+						SourceDone: checkpoint.SourceDone, SourceRoot: attempt.Spec.Source.Root}
+					current.TransferCheckpoint = recovery
+					// Attach the boundary to the last output batch atomically with the
+					// source page. A concurrent reader cannot observe it ahead of data.
+					// Later batches also carry this boundary in case this batch was
+					// assigned before the checkpoint-only commit reached the store.
+					if current.LastBatch > current.ReleasedThrough {
+						var tail Batch
+						found, err := tx.Get(batches, batchKey(attempt.Spec.ParentID, current.LastBatch), &tail)
+						if err != nil {
+							return err
+						}
+						if found {
+							tail.Checkpoint = recovery
+							if err := tx.Put(batches, batchKey(tail.ParentID, tail.Number), tail); err != nil {
+								return err
+							}
+						}
+					}
+				}
 				modified = true
 			}
 		}

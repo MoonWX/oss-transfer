@@ -22,27 +22,29 @@ const MaxTakeoverBatchCount = 128
 const MaxTakeoverPayloadBytes = 4 << 20
 
 // TakeoverRequest replays only Master's durably assigned source manifests.
-// It deliberately contains no source cursor: directory walks and resumed scan
-// histories are not globally ordered by object key.
+// A source cursor is accepted only at a complete page covered by that manifest;
+// a scanner's latest private cursor may be ahead of Master's assigned work.
 type TakeoverRequest struct {
-	Spec         Spec    `json:"spec"`
-	Epoch        uint64  `json:"epoch"`
-	ThroughBatch int64   `json:"throughBatch"`
-	Objects      int64   `json:"objects"`
-	Bytes        int64   `json:"bytes"`
-	Batches      []Batch `json:"batches,omitempty"`
+	Checkpoint   *RecoveryCheckpoint `json:"checkpoint,omitempty"`
+	Spec         Spec                `json:"spec"`
+	Epoch        uint64              `json:"epoch"`
+	ThroughBatch int64               `json:"throughBatch"`
+	Objects      int64               `json:"objects"`
+	Bytes        int64               `json:"bytes"`
+	Batches      []Batch             `json:"batches,omitempty"`
 }
 
 type TakeoverState struct {
-	ThroughBatch     int64 `json:"throughBatch"`
-	Objects          int64 `json:"objects"`
-	Bytes            int64 `json:"bytes"`
-	SeededThrough    int64 `json:"seededThrough"`
-	SeededObjects    int64 `json:"seededObjects"`
-	SeededBytes      int64 `json:"seededBytes"`
-	DuplicateObjects int64 `json:"duplicateObjects,omitempty"`
-	Cleaning         bool  `json:"cleaning"`
-	Sealed           bool  `json:"sealed"`
+	Checkpoint       *RecoveryCheckpoint `json:"checkpoint,omitempty"`
+	ThroughBatch     int64               `json:"throughBatch"`
+	Objects          int64               `json:"objects"`
+	Bytes            int64               `json:"bytes"`
+	SeededThrough    int64               `json:"seededThrough"`
+	SeededObjects    int64               `json:"seededObjects"`
+	SeededBytes      int64               `json:"seededBytes"`
+	DuplicateObjects int64               `json:"duplicateObjects,omitempty"`
+	Cleaning         bool                `json:"cleaning"`
+	Sealed           bool                `json:"sealed"`
 }
 
 func requestedEpoch(values []uint64) uint64 {
@@ -52,7 +54,28 @@ func requestedEpoch(values []uint64) uint64 {
 	return 0
 }
 
-func (s *Scanner) parentContext(parentID int64, generation uint64) (context.Context, error) {
+func (s *Scanner) parentContext(parentID int64, generation uint64, specs ...Spec) (context.Context, error) {
+	if s.options.SpecContext != nil {
+		var spec Spec
+		if len(specs) > 0 {
+			spec = specs[0]
+		} else {
+			current, err := s.Status(context.Background(), parentID)
+			if err != nil {
+				return nil, err
+			}
+			spec = current.Spec
+		}
+		spec.Generation = generation
+		ctx, err := s.options.SpecContext(spec)
+		if err != nil {
+			return nil, err
+		}
+		if ctx == nil {
+			return nil, ErrStopped
+		}
+		return ctx, ctx.Err()
+	}
 	if s.options.ParentContext == nil {
 		return context.Background(), nil
 	}
@@ -104,6 +127,11 @@ func validateTakeover(request TakeoverRequest) error {
 		request.ThroughBatch == 0 && (request.Objects != 0 || request.Bytes != 0) || len(request.Batches) > MaxTakeoverBatchCount {
 		return ErrInvalid
 	}
+	if checkpoint := request.Checkpoint; checkpoint != nil {
+		if !checkpoint.Valid() || checkpoint.ThroughBatch > request.ThroughBatch || checkpoint.Objects > request.Objects || checkpoint.Bytes > request.Bytes {
+			return ErrInvalid
+		}
+	}
 	raw, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -146,7 +174,7 @@ func (s *Scanner) SeedTakeover(ctx context.Context, request TakeoverRequest) (St
 	}
 	request.Spec = normalized(request.Spec)
 	request.Spec.Epoch = request.Epoch
-	parent, err := s.parentContext(request.Spec.ParentID, request.Spec.Generation)
+	parent, err := s.parentContext(request.Spec.ParentID, request.Spec.Generation, request.Spec)
 	if err != nil {
 		return State{}, err
 	}
@@ -171,7 +199,7 @@ func (s *Scanner) SeedTakeover(ctx context.Context, request TakeoverRequest) (St
 		}
 		if current.Epoch == request.Epoch {
 			if current.Takeover == nil || !sameSpec(current.Spec, request.Spec) ||
-				current.Takeover.ThroughBatch != request.ThroughBatch || current.Takeover.Objects != request.Objects || current.Takeover.Bytes != request.Bytes {
+				current.Takeover.ThroughBatch != request.ThroughBatch || current.Takeover.Objects != request.Objects || current.Takeover.Bytes != request.Bytes || !sameRecoveryCheckpoint(current.Takeover.Checkpoint, request.Checkpoint) {
 				return State{}, ErrConflict
 			}
 			if current.Status == Stopped {
@@ -185,7 +213,7 @@ func (s *Scanner) SeedTakeover(ctx context.Context, request TakeoverRequest) (St
 			return State{}, ErrRunning
 		}
 		current = State{Spec: request.Spec, Generation: request.Spec.Generation, Epoch: request.Epoch, Status: Seeding,
-			Takeover: &TakeoverState{ThroughBatch: request.ThroughBatch, Objects: request.Objects, Bytes: request.Bytes, Cleaning: true}}
+			Takeover: &TakeoverState{Checkpoint: request.Checkpoint, ThroughBatch: request.ThroughBatch, Objects: request.Objects, Bytes: request.Bytes, Cleaning: true}}
 	}
 	err = s.store.Update(func(tx *state.Tx) error {
 		if err := ctx.Err(); err != nil {
@@ -308,6 +336,9 @@ func (s *Scanner) FinalizeTakeover(ctx context.Context, parentID int64, generati
 		progress.Sealed = true
 		current.LastBatch, current.AckedThrough = progress.ThroughBatch, progress.ThroughBatch
 		current.TotalObjects, current.TotalBytes = progress.Objects, progress.Bytes
+	}
+	if err := s.importTakeoverCheckpoint(ctx, &current); err != nil {
+		return State{}, err
 	}
 	return s.launchLocked(current)
 }

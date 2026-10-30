@@ -73,6 +73,7 @@ func installAgentRoutes(s *Server) error {
 	s.mux.HandleFunc("PUT /api/master/nodes/{address}", s.adminOnly(s.updateAgentNode))
 	s.mux.HandleFunc("POST /api/agents/join", s.joinAgent)
 	s.mux.HandleFunc("POST /api/agents/cli-access", s.cliAccess)
+	s.mux.HandleFunc("POST /api/master/agents/maintenance", s.adminOnly(s.agentMaintenanceHTTP))
 	s.mux.HandleFunc("GET /api/agents/bootstrap/{token}", s.agentBootstrap)
 	transport := agenttransport.HTTPHandler{Broker: a.broker, Authenticate: s.authenticateAgent}
 	s.mux.Handle(agenttransport.PollPath, transport)

@@ -90,6 +90,9 @@ func (e *Engine) Accept(ctx context.Context, job Job, inventorySource ...bool) (
 	if e.closed {
 		return Record{}, ErrClosed
 	}
+	if _, err := e.jobContext(job); err != nil {
+		return Record{}, err
+	}
 	return e.repo.Accept(ctx, job, inventorySource...)
 }
 func (e *Engine) Get(ctx context.Context, child string) (Record, error) {
@@ -196,12 +199,11 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 		}
 		return nil
 	}
-	parentCtx := e.ctx
-	if e.opts.ParentContext != nil {
-		parentCtx, err = e.opts.ParentContext(current.Job.ParentID, generation)
-		if err != nil {
-			return err
-		}
+	admission := current.Job
+	admission.Generation = generation
+	parentCtx, err := e.jobContext(admission)
+	if err != nil {
+		return err
 	}
 	record, err := e.repo.begin(ctx, child, generation, resume, retryFailed)
 	if err != nil {

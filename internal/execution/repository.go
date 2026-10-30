@@ -109,6 +109,7 @@ func validate(job Job) (string, error) {
 	// The generation is the ownership fence, not the identity of the work.
 	job.Generation = 0
 	job.Assignment = 0
+	job.OwnerEpoch = 0
 	job.DiscoveryComplete = false
 	data, err := json.Marshal(job)
 	if err != nil {
@@ -741,6 +742,9 @@ func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, 
 // activateGeneration touches only the child being admitted. Failed history
 // consumes queue capacity only when the Master actually redispatches that child.
 func activateGeneration(j *Record, p ParentFence) {
+	if j.Status == Retired {
+		return
+	}
 	if j.Status == Running {
 		// A fenced attempt without a durable stop can prove work only through
 		// its last checkpoint, not the time spent waiting for readmission.

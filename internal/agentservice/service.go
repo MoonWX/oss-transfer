@@ -127,6 +127,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	options.Execution.ParentContext = leases.ParentContext
+	options.Execution.JobContext = leases.JobContext
 	if concurrency, saved := nodes.SavedConcurrency(); saved {
 		options.Execution.MaxConcurrentJobs = concurrency.MaxConcurrentChildren
 		options.Execution.WorkersPerJob = concurrency.ObjectsPerChild
@@ -138,7 +139,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 		limits.Close()
 		return nil, err
 	}
-	scanner, err := discovery.New(store, factory, discovery.Options{ParentContext: leases.ParentContext})
+	scanner, err := discovery.New(store, factory, discovery.Options{ParentContext: leases.ParentContext, SpecContext: leases.SpecContext})
 	if err != nil {
 		_ = engine.Close(context.Background())
 		temporary.Close()
@@ -151,6 +152,10 @@ func New(store *state.Store, options Options) (*Service, error) {
 	s.Leases = leases
 	leases.quiesce = func(ctx context.Context, parentID int64) error {
 		return errors.Join(engine.QuiesceParent(ctx, parentID), scanner.QuiesceParent(ctx, parentID))
+	}
+	leases.rejoinCleanup = jobs.RetireOwnership
+	leases.rejoinScanner = func(ctx context.Context, req LeaseRejoinRequest) error {
+		return scanner.AdoptCompletedOwner(ctx, req.ParentID, req.Generation, *req.ScannerEpoch, req.ScannerThrough, req.OwnerEpoch)
 	}
 	s.Updater = options.Updater
 	s.preflight = preflight
@@ -233,7 +238,7 @@ func (s *Service) schedule() {
 			after = jobs[len(jobs)-1].Job.ChildID
 		}
 		for _, record := range jobs {
-			if s.Leases.Admission(record.Job.ParentID, record.Job.Generation) != nil {
+			if s.Leases.AdmissionJob(record.Job) != nil {
 				continue
 			}
 			if !s.Shared.Allows(record.Job) {
@@ -266,7 +271,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	}
 	switch operation {
-	case "lease_prepare", "lease_grant", "lease_retire", "scan_takeover_seed", "scan_takeover_finalize":
+	case "lease_prepare", "lease_grant", "lease_retire", "lease_rejoin", "scan_takeover_seed", "scan_takeover_finalize":
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete":
 		return true
@@ -381,6 +386,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		return result, err
 	}
 	switch c.Operation {
+	case "lease_rejoin":
+		var request LeaseRejoinRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		err := s.Leases.Rejoin(ctx, request)
+		return response(map[string]any{"ownerEpoch": request.OwnerEpoch}, err)
 	case "lease_prepare":
 		var request LeasePrepareRequest
 		if err := decode(c.Payload, &request); err != nil {
@@ -403,7 +415,7 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if err := decode(c.Payload, &request); err != nil {
 			return badRequest(err)
 		}
-		err := s.Leases.Retire(ctx, request.ParentID)
+		err := s.Leases.Retire(ctx, request.ParentID, request.OwnerEpoch)
 		return response(map[string]any{"parentId": request.ParentID, "retired": err == nil}, err)
 	case "child_recover":
 		var request ChildRecoverRequest
@@ -617,7 +629,7 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(err)
 		}
 		job := request.Job
-		if err := s.Leases.Admission(job.ParentID, job.Generation); err != nil {
+		if err := s.Leases.AdmissionJob(job); err != nil {
 			return response(nil, err)
 		}
 		if !s.Shared.Allows(job) {

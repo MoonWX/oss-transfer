@@ -173,7 +173,7 @@ func (s *Scanner) Start(ctx context.Context, spec Spec) (State, error) {
 	if !validSpec(spec) {
 		return State{}, ErrInvalid
 	}
-	if _, err := s.parentContext(spec.ParentID, spec.Generation); err != nil {
+	if _, err := s.parentContext(spec.ParentID, spec.Generation, spec); err != nil {
 		return State{}, err
 	}
 	if spec.InventoryID != "" {
@@ -245,7 +245,7 @@ func (s *Scanner) isActiveLocked(parentID int64) bool {
 // launchLocked publishes the attempt before spawning it. Its context belongs to
 // Scanner, so the short Start/Resume HTTP request can finish independently.
 func (s *Scanner) launchLocked(current State) (State, error) {
-	parent, err := s.parentContext(current.Spec.ParentID, current.Generation)
+	parent, err := s.parentContext(current.Spec.ParentID, current.Generation, current.Spec)
 	if err != nil {
 		return State{}, err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/discovery"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 )
 
@@ -49,8 +50,9 @@ type Spec struct {
 }
 
 type Parent struct {
-	ActiveTime   *execution.ActiveTime `json:"activeTime,omitempty"`
-	ResumeTiming *ResumeTiming         `json:"resumeTiming,omitempty"`
+	ScanCheckpoint *discovery.RecoveryCheckpoint `json:"scanCheckpoint,omitempty"`
+	ActiveTime     *execution.ActiveTime         `json:"activeTime,omitempty"`
+	ResumeTiming   *ResumeTiming                 `json:"resumeTiming,omitempty"`
 	// ResumeAfter is a durable cursor while old child assignments are prepared.
 	ResumeAfter       *int               `json:"resumeAfter,omitempty"`
 	ID                int64              `json:"id"`

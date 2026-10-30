@@ -45,7 +45,7 @@ func grantPrepared(t *testing.T, leases *Leases, req LeasePrepareRequest) LeaseG
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant := LeaseGrantRequest{ParentID: req.ParentID, Generation: req.Generation, LeaseID: req.LeaseID, Sequence: req.Sequence, Challenge: p.Challenge, BootID: p.BootID}
+	grant := LeaseGrantRequest{OwnerEpoch: req.OwnerEpoch, ParentID: req.ParentID, Generation: req.Generation, LeaseID: req.LeaseID, Sequence: req.Sequence, Challenge: p.Challenge, BootID: p.BootID}
 	if err := leases.Grant(context.Background(), grant); err != nil {
 		t.Fatal(err)
 	}

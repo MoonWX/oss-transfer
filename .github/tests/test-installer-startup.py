@@ -277,6 +277,7 @@ class StartupCommitTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.source = INSTALLER.read_text()
         self.function = self.source[self.source.index('commit_start() {'):self.source.index('\nprint_initial_credentials() {')]
+        self.function += '\n' + self.source[self.source.index('finish_agent_maintenance() {'):self.source.index('\nrollback() {')]
 
     def invoke(self, body='', fail=''):
         start = self.source.rindex('\nprepare_start\n')
@@ -287,6 +288,7 @@ trap 'printf rolled-back > "$TEST_ROOT/rollback"; exit 7' ERR
 ready_file=$TEST_ROOT/ready; launch_id=''' + 'a' * 64 + '''
 platform=linux; existed=1; had_unit=1; was_enabled=1; service_name=test; cli_migrated=0
 prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }
+agent_maintenance_started=0
 start_service() { return 0; }
 wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
 systemctl() { [[ "$TEST_FAIL" != enable ]]; }
@@ -335,6 +337,75 @@ finish_backup() { printf confirmed > "$TEST_ROOT/backup-finished"; }
                 self.assertFalse((self.root/'backup-finished').exists())
                 if kind == 'symlink': committed.unlink()
                 else: committed.rmdir()
+
+
+class AgentMaintenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-maintenance-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = INSTALLER.read_text()
+        candidate = self.root / 'candidate'
+        candidate.write_text('''#!/bin/bash
+set -euo pipefail
+case "$3" in
+  --upgrade-maintenance) printf '%s\\n' "$4" >> "$TEST_ROOT/events"; exit "$TEST_MAINTENANCE_STATUS" ;;
+  --backup-state) printf 'backup\\n' >> "$TEST_ROOT/events" ;;
+  *) exit 99 ;;
+esac
+''')
+        candidate.chmod(0o755)
+
+    def invoke(self, body, status=0):
+        script = '''set -euo pipefail
+work=$TEST_ROOT; filename=candidate; config=$TEST_ROOT/service.json; backup=$TEST_ROOT/backup
+role=agent; service_name=test-agent; agent_maintenance_started=0
+stop_service() { printf 'stop\\n' >> "$TEST_ROOT/events"; }
+rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
+''' + body
+        return subprocess.run(['bash','-c',script], text=True, capture_output=True, timeout=5,
+                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_MAINTENANCE_STATUS=str(status)))
+
+    def test_failed_maintenance_never_stops_agent_or_backs_up_database(self):
+        start = self.source.index('  if [[ "$role" == agent ]]; then\n    printf \'Protecting Agent tasks')
+        end = self.source.index('\nelif [[ -n "$adopt_config" ]]; then', start)
+        section = self.source[start:end]
+        failed = self.invoke(section, status=7)
+        self.assertEqual(failed.returncode, 7, failed.stderr)
+        self.assertEqual((self.root/'events').read_text().splitlines(), ['begin'])
+        (self.root/'events').unlink()
+        passed = self.invoke(section)
+        self.assertEqual(passed.returncode, 0, passed.stderr)
+        self.assertEqual((self.root/'events').read_text().splitlines(), ['begin','stop','backup'])
+
+    def test_failed_end_warns_without_rolling_back_healthy_service(self):
+        start = self.source.index('finish_agent_maintenance() {')
+        end = self.source.index('\nrollback() {',start)
+        section = self.source[start:end]
+        body = section + '\nagent_maintenance_started=1\nfinish_agent_maintenance\nprintf healthy\\n\n'
+        failed = self.invoke(body,status=7)
+        self.assertEqual(failed.returncode,0,failed.stderr)
+        self.assertIn('expires automatically',failed.stderr)
+        self.assertEqual((self.root/'events').read_text().splitlines(),['end'])
+        self.assertIn('healthy',failed.stdout)
+
+    def test_end_only_follows_successful_readiness(self):
+        start=self.source.rindex('\nprepare_start\n')
+        end=self.source.index("\nprintf 'Installed ",start)
+        section=self.source[start:end]
+        body='''
+platform=linux; existed=1; had_unit=1; was_enabled=0; cli_migrated=0
+prepare_start() { return 0; }
+start_service() { return 0; }
+wait_ready() { return 7; }
+finish_agent_maintenance() { printf 'end\\n' >> "$TEST_ROOT/events"; }
+commit_start() { return 0; }
+finish_backup() { return 0; }
+trap rollback ERR INT TERM
+'''+section
+        result=self.invoke(body)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual((self.root/'events').read_text().splitlines(),['rollback'])
 
 
 class BackupRetentionTests(unittest.TestCase):
@@ -433,6 +504,7 @@ esac
         source = self.source
         functions = source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
         functions += '\n' + source[source.index('commit_start() {'):source.index('\nprint_initial_credentials() {')]
+        functions += '\n' + source[source.index('finish_agent_maintenance() {'):source.index('\nrollback() {')]
         functions += '\n' + source[source.index('cleanup() {'):source.index('\ntrap cleanup EXIT')]
         start = source.rindex('\nprepare_start\n')
         finish = source[start:source.index("\nprintf 'Installed ", start)]
@@ -444,6 +516,7 @@ existed=$TEST_EXISTED; service_name=oss-transfer-agent
 platform=linux; had_unit=1; was_enabled=1
 launch_id=''' + 'b' * 64 + '''
 prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }
+agent_maintenance_started=0
 start_service() { return 0; }
 wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
 systemctl() { [[ "$TEST_FAIL" != enable ]]; }

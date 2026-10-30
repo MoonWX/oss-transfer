@@ -206,8 +206,8 @@ export default function NodeRateLimits({
                     ? "info.main"
                     : "warning.main"
                   : "divider",
-              borderRadius: 2,
-              p: 1.5,
+              borderRadius: "12px",
+              p: { xs: 2, sm: 2.5 },
               minWidth: 0,
             }}
           >
@@ -265,7 +265,7 @@ export default function NodeRateLimits({
                   sm: "repeat(3, minmax(0, 1fr))",
                 },
                 gap: 1.25,
-                mt: 1.5,
+                mt: 2,
               }}
             >
               {[

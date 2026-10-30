@@ -506,10 +506,10 @@ if [[ "$method" == native ]]; then
       upgrade=1
     fi
     owned_cli=$(awk -F '\t' '$1=="cliPath"{print $2}' "$metadata")
-    [[ -n "$cli_path" ]] || cli_path=$owned_cli
+    if [[ "$role" != agent && -z "$cli_path" ]]; then cli_path=$owned_cli; fi
   fi
-  # Master installs the user-facing CLI globally. An Agent's CLI stays beside
-  # its binary, so adding it on the same host does not replace the Master's CLI.
+  # The native installer chooses an unused global CLI for Agents and preserves
+  # a CLI already owned by another installation on the same host.
   if [[ -z "$cli_path" ]]; then
     if [[ "$role" == master ]]; then
       if ((user_service)); then cli_path=$HOME/.local/bin/oss-transfer-cli

@@ -285,7 +285,7 @@ class StartupCommitTests(unittest.TestCase):
         script = '''set -eEuo pipefail
 trap 'printf rolled-back > "$TEST_ROOT/rollback"; exit 7' ERR
 ready_file=$TEST_ROOT/ready; launch_id=''' + 'a' * 64 + '''
-platform=linux; existed=1; had_unit=1; was_enabled=1; service_name=test
+platform=linux; existed=1; had_unit=1; was_enabled=1; service_name=test; cli_migrated=0
 prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }
 start_service() { return 0; }
 wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
@@ -398,7 +398,7 @@ printf 'installation continues\\n'
         preflight = source.index('\n  maintain_backups prune || true\n')
         self.assertLess(preflight, source.index('\n  check_backup_space\n'))
         self.assertLess(preflight, source.index('\n  stop_service\n'))
-        completion = source.index('\nif commit_start; then finish_backup; fi\n')
+        completion = source.index('\nif commit_start; then\n')
         self.assertGreater(completion, source.rindex('\nwait_ready\n'))
         self.assertGreater(completion, source.rindex('\ntrap - ERR INT TERM\n'))
 
@@ -630,6 +630,78 @@ printf 'can stop service\\n'
                                       text=True,capture_output=True,timeout=5)
             self.assertNotEqual(invalid.returncode, 0)
             self.assertIn('Cannot determine available backup space', invalid.stderr)
+
+
+
+class CLIPlacementTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-cli-placement-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.install = self.root/'agent'
+        self.install.mkdir(mode=0o700)
+        self.old = self.install/'oss-transfer-cli'
+        self.global_cli = self.root/'global'/'oss-transfer-cli'
+        self.global_cli.parent.mkdir()
+        self.source = INSTALLER.read_text()
+        self.function = self.source[self.source.index('default_cli_path() {'):self.source.index('\ncli_path=${cli_path:-$(default_cli_path')]
+
+    def selection(self, installed='', role='agent'):
+        result = subprocess.run(['bash','-c','set -euo pipefail\n'+self.function+
+                                 '\nrole=$1; install_dir=$2; global_cli=$3; default_cli_path "$4"',
+                                 'test',role,str(self.install),str(self.global_cli),str(installed)],
+                                text=True,capture_output=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+        return result.stdout.strip()
+
+    def test_agent_first_install_and_existing_role_cli_use_free_global_path(self):
+        self.assertEqual(self.selection(),str(self.global_cli))
+        self.old.write_text('previous agent CLI')
+        self.assertEqual(self.selection(self.old),str(self.global_cli))
+        self.assertEqual(self.old.read_text(),'previous agent CLI')
+        self.assertEqual(self.install.stat().st_mode & 0o777,0o700)
+
+    def test_existing_master_cli_and_stale_sidecar_are_not_overwritten(self):
+        self.global_cli.write_text('Master CLI')
+        self.assertEqual(self.selection(),str(self.old))
+        self.assertEqual(self.selection(self.old),str(self.old))
+        self.assertEqual(self.global_cli.read_text(),'Master CLI')
+        self.global_cli.unlink()
+        Path(str(self.global_cli)+'.cluster.json').write_text('existing cluster')
+        self.assertEqual(self.selection(self.old),str(self.old))
+
+    def test_custom_cli_and_master_existing_role_path_stay_unchanged(self):
+        custom=self.root/'custom'/'oss-transfer-cli'
+        self.assertEqual(self.selection(custom),str(custom))
+        self.assertEqual(self.selection(self.old,'master'),str(self.old))
+
+    def test_failed_migration_removes_only_new_global_files(self):
+        self.old.write_text('previous agent CLI')
+        self.global_cli.write_text('new CLI')
+        Path(str(self.global_cli)+'.cluster.json').write_text('new cluster')
+        rollback=self.source[self.source.index('rollback() {'):self.source.index('\ncheck_listener\n')]
+        body=r"""set -euo pipefail
+existed=0; cli_changed=1; had_cli=0; cli_migrated=1; platform=linux; adopt_config=
+cli_path=$1; previous_cli=$2; unit=$3/unit; backup=$3/backup; log_file=$3/log; database=$3/missing.db
+systemctl() { return 0; }
+stop_service() { return 0; }
+"""+rollback+'\nfalse || rollback\n'
+        result=subprocess.run(['bash','-c',body,'test',str(self.global_cli),str(self.old),str(self.root)],
+                              text=True,capture_output=True,timeout=5)
+        self.assertEqual(result.returncode,1,result.stderr)
+        self.assertEqual(self.old.read_text(),'previous agent CLI')
+        self.assertFalse(self.global_cli.exists())
+        self.assertFalse(Path(str(self.global_cli)+'.cluster.json').exists())
+
+    def test_old_cli_removed_only_after_startup_is_committed(self):
+        start=self.source.index('\nif commit_start; then\n')
+        finish=self.source[start:self.source.index("\nprintf 'Installed ",start)]
+        for committed in (False,True):
+            self.old.write_text('previous agent CLI')
+            body='set -euo pipefail\ncli_migrated=1; previous_cli=$1\ncommit_start() { return '+('0' if committed else '1')+'; }\nfinish_backup() { return 0; }\n'+finish
+            result=subprocess.run(['bash','-c',body,'test',str(self.old)],text=True,capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(self.old.exists(),not committed)
 
 
 if __name__ == '__main__':

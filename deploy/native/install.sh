@@ -268,6 +268,7 @@ cli_path=
 replace_cli=0
 had_cli=0
 cli_changed=0
+cli_migrated=0
 install_dir=
 config_dir=
 data_dir=
@@ -289,7 +290,7 @@ Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --package-dir DIR    Install verified files from a local release directory
   --upgrade            Back up and upgrade an existing installation
   --adopt-config FILE   Install a service for stopped, existing Go data
-  --cli-path FILE       CLI location (default: beside the service binary)
+  --cli-path FILE       CLI location (default: global when available)
   --replace-cli         Back up and replace an existing unmanaged CLI
   --listen HOST:PORT   Master listener (default 0.0.0.0:1685; first install only)
   --master-url URL     Master URL for first Agent enrollment
@@ -447,7 +448,6 @@ if ((upgrade)); then
   saved_config=$(metadata_field "$installed_metadata" config)
   [[ "$saved_config" == /*/service.json ]] || fail 'Invalid installed configuration path'
   config_dir=${config_dir:-$(dirname "$saved_config")}
-  cli_path=${cli_path:-$(metadata_field "$installed_metadata" cliPath)}
   # Each upgrade uses the local OS default unless this invocation overrides it.
   # A path recorded by an earlier installer may belong to a temporary mount.
   # Old metadata omitted the data path; use the binary's validated config output.
@@ -516,7 +516,22 @@ done
 config=$config_dir/service.json
 binary=$install_dir/oss-transfer-$role
 metadata=$install_dir/install.tsv
-cli_path=${cli_path:-$install_dir/oss-transfer-cli}
+global_cli=/usr/local/bin/oss-transfer-cli
+if [[ "$platform" == darwin && "$user_service" == 1 ]]; then global_cli=$HOME/.local/bin/oss-transfer-cli; fi
+previous_cli=''
+if [[ -f "$metadata" && ! -L "$metadata" ]]; then previous_cli=$(metadata_field "$metadata" cliPath); fi
+
+default_cli_path() {
+  local installed=$1
+  if [[ ! -e "$global_cli" && ! -L "$global_cli" && ! -e "$global_cli.cluster.json" && ! -L "$global_cli.cluster.json" ]]; then
+    if [[ -z "$installed" || "$role" == agent && "$installed" == "$install_dir/oss-transfer-cli" ]]; then
+      printf '%s\n' "$global_cli"
+      return
+    fi
+  fi
+  printf '%s\n' "${installed:-$install_dir/oss-transfer-cli}"
+}
+cli_path=${cli_path:-$(default_cli_path "$previous_cli")}
 safe_path "$(dirname "$cli_path")"
 [[ "$cli_path" != *[$'\n\r\t"\\%$`']* && "$(basename "$cli_path")" == oss-transfer-cli ]] || fail 'CLI path must end in oss-transfer-cli'
 for path in "$config_dir" "$data_dir" "$backup_dir"; do
@@ -544,8 +559,13 @@ if [[ -f "$cli_path" ]]; then
   fi
 fi
 if ((existed)); then
-  previous_cli=$(awk -F '\t' '$1=="cliPath"{print $2}' "$metadata")
-  [[ -z "$previous_cli" || "$previous_cli" == "$cli_path" ]] || fail 'CLI path differs from the installed path; keep --cli-path unchanged during upgrade'
+  if [[ -n "$previous_cli" && "$previous_cli" != "$cli_path" ]]; then
+    # Only move this Agent's own CLI into an unused global slot. In particular,
+    # an existing Master's CLI is never adopted or replaced by an Agent upgrade.
+    [[ "$role" == agent && "$previous_cli" == "$install_dir/oss-transfer-cli" && "$cli_path" == "$global_cli" && ! -e "$cli_path" && ! -L "$cli_path" && ! -e "$cli_path.cluster.json" && ! -L "$cli_path.cluster.json" ]] || fail 'CLI relocation requires this Agent own CLI and an unused global path'
+    [[ -f "$previous_cli" && ! -L "$previous_cli" ]] || fail 'Installed CLI is missing or symlinked'
+    cli_migrated=1
+  fi
 fi
 [[ ! -L "$unit" ]] || fail 'Service definition is a symlink'
 if [[ "$platform" == linux ]]; then
@@ -945,6 +965,7 @@ rollback() {
       fi
     else
       rm -f "$cli_path"
+      if ((cli_migrated)); then rm -f "$cli_path.cluster.json"; fi
     fi
   fi
   if ((existed)); then
@@ -1023,7 +1044,10 @@ printf 'Installing %s %s...\n' "$role" "$version"
 cp "$work/$filename" "$binary.new"
 chmod 755 "$binary.new"
 mv -f "$binary.new" "$binary"
-mkdir -p "$(dirname "$cli_path")"
+if [[ ! -d "$(dirname "$cli_path")" ]]; then
+  mkdir -p "$(dirname "$cli_path")"
+  chmod 755 "$(dirname "$cli_path")"
+fi
 cp "$work/$cli_filename" "$cli_path.new"
 chmod 755 "$cli_path.new"
 mv -f "$cli_path.new" "$cli_path"
@@ -1096,7 +1120,10 @@ if [[ "$platform" == linux ]]; then
   if ((existed == 0 || had_unit == 0 || was_enabled)); then systemctl enable "$service_name" >/dev/null; fi
 fi
 trap - ERR INT TERM
-if commit_start; then finish_backup; fi
+if commit_start; then
+  finish_backup
+  if ((cli_migrated)); then rm -f "$previous_cli" "$previous_cli.cluster.json"; fi
+fi
 printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
 printf 'CLI: %s\n' "$cli_path"
 printf 'Login: %q login\n' "$cli_path"

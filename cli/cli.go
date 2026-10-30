@@ -23,9 +23,6 @@ type globalOptions struct {
 
 func parseGlobals(args []string) (globalOptions, error) {
 	o := globalOptions{host: os.Getenv("OSS_TRANSFER_MASTER_SERVER")}
-	if o.host == "" {
-		o.host = "http://localhost:1685"
-	}
 	if len(args) == 1 && args[0] == "-v" {
 		o.version = true
 		return o, nil
@@ -37,6 +34,16 @@ func parseGlobals(args []string) (globalOptions, error) {
 			break
 		}
 		name, value, equals := strings.Cut(arg, "=")
+		// An update target version belongs to that command; the standalone
+		// --version flag still prints this CLI's build information.
+		if name == "--version" && len(o.args) > 0 && o.args[0] == "update" {
+			o.args = append(o.args, arg)
+			if !equals && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				i++
+				o.args = append(o.args, args[i])
+			}
+			continue
+		}
 		switch name {
 		case "--host", "--watch", "--lang":
 			if !equals {
@@ -49,6 +56,9 @@ func parseGlobals(args []string) (globalOptions, error) {
 			if name == "--lang" {
 				continue
 			} else if name == "--host" {
+				if value == "" {
+					return o, cliErrorf("--host 缺少值")
+				}
 				o.host = value
 			} else {
 				duration, err := time.ParseDuration(value)
@@ -84,6 +94,16 @@ func parseGlobals(args []string) (globalOptions, error) {
 	}
 	if len(o.args) > 0 && o.args[0] == "config" {
 		return o, nil
+	}
+	if o.version || o.help || len(o.args) == 0 || o.args[0] == "help" {
+		return o, nil
+	}
+	if o.host == "" {
+		var err error
+		o.host, err = discoveredMaster()
+		if err != nil {
+			return o, err
+		}
 	}
 	parsed, err := url.Parse(o.host)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
@@ -201,6 +221,9 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			if ctx.Err() != nil {
 				return 130
 			}
+			if incompleteResult(result) {
+				return 3
+			}
 			return 1
 		}
 		partial := incompleteResult(result)
@@ -230,13 +253,17 @@ func watchable(args []string) bool {
 	switch args[0] {
 	case "task":
 		switch args[1] {
-		case "list", "show", "children", "trash":
+		case "list", "show", "children", "trash", "progress", "cleanup-status":
 			return true
 		case "bandwidth", "limits":
 			return len(args) == 3
 		}
 	case "node", "agent":
-		return args[1] == "list" || args[1] == "show" || args[1] == "details" || (args[0] == "node" && args[1] == "network" && len(args) == 2)
+		return args[1] == "list" || args[1] == "show" || args[1] == "details" || args[0] == "agent" && args[1] == "invite-status" || (args[0] == "node" && args[1] == "network" && len(args) == 2)
+	case "update":
+		return args[1] == "status"
+	case "backup":
+		return args[1] == "list"
 	case "setup":
 		return args[1] == "status"
 	case "limit":
@@ -252,6 +279,8 @@ func dispatchCLI(client *ApiClient, args []string, input io.Reader, host string)
 		return runSetupCommand(client, args[1:], input)
 	case "task":
 		return runTaskCommand(client, args[1:])
+	case "update", "backup":
+		return runMaintenanceCommand(client, args[0], args[1:])
 	case "node", "agent", "storage", "limit", "exceptions", "object":
 		return runAdminCommand(client, args[0], args[1:])
 	case "login", "logout", "whoami", "change-password":
@@ -401,6 +430,9 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 			return
 		}
 	}
+	if renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) {
+		return
+	}
 	if renderAdminTable(out, result, data) {
 		return
 	}
@@ -463,6 +495,9 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		return true
 	}
 	if getString(data, "joinUrl") != "" && (getString(data, "traditionalCommand") != "" || getString(data, "nativeCommand") != "" || getString(data, "windowsCommand") != "" || getString(data, "dockerCommand") != "") {
+		if id := getString(data, "id"); id != "" {
+			fmt.Fprintf(out, cliText(out, "邀请 ID: %s\n"), safeCLIText(id))
+		}
 		if expiry := getString(data, "expiresAt"); expiry != "" {
 			fmt.Fprintf(out, cliText(out, "有效至 %s\n"), safeCLIText(expiry))
 		}

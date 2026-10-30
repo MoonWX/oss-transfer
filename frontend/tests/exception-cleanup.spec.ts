@@ -320,3 +320,153 @@ test("task ID search waits for a valid ID and accepts a hash prefix", async ({
   await expect(input).toHaveValue("41");
   expect(searches).toEqual(["41"]);
 });
+
+for (const mode of ["failed", "local"] as const) {
+  test(`${mode} retry success keeps the original exception and completed task choice until explicit cleanup`, async ({
+    page,
+  }) => {
+    await mockApi(page);
+    let completed = false;
+    let cleared = false;
+    let clearRequests = 0;
+    const rows = () =>
+      cleared
+        ? []
+        : [
+            {
+              ...row(61, completed ? "RECOVERED" : "NOT_RETRIED"),
+              direction: mode === "local" ? "OSS_TO_LOCAL" : "OSS_TO_OSS",
+              errorMessage: "Original upload failure",
+              retryCount: completed ? 1 : 0,
+            },
+          ];
+    await page.route("**/api/master/tasks/61", (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: {
+            taskIndex: 61,
+            status: completed ? "COMPLETED" : "PARTIAL_FAILED",
+            generation: completed ? 2 : 1,
+          },
+        },
+      }),
+    );
+    await page.route("**/api/master/exceptions/tasks?**", (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: {
+            items: cleared
+              ? []
+              : [
+                  {
+                    taskIndex: 61,
+                    status: completed ? "COMPLETED" : "PARTIAL_FAILED",
+                  },
+                ],
+            hasMore: false,
+          },
+        },
+      }),
+    );
+    if (mode === "local") {
+      await page.route("**/api/master/local-transfers/failures?**", (route) =>
+        route.fulfill({
+          json: {
+            success: true,
+            data: {
+              items: rows(),
+              total: rows().length,
+              clearableCount: completed && !cleared ? 1 : 0,
+            },
+          },
+        }),
+      );
+    } else {
+      await page.route("**/api/master/failed", (route) =>
+        route.fulfill({
+          json: {
+            success: true,
+            failedKeys: {
+              "10.0.1.12": rows(),
+              "10.0.1.12Count": rows().length,
+            },
+            clearableCount: completed && !cleared ? 1 : 0,
+          },
+        }),
+      );
+    }
+    await page.route("**/api/master/retry", (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        taskIds: [61],
+        expectedGenerations: { "61": 1 },
+      });
+      completed = true;
+      return route.fulfill({
+        json: {
+          accepted: 1,
+          ignored: 0,
+          failed: 0,
+          details: [
+            { taskId: 61, generation: 2, status: "RESUMING", success: true },
+          ],
+        },
+      });
+    });
+    await page.route("**/api/master/failed/clear", (route) => {
+      clearRequests++;
+      expect(route.request().postDataJSON()).toEqual({
+        type: mode,
+        taskIndex: 61,
+      });
+      cleared = true;
+      return route.fulfill({
+        json: { success: true, complete: true, clearedCount: 1 },
+      });
+    });
+    await page.goto(`/exceptions?taskId=61&type=${mode}`);
+    const table = page.getByRole("table");
+    const cleanup = page.getByRole("button", {
+      name: "清理已处理记录",
+      exact: true,
+    });
+    await expect(table).toContainText("Original upload failure");
+    await expect(cleanup).toBeDisabled();
+    await page
+      .getByRole("region", { name: "任务操作", exact: true })
+      .getByRole("button", { name: "重试失败项", exact: true })
+      .click();
+    await expect(table).toContainText("已恢复");
+    await expect(table).toContainText("file-61.bin");
+    await expect(table).toContainText("Original upload failure");
+    await expect(cleanup).toBeEnabled();
+    expect(clearRequests).toBe(0);
+    await page.reload();
+    await expect(table).toContainText("已恢复");
+    await expect(
+      page.getByRole("button", { name: "任务已完成", exact: true }),
+    ).toBeDisabled();
+    const taskFilter = page.getByRole("combobox", {
+      name: "所属任务",
+      exact: true,
+    });
+    await taskFilter.click();
+    await expect(
+      page.getByRole("option", { name: "任务 #61", exact: true }),
+    ).toBeVisible();
+    await taskFilter.press("Escape");
+    await cleanup.click();
+    await page.getByRole("button", { name: "确认清理", exact: true }).click();
+    await expect(table).toHaveCount(0);
+    await expect(cleanup).toBeDisabled();
+    expect(clearRequests).toBe(1);
+    await taskFilter.click();
+    await expect(
+      page.getByRole("option", { name: "全部任务", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("option", { name: "任务 #61", exact: true }),
+    ).toHaveCount(0);
+  });
+}

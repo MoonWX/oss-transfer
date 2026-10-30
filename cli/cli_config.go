@@ -12,6 +12,7 @@ import (
 
 type cliPreferences struct {
 	Language string `json:"language"`
+	Master   string `json:"master,omitempty"`
 }
 
 func normalizeCLILanguagePreference(value string) (string, error) {
@@ -61,6 +62,12 @@ func loadCLIPreferences() (cliPreferences, error) {
 		return preference, err
 	}
 	preference.Language = language
+	if preference.Master != "" {
+		preference.Master, err = masterOrigin(preference.Master, "host")
+		if err != nil {
+			return preference, err
+		}
+	}
 	return preference, nil
 }
 
@@ -112,14 +119,27 @@ func runCLIConfig(options globalOptions, output, errors io.Writer) int {
 		return code
 	}
 	args := options.args
-	if options.watch > 0 || len(args) < 3 || args[2] != "language" ||
+	if options.watch > 0 || len(args) < 3 || (args[2] != "language" && args[2] != "master") ||
 		!(args[1] == "get" && len(args) == 3 || args[1] == "set" && len(args) == 4) {
-		return fail(cliErrorf("用法: config get language 或 config set language auto|zh|en|ja"), 2)
+		return fail(cliErrorf("用法: config get language|master，config set language auto|zh|en|ja，或 config set master URL|auto"), 2)
 	}
 	var preference cliPreferences
 	var err error
 	if args[1] == "set" {
-		preference.Language, err = normalizeCLILanguagePreference(args[3])
+		preference, err = loadCLIPreferences()
+		if err != nil {
+			if args[2] != "language" {
+				return fail(err, 1)
+			}
+			preference = cliPreferences{Language: "auto"}
+		}
+		if args[2] == "language" {
+			preference.Language, err = normalizeCLILanguagePreference(args[3])
+		} else if args[3] == "auto" {
+			preference.Master, err = "", nil
+		} else {
+			preference.Master, err = masterOrigin(args[3], "host")
+		}
 		if err != nil {
 			return fail(err, 2)
 		}
@@ -130,12 +150,39 @@ func runCLIConfig(options globalOptions, output, errors io.Writer) int {
 	if err != nil {
 		return fail(err, 1)
 	}
+	value := preference.Language
+	if args[2] == "master" {
+		value = preference.Master
+		if value == "" {
+			value = "auto"
+		}
+	}
+	result := map[string]string{args[2]: value}
+	if args[2] == "master" && args[1] == "get" {
+		source := "automatic"
+		if options.host != "" {
+			value, err = masterOrigin(options.host, "host")
+			source = "override"
+		} else {
+			value, err = discoveredMaster()
+			if preference.Master != "" {
+				source = "saved"
+			}
+		}
+		if err != nil {
+			return fail(err, 1)
+		}
+		result["master"], result["source"] = value, source
+	}
 	if options.json {
-		if err := json.NewEncoder(output).Encode(map[string]string{"language": preference.Language}); err != nil {
+		if err := json.NewEncoder(output).Encode(result); err != nil {
 			return fail(err, 1)
 		}
 		return 0
 	}
-	fmt.Fprintln(output, preference.Language)
+	fmt.Fprintln(output, value)
+	if source := result["source"]; source != "" {
+		fmt.Fprintf(output, "source: %s\n", source)
+	}
 	return 0
 }

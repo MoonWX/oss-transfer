@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -30,6 +29,10 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return taskShow(client, args, action == "children")
 	case "recover-child":
 		return taskRecoverChild(client, args)
+	case "progress":
+		return taskProgress(client, args)
+	case "cleanup-status":
+		return taskCleanupStatus(client, args)
 	case "stop", "resume", "start", "retry", "delete":
 		return taskControl(client, action, args)
 	case "trash":
@@ -48,12 +51,12 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 			return nil, err
 		}
 		if action == "restore" {
-			return client.Post("/restore", map[string]interface{}{"taskIds": ids})
+			return taskControlBatches(client, action, []taskControlGroup{{path: "/restore", ids: ids}}, nil)
 		}
 		if !opts.Has("yes") {
 			return nil, cliErrorf("永久删除指定任务记录不可恢复；确认后添加 --yes")
 		}
-		return client.Post("/permanent-delete", map[string]interface{}{"taskIds": ids})
+		return taskControlBatches(client, action, []taskControlGroup{{path: "/permanent-delete", ids: ids}}, nil)
 	case "bandwidth":
 		return taskBandwidth(client, args)
 	case "limits":
@@ -199,7 +202,7 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 	if direction != "" && direction != "OSS_TO_OSS" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
 		return nil, cliErrorf("无效迁移方向 %q", opts.Value("direction"))
 	}
-	result, err := client.Get("/status?" + query.Encode())
+	result, err := taskListPages(client, query, opts.Has("all") || opts.Has("a"))
 	if err != nil {
 		return result, err
 	}
@@ -387,44 +390,19 @@ func taskEndpoint(task map[string]interface{}, source bool, locales ...cliLocale
 	}
 	return "—"
 }
-func taskSnapshot(client *ApiClient) (map[string]interface{}, map[int]map[string]interface{}, error) {
-	result, err := client.Get("/status?includeSubtasks=false")
+func taskByID(client *ApiClient, id int) (map[string]interface{}, map[string]interface{}, error) {
+	result, err := client.Get(fmt.Sprintf("/tasks/%d", id))
 	if err != nil {
 		return result, nil, err
 	}
-	tasks := map[int]map[string]interface{}{}
-	for _, task := range objectList(responseData(result)["tasks"]) {
-		tasks[getInt(task, "taskIndex")] = task
+	row := responseData(result)
+	if getInt(row, "taskIndex") != id {
+		return result, nil, cliErrorf("服务未返回请求的主任务 #%d", id)
 	}
-	return result, tasks, nil
-}
-
-func taskByID(client *ApiClient, id int) (map[string]interface{}, map[string]interface{}, error) {
-	result, err := client.Get(fmt.Sprintf("/tasks/%d", id))
-	if err == nil {
-		row := responseData(result)
-		if getInt(row, "taskIndex") != id {
-			return result, nil, cliErrorf("服务未返回请求的主任务 #%d", id)
-		}
-		return result, row, nil
-	}
-	var status *apiHTTPError
-	if !errors.As(err, &status) || status.Status != 404 {
-		return result, nil, err
-	}
-	// V4 did not have a direct parent lookup. Only an absent route/task can
-	// fall back; authentication and storage failures must remain failures.
-	snapshot, tasks, fallbackErr := taskSnapshot(client)
-	if fallbackErr != nil {
-		return snapshot, nil, fallbackErr
-	}
-	if row := tasks[id]; row != nil {
-		return snapshot, row, nil
-	}
-	return result, nil, err
+	return result, row, nil
 }
 func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]interface{}, error) {
-	opts, err := adminOptions(args, []string{"child", "node", "offset", "limit"}, nil, 1)
+	opts, err := adminOptions(args, []string{"child", "node", "offset", "limit", "cursor", "order"}, []string{"active"}, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +428,7 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 	}
 	var childNumber int
 	if opts.Has("child") {
-		if childrenOnly || opts.Has("offset") || opts.Has("limit") {
+		if childrenOnly || opts.Has("offset") || opts.Has("limit") || opts.Has("active") || opts.Has("cursor") || opts.Has("order") {
 			return nil, cliErrorf("--child 仅用于 task show，且不能与分页选项同时使用")
 		}
 		parentText, childText, hasNumber := strings.Cut(strings.TrimPrefix(opts.Value("child"), "#"), "-")
@@ -460,11 +438,34 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 			return nil, cliErrorf("子任务编号应为 %d-序号，序号从 1 开始", id)
 		}
 	}
+	query := url.Values{"offset": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(limit)}}
+	if opts.Has("active") {
+		query.Set("view", "active")
+	}
+	order := opts.Value("order")
+	if order == "" {
+		order = "priority"
+		if opts.Has("offset") && !opts.Has("cursor") {
+			order = "id"
+		}
+	}
+	if order != "priority" && order != "id" {
+		return nil, cliErrorf("--order 必须为 priority 或 id")
+	}
+	if order == "priority" {
+		query.Set("order", order)
+	}
+	if opts.Has("cursor") {
+		if order != "priority" || strings.TrimSpace(opts.Value("cursor")) == "" {
+			return nil, cliErrorf("--cursor 必须为非空游标，且需要按 priority 排序")
+		}
+		query.Set("cursor", opts.Value("cursor"))
+	}
 	snapshot, task, err := taskByID(client, id)
 	if err != nil {
 		return snapshot, err
 	}
-	path := fmt.Sprintf("/tasks/%d/children?offset=%d&limit=%d", id, offset, limit)
+	path := fmt.Sprintf("/tasks/%d/children?%s", id, query.Encode())
 	if childNumber > 0 {
 		path = fmt.Sprintf("/tasks/%d/children/%d", id, childNumber)
 		if opts.Has("node") {
@@ -484,6 +485,13 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 		return result, cliErrorf("服务未返回有效的子任务列表")
 	}
 	result["children"] = children
+	if childNumber == 0 {
+		data["order"] = order
+		data["view"] = "all"
+		if opts.Has("active") {
+			data["view"] = "active"
+		}
+	}
 	result["subtaskPage"] = data
 	for _, key := range []string{"snapshotComplete", "missingTaskIds"} {
 		if value, ok := task[key]; ok {
@@ -641,75 +649,6 @@ func numberCLIChildren(parent int, children []map[string]interface{}, childIDs i
 
 var legacyStartFailure = regexp.MustCompile(`失败[:：]\s*[1-9][0-9]*`)
 
-func taskControl(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := taskIDs(opts.Positionals)
-	if err != nil {
-		return nil, err
-	}
-	snapshot, tasks, err := taskSnapshot(client)
-	if err != nil {
-		return snapshot, err
-	}
-	if incompleteResult(snapshot) {
-		return snapshot, cliErrorf("节点数据不完整，无法确认任务状态；本次未执行%s", action)
-	}
-	groups := map[string][]int{}
-	paths := []string{}
-	for _, id := range ids {
-		task := tasks[id]
-		if task == nil {
-			return nil, cliErrorf("未找到主任务 #%d；本次未执行操作", id)
-		}
-		state := getString(task, "status")
-		exploring := task["ossTaskGroup"] == true && (task["creationStatus"] == "QUEUED" || task["creationStatus"] == "RUNNING")
-		path := "/" + action
-		allowed := false
-		switch action {
-		case "stop":
-			allowed = exploring || state == "RUNNING" || state == "LIST_DONE" || state == "PENDING" || state == "WAITING" || state == "RESUMING" || state == "RECOVERABLE"
-		case "resume", "retry":
-			allowed = !exploring && (state == "STOPPED" || state == "FAILED" || state == "PARTIAL_FAILED")
-			path = "/resume"
-		case "start":
-			allowed = !localTask(task) && task["autoStart"] != true && state == "PENDING" && !exploring
-		case "delete":
-			allowed = state != "RUNNING" && state != "LIST_DONE" && state != "STOPPING" && state != "WAITING" && state != "RESUMING" && state != "RECOVERABLE" && !exploring
-			path = "/clear"
-		}
-		if !allowed {
-			return nil, cliErrorf("任务 #%d 当前状态 %s 不允许 %s；本次未执行操作", id, state, action)
-		}
-		if localTask(task) && (path == "/stop" || path == "/resume") {
-			path = "/local-transfers" + path
-		}
-		if _, exists := groups[path]; !exists {
-			paths = append(paths, path)
-		}
-		groups[path] = append(groups[path], id)
-	}
-	details := []interface{}{}
-	issues := []string{}
-	for _, path := range paths {
-		result, callErr := client.Post(path, map[string]interface{}{"taskIds": groups[path]})
-		entry := map[string]interface{}{"taskIds": groups[path], "operation": action, "result": result}
-		if callErr != nil {
-			entry["error"] = localizedCLIError(client.locale, callErr)
-			issues = append(issues, localizedCLIError(client.locale, callErr))
-		} else if incompleteResult(result) || getInt(responseData(result), "failed") > 0 || (action == "start" && legacyStartFailure.MatchString(getString(result, "message"))) {
-			issues = append(issues, client.text("部分任务未受理，请检查节点结果"))
-		}
-		details = append(details, entry)
-	}
-	result := map[string]interface{}{"success": len(issues) == 0, "operation": action, "taskIds": ids, "details": details, "message": client.text("操作请求已处理；以任务最新状态为准")}
-	if len(issues) > 0 {
-		return result, fmt.Errorf("%s", strings.Join(issues, "；"))
-	}
-	return result, nil
-}
 func taskBandwidth(client *ApiClient, args []string) (map[string]interface{}, error) {
 	opts, err := parseCommandOptions(args, nil, nil)
 	if err != nil {

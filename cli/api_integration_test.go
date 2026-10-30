@@ -47,31 +47,20 @@ func TestAgentWindowsAndPosixRootsArePassedWithoutHostPathCleaning(t *testing.T)
 	}
 }
 
-func TestDirectTaskLookupOnlyFallsBackFor404(t *testing.T) {
+func TestDirectTaskLookupPreservesErrorsWithoutCatalogFallback(t *testing.T) {
 	for _, status := range []int{401, 404, 500} {
 		calls := 0
 		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			calls++
-			if calls == 1 {
-				if r.URL.Path != "/api/master/tasks/123456" {
-					t.Fatal(r.URL)
-				}
-				w.WriteHeader(status)
-				adminTestJSON(t, w, map[string]interface{}{"message": "failed"})
-				return
+			if r.URL.Path != "/api/master/tasks/123456" {
+				t.Fatal("unexpected catalog fallback", r.URL)
 			}
-			if status != 404 || r.URL.Path != "/api/master/status" {
-				t.Fatal("unexpected history fallback")
-			}
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(123456, "OSS_TO_OSS", "STOPPED")}})
+			w.WriteHeader(status)
+			adminTestJSON(t, w, map[string]interface{}{"message": "failed"})
 		})
-		_, task, err := taskByID(client, 123456)
-		if status == 404 {
-			if err != nil || task == nil || calls != 2 {
-				t.Fatal(task, err, calls)
-			}
-		} else if err == nil || calls != 1 {
-			t.Fatal("auth/storage failure hidden", err, calls)
+		_, row, err := taskByID(client, 123456)
+		if err == nil || row != nil || calls != 1 {
+			t.Fatal("lookup failure hidden or catalog scanned", row, err, calls)
 		}
 	}
 }

@@ -287,6 +287,99 @@ func TestLegacyHiddenUnresolvedExceptionsReappearBeforeRetryStateDerivation(t *t
 	check(ExceptionInterrupted)
 }
 
+func TestLegacyClearDoesNotHideLaterRecoveryOrCompletedTaskOption(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	db, repo := openTest(t, path)
+	defer func() { _ = db.Close() }()
+	p, _, err := repo.Create(testSpec(), "legacy-clear-then-recover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.Assign(p.ID, 1, 1, append(objects("recover"), objects("skip")...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := time.Now().UTC()
+	record := execution.Record{Job: c.Job, Status: execution.Failed, Attempt: 1, UpdatedAt: first, Counters: execution.Counters{Total: 2, TotalBytes: 2048, Failed: 2, FailedBytes: 2048}}
+	for _, item := range c.Job.Items {
+		record.Results = append(record.Results, execution.ItemResult{ID: item.ID, Status: execution.ItemFailed, Error: "original upload error"})
+	}
+	if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	// Before resolved-only cleanup existed, clearing failures saved only the
+	// original failure identity. It did not identify a resolved retry outcome.
+	entries := exceptionRows(t, repo, ExceptionFilter{ParentID: p.ID})
+	if err := db.Update(func(tx *state.Tx) error {
+		for _, entry := range entries {
+			for _, item := range c.Job.Items {
+				if item.Source.Key == entry.Key {
+					if err := tx.Put("master-task-exceptions-hidden", childKey(p.ID, 1)+"/"+digest(item.ID), entry.Identity); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p = resumeExceptionTest(t, repo, p)
+	record.Job.Generation = p.Generation
+	record.Attempt, record.Status, record.UpdatedAt = 2, execution.Completed, first.Add(time.Second)
+	record.Results[0].Status, record.Results[0].Error = execution.ItemSucceeded, ""
+	record.Results[1].Status, record.Results[1].Error = execution.ItemSkipped, ""
+	record.Counters = execution.Counters{Total: 2, TotalBytes: 2048, Succeeded: 1, SucceededBytes: 1024, Skipped: 1, SkippedBytes: 1024}
+	if err := repo.Observe(p.ID, p.Generation, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ScanProgress(p.ID, p.Generation, 2, 2048, 1, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := repo.FinishIfReady(p.ID, p.Generation); err != nil || !done {
+		t.Fatal("task did not complete", done, err)
+	}
+	assertHistory := func() {
+		t.Helper()
+		rows := exceptionRows(t, repo, ExceptionFilter{ParentID: p.ID})
+		if len(rows) != 2 {
+			t.Fatal("legacy dismissal hid new retry results", rows)
+		}
+		for _, row := range rows {
+			want := ExceptionRecovered
+			if row.Key == "skip" {
+				want = ExceptionSkipped
+			}
+			if row.RetryStatus != want || row.RetryGeneration != p.Generation || row.RetryCount != 1 || row.Error != "original upload error" || !row.ObservedAt.Equal(first) {
+				t.Fatal("recovery history changed", row)
+			}
+		}
+		options, more, err := repo.ExceptionTasks(context.Background(), ExceptionFilter{}, 100)
+		if err != nil || more || len(options) != 1 || options[0].ID != p.ID || options[0].Status != "COMPLETED" {
+			t.Fatal("completed task with uncleared history disappeared from picker", options, more, err)
+		}
+	}
+	assertHistory()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, repo = openTest(t, path)
+	assertHistory()
+	if count, err := repo.ClearExceptions(context.Background(), ExceptionFilter{ParentID: p.ID}); err != nil || count != 2 {
+		t.Fatal("explicit cleanup did not clear both resolved records", count, err)
+	}
+	if rows := exceptionRows(t, repo, ExceptionFilter{}); len(rows) != 0 {
+		t.Fatal("new resolved dismissal did not apply", rows)
+	}
+	if options, _, err := repo.ExceptionTasks(context.Background(), ExceptionFilter{}, 100); err != nil || len(options) != 0 {
+		t.Fatal("cleaned task remained in exception picker", options, err)
+	}
+	parent, err := repo.Get(p.ID)
+	if err != nil || parent.Status != "COMPLETED" || parent.Counters != record.Counters {
+		t.Fatal("history cleanup altered the completed task", parent, err)
+	}
+}
+
 func TestExceptionTaskOptionsAreBoundedAndExcludeUnrelatedTasks(t *testing.T) {
 	db, repo := openTest(t, filepath.Join(t.TempDir(), "db"))
 	defer db.Close()

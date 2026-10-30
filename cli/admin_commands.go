@@ -210,6 +210,8 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 
 func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	switch action {
+	case "invite-status":
+		return agentInviteStatus(client, args)
 	case "list", "show", "details", "remove":
 		return runNodeAdmin(client, action, args)
 	case "update":

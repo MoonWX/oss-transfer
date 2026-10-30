@@ -75,7 +75,7 @@ func TestCLILocaleSelection(t *testing.T) {
 	}
 }
 func TestCLIHelpAllLanguagesAndAliases(t *testing.T) {
-	groups := [][]string{{}, {"config"}, {"task"}, {"task", "create"}, {"task", "import"}, {"node"}, {"agent"}, {"setup"}, {"storage"}, {"limit"}, {"exceptions"}, {"object"}, {"login"}, {"tools"}}
+	groups := [][]string{{}, {"config"}, {"task"}, {"task", "create"}, {"task", "import"}, {"node"}, {"agent"}, {"setup"}, {"storage"}, {"limit"}, {"exceptions"}, {"object"}, {"update"}, {"backup"}, {"login"}, {"tools"}}
 	for _, group := range groups {
 		source := helpFor(group)
 		for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {

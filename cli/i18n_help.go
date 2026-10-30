@@ -15,18 +15,59 @@ func helpForLocale(args []string, locale cliLocale) string {
 }
 
 var cliHelpTranslations = map[string][2]string{
+	cliUpdateHelp: {`Service updates
+  oss-transfer-cli update status
+  oss-transfer-cli update check
+  oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update agent --worker NODE --yes
+  oss-transfer-cli update agents --all --yes
+
+Agents default to the Master's current version; --version selects another release.
+Follow queued updates with update status --watch 5. Acceptance is not completion.
+`, `サービス更新
+  oss-transfer-cli update status
+  oss-transfer-cli update check
+  oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update agent --worker ノード --yes
+  oss-transfer-cli update agents --all --yes
+
+Agent は既定で Master の現在のバージョンに更新します。--version で変更できます。
+update status --watch 5 で結果を確認します。受付は更新完了を意味しません。
+`},
+	cliBackupHelp: {`Upgrade backups
+  oss-transfer-cli backup list
+  oss-transfer-cli backup prune master --yes
+  oss-transfer-cli backup prune agent --worker NODE --yes
+
+Removes only backups marked removable; recovery backups for failed upgrades remain.
+`, `アップグレードのバックアップ
+  oss-transfer-cli backup list
+  oss-transfer-cli backup prune master --yes
+  oss-transfer-cli backup prune agent --worker ノード --yes
+
+削除可能なバックアップのみ削除し、失敗した更新の復元用バックアップは残します。
+`},
+
 	cliConfigHelp: {`Local preferences
 Usage:
+  oss-transfer-cli config get master
+  oss-transfer-cli config set master https://transfer.example.com
+  oss-transfer-cli config set master auto
   oss-transfer-cli config get language
   oss-transfer-cli config set language auto|zh|en|ja
 
-The default follows the system locale. Save a language once for later commands; auto restores system selection.
+Master is detected from the local installation. Save another URL once, or use auto to restore detection.
+The default language follows the system locale. Save a language once for later commands; auto restores system selection.
 --lang and OSS_TRANSFER_LANG override it for the current invocation; auto temporarily uses the system language.
 `, `ローカル設定
 使い方:
+  oss-transfer-cli config get master
+  oss-transfer-cli config set master https://transfer.example.com
+  oss-transfer-cli config set master auto
   oss-transfer-cli config get language
   oss-transfer-cli config set language auto|zh|en|ja
 
+Master はローカルインストールから検出します。別の URL を保存でき、auto で自動検出に戻せます。
 既定はシステム言語です。一度保存すると以降のコマンドで使用し、auto で自動選択に戻します。
 --lang と OSS_TRANSFER_LANG は今回の設定を上書きし、auto は一時的にシステム言語を使用します。
 `},
@@ -51,13 +92,16 @@ Tasks
 
 Nodes and storage
   node list|show|details|network|add|invite|update|remove
-  agent invite|list|show|details|update|remove
+  agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove
   storage buckets|test <alias>
 
 Limits and diagnostics
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
+  update status|check
+  update master|agent|agents ...
+  backup list|prune ...
   object compare ...              Compare buckets, prefixes or objects
 
 Account
@@ -67,6 +111,8 @@ Account
   change-password --old-password-env OLD --new-password-env NEW
 
 Local preferences
+  config get master               Show the current Master and address source
+  config set master URL|auto      Save another Master or use automatic discovery
   config get language             Show the saved language
   config set language auto|zh|en|ja  Save a language; default: system locale
 
@@ -76,7 +122,7 @@ Inventory tools
   import-inventory <source-alias/bucket> <target-alias/bucket> <manifest-dir> [--overwrite]
 
 Global options
-  --host <http://IP:1685>          Default: http://localhost:1685
+  --host <URL>                    Override the automatically detected cluster Master
   --lang auto|zh|en|ja             Override language for this invocation
   --json                          Structured JSON; one line per --watch refresh
   --verbose                       Write request paths and HTTP status to stderr
@@ -122,13 +168,16 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
 
 ノードとストレージ
   node list|show|details|network|add|invite|update|remove
-  agent invite|list|show|details|update|remove
+  agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove
   storage buckets|test <接続名>
 
 制限と診断
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
+  update status|check
+  update master|agent|agents ...
+  backup list|prune ...
   object compare ...              バケット、プレフィックス、オブジェクトの比較
 
 アカウント
@@ -138,6 +187,8 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   change-password --old-password-env OLD --new-password-env NEW
 
 ローカル設定
+  config get master               Master のアドレスと設定元を表示
+  config set master URL|auto      接続先を保存、または自動検出に戻す
   config get language             保存した言語を表示
   config set language auto|zh|en|ja  言語を保存（既定はシステム言語）
 
@@ -147,7 +198,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   import-inventory <転送元接続名/バケット> <転送先接続名/バケット> <マニフェストディレクトリ> [--overwrite]
 
 グローバルオプション
-  --host <http://IP:1685>          既定: http://localhost:1685
+  --host <URL>                    自動検出したクラスタの Master を一時的に変更
   --lang auto|zh|en|ja             今回の表示言語を指定
   --json                          JSON で出力。--watch 時は更新ごとに 1 行
   --verbose                       リクエストパスと HTTP 状態を標準エラーに出力
@@ -178,13 +229,16 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
 
   list [--status STATUS] [--source BUCKET] [--dest BUCKET] [--worker NODE]
        [--direction oss-to-oss|oss-to-local|local-to-oss] [--search TEXT]
-       [--limit 100] [--before-id ID]
+       [--limit 100] [--before-id ID] [--all]
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-N [--node NODE]
-  children <ID> [--offset 0] [--limit 25]
+  children <ID> [--active] [--order priority|id] [--cursor CURSOR] [--offset 0] [--limit 25]
+  progress <ID> [--child ID-N] [--generation N]
+  cleanup-status <ID...>
+  retry --all --yes
   recover-child <ID-N>            Try to resume a subtask within the node's concurrency limit
   trash [--task-id ID] [--worker NODE] [--direction DIRECTION] [--search TEXT]
-        [--limit 100] [--before-id ID]
+        [--limit 100] [--before-id ID] [--all]
 
   stop <ID...>                     Stop and retain progress
   resume|retry <ID...>             Resume stopped/failed tasks, retaining completed work
@@ -207,24 +261,28 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   See help task create and help task import.
 
 States: RUNNING, STOPPING, RESUMING, COMPLETED, PARTIAL_FAILED, FAILED, STOPPED.
-Actions accept parent IDs: 224,225 or 224-226. Incomplete node status prevents task controls.
-Child pages default to 25 IDs; --limit is 1–200, --offset skips IDs without renumbering.
-list/trash accept --limit 1–10000; --before-id loads older records.
+Actions read selected parent IDs and submit in bounded batches; running tasks are not retried.
+Child pages default to 25 results in status priority order. --active selects ongoing work; --cursor continues.
+Use --order id or --offset for numbering order; --limit is 1–200.
+list/trash accept --limit 1–10000; --before-id loads older records. list --all follows every page.
 --child loads only the selected child. Use --node when the ID exists on multiple nodes.
---watch supports list/show/children/trash and bandwidth/limits without a new value.
+--watch supports list/show/children/progress/cleanup-status/trash and bandwidth/limits without a new value.
 Deleting records does not delete source or target objects.
 `, `タスク管理
 使い方: oss-transfer-cli task <サブコマンド> [引数]
 
   list [--status 状態] [--source バケット] [--dest バケット] [--worker ノード]
        [--direction oss-to-oss|oss-to-local|local-to-oss] [--search 文字列]
-       [--limit 100] [--before-id ID]
+       [--limit 100] [--before-id ID] [--all]
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-N [--node ノード]
-  children <ID> [--offset 0] [--limit 25]
+  children <ID> [--active] [--order priority|id] [--cursor CURSOR] [--offset 0] [--limit 25]
+  progress <ID> [--child ID-N] [--generation N]
+  cleanup-status <ID...>
+  retry --all --yes
   recover-child <ID-N>            ノードの同時実行数制限内で子タスクの再開を試行
   trash [--task-id ID] [--worker ノード] [--direction 方向] [--search 文字列]
-        [--limit 100] [--before-id ID]
+        [--limit 100] [--before-id ID] [--all]
 
   stop <ID...>                     進捗を保持して停止
   resume|retry <ID...>             完了済みの処理を保持して停止・失敗タスクを再開
@@ -247,9 +305,10 @@ Deleting records does not delete source or target objects.
   詳細は help task create と help task import を参照してください。
 
 状態: RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
-操作には親 ID（224,225 または 224-226）を指定します。ノード情報が不完全なら実行しません。
-子タスクは既定で 25 番号ずつ取得します。--limit は 1～200、--offset は番号を変えずに取得位置を指定します。
-list/trash の --limit は 1～10000、--before-id は指定 ID より古い記録を取得します。
+指定した親タスクを個別に確認し、分割して送信します。実行中のタスクは再試行しません。
+子タスクは状態の優先順で 25 件ずつ取得します。--active は進行中のみ、--cursor は続きの取得です。
+--order id または --offset で番号順に表示します。--limit は 1～200 です。
+list/trash の --limit は 1～10000、--before-id は古い記録、list --all は全ページを取得します。
 --child は指定した子タスクのみ取得します。同じ ID が複数ノードにある場合は --node を指定してください。
 --watch は list/show/children/trash と、新しい値を指定しない bandwidth/limits に対応します。
 記録を削除しても転送元や転送先のオブジェクトは削除されません。
@@ -439,6 +498,7 @@ node network は旧版のアドレス設定を保持します。新しい招待�
 Usage: oss-transfer-cli agent <subcommand> [arguments]
 
   invite [--label name] [--address node] [--master-url URL]
+  invite-status <invitation-ID>   Check whether the Agent has joined
   list                            List registered Agents
   show <node>                     Connection, queues, roots and limits
   details <node>                  Host, interface IPs and mounted directories
@@ -459,6 +519,7 @@ Invitations expire after 30 minutes and can be used once. Run the native install
 使い方: oss-transfer-cli agent <サブコマンド> [引数]
 
   invite [--label 名前] [--address ノード] [--master-url URL]
+  invite-status <招待ID>          ノードの参加状況を確認
   list                            登録済み Agent を表示
   show <ノード>                   接続、キュー、ルート、制限を表示
   details <ノード>                ホスト、インターフェース IP、マウントを表示

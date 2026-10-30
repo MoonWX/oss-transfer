@@ -189,6 +189,9 @@ func serve(ctx context.Context, config servicehost.Config, options agent.Options
 	if err != nil {
 		return err
 	}
+	if err := servicehost.PublishCLIConnection("agent", runner.MasterURL(), config); err != nil {
+		fmt.Fprintf(os.Stderr, "CLI connection discovery: %v\n", err)
+	}
 	err = runner.Run(ctx)
 	if errors.Is(err, context.Canceled) {
 		return nil

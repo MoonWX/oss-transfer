@@ -697,11 +697,7 @@ try {
     Write-Host "Installed $Role $version. Service: $ServiceName"
     Write-Host "Configuration: $config"
     Write-Host "CLI: $CliPath"
-    if ($Role -eq 'master') {
-        $installedListen = if ($existing -or $AdoptConfig) { $fields.listen } else { $Listen }
-        $cliListen = $installedListen -replace '^0\.0\.0\.0:', '127.0.0.1:' -replace '^\[::\]:', '[::1]:' -replace '^:', '127.0.0.1:'
-        Write-Host ("Login: & '"+$CliPath.Replace("'","''")+"' --host 'http://"+$cliListen+"' login")
-    }
+    Write-Host ("Login: & '"+$CliPath.Replace("'","''")+"' login")
     Write-Host ('Log: '+$script:logFile)
     Show-InitialCredentials
     $installationSucceeded = $true

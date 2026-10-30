@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -64,5 +65,61 @@ func TestTaskDisplayGroupsLegacyStatesWithoutRewritingJSON(t *testing.T) {
 		if !strings.Contains(output.String(), want) || row["status"] != state {
 			t.Fatalf("wrong display or mutated data: %s %#v", output.String(), row)
 		}
+	}
+}
+
+func TestSubtaskPriorityPageShowsActualRowsAndCursorCommand(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		page := map[string]interface{}{"parentTaskId": 224, "totalCount": 80, "offset": 25, "limit": 25, "order": "priority", "nextCursor": "0/0000000004", "hasMore": true}
+		if active {
+			page["view"] = "active"
+		}
+		result := map[string]interface{}{"subtaskPage": page, "children": []map[string]interface{}{{"childTaskId": "224-99"}, {"childTaskId": "224-4"}}}
+		var output bytes.Buffer
+		renderSubtaskPage(&output, result)
+		text := output.String()
+		if !strings.Contains(text, "本页 2 个子任务") || !strings.Contains(text, "task children 224 --cursor '0/0000000004' --limit 25 --order priority") || strings.Contains(text, "--offset") || strings.Contains(text, "子任务编号") {
+			t.Fatal("priority order was displayed as ordinal pagination", text)
+		}
+		if strings.Contains(text, "--active") != active {
+			t.Fatal("next page changed active/all view", text)
+		}
+	}
+}
+
+func TestSubtaskPriorityEmptyAndIndexingPagesDoNotInventNumberWindows(t *testing.T) {
+	for _, indexing := range []bool{false, true} {
+		result := map[string]interface{}{"children": []interface{}{}, "subtaskPage": map[string]interface{}{"order": "priority", "totalCount": 999, "limit": 25, "indexing": indexing}}
+		var output bytes.Buffer
+		renderSubtaskPage(&output, result)
+		text := output.String()
+		if indexing && !strings.Contains(text, "正在整理子任务，请稍后重试。") || !indexing && !strings.Contains(text, "本页 0 个子任务") || strings.Contains(text, "编号") || strings.Contains(text, "下一页") {
+			t.Fatal("empty/indexing page claimed a numbered window", text)
+		}
+	}
+}
+
+func TestSubtaskNextCursorIsQuotedAsOneShellArgument(t *testing.T) {
+	cursor := "0/0000000004'; $(echo injected); '"
+	want := "'0/0000000004'\\''; $(echo injected); '\\'''"
+	if runtime.GOOS == "windows" {
+		want = "'0/0000000004''; $(echo injected); '''"
+	}
+	if got := quoteTaskCursor(cursor); got != want {
+		t.Fatalf("unsafe cursor argument: %q, want %q", got, want)
+	}
+	var output bytes.Buffer
+	renderSubtaskPage(&output, map[string]interface{}{"children": []interface{}{}, "subtaskPage": map[string]interface{}{"parentTaskId": 1, "order": "priority", "limit": 25, "hasMore": true, "nextCursor": cursor}})
+	if !strings.Contains(output.String(), "--cursor "+want+" --limit") {
+		t.Fatal("next-page command did not use the quoted cursor", output.String())
+	}
+}
+
+func TestSubtaskNumberPagePreservesExplicitOrderAndActiveView(t *testing.T) {
+	var output bytes.Buffer
+	renderSubtaskPage(&output, map[string]interface{}{"children": []map[string]interface{}{{"childTaskId": "224-26"}}, "subtaskPage": map[string]interface{}{"parentTaskId": 224, "totalCount": 80, "offset": 25, "limit": 25, "order": "id", "view": "active", "hasMore": true}})
+	text := output.String()
+	if !strings.Contains(text, "子任务编号 26–50 / 80") || !strings.Contains(text, "task children 224 --offset 50 --limit 25 --order id --active") || strings.Contains(text, "--cursor") {
+		t.Fatal("explicit numeric page changed behavior", text)
 	}
 }

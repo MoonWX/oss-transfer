@@ -156,6 +156,10 @@ func (a *Agent) Enroll(ctx context.Context) error {
 	a.identity = next
 	return nil
 }
+
+// MasterURL exposes the non-secret cluster origin for local CLI discovery.
+func (a *Agent) MasterURL() string { return a.identity.MasterURL }
+
 func (a *Agent) Session() agenttransport.Session {
 	return agenttransport.Session{NodeID: a.identity.InstanceID, EnrollmentID: a.identity.EnrollmentID}
 }

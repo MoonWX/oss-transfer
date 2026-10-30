@@ -1,104 +1,119 @@
 # Use the CLI
 
-The command-line interface (CLI) connects to the same Master and uses the same account as the console. The examples below use Bash and a default Linux installation. On other systems, use the CLI path printed by the installer. With Docker Compose, run it through `docker compose exec master oss-transfer-cli`.
-
-## Log in
-
-The default Master address is `http://localhost:1685`. To connect elsewhere, set its address once in your shell:
-
-```bash
-read -r -p 'Master URL: ' OSS_TRANSFER_MASTER_SERVER
-export OSS_TRANSFER_MASTER_SERVER
-```
-
-Log in as `admin` with the password printed by the installer. Password input is hidden:
-
-```bash
-oss-transfer-cli login
-oss-transfer-cli change-password
-```
-
-The first login requires a password change before running other commands. For another account, use `login --username name`. Scripts can supply `--password-env`, `--password-file`, or `--password-stdin`; `change-password` accepts `--old-password-env` and `--new-password-env` (or the corresponding `-file` options).
-
-The session is saved for this Master address. Keep using the same address and port for subsequent commands.
-
-## Inspect and control tasks
+The command-line interface (CLI) uses the same account, tasks and settings as the web console. On an installed Master or Agent, it detects that installation's cluster address and port.
 
 ```sh
+oss-transfer-cli login
 oss-transfer-cli task list
 ```
 
-Select a task ID from the list:
+Login asks for the password without displaying it. In Docker Compose, use `docker compose exec master oss-transfer-cli login`.
+
+## Choose another Master
+
+Use `--host` for a single command, or save a connection for later commands:
+
+```bash
+read -r -p 'Master URL: ' TRANSFER_MASTER
+oss-transfer-cli config set master "$TRANSFER_MASTER"
+oss-transfer-cli login
+oss-transfer-cli task list
+```
+
+`config set master auto` returns to the installed cluster. `config get master` shows the current address and where it came from. Address selection follows `--host`, `OSS_TRANSFER_MASTER_SERVER`, the saved preference, then the installation. A standalone CLI without any of these uses `http://localhost:1685`. Sessions belong to one Master address; connecting to another Master requires its own login.
+
+## Inspect and control tasks
+
+List all tasks, including those beyond the first page:
+
+```sh
+oss-transfer-cli task list --all
+```
+
+Select an ID from the list:
 
 ```bash
 read -r -p 'Task ID: ' TRANSFER_TASK
 oss-transfer-cli task show "$TRANSFER_TASK"
+oss-transfer-cli task children "$TRANSFER_TASK" --active
+oss-transfer-cli task progress "$TRANSFER_TASK" --watch 5
 ```
 
-Stop that task:
+Children use the console's status priority. When another page is available, the command prints the next-page command. `--order id` lists them by number. `task progress` shows in-flight file bytes; add `--child ID-N` to inspect one child task.
 
 ```sh
 oss-transfer-cli task stop "$TRANSFER_TASK"
-```
-
-Resume it when ready:
-
-```sh
 oss-transfer-cli task resume "$TRANSFER_TASK"
 ```
 
-After the task stops or finishes, export its report:
+Resume continues unfinished work and keeps completed progress. To retry failed tasks, pass their IDs to `task retry`, or use `task retry --all --yes` for every failed or partially failed task. If a request times out, the CLI reports the IDs whose result is unknown and stops sending further batches. Check those tasks before retrying.
+
+Export a stopped or finished task's report:
 
 ```sh
 oss-transfer-cli task report "$TRANSFER_TASK" --output "task-$TRANSFER_TASK.zip"
 ```
 
-For task creation, storage connections and node management, inspect the corresponding command help:
+`task delete` moves records to the recycle bin. `task restore` restores them. `task purge ID --yes` starts permanent record cleanup; use `task cleanup-status ID --watch 5` to follow it. These operations do not delete migrated files.
+
+## Create tasks and set limits
+
+The CLI supports object storage to object storage, uploads and downloads. Help lists each direction's required paths, storage connections and nodes:
 
 ```sh
-oss-transfer-cli help task
+oss-transfer-cli help task create
+oss-transfer-cli help task import
 oss-transfer-cli help storage
-oss-transfer-cli help node
 ```
 
-Add the global `--json` option for machine-readable output, for example `oss-transfer-cli --json task list`.
+Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task.
 
-## Set task limits
-
-Read the current limits or change individual fields while a task is running:
+Adjust a running task's limits:
 
 ```sh
-oss-transfer-cli task limits "$TRANSFER_TASK"
 oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --put-qps 200 --bandwidth-mbps 100
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-Unspecified fields keep their current values. `--list-qps` covers both object listing and GET reads; PUT includes multipart upload requests. New tasks share these limits across their selected Agents, and node limits still apply. The command prints the scope for older tasks that use per-node limits. These QPS flags also work with `task create`.
+Unspecified fields keep their values. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are shared across selected Agents, and node limits still apply.
 
-## Add an Agent
-
-Generate the join commands:
+## Manage nodes and exceptions
 
 ```sh
+oss-transfer-cli node list
 oss-transfer-cli agent invite --label storage-01
 ```
 
-Run the command for the Agent host's operating system or Docker. To use a private network address, add `--master-url` when creating the invitation.
-
-Node settings accept `--child-concurrency` and `--object-concurrency` on `node update`. They apply immediately and remain saved after restart. See `oss-transfer-cli help node` for the syntax.
-
-## Compare a bucket or prefix
-
-`object compare` accepts `--scope prefix` for a bucket or prefix, and `--scope object` for one object. Choose `--mode metadata` for HEAD-only checks or `--mode content` for streaming SHA-256. Supply `--source-bucket` and `--dest-bucket` as `connection/bucket`; prefixes use `--source-prefix` and `--dest-prefix`.
-
-The command returns a comparison ID. Use `object status`, `object cancel` or `object delete` with that ID to read results, stop a comparison or remove a finished result. `oss-transfer-cli help object` lists the options. [Comparison details](operations.md#compare-objects) explain what each mode verifies.
-
-## Language
-
-The CLI follows the system language and supports English, Chinese and Japanese. It uses English for other locales. To save a different preference:
+Run the printed join command on the new node. The invitation includes an ID for `agent invite-status`. If Agents need a private Master address, set `--master-url` when creating the invitation. `node update` supports live changes to `--child-concurrency` and `--object-concurrency`.
 
 ```sh
-oss-transfer-cli config set language en
+oss-transfer-cli exceptions list failed --task-id "$TRANSFER_TASK"
+oss-transfer-cli task retry "$TRANSFER_TASK"
+oss-transfer-cli exceptions clear failed --task-id "$TRANSFER_TASK" --yes
 ```
 
-Use `zh` for Chinese, `ja` for Japanese, or `auto` to follow the system again.
+Clearing removes only records resolved by a successful retry or skip. Unresolved failures remain visible. Use `local` for local-transfer failures, or `fallback` to inspect fallback records.
+
+## Compare stored objects
+
+`object compare` checks one object with `--scope object`, or a bucket/prefix with `--scope prefix`. `--mode metadata` compares metadata; `--mode content` streams both objects through SHA-256 without staging them on disk. Use `object status`, `object cancel` and `object delete` with the returned comparison ID. [Comparison details](operations.md#compare-objects) describe the checks; `help object` lists the arguments.
+
+## Update the cluster
+
+```sh
+oss-transfer-cli update check
+oss-transfer-cli update status
+oss-transfer-cli help update
+```
+
+Update a Master with `update master --version VERSION --yes`, then run `update agents --all --yes` to bring Agents to its version. To select one Agent, use `update agent --worker NODE --yes`. Follow the result with `update status --watch 5`; accepting the request does not mean the upgrade has finished. Online upgrades require a managed native installation.
+
+`backup list` shows upgrade backups. `backup prune master --yes` or `backup prune agent --worker NODE --yes` removes only backups the service marks as removable.
+
+## Language and scripts
+
+The CLI follows the system language, with English as the fallback. Save a preference with `config set language en`, `zh`, `ja` or `auto`. `--lang` overrides it for one command.
+
+Use `--json` for structured output. Exit codes are 0 for success, 1 for a failed operation, 2 for invalid arguments, 3 for an incomplete or uncertain result, and 130 for interruption. Read-only commands support `--watch 5`.
+
+Scripts can log in with `--password-env`, `--password-file` or `--password-stdin`. `change-password` accepts `--old-password-env` and `--new-password-env`, or the corresponding file options. `logout` closes the current Master's session.

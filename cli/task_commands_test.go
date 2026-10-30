@@ -9,82 +9,106 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func taskTestRow(id int, direction, status string) map[string]interface{} {
-	return map[string]interface{}{"taskIndex": id, "direction": direction, "status": status}
+	return map[string]interface{}{"taskIndex": id, "direction": direction, "status": status, "generation": 1}
 }
 
-func TestTaskStopRoutesMixedDirectionsAfterSinglePrecheck(t *testing.T) {
+func TestTaskStopRoutesMixedDirectionsAfterDirectPrechecks(t *testing.T) {
+	var mu sync.Mutex
 	paths := []string{}
+	rows := map[int]map[string]interface{}{224: taskTestRow(224, "OSS_TO_OSS", "RUNNING"), 225: taskTestRow(225, "OSS_TO_LOCAL", "PENDING"), 226: taskTestRow(226, "LOCAL_TO_OSS", "LIST_DONE")}
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		paths = append(paths, r.URL.Path)
+		mu.Unlock()
 		if r.Method == "GET" {
-			if r.URL.Path != "/api/master/status" {
-				t.Fatalf("unexpected precheck: %s", r.URL)
+			id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/master/tasks/"))
+			if err != nil || rows[id] == nil {
+				t.Errorf("unexpected precheck %s", r.URL)
+				w.WriteHeader(500)
+				return
 			}
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_OSS", "RUNNING"), taskTestRow(225, "OSS_TO_LOCAL", "PENDING"), taskTestRow(226, "LOCAL_TO_OSS", "LIST_DONE")}, "partial": false})
+			adminTestJSON(t, w, map[string]interface{}{"data": rows[id]})
 			return
-		}
-		if r.Method != "POST" {
-			t.Fatalf("unexpected method: %s", r.Method)
 		}
 		ids := adminTestBody(t, r)["taskIds"]
 		switch r.URL.Path {
 		case "/api/master/stop":
 			if !reflect.DeepEqual(ids, []interface{}{float64(224)}) {
-				t.Fatalf("wrong OSS targets: %#v", ids)
+				t.Errorf("wrong OSS targets %#v", ids)
 			}
 			adminTestJSON(t, w, map[string]interface{}{"success": true, "accepted": 1, "failed": 0})
 		case "/api/master/local-transfers/stop":
 			if !reflect.DeepEqual(ids, []interface{}{float64(225), float64(226)}) {
-				t.Fatalf("wrong local targets: %#v", ids)
+				t.Errorf("wrong local targets %#v", ids)
 			}
-			adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"accepted": 2, "failed": 0, "partial": false}})
+			adminTestJSON(t, w, map[string]interface{}{"data": map[string]interface{}{"accepted": 2, "failed": 0}})
 		default:
-			t.Fatalf("unexpected control request: %s", r.URL)
+			t.Errorf("unexpected request %s", r.URL)
+			w.WriteHeader(500)
 		}
 	})
 	result, err := runTaskCommand(client, []string{"stop", "224-226"})
 	if err != nil || result["success"] != true {
-		t.Fatalf("control failed: %#v, %v", result, err)
+		t.Fatalf("control failed %#v %v", result, err)
 	}
-	if !reflect.DeepEqual(paths, []string{"/api/master/status", "/api/master/stop", "/api/master/local-transfers/stop"}) {
-		t.Fatalf("unexpected request sequence: %v", paths)
+	sort.Strings(paths[:3])
+	if !reflect.DeepEqual(paths, []string{"/api/master/tasks/224", "/api/master/tasks/225", "/api/master/tasks/226", "/api/master/stop", "/api/master/local-transfers/stop"}) {
+		t.Fatal(paths)
 	}
 }
 
 func TestTaskControlPrevalidatesAllTargetsBeforeAnyMutation(t *testing.T) {
 	for _, invalid := range []string{"completed", "missing", "group-partial", "node-partial"} {
 		t.Run(invalid, func(t *testing.T) {
+			var mu sync.Mutex
 			calls := 0
 			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
 				calls++
+				mu.Unlock()
 				if r.Method != "GET" {
-					t.Fatalf("mutated first target before validating all: %s", r.URL)
+					t.Errorf("mutated before all selected tasks were validated")
+					w.WriteHeader(500)
+					return
 				}
-				first, second := taskTestRow(224, "OSS_TO_OSS", "RUNNING"), taskTestRow(225, "OSS_TO_LOCAL", "RUNNING")
-				result := map[string]interface{}{"tasks": []interface{}{first, second}, "partial": false}
-				switch invalid {
-				case "completed":
-					second["status"] = "COMPLETED"
-				case "missing":
-					second["taskIndex"] = 226
-				case "group-partial":
-					first["snapshotComplete"] = false
-					first["missingTaskIds"] = []int{230}
-				case "node-partial":
-					result["partial"] = true
-					result["unreachableWorkers"] = []string{"10.0.0.3"}
+				id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/master/tasks/"))
+				if err != nil {
+					t.Errorf("not direct lookup %s", r.URL)
+					w.WriteHeader(500)
+					return
+				}
+				row := taskTestRow(id, "OSS_TO_OSS", "RUNNING")
+				result := map[string]interface{}{"data": row}
+				if id == 225 {
+					switch invalid {
+					case "completed":
+						row["status"] = "COMPLETED"
+					case "missing":
+						w.WriteHeader(404)
+						adminTestJSON(t, w, map[string]interface{}{"error": "Task not found"})
+						return
+					case "group-partial":
+						row["snapshotComplete"] = false
+						row["missingTaskIds"] = []int{230}
+					case "node-partial":
+						result["partial"] = true
+						result["unreachableWorkers"] = []string{"10.0.0.3"}
+					}
 				}
 				adminTestJSON(t, w, result)
 			})
 			if _, err := runTaskCommand(client, []string{"stop", "224", "225"}); err == nil {
-				t.Fatal("invalid batch accepted")
+				t.Fatal("invalid selection accepted")
 			}
-			if calls != 1 {
+			if calls != 2 {
 				t.Fatalf("requests = %d", calls)
 			}
 		})
@@ -100,7 +124,7 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 					writes := 0
 					client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 						if r.Method == "GET" {
-							adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, direction, state)}})
+							adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, direction, state)})
 							return
 						}
 						writes++
@@ -108,7 +132,9 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 							t.Fatal("non-resumable state mutated")
 						}
 						path := "/api/master/resume"
-						if direction != "OSS_TO_OSS" {
+						if action == "retry" {
+							path = "/api/master/retry"
+						} else if direction != "OSS_TO_OSS" {
 							path = "/api/master/local-transfers/resume"
 						}
 						if r.URL.Path != path {
@@ -133,7 +159,7 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 		}
 		row := taskTestRow(224, "OSS_TO_OSS", "STOPPED")
 		row["ossTaskGroup"], row["creationStatus"] = true, "RUNNING"
-		adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{row}})
+		adminTestJSON(t, w, map[string]interface{}{"data": row})
 	})
 	if _, err := runTaskCommand(client, []string{"resume", "224"}); err == nil {
 		t.Fatal("active exploration resumed")
@@ -143,7 +169,7 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 func TestTaskControlReturnsPartialFailure(t *testing.T) {
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_LOCAL", "STOPPED")}})
+			adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, "OSS_TO_LOCAL", "STOPPED")})
 			return
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"accepted": 1, "failed": 1, "partial": true, "unreachableWorkers": []string{"10.0.0.3"}}})
@@ -161,7 +187,7 @@ func TestTaskControlReturnsPartialFailure(t *testing.T) {
 func TestTaskLegacyStartPartialFailureReturnsError(t *testing.T) {
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(224, "OSS_TO_OSS", "PENDING")}})
+			adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(224, "OSS_TO_OSS", "PENDING")})
 			return
 		}
 		if r.URL.Path != "/api/master/start" {
@@ -479,7 +505,7 @@ func TestTaskDeleteRejectsQueuedAndRecoveringTasksBeforeMutation(t *testing.T) {
 			if r.Method != "GET" {
 				t.Fatalf("deleted active task %s", status)
 			}
-			adminTestJSON(t, w, map[string]interface{}{"tasks": []interface{}{taskTestRow(1, "OSS_TO_OSS", status)}})
+			adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(1, "OSS_TO_OSS", status)})
 		})
 		if _, err := runTaskCommand(client, []string{"delete", "1"}); err == nil {
 			t.Fatalf("accepted %s", status)

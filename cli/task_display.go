@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -31,6 +33,21 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 		return
 	}
 	total, offset, limit := getInt(page, "totalCount"), getInt(page, "offset"), getInt(page, "limit")
+	if getString(page, "order") == "priority" {
+		if page["indexing"] == true {
+			fmt.Fprintln(out, cliText(out, "正在整理子任务，请稍后重试。"))
+			return
+		}
+		fmt.Fprintf(out, cliText(out, "本页 %d 个子任务\n"), len(objectList(result["children"])))
+		if cursor := getString(page, "nextCursor"); page["hasMore"] == true && cursor != "" && limit > 0 {
+			command := fmt.Sprintf("task children %d --cursor %s --limit %d --order priority", getInt(page, "parentTaskId"), quoteTaskCursor(cursor), limit)
+			if getString(page, "view") == "active" {
+				command += " --active"
+			}
+			fmt.Fprintf(out, cliText(out, "下一页：%s\n"), command)
+		}
+		return
+	}
 	if total > 0 && limit > 0 {
 		end := offset + limit
 		if end > total {
@@ -44,8 +61,22 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 	}
 	if page["hasMore"] == true && limit > 0 {
 		parent := getInt(page, "parentTaskId")
-		fmt.Fprintf(out, cliText(out, "下一页：task children %d --offset %d --limit %d\n"), parent, offset+limit, limit)
+		command := fmt.Sprintf("task children %d --offset %d --limit %d", parent, offset+limit, limit)
+		if getString(page, "order") == "id" {
+			command += " --order id"
+		}
+		if getString(page, "view") == "active" {
+			command += " --active"
+		}
+		fmt.Fprintf(out, cliText(out, "下一页：%s\n"), command)
 	}
+}
+
+func quoteTaskCursor(cursor string) string {
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(cursor, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(cursor, "'", "'\\''") + "'"
 }
 
 func cliTaskCount(task map[string]interface{}, key string) string {

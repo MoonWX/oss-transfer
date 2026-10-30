@@ -315,7 +315,10 @@ func visibleException(tx *state.Tx, k string, entry Exception, parent *Parent) (
 		if err != nil {
 			return entry, false, err
 		}
-		if found && hidden != "" && (hidden == entry.Identity || hidden == resolvedExceptionIdentity(entry)) {
+		// Legacy markers contain only the failure identity. They could have
+		// been created before this retry succeeded and cannot dismiss its
+		// outcome. Only an explicit cleanup of this resolved result can hide it.
+		if found && hidden == resolvedExceptionIdentity(entry) {
 			return entry, false, nil
 		}
 	}

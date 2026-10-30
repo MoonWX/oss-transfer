@@ -3,7 +3,7 @@ _oss_transfer_cli_completion() {
     local cur prev words cword
     _init_completion -n = || return
     local globals="--lang --host --json --verbose --watch --help --version"
-    local commands="config task node agent storage limit exceptions object login logout whoami change-password \
+    local commands="config task node agent storage limit exceptions object update backup login logout whoami change-password \
         list-task status show-task stop resume start retry delete-task clear list-deleted permanent-delete export-report \
         add-task import-tasks list-worker worker-status list-s3-config remove-s3-config \
         list-rate-limit rate-limit list-rate-limit-history rate-limit-history set-rate-limit \
@@ -24,8 +24,10 @@ _oss_transfer_cli_completion() {
         if ((skip)); then skip=0; continue; fi
         case "$word" in
             --*=*) continue ;;
-            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
+            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--order|--generation|--child-concurrency|--object-concurrency|--scope|--after|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive)
                 skip=1; continue ;;
+            --version)
+                if [[ ${positional[0]} == update ]]; then skip=1; fi; continue ;;
             -*) continue ;;
         esac
         positional+=("$word")
@@ -44,7 +46,9 @@ _oss_transfer_cli_completion() {
         --conflict) choices="skip overwrite" ;;
         --mapping) choices="preserve add-prefix replace-prefix exact-key" ;;
         --format) choices="json csv" ;;
-        --mode) choices="sort-merge bloom" ;;
+        --mode) if [[ $command == object ]]; then choices="metadata content"; else choices="sort-merge bloom"; fi ;;
+        --scope) choices="object prefix" ;;
+        --order) choices="priority id" ;;
         --unit) choices="bps Kbps Mbps Gbps" ;;
         --validate) choices="true false" ;;
         --v2-signer|--path-style) choices="true false inherit" ;;
@@ -52,7 +56,7 @@ _oss_transfer_cli_completion() {
         --direction)
             if [[ $command == exceptions ]]; then choices="OSS_TO_LOCAL LOCAL_TO_OSS";
             else choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
-        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
+        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--order|--generation|--child-concurrency|--object-concurrency|--scope|--after|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive)
             return ;;
     esac
     if [[ -n $choices ]]; then
@@ -66,15 +70,19 @@ _oss_transfer_cli_completion() {
             case "$action" in
                 "") choices="get set" ;;
                 get|set)
-                    if ((${#positional[@]} == 2)); then choices="language";
-                    elif [[ $action == set ]] && ((${#positional[@]} == 3)); then choices="auto zh en ja"; fi ;;
+                    if ((${#positional[@]} == 2)); then choices="language master";
+                    elif [[ $action == set ]] && ((${#positional[@]} == 3)); then
+                        if [[ ${positional[2]} == language ]]; then choices="auto zh en ja"; else choices="auto"; fi
+                    fi ;;
             esac ;;
         task)
             case "$action" in
-                "") choices="list show children recover-child create import stop resume start retry delete trash restore purge bandwidth limits report" ;;
+                "") choices="list show children progress cleanup-status recover-child create import stop resume start retry delete trash restore purge bandwidth limits report" ;;
                 list) flags="--status --source --dest --worker --direction --search --all --before-id --limit" ;;
                 show) flags="--child --node --offset --limit" ;;
-                children) flags="--offset --limit" ;;
+                progress) flags="--child --generation" ;;
+                retry) flags="--all --yes" ;;
+                children) flags="--offset --limit --active --order --cursor" ;;
                 trash) flags="--task-id --worker --direction --search --before-id --limit" ;;
                 create)
                     flags="$create_flags"
@@ -99,7 +107,7 @@ _oss_transfer_cli_completion() {
             esac ;;
         agent)
             case "$action" in
-                "") choices="invite list show details update remove" ;;
+                "") choices="invite invite-status list show details update remove" ;;
                 invite) flags="--label --address --master-url" ;;
                 update) flags="--label --local-root --clear-local-roots --child-concurrency --object-concurrency" ;;
                 remove) flags="--yes" ;;
@@ -131,6 +139,12 @@ _oss_transfer_cli_completion() {
                     flags="--all --yes --task-id --worker --direction --source-bucket --dest-bucket --endpoint"
                     if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
             esac ;;
+        update)
+            if [[ -z $action ]]; then choices="status check master agent agents";
+            elif [[ $action == master || $action == agent || $action == agents ]]; then flags="--version --worker --all --yes"; fi ;;
+        backup)
+            if [[ -z $action ]]; then choices="list prune";
+            elif [[ $action == prune ]]; then choices="master agent"; flags="--worker --yes"; fi ;;
         object)
             if [[ -z $action ]]; then choices="compare status cancel delete";
             elif [[ $action == status ]]; then flags="--after --limit";

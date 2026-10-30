@@ -115,3 +115,20 @@ func agentAbsolutePath(value string) bool {
 	}
 	return false
 }
+
+func agentInviteStatus(client *ApiClient, args []string) (map[string]interface{}, error) {
+	o, err := adminOptions(args, nil, nil, 1)
+	if err != nil {
+		return nil, err
+	}
+	id := o.Positionals[0]
+	if len(id) == 0 || len(id) > 256 || strings.ContainsAny(id, "/\\?#% \t\r\n\x00") {
+		return nil, cliErrorf("请指定加入邀请 ID，而不是加入链接或密钥")
+	}
+	for _, char := range id {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_') {
+			return nil, cliErrorf("请指定加入邀请 ID，而不是加入链接或密钥")
+		}
+	}
+	return client.Get("/agents/invitations/" + url.PathEscape(id))
+}

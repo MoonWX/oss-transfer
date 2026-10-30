@@ -177,6 +177,11 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	fmt.Printf("Master listening on %s\n", listener.Addr())
+	if origin, err := servicehost.LocalMasterOrigin(listener.Addr().String()); err == nil {
+		if err := servicehost.PublishCLIConnection("master", origin, config); err != nil {
+			fmt.Fprintf(os.Stderr, "CLI connection discovery: %v\n", err)
+		}
+	}
 	if initialPassword != "" {
 		printInitialPassword("admin", initialPassword)
 	}

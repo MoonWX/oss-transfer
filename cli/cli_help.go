@@ -23,7 +23,7 @@ const cliHelp = `OSS Transfer CLI
 
 节点与存储
   node list|show|details|network|add|invite|update|remove
-  agent invite|list|show|details|update|remove
+  agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove  管理存储连接
   storage buckets|test <连接名>  列举 Bucket 并验证连接
 
@@ -31,6 +31,9 @@ const cliHelp = `OSS Transfer CLI
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
   object compare ...             比对存储桶、前缀或单个对象
+  update status|check            查看集群版本或检查新版本
+  update master|agent|agents ...  更新服务
+  backup list|prune ...          查看或清理升级备份
 
 账户
   login                          登录（默认 admin）
@@ -39,6 +42,8 @@ const cliHelp = `OSS Transfer CLI
   change-password --old-password-env OLD --new-password-env NEW
 
 本机设置
+  config get master              查看当前 Master 地址和来源
+  config set master URL|auto     保存其他 Master 或恢复自动识别
   config get language            查看语言设置
   config set language auto|zh|en|ja  保存语言，默认跟随系统
 
@@ -48,7 +53,7 @@ const cliHelp = `OSS Transfer CLI
   import-inventory <源连接/桶> <目标连接/桶> <本机清单目录> [--overwrite]
 
 全局选项
-  --host <http://IP:1685>         服务地址，默认 http://localhost:1685
+  --host <URL>                   临时连接其他 Master，默认使用所在集群
   --lang auto|zh|en|ja            临时指定语言
   --json                         输出结构化 JSON；持续刷新时每次一行
   --verbose                      将请求路径及 HTTP 状态写入标准错误
@@ -75,7 +80,7 @@ const cliHelp = `OSS Transfer CLI
   --lang 和 OSS_TRANSFER_LANG 可临时覆盖已保存设置。
   JSON 字段名、枚举值和用户数据保持原样。
   帮助：help task、help task create、help task import、help node、help storage、
-        help agent、help setup、help limit、help exceptions、help object、help login、help config、help tools。
+        help agent、help setup、help limit、help exceptions、help object、help update、help backup、help login、help config、help tools。
 `
 
 const cliTaskHelp = `任务管理
@@ -84,17 +89,20 @@ const cliTaskHelp = `任务管理
 查询
   list [--status 状态] [--source 源Bucket] [--dest 目标Bucket]
        [--worker 节点] [--direction oss-to-oss|oss-to-local|local-to-oss]
-       [--search 关键词]
+       [--search 关键词] [--all] [--limit 100] [--before-id ID]
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-序号 [--node 节点]
-  children <ID> [--offset 0] [--limit 25]
+  children <ID> [--active] [--order priority|id] [--cursor 游标] [--limit 25]
+  progress <ID> [--child ID-序号] [--generation N] 查看文件进度
+  cleanup-status <ID...>          查看后台清理结果
   recover-child <ID-序号>         立即尝试恢复子任务，仍遵守节点并发上限
   trash [--task-id ID] [--worker 节点] [--direction 方向] [--search 关键词]
 
 操作
   stop <ID...>                    停止传输并保留进度
   resume <ID...>                  继续已停止或失败的任务
-  retry <ID...>                   与 resume 相同，保留已完成进度
+  retry <ID...>                   重试未完成对象，保留已完成进度
+  retry --all --yes               重试所有失败或部分失败任务
   start <ID...>                   启动尚未自动执行的待执行任务
   delete <ID...>                  将任务记录移入回收站
   restore <ID...>                 从回收站恢复指定任务
@@ -128,11 +136,12 @@ const cliTaskHelp = `任务管理
   oss-transfer-cli task trash --direction oss-to-local --worker 10.0.0.2
 
 状态：RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
-操作只接受主任务 ID；子任务编号用于详情查询。节点状态不完整时不执行任务控制操作。
-子任务默认读取 25 个编号，--limit 为 1–200；--offset 跳过指定数量的编号，不重新编号。
-list/trash 的 --limit 为 1–10000；--before-id 从指定 ID 之前加载更早任务。
+操作按指定主任务逐项检查，批量请求分批提交；不会重试已在执行中的任务。
+子任务默认按状态优先级读取 25 项；--active 只看进行中，--cursor 继续读取。
+按编号查看可用 --order id 或 --offset；--limit 为 1–200，不改变子任务编号。
+list/trash 的 --limit 为 1–10000；--before-id 读取更早任务，list --all 自动读取全部分页。
 --child 按编号直接读取详情，不加载其他子任务；同编号在多个节点存在时须用 --node。
---watch 仅支持 list/show/children/trash 及不带新值的 bandwidth/limits 查询。
+--watch 支持 list/show/children/progress/cleanup-status/trash 及不带新值的 bandwidth/limits。
 删除操作只处理迁移记录，源端和目标端的数据对象不受影响。
 `
 
@@ -248,6 +257,7 @@ const cliAgentHelp = `Agent 管理
 用法：oss-transfer-cli agent <子命令> [参数]
 
   invite [--label 名称] [--address 节点] [--master-url URL]
+  invite-status <邀请ID>          查看节点是否已加入
   list                            查看全部 Agent
   show <节点>                     查看连接、队列、根目录和限速
   details <节点>                  查看主机、网卡 IP 和挂载目录
@@ -454,6 +464,10 @@ func helpFor(args []string) string {
 		return cliExceptionsHelp
 	case "object":
 		return cliObjectHelp
+	case "update":
+		return cliUpdateHelp
+	case "backup":
+		return cliBackupHelp
 	case "login", "logout", "whoami", "change-password", "auth":
 		return cliAuthHelp
 	case "tools", "diff-objects", "count-lines", "import-inventory":
@@ -471,9 +485,13 @@ func helpFor(args []string) string {
 
 const cliConfigHelp = `本机设置
 用法：
+  oss-transfer-cli config get master
+  oss-transfer-cli config set master https://transfer.example.com
+  oss-transfer-cli config set master auto
   oss-transfer-cli config get language
   oss-transfer-cli config set language auto|zh|en|ja
 
-默认跟随系统。保存一次语言后，后续命令直接使用；auto 恢复跟随系统。
+Master 默认从所在安装识别。保存其他 Master 后持续使用，auto 恢复自动识别。
+语言默认跟随系统；保存一次后生效，auto 恢复跟随系统。
 --lang 和 OSS_TRANSFER_LANG 只覆盖当前运行；auto 可临时使用系统语言。
 `

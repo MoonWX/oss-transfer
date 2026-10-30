@@ -1099,10 +1099,5 @@ trap - ERR INT TERM
 if commit_start; then finish_backup; fi
 printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
 printf 'CLI: %s\n' "$cli_path"
-if [[ "$role" == master ]]; then
-  installed_listen=$(awk -F '\t' '$1=="listen"{print $2}' "$work/config.tsv")
-  cli_host=${installed_listen%:*}
-  case "$cli_host" in ''|0.0.0.0) cli_host=127.0.0.1;; '[::]') cli_host='[::1]';; esac
-  printf 'Login: %q --host %q login\n' "$cli_path" "http://$cli_host:${installed_listen##*:}"
-fi
+printf 'Login: %q login\n' "$cli_path"
 print_initial_credentials

@@ -154,11 +154,7 @@ func (s *S3) Scan(ctx context.Context, options ListOptions, emit func(Object) er
 	if emit == nil {
 		return errors.New("scan callback is required")
 	}
-	for {
-		page, err := s.List(ctx, options)
-		if err != nil {
-			return err
-		}
+	return s.ScanPages(ctx, options, func(page Page) error {
 		for _, object := range page.Objects {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -166,6 +162,35 @@ func (s *S3) Scan(ctx context.Context, options ListOptions, emit func(Object) er
 			if err := emit(object); err != nil {
 				return err
 			}
+		}
+		return nil
+	})
+}
+
+// ScanPages exposes the continuation token at the same boundary as the objects
+// it covers. The caller can persist both atomically before accepting the page.
+// Empty pages are significant: a provider can advance its token without
+// returning objects, and an empty final page must still mark the scan complete.
+func (s *S3) ScanPages(ctx context.Context, options ListOptions, emit func(Page) error) error {
+	if emit == nil {
+		return errors.New("scan page callback is required")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		page, err := s.List(ctx, options)
+		if err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if err = emit(page); err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
 		}
 		if page.NextCursor == "" {
 			return nil
@@ -226,6 +251,15 @@ func (s *S3) List(ctx context.Context, options ListOptions) (Page, error) {
 	}
 	output, err := s.client.ListObjectsV2(ctx, input)
 	if err != nil {
+		// A saved token cannot be replaced with a last-key guess: some S3
+		// listings are unordered. Report rejection without skipping ahead or
+		// silently replaying the whole source.
+		var apiError smithy.APIError
+		if token != "" && errors.As(err, &apiError) &&
+			(apiError.ErrorCode() == "InvalidToken" ||
+				apiError.ErrorCode() == "InvalidArgument" && strings.Contains(strings.ToLower(apiError.ErrorMessage()), "continuation")) {
+			return Page{}, fmt.Errorf("%w: saved S3 listing cursor was rejected: %w", ErrInvalidCursor, s3Error(err))
+		}
 		return Page{}, s3Error(err)
 	}
 	page := Page{Objects: make([]Object, 0, len(output.Contents))}

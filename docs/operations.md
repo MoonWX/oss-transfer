@@ -40,6 +40,14 @@ A request already accepted by object storage may finish after its client is canc
 
 Agents release scan batches after the Master durably saves, acknowledges and authorizes their release. Completed scans also release their deduplication indexes in the background. Permanently deleted tasks also release their scan and execution records. Freed pages are reused; to shrink an existing database file, follow [database maintenance](database-maintenance.md).
 
+## Resume a scan
+
+Stopping a task or restarting its scanning Agent preserves the scan position in the Agent database. OSS scans continue with the saved listing token. Local scans reopen the active directory path and skip completed subdirectories and previously processed files. A very large active directory still needs its names read and sorted on restart; files before the saved position are not individually inspected. File-list tasks also preserve their position.
+
+Checkpoints are committed with the preceding scan results. A restart may replay a small uncommitted portion, which is deduplicated before creating child tasks. Checkpoints add bounded traversal state per task, not a second copy of every file name. Upgrade the scanning Agent to enable this behavior. Unfinished scans from older versions without a checkpoint need one compatibility rescan to establish their first checkpoint. A replacement scanner on another node rebuilds from the Master's saved assignments because it does not have the old Agent's undispatched scan results.
+
+This continues the same traversal; changes behind its saved position may not be discovered. Keep the source stable or use a snapshot when a fixed dataset is required. A rejected OSS token or a replaced active local directory stops the scan with an error rather than silently restarting or skipping data. An already completed scan is not repeated when its transfers resume.
+
 ## 中文说明
 
 **执行节点 → 编辑节点** 可调整子任务并发和每个子任务的对象并发。默认值分别是 8 和 4，即单节点最多同时传输 32 个对象；已有配置继续保留。保存后直接生效，重启后保留。调低并发时，已发出的请求会先完成，再按新上限继续调度。子任务并发范围为 1–64，对象并发为 1–32，两者乘积不能超过 256。节点和任务的带宽、QPS 限制仍然生效。
@@ -63,3 +71,9 @@ Agents release scan batches after the Master durably saves, acknowledges and aut
 对象存储已经接收的请求可能在客户端取消后才完成，因此不能保证任意 S3 服务上绝无重复写入。迁移期间应保持源数据稳定。启用租约后数据库格式升级为 schema 5；降级需要同时恢复 Master 和 Agent 升级前的配套数据库备份。
 
 Master 持久保存、确认接收并授权释放扫描批次后，Agent 会在后台释放这些批次；扫描完成后也会回收去重索引，永久删除任务时也会清理扫描和执行记录。释放的页面可再次使用；缩小已有数据库文件的方法见[数据库维护](database-maintenance.md)。
+
+停止任务或重启扫描节点后，扫描位置保存在 Agent 数据库中。OSS 从保存的分页游标继续；本地扫描重新打开尚未完成的目录，跳过已完成的子目录和已处理文件。若当前单个目录特别大，恢复时仍需读取和排序该目录的文件名，但不会逐个检查断点之前的文件属性。文件清单任务也保存处理位置。
+
+断点与此前的扫描结果按顺序提交，重启后可能回放一小段尚未落盘的内容，去重后再生成子任务。每个任务只增加有限的遍历状态，不额外保存一整份文件名清单。升级负责扫描的 Agent 后生效；旧版本尚未完成且没有断点的扫描，首次恢复需要兼容重扫来建立断点。其他节点接管扫描时，因为没有原节点尚未分发的扫描结果，仍需从 Master 保存的分配记录重建扫描。
+
+续扫延续同一轮遍历，不能保证发现断点之前的新增或修改。需要固定数据集时，应保持源端不变或使用快照。OSS 拒绝旧游标、或尚未扫描完的本地目录被替换时，会明确报错，不会静默从头扫描或跳过数据。已完成扫描的任务恢复传输时，不再重新扫描。

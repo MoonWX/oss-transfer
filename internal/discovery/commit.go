@@ -115,6 +115,9 @@ func (c *scanCommitter) loop() {
 // here: the scanner stores identity metadata and never reads object bodies.
 func batchMetadataBytes(batch pendingBatch) int64 {
 	var size int64
+	if batch.checkpoint != nil {
+		size += 128 + 6*int64(len(batch.checkpoint.Cursor)+len(batch.checkpoint.LegacyAfter)+len(batch.checkpoint.Pass))
+	}
 	for _, object := range batch.objects {
 		size += 512
 		for _, field := range [...]string{object.Key, object.ETag, object.VersionID, object.ContentType,

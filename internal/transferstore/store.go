@@ -54,6 +54,16 @@ type Page struct {
 	NextCursor string   `json:"nextCursor,omitempty"`
 }
 
+// CheckpointScanner streams bounded source pages with a durable-resume cursor.
+// NextCursor is empty only on the final page; empty intermediate pages can
+// advance traversal over directories or excluded entries. Callers must save a
+// cursor together with all preceding output, never ahead of it. The source
+// waits for each callback before reading another page. This is a live traversal,
+// not a snapshot or a change feed for objects behind the saved position.
+type CheckpointScanner interface {
+	ScanPages(context.Context, ListOptions, func(Page) error) error
+}
+
 type OpenOptions struct {
 	// Expected is the prior LIST/HEAD result. A mismatch fails before returning
 	// data. S3 additionally sends If-Match (and VersionId when available).

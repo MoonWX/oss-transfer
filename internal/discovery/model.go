@@ -55,6 +55,7 @@ type Spec struct {
 }
 
 type State struct {
+	Checkpoint        *Checkpoint    `json:"checkpoint,omitempty"`
 	CleanupPhase      int            `json:"cleanupPhase,omitempty"`
 	CleanupAfter      string         `json:"cleanupAfter,omitempty"`
 	CleanupDeleted    int64          `json:"cleanupDeleted,omitempty"`
@@ -76,8 +77,8 @@ type State struct {
 	Error             string         `json:"error,omitempty"`
 	Warning           string         `json:"warning,omitempty"`
 	UpdatedAt         time.Time      `json:"updatedAt"`
-	// Attempt and SeenObjects fence callbacks and reconcile source deletions.
-	// They are durable bookkeeping, not a source cursor or completion checkpoint.
+	// Attempt fences callbacks from old runs; the checkpoint's stable Pass
+	// identifies the traversal across process restarts and task generations.
 	Attempt     string `json:"attempt,omitempty"`
 	SeenObjects int64  `json:"seenObjects"`
 	// A completed scan never consults its deduplication index again. Cleanup is
@@ -85,6 +86,20 @@ type State struct {
 	ObjectsReleased bool `json:"objectsReleased,omitempty"`
 	Deleted         bool `json:"deleted,omitempty"`
 	Purged          bool `json:"purged,omitempty"`
+}
+
+// Checkpoint advances only after its source page and output batches commit.
+// SourceDone distinguishes a committed terminal page from an initial cursor.
+// LegacyAfter is separate because imported manifests have a reconciliation
+// phase after source enumeration. These cursors are private to this scanner;
+// takeover replays Master's assigned work instead of inheriting scan-ahead.
+type Checkpoint struct {
+	Version     int    `json:"version"`
+	Pass        string `json:"pass"`
+	Cursor      string `json:"cursor,omitempty"`
+	SourceDone  bool   `json:"sourceDone,omitempty"`
+	LegacyAfter string `json:"legacyAfter,omitempty"`
+	LegacyDone  bool   `json:"legacyDone,omitempty"`
 }
 
 type Batch struct {

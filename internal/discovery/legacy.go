@@ -132,8 +132,11 @@ func (s *Scanner) legacyHeader(spec Spec) (LegacyManifest, error) {
 
 // appendLegacy scans a durable keyset in bounded pages. Normal LIST entries and
 // these keys share commitBatch's object-key uniqueness transaction.
-func (s *Scanner) appendLegacy(ctx context.Context, attempt State, store transferstore.Store, emit func(transferstore.Object, bool) error) error {
+func (s *Scanner) appendLegacy(ctx context.Context, attempt State, store transferstore.Store, emit func(transferstore.Object, bool) error, checkpoint func(string, bool) error) error {
 	after := ""
+	if attempt.Checkpoint != nil {
+		after = attempt.Checkpoint.LegacyAfter
+	}
 	for {
 		var page []LegacyKey
 		err := s.store.View(func(tx *state.Tx) error {
@@ -160,7 +163,7 @@ func (s *Scanner) appendLegacy(ctx context.Context, attempt State, store transfe
 			var already bool
 			err = s.store.View(func(tx *state.Tx) error {
 				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, row.Key)
-				already = found && prior.SeenAttempt == attempt.Attempt
+				already = found && prior.SeenAttempt == scanIdentity(attempt)
 				return err
 			})
 			if err != nil {
@@ -183,6 +186,9 @@ func (s *Scanner) appendLegacy(ctx context.Context, attempt State, store transfe
 			if err := emit(obj, missing); err != nil {
 				return err
 			}
+		}
+		if err := checkpoint(after, len(page) < 128); err != nil {
+			return err
 		}
 		if len(page) < 128 {
 			return nil

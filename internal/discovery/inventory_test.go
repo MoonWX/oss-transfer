@@ -135,6 +135,23 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReached(t, f.reached)
+	checkpointDeadline := time.Now().Add(5 * time.Second)
+	for {
+		current, err := scanner.Status(ctx, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.Checkpoint != nil && current.Checkpoint.Cursor != "" {
+			if current.TotalObjects != 128 || current.SeenObjects != 128 || current.Checkpoint.SourceDone {
+				t.Fatalf("inventory checkpoint did not cover its first page: %+v", current)
+			}
+			break
+		}
+		if time.Now().After(checkpointDeadline) {
+			t.Fatal("first inventory page was not durably checkpointed")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if _, err := scanner.Stop(ctx, 1, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +164,12 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 	}
 	scanner, db = newScanner(t, path, base, Options{})
 	stopped, err := scanner.Status(ctx, 1)
-	if err != nil || stopped.Status != Stopped || stopped.TotalObjects != 128 {
+	if err != nil || stopped.Status != Stopped || stopped.TotalObjects != 128 || stopped.Checkpoint == nil || stopped.Checkpoint.Cursor == "" {
 		t.Fatal(stopped, err)
+	}
+	statsBeforeResume := base.stats.Load()
+	if statsBeforeResume != 128 {
+		t.Fatalf("stopped inventory did not read exactly one page: %d", statsBeforeResume)
 	}
 	if err := os.WriteFile(filepath.Join(root, "0000.txt"), []byte("supplied during restart"), 0600); err != nil {
 		t.Fatal(err)
@@ -157,8 +178,11 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := waitStatus(t, scanner, Completed)
-	if done.TotalObjects != 130 || base.scans.Load() != 0 {
+	if done.TotalObjects != 130 || done.SeenObjects != 130 || done.MissingObjects != 0 || base.scans.Load() != 0 {
 		t.Fatal("resumed scan enlarged or duplicated inventory", done)
+	}
+	if resumedStats := base.stats.Load() - statsBeforeResume; resumedStats != 2 {
+		t.Fatalf("resume reread metadata from the committed inventory page: %d metadata reads, want 2", resumedStats)
 	}
 	assertBatches(t, scanner, 2, 130)
 	retained, _, err := scanner.Batch(ctx, 1, 2, 0)

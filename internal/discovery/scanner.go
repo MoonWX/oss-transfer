@@ -254,8 +254,15 @@ func (s *Scanner) launchLocked(current State) (State, error) {
 		return State{}, err
 	}
 	current.Attempt = hex.EncodeToString(token[:])
-	current.Status, current.ScanComplete, current.SeenObjects = Scanning, false, 0
-	if current.Takeover != nil {
+	current.Status, current.ScanComplete = Scanning, false
+	if current.Checkpoint != nil {
+		if current.Checkpoint.Version != 1 || current.Checkpoint.Pass == "" {
+			return State{}, ErrCorrupt
+		}
+	} else {
+		current.SeenObjects = 0
+	}
+	if current.Checkpoint == nil && current.Takeover != nil {
 		// Identical historical duplicate assignments remain in Master counters,
 		// while the recovery index stores each source key only once.
 		current.SeenObjects = current.Takeover.DuplicateObjects

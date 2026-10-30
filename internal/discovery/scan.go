@@ -22,8 +22,16 @@ type discoveredObject struct {
 }
 
 type pendingBatch struct {
-	objects []transferstore.Object
-	missing map[string]bool
+	objects    []transferstore.Object
+	missing    map[string]bool
+	checkpoint *Checkpoint
+}
+
+func scanIdentity(attempt State) string {
+	if attempt.Checkpoint != nil {
+		return attempt.Checkpoint.Pass
+	}
+	return attempt.Attempt
 }
 
 func objectKey(parentID int64, key string) string {
@@ -95,7 +103,7 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 					// pins its first available identity before reading any data.
 					object = prior.Object
 				}
-				if prior.SeenAttempt == attempt.Attempt {
+				if prior.SeenAttempt == scanIdentity(attempt) {
 					continue
 				}
 				if !found {
@@ -119,7 +127,7 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 				}
 				current.SeenObjects++
 				modified = true
-				if err := tx.Put(objects, key, discoveredObject{Object: object, SeenAttempt: attempt.Attempt}); err != nil {
+				if err := tx.Put(objects, key, discoveredObject{Object: object, SeenAttempt: scanIdentity(attempt)}); err != nil {
 					return err
 				}
 			}
@@ -132,6 +140,14 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 				if err := tx.Put(batches, batchKey(batch.ParentID, batch.Number), batch); err != nil {
 					return err
 				}
+			}
+			if part.checkpoint != nil {
+				if part.checkpoint.Version != 1 || part.checkpoint.Pass != scanIdentity(attempt) {
+					return ErrCorrupt
+				}
+				checkpoint := *part.checkpoint
+				current.Checkpoint = &checkpoint
+				modified = true
 			}
 		}
 		if !modified {
@@ -146,6 +162,11 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	ctx = nodecontrol.WithRequestContext(ctx, nodecontrol.RequestContext{TaskID: attempt.Spec.ParentID, Generation: attempt.Generation})
+	if attempt.Checkpoint != nil && attempt.Checkpoint.SourceDone &&
+		(attempt.Spec.LegacyManifestID == "" || attempt.Checkpoint.LegacyDone) {
+		s.finish(attempt, ctx.Err())
+		return
+	}
 	store, err := s.factory.OpenEndpoint(ctx, attempt.Spec.Source)
 	if err != nil {
 		s.finish(attempt, err)
@@ -159,6 +180,18 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 			s.finish(attempt, err)
 			return
 		}
+	}
+	pageSource, resumable := store.(transferstore.CheckpointScanner)
+	if resumable || attempt.Spec.InventoryID != "" || manifest.Exact || attempt.Spec.SingleKey != "" {
+		if err = s.beginCheckpoint(ctx, &attempt); err != nil {
+			_ = store.Close()
+			s.finish(attempt, err)
+			return
+		}
+	} else if attempt.Checkpoint != nil {
+		_ = store.Close()
+		s.finish(attempt, fmt.Errorf("%w: source cannot resume its saved scan checkpoint", transferstore.ErrUnsupported))
+		return
 	}
 	missing := map[string]bool{}
 	pending := make([]transferstore.Object, 0, s.options.MaxBatchObjects)
@@ -232,10 +265,21 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 		return nil
 	}
 	emit := func(object transferstore.Object) error { return emitAll(object, false, false) }
-	if attempt.Spec.InventoryID != "" {
-		err = s.scanInventory(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) })
+	checkpoint := func(cursor string, done bool) error {
+		if err := flush(); err != nil {
+			return err
+		}
+		progress := *attempt.Checkpoint
+		progress.Cursor, progress.SourceDone = cursor, done
+		return committer.add(pendingBatch{checkpoint: &progress})
+	}
+	if attempt.Checkpoint != nil && attempt.Checkpoint.SourceDone {
+		// A crash after the last page does not reopen the source enumeration.
+	} else if attempt.Spec.InventoryID != "" {
+		err = s.scanInventory(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) }, checkpoint)
 	} else if manifest.Exact {
 		// Only the original immutable inventory belongs to an inventory task.
+		err = checkpoint("", true)
 	} else if attempt.Spec.SingleKey != "" {
 		var object transferstore.Object
 		object, err = store.Stat(ctx, attempt.Spec.SingleKey)
@@ -245,6 +289,18 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 			// The retained inventory emits an explicit failed object below.
 			err = nil
 		}
+		if err == nil {
+			err = checkpoint("", true)
+		}
+	} else if resumable {
+		err = pageSource.ScanPages(ctx, transferstore.ListOptions{Prefix: attempt.Spec.Prefix, StartAfter: attempt.Spec.StartKey, Cursor: attempt.Checkpoint.Cursor}, func(page transferstore.Page) error {
+			for _, object := range page.Objects {
+				if err := emit(object); err != nil {
+					return err
+				}
+			}
+			return checkpoint(page.NextCursor, page.NextCursor == "")
+		})
 	} else {
 		err = store.Scan(ctx, transferstore.ListOptions{Prefix: attempt.Spec.Prefix, StartAfter: attempt.Spec.StartKey}, emit)
 	}
@@ -259,7 +315,18 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 			committer = newScanCommitter(ctx, cancel, func(batches []pendingBatch) error {
 				return s.commitBatches(ctx, attempt, batches)
 			})
-			err = s.appendLegacy(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) })
+			err = s.appendLegacy(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) }, func(after string, done bool) error {
+				if attempt.Checkpoint == nil {
+					return nil
+				}
+				if err := flush(); err != nil {
+					return err
+				}
+				progress := *attempt.Checkpoint
+				progress.Cursor, progress.SourceDone = "", true
+				progress.LegacyAfter, progress.LegacyDone = after, done
+				return committer.add(pendingBatch{checkpoint: &progress})
+			})
 		}
 	}
 	if err == nil {
@@ -275,6 +342,34 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 		err = ctx.Err()
 	}
 	s.finish(attempt, err)
+}
+
+func (s *Scanner) beginCheckpoint(ctx context.Context, attempt *State) error {
+	if attempt.Checkpoint != nil {
+		return nil
+	}
+	checkpoint := &Checkpoint{Version: 1, Pass: attempt.Attempt}
+	err := s.store.Update(func(tx *state.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		current, err := get(tx, attempt.Spec.ParentID)
+		if err != nil {
+			return err
+		}
+		if current.Generation != attempt.Generation || current.Epoch != attempt.Epoch || current.Attempt != attempt.Attempt {
+			return ErrGeneration
+		}
+		if current.Status != Scanning {
+			return ErrStopped
+		}
+		current.Checkpoint = checkpoint
+		return tx.Put(states, parentKey(attempt.Spec.ParentID), current)
+	})
+	if err == nil {
+		attempt.Checkpoint = checkpoint
+	}
+	return err
 }
 
 func (s *Scanner) finish(attempt State, scanErr error) {

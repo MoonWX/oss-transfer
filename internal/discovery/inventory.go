@@ -12,7 +12,7 @@ import (
 
 const inventoryMetadataConcurrency = 16
 
-func (s *Scanner) scanInventory(ctx context.Context, attempt State, source transferstore.Store, emit func(transferstore.Object, bool) error) error {
+func (s *Scanner) scanInventory(ctx context.Context, attempt State, source transferstore.Store, emit func(transferstore.Object, bool) error, checkpoint func(string, bool) error) error {
 	repo := inventory.New(s.store)
 	header, err := repo.Get(ctx, attempt.Spec.InventoryID)
 	if err != nil {
@@ -25,6 +25,9 @@ func (s *Scanner) scanInventory(ctx context.Context, attempt State, source trans
 		return inventory.ErrUnsealed
 	}
 	after := ""
+	if attempt.Checkpoint != nil {
+		after = attempt.Checkpoint.Cursor
+	}
 	for {
 		keys, next, err := repo.Keys(ctx, header.ID, after, inventory.MaxBatchKeys)
 		if err != nil {
@@ -35,6 +38,9 @@ func (s *Scanner) scanInventory(ctx context.Context, attempt State, source trans
 			parallelism = inventoryMetadataConcurrency
 		}
 		if err := scanInventoryPage(ctx, source, keys, parallelism, emit); err != nil {
+			return err
+		}
+		if err := checkpoint(next, len(keys) < inventory.MaxBatchKeys); err != nil {
 			return err
 		}
 		if len(keys) < inventory.MaxBatchKeys {

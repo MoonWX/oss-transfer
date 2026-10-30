@@ -591,7 +591,13 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 				return response(nil, err)
 			}
 		}
-		info, err := os.Stat(request.Path)
+		var info os.FileInfo
+		var err error
+		if c.Operation == "local_path" {
+			info, err = statPreflightPath(ctx, request.Path)
+		} else {
+			info, err = os.Stat(request.Path)
+		}
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) && c.Operation == "local_path" {
 				return response(map[string]any{"path": request.Path, "pathType": "MISSING", "exists": false}, nil)

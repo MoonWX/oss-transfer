@@ -478,6 +478,7 @@ export default function CreateTransfer() {
   );
   const [busy, setBusy] = useState<"create" | "validate" | null>(null);
   const [precheck, setPrecheck] = useState<Precheck | null>(null);
+  const precheckRequest = useRef<string | null>(null);
   const [submission, setSubmission] = useState<Submission | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [batchKind, setBatchKind] = useState<"buckets" | "tasks" | "local">(
@@ -554,12 +555,14 @@ export default function CreateTransfer() {
       !nodes.some((node) => node.executionNodeIp === ip && node.reachable),
   );
   const local = form.direction !== "OSS_TO_OSS";
+  const requiresPrecheck = tab === 0 ? local : batchKind === "local";
   const effectiveDistributionMode =
     form.direction === "LOCAL_TO_OSS"
       ? localUploadMode(form.bindings.length)
       : form.distributionMode;
   const clearFeedback = (inputChanged = true) => {
     setPrecheck(null);
+    precheckRequest.current = null;
     setSubmission(null);
     setSubmitted(false);
     if (inputChanged) submittedDraft.current = false;
@@ -904,16 +907,29 @@ export default function CreateTransfer() {
       submissionInFlight.current = false;
       return;
     }
-    const isLocal = tab === 0 ? local : batchKind === "local";
+    const isLocal = requiresPrecheck;
+    const checkedRequest = JSON.stringify(payload);
+    if (
+      !validateOnly &&
+      isLocal &&
+      (!precheck?.valid || precheckRequest.current !== checkedRequest)
+    ) {
+      notify(tr("请先通过预检，再创建任务。"), "warning");
+      submissionInFlight.current = false;
+      return;
+    }
     setBusy(validateOnly ? "validate" : "create");
     try {
       if (validateOnly) {
+        setPrecheck(null);
+        precheckRequest.current = null;
         const response = await api<{ data: Precheck }>(
           "/api/master/local-transfers/validate",
           { method: "POST", body: payload },
         );
         const checked = applyUploadPrecheck(response.data);
         setPrecheck(checked);
+        precheckRequest.current = checked.valid ? checkedRequest : null;
         notify(
           checked.valid
             ? tr("所有节点预检通过")
@@ -921,42 +937,6 @@ export default function CreateTransfer() {
           checked.valid ? "success" : "warning",
         );
         return;
-      }
-      if (
-        tab === 0 &&
-        form.direction === "LOCAL_TO_OSS" &&
-        (form.destinationMode === "object" || form.bindings.length > 1)
-      ) {
-        const checked = applyUploadPrecheck(
-          precheck ??
-            (
-              await api<{ data: Precheck }>(
-                "/api/master/local-transfers/validate",
-                { method: "POST", body: payload },
-              )
-            ).data,
-        );
-        setPrecheck(checked);
-        if (
-          checked.nodeBindings.some(
-            (binding) => binding.code === "SINGLE_FILE_REQUIRES_ONE_NODE",
-          )
-        )
-          throw new Error(tr("单文件上传请只保留一个执行节点。"));
-        if (!checked.valid)
-          throw new Error(tr("节点预检未通过，请检查节点和源路径。"));
-        if (
-          form.destinationMode === "object" &&
-          checked.nodeBindings.some(
-            (binding) => !binding.valid || binding.pathType !== "FILE",
-          )
-        ) {
-          throw new Error(
-            tr(
-              "指定目标对象 Key 时，各节点的源路径必须是可访问的单个文件。目录迁移请选择“添加目标前缀”或“保留源文件名 / 相对路径”。",
-            ),
-          );
-        }
       }
       const path = isLocal
         ? "/api/master/local-transfers"
@@ -1015,6 +995,15 @@ export default function CreateTransfer() {
         !Number.isFinite(count) ||
         count !== payload.length ||
         Number(result.rejectedCount || 0) > 0;
+      if (
+        isLocal &&
+        (Number(result.rejectedCount || 0) > 0 ||
+          (Array.isArray(result.validationErrors) &&
+            result.validationErrors.length > 0))
+      ) {
+        setPrecheck(null);
+        precheckRequest.current = null;
+      }
       const rawIds =
         isLocal && Array.isArray(result.parentTaskIds)
           ? result.parentTaskIds
@@ -2249,10 +2238,10 @@ export default function CreateTransfer() {
                   <Button disabled={Boolean(busy)} onClick={resetDraft}>
                     {tr("重置草稿")}
                   </Button>
-                  {(tab === 0 ? local : batchKind === "local") && (
+                  {requiresPrecheck && (
                     <Tooltip
                       title={tr(
-                        "检查节点、路径和存储桶可访问性。目标目录在预检时可能被创建。",
+                        "检查执行节点和本地路径；多节点会验证共享目录。",
                       )}
                     >
                       <span>
@@ -2294,7 +2283,7 @@ export default function CreateTransfer() {
                       type="submit"
                       variant="contained"
                       disabled={
-                        Boolean(busy) || Boolean(precheck && !precheck.valid)
+                        Boolean(busy) || (requiresPrecheck && !precheck?.valid)
                       }
                       startIcon={
                         busy === "create" ? (
@@ -2313,13 +2302,17 @@ export default function CreateTransfer() {
                   )}
                 </Stack>
               </Stack>
-              {(tab === 0 ? local : batchKind === "local") && (
+              {requiresPrecheck && (
                 <Typography
                   variant="caption"
                   color="text.secondary"
                   sx={{ display: "block", mt: 1.5 }}
                 >
-                  {tr("多节点预检会读写临时文件，验证共享目录。")}
+                  {tr(
+                    precheck?.valid
+                      ? "多节点预检会读写临时文件，验证共享目录。"
+                      : "请先通过预检，再创建任务。",
+                  )}
                 </Typography>
               )}
               <Typography

@@ -125,7 +125,7 @@ test("failed local precheck displays node error and blocks creation", async ({
   await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/another");
   await expect(
     page.getByRole("button", { name: "创建迁移任务", exact: true }),
-  ).toBeEnabled();
+  ).toBeDisabled();
   await expect(page.getByText("节点预检未通过", { exact: true })).toHaveCount(
     0,
   );
@@ -356,6 +356,7 @@ for (const nodeCount of [1, 2]) {
       .fill("media-backup");
     await select(page, "目标对象命名", "添加目标前缀");
     await page.getByLabel("目标对象前缀").fill("datasets/2026/");
+    await page.getByRole("button", { name: "运行预检", exact: true }).click();
     await page
       .getByRole("button", { name: "创建迁移任务", exact: true })
       .click();

@@ -384,6 +384,8 @@ test("LOCAL upload naming remains independent and retains its existing request s
   await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
   await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("源文件或目录绝对路径").fill("/mnt/data/source.txt");
+  await page.getByRole("button", { name: "运行预检", exact: true }).click();
+  await expect(page.getByText("节点预检通过", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
   await expect
     .poll(

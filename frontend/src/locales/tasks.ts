@@ -843,9 +843,13 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Reset draft",
     ja: "下書きをリセット",
   },
-  "检查节点、路径和存储桶可访问性。目标目录在预检时可能被创建。": {
-    en: "Check agent, path, and bucket access. Preflight may create the destination directory.",
-    ja: "実行ノード、パス、バケットへのアクセスを確認します。事前チェック時に転送先ディレクトリが作成される場合があります。",
+  "检查执行节点和本地路径；多节点会验证共享目录。": {
+    en: "Check agents and local paths. Multiple agents also verify the shared directory.",
+    ja: "実行ノードとローカルパスを確認します。複数ノードでは共有ディレクトリも検証します。",
+  },
+  "请先通过预检，再创建任务。": {
+    en: "Run preflight and resolve any errors before creating tasks.",
+    ja: "事前チェックに合格してからタスクを作成してください。",
   },
   正在预检: {
     en: "Checking",

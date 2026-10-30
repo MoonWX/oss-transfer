@@ -164,12 +164,21 @@ for (const manualPrecheck of [true, false]) {
     await mockApi(page);
     const calls = await uploadApi(page, "FILE");
     await configureUpload(page, 2);
-    await page
-      .getByRole("button", {
-        name: manualPrecheck ? "运行预检" : "创建迁移任务",
-        exact: true,
-      })
-      .click();
+    if (!manualPrecheck) {
+      await expect(
+        page.getByRole("button", { name: "创建迁移任务", exact: true }),
+      ).toBeDisabled();
+      await page
+        .locator("form")
+        .evaluate((form) =>
+          form.dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true }),
+          ),
+        );
+      expect(calls.creationBodies).toHaveLength(0);
+      expect(calls.validationBodies).toHaveLength(0);
+    }
+    await page.getByRole("button", { name: "运行预检", exact: true }).click();
     await expect(
       page.getByText("节点预检未通过", { exact: true }),
     ).toBeVisible();
@@ -194,6 +203,10 @@ for (const manualPrecheck of [true, false]) {
     await expect(
       page.getByText("跳过同名对象或文件 · 单节点执行", { exact: true }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "创建迁移任务", exact: true }),
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "运行预检", exact: true }).click();
     await page
       .getByRole("button", { name: "创建迁移任务", exact: true })
       .click();
@@ -263,6 +276,10 @@ test("local JSON batch normalizes upload modes while preserving download modes a
     },
   ];
   await page.getByLabel("任务数据", { exact: true }).fill(JSON.stringify(rows));
+  await expect(
+    page.getByRole("button", { name: "导入任务", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "运行预检", exact: true }).click();
   await page.getByRole("button", { name: "导入任务", exact: true }).click();
   await expect.poll(() => calls.creationBodies.length).toBe(1);
   expect(

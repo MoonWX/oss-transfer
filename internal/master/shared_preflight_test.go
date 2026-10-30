@@ -273,3 +273,50 @@ func TestSharedPreflightMissingDestinationsNeverAppearValid(t *testing.T) {
 		t.Fatal("blocked preflight changed the target directory", entries, err)
 	}
 }
+
+func TestSharedPreflightCreationRechecksChangedDestination(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	a, b := preflightTestAgent(t, f, 1), preflightTestAgent(t, f, 2)
+	for _, replacement := range []string{"missing", "file"} {
+		t.Run(replacement, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "shared")
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			row := taskCreateRequest{Direction: "OSS_TO_LOCAL",
+				SourceEndpoint:      &taskEndpoint{Type: "OSS", S3Alias: "qa", Bucket: "source"},
+				DestinationEndpoint: &taskEndpoint{Type: "LOCAL", NodeBindings: []taskBinding{{a.Address, root}, {b.Address, root}}}}
+			code, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []taskCreateRequest{row})
+			if code != 200 || response["data"].(map[string]any)["valid"] != true {
+				t.Fatal("initial shared-directory verification failed", code, response)
+			}
+			if err := os.Remove(root); err != nil {
+				t.Fatal("successful preflight left a marker", err)
+			}
+			if replacement == "file" {
+				if err := os.WriteFile(root, []byte("keep this file"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, response = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers", f.admin, []taskCreateRequest{row})
+			if code != 200 {
+				t.Fatal(code, response)
+			}
+			data := response["data"].(map[string]any)
+			if data["acceptedCount"] != float64(0) || data["rejectedCount"] != float64(1) {
+				t.Fatal("creation reused the previous preflight result", data)
+			}
+			parents, _, err := f.master.allTaskParents()
+			if err != nil || len(parents) != 0 {
+				t.Fatal("failed creation persisted a task", parents, err)
+			}
+			if replacement == "missing" {
+				if _, err := os.Stat(root); !os.IsNotExist(err) {
+					t.Fatal("creation recreated an unverified shared destination", err)
+				}
+			} else if content, err := os.ReadFile(root); err != nil || string(content) != "keep this file" {
+				t.Fatal("creation changed the replacement file", string(content), err)
+			}
+		})
+	}
+}

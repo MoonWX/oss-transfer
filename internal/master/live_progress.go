@@ -16,10 +16,7 @@ import (
 func liveTask(status string) bool { return status == "RUNNING" || status == "STOPPING" }
 
 func (t *taskRuntime) progressSnapshot(p task.Parent) (taskRateCache, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	entry, exists := t.rates[p.ID]
-	return entry, exists && entry.valid && entry.generation == p.Generation && time.Since(entry.observed) <= 3*time.Second
+	return t.cachedRates(p, 3*time.Second)
 }
 
 // Live bytes are an observation, never durable success credit. Taking the
@@ -29,7 +26,7 @@ func (s *Server) addLiveAverage(row map[string]any, p task.Parent, child *task.C
 	if !liveTask(p.Status) || !liveTask(stringValue(row["status"])) || p.ResumeTiming != nil {
 		return
 	}
-	entry, fresh := s.tasks.progressSnapshot(p)
+	entry, fresh := s.tasks.rateSnapshot(p)
 	if !entry.progressSupported {
 		return
 	}

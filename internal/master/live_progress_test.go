@@ -204,6 +204,62 @@ func TestLiveProgressMetricsDoNotDoubleCountCompletionDuringRPC(t *testing.T) {
 	}
 }
 
+func TestTaskSpeedFreshnessMatchesWhileFileProgressExpiresEarlier(t *testing.T) {
+	f, p := progressMasterFixture(t, 1)
+	c := assignProgressChild(t, f, p, 1, []transferstore.Object{{Key: "large", Size: 350 << 30}})
+	sample := childProgressSample(c, 1, 50<<30)
+	serveProgressAgent(t, f, c.Node, func(command agenttransport.Command) (any, error) {
+		if command.Operation != "task_metrics" {
+			return nil, fmt.Errorf("unexpected operation %s", command.Operation)
+		}
+		reply := progressMetrics(p, sample)
+		reply.BytesPerSecond = 1234
+		reply.Children = map[string]float64{c.Job.ChildID: 1234}
+		return reply, nil
+	})
+	f.master.tasks.sampleRates(context.Background(), p)
+	original, fresh := f.master.tasks.rateSnapshot(p)
+	if !fresh || original.progress == nil {
+		t.Fatal("initial aggregate missing")
+	}
+	for _, age := range []time.Duration{2 * time.Second, 4 * time.Second, 9 * time.Second, 11 * time.Second} {
+		t.Run(age.String(), func(t *testing.T) {
+			entry := original
+			entry.observed = time.Now().Add(-age)
+			f.master.tasks.mu.Lock()
+			f.master.tasks.rates[p.ID] = entry
+			f.master.tasks.mu.Unlock()
+			for _, row := range []map[string]any{f.master.taskView(p), f.master.childView(p, c)} {
+				average, hasAverage := row["averageSpeedBytesPerSecond"].(float64)
+				if age > taskRateMaxAge {
+					if row["currentSpeedBytesPerSecond"] != nil || hasAverage {
+						t.Fatalf("expired task speeds remain visible: %+v", row)
+					}
+					continue
+				}
+				want := float64(sample.InFlightBytes) / time.Since(*p.StartedAt).Seconds()
+				if row["currentSpeedBytesPerSecond"] != float64(1234) || !hasAverage || math.Abs(average-want) > want*0.001 {
+					t.Fatalf("one task speed expired before the other: %+v", row)
+				}
+			}
+			if _, fresh := f.master.tasks.progressSnapshot(p); fresh != (age < 3*time.Second) {
+				t.Fatalf("file progress freshness changed at %s", age)
+			}
+		})
+	}
+	// A current byte sample cannot repair unknown accumulated execution time.
+	f.master.tasks.mu.Lock()
+	f.master.tasks.rates[p.ID] = original
+	f.master.tasks.mu.Unlock()
+	p.ActiveTime.Incomplete = true
+	c.Record.ActiveTime.Incomplete = true
+	for _, row := range []map[string]any{f.master.taskView(p), f.master.childView(p, c)} {
+		if value, exists := row["averageSpeedBytesPerSecond"]; exists || row["durationIncomplete"] != true {
+			t.Fatalf("incomplete timing produced an average: %v, %+v", value, row)
+		}
+	}
+}
+
 func TestLiveProgressAverageIsUnknownWhenSupportedSampleExpiresOrRefreshFails(t *testing.T) {
 	f, p := progressMasterFixture(t, 1)
 	c := assignProgressChild(t, f, p, 1, []transferstore.Object{{Key: "large", Size: 350 << 30}})
@@ -227,7 +283,7 @@ func TestLiveProgressAverageIsUnknownWhenSupportedSampleExpiresOrRefreshFails(t 
 		name   string
 		change func(*taskRateCache)
 	}{
-		{"expired", func(entry *taskRateCache) { entry.observed = time.Now().Add(-4 * time.Second) }},
+		{"expired", func(entry *taskRateCache) { entry.observed = time.Now().Add(-11 * time.Second) }},
 		{"invalid", func(entry *taskRateCache) { entry.valid = false }},
 		{"unavailable projection", func(entry *taskRateCache) { entry.progress = nil }},
 		{"generation changed", func(entry *taskRateCache) { entry.generation++ }},
@@ -264,6 +320,52 @@ func TestLiveProgressAverageIsUnknownWhenSupportedSampleExpiresOrRefreshFails(t 
 	row := f.master.taskView(p)
 	if value, exists := row["averageSpeedBytesPerSecond"]; exists {
 		t.Fatalf("failed refresh reset supported progress to a misleading average of %v", value)
+	}
+}
+
+func TestFailedMetricsRefreshRetainsKnownProgressCapability(t *testing.T) {
+	f, p := progressMasterFixture(t, 2)
+	c := assignProgressChild(t, f, p, 1, []transferstore.Object{{Key: "large", Size: 350 << 30}})
+	var failRefresh atomic.Bool
+	for index, node := range p.Spec.Nodes {
+		serveProgressAgent(t, f, node, func(command agenttransport.Command) (any, error) {
+			if command.Operation != "task_metrics" {
+				return nil, fmt.Errorf("unexpected operation %s", command.Operation)
+			}
+			reply := progressMetrics(p)
+			if index == 0 {
+				reply.Progress = []execution.ChildProgress{childProgressSample(c, 1, 50<<30)}
+			}
+			if failRefresh.Load() {
+				// Only a complete collection may establish legacy capability.
+				// One peer omits progress, while the other sends a stale reply.
+				reply.ProgressSupported = false
+				if index == 1 {
+					reply.Generation++
+				}
+			}
+			return reply, nil
+		})
+	}
+	f.master.tasks.sampleRates(context.Background(), p)
+	original, fresh := f.master.tasks.rateSnapshot(p)
+	if !fresh || !original.progressSupported || original.progress == nil {
+		t.Fatal("initial supported sample missing")
+	}
+	original.attempted = time.Now().Add(-2 * time.Second)
+	f.master.tasks.mu.Lock()
+	f.master.tasks.rates[p.ID] = original
+	f.master.tasks.mu.Unlock()
+	failRefresh.Store(true)
+	f.master.tasks.sampleRates(context.Background(), p)
+	entry, fresh := f.master.tasks.rateSnapshot(p)
+	if fresh || !entry.progressSupported {
+		t.Fatalf("failed collection lost known progress capability: %+v", entry)
+	}
+	for _, row := range []map[string]any{f.master.taskView(p), f.master.childView(p, c)} {
+		if value, exists := row["averageSpeedBytesPerSecond"]; exists || row["currentSpeedBytesPerSecond"] != nil {
+			t.Fatalf("failed collection showed a misleading speed: %v, %+v", value, row)
+		}
 	}
 }
 

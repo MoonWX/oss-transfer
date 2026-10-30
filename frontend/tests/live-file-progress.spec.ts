@@ -19,7 +19,8 @@ async function arrange(page: Page, openChild = true) {
       listObjectSize: 100 * 1024 ** 3,
       putObjectCount: 0,
       putObjectSize: 0,
-      averageSpeedBytesPerSecond: 0,
+      averageSpeedBytesPerSecond: 0 as number | null | undefined,
+      currentSpeedBytesPerSecond: (181.4 * 1024 ** 2) as number | null,
     },
     progress: {
       supported: true,
@@ -99,6 +100,43 @@ async function openSubtask(page: Page, number: number) {
   await expect(page.locator("[data-subtask-heading]")).toHaveText(
     `子任务 #51-${number}`,
   );
+}
+
+for (const openChild of [false, true]) {
+  test(`${openChild ? "subtask" : "task"} keeps speed rows when a live sample is unavailable and recovers on refresh`, async ({
+    page,
+  }) => {
+    const state = await arrange(page, openChild);
+    const details = openChild
+      ? page.locator("[data-subtask-heading]").locator("..")
+      : page;
+    const average = details
+      .getByText("平均速度", { exact: true })
+      .locator("..");
+    const current = details
+      .getByText("当前速度", { exact: true })
+      .locator("..");
+    await expect(average).toContainText("0 B/s");
+    await expect(current).toContainText("181.4 MiB/s");
+    state.parent.averageSpeedBytesPerSecond = 120 * 1024 ** 2;
+    await expect(average).toContainText("120 MiB/s");
+
+    // JSON omits an undefined field, as the API does for an expired sample.
+    state.parent.averageSpeedBytesPerSecond = undefined;
+    await expect(average).toBeVisible();
+    await expect(average).toContainText("—");
+    await expect(average).not.toContainText("0 B/s");
+    await expect(current).toContainText("181.4 MiB/s");
+
+    state.parent.averageSpeedBytesPerSecond = null;
+    state.parent.currentSpeedBytesPerSecond = null;
+    await expect(current).toContainText("—");
+    await expect(average).toContainText("—");
+    state.parent.averageSpeedBytesPerSecond = 125 * 1024 ** 2;
+    state.parent.currentSpeedBytesPerSecond = 0;
+    await expect(average).toContainText("125 MiB/s");
+    await expect(current).toContainText("0 B/s");
+  });
 }
 
 test("file progress is only requested inside the selected subtask and preserves large-file finalization", async ({

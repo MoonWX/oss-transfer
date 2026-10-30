@@ -48,7 +48,7 @@ const timestamp = (value: unknown) =>
     ? formatDate(value)
     : value;
 const speed = (value: unknown) =>
-  value == null ? null : `${formatBytes(value)}/s`;
+  value == null ? "—" : `${formatBytes(value)}/s`;
 export default function SubtaskDetails({
   childId,
   task,

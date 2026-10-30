@@ -1044,13 +1044,13 @@ function TaskDetail({
               [
                 tr("当前速度"),
                 current.currentSpeedBytesPerSecond == null
-                  ? null
+                  ? "—"
                   : `${formatBytes(current.currentSpeedBytesPerSecond)}/s`,
               ],
               [
                 tr("平均速度"),
                 current.averageSpeedBytesPerSecond == null
-                  ? null
+                  ? "—"
                   : `${formatBytes(current.averageSpeedBytesPerSecond)}/s`,
               ],
               [

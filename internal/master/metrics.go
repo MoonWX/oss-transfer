@@ -10,6 +10,10 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
+// Both task speeds describe the same aggregate observation. File-level
+// progress has a shorter lifetime because it also identifies active objects.
+const taskRateMaxAge = 10 * time.Second
+
 type taskRateCache struct {
 	generation        uint64
 	attempted         time.Time
@@ -102,6 +106,12 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 			entry.children[child] += rate
 		}
 	}
+	if !entry.valid && last.generation == p.Generation && last.progressSupported {
+		// A failed collection cannot establish that an Agent lacks progress
+		// support. Keep known capability so an incomplete sample never falls
+		// back to a misleading completed-bytes-only average.
+		entry.progressSupported = true
+	}
 	if entry.valid && entry.progressSupported && !progressTruncated {
 		if projection, err := t.repo.ProjectProgress(p.ID, p.Generation, progressReports); err == nil {
 			entry.progress = &projection
@@ -115,11 +125,18 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	t.mu.Unlock()
 }
 func validTaskRate(rate float64) bool { return rate >= 0 && !math.IsNaN(rate) && !math.IsInf(rate, 0) }
-func (t *taskRuntime) rate(p task.Parent, child string) (float64, bool) {
+func (t *taskRuntime) cachedRates(p task.Parent, maxAge time.Duration) (taskRateCache, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	entry := t.rates[p.ID]
-	if !entry.valid || entry.generation != p.Generation || time.Since(entry.observed) > 10*time.Second {
+	entry, exists := t.rates[p.ID]
+	return entry, exists && entry.valid && entry.generation == p.Generation && time.Since(entry.observed) <= maxAge
+}
+func (t *taskRuntime) rateSnapshot(p task.Parent) (taskRateCache, bool) {
+	return t.cachedRates(p, taskRateMaxAge)
+}
+func (t *taskRuntime) rate(p task.Parent, child string) (float64, bool) {
+	entry, fresh := t.rateSnapshot(p)
+	if !fresh {
 		return 0, false
 	}
 	if child != "" {

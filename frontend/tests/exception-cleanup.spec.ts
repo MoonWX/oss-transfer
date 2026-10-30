@@ -321,6 +321,77 @@ test("task ID search waits for a valid ID and accepts a hash prefix", async ({
   expect(searches).toEqual(["41"]);
 });
 
+for (const width of [1280, 390]) {
+  test(`task dropdown stays compact and readable with long paths at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const requests = await mockApi(page);
+    const source = "/mnt/shared/training-datasets/2026-10-30/images";
+    const destination =
+      "/mnt/backups/a-very-long-directory-name/2026-10-30/corpus/snapshots";
+    await page.route("**/api/master/exceptions/tasks?**", (route) =>
+      route.fulfill({
+        json: {
+          data: {
+            items: Array.from({ length: 20 }, (_, index) => ({
+              taskIndex: index + 41,
+              sourceEndpoint: { localPath: source },
+              destinationEndpoint: { localPath: destination },
+            })),
+            hasMore: false,
+          },
+        },
+      }),
+    );
+    await page.goto("/exceptions?type=local");
+    const input = page.getByRole("combobox", { name: "所属任务", exact: true });
+    await input.click();
+    const option = page.getByRole("option", { name: /^任务 #41 / });
+    await expect(option).toBeVisible();
+    const list = page.getByRole("listbox");
+    const menu = list.locator("..");
+    const menuStyle = await menu.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return {
+        shadow: style.boxShadow,
+        border: parseFloat(style.borderTopWidth),
+        left: rect.left,
+        right: rect.right,
+      };
+    });
+    expect(menuStyle.shadow).not.toBe("none");
+    expect(menuStyle.border).toBeGreaterThan(0);
+    expect(menuStyle.left).toBeGreaterThanOrEqual(0);
+    expect(menuStyle.right).toBeLessThanOrEqual(width);
+    expect((await option.boundingBox())!.height).toBeLessThan(72);
+    await expect(option.getByTitle(`${source} → ${destination}`)).toHaveCSS(
+      "text-overflow",
+      "ellipsis",
+    );
+    expect(
+      await list.evaluate(
+        (element) => element.scrollHeight > element.clientHeight,
+      ),
+    ).toBe(true);
+    await option.click();
+    await expect(input).toHaveValue("41");
+    await expect(list).toBeHidden();
+    await expect
+      .poll(() =>
+        requests.some(
+          (request) =>
+            request.path.startsWith("/api/master/local-transfers/failures?") &&
+            new URL(request.path, "http://localhost").searchParams.get(
+              "taskId",
+            ) === "41",
+        ),
+      )
+      .toBe(true);
+  });
+}
+
 for (const mode of ["failed", "local"] as const) {
   test(`${mode} retry success keeps the original exception and completed task choice until explicit cleanup`, async ({
     page,

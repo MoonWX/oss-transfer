@@ -2208,6 +2208,8 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Scroll down to load more",
     ja: "下にスクロールして続きを表示",
   },
+  滚动到顶部: { en: "Scroll to top", ja: "先頭へ移動" },
+  滚动到底部: { en: "Scroll to bottom", ja: "末尾へ移動" },
   "已加载全部 {count} 个子任务": {
     en: "All {count} subtasks loaded",
     ja: "全 {count} 件のサブタスクを表示中",

@@ -69,6 +69,8 @@ import { useTaskRecovery } from "../lib/taskRecovery";
 import {
   compareActiveSubtasks,
   compareAllSubtasks,
+  activeSubtaskPriority,
+  allSubtaskPriority,
   numberSubtasks,
 } from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
@@ -89,6 +91,7 @@ import ListPagination, {
 } from "../components/ListPagination";
 import TaskBandwidth from "../components/TaskBandwidth";
 import SubtaskDetails from "../components/SubtaskDetails";
+import ScrollJumpButtons from "../components/ScrollJumpButtons";
 import {
   EmptyState,
   ErrorAlert,
@@ -414,26 +417,31 @@ function TaskDetail({
   const activeAnchor = useRef<{
     taskId?: number;
     scrollTop: number;
-    rows: { id?: string; node?: string; top: number }[];
+    rows: { id?: string; node?: string; priority?: string; top: number }[];
   } | null>(null);
   const beforeChildrenChange = useCallback(() => {
     const paper = paperRef.current;
     if (requestedChildId || !paper || activeAnchor.current) return;
     const bounds = paper.getBoundingClientRect();
+    // At the list head, let new high-priority work appear without following
+    // the old first row down into history.
+    const atHead =
+      !childrenRegion.current ||
+      childrenRegion.current.getBoundingClientRect().top >= bounds.top - 1;
     const rows = Array.from(
       paper.querySelectorAll<HTMLElement>("[data-child-id]"),
     )
       .filter((row) => {
         const rect = row.getBoundingClientRect();
-        return rect.bottom > bounds.top && rect.top < bounds.bottom;
+        return !atHead && rect.bottom > bounds.top && rect.top < bounds.bottom;
       })
       .map((row) => ({
         id: row.dataset.childId,
         node: row.dataset.childNode,
+        priority: row.dataset.childPriority,
         top: row.getBoundingClientRect().top - bounds.top,
       }));
-    if (rows.length)
-      activeAnchor.current = { taskId, scrollTop: paper.scrollTop, rows };
+    activeAnchor.current = { taskId, scrollTop: paper.scrollTop, rows };
   }, [childView, requestedChildId, taskId]);
   const visibleChildOffsets = useRef(new Set<number>());
   const visibleChildElements = useRef(new Set<Element>());
@@ -645,7 +653,8 @@ function TaskDetail({
       const row = rows.find(
         (item) =>
           item.dataset.childId === previous.id &&
-          item.dataset.childNode === previous.node,
+          item.dataset.childNode === previous.node &&
+          item.dataset.childPriority === previous.priority,
       );
       if (!row) continue;
       paper.scrollTop +=
@@ -740,6 +749,9 @@ function TaskDetail({
         "& .MuiDrawer-paper": {
           width: { xs: "100%", sm: 560 },
           p: { xs: 2.5, sm: 3.5 },
+          // The reading anchor above handles live insertions. Native scroll
+          // anchoring would also follow rows that move to a different status.
+          overflowAnchor: "none",
         },
       }}
     >
@@ -1217,6 +1229,11 @@ function TaskDetail({
                           })}
                           data-child-id={`${current.taskIndex}-${shard.subtaskNumber}`}
                           data-child-node={subtaskNode(shard)}
+                          data-child-priority={
+                            childView === "active"
+                              ? activeSubtaskPriority(shard)
+                              : allSubtaskPriority(shard)
+                          }
                           onClick={() =>
                             onSelectChild(
                               `${current.taskIndex}-${shard.subtaskNumber}`,
@@ -1304,6 +1321,12 @@ function TaskDetail({
           )}
         </Box>
       )}
+      <ScrollJumpButtons
+        containerRef={paperRef}
+        regionRef={childrenRegion}
+        enabled={!!taskId && !childId && pageVisible && shards.length > 0}
+        regionKey={`${taskId}:${childView}`}
+      />
     </Drawer>
   );
 }

@@ -294,12 +294,38 @@ test("a visible child promoted behind the first running page stays present and c
   await expect(promoted).toBeAttached();
   await promoted.scrollIntoViewIfNeeded();
   await page.clock.runFor(200);
+  const stableAnchor = await page.getByRole("dialog").evaluate((drawer) => {
+    const viewport = drawer.getBoundingClientRect();
+    const neighbor = Array.from(
+      drawer.querySelectorAll<HTMLElement>("[data-child-id]"),
+    ).find((element) => {
+      const bounds = element.getBoundingClientRect();
+      return (
+        !["989-123", "989-124"].includes(element.dataset.childId!) &&
+        bounds.bottom > viewport.top &&
+        bounds.top < viewport.bottom
+      );
+    })!;
+    return {
+      id: neighbor.dataset.childId,
+      top: neighbor.getBoundingClientRect().top,
+    };
+  });
+  const stableNeighbor = page.locator(`[data-child-id="${stableAnchor.id}"]`);
   children[122].status = "RUNNING";
   children[123].status = "COMPLETED";
   await page.clock.runFor(1200);
   await expect(promoted.getByText("执行中", { exact: true })).toBeAttached();
   await expect(completed).toHaveCount(0);
-  await expect(promoted).toBeInViewport();
+  await expect(stableNeighbor).toBeInViewport();
+  // A priority change must not drag the reader along with the moved row.
+  expect(
+    Math.abs(
+      (await stableNeighbor.evaluate(
+        (element) => element.getBoundingClientRect().top,
+      )) - stableAnchor.top,
+    ),
+  ).toBeLessThanOrEqual(2);
   const ids = await page
     .locator("[data-child-id]")
     .evaluateAll((rows) =>
@@ -582,19 +608,25 @@ test("an all-view index build keeps loading and retries while visible even with 
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect
-    .poll(async () => {
-      await page.clock.runFor(100);
-      return builds;
-    })
+    .poll(
+      async () => {
+        await page.clock.runFor(100);
+        return builds;
+      },
+      { intervals: [50] },
+    )
     .toBe(2);
   await page.clock.runFor(2000);
   expect(builds).toBe(2);
   releaseBuild();
   await expect
-    .poll(async () => {
-      await page.clock.runFor(100);
-      return builds;
-    })
+    .poll(
+      async () => {
+        await page.clock.runFor(100);
+        return builds;
+      },
+      { intervals: [50] },
+    )
     .toBe(7);
   await expect(page.locator("[data-child-id]")).toHaveCount(25);
   await page.clock.runFor(5000);

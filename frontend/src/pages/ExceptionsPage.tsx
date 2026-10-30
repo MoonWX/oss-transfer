@@ -924,6 +924,18 @@ export default function ExceptionsPage() {
               freeSolo
               forcePopupIcon
               openOnFocus
+              slotProps={{
+                paper: {
+                  elevation: 3,
+                  sx: {
+                    mt: 0.5,
+                    border: 1,
+                    borderColor: "divider",
+                    borderRadius: "10px",
+                  },
+                },
+                listbox: { sx: { maxHeight: 320 } },
+              }}
               options={[
                 "",
                 ...taskOptions.map((task) => String(task.taskIndex)),
@@ -941,6 +953,7 @@ export default function ExceptionsPage() {
               onChange={(_, value) => applyTaskFilter(value)}
               getOptionLabel={(value) => value}
               renderOption={(props, id) => {
+                const { key, ...optionProps } = props;
                 const task = taskOptions.find(
                   (task) => String(task.taskIndex) === id,
                 );
@@ -948,9 +961,10 @@ export default function ExceptionsPage() {
                   task?.sourceEndpoint?.localPath || task?.sourceBucket;
                 const destination =
                   task?.destinationEndpoint?.localPath || task?.destBucket;
+                const endpoints = `${source || "—"} → ${destination || "—"}`;
                 return (
-                  <li {...props} key={id || "all"}>
-                    <Box sx={{ minWidth: 0 }}>
+                  <li key={key} {...optionProps}>
+                    <Box sx={{ minWidth: 0, width: "100%", py: 0.25 }}>
                       <Typography variant="body2">
                         {id ? tr("任务 #{id}", { id }) : tr("全部任务")}
                       </Typography>
@@ -958,9 +972,11 @@ export default function ExceptionsPage() {
                         <Typography
                           variant="caption"
                           color="text.secondary"
-                          sx={{ overflowWrap: "anywhere" }}
+                          noWrap
+                          title={endpoints}
+                          sx={{ display: "block" }}
                         >
-                          {source || "—"} → {destination || "—"}
+                          {endpoints}
                         </Typography>
                       )}
                     </Box>

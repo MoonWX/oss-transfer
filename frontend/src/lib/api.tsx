@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { Alert, Snackbar } from "@mui/material";
+import { radii } from "../theme";
 
 const TOKEN_KEY = "oss-transfer-token";
 export const getToken = () => sessionStorage.getItem(TOKEN_KEY);
@@ -269,7 +270,7 @@ export function NotifyProvider({ children }: { children: ReactNode }) {
           severity={notice?.severity}
           variant="filled"
           onClose={() => setNotice(undefined)}
-          sx={{ width: "100%", maxWidth: 720 }}
+          sx={{ width: "100%", maxWidth: 720, borderRadius: radii.surface }}
         >
           {notice?.message}
         </Alert>

@@ -36,13 +36,15 @@ type taskRuntime struct {
 	sharedProofs map[int64]string
 	rates        map[int64]taskRateCache
 	observeAfter map[int64]int
+	stopProgress map[int64]*stopObservation
+	wake         chan struct{}
 	leases       *taskLeases
 	cleanup      *taskCleanupRuntime
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
-	t := &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}, observeAfter: map[int64]int{}}
+	t := &taskRuntime{repo: task.New(s.store), server: s, ctx: ctx, cancel: cancel, active: map[int64]*taskRun{}, sharedProofs: map[int64]string{}, rates: map[int64]taskRateCache{}, observeAfter: map[int64]int{}, stopProgress: map[int64]*stopObservation{}, wake: make(chan struct{}, 1)}
 	t.leases = newTaskLeases(t)
 	t.cleanup = newTaskCleanupRuntime(t)
 	return t
@@ -84,6 +86,7 @@ func (t *taskRuntime) loop() {
 		case <-t.ctx.Done():
 			return
 		case <-timer.C:
+		case <-t.wake:
 		}
 		parents, err := t.repo.List(after, 32, true)
 		if err != nil {
@@ -221,7 +224,8 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	var err error
 	switch action {
 	case "stop":
-		p, err = s.tasks.repo.Stop(id)
+		p, _, err = s.requestTaskStop(ctx, id)
+		return p, err
 	case "resume", "retry":
 		p, _, err = s.requestTaskResume(ctx, id, nil)
 	case "clear":
@@ -237,14 +241,34 @@ func (s *Server) controlTask(ctx context.Context, id int64, action string) (task
 	if err != nil {
 		return p, err
 	}
-	if p.Status == "STOPPING" {
-		err = s.tasks.exclusive(ctx, id, func() error { return s.tasks.step(ctx, id) })
-	}
 	current, readErr := s.tasks.repo.Get(id)
 	if readErr != nil {
 		return p, readErr
 	}
 	return current, err
+}
+
+// Agent fences and final-ledger reconciliation belong to the existing runtime.
+// Cancellation interrupts an older running step, never a repeated stop request.
+func (s *Server) requestTaskStop(ctx context.Context, id int64) (task.Parent, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return task.Parent{}, false, err
+	}
+	p, admitted, err := s.tasks.repo.RequestStop(id)
+	if err != nil || !admitted {
+		return p, admitted, err
+	}
+	t := s.tasks
+	t.mu.Lock()
+	if run := t.active[id]; run != nil {
+		run.cancel()
+	}
+	t.mu.Unlock()
+	select {
+	case t.wake <- struct{}{}:
+	default:
+	}
+	return p, true, nil
 }
 
 // requestTaskResume serializes membership validation with task admission; the
@@ -453,6 +477,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		return err
 	}
 	if p.Deleted || task.Ended(p.Status) {
+		t.forgetStopObservation(p.ID)
 		return nil
 	}
 	if p.Status == "RESUMING" && (p.ActiveTime == nil || (p.ResumeAfter == nil && p.Scheduling == nil)) {
@@ -488,10 +513,15 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		if err := t.stopMembers(ctx, p); err != nil {
 			return err
 		}
-		if err := t.observeStopped(ctx, p); err != nil {
+		ready, err := t.observeStopped(ctx, p)
+		if err != nil || !ready {
 			return err
 		}
-		return t.repo.Stopped(p.ID, p.Generation)
+		if err := t.repo.Stopped(p.ID, p.Generation); err != nil {
+			return err
+		}
+		t.forgetStopObservation(p.ID)
+		return nil
 	}
 	defer t.sampleRates(ctx, p)
 	snapshot, err := storageconfig.NewMaster(s.store).Snapshot()
@@ -745,56 +775,6 @@ func (t *taskRuntime) observeAvailable(ctx context.Context, p task.Parent, limit
 	// Persist healthy peers' reports even when a different peer times out.
 	err = errors.Join(err, t.repo.ObserveBatch(p.ID, p.Generation, observations))
 	return err
-}
-
-// Page through the Agent ledger after every stop fence has been acknowledged.
-// This avoids dropping final counters when more than one page of children exists.
-func (t *taskRuntime) observeStopped(ctx context.Context, p task.Parent) error {
-	for _, node := range p.ActiveNodes() {
-		stopped, err := t.nodeLeaseStopped(p, node)
-		if err != nil {
-			return err
-		}
-		if stopped {
-			continue
-		}
-		after := ""
-		for {
-			var rows []execution.Record
-			if err := t.server.agentCall(ctx, nodeSession(node), "children", false, agentservice.ChildrenRequest{ParentID: p.ID, After: after, Limit: 8}, &rows); err != nil {
-				return err
-			}
-			observations := make([]task.Observation, 0, len(rows))
-			for _, record := range rows {
-				if record.ReleasedAssignment != nil {
-					continue
-				}
-				if record.Job.OwnerEpoch != p.NodeEpoch(node.ID) {
-					continue // Historical ownership on a rejoined node is no longer authoritative.
-				}
-				if record.Job.Generation != p.Generation {
-					// Successful historical children are not rewritten for every retry.
-					if record.Job.Generation < p.Generation && record.Status == execution.Completed {
-						continue
-					}
-					return task.ErrGeneration
-				}
-				observations = append(observations, task.Observation{Number: record.Job.Number, Record: record})
-			}
-			if err := t.repo.ObserveBatch(p.ID, p.Generation, observations); err != nil {
-				return err
-			}
-			if len(rows) < 8 {
-				break
-			}
-			next := rows[len(rows)-1].Job.ChildID
-			if next == after {
-				return errors.New("Agent child pagination did not advance")
-			}
-			after = next
-		}
-	}
-	return nil
 }
 
 func (s *Server) checkTaskEnrollments(p task.Parent) error {

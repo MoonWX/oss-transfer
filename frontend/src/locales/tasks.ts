@@ -1,4 +1,8 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "正在提交停止请求…": {
+    en: "Sending stop request…",
+    ja: "停止リクエストを送信中…",
+  },
   "搜索或输入任务 ID": {
     en: "Search or enter a task ID",
     ja: "タスク ID を検索・入力",

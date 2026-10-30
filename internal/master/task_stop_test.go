@@ -119,7 +119,7 @@ func TestStopReconcilesMoreThanOneLedgerPage(t *testing.T) {
 	// Engine.Accept alone doesn't wake the service scheduler. Mark these jobs
 	// stopped before allowing reconciliation, so no fixture requires S3 I/O.
 	service.Close(context.Background())
-	for number := 1; number <= 270; number++ {
+	for number := 1; number <= 530; number++ {
 		c, err := f.master.tasks.repo.Assign(p.ID, 1, number, []transferstore.Object{{Key: filepath.Base(t.TempDir()), Size: 1}})
 		if err != nil {
 			t.Fatal(err)
@@ -133,16 +133,75 @@ func TestStopReconcilesMoreThanOneLedgerPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, _ := f.master.tasks.repo.Get(p.ID)
-	if err = f.master.tasks.observeStopped(context.Background(), current); err != nil {
-		t.Fatal(err)
+	if ready, err := f.master.tasks.observeStopped(context.Background(), current); err != nil || ready {
+		t.Fatal("large stop must yield after a bounded number of pages", ready, err)
 	}
-	children, err := f.master.tasks.repo.Children(p.ID, 256, 32)
-	if err != nil || len(children) != 14 {
+	cursor := f.master.tasks.stopObservationCursor(current, node)
+	if cursor.after == "" || cursor.done {
+		t.Fatal("bounded stop did not retain its cursor", cursor)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if ready, err := f.master.tasks.observeStopped(ctx, current); !errors.Is(err, context.Canceled) || ready {
+		t.Fatal("cancelled stop round continued", ready, err)
+	}
+	if after := f.master.tasks.stopObservationCursor(current, node); after != cursor {
+		t.Fatal("failed round advanced or reset the stop cursor", after, cursor)
+	}
+	if ready, err := f.master.tasks.observeStopped(context.Background(), current); err != nil || !ready {
+		t.Fatal("next round restarted instead of completing the remaining page", ready, err)
+	}
+	children, err := f.master.tasks.repo.Children(p.ID, 512, 32)
+	if err != nil || len(children) != 18 {
 		t.Fatal(len(children), err)
 	}
 	for _, c := range children {
 		if c.Record == nil {
 			t.Fatalf("child %d was not reconciled", c.Job.Number)
 		}
+	}
+}
+
+func TestStopObservationDoesNotReuseAnotherGenerationOrNodeCursor(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	service, node := taskAPIAgent(t, f)
+	p := takeoverParent(t, f, node)
+	if err := service.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	child, err := f.master.tasks.repo.Assign(p.ID, p.Generation, 1, []transferstore.Object{{Key: "one", Size: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Jobs.Accept(context.Background(), child.Job); err != nil {
+		t.Fatal(err)
+	}
+	p, err = f.master.tasks.repo.Stop(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []struct {
+		parent task.Parent
+		node   task.Node
+	}{
+		{parent: func() task.Parent { old := p; old.Generation--; return old }(), node: node},
+		{parent: p, node: task.Node{ID: node.ID, EnrollmentID: "previous-enrollment"}},
+	} {
+		f.master.tasks.forgetStopObservation(p.ID)
+		f.master.tasks.saveStopObservation(stale.parent, stale.node, stopNodeObservation{after: child.Job.ChildID, done: true})
+		if ready, err := f.master.tasks.observeStopped(context.Background(), p); err != nil || !ready {
+			t.Fatal(ready, err)
+		}
+		cursor := f.master.tasks.stopObservationCursor(p, node)
+		if !cursor.done || cursor.after != child.Job.ChildID || cursor.enrollment != node.EnrollmentID || cursor.epoch != p.NodeEpoch(node.ID) {
+			t.Fatal("new attempt or node inherited an old cursor", cursor)
+		}
+		if f.master.tasks.stopProgress[p.ID].generation != p.Generation {
+			t.Fatal("a prior attempt's completion skipped this generation")
+		}
+	}
+	rows, err := f.master.tasks.repo.Children(p.ID, 0, 1)
+	if err != nil || len(rows) != 1 || rows[0].Record == nil {
+		t.Fatal("final ledger observation was skipped", rows, err)
 	}
 }

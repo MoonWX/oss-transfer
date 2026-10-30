@@ -210,7 +210,18 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
         },
         MuiAlert: {
           styleOverrides: {
-            root: { borderRadius: radii.inset, overflowWrap: "anywhere" },
+            root: {
+              borderRadius: radii.inset,
+              padding: "12px 20px",
+              overflowWrap: "anywhere",
+            },
+            message: { minWidth: 0, padding: "4px 0" },
+            icon: { padding: "6px 0" },
+            action: {
+              marginRight: 0,
+              padding: "0 0 0 12px",
+              alignItems: "flex-start",
+            },
           },
         },
         MuiTooltip: { defaultProps: { arrow: true } },

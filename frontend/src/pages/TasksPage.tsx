@@ -353,6 +353,7 @@ function TaskDetail({
   taskId,
   loading,
   busy,
+  stopSubmitting,
   onAction,
   onRefresh,
   operationError,
@@ -367,6 +368,7 @@ function TaskDetail({
   taskId: number | undefined;
   loading: boolean;
   busy: boolean;
+  stopSubmitting: boolean;
   onAction: (task: Task, operation: string) => void;
   onRefresh: () => void;
   operationError: string;
@@ -877,6 +879,7 @@ function TaskDetail({
                   color="warning"
                   startIcon={<PauseRounded />}
                   disabled={busy}
+                  loading={stopSubmitting}
                   onClick={() => onAction(current, "停止")}
                 >
                   {tr("停止任务")}
@@ -1477,6 +1480,7 @@ export default function TasksPage({
   const [operationOpen, setOperationOpen] = useState(false);
   const [confirmationTasks, setConfirmationTasks] = useState<Task[]>([]);
   const [busy, setBusy] = useState(false);
+  const [stopSubmittingIds, setStopSubmittingIds] = useState<number[]>([]);
   const [actionResult, setActionResult] = useState("");
   const [actionFailed, setActionFailed] = useState(false);
   const [actionIssues, setActionIssues] = useState<
@@ -1552,6 +1556,7 @@ export default function TasksPage({
     : filtered.slice(page * pageSize, (page + 1) * pageSize);
   const chosen = tasks.filter((t) => selectedSet.has(t.taskIndex));
   const openOperation = (next: string, ids: number[] | null) => {
+    if (actionInFlight.current) return;
     if (
       (next === "启动" || next === "继续传输") &&
       (ids ?? chosen.map((task) => task.taskIndex)).some(
@@ -1596,6 +1601,7 @@ export default function TasksPage({
   async function execute() {
     if (!confirmationTasks.length || actionInFlight.current) return;
     const recovering = operation === "启动" || operation === "继续传输";
+    const stopping = operation === "停止";
     const submittedTasks = confirmationTasks;
     const snapshots = new Map(
       submittedTasks.map((task) => [task.taskIndex, task]),
@@ -1603,9 +1609,13 @@ export default function TasksPage({
     if (recovering && !recovery.begin([...snapshots.keys()])) return;
     actionInFlight.current = true;
     setBusy(true);
-    setActionResult("");
+    setActionResult(stopping ? tr("正在提交停止请求…") : "");
     setActionFailed(false);
     setActionIssues([]);
+    if (stopping) {
+      setStopSubmittingIds([...snapshots.keys()]);
+      setOperationOpen(false);
+    }
     const issues: { taskIds: number[]; message: string }[] = [];
     const sent = new Set<number>();
     try {
@@ -1761,7 +1771,10 @@ export default function TasksPage({
             previous?.filter((task) => !successful.has(task.taskIndex)) ?? null,
         );
       }
-      void Promise.allSettled([refresh(), detailFallback.refresh()]);
+      const refreshed = Promise.allSettled([
+        refresh(),
+        detailFallback.refresh(),
+      ]);
       setActionIssues(issues);
       const pending = result.progress.uncertain + result.progress.unsubmitted;
       const summary = tr(
@@ -1790,6 +1803,9 @@ export default function TasksPage({
           "info",
         );
       }
+      // Keep duplicate controls locked until the accepted STOPPING state has
+      // been read, while leaving the page and detail drawer usable throughout.
+      if (stopping) await refreshed;
     } catch (cause) {
       if (recovering)
         recovery.settle(
@@ -1807,6 +1823,7 @@ export default function TasksPage({
     } finally {
       actionInFlight.current = false;
       setBusy(false);
+      setStopSubmittingIds([]);
     }
   }
   const renderBatchProgress = () =>
@@ -2022,11 +2039,17 @@ export default function TasksPage({
       {actionResult && (
         <Alert
           severity={actionFailed ? "warning" : "info"}
-          onClose={() => setActionResult("")}
+          icon={
+            stopSubmittingIds.length > 0 ? (
+              <CircularProgress size={20} color="inherit" />
+            ) : undefined
+          }
+          onClose={busy ? undefined : () => setActionResult("")}
           sx={{ mb: 2 }}
         >
           {actionResult}
-          {renderBatchProgress()}
+          {(actionFailed || (busy && (batchProgress?.total ?? 0) > 1)) &&
+            renderBatchProgress()}
           {actionIssues.length > 0 && (
             <Box component="details" sx={{ mt: 1 }}>
               <Box component="summary" sx={{ cursor: "pointer" }}>
@@ -2546,6 +2569,9 @@ export default function TasksPage({
         }
         loading={linkedTask ? loading : detailFallback.loading}
         busy={busy}
+        stopSubmitting={
+          detailId !== undefined && stopSubmittingIds.includes(detailId)
+        }
         onRefresh={() =>
           void Promise.all([refresh(), detailFallback.refresh()])
         }

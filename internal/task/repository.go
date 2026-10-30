@@ -781,19 +781,25 @@ func (r *Repository) scanProgress(id int64, generation uint64, epoch *uint64, ob
 		return r.save(tx, p)
 	}))
 }
-func (r *Repository) Stop(id int64) (p Parent, err error) {
+func (r *Repository) Stop(id int64) (Parent, error) {
+	p, _, err := r.RequestStop(id)
+	return p, err
+}
+
+// RequestStop durably accepts the intent without waiting for Agent acknowledgements.
+// Repeated requests do not restart reconciliation or advance the budget revision.
+func (r *Repository) RequestStop(id int64) (p Parent, admitted bool, err error) {
 	err = r.store.Update(func(tx *state.Tx) error {
 		p, err = get(tx, id)
 		if err != nil {
 			return err
 		}
-		if Ended(p.Status) {
+		if Ended(p.Status) || p.Status == "STOPPING" {
 			return nil
 		}
-		if p.Status != "STOPPING" {
-			p.BudgetRevision++
-		}
+		p.BudgetRevision++
 		p.Status = "STOPPING"
+		admitted = true
 		return r.save(tx, p)
 	})
 	return

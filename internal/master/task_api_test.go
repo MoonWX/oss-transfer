@@ -190,8 +190,8 @@ func TestTaskHTTPPaginationDetailsRecycleAndOfflineState(t *testing.T) {
 		}
 	}
 	status, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/stop", f.admin, map[string]any{"taskIds": []int64{p.ID}})
-	if status != 200 || body["partial"] != true || body["accepted"] != float64(0) {
-		t.Fatal("offline control falsely acknowledged", status, body)
+	if status != 200 || body["partial"] != false || body["accepted"] != float64(1) {
+		t.Fatal("offline stop intent was not accepted", status, body)
 	}
 	stored, err := f.master.tasks.repo.Get(p.ID)
 	if err != nil || stored.Status != "STOPPING" {

@@ -1280,6 +1280,9 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			if action == "permanent-delete" {
 				return s.requestTaskPurge(ctx, id)
 			}
+			if action == "stop" {
+				return s.requestTaskStop(ctx, id)
+			}
 			if resuming {
 				var expected *uint64
 				if request.ExpectedGenerations != nil {

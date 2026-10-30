@@ -116,8 +116,8 @@ func TestReturningNodeRejoinsWithFreshEpochAndFutureAssignments(t *testing.T) {
 	if err = runtime.stopMembers(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if err = runtime.observeStopped(ctx, p); err != nil {
-		t.Fatal("retired queue blocked task stop", err)
+	if ready, err := runtime.observeStopped(ctx, p); err != nil || !ready {
+		t.Fatal("retired queue blocked task stop", ready, err)
 	}
 	if err = runtime.repo.Stopped(p.ID, p.Generation); err != nil {
 		t.Fatal(err)

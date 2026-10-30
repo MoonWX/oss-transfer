@@ -58,6 +58,7 @@ func (t *taskRuntime) saveStopObservation(p task.Parent, node task.Node, cursor 
 func (t *taskRuntime) forgetStopObservation(id int64) {
 	t.mu.Lock()
 	delete(t.stopProgress, id)
+	delete(t.stopWaits, id)
 	t.mu.Unlock()
 }
 

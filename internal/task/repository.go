@@ -799,6 +799,7 @@ func (r *Repository) RequestStop(id int64) (p Parent, admitted bool, err error) 
 		}
 		p.BudgetRevision++
 		p.Status = "STOPPING"
+		p.RuntimeError = ""
 		admitted = true
 		return r.save(tx, p)
 	})
@@ -817,6 +818,7 @@ func (r *Repository) Stopped(id int64, generation uint64) error {
 			return ErrState
 		}
 		p.Status = "STOPPED"
+		p.RuntimeError = ""
 		now := r.now().UTC()
 		p.FinishedAt = &now
 		return r.save(tx, p)

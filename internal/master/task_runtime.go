@@ -37,6 +37,7 @@ type taskRuntime struct {
 	rates        map[int64]taskRateCache
 	observeAfter map[int64]int
 	stopProgress map[int64]*stopObservation
+	stopWaits    map[int64]stopWait
 	wake         chan struct{}
 	leases       *taskLeases
 	cleanup      *taskCleanupRuntime
@@ -119,7 +120,7 @@ func (t *taskRuntime) loop() {
 				err := t.step(ctx, p.ID)
 				if ctx.Err() == nil {
 					message := ""
-					if err != nil {
+					if err != nil && !isStopAwaitingAcknowledgement(err) {
 						message = err.Error()
 					}
 					_ = t.repo.RuntimeProblem(p.ID, p.Generation, message)
@@ -403,7 +404,7 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 	for err := range results {
 		problems = append(problems, err)
 	}
-	return errors.Join(problems...)
+	return t.stopControlProblem(p, errors.Join(problems...))
 }
 func (t *taskRuntime) scanSpec(p task.Parent) discovery.Spec {
 	spec := discovery.Spec{OwnerEpoch: p.NodeEpoch(p.ScannerNode().ID), InventoryID: p.Spec.InventoryID, ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch(), Source: p.Spec.Source, Prefix: p.Spec.Prefix, SingleKey: p.Spec.ObjectKey, StartKey: p.Spec.StartKey, EndKey: p.Spec.EndKey}

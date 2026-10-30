@@ -676,6 +676,11 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		if p.Deleted && !deleted {
 			return ErrDeleted
 		}
+		// Only a complete stop sets this marker. Resume's fence-only phase must
+		// not skip the child ledger updates if a user stop follows it.
+		if !deleted && p.Generation == generation && p.Stopped && p.StopJobsFenced {
+			return nil
+		}
 		if p.Deleted && deleted && p.Generation == generation {
 			if p.CleanupDone {
 				return nil
@@ -692,6 +697,9 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 		if !ok {
 			p = ParentFence{ParentID: id, Generation: generation}
 		}
+		if p.Generation != generation {
+			p.StopJobsFenced = false
+		}
 		p.Generation = generation
 		p.Stopped = true
 		p.Deleted = p.Deleted || deleted
@@ -706,17 +714,11 @@ func (r *Repository) fenceParent(ctx context.Context, id int64, generation uint6
 			// rewrite large result ledgers merely to delete them after I/O exits.
 			return tx.Put(purgesBucket, parentKey(id), generation)
 		}
-		return r.changeParentJobs(tx, id, func(j *Record) error {
-			advanced := j.Job.Generation != generation
-			j.Job.Generation = generation
-			if !terminal(j.Status) && j.Status != Stopped {
-				j.Status = Stopped
-				j.Attempt++
-			} else if advanced {
-				j.Attempt++
-			}
-			return nil
-		})
+		if err := r.stopParentJobs(tx, id, generation); err != nil {
+			return err
+		}
+		p.StopJobsFenced = true
+		return tx.Put(parentsBucket, parentKey(id), p)
 	})
 }
 func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, newGeneration uint64, retryFailed bool, inventorySource ...bool) error {
@@ -742,6 +744,7 @@ func (r *Repository) resumeParent(ctx context.Context, id int64, oldGeneration, 
 		}
 		p.Generation = newGeneration
 		p.Stopped = false
+		p.StopJobsFenced = false
 		p.RetryFailed = retryFailed
 		p.InventorySource = len(inventorySource) > 0 && inventorySource[0]
 		return tx.Put(parentsBucket, parentKey(id), p)
@@ -778,19 +781,35 @@ func activateGeneration(j *Record, p ParentFence) {
 	}
 }
 
-func (r *Repository) changeParentJobs(tx *state.Tx, id int64, fn func(*Record) error) error {
+func (r *Repository) stopParentJobs(tx *state.Tx, id int64, generation uint64) error {
 	prefix := fmt.Sprintf("%020d/", id)
 	after := ""
 	for {
 		var page []Record
 		var last string
+		count := 0
 		err := tx.Scan(jobsBucket, prefix, after, 128, func(key string, raw json.RawMessage) error {
+			count++
+			last = key
+			// Completed history is immutable across later attempts. Inspect only
+			// the status and generation before allocating its object/result arrays.
+			var header struct {
+				Status Status `json:"status"`
+				Job    struct {
+					Generation uint64 `json:"generation"`
+				} `json:"job"`
+			}
+			if err := json.Unmarshal(raw, &header); err != nil {
+				return err
+			}
+			if header.Status == Completed || (header.Job.Generation == generation && (terminal(header.Status) || header.Status == Stopped)) {
+				return nil
+			}
 			var j Record
 			if err := json.Unmarshal(raw, &j); err != nil {
 				return err
 			}
 			page = append(page, j)
-			last = key
 			return nil
 		})
 		if err != nil {
@@ -798,15 +817,19 @@ func (r *Repository) changeParentJobs(tx *state.Tx, id int64, fn func(*Record) e
 		}
 		for _, before := range page {
 			j := before
-			j.Results = append([]ItemResult(nil), before.Results...)
-			if err := fn(&j); err != nil {
-				return err
+			advanced := j.Job.Generation != generation
+			j.Job.Generation = generation
+			if !terminal(j.Status) && j.Status != Stopped {
+				j.Status = Stopped
+				j.Attempt++
+			} else if advanced {
+				j.Attempt++
 			}
 			if err := r.put(tx, &before, &j); err != nil {
 				return err
 			}
 		}
-		if len(page) < 128 {
+		if count < 128 {
 			return nil
 		}
 		after = last

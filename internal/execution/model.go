@@ -125,6 +125,7 @@ type Record struct {
 }
 
 type ParentFence struct {
+	StopJobsFenced  bool   `json:"stopJobsFenced,omitempty"`
 	CleanupDone     bool   `json:"cleanupDone,omitempty"`
 	CleanupDeleted  int64  `json:"cleanupDeleted,omitempty"`
 	CleanupAfter    string `json:"cleanupAfter,omitempty"`

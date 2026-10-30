@@ -42,7 +42,11 @@ test("partial clear refreshes available data and leaves a persistent failure rat
   await page.route("**/api/master/failed", (route) => {
     reads++;
     return route.fulfill({
-      json: { success: true, failedKeys: { "10.0.1.12": [], "10.0.1.13": [] } },
+      json: {
+        success: true,
+        clearableCount: 1,
+        failedKeys: { "10.0.1.12": [], "10.0.1.13": [] },
+      },
     });
   });
   await page.route("**/api/master/failed/clear", (route) =>
@@ -56,9 +60,9 @@ test("partial clear refreshes available data and leaves a persistent failure rat
     }),
   );
   await page.goto("/exceptions");
-  await page.getByRole("button", { name: "清除全部记录" }).click();
+  await page.getByRole("button", { name: "清理已处理记录" }).click();
   const readsBeforeClear = reads;
-  await page.getByRole("button", { name: "确认清除全部" }).click();
+  await page.getByRole("button", { name: "确认清理" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
   await expect.poll(() => reads).toBeGreaterThan(readsBeforeClear);
   await expect(

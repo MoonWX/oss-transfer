@@ -110,7 +110,7 @@ func TestAdminDestructiveCommandsRequireTargetsAndConfirmation(t *testing.T) {
 		{"node", []string{"remove", "10.0.0.2"}}, {"node", []string{"remove", "--yes"}},
 		{"storage", []string{"remove", "source"}}, {"storage", []string{"remove", "--yes"}},
 		{"exceptions", []string{"clear", "failed", "--yes"}}, {"exceptions", []string{"clear", "failed", "--all"}},
-		{"exceptions", []string{"clear", "local", "--all", "--yes"}},
+		{"exceptions", []string{"clear", "local", "--task-id", "0", "--yes"}},
 		{"exceptions", []string{"clear", "fallback", "--all", "--yes", "--task-id", "224"}},
 	}
 	for _, test := range cases {
@@ -481,5 +481,44 @@ func TestAdminFallbackClearDoesNotClaimConfirmedCompletion(t *testing.T) {
 	}
 	if result["complete"] != false || result["warning"] == nil {
 		t.Fatalf("unconfirmed clear reported complete: %#v", result)
+	}
+}
+
+func TestExceptionClearPreservesFilterAndRequiresSafeMaster(t *testing.T) {
+	for _, kind := range []string{"failed", "local"} {
+		t.Run(kind, func(t *testing.T) {
+			calls := 0
+			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					if r.URL.Path != "/api/master/failed" {
+						t.Fatalf("unexpected probe %s", r.URL)
+					}
+					adminTestJSON(t, w, map[string]interface{}{"success": true, "clearableCount": 2})
+					return
+				}
+				if r.URL.Path != "/api/master/failed/clear" {
+					t.Fatalf("unexpected clear %s", r.URL)
+				}
+				body := adminTestBody(t, r)
+				if body["type"] != kind || body["taskIndex"] != float64(43) || body["workerNode"] != "agent-1" {
+					t.Fatalf("lost filters: %#v", body)
+				}
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "clearedCount": 2, "scope": "resolved-exceptions"})
+			})
+			result, err := runAdminCommand(client, "exceptions", []string{"clear", kind, "--task-id", "43", "--worker", "agent-1", "--yes"})
+			if err != nil || result["clearedCount"] != float64(2) || calls != 2 {
+				t.Fatalf("clear: %#v %v calls=%d", result, err, calls)
+			}
+		})
+	}
+	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/master/failed" {
+			t.Fatalf("unsafe clear on older master: %s", r.URL)
+		}
+		adminTestJSON(t, w, map[string]interface{}{"success": true})
+	})
+	if _, err := runAdminCommand(client, "exceptions", []string{"clear", "failed", "--all", "--yes"}); err == nil {
+		t.Fatal("accepted old unsafe API")
 	}
 }

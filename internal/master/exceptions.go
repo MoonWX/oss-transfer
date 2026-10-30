@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/task"
@@ -19,10 +20,12 @@ func installExceptionRoutes(s *Server) error {
 	s.mux.HandleFunc("POST /api/master/failed/clear", s.adminOnly(s.clearExceptions(false)))
 	s.mux.HandleFunc("POST /api/master/fallback/clear", s.adminOnly(s.clearExceptions(true)))
 	s.mux.HandleFunc("GET /api/master/local-transfers/failures", s.adminOnly(s.localExceptions))
+	s.mux.HandleFunc("GET /api/master/exceptions/tasks", s.adminOnly(s.exceptionTasks))
 	return nil
 }
 
 type exceptionRequest struct {
+	Type            string `json:"type"`
 	TaskIndex       int64  `json:"taskIndex"`
 	TaskID          int64  `json:"taskId"`
 	WorkerNode      string `json:"workerNode"`
@@ -45,6 +48,10 @@ func exceptionBody(w http.ResponseWriter, r *http.Request) (task.ExceptionFilter
 		fail(w, 400, "Invalid exception query")
 		return task.ExceptionFilter{}, 0, false
 	}
+	if request.Type != "" && request.Type != "failed" && request.Type != "local" {
+		fail(w, 400, "Invalid exception query")
+		return task.ExceptionFilter{}, 0, false
+	}
 	node, err := mergeTaskString(request.WorkerNode, request.ExecutionNodeIP, "execution node")
 	if err != nil {
 		fail(w, 400, err.Error())
@@ -54,7 +61,7 @@ func exceptionBody(w http.ResponseWriter, r *http.Request) (task.ExceptionFilter
 		fail(w, 400, "Invalid transfer direction")
 		return task.ExceptionFilter{}, 0, false
 	}
-	return task.ExceptionFilter{ParentID: max(request.TaskIndex, request.TaskID), Node: node, Direction: request.Direction, SourceBucket: request.SourceBucket, DestinationBucket: request.DestBucket, Endpoint: request.Endpoint}, request.Limit, true
+	return task.ExceptionFilter{ParentID: max(request.TaskIndex, request.TaskID), Node: node, Direction: request.Direction, SourceBucket: request.SourceBucket, DestinationBucket: request.DestBucket, Endpoint: request.Endpoint, LocalOnly: request.Type == "local"}, request.Limit, true
 }
 func exceptionDTO(e task.Exception) map[string]any {
 	local := ""
@@ -152,11 +159,15 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 		displays := s.nodeDisplaySnapshot()
 		groups := map[string]any{}
 		counts := map[string]int64{}
+		var clearable int64
 		for node := range nodes {
 			groups[node] = []map[string]any{}
 		}
 		if !fallback {
 			err = s.tasks.repo.VisitExceptions(r.Context(), filter, func(e task.Exception) error {
+				if e.Resolved() {
+					clearable++
+				}
 				rows, found := groups[e.Node].([]map[string]any)
 				if !found {
 					rows = []map[string]any{}
@@ -192,7 +203,7 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 			name = "fallbackObjects"
 			failed = []string{}
 		}
-		result := map[string]any{"success": true, name: groups, "totalCount": total, "nodeDisplays": displays.byAddress, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "complete": len(failed) == 0, "partial": len(failed) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
+		result := map[string]any{"success": true, name: groups, "totalCount": total, "clearableCount": clearable, "nodeDisplays": displays.byAddress, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "complete": len(failed) == 0, "partial": len(failed) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
 		if fallback {
 			result["supported"] = false
 			result["message"] = localize(w, "The Go transfer engine does not use the legacy SDK fallback mechanism")
@@ -215,13 +226,9 @@ func (s *Server) clearExceptions(fallback bool) http.HandlerFunc {
 			fail(w, 500, "Cannot clear displayed exceptions")
 			return
 		}
-		nodes, err := s.exceptionNodes(filter)
-		if err != nil {
-			fail(w, 500, "Cannot confirm Agent connectivity")
-			return
-		}
-		queried, failed := exceptionNodeLists(nodes)
-		writeJSON(w, 200, map[string]any{"success": true, "clearedCount": count, "nodeDisplays": s.nodeDisplaySnapshot().byAddress, "complete": len(failed) == 0, "partial": len(failed) > 0, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "scope": "observed-failures", "executionLedgerPreserved": true})
+		// Dismissal is committed by the Master alone. An offline Agent cannot
+		// make that local transaction incomplete or require a repeated clear.
+		writeJSON(w, 200, map[string]any{"success": true, "clearedCount": count, "nodeDisplays": s.nodeDisplaySnapshot().byAddress, "complete": true, "partial": false, "queriedWorkers": []string{}, "failedWorkers": []string{}, "unreachableWorkers": []string{}, "scope": "resolved-exceptions", "executionLedgerPreserved": true})
 	}
 }
 func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
@@ -265,8 +272,12 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []map[string]any{}
 	total := 0
+	clearable := 0
 	displays := s.nodeDisplaySnapshot()
 	err = s.tasks.repo.VisitExceptions(r.Context(), filter, func(e task.Exception) error {
+		if e.Resolved() {
+			clearable++
+		}
 		if _, found := nodes[e.Node]; !found {
 			nodes[e.Node] = false
 		}
@@ -286,5 +297,49 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	queried, failed := exceptionNodeLists(nodes)
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}})
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "clearableCount": clearable, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}})
+}
+
+func (s *Server) exceptionTasks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	kind := q.Get("type")
+	if kind == "" {
+		kind = "failed"
+	}
+	if kind != "failed" && kind != "local" && kind != "fallback" {
+		fail(w, 400, "Invalid exception query")
+		return
+	}
+	filter := task.ExceptionFilter{LocalOnly: kind == "local"}
+	if search := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(q.Get("search")), "#")); search != "" {
+		id, err := strconv.ParseInt(search, 10, 64)
+		if err != nil || id < 1 {
+			fail(w, 400, "Invalid task ID")
+			return
+		}
+		filter.ParentID = id
+	}
+	limit := 100
+	if raw := q.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			fail(w, 400, "Invalid exception query")
+			return
+		}
+		limit = parsed
+	}
+	items := []map[string]any{}
+	hasMore := false
+	if kind != "fallback" {
+		parents, more, err := s.tasks.repo.ExceptionTasks(r.Context(), filter, limit)
+		if err != nil {
+			fail(w, 500, "Cannot read failure ledger")
+			return
+		}
+		hasMore = more
+		for _, p := range parents {
+			items = append(items, taskDTO(p))
+		}
+	}
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "hasMore": hasMore}})
 }

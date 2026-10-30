@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -49,7 +50,7 @@ func TestExceptionIndexAtomicityClearReplayRestartAndPurge(t *testing.T) {
 		t.Fatal(rows)
 	}
 	filter := ExceptionFilter{ParentID: p.ID, Node: "node-a", SourceBucket: "bucket"}
-	if count, err := r.ClearExceptions(context.Background(), filter); err != nil || count != 1 {
+	if count, err := r.ClearExceptions(context.Background(), filter); err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
 	children, err := r.Children(p.ID, 0, 10)
@@ -64,8 +65,8 @@ func TestExceptionIndexAtomicityClearReplayRestartAndPurge(t *testing.T) {
 	if err := r.Observe(p.ID, p.Generation, 1, records[0]); err != nil {
 		t.Fatal(err)
 	}
-	if rows := exceptionRows(t, r, filter); len(rows) != 0 {
-		t.Fatal("polling recreated hidden failure", rows)
+	if rows := exceptionRows(t, r, filter); len(rows) != 1 {
+		t.Fatal("unresolved failure was hidden", rows)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -75,8 +76,8 @@ func TestExceptionIndexAtomicityClearReplayRestartAndPurge(t *testing.T) {
 	if err := r.EnsureExceptionIndex(); err != nil {
 		t.Fatal(err)
 	}
-	if rows := exceptionRows(t, r, ExceptionFilter{}); len(rows) != 1 || rows[0].Node != "node-b" {
-		t.Fatal("hidden state lost on restart", rows)
+	if rows := exceptionRows(t, r, ExceptionFilter{}); len(rows) != 2 {
+		t.Fatal("unresolved failures lost on restart", rows)
 	}
 	// Fail after the old index has been replaced inside the transaction. Both
 	// the old displayed entry and parent/child counters must roll back.
@@ -87,7 +88,7 @@ func TestExceptionIndexAtomicityClearReplayRestartAndPurge(t *testing.T) {
 	if err := r.Observe(p.ID, p.Generation, 2, malformed); err == nil {
 		t.Fatal("unknown failure object accepted")
 	}
-	if rows := exceptionRows(t, r, ExceptionFilter{}); len(rows) != 1 || rows[0].Attempt != 1 {
+	if rows := exceptionRows(t, r, ExceptionFilter{}); len(rows) != 2 || rows[1].Attempt != 1 {
 		t.Fatal("failed transaction damaged exception index", rows)
 	}
 	current, _ := r.Get(p.ID)
@@ -102,8 +103,8 @@ func TestExceptionIndexAtomicityClearReplayRestartAndPurge(t *testing.T) {
 	if err := r.Observe(p.ID, p.Generation, 1, records[0]); err != nil {
 		t.Fatal(err)
 	}
-	if rows := exceptionRows(t, r, filter); len(rows) != 0 {
-		t.Fatal("pending retry recreated hidden failure", rows)
+	if rows := exceptionRows(t, r, filter); len(rows) != 1 || rows[0].RetryStatus != ExceptionPending {
+		t.Fatal("pending retry was hidden", rows)
 	}
 	records[0].Status = execution.Failed
 	records[0].Results[0].Status = execution.ItemFailed
@@ -168,5 +169,186 @@ func TestExceptionIndexBackfillsExistingLedger(t *testing.T) {
 	}
 	if rows := exceptionRows(t, r, ExceptionFilter{}); len(rows) != 1 || rows[0].Error != "old error" {
 		t.Fatal("existing ledger not indexed", rows)
+	}
+}
+
+func TestExceptionClearOnlyResolvedOutcomesAndPreservesLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	db, repo := openTest(t, path)
+	defer func() { _ = db.Close() }()
+	p, _, err := repo.Create(testSpec(), "resolved-cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := append(objects("recovered"), objects("skipped")...)
+	items = append(items, objects("failed")...)
+	c, err := repo.Assign(p.ID, 1, 1, items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := execution.Record{Job: c.Job, Status: execution.Failed, Attempt: 1, UpdatedAt: time.Now().UTC()}
+	for _, item := range c.Job.Items {
+		record.Results = append(record.Results, execution.ItemResult{ID: item.ID, Status: execution.ItemFailed, Error: "original failure"})
+	}
+	if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	record.Attempt++
+	record.UpdatedAt = record.UpdatedAt.Add(time.Second)
+	record.Results[0].Status, record.Results[0].Error = execution.ItemSucceeded, ""
+	record.Results[1].Status, record.Results[1].Error = execution.ItemSkipped, ""
+	if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	beforeParent, _ := repo.Get(p.ID)
+	beforeChildren, _ := repo.Children(p.ID, 0, 10)
+	for _, filter := range []ExceptionFilter{{ParentID: p.ID + 1}, {SourceBucket: "other"}, {DestinationBucket: "other"}, {Node: "other"}, {LocalOnly: true}} {
+		if count, err := repo.ClearExceptions(context.Background(), filter); err != nil || count != 0 {
+			t.Fatal("cleanup crossed its filter", filter, count, err)
+		}
+	}
+	if count, err := repo.ClearExceptions(context.Background(), ExceptionFilter{ParentID: p.ID}); err != nil || count != 2 {
+		t.Fatal("resolved cleanup", count, err)
+	}
+	if count, err := repo.ClearExceptions(context.Background(), ExceptionFilter{}); err != nil || count != 0 {
+		t.Fatal("cleanup was not idempotent", count, err)
+	}
+	afterParent, _ := repo.Get(p.ID)
+	afterChildren, _ := repo.Children(p.ID, 0, 10)
+	if !reflect.DeepEqual(beforeParent, afterParent) || !reflect.DeepEqual(beforeChildren, afterChildren) {
+		t.Fatal("cleanup changed execution evidence")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, repo = openTest(t, path)
+	if rows := exceptionRows(t, repo, ExceptionFilter{}); len(rows) != 1 || rows[0].Key != "failed" {
+		t.Fatal("resolved cleanup did not survive restart", rows)
+	}
+	// An unchanged report must stay hidden, but a new failure of that same
+	// object must reappear even when its original error text is unchanged.
+	record.UpdatedAt = record.UpdatedAt.Add(time.Second)
+	if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	if rows := exceptionRows(t, repo, ExceptionFilter{}); len(rows) != 1 {
+		t.Fatal("report replay recreated resolved records", rows)
+	}
+	record.Attempt++
+	record.UpdatedAt = record.UpdatedAt.Add(time.Second)
+	record.Results[0].Status, record.Results[0].Error = execution.ItemFailed, "original failure"
+	if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	if rows := exceptionRows(t, repo, ExceptionFilter{}); len(rows) != 2 {
+		t.Fatal("new failure remained hidden", rows)
+	}
+}
+
+func TestLegacyHiddenUnresolvedExceptionsReappearBeforeRetryStateDerivation(t *testing.T) {
+	db, repo := openTest(t, filepath.Join(t.TempDir(), "db"))
+	defer db.Close()
+	p, _, err := repo.Create(testSpec(), "legacy-hidden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.Assign(p.ID, 1, 1, objects("file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := execution.Record{Job: c.Job, Status: execution.Failed, Attempt: 1, UpdatedAt: time.Now().UTC(), Results: []execution.ItemResult{{ID: c.Job.Items[0].ID, Status: execution.ItemFailed, Error: "old failure"}}}
+	if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	entry := exceptionRows(t, repo, ExceptionFilter{})[0]
+	k := childKey(p.ID, 1) + "/" + digest(c.Job.Items[0].ID)
+	if err := db.Update(func(tx *state.Tx) error { return tx.Put("master-task-exceptions-hidden", k, entry.Identity) }); err != nil {
+		t.Fatal(err)
+	}
+	check := func(status string) {
+		t.Helper()
+		rows := exceptionRows(t, repo, ExceptionFilter{})
+		if len(rows) != 1 || rows[0].RetryStatus != status {
+			t.Fatal("legacy hidden state suppressed unresolved work", status, rows)
+		}
+		if count, err := repo.ClearExceptions(context.Background(), ExceptionFilter{}); err != nil || count != 0 {
+			t.Fatal("unresolved work was cleared", count, err)
+		}
+	}
+	check(ExceptionNotRetried)
+	p = resumeExceptionTest(t, repo, p)
+	check(ExceptionPending)
+	if _, err := repo.Stop(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Stopped(p.ID, p.Generation); err != nil {
+		t.Fatal(err)
+	}
+	check(ExceptionInterrupted)
+}
+
+func TestExceptionTaskOptionsAreBoundedAndExcludeUnrelatedTasks(t *testing.T) {
+	db, repo := openTest(t, filepath.Join(t.TempDir(), "db"))
+	defer db.Close()
+	for i := 1; i <= 105; i++ {
+		spec := testSpec()
+		if i%2 == 0 {
+			spec.Direction = "LOCAL_TO_OSS"
+			spec.Source = execution.Endpoint{Kind: "LOCAL", Root: "/data"}
+		}
+		p, _, err := repo.Create(spec, fmt.Sprintf("task-option-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 105 { // A task without exceptions never appears.
+			continue
+		}
+		c, err := repo.Assign(p.ID, 1, 1, objects("file"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := execution.Record{Job: c.Job, Status: execution.Failed, Attempt: 1, UpdatedAt: time.Now().UTC(), Results: []execution.ItemResult{{ID: c.Job.Items[0].ID, Status: execution.ItemFailed, Error: "denied"}}}
+		if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+			t.Fatal(err)
+		}
+		if i == 104 { // Entirely dismissed history is not a useful option.
+			record.Results[0].Status, record.Results[0].Error = execution.ItemSucceeded, ""
+			record.Attempt++
+			record.UpdatedAt = record.UpdatedAt.Add(time.Second)
+			if err := repo.Observe(p.ID, 1, 1, record); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.ClearExceptions(context.Background(), ExceptionFilter{ParentID: p.ID}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i == 103 {
+			if _, err := repo.Stop(p.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Stopped(p.ID, 1); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.Recycle(p.ID, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	parents, more, err := repo.ExceptionTasks(context.Background(), ExceptionFilter{}, 100)
+	if err != nil || !more || len(parents) != 100 || parents[0].ID != 102 || parents[99].ID != 3 {
+		t.Fatal("bounded options", len(parents), more, err)
+	}
+	parents, more, err = repo.ExceptionTasks(context.Background(), ExceptionFilter{ParentID: 1}, 100)
+	if err != nil || more || len(parents) != 1 || parents[0].ID != 1 {
+		t.Fatal("exact search could not reach older task", parents, more, err)
+	}
+	parents, more, err = repo.ExceptionTasks(context.Background(), ExceptionFilter{LocalOnly: true}, 100)
+	if err != nil || more || len(parents) != 51 {
+		t.Fatal("local options", len(parents), more, err)
+	}
+	for _, p := range parents {
+		if p.Spec.Direction != "LOCAL_TO_OSS" {
+			t.Fatal("unrelated direction", p.ID)
+		}
 	}
 }

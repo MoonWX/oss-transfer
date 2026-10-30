@@ -596,13 +596,14 @@ Types: failed (failed objects), fallback (legacy SDK records; unsupported by Go)
              [--endpoint VALUE] [--storage-id ID] [--offset 0] [--limit 25]
   export failed|fallback --output file.csv [same filters as list]
   export local --output file.zip
-  clear failed|fallback --all --yes
+  clear failed|local --task-id ID --yes
+  clear failed|local --all --yes
 
 CSV contains this query's records and completeness/truncation indicators; existing files are not overwritten.
 Local ZIP exports all local task reports without filters; use task report for one task.
-Only ended or stopped tasks can be exported. Clearing covers all nodes of the selected type;
-no task/node filters are supported and local records cannot be cleared.
-Clearing display records does not change object results. Incomplete legacy results exit with 3.
+Only ended or stopped tasks can be exported. Clear removes recovered or skipped exception records;
+unresolved failures and tasks remain. Use filters or --all, not both.
+Filters: --task-id, --worker, --direction, --source-bucket, --dest-bucket, --endpoint.
 complete/partial describe node coverage; truncated describes the size cap. Legacy caps may return
 truncatedWorkers; use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
 
@@ -618,13 +619,14 @@ truncatedWorkers; use ZIP reports for more records. A downloaded report does not
              [--endpoint 値] [--storage-id ID] [--offset 0] [--limit 25]
   export failed|fallback --output ファイル.csv [list と同じ絞り込み条件]
   export local --output ファイル.zip
-  clear failed|fallback --all --yes
+  clear failed|local --task-id ID --yes
+  clear failed|local --all --yes
 
 CSV は今回の記録と完全性・件数省略の情報を出力します。既存ファイルは上書きしません。
 ローカル ZIP は絞り込まず全ローカルタスクを出力します。単一タスクには task report を使用します。
-出力できるのは終了・停止したタスクのみです。クリアは選択種別の全ノードを対象とし、
-タスク・ノードで絞り込めません。local のクリアは未対応です。
-表示記録をクリアしても実行結果は変わりません。旧サービスの不完全な結果ではコード 3 を返します。
+出力できるのは終了・停止したタスクのみです。削除するのは回復済み・スキップ済みの例外記録です。
+未解決の失敗とタスクは残ります。絞り込み条件と --all は併用できません。
+絞り込み: --task-id、--worker、--direction、--source-bucket、--dest-bucket、--endpoint。
 complete/partial は応答の完全性、truncated は件数上限による省略を示します。
 truncatedWorkers が返された場合、詳細には ZIP レポートを使用してください。
 ダウンロード成功は転送データの検証完了を示しません。

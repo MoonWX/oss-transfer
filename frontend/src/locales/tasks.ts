@@ -1,4 +1,23 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "搜索或输入任务 ID": {
+    en: "Search or enter a task ID",
+    ja: "タスク ID を検索・入力",
+  },
+  清理已处理记录: { en: "Clear resolved records", ja: "解決済みの記録を削除" },
+  "清理已处理记录？": {
+    en: "Clear resolved records?",
+    ja: "解決済みの記録を削除しますか？",
+  },
+  确认清理: { en: "Clear records", ja: "記録を削除" },
+  "清理当前筛选范围内 {count} 条已恢复或已跳过的记录。任务和未解决的失败记录会保留。":
+    {
+      en: "Clear {count} recovered or skipped records matching the current filters. Tasks and unresolved failures will remain.",
+      ja: "現在のフィルターに一致する復旧済み・スキップ済みの記録 {count} 件を削除します。タスクと未解決の失敗記録は残ります。",
+    },
+  "已清理 {count} 条已处理记录。": {
+    en: "Cleared {count} resolved records.",
+    ja: "解決済みの記録を {count} 件削除しました。",
+  },
   文件进度: { en: "File progress", ja: "ファイルの進捗" },
   刷新文件进度: { en: "Refresh file progress", ja: "ファイルの進捗を更新" },
   更新执行节点后可查看文件进度: {

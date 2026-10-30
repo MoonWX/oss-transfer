@@ -59,7 +59,6 @@ import {
 } from "@mui/icons-material";
 import { api, ApiError, download, getToken, useNotify } from "../lib/api";
 import FailedTaskRetryDialog from "../components/FailedTaskRetryDialog";
-import { loadTaskCatalog } from "../lib/taskCatalog";
 import ListPagination, {
   rememberPageSize,
   savedPageSize,
@@ -117,6 +116,7 @@ type Filters = {
 type Result = {
   items: Failure[];
   total: number;
+  clearableCount?: number;
   partial?: boolean;
   complete?: boolean;
   queriedWorkers?: string[];
@@ -137,6 +137,26 @@ const initialFilters: Filters = {
 };
 const modes = ["failed", "fallback", "local"] as const;
 type Mode = (typeof modes)[number];
+type ExceptionTask = {
+  taskIndex: number;
+  sourceBucket?: string;
+  destBucket?: string;
+  sourceEndpoint?: { localPath?: string };
+  destinationEndpoint?: { localPath?: string };
+};
+type ClearScope = { mode: Mode; filters: Filters; count: number };
+
+const exceptionFilters = (filters: Filters) => ({
+  ...(filters.task.trim() ? { taskIndex: Number(filters.task) } : {}),
+  ...(filters.node ? { executionNodeIp: filters.node } : {}),
+  ...(filters.source.trim() ? { sourceBucket: filters.source.trim() } : {}),
+  ...(filters.destination.trim()
+    ? { destBucket: filters.destination.trim() }
+    : {}),
+  ...(filters.direction ? { direction: filters.direction } : {}),
+  ...(filters.endpoint.trim() ? { endpoint: filters.endpoint.trim() } : {}),
+});
+
 type QueryState = {
   key: string;
   result: Result | null;
@@ -145,8 +165,8 @@ type QueryState = {
 };
 
 const normalizeTaskFilter = (value: string) => {
-  const task = value.trim();
-  if (!task) return "";
+  const task = value.trim().replace(/^#/, "");
+  if (!task) return value.trim() ? null : "";
   return /^\d+$/.test(task) &&
     Number.isSafeInteger(Number(task)) &&
     Number(task) > 0
@@ -205,32 +225,18 @@ export default function ExceptionsPage() {
   );
   const [resumeAccepted, setResumeAccepted] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearScope, setClearScope] = useState<ClearScope | null>(null);
+  const clearInFlight = useRef(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Failure | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [catalogIds, setCatalogIds] = useState<number[]>([]);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const [catalog, setCatalog] = useState<{
+    key: string;
+    items: ExceptionTask[];
+  } | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const catalogRequest = useRef<AbortController | null>(null);
-  useEffect(() => () => catalogRequest.current?.abort(), []);
-  async function loadTaskOptions() {
-    if (catalogRequest.current) return;
-    const controller = new AbortController();
-    catalogRequest.current = controller;
-    const token = getToken();
-    setCatalogLoading(true);
-    try {
-      const tasks = await loadTaskCatalog(controller.signal);
-      if (!controller.signal.aborted && token === getToken())
-        setCatalogIds(tasks.map((task) => task.taskIndex));
-    } catch (cause) {
-      if (!controller.signal.aborted && token === getToken())
-        notify(errorText(cause), "warning");
-    } finally {
-      if (!controller.signal.aborted) setCatalogLoading(false);
-      if (catalogRequest.current === controller) catalogRequest.current = null;
-    }
-  }
   const loadId = useRef(0);
   const mounted = useRef(false);
   const inFlight = useRef(
@@ -259,6 +265,49 @@ export default function ExceptionsPage() {
     setSelected(null);
   }, [params]);
   const mode = modes[tab];
+  const catalogKey = JSON.stringify([mode, draft.task.trim(), catalogRevision]);
+  const taskOptions = catalog?.key === catalogKey ? catalog.items : [];
+  const taskSearch = draft.task.trim().replace(/^#/, "");
+  const validTaskSearch =
+    !draft.task.trim() ||
+    (taskSearch !== "" && normalizeTaskFilter(taskSearch) !== null);
+  useEffect(() => {
+    if (!catalogOpen || !validTaskSearch) {
+      setCatalogLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const token = getToken();
+    setCatalogLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          type: mode,
+          search: taskSearch,
+          limit: "100",
+        });
+        const response = await api<{
+          data: { items: ExceptionTask[]; hasMore: boolean };
+        }>(`/api/master/exceptions/tasks?${params}`, {
+          signal: controller.signal,
+          timeoutMs: 10000,
+        });
+        if (!controller.signal.aborted && token === getToken())
+          setCatalog({ key: catalogKey, items: response.data.items });
+      } catch (cause) {
+        if (!controller.signal.aborted && token === getToken()) {
+          setCatalog({ key: catalogKey, items: [] });
+          notify(errorText(cause), "warning");
+        }
+      } finally {
+        if (!controller.signal.aborted) setCatalogLoading(false);
+      }
+    }, 200);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [catalogOpen, catalogKey, mode, taskSearch, validTaskSearch, notify]);
   useEffect(() => setClearError(null), [mode]);
   const isLocal = mode === "local";
   const localPage = isLocal ? page : 0;
@@ -268,6 +317,7 @@ export default function ExceptionsPage() {
   // A new tab/filter is loading from its very first render. Cached rows belong
   // to one exact query and can remain visible while that query is refreshed.
   const result = query?.result ?? null;
+  const clearableCount = Math.max(0, result?.clearableCount ?? 0);
   const loading = query?.loading ?? true;
   const error = query?.error ?? null;
   const recordNodeLabel: NodeLabels = (id, display) =>
@@ -327,15 +377,10 @@ export default function ExceptionsPage() {
               )
             ).data;
           } else {
-            const body: Record<string, unknown> = {
+            const body = {
+              ...exceptionFilters(filters),
               limit: Number(filters.limit) || 1000,
             };
-            if (filters.task.trim()) body.taskIndex = Number(filters.task);
-            if (filters.node) body.executionNodeIp = filters.node;
-            if (filters.source.trim())
-              body.sourceBucket = filters.source.trim();
-            if (filters.destination.trim())
-              body.destBucket = filters.destination.trim();
             const raw = await api<Record<string, unknown>>(
               `/api/master/${mode}`,
               {
@@ -367,6 +412,10 @@ export default function ExceptionsPage() {
             next = {
               items,
               total,
+              clearableCount:
+                typeof raw.clearableCount === "number"
+                  ? raw.clearableCount
+                  : undefined,
               respondingNodes,
               queriedWorkers: Array.isArray(raw.queriedWorkers)
                 ? (raw.queriedWorkers as string[])
@@ -484,13 +533,6 @@ export default function ExceptionsPage() {
             resultTaskIds.length === 1
           ? resultTaskIds[0]
           : undefined;
-  const taskOptionIds = [
-    ...new Set([
-      ...catalogIds,
-      ...resultTaskIds,
-      ...(Number(filters.task) > 0 ? [Number(filters.task)] : []),
-    ]),
-  ].sort((a, b) => b - a);
   const applyTaskFilter = (value: string | null) => {
     const task = normalizeTaskFilter(value ?? "");
     if (task === null) {
@@ -541,10 +583,19 @@ export default function ExceptionsPage() {
     setFilters({ ...draft, task });
   };
   async function clearRecords() {
+    if (!clearScope || clearScope.mode === "fallback" || clearInFlight.current)
+      return;
+    clearInFlight.current = true;
     setBusy(true);
     setClearError(null);
     try {
-      const value = await api(`/api/master/${mode}/clear`, { method: "POST" });
+      const value = await api("/api/master/failed/clear", {
+        method: "POST",
+        body: {
+          type: clearScope.mode,
+          ...exceptionFilters(clearScope.filters),
+        },
+      });
       if (
         value.partial ||
         value.failedWorkers?.length ||
@@ -554,9 +605,17 @@ export default function ExceptionsPage() {
           value.message || tr("部分节点未能清除记录，请刷新后重试。");
         setClearError(message);
         notify(message, "warning");
-      } else notify(tr("清除请求已提交，正在刷新各节点记录。"), "info");
-      setConfirmClear(false);
+      } else
+        notify(
+          tr("已清理 {count} 条已处理记录。", {
+            count: formatNumber(value.clearedCount ?? 0),
+          }),
+          "success",
+        );
+      setClearScope(null);
       setPage(0);
+      setCatalog(null);
+      setCatalogRevision((value) => value + 1);
       await load(true);
     } catch (cause) {
       const value = cause instanceof ApiError ? cause.response : undefined;
@@ -570,11 +629,14 @@ export default function ExceptionsPage() {
       setClearError(message);
       notify(message, value?.partial ? "warning" : "error");
       if (value?.partial) {
-        setConfirmClear(false);
+        setClearScope(null);
         setPage(0);
+        setCatalog(null);
+        setCatalogRevision((value) => value + 1);
         await load(true);
       }
     } finally {
+      clearInFlight.current = false;
       setBusy(false);
     }
   }
@@ -862,27 +924,54 @@ export default function ExceptionsPage() {
               freeSolo
               forcePopupIcon
               openOnFocus
-              options={["", ...taskOptionIds.map(String)]}
+              options={[
+                "",
+                ...taskOptions.map((task) => String(task.taskIndex)),
+              ]}
+              filterOptions={(options) => options}
               value={filters.task || null}
               inputValue={draft.task}
               loading={catalogLoading}
               loadingText={tr("正在读取任务")}
-              onOpen={() => void loadTaskOptions()}
+              onOpen={() => setCatalogOpen(true)}
+              onClose={() => setCatalogOpen(false)}
               onInputChange={(_, value, reason) => {
                 if (reason === "input") updateDraft("task", value);
               }}
               onChange={(_, value) => applyTaskFilter(value)}
               getOptionLabel={(value) => value}
-              renderOption={(props, id) => (
-                <li {...props} key={id || "all"}>
-                  {id ? tr("任务 #{id}", { id }) : tr("全部任务")}
-                </li>
-              )}
+              renderOption={(props, id) => {
+                const task = taskOptions.find(
+                  (task) => String(task.taskIndex) === id,
+                );
+                const source =
+                  task?.sourceEndpoint?.localPath || task?.sourceBucket;
+                const destination =
+                  task?.destinationEndpoint?.localPath || task?.destBucket;
+                return (
+                  <li {...props} key={id || "all"}>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2">
+                        {id ? tr("任务 #{id}", { id }) : tr("全部任务")}
+                      </Typography>
+                      {(source || destination) && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ overflowWrap: "anywhere" }}
+                        >
+                          {source || "—"} → {destination || "—"}
+                        </Typography>
+                      )}
+                    </Box>
+                  </li>
+                );
+              }}
               renderInput={(params) => (
                 <TextField
                   {...params}
                   label={tr("所属任务")}
-                  placeholder={tr("全部任务")}
+                  placeholder={tr("搜索或输入任务 ID")}
                   size="small"
                 />
               )}
@@ -1080,7 +1169,7 @@ export default function ExceptionsPage() {
             >
               {isLocal ? tr("导出当前页") : tr("导出已加载记录")}
             </Button>
-            {isLocal ? (
+            {isLocal && (
               <Button
                 size="small"
                 variant="outlined"
@@ -1090,15 +1179,22 @@ export default function ExceptionsPage() {
               >
                 {tr("完整迁移报告")}
               </Button>
-            ) : (
+            )}
+            {mode !== "fallback" && (
               <Button
                 size="small"
                 color="error"
                 startIcon={<DeleteOutlineRounded />}
-                onClick={() => setConfirmClear(true)}
-                disabled={busy || loading}
+                onClick={() =>
+                  setClearScope({
+                    mode,
+                    filters: { ...filters },
+                    count: clearableCount,
+                  })
+                }
+                disabled={busy || loading || clearableCount === 0}
               >
-                {tr("清除全部记录")}
+                {tr("清理已处理记录")}
               </Button>
             )}
           </Stack>
@@ -1476,32 +1572,27 @@ export default function ExceptionsPage() {
         onSubmitted={() => void load(true)}
       />
       <Dialog
-        open={confirmClear}
-        onClose={() => !busy && setConfirmClear(false)}
+        open={clearScope !== null}
+        onClose={() => !busy && setClearScope(null)}
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>
-          {mode === "fallback"
-            ? tr("清除全部降级记录？")
-            : tr("清除全部失败记录？")}
-        </DialogTitle>
+        <DialogTitle>{tr("清理已处理记录？")}</DialogTitle>
         <DialogContent>
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            {tr("清除所有执行节点的记录，不受当前筛选条件限制。")}
-          </Alert>
           <Typography>
-            {mode === "failed"
-              ? tr(
-                  "记录清除后无法恢复。清除范围也包括本地迁移产生的失败对象。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。",
-                )
-              : tr(
-                  "记录清除后无法恢复。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。",
-                )}
+            {tr(
+              "清理当前筛选范围内 {count} 条已恢复或已跳过的记录。任务和未解决的失败记录会保留。",
+              { count: formatNumber(clearScope?.count ?? 0) },
+            )}
           </Typography>
+          {clearScope?.filters.task && (
+            <Typography sx={{ mt: 2 }}>
+              {tr("任务 #{id}", { id: clearScope.filters.task })}
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button disabled={busy} onClick={() => setConfirmClear(false)}>
+          <Button disabled={busy} onClick={() => setClearScope(null)}>
             {tr("取消")}
           </Button>
           <Button
@@ -1513,7 +1604,7 @@ export default function ExceptionsPage() {
               busy ? <CircularProgress size={16} color="inherit" /> : undefined
             }
           >
-            {tr("确认清除全部")}
+            {tr("确认清理")}
           </Button>
         </DialogActions>
       </Dialog>

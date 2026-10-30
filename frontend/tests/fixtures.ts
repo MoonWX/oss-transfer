@@ -148,6 +148,8 @@ export async function mockApi(
         masterIp: "10.0.1.12",
         masterPort: 1685,
       };
+    else if (path === "/api/master/exceptions/tasks")
+      result = { success: true, data: { items: [], hasMore: false } };
     else if (path === "/api/master/status")
       result = {
         totalTasks: options.empty ? 0 : 4,

@@ -128,8 +128,8 @@ _oss_transfer_cli_completion() {
                     [[ $action == export ]] && flags="$flags --output"
                     if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
                 clear)
-                    flags="--all --yes"
-                    if ((${#positional[@]} == 2)); then choices="failed fallback"; fi ;;
+                    flags="--all --yes --task-id --worker --direction --source-bucket --dest-bucket --endpoint"
+                    if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
             esac ;;
         object)
             if [[ -z $action ]]; then choices="compare status cancel delete";

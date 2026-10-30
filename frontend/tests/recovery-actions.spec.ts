@@ -164,14 +164,12 @@ test("create-page connection and local-node retries target their own reads and r
   expect(requests.some((item) => item.method !== "GET")).toBe(false);
 });
 
-test("fallback query and clear use dedicated endpoints with cancel, partial failure and successful retry", async ({
+test("fallback query retains export and refresh but offers no destructive cleanup", async ({
   page,
 }) => {
   const requests = await mockApi(page);
-  let readable = false,
-    clearCount = 0;
+  let readable = false;
   const reads: unknown[] = [];
-  const clears: { method: string; body: string | null }[] = [];
   const first = {
     taskIndex: 501,
     key: "fallback/first.bin",
@@ -198,30 +196,12 @@ test("fallback query and clear use dedicated endpoints with cancel, partial fail
       json: {
         success: true,
         fallbackObjects: {
-          "10.0.1.12": clearCount === 0 ? [first] : [],
-          "10.0.1.12Count": clearCount === 0 ? 1 : 0,
-          "10.0.1.13": clearCount < 2 ? [second] : [],
-          "10.0.1.13Count": clearCount < 2 ? 1 : 0,
+          "10.0.1.12": [first],
+          "10.0.1.12Count": 1,
+          "10.0.1.13": [second],
+          "10.0.1.13Count": 1,
         },
       },
-    });
-  });
-  await page.route("**/api/master/fallback/clear", async (route) => {
-    clears.push({
-      method: route.request().method(),
-      body: route.request().postData(),
-    });
-    clearCount++;
-    await route.fulfill({
-      json:
-        clearCount === 1
-          ? {
-              success: false,
-              partial: true,
-              failedWorkers: ["10.0.1.13"],
-              message: "降级清理部分失败",
-            }
-          : { success: true, partial: false },
     });
   });
   await page.goto("/exceptions");
@@ -240,47 +220,18 @@ test("fallback query and clear use dedicated endpoints with cancel, partial fail
   await expect(page.getByText(first.key, { exact: true })).toBeVisible();
   await expect(page.getByText(second.key, { exact: true })).toBeVisible();
   expect(reads.at(-1)).toEqual({ limit: 1000 });
-  await page.getByRole("button", { name: "清除全部记录", exact: true }).click();
-  const confirmation = page.getByRole("dialog", { name: "清除全部降级记录？" });
-  await expect(confirmation).toContainText(
-    "清除所有执行节点的记录，不受当前筛选条件限制。",
-  );
-  await confirmation.getByRole("button", { name: "取消", exact: true }).click();
-  expect(clears).toHaveLength(0);
-  await page.getByRole("button", { name: "清除全部记录", exact: true }).click();
-  await confirmation
-    .getByRole("button", { name: "确认清除全部", exact: true })
-    .click();
-  await expect(confirmation).toBeHidden();
-  await expect(page.getByText(first.key, { exact: true })).toHaveCount(0);
-  await expect(page.getByText(second.key, { exact: true })).toBeVisible();
   await expect(
-    page
-      .getByText("降级清理部分失败（未完成节点：10.0.1.13）", { exact: true })
-      .first(),
-  ).toBeVisible();
-  await expect(
-    page.getByText("清除请求已提交，正在刷新各节点记录。", { exact: true }),
+    page.getByRole("button", { name: "清理已处理记录", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "清除全部记录", exact: true }).click();
-  await confirmation
-    .getByRole("button", { name: "确认清除全部", exact: true })
-    .click();
   await expect(
-    page.getByRole("heading", { name: "暂无匹配记录" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("降级清理部分失败（未完成节点：10.0.1.13）", {
-      exact: true,
-    }),
+    page.getByRole("button", { name: "清除全部记录", exact: true }),
   ).toHaveCount(0);
-  expect(clears).toEqual([
-    { method: "POST", body: null },
-    { method: "POST", body: null },
-  ]);
-  expect(
-    requests.some((item) => item.path === "/api/master/failed/clear"),
-  ).toBe(false);
+  const download = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "导出已加载记录", exact: true })
+    .click();
+  expect((await download).suggestedFilename()).toBe("fallback-records.csv");
+  expect(requests.some((item) => item.path.endsWith("/clear"))).toBe(false);
 });
 
 test("runtime error boundary reload recovers the current route after correcting the service response", async ({

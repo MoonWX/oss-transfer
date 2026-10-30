@@ -191,7 +191,7 @@ test("exception details distinguish the local parent task from its execution sha
   await expect(dialog.getByText("子任务 ID", { exact: true })).toHaveCount(0);
 });
 
-test("warns about missing workers and requires confirmation before clearing all records", async ({
+test("warns about missing workers and confirms scoped resolved-record cleanup", async ({
   page,
 }) => {
   const requests = await mockApi(page);
@@ -200,7 +200,11 @@ test("warns about missing workers and requires confirmation before clearing all 
       json: {
         success: true,
         queriedWorkers: ["10.0.1.12", "10.0.1.13"],
-        failedKeys: { "10.0.1.12": [failure], "10.0.1.12Count": 1 },
+        failedKeys: {
+          "10.0.1.12": [{ ...failure, retryStatus: "RECOVERED" }],
+          "10.0.1.12Count": 1,
+        },
+        clearableCount: 1,
       },
     }),
   );
@@ -213,14 +217,14 @@ test("warns about missing workers and requires confirmation before clearing all 
       "部分节点未返回数据，当前结果不完整。不可达节点：agent (10.0.1.13)",
     ),
   ).toBeVisible();
-  await page.getByRole("button", { name: "清除全部记录" }).click();
+  await page.getByRole("button", { name: "清理已处理记录" }).click();
   await expect(
-    page.getByText("清除所有执行节点的记录，不受当前筛选条件限制。", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByText(/清除范围也包括本地迁移产生的失败对象/),
+    page.getByText(
+      "清理当前筛选范围内 1 条已恢复或已跳过的记录。任务和未解决的失败记录会保留。",
+      {
+        exact: true,
+      },
+    ),
   ).toBeVisible();
   expect(
     requests.some((item) => item.path === "/api/master/failed/clear"),
@@ -232,12 +236,15 @@ test("warns about missing workers and requires confirmation before clearing all 
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出已加载记录" }).click();
   expect((await download).suggestedFilename()).toBe("failed-records.csv");
-  await page.getByRole("button", { name: "清除全部记录" }).click();
-  await page.getByRole("button", { name: "确认清除全部" }).click();
+  await page.getByRole("button", { name: "清理已处理记录" }).click();
+  await page.getByRole("button", { name: "确认清理" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
   expect(
     requests.some((item) => item.path === "/api/master/failed/clear"),
   ).toBe(true);
+  expect(
+    requests.find((item) => item.path === "/api/master/failed/clear")?.body,
+  ).toEqual({ type: "failed", taskIndex: 123 });
 });
 
 test("deletes only selected recycle task IDs", async ({ page }) => {

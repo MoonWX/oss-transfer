@@ -635,21 +635,60 @@ func runObjectAdmin(client *ApiClient, action string, args []string) (map[string
 
 func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	if action == "clear" {
-		o, err := adminOptions(args, nil, []string{"all", "yes"}, 1)
+		o, err := adminOptions(args, []string{"task-id", "worker", "direction", "source-bucket", "dest-bucket", "endpoint"}, []string{"all", "yes"}, 1)
 		if err != nil {
 			return nil, err
 		}
 		kind := o.Positionals[0]
-		if kind != "failed" && kind != "fallback" {
-			return nil, cliErrorf("仅 failed、fallback 支持清空；本地迁移失败需使用任务重试或报告")
+		if kind != "failed" && kind != "fallback" && kind != "local" {
+			return nil, cliErrorf("异常类型必须是 failed、fallback 或 local")
 		}
-		if !o.Has("all") {
-			return nil, cliErrorf("此 API 只能清空所有节点的该类记录，请明确指定 --all --yes；不支持按筛选条件清空")
+		if o.Has("all") == (len(o.Values) > 0) {
+			return nil, cliErrorf("请指定清理筛选条件或 --all，不能同时使用")
 		}
 		if err := adminConfirmed(o); err != nil {
 			return nil, err
 		}
-		result, err := client.Post("/"+kind+"/clear", nil)
+		body := map[string]interface{}{"type": kind}
+		if kind == "fallback" {
+			delete(body, "type")
+		}
+		for flag, field := range map[string]string{"worker": "workerNode", "direction": "direction", "source-bucket": "sourceBucket", "dest-bucket": "destBucket", "endpoint": "endpoint"} {
+			if o.Has(flag) {
+				if strings.TrimSpace(o.Value(flag)) == "" {
+					return nil, cliErrorf("--%s 不能为空", flag)
+				}
+				body[field] = o.Value(flag)
+			}
+		}
+		if o.Has("task-id") {
+			id, err := adminInteger(o, "task-id", 0, 1, math.MaxInt32)
+			if err != nil {
+				return nil, err
+			}
+			body["taskIndex"] = id
+		}
+		path := kind
+		if kind == "local" {
+			path = "failed"
+		}
+		if kind != "fallback" {
+			// Older masters clear unresolved records too. Require the new API
+			// before sending a destructive request, even when --all is explicit.
+			query := make(map[string]interface{}, len(body)+1)
+			for key, value := range body {
+				query[key] = value
+			}
+			query["limit"] = 1
+			probe, err := client.Post("/failed", query)
+			if err != nil {
+				return nil, err
+			}
+			if _, supported := probe["clearableCount"]; !supported {
+				return nil, cliErrorf("Master 不支持安全清理已处理记录，请先升级 Master")
+			}
+		}
+		result, err := client.Post("/"+path+"/clear", body)
 		if _, confirmed := result["complete"].(bool); err == nil && kind == "fallback" && !confirmed {
 			result["complete"] = false
 			result["warning"] = client.text("降级记录清空请求已提交；此 API 不逐节点确认结果，请重新查询检查记录及节点完整性")

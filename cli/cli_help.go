@@ -352,10 +352,12 @@ const cliExceptionsHelp = `异常记录
   CSV 导出本次查询返回的记录，保留截断和节点完整性提示；不会覆盖已有文件。
   local ZIP 包含全量本地任务报告，不接受查询筛选；单任务请使用 task report。
 
-清空
-  clear failed|fallback --all --yes
-  清空仅支持所选类型的全节点记录，不支持按任务或节点筛选；local 不提供清空接口。
-  清空展示记录不会改变任务中的对象执行结果。旧版服务返回不完整时退出码为 3。
+清理已处理记录
+  clear failed|local --task-id ID --yes
+  clear failed|local --all --yes
+  仅清理已恢复或已跳过的异常记录，保留未解决的失败，不删除任务。
+  支持 --worker、--direction、--source-bucket、--dest-bucket、--endpoint 筛选；
+  --all 与筛选条件不能同时使用。
 
 示例
   oss-transfer-cli exceptions list failed --task-id 224 --limit 1000

@@ -54,6 +54,20 @@ type ExceptionFilter struct {
 	LocalOnly                                                  bool
 }
 
+func (e Exception) Resolved() bool {
+	return e.RetryStatus == ExceptionRecovered || e.RetryStatus == ExceptionSkipped
+}
+
+// Bind a new dismissal to the resolved outcome, not just the original error.
+// A subsequent retry or failure must remain visible.
+func resolvedExceptionIdentity(e Exception) string {
+	return "resolved:" + digest(struct {
+		Identity, Status                string
+		Generation, Assignment, Attempt uint64
+		UpdatedAt                       time.Time
+	}{e.Identity, e.RetryStatus, e.RetryGeneration, e.RetryAssignment, e.RetryAttempt, e.RetryUpdatedAt})
+}
+
 func syncExceptionIndex(tx *state.Tx, p Parent, child Child, record execution.Record, prior ...*execution.Record) error {
 	prefix := childKey(p.ID, child.Job.Number) + "/"
 	// Retain only objects which have failed. Normal successful transfers add no
@@ -272,6 +286,42 @@ func exceptionMatches(e Exception, f ExceptionFilter) bool {
 	}
 	return true
 }
+func visibleException(tx *state.Tx, k string, entry Exception, parent *Parent) (Exception, bool, error) {
+	if parent.ID != entry.ParentID {
+		var err error
+		*parent, err = get(tx, entry.ParentID)
+		if err != nil {
+			return entry, false, err
+		}
+	}
+	if parent.Deleted || parent.Purged {
+		return entry, false, nil
+	}
+	if entry.RetryStatus == "" {
+		entry.RetryStatus = ExceptionNotRetried
+	}
+	if !entry.Resolved() && parent.Generation > max(entry.Generation, entry.RetryGeneration) {
+		// Accepted retries can wait for an Agent. Derive that state before
+		// considering legacy dismissals, which used to hide unresolved work.
+		entry.RetryStatus = ExceptionPending
+		entry.RetryGeneration = parent.Generation
+	}
+	if entry.RetryStatus == ExceptionPending && Ended(parent.Status) {
+		entry.RetryStatus = ExceptionInterrupted
+	}
+	if entry.Resolved() {
+		var hidden string
+		found, err := tx.Get("master-task-exceptions-hidden", k, &hidden)
+		if err != nil {
+			return entry, false, err
+		}
+		if found && hidden != "" && (hidden == entry.Identity || hidden == resolvedExceptionIdentity(entry)) {
+			return entry, false, nil
+		}
+	}
+	return entry, true, nil
+}
+
 func visitExceptions(ctx context.Context, tx *state.Tx, filter ExceptionFilter, visit func(string, Exception) error) error {
 	prefix := ""
 	if filter.ParentID > 0 {
@@ -294,34 +344,12 @@ func visitExceptions(ctx context.Context, tx *state.Tx, filter ExceptionFilter, 
 			if !exceptionMatches(entry, filter) {
 				return nil
 			}
-			if parent.ID != entry.ParentID {
-				var err error
-				parent, err = get(tx, entry.ParentID)
-				if err != nil {
-					return err
-				}
-			}
-			if parent.Deleted || parent.Purged {
-				return nil
-			}
-			var hidden string
-			if _, err := tx.Get("master-task-exceptions-hidden", k, &hidden); err != nil {
+			entry, visible, err := visibleException(tx, k, entry, &parent)
+			if err != nil {
 				return err
 			}
-			if hidden == entry.Identity {
+			if !visible {
 				return nil
-			}
-			if entry.RetryStatus == "" {
-				entry.RetryStatus = ExceptionNotRetried
-			}
-			if entry.RetryStatus != ExceptionRecovered && entry.RetryStatus != ExceptionSkipped && parent.Generation > max(entry.Generation, entry.RetryGeneration) {
-				// A request can be durably accepted before the Agent is reachable.
-				// It proves pending work, never a successful object outcome.
-				entry.RetryStatus = ExceptionPending
-				entry.RetryGeneration = parent.Generation
-			}
-			if entry.RetryStatus == ExceptionPending && Ended(parent.Status) {
-				entry.RetryStatus = ExceptionInterrupted
 			}
 			return visit(k, entry)
 		})
@@ -342,7 +370,10 @@ func (r *Repository) ClearExceptions(ctx context.Context, filter ExceptionFilter
 	var count int64
 	err := r.store.Update(func(tx *state.Tx) error {
 		return visitExceptions(ctx, tx, filter, func(k string, e Exception) error {
-			if err := tx.Put("master-task-exceptions-hidden", k, e.Identity); err != nil {
+			if !e.Resolved() {
+				return nil
+			}
+			if err := tx.Put("master-task-exceptions-hidden", k, resolvedExceptionIdentity(e)); err != nil {
 				return err
 			}
 			count++
@@ -353,4 +384,78 @@ func (r *Repository) ClearExceptions(ctx context.Context, filter ExceptionFilter
 		return 0, err
 	}
 	return count, nil
+}
+
+// ExceptionTasks reads only the exception index. Once a visible record proves
+// membership, seeking before its parent prefix skips the rest of that task.
+func (r *Repository) ExceptionTasks(ctx context.Context, filter ExceptionFilter, limit int) ([]Parent, bool, error) {
+	if limit < 1 || limit > 100 {
+		return nil, false, errors.New("invalid exception task limit")
+	}
+	parents := []Parent{}
+	err := r.store.View(func(tx *state.Tx) error {
+		before := ""
+		if filter.ParentID > 0 {
+			before = key(filter.ParentID) + "/\xff"
+		}
+		var parent Parent
+		foundTask := errors.New("exception task found")
+		searchDone := errors.New("exception task search complete")
+		for len(parents) <= limit {
+			read := 0
+			err := tx.ScanReverse("master-task-exceptions", before, 256, func(k string, raw json.RawMessage) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				read++
+				before = k
+				var entry Exception
+				if err := json.Unmarshal(raw, &entry); err != nil {
+					return err
+				}
+				if filter.ParentID > 0 && entry.ParentID < filter.ParentID {
+					return searchDone
+				}
+				if filter.LocalOnly && entry.Direction == "OSS_TO_OSS" || filter.Direction != "" && entry.Direction != filter.Direction {
+					before = key(entry.ParentID)
+					return foundTask
+				}
+				if !exceptionMatches(entry, filter) {
+					return nil
+				}
+				_, visible, err := visibleException(tx, k, entry, &parent)
+				if err == nil && (parent.Deleted || parent.Purged) {
+					before = key(parent.ID)
+					return foundTask
+				}
+				if err != nil || !visible {
+					return err
+				}
+				parents = append(parents, parent)
+				before = key(parent.ID)
+				return foundTask
+			})
+			if errors.Is(err, foundTask) {
+				continue
+			}
+			if errors.Is(err, searchDone) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if read < 256 {
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(parents) > limit
+	if hasMore {
+		parents = parents[:limit]
+	}
+	return parents, hasMore, nil
 }

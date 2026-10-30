@@ -28,19 +28,20 @@ async function ossFailures(page: Page, rows: ReturnType<typeof failure>[]) {
       },
     });
   });
-  await page.route("**/api/master/status?**", (route) =>
+  await page.route("**/api/master/exceptions/tasks?**", (route) =>
     route.fulfill({
       json: {
         success: true,
-        pageComplete: true,
-        hasMore: false,
-        tasks: [...new Set(rows.map((row) => row.parentTaskId))].map(
-          (taskIndex) => ({
-            taskIndex,
-            status: "PARTIAL_FAILED",
-            generation: 1,
-          }),
-        ),
+        data: {
+          hasMore: false,
+          items: [...new Set(rows.map((row) => row.parentTaskId))]
+            .filter((id) =>
+              String(id).includes(
+                new URL(route.request().url()).searchParams.get("search") || "",
+              ),
+            )
+            .map((taskIndex) => ({ taskIndex })),
+        },
       },
     }),
   );
@@ -342,15 +343,17 @@ test("local task filtering resets pagination and rejects IDs that could broaden 
     localStorage.setItem("oss-transfer-exceptions-page-size", "10"),
   );
   const queries: URL[] = [];
-  await page.route("**/api/master/status?**", (route) =>
+  await page.route("**/api/master/exceptions/tasks?**", (route) =>
     route.fulfill({
       json: {
-        tasks: [
-          { taskIndex: 101, status: "PARTIAL_FAILED", generation: 1 },
-          { taskIndex: 102, status: "PARTIAL_FAILED", generation: 1 },
-        ],
-        hasMore: false,
-        pageComplete: true,
+        data: {
+          items: [{ taskIndex: 101 }, { taskIndex: 102 }].filter((task) =>
+            String(task.taskIndex).includes(
+              new URL(route.request().url()).searchParams.get("search") || "",
+            ),
+          ),
+          hasMore: false,
+        },
       },
     }),
   );

@@ -2,6 +2,9 @@ package main
 
 // Catalog keys are controlled source messages. User and server strings are never matched against this map.
 var cliMessages = map[string][2]string{
+	"请指定清理筛选条件或 --all，不能同时使用":         {"Specify cleanup filters or --all, not both", "絞り込み条件または --all を指定してください。併用はできません"},
+	"Master 不支持安全清理已处理记录，请先升级 Master": {"Upgrade Master before clearing resolved records", "処理済み記録を削除するには、Master を更新してください"},
+
 	"已清理":         {"Cleaned up", "クリーンアップ済み"},
 	"等待清理":        {"Queued for cleanup", "クリーンアップ待ち"},
 	"等待自动继续":      {"Waiting to continue", "自動再開を待機中"},

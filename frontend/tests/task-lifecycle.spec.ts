@@ -66,137 +66,125 @@ test("creation opens the accepted task directly and preserves the shared layout"
   ).toBeVisible();
 });
 
-test("asynchronous OSS creation waits for its own IDs and exposes every generated task", async ({
+test("delayed OSS creation exposes only the task IDs acknowledged by its response", async ({
   page,
 }) => {
-  // Multiple routes/actions share this total budget; assertions keep their own deadline.
-  test.setTimeout(60_000);
   await mockApi(page);
-  await page.route("**/api/master/add-buckets", (route) =>
-    route.fulfill({
-      json: { success: true, addedCount: 1, creationIds: ["creation-qa"] },
-    }),
-  );
-  let ready = false;
-  await page.route("**/api/master/task-creations/creation-qa", (route) =>
-    route.fulfill({
-      json: {
-        success: true,
-        creation: {
-          id: "creation-qa",
-          status: ready ? "COMPLETED" : "RUNNING",
-          taskIds: ready ? [1047, 1048] : [],
-        },
-      },
-    }),
-  );
-  await createOss(page);
-  await page.getByRole("link", { name: "查看任务", exact: true }).click();
-  await expect(page).toHaveURL(/creationId=creation-qa$/);
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let submits = 0;
+  await page.route("**/api/master/add-buckets", async (route) => {
+    submits++;
+    expect(route.request().postDataJSON()).toHaveLength(2);
+    await ready;
+    await route.fulfill({
+      json: { success: true, addedCount: 2, taskIds: [1047, 1048] },
+    });
+  });
+  await page.goto("/create");
+  await page.getByRole("tab", { name: "批量导入", exact: true }).click();
+  const payload = ["analytics-2026", "media-archive"].map((sourceBucket) => ({
+    sourceS3Alias: "production",
+    sourceBucket,
+    destS3Alias: "backup",
+    destBucket: "media-backup",
+  }));
+  await page
+    .getByRole("textbox", { name: "任务数据", exact: true })
+    .fill(JSON.stringify(payload));
+  await page.getByRole("button", { name: "导入任务", exact: true }).click();
+  await expect.poll(() => submits).toBe(1);
   await expect(
-    page.getByText("正在生成任务，完成后将自动打开详情。"),
-  ).toBeVisible();
-  ready = true;
+    page.getByRole("link", { name: "查看任务", exact: true }),
+  ).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { name: "迁移任务 #1047" }),
-  ).toBeVisible();
-  await expect(page).toHaveURL(/taskId=1047/);
-  const drawer = page
-    .locator(".MuiDrawer-paper")
-    .filter({ has: page.getByRole("heading", { name: "迁移任务 #1047" }) });
-  await drawer.getByRole("button", { name: "#1048", exact: true }).click();
+    page.getByRole("button", { name: "正在提交", exact: true }),
+  ).toBeDisabled();
+  release();
+  for (const id of [1047, 1048]) {
+    await expect(
+      page.getByRole("link", { name: `查看任务 #${id}`, exact: true }),
+    ).toHaveAttribute("href", `/tasks?taskId=${id}`);
+  }
+  await page.getByRole("link", { name: "查看任务 #1048", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "迁移任务 #1048" }),
+    page.getByRole("heading", { name: "迁移任务 #1048", exact: true }),
   ).toBeVisible();
+  expect(submits).toBe(1);
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "迁移任务 #1048" }),
+    page.getByRole("heading", { name: "迁移任务 #1048", exact: true }),
   ).toBeVisible();
 });
 
-test("delayed completed creation never flashes an empty result before opening its task", async ({
+test("delayed task details do not flash a missing result or select a similarly named older task", async ({
   page,
 }) => {
   await mockApi(page);
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reads = 0;
+  await page.route("**/api/master/tasks/1049", async (route) => {
+    reads++;
+    await ready;
+    await route.fulfill({
+      json: { success: true, data: { ...tasks[1], taskIndex: 1049 } },
+    });
+  });
   await page.addInitScript(() => {
     const capture = () => {
-      if (document.body?.textContent?.includes("本次创建未生成可执行任务。"))
-        (window as any).creationEmptyResultSeen = true;
+      if (document.body?.textContent?.includes("当前列表中未找到此任务"))
+        (window as any).missingTaskSeen = true;
     };
-    (window as any).creationEmptyResultSeen = false;
+    (window as any).missingTaskSeen = false;
     new MutationObserver(capture).observe(document, {
       childList: true,
       subtree: true,
       characterData: true,
     });
   });
-  let release!: () => void;
-  const responseReady = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route(
-    "**/api/master/task-creations/delayed-creation",
-    async (route) => {
-      await responseReady;
-      await route.fulfill({
-        json: {
-          success: true,
-          creation: {
-            id: "delayed-creation",
-            status: "COMPLETED",
-            taskIds: [1047],
-          },
-        },
-      });
-    },
-  );
-  await page.goto("/tasks?creationId=delayed-creation");
+  await page.goto("/tasks?taskId=1049");
+  await expect.poll(() => reads).toBeGreaterThan(0);
   await expect(
-    page.getByText("正在生成任务，完成后将自动打开详情。"),
+    page.getByRole("heading", { name: "迁移任务 #1049", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("本次创建未生成可执行任务。")).toHaveCount(0);
-  await expect(page).not.toHaveURL(/taskId=/);
+  await expect(
+    page.getByText("当前列表中未找到此任务，请刷新任务状态。", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "迁移任务 #1047", exact: true }),
+  ).toHaveCount(0);
   release();
   await expect(
-    page.getByRole("heading", { name: "迁移任务 #1047" }),
+    page.getByRole("button", { name: "启动任务", exact: true }),
   ).toBeVisible();
-  await expect(page).toHaveURL(/creationId=delayed-creation&taskId=1047/);
-  expect(
-    await page.evaluate(() => (window as any).creationEmptyResultSeen),
-  ).toBe(false);
+  await expect(page).toHaveURL(/taskId=1049$/);
+  expect(await page.evaluate(() => (window as any).missingTaskSeen)).toBe(
+    false,
+  );
 });
 
-test("completed creation without IDs displays an empty result only after the query returns", async ({
+test("creation without acknowledged IDs links to the list without guessing a matching task", async ({
   page,
 }) => {
   await mockApi(page);
-  let release!: () => void;
-  const responseReady = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route(
-    "**/api/master/task-creations/empty-creation",
-    async (route) => {
-      await responseReady;
-      await route.fulfill({
-        json: {
-          success: true,
-          creation: { id: "empty-creation", status: "COMPLETED", taskIds: [] },
-        },
-      });
-    },
+  await page.route("**/api/master/add-buckets", (route) =>
+    route.fulfill({ json: { success: true, addedCount: 1, taskIds: [] } }),
   );
-  await page.goto("/tasks?creationId=empty-creation");
+  await createOss(page);
   await expect(
-    page.getByText("正在生成任务，完成后将自动打开详情。"),
-  ).toBeVisible();
-  await expect(page.getByText("本次创建未生成可执行任务。")).toHaveCount(0);
-  release();
-  await expect(page.getByText("本次创建未生成可执行任务。")).toBeVisible();
+    page.getByRole("link", { name: "查看任务", exact: true }),
+  ).toHaveAttribute("href", "/tasks");
+  await expect(page.getByRole("link", { name: /查看任务 #/ })).toHaveCount(0);
+  await page.getByRole("link", { name: "查看任务", exact: true }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
   await expect(page.getByRole("heading", { name: /迁移任务 #/ })).toHaveCount(
     0,
   );
-  await expect(page).not.toHaveURL(/taskId=/);
 });
 
 test("local creation uses its parent ID instead of a worker shard ID", async ({
@@ -219,7 +207,14 @@ test("local creation uses its parent ID instead of a worker shard ID", async ({
   await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
   await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
   await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/media");
-  await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
+  const create = page.getByRole("button", {
+    name: "创建迁移任务",
+    exact: true,
+  });
+  await expect(create).toBeDisabled();
+  await page.getByRole("button", { name: "运行预检", exact: true }).click();
+  await expect(create).toBeEnabled();
+  await create.click();
   await expect(
     page.getByRole("link", { name: "查看任务", exact: true }),
   ).toHaveAttribute("href", "/tasks?taskId=1046");
@@ -722,27 +717,23 @@ test("partially accepted stop keeps failed nodes visible and never reports full 
   await expect(page.getByText(/停止请求已提交/)).toHaveCount(0);
 });
 
-test("failed task generation shows its error instead of opening a similarly named old task", async ({
+test("failed task creation shows its error instead of opening a similarly named old task", async ({
   page,
 }) => {
   await mockApi(page);
-  await page.route("**/api/master/task-creations/failed-creation", (route) =>
+  await page.route("**/api/master/add-buckets", (route) =>
     route.fulfill({
-      json: {
-        success: true,
-        creation: {
-          id: "failed-creation",
-          status: "FAILED",
-          taskIds: [],
-          message: "源存储桶读取失败",
-        },
-      },
+      status: 503,
+      json: { success: false, message: "源存储桶读取失败" },
     }),
   );
-  await page.goto("/tasks?creationId=failed-creation");
+  await createOss(page);
   await expect(
-    page.getByText("源存储桶读取失败", { exact: true }),
-  ).toBeVisible();
+    page.getByRole("alert").filter({ hasText: "任务提交失败" }),
+  ).toContainText("源存储桶读取失败");
+  await expect(
+    page.getByRole("link", { name: "查看任务", exact: true }),
+  ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: /迁移任务 #/ })).toHaveCount(
     0,
   );
@@ -802,6 +793,14 @@ test("local recycle records keep the actual source and destination and surface p
         partial: true,
         failed: 1,
         failedWorkers: ["10.0.1.13"],
+        details: [
+          {
+            taskId: 1050,
+            success: false,
+            accepted: false,
+            message: "节点暂不可用",
+          },
+        ],
       },
     }),
   );
@@ -811,85 +810,97 @@ test("local recycle records keep the actual source and destination and surface p
   });
   await expect(row).toContainText("/mnt/upload");
   await expect(row).toContainText("backup/upload");
-  await expect(row).toContainText("10.0.1.12, 10.0.1.13");
+  await expect(row).toContainText("master (10.0.1.12), agent (10.0.1.13)");
   await row.getByRole("checkbox").check();
   await page.getByRole("button", { name: "永久删除", exact: true }).click();
   await page.getByRole("button", { name: "确认永久删除", exact: true }).click();
-  await expect(
-    page.getByText("部分记录未删除，未响应节点：10.0.1.13。", { exact: true }),
-  ).toBeVisible();
+  const result = page.getByRole("alert").filter({ hasText: "已处理 1 / 1" });
+  await expect(result).toContainText("已受理 0，忽略 0，失败 1");
+  await result
+    .getByRole("button", { name: "查看失败详情", exact: true })
+    .click();
+  await expect(result).toContainText("节点暂不可用");
+  await expect(result).toContainText("未完成节点：agent (10.0.1.13)");
   await expect(row.getByRole("checkbox")).toBeChecked();
 });
 
-test("changing creation links cannot reuse the previous creation's task IDs", async ({
+test("changing task links cannot reuse a previous delayed detail response", async ({
   page,
 }) => {
   await mockApi(page);
-  await page.route("**/api/master/task-creations/creation-a", (route) =>
+  let releaseFirst!: () => void;
+  const firstReady = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let firstReads = 0;
+  let firstResponded = false;
+  await page.route("**/api/master/tasks/1049", async (route) => {
+    firstReads++;
+    await firstReady;
+    await route.fulfill({
+      json: {
+        success: true,
+        data: { ...tasks[1], taskIndex: 1049, sourceBucket: "first-source" },
+      },
+    });
+    firstResponded = true;
+  });
+  await page.route("**/api/master/tasks/1050", (route) =>
     route.fulfill({
       json: {
         success: true,
-        creation: { id: "creation-a", status: "COMPLETED", taskIds: [1047] },
+        data: { ...tasks[1], taskIndex: 1050, sourceBucket: "second-source" },
       },
     }),
   );
-  let secondReady = false;
-  await page.route("**/api/master/task-creations/creation-b", (route) =>
-    route.fulfill({
-      json: {
-        success: true,
-        creation: {
-          id: "creation-b",
-          status: secondReady ? "COMPLETED" : "RUNNING",
-          taskIds: secondReady ? [1045] : [],
-        },
-      },
-    }),
-  );
-  await page.goto("/tasks?creationId=creation-a");
-  await expect(
-    page.getByRole("heading", { name: "迁移任务 #1047" }),
-  ).toBeVisible();
+  await page.goto("/tasks?taskId=1049");
+  await expect.poll(() => firstReads).toBeGreaterThan(0);
   await page.evaluate(() => {
-    history.pushState({}, "", "/tasks?creationId=creation-b");
+    history.pushState({}, "", "/tasks?taskId=1050");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   await expect(
-    page.getByText("正在生成任务，完成后将自动打开详情。"),
+    page.getByRole("heading", { name: "迁移任务 #1050", exact: true }),
   ).toBeVisible();
-  await expect(page).not.toHaveURL(/taskId=1047/);
-  secondReady = true;
+  const drawer = page.locator(".MuiDrawer-paper").filter({
+    has: page.getByRole("heading", { name: "迁移任务 #1050", exact: true }),
+  });
+  await expect(drawer).toContainText("second-source");
+  releaseFirst();
+  await expect.poll(() => firstResponded).toBe(true);
+  await expect(drawer).not.toContainText("first-source");
   await expect(
-    page.getByRole("heading", { name: "迁移任务 #1045" }),
-  ).toBeVisible();
-  await expect(page).toHaveURL(/creationId=creation-b&taskId=1045/);
+    page.getByRole("heading", { name: "迁移任务 #1049", exact: true }),
+  ).toHaveCount(0);
+  await expect(page).toHaveURL(/taskId=1050$/);
 });
 
-test("partially generated tasks remain accessible while the generation failure stays visible", async ({
+test("partially accepted creation keeps its acknowledged task link and diagnostic visible", async ({
   page,
 }) => {
   await mockApi(page);
-  await page.route("**/api/master/task-creations/partial-creation", (route) =>
+  const message = "节点暂不可用；已创建的任务仍可查看和继续传输。";
+  await page.route("**/api/master/add-buckets", (route) =>
     route.fulfill({
       json: {
         success: true,
-        creation: {
-          id: "partial-creation",
-          status: "FAILED",
-          taskIds: [1047],
-          message: "服务重启中断了任务生成；已生成的任务仍可查看和继续传输。",
-        },
+        partial: true,
+        addedCount: 1,
+        taskIds: [1047],
+        rejectedCount: 0,
+        validationErrors: [message],
       },
     }),
   );
-  await page.goto("/tasks?creationId=partial-creation");
+  await createOss(page);
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await expect(page.getByText("提交结果待核对", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "迁移任务 #1047" }),
-  ).toBeVisible();
+    page.getByRole("link", { name: "查看任务", exact: true }),
+  ).toHaveAttribute("href", "/tasks?taskId=1047");
+  await page.getByRole("link", { name: "查看任务", exact: true }).click();
   await expect(
-    page.getByText("服务重启中断了任务生成；已生成的任务仍可查看和继续传输。", {
-      exact: true,
-    }),
+    page.getByRole("heading", { name: "迁移任务 #1047", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "启动任务", exact: true }),

@@ -512,7 +512,7 @@ esac
 work=$TEST_ROOT/work; filename=candidate
 backup_dir=$TEST_ROOT/backups; backup=$TEST_BACKUP; owned_backup=$backup
 config=$TEST_ROOT/service.json; ready_file=$TEST_ROOT/ready
-existed=$TEST_EXISTED; service_name=oss-transfer-agent
+existed=$TEST_EXISTED; service_name=oss-transfer-agent; cli_migrated=0
 platform=linux; had_unit=1; was_enabled=1
 launch_id=''' + 'b' * 64 + '''
 prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }

@@ -20,9 +20,11 @@ One comparison runs per Agent. Results are saved in batches; only differences an
 
 Open **Operations → Software updates** to update the Master. Then open **Execution nodes → Software updates** and choose **Update all nodes** to bring eligible Agents to the Master's version. Each node must reconnect at the target version and finish its update before the next starts. A failed update stops the queue. The Master saves the queue, so closing the page or restarting the Master does not discard it. You can also update one node.
 
-Online replacement supports managed native installations. The updater verifies the release archive, downloads it before stopping the service, and runs the native installer in a separate process. The installer backs up the binary, configuration and stopped database, checks the new service, and attempts to restore the backup if startup fails. Agent transfers interrupted by the restart resume after it reconnects.
+Online replacement supports managed native installations. The updater verifies the release archive, downloads it before stopping the service, and runs the native installer in a separate process. The installer takes a temporary backup of the programs, configuration, service definition and stopped database. It deletes that backup after the new service passes its health check and confirms the installation. If startup fails, it attempts to restore the previous installation and keeps the recovery files. Agent transfers interrupted by the restart resume after it reconnects.
 
-Before stopping the service, the installer cleans eligible backups and checks space for the current database and binaries. It keeps up to two completed upgrade backups for 30 days, always retaining the newest rollback copy; failed and unrecognized backups are left alone. It applies the same policy after a successful upgrade. Database backup progress is printed every 10 seconds, including the final disk sync. A large database can take minutes.
+Backups use the host's [default backup directory](../deploy/native/README.md#change-paths-and-startup-settings), even if an earlier installation saved a shared-storage path. An explicit `--backup-dir` or PowerShell `-BackupDir` selects another directory. Before stopping the service, the installer cleans eligible backups and checks available space. **Upgrade backups → Clean up backups** removes completed upgrade backups; failed backups and older backups without a completion marker are kept. Database backup progress is printed every 10 seconds, including the final disk sync.
+
+For a planned downgrade, make a separate backup of each service's programs, configuration and stopped database before upgrading. Successful upgrades do not leave a rollback copy. See [manual recovery](../deploy/native/README.md#recover-from-a-failed-upgrade) if automatic rollback could not finish.
 
 The first upgrade from a version without online updates still uses the installation script. Containers use [Docker Compose updates](docker-compose.md); replacing a binary inside a running container would be lost when the container is recreated.
 
@@ -48,10 +50,11 @@ Agents release scan batches after the Master durably saves, acknowledges and aut
 
 每个节点同时执行一次比对，批量保存差异和错误，保留最近 10 次结果，每次保留前 10,000 条差异。达到上限后仍继续统计，页面会提示结果截断；可缩小前缀再次比对，或删除已结束的比对结果。
 
-**运维工具 → 版本更新** 更新 Master 后，在 **执行节点 → 版本更新** 点击“更新全部节点”，即可逐台更新可升级的 Agent。前一台重新连接、版本一致且安装完成后，才更新下一台；失败时停止队列。队列保存在 Master，关闭页面或重启 Master 后继续，也可以单独更新某个节点。原生安装会先下载并校验安装包，再由独立进程运行安装器，备份、重启并检查服务；启动失败时尝试恢复备份。Agent 重启导致中断的子任务会在重新连接后恢复。尚不支持在线升级的旧版本需先通过安装脚本升级一次；Docker 部署通过 Compose 更新。
+**运维工具 → 版本更新** 更新 Master 后，在 **执行节点 → 版本更新** 点击“更新全部节点”，即可逐台更新可升级的 Agent。前一台重新连接、版本一致且安装完成后，才更新下一台；失败时停止队列。队列保存在 Master，关闭页面或重启 Master 后继续，也可以单独更新某个节点。原生安装会先下载并校验安装包，再由独立进程运行安装器，临时备份程序、配置、服务定义和已停止的数据库。新服务通过健康检查并确认安装成功后，删除本次备份；启动失败时尝试自动恢复旧安装，并保留恢复文件。Agent 重启导致中断的子任务会在重新连接后恢复。尚不支持在线升级的旧版本需先通过安装脚本升级一次；Docker 部署通过 Compose 更新。
 
+备份默认写入[本机的默认备份目录](../deploy/native/README.md#change-paths-and-startup-settings)，不再沿用历史安装保存的共享存储路径；需要其他位置时，显式传入 `--backup-dir`，PowerShell 使用 `-BackupDir`。安装器在停服务前清理符合条件的旧备份并检查空间，不足时保留运行中的服务。页面的“升级备份 → 清理备份”可删除成功升级留下的备份；失败备份和缺少完成标记的旧备份继续保留。数据库备份每 10 秒显示进度，包括最后的落盘同步。
 
-安装器在停服务前清理符合条件的旧备份并检查空间，不足时保留运行中的服务。成功升级的备份最多保留 2 份、30 天，但始终保留最新 1 份；失败和无法识别的备份不自动删除。升级成功后也按此规则清理。数据库备份每 10 秒显示进度，落盘同步也会提示；大数据库可能需要几分钟。
+如果计划降级，升级前应另行备份各服务的程序、配置和已停止的数据库；成功升级后不会留下回退副本。自动回滚未完成时，按[手动恢复步骤](../deploy/native/README.md#recover-from-a-failed-upgrade)处理。
 
 多节点任务中的 Agent 失联后，未完成子任务会自动交给原先选定的健康节点。参与节点都需要支持任务租约：Master 每 20 秒续期，失联 Agent 在 60 秒授权到期后停止启动新工作并取消当前传输；Master 再等待 10 秒后重新分配。原节点回来后不再参与这个任务，仍可用于新任务。
 

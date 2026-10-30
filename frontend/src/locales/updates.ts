@@ -1,9 +1,9 @@
 export const updatesMessages: Record<string, { en: string; ja: string }> = {
   升级备份: { en: "Upgrade backups", ja: "更新時のバックアップ" },
   刷新备份: { en: "Refresh backups", ja: "バックアップ情報を再読み込み" },
-  "成功升级的备份保留最近 {count} 份、最多 {days} 天，至少保留一份。": {
-    en: "After successful upgrades, keep the latest {count} backups for up to {days} days, retaining at least one.",
-    ja: "更新成功時のバックアップは最新 {count} 件、最大 {days} 日間保存し、最低 1 件は残します。",
+  "升级成功后删除本次备份；失败或缺少完成标记的备份会保留。": {
+    en: "Successful upgrades remove their temporary backup. Backups from failed upgrades or without a completion marker are kept.",
+    ja: "更新が成功すると、その更新用バックアップを削除します。更新に失敗したものや完了の記録がないものは残します。",
   },
   读取备份信息: {
     en: "Loading backup information",
@@ -12,14 +12,14 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
   备份数量: { en: "Backups", ja: "バックアップ数" },
   占用空间: { en: "Disk usage", ja: "使用容量" },
   可清理: { en: "Can be removed", ja: "削除可能" },
-  清理过期备份: { en: "Clean up old backups", ja: "古いバックアップを削除" },
-  "清理 {name} 的过期备份？": {
-    en: "Clean up old backups on {name}?",
-    ja: "{name} の古いバックアップを削除しますか？",
+  清理备份: { en: "Clean up backups", ja: "バックアップを削除" },
+  "清理 {name} 的备份？": {
+    en: "Clean up backups on {name}?",
+    ja: "{name} のバックアップを削除しますか？",
   },
-  "将删除 {count} 份备份，释放约 {size}。最新备份会保留。": {
-    en: "Delete {count} backups and free about {size}. The newest backup will be kept.",
-    ja: "バックアップ {count} 件を削除し、約 {size} を解放します。最新のバックアップは残します。",
+  "将删除 {count} 份备份，释放约 {size}。": {
+    en: "Delete {count} backups and free about {size}.",
+    ja: "バックアップ {count} 件を削除し、約 {size} を解放します。",
   },
   正在清理: { en: "Cleaning up", ja: "削除中" },
   确认清理: { en: "Confirm cleanup", ja: "削除を実行" },

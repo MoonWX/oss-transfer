@@ -270,7 +270,6 @@ if ($Upgrade) {
     if (-not $ServiceName) { $ServiceName = $record.serviceName }
     if (-not $ConfigDir) { $ConfigDir = Split-Path $record.config -Parent }
     if (-not $CliPath -and $record.PSObject.Properties['cliPath']) { $CliPath = $record.cliPath }
-    if (-not $BackupDir -and $record.PSObject.Properties['backupDir']) { $BackupDir = $record.backupDir }
     if (-not $DataDir) {
         if (-not (Test-Path -LiteralPath $record.config -PathType Leaf) -or ((Get-Item -LiteralPath $record.config -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installed configuration is missing or linked.' }
         $savedConfig = Get-Content -LiteralPath $record.config -Raw | ConvertFrom-Json
@@ -285,7 +284,11 @@ $base = Join-Path $env:ProgramData "OSS Transfer\$Role"
 if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles "OSS Transfer\$Role" }
 if (-not $ConfigDir) { $ConfigDir = Join-Path $base 'config' }
 if (-not $DataDir) { $DataDir = Join-Path $base 'data' }
-if (-not $BackupDir) { $BackupDir = Join-Path $base 'backups' }
+function Resolve-BackupDirectory([string]$Requested,[string]$RoleName) {
+    if ($Requested) { return $Requested }
+    return Join-Path (Join-Path $env:ProgramData "OSS Transfer\$RoleName") 'backups'
+}
+$BackupDir = Resolve-BackupDirectory $BackupDir $Role
 function Assert-DirectoryPath([string]$Path) {
     if (-not [IO.Path]::IsPathRooted($Path) -or $Path.StartsWith('\\') -or $Path -match '[\x00-\x1f"%]' -or [IO.Path]::GetFullPath($Path).TrimEnd('\') -cne $Path -or $Path -match '^[A-Za-z]:$') { throw "Use a clean local absolute path: $Path" }
     $ancestor = $Path
@@ -352,6 +355,8 @@ Protect-Directory $work
 $changed = $false
 $installationSucceeded = $false
 $backup = $null
+$script:ownedBackup = $null
+$script:startupCommitted = $false
 $hadDatabaseBackup = $false
 $wasRunning = $false
 $oldService = $null
@@ -382,13 +387,15 @@ function Invoke-Native([string]$Executable,[string[]]$Arguments) {
 }
 function Service-Record { Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue }
 function Maintain-Backups([string]$Action) {
+    $script:backupMaintenanceSucceeded = $false
     try {
         $arguments = @('--backup-maintenance',$Action,'--backup-dir',$BackupDir,'--config',$config)
         if ($Action -eq 'complete') { $arguments += @('--backup-entry',[IO.Path]::GetFileName($backup)) }
         $result = (Invoke-Native $candidate $arguments | Out-String) | ConvertFrom-Json
         if ($Action -eq 'prune' -and $result.count -gt 0) {
-            Write-Host ("Removed {0} expired upgrade backup(s)." -f $result.count)
+            Write-Host ("Removed {0} completed temporary backup(s)." -f $result.count)
         }
+        $script:backupMaintenanceSucceeded = $true
     } catch {
         Write-Warning ("Could not finish upgrade backup maintenance ({0}). Check {1}. {2}" -f $Action,$BackupDir,$_.Exception.Message) -WarningAction Continue
     }
@@ -407,6 +414,64 @@ function Test-BackupSpace {
     $drive = [IO.DriveInfo]::new($driveRoot)
     $available = $drive.AvailableFreeSpace
     Assert-BackupSpace $required $available
+}
+function Prepare-BackupDirectory {
+    Assert-DirectoryPath $BackupDir
+    Protect-Directory $BackupDir
+    $probe = Join-Path $BackupDir ('.write-test-'+[Guid]::NewGuid().ToString('N'))
+    $stream = $null
+    $created = $false
+    try {
+        $stream = [IO.File]::Open($probe,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $created = $true
+        $stream.WriteByte(0)
+        $stream.Flush($true)
+    } catch {
+        throw ("Cannot write the temporary backup directory: {0}. The service has not been stopped. {1}" -f $BackupDir,$_.Exception.GetBaseException().Message)
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        if ($created) { Remove-Item -LiteralPath $probe -Force }
+    }
+}
+function New-TemporaryBackup {
+    $path = Join-Path $BackupDir ($ServiceName+'-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[Guid]::NewGuid().ToString('N'))
+    if (Test-Path -LiteralPath $path) { throw 'Temporary backup directory already exists.' }
+    Protect-Directory $path
+    $script:ownedBackup = $path
+    Write-Host "Temporary backup: $path"
+    return $path
+}
+function Remove-TemporaryBackup {
+    try {
+        if (-not $backup -or $backup -cne $script:ownedBackup -or -not (Split-Path $backup -Parent).Equals($BackupDir,[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Temporary backup does not belong to this installation attempt.'
+        }
+        Assert-DirectoryPath $backup
+        # First-time CLI replacement and adoption do not have complete managed
+        # installation metadata. Only remove their exact, newly created files.
+        foreach ($file in @(Get-ChildItem -LiteralPath $backup -Force)) {
+            if ($file.Name -notin @('database','service.json','cli.exe')) { throw 'Unexpected temporary backup contents.' }
+            Assert-RegularFile $file.FullName
+        }
+        Remove-Item -LiteralPath $backup -Recurse -Force
+        Write-Host "Removed temporary backup: $backup"
+    } catch {
+        Write-Warning ("Could not remove the temporary backup. Retained at {0}. {1}" -f $backup,$_.Exception.GetBaseException().Message) -WarningAction Continue
+    }
+}
+function Finish-TemporaryBackup {
+    if (-not $installationSucceeded) { return }
+    Commit-Start
+    if (-not $script:startupCommitted) {
+        if ($backup) { Write-Warning "Startup confirmation was not saved. Backup retained at $backup" -WarningAction Continue }
+        return
+    }
+    if (-not $backup) { return }
+    if ($existing) {
+        Maintain-Backups 'complete'
+        if ($script:backupMaintenanceSucceeded) { Maintain-Backups 'prune' }
+        if (Test-Path -LiteralPath $backup) { Write-Warning "Temporary backup retained at $backup" -WarningAction Continue }
+    } else { Remove-TemporaryBackup }
 }
 function Stop-OwnedService {
     $current = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -439,6 +504,7 @@ function Wait-Ready {
     throw 'Service did not confirm this startup before the timeout.'
 }
 function Commit-Start {
+    $script:startupCommitted = $false
     $temporary = $null
     try {
         if ($script:launchId -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid startup confirmation.' }
@@ -451,6 +517,7 @@ function Commit-Start {
         # PowerShell converts $null to an empty backup filename for this overload.
         if (Test-Path -LiteralPath $committed) { [IO.File]::Replace($temporary,$committed,[NullString]::Value) }
         else { [IO.File]::Move($temporary,$committed) }
+        $script:startupCommitted = $true
     } catch {
         Write-Warning ("Could not confirm the installation for scan cleanup; the service remains available. {0}" -f $_.Exception.GetBaseException().Message) -WarningAction Continue
     } finally {
@@ -572,13 +639,14 @@ try {
     }
     if ((Test-Path (Join-Path $DataDir 'CURRENT')) -or (Test-Path (Join-Path $DataDir 'rocksdb\CURRENT'))) { throw 'RocksDB requires an explicit migration.' }
     if (-not $Yes -and (Read-Host "Install $Role $version? [y/N]") -notmatch '^[yY]$') { return }
-    if ($existing) { Maintain-Backups 'prune'; Test-BackupSpace }
-    if ($AdoptConfig) { Invoke-Native $candidate @('--config',$freshConfig,'--backup-state',(Join-Path $work 'database')) | Out-Null }
+    if ($existing -or $AdoptConfig -or $hadCli) {
+        Prepare-BackupDirectory
+        if ($existing) { Maintain-Backups 'prune' }
+        Test-BackupSpace
+    }
     foreach ($path in $directories) { Protect-Directory $path }
     if ($existing) {
-        $backup = Join-Path $BackupDir ($ServiceName+'-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[Guid]::NewGuid().ToString('N'))
-        Protect-Directory $backup
-        Write-Host "Backup: $backup"
+        $backup = New-TemporaryBackup
         Copy-Item -LiteralPath $binary -Destination (Join-Path $backup 'binary.exe')
         Copy-Item -LiteralPath $config -Destination (Join-Path $backup 'service.json')
         Copy-Item -LiteralPath $metadata -Destination (Join-Path $backup 'install.json')
@@ -594,18 +662,14 @@ try {
         Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--backup-state',(Join-Path $backup 'database')) | Out-Null
         $hadDatabaseBackup = $true
     } elseif ($AdoptConfig) {
-        $backup = Join-Path $BackupDir ($ServiceName+'-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[Guid]::NewGuid().ToString('N'))
-        Protect-Directory $backup
-        Copy-Item -LiteralPath (Join-Path $work 'database') -Destination (Join-Path $backup 'database')
+        $backup = New-TemporaryBackup
         Copy-Item -LiteralPath $freshConfig -Destination (Join-Path $backup 'service.json')
+        Invoke-Native $candidate @('--config',$freshConfig,'--backup-state',(Join-Path $backup 'database')) | Out-Null
         $hadDatabaseBackup = $true
-        Write-Host "Backup: $backup"
     }
     if ($hadCli) {
         if (-not $backup) {
-            $backup = Join-Path $BackupDir ($ServiceName+'-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[Guid]::NewGuid().ToString('N'))
-            Protect-Directory $backup
-            Write-Host "Backup: $backup"
+            $backup = New-TemporaryBackup
         }
         Copy-Item -LiteralPath $CliPath -Destination (Join-Path $backup 'cli.exe')
     }
@@ -694,11 +758,11 @@ try {
             }
         } catch { Write-Warning ('Rollback needs attention: '+$_.Exception.Message) }
     }
+    if ($backup) { Write-Warning "Temporary backup retained at $backup" -WarningAction Continue }
     throw $failure
 } finally {
     # This finally block is outside the catch that restores the old database.
-    if ($installationSucceeded) { Commit-Start }
-    if ($installationSucceeded -and $existing) { Maintain-Backups 'complete'; Maintain-Backups 'prune' }
+    Finish-TemporaryBackup
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

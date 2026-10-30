@@ -49,7 +49,7 @@ func (s *Server) backupsHTTP(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, row)
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{
-		"policy": map[string]int{"keep": 2, "maxAgeDays": 30}, "master": local, "agents": nodes,
+		"policy": map[string]int{"keep": 0, "maxAgeDays": 0}, "master": local, "agents": nodes,
 	}})
 }
 

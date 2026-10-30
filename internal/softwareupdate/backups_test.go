@@ -88,7 +88,7 @@ func TestBackupMaintenanceUsesInstallationAndProtectsUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err = m.BackupStats(ctx)
-	if err != nil || stats.Count != 3 || stats.ReclaimableCount != 1 || stats.ReclaimableBytes == 0 {
+	if err != nil || stats.Count != 3 || stats.ReclaimableCount != 3 || stats.ReclaimableBytes == 0 {
 		t.Fatal(stats, err)
 	}
 	if err = writeJSON(m.statusPath(), Status{Phase: "APPLYING", UpdatedAt: time.Now()}); err != nil {
@@ -104,14 +104,14 @@ func TestBackupMaintenanceUsesInstallationAndProtectsUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := m.PruneBackups(ctx)
-	if err != nil || result.RemovedCount != 1 || result.FreedBytes == 0 {
+	if err != nil || result.RemovedCount != 3 || result.FreedBytes == 0 {
 		t.Fatal(result, err)
 	}
 	if _, err = os.Stat(filepath.Join(root, "backup-1")); !os.IsNotExist(err) {
 		t.Fatal("old backup remains", err)
 	}
-	if _, err = os.Stat(filepath.Join(root, "backup-3")); err != nil {
-		t.Fatal("latest backup lost", err)
+	if _, err = os.Stat(foreign); err != nil {
+		t.Fatal("foreign backup lost", err)
 	}
 	// Changing the service identity cannot make the cleanup act on another install.
 	m.options.ServiceName = "another-service"

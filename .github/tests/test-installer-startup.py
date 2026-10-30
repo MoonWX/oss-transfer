@@ -280,7 +280,7 @@ class StartupCommitTests(unittest.TestCase):
 
     def invoke(self, body='', fail=''):
         start = self.source.rindex('\nprepare_start\n')
-        end = self.source.index('\nif ((existed)); then\n  maintain_backups complete', start)
+        end = self.source.index("\nprintf 'Installed ", start)
         finish = self.source[start:end]
         script = '''set -eEuo pipefail
 trap 'printf rolled-back > "$TEST_ROOT/rollback"; exit 7' ERR
@@ -290,6 +290,7 @@ prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }
 start_service() { return 0; }
 wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
 systemctl() { [[ "$TEST_FAIL" != enable ]]; }
+finish_backup() { printf confirmed > "$TEST_ROOT/backup-finished"; }
 ''' + self.function + '\n' + body + '\n' + finish + '\nprintf installed\n'
         return subprocess.run(['bash', '-c', script], text=True, capture_output=True, timeout=5,
                               env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL=fail))
@@ -306,6 +307,7 @@ systemctl() { [[ "$TEST_FAIL" != enable ]]; }
         committed = self.root/'ready.committed'
         self.assertEqual(committed.read_text(), (self.root/'ready.request').read_text())
         self.assertEqual(committed.stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.root/'backup-finished').read_text(), 'confirmed')
 
     def test_commit_failure_warns_without_rolling_back(self):
         result = self.invoke('mv() { return 7; }')
@@ -315,6 +317,7 @@ systemctl() { [[ "$TEST_FAIL" != enable ]]; }
         self.assertFalse((self.root/'rollback').exists())
         self.assertFalse((self.root/'ready.committed').exists())
         self.assertEqual(list(self.root.glob('ready.committed.*')), [])
+        self.assertFalse((self.root/'backup-finished').exists())
 
     def test_commit_refuses_symlink_or_nonregular_target(self):
         target = self.root/'unchanged'
@@ -329,6 +332,7 @@ systemctl() { [[ "$TEST_FAIL" != enable ]]; }
                 self.assertIn('service remains available', result.stderr)
                 self.assertEqual(target.read_text(), 'unchanged')
                 self.assertFalse((self.root/'rollback').exists())
+                self.assertFalse((self.root/'backup-finished').exists())
                 if kind == 'symlink': committed.unlink()
                 else: committed.rmdir()
 
@@ -358,7 +362,7 @@ trap 'printf rollback >> "$TEST_ROOT/rollback"' ERR
 work=$TEST_ROOT; filename=candidate
 config="$TEST_ROOT/config directory/service.json"
 backup_dir="$TEST_ROOT/backup directory"; backup="$backup_dir/upgrade-1"
-maintain_backups "$1"
+maintain_backups "$1" || true
 printf 'installation continues\\n'
 '''
         return subprocess.run(['bash','-c',body,'test',action],
@@ -376,7 +380,7 @@ printf 'installation continues\\n'
     def test_prune_reports_removals_without_printing_internal_json(self):
         result = self.invoke('prune')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Removed 1 expired upgrade backup(s).', result.stdout)
+        self.assertIn('Removed 1 completed upgrade backup(s).', result.stdout)
         self.assertNotIn('freedBytes', result.stdout)
         self.assertNotIn('--backup-entry', (self.root/'arguments').read_text())
 
@@ -391,14 +395,194 @@ printf 'installation continues\\n'
 
     def test_retention_runs_before_space_check_and_after_startup_success(self):
         source = INSTALLER.read_text()
-        preflight = source.index('\n  maintain_backups prune\n  check_backup_space')
+        preflight = source.index('\n  maintain_backups prune || true\n')
+        self.assertLess(preflight, source.index('\n  check_backup_space\n'))
         self.assertLess(preflight, source.index('\n  stop_service\n'))
-        completion = source.index('\n  maintain_backups complete\n')
+        completion = source.index('\nif commit_start; then finish_backup; fi\n')
         self.assertGreater(completion, source.rindex('\nwait_ready\n'))
         self.assertGreater(completion, source.rindex('\ntrap - ERR INT TERM\n'))
 
 
+class TemporaryBackupTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-temporary-backup-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = INSTALLER.read_text()
+        self.backup_dir = self.root/'backups'
+        self.backup = self.backup_dir/'oss-transfer-agent-20261030.abcdef'
+        self.backup.mkdir(parents=True)
+        (self.backup/'database').write_text('rollback state')
+        self.unknown = self.backup_dir/'unknown'
+        self.unknown.mkdir()
+        (self.unknown/'database').write_text('keep unknown backup')
+        self.work = self.root/'work'
+        self.work.mkdir()
+        candidate = self.work/'candidate'
+        candidate.write_text('''#!/bin/sh
+printf '%s\\n' "$2" >> "$TEST_ROOT/maintenance"
+[ "$TEST_FAIL" != "$2" ] || exit 7
+case "$2" in
+  complete) touch "$TEST_BACKUP/completed"; printf '{"completed":"entry"}\\n';;
+  prune) [ ! -f "$TEST_BACKUP/completed" ] || rm -rf -- "$TEST_BACKUP"; printf '{"count":1}\\n';;
+esac
+''')
+        candidate.chmod(0o755)
+
+    def invoke(self, existed, fail=''):
+        source = self.source
+        functions = source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
+        functions += '\n' + source[source.index('commit_start() {'):source.index('\nprint_initial_credentials() {')]
+        functions += '\n' + source[source.index('cleanup() {'):source.index('\ntrap cleanup EXIT')]
+        start = source.rindex('\nprepare_start\n')
+        finish = source[start:source.index("\nprintf 'Installed ", start)]
+        body = '''set -eEuo pipefail
+work=$TEST_ROOT/work; filename=candidate
+backup_dir=$TEST_ROOT/backups; backup=$TEST_BACKUP; owned_backup=$backup
+config=$TEST_ROOT/service.json; ready_file=$TEST_ROOT/ready
+existed=$TEST_EXISTED; service_name=oss-transfer-agent
+platform=linux; had_unit=1; was_enabled=1
+launch_id=''' + 'b' * 64 + '''
+prepare_start() { printf '%s\\n' "$launch_id" > "$ready_file.request"; }
+start_service() { return 0; }
+wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
+systemctl() { [[ "$TEST_FAIL" != enable ]]; }
+mv() { [[ "$TEST_FAIL" != commit ]] && command mv "$@"; }
+rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
+''' + functions + '\ntrap cleanup EXIT\ntrap rollback ERR INT TERM\n' + finish + '\nprintf installed\n'
+        return subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
+                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_BACKUP=str(self.backup),
+                                       TEST_EXISTED=str(existed), TEST_FAIL=fail))
+
+    def assert_unknown_preserved(self):
+        self.assertEqual((self.unknown/'database').read_text(), 'keep unknown backup')
+
+    def test_upgrade_completes_then_prunes_only_after_committed_start(self):
+        result = self.invoke(1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'maintenance').read_text().splitlines(), ['complete','prune'])
+        self.assertFalse(self.backup.exists())
+        self.assertNotIn('Backup retained', result.stderr)
+        self.assert_unknown_preserved()
+
+    def test_successful_cli_replacement_or_adoption_removes_current_backup(self):
+        result = self.invoke(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.backup.exists())
+        self.assertFalse((self.root/'maintenance').exists())
+        self.assert_unknown_preserved()
+
+    def test_failed_or_unconfirmed_start_retains_and_prints_backup(self):
+        for existed in (0, 1):
+            for failure in ('ready', 'enable', 'commit'):
+                with self.subTest(existed=existed, failure=failure):
+                    self.work.mkdir(exist_ok=True)
+                    result = self.invoke(existed, failure)
+                    self.assertEqual(result.returncode, 0 if failure == 'commit' else 7, result.stderr)
+                    self.assertEqual((self.backup/'database').read_text(), 'rollback state')
+                    self.assertIn('Backup retained: '+str(self.backup), result.stderr)
+                    self.assertFalse((self.root/'maintenance').exists())
+                    self.assert_unknown_preserved()
+
+    def test_completion_failure_never_calls_prune(self):
+        result = self.invoke(1, 'complete')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'maintenance').read_text().splitlines(), ['complete'])
+        self.assertTrue(self.backup.is_dir())
+        self.assertIn('Backup retained: '+str(self.backup), result.stderr)
+        self.assertFalse((self.root/'rollback').exists())
+
+    def test_cleanup_failure_keeps_backup_without_rolling_back_healthy_service(self):
+        result = self.invoke(1, 'prune')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'maintenance').read_text().splitlines(), ['complete','prune'])
+        self.assertTrue(self.backup.is_dir())
+        self.assertIn('Backup retained: '+str(self.backup), result.stderr)
+        self.assertFalse((self.root/'rollback').exists())
+
+    def test_partial_backup_cleanup_refuses_a_replaced_symlink(self):
+        shutil.rmtree(self.backup)
+        self.backup.symlink_to(self.unknown, target_is_directory=True)
+        result = self.invoke(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('temporary backup path changed', result.stderr)
+        self.assertTrue(self.backup.is_symlink())
+        self.assert_unknown_preserved()
+
+    def test_partial_backup_cleanup_preserves_unexpected_or_nonregular_contents(self):
+        for kind in ('unexpected', 'hidden', 'directory', 'symlink'):
+            with self.subTest(kind=kind):
+                extra = self.backup/('.unexpected' if kind == 'hidden' else 'cli' if kind in ('directory','symlink') else 'unexpected')
+                if kind == 'directory': extra.mkdir()
+                elif kind == 'symlink': extra.symlink_to(self.unknown/'database')
+                else: extra.write_text('unexpected file')
+                self.work.mkdir(exist_ok=True)
+                result = self.invoke(0)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('unexpected temporary backup contents', result.stderr)
+                self.assertEqual((self.backup/'database').read_text(), 'rollback state')
+                self.assertTrue(extra.exists())
+                self.assert_unknown_preserved()
+                if kind == 'directory': extra.rmdir()
+                else: extra.unlink()
+
+    def test_upgrade_ignores_old_backup_location_but_preserves_explicit_override(self):
+        install = self.root/'installed'
+        install.mkdir()
+        config_dir = self.root/'config'
+        config_dir.mkdir()
+        (config_dir/'service.json').write_text('{}')
+        (install/'install.tsv').write_text('role\tagent\nserviceName\toss-transfer-agent\nconfig\t'+
+                                          str(config_dir/'service.json')+'\nbackupDir\t/mnt/cfs/old-test-backup\n')
+        binary = install/'oss-transfer-agent'
+        binary.write_text('#!/bin/sh\nprintf "dataDirectory\\t%s/data\\n" "$TEST_ROOT"\n')
+        binary.chmod(0o755)
+        metadata = self.source[self.source.index('  installed_metadata=$install_dir/install.tsv'):self.source.index('\nrole=${role:-master}')]
+        defaults = self.source[self.source.index('\nrole=${role:-master}'):self.source.index('\nfor path in "$install_dir"')]
+        for override in ('', str(self.root/'chosen-backups')):
+            with self.subTest(override=override):
+                body = '''set -euo pipefail
+install_dir=$TEST_ROOT/installed; backup_dir=$TEST_BACKUP_OVERRIDE
+role=; service_name=; config_dir=; cli_path=; data_dir=
+platform=linux; upgrade=1; user_service=0
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+safe_path() { return 0; }
+systemctl() { return 0; }
+metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
+if true; then
+''' + metadata + defaults + '\nprintf "%s\\n" "$backup_dir"\n'
+                result = subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
+                                        env=dict(os.environ,TEST_ROOT=str(self.root),TEST_BACKUP_OVERRIDE=override))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), override or '/var/backups/oss-transfer/agent')
+
+
 class BackupSpaceTests(unittest.TestCase):
+    def test_directory_and_write_probe_failures_happen_before_service_stop(self):
+        source = INSTALLER.read_text()
+        functions = source[source.index('check_backup_space() {'):source.index('\nactive() {')]
+        with tempfile.TemporaryDirectory(prefix='installer-backup-write-') as directory:
+            root = Path(directory)
+            blocked = root/'not-a-directory'
+            blocked.write_text('leave this file unchanged')
+            for backup_dir, shim, expected in (
+                (blocked/'backups', '', 'Cannot create backup directory'),
+                (root/'backups', 'mktemp() { return 7; }', 'Cannot write to backup directory'),
+            ):
+                with self.subTest(backup_dir=backup_dir):
+                    body = '''set -euo pipefail
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+backup_dir=$TEST_BACKUP_DIR
+database=$TEST_ROOT/missing.db; binary=$TEST_ROOT/missing-binary; cli_path=$TEST_ROOT/missing-cli
+''' + functions + '\n' + shim + '\ncheck_backup_space\nprintf stopped > "$TEST_ROOT/stopped"\n'
+                    result = subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
+                                            env=dict(os.environ,TEST_ROOT=str(root),TEST_BACKUP_DIR=str(backup_dir)))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected, result.stderr)
+                    self.assertIn('The service has not been stopped', result.stderr)
+                    self.assertFalse((root/'stopped').exists())
+                    self.assertEqual(blocked.read_text(), 'leave this file unchanged')
+
     def test_space_checked_before_stop_and_existing_backups_retained(self):
         source = INSTALLER.read_text()
         self.assertLess(source.index('\n  check_backup_space\n'),
@@ -436,7 +620,8 @@ printf 'can stop service\\n'
             self.assertIn('5185 MiB', insufficient.stderr)
             self.assertNotIn('can stop service', insufficient.stdout)
             self.assertEqual(previous.read_text(), 'only rollback copy')
-            self.assertFalse((root/'backups'/'new').exists())
+            self.assertTrue((root/'backups'/'new').is_dir())
+            self.assertEqual(list((root/'backups'/'new').iterdir()), [])
             enough = subprocess.run(['bash','-c',body], env=dict(env,TEST_AVAILABLE=str(6*1024**2)),
                                     text=True,capture_output=True,timeout=5)
             self.assertEqual(enough.returncode, 0, enough.stderr)

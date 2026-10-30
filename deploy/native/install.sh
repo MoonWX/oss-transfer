@@ -448,7 +448,8 @@ if ((upgrade)); then
   [[ "$saved_config" == /*/service.json ]] || fail 'Invalid installed configuration path'
   config_dir=${config_dir:-$(dirname "$saved_config")}
   cli_path=${cli_path:-$(metadata_field "$installed_metadata" cliPath)}
-  backup_dir=${backup_dir:-$(metadata_field "$installed_metadata" backupDir)}
+  # Each upgrade uses the local OS default unless this invocation overrides it.
+  # A path recorded by an earlier installer may belong to a temporary mount.
   # Old metadata omitted the data path; use the binary's validated config output.
   safe_path "$install_dir"
   safe_path "$(dirname "$saved_config")"
@@ -555,11 +556,17 @@ elif [[ "$platform" == darwin ]]; then
 fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-install.XXXXXX")
 backup=
+owned_backup=
 was_active=0
 was_enabled=0
 had_unit=0
 [[ ! -f "$unit" ]] || had_unit=1
-cleanup() { rm -rf -- "$work"; }
+cleanup() {
+  local result=$?
+  rm -rf -- "$work"
+  if [[ -n "$backup" && -d "$backup" ]]; then printf 'Backup retained: %s\n' "$backup" >&2; fi
+  return "$result"
+}
 trap cleanup EXIT
 fetch() {
   local name=$1 protocol=https
@@ -668,27 +675,58 @@ maintain_backups() {
   if [[ "$action" == complete ]]; then args+=(--backup-entry "$(basename "$backup")"); fi
   if ! result=$(trap - ERR; "$work/$filename" "${args[@]}"); then
     printf 'Warning: could not finish upgrade backup maintenance (%s). Check %s.\n' "$action" "$backup_dir" >&2
-    return 0
+    return 1
   fi
   if [[ "$action" == prune ]]; then
     count=$(printf '%s\n' "$result" | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
     if [[ "$count" =~ ^[0-9]+$ ]] && ((count > 0)); then
-      printf 'Removed %s expired upgrade backup(s).\n' "$count"
+      printf 'Removed %s completed upgrade backup(s).\n' "$count"
+    fi
+  fi
+}
+finish_backup() {
+  local path name
+  [[ -n "$backup" ]] || return 0
+  if ((existed)); then
+    if maintain_backups complete; then maintain_backups prune || true; fi
+  else
+    # CLI replacement and database adoption do not create a complete managed
+    # upgrade snapshot. Only remove the directory made by this invocation.
+    if [[ "$backup" != "$owned_backup" || "$(dirname "$backup")" != "$backup_dir" || "$backup" != "$backup_dir/$service_name-"* || ! -d "$backup" || -L "$backup" ]]; then
+      printf 'Warning: temporary backup path changed; retained %s.\n' "$backup" >&2
+      return 0
+    fi
+    for path in "$backup"/* "$backup"/.[!.]* "$backup"/..?*; do
+      [[ -e "$path" || -L "$path" ]] || continue
+      name=${path##*/}
+      if [[ "$name" != database && "$name" != service.json && "$name" != cli || ! -f "$path" || -L "$path" ]]; then
+        printf 'Warning: unexpected temporary backup contents; retained %s.\n' "$backup" >&2
+        return 0
+      fi
+    done
+    if ! rm -f -- "$backup/database" "$backup/service.json" "$backup/cli" || ! rmdir -- "$backup"; then
+      printf 'Warning: could not remove temporary backup: %s\n' "$backup" >&2
     fi
   fi
 }
 check_backup_space() {
-  local ancestor=$backup_dir path size required=65536 available
+  local path size required=65536 available probe
   # Only completed, managed backups are pruned before this check. Unrecognized
   # or failed upgrade backups must not be removed to make room.
-  while [[ ! -d "$ancestor" ]]; do ancestor=$(dirname "$ancestor"); done
+  mkdir -p "$backup_dir" || fail "Cannot create backup directory: $backup_dir. The service has not been stopped."
+  probe=$(mktemp "$backup_dir/.oss-transfer-write.XXXXXX") || fail "Cannot write to backup directory: $backup_dir. The service has not been stopped."
+  if ! printf 'backup preflight\n' > "$probe"; then
+    rm -f -- "$probe" || true
+    fail "Cannot write to backup directory: $backup_dir. The service has not been stopped."
+  fi
+  rm -f -- "$probe" || fail "Cannot remove backup directory probe: $backup_dir. The service has not been stopped."
   for path in "$database" "$binary" "$cli_path"; do
     [[ -f "$path" ]] || continue
     size=$(LC_ALL=C ls -ln "$path" | awk '{print $5}')
     [[ "$size" =~ ^[0-9]+$ ]] || fail "Cannot determine backup size: $path"
     required=$((required+(size+1023)/1024))
   done
-  available=$(LC_ALL=C df -Pk "$ancestor" | awk 'END {print $4}')
+  available=$(LC_ALL=C df -Pk "$backup_dir" | awk 'END {print $4}')
   [[ "$available" =~ ^[0-9]+$ ]] || fail "Cannot determine available backup space: $backup_dir"
   if ((available < required)); then
     fail "Not enough space for the upgrade backup: $backup_dir needs $(((required+1023)/1024)) MiB; $((available/1024)) MiB available. Free space or choose --backup-dir on another disk. The service has not been stopped."
@@ -864,7 +902,7 @@ wait_ready() {
 commit_start() {
   local committed_file="$ready_file.committed" temporary_file=
   # Remote scan copies may be reclaimed only after database rollback is no
-  # longer possible. Failure leaves reclamation paused, not the installation.
+  # longer possible. Failure keeps the backup and leaves reclamation paused.
   if [[ "$launch_id" =~ ^[a-f0-9]{64}$ && ! -L "$committed_file" && ( ! -e "$committed_file" || -f "$committed_file" ) ]] &&
      temporary_file=$(mktemp "$committed_file.XXXXXX") &&
      printf '%s\n' "$launch_id" > "$temporary_file" &&
@@ -873,7 +911,7 @@ commit_start() {
   fi
   [[ -z "$temporary_file" ]] || rm -f "$temporary_file" || true
   printf 'Warning: could not confirm the installation for scan cleanup; the service remains available.\n' >&2
-  return 0
+  return 1
 }
 print_initial_credentials() {
   [[ "$role" == master && -f "$log_file" ]] || return 0
@@ -942,16 +980,16 @@ rollback() {
 }
 check_listener
 if ((existed)); then
-  maintain_backups prune
-  check_backup_space
+  maintain_backups prune || true
 fi
-if [[ -n "$adopt_config" ]]; then
-  "$work/$filename" --config "$work/service.json" --backup-state "$work/database"
+if ((existed || had_cli)) || [[ -n "$adopt_config" ]]; then
+  check_backup_space
 fi
 mkdir -p "$install_dir" "$config_dir" "$data_dir" "$backup_dir" "$(dirname "$unit")"
 chmod 700 "$install_dir" "$config_dir" "$data_dir" "$backup_dir"
 if ((existed)); then
   backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+  owned_backup=$backup
   printf 'Backup: %s\n' "$backup"
   cp -p "$binary" "$backup/binary"
   cp -p "$config" "$backup/service.json"
@@ -967,13 +1005,15 @@ if ((existed)); then
   "$work/$filename" --config "$backup/service.json" --backup-state "$backup/database"
 elif [[ -n "$adopt_config" ]]; then
   backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
-  cp -p "$work/database" "$backup/database"
-  cp -p "$work/service.json" "$backup/service.json"
+  owned_backup=$backup
   printf 'Backup: %s\n' "$backup"
+  cp -p "$work/service.json" "$backup/service.json"
+  "$work/$filename" --config "$backup/service.json" --backup-state "$backup/database"
 fi
 if ((had_cli)); then
   if [[ -z "$backup" ]]; then
     backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+    owned_backup=$backup
     printf 'Backup: %s\n' "$backup"
   fi
   cp -p "$cli_path" "$backup/cli"
@@ -1056,11 +1096,7 @@ if [[ "$platform" == linux ]]; then
   if ((existed == 0 || had_unit == 0 || was_enabled)); then systemctl enable "$service_name" >/dev/null; fi
 fi
 trap - ERR INT TERM
-commit_start
-if ((existed)); then
-  maintain_backups complete
-  maintain_backups prune
-fi
+if commit_start; then finish_backup; fi
 printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
 printf 'CLI: %s\n' "$cli_path"
 if [[ "$role" == master ]]; then

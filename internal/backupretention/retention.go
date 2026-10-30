@@ -20,11 +20,9 @@ import (
 )
 
 const (
-	MarkerName        = "backup.json"
-	LockName          = ".retention.lock"
-	ActiveName        = ".active"
-	DefaultKeep       = 2
-	DefaultMaxAgeDays = 30
+	MarkerName = "backup.json"
+	LockName   = ".retention.lock"
+	ActiveName = ".active"
 )
 
 var (
@@ -45,13 +43,10 @@ type Policy struct {
 	MaxAgeDays int `json:"maxAgeDays"`
 }
 
-// Names is for trusted maintenance callers only. Explicit selection still
-// protects the newest usable backup, active backups and all unrecognized data.
-// A zero Keep or MaxAgeDays uses the default; negative values are rejected.
+// Names is for trusted maintenance callers only. Active, unsuccessful and
+// unrecognized backups remain protected even when explicitly selected.
 type Options struct {
-	Keep       int
-	MaxAgeDays int
-	Names      []string
+	Names []string
 }
 
 type Entry struct {
@@ -205,23 +200,8 @@ func (m *Manager) lock() (*os.Root, *bolt.DB, error) {
 	return root, db, nil
 }
 
-func policy(options Options) (Policy, error) {
-	if options.Keep < 0 || options.MaxAgeDays < 0 || options.MaxAgeDays > 36500 {
-		return Policy{}, errors.New("invalid backup retention policy")
-	}
-	p := Policy{Keep: options.Keep, MaxAgeDays: options.MaxAgeDays}
-	if p.Keep == 0 {
-		p.Keep = DefaultKeep
-	}
-	if p.MaxAgeDays == 0 {
-		p.MaxAgeDays = DefaultMaxAgeDays
-	}
-	return p, nil
-}
-
 func (m *Manager) List() (Listing, error) {
-	p, _ := policy(Options{})
-	listing := Listing{Root: m.root, Entries: []Entry{}, Policy: p}
+	listing := Listing{Root: m.root, Entries: []Entry{}}
 	root, lock, err := m.lock()
 	if errors.Is(err, os.ErrNotExist) {
 		return listing, nil
@@ -231,11 +211,11 @@ func (m *Manager) List() (Listing, error) {
 	}
 	defer root.Close()
 	defer lock.Close()
-	return m.list(root, p)
+	return m.list(root)
 }
 
-func (m *Manager) list(root *os.Root, p Policy) (Listing, error) {
-	listing := Listing{Root: m.root, Entries: []Entry{}, Policy: p}
+func (m *Manager) list(root *os.Root) (Listing, error) {
+	listing := Listing{Root: m.root, Entries: []Entry{}}
 	directory, err := root.Open(".")
 	if err != nil {
 		return listing, err
@@ -260,19 +240,14 @@ func (m *Manager) list(root *os.Root, p Policy) (Listing, error) {
 		}
 		return a.Name > b.Name
 	})
-	position := 0
 	for index := range listing.Entries {
 		entry := &listing.Entries[index]
-		if !entry.Managed || entry.Protected {
-			continue
-		}
-		if position == 0 {
-			entry.Protected, entry.Reason = true, "LATEST"
-		} else if position >= p.Keep || entry.CompletedAt.Before(m.now().AddDate(0, 0, -p.MaxAgeDays)) {
+		if entry.Managed && !entry.Protected {
+			// Completion is written only after the new service passes its health
+			// check and commits startup. Its rollback copy is no longer needed.
 			entry.Eligible = true
 			listing.ReclaimableBytes += entry.SizeBytes
 		}
-		position++
 	}
 	return listing, nil
 }
@@ -537,10 +512,6 @@ func (m *Manager) Complete(name, version string) error {
 
 func (m *Manager) Prune(options Options) (Result, error) {
 	result := Result{Removed: []string{}, Skipped: []Entry{}}
-	p, err := policy(options)
-	if err != nil {
-		return result, err
-	}
 	selected := make(map[string]bool, len(options.Names))
 	for _, name := range options.Names {
 		if !validName(name) {
@@ -557,7 +528,7 @@ func (m *Manager) Prune(options Options) (Result, error) {
 	}
 	defer root.Close()
 	defer lock.Close()
-	listing, err := m.list(root, p)
+	listing, err := m.list(root)
 	if err != nil {
 		return result, err
 	}

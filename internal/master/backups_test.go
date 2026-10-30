@@ -91,8 +91,11 @@ func TestBackupHTTPRequiresAdminAndPrunesOnlySelectedNode(t *testing.T) {
 		t.Fatal(status, body)
 	}
 	data := body["data"].(map[string]any)
-	if data["master"].(map[string]any)["reclaimableCount"] != float64(1) {
+	if data["master"].(map[string]any)["reclaimableCount"] != float64(3) {
 		t.Fatal(data)
+	}
+	if policy := data["policy"].(map[string]any); policy["keep"] != float64(0) || policy["maxAgeDays"] != float64(0) {
+		t.Fatal("obsolete retention policy", policy)
 	}
 	if len(data["agents"].([]any)) != 3 {
 		t.Fatal(data)
@@ -102,15 +105,15 @@ func TestBackupHTTPRequiresAdminAndPrunesOnlySelectedNode(t *testing.T) {
 		t.Fatal("arbitrary path accepted", status)
 	}
 	status, body = request(t, f.http.Client(), "POST", f.http.URL+path, f.admin, map[string]any{})
-	if status != 200 || body["data"].(map[string]any)["removedCount"] != float64(1) {
+	if status != 200 || body["data"].(map[string]any)["removedCount"] != float64(3) {
 		t.Fatal(status, body)
 	}
 	if _, err := os.Stat(filepath.Join(rootA, "backup-1")); !os.IsNotExist(err) {
 		t.Fatal("selected old backup not removed", err)
 	}
-	for _, root := range []string{rootA, rootB, masterRoot} {
+	for _, root := range []string{rootB, masterRoot} {
 		if _, err := os.Stat(filepath.Join(root, "backup-3")); err != nil {
-			t.Fatal("latest backup lost", root, err)
+			t.Fatal("other node backup lost", root, err)
 		}
 	}
 	for _, root := range []string{rootB, masterRoot} {

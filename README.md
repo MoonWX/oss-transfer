@@ -28,6 +28,8 @@ Add a storage connection, create a task, and watch it run.
 
 For native installations, open **Operations → Software updates** to check for a release and update the Master, then its Agents. Older versions without this page need one installer upgrade first. You can also rerun the install command. Docker deployments upgrade through Compose.
 
+Upgrade backups are temporary and removed after a successful upgrade. If you plan to downgrade later, [make a separate backup first](deploy/native/README.md#upgrade).
+
 ## Docs
 
 - [Deployment](deploy/native/README.md): Windows, offline install, custom paths

@@ -28,6 +28,8 @@ Master 只负责调度，数据由 Agent 传输。在 **执行节点 → 添加�
 
 原生部署可在 **运维工具 → 版本更新** 中检测版本，先更新 Master，再更新 Agent。尚无此入口的旧版本需要先通过安装脚本升级一次。也可重新运行安装命令；Docker 部署通过 Compose 更新。
 
+升级成功后会删除本次临时备份。若计划之后降级，请[提前另做备份](deploy/native/README.md#upgrade)。
+
 ## 文档
 
 - [部署](deploy/native/README.md)：Windows、离线安装、自定义路径

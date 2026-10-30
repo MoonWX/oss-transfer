@@ -171,17 +171,23 @@ On Windows, download the current `Install.ps1` using the download block in [Wind
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Upgrade
 ```
 
-The installer lists discovered services and reuses their paths, including older installations with `oss-transfer-go` names. To upgrade only Agents, add `--role agent` or `-Role agent`. A custom service can be selected with `--service-name` or `-ServiceName`. If its service definition has been removed, pass its existing `--install-dir` or `-InstallDir` so the installer can locate it.
+The installer lists discovered services and reuses their program, configuration and data paths, including older installations with `oss-transfer-go` names. To upgrade only Agents, add `--role agent` or `-Role agent`. A custom service can be selected with `--service-name` or `-ServiceName`. If its service definition has been removed, pass its existing `--install-dir` or `-InstallDir` so the installer can locate it.
 
-The installer stops the service and backs up its programs, configuration, service definition and database. Accounts, settings and Agent identities remain. If the new service fails its startup check, the installer restores the backup and restarts the previous service if it was running. Older installations that did not record a custom backup directory use the platform default.
+The installer stops the service and temporarily backs up its programs, configuration, service definition and database. Accounts, settings and Agent identities remain. Backups use the platform's default local directory rather than an earlier saved backup path. To choose another location for this upgrade, pass `--backup-dir` or PowerShell `-BackupDir`.
 
-After a successful upgrade, it keeps the two most recent upgrade backups and removes backups older than 30 days, always keeping at least one rollback copy. It also checks for eligible backups before the next upgrade's disk-space check. Backups from failed upgrades and older installers are left for manual review.
+After the new service passes its health check and confirms the installation, the installer deletes that temporary backup. If startup fails, it attempts to restore the previous installation and retains the backup files. Completed upgrade backups can also be removed under **Software updates → Upgrade backups → Clean up backups**. Failed backups and older backups without a completion marker are left for manual review.
 
-Stop active tasks before upgrading if they must stay stopped during rollback. Restoring a database does not undo objects or files already written. For a separate backup, stop the service and copy its configuration and data directories, or take a consistent filesystem snapshot.
+Stop active tasks before upgrading if they must stay stopped during rollback. Restoring a database does not undo objects or files already written. If you plan to downgrade later, make a separate backup before upgrading: stop each service and copy its programs, configuration, service definition and data directory, or take a consistent filesystem snapshot. Keep the program and database versions together; a successful upgrade does not leave a rollback copy.
 
 If a file-list task originally included a missing object, retrying after that object appears saves its source identity in a newer database format. V4.1.8 and earlier cannot open that database. To return to an older release, restore its programs and the matching pre-upgrade database backup on the Master and Agents together.
 
 After a new installation or administrator password reset in V4.1.11, downgrading to V4.1.10 or earlier requires restoring the matching older database backup.
+
+## Recover from a failed upgrade
+
+Use the backup directory printed by the installer. Stop the affected service first. The `database` file is the snapshot, `service.json` records its original data directory, and `binary` (`binary.exe` on Windows) is the previous program. Run a Master or Agent program that supports both the current and backup database formats with `--config <backup-directory>/service.json --restore-state <backup-directory>/database`. This restores the existing database in the data directory recorded in the saved configuration.
+
+Restore the saved program and `service.json` to their original locations, along with the saved installation metadata, service definition and CLI if present. Reload the service manager if its definition changed, then start the service and check its log. The backup does not include transferred files, so this does not roll back writes to the source or destination storage.
 
 ## Install without network access
 

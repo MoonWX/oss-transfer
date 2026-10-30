@@ -11,7 +11,7 @@ async function fixture(page: Page) {
     checkedAt: new Date().toISOString(),
   };
   const backups = {
-    policy: { keep: 2, maxAgeDays: 30 },
+    policy: { keep: 0, maxAgeDays: 0 },
     master: {
       supported: true,
       count: 4,
@@ -101,15 +101,24 @@ async function fixture(page: Page) {
   };
 }
 
-test("backups load on demand without polling and cleanup refreshes actual disk totals once", async ({
+test("backups load on demand and cleanup can remove every eligible backup without keeping the newest", async ({
   page,
 }) => {
   const f = await fixture(page);
+  Object.assign(f.backups.master, {
+    reclaimableCount: 4,
+    reclaimableBytes: 10 * GiB,
+  });
   await page.goto("/tools?tab=updates");
   const section = page.getByRole("button", { name: "升级备份", exact: true });
   await expect(section).toBeVisible();
   expect(f.requests).toEqual([]);
   await section.click();
+  await expect(
+    page.getByText("升级成功后删除本次备份；失败或缺少完成标记的备份会保留。", {
+      exact: true,
+    }),
+  ).toBeVisible();
   const table = page.getByRole("table", { name: "升级备份", exact: true });
   const master = table.getByRole("row").filter({ hasText: "Master" });
   await expect(master).toContainText("10 GiB");
@@ -127,11 +136,11 @@ test("backups load on demand without polling and cleanup refreshes actual disk t
     .getByRole("row")
     .filter({ hasText: "Archive (10.0.1.10)" });
   await expect(
-    archive.getByRole("button", { name: "清理过期备份" }),
+    archive.getByRole("button", { name: "清理备份" }),
   ).toBeDisabled();
-  await master.getByRole("button", { name: "清理过期备份" }).click();
+  await master.getByRole("button", { name: "清理备份" }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("删除 2 份备份，释放约 6 GiB");
+  await expect(dialog).toContainText("删除 4 份备份，释放约 10 GiB");
   f.hold();
   await dialog
     .getByRole("button", { name: "确认清理" })
@@ -148,12 +157,11 @@ test("backups load on demand without polling and cleanup refreshes actual disk t
     .toBe(1);
   f.release();
   await expect(dialog).toBeHidden();
-  await expect(master).toContainText("4 GiB");
+  await expect(master.getByRole("cell").nth(1)).toHaveText("0");
+  await expect(master.getByRole("cell").nth(2)).toHaveText("0 B");
+  await expect(master.getByRole("button", { name: "清理备份" })).toBeDisabled();
   await expect(
-    master.getByRole("button", { name: "清理过期备份" }),
-  ).toBeDisabled();
-  await expect(
-    page.getByText("已清理 2 份备份，释放 6 GiB。", { exact: true }),
+    page.getByText("已清理 4 份备份，释放 10 GiB。", { exact: true }),
   ).toBeVisible();
   expect(f.requests.filter((request) => request.method === "POST")).toEqual([
     {
@@ -190,7 +198,7 @@ test("offline backup data stays unknown; failed cleanup preserves totals and can
   await page.getByRole("button", { name: "刷新备份", exact: true }).click();
   await expect(offline).toContainText("8 GiB");
   f.fail("节点正在更新或清理备份，请稍后刷新。");
-  await offline.getByRole("button", { name: "清理过期备份" }).click();
+  await offline.getByRole("button", { name: "清理备份" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认清理" }).click();
   await expect(dialog.getByRole("alert")).toContainText("节点正在更新");
@@ -235,7 +243,7 @@ test("a partly completed cleanup refreshes remaining backups without resubmittin
     .getByRole("table", { name: "升级备份", exact: true })
     .getByRole("row")
     .filter({ hasText: "Master" });
-  await master.getByRole("button", { name: "清理过期备份" }).click();
+  await master.getByRole("button", { name: "清理备份" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("删除 2 份备份，释放约 6 GiB");
   f.hold();

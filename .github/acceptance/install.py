@@ -482,8 +482,9 @@ func main(){
         with self.latest_release() as release_url:
             installed = self.install('master',release_url=release_url,replace_cli=True)
         backups=list((self.root/'master/backups').glob('*/'+('cli.exe' if self.system=='Windows' else 'cli')))
-        require(len(backups)==1 and backups[0].read_bytes()==old_cli,'Existing CLI was not backed up before replacement')
-        self.record('existing_cli_requires_explicit_replacement_and_has_exact_backup')
+        require(not backups,'Successful replacement retained its temporary CLI backup')
+        require(re.search(r'backup: ', installed.stdout, re.IGNORECASE), 'CLI replacement did not create a rollback copy')
+        self.record('existing_cli_requires_explicit_replacement_and_removes_temporary_backup_after_success')
         before=self.pid('master')
         require(before>0,'Master has no service-owned PID')
         ready=self.root/'master/data/runtime/ready'
@@ -556,31 +557,30 @@ func main(){
             expected_cli=self.cli_path if role=='master' else self.root/role/'bin'/'oss-transfer-cli'
             if self.system=='Windows' and role=='agent': expected_cli=expected_cli.with_suffix('.exe')
             require(metadata['cliPath']==str(expected_cli), 'Discovered upgrade changed the custom CLI location')
-            require(metadata['backupDir']==str(self.root/role/'backups'), 'Discovered upgrade changed the custom backup directory')
-            require(any((self.root/role/'backups').iterdir()), 'Upgrade did not retain a backup in the custom directory')
-            completed=list((self.root/role/'backups').glob('*/backup.json'))
-            require(len(completed)==1, 'Successful upgrade did not mark exactly one complete rollback backup')
-            marker=json.loads(completed[0].read_text())
-            require(marker['state']=='COMPLETED' and marker['identity']['role']==role and
-                    marker['identity']['serviceName']==self.names[role], 'Upgrade backup marker belongs to the wrong installation')
+            if self.system=='Windows': expected_backup=Path(os.environ['ProgramData'])/'OSS Transfer'/role/'backups'
+            elif self.system=='Darwin':
+                base=Path('/Library') if self.args.system else Path.home()/'Library'
+                expected_backup=base/'Application Support'/'OSS Transfer'/role/'backups'
+            else: expected_backup=Path('/var/backups/oss-transfer')/role
+            require(Path(metadata['backupDir'])==expected_backup, 'Discovered upgrade reused a historical backup location')
+            require(expected_backup.is_dir(), 'Upgrade did not create its local backup directory')
+            require(not list(expected_backup.glob(self.names[role]+'-*')), 'Successful upgrade retained a temporary rollback backup')
+        self.record('discovered_upgrade_uses_local_backup_directory_and_removes_completed_backups')
         if self.args.all_installed: self.record('unfiltered_upgrade_discovers_both_roles_and_preserves_configuration_password_membership_and_cli_paths')
-        old_marker=next((self.root/'master/backups').glob('*/backup.json'))
-        old_backup=old_marker.parent
-        protected_backups=[path for path in (self.root/'master/backups').iterdir()
-                           if path.is_dir() and not (path/'backup.json').exists()]
-        marker=json.loads(old_marker.read_text())
-        marker['completedAt']='2000-01-01T00:00:00Z'
-        old_marker.write_text(json.dumps(marker)+'\n')
+        # Incomplete or unrecognized backups must survive later successful
+        # upgrades; a health check cannot establish whether these are disposable.
+        protected_backup=self.root/'master/backups'/'unrecognized-backup'
+        protected_backup.mkdir()
+        (protected_backup/'sentinel').write_bytes(b'keep for manual recovery')
         legacy_before=self.pid('master')
-        self.install('master',upgrade=True,release=self.legacy_release(),discover=True)
+        self.install('master',upgrade=True,release=self.legacy_release())
         require(self.pid('master')!=legacy_before and config.read_bytes()==config_bytes,'Legacy-format upgrade did not preserve the installed service')
         self.login()
         require(self.api('/api/master/nodes')['nodes'][0]['id']==member_id,'Legacy-format upgrade lost membership')
         self.record('legacy_manifest_without_archive_still_upgrades_existing_service')
-        require(not old_backup.exists(), 'Expired completed backup was not removed after successful replacement')
-        require(len(list((self.root/'master/backups').glob('*/backup.json')))==1, 'Retention removed the newest rollback backup')
-        require(all(path.exists() for path in protected_backups), 'Retention removed an unrecognized or CLI-only backup')
-        self.record('successful_upgrade_expires_old_backup_and_preserves_newest_and_unmanaged_backups')
+        require((protected_backup/'sentinel').read_bytes()==b'keep for manual recovery', 'Cleanup changed an unrecognized backup')
+        require(not list((self.root/'master/backups').glob(self.names['master']+'-*')), 'Successful explicit-directory upgrade retained a rollback backup')
+        self.record('successful_upgrade_cleans_only_completed_backups_and_preserves_unrecognized_data')
         tampered=self.root/'tampered'
         shutil.copytree(self.release,tampered)
         archive=next(entry for entry in tampered.iterdir() if entry.name.endswith(('.tar.gz','.zip')))

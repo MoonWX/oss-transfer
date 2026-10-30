@@ -40,7 +40,6 @@ type Summary = {
 };
 type AgentSummary = Summary & NodeDisplay & { address: string };
 type Snapshot = {
-  policy: { keep: number; maxAgeDays: number };
   master: Summary;
   agents: AgentSummary[];
 };
@@ -207,11 +206,7 @@ export default function BackupManagement({
               {snapshot && (
                 <Typography variant="body2" color="text.secondary">
                   {t(
-                    "成功升级的备份保留最近 {count} 份、最多 {days} 天，至少保留一份。",
-                    {
-                      count: snapshot.policy.keep,
-                      days: snapshot.policy.maxAgeDays,
-                    },
+                    "升级成功后删除本次备份；失败或缺少完成标记的备份会保留。",
                   )}
                 </Typography>
               )}
@@ -290,7 +285,7 @@ export default function BackupManagement({
                             }}
                             sx={{ whiteSpace: "nowrap" }}
                           >
-                            {t("清理过期备份")}
+                            {t("清理备份")}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -314,11 +309,11 @@ export default function BackupManagement({
         maxWidth="xs"
       >
         <DialogTitle>
-          {t("清理 {name} 的过期备份？", { name: target?.name ?? "" })}
+          {t("清理 {name} 的备份？", { name: target?.name ?? "" })}
         </DialogTitle>
         <DialogContent>
           <Typography>
-            {t("将删除 {count} 份备份，释放约 {size}。最新备份会保留。", {
+            {t("将删除 {count} 份备份，释放约 {size}。", {
               count: formatNumber(target?.reclaimableCount),
               size: formatBytes(target?.reclaimableBytes),
             })}

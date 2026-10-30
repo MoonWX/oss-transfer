@@ -6,12 +6,13 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Protect-File')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('oss-source-test-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($work) | Out-Null
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $script:responses = @{}
 $script:requests = [Collections.Generic.List[object]]::new()
 function Invoke-WebRequest {
@@ -93,11 +94,13 @@ try {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $message = Commit-Start 3>&1 | Out-String
         Assert ([string]::IsNullOrWhiteSpace($message)) 'First startup commit emitted a warning.'
+        Assert $script:startupCommitted 'First startup was not marked committed.'
         $committed = $script:readyFile+'.committed'
         Assert ([IO.File]::ReadAllText($committed) -ceq ($script:launchId+"`n")) 'Startup nonce was not committed.'
         $script:launchId = 'b' * 64
         $message = Commit-Start 3>&1 | Out-String
         Assert ([string]::IsNullOrWhiteSpace($message)) 'Replacing the startup commit emitted a warning.'
+        Assert $script:startupCommitted 'Replacement startup was not marked committed.'
         Assert ([IO.File]::ReadAllText($committed) -ceq ($script:launchId+"`n")) 'Previous startup commit was not replaced.'
         Assert (@(Get-ChildItem -LiteralPath $work | Where-Object { $_.Name.StartsWith('ready.committed.',[StringComparison]::Ordinal) }).Count -eq 0) 'Successful commit left temporary files.'
         $savedWarningPreference = $WarningPreference
@@ -108,6 +111,7 @@ try {
             $WarningPreference = 'Stop'
             $message = Commit-Start 3>&1 | Out-String
             Assert ($message -match 'service remains available') 'Commit failure did not warn.'
+            Assert (-not $script:startupCommitted) 'Failed commit kept a previous success flag.'
             Assert ([IO.File]::ReadAllText($committed) -ceq (('b' * 64)+"`n")) 'Failed commit altered the old marker.'
         } finally {
             $WarningPreference = $savedWarningPreference
@@ -117,6 +121,7 @@ try {
         [IO.Directory]::CreateDirectory($committed) | Out-Null
         $message = Commit-Start 3>&1 | Out-String
         Assert ($message -match 'service remains available') 'Non-file commit target was not rejected.'
+        Assert (-not $script:startupCommitted) 'Non-file commit target was marked successful.'
         Assert (Test-Path -LiteralPath $committed -PathType Container) 'Non-file commit target was replaced.'
         Remove-Item -LiteralPath $committed
     }
@@ -178,6 +183,106 @@ try {
         Assert-BackupSpace ([long](5GB+64MB)) ([long](6GB))
         Reject { Assert-BackupSpace ([long](5GB+64MB)) ([long](2GB)) } '5184 MiB'
         Reject { Assert-BackupSpace ([long](5GB+64MB)) ([long](2GB)) } 'The service has not been stopped'
+    }
+    Check 'temporary backups default to this host and preflight leaves no probe' {
+        $default = Join-Path (Join-Path $env:ProgramData 'OSS Transfer\master') 'backups'
+        Assert ((Resolve-BackupDirectory '' 'master') -ceq $default) 'Default backup path is not local ProgramData.'
+        $BackupDir = Join-Path $work 'explicit-backup-root'
+        Assert ((Resolve-BackupDirectory $BackupDir 'master') -ceq $BackupDir) 'Explicit backup path changed.'
+        Prepare-BackupDirectory
+        Assert (Test-Path -LiteralPath $BackupDir -PathType Container) 'Backup preflight did not create the directory.'
+        Assert (@(Get-ChildItem -LiteralPath $BackupDir -Force).Count -eq 0) 'Backup write probe was retained.'
+        $BackupDir = Join-Path $work 'blocked-backup-root'
+        Write-UTF8 $BackupDir 'keep'
+        Reject { Prepare-BackupDirectory } 'Directory is a link or non-directory'
+        Assert ([IO.File]::ReadAllText($BackupDir) -ceq 'keep') 'Backup preflight modified an existing non-directory.'
+    }
+    Check 'confirmed first installs remove only this attempt CLI and adoption backups' {
+        $BackupDir = Join-Path $work 'first-install-backups'
+        $ServiceName = 'OSSTransferQA'
+        $script:readyFile = Join-Path $work 'first-install-ready'
+        $script:launchId = 'f' * 64
+        $installationSucceeded = $true
+        $existing = $false
+        Prepare-BackupDirectory
+        $retained = Join-Path $BackupDir 'old-incomplete'
+        Protect-Directory $retained
+        Write-UTF8 (Join-Path $retained 'database') 'old rollback data'
+        foreach ($files in @(@('cli.exe'),@('database','service.json','cli.exe'))) {
+            $backup = New-TemporaryBackup
+            foreach ($file in $files) { Write-UTF8 (Join-Path $backup $file) 'this attempt' }
+            Finish-TemporaryBackup
+            Assert $script:startupCommitted 'Successful installation did not commit its startup.'
+            Assert (-not (Test-Path -LiteralPath $backup)) 'Successful first installation kept its temporary backup.'
+            Assert ([IO.File]::ReadAllText((Join-Path $retained 'database')) -ceq 'old rollback data') 'Another rollback backup was removed.'
+        }
+        $backup = $retained
+        $message = Remove-TemporaryBackup 3>&1 | Out-String
+        Assert ($message -match 'does not belong') 'Deletion accepted a backup from another attempt.'
+        Assert (Test-Path -LiteralPath $retained) 'Deletion changed an unowned backup.'
+    }
+    Check 'failed startup confirmation retains the backup without completion or pruning' {
+        $BackupDir = Join-Path $work 'unconfirmed-backups'
+        $ServiceName = 'OSSTransferQA'
+        $script:readyFile = Join-Path $work 'unconfirmed-ready'
+        $script:launchId = 'a' * 64
+        $installationSucceeded = $true
+        $existing = $true
+        Prepare-BackupDirectory
+        $backup = New-TemporaryBackup
+        Write-UTF8 (Join-Path $backup 'database') 'recoverable data'
+        $script:finishActions = [Collections.Generic.List[string]]::new()
+        $savedMaintenance = ${function:Maintain-Backups}
+        $savedWrite = ${function:Write-UTF8}
+        function Maintain-Backups([string]$Action) { $script:finishActions.Add($Action) }
+        function Write-UTF8([string]$Path,[string]$Text) { throw 'Injected startup confirmation failure.' }
+        try {
+            $message = Finish-TemporaryBackup 3>&1 | Out-String
+            Assert (-not $script:startupCommitted) 'Failed startup confirmation was accepted.'
+            Assert ($script:finishActions.Count -eq 0) 'Unconfirmed installation completed or pruned a backup.'
+            Assert ($message.Contains($backup)) 'Retained backup location was not reported.'
+            Assert ([IO.File]::ReadAllText((Join-Path $backup 'database')) -ceq 'recoverable data') 'Unconfirmed installation lost its backup.'
+            $installationSucceeded = $false
+            $message = Finish-TemporaryBackup 3>&1 | Out-String
+            Assert ([string]::IsNullOrWhiteSpace($message)) 'Failed installation attempted startup confirmation.'
+            Assert ($script:finishActions.Count -eq 0) 'Failed installation cleaned up its rollback backup.'
+        } finally { Set-Item function:Write-UTF8 $savedWrite; Set-Item function:Maintain-Backups $savedMaintenance }
+    }
+    Check 'upgrade cleanup requires a successful completion marker' {
+        $BackupDir = Join-Path $work 'upgrade-finish-backups'
+        $ServiceName = 'OSSTransferQA'
+        $script:readyFile = Join-Path $work 'upgrade-finish-ready'
+        $script:launchId = 'b' * 64
+        $installationSucceeded = $true
+        $existing = $true
+        $candidate = Join-Path $work 'candidate.exe'
+        $config = Join-Path $work 'service.json'
+        Prepare-BackupDirectory
+        $backup = New-TemporaryBackup
+        Write-UTF8 (Join-Path $backup 'database') 'rollback database'
+        $script:finishActions = [Collections.Generic.List[string]]::new()
+        $script:completeFails = $true
+        function Invoke-Native([string]$Executable,[string[]]$Arguments) {
+            $script:finishActions.Add($Arguments[1])
+            if ($Arguments[1] -eq 'complete') {
+                if ($script:completeFails) { throw 'Injected completion marker failure.' }
+                return '{"completed":"current-attempt"}'
+            }
+            Remove-Item -LiteralPath $backup -Recurse -Force
+            return '{"removed":["current-attempt"],"count":1,"freedBytes":17}'
+        }
+        try {
+            $message = Finish-TemporaryBackup 3>&1 | Out-String
+            Assert $script:startupCommitted 'Healthy startup did not commit.'
+            Assert (($script:finishActions -join ',') -ceq 'complete') 'Failed completion was followed by cleanup.'
+            Assert ($message.Contains($backup)) 'Failed completion did not report the retained backup.'
+            Assert (Test-Path -LiteralPath $backup) 'Failed completion removed rollback data.'
+            $script:completeFails = $false
+            $script:finishActions.Clear()
+            Finish-TemporaryBackup
+            Assert (($script:finishActions -join ',') -ceq 'complete,prune') 'Confirmed upgrade did not complete then remove its temporary backup.'
+            Assert (-not (Test-Path -LiteralPath $backup)) 'Confirmed upgrade kept its temporary backup.'
+        } finally { Remove-Item function:Invoke-Native }
     }
     Check 'Windows PowerShell 5 accepts native progress and rejects nonzero exits' {
         $definition = $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Native'},$true)[0].Extent.Text

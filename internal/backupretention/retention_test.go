@@ -102,41 +102,36 @@ func exists(t *testing.T, path string, expected bool) {
 	}
 }
 
-func TestDefaultRetentionKeepsTwoAndLatestBeyondMaxAge(t *testing.T) {
+func TestCompletedUpgradeBackupsAreImmediatelyRemovable(t *testing.T) {
 	m, _ := fixture(t)
 	completedBackup(t, m, "backup-a", 3*time.Hour)
 	completedBackup(t, m, "backup-b", 2*time.Hour)
-	completedBackup(t, m, "backup-c", time.Hour)
+	completedBackup(t, m, "backup-c", 0)
 	listing, err := m.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listing.Entries) != 3 || listing.Entries[0].Name != "backup-c" || listing.Entries[0].Reason != "LATEST" || listing.ReclaimableBytes <= 0 {
+	if len(listing.Entries) != 3 || listing.Policy != (Policy{}) || listing.ReclaimableBytes != listing.TotalBytes {
 		t.Fatalf("unexpected listing: %+v", listing)
+	}
+	for _, entry := range listing.Entries {
+		if !entry.Eligible || entry.Protected {
+			t.Fatalf("completed backup protected: %+v", entry)
+		}
 	}
 	result, err := m.Prune(Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(result.Removed, []string{"backup-a"}) || result.FreedBytes != listing.ReclaimableBytes {
+	if !slices.Equal(result.Removed, []string{"backup-c", "backup-b", "backup-a"}) || result.FreedBytes != listing.TotalBytes {
 		t.Fatalf("unexpected cleanup: %+v", result)
 	}
-	exists(t, filepath.Join(m.root, "backup-a"), false)
-	exists(t, filepath.Join(m.root, "backup-b"), true)
-	exists(t, filepath.Join(m.root, "backup-c"), true)
-	initialNow := m.now()
-	m.now = func() time.Time { return initialNow.Add(40 * 24 * time.Hour) }
+	for _, name := range result.Removed {
+		exists(t, filepath.Join(m.root, name), false)
+	}
 	result, err = m.Prune(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(result.Removed, []string{"backup-b"}) {
-		t.Fatalf("old backup not cleaned: %+v", result)
-	}
-	exists(t, filepath.Join(m.root, "backup-c"), true)
-	result, err = m.Prune(Options{Names: []string{"backup-c"}, Keep: 1})
-	if err != nil || len(result.Removed) != 0 {
-		t.Fatalf("latest backup not protected: %+v %v", result, err)
+	if err != nil || len(result.Removed) != 0 || result.FreedBytes != 0 {
+		t.Fatalf("repeated cleanup: %+v %v", result, err)
 	}
 }
 
@@ -161,8 +156,8 @@ func TestProtectsIncompleteFailedLegacyAndActiveBackups(t *testing.T) {
 	completedBackup(t, m, "active", 60*24*time.Hour)
 	write(t, filepath.Join(m.root, "active", ActiveName), "installer still using this backup")
 	write(t, filepath.Join(m.root, "unrelated.txt"), "leave this alone")
-	result, err := m.Prune(Options{Keep: 1, MaxAgeDays: 1})
-	if err != nil || len(result.Removed) != 0 {
+	result, err := m.Prune(Options{})
+	if err != nil || !slices.Equal(result.Removed, []string{"latest"}) {
 		t.Fatalf("protected backups removed: %+v %v", result, err)
 	}
 	for _, name := range []string{"legacy", "in-progress", "failed", "broken", "invalid-json", "active", "unrelated.txt"} {
@@ -202,8 +197,8 @@ func TestOnlyMatchingInstallationCanManageBackups(t *testing.T) {
 			t.Fatal("foreign backup accepted")
 		}
 	}
-	result, err := m.Prune(Options{Keep: 1})
-	if err != nil || !slices.Equal(result.Removed, []string{"our-backup"}) {
+	result, err := m.Prune(Options{})
+	if err != nil || !slices.Equal(result.Removed, []string{"our-latest", "our-backup"}) {
 		t.Fatalf("incorrect isolation: %+v %v", result, err)
 	}
 	for index := range variants {
@@ -299,8 +294,8 @@ func TestRejectsSymlinkRootsAncestorsEntriesAndContents(t *testing.T) {
 	if err := m.Complete("outside-link", ""); !errors.Is(err, ErrUnsafe) {
 		t.Fatalf("linked backup accepted: %v", err)
 	}
-	result, err := m.Prune(Options{Keep: 1})
-	if err != nil || len(result.Removed) != 0 {
+	result, err := m.Prune(Options{})
+	if err != nil || !slices.Equal(result.Removed, []string{"latest"}) {
 		t.Fatalf("unsafe backup cleanup: %+v %v", result, err)
 	}
 	for _, name := range []string{"outside-link", "linked-contents", "linked-marker"} {
@@ -400,11 +395,11 @@ func TestSharedFileLockAndConcurrentCleanup(t *testing.T) {
 			seen[name] = true
 		}
 	}
-	if len(seen) != 7 {
-		t.Fatalf("wanted 7 removed backups, got %v", seen)
+	if len(seen) != 9 {
+		t.Fatalf("wanted 9 removed backups, got %v", seen)
 	}
 	listing, err := m.List()
-	if err != nil || len(listing.Entries) != 2 {
+	if err != nil || len(listing.Entries) != 0 {
 		t.Fatalf("concurrent cleanup retained wrong backups: %+v %v", listing, err)
 	}
 }
@@ -415,7 +410,11 @@ func TestRemovalFailureReturnsPartialResultWithoutOverstatingBytes(t *testing.T)
 	completedBackup(t, m, "keep", time.Hour)
 	completedBackup(t, m, "cannot-remove", 2*time.Hour)
 	completedBackup(t, m, "can-remove", 3*time.Hour)
-	removable := entryNamed(t, m, "can-remove")
+	listing, err := m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := entryNamed(t, m, "cannot-remove")
 	m.removeAll = func(root *os.Root, name string) error {
 		if name == "cannot-remove" {
 			return os.ErrPermission
@@ -426,7 +425,7 @@ func TestRemovalFailureReturnsPartialResultWithoutOverstatingBytes(t *testing.T)
 	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "cannot-remove") {
 		t.Fatalf("failed deletion not reported: %v", err)
 	}
-	if !slices.Equal(result.Removed, []string{"can-remove"}) || result.FreedBytes != removable.SizeBytes {
+	if !slices.Equal(result.Removed, []string{"latest", "keep", "can-remove"}) || result.FreedBytes != listing.TotalBytes-retained.SizeBytes {
 		t.Fatalf("incorrect partial result: %+v", result)
 	}
 	exists(t, filepath.Join(m.root, "cannot-remove"), true)

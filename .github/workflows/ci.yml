@@ -316,6 +316,8 @@ jobs:
             ${{ runner.temp }}/acceptance/smoke/*.log
             ${{ runner.temp }}/acceptance/cli/evidence.json
             ${{ runner.temp }}/acceptance/cli/*.log
+            ${{ runner.temp }}/acceptance/local-cli/evidence.json
+            ${{ runner.temp }}/acceptance/local-cli/**/*.log
             ${{ runner.temp }}/acceptance/cluster/evidence.json
             ${{ runner.temp }}/acceptance/cluster/bandwidth-samples.json
             ${{ runner.temp }}/acceptance/cluster/*.log
@@ -397,6 +399,8 @@ jobs:
             output/unit/*.log
             output/cli/evidence.json
             output/cli/*.log
+            output/local-cli/evidence.json
+            output/local-cli/**/*.log
             output/inventory/evidence.json
             output/inventory/*.log
             output/install/evidence.json
@@ -541,6 +545,7 @@ jobs:
             --include='/cluster/' --include='/cluster/evidence.json' --include='/cluster/bandwidth-samples.json' --include='/cluster/*.log' \
             --include='/unit/' --include='/unit/evidence.json' --include='/unit/*.log' \
             --include='/cli/' --include='/cli/evidence.json' --include='/cli/*.log' \
+            --include='/local-cli/' --include='/local-cli/**/' --include='/local-cli/evidence.json' --include='/local-cli/**/*.log' \
             --include='/inventory/' --include='/inventory/evidence.json' --include='/inventory/*.log' \
             --include='/install/' --include='/install/evidence.json' --include='/install/*-install-*.log' \
             --exclude='*' \
@@ -571,6 +576,8 @@ jobs:
             output/unit/*.log
             output/cli/evidence.json
             output/cli/*.log
+            output/local-cli/evidence.json
+            output/local-cli/**/*.log
             output/inventory/evidence.json
             output/inventory/*.log
             output/install/evidence.json

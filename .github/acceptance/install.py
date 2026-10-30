@@ -20,6 +20,7 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import tempfile
 import threading
 import time
 import zipfile
@@ -39,7 +40,7 @@ PREPARE_SPEC.loader.exec_module(PREPARE)
 class Lifecycle:
     def __init__(self, args):
         self.args = args
-        self.root = args.output.resolve()
+        self.output = args.output.resolve()
         self.system = platform.system()
         self.os_name = {'Linux':'linux','Darwin':'darwin','Windows':'windows','FreeBSD':'freebsd'}[self.system]
         machine = platform.machine().lower()
@@ -57,7 +58,11 @@ class Lifecycle:
         for source in (args.master, args.agent, args.cli, args.failure_master_fixture, args.rollback_cli_fixture):
             if source is not None:
                 PREPARE.verify_binary(source.resolve(), self.os_name, self.arch)
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.output.mkdir(parents=True, exist_ok=False)
+        # The checkout may retain another UID after host-to-VM copying. Install
+        # below a private temporary ancestor so local CLI trust checks stay real.
+        self.workspace = tempfile.TemporaryDirectory(prefix='oss-transfer-install-', dir=None if os.name == 'nt' else '/tmp')
+        self.root = Path(self.workspace.name).resolve()
         self.installer_env = dict(os.environ,
                                   QA_REAL_MASTER=str(args.master.resolve()),
                                   QA_REAL_CLI=str(args.cli.resolve()))
@@ -161,7 +166,7 @@ class Lifecycle:
         return text
 
     def save(self):
-        (self.root/'evidence.json').write_text(self.scrub(json.dumps(self.evidence,indent=2))+'\n', encoding="utf-8")
+        (self.output/'evidence.json').write_text(self.scrub(json.dumps(self.evidence,indent=2))+'\n', encoding="utf-8")
 
     def record(self,name,**details):
         self.evidence['checks'].append(dict(name=name,**details))
@@ -267,7 +272,7 @@ class Lifecycle:
         finally:
             monitor_stop.set()
             if monitor:monitor.join(timeout=10)
-        log=self.root/f'{len(list(self.root.glob("*-install-*.log"))):02d}-install-{role}.log'
+        log=self.output/f'{len(list(self.output.glob("*-install-*.log"))):02d}-install-{role}.log'
         log.write_text(self.scrub(result.stdout+'\nSCM startup observations:\n'+'\n'.join(observations) if observations else result.stdout), encoding="utf-8")
         if (result.returncode==0)!=(expect==0):
             # An installer can fail before our test reads its initial password.
@@ -285,8 +290,16 @@ class Lifecycle:
                     print('Additional Windows diagnostics failed; original installer failure retained.',flush=True)
         require((result.returncode==0)==(expect==0),'Installer result unexpected; see '+str(log))
         if expect==0 and role=='master':
-            require('Login: ' in result.stdout and '--host '+("'" if self.system=='Windows' else '')+self.origin in result.stdout,
-                    'Installer did not print a CLI login command for the configured listener')
+            guidance = next((line.removeprefix('Tasks: ') for line in result.stdout.splitlines()
+                             if line.startswith('Tasks: ')), '')
+            expected = "& '"+str(self.cli_path).replace("'", "''")+"' task list"
+            valid_guidance = guidance == expected if self.system == 'Windows' else shlex.split(guidance) == [str(self.cli_path), 'task', 'list']
+            require(valid_guidance, 'Installer did not print its local task-list command')
+            cli_env={key:value for key,value in os.environ.items() if not key.startswith('OSS_TRANSFER_')}
+            cli_env['OSS_TRANSFER_CLI_CONFIG_DIR']=str(self.root/'local-cli-profile')
+            check=self.invoke([self.cli_path,'--json','task','list'],env=cli_env)
+            require(check.returncode==0, 'Installed CLI could not list its local cluster without login: '+self.scrub(check.stdout))
+            require(json.loads(check.stdout).get('success') is True, 'Installed CLI task list did not succeed')
             if hasattr(self, 'credentials'):
                 require('Initial password:' not in result.stdout,
                         'Installer reprinted an initial password from an existing installation')
@@ -676,6 +689,7 @@ func main(){
             path.write_text(self.scrub(path.read_text(errors='replace', encoding="utf-8")), encoding="utf-8")
         self.evidence['testServicesRemoved']=True
         self.save()
+        self.workspace.cleanup()
 
 
 def main():

@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -33,13 +34,23 @@ def main():
     for name in ("master", "agent", "cli", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
-    root = args.output.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    output = args.output.resolve()
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    # A VM checkout can belong to the host runner's UID. Local administrative
+    # credentials must live below ancestors owned by this OS user or root.
+    workspace = tempfile.TemporaryDirectory(prefix="oss-transfer-local-cli-", dir=None if os.name == "nt" else "/tmp")
+    root = Path(workspace.name).resolve()
     environment = {key: value for key, value in os.environ.items() if not key.startswith("OSS_TRANSFER_")}
     environment.update(OSS_TRANSFER_CLI_CONFIG_DIR=str(root / "profile"), OSS_TRANSFER_LANG="en")
     processes, streams, private_values, checks, commands = [], [], [], [], []
     evidence = {"status": "failed", "checks": checks, "commands": commands,
                 "scope": "Isolated native processes and managed installation metadata; no live cluster changes"}
+
+    def scrub(text):
+        for value in private_values:
+            text = text.replace(value, "[redacted]")
+        text = re.sub(r'(?i)("(?:token|inviteToken|password)"\s*:\s*")[^"]*', r'\1[redacted]', text)
+        return re.sub(r"(?m)^Initial password: .+$", "Initial password: [redacted]", text)
 
     def install(name, role):
         directory = root / name
@@ -72,9 +83,13 @@ def main():
         result = subprocess.run([str(installation["cli"]), "--json", *map(str, arguments)],
                                 cwd=root, env=env or environment, input=input_text, text=True,
                                 capture_output=True, timeout=30)
-        commands.append({"installation": installation["directory"].name, "command": list(arguments),
-                         "exitCode": result.returncode})
-        require(result.returncode == expected, "CLI " + str(arguments[:2]) + " unexpected exit " + str(result.returncode))
+        command = {"installation": installation["directory"].name, "command": list(arguments),
+                   "exitCode": result.returncode}
+        commands.append(command)
+        if result.returncode != expected:
+            command["error"] = scrub(result.stderr or result.stdout)[-2000:]
+            raise AssertionError("CLI " + str(arguments[:2]) + " unexpected exit "
+                                 + str(result.returncode) + ": " + command["error"])
         if arguments[:2] != ("agent", "invite"):
             require(not any(value in result.stdout + result.stderr for value in private_values), "CLI leaked a private credential")
         return json.loads(result.stdout)
@@ -165,17 +180,14 @@ def main():
         for stream in streams:
             stream.close()
         for log in root.rglob("*.log"):
-            content = log.read_text(errors="replace")
-            for secret in private_values:
-                content = content.replace(secret, "[redacted]")
-            content = re.sub(r"(?m)^Initial password: .+$", "Initial password: [redacted]", content)
-            log.write_text(content)
-        # This fixture has finished; do not retain reusable administrative tokens.
-        for path in list(root.rglob("*.local-auth.json")) + list(root.rglob("cli-local-auth.json")):
-            path.unlink()
-        shutil.rmtree(root / "profile", ignore_errors=True)
-        shutil.rmtree(root / "anonymous-profile", ignore_errors=True)
-        (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
+            destination = output / log.relative_to(root)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(scrub(log.read_text(errors="replace")))
+        try:
+            (output / "evidence.json").write_text(scrub(json.dumps(evidence, indent=2)) + "\n")
+        finally:
+            # Keep sanitized diagnostics, never the administrative grants or DB.
+            workspace.cleanup()
     print(json.dumps({"status": evidence["status"], "checks": len(checks), "commands": len(commands)}))
 
 

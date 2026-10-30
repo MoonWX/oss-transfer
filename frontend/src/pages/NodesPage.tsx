@@ -1,3 +1,4 @@
+import { radii } from "../theme";
 import { t, useI18n, formatDate } from "../lib/i18n";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
@@ -322,7 +323,7 @@ export default function NodesPage() {
                 p: 1.5,
                 bgcolor: "action.selected",
                 color: "primary.main",
-                borderRadius: 3,
+                borderRadius: radii.control,
                 display: "flex",
               }}
             >
@@ -619,7 +620,10 @@ export default function NodesPage() {
                                       color={
                                         percentage > 85 ? "warning" : "primary"
                                       }
-                                      sx={{ height: 5, borderRadius: 5 }}
+                                      sx={{
+                                        height: 5,
+                                        borderRadius: radii.pill,
+                                      }}
                                       aria-label={
                                         execution
                                           ? queue.label

@@ -1,3 +1,4 @@
+import { radii } from "../theme";
 import { useState, type FormEvent } from "react";
 import {
   Alert,
@@ -84,7 +85,7 @@ export default function InitialPasswordPage({
           width: "100%",
           maxWidth: 460,
           p: { xs: 3, sm: 4 },
-          borderRadius: "24px",
+          borderRadius: radii.hero,
         }}
       >
         <Typography variant="h5" component="h1">

@@ -1,3 +1,4 @@
+import { radii } from "../theme";
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
 import {
@@ -931,7 +932,7 @@ export default function ExceptionsPage() {
                     mt: 0.5,
                     border: 1,
                     borderColor: "divider",
-                    borderRadius: "10px",
+                    borderRadius: radii.inset,
                   },
                 },
                 listbox: { sx: { maxHeight: 320 } },

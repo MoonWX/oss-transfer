@@ -1,3 +1,4 @@
+import { radii } from "../theme";
 import { t, useI18n } from "../lib/i18n";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import {
@@ -308,7 +309,7 @@ export default function StoragePage() {
               sx={{
                 p: 1,
                 display: "flex",
-                borderRadius: 3,
+                borderRadius: radii.control,
                 bgcolor: "action.hover",
                 color: "primary.main",
               }}
@@ -404,7 +405,7 @@ export default function StoragePage() {
                     bgcolor: "action.selected",
                     color: "primary.main",
                     p: 1.5,
-                    borderRadius: 3,
+                    borderRadius: radii.control,
                     display: "flex",
                   }}
                 >

@@ -135,7 +135,7 @@ for (const direction of ["OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"]) {
   });
 }
 
-test("shared storage rows prevent duplicate choices and use restrained nested corners", async ({
+test("shared storage rows prevent duplicate choices and form one rounded group", async ({
   page,
 }, testInfo) => {
   await prepare(page, "LOCAL_TO_OSS");
@@ -153,10 +153,26 @@ test("shared storage rows prevent duplicate choices and use restrained nested co
     page.getByRole("option", { name: /训练存储 A/ }),
   ).toHaveAttribute("aria-disabled", "true");
   await page.keyboard.press("Escape");
-  const row = page.getByText("执行节点 1", { exact: true }).locator("../..");
-  expect(
-    await row.evaluate((element) => getComputedStyle(element).borderRadius),
-  ).toBe("12px");
+  const corners = await Promise.all(
+    [1, 2].map((number) =>
+      page
+        .getByText(`执行节点 ${number}`, { exact: true })
+        .locator("../..")
+        .evaluate((element) => {
+          const style = getComputedStyle(element);
+          return [
+            style.borderTopLeftRadius,
+            style.borderTopRightRadius,
+            style.borderBottomRightRadius,
+            style.borderBottomLeftRadius,
+          ].map(parseFloat);
+        }),
+    ),
+  );
+  const [first, last] = corners;
+  expect(first[0]).toBeGreaterThan(first[2]);
+  expect(first).toEqual([first[0], first[0], first[2], first[2]]);
+  expect(last).toEqual([first[2], first[2], first[0], first[0]]);
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect

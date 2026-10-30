@@ -1,3 +1,4 @@
+import { groupedCardRadius, radii } from "../theme";
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { Link } from "react-router-dom";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -297,7 +298,7 @@ function EndpointCard({
         <Box
           sx={{
             p: 1.25,
-            borderRadius: "12px",
+            borderRadius: radii.control,
             display: "flex",
             bgcolor: "action.selected",
             color: "primary.main",
@@ -1113,132 +1114,134 @@ export default function CreateTransfer() {
       )}
       {localNodes.loading && !localNodes.data && <LinearProgress />}
       <Stack spacing={2.5}>
-        {form.bindings.map((binding, index) => {
-          const selectedNode = nodes.find(
-            (node) => node.executionNodeIp === binding.executionNodeIp,
-          );
-          return (
-            <Box
-              key={index}
-              sx={{
-                border: "1px solid",
-                borderColor: "divider",
-                borderRadius: "12px",
-                p: 2,
-              }}
-            >
-              <Stack
-                direction="row"
-                alignItems="center"
-                justifyContent="space-between"
-                sx={{ mb: 2 }}
+        <Stack spacing={0.5}>
+          {form.bindings.map((binding, index) => {
+            const selectedNode = nodes.find(
+              (node) => node.executionNodeIp === binding.executionNodeIp,
+            );
+            return (
+              <Box
+                key={index}
+                sx={{
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: groupedCardRadius(index, form.bindings.length),
+                  p: 2,
+                }}
               >
-                <Typography variant="subtitle2">
-                  {tr("执行节点 {index}", { index: index + 1 })}
-                </Typography>
-                {form.bindings.length > 1 && (
-                  <IconButton
-                    size="small"
-                    aria-label={tr("移除执行节点 {value1}", {
-                      value1: index + 1,
-                    })}
-                    onClick={() =>
-                      update({
-                        bindings: form.bindings.filter((_, i) => i !== index),
-                      })
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  sx={{ mb: 2 }}
+                >
+                  <Typography variant="subtitle2">
+                    {tr("执行节点 {index}", { index: index + 1 })}
+                  </Typography>
+                  {form.bindings.length > 1 && (
+                    <IconButton
+                      size="small"
+                      aria-label={tr("移除执行节点 {value1}", {
+                        value1: index + 1,
+                      })}
+                      onClick={() =>
+                        update({
+                          bindings: form.bindings.filter((_, i) => i !== index),
+                        })
+                      }
+                    >
+                      <DeleteOutlineRounded fontSize="small" />
+                    </IconButton>
+                  )}
+                </Stack>
+                <Stack spacing={2}>
+                  <Autocomplete
+                    options={Array.from(
+                      new Set([
+                        ...nodes.map((node) => node.executionNodeIp),
+                        ...(binding.executionNodeIp
+                          ? [binding.executionNodeIp]
+                          : []),
+                      ]),
+                    )}
+                    value={binding.executionNodeIp || null}
+                    getOptionLabel={nodeLabel}
+                    getOptionDisabled={(id) =>
+                      !availableLocalNodes.some(
+                        (node) => node.executionNodeIp === id,
+                      ) ||
+                      form.bindings.some(
+                        (other, otherIndex) =>
+                          otherIndex !== index && other.executionNodeIp === id,
+                      )
                     }
-                  >
-                    <DeleteOutlineRounded fontSize="small" />
-                  </IconButton>
-                )}
-              </Stack>
-              <Stack spacing={2}>
-                <Autocomplete
-                  options={Array.from(
-                    new Set([
-                      ...nodes.map((node) => node.executionNodeIp),
-                      ...(binding.executionNodeIp
-                        ? [binding.executionNodeIp]
-                        : []),
-                    ]),
-                  )}
-                  value={binding.executionNodeIp || null}
-                  getOptionLabel={nodeLabel}
-                  getOptionDisabled={(id) =>
-                    !availableLocalNodes.some(
-                      (node) => node.executionNodeIp === id,
-                    ) ||
-                    form.bindings.some(
-                      (other, otherIndex) =>
-                        otherIndex !== index && other.executionNodeIp === id,
-                    )
-                  }
-                  onChange={(_, value) =>
-                    setBinding(index, { executionNodeIp: value || "" })
-                  }
-                  noOptionsText={tr("暂无可用节点")}
-                  renderOption={(props, ip) => {
-                    const node = nodes.find(
-                      (item) => item.executionNodeIp === ip,
-                    );
-                    const { key, ...optionProps } = props;
-                    return (
-                      <li {...optionProps} key={key}>
-                        <Box sx={{ flex: 1 }}>{nodeLabel(ip)}</Box>
-                        <Chip
-                          size="small"
-                          label={
-                            node?.reachable && node?.localTransferSupported
-                              ? tr("可用")
-                              : tr("不可用")
-                          }
-                          color={
-                            node?.reachable && node?.localTransferSupported
-                              ? "success"
-                              : "default"
-                          }
-                        />
-                      </li>
-                    );
-                  }}
-                  renderInput={(params) => (
-                    <TextField
-                      {...params}
-                      required
-                      label={tr("执行节点")}
-                      placeholder={tr("选择执行节点")}
-                    />
-                  )}
-                />
-                <TextField
-                  required
-                  fullWidth
-                  label={
-                    form.direction === "LOCAL_TO_OSS"
-                      ? tr("源文件或目录绝对路径")
-                      : tr("目标目录绝对路径")
-                  }
-                  placeholder="/mnt/storage/transfer"
-                  value={binding.localPath}
-                  onChange={(e) =>
-                    setBinding(index, { localPath: e.target.value })
-                  }
-                />
-                {selectedNode &&
-                  (!selectedNode.reachable ||
-                    !selectedNode.localTransferSupported) && (
-                    <Alert severity="warning">
-                      {tr("节点不可达或不支持本地迁移，请检查节点状态。")}
-                    </Alert>
-                  )}
-              </Stack>
-            </Box>
-          );
-        })}
+                    onChange={(_, value) =>
+                      setBinding(index, { executionNodeIp: value || "" })
+                    }
+                    noOptionsText={tr("暂无可用节点")}
+                    renderOption={(props, ip) => {
+                      const node = nodes.find(
+                        (item) => item.executionNodeIp === ip,
+                      );
+                      const { key, ...optionProps } = props;
+                      return (
+                        <li {...optionProps} key={key}>
+                          <Box sx={{ flex: 1 }}>{nodeLabel(ip)}</Box>
+                          <Chip
+                            size="small"
+                            label={
+                              node?.reachable && node?.localTransferSupported
+                                ? tr("可用")
+                                : tr("不可用")
+                            }
+                            color={
+                              node?.reachable && node?.localTransferSupported
+                                ? "success"
+                                : "default"
+                            }
+                          />
+                        </li>
+                      );
+                    }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        required
+                        label={tr("执行节点")}
+                        placeholder={tr("选择执行节点")}
+                      />
+                    )}
+                  />
+                  <TextField
+                    required
+                    fullWidth
+                    label={
+                      form.direction === "LOCAL_TO_OSS"
+                        ? tr("源文件或目录绝对路径")
+                        : tr("目标目录绝对路径")
+                    }
+                    placeholder="/mnt/storage/transfer"
+                    value={binding.localPath}
+                    onChange={(e) =>
+                      setBinding(index, { localPath: e.target.value })
+                    }
+                  />
+                  {selectedNode &&
+                    (!selectedNode.reachable ||
+                      !selectedNode.localTransferSupported) && (
+                      <Alert severity="warning">
+                        {tr("节点不可达或不支持本地迁移，请检查节点状态。")}
+                      </Alert>
+                    )}
+                </Stack>
+              </Box>
+            );
+          })}
+        </Stack>
         <Button
           variant="outlined"
           startIcon={<AddRounded />}
-          sx={{ borderRadius: "12px" }}
+          sx={{ borderRadius: radii.pill }}
           disabled={
             !nextLocalNode ||
             form.bindings.some((binding) => !binding.executionNodeIp)
@@ -1654,7 +1657,7 @@ export default function CreateTransfer() {
                         p: 2,
                         justifyContent: "flex-start",
                         textAlign: "left",
-                        borderRadius: "12px",
+                        borderRadius: radii.inset,
                         borderColor:
                           form.direction === direction.value
                             ? "primary.main"
@@ -1700,7 +1703,6 @@ export default function CreateTransfer() {
                   sx={{
                     border: "1px solid",
                     borderColor: "divider",
-                    borderRadius: "16px !important",
                     "&:before": { display: "none" },
                   }}
                 >

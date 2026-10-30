@@ -1,3 +1,4 @@
+import { groupedCardRadius, radii } from "../theme";
 import { t as tr, useI18n, formatDate } from "../lib/i18n";
 import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
 import { taskNodeLabels, type NodeLabels } from "../lib/nodeRegistry";
@@ -307,7 +308,7 @@ function Metrics({ data }: { data: any }) {
         <Paper
           variant="outlined"
           key={card.label}
-          sx={{ p: { xs: 2, md: 2.5 }, borderRadius: "18px" }}
+          sx={{ p: { xs: 2, md: 2.5 }, borderRadius: radii.surface }}
         >
           <Stack
             direction="row"
@@ -433,7 +434,11 @@ function TaskDetail({
     )
       .filter((row) => {
         const rect = row.getBoundingClientRect();
-        return !atHead && rect.bottom > bounds.top && rect.top < bounds.bottom;
+        // A clipped edge of the preceding card is not the row being read.
+        // Anchor a readable row so tight card spacing does not cause jumps.
+        const visibleHeight =
+          Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top);
+        return !atHead && visibleHeight >= Math.min(rect.height, 24);
       })
       .map((row) => ({
         id: row.dataset.childId,
@@ -1213,14 +1218,17 @@ function TaskDetail({
                     </Typography>
                   ) : null
                 ) : (
-                  <Stack gap={1.5}>
-                    {shards.map((shard: any) => (
+                  <Stack gap={0.5}>
+                    {shards.map((shard: any, index: number) => (
                       <Paper
                         variant="outlined"
                         key={subtaskIdentity(shard)}
                         ref={observeChildRow}
                         data-child-offset={children.pageOffset(shard)}
-                        sx={{ overflow: "hidden" }}
+                        sx={{
+                          overflow: "hidden",
+                          borderRadius: groupedCardRadius(index, shards.length),
+                        }}
                       >
                         <ButtonBase
                           aria-label={tr("查看子任务 {value1}-{value2}", {
@@ -1891,7 +1899,12 @@ export default function TasksPage({
                 ? "success"
                 : "primary"
           }
-          sx={{ height: 4, borderRadius: 2, mt: 0.7, bgcolor: "action.hover" }}
+          sx={{
+            height: 4,
+            borderRadius: radii.pill,
+            mt: 0.7,
+            bgcolor: "action.hover",
+          }}
         />
       </Box>
     );
@@ -1981,7 +1994,7 @@ export default function TasksPage({
                 height: 48,
                 bgcolor: "action.selected",
                 color: "primary.main",
-                borderRadius: "16px",
+                borderRadius: radii.control,
               }}
             >
               <StorageRounded />
@@ -2042,7 +2055,7 @@ export default function TasksPage({
       )}
       <Paper
         variant="outlined"
-        sx={{ overflow: "hidden", borderRadius: "20px" }}
+        sx={{ overflow: "hidden", borderRadius: radii.surface }}
       >
         <Stack
           direction="row"

@@ -1,3 +1,4 @@
+import { radii } from "../theme";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -190,7 +191,11 @@ export default function LiveFileProgress({
                       finalizing ? t("确认中") : `${displayPercent}%`
                     }
                     color={stale ? "inherit" : "primary"}
-                    sx={{ height: 3, borderRadius: 1, bgcolor: "action.hover" }}
+                    sx={{
+                      height: 3,
+                      borderRadius: radii.pill,
+                      bgcolor: "action.hover",
+                    }}
                   />
                 </Box>
               );

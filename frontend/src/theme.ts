@@ -1,6 +1,24 @@
 import { createTheme } from "@mui/material/styles";
 import { enUS, jaJP, zhCN } from "@mui/material/locale";
 import type { Locale } from "./lib/i18n";
+
+// Pixel values keep the same geometry in component overrides and MUI sx.
+export const radii = {
+  item: "8px",
+  control: "16px",
+  inset: "24px",
+  surface: "32px",
+  dialog: "40px",
+  hero: "48px",
+  pill: "999px",
+} as const;
+
+export function groupedCardRadius(index: number, count: number) {
+  const top = index === 0 ? radii.inset : radii.item;
+  const bottom = index === count - 1 ? radii.inset : radii.item;
+  return `${top} ${top} ${bottom} ${bottom}`;
+}
+
 export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
   createTheme(
     {
@@ -62,7 +80,7 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
           defaultProps: { disableElevation: true },
           styleOverrides: {
             root: {
-              borderRadius: 22,
+              borderRadius: radii.pill,
               padding: "9px 20px",
               whiteSpace: "nowrap",
             },
@@ -73,6 +91,7 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
           defaultProps: { elevation: 0 },
           styleOverrides: {
             root: { backgroundImage: "none" },
+            rounded: { borderRadius: radii.surface },
             outlined: { borderColor: mode === "light" ? "#e3e7ed" : "#343a43" },
           },
         },
@@ -92,7 +111,7 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
         MuiOutlinedInput: {
           styleOverrides: {
             root: ({ ownerState }) => ({
-              borderRadius: 10,
+              borderRadius: radii.control,
               lineHeight: "24px",
               ...(ownerState.multiline && { padding: "12px 14px" }),
             }),
@@ -105,6 +124,11 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
         MuiAutocomplete: {
           defaultProps: { size: "small" },
           styleOverrides: {
+            paper: { borderRadius: radii.inset },
+            listbox: {
+              padding: 8,
+              "& .MuiAutocomplete-option": { borderRadius: radii.control },
+            },
             inputRoot: {
               "&.MuiOutlinedInput-root": {
                 paddingTop: 6,
@@ -131,10 +155,62 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
             },
           },
         },
-        MuiDialog: { styleOverrides: { paper: { borderRadius: 24 } } },
+        MuiDialog: {
+          styleOverrides: {
+            paper: { borderRadius: radii.dialog },
+            paperFullScreen: { borderRadius: 0 },
+          },
+        },
+        MuiDialogTitle: {
+          styleOverrides: { root: { padding: "24px 24px 16px" } },
+        },
+        MuiDialogActions: {
+          styleOverrides: { root: { padding: "16px 24px 24px" } },
+        },
+        MuiDrawer: {
+          styleOverrides: {
+            paper: ({ ownerState }) => ({
+              borderRadius:
+                ownerState.variant === "permanent"
+                  ? 0
+                  : ownerState.anchor === "right"
+                    ? `${radii.surface} 0 0 ${radii.surface}`
+                    : ownerState.anchor === "left"
+                      ? `0 ${radii.surface} ${radii.surface} 0`
+                      : ownerState.anchor === "bottom"
+                        ? `${radii.surface} ${radii.surface} 0 0`
+                        : `0 0 ${radii.surface} ${radii.surface}`,
+            }),
+          },
+        },
+        MuiMenu: {
+          styleOverrides: {
+            paper: { borderRadius: radii.inset },
+            list: { padding: 8 },
+          },
+        },
+        MuiMenuItem: {
+          styleOverrides: { root: { borderRadius: radii.control } },
+        },
+        MuiAccordion: {
+          styleOverrides: {
+            root: {
+              borderRadius: radii.surface,
+              "&:first-of-type, &:last-of-type": {
+                borderRadius: radii.surface,
+              },
+            },
+          },
+        },
+        MuiChip: {
+          styleOverrides: { root: { borderRadius: radii.pill } },
+        },
+        MuiToggleButtonGroup: {
+          styleOverrides: { root: { borderRadius: radii.pill } },
+        },
         MuiAlert: {
           styleOverrides: {
-            root: { borderRadius: 12, overflowWrap: "anywhere" },
+            root: { borderRadius: radii.inset, overflowWrap: "anywhere" },
           },
         },
         MuiTooltip: { defaultProps: { arrow: true } },

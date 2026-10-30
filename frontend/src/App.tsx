@@ -70,7 +70,7 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { api, getToken, NotifyProvider, setToken, useNotify } from "./lib/api";
-import { makeTheme } from "./theme";
+import { makeTheme, radii } from "./theme";
 import { LoadingState } from "./components/Common";
 import LanguageSelector from "./components/LanguageSelector";
 import { BuildInfo } from "./components/BuildInfo";
@@ -138,7 +138,7 @@ function Brand({
           flexShrink: 0,
           bgcolor: "primary.main",
           color: "primary.contrastText",
-          borderRadius: "14px",
+          borderRadius: radii.control,
         }}
       >
         <CloudSyncRounded />
@@ -212,7 +212,7 @@ function Login({
           width: "100%",
           maxWidth: 1040,
           overflow: "hidden",
-          borderRadius: { xs: "24px", sm: "32px" },
+          borderRadius: { xs: radii.surface, sm: radii.hero },
           display: "grid",
           gridTemplateColumns: { xs: "1fr", md: "1.05fr 1fr" },
         }}
@@ -493,7 +493,7 @@ function Workspace({
         sx={{
           mx: 0.5,
           mb: 3,
-          borderRadius: "18px",
+          borderRadius: radii.pill,
           height: 52,
           px: 2,
           justifyContent: "flex-start",
@@ -542,7 +542,7 @@ function Workspace({
               }
               sx={{
                 mb: 0.5,
-                borderRadius: 8,
+                borderRadius: radii.pill,
                 height: 44,
                 px: 2.5,
                 overflow: "hidden",
@@ -789,7 +789,7 @@ function Workspace({
                   width: 4,
                   height: 36,
                   transform: "translateY(-50%)",
-                  borderRadius: 2,
+                  borderRadius: radii.pill,
                   bgcolor:
                     dragWidth !== null ? "primary.main" : "text.secondary",
                   opacity: dragWidth !== null ? 1 : 0.45,

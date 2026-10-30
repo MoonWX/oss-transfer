@@ -183,7 +183,6 @@ export default function BackupManagement({
         sx={{
           border: "1px solid",
           borderColor: "divider",
-          borderRadius: "16px !important",
           "&:before": { display: "none" },
         }}
       >

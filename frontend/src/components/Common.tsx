@@ -10,6 +10,7 @@ import {
   Typography,
 } from "@mui/material";
 import InboxOutlined from "@mui/icons-material/InboxOutlined";
+import { radii } from "../theme";
 
 export const formatNumber = (n: unknown) =>
   Number(n || 0).toLocaleString(getLocale());
@@ -130,7 +131,7 @@ export function EmptyState({
         sx={{
           color: "primary.main",
           bgcolor: "action.selected",
-          borderRadius: "24px",
+          borderRadius: radii.surface,
           p: 2,
           mb: 1,
         }}

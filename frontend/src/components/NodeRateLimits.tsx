@@ -1,3 +1,4 @@
+import { groupedCardRadius, radii } from "../theme";
 import { useNodeLabels } from "../lib/workerStatus";
 import { t, useI18n, formatNumber } from "../lib/i18n";
 import { Link as RouterLink } from "react-router-dom";
@@ -151,192 +152,194 @@ export default function NodeRateLimits({
           </Stack>
         </Alert>
       )}
-      {rateTypes.map((type) => {
-        const rate = rateLimit?.[type];
-        const bandwidth = type === "bandwidth";
-        const current = bandwidth ? rate?.currentBps : rate?.currentQps;
-        const limit = bandwidth ? rate?.limitBps : rate?.limitQps;
-        const target = rateTarget(rate, type);
-        const reduced =
-          rate?.state === "REDUCED" || rate?.state === "RECOVERING";
-        const configuredTarget = bandwidth
-          ? rate?.configuredLimitBps
-          : rate?.configuredLimitQps;
-        const usesConfiguredTarget =
-          rate?.limitSource === "CONFIG" ||
-          (target != null &&
-            configuredTarget != null &&
-            target === configuredTarget);
-        const hasRecoveryStatus = type === "put" || type === "head";
-        const recovered = !uncertain && rate?.state === "RECOVERED";
-        const recovering = !uncertain && rate?.state === "RECOVERING";
-        const stateLabel = uncertain
-          ? t("状态待确认")
-          : reduced
-            ? rate?.state === "RECOVERING"
-              ? t("逐步恢复")
-              : t("自动降速")
-            : recovered
-              ? t("已恢复目标")
-              : target !== undefined && target <= 0
-                ? t("不限速")
-                : rate?.state === "NORMAL"
-                  ? t("按目标运行")
-                  : undefined;
-        const showProgress =
-          hasRecoveryStatus &&
-          !uncertain &&
-          target !== undefined &&
-          target > 0 &&
-          limit !== undefined &&
-          (reduced || recovered);
-        const percentage =
-          target && target > 0 && limit !== undefined
-            ? Math.max(0, Math.min(100, (limit / target) * 100))
-            : 0;
-        return (
-          <Box
-            key={type}
-            data-testid={`rate-${ip}-${type}`}
-            sx={{
-              border: 1,
-              borderColor:
-                reduced && !uncertain
-                  ? recovering
-                    ? "info.main"
-                    : "warning.main"
-                  : "divider",
-              borderRadius: "12px",
-              p: { xs: 2, sm: 2.5 },
-              minWidth: 0,
-            }}
-          >
-            <Stack
-              direction="row"
-              justifyContent="space-between"
-              alignItems="center"
-              spacing={1}
+      <Stack spacing={0.5}>
+        {rateTypes.map((type, index) => {
+          const rate = rateLimit?.[type];
+          const bandwidth = type === "bandwidth";
+          const current = bandwidth ? rate?.currentBps : rate?.currentQps;
+          const limit = bandwidth ? rate?.limitBps : rate?.limitQps;
+          const target = rateTarget(rate, type);
+          const reduced =
+            rate?.state === "REDUCED" || rate?.state === "RECOVERING";
+          const configuredTarget = bandwidth
+            ? rate?.configuredLimitBps
+            : rate?.configuredLimitQps;
+          const usesConfiguredTarget =
+            rate?.limitSource === "CONFIG" ||
+            (target != null &&
+              configuredTarget != null &&
+              target === configuredTarget);
+          const hasRecoveryStatus = type === "put" || type === "head";
+          const recovered = !uncertain && rate?.state === "RECOVERED";
+          const recovering = !uncertain && rate?.state === "RECOVERING";
+          const stateLabel = uncertain
+            ? t("状态待确认")
+            : reduced
+              ? rate?.state === "RECOVERING"
+                ? t("逐步恢复")
+                : t("自动降速")
+              : recovered
+                ? t("已恢复目标")
+                : target !== undefined && target <= 0
+                  ? t("不限速")
+                  : rate?.state === "NORMAL"
+                    ? t("按目标运行")
+                    : undefined;
+          const showProgress =
+            hasRecoveryStatus &&
+            !uncertain &&
+            target !== undefined &&
+            target > 0 &&
+            limit !== undefined &&
+            (reduced || recovered);
+          const percentage =
+            target && target > 0 && limit !== undefined
+              ? Math.max(0, Math.min(100, (limit / target) * 100))
+              : 0;
+          return (
+            <Box
+              key={type}
+              data-testid={`rate-${ip}-${type}`}
+              sx={{
+                border: 1,
+                borderColor:
+                  reduced && !uncertain
+                    ? recovering
+                      ? "info.main"
+                      : "warning.main"
+                    : "divider",
+                borderRadius: groupedCardRadius(index, rateTypes.length),
+                p: { xs: 2, sm: 2.5 },
+                minWidth: 0,
+              }}
             >
               <Stack
                 direction="row"
-                spacing={1}
-                useFlexGap
-                flexWrap="wrap"
+                justifyContent="space-between"
                 alignItems="center"
-                sx={{ minWidth: 0 }}
+                spacing={1}
               >
-                <Typography variant="subtitle2">{rateNames[type]}</Typography>
-                {stateLabel && (
-                  <Chip
-                    label={stateLabel}
-                    size="small"
-                    variant="outlined"
-                    color={
-                      uncertain
-                        ? "default"
-                        : reduced
-                          ? recovering
-                            ? "info"
-                            : "warning"
-                          : recovered
-                            ? "success"
-                            : "default"
-                    }
-                  />
-                )}
-              </Stack>
-              <Button
-                size="small"
-                onClick={() => onEdit(ip, type, target)}
-                aria-label={t("调整 {value1} 的 {value2} 限速", {
-                  value1: nodeLabel(ip),
-                  value2: rateNames[type],
-                })}
-                sx={{ flexShrink: 0 }}
-              >
-                {t("调整")}
-              </Button>
-            </Stack>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: {
-                  xs: "1fr",
-                  sm: "repeat(3, minmax(0, 1fr))",
-                },
-                gap: 1.25,
-                mt: 2,
-              }}
-            >
-              {[
-                {
-                  label: t("运行上限"),
-                  value: rateText(limit, bandwidth),
-                },
-                {
-                  label: usesConfiguredTarget
-                    ? t("配置目标")
-                    : rate?.limitSource === "PERSISTED_MANUAL"
-                      ? t("已保存目标")
-                      : t("目标上限"),
-                  value: rateText(target, bandwidth),
-                },
-                {
-                  label: t("实测速率"),
-                  value: currentText(current, bandwidth),
-                },
-              ].map(({ label, value }) => (
-                <Box key={label}>
-                  <Typography variant="caption" color="text.secondary">
-                    {label}
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontVariantNumeric: "tabular-nums",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {value}
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-            {showProgress && (
-              <Box sx={{ mt: 1.75 }}>
                 <Stack
                   direction="row"
-                  justifyContent="space-between"
-                  alignItems="baseline"
                   spacing={1}
-                  sx={{ mb: 0.75 }}
+                  useFlexGap
+                  flexWrap="wrap"
+                  alignItems="center"
+                  sx={{ minWidth: 0 }}
                 >
-                  <Typography variant="caption" color="text.secondary">
-                    {t("运行上限 / 目标上限")}
-                  </Typography>
-                  <Typography variant="caption">
-                    {percentText(percentage)}%
-                  </Typography>
+                  <Typography variant="subtitle2">{rateNames[type]}</Typography>
+                  {stateLabel && (
+                    <Chip
+                      label={stateLabel}
+                      size="small"
+                      variant="outlined"
+                      color={
+                        uncertain
+                          ? "default"
+                          : reduced
+                            ? recovering
+                              ? "info"
+                              : "warning"
+                            : recovered
+                              ? "success"
+                              : "default"
+                      }
+                    />
+                  )}
                 </Stack>
-                <LinearProgress
-                  variant="determinate"
-                  value={percentage}
-                  color={
-                    recovered ? "success" : recovering ? "info" : "warning"
-                  }
-                  aria-label={t("{value1}运行上限占目标比例", {
-                    value1: rateNames[type],
+                <Button
+                  size="small"
+                  onClick={() => onEdit(ip, type, target)}
+                  aria-label={t("调整 {value1} 的 {value2} 限速", {
+                    value1: nodeLabel(ip),
+                    value2: rateNames[type],
                   })}
-                  aria-valuetext={t("{value1}%，运行上限占目标上限比例", {
-                    value1: percentText(percentage),
-                  })}
-                  sx={{ height: 6, borderRadius: 6 }}
-                />
+                  sx={{ flexShrink: 0 }}
+                >
+                  {t("调整")}
+                </Button>
+              </Stack>
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: {
+                    xs: "1fr",
+                    sm: "repeat(3, minmax(0, 1fr))",
+                  },
+                  gap: 1.25,
+                  mt: 2,
+                }}
+              >
+                {[
+                  {
+                    label: t("运行上限"),
+                    value: rateText(limit, bandwidth),
+                  },
+                  {
+                    label: usesConfiguredTarget
+                      ? t("配置目标")
+                      : rate?.limitSource === "PERSISTED_MANUAL"
+                        ? t("已保存目标")
+                        : t("目标上限"),
+                    value: rateText(target, bandwidth),
+                  },
+                  {
+                    label: t("实测速率"),
+                    value: currentText(current, bandwidth),
+                  },
+                ].map(({ label, value }) => (
+                  <Box key={label}>
+                    <Typography variant="caption" color="text.secondary">
+                      {label}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontVariantNumeric: "tabular-nums",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {value}
+                    </Typography>
+                  </Box>
+                ))}
               </Box>
-            )}
-          </Box>
-        );
-      })}
+              {showProgress && (
+                <Box sx={{ mt: 1.75 }}>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="baseline"
+                    spacing={1}
+                    sx={{ mb: 0.75 }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      {t("运行上限 / 目标上限")}
+                    </Typography>
+                    <Typography variant="caption">
+                      {percentText(percentage)}%
+                    </Typography>
+                  </Stack>
+                  <LinearProgress
+                    variant="determinate"
+                    value={percentage}
+                    color={
+                      recovered ? "success" : recovering ? "info" : "warning"
+                    }
+                    aria-label={t("{value1}运行上限占目标比例", {
+                      value1: rateNames[type],
+                    })}
+                    aria-valuetext={t("{value1}%，运行上限占目标上限比例", {
+                      value1: percentText(percentage),
+                    })}
+                    sx={{ height: 6, borderRadius: radii.pill }}
+                  />
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+      </Stack>
     </Stack>
   );
 }

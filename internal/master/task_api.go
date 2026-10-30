@@ -691,6 +691,8 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 	}
 	if firstErr == nil {
 		firstErr = s.validateSharedBindings(ctx, &spec, checks)
+	} else {
+		invalidateUnverifiedSharedBindings(ctx, checks)
 	}
 	if len(spec.Nodes) > 0 {
 		if spec.Direction == "LOCAL_TO_OSS" {

@@ -190,7 +190,7 @@ for (const manualPrecheck of [true, false]) {
       .click();
     await expect(
       page.getByRole("combobox", { name: "执行节点", exact: true }),
-    ).toHaveValue("10.0.1.13");
+    ).toHaveValue("agent (10.0.1.13)");
     await expect(
       page.getByText("跳过同名对象或文件 · 单节点执行", { exact: true }),
     ).toBeVisible();

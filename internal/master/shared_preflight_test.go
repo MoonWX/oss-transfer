@@ -188,3 +188,88 @@ func TestSharedPreflightUsesRealCrossAgentReadWriteAndAlwaysCleansUp(t *testing.
 	}
 	clean()
 }
+
+func TestSharedPreflightMissingDestinationsNeverAppearValid(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	a, b := preflightTestAgent(t, f, 1), preflightTestAgent(t, f, 2)
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing-target")
+	for _, test := range []struct {
+		name     string
+		bindings []taskBinding
+	}{
+		{"both missing", []taskBinding{{a.Address, missing}, {b.Address, missing}}},
+		{"first missing", []taskBinding{{a.Address, missing}, {b.Address, root}}},
+		{"second missing", []taskBinding{{a.Address, root}, {b.Address, missing}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			row := taskCreateRequest{Direction: "OSS_TO_LOCAL",
+				SourceEndpoint:      &taskEndpoint{Type: "OSS", S3Alias: "qa", Bucket: "source"},
+				DestinationEndpoint: &taskEndpoint{Type: "LOCAL", NodeBindings: test.bindings}}
+			code, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []taskCreateRequest{row})
+			if code != 200 {
+				t.Fatal(code, response)
+			}
+			data := response["data"].(map[string]any)
+			checks := data["nodeBindings"].([]any)
+			if data["valid"] != false || len(checks) != len(test.bindings) {
+				t.Fatal("multi-node validation did not fail all bindings", data)
+			}
+			for i, raw := range checks {
+				check := raw.(map[string]any)
+				if check["valid"] != false {
+					t.Fatalf("binding %d passed without shared-directory proof: %v", i, check)
+				}
+				wantCode, wantType := "SHARED_STORAGE_NOT_VERIFIED", "DIRECTORY"
+				if test.bindings[i].LocalPath == missing {
+					wantCode, wantType = "SHARED_DIRECTORY_REQUIRED", "MISSING"
+				}
+				if check["code"] != wantCode || check["pathType"] != wantType || check["message"] == "" {
+					t.Fatal("incorrect blocked binding result", check)
+				}
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("failed preflight created a destination or marker", entries, err)
+			}
+		})
+	}
+	// A single download node can still create its destination when the task
+	// starts; this read-only preflight must not create it prematurely.
+	row := taskCreateRequest{Direction: "OSS_TO_LOCAL",
+		SourceEndpoint:      &taskEndpoint{Type: "OSS", S3Alias: "qa", Bucket: "source"},
+		DestinationEndpoint: &taskEndpoint{Type: "LOCAL", NodeBindings: []taskBinding{{a.Address, missing}}}}
+	code, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []taskCreateRequest{row})
+	if code != 200 || response["data"].(map[string]any)["valid"] != true {
+		t.Fatal("single-node missing destination was rejected", code, response)
+	}
+	checks := response["data"].(map[string]any)["nodeBindings"].([]any)
+	if len(checks) != 1 || checks[0].(map[string]any)["pathType"] != "MISSING" {
+		t.Fatal("single-node missing destination lost its path type", checks)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatal("preflight created a destination", err)
+	}
+	// A failed basic check prevents the shared proof too. Do not overwrite the
+	// offline node's actionable reason or leave its online peer marked valid.
+	row.DestinationEndpoint.NodeBindings = []taskBinding{{a.Address, root}, {"offline.example", root}}
+	code, response = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []taskCreateRequest{row})
+	if code != 200 || response["data"].(map[string]any)["valid"] != false {
+		t.Fatal("offline node did not fail preflight", code, response)
+	}
+	checks = response["data"].(map[string]any)["nodeBindings"].([]any)
+	if len(checks) != 2 {
+		t.Fatal("missing binding check", checks)
+	}
+	online, offline := checks[0].(map[string]any), checks[1].(map[string]any)
+	if online["valid"] != false || online["code"] != "SHARED_STORAGE_NOT_VERIFIED" || online["pathType"] != "DIRECTORY" {
+		t.Fatal("online peer passed without shared-directory proof", online)
+	}
+	if offline["valid"] != false || offline["message"] != "执行节点未连接" {
+		t.Fatal("offline node's original failure was lost", offline)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("blocked preflight changed the target directory", entries, err)
+	}
+}

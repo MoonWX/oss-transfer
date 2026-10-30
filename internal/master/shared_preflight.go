@@ -62,17 +62,42 @@ func (s *Server) proveSharedDirectory(ctx context.Context, nodes []task.Node, wr
 	return false, -1, nil
 }
 
+// A successful path lookup is not a completed multi-node preflight. Preserve
+// each failing node's reason and mark the other bindings as still unverified.
+func invalidateUnverifiedSharedBindings(ctx context.Context, checks []bindingCheck) {
+	if len(checks) < 2 {
+		return
+	}
+	for i := range checks {
+		if checks[i].Valid {
+			checks[i].Valid = false
+			checks[i].Code = "SHARED_STORAGE_NOT_VERIFIED"
+			checks[i].Message = localizeContext(ctx, "Shared storage verification has not run because another node failed preflight")
+		}
+	}
+}
+
 func (s *Server) validateSharedBindings(ctx context.Context, spec *task.Spec, checks []bindingCheck) error {
 	if len(spec.Nodes) < 2 {
 		return nil
 	}
+	var pathErr error
 	for i, check := range checks {
 		if check.PathType != "DIRECTORY" {
 			checks[i].Valid = false
 			checks[i].Code = "SHARED_DIRECTORY_REQUIRED"
 			checks[i].Message = localizeContext(ctx, "Create the shared directory on all selected nodes before preflight")
-			return errors.New(checks[i].Message)
+			if check.PathType == "MISSING" && spec.Direction == "OSS_TO_LOCAL" {
+				checks[i].Message = localizeContext(ctx, "Shared destination directory does not exist")
+			}
+			if pathErr == nil {
+				pathErr = errors.New(checks[i].Message)
+			}
 		}
+	}
+	if pathErr != nil {
+		invalidateUnverifiedSharedBindings(ctx, checks)
+		return pathErr
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()

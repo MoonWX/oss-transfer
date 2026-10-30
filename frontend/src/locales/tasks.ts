@@ -799,6 +799,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Preflight failed",
     ja: "事前チェックに失敗",
   },
+  将创建目录: {
+    en: "Directory will be created",
+    ja: "ディレクトリを作成予定",
+  },
   "通过{value1}": {
     en: "Passed{value1}",
     ja: "合格{value1}",

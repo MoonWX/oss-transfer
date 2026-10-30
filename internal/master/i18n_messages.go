@@ -53,6 +53,8 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Probe cleanup failed on node %s: %s":                                                     {"Probe cleanup failed on node %s: %s", "节点 %s 的测试文件清理失败：%s", "ノード %s のテストファイルを削除できませんでした：%s"},
 	"Node %s could not read the shared test file: %s":                                         {"Node %s could not read the shared test file: %s", "节点 %s 无法读取同一测试文件：%s", "ノード %s から共有テストファイルを読み取れません：%s"},
 	"Create the shared directory on all selected nodes before preflight":                      {"Create the shared directory on all selected nodes before preflight", "请先在所有选定节点上准备好共享目录，再进行预检", "事前チェックの前に、選択した全ノードの共有ディレクトリを準備してください"},
+	"Shared destination directory does not exist":                                             {"Shared destination directory does not exist", "共享目标目录不存在", "共有の転送先ディレクトリが存在しません"},
+	"Shared storage verification has not run because another node failed preflight":           {"Shared storage verification has not run because another node failed preflight", "其他节点预检未通过，尚未验证共享目录", "他のノードの事前チェックが失敗したため、共有ディレクトリの検証は実行されていません"},
 	"Shared source verification needs one writable node; use one node for a read-only source": {"Shared source verification needs one writable node; use one node for a read-only source", "共享源目录验证需要至少一个节点可写；只读源可改用单节点迁移", "共有元の検証には書き込み可能なノードが必要です。読み取り専用の転送元は単一ノードで転送できます"},
 	"Shared storage verification did not pass":                                                {"Shared storage verification did not pass", "共享存储验证未通过", "共有ストレージの検証に失敗しました"},
 	"Shared test file was written, read by every node, and removed":                           {"Shared test file was written, read by every node, and removed", "已写入测试文件，所有节点读取校验通过并已清理", "テストファイルの書き込み、全ノードからの読み取り検証、削除が完了しました"},

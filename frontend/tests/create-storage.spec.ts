@@ -131,6 +131,94 @@ test("failed local precheck displays node error and blocks creation", async ({
   );
 });
 
+test("single-node download preflight distinguishes a missing destination from an existing directory", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.route("**/api/master/local-transfers/validate", async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        data: {
+          valid: true,
+          nodeBindings: [
+            {
+              executionNodeIp: "10.0.1.12",
+              localPath: "/mnt/datasets/media",
+              valid: true,
+              pathType: "MISSING",
+              message: "目标目录将在任务开始时创建",
+            },
+          ],
+        },
+      },
+    });
+  });
+  await fillOssToLocal(page);
+  await page.getByRole("button", { name: "运行预检" }).click();
+  await expect(page.getByText("节点预检通过", { exact: true })).toBeVisible();
+  await expect(page.getByText("通过 · 目录", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText("通过 · 将创建目录", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("目标目录将在任务开始时创建", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "创建迁移任务", exact: true }),
+  ).toBeEnabled();
+});
+
+test("shared download shows every missing destination as failed", async ({
+  page,
+}) => {
+  const requests = await mockApi(page);
+  await page.route("**/api/master/local-transfers/validate", async (route) => {
+    const bindings = route.request().postDataJSON()[0]
+      .destinationEndpoint.nodeBindings;
+    await route.fulfill({
+      json: {
+        success: true,
+        data: {
+          valid: false,
+          nodeBindings: bindings.map((binding: object) => ({
+            ...binding,
+            valid: false,
+            pathType: "MISSING",
+            code: "SHARED_DIRECTORY_REQUIRED",
+            message: "共享目标目录不存在",
+          })),
+        },
+      },
+    });
+  });
+  await fillOssToLocal(page);
+  await page.getByRole("button", { name: "添加共享存储节点" }).click();
+  await page
+    .getByRole("combobox", { name: "执行节点", exact: true })
+    .nth(1)
+    .click();
+  await page.getByRole("option", { name: /10\.0\.1\.13/ }).click();
+  await page.getByLabel("目标目录绝对路径").nth(1).fill("/mnt/datasets/media");
+  await page.getByRole("button", { name: "运行预检" }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "节点预检未通过" }),
+  ).toContainText("通过 0 / 2 个节点配置。修改配置后需重新预检。");
+  await expect(
+    page.getByText("共享目标目录不存在", { exact: true }),
+  ).toHaveCount(2);
+  await expect(page.getByText("未通过", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("通过 · 目录", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "创建迁移任务", exact: true }),
+  ).toBeDisabled();
+  expect(
+    requests.filter(
+      (request) => request.path === "/api/master/local-transfers",
+    ),
+  ).toHaveLength(0);
+});
+
 test("shared local migration prechecks and submits all bindings without a storage ID", async ({
   page,
 }) => {
@@ -570,7 +658,7 @@ test("unsent migration and batch drafts survive adding a storage connection with
   );
   await expect(
     page.getByRole("combobox", { name: "执行节点", exact: true }),
-  ).toHaveValue("10.0.1.12");
+  ).toHaveValue("master (10.0.1.12)");
   await expect(page.getByLabel("目标目录绝对路径")).toHaveValue(
     "/mnt/datasets/media",
   );

@@ -2128,9 +2128,16 @@ export default function CreateTransfer() {
                         >
                           {binding.localPath}
                         </Typography>
-                        {!binding.valid && (
-                          <Typography variant="body2" color="error.main">
-                            {binding.message || binding.code || tr("预检失败")}
+                        {(!binding.valid || binding.pathType === "MISSING") && (
+                          <Typography
+                            variant="body2"
+                            color={
+                              binding.valid ? "text.secondary" : "error.main"
+                            }
+                          >
+                            {binding.message ||
+                              binding.code ||
+                              tr(binding.valid ? "将创建目录" : "预检失败")}
                           </Typography>
                         )}
                       </Box>
@@ -2140,9 +2147,14 @@ export default function CreateTransfer() {
                         label={
                           binding.valid
                             ? tr("通过{value1}", {
-                                value1: binding.pathType
-                                  ? ` · ${binding.pathType === "FILE" ? tr("文件") : tr("目录")}`
-                                  : "",
+                                value1:
+                                  binding.pathType === "FILE"
+                                    ? ` · ${tr("文件")}`
+                                    : binding.pathType === "DIRECTORY"
+                                      ? ` · ${tr("目录")}`
+                                      : binding.pathType === "MISSING"
+                                        ? ` · ${tr("将创建目录")}`
+                                        : "",
                               })
                             : tr("未通过")
                         }

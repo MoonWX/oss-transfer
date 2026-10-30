@@ -1480,6 +1480,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Not applied on all nodes",
     ja: "一部のノードで未適用",
   },
+  "正在同步限速设置…": {
+    en: "Synchronizing rate limits…",
+    ja: "制限設定を同期中…",
+  },
   未生效: {
     en: "Not applied",
     ja: "未適用",

@@ -35,11 +35,13 @@ type BandwidthStatus = {
   limitMbps: number | null;
   requestLimits?: RequestLimits | null;
   applied: boolean;
+  pending?: boolean;
   sharedTaskCount: number;
   canEdit: boolean;
   nodes: (NodeDisplay & {
     address: string;
     applied: boolean;
+    pending?: boolean;
     message?: string;
   })[];
 };
@@ -128,12 +130,13 @@ export default function TaskBandwidth({
     };
   }, [active, load]);
   useEffect(() => {
-    if (!active || open || refreshMs <= 0) return;
+    if (!active || saving || (open && !status?.pending) || refreshMs <= 0)
+      return;
     const timer = window.setInterval(() => {
       if (!document.hidden && !reading.current) void load();
     }, refreshMs);
     return () => window.clearInterval(timer);
-  }, [active, open, refreshMs, load]);
+  }, [active, open, saving, status?.pending, refreshMs, load]);
   const edit = () => {
     if (completed || !active || !status?.canEdit || readError) return;
     // Editing uses the last confirmed settings; an older background read must
@@ -231,8 +234,10 @@ export default function TaskBandwidth({
       setSaving(false);
     }
   }
-  const partial = status && !status.applied;
-  const failures = status?.nodes.filter((node) => !node.applied) || [];
+  const failures =
+    status?.nodes.filter((node) => !node.applied && !node.pending) || [];
+  const partial =
+    status && !status.applied && (!status.pending || failures.length > 0);
   const warning = (
     <Alert
       severity="warning"
@@ -395,6 +400,16 @@ export default function TaskBandwidth({
               </Typography>
             )}
             {partial && warning}
+            {status?.pending && !partial && (
+              <Typography
+                role="status"
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 1.5 }}
+              >
+                {t("正在同步限速设置…")}
+              </Typography>
+            )}
             {saveError && (
               <Alert severity={saving ? "info" : "error"} sx={{ mt: 1.5 }}>
                 {saveError}

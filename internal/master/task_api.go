@@ -1483,6 +1483,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	displays := s.nodeDisplaySnapshot()
 	activeNodes := parent.ActiveNodes()
 	nodes := make([]map[string]any, len(activeNodes))
+	observed := make([]*ratelimit.ParentLimit, len(activeNodes))
 	// All lookups share one deadline, and a bounded set of workers. A dead
 	// Agent must not hold the UI open for thirty seconds per selected node.
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -1498,7 +1499,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			for index := range indexes {
 				node := activeNodes[index]
 				if online[node.ID] != node.EnrollmentID {
-					nodes[index] = map[string]any{"address": node.Address, "applied": false, "message": localize(w, "执行节点未连接")}
+					nodes[index] = map[string]any{"address": node.Address, "applied": false, "pending": false, "message": localize(w, "执行节点未连接")}
 					addNodeDisplay(nodes[index], displays.lookup(node.ID, node.Address))
 					continue
 				}
@@ -1506,19 +1507,50 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				err := s.agentCall(ctx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}.Session(), "bandwidth_parent_status", false, map[string]any{"parentId": parent.ID}, &policy)
 				expected := parentPolicy(parent, index)
 				matches := err == nil && policy.Generation == expected.Generation && policy.Revision == expected.Revision && policy.BandwidthBytesPerSecond == expected.BandwidthBytesPerSecond && policy.ListQPS == expected.ListQPS && policy.HeadQPS == expected.HeadQPS && policy.PutQPS == expected.PutQPS && policy.Stopped == expected.Stopped
-				item := map[string]any{"address": node.Address, "applied": matches}
+				pending := err == nil && !matches && (parent.Status == "STOPPING" || parent.Status == "RESUMING") &&
+					(policy.Generation < expected.Generation || (policy.Generation == expected.Generation && policy.Revision < expected.Revision))
+				item := map[string]any{"address": node.Address, "applied": matches, "pending": pending}
 				addNodeDisplay(item, displays.lookup(node.ID, node.Address))
 				if err != nil {
 					item["message"] = err.Error()
+				} else {
+					observed[index] = &policy
 				}
 				nodes[index] = item
 			}
 		})
 	}
 	workers.Wait()
+	// A stop, resume or limit edit may finish while the Agent replies are in
+	// flight. Do not present a comparison with that older parent as a failure
+	// (or as confirmed application of the latest settings). The next poll will
+	// compare one fresh snapshot; actual Agent query errors remain visible.
+	latest, err := s.tasks.repo.Get(parent.ID)
+	if err != nil {
+		fail(w, 500, "Cannot read task")
+		return
+	}
+	if latest.Generation != parent.Generation || latest.BudgetRevision != parent.BudgetRevision || latest.Status != parent.Status {
+		for index, policy := range observed {
+			if policy == nil {
+				continue
+			}
+			nodes[index]["applied"] = false
+			nodes[index]["pending"] = policy.Generation < latest.Generation ||
+				(policy.Generation == latest.Generation && policy.Revision <= latest.BudgetRevision)
+		}
+		parent = latest
+		value = nil
+		if parent.Spec.BandwidthMbps > 0 {
+			value = parent.Spec.BandwidthMbps
+		}
+	}
 	applied := len(nodes) > 0
+	pending, failed := false, false
 	for _, node := range nodes {
 		applied = applied && node["applied"] == true
+		pending = pending || node["pending"] == true
+		failed = failed || (node["applied"] != true && node["pending"] != true)
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
 }

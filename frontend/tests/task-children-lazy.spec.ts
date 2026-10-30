@@ -535,7 +535,7 @@ test("an all-view index build keeps loading and retries while visible even with 
     releaseBuild = resolve;
   });
   await page.route("**/api/master/tasks/989/children?**", async (route) => {
-    if (++builds <= 2) {
+    if (++builds <= 6) {
       if (builds === 2) await heldBuild;
       await route.fulfill({
         json: {
@@ -595,7 +595,8 @@ test("an all-view index build keeps loading and retries while visible even with 
       await page.clock.runFor(100);
       return builds;
     })
-    .toBe(3);
+    .toBe(7);
   await expect(page.locator("[data-child-id]")).toHaveCount(25);
-  expect(builds).toBe(3);
+  await page.clock.runFor(5000);
+  expect(builds).toBe(7);
 });

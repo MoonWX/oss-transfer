@@ -348,35 +348,35 @@ export function useTaskChildren({
   // An older database may need a resumable index build before its first
   // sorted page is ready. Continue only while this list is actually visible.
   useEffect(() => {
-    if (
-      !enabled ||
-      !cache.indexing ||
-      cache.inFlight.size > 0 ||
-      cache.errors.size > 0
-    )
-      return;
+    if (!enabled || !cache.indexing || cache.errors.size > 0) return;
+    let disposed = false;
     let timer: number | undefined;
     const schedule = () => {
       window.clearTimeout(timer);
-      if (!document.hidden)
-        timer = window.setTimeout(() => {
-          if (!document.hidden) void refresh();
-        }, 200);
+      if (
+        disposed ||
+        document.hidden ||
+        !cache.indexing ||
+        cache.errors.size > 0
+      )
+        return;
+      timer = window.setTimeout(async () => {
+        if (disposed || document.hidden) return;
+        await refresh();
+        // A fast response can batch both redraws into one render, leaving
+        // indexing/inFlight unchanged. Continue without relying on an effect
+        // rerun; refresh itself prevents overlapping requests.
+        schedule();
+      }, 200);
     };
     document.addEventListener("visibilitychange", schedule);
     schedule();
     return () => {
+      disposed = true;
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", schedule);
     };
-  }, [
-    cache,
-    cache.indexing,
-    cache.inFlight.size,
-    cache.errors.size,
-    enabled,
-    refresh,
-  ]);
+  }, [cache, cache.indexing, cache.errors.size, enabled, refresh]);
 
   const pages = [...cache.pages.values()].sort((a, b) => a.offset - b.offset);
   const tail = pages

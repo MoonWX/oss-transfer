@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise native installer port ownership and startup failure handling."""
 import os
+import importlib.util
 from pathlib import Path
 import shutil
 import socket
@@ -11,6 +12,33 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "deploy/native/install.sh"
 PUBLIC_INSTALLER = ROOT / "install.sh"
+
+
+class InstallerGuidanceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec=importlib.util.spec_from_file_location('installer_acceptance',ROOT/'.github/acceptance/install.py')
+        cls.acceptance=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.acceptance)
+
+    def test_all_role_upgrade_finds_master_after_agent(self):
+        cases=(
+            ('/tmp/custom Master/oss-transfer-cli',False,
+             'Tasks: /tmp/agent/oss-transfer-cli task list\nTasks: /tmp/custom\\ Master/oss-transfer-cli task list\n'),
+            ("C:\\custom Master's CLI\\oss-transfer-cli.exe",True,
+             "Tasks: & 'C:\\agent\\oss-transfer-cli.exe' task list\nTasks: & 'C:\\custom Master''s CLI\\oss-transfer-cli.exe' task list\n"),
+        )
+        for path,windows,output in cases:
+            with self.subTest(windows=windows):
+                self.assertTrue(self.acceptance.has_task_guidance(output,path,windows))
+                self.assertTrue(self.acceptance.has_task_guidance('\n'.join(reversed(output.splitlines())),path,windows))
+
+    def test_missing_or_wrong_local_command_is_rejected(self):
+        for output in ('', 'Tasks: /tmp/agent/oss-transfer-cli task list',
+                       'Tasks: /tmp/master/oss-transfer-cli --host http://localhost:1685 task list',
+                       'Tasks: /tmp/master/oss-transfer-cli task list-all'):
+            with self.subTest(output=output):
+                self.assertFalse(self.acceptance.has_task_guidance(output,'/tmp/master/oss-transfer-cli'))
 
 
 class EnrollmentInputTests(unittest.TestCase):

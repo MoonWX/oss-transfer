@@ -65,6 +65,7 @@ func TestCLIFailureExitAndCleanJSON(t *testing.T) {
 	}
 }
 func TestGlobalOptionsAndReadOnlyWatch(t *testing.T) {
+	discoveryTestPaths(t)
 	for _, args := range [][]string{{"--watch", "0", "task", "list"}, {"--watch", "1.5s", "task", "list"}, {"--host", "http://u:p@host", "task", "list"}, {"--watch", "1", "task", "stop", "224"}, {"--json", "count-lines", "x"}} {
 		code, _, _ := runMockCLI(t, args, func(http.ResponseWriter, *http.Request) { t.Fatal("unexpected network") })
 		if code != 2 {

@@ -32,6 +32,14 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+def has_task_guidance(output, cli_path, windows=False):
+    commands = [line.removeprefix('Tasks: ') for line in output.splitlines()
+                if line.startswith('Tasks: ')]
+    if windows:
+        return "& '"+str(cli_path).replace("'", "''")+"' task list" in commands
+    return any(shlex.split(command) == [str(cli_path), 'task', 'list'] for command in commands)
+
+
 PREPARE_SPEC = importlib.util.spec_from_file_location('prepare_go', Path(__file__).with_name('prepare.py'))
 PREPARE = importlib.util.module_from_spec(PREPARE_SPEC)
 PREPARE_SPEC.loader.exec_module(PREPARE)
@@ -80,7 +88,9 @@ class Lifecycle:
             # Only the installer sees this CPU selector. systemctl and the
             # generated ExecStart remain real host services using target ELF.
             self.installer_env['PATH'] = str(shim_dir)+os.pathsep+os.environ.get('PATH','')
-        self.cli_path=self.root/'shared CLI'/('oss-transfer-cli.exe' if self.system=='Windows' else 'oss-transfer-cli')
+        cli_name='oss-transfer-cli.exe' if self.system=='Windows' else 'oss-transfer-cli'
+        self.cli_path=self.root/'shared CLI'/cli_name
+        self.agent_cli_path=self.root/'agent CLI'/cli_name
         self.names = {role:'oss-qa-'+role+'-'+secrets.token_hex(5) for role in ('master','agent')}
         if self.system == 'FreeBSD': self.names = {role:name.replace('-','_') for role,name in self.names.items()}
         self.roles = []
@@ -228,7 +238,7 @@ class Lifecycle:
                      '-ConfigDir',paths['config'],'-DataDir',paths['data'],'-BackupDir',paths['backups'],'-Yes','-StartupTimeout',str(timeout)]
             if upgrade: command+=['-Upgrade']
             if adopt_config: command+=['-AdoptConfig',adopt_config]
-            if role=='master':command+=['-CliPath',self.cli_path]
+            command+=['-CliPath',self.cli_path if role=='master' else self.agent_cli_path]
             if replace_cli:command+=['-ReplaceCli']
             if role=='master':command+=['-Listen','127.0.0.1:'+str(self.port)]
             else:command+=['-MasterUrl',self.origin]
@@ -239,7 +249,7 @@ class Lifecycle:
             if self.system=='Darwin' and not self.args.system:command+=['--user']
             if upgrade:command+=['--upgrade']
             if adopt_config:command+=['--adopt-config',adopt_config]
-            if role=='master':command+=['--cli-path',self.cli_path]
+            command+=['--cli-path',self.cli_path if role=='master' else self.agent_cli_path]
             if replace_cli:command+=['--replace-cli']
             if role=='master':command+=['--listen','127.0.0.1:'+str(self.port)]
             else:command+=['--master-url',self.origin]
@@ -290,11 +300,8 @@ class Lifecycle:
                     print('Additional Windows diagnostics failed; original installer failure retained.',flush=True)
         require((result.returncode==0)==(expect==0),'Installer result unexpected; see '+str(log))
         if expect==0 and role=='master':
-            guidance = next((line.removeprefix('Tasks: ') for line in result.stdout.splitlines()
-                             if line.startswith('Tasks: ')), '')
-            expected = "& '"+str(self.cli_path).replace("'", "''")+"' task list"
-            valid_guidance = guidance == expected if self.system == 'Windows' else shlex.split(guidance) == [str(self.cli_path), 'task', 'list']
-            require(valid_guidance, 'Installer did not print its local task-list command')
+            require(has_task_guidance(result.stdout,self.cli_path,self.system=='Windows'),
+                    'Installer did not print its local task-list command')
             cli_env={key:value for key,value in os.environ.items() if not key.startswith('OSS_TRANSFER_')}
             cli_env['OSS_TRANSFER_CLI_CONFIG_DIR']=str(self.root/'local-cli-profile')
             check=self.invoke([self.cli_path,'--json','task','list'],env=cli_env)
@@ -567,8 +574,7 @@ func main(){
             installed=self.root/role/'bin'/('install.json' if self.system=='Windows' else 'install.tsv')
             if self.system=='Windows': metadata=json.loads(installed.read_text(encoding='utf-8-sig'))
             else: metadata=dict(line.split('\t',1) for line in installed.read_text(encoding='utf-8').splitlines())
-            expected_cli=self.cli_path if role=='master' else self.root/role/'bin'/'oss-transfer-cli'
-            if self.system=='Windows' and role=='agent': expected_cli=expected_cli.with_suffix('.exe')
+            expected_cli=self.cli_path if role=='master' else self.agent_cli_path
             require(metadata['cliPath']==str(expected_cli), 'Discovered upgrade changed the custom CLI location')
             if self.system=='Windows': expected_backup=Path(os.environ['ProgramData'])/'OSS Transfer'/role/'backups'
             elif self.system=='Darwin':
@@ -634,6 +640,8 @@ func main(){
             directory=self.root/role
             for part in ('bin','config'):
                 shutil.move(directory/part,directory/('before-adoption-'+part))
+            if role=='agent':
+                shutil.move(self.agent_cli_path.parent,directory/'before-adoption-cli')
         master_source=self.root/'master/before-adoption-config/service.json'
         self.install('master',expect=1)
         self.install('master',adopt_config=master_source,release=failed,expect=1,timeout=10,replace_cli=True)

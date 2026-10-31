@@ -161,6 +161,7 @@ func TestCLIConcurrentInvocationsDoNotShareLanguage(t *testing.T) {
 	wg.Wait()
 }
 func TestCLIOfflineToolsUseSelectedOutput(t *testing.T) {
+	discoveryTestPaths(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "状态.txt"), []byte("first\nsecond\n"), 0600); err != nil {
 		t.Fatal(err)

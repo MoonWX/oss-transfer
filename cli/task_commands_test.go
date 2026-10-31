@@ -470,6 +470,7 @@ func TestCLIBrokenSessionStillReturnsJSONAndCanLogout(t *testing.T) {
 }
 
 func TestWatchSecondsRejectIntegerOverflowBeforeDurationConversion(t *testing.T) {
+	discoveryTestPaths(t)
 	for _, value := range []string{"36028797018963969", "9223372036854775807", "3601", "0", "-1"} {
 		if _, err := parseGlobals([]string{"task", "list", "--watch", value}); err == nil {
 			t.Errorf("accepted out-of-range seconds: %s", value)

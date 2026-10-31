@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,11 @@ func TestPlannedAgentDowntimePreservesScanUntilMaintenanceExpires(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.leases.ttl, runtime.leases.margin = 150*time.Millisecond, 30*time.Millisecond
+	// Keep the production lease duration while the real HTTP/DB handshake
+	// completes. Advance only the Master's fence once the Agent has stopped.
+	clockStart := time.Now()
+	var elapsed atomic.Int64
+	runtime.leases.now = func() time.Time { return clockStart.Add(time.Duration(elapsed.Load())) }
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	startTakeoverLeaseLoop(t, ctx, runtime)
@@ -51,23 +56,17 @@ func TestPlannedAgentDowntimePreservesScanUntilMaintenanceExpires(t *testing.T) 
 	}
 	save()
 	a.cancel()
+	// A planned service shutdown closes its leases as well as its transport.
+	// Check real I/O cancellation before allowing the Master fence to expire.
+	a.service.Leases.Close()
 	select {
 	case <-lease.Done():
 	case <-ctx.Done():
 		t.Fatal("planned maintenance kept disconnected Agent authorized")
 	}
-	for {
-		expired, err := runtime.leases.expired(p, a.node)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if expired {
-			break
-		}
-		if ctx.Err() != nil {
-			t.Fatal(ctx.Err())
-		}
-		time.Sleep(5 * time.Millisecond)
+	elapsed.Store(int64(runtime.leases.ttl + runtime.leases.margin + time.Second))
+	if expired, err := runtime.leases.expired(p, a.node); err != nil || !expired {
+		t.Fatalf("stopped Agent's conservative fence did not expire: expired=%v error=%v", expired, err)
 	}
 	p, err = runtime.reconcileFailover(ctx, p, map[string]bool{b.node.ID: true})
 	if err != nil {

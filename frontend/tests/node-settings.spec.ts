@@ -7,7 +7,7 @@ async function fixture(page: Page) {
     localStorage.setItem("oss-transfer-refresh-seconds", "1"),
   );
   let reachable = true;
-  let children = 16;
+  let children = 32;
   let objects = 4;
   const roots = ["/mnt/data", "C:\\Archive"];
   const writes: Record<string, unknown>[] = [];
@@ -147,7 +147,7 @@ test("node concurrency applies through the settings dialog and is retained when 
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await expect(
     dialog.getByRole("spinbutton", { name: "子任务并发", exact: true }),
-  ).toHaveValue("16");
+  ).toHaveValue("32");
   await expect(
     dialog.getByRole("spinbutton", {
       name: "每个子任务的对象并发",

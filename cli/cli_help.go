@@ -238,7 +238,7 @@ const cliNodeHelp = `执行节点
   add <节点> [--label 名称]        生成指定地址的 Agent 加入指令
   invite [--address 节点] [--label 名称] [--master-url URL]
   update <节点> [--address 新地址] [--label 名称]
-  update <节点> --child-concurrency 8 --object-concurrency 4
+  update <节点> --child-concurrency 32 --object-concurrency 4
   remove <节点> --yes              移除指定节点注册
 
 示例
@@ -264,7 +264,7 @@ const cliAgentHelp = `Agent 管理
   details <节点>                  查看主机、网卡 IP 和挂载目录
   update <节点> [--label 名称] [--local-root 目录 ...]
   update <节点> --clear-local-roots
-  update <节点> --child-concurrency 8 --object-concurrency 4
+  update <节点> --child-concurrency 32 --object-concurrency 4
   remove <节点> --yes              撤销该 Agent 的注册
 
 示例

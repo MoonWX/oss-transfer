@@ -23,6 +23,8 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 
+INITIAL_PASSWORD_PATTERN = r"^(?:Initial password|初始密码)[ \t]*[:：][ \t]*([A-Za-z0-9_-]+)[ \t]*$"
+
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -62,7 +64,7 @@ class Acceptance:
     def scrub(self, text):
         for value in self.secrets:
             text = text.replace(value, "[redacted]")
-        return re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
+        return re.sub(r'((?:Initial password|Setup token|初始密码|初始化密钥|\\u521d\\u59cb\\u5bc6\\u7801|\\u521d\\u59cb\\u5316\\u5bc6\\u94a5)[ \t]*(?:[:：]|\\uff1a))[ \t]*[^\s"\\]+', r"\1 [redacted]", text)
 
     def log(self, name, text):
         path = self.output / name
@@ -188,7 +190,7 @@ class Acceptance:
         require(master and "\n" not in master, "Installer did not create exactly one Master container")
         status = eventually(lambda: self.api("/api/setup/status"), "installed Master authentication readiness")
         require(status["configured"], "Fresh Compose Master did not create an administrator")
-        printed_passwords = re.findall(r"^Initial password: ([A-Za-z0-9_-]+)$", installed.stdout, re.MULTILINE)
+        printed_passwords = re.findall(INITIAL_PASSWORD_PATTERN, installed.stdout, re.MULTILINE)
         require(len(printed_passwords) == 1, "Compose installer did not print exactly one initial password")
         initial_password = printed_passwords[0]
         credentials = {"username": "admin", "password": secrets.token_urlsafe(24)}

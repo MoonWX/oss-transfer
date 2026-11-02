@@ -27,6 +27,8 @@ import zipfile
 from urllib.request import Request, urlopen
 
 
+INITIAL_PASSWORD_PATTERN = r"^(?:Initial password|初始密码)[ \t]*[:：][ \t]*([A-Za-z0-9_-]+)[ \t]*$"
+
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -172,7 +174,7 @@ class Lifecycle:
         return directory
 
     def scrub(self,text):
-        text=re.sub(r'((?:Initial password|Setup token):) \S+',r'\1 [redacted]',text)
+        text=re.sub(r'((?:Initial password|Setup token|初始密码|初始化密钥|\\u521d\\u59cb\\u5bc6\\u7801|\\u521d\\u59cb\\u5316\\u5bc6\\u94a5)[ \t]*(?:[:：]|\\uff1a))[ \t]*[^\s"\\]+',r'\1 [redacted]',text)
         for secret in self.secrets:
             text=text.replace(secret,'[redacted]')
         return text
@@ -310,7 +312,7 @@ class Lifecycle:
             require(check.returncode==0, 'Installed CLI could not list its local cluster without login: '+self.scrub(check.stdout))
             require(json.loads(check.stdout).get('success') is True, 'Installed CLI task list did not succeed')
             if hasattr(self, 'credentials'):
-                require('Initial password:' not in result.stdout,
+                require(not re.search(INITIAL_PASSWORD_PATTERN, result.stdout, re.MULTILINE),
                         'Installer reprinted an initial password from an existing installation')
         return result
 
@@ -512,7 +514,7 @@ func main(){
         ready=self.root/'master/data/runtime/ready'
         require(ready.with_name('ready.request').read_text()==ready.with_name('ready.committed').read_text(),
                 'Successful installation did not commit its startup for scan cleanup')
-        printed_passwords = re.findall(r'^Initial password: ([A-Za-z0-9_-]+)$', installed.stdout, re.MULTILINE)
+        printed_passwords = re.findall(INITIAL_PASSWORD_PATTERN, installed.stdout, re.MULTILINE)
         require(len(printed_passwords) == 1, 'Fresh installation did not print exactly one initial password to the terminal')
         initial_password = printed_passwords[0]
         self.secrets.append(initial_password)

@@ -30,9 +30,11 @@ def event(value):
         stream.write(json.dumps(value) + '\n')
 role = option('--role')
 event({'event': 'native', 'role': role, 'args': args,
+       'lang': os.environ.get('OSS_TRANSFER_INSTALL_LANG'),
        'token': os.environ.get('TRANSFER_JOIN_TOKEN', '')})
 if role != 'master':
-    sys.exit(0)
+    print('Agent installation finished')
+    sys.exit(int(os.environ.get('AGENT_EXIT_CODE', '0')))
 root = Path(option('--root-dir', os.environ.get('DEFAULT_INSTALL_ROOT')))
 install = Path(option('--install-dir', os.environ.get('MASTER_INSTALL_DIR', str(root/'master/bin'))))
 config = Path(option('--config-dir', str(root/'master/config')))/'service.json'
@@ -50,6 +52,11 @@ shutil.copyfile(Path(option('--package-dir'))/'manifest.tsv', data/'packages/man
 shutil.copyfile(os.environ['FIXTURE_CLI'], cli)
 cli.chmod(0o755)
 print('Installation: '+str(install))
+zh = os.environ.get('OSS_TRANSFER_INSTALL_LANG') == 'zh'
+print(('访问地址: ' if zh else 'Web UI: ')+os.environ['MASTER_ORIGIN'])
+if os.environ.get('NEW_PASSWORD'):
+    print('初始管理员: admin' if zh else 'Initial administrator: admin')
+    print(('初始密码: ' if zh else 'Initial password: ')+os.environ['NEW_PASSWORD'])
 '''
 
 CLI_FIXTURE = r'''
@@ -173,6 +180,31 @@ class CombinedInstallerTests(unittest.TestCase):
         result = self.run_installer('--role', 'master', '--without-agent')
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertEqual([(event['event'], event.get('role')) for event in self.events()], [('native', 'master')])
+
+    def test_chinese_combined_install_ends_with_access_details_once(self):
+        result = self.run_installer('--role', 'master', '--lang', 'zh',
+                                    MASTER_ORIGIN='http://10.0.0.2:1688', NEW_PASSWORD='new_test_password')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertEqual([e['lang'] for e in self.events() if e['event'] == 'native'], ['zh', 'zh'])
+        self.assertEqual(result.stdout.count('初始密码: new_test_password'), 1)
+        self.assertIn('Master 和本机 Agent 安装成功', result.stdout)
+        self.assertTrue(result.stdout.endswith('访问地址: http://10.0.0.2:1688\n初始管理员: admin\n初始密码: new_test_password\n'))
+        self.assertGreater(result.stdout.index('访问地址:'), result.stdout.index('Agent installation finished'))
+
+    def test_agent_failure_preserves_master_access_without_cluster_success(self):
+        result = self.run_installer('--role', 'master', '--lang', 'zh',
+                                    NEW_PASSWORD='new_test_password', AGENT_EXIT_CODE='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('Master 和本机 Agent 安装成功', result.stdout)
+        self.assertIn('初始密码: new_test_password', result.stdout)
+        self.assertIn('访问地址: http://127.0.0.1:1685', result.stdout)
+
+    def test_chinese_reinstall_does_not_invent_a_password(self):
+        result = self.run_installer('--role', 'master', '--lang', 'zh')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertNotIn('初始密码', result.stdout)
+        self.assertNotIn('初始管理员', result.stdout)
+        self.assertIn('访问地址:', result.stdout)
 
     def test_with_agent_uses_published_ipv6_origin_not_wildcard_check_config(self):
         origin = 'http://[::1]:1688'

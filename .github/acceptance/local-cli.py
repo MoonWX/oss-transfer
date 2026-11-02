@@ -50,7 +50,7 @@ def main():
         for value in private_values:
             text = text.replace(value, "[redacted]")
         text = re.sub(r'(?i)("(?:token|inviteToken|password)"\s*:\s*")[^"]*', r'\1[redacted]', text)
-        return re.sub(r"(?m)^Initial password: .+$", "Initial password: [redacted]", text)
+        return re.sub(r'((?:Initial password|Setup token|初始密码|初始化密钥|\\u521d\\u59cb\\u5bc6\\u7801|\\u521d\\u59cb\\u5316\\u5bc6\\u94a5)[ \t]*(?:[:：]|\\uff1a))[ \t]*[^\s"\\]+', r"\1 [redacted]", text)
 
     def install(name, role):
         directory = root / name

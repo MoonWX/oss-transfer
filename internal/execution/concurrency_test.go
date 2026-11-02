@@ -128,11 +128,11 @@ func TestChildConcurrencyChangesWakeAndDrainWithoutCancelling(t *testing.T) {
 	}
 }
 
-func TestDefaultConcurrencyIsEightChildrenAndFourObjects(t *testing.T) {
+func TestDefaultConcurrencyIsThirtyTwoChildrenAndFourObjects(t *testing.T) {
 	f := newFixture(t, 1)
 	f.startEngine(nil, Options{})
 	_, children := f.engine.Concurrency()
-	if children != 8 || f.engine.ObjectConcurrency() != 4 {
+	if children != 32 || f.engine.ObjectConcurrency() != 4 {
 		t.Fatal(children, f.engine.ObjectConcurrency())
 	}
 }

@@ -64,7 +64,7 @@ def main():
     phase = "Master startup"
 
     def redact(text):
-        text = re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
+        text = re.sub(r'((?:Initial password|Setup token|初始密码|初始化密钥|\\u521d\\u59cb\\u5bc6\\u7801|\\u521d\\u59cb\\u5316\\u5bc6\\u94a5)[ \t]*(?:[:：]|\\uff1a))[ \t]*[^\s"\\]+', r"\1 [redacted]", text)
         for secret in secrets:
             if secret:
                 text = text.replace(secret, "[redacted]")

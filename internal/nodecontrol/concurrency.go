@@ -1,6 +1,10 @@
 package nodecontrol
 
-import "context"
+import (
+	"context"
+
+	"github.com/MoonWX/oss-transfer/internal/execution"
+)
 
 // ValidateConcurrency bounds the total active object requests on a node.
 // Multipart requests also retain their existing per-upload bounds and node QPS.
@@ -57,7 +61,7 @@ func (c *Controller) UpdateConfig(ctx context.Context, change ConfigChange) (Con
 }
 
 func (c *Controller) config() Config {
-	value := ConcurrencyConfig{MaxConcurrentChildren: 8, ObjectsPerChild: 4}
+	value := ConcurrencyConfig{MaxConcurrentChildren: execution.DefaultChildConcurrency, ObjectsPerChild: execution.DefaultObjectConcurrency}
 	if c.data.Concurrency != nil {
 		value = *c.data.Concurrency
 	}

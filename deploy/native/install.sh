@@ -293,9 +293,12 @@ upgrade=0
 yes=0
 user_service=0
 startup_timeout=120
+lang=${OSS_TRANSFER_INSTALL_LANG:-}
+say() { if [[ "${lang:-en}" == zh ]]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
 usage() {
   cat <<'EOF'
 Usage: bash install.sh [--role master|agent] [--upgrade] [options]
+  --lang en|zh         Output language (default: system locale)
   --release-url URL    Release directory (default: public latest)
   --source auto|github|jdoss  Download source (default: public IP location)
   --version VERSION   Release version (default: latest)
@@ -319,7 +322,7 @@ fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 while (($#)); do
   case "$1" in
     --version) (($# >= 2)) || fail 'Missing value: --version'; requested_version=$2; shift 2;;
-    --role|--source|--release-url|--package-dir|--adopt-config|--cli-path|--root-dir|--install-dir|--config-dir|--data-dir|--backup-dir|--service-name|--listen|--master-url|--startup-timeout)
+    --lang|--role|--source|--release-url|--package-dir|--adopt-config|--cli-path|--root-dir|--install-dir|--config-dir|--data-dir|--backup-dir|--service-name|--listen|--master-url|--startup-timeout)
       (($# >= 2)) || fail "Missing value: $1"
       key=${1#--}; key=${key//-/_}; printf -v "$key" '%s' "$2"; shift 2 ;;
     --token-stdin) token_stdin=1; shift;;
@@ -331,6 +334,11 @@ while (($#)); do
     *) fail "Unknown option: $1";;
   esac
 done
+if [[ -z "$lang" ]]; then
+  case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in zh*) lang=zh;; *) lang=en;; esac
+fi
+[[ "$lang" == en || "$lang" == zh ]] || fail '--lang must be en or zh'
+export OSS_TRANSFER_INSTALL_LANG=$lang
 [[ -z "$role" || "$role" == master || "$role" == agent ]] || fail 'Role must be master or agent'
 [[ -z "$adopt_config" || "$upgrade" == 0 ]] || fail 'Choose --adopt-config or --upgrade'
 if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]] || ((startup_timeout < 10 || startup_timeout > 600)); then fail 'Invalid readiness timeout'; fi
@@ -423,7 +431,7 @@ trusted_master_release() {
 }
 if [[ -z "$release_url" && -z "$package_dir" ]]; then
   selected_source=$(transfer_select_source "$source" "$requested_version") || fail 'Cannot select a download source; use --source or --release-url'
-  printf 'Download source: %s\n' "$selected_source"
+  printf '%s: %s\n' "$(say 'Download source' '下载源')" "$selected_source"
   if [[ "$selected_source" == github ]]; then
     source_stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-download.XXXXXX")
     trap 'rm -rf -- "$source_stage"' EXIT
@@ -655,7 +663,7 @@ if [[ -f "$metadata" && ! -L "$metadata" ]]; then
 elif [[ -z "$adopt_config" && -f "$config" && ! -L "$config" ]]; then
   existed=1
   [[ ! -L "$binary" && ( ! -e "$binary" || -f "$binary" ) ]] || fail 'Existing program is a link or non-file'
-  printf 'Existing configuration found; preserving its data.\n'
+  say 'Existing configuration found; preserving its data.' '已发现原有配置，将保留现有数据。'
   # A leftover service is accepted only if it names these exact program and
   # config paths. An unrelated service must never be stopped by recovery.
   if [[ -f "$unit" ]]; then
@@ -1083,18 +1091,18 @@ startup_failure() {
 }
 wait_ready() {
   local started=$SECONDS deadline=$((SECONDS+startup_timeout)) next_notice=$((SECONDS+10)) pid
-  printf 'Waiting for %s to become ready (up to %ss)...\n' "$service_name" "$startup_timeout"
+  printf "$(say 'Waiting for %s to become ready (up to %ss)...' '正在等待 %s 就绪（最多 %s 秒）…')\n" "$service_name" "$startup_timeout"
   while ((SECONDS < deadline)); do
     pid=$(service_pid || true)
     if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && "$binary" --config "$config" --check-ready --expect-pid "$pid" --expect-launch-id "$launch_id" >/dev/null 2>&1; then return 0; fi
     if startup_failure; then return 1; fi
     if ((SECONDS >= next_notice)); then
-      printf 'Still waiting for %s (%ss elapsed); log: %s\n' "$service_name" "$((SECONDS-started))" "$log_file"
+      printf "$(say 'Still waiting for %s (%ss elapsed); log: %s' '仍在等待 %s（已等待 %s 秒）；日志: %s')\n" "$service_name" "$((SECONDS-started))" "$log_file"
       next_notice=$((SECONDS+10))
     fi
     sleep 1
   done
-  printf 'Startup timed out after %ss. Check %s and the %s service status.\n' "$startup_timeout" "$log_file" "$service_name" >&2
+  printf "$(say 'Startup timed out after %ss. Check %s and the %s service status.' '启动等待超过 %s 秒。请检查日志 %s 和 %s 服务状态。')\n" "$startup_timeout" "$log_file" "$service_name" >&2
   return 1
 }
 commit_start() {
@@ -1119,13 +1127,29 @@ print_initial_credentials() {
   password=$(tail -n +$((startup_log_lines+1)) "$log_file" |
     sed -n 's/^Initial password: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
   if [[ -n "$password" ]]; then
-    printf '\nInitial administrator: admin\nInitial password: %s\n' "$password"
+    printf '\n%s: admin\n%s: %s\n' "$(say 'Initial administrator' '初始管理员')" "$(say 'Initial password' '初始密码')" "$password"
   else
     # Fixed-version installs and downgrades can still run the earlier setup UI.
     token=$(tail -n +$((startup_log_lines+1)) "$log_file" |
       sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
-    [[ -z "$token" ]] || printf '\nSetup token: %s\n' "$token"
+    [[ -z "$token" ]] || printf '\n%s: %s\n' "$(say 'Setup token' '初始化密钥')" "$token"
   fi
+}
+console_url() {
+  local address host port candidate
+  address=$(awk -F '\t' '$1=="listen"{print $2}' "$work/config.tsv")
+  host=${address%:*}; port=${address##*:}; host=${host#[}; host=${host%]}
+  if [[ -z "$host" || "$host" == 0.0.0.0 || "$host" == :: ]]; then
+    # Inspect local interfaces only. Printing an address must not depend on an
+    # external IP lookup, and must retain the listener's actual custom port.
+    candidate=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ {print; exit}') || candidate=
+    if [[ -z "$candidate" ]] && command -v ifconfig >/dev/null 2>&1; then
+      candidate=$(ifconfig 2>/dev/null | awk '$1=="inet" && $2 !~ /^127\./ {print $2; exit}') || candidate=
+    fi
+    host=${candidate:-localhost}
+  fi
+  [[ "$host" != *:* ]] || host=[$host]
+  printf 'http://%s:%s\n' "$host" "$port"
 }
 backup_cli_sidecars() {
   local suffix kind path name
@@ -1247,7 +1271,7 @@ if ((existed)); then
     agent_maintenance_started=1
   fi
   trap rollback ERR INT TERM
-  printf 'Stopping %s before the database backup...\n' "$service_name"
+  printf "$(say 'Stopping %s before the database backup...' '正在停止 %s，随后备份数据库…')\n" "$service_name"
   stop_service
   # Recheck the database lock after stopping the service; a manual process may
   # still own it. Take a consistent snapshot only when all writers are stopped.
@@ -1269,7 +1293,7 @@ if ((had_cli || had_cli_sidecars || had_data_cli_connections)); then
   backup_cli_sidecars
 fi
 trap rollback ERR INT TERM
-printf 'Installing %s %s...\n' "$role" "$version"
+printf "$(say 'Installing %s %s...' '正在安装 %s %s…')\n" "$role" "$version"
 cp "$work/$filename" "$binary.new"
 chmod 755 "$binary.new"
 mv -f "$binary.new" "$binary"
@@ -1345,7 +1369,7 @@ EOF
 fi
 if [[ "$platform" == freebsd ]]; then chmod 755 "$unit"; else chmod 644 "$unit"; fi
 prepare_start
-printf 'Starting %s...\n' "$service_name"
+printf "$(say 'Starting %s...' '正在启动 %s…')\n" "$service_name"
 start_service
 wait_ready
 if [[ "$platform" == linux ]]; then
@@ -1357,9 +1381,20 @@ if commit_start; then
   finish_backup
   if ((cli_migrated)); then rm -f "$previous_cli" "$previous_cli.cluster.json" "$previous_cli.local-auth.json"; fi
 fi
-if ! publish_master_packages; then fail 'Service installed, but could not retain Agent packages; rerun the installer to repair the package cache'; fi
-printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
+if ! publish_master_packages; then
+  if [[ "$role" == master ]]; then
+    printf '%s: %s\n' "$(say 'Web UI' '访问地址')" "$(console_url)"
+    print_initial_credentials
+  fi
+  fail "$(say 'Service installed, but could not retain Agent packages; rerun the installer to repair the package cache' '服务已就绪，但 Agent 安装包保存失败。请重新运行安装脚本修复。')"
+fi
+printf '\n%s: %s\n%s: %s\n%s: %s\n' "$(say 'Service' '服务')" "$service_name" "$(say 'Configuration' '配置文件')" "$config" "$(say 'Log' '日志')" "$log_file"
+# These two labels are also consumed by installation tooling.
 printf 'Installation: %s\n' "$install_dir"
 printf 'CLI: %s\n' "$cli_path"
 printf 'Tasks: %q task list\n' "$cli_path"
+printf '\n=== %s %s · %s ===\n' "$role" "$version" "$(say 'Installed successfully' '安装成功')"
+if [[ "$role" == master ]]; then
+  printf '%s: %s\n' "$(say 'Web UI' '访问地址')" "$(console_url)"
+fi
 print_initial_credentials

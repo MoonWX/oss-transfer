@@ -1,8 +1,9 @@
-# Native Go service installation. Run from an elevated PowerShell session.
+﻿# Native Go service installation. Run from an elevated PowerShell session.
 [CmdletBinding()]
 param(
     [ValidateSet('master','agent')][string]$Role,
     [ValidateSet('auto','github','jdoss')][string]$Source = 'auto',
+    [ValidateSet('en','zh')][string]$Lang,
     [string]$Version = 'latest',
     [string]$ReleaseUrl,
     [string]$PackageDir,
@@ -25,6 +26,17 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+function Resolve-InstallLanguage([string]$Requested,[string]$Inherited,[string]$Culture) {
+    if ($Requested -in @('en','zh')) { return $Requested }
+    if ($Inherited -in @('en','zh')) { return $Inherited }
+    if ($Culture.StartsWith('zh',[StringComparison]::OrdinalIgnoreCase)) { return 'zh' }
+    return 'en'
+}
+function Get-InstallText([string]$English,[string]$Chinese) {
+    if ($Lang -eq 'zh') { return $Chinese }
+    return $English
+}
+$Lang = Resolve-InstallLanguage $Lang $env:OSS_TRANSFER_INSTALL_LANG (Get-UICulture).Name
 # Source resolution is kept separate from service operations so malformed downloads
 # are rejected before an existing installation is stopped.
 function Protect-Directory([string]$Path) {
@@ -137,7 +149,7 @@ function Resolve-DownloadSource([string]$Preference,[string]$RequestedVersion,[s
     catch [Net.WebException] {
         if ($Preference -ne 'auto') { throw }
         $alternate = if ($selected -eq 'github') { 'jdoss' } else { 'github' }
-        Write-Warning "Could not reach $selected; trying $alternate."
+        Write-Warning ((Get-InstallText 'Could not reach {0}; trying {1}.' '无法连接 {0}，正在尝试 {1}。') -f $selected,$alternate)
         return Get-SourceMetadata $alternate $RequestedVersion $Architecture
     }
 }
@@ -252,7 +264,7 @@ if (-not $Upgrade -and -not $AdoptConfig) {
             if ($saved.role -ne $selectedRole) { throw 'Existing installation role differs.' }
             if ($ServiceName -and $saved.serviceName -ne $ServiceName) { throw 'Existing service name differs from -ServiceName.' }
             $InstallDir = $directory; $Upgrade = $true
-            Write-Host 'Existing installation found; preserving its configuration and data.'
+            Write-Host (Get-InstallText 'Existing installation found; preserving its configuration and data.' '检测到已有安装，保留配置和数据。')
             break
         }
     }
@@ -261,7 +273,7 @@ $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToS
 $arch = switch ($architecture) { 'x64' {'amd64'} 'arm64' {'arm64'} default {throw 'Unsupported CPU architecture.'} }
 if (-not $ReleaseUrl -and -not $PackageDir) {
     $resolved = Resolve-DownloadSource $Source $Version $arch
-    Write-Host "Download source: $($resolved.Source) ($($resolved.Version))"
+    Write-Host ((Get-InstallText 'Download source: {0} ({1})' '下载源：{0}（{1}）') -f $resolved.Source,$resolved.Version)
     if ($resolved.Source -eq 'github') {
         $sourceWork = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-source-'+[Guid]::NewGuid().ToString('N'))
         Protect-Directory $sourceWork
@@ -304,9 +316,9 @@ if ($Upgrade) {
             }
         }
         if ($candidates.Count -eq 0) { throw 'No managed installation found; use -InstallDir for an installation without a service definition.' }
-        Write-Host 'Upgrade installations:'
+        Write-Host (Get-InstallText 'Upgrade installations:' '将升级以下服务：')
         foreach ($directory in @($candidates.Keys | Sort-Object)) { Write-Host "  $($candidates[$directory].serviceName): $directory" }
-        if (-not $Yes -and (Read-Host 'Back up and upgrade these installations? [y/N]') -notmatch '^[yY]$') { return }
+        if (-not $Yes -and (Read-Host (Get-InstallText 'Back up and upgrade these installations? [y/N]' '备份并升级这些服务？[y/N]')) -notmatch '^[yY]$') { return }
         # Resolve latest before dispatching either role, then pass that fixed URL.
         if ($ReleaseUrl -and $ReleaseUrl.EndsWith('/latest',[StringComparison]::Ordinal)) {
             $uri = [Uri]$ReleaseUrl
@@ -341,6 +353,7 @@ if ($Upgrade) {
             if ($PackageDir) { $childArguments.PackageDir = $PackageDir; $childArguments.Remove('ReleaseUrl') }
             $childArguments.InstallDir = $directory
             $childArguments.Yes = $true
+            $childArguments.Lang = $Lang
             & $PSCommandPath @childArguments
         }
         return
@@ -386,7 +399,7 @@ if (-not $Upgrade -and -not $AdoptConfig -and (Test-Path -LiteralPath $retainedC
         }
     }
     $AdoptConfig = $retainedConfig; $autoAdopt = $true
-    Write-Host 'Retained configuration found; restoring this installation with its existing data.'
+    Write-Host (Get-InstallText 'Retained configuration found; restoring this installation with its existing data.' '检测到保留的配置，使用原有数据恢复安装。')
 }
 if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid retained service name.' }
 function Resolve-BackupDirectory([string]$Requested,[string]$RoleName,[string]$InstallationRoot = '') {
@@ -397,7 +410,7 @@ function Resolve-BackupDirectory([string]$Requested,[string]$RoleName,[string]$I
 $BackupDir = Resolve-BackupDirectory $BackupDir $Role $RootDir
 if ($Role -eq 'master' -and -not $Upgrade -and -not $AdoptConfig -and -not $WithAgent -and -not $WithoutAgent) {
     if ($Yes) { $WithAgent = $true }
-    else { $WithAgent = (Read-Host 'Install an Agent on this host as well? [Y/n]') -notmatch '^[nN]$' }
+    else { $WithAgent = (Read-Host (Get-InstallText 'Install an Agent on this host as well? [Y/n]' '是否同时安装本机 Agent？[Y/n]')) -notmatch '^[nN]$' }
 }
 function Assert-DirectoryPath([string]$Path) {
     if (-not [IO.Path]::IsPathRooted($Path) -or $Path.StartsWith('\\') -or $Path -match '[\x00-\x1f"%]' -or [IO.Path]::GetFullPath($Path).TrimEnd('\') -cne $Path -or $Path -match '^[A-Za-z]:$') { throw "Use a clean local absolute path: $Path" }
@@ -624,7 +637,7 @@ function Maintain-Backups([string]$Action) {
         if ($Action -eq 'complete') { $arguments += @('--backup-entry',[IO.Path]::GetFileName($backup)) }
         $result = (Invoke-Native $candidate $arguments | Out-String) | ConvertFrom-Json
         if ($Action -eq 'prune' -and $result.count -gt 0) {
-            Write-Host ("Removed {0} completed temporary backup(s)." -f $result.count)
+            Write-Host ((Get-InstallText 'Removed {0} completed temporary backup(s).' '已删除 {0} 份已完成的临时备份。') -f $result.count)
         }
         $script:backupMaintenanceSucceeded = $true
     } catch {
@@ -669,7 +682,7 @@ function New-TemporaryBackup {
     if (Test-Path -LiteralPath $path) { throw 'Temporary backup directory already exists.' }
     Protect-Directory $path
     $script:ownedBackup = $path
-    Write-Host "Temporary backup: $path"
+    Write-Host ((Get-InstallText 'Temporary backup: {0}' '临时备份：{0}') -f $path)
     return $path
 }
 function Remove-TemporaryBackup {
@@ -685,7 +698,7 @@ function Remove-TemporaryBackup {
             Assert-RegularFile $file.FullName
         }
         Remove-Item -LiteralPath $backup -Recurse -Force
-        Write-Host "Removed temporary backup: $backup"
+        Write-Host ((Get-InstallText 'Removed temporary backup: {0}' '已删除临时备份：{0}') -f $backup)
     } catch {
         Write-Warning ("Could not remove the temporary backup. Retained at {0}. {1}" -f $backup,$_.Exception.GetBaseException().Message) -WarningAction Continue
     }
@@ -762,6 +775,7 @@ function Prepare-Start {
     Protect-File ($script:readyFile+'.request')
 }
 function Wait-Ready {
+    Write-Host ((Get-InstallText 'Waiting for {0} to become ready...' '正在等待 {0} 就绪...') -f $ServiceName)
     $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeout)
     while ([DateTime]::UtcNow -lt $deadline) {
         $current = Service-Record
@@ -808,8 +822,60 @@ function Show-InitialCredentials {
         if ($index -gt $script:startupLogLines -and $_ -cmatch '^Initial password: ([A-Za-z0-9_-]+)$') { $password = $Matches[1] }
         if ($index -gt $script:startupLogLines -and $_ -cmatch '^Open the console to complete setup\. Setup token: ([A-Za-z0-9_-]+)$') { $token = $Matches[1] }
     }
-    if ($password) { Write-Host "`nInitial administrator: admin`nInitial password: $password" }
-    elseif ($token) { Write-Host "`nSetup token: $token" }
+    if ($password) {
+        Write-Host (Get-InstallText "`nInitial administrator: admin" "`n初始管理员：admin")
+        Write-Host ((Get-InstallText 'Initial password: {0}' '初始密码：{0}') -f $password)
+    } elseif ($token) { Write-Host ((Get-InstallText "`nSetup token: {0}" "`n初始化密钥：{0}") -f $token) }
+}
+function Get-LocalAccessAddress {
+    $candidates = @()
+    try {
+    foreach ($network in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+        if ($network.OperationalStatus -ne [Net.NetworkInformation.OperationalStatus]::Up -or
+            $network.NetworkInterfaceType -in @([Net.NetworkInformation.NetworkInterfaceType]::Loopback,[Net.NetworkInformation.NetworkInterfaceType]::Tunnel)) { continue }
+        $properties = $network.GetIPProperties()
+        foreach ($unicast in $properties.UnicastAddresses) {
+            $address = $unicast.Address
+            if ([Net.IPAddress]::IsLoopback($address) -or $address.Equals([Net.IPAddress]::Any) -or
+                $address.Equals([Net.IPAddress]::IPv6Any) -or $address.IsIPv6LinkLocal -or
+                $address.ToString().StartsWith('169.254.')) { continue }
+            $priority = if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) { 0 } else { 2 }
+            if (@($properties.GatewayAddresses).Count -eq 0) { $priority++ }
+            $candidates += [PSCustomObject]@{priority=$priority;address=$address.ToString()}
+        }
+    }
+    } catch { return 'localhost' }
+    $selected = $candidates | Sort-Object priority,address | Select-Object -First 1
+    if ($selected) { return $selected.address }
+    return 'localhost'
+}
+function Get-MasterAccessUrl([string]$Binding,[string]$LocalAddress) {
+    if ($Binding.StartsWith(':')) { $Binding = '0.0.0.0'+$Binding }
+    $uri = [Uri]('http://'+$Binding)
+    $address = $uri.Host.Trim([char[]]'[]')
+    if ($address -in @('0.0.0.0','::')) { $address = $LocalAddress }
+    if (-not $address -or $address -in @('0.0.0.0','::')) { $address = 'localhost' }
+    if ($address.Contains(':')) { $address = '['+$address+']' }
+    return 'http://'+$address+':'+$uri.Port
+}
+function Show-MasterAccess {
+    if ($Role -ne 'master') { return }
+    $settings = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+    $binding = '0.0.0.0:1685'
+    if ($settings.PSObject.Properties['listen'] -and $settings.listen) { $binding = [string]$settings.listen }
+    $url = Get-MasterAccessUrl $binding (Get-LocalAccessAddress)
+    Write-Host ((Get-InstallText 'Web console: {0}' '访问地址：{0}') -f $url) -ForegroundColor Cyan
+}
+function Show-InstallationSummary {
+    Write-Host ((Get-InstallText "`nInstallation successful: {0} {1}" "`n安装成功：{0} {1}") -f $Role,$version) -ForegroundColor Green
+    Show-MasterAccess
+    Write-Host ((Get-InstallText 'Service: {0}' '服务：{0}') -f $ServiceName)
+    Write-Host ('Installation: '+$InstallDir)
+    Write-Host ((Get-InstallText 'Configuration: {0}' '配置文件：{0}') -f $config)
+    Write-Host ((Get-InstallText 'Data: {0}' '数据目录：{0}') -f $DataDir)
+    Write-Host ('CLI: '+$CliPath)
+    Write-Host ("Tasks: & '"+$CliPath.Replace("'","''")+"' task list")
+    Write-Host ((Get-InstallText 'Log: {0}' '日志：{0}') -f $script:logFile)
 }
 try {
     if ($ReleaseUrl) {
@@ -910,7 +976,7 @@ try {
         Invoke-Native $candidate @('--config',$freshConfig,'--check-config') | Out-Null
     }
     if ((Test-Path (Join-Path $DataDir 'CURRENT')) -or (Test-Path (Join-Path $DataDir 'rocksdb\CURRENT'))) { throw 'RocksDB requires an explicit migration.' }
-    if (-not $Yes -and (Read-Host "Install $Role $version? [y/N]") -notmatch '^[yY]$') { return }
+    if (-not $Yes -and (Read-Host ((Get-InstallText 'Install {0} {1}? [y/N]' '安装 {0} {1}？[y/N]') -f $Role,$version)) -notmatch '^[yY]$') { return }
     if ($existing -or $AdoptConfig -or $hadCli -or $hadCliSidecars -or $hadDataCLIConnections) {
         Prepare-BackupDirectory
         if ($existing) { Maintain-Backups 'prune' }
@@ -929,12 +995,12 @@ try {
             $wasRunning = $oldService.State -ne 'Stopped'
         }
         if ($Role -eq 'agent') {
-            Write-Host 'Protecting Agent tasks during the upgrade...'
+            Write-Host (Get-InstallText 'Protecting Agent tasks during the upgrade...' '正在保留 Agent 上的任务进度...')
             Invoke-Native $candidate @('--config',$config,'--upgrade-maintenance','begin','--upgrade-maintenance-file',(Join-Path $work 'agent-maintenance.json')) | Out-Null
             $agentMaintenanceStarted = $true
         }
         $changed = $true
-        Write-Host "Stopping $ServiceName before the database backup..."
+        Write-Host ((Get-InstallText 'Stopping {0} before the database backup...' '正在停止 {0}，随后备份数据库...') -f $ServiceName)
         Stop-OwnedService
         Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--backup-state',(Join-Path $backup 'database')) | Out-Null
         $hadDatabaseBackup = $true
@@ -959,7 +1025,7 @@ try {
         Backup-CLIConnections
     }
     $changed = $true
-    Write-Host "Installing $Role $version..."
+    Write-Host ((Get-InstallText 'Installing {0} {1}...' '正在安装 {0} {1}...') -f $Role,$version)
     Copy-Item -LiteralPath $candidate -Destination ($binary+'.new')
     Move-Item -LiteralPath ($binary+'.new') -Destination $binary -Force
     [IO.Directory]::CreateDirectory((Split-Path $CliPath -Parent)) | Out-Null
@@ -983,6 +1049,7 @@ try {
         if ($result.ReturnValue -ne 0) { throw 'Could not update the service command.' }
     } else { New-Service -Name $ServiceName -BinaryPathName $command -DisplayName "OSS Transfer $Role" -StartupType Automatic | Out-Null }
     Prepare-Start
+    Write-Host ((Get-InstallText 'Starting {0}...' '正在启动 {0}...') -f $ServiceName)
     Start-Service -Name $ServiceName
     Wait-Ready
     Publish-MasterPackages
@@ -992,13 +1059,8 @@ try {
             $agentMaintenanceStarted = $false
         } catch { Write-Warning 'Could not end Agent upgrade maintenance; it expires automatically within 30 minutes.' }
     }
-    Write-Host "Installed $Role $version. Service: $ServiceName"
-    Write-Host "Installation: $InstallDir"
-    Write-Host "Configuration: $config"
-    Write-Host "CLI: $CliPath"
-    Write-Host ("Tasks: & '"+$CliPath.Replace("'","''")+"' task list")
-    Write-Host ('Log: '+$script:logFile)
-    Show-InitialCredentials
+    Show-InstallationSummary
+    if (-not ($Role -eq 'master' -and $WithAgent)) { Show-InitialCredentials }
     $installationSucceeded = $true
 } catch {
     $failure = $_
@@ -1021,7 +1083,7 @@ try {
                 Write-Warning ("Service account: {0}; command: {1}" -f $failedService.StartName,$failedService.PathName)
             }
         } catch { Write-Warning 'Could not read the failed service record.' }
-        Write-Warning 'Installation failed; restoring the previous installation.'
+        Write-Warning (Get-InstallText 'Installation failed; restoring the previous installation.' '安装失败，正在恢复原有安装。')
         try {
             Stop-OwnedService
             if ($cliChanged) {
@@ -1079,59 +1141,66 @@ try {
 }
 
 if ($installationSucceeded -and $Role -eq 'master' -and $WithAgent) {
-    # The Master keeps running if the optional Agent step fails. Rerunning this
-    # command reuses the existing Master and any enrolled Agent identity.
-    $localMaster = Read-PublishedMasterOrigin $DataDir
-    $agentRoot = Resolve-LocalAgentRoot $RootDir $rootExplicit $InstallDir (Join-Path $env:ProgramFiles 'OSS Transfer\master')
-    $agentInstall = Join-Path $agentRoot 'agent\bin'
-    $agentConfig = Join-Path $agentRoot 'agent\config\service.json'
-    $agentData = Join-Path $agentRoot 'agent\data'
-    if (-not $rootExplicit -and $agentRoot.Equals($RootDir,[StringComparison]::OrdinalIgnoreCase) -and -not (Test-Path -LiteralPath (Join-Path $agentInstall 'install.json'))) {
-        $legacyAgent = Join-Path $env:ProgramFiles 'OSS Transfer\agent'
-        if (Test-Path -LiteralPath (Join-Path $legacyAgent 'install.json')) { $agentInstall = $legacyAgent }
-    }
-    $agentMetadata = Join-Path $agentInstall 'install.json'
-    $agentService = if ($ServiceName -eq 'OSSTransferMaster') { 'OSSTransferAgent' } else { $ServiceName+'-Agent' }
-    if (Test-Path -LiteralPath $agentMetadata) {
-        Assert-RegularFile $agentMetadata
-        $agentRecord = Get-Content -LiteralPath $agentMetadata -Raw | ConvertFrom-Json
-        if ($agentRecord.role -ne 'agent') { throw 'Existing local installation is not an Agent.' }
-        $agentConfig = $agentRecord.config
-        $agentService = $agentRecord.serviceName
-    }
-    $retainedAgent = Test-Path -LiteralPath $agentConfig
-    if ($retainedAgent) {
-        Assert-RegularFile $agentConfig
-        $agentSettings = Get-Content -LiteralPath $agentConfig -Raw | ConvertFrom-Json
-        $agentData = $agentSettings.dataDirectory
-        $agentService = $agentSettings.serviceName
-        $grantPath = Join-Path $agentData 'cli-local-auth.json'
-        Assert-RegularFile $grantPath
-        $grant = Get-Content -LiteralPath $grantPath -Raw | ConvertFrom-Json
-        try {
-            $membership = Invoke-RestMethod -UseBasicParsing -Uri ($localMaster+'/api/auth/current') -Headers @{Authorization=('Bearer '+$grant.token)} -TimeoutSec 10
-            if (-not $membership.success -or $membership.user.username -notlike 'local:agent:*') { throw 'Agent identity not recognized.' }
-        } catch { throw 'The existing local Agent could not be verified as a member of this Master. Its data was left unchanged.' }
-    }
-    $agentArguments = @{Role='agent'; RootDir=$agentRoot; InstallDir=$agentInstall; ConfigDir=(Split-Path $agentConfig -Parent); DataDir=$agentData; ServiceName=$agentService; MasterUrl=$localMaster; Yes=$true; StartupTimeout=$StartupTimeout}
-    $cached = Join-Path $DataDir 'packages'
-    if ((Test-Path -LiteralPath (Join-Path $cached "oss-transfer-windows-$arch.zip")) -and (Test-Path -LiteralPath (Join-Path $cached 'manifest.tsv'))) { $agentArguments.PackageDir = $cached }
-    elseif ($PackageDir) { $agentArguments.PackageDir = $PackageDir }
-    else { $agentArguments.ReleaseUrl = $ReleaseUrl }
     try {
-        if (-not $retainedAgent) {
-            $savedAuthToken = $env:OSS_TRANSFER_AUTH_TOKEN
-            try {
-                Remove-Item Env:OSS_TRANSFER_AUTH_TOKEN -ErrorAction SilentlyContinue
-                $invitation = (Invoke-Native $CliPath @('--host',$localMaster,'--json','agent','invite','--label',$env:COMPUTERNAME,'--master-url',$localMaster) | Out-String) | ConvertFrom-Json
-            } finally {
-                if ($savedAuthToken) { $env:OSS_TRANSFER_AUTH_TOKEN = $savedAuthToken }
-            }
-            if (-not $invitation.success -or -not $invitation.data.inviteToken) { throw 'Could not invite the local Agent.' }
-            $env:TRANSFER_JOIN_TOKEN = $invitation.data.inviteToken
+        # The Master keeps running if the optional Agent step fails. Rerunning this
+        # command reuses the existing Master and any enrolled Agent identity.
+        $localMaster = Read-PublishedMasterOrigin $DataDir
+        $agentRoot = Resolve-LocalAgentRoot $RootDir $rootExplicit $InstallDir (Join-Path $env:ProgramFiles 'OSS Transfer\master')
+        $agentInstall = Join-Path $agentRoot 'agent\bin'
+        $agentConfig = Join-Path $agentRoot 'agent\config\service.json'
+        $agentData = Join-Path $agentRoot 'agent\data'
+        if (-not $rootExplicit -and $agentRoot.Equals($RootDir,[StringComparison]::OrdinalIgnoreCase) -and -not (Test-Path -LiteralPath (Join-Path $agentInstall 'install.json'))) {
+            $legacyAgent = Join-Path $env:ProgramFiles 'OSS Transfer\agent'
+            if (Test-Path -LiteralPath (Join-Path $legacyAgent 'install.json')) { $agentInstall = $legacyAgent }
         }
-        & $PSCommandPath @agentArguments
-    } finally { Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue }
+        $agentMetadata = Join-Path $agentInstall 'install.json'
+        $agentService = if ($ServiceName -eq 'OSSTransferMaster') { 'OSSTransferAgent' } else { $ServiceName+'-Agent' }
+        if (Test-Path -LiteralPath $agentMetadata) {
+            Assert-RegularFile $agentMetadata
+            $agentRecord = Get-Content -LiteralPath $agentMetadata -Raw | ConvertFrom-Json
+            if ($agentRecord.role -ne 'agent') { throw 'Existing local installation is not an Agent.' }
+            $agentConfig = $agentRecord.config
+            $agentService = $agentRecord.serviceName
+        }
+        $retainedAgent = Test-Path -LiteralPath $agentConfig
+        if ($retainedAgent) {
+            Assert-RegularFile $agentConfig
+            $agentSettings = Get-Content -LiteralPath $agentConfig -Raw | ConvertFrom-Json
+            $agentData = $agentSettings.dataDirectory
+            $agentService = $agentSettings.serviceName
+            $grantPath = Join-Path $agentData 'cli-local-auth.json'
+            Assert-RegularFile $grantPath
+            $grant = Get-Content -LiteralPath $grantPath -Raw | ConvertFrom-Json
+            try {
+                $membership = Invoke-RestMethod -UseBasicParsing -Uri ($localMaster+'/api/auth/current') -Headers @{Authorization=('Bearer '+$grant.token)} -TimeoutSec 10
+                if (-not $membership.success -or $membership.user.username -notlike 'local:agent:*') { throw 'Agent identity not recognized.' }
+            } catch { throw 'The existing local Agent could not be verified as a member of this Master. Its data was left unchanged.' }
+        }
+        $agentArguments = @{Role='agent'; RootDir=$agentRoot; InstallDir=$agentInstall; ConfigDir=(Split-Path $agentConfig -Parent); DataDir=$agentData; ServiceName=$agentService; MasterUrl=$localMaster; Lang=$Lang; Yes=$true; StartupTimeout=$StartupTimeout}
+        $cached = Join-Path $DataDir 'packages'
+        if ((Test-Path -LiteralPath (Join-Path $cached "oss-transfer-windows-$arch.zip")) -and (Test-Path -LiteralPath (Join-Path $cached 'manifest.tsv'))) { $agentArguments.PackageDir = $cached }
+        elseif ($PackageDir) { $agentArguments.PackageDir = $PackageDir }
+        else { $agentArguments.ReleaseUrl = $ReleaseUrl }
+        try {
+            if (-not $retainedAgent) {
+                $savedAuthToken = $env:OSS_TRANSFER_AUTH_TOKEN
+                try {
+                    Remove-Item Env:OSS_TRANSFER_AUTH_TOKEN -ErrorAction SilentlyContinue
+                    $invitation = (Invoke-Native $CliPath @('--host',$localMaster,'--json','agent','invite','--label',$env:COMPUTERNAME,'--master-url',$localMaster) | Out-String) | ConvertFrom-Json
+                } finally {
+                    if ($savedAuthToken) { $env:OSS_TRANSFER_AUTH_TOKEN = $savedAuthToken }
+                }
+                if (-not $invitation.success -or -not $invitation.data.inviteToken) { throw 'Could not invite the local Agent.' }
+                $env:TRANSFER_JOIN_TOKEN = $invitation.data.inviteToken
+            }
+            Write-Host (Get-InstallText 'Installing the local Agent...' '正在安装本机 Agent...')
+            & $PSCommandPath @agentArguments
+            Write-Host (Get-InstallText "`nMaster and local Agent installed successfully." "`nMaster 和本机 Agent 安装成功。") -ForegroundColor Green
+        } finally { Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue }
+    } finally {
+        Show-MasterAccess
+        Show-InitialCredentials
+    }
 }
 
 } finally {

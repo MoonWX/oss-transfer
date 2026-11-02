@@ -356,6 +356,9 @@ if [[ -z "$lang" ]]; then
     case "$answer" in 2) lang=zh;; *) lang=en;; esac
   fi
 fi
+# Environment propagation also works with older release installers that do
+# not accept --lang. Keep the system locale unchanged.
+export OSS_TRANSFER_INSTALL_LANG=$lang
 default_install_dir() {
   if [[ -n "$root_dir" ]]; then printf '%s/%s/bin\n' "$root_dir" "$1"
   elif [[ "$os" == Linux ]]; then printf '/opt/oss-transfer/%s/bin\n' "$1"
@@ -508,9 +511,39 @@ if [[ -n "${release_url:-}" ]]; then
   valid_release_url || fail 'Release URL must use HTTPS or the inviting Master'
 fi
 stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-setup.XXXXXX")
-trap 'rm -rf -- "$stage"; unset TRANSFER_JOIN_TOKEN OSS_TRANSFER_JOIN_TOKEN join_url' EXIT
+cleanup() {
+  local status=$?
+  if ((status != 0 && with_agent)) && [[ -f "$stage/native-install.log" ]]; then
+    # A failed Agent install must not hide credentials for the ready Master.
+    print_master_access || true
+  fi
+  rm -rf -- "$stage"
+  unset TRANSFER_JOIN_TOKEN OSS_TRANSFER_JOIN_TOKEN join_url
+}
+trap cleanup EXIT
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; elif [[ -x /sbin/sha256 ]]; then /sbin/sha256 -q "$1"; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 metadata_field() { awk -F '\t' -v key="$2" '$1==key {print $2}' "$1"; }
+native_output() {
+  if ((with_agent)); then
+    # Keep the Master's access details together at the very end of a combined
+    # install. tee has already saved this run's output in the private stage.
+    sed -E '/^(Web UI|访问地址|Initial administrator|初始管理员|Initial password|初始密码|Setup token|初始化密钥): /d'
+  else
+    cat
+  fi
+}
+print_master_access() {
+  local address password token
+  address=$(sed -nE 's/^(Web UI|访问地址): (https?:\/\/[^[:space:]]+)$/\2/p' "$stage/native-install.log" | tail -n 1)
+  password=$(sed -nE 's/^(Initial password|初始密码): ([A-Za-z0-9_-]+)$/\2/p' "$stage/native-install.log" | tail -n 1)
+  token=$(sed -nE 's/^(Setup token|初始化密钥): ([A-Za-z0-9_-]+)$/\2/p' "$stage/native-install.log" | tail -n 1)
+  [[ -z "$address" ]] || printf '%s: %s\n' "$(say 'Web UI' '访问地址')" "$address"
+  if [[ -n "$password" ]]; then
+    printf '%s: admin\n%s: %s\n' "$(say 'Initial administrator' '初始管理员')" "$(say 'Initial password' '初始密码')" "$password"
+  elif [[ -n "$token" ]]; then
+    printf '%s: %s\n' "$(say 'Setup token' '初始化密钥')" "$token"
+  fi
+}
 verify_local_agent_cluster() {
   local origin=$1 config=$2 directory token
   directory=$(sed -nE 's/.*"dataDirectory"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$config")
@@ -587,10 +620,12 @@ install_local_agent() {
   say 'Installing local Agent…' '正在安装本机 Agent…'
   if ! bash "$stage/native-install.sh" "${agent_args[@]}"; then
     unset TRANSFER_JOIN_TOKEN
-    fail 'Master is ready. Local Agent installation failed; rerun this installer to finish it.'
+    fail "$(say 'Master is ready. Local Agent installation failed; rerun this installer to finish it.' 'Master 已就绪，但本机 Agent 安装失败。请重新运行安装脚本完成安装。')"
   fi
   unset TRANSFER_JOIN_TOKEN
+  printf '\n=== %s ===\n' "$(say 'Master and local Agent installed successfully' 'Master 和本机 Agent 安装成功')"
   say 'Local Agent joined the cluster.' '本机 Agent 已加入集群。'
+  print_master_access
 }
 if [[ -z "$release_url" && -z "$package_dir" ]]; then
   selected_source=$(transfer_select_source "$source" "$version") || fail 'Cannot select a download source; use --source or --release-url'
@@ -645,7 +680,7 @@ if [[ "$method" == native ]]; then
     done
     ((user_service == 0)) || native_args+=(--user)
     ((yes == 0)) || native_args+=(--yes)
-    bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log"
+    bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log" | native_output
     ((with_agent == 0)) || install_local_agent
     exit 0
   fi
@@ -696,7 +731,7 @@ if [[ "$method" == native ]]; then
   enrollment_input
   [[ -z "$master_url" ]] || native_args+=(--master-url "$master_url")
   ((token_stdin == 0)) || native_args+=(--token-stdin)
-  bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log"
+  bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log" | native_output
   ((with_agent == 0)) || install_local_agent
   exit 0
 fi
@@ -796,17 +831,20 @@ if [[ "$role" == master ]]; then
     sleep 1
   done
   ((ready)) || fail "Master did not become ready; inspect logs in $install_dir"
+  printf '\n=== %s ===\n' "$(say 'Master installed successfully' 'Master 安装成功')"
+  access_host=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ {print; exit}') || access_host=
+  printf '%s: http://%s:%s\n' "$(say 'Web UI' '访问地址')" "${access_host:-localhost}" "$port"
   # This is a newly created container. An existing data directory does not
   # generate a new password, and unrelated log messages are never printed.
   initial_password=$(docker logs "$container" 2>&1 |
     sed -n 's/^Initial password: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
   if [[ -n "$initial_password" ]]; then
-    printf '\nInitial administrator: admin\nInitial password: %s\n' "$initial_password"
+    printf '%s: admin\n%s: %s\n' "$(say 'Initial administrator' '初始管理员')" "$(say 'Initial password' '初始密码')" "$initial_password"
   else
     # Older image versions still use a one-time setup token.
     setup_token=$(docker logs "$container" 2>&1 |
       sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
-    [[ -z "$setup_token" ]] || printf '\nSetup token: %s\n' "$setup_token"
+    [[ -z "$setup_token" ]] || printf '%s: %s\n' "$(say 'Setup token' '初始化密钥')" "$setup_token"
   fi
 else
   sleep 2

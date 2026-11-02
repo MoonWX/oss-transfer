@@ -136,7 +136,8 @@ class StartupTests(unittest.TestCase):
         self.bin.mkdir()
         source = INSTALLER.read_text()
         self.functions = self.root / "functions.sh"
-        self.functions.write_text(source[source.index("listener_address() {"):source.index("rollback() {")])
+        say = next(line for line in source.splitlines() if line.startswith('say() {'))
+        self.functions.write_text(say + '\n' + source[source.index("listener_address() {"):source.index("rollback() {")])
         self.environment = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                                 QA_ROOT=str(self.root), QA_OWN_PID="0", QA_LISTEN="0.0.0.0:1685",
                                 QA_PLATFORM="linux", QA_EXISTED="0", QA_SS="", QA_SOCKET_STATUS="0",
@@ -281,6 +282,29 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
             'Initial password: invalid password\n'))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '\nInitial administrator: admin\nInitial password: current-password_2\n')
+
+    def test_chinese_credentials_only_show_new_password(self):
+        old = 'Initial password: old_password\n'
+        result = self.run_shell('lang=zh; startup_log_lines=1; print_initial_credentials',
+                                QA_LOG=old+'Initial password: new_password\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '\n初始管理员: admin\n初始密码: new_password\n')
+        restarted = self.run_shell('lang=zh; startup_log_lines=1; print_initial_credentials', QA_LOG=old)
+        self.assertEqual(restarted.returncode, 0, restarted.stderr)
+        self.assertEqual(restarted.stdout, '')
+
+    def test_console_url_uses_actual_listener_and_custom_port(self):
+        self.shim('hostname', 'printf "10.0.0.2 172.17.0.1\\n"')
+        for binding, expected in (
+            ('0.0.0.0:1688', 'http://10.0.0.2:1688'),
+            ('[::]:1688', 'http://10.0.0.2:1688'),
+            ('127.0.0.1:1689', 'http://127.0.0.1:1689'),
+            ('[fd00::43]:1688', 'http://[fd00::43]:1688'),
+        ):
+            with self.subTest(binding=binding):
+                result = self.run_shell('console_url', QA_LISTEN=binding)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
 
     def test_fixed_older_release_prints_only_its_current_setup_token(self):
         old = 'Open the console to complete setup. Setup token: old_token\n'

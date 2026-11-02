@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	DefaultChildConcurrency  = 8
+	DefaultChildConcurrency  = 32
 	DefaultObjectConcurrency = 4
 )
 

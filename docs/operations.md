@@ -2,7 +2,7 @@
 
 ## Node concurrency
 
-Open **Execution nodes → Edit node** to change child-task concurrency and the object concurrency within each child. The defaults are 8 children and 4 objects per child, allowing up to 32 simultaneous object transfers on a node. Existing saved settings are retained.
+Open **Execution nodes → Edit node** to change child-task concurrency and the object concurrency within each child. The defaults are 32 children and 4 objects per child, allowing up to 128 simultaneous object transfers on a node. Existing saved settings are retained.
 
 Changes apply to running work and survive a restart. Reducing a limit lets the current requests finish before admitting more. Increasing it can help when the network is underused; node and task bandwidth/QPS limits still apply. Child concurrency accepts 1–64, object concurrency 1–32, with a combined maximum of 256.
 
@@ -73,7 +73,7 @@ This continues the same traversal; changes behind its saved position may not be 
 
 ## 中文说明
 
-**执行节点 → 编辑节点** 可调整子任务并发和每个子任务的对象并发。默认值分别是 8 和 4，即单节点最多同时传输 32 个对象；已有配置继续保留。保存后直接生效，重启后保留。调低并发时，已发出的请求会先完成，再按新上限继续调度。子任务并发范围为 1–64，对象并发为 1–32，两者乘积不能超过 256。节点和任务的带宽、QPS 限制仍然生效。
+**执行节点 → 编辑节点** 可调整子任务并发和每个子任务的对象并发。默认值分别是 32 和 4，即单节点最多同时传输 128 个对象；已有配置继续保留。保存后直接生效，重启后保留。调低并发时，已发出的请求会先完成，再按新上限继续调度。子任务并发范围为 1–64，对象并发为 1–32，两者乘积不能超过 256。节点和任务的带宽、QPS 限制仍然生效。
 
 **运维工具 → 对象比对** 支持单对象、整个存储桶和前缀比对。前缀按相对路径匹配，例如源 `images/` 下的 `images/a.jpg` 对应目标 `backup/` 下的 `backup/a.jpg`。两侧缺失对象都会记录。
 

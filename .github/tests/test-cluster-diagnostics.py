@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Offline checks that failed acceptance retains bounded, sanitized evidence."""
 
+import ast
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import types
@@ -39,6 +41,56 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn("Initial password: [redacted]", output)
         self.assertIn("Setup token: [redacted]", output)
         self.assertNotIn("unseen_", output)
+
+    def test_all_acceptance_redactors_hide_localized_startup_credentials(self):
+        # Exercise the real scrub functions without starting their services or
+        # installing S3 clients. Nested runtime helpers only close over secrets.
+        for filename, function_name in (
+                ('install.py', 'scrub'), ('setup.py', 'scrub'),
+                ('cluster.py', 'scrub'), ('docker.py', 'scrub'),
+                ('runtime-smoke.py', 'redact'), ('local-cli.py', 'scrub')):
+            path = ROOT / '.github/acceptance' / filename
+            source = ast.parse(path.read_text(encoding='utf-8'))
+            functions = [node for node in ast.walk(source)
+                         if isinstance(node, ast.FunctionDef) and node.name == function_name]
+            self.assertEqual(len(functions), 1, filename)
+            scope = {'re': re, 'secrets': [], 'private_values': []}
+            exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), scope)
+            function = scope[function_name]
+            if functions[0].args.args[0].arg == 'self':
+                function = function.__get__(types.SimpleNamespace(secrets=[]))
+            for label in ('Initial password', 'Setup token', '初始密码', '初始化密钥'):
+                for colon in (': ', '：'):
+                    with self.subTest(file=filename, label=label, colon=colon):
+                        line = label + colon + 'unseen_random-password'
+                        output = function('Installation: /tmp/master\n' + line + '\nTasks: cli task list\n')
+                        self.assertNotIn('unseen_random-password', output)
+                        self.assertIn('[redacted]', output)
+                        self.assertIn('Installation: /tmp/master\n', output)
+                        self.assertIn('\nTasks: cli task list\n', output)
+                        # Evidence is sometimes serialized before scrubbing.
+                        encoded = function(json.dumps({'message': line}))
+                        self.assertNotIn('unseen_random-password', encoded)
+                        self.assertIn('[redacted]', json.loads(encoded)['message'])
+
+    def test_installer_password_extraction_accepts_both_terminal_languages(self):
+        for filename in ('install.py', 'setup.py'):
+            path = ROOT / '.github/acceptance' / filename
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            patterns = [ast.literal_eval(node.value) for node in tree.body
+                        if isinstance(node, ast.Assign) and any(
+                            isinstance(target, ast.Name) and target.id == 'INITIAL_PASSWORD_PATTERN'
+                            for target in node.targets)]
+            self.assertEqual(len(patterns), 1, filename)
+            for label in ('Initial password', '初始密码'):
+                for colon in (': ', '：'):
+                    with self.subTest(file=filename, label=label, colon=colon):
+                        output = ('Installation: /tmp/master\n' + label + colon +
+                                  'current-password_1\nTasks: cli task list\n')
+                        self.assertEqual(re.findall(patterns[0], output, re.MULTILINE),
+                                         ['current-password_1'])
+                        self.assertEqual(re.findall(patterns[0], label + colon + 'invalid password',
+                                                    re.MULTILINE), [])
 
     def test_timeout_retains_last_poll_and_only_bounded_safe_fields(self):
         failure = AssertionError("original task completion timeout")

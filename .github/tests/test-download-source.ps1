@@ -1,4 +1,4 @@
-# Run the installer's download preflight with HTTP fixtures; no service or disk
+﻿# Run the installer's download preflight with HTTP fixtures; no service or disk
 # outside a temporary directory is changed. Compatible with Windows PowerShell 5.1.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
+$names = @('Resolve-InstallLanguage','Get-InstallText','Get-MasterAccessUrl','Show-MasterAccess','Show-InstallationSummary','Show-InitialCredentials','Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -29,6 +29,7 @@ function Reject([ScriptBlock]$Action,[string]$Expected) {
     try { & $Action } catch { if ($_.Exception.Message -notlike "*$Expected*") { throw }; return }
     throw "Expected rejection: $Expected"
 }
+$Lang = 'en'
 $script:checks = 0
 function Check([string]$Name,[ScriptBlock]$Action) {
     $script:responses = @{}; $script:requests.Clear()
@@ -91,6 +92,97 @@ function New-TestArchive([string]$Fault='') {
     return Resolve-DownloadSource 'github' 'latest' 'amd64'
 }
 try {
+    Check 'installer language honors explicit choice, inherited choice and locale' {
+        Assert ((Resolve-InstallLanguage 'en' 'zh' 'zh-CN') -eq 'en') 'Explicit English was ignored.'
+        Assert ((Resolve-InstallLanguage '' 'zh' 'en-US') -eq 'zh') 'Inherited Chinese was ignored.'
+        Assert ((Resolve-InstallLanguage '' '' 'zh-TW') -eq 'zh') 'Chinese locale was not recognized.'
+        Assert ((Resolve-InstallLanguage '' 'invalid' 'ja-JP') -eq 'en') 'Unknown language did not fall back to English.'
+        $Lang = 'zh'
+        Assert ((Get-InstallText 'Installation successful' '安装成功') -ceq '安装成功') 'Chinese completion text was lost.'
+    }
+    Check 'console address uses the actual port and replaces wildcard bindings' {
+        Assert ((Get-MasterAccessUrl '0.0.0.0:18088' '10.1.2.3') -ceq 'http://10.1.2.3:18088') 'Wildcard IPv4 used the wrong address or port.'
+        Assert ((Get-MasterAccessUrl '[::]:18089' '2001:db8::1') -ceq 'http://[2001:db8::1]:18089') 'IPv6 console URL is invalid.'
+        Assert ((Get-MasterAccessUrl ':18090' '') -ceq 'http://localhost:18090') 'Missing local address did not preserve the listen port.'
+        Assert ((Get-MasterAccessUrl '127.0.0.1:18091' '10.1.2.3') -ceq 'http://127.0.0.1:18091') 'Loopback-only binding was advertised remotely.'
+        Assert ((Get-MasterAccessUrl '10.9.8.7:18092' '10.1.2.3') -ceq 'http://10.9.8.7:18092') 'An explicit listener address was replaced.'
+    }
+    Check 'Chinese completion reads the saved configuration and only this launch credentials' {
+        $Lang = 'zh'; $Role = 'master'; $version = '4.1.22'; $ServiceName = 'TestMaster'
+        $InstallDir = Join-Path $work 'master/bin'; $DataDir = Join-Path $work 'master/data'
+        $config = Join-Path $work 'summary-config.json'; $CliPath = Join-Path $work 'cli.exe'
+        [IO.File]::WriteAllText($config,'{"listen":"0.0.0.0:18088"}',[Text.UTF8Encoding]::new($false))
+        function Get-LocalAccessAddress { return '10.1.2.3' }
+        $script:logFile = Join-Path $work 'summary-service.log'
+        [IO.File]::WriteAllText($script:logFile,"Initial password: old-password`nready`nInitial password: new-password`n",[Text.UTF8Encoding]::new($false))
+        $script:startupLogLines = 2
+        $summary = Show-InstallationSummary 6>&1 | Out-String
+        Assert ($summary.Contains('安装成功：master 4.1.22') -and $summary.Contains('访问地址：http://10.1.2.3:18088')) 'Completion missed the actual configured address.'
+        Assert ($summary.Contains('数据目录：') -and $summary.Contains('配置文件：') -and $summary.Contains('日志：')) 'Completion paths were not localized.'
+        $credentials = Show-InitialCredentials 6>&1 | Out-String
+        Assert ($credentials.Contains('初始管理员：admin') -and $credentials.Contains('初始密码：new-password')) 'This launch credentials were not localized.'
+        Assert (-not $credentials.Contains('old-password')) 'Previous credentials were exposed.'
+        $script:startupLogLines = 3
+        Assert ([string]::IsNullOrWhiteSpace((Show-InitialCredentials 6>&1 | Out-String))) 'Reinstall repeated a previous initial password.'
+        $Lang = 'en'
+        Assert ((Show-InstallationSummary 6>&1 | Out-String).Contains('Web console: http://10.1.2.3:18088')) 'English summary lost the console URL.'
+        [IO.File]::WriteAllText($config,'{}',[Text.UTF8Encoding]::new($false))
+        Assert ((Show-MasterAccess 6>&1 | Out-String).Contains('http://10.1.2.3:1685')) 'Older configuration without listen did not use the backend default.'
+    }
+    Check 'combined installation prints Master credentials once even when the Agent step fails' {
+        $combined = @($ast.FindAll({param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith("if (`$installationSucceeded -and `$Role -eq 'master' -and `$WithAgent)")
+        },$true))
+        $initial = @($ast.FindAll({param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith("if (-not (`$Role -eq 'master' -and `$WithAgent))")
+        },$true))
+        Assert ($combined.Count -eq 1 -and $initial.Count -eq 1) 'Installation summary paths are ambiguous.'
+        $Lang='en'; $Role='master'; $WithAgent=$true; $installationSucceeded=$true
+        $RootDir=Join-Path $work 'combined-root'; $rootExplicit=$true
+        $InstallDir=Join-Path $RootDir 'master/bin'; $DataDir=Join-Path $RootDir 'master/data'
+        $ServiceName='TestMaster'; $CliPath=Join-Path $work 'cli.exe'; $StartupTimeout=120; $arch='amd64'; $PackageDir=$work
+        $config=Join-Path $work 'combined-config.json'
+        [IO.File]::WriteAllText($config,'{"listen":"127.0.0.1:18088"}',[Text.UTF8Encoding]::new($false))
+        $masterLog=Join-Path $work 'combined-master.log'
+        [IO.File]::WriteAllText($masterLog,"Initial password: previous-secret`nInitial password: this-launch-secret`n",[Text.UTF8Encoding]::new($false))
+        $script:logFile=$masterLog; $script:startupLogLines=1
+        $fixturePath=Join-Path $work 'combined-child-scope.ps1'
+        $credentialFunction=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-InitialCredentials'},$true)[0].Extent.Text
+        $fixturePrelude=@'
+param([string]$Role='master')
+if ($Role -eq 'agent') {
+    $script:logFile='agent-log'; $script:startupLogLines=999
+    if ($env:OSS_TRANSFER_FIXTURE_AGENT_FAIL -eq '1') { throw 'fixture Agent startup failed' }
+    return
+}
+$script:logFile=$masterLog; $script:startupLogLines=1
+'@
+        $fixtureSource=$fixturePrelude+"`n"+$credentialFunction+"`n"+$initial[0].Extent.Text+"`n"+$combined[0].Extent.Text+"`n"+
+            'if ($script:logFile -cne $masterLog -or $script:startupLogLines -ne 1 -or $Role -ne "master") { throw "Master scope changed" }'
+        [IO.File]::WriteAllText($fixturePath,$fixtureSource,[Text.UTF8Encoding]::new($true))
+        function Get-LocalAccessAddress { return '127.0.0.1' }
+        function Read-PublishedMasterOrigin { if ($scenario -eq 'prepare-failure') { throw 'fixture Agent preparation failed' }; return 'http://127.0.0.1:18088' }
+        function Invoke-Native { return '{"success":true,"data":{"inviteToken":"fixture-invitation"}}' }
+        $savedProgramFiles=$env:ProgramFiles
+        try {
+            $env:ProgramFiles=$work
+            foreach ($scenario in @('success','agent-failure','prepare-failure')) {
+                $env:OSS_TRANSFER_FIXTURE_AGENT_FAIL=if($scenario -eq 'agent-failure'){'1'}else{'0'}
+                $output = & {
+                    try { & $fixturePath } catch { Write-Output ('Caught: '+$_.Exception.Message) }
+                } 6>&1 | Out-String
+                Assert (([regex]::Matches($output,'Initial password:')).Count -eq 1) "Credentials were repeated or lost for $scenario."
+                Assert ($output.Contains('this-launch-secret') -and -not $output.Contains('previous-secret')) "Wrong launch credentials for $scenario."
+                Assert ($output.Contains('Web console: http://127.0.0.1:18088')) "Master URL was lost for $scenario."
+                Assert ($script:logFile -ceq $masterLog -and $script:startupLogLines -eq 1 -and $Role -eq 'master') 'Agent child script overwrote Master scope.'
+                if($scenario -eq 'success') { Assert ($output.Contains('Master and local Agent installed successfully.')) "Combined installation did not finish: $output" }
+                else { Assert ($output.Contains('Caught: fixture Agent')) "Expected Agent failure did not occur: $scenario." }
+            }
+        } finally {
+            $env:ProgramFiles=$savedProgramFiles
+            Remove-Item Env:OSS_TRANSFER_FIXTURE_AGENT_FAIL -ErrorAction SilentlyContinue
+        }
+    }
     Check 'noninteractive first Master includes Agent but reinstall does not add one' {
         $selection=@($ast.FindAll({param($node)
             $node -is [Management.Automation.Language.IfStatementAst] -and

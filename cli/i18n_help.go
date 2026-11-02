@@ -461,7 +461,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   add <node> [--label name]        Generate Agent join commands
   invite [--address node] [--label name] [--master-url URL]
   update <node> [--address new-address] [--label name]
-  update <node> --child-concurrency 8 --object-concurrency 4
+  update <node> --child-concurrency 32 --object-concurrency 4
   remove <node> --yes              Remove the registration
 
   oss-transfer-cli node list --watch 5
@@ -483,7 +483,7 @@ Use --json for queue/raw rate data; use limit list for limits.
   add <ノード> [--label 名前]      Agent 参加コマンドを生成
   invite [--address ノード] [--label 名前] [--master-url URL]
   update <ノード> [--address 新アドレス] [--label 名前]
-  update <ノード> --child-concurrency 8 --object-concurrency 4
+  update <ノード> --child-concurrency 32 --object-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli node list --watch 5
@@ -506,7 +506,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   details <node>                  Host, interface IPs and mounted directories
   update <node> [--label name] [--local-root path ...]
   update <node> --clear-local-roots
-  update <node> --child-concurrency 8 --object-concurrency 4
+  update <node> --child-concurrency 32 --object-concurrency 4
   remove <node> --yes              Revoke registration
 
   oss-transfer-cli agent invite --address storage-node --label transfer-node
@@ -527,7 +527,7 @@ Invitations expire after 30 minutes and can be used once. Run the native install
   details <ノード>                ホスト、インターフェース IP、マウントを表示
   update <ノード> [--label 名前] [--local-root パス ...]
   update <ノード> --clear-local-roots
-  update <ノード> --child-concurrency 8 --object-concurrency 4
+  update <ノード> --child-concurrency 32 --object-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli agent invite --address storage-node --label transfer-node

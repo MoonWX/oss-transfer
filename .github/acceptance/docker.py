@@ -61,7 +61,7 @@ class Acceptance:
     def scrub(self, text):
         for value in self.secrets:
             text = text.replace(value, "[redacted]")
-        return re.sub(r"((?:Initial password|Setup token):) \S+", r"\1 [redacted]", text)
+        return re.sub(r'((?:Initial password|Setup token|初始密码|初始化密钥|\\u521d\\u59cb\\u5bc6\\u7801|\\u521d\\u59cb\\u5316\\u5bc6\\u94a5)[ \t]*(?:[:：]|\\uff1a))[ \t]*[^\s"\\]+', r"\1 [redacted]", text)
 
     def docker(self, *arguments, env=None, timeout=60, check=True):
         result = subprocess.run(["docker", *map(str, arguments)], env=env, text=True,

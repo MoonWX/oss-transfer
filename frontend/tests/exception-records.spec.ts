@@ -5,6 +5,7 @@ import {
   missingExceptionNodes,
 } from "../src/lib/exceptionRecords";
 import { translate } from "../src/lib/i18n";
+import "./catalogs";
 
 const nodes = ["192.0.2.10", "192.0.2.11"];
 // Shape returned by the real missing-object task used in cloud acceptance.

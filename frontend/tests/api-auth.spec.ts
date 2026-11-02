@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { api } from "../src/lib/api";
 import { setLocale, translate } from "../src/lib/i18n";
+import "./catalogs";
 
 const originals = new Map<string, PropertyDescriptor | undefined>();
 let stored: Map<string, string>;

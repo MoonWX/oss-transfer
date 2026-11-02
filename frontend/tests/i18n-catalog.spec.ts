@@ -6,7 +6,11 @@ import { coreMessages } from "../src/locales/core";
 import { adminMessages } from "../src/locales/admin";
 import { tasksMessages } from "../src/locales/tasks";
 import { updatesMessages } from "../src/locales/updates";
-import { messages, normalizeLocale, translate } from "../src/lib/i18n";
+import { buildCatalog } from "../src/locales/index.ts";
+import { normalizeLocale, translate } from "../src/lib/i18n";
+import "./catalogs";
+
+const messages = buildCatalog("en");
 
 const parameters = (value: string) =>
   [

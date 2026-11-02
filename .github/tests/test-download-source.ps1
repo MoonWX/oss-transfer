@@ -29,6 +29,114 @@ function Reject([ScriptBlock]$Action,[string]$Expected) {
     try { & $Action } catch { if ($_.Exception.Message -notlike "*$Expected*") { throw }; return }
     throw "Expected rejection: $Expected"
 }
+function Invoke-AgentInstallFixture([string]$Scenario) {
+    $transaction = @($ast.FindAll({param($node)
+        $node -is [Management.Automation.Language.TryStatementAst] -and $node.CatchClauses.Count -eq 1 -and
+        $node.Body.Extent.Text.Contains("`$manifest = Fetch 'manifest.tsv'")
+    },$true))
+    Assert ($transaction.Count -eq 1) 'Installation transaction is ambiguous.'
+    $start = @($transaction[0].Body.Statements | Where-Object { $_.Extent.Text -eq 'foreach ($path in $directories) { Protect-Directory $path }' })
+    Assert ($start.Count -eq 1) 'Installation mutation boundary is ambiguous.'
+    $transactionText = 'try {' + $transaction[0].Extent.Text.Substring($start[0].Extent.EndOffset - $transaction[0].Extent.StartOffset)
+    $selection = @($ast.FindAll({param($node)
+        ($node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$enrollmentRequested') -or
+        ($node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($enrollmentRequested -and'))
+    },$true) | Sort-Object { $_.Extent.StartOffset })
+    Assert ($selection.Count -eq 2) 'Enrollment selection is ambiguous.'
+    $outer = @($ast.FindAll({param($node)
+        $node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and
+        $node.Finally.Extent.Text.Contains('if ($sourceWork)')
+    },$true))
+    Assert ($outer.Count -eq 1) 'Installer cleanup is ambiguous.'
+    $fixtureRoot = Join-Path $work ('agent-transaction-'+$Scenario)
+    [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+    $fixtureScript = Join-Path $fixtureRoot 'transaction.ps1'
+    $fixturePrelude = @'
+param($FixtureRoot,$Scenario)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$Lang='zh'; $Role='agent'; $version='4.1.23'; $WithAgent=$false
+$RootDir=$FixtureRoot; $base=Join-Path $RootDir 'agent'
+$InstallDir=Join-Path $base 'bin'; $ConfigDir=Join-Path $base 'config'; $DataDir=Join-Path $base 'data'
+$BackupDir=Join-Path $base 'backups'; $work=Join-Path $FixtureRoot 'work'; $sourceWork=$null
+foreach($path in @($InstallDir,$ConfigDir,$DataDir,$BackupDir,$work)){ [IO.Directory]::CreateDirectory($path)|Out-Null }
+$binary=Join-Path $InstallDir 'oss-transfer-agent.exe'; $candidate=Join-Path $work 'candidate.exe'
+$CliPath=Join-Path $InstallDir 'oss-transfer-cli.exe'; $cliCandidate=Join-Path $work 'cli.exe'
+$config=Join-Path $ConfigDir 'service.json'; $metadata=Join-Path $InstallDir 'install.json'; $database=Join-Path $DataDir 'agent.db'
+[IO.File]::WriteAllText($binary,'old-binary'); [IO.File]::WriteAllText($candidate,'new-binary')
+[IO.File]::WriteAllText($CliPath,'old-cli'); [IO.File]::WriteAllText($cliCandidate,'new-cli')
+[IO.File]::WriteAllText($config,'{"dataDirectory":"retained"}'); [IO.File]::WriteAllText($metadata,'old-metadata')
+[IO.File]::WriteAllText($database,'old-identity|retained-task')
+$existing=-not $Scenario.StartsWith('adopt-'); $AdoptConfig=if($existing){''}else{$config}; $autoAdopt=-not $existing
+$freshConfig=Join-Path $work 'fresh.json'; Copy-Item $config $freshConfig
+$ServiceName='FixtureAgent'; $service=$true; $hadBinary=$true; $hadCli=$true; $hadCliSidecars=$false; $hadDataCLIConnections=$false
+$cliChanged=$false; $changed=$false; $installationSucceeded=$false; $agentMaintenanceStarted=$false; $enrollmentAttempted=$false
+$backup=$null; $hadDatabaseBackup=$false; $wasRunning=$false; $oldService=$null; $script:logFile=Join-Path $DataDir 'service.log'
+$script:events=[Collections.Generic.List[string]]::new(); $script:readyCalls=0
+$MasterUrl=if($Scenario -eq 'missing-master'){''}else{'http://master.invalid:1688'}
+$env:TRANSFER_JOIN_TOKEN=if($Scenario.StartsWith('ordinary-')){''}else{'fixture-invitation'}
+function Get-InstallText($English,$Chinese){if($Lang -eq 'zh'){return $Chinese};return $English}
+function Write-UTF8($Path,$Text){[IO.File]::WriteAllText($Path,$Text,[Text.UTF8Encoding]::new($false))}
+function New-TemporaryBackup { $path=Join-Path $BackupDir 'attempt';[IO.Directory]::CreateDirectory($path)|Out-Null;return $path }
+function Service-Record { return [PSCustomObject]@{StartName='LocalSystem';State='Running';PathName='old-service';StartMode='Auto';ExitCode=0;ServiceSpecificExitCode=0} }
+function Get-Service {param($Name,$ErrorAction);return [PSCustomObject]@{Name=$Name} }
+function Stop-OwnedService { $script:events.Add('stop') }
+function Start-Service {param($Name);$script:events.Add('start') }
+function Invoke-CimMethod {param($InputObject,$MethodName,$Arguments);return [PSCustomObject]@{ReturnValue=0} }
+function Backup-CLIConnections {}
+function Restore-CLIConnections {}
+function Prepare-Start {}
+function Publish-MasterPackages {}
+function Show-InstallationSummary { $script:events.Add('success') }
+function Show-InitialCredentials {}
+function Finish-TemporaryBackup { $script:events.Add('finish') }
+function Wait-Ready {
+    $script:readyCalls++
+    if($Scenario -like '*ready-failure' -and $script:readyCalls -eq 1){throw 'fixture startup failure'}
+}
+function Invoke-Native($Executable,[string[]]$Arguments) {
+    if($Arguments -contains '--upgrade-maintenance') {
+        $action=$Arguments[[Array]::IndexOf($Arguments,'--upgrade-maintenance')+1]
+        $script:events.Add('maintenance-'+$action)
+        if($Scenario -eq 'ordinary-401'){throw 'fixture maintenance HTTP 401'}
+    } elseif($Arguments -contains '--backup-state') {
+        $script:events.Add('backup')
+        $target=$Arguments[[Array]::IndexOf($Arguments,'--backup-state')+1]
+        [IO.Directory]::CreateDirectory($target)|Out-Null; Copy-Item $database (Join-Path $target 'agent.db')
+    } elseif($Arguments -contains '--restore-state') {
+        $script:events.Add('restore')
+        $source=$Arguments[[Array]::IndexOf($Arguments,'--restore-state')+1]
+        Copy-Item (Join-Path $source 'agent.db') $database -Force
+    } elseif($Arguments -contains '--enroll-only') {
+        $script:events.Add('enroll')
+        if($env:OSS_TRANSFER_JOIN_TOKEN -cne 'fixture-invitation'){throw 'Join credential was not forwarded.'}
+        [IO.File]::WriteAllText($database,'pending-identity|retained-task')
+        if($Scenario -like '*enroll-failure'){throw 'fixture enrollment response lost'}
+        [IO.File]::WriteAllText($database,'new-identity|retained-task')
+    } else { throw ('Unexpected binary call: '+($Arguments -join ' ')) }
+}
+$failure=''
+try {
+'@
+    $fixtureSuffix = @'
+} catch { $failure=$_.Exception.Message }
+Write-Output ([PSCustomObject]@{
+    failure=$failure;events=@($script:events);database=[IO.File]::ReadAllText($database)
+    binary=[IO.File]::ReadAllText($binary);config=[IO.File]::ReadAllText($config);cli=[IO.File]::ReadAllText($CliPath)
+    tokenPresent=([bool]$env:TRANSFER_JOIN_TOKEN -or [bool]$env:OSS_TRANSFER_JOIN_TOKEN)
+    backupPresent=($backup -and (Test-Path (Join-Path $backup 'database/agent.db')))
+} | ConvertTo-Json -Compress)
+'@
+    $fixtureSource=$fixturePrelude+"`ntry {`n"+($selection.Extent.Text -join "`n")+"`n"+$transactionText+"`n} finally "+$outer[0].Finally.Extent.Text+"`n"+$fixtureSuffix
+    [IO.File]::WriteAllText($fixtureScript,$fixtureSource,[Text.UTF8Encoding]::new($true))
+    # Run the installer's actual mutation/catch/finally blocks in a child script.
+    # Only Windows service calls and native binary behavior are substituted.
+    $lines=@(& $fixtureScript $fixtureRoot $Scenario 3>&1 6>&1)
+    $result=($lines[-1] | ConvertFrom-Json)
+    Assert (-not $result.tokenPresent) 'Join token survived installer cleanup.'
+    return $result
+}
+
 $Lang = 'en'
 $script:checks = 0
 function Check([string]$Name,[ScriptBlock]$Action) {
@@ -182,6 +290,38 @@ $script:logFile=$masterLog; $script:startupLogLines=1
             $env:ProgramFiles=$savedProgramFiles
             Remove-Item Env:OSS_TRANSFER_FIXTURE_AGENT_FAIL -ErrorAction SilentlyContinue
         }
+    }
+    Check 'Agent rejoin replaces revoked identity after backup and preserves task data' {
+        foreach ($scenario in @('existing-success','adopt-success')) {
+            $result=Invoke-AgentInstallFixture $scenario
+            Assert (-not $result.failure) "Join failed: $($result.failure)"
+            Assert (($result.events -join ',') -eq 'stop,backup,enroll,start,success,finish') "Unexpected rejoin order: $($result.events)"
+            Assert ($result.database -ceq 'new-identity|retained-task') 'Enrollment lost task data.'
+        }
+    }
+    Check 'Agent rejoin retains pending or accepted identity when installation fails' {
+        foreach ($scenario in @('existing-enroll-failure','adopt-enroll-failure','existing-ready-failure','adopt-ready-failure')) {
+            $result=Invoke-AgentInstallFixture $scenario
+            Assert ($result.failure -like 'fixture *') 'Enrollment/startup failure was hidden.'
+            Assert (-not ($result.events -contains 'restore')) 'Rollback replaced a potentially accepted identity.'
+            $identity=if($scenario -like '*enroll-failure'){'pending'}else{'new'}
+            Assert ($result.database -ceq "$identity-identity|retained-task") 'Rollback lost enrollment state or task data.'
+            Assert ($result.binary -ceq 'old-binary' -and $result.cli -ceq 'old-cli' -and $result.config -ceq '{"dataDirectory":"retained"}') 'Original binary/configuration/CLI were not restored.'
+            Assert ($result.backupPresent -and -not ($result.events -contains 'success')) 'Failed enrollment was marked successful or lost its backup.'
+        }
+    }
+    Check 'Agent ordinary upgrade still requires maintenance and restores its database on failure' {
+        $result=Invoke-AgentInstallFixture 'ordinary-success'
+        Assert (-not $result.failure -and ($result.events -join ',') -eq 'maintenance-begin,stop,backup,start,maintenance-end,success,finish') 'Ordinary upgrade bypassed maintenance.'
+        Assert ($result.database -ceq 'old-identity|retained-task') 'Ordinary upgrade re-enrolled the Agent.'
+        $result=Invoke-AgentInstallFixture 'ordinary-401'
+        Assert ($result.failure -ceq 'fixture maintenance HTTP 401' -and ($result.events -join ',') -eq 'maintenance-begin,finish') 'Maintenance authorization failure was ignored.'
+        Assert ($result.binary -ceq 'old-binary') 'Authorization failure replaced the binary.'
+        $result=Invoke-AgentInstallFixture 'ordinary-ready-failure'
+        Assert ($result.failure -ceq 'fixture startup failure' -and $result.events -contains 'restore') 'Ordinary rollback omitted database restoration.'
+        Assert ($result.database -ceq 'old-identity|retained-task') 'Ordinary rollback lost retained tasks.'
+        $result=Invoke-AgentInstallFixture 'missing-master'
+        Assert ($result.failure.Contains('-MasterUrl') -and $result.events.Count -eq 0) 'Join without a Master changed the installation.'
     }
     Check 'noninteractive first Master includes Agent but reinstall does not add one' {
         $selection=@($ast.FindAll({param($node)

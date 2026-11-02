@@ -25,6 +25,7 @@ import threading
 import time
 import zipfile
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 
 INITIAL_PASSWORD_PATTERN = r"^(?:Initial password|初始密码)[ \t]*[:：][ \t]*([A-Za-z0-9_-]+)[ \t]*$"
@@ -282,7 +283,12 @@ class Lifecycle:
                 except Exception as error: observations.append('SCM observation unavailable: '+str(error))
         monitor=threading.Thread(target=monitor_scm,daemon=True) if self.system=='Windows' else None
         if monitor:monitor.start()
-        try: result=self.invoke(command,env=dict(self.installer_env,TRANSFER_JOIN_TOKEN=token or ''),timeout=timeout+100)
+        # The public bootstrap passes its invitation through stdin on Unix.
+        # Exercise that exact input path for existing installations as well.
+        stdin_token=token if self.system!='Windows' else None
+        if stdin_token: command+=['--token-stdin']
+        try: result=self.invoke(command,env=dict(self.installer_env,TRANSFER_JOIN_TOKEN=token if self.system=='Windows' and token else ''),
+                                input=stdin_token,timeout=timeout+100)
         finally:
             monitor_stop.set()
             if monitor:monitor.join(timeout=10)
@@ -452,14 +458,85 @@ func main(){
             return int(re.search(r'\bpid = (\d+)',output)[1])
         return int(subprocess.check_output(['powershell.exe','-NoProfile','-Command',f'(Get-CimInstance Win32_Service -Filter "Name=\'{name}\'").ProcessId'],text=True, encoding="utf-8").strip())
 
-    def api(self,path,body=None):
+    def api(self,path,body=None,method=None,token=None,expected=200,unwrap=True):
         headers={'Content-Type':'application/json'}
-        if self.token:headers['Authorization']='Bearer '+self.token
-        request=Request(self.origin+path,data=json.dumps(body).encode() if body is not None else None,headers=headers)
-        with urlopen(request,timeout=15) as response:
+        authorization=self.token if token is None else token
+        if authorization:headers['Authorization']='Bearer '+authorization
+        request=Request(self.origin+path,data=json.dumps(body).encode() if body is not None else None,headers=headers,method=method)
+        try: response=urlopen(request,timeout=15)
+        except HTTPError as error: response=error
+        with response:
+            require(response.status==expected,'API status mismatch for '+path+': '+str(response.status))
             payload=json.load(response)
-        require(payload.get('success') is not False,'API returned failure')
-        return payload.get('data',payload)
+        if expected<400:require(payload.get('success') is not False,'API returned failure')
+        return payload.get('data',payload) if unwrap else payload
+
+    def agent_grant(self,member_id,previous=None):
+        deadline=time.monotonic()+30
+        while time.monotonic()<deadline:
+            nodes=self.api('/api/master/nodes')['nodes']
+            path=self.root/'agent/data/cli-local-auth.json'
+            if len(nodes)==1 and nodes[0]['id']==member_id and nodes[0].get('online') and path.is_file():
+                grant=json.loads(path.read_text(encoding='utf-8-sig'))['token']
+                if previous is None or grant!=previous:
+                    self.secrets.append(grant)
+                    self.api('/api/master/nodes',token=grant)
+                    return grant
+            time.sleep(.2)
+        raise AssertionError('Agent did not become online with its authenticated local grant')
+
+    def verify_agent_rejoin(self,member_id,original_invitation):
+        config=self.root/'agent/config/service.json'
+        config_bytes=config.read_bytes()
+        keys={path:hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in (self.root/'agent/data').glob('*.db.key')}
+        require(len(keys)==1,'Agent database key is missing before re-enrollment')
+        address=self.api('/api/master/nodes')['nodes'][0]['address']
+        self.api('/api/master/nodes/'+address,{'maxConcurrentChildren':7,'objectsPerChild':3},method='PUT')
+        original_grant=self.agent_grant(member_id)
+        self.api('/api/master/nodes/'+address,method='DELETE')
+        require(not self.api('/api/master/nodes')['nodes'],'Deleted Agent remains in the cluster')
+        self.api('/api/master/nodes',token=original_grant,expected=401)
+        refused=self.install('agent',token=original_invitation,expect=1,timeout=10)
+        require('enroll Agent: HTTP 403' in refused.stdout,
+                'Used invitation did not reach enrollment authorization')
+        require(not self.api('/api/master/nodes')['nodes'],'Used invitation restored a removed Agent')
+        self.api('/api/master/nodes',token=original_grant,expected=401)
+        # An ordinary upgrade cannot use a revoked grant to bypass admission.
+        refused=self.install('agent',upgrade=True,expect=1,timeout=10)
+        require('Agent upgrade maintenance rejected by Master (HTTP 401)' in refused.stdout,
+                'Revoked upgrade did not fail at the maintenance authorization check')
+        require(not self.api('/api/master/nodes')['nodes'],'Ordinary upgrade resurrected a removed Agent')
+        self.record('removed_agent_requires_fresh_invitation_and_keeps_old_grant_revoked')
+
+        invite=self.api('/api/master/agents/invitations',{'address':address,'label':'Rejoined Agent'})
+        self.secrets.append(invite['inviteToken'])
+        self.install('agent',token=invite['inviteToken'])
+        new_grant=self.agent_grant(member_id,previous=original_grant)
+        require(config.read_bytes()==config_bytes,'Re-enrollment changed Agent configuration')
+        require(all(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==digest
+                    for path,digest in keys.items()),'Re-enrollment replaced the retained database key')
+        workers=self.api('/api/master/worker-status',unwrap=False)['workers']
+        settings=workers[address]['executionStatus']
+        require(settings.get('maxConcurrentChildren')==7 and settings.get('objectsPerChild')==3,
+                'Re-enrollment reset the persisted node concurrency')
+        self.api('/api/master/nodes',token=original_grant,expected=401)
+        self.record('fresh_invitation_rejoins_existing_database_with_new_grant_and_retained_settings',nodeId=member_id)
+
+        # A rejected invitation must not replace the still-valid saved identity.
+        invalid_invitation=secrets.token_urlsafe(32)
+        self.secrets.append(invalid_invitation)
+        refused=self.install('agent',token=invalid_invitation,expect=1,timeout=10)
+        require('enroll Agent: HTTP 403' in refused.stdout,
+                'Invalid invitation did not reach enrollment authorization')
+        require(self.agent_grant(member_id)==new_grant,'Rejected invitation changed the active Agent grant')
+        require(config.read_bytes()==config_bytes,'Rejected invitation changed Agent configuration')
+        self.record('invalid_rejoin_invitation_preserves_active_agent_and_configuration')
+
+        self.install('agent',upgrade=True)
+        require(self.agent_grant(member_id)==new_grant,'Normal upgrade after rejoin changed the enrollment')
+        self.api('/api/master/nodes',token=original_grant,expected=401)
+        self.record('ordinary_agent_upgrade_after_rejoin_keeps_new_identity_and_old_revocation')
 
     def login(self):
         self.token=self.api('/api/auth/login',self.credentials)['token']
@@ -557,6 +634,11 @@ func main(){
         self.record('fresh_agent_service_authenticated',pid=agent_before,nodeId=member_id)
         agent_config=self.root/'agent/config/service.json'
         agent_bytes=agent_config.read_bytes()
+        if self.args.rejoin_only:
+            self.verify_agent_rejoin(member_id,invite['inviteToken'])
+            self.evidence['result']='passed'
+            self.save()
+            return
         if self.args.all_installed:
             with self.latest_release() as release_url:
                 self.install('master',upgrade=True,discover=True,discover_all=True,release_url=release_url)
@@ -687,6 +769,7 @@ func main(){
         require(len(nodes)==1 and nodes[0]['id']==member_id,'Adoption re-enrolled the existing Agent')
         require(agent_config.read_bytes()==agent_bytes,'Adoption changed Agent configuration')
         self.record('adopt_existing_agent_without_invitation_preserves_identity')
+        self.verify_agent_rejoin(member_id,invite['inviteToken'])
         self.evidence['result']='passed'
         self.save()
 
@@ -742,6 +825,7 @@ def main():
     parser.add_argument('--failure-master-fixture',type=Path,help='Precompiled target-platform startup failure fixture')
     parser.add_argument('--rollback-cli-fixture',type=Path,help='Precompiled target-platform replacement CLI fixture')
     parser.add_argument('--all-installed',action='store_true',help='Disposable CI hosts only: exercise unfiltered discovery of every installed role')
+    parser.add_argument('--rejoin-only',action='store_true',help='Run fresh install and removed-Agent re-enrollment checks only')
     parser.add_argument('--system',action='store_true',help='macOS: system LaunchDaemon (requires root)')
     args=parser.parse_args()
     if bool(args.failure_master_fixture) != bool(args.rollback_cli_fixture):

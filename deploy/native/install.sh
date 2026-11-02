@@ -308,7 +308,7 @@ Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --cli-path FILE       CLI location (default: global when available)
   --replace-cli         Back up and replace an existing unmanaged CLI
   --listen HOST:PORT   Master listener (default 0.0.0.0:1685; first install only)
-  --master-url URL     Master URL for first Agent enrollment
+  --master-url URL     Master URL for Agent enrollment or rejoining
   --token-stdin        Read the Agent invitation token from standard input
   --service-name NAME  Isolated service name
   --root-dir DIR       Keep programs, configuration and data under one directory
@@ -717,6 +717,8 @@ backup=
 owned_backup=
 was_active=0
 agent_maintenance_started=0
+enrollment_requested=0
+enrollment_attempted=0
 was_enabled=0
 had_unit=0
 [[ ! -f "$unit" ]] || had_unit=1
@@ -838,6 +840,17 @@ publish_master_packages() {
 }
 [[ $("$work/$filename" --version) == "oss-transfer-$role $version "* ]] || fail 'Binary version or platform check failed'
 [[ $("$work/$cli_filename" --version --json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') == "$version" ]] || fail 'CLI version or platform check failed'
+if [[ "$role" == agent ]]; then
+  if ((token_stdin)); then
+    IFS= read -r TRANSFER_JOIN_TOKEN || true
+    [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Copy a new Agent join command from Nodes > Add node'
+  fi
+  if [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]]; then
+    [[ -n "$master_url" ]] || fail 'Copy a new Agent join command from Nodes > Add node'
+    enrollment_requested=1
+    export TRANSFER_JOIN_TOKEN
+  fi
+fi
 if ((existed)) || [[ -n "$adopt_config" ]]; then
   source_config=${adopt_config:-$config}
   [[ -f "$source_config" && ! -L "$source_config" ]] || fail 'Existing configuration must be a regular file'
@@ -849,9 +862,7 @@ if ((existed)) || [[ -n "$adopt_config" ]]; then
 else
   if [[ "$role" == agent ]]; then
     [[ -n "$master_url" ]] || fail 'Copy an Agent join command from Nodes > Add node'
-    if ((token_stdin)); then IFS= read -r TRANSFER_JOIN_TOKEN || [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]]; fi
-    [[ -n "${TRANSFER_JOIN_TOKEN:-}" ]] || fail 'Copy an Agent join command from Nodes > Add node'
-    export TRANSFER_JOIN_TOKEN
+    ((enrollment_requested)) || fail 'Copy an Agent join command from Nodes > Add node'
   fi
   if [[ "$role" == master ]]; then listen_json=",\"listen\":\"$listen\""; else listen_json=; fi
   [[ "$listen" != *[$'\n\r\t"\\']* ]] || fail 'Invalid listener'
@@ -1212,7 +1223,7 @@ rollback() {
     if ! restore_cli_sidecars; then printf 'CLI connection rollback failed; backup: %s\n' "$backup" >&2; exit 1; fi
   fi
   if ((existed)); then
-    if [[ -f "$backup/database" ]] && ! "$work/$filename" --config "$backup/service.json" --restore-state "$backup/database"; then
+    if ((enrollment_attempted == 0)) && [[ -f "$backup/database" ]] && ! "$work/$filename" --config "$backup/service.json" --restore-state "$backup/database"; then
       printf 'Database rollback incomplete. Current files retained; backup: %s\n' "$backup" >&2
       exit 1
     fi
@@ -1229,7 +1240,7 @@ rollback() {
   else
     rm -f "$unit"
     if [[ "$platform" == linux ]]; then systemctl daemon-reload; fi
-    if [[ -n "$adopt_config" && -f "$backup/database" ]]; then
+    if ((enrollment_attempted == 0)) && [[ -n "$adopt_config" && -f "$backup/database" ]]; then
       if ! "$work/$filename" --config "$work/service.json" --restore-state "$backup/database"; then
         printf 'Database rollback incomplete. Current database retained; backup: %s\n' "$backup" >&2
         exit 1
@@ -1242,6 +1253,9 @@ rollback() {
     else
       printf 'No database was initialized. Inspect the startup error before retrying.\n' >&2
     fi
+  fi
+  if ((enrollment_attempted)); then
+    say 'Agent data and enrollment state were retained. Check the Master connection and retry enrollment.' '已保留 Agent 数据和注册状态，请检查 Master 连接后重试注册。' >&2
   fi
   [[ $result != 0 ]] || result=1
   exit "$result"
@@ -1265,7 +1279,7 @@ if ((existed)); then
   if [[ -f "$unit" ]]; then cp -p "$unit" "$backup/unit"; fi
   if active; then was_active=1; fi
   if [[ "$platform" == linux ]] && systemctl is-enabled --quiet "$service_name"; then was_enabled=1; fi
-  if [[ "$role" == agent ]]; then
+  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then
     printf 'Protecting Agent tasks during the upgrade...\n'
     "$work/$filename" --config "$config" --upgrade-maintenance begin --upgrade-maintenance-file "$work/agent-maintenance.json"
     agent_maintenance_started=1
@@ -1311,7 +1325,13 @@ printf 'cliPath\t%s\nbackupDir\t%s\ndataDir\t%s\n' "$cli_path" "$backup_dir" "$d
 if [[ "$install_dir" == "$root_dir/$role/bin" && "$config_dir" == "$root_dir/$role/config" && "$data_dir" == "$root_dir/$role/data" ]]; then
   printf 'rootDir\t%s\n' "$root_dir" >> "$metadata"
 fi
-if [[ "$role" == agent && "$existed" == 0 && -z "$adopt_config" ]]; then
+if ((enrollment_requested)); then
+  if ((existed)) || [[ -n "$adopt_config" ]]; then
+    say 'Rejoining the Agent to the cluster...' '正在将 Agent 重新加入集群…'
+  fi
+  # A join may commit on the Master even when its response is lost. Keep the
+  # durable pending/new identity on failure so the next attempt is idempotent.
+  enrollment_attempted=1
   OSS_TRANSFER_JOIN_TOKEN="$TRANSFER_JOIN_TOKEN" "$binary" --config "$config" --master-url "$master_url" --enroll-only
 fi
 unset TRANSFER_JOIN_TOKEN

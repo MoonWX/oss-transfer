@@ -376,6 +376,10 @@ if ($Upgrade) {
     }
 }
 if (-not $Role) { $Role = 'master' }
+$enrollmentRequested = $Role -eq 'agent' -and -not [string]::IsNullOrWhiteSpace($env:TRANSFER_JOIN_TOKEN)
+if ($enrollmentRequested -and [string]::IsNullOrWhiteSpace($MasterUrl)) {
+    throw (Get-InstallText 'An Agent join token requires -MasterUrl. Copy a new join command from Nodes > Add node.' '使用 Agent 加入凭证时必须提供 -MasterUrl。请从执行节点 > 添加节点重新复制加入指令。')
+}
 if (-not $ServiceName) { $ServiceName = "OSSTransfer$((Get-Culture).TextInfo.ToTitleCase($Role))" }
 if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid service name.' }
 $base = Join-Path $RootDir $Role
@@ -543,6 +547,7 @@ Protect-Directory $work
 $changed = $false
 $installationSucceeded = $false
 $agentMaintenanceStarted = $false
+$enrollmentAttempted = $false
 $backup = $null
 $script:ownedBackup = $null
 $script:startupCommitted = $false
@@ -994,7 +999,7 @@ try {
             Write-UTF8 (Join-Path $backup 'service-record.json') ($oldService | Select-Object PathName,StartMode | ConvertTo-Json)
             $wasRunning = $oldService.State -ne 'Stopped'
         }
-        if ($Role -eq 'agent') {
+        if ($Role -eq 'agent' -and -not $enrollmentRequested) {
             Write-Host (Get-InstallText 'Protecting Agent tasks during the upgrade...' '正在保留 Agent 上的任务进度...')
             Invoke-Native $candidate @('--config',$config,'--upgrade-maintenance','begin','--upgrade-maintenance-file',(Join-Path $work 'agent-maintenance.json')) | Out-Null
             $agentMaintenanceStarted = $true
@@ -1040,7 +1045,14 @@ try {
         $installationRecord.rootDir = $RootDir
     }
     Write-UTF8 $metadata ($installationRecord | ConvertTo-Json)
-    if (-not $existing -and -not $AdoptConfig -and $Role -eq 'agent') { $env:OSS_TRANSFER_JOIN_TOKEN = $env:TRANSFER_JOIN_TOKEN; Invoke-Native $binary @('--config',$config,'--master-url',$MasterUrl,'--enroll-only') | Out-Null }
+    if ($enrollmentRequested) {
+        if ($existing -or $AdoptConfig) { Write-Host (Get-InstallText 'Rejoining this Agent to the cluster...' '正在将本机 Agent 重新加入集群...') }
+        $env:OSS_TRANSFER_JOIN_TOKEN = $env:TRANSFER_JOIN_TOKEN
+        # Join may have reached the Master even if its response is lost. Keep the
+        # new or pending identity if any later installation step needs rollback.
+        $enrollmentAttempted = $true
+        Invoke-Native $binary @('--config',$config,'--master-url',$MasterUrl,'--enroll-only') | Out-Null
+    }
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     $command = '"'+$binary+'" --config "'+$config+'"'
@@ -1092,7 +1104,7 @@ try {
                 Restore-CLIConnections
             }
             if ($existing) {
-                if ($hadDatabaseBackup) { Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--restore-state',(Join-Path $backup 'database')) | Out-Null }
+                if ($hadDatabaseBackup -and -not $enrollmentAttempted) { Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--restore-state',(Join-Path $backup 'database')) | Out-Null }
                 if ($hadBinary) { Copy-Item -LiteralPath (Join-Path $backup 'binary.exe') -Destination $binary -Force }
                 else { Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue }
                 Copy-Item -LiteralPath (Join-Path $backup 'service.json') -Destination $config -Force
@@ -1114,7 +1126,7 @@ try {
             } else {
                 $created = Service-Record
                 if ($created -and -not $oldService) { Invoke-CimMethod -InputObject $created -MethodName Delete | Out-Null }
-                if ($AdoptConfig -and $hadDatabaseBackup) {
+                if ($AdoptConfig -and $hadDatabaseBackup -and -not $enrollmentAttempted) {
                     Invoke-Native $candidate @('--config',$freshConfig,'--restore-state',(Join-Path $backup 'database')) | Out-Null
                     Write-Warning "Restored the adopted database. Backup: $backup"
                 }
@@ -1130,6 +1142,7 @@ try {
             }
         } catch { Write-Warning ('Rollback needs attention: '+$_.Exception.Message) }
     }
+    if ($enrollmentAttempted) { Write-Warning (Get-InstallText 'Agent data and enrollment state were retained. Check the Master connection and retry enrollment; do not delete the Agent data.' '已保留 Agent 数据和注册状态。请检查 Master 连接后重试注册，不要删除 Agent 数据。') }
     if ($backup) { Write-Warning "Temporary backup retained at $backup" -WarningAction Continue }
     throw $failure
 } finally {
@@ -1204,5 +1217,7 @@ if ($installationSucceeded -and $Role -eq 'master' -and $WithAgent) {
 }
 
 } finally {
+    Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     if ($sourceWork) { Remove-Item -LiteralPath $sourceWork -Recurse -Force -ErrorAction SilentlyContinue }
 }

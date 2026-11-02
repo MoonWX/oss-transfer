@@ -54,6 +54,8 @@ type Agent struct {
 	bootID   string
 }
 
+const previousIdentityKey = "before-enrollment"
+
 func tokenHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
@@ -85,7 +87,15 @@ func New(store *state.Store, options Options) (*Agent, error) {
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 			return errors.New("Master URL must be an HTTP or HTTPS origin")
 		}
+		if identity.PendingToken != "" && options.JoinToken != "" && options.JoinToken != identity.PendingToken {
+			return errors.New("Agent enrollment is awaiting confirmation; retry enrollment without a new invitation before replacing it")
+		}
 		if options.JoinToken != "" && tokenHash(options.JoinToken) != identity.UsedTokenHash && options.JoinToken != identity.PendingToken {
+			if identity.EnrollmentID != "" {
+				if err := tx.Put("agent-identity", previousIdentityKey, identity); err != nil {
+					return err
+				}
+			}
 			identity.PendingToken = options.JoinToken
 			identity.Credential, err = cluster.Token()
 			if err != nil {
@@ -116,10 +126,16 @@ func New(store *state.Store, options Options) (*Agent, error) {
 // Enroll keeps the identity and secret durable before the first request. A lost
 // join response is retried with exactly the same identity after restart.
 func (a *Agent) Enroll(ctx context.Context) error {
-	if a.identity.EnrollmentID != "" {
+	token := a.identity.PendingToken
+	if a.identity.EnrollmentID != "" && a.options.JoinToken == "" {
 		return nil
 	}
-	data, err := json.Marshal(cluster.JoinRequest{Token: a.identity.PendingToken, InstanceID: a.identity.InstanceID, Credential: a.identity.Credential, Address: a.identity.Address, Label: a.identity.Label})
+	if a.identity.EnrollmentID != "" {
+		// Explicitly repeating an invitation must revalidate it. A revoked
+		// enrollment must not report success just because it is still on disk.
+		token = a.options.JoinToken
+	}
+	data, err := json.Marshal(cluster.JoinRequest{Token: token, InstanceID: a.identity.InstanceID, Credential: a.identity.Credential, Address: a.identity.Address, Label: a.identity.Label})
 	if err != nil {
 		return err
 	}
@@ -135,6 +151,14 @@ func (a *Agent) Enroll(ctx context.Context) error {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
+		// Only definitive Join rejections release a pending identity. A lost
+		// response or unavailable Master may have committed it already, so its
+		// credential must remain durable for an idempotent retry.
+		if a.identity.PendingToken != "" && (response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusConflict) {
+			if err := a.rejectEnrollment(); err != nil {
+				return fmt.Errorf("enroll Agent: HTTP %d; restore previous identity: %w", response.StatusCode, err)
+			}
+		}
 		return fmt.Errorf("enroll Agent: HTTP %d", response.StatusCode)
 	}
 	var result struct {
@@ -151,13 +175,51 @@ func (a *Agent) Enroll(ctx context.Context) error {
 	next.EnrollmentID = result.Data.EnrollmentID
 	next.Address = result.Data.Address
 	next.Label = result.Data.Label
-	next.UsedTokenHash = tokenHash(next.PendingToken)
+	next.UsedTokenHash = tokenHash(token)
 	next.PendingToken = ""
-	if err := a.store.Update(func(tx *state.Tx) error { return tx.Put("agent-identity", "self", next) }); err != nil {
+	if err := a.store.Update(func(tx *state.Tx) error {
+		if err := tx.Put("agent-identity", "self", next); err != nil {
+			return err
+		}
+		return tx.Delete("agent-identity", previousIdentityKey)
+	}); err != nil {
 		return err
 	}
 	a.identity = next
 	return nil
+}
+
+func (a *Agent) rejectEnrollment() error {
+	var next Identity
+	err := a.store.Update(func(tx *state.Tx) error {
+		var current Identity
+		found, err := tx.Get("agent-identity", "self", &current)
+		if err != nil {
+			return err
+		}
+		if !found || current != a.identity {
+			return errors.New("Agent identity changed during enrollment")
+		}
+		found, err = tx.Get("agent-identity", previousIdentityKey, &next)
+		if err != nil {
+			return err
+		}
+		if !found {
+			// A rejected first invitation has no enrolled identity to restore.
+			// Retain the instance ID, but require another invitation to proceed.
+			next = Identity{InstanceID: current.InstanceID, MasterURL: current.MasterURL, Address: current.Address, Label: current.Label}
+		} else if next.InstanceID != current.InstanceID || next.MasterURL != current.MasterURL || next.EnrollmentID == "" || next.Credential == "" || next.PendingToken != "" {
+			return errors.New("previous Agent identity is inconsistent")
+		}
+		if err := tx.Put("agent-identity", "self", next); err != nil {
+			return err
+		}
+		return tx.Delete("agent-identity", previousIdentityKey)
+	})
+	if err == nil {
+		a.identity = next
+	}
+	return err
 }
 
 // MasterURL exposes the non-secret cluster origin for local CLI discovery.

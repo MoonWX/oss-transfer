@@ -418,7 +418,7 @@ esac
     def invoke(self, body, status=0):
         script = '''set -euo pipefail
 work=$TEST_ROOT; filename=candidate; config=$TEST_ROOT/service.json; backup=$TEST_ROOT/backup
-role=agent; service_name=test-agent; agent_maintenance_started=0
+role=agent; service_name=test-agent; agent_maintenance_started=0; enrollment_requested=0
 stop_service() { printf 'stop\\n' >> "$TEST_ROOT/events"; }
 rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
 ''' + installer_say(self.source) + body
@@ -428,7 +428,7 @@ rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
         return result
 
     def test_failed_maintenance_never_stops_agent_or_backs_up_database(self):
-        start = self.source.index('  if [[ "$role" == agent ]]; then\n    printf \'Protecting Agent tasks')
+        start = self.source.index('  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then\n    printf \'Protecting Agent tasks')
         end = self.source.index('\nelif [[ -n "$adopt_config" ]]; then', start)
         section = self.source[start:end]
         failed = self.invoke(section, status=7)
@@ -438,6 +438,13 @@ rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
         passed = self.invoke(section)
         self.assertEqual(passed.returncode, 0, passed.stderr)
         self.assertEqual((self.root/'events').read_text().splitlines(), ['begin','stop','backup'])
+
+    def test_explicit_rejoin_backs_up_without_authenticating_with_revoked_identity(self):
+        start = self.source.index('  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then\n    printf \'Protecting Agent tasks')
+        end = self.source.index('\nelif [[ -n "$adopt_config" ]]; then', start)
+        result = self.invoke('enrollment_requested=1\n' + self.source[start:end], status=7)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'events').read_text().splitlines(), ['stop','backup'])
 
     def test_failed_end_warns_without_rolling_back_healthy_service(self):
         start = self.source.index('finish_agent_maintenance() {')
@@ -776,7 +783,7 @@ if true; then
 
     def test_metadata_marks_only_an_actual_unified_layout(self):
         start = self.source.index("printf 'role\\t%s\\nserviceName")
-        end = self.source.index('\nif [[ "$role" == agent && "$existed"', start)
+        end = self.source.index('\nif ((enrollment_requested)); then', start)
         writer = self.source[start:end]
         for split in ('', 'install', 'config', 'data'):
             with self.subTest(split=split):
@@ -1012,7 +1019,7 @@ class CLIPlacementTests(unittest.TestCase):
         Path(str(self.global_cli)+'.local-auth.json').write_text('new private grant')
         rollback=self.source[self.source.index('backup_cli_sidecars() {'):self.source.index('\ncheck_listener\n')]
         body=r"""set -euo pipefail
-existed=0; cli_changed=1; had_cli=0; cli_migrated=1; platform=linux; adopt_config=
+existed=0; cli_changed=1; had_cli=0; cli_migrated=1; platform=linux; adopt_config=; enrollment_attempted=0
 cli_path=$1; previous_cli=$2; unit=$3/unit; backup=$3/backup; log_file=$3/log; database=$3/missing.db; data_dir=$3/data
 systemctl() { return 0; }
 stop_service() { return 0; }

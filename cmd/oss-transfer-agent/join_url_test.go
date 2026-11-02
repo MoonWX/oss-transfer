@@ -156,8 +156,12 @@ func testJoinURLDefaultDirectory(t *testing.T, legacy bool) {
 	if err := runAgentCommand("--join-url", link, "--enroll-only"); err != nil {
 		t.Fatal(err)
 	}
-	if joins.Load() != 1 {
-		t.Fatal("repeating the command attempted to consume the invitation again")
+	if joins.Load() != 2 {
+		t.Fatal("repeating the command did not revalidate its invitation")
+	}
+	current, err := registry.Members()
+	if err != nil || len(current) != 1 || current[0].Session() != members[0].Session() {
+		t.Fatal("revalidating the invitation changed the registered identity", err)
 	}
 	if legacy {
 		if _, err := os.Stat(filepath.Join("data", "agent", "agent.db")); !os.IsNotExist(err) {
@@ -176,7 +180,7 @@ func testJoinURLDefaultDirectory(t *testing.T, legacy bool) {
 	if err := runner.Enroll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if runner.Session() != members[0].Session() || joins.Load() != 1 {
+	if runner.Session() != members[0].Session() || joins.Load() != 2 {
 		t.Fatal("default-directory enrollment was not retained across restarts")
 	}
 	if err := db.Close(); err != nil {
@@ -197,7 +201,7 @@ func testJoinURLDefaultDirectory(t *testing.T, legacy bool) {
 		if err := runAgentCommand("--join-url", link, "--data-dir", "./agent-data", "--enroll-only"); err != nil {
 			t.Fatal("explicit legacy directory was not respected:", err)
 		}
-		if joins.Load() != 1 {
+		if joins.Load() != 3 {
 			t.Fatal("legacy identity changed after explicitly choosing its database")
 		}
 	}

@@ -2,18 +2,20 @@
 
 [English](offline-install.md)
 
-在联网机器上下载一个版本的安装文件，再拷贝到离线主机。Agent 仍需能访问 Master，以及任务使用的对象存储地址。
+在联网机器上下载一个版本的安装文件，再拷贝到离线 Master。Agent 仍需能访问 Master，以及任务使用的对象存储地址。
 
 ## 1. 准备安装文件
 
-在联网机器的 Bash 中执行以下命令。选定发布版本和与**目标主机**匹配的压缩包，下面以 Linux x86-64 为例：
+在联网机器的 Bash 中执行以下命令，下载最新版本及与**目标主机**匹配的压缩包。下面以 Linux x86-64 为例：
 
 ```bash
 (
-version=v4.1.21
+base=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
+version=$(curl -fsSL "$base/latest/manifest.tsv" | awk -F '\t' '$1 == "version" {print "v" $2}')
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
 archive=oss-transfer-linux-amd64.tar.gz
 bundle="oss-transfer-$version-offline"
-base="https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$version"
+base="$base/$version"
 mkdir -p "$bundle"
 for file in install.sh native-install.sh Install.ps1 manifest.tsv "$archive"; do
   curl -fL --retry 2 "$base/$file" -o "$bundle/$file" || exit 1
@@ -37,7 +39,7 @@ done
 将整个文件夹拷贝到离线主机，压缩包无需解压。Linux 在该文件夹中打开终端并执行：
 
 ```bash
-sudo bash native-install.sh --role master --package-dir "$PWD" --yes
+sudo bash install.sh --role master --package-dir "$PWD"
 ```
 
 打开 `http://<master-ip>:1685`，使用 `admin` 和安装器输出的初始密码登录，然后设置自己的密码。
@@ -50,30 +52,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role mast
 
 ## 3. 添加 Agent
 
-打开**执行节点 → 添加节点**，填写 Agent 能访问的 Master 地址并生成加入指令。在 **Linux / macOS / FreeBSD** 页签中，只复制以 `/api/agents/bootstrap/<token>` 结尾的 URL，不要带引号。
+安装 Master 时可同时安装本机 Agent，它会自动加入集群。其他机器打开**执行节点 → 添加节点**，填写 Agent 能访问的 Master 地址，将生成的命令原样复制到 Agent 主机执行。
 
-在 Linux Agent 主机上进入拷贝后的文件夹。先执行 `read -r join_url`，粘贴 URL 并回车，然后执行余下命令：
+Agent 从 Master 获取安装器和程序包，不需要逐台拷贝文件或拆分邀请链接。Master 离线时，先把各台 Agent 所需平台的压缩包一起放进第 1 步的文件夹，再安装 Master；安装器会将这些包保存到 Master 的 `data/packages` 目录。
 
-```bash
-read -r join_url
-sudo bash install.sh --role agent --method native \
-  --package-dir "$PWD" --join-url "$join_url" --yes
-unset join_url
-```
-
-macOS 或 FreeBSD 按第 2 步调整权限和 `--user`。Windows 在管理员 PowerShell 中执行，粘贴同一个邀请 URL：
-
-```powershell
-$join = (Read-Host 'Agent invitation URL') -split '/api/agents/bootstrap/', 2
-$env:TRANSFER_JOIN_TOKEN = $join[1]
-try {
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role agent -MasterUrl $join[0] -PackageDir $PWD.Path -Yes
-} finally {
-    Remove-Item Env:TRANSFER_JOIN_TOKEN
-}
-```
-
-确认 Agent 在控制台中显示在线。每台 Agent 单独生成邀请；如果 Master 所在主机也要传输数据，在同一主机上再安装一个 Agent。
+Master 能联网时，可以按需下载其他平台的同版本安装包。需要使用原来的公网下载方式时，在加入窗口点击“改用公网下载”；Docker 使用镜像仓库。
 
 ## 4. 升级
 
@@ -91,4 +74,4 @@ Windows 使用 `-Upgrade`，并指定 `-Role master` 或 `-Role agent` 及 `-Pac
 
 - 所有文件必须来自同一个固定版本。安装器会校验压缩包，不能把解压后的二进制目录当作 `--package-dir`。
 - Unix 主机需要 Bash、tar 和 SHA-256 工具，Linux 还需要 systemd。缺少的工具应提前安装。
-- 邀请有有效期且只能使用一次。控制台中的普通加入指令和版本更新按钮会下载发布文件；无法下载时，使用本文的本地命令。
+- 邀请有有效期且只能使用一次。新邀请可以继续使用 Master 已保存的安装包。版本更新需要先准备新版本文件。

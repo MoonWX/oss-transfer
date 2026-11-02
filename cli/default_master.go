@@ -32,13 +32,13 @@ func nativeCLIInstallationDirs() []string {
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "windows":
-		return []string{filepath.Join(os.Getenv("ProgramFiles"), "OSS Transfer", "master"), filepath.Join(os.Getenv("ProgramFiles"), "OSS Transfer", "agent")}
+		return []string{filepath.Join(os.Getenv("ProgramData"), "OSS Transfer", "master", "bin"), filepath.Join(os.Getenv("ProgramData"), "OSS Transfer", "agent", "bin"), filepath.Join(os.Getenv("ProgramFiles"), "OSS Transfer", "master"), filepath.Join(os.Getenv("ProgramFiles"), "OSS Transfer", "agent")}
 	case "darwin":
-		return []string{filepath.Join(home, "Library/Application Support/OSS Transfer/master/bin"), filepath.Join(home, "Library/Application Support/OSS Transfer/agent/bin"), "/usr/local/lib/oss-transfer/master", "/usr/local/lib/oss-transfer/agent"}
+		return []string{filepath.Join(home, "Library/Application Support/OSS Transfer/master/bin"), filepath.Join(home, "Library/Application Support/OSS Transfer/agent/bin"), "/Library/Application Support/OSS Transfer/master/bin", "/Library/Application Support/OSS Transfer/agent/bin", "/usr/local/lib/oss-transfer/master", "/usr/local/lib/oss-transfer/agent"}
 	case "freebsd":
-		return []string{"/usr/local/lib/oss-transfer/master", "/usr/local/lib/oss-transfer/agent"}
+		return []string{"/usr/local/lib/oss-transfer/master/bin", "/usr/local/lib/oss-transfer/agent/bin", "/usr/local/lib/oss-transfer/master", "/usr/local/lib/oss-transfer/agent"}
 	default:
-		return []string{"/opt/oss-transfer/master", "/opt/oss-transfer/agent", "/opt/oss-transfer-go/master", "/opt/oss-transfer-go/agent"}
+		return []string{"/opt/oss-transfer/master/bin", "/opt/oss-transfer/agent/bin", "/opt/oss-transfer/master", "/opt/oss-transfer/agent", "/opt/oss-transfer-go/master", "/opt/oss-transfer-go/agent"}
 	}
 }
 

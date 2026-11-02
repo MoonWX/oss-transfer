@@ -18,13 +18,13 @@ From mainland China:
 curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh | sudo bash
 ```
 
-After downloading, the installer automatically chooses GitHub or the OSS mirror for its packages. For other systems or custom paths, see [installation options](docs/install.md). For hosts without internet access, use the [offline installation guide](docs/offline-install.md).
+The installer can also install a local Agent and join it to the Master automatically. New installations use `/opt/oss-transfer/`; choose another location with `--root-dir`. Packages are downloaded from GitHub or the OSS mirror automatically. For other systems or custom paths, see [installation options](docs/install.md). For hosts without internet access, use the [offline installation guide](docs/offline-install.md).
 
 Open `http://<master-ip>:1685`. Sign in as `admin` with the generated password printed by the installer; the first login requires you to change it.
 
 ## Add an Agent
 
-Open **Execution nodes → Add node**, select the host's operating system, and run the generated command on that host. Add at least one Agent before transferring data. The Master host can run an Agent too.
+Open **Execution nodes → Add node**, select the host's operating system, and run the generated command on that host. Agents download their packages from the Master by default. If you installed the local Agent with the Master, it is already ready to use.
 
 When adding a node, the Master address defaults to the current browser address. Change it to the Master's private URL if that Agent will connect over a private network.
 
@@ -48,7 +48,7 @@ See [CLI usage](docs/cli.md) for task control, remote login and scripting.
 
 Open **Operations → Software updates** to update the Master. Then open **Execution nodes → Software updates** and choose **Update all nodes** to update the Agents. Updating the Master does not start Agent updates. Older versions without these pages need one installer upgrade first; you can also rerun the install command.
 
-Successful upgrades delete their temporary backups. Make a separate backup before a planned downgrade; [backup and recovery](docs/operations.md) covers the files and database keys to keep.
+Reinstalling preserves existing configuration, databases and node identities. Existing installations keep their paths. Successful upgrades delete their temporary backups. Make a separate backup before a planned downgrade; [backup and recovery](docs/operations.md) covers the files and database keys to keep.
 
 ## Docker Compose
 

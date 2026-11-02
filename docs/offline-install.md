@@ -2,18 +2,20 @@
 
 [中文](offline-install.zh-CN.md)
 
-Download one release on a connected machine, then copy it to the offline hosts. Agents still need access to the Master and the storage endpoints used by their tasks.
+Download one release on a connected machine, then copy it to the offline Master. Agents still need access to the Master and the storage endpoints used by their tasks.
 
 ## 1. Prepare the files
 
-Run this in Bash on a connected machine. Choose a fixed release and the archive for the **target host**; this example uses Linux x86-64:
+Run this in Bash on a connected machine. It downloads the latest release for the **target host**; this example uses Linux x86-64:
 
 ```bash
 (
-version=v4.1.21
+base=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
+version=$(curl -fsSL "$base/latest/manifest.tsv" | awk -F '\t' '$1 == "version" {print "v" $2}')
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
 archive=oss-transfer-linux-amd64.tar.gz
 bundle="oss-transfer-$version-offline"
-base="https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$version"
+base="$base/$version"
 mkdir -p "$bundle"
 for file in install.sh native-install.sh Install.ps1 manifest.tsv "$archive"; do
   curl -fL --retry 2 "$base/$file" -o "$bundle/$file" || exit 1
@@ -37,7 +39,7 @@ For another platform, change `archive`:
 Copy the whole folder to the offline host. Keep the archives compressed. On Linux, open a terminal in that folder and run:
 
 ```bash
-sudo bash native-install.sh --role master --package-dir "$PWD" --yes
+sudo bash install.sh --role master --package-dir "$PWD"
 ```
 
 Open `http://<master-ip>:1685`, sign in as `admin` with the password printed by the installer, and choose a new password.
@@ -48,32 +50,13 @@ macOS and FreeBSD use the same command. For a macOS user service, omit `sudo` an
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -PackageDir $PWD.Path -Yes
 ```
 
-## 3. Add an Agent
+## 3. Add Agents
 
-Open **Execution nodes → Add node** and enter a Master address the Agent can reach. Generate the join command. From its **Linux / macOS / FreeBSD** tab, copy just the URL ending in `/api/agents/bootstrap/<token>`, without quotes.
+During Master installation, you can also install a local Agent; it joins automatically. For other hosts, open **Execution nodes → Add node**, enter a Master address reachable from the Agent, and run the generated command on that host.
 
-On the Linux Agent host, open the copied folder. Run `read -r join_url`, paste the URL and press Enter, then run the remaining commands:
+Agents download their installer and package from the Master. If the Master is offline, include the archives for every Agent platform in the folder from step 1 before installing it. The installer keeps those packages in the Master’s `data/packages` directory.
 
-```bash
-read -r join_url
-sudo bash install.sh --role agent --method native \
-  --package-dir "$PWD" --join-url "$join_url" --yes
-unset join_url
-```
-
-For macOS or FreeBSD, use the same permission and `--user` adjustments as step 2. In Administrator PowerShell on Windows, paste the same invitation URL:
-
-```powershell
-$join = (Read-Host 'Agent invitation URL') -split '/api/agents/bootstrap/', 2
-$env:TRANSFER_JOIN_TOKEN = $join[1]
-try {
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role agent -MasterUrl $join[0] -PackageDir $PWD.Path -Yes
-} finally {
-    Remove-Item Env:TRANSFER_JOIN_TOKEN
-}
-```
-
-Confirm that the Agent appears online. Each Agent needs its own invitation. Install an Agent on the Master host too if that machine will transfer data.
+An online Master can fetch matching packages for other platforms as needed. Choose **Download from public sources** in the invitation dialog to use the original download path. Docker still uses the container registry.
 
 ## 4. Upgrade
 
@@ -91,4 +74,4 @@ Windows uses `-Upgrade` with `-Role master` or `-Role agent` and `-PackageDir`. 
 
 - Keep all files from the same fixed release. The installer verifies package checksums; an extracted binary folder is not a valid `--package-dir`.
 - Unix hosts need Bash, tar and a SHA-256 tool; Linux also needs systemd. Install missing prerequisites before disconnecting.
-- Invitations expire and work once. The console's usual join command and update buttons download release files; use the local commands above when downloads are unavailable.
+- Invitations expire and work once. New invitations can reuse the packages held by the Master. Prepare new release files before an offline update.

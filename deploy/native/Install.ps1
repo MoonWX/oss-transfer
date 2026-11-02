@@ -13,10 +13,13 @@ param(
     [string]$ConfigDir,
     [string]$DataDir,
     [string]$BackupDir,
+    [string]$RootDir,
     [string]$ServiceName,
     [string]$Listen = '0.0.0.0:1685',
     [string]$MasterUrl,
     [switch]$Upgrade,
+    [switch]$WithAgent,
+    [switch]$WithoutAgent,
     [switch]$Yes,
     [ValidateRange(10,600)][int]$StartupTimeout = 120
 )
@@ -47,6 +50,27 @@ function Normalize-ReleaseUrl([string]$Value) {
         return 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer' + $url.Substring($legacy.Length)
     }
     return $url
+}
+function Test-MasterPackageUrl([string]$Value,[string]$Origin) {
+    $uri = $null; $master = $null
+    if (-not [Uri]::TryCreate($Value,[UriKind]::Absolute,[ref]$uri) -or -not [Uri]::TryCreate($Origin,[UriKind]::Absolute,[ref]$master)) { return $false }
+    return $uri.Scheme -in @('http','https') -and -not $uri.UserInfo -and -not $uri.Query -and -not $uri.Fragment -and
+        $uri.GetLeftPart([UriPartial]::Authority) -ceq $master.GetLeftPart([UriPartial]::Authority) -and
+        -not $master.UserInfo -and -not $master.Query -and -not $master.Fragment -and $master.AbsolutePath -eq '/' -and
+        $uri.AbsolutePath -cmatch '^/api/agents/bootstrap/[A-Za-z0-9_-]+/files$'
+}
+function Test-ReleaseDownloadUrl([string]$Value,[string]$Origin,[string]$AgentMaster) {
+    $uri = $null
+    if (-not [Uri]::TryCreate($Value,[UriKind]::Absolute,[ref]$uri) -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { return $false }
+    if (Test-MasterPackageUrl $Origin $AgentMaster) {
+        # A join link may use a private HTTP address; its downloads must stay
+        # under that exact invitation rather than redirecting credentials.
+        $base = [Uri]($Origin.TrimEnd('/')+'/')
+        return $uri.GetLeftPart([UriPartial]::Authority) -ceq $base.GetLeftPart([UriPartial]::Authority) -and
+            $uri.AbsolutePath.StartsWith($base.AbsolutePath,[StringComparison]::Ordinal) -and
+            $uri.AbsolutePath.Substring($base.AbsolutePath.Length) -cmatch '^[A-Za-z0-9._-]+$'
+    }
+    return $uri.Scheme -eq 'https' -or ($uri.Scheme -eq 'http' -and $uri.IsLoopback)
 }
 function Invoke-SourceRequest([string]$Url,[int]$Timeout = 20,[string]$Target) {
     $arguments = @{Uri=$Url; UseBasicParsing=$true; TimeoutSec=$Timeout; Headers=@{'User-Agent'='oss-transfer-installer'; Accept='application/vnd.github+json'}}
@@ -175,6 +199,27 @@ function New-GitHubPackage($Release,[string]$Directory) {
             $manifest.Add("file`twindows`t$($Release.Architecture)`t$program`toss-transfer-$program-windows-$($Release.Architecture).exe`t$($checksums[$member])`t$($entry.Length)")
         }
         $manifest.Add("archive`twindows`t$($Release.Architecture)`t$($Release.Name)`t$($Release.Hash)`t$($Release.Size)")
+        foreach ($assetName in @('install.sh','native-install.sh','Install.ps1')) {
+            $paths = switch ($assetName) {
+                'native-install.sh' { @('deploy/native/install.sh','deploy/go/install.sh') }
+                'Install.ps1' { @('deploy/native/Install.ps1','deploy/go/Install.ps1') }
+                default { @('install.sh') }
+            }
+            $assetPath = Join-Path $Directory $assetName
+            $downloaded = $false
+            foreach ($path in $paths) {
+                try {
+                    Invoke-SourceRequest "https://raw.githubusercontent.com/MoonWX/oss-transfer/$($fields['FullCommit'])/$path" 60 $assetPath
+                    $downloaded = $true
+                    break
+                } catch [Net.WebException] { }
+            }
+            if (-not $downloaded) { throw "Could not download the pinned installer: $assetName" }
+            $assetSize = (Get-Item -LiteralPath $assetPath).Length
+            if ($assetSize -lt 1 -or $assetSize -gt 1048576) { throw 'Installer has an invalid size.' }
+            $assetHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest.Add("asset`t$assetName`t$assetHash`t$assetSize")
+        }
         [IO.File]::WriteAllText((Join-Path $Directory 'manifest.tsv'),(($manifest -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
     } finally { $zip.Dispose() }
 }
@@ -188,6 +233,30 @@ if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Pri
 if ($ReleaseUrl -and $PackageDir) { throw 'Choose -ReleaseUrl or -PackageDir.' }
 if ($ReleaseUrl) { $ReleaseUrl = Normalize-ReleaseUrl $ReleaseUrl }
 if ($AdoptConfig -and $Upgrade) { throw 'Choose -AdoptConfig or -Upgrade.' }
+if ($WithAgent -and $WithoutAgent) { throw 'Choose -WithAgent or -WithoutAgent.' }
+if (($WithAgent -or $WithoutAgent) -and $Role -and $Role -ne 'master') { throw 'The local Agent option belongs to a Master installation.' }
+$rootExplicit = $PSBoundParameters.ContainsKey('RootDir')
+if (-not $RootDir) { $RootDir = Join-Path $env:ProgramData 'OSS Transfer' }
+# A repeated install repairs the original installation instead of creating a
+# second database under the new layout. Explicit paths still take precedence.
+if (-not $Upgrade -and -not $AdoptConfig) {
+    $selectedRole = if ($Role) { $Role } else { 'master' }
+    $locations = if ($InstallDir) { @($InstallDir) } else {
+        @((Join-Path $RootDir "$selectedRole\bin")) + $(if (-not $rootExplicit) { @((Join-Path $env:ProgramFiles "OSS Transfer\$selectedRole")) } else { @() })
+    }
+    foreach ($directory in $locations) {
+        $recordPath = Join-Path $directory 'install.json'
+        if (Test-Path -LiteralPath $recordPath -PathType Leaf) {
+            if ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation record must not be linked.' }
+            $saved = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+            if ($saved.role -ne $selectedRole) { throw 'Existing installation role differs.' }
+            if ($ServiceName -and $saved.serviceName -ne $ServiceName) { throw 'Existing service name differs from -ServiceName.' }
+            $InstallDir = $directory; $Upgrade = $true
+            Write-Host 'Existing installation found; preserving its configuration and data.'
+            break
+        }
+    }
+}
 $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $arch = switch ($architecture) { 'x64' {'amd64'} 'arm64' {'arm64'} default {throw 'Unsupported CPU architecture.'} }
 if (-not $ReleaseUrl -and -not $PackageDir) {
@@ -205,6 +274,7 @@ if ($Upgrade) {
     if (-not $InstallDir) {
         $candidates = @{}
         function Add-Installation([string]$Directory) {
+            if ($rootExplicit -and -not $Directory.StartsWith($RootDir+'\',[StringComparison]::OrdinalIgnoreCase)) { return }
             $recordPath = Join-Path $Directory 'install.json'
             if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return }
             if ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
@@ -213,7 +283,8 @@ if ($Upgrade) {
             $candidates[$Directory] = $record
         }
         foreach ($installedRole in @('master','agent')) {
-            Add-Installation (Join-Path $env:ProgramFiles "OSS Transfer\$installedRole")
+            Add-Installation (Join-Path $RootDir "$installedRole\bin")
+            if (-not $rootExplicit) { Add-Installation (Join-Path $env:ProgramFiles "OSS Transfer\$installedRole") }
         }
         foreach ($installedService in @(Get-CimInstance Win32_Service)) {
             if ($installedService.PathName -match '^"([^"]+\\oss-transfer-(?:master|agent)\.exe)"(?:\s|$)') {
@@ -270,6 +341,7 @@ if ($Upgrade) {
     if (-not $ServiceName) { $ServiceName = $record.serviceName }
     if (-not $ConfigDir) { $ConfigDir = Split-Path $record.config -Parent }
     if (-not $CliPath -and $record.PSObject.Properties['cliPath']) { $CliPath = $record.cliPath }
+    if (-not $BackupDir -and $record.PSObject.Properties['backupDir']) { $BackupDir = $record.backupDir }
     if (-not $DataDir) {
         if (-not (Test-Path -LiteralPath $record.config -PathType Leaf) -or ((Get-Item -LiteralPath $record.config -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installed configuration is missing or linked.' }
         $savedConfig = Get-Content -LiteralPath $record.config -Raw | ConvertFrom-Json
@@ -280,15 +352,39 @@ if ($Upgrade) {
 if (-not $Role) { $Role = 'master' }
 if (-not $ServiceName) { $ServiceName = "OSSTransfer$((Get-Culture).TextInfo.ToTitleCase($Role))" }
 if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid service name.' }
-$base = Join-Path $env:ProgramData "OSS Transfer\$Role"
-if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles "OSS Transfer\$Role" }
+$base = Join-Path $RootDir $Role
+if (-not $InstallDir) { $InstallDir = Join-Path $base 'bin' }
 if (-not $ConfigDir) { $ConfigDir = Join-Path $base 'config' }
 if (-not $DataDir) { $DataDir = Join-Path $base 'data' }
+$autoAdopt = $false
+$retainedConfig = Join-Path $ConfigDir 'service.json'
+if (-not $Upgrade -and -not $AdoptConfig -and (Test-Path -LiteralPath $retainedConfig -PathType Leaf)) {
+    if ((Get-Item -LiteralPath $retainedConfig -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Retained configuration must not be linked.' }
+    $savedConfig = Get-Content -LiteralPath $retainedConfig -Raw | ConvertFrom-Json
+    if (-not $PSBoundParameters.ContainsKey('DataDir')) { $DataDir = $savedConfig.dataDirectory }
+    if (-not $PSBoundParameters.ContainsKey('ServiceName')) { $ServiceName = $savedConfig.serviceName }
+    if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid retained service name.' }
+    if (-not $PSBoundParameters.ContainsKey('InstallDir')) {
+        $savedService = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+        $commandPattern = '^"([^"]+\\oss-transfer-'+$Role+'\.exe)" --config "'+[Regex]::Escape($retainedConfig)+'"$'
+        if ($savedService -and $savedService.PathName -match $commandPattern) {
+            $savedBin = Split-Path $Matches[1] -Parent
+            if (-not $rootExplicit -or $savedBin.StartsWith($RootDir+'\',[StringComparison]::OrdinalIgnoreCase)) { $InstallDir = $savedBin }
+        }
+    }
+    $AdoptConfig = $retainedConfig; $autoAdopt = $true
+    Write-Host 'Retained configuration found; restoring this installation with its existing data.'
+}
+if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid retained service name.' }
 function Resolve-BackupDirectory([string]$Requested,[string]$RoleName) {
     if ($Requested) { return $Requested }
     return Join-Path (Join-Path $env:ProgramData "OSS Transfer\$RoleName") 'backups'
 }
-$BackupDir = Resolve-BackupDirectory $BackupDir $Role
+if (-not $BackupDir) { $BackupDir = Join-Path $base 'backups' }
+if ($Role -eq 'master' -and -not $Upgrade -and -not $AdoptConfig -and -not $WithAgent -and -not $WithoutAgent) {
+    if ($Yes) { $WithAgent = $true }
+    else { $WithAgent = (Read-Host 'Install an Agent on this host as well? [Y/n]') -notmatch '^[nN]$' }
+}
 function Assert-DirectoryPath([string]$Path) {
     if (-not [IO.Path]::IsPathRooted($Path) -or $Path.StartsWith('\\') -or $Path -match '[\x00-\x1f"%]' -or [IO.Path]::GetFullPath($Path).TrimEnd('\') -cne $Path -or $Path -match '^[A-Za-z]:$') { throw "Use a clean local absolute path: $Path" }
     $ancestor = $Path
@@ -301,12 +397,39 @@ function Assert-DirectoryPath([string]$Path) {
     }
 }
 $directories = @($InstallDir,$ConfigDir,$DataDir,$BackupDir)
+Assert-DirectoryPath $RootDir
 foreach ($path in $directories) { Assert-DirectoryPath $path }
 for ($i=0; $i -lt 4; $i++) { for ($j=0; $j -lt 4; $j++) {
     if ($i -ne $j -and ($directories[$i].Equals($directories[$j],[StringComparison]::OrdinalIgnoreCase) -or $directories[$i].StartsWith($directories[$j]+'\',[StringComparison]::OrdinalIgnoreCase))) { throw 'Binary, config, data and backup directories must be separate.' }
 } }
 function Assert-RegularFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Expected a regular file: $Path" }
+}
+function Read-PublishedMasterOrigin([string]$Directory) {
+    $path = Join-Path $Directory 'cli-cluster.json'
+    Assert-RegularFile $path
+    if ((Get-Item -LiteralPath $path).Length -gt 65536) { throw 'Master local connection file is too large.' }
+    $connection = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $origin = [string]$connection.masterUrl
+    $uri = $null
+    if ($connection.role -ne 'master' -or -not [Uri]::TryCreate($origin,[UriKind]::Absolute,[ref]$uri) -or
+        $uri.Scheme -notin @('http','https') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $uri.AbsolutePath -ne '/') { throw 'Master local connection was not published correctly.' }
+    # Preserve the actual listener's origin, including [::1]. Guessing an IPv4
+    # loopback from 0.0.0.0 would no longer match the private CLI credential.
+    return $origin
+}
+function Resolve-LocalAgentRoot([string]$SelectedRoot,[bool]$ExplicitRoot,[string]$MasterInstall,[string]$LegacyMaster) {
+    if ($ExplicitRoot) { return $SelectedRoot }
+    $suffix = '\master\bin'
+    if ($MasterInstall.EndsWith($suffix,[StringComparison]::OrdinalIgnoreCase)) {
+        return $MasterInstall.Substring(0,$MasterInstall.Length-$suffix.Length)
+    }
+    if ($MasterInstall.Equals($LegacyMaster,[StringComparison]::OrdinalIgnoreCase)) { return $SelectedRoot }
+    # A custom flat installation gets a sibling Agent directory, not a node
+    # silently installed in an unrelated default cluster.
+    $separator = $MasterInstall.LastIndexOf('\')
+    if ($separator -lt 0) { throw 'Master installation path must be absolute.' }
+    return $MasterInstall.Substring(0,$separator)+'\oss-transfer-local-agent'
 }
 function Protect-File([string]$Path) {
     Assert-RegularFile $Path
@@ -350,22 +473,44 @@ foreach ($name in @('cli-cluster.json','cli-local-auth.json')) {
 $cliChanged = $false
 $database = Join-Path $DataDir "$Role.db"
 $existing = Test-Path -LiteralPath $metadata
+$hadBinary = Test-Path -LiteralPath $binary
+if ($hadBinary) { Assert-RegularFile $binary }
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
-    if (-not $Upgrade) { throw 'Installation exists; rerun with -Upgrade.' }
-    Assert-RegularFile $metadata; Assert-RegularFile $binary; Assert-RegularFile $config
+    Assert-RegularFile $metadata; Assert-RegularFile $config
     $installed = Get-Content -LiteralPath $metadata -Raw | ConvertFrom-Json
     if ($installed.role -ne $Role -or $installed.serviceName -ne $ServiceName -or $installed.config -ne $config) { throw 'Existing installation identity does not match.' }
 } else {
     if ($Upgrade) { throw 'No managed installation found; V4.0.x requires database migration first.' }
-    if ($service) { throw 'An unmanaged service already exists.' }
+    if ($service) {
+        $retainedService = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+        $expectedCommand = '"'+$binary+'" --config "'+$config+'"'
+        if (-not $autoAdopt -or $retainedService.PathName -cne $expectedCommand -or $retainedService.StartName -ne 'LocalSystem') { throw 'An unmanaged service already exists.' }
+    }
     foreach ($path in @($InstallDir,$ConfigDir,$DataDir)) {
         if ($AdoptConfig -and $path -eq $DataDir) { continue }
+        if ($autoAdopt -and $path -eq $ConfigDir) { continue }
+        if ($autoAdopt -and $path -eq $InstallDir) {
+            foreach ($entry in @(Get-ChildItem -LiteralPath $path -Force -ErrorAction SilentlyContinue)) {
+                if ($entry.Name -notin @("oss-transfer-$Role.exe",'oss-transfer-cli.exe','oss-transfer-cli.exe.cluster.json','oss-transfer-cli.exe.local-auth.json') -or $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Unexpected file in retained installation: $($entry.FullName)" }
+            }
+            continue
+        }
         if ((Test-Path -LiteralPath $path) -and @(Get-ChildItem -LiteralPath $path -Force).Count -gt 0) { throw "Refusing nonempty directory: $path" }
     }
 }
 if ($existing -and $installed.PSObject.Properties['cliPath'] -and $installed.cliPath -ne $CliPath) { throw 'CLI path differs from the installed path; keep -CliPath unchanged during upgrade.' }
-if (($hadCli -or $hadCliSidecars) -and (-not $existing -or -not $installed.PSObject.Properties['cliPath'] -or $installed.cliPath -ne $CliPath) -and -not $ReplaceCli) { throw "CLI already exists: $CliPath; use -ReplaceCli to back it up and replace it, or choose -CliPath." }
+$retainedCLI = $false
+if ($AdoptConfig -and $hadCliSidecars -and $hadDataCLIConnections) {
+    $retainedCLI = $true
+    foreach ($suffix in @('cluster.json','local-auth.json')) {
+        $sidecar = $CliPath+'.'+$suffix
+        $dataSidecar = Join-Path $DataDir ('cli-'+$suffix)
+        if (-not (Test-Path -LiteralPath $sidecar) -or -not (Test-Path -LiteralPath $dataSidecar) -or
+            (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $dataSidecar -Algorithm SHA256).Hash) { $retainedCLI = $false; break }
+    }
+}
+if (($hadCli -or $hadCliSidecars) -and (-not $existing -or -not $installed.PSObject.Properties['cliPath'] -or $installed.cliPath -ne $CliPath) -and -not $ReplaceCli -and -not $retainedCLI -and -not ($autoAdopt -and $CliPath -ceq (Join-Path $InstallDir 'oss-transfer-cli.exe'))) { throw "CLI already exists: $CliPath; use -ReplaceCli to back it up and replace it, or choose -CliPath." }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-install-'+[Guid]::NewGuid().ToString('N'))
 Protect-Directory $work
 $changed = $false
@@ -377,13 +522,14 @@ $script:startupCommitted = $false
 $hadDatabaseBackup = $false
 $wasRunning = $false
 $oldService = $null
+$masterPackageStage = $null
 function Fetch([string]$Name) {
     $target = Join-Path $work $Name
     if ($PackageDir) { $source=Join-Path $PackageDir $Name; Assert-RegularFile $source; Copy-Item -LiteralPath $source -Destination $target }
     else {
         $response = Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseUrl/$Name" -OutFile $target -PassThru -TimeoutSec 600
         if ($response.BaseResponse.PSObject.Properties['ResponseUri']) { $finalUri = $response.BaseResponse.ResponseUri } else { $finalUri = $response.BaseResponse.RequestMessage.RequestUri }
-        if ($finalUri.Scheme -ne 'https' -and -not ($finalUri.Scheme -eq 'http' -and $finalUri.IsLoopback)) { throw 'Release download redirected to an insecure URL.' }
+        if (-not (Test-ReleaseDownloadUrl ([string]$finalUri) $ReleaseUrl $MasterUrl)) { throw 'Release download redirected outside its trusted source.' }
     }
     return $target
 }
@@ -401,6 +547,60 @@ function Invoke-Native([string]$Executable,[string[]]$Arguments) {
     } finally { $ErrorActionPreference = $savedPreference }
     if ($null -eq $exitCode -or $exitCode -ne 0) { throw "Native command failed (exit $exitCode)." }
     return $output
+}
+function Prepare-MasterPackages {
+    if ($Role -ne 'master') { return }
+    $script:masterPackageStage = Join-Path $work 'packages'
+    [IO.Directory]::CreateDirectory($script:masterPackageStage) | Out-Null
+    Copy-Item -LiteralPath $manifest -Destination (Join-Path $script:masterPackageStage 'manifest.tsv')
+    foreach ($assetName in @('install.sh','native-install.sh','Install.ps1')) {
+        $assets = @($rows | Where-Object { $_.StartsWith("asset`t$assetName`t") })
+        # Older release manifests do not describe every installer. Their
+        # original upstream join workflow remains available.
+        if ($assets.Count -eq 0) { continue }
+        if ($assets.Count -ne 1) { throw 'Duplicate installer asset.' }
+        $asset = $assets[0] -split "`t"
+        if ($asset.Count -ne 4 -or $asset[2] -cnotmatch '^[a-f0-9]{64}$' -or $asset[3] -cnotmatch '^[1-9][0-9]{0,6}$' -or [long]$asset[3] -gt 1048576) { throw 'Invalid installer asset.' }
+        $source = Fetch $assetName
+        if ((Get-Item -LiteralPath $source).Length -ne [long]$asset[3] -or (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant() -cne $asset[2]) { throw 'Installer checksum mismatch.' }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $script:masterPackageStage $assetName)
+    }
+    if (Get-Variable -Name archivePath -ErrorAction SilentlyContinue) {
+        Copy-Item -LiteralPath $archivePath -Destination (Join-Path $script:masterPackageStage $archiveName)
+    }
+    if ($PackageDir) {
+        foreach ($line in @($rows | Where-Object { $_.StartsWith("archive`t") })) {
+            $entry = $line -split "`t"
+            if ($entry.Count -ne 6 -or $entry[1] -cnotmatch '^[a-z0-9]+$' -or $entry[2] -cnotmatch '^[a-z0-9]+$' -or $entry[4] -cnotmatch '^[a-f0-9]{64}$' -or $entry[5] -cnotmatch '^[1-9][0-9]{0,9}$' -or [long]$entry[5] -gt 2147483647) { throw 'Invalid cached archive entry.' }
+            $extension = if ($entry[1] -eq 'windows') { 'zip' } else { 'tar.gz' }
+            if ($entry[3] -cne "oss-transfer-$($entry[1])-$($entry[2]).$extension") { throw 'Invalid cached archive name.' }
+            $source = Join-Path $PackageDir $entry[3]
+            if (-not (Test-Path -LiteralPath $source)) { continue }
+            Assert-RegularFile $source
+            if ((Get-Item -LiteralPath $source).Length -ne [long]$entry[5] -or (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry[4]) { throw 'Cached archive checksum mismatch.' }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $script:masterPackageStage $entry[3])
+        }
+    }
+}
+function Publish-MasterPackages {
+    if (-not $masterPackageStage) { return }
+    $destination = Join-Path $DataDir 'packages'
+    $incoming = Join-Path $DataDir ('.packages-new-'+[Guid]::NewGuid().ToString('N'))
+    $previous = Join-Path $DataDir ('.packages-old-'+[Guid]::NewGuid().ToString('N'))
+    Assert-DirectoryPath $destination
+    Protect-Directory $incoming
+    try {
+        Get-ChildItem -LiteralPath $masterPackageStage -File | Copy-Item -Destination $incoming
+        if (Test-Path -LiteralPath $destination) { Move-Item -LiteralPath $destination -Destination $previous }
+        try { Move-Item -LiteralPath $incoming -Destination $destination }
+        catch {
+            if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination $destination }
+            throw
+        }
+        if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Recurse -Force }
+    } finally {
+        if (Test-Path -LiteralPath $incoming) { Remove-Item -LiteralPath $incoming -Recurse -Force }
+    }
 }
 function Service-Record { Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue }
 function Maintain-Backups([string]$Action) {
@@ -467,7 +667,7 @@ function Remove-TemporaryBackup {
         # First-time CLI replacement and adoption do not have complete managed
         # installation metadata. Only remove their exact, newly created files.
         foreach ($file in @(Get-ChildItem -LiteralPath $backup -Force)) {
-            if ($file.Name -notin @('database','database.key','service.json','cli.exe','cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json')) { throw 'Unexpected temporary backup contents.' }
+            if ($file.Name -notin @('database','database.key','service.json','binary.exe','cli.exe','cli.cluster.json','cli.local-auth.json','data-cli.cluster.json','data-cli.local-auth.json')) { throw 'Unexpected temporary backup contents.' }
             Assert-RegularFile $file.FullName
         }
         Remove-Item -LiteralPath $backup -Recurse -Force
@@ -601,7 +801,8 @@ try {
     if ($ReleaseUrl) {
         $ReleaseUrl = $ReleaseUrl.TrimEnd('/')
         $uri = [Uri]$ReleaseUrl
-        if (-not $uri.IsAbsoluteUri -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and $uri.IsLoopback)) -or $uri.AbsolutePath -notmatch '^/[A-Za-z0-9._~/-]+$') { throw 'Release URL must be an HTTPS version directory (loopback HTTP is allowed for testing).' }
+        $masterPackages = $Role -eq 'agent' -and (Test-MasterPackageUrl $ReleaseUrl $MasterUrl)
+        if (-not $uri.IsAbsoluteUri -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and ($uri.IsLoopback -or $masterPackages))) -or $uri.AbsolutePath -notmatch '^/[A-Za-z0-9._~/-]+$') { throw 'Release URL must use HTTPS or the selected Master invitation.' }
     }
     $manifest = Fetch 'manifest.tsv'
     if ((Get-Item $manifest).Length -ge 65536) { throw 'Manifest too large.' }
@@ -668,6 +869,7 @@ try {
     if (-not $versionOutput.StartsWith("oss-transfer-$Role $version ")) { throw 'Binary version or platform check failed.' }
     $cliVersion = (Invoke-Native $cliCandidate @('--version','--json') | ConvertFrom-Json).version
     if ($cliVersion -cne $version) { throw 'CLI version or platform check failed.' }
+    Prepare-MasterPackages
     if ($existing -or $AdoptConfig) {
         $sourceConfig = if ($AdoptConfig) { $AdoptConfig } else { $config }
         Assert-RegularFile $sourceConfig
@@ -703,7 +905,7 @@ try {
     foreach ($path in $directories) { Protect-Directory $path }
     if ($existing) {
         $backup = New-TemporaryBackup
-        Copy-Item -LiteralPath $binary -Destination (Join-Path $backup 'binary.exe')
+        if ($hadBinary) { Copy-Item -LiteralPath $binary -Destination (Join-Path $backup 'binary.exe') }
         Copy-Item -LiteralPath $config -Destination (Join-Path $backup 'service.json')
         Copy-Item -LiteralPath $metadata -Destination (Join-Path $backup 'install.json')
         $oldService = Service-Record
@@ -725,6 +927,13 @@ try {
     } elseif ($AdoptConfig) {
         $backup = New-TemporaryBackup
         Copy-Item -LiteralPath $freshConfig -Destination (Join-Path $backup 'service.json')
+        if ($autoAdopt -and $hadBinary) { Copy-Item -LiteralPath $binary -Destination (Join-Path $backup 'binary.exe') }
+        if ($autoAdopt -and $service) {
+            $oldService = Service-Record
+            $wasRunning = $oldService.State -ne 'Stopped'
+            $changed = $true
+            Stop-OwnedService
+        }
         Invoke-Native $candidate @('--config',$freshConfig,'--backup-state',(Join-Path $backup 'database')) | Out-Null
         $hadDatabaseBackup = $true
     }
@@ -756,6 +965,7 @@ try {
     Prepare-Start
     Start-Service -Name $ServiceName
     Wait-Ready
+    Publish-MasterPackages
     if ($agentMaintenanceStarted) {
         try {
             Invoke-Native $candidate @('--config',$config,'--upgrade-maintenance','end','--upgrade-maintenance-file',(Join-Path $work 'agent-maintenance.json')) | Out-Null
@@ -763,6 +973,7 @@ try {
         } catch { Write-Warning 'Could not end Agent upgrade maintenance; it expires automatically within 30 minutes.' }
     }
     Write-Host "Installed $Role $version. Service: $ServiceName"
+    Write-Host "Installation: $InstallDir"
     Write-Host "Configuration: $config"
     Write-Host "CLI: $CliPath"
     Write-Host ("Tasks: & '"+$CliPath.Replace("'","''")+"' task list")
@@ -800,7 +1011,8 @@ try {
             }
             if ($existing) {
                 if ($hadDatabaseBackup) { Invoke-Native $candidate @('--config',(Join-Path $backup 'service.json'),'--restore-state',(Join-Path $backup 'database')) | Out-Null }
-                Copy-Item -LiteralPath (Join-Path $backup 'binary.exe') -Destination $binary -Force
+                if ($hadBinary) { Copy-Item -LiteralPath (Join-Path $backup 'binary.exe') -Destination $binary -Force }
+                else { Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue }
                 Copy-Item -LiteralPath (Join-Path $backup 'service.json') -Destination $config -Force
                 Copy-Item -LiteralPath (Join-Path $backup 'install.json') -Destination $metadata -Force
                 if ($oldService) {
@@ -819,10 +1031,17 @@ try {
                 }
             } else {
                 $created = Service-Record
-                if ($created) { Invoke-CimMethod -InputObject $created -MethodName Delete | Out-Null }
+                if ($created -and -not $oldService) { Invoke-CimMethod -InputObject $created -MethodName Delete | Out-Null }
                 if ($AdoptConfig -and $hadDatabaseBackup) {
                     Invoke-Native $candidate @('--config',$freshConfig,'--restore-state',(Join-Path $backup 'database')) | Out-Null
                     Write-Warning "Restored the adopted database. Backup: $backup"
+                }
+                if ($autoAdopt) {
+                    Copy-Item -LiteralPath (Join-Path $backup 'service.json') -Destination $config -Force
+                    if ($hadBinary) { Copy-Item -LiteralPath (Join-Path $backup 'binary.exe') -Destination $binary -Force }
+                    else { Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue }
+                    Remove-Item -LiteralPath $metadata -Force -ErrorAction SilentlyContinue
+                    if ($wasRunning -and $hadBinary) { Prepare-Start; Start-Service -Name $ServiceName; Wait-Ready }
                 }
                 Write-Warning 'Installation failed. Existing files were retained for diagnosis.'
                 Write-Warning ('Service log, if created: '+(Join-Path $DataDir 'logs\service.log'))
@@ -837,6 +1056,62 @@ try {
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if ($installationSucceeded -and $Role -eq 'master' -and $WithAgent) {
+    # The Master keeps running if the optional Agent step fails. Rerunning this
+    # command reuses the existing Master and any enrolled Agent identity.
+    $localMaster = Read-PublishedMasterOrigin $DataDir
+    $agentRoot = Resolve-LocalAgentRoot $RootDir $rootExplicit $InstallDir (Join-Path $env:ProgramFiles 'OSS Transfer\master')
+    $agentInstall = Join-Path $agentRoot 'agent\bin'
+    $agentConfig = Join-Path $agentRoot 'agent\config\service.json'
+    $agentData = Join-Path $agentRoot 'agent\data'
+    if (-not $rootExplicit -and $agentRoot.Equals($RootDir,[StringComparison]::OrdinalIgnoreCase) -and -not (Test-Path -LiteralPath (Join-Path $agentInstall 'install.json'))) {
+        $legacyAgent = Join-Path $env:ProgramFiles 'OSS Transfer\agent'
+        if (Test-Path -LiteralPath (Join-Path $legacyAgent 'install.json')) { $agentInstall = $legacyAgent }
+    }
+    $agentMetadata = Join-Path $agentInstall 'install.json'
+    $agentService = if ($ServiceName -eq 'OSSTransferMaster') { 'OSSTransferAgent' } else { $ServiceName+'-Agent' }
+    if (Test-Path -LiteralPath $agentMetadata) {
+        Assert-RegularFile $agentMetadata
+        $agentRecord = Get-Content -LiteralPath $agentMetadata -Raw | ConvertFrom-Json
+        if ($agentRecord.role -ne 'agent') { throw 'Existing local installation is not an Agent.' }
+        $agentConfig = $agentRecord.config
+        $agentService = $agentRecord.serviceName
+    }
+    $retainedAgent = Test-Path -LiteralPath $agentConfig
+    if ($retainedAgent) {
+        Assert-RegularFile $agentConfig
+        $agentSettings = Get-Content -LiteralPath $agentConfig -Raw | ConvertFrom-Json
+        $agentData = $agentSettings.dataDirectory
+        $agentService = $agentSettings.serviceName
+        $grantPath = Join-Path $agentData 'cli-local-auth.json'
+        Assert-RegularFile $grantPath
+        $grant = Get-Content -LiteralPath $grantPath -Raw | ConvertFrom-Json
+        try {
+            $membership = Invoke-RestMethod -UseBasicParsing -Uri ($localMaster+'/api/auth/current') -Headers @{Authorization=('Bearer '+$grant.token)} -TimeoutSec 10
+            if (-not $membership.success -or $membership.user.username -notlike 'local:agent:*') { throw 'Agent identity not recognized.' }
+        } catch { throw 'The existing local Agent could not be verified as a member of this Master. Its data was left unchanged.' }
+    }
+    $agentArguments = @{Role='agent'; RootDir=$agentRoot; InstallDir=$agentInstall; ConfigDir=(Split-Path $agentConfig -Parent); DataDir=$agentData; ServiceName=$agentService; MasterUrl=$localMaster; Yes=$true; StartupTimeout=$StartupTimeout}
+    $cached = Join-Path $DataDir 'packages'
+    if ((Test-Path -LiteralPath (Join-Path $cached "oss-transfer-windows-$arch.zip")) -and (Test-Path -LiteralPath (Join-Path $cached 'manifest.tsv'))) { $agentArguments.PackageDir = $cached }
+    elseif ($PackageDir) { $agentArguments.PackageDir = $PackageDir }
+    else { $agentArguments.ReleaseUrl = $ReleaseUrl }
+    try {
+        if (-not $retainedAgent) {
+            $savedAuthToken = $env:OSS_TRANSFER_AUTH_TOKEN
+            try {
+                Remove-Item Env:OSS_TRANSFER_AUTH_TOKEN -ErrorAction SilentlyContinue
+                $invitation = (Invoke-Native $CliPath @('--host',$localMaster,'--json','agent','invite','--label',$env:COMPUTERNAME,'--master-url',$localMaster) | Out-String) | ConvertFrom-Json
+            } finally {
+                if ($savedAuthToken) { $env:OSS_TRANSFER_AUTH_TOKEN = $savedAuthToken }
+            }
+            if (-not $invitation.success -or -not $invitation.data.inviteToken) { throw 'Could not invite the local Agent.' }
+            $env:TRANSFER_JOIN_TOKEN = $invitation.data.inviteToken
+        }
+        & $PSCommandPath @agentArguments
+    } finally { Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue }
 }
 
 } finally {

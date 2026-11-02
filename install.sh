@@ -61,6 +61,7 @@ transfer_select_source() {
   printf '%s\n' "$selected"
 }
 
+# shellcheck shell=bash
 # Shared by the standalone Unix installers. Keep this helper dependency-free.
 # GitHub supplies an authenticated SHA-256 digest for each uploaded release asset:
 # https://docs.github.com/en/rest/releases/assets#get-a-release-asset
@@ -200,7 +201,7 @@ transfer_source_member() {
 transfer_github_prepare() (
   set -o pipefail
   local requested=${1#v} platform=$2 arch=$3 destination=$4
-  local name root api tag digest size url actual version commit native_hash native_size role expected length payload
+  local name root api tag digest size url actual commit native_hash native_size role expected length payload installer installer_path
   case "$platform/$arch" in
     linux/amd64|linux/arm64|linux/armv7|linux/riscv64|linux/loong64|darwin/amd64|darwin/arm64|freebsd/amd64|freebsd/arm64) ;;
     *) transfer_source_error 'Unsupported GitHub release platform'; return 1;;
@@ -245,25 +246,33 @@ transfer_github_prepare() (
     printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$transfer_download_work/manifest.tsv" || return 1
   done
   printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$transfer_download_work/manifest.tsv" || return 1
-  # Older releases stored the installer under deploy/go. Keep both lookups
-  # pinned to the verified archive commit; never substitute the current branch.
-  if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/native/install.sh" "$transfer_download_work/native-install.sh" 1048576; then
-    transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
-  fi
-  [[ -s "$transfer_download_work/native-install.sh" ]] || { transfer_source_error 'Empty native installer'; return 1; }
-  native_hash=$(transfer_source_sha256 "$transfer_download_work/native-install.sh") || return 1
-  native_size=$(wc -c < "$transfer_download_work/native-install.sh" | tr -d '[:space:]') || return 1
-  printf 'asset\tnative-install.sh\t%s\t%s\n' "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
-  for name in "$name" manifest.tsv native-install.sh; do
+  # Keep all installers at the verified archive commit. A Master retains these
+  # files to install Agents without requiring their hosts to reach the internet.
+  for installer in native-install.sh install.sh Install.ps1; do
+    case "$installer" in
+      native-install.sh) installer_path=deploy/native/install.sh;;
+      Install.ps1) installer_path=deploy/native/Install.ps1;;
+      *) installer_path=install.sh;;
+    esac
+    if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/$installer_path" "$transfer_download_work/$installer" 1048576; then
+      [[ "$installer_path" == deploy/native/* ]] && transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/${installer_path#deploy/native/}" "$transfer_download_work/$installer" 1048576 || { transfer_source_error "Cannot fetch the versioned native installer: $installer"; return 1; }
+    fi
+    [[ -s "$transfer_download_work/$installer" ]] || { transfer_source_error "Empty installer: $installer"; return 1; }
+    native_hash=$(transfer_source_sha256 "$transfer_download_work/$installer") || return 1
+    native_size=$(wc -c < "$transfer_download_work/$installer" | tr -d '[:space:]') || return 1
+    printf 'asset\t%s\t%s\t%s\n' "$installer" "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
+  done
+  for name in "$name" manifest.tsv native-install.sh install.sh Install.ps1; do
     [[ ! -e "$destination/$name" && ! -L "$destination/$name" ]] || { transfer_source_error 'Package directory already contains release files'; return 1; }
   done
-  mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$destination/"
+  mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$transfer_download_work/install.sh" "$transfer_download_work/Install.ps1" "$destination/"
+
 )
 
 # END embedded download source
-lang='' role='' method='' version=latest source=auto release_url='' package_dir='' yes=0 upgrade=0 user_service=0
+lang='' role='' method='' version=latest source=auto release_url='' package_dir='' yes=0 upgrade=0 user_service=0 answer=''
 install_dir='' data_dir='' cli_path='' service_name='' master_url='' join_url='' files_dir='' image='' port=1685
-listen='' adopt_config=''
+listen='' adopt_config='' root_dir='' with_agent='' config_dir=''
 replace_cli=0 token_stdin=0 no_deps=0
 prepared_github=0
 native_args=()
@@ -276,6 +285,8 @@ OSS Transfer installer
 Usage: bash install.sh [options]
   --lang en|zh                   Prompt language (default: asked, or system locale)
   --role master|agent            Node role
+  --with-agent / --without-agent Install a local Agent with a native Master
+  --root-dir DIR                Keep programs, configuration and data under DIR
   --method native|compose        Native service (default) or Docker Compose
   --version latest|VERSION       Release version (default: latest)
   --source auto|github|jdoss      Download source (default: public IP location)
@@ -298,13 +309,15 @@ EOF
 while (($#)); do
   case "$1" in
     --help|-h) usage; exit 0;;
-    --lang|--role|--method|--version|--source|--release-url|--package-dir|--port|--join-url|--master-url|--files-dir|--image|--install-dir|--data-dir|--cli-path|--service-name|--listen|--adopt-config)
+    --lang|--role|--method|--version|--source|--release-url|--package-dir|--port|--join-url|--master-url|--files-dir|--image|--install-dir|--data-dir|--cli-path|--service-name|--listen|--adopt-config|--root-dir|--config-dir)
       (($# >= 2)) && [[ -n "$2" && "$2" != --* ]] || fail "Missing value: $1"
       key=${1#--}; key=${key//-/_}; printf -v "$key" '%s' "$2"; shift 2;;
-    --config-dir|--backup-dir|--startup-timeout)
+    --backup-dir|--startup-timeout)
       (($# >= 2)) && [[ -n "$2" && "$2" != --* ]] || fail "Missing value: $1"
       native_args+=("$1" "$2"); shift 2;;
     --yes) yes=1; shift;;
+    --with-agent) with_agent=1; shift;;
+    --without-agent) with_agent=0; shift;;
     --upgrade) upgrade=1; shift;;
     --user) user_service=1; shift;;
     --replace-cli) replace_cli=1; shift;;
@@ -344,18 +357,47 @@ if [[ -z "$lang" ]]; then
   fi
 fi
 default_install_dir() {
-  if [[ "$os" == Linux ]]; then printf '/opt/oss-transfer/%s\n' "$1"
-  elif [[ "$os" == FreeBSD ]]; then printf '/usr/local/lib/oss-transfer/%s\n' "$1"
+  if [[ -n "$root_dir" ]]; then printf '%s/%s/bin\n' "$root_dir" "$1"
+  elif [[ "$os" == Linux ]]; then printf '/opt/oss-transfer/%s/bin\n' "$1"
+  elif [[ "$os" == FreeBSD ]]; then printf '/usr/local/lib/oss-transfer/%s/bin\n' "$1"
   elif ((user_service)); then printf '%s\n' "$HOME/Library/Application Support/OSS Transfer/$1/bin"
-  else printf '/usr/local/lib/oss-transfer/%s\n' "$1"; fi
+  else printf '/Library/Application Support/OSS Transfer/%s/bin\n' "$1"; fi
 }
 existing_install_dir() {
-  local directory
+  local directory legacy
   directory=$(default_install_dir "$1")
+  legacy=${directory%/bin}
   if [[ -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]]; then
     printf '%s\n' "$directory"
-  elif [[ "$os" == Linux && -f "/opt/oss-transfer-go/$1/install.tsv" && ! -L "/opt/oss-transfer-go/$1/install.tsv" ]]; then
+  elif [[ -f "$legacy/install.tsv" && ! -L "$legacy/install.tsv" ]]; then
+    # Older binaries lived directly in the role directory. This is still
+    # inside the selected root and must receive the same identity checks.
+    printf '%s\n' "$legacy"
+  elif [[ -z "$root_dir" && "$os" == Linux && -f "/opt/oss-transfer/$1/install.tsv" && ! -L "/opt/oss-transfer/$1/install.tsv" ]]; then
+    printf '/opt/oss-transfer/%s\n' "$1"
+  elif [[ -z "$root_dir" && "$os" != Linux && -f "/usr/local/lib/oss-transfer/$1/install.tsv" && ! -L "/usr/local/lib/oss-transfer/$1/install.tsv" ]]; then
+    printf '/usr/local/lib/oss-transfer/%s\n' "$1"
+  elif [[ -z "$root_dir" && "$os" == Linux && -f "/opt/oss-transfer-go/$1/install.tsv" && ! -L "/opt/oss-transfer-go/$1/install.tsv" ]]; then
     printf '/opt/oss-transfer-go/%s\n' "$1"
+  fi
+}
+retained_role_config() {
+  local selected=$1 directory candidate
+  if [[ -n "${config_dir:-}" ]]; then
+    [[ ! -f "$config_dir/service.json" || -L "$config_dir/service.json" ]] || printf '%s\n' "$config_dir/service.json"
+    return 0
+  fi
+  directory=${install_dir:-$(existing_install_dir "$selected")}
+  if [[ -n "$directory" && -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]]; then
+    candidate=$(awk -F '\t' '$1=="config"{print $2}' "$directory/install.tsv")
+    [[ ! -f "$candidate" || -L "$candidate" ]] || printf '%s\n' "$candidate"
+    return 0
+  fi
+  candidate=$(dirname "$(default_install_dir "$selected")")/config/service.json
+  if [[ -f "$candidate" && ! -L "$candidate" ]]; then printf '%s\n' "$candidate"; return; fi
+  if [[ -z "${root_dir:-}" && -z "${install_dir:-}" ]]; then
+    case "$os" in Linux) candidate=/etc/oss-transfer/$selected/service.json;; FreeBSD) candidate=/usr/local/etc/oss-transfer/$selected/service.json;; *) candidate=/Library/Application\ Support/OSS\ Transfer/$selected/config/service.json;; esac
+    [[ ! -f "$candidate" || -L "$candidate" ]] || printf '%s\n' "$candidate"
   fi
 }
 # Rerunning the same one-line command offers to upgrade what is already installed.
@@ -367,6 +409,10 @@ if ((interactive && upgrade == 0)) && [[ -z "$role$method$package_dir$release_ur
   if [[ -n "$installed" ]]; then
     prompt answer "$(say "Installed:$installed. 1 Upgrade / 2 Install another role" "已安装：$installed。1 升级 / 2 安装其他角色")" 1
     [[ "$answer" != 1 ]] || upgrade=1
+    if [[ "$upgrade" == 1 && "$installed" == *master* && "$installed" != *agent* && -z "$with_agent" ]]; then
+      prompt answer "$(say 'Also install a local Agent? y / n' '同时补装本机 Agent？y / n')" y
+      case "$answer" in y|Y) with_agent=1; role=master;; n|N) with_agent=0;; *) fail 'Choose y or n';; esac
+    fi
   fi
 fi
 # Generated Agent commands and local package installs already chose native mode.
@@ -385,17 +431,25 @@ if ((yes == 0)); then
 fi
 if ((upgrade == 0)); then role=${role:-master}; fi
 method=${method:-native}
+if [[ "$with_agent" == 1 && -z "$role" && "$upgrade" == 1 ]]; then role=master; fi
 [[ -z "$role" || "$role" == master || "$role" == agent ]] || fail 'Invalid role'
 [[ "$method" == native || "$method" == compose ]] || fail 'Invalid deployment method'
+if [[ "$with_agent" == 1 && ( "$role" != master || "$method" != native ) ]]; then
+  fail '--with-agent requires a native Master installation'
+fi
+if [[ "$role" == master && "$method" == native && "$upgrade" == 0 && -z "$with_agent" ]]; then
+  with_agent=1
+  if ((yes == 0)); then
+    prompt answer "$(say 'Install a local Agent to transfer files on this machine? y / n' '同时安装本机 Agent，让这台机器参与传输？y / n')" y
+    case "$answer" in y|Y) with_agent=1;; n|N) with_agent=0;; *) fail 'Choose y or n';; esac
+  fi
+fi
+with_agent=${with_agent:-0}
 if ((yes == 0)) && [[ "$role" == master && -z "$listen" && "$upgrade" == 0 && -z "$adopt_config" ]]; then
   prompt port "$(say 'Master port' '主节点端口')" "$port"
 fi
 if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then fail 'Invalid port'; fi
 [[ -z "$package_dir" || -z "$release_url" ]] || fail 'Choose --package-dir or --release-url'
-if [[ -n "$release_url" ]]; then
-  release_url=$(transfer_release_url "$release_url")
-  [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]] || fail 'Release URL must use HTTPS'
-fi
 valid_master_origin() {
   local host port address
   [[ "$1" =~ ^https?://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(:([0-9]{1,5}))?/?$ ]] || return 1
@@ -427,7 +481,7 @@ valid_master_origin() {
 }
 enrollment_input() {
   local join_master join_token
-  if [[ "$role" == agent && "$upgrade" == 0 && -z "$adopt_config" && -z "$master_url" && -z "$join_url" && "$yes" == 0 ]]; then
+  if [[ "$role" == agent && "$upgrade" == 0 && -z "$adopt_config" && -z "$master_url" && -z "$join_url" && "$yes" == 0 ]] && [[ -z $(retained_role_config agent) ]]; then
     prompt join_url "$(say 'Agent invitation link from the console' '控制台生成的执行节点邀请链接')" ''
   fi
   if [[ -n "$join_url" ]]; then
@@ -437,9 +491,107 @@ enrollment_input() {
     master_url=$join_master; TRANSFER_JOIN_TOKEN=$join_token; export TRANSFER_JOIN_TOKEN
   fi
 }
+# A joining Agent may fetch packages from the exact Master that issued its
+# invitation. Other remote HTTP mirrors are still rejected.
+valid_release_url() {
+  local origin=$master_url suffix
+  if [[ -n "$join_url" && "$join_url" =~ ^(.+)/api/agents/bootstrap/([A-Za-z0-9_-]+)$ ]]; then origin=${BASH_REMATCH[1]}; fi
+  if [[ "$role" == agent && -n "$origin" ]] && valid_master_origin "$origin"; then
+    origin=${origin%/}
+    suffix=${release_url#"$origin"}
+    [[ "$release_url" == "$origin"* && "$suffix" =~ ^/api/agents/bootstrap/[A-Za-z0-9_-]+/files$ ]] && return 0
+  fi
+  [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]]
+}
+if [[ -n "${release_url:-}" ]]; then
+  release_url=$(transfer_release_url "$release_url")
+  valid_release_url || fail 'Release URL must use HTTPS or the inviting Master'
+fi
 stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-setup.XXXXXX")
 trap 'rm -rf -- "$stage"; unset TRANSFER_JOIN_TOKEN OSS_TRANSFER_JOIN_TOKEN join_url' EXIT
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; elif [[ -x /sbin/sha256 ]]; then /sbin/sha256 -q "$1"; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+metadata_field() { awk -F '\t' -v key="$2" '$1==key {print $2}' "$1"; }
+verify_local_agent_cluster() {
+  local origin=$1 config=$2 directory token
+  directory=$(sed -nE 's/.*"dataDirectory"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$config")
+  [[ "$directory" == /* && -f "$directory/cli-local-auth.json" && ! -L "$directory/cli-local-auth.json" ]] || fail 'Existing Agent identity could not be verified; its data has been kept'
+  token=$(sed -nE 's/.*"token"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_.-]+)".*/\1/p' "$directory/cli-local-auth.json")
+  [[ "$token" == otcli1.* && "$token" != *$'\n'* ]] || fail 'Existing Agent credential is invalid; its data has been kept'
+  # A retained Agent must belong to this Master. This also accepts an existing
+  # identity using a private IP instead of the local Master's loopback origin.
+  printf 'header = "Authorization: Bearer %s"\n' "$token" |
+    curl --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 "$origin/api/auth/current" -o /dev/null ||
+    fail 'Existing Agent belongs to another cluster or its identity is unavailable; its data has been kept'
+}
+install_local_agent() {
+  local master_install master_metadata master_cli master_config master_data master_service origin
+  local agent_root agent_install agent_config agent_service invitation token name
+  local -a agent_args
+  master_install=$(sed -n 's/^Installation: //p' "$stage/native-install.log" | tail -n 1)
+  [[ -n "$master_install" ]] || master_install=${install_dir:-$(default_install_dir master)}
+  master_metadata=$master_install/install.tsv
+  [[ -f "$master_metadata" && ! -L "$master_metadata" ]] || fail 'Master installed, but its installation metadata could not be read'
+  master_cli=$(metadata_field "$master_metadata" cliPath)
+  master_config=$(metadata_field "$master_metadata" config)
+  master_data=$(metadata_field "$master_metadata" dataDir)
+  master_service=$(metadata_field "$master_metadata" serviceName)
+  "$master_install/oss-transfer-master" --config "$master_config" --check-config > "$stage/master-config.tsv"
+  # The OS may turn 0.0.0.0 into a dual-stack listener. Use the exact origin
+  # published with the local credential, rather than guessing an IPv4 alias.
+  [[ -f "$master_data/cli-cluster.json" && ! -L "$master_data/cli-cluster.json" ]] || fail 'Master installed, but its local CLI connection is unavailable'
+  origin=$(sed -nE 's/.*"masterUrl"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$master_data/cli-cluster.json")
+  valid_master_origin "$origin" || fail 'Master installed, but its local address is invalid'
+  agent_root=$root_dir
+  if [[ -z "$agent_root" && "$master_install" == */master/bin ]]; then agent_root=${master_install%/master/bin}; fi
+  if [[ -z "$agent_root" && "$master_install" != /opt/oss-transfer/master && "$master_install" != /usr/local/lib/oss-transfer/master && "$master_install" != /opt/oss-transfer-go/master ]]; then
+    agent_root=$(dirname "$master_install")/oss-transfer-local-agent
+  fi
+  agent_args=(--role agent --yes --master-url "$origin")
+  ((user_service == 0)) || agent_args+=(--user)
+  agent_install=$(root_dir=$agent_root; existing_install_dir agent)
+  if [[ -n "$agent_install" ]]; then
+    agent_config=$(metadata_field "$agent_install/install.tsv" config)
+    agent_args+=(--install-dir "$agent_install")
+  else
+    # An inferred default root is not a user-selected isolated installation:
+    # it may still have an older Agent configuration under /etc.
+    if [[ -z "$root_dir" && "$agent_root" == "$(dirname "$(dirname "$(default_install_dir agent)")")" ]]; then agent_root=; fi
+    agent_config=$(root_dir=$agent_root; install_dir=; config_dir=; retained_role_config agent)
+    if [[ -n "$agent_config" ]]; then
+      agent_args+=(--config-dir "$(dirname "$agent_config")")
+    else
+      if [[ "$os" == FreeBSD ]]; then
+        agent_service=${master_service%_master}_agent
+      else
+        agent_service=${master_service%-master}-agent
+      fi
+      agent_args+=(--service-name "$agent_service")
+    fi
+  fi
+  [[ -z "$agent_root" ]] || agent_args+=(--root-dir "$agent_root")
+  # The Master retains this exact build. Reuse it instead of downloading twice
+  # or accidentally pairing a freshly installed Master with a moving latest.
+  if [[ -f "$master_data/packages/manifest.tsv" ]]; then agent_args+=(--package-dir "$master_data/packages")
+  elif [[ -n "$package_dir" ]]; then agent_args+=(--package-dir "$package_dir")
+  else agent_args+=(--release-url "$release_url"); fi
+  if [[ ! -f "$agent_config" ]]; then
+    name=$(hostname | cut -c 1-80)
+    invitation=$("$master_cli" --host "$origin" --json agent invite --label "$name" --master-url "$origin") || fail 'Master installed; local Agent invitation failed'
+    token=$(printf '%s\n' "$invitation" | sed -nE 's/.*"inviteToken"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)".*/\1/p')
+    [[ "$token" =~ ^[A-Za-z0-9_-]{20,128}$ ]] || fail 'Master installed; local Agent invitation was invalid'
+    export TRANSFER_JOIN_TOKEN=$token
+    unset invitation token
+  else
+    verify_local_agent_cluster "$origin" "$agent_config"
+  fi
+  say 'Installing local Agent…' '正在安装本机 Agent…'
+  if ! bash "$stage/native-install.sh" "${agent_args[@]}"; then
+    unset TRANSFER_JOIN_TOKEN
+    fail 'Master is ready. Local Agent installation failed; rerun this installer to finish it.'
+  fi
+  unset TRANSFER_JOIN_TOKEN
+  say 'Local Agent joined the cluster.' '本机 Agent 已加入集群。'
+}
 if [[ -z "$release_url" && -z "$package_dir" ]]; then
   selected_source=$(transfer_select_source "$source" "$version") || fail 'Cannot select a download source; use --source or --release-url'
   printf '%s: %s\n' "$(say 'Download source' '下载源')" "$selected_source"
@@ -482,6 +634,8 @@ if [[ "$method" == native ]]; then
   [[ "$checksum" =~ ^[a-f0-9]{64}$ && "$size" =~ ^[0-9]+$ && "$asset" != *$'\n'* ]] || fail 'Native installer missing from manifest'
   fetch native-install.sh
   [[ $(sha256 "$stage/native-install.sh") == "$checksum" && $(wc -c < "$stage/native-install.sh" | tr -d ' ') == "$size" ]] || fail 'Native installer checksum mismatch'
+  [[ -z "$root_dir" ]] || native_args+=(--root-dir "$root_dir")
+  [[ -z "$config_dir" ]] || native_args+=(--config-dir "$config_dir")
   if ((upgrade)); then
     native_args+=(--upgrade)
     if [[ -n "$package_dir" ]]; then native_args+=(--package-dir "$package_dir"); else native_args+=(--release-url "$release_url"); fi
@@ -491,7 +645,8 @@ if [[ "$method" == native ]]; then
     done
     ((user_service == 0)) || native_args+=(--user)
     ((yes == 0)) || native_args+=(--yes)
-    bash "$stage/native-install.sh" "${native_args[@]}"
+    bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log"
+    ((with_agent == 0)) || install_local_agent
     exit 0
   fi
   # Preserve an existing installation, but let the downloaded version choose
@@ -516,7 +671,7 @@ if [[ "$method" == native ]]; then
       else cli_path=/usr/local/bin/oss-transfer-cli; fi
     fi
   fi
-  if [[ -e "$cli_path" && "$cli_path" != "$owned_cli" && "$replace_cli" == 0 && "$yes" == 0 ]]; then
+  if [[ -e "$cli_path" && "$cli_path" != "$owned_cli" && "$replace_cli" == 0 && "$yes" == 0 ]] && [[ -z $(retained_role_config "$role") ]]; then
     prompt answer "$(say 'Existing CLI: back up and replace? y / n' '已有 CLI，是否备份后替换？y / n')" n
     [[ "$answer" == y || "$answer" == Y ]] || exit 0
     replace_cli=1
@@ -541,7 +696,8 @@ if [[ "$method" == native ]]; then
   enrollment_input
   [[ -z "$master_url" ]] || native_args+=(--master-url "$master_url")
   ((token_stdin == 0)) || native_args+=(--token-stdin)
-  bash "$stage/native-install.sh" "${native_args[@]}"
+  bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log"
+  ((with_agent == 0)) || install_local_agent
   exit 0
 fi
 

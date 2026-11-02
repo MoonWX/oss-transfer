@@ -215,6 +215,8 @@ export type AgentInvitation = {
   dockerCommand?: string;
   traditionalCommand?: string;
   windowsCommand?: string;
+  upstreamTraditionalCommand?: string;
+  upstreamWindowsCommand?: string;
   nativeCommand?: string;
   nativeAgent?: { available: boolean };
 };

@@ -18,13 +18,13 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh | sudo bash
 ```
 
-脚本下载后，会自动选择 GitHub 或 OSS 镜像下载程序包。其他系统和自定义路径见[安装选项](docs/install.md)，无法访问互联网的主机见[离线安装](docs/offline-install.zh-CN.md)。
+安装时可选择同时安装本机 Agent，安装完成后自动加入集群。新安装默认放在 `/opt/oss-transfer/`，可用 `--root-dir` 指定其他目录。脚本会自动选择 GitHub 或 OSS 镜像下载程序包。其他系统和自定义路径见[安装选项](docs/install.md)，无法访问互联网的主机见[离线安装](docs/offline-install.zh-CN.md)。
 
 打开 `http://<master-ip>:1685`，使用 `admin` 和安装器输出的随机初始密码登录；首次登录必须修改密码。
 
 ## 添加 Agent
 
-打开 **执行节点 → 添加节点**，选择主机操作系统，将生成的命令复制到对应主机上运行。开始迁移前至少添加一个 Agent。Master 所在主机也可以运行 Agent。
+打开 **执行节点 → 添加节点**，选择主机操作系统，将生成的命令复制到对应主机上运行。Agent 默认从 Master 下载安装包；如果安装 Master 时已勾选本机 Agent，就可以直接开始迁移。
 
 添加节点时，Master 地址默认使用当前浏览器地址。Agent 走内网时，将它改为 Master 的内网 URL。
 
@@ -48,7 +48,7 @@ oss-transfer-cli node list
 
 先在 **运维工具 → 版本更新** 更新 Master，再到 **执行节点 → 版本更新** 点击“更新全部节点”来更新 Agent。更新 Master 不会自动触发 Agent 更新。尚无这些入口的旧版本需要先通过安装脚本升级一次；也可以重新运行安装命令。
 
-升级成功后会删除本次临时备份。计划降级时，升级前要另做备份；需要保留的文件和数据库密钥见[备份与恢复说明](docs/operations.md)。
+重装时会识别并保留原配置、数据库和节点身份。旧安装继续使用原路径。升级成功后会删除本次临时备份。计划降级时，升级前要另做备份；需要保留的文件和数据库密钥见[备份与恢复说明](docs/operations.md)。
 
 ## Docker Compose
 

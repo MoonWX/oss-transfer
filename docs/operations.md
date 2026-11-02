@@ -42,8 +42,8 @@ For a default Linux installation:
 
 ```sh
 sudo systemctl stop oss-transfer-master
-sudo /opt/oss-transfer/master/oss-transfer-master \
-  --config /etc/oss-transfer/master/service.json --reset-admin-password
+sudo /opt/oss-transfer/master/bin/oss-transfer-master \
+  --config /opt/oss-transfer/master/config/service.json --reset-admin-password
 sudo systemctl start oss-transfer-master
 ```
 

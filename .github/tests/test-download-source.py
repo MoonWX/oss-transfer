@@ -59,6 +59,8 @@ shutil.copyfile(source,args[args.index('-o')+1])
             API: str(self.metadata),
             f"https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/{TAG}": str(self.metadata),
             ASSET_URL: str(self.archive), INSTALLER_URL: str(self.installer),
+            INSTALLER_URL.replace("/deploy/native/install.sh", "/install.sh"): str(self.installer),
+            INSTALLER_URL.replace("/install.sh", "/Install.ps1"): str(self.installer),
         })
 
     def make_archive(self, modification=None):
@@ -152,13 +154,14 @@ shutil.copyfile(source,args[args.index('-o')+1])
     def test_prepare_produces_verified_package_and_commit_pinned_installer(self):
         result = self.prepare()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual({p.name for p in self.package.iterdir()}, {ARCHIVE, "manifest.tsv", "native-install.sh"})
+        self.assertEqual({p.name for p in self.package.iterdir()}, {ARCHIVE, "manifest.tsv", "native-install.sh", "install.sh", "Install.ps1"})
         manifest = (self.package / "manifest.tsv").read_text()
         self.assertIn(f"version\t{TAG[1:]}\ncommit\t{COMMIT}\n", manifest)
         self.assertEqual(sum(line.startswith("file\t") for line in manifest.splitlines()), 3)
         self.assertIn("archive\tlinux\tamd64\t" + ARCHIVE, manifest)
         self.assertEqual((self.package / ARCHIVE).read_bytes(), self.archive.read_bytes())
-        self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL])
+        self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL,
+                         INSTALLER_URL.replace("/deploy/native/install.sh", "/install.sh"), INSTALLER_URL.replace("/install.sh", "/Install.ps1")])
         self.assertNotIn("NEVER_EXECUTE", result.stdout)
 
     def test_old_release_uses_legacy_installer_path_at_same_verified_commit(self):
@@ -168,7 +171,8 @@ shutil.copyfile(source,args[args.index('-o')+1])
         self.env["DOWNLOAD_MAP"] = json.dumps(mapping)
         result = self.prepare()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL, legacy_url])
+        self.assertEqual(self.log.read_text().splitlines(), [API, ASSET_URL, INSTALLER_URL, legacy_url,
+                         INSTALLER_URL.replace("/deploy/native/install.sh", "/install.sh"), INSTALLER_URL.replace("/install.sh", "/Install.ps1")])
         self.assertEqual((self.package / "native-install.sh").read_bytes(), self.installer.read_bytes())
 
     def test_missing_pinned_installers_fail_without_using_a_moving_branch(self):

@@ -25,6 +25,7 @@ type agentControl struct {
 	lastSeen      map[string]time.Time
 	remoteAddress map[string]string
 	nodeInfo      map[string]nodeRuntimeInfo
+	packageSlot   chan struct{}
 }
 
 // Close releases long polls and pending commands before HTTP shutdown. The
@@ -48,6 +49,7 @@ func installAgentRoutes(s *Server) error {
 		lastSeen:      make(map[string]time.Time),
 		remoteAddress: make(map[string]string),
 		nodeInfo:      make(map[string]nodeRuntimeInfo),
+		packageSlot:   make(chan struct{}, 1),
 	}
 	members, err := a.registry.Members()
 	if err != nil {
@@ -75,6 +77,7 @@ func installAgentRoutes(s *Server) error {
 	s.mux.HandleFunc("POST /api/agents/cli-access", s.cliAccess)
 	s.mux.HandleFunc("POST /api/master/agents/maintenance", s.adminOnly(s.agentMaintenanceHTTP))
 	s.mux.HandleFunc("GET /api/agents/bootstrap/{token}", s.agentBootstrap)
+	s.mux.HandleFunc("GET /api/agents/bootstrap/{token}/files/{name}", s.agentPackageDownload)
 	transport := agenttransport.HTTPHandler{Broker: a.broker, Authenticate: s.authenticateAgent}
 	s.mux.Handle(agenttransport.PollPath, transport)
 	s.mux.Handle(agenttransport.ResultPath, transport)

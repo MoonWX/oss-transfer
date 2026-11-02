@@ -57,6 +57,7 @@ transfer_select_source() {
   printf '%s\n' "$selected"
 }
 
+# shellcheck shell=bash
 # Shared by the standalone Unix installers. Keep this helper dependency-free.
 # GitHub supplies an authenticated SHA-256 digest for each uploaded release asset:
 # https://docs.github.com/en/rest/releases/assets#get-a-release-asset
@@ -196,7 +197,7 @@ transfer_source_member() {
 transfer_github_prepare() (
   set -o pipefail
   local requested=${1#v} platform=$2 arch=$3 destination=$4
-  local name root api tag digest size url actual version commit native_hash native_size role expected length payload
+  local name root api tag digest size url actual commit native_hash native_size role expected length payload installer installer_path
   case "$platform/$arch" in
     linux/amd64|linux/arm64|linux/armv7|linux/riscv64|linux/loong64|darwin/amd64|darwin/arm64|freebsd/amd64|freebsd/arm64) ;;
     *) transfer_source_error 'Unsupported GitHub release platform'; return 1;;
@@ -241,19 +242,27 @@ transfer_github_prepare() (
     printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$transfer_download_work/manifest.tsv" || return 1
   done
   printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$transfer_download_work/manifest.tsv" || return 1
-  # Older releases stored the installer under deploy/go. Keep both lookups
-  # pinned to the verified archive commit; never substitute the current branch.
-  if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/native/install.sh" "$transfer_download_work/native-install.sh" 1048576; then
-    transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
-  fi
-  [[ -s "$transfer_download_work/native-install.sh" ]] || { transfer_source_error 'Empty native installer'; return 1; }
-  native_hash=$(transfer_source_sha256 "$transfer_download_work/native-install.sh") || return 1
-  native_size=$(wc -c < "$transfer_download_work/native-install.sh" | tr -d '[:space:]') || return 1
-  printf 'asset\tnative-install.sh\t%s\t%s\n' "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
-  for name in "$name" manifest.tsv native-install.sh; do
+  # Keep all installers at the verified archive commit. A Master retains these
+  # files to install Agents without requiring their hosts to reach the internet.
+  for installer in native-install.sh install.sh Install.ps1; do
+    case "$installer" in
+      native-install.sh) installer_path=deploy/native/install.sh;;
+      Install.ps1) installer_path=deploy/native/Install.ps1;;
+      *) installer_path=install.sh;;
+    esac
+    if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/$installer_path" "$transfer_download_work/$installer" 1048576; then
+      [[ "$installer_path" == deploy/native/* ]] && transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/${installer_path#deploy/native/}" "$transfer_download_work/$installer" 1048576 || { transfer_source_error "Cannot fetch the versioned native installer: $installer"; return 1; }
+    fi
+    [[ -s "$transfer_download_work/$installer" ]] || { transfer_source_error "Empty installer: $installer"; return 1; }
+    native_hash=$(transfer_source_sha256 "$transfer_download_work/$installer") || return 1
+    native_size=$(wc -c < "$transfer_download_work/$installer" | tr -d '[:space:]') || return 1
+    printf 'asset\t%s\t%s\t%s\n' "$installer" "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
+  done
+  for name in "$name" manifest.tsv native-install.sh install.sh Install.ps1; do
     [[ ! -e "$destination/$name" && ! -L "$destination/$name" ]] || { transfer_source_error 'Package directory already contains release files'; return 1; }
   done
-  mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$destination/"
+  mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$transfer_download_work/install.sh" "$transfer_download_work/Install.ps1" "$destination/"
+
 )
 
 # END embedded download source
@@ -271,6 +280,7 @@ had_cli_sidecars=0
 had_data_cli_connections=0
 cli_changed=0
 cli_migrated=0
+root_dir=
 install_dir=
 config_dir=
 data_dir=
@@ -298,6 +308,7 @@ Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --master-url URL     Master URL for first Agent enrollment
   --token-stdin        Read the Agent invitation token from standard input
   --service-name NAME  Isolated service name
+  --root-dir DIR       Keep programs, configuration and data under one directory
   --install-dir DIR --config-dir DIR --data-dir DIR --backup-dir DIR
   --user               macOS: install a LaunchAgent for the current logged-in user
   --startup-timeout N  Readiness timeout, 10–600 seconds (default 120)
@@ -308,7 +319,7 @@ fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 while (($#)); do
   case "$1" in
     --version) (($# >= 2)) || fail 'Missing value: --version'; requested_version=$2; shift 2;;
-    --role|--source|--release-url|--package-dir|--adopt-config|--cli-path|--install-dir|--config-dir|--data-dir|--backup-dir|--service-name|--listen|--master-url|--startup-timeout)
+    --role|--source|--release-url|--package-dir|--adopt-config|--cli-path|--root-dir|--install-dir|--config-dir|--data-dir|--backup-dir|--service-name|--listen|--master-url|--startup-timeout)
       (($# >= 2)) || fail "Missing value: $1"
       key=${1#--}; key=${key//-/_}; printf -v "$key" '%s' "$2"; shift 2 ;;
     --token-stdin) token_stdin=1; shift;;
@@ -354,6 +365,62 @@ sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print
 # Read existing service definitions without evaluating their contents. This also
 # discovers older installations with custom directories or service names.
 metadata_field() { awk -F '\t' -v key="$2" '$1==key {print $2}' "$1"; }
+# Configuration values are discovery hints only. The downloaded binary validates
+# the complete JSON and confirms all paths before any existing file is changed.
+config_field() {
+  LC_ALL=C sed -nE 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$1"
+}
+default_root() {
+  if [[ "$platform" == linux ]]; then printf '/opt/oss-transfer\n'
+  elif [[ "$platform" == freebsd ]]; then printf '/usr/local/lib/oss-transfer\n'
+  elif ((user_service)); then printf '%s/Library/Application Support/OSS Transfer\n' "$HOME"
+  else printf '/Library/Application Support/OSS Transfer\n'; fi
+}
+root_explicit=0; [[ -z "$root_dir" ]] || root_explicit=1
+root_dir=${root_dir:-$(default_root)}
+if ((upgrade == 0)); then role=${role:-master}; fi
+safe_path "$root_dir"
+# A normal rerun also recognizes an installation whose binary or service was
+# removed. Prefer saved paths; selecting a new root never moves existing data.
+if [[ -n "$role" && -z "$adopt_config" ]]; then
+  if [[ -z "$install_dir" ]]; then
+    for candidate in "$root_dir/$role/bin" "$root_dir/$role"; do
+      if [[ -f "$candidate/install.tsv" && ! -L "$candidate/install.tsv" ]]; then
+        [[ -z "$service_name" || $(metadata_field "$candidate/install.tsv" serviceName) == "$service_name" ]] || continue
+        install_dir=$candidate; break
+      fi
+    done
+    if [[ -z "$install_dir" && "$platform" == linux && "$root_explicit" == 0 && -f "/opt/oss-transfer-go/$role/install.tsv" && ! -L "/opt/oss-transfer-go/$role/install.tsv" ]]; then
+      if [[ -z "$service_name" || $(metadata_field "/opt/oss-transfer-go/$role/install.tsv" serviceName) == "$service_name" ]]; then install_dir=/opt/oss-transfer-go/$role; fi
+    fi
+    if [[ -z "$install_dir" ]]; then
+      if [[ "$platform" == linux ]]; then legacy_bin=/opt/oss-transfer/$role; legacy_config=/etc/oss-transfer/$role
+      elif [[ "$platform" == freebsd ]]; then legacy_bin=/usr/local/lib/oss-transfer/$role; legacy_config=/usr/local/etc/oss-transfer/$role
+      elif ((user_service)); then legacy_bin="$HOME/Library/Application Support/OSS Transfer/$role/bin"; legacy_config="$HOME/Library/Application Support/OSS Transfer/$role/config"
+      else legacy_bin=/usr/local/lib/oss-transfer/$role; legacy_config="/Library/Application Support/OSS Transfer/$role/config"; fi
+      if ((root_explicit == 0)) && [[ -f "$legacy_bin/install.tsv" && ! -L "$legacy_bin/install.tsv" && ( -z "$service_name" || $(metadata_field "$legacy_bin/install.tsv" serviceName) == "$service_name" ) ]]; then install_dir=$legacy_bin
+      elif [[ -f "$root_dir/$role/config/service.json" && ! -L "$root_dir/$role/config/service.json" ]]; then
+        install_dir=$root_dir/$role/bin; config_dir=${config_dir:-$root_dir/$role/config}
+      elif ((root_explicit == 0)) && [[ -f "$legacy_config/service.json" && ! -L "$legacy_config/service.json" && ( -z "$service_name" || $(config_field "$legacy_config/service.json" serviceName) == "$service_name" ) ]]; then
+        install_dir=$legacy_bin; config_dir=${config_dir:-$legacy_config}
+      fi
+    fi
+  fi
+  if [[ -n "$install_dir" && -f "$install_dir/install.tsv" && ! -L "$install_dir/install.tsv" ]]; then
+    upgrade=1
+  elif [[ -n "$config_dir" && -f "$config_dir/service.json" && ! -L "$config_dir/service.json" ]]; then
+    install_dir=${install_dir:-$root_dir/$role/bin}
+    upgrade=1
+  fi
+fi
+trusted_master_release() {
+  [[ "$role" == agent && -n "$master_url" ]] || return 1
+  local origin=${master_url%/} suffix
+  [[ "$origin" =~ ^https?://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?$ ]] || return 1
+  [[ "$release_url" == "$origin"/api/agents/bootstrap/*/files ]] || return 1
+  suffix=${release_url#"$origin"/api/agents/bootstrap/}; suffix=${suffix%/files}
+  [[ "$suffix" =~ ^[A-Za-z0-9_-]+$ ]]
+}
 if [[ -z "$release_url" && -z "$package_dir" ]]; then
   selected_source=$(transfer_select_source "$source" "$requested_version") || fail 'Cannot select a download source; use --source or --release-url'
   printf 'Download source: %s\n' "$selected_source"
@@ -383,13 +450,17 @@ if ((upgrade)); then
     }
     for item_role in master agent; do
       if [[ "$platform" == linux ]]; then
-        add_candidate "/opt/oss-transfer/$item_role"
-        add_candidate "/opt/oss-transfer-go/$item_role"
-      elif [[ "$platform" == freebsd ]]; then add_candidate "/usr/local/lib/oss-transfer/$item_role"
-      elif ((user_service)); then add_candidate "$HOME/Library/Application Support/OSS Transfer/$item_role/bin"
-      else add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi
+        add_candidate "$root_dir/$item_role/bin"
+        if ((root_explicit == 0)); then
+          add_candidate "/opt/oss-transfer/$item_role"
+          add_candidate "/opt/oss-transfer-go/$item_role"
+        fi
+      elif [[ "$platform" == freebsd ]]; then add_candidate "$root_dir/$item_role/bin"; if ((root_explicit == 0)); then add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi
+      elif ((user_service)); then add_candidate "$root_dir/$item_role/bin"
+      else add_candidate "$root_dir/$item_role/bin"; if ((root_explicit == 0)); then add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi; fi
     done
-    if [[ "$platform" == linux ]]; then
+    if ((root_explicit)); then :
+    elif [[ "$platform" == linux ]]; then
       for definition in /etc/systemd/system/*.service; do
         [[ -f "$definition" && ! -L "$definition" ]] || continue
         installed_binary=$(sed -nE 's#^ExecStart="([^"]*/oss-transfer-(master|agent))" .*#\1#p' "$definition")
@@ -440,29 +511,36 @@ if ((upgrade)); then
     exit 0
   fi
   installed_metadata=$install_dir/install.tsv
-  [[ -f "$installed_metadata" && ! -L "$installed_metadata" ]] || fail 'No managed installation found in the selected directory'
-  saved_role=$(metadata_field "$installed_metadata" role)
-  [[ "$saved_role" == master || "$saved_role" == agent ]] || fail 'Invalid installed role'
-  [[ -z "$role" || "$role" == "$saved_role" ]] || fail 'Installed role differs from --role'
-  role=$saved_role
-  service_name=${service_name:-$(metadata_field "$installed_metadata" serviceName)}
-  [[ -n "$service_name" ]] || fail 'Missing installed service name'
-  saved_config=$(metadata_field "$installed_metadata" config)
-  [[ "$saved_config" == /*/service.json ]] || fail 'Invalid installed configuration path'
+  if [[ -f "$installed_metadata" && ! -L "$installed_metadata" ]]; then
+    saved_role=$(metadata_field "$installed_metadata" role)
+    [[ "$saved_role" == master || "$saved_role" == agent ]] || fail 'Invalid installed role'
+    [[ -z "$role" || "$role" == "$saved_role" ]] || fail 'Installed role differs from --role'
+    role=$saved_role
+    service_name=${service_name:-$(metadata_field "$installed_metadata" serviceName)}
+    saved_config=$(metadata_field "$installed_metadata" config)
+    saved_data=$(metadata_field "$installed_metadata" dataDir)
+  else
+    [[ -n "$role" && -n "$config_dir" ]] || fail 'No installation configuration found'
+    saved_config=$config_dir/service.json
+    saved_data=
+  fi
+  [[ "$saved_config" == /*/service.json && -f "$saved_config" && ! -L "$saved_config" ]] || fail 'Existing service configuration is missing or symlinked'
   config_dir=${config_dir:-$(dirname "$saved_config")}
-  # Each upgrade uses the local OS default unless this invocation overrides it.
-  # A path recorded by an earlier installer may belong to a temporary mount.
-  # Old metadata omitted the data path; use the binary's validated config output.
   safe_path "$install_dir"
   safe_path "$(dirname "$saved_config")"
   installed_binary=$install_dir/oss-transfer-$role
-  [[ -f "$installed_binary" && ! -L "$installed_binary" && -f "$saved_config" && ! -L "$saved_config" ]] || fail 'Existing installation files are missing or symlinked'
-  saved_data=$("$installed_binary" --config "$saved_config" --check-config | awk -F '\t' '$1=="dataDirectory"{print $2}')
-  [[ -n "$saved_data" ]] || fail 'Installed data directory is missing'
+  [[ ! -L "$installed_binary" && ( ! -e "$installed_binary" || -f "$installed_binary" ) ]] || fail 'Existing program is a link or non-file'
+  if [[ -f "$installed_binary" ]]; then
+    saved_data=$("$installed_binary" --config "$saved_config" --check-config | awk -F '\t' '$1=="dataDirectory"{print $2}')
+  elif [[ -z "$saved_data" ]]; then
+    saved_data=$(config_field "$saved_config" dataDirectory)
+  fi
+  service_name=${service_name:-$(config_field "$saved_config" serviceName)}
+  [[ -n "$service_name" && -n "$saved_data" ]] || fail 'Existing configuration must contain serviceName and dataDirectory'
   data_dir=${data_dir:-$saved_data}
 fi
 role=${role:-master}
-if [[ "$platform" == linux && -z "$install_dir" && "$upgrade" == 0 && -f "/opt/oss-transfer-go/$role/install.tsv" ]]; then
+if [[ "$platform" == linux && "${root_explicit:-0}" == 0 && -z "$install_dir" && "$upgrade" == 0 && -f "/opt/oss-transfer-go/$role/install.tsv" ]]; then
   fail 'Installation exists; rerun with --upgrade'
 fi
 if [[ "$platform" == freebsd ]]; then
@@ -474,17 +552,17 @@ fi
 [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] || fail 'Invalid service name'
 if [[ "$platform" == linux ]]; then
   command -v systemctl >/dev/null || fail 'systemd is required'
-  install_dir=${install_dir:-/opt/oss-transfer/$role}
-  config_dir=${config_dir:-/etc/oss-transfer/$role}
-  data_dir=${data_dir:-/var/lib/oss-transfer/$role}
-  backup_dir=${backup_dir:-/var/backups/oss-transfer/$role}
+  install_dir=${install_dir:-$root_dir/$role/bin}
+  config_dir=${config_dir:-$root_dir/$role/config}
+  data_dir=${data_dir:-$root_dir/$role/data}
+  if [[ "$install_dir" == "$root_dir/$role/bin" ]]; then backup_dir=${backup_dir:-$root_dir/$role/backups}; else backup_dir=${backup_dir:-/var/backups/oss-transfer/$role}; fi
   unit=/etc/systemd/system/$service_name.service
 elif [[ "$platform" == freebsd ]]; then
   [[ -f /etc/rc.subr && -x /usr/sbin/daemon ]] || fail 'FreeBSD rc.d and daemon are required'
-  install_dir=${install_dir:-/usr/local/lib/oss-transfer/$role}
-  config_dir=${config_dir:-/usr/local/etc/oss-transfer/$role}
-  data_dir=${data_dir:-/var/db/oss-transfer/$role}
-  backup_dir=${backup_dir:-/var/backups/oss-transfer/$role}
+  install_dir=${install_dir:-$root_dir/$role/bin}
+  config_dir=${config_dir:-$root_dir/$role/config}
+  data_dir=${data_dir:-$root_dir/$role/data}
+  if [[ "$install_dir" == "$root_dir/$role/bin" ]]; then backup_dir=${backup_dir:-$root_dir/$role/backups}; else backup_dir=${backup_dir:-/var/backups/oss-transfer/$role}; fi
   unit=/usr/local/etc/rc.d/$service_name
   rc_name=$service_name
   supervisor_pidfile=/var/run/$service_name.supervisor.pid
@@ -492,13 +570,13 @@ elif [[ "$platform" == freebsd ]]; then
 else
   command -v launchctl >/dev/null || fail 'launchd is required'
   if ((user_service)); then
-    base="$HOME/Library/Application Support/OSS Transfer/$role"
+    base="$root_dir/$role"
     install_dir=${install_dir:-$base/bin}
     unit="$HOME/Library/LaunchAgents/$service_name.plist"
     domain=gui/$(id -u)
   else
-    base="/Library/Application Support/OSS Transfer/$role"
-    install_dir=${install_dir:-/usr/local/lib/oss-transfer/$role}
+    base="$root_dir/$role"
+    install_dir=${install_dir:-$base/bin}
     unit=/Library/LaunchDaemons/$service_name.plist
     domain=system
   fi
@@ -522,6 +600,17 @@ global_cli=/usr/local/bin/oss-transfer-cli
 if [[ "$platform" == darwin && "$user_service" == 1 ]]; then global_cli=$HOME/.local/bin/oss-transfer-cli; fi
 previous_cli=''
 if [[ -f "$metadata" && ! -L "$metadata" ]]; then previous_cli=$(metadata_field "$metadata" cliPath); fi
+
+cli_belongs_to_data() {
+  local cli=$1 path
+  [[ -f "$config" && ! -L "$config" ]] || return 1
+  for path in "$cli.cluster.json" "$cli.local-auth.json" "$data_dir/cli-cluster.json" "$data_dir/cli-local-auth.json"; do
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+  done
+  [[ $(config_field "$data_dir/cli-local-auth.json" role) == "$role" ]] || return 1
+  cmp -s "$cli.cluster.json" "$data_dir/cli-cluster.json" && cmp -s "$cli.local-auth.json" "$data_dir/cli-local-auth.json"
+}
+if [[ -z "$previous_cli" ]] && cli_belongs_to_data "$global_cli"; then previous_cli=$global_cli; fi
 
 default_cli_path() {
   local installed=$1
@@ -550,22 +639,41 @@ for path in "$data_dir/cli-cluster.json" "$data_dir/cli-local-auth.json"; do
 done
 existed=0
 if [[ -f "$metadata" && ! -L "$metadata" ]]; then
+  [[ -z "$adopt_config" ]] || fail 'Existing installation found; rerun without --adopt-config'
   existed=1
-  ((upgrade)) || fail 'Installation exists; rerun with --upgrade'
   [[ $(awk -F '\t' '$1=="role"{print $2}' "$metadata") == "$role" && $(awk -F '\t' '$1=="serviceName"{print $2}' "$metadata") == "$service_name" && $(awk -F '\t' '$1=="config"{print $2}' "$metadata") == "$config" && $(awk -F '\t' '$1=="unit"{print $2}' "$metadata") == "$unit" ]] || fail 'Existing installation identity does not match'
-  [[ -f "$binary" && ! -L "$binary" && -f "$config" && ! -L "$config" ]] || fail 'Existing installation files are missing or symlinked'
+  [[ ! -L "$binary" && ( ! -e "$binary" || -f "$binary" ) && -f "$config" && ! -L "$config" ]] || fail 'Existing installation configuration is missing or symlinked'
+elif [[ -z "$adopt_config" && -f "$config" && ! -L "$config" ]]; then
+  existed=1
+  [[ ! -L "$binary" && ( ! -e "$binary" || -f "$binary" ) ]] || fail 'Existing program is a link or non-file'
+  printf 'Existing configuration found; preserving its data.\n'
+  # A leftover service is accepted only if it names these exact program and
+  # config paths. An unrelated service must never be stopped by recovery.
+  if [[ -f "$unit" ]]; then
+    if [[ "$platform" == linux ]]; then
+      grep -Fx "ExecStart=\"$binary\" --config \"$config\"" "$unit" >/dev/null || fail 'Existing service does not match this installation'
+    elif [[ "$platform" == darwin ]]; then
+      [[ $(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$unit") == "$binary" && $(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:2' "$unit") == "$config" ]] || fail 'Existing service does not match this installation'
+    else
+      grep -Fx "# oss-transfer-install: $install_dir" "$unit" >/dev/null || fail 'Existing service does not match this installation'
+    fi
+  fi
 else
   ((upgrade == 0)) || fail 'No managed installation found; V4.0.x requires database migration first'
   for path in "$install_dir" "$config_dir" "$data_dir"; do
     [[ -n "$adopt_config" && "$path" == "$data_dir" ]] && continue
-    [[ ! -e "$path" || -z $(ls -A "$path") ]] || fail "Refusing nonempty directory: $path"
+    [[ ! -e "$path" || -z $(ls -A "$path") ]] || fail "Refusing nonempty directory without its service.json: $path"
   done
   [[ ! -e "$unit" && ! -L "$unit" ]] || fail "Service already exists: $service_name"
 fi
+partial_backup=0
+if ((existed)) && [[ ! -f "$binary" || ! -f "$metadata" ]]; then partial_backup=1; fi
 if [[ -f "$cli_path" ]]; then had_cli=1; fi
 if ((had_cli || had_cli_sidecars)); then
-  if ((existed == 0)) || [[ $(awk -F '\t' '$1=="cliPath"{print $2}' "$metadata") != "$cli_path" ]]; then
-    ((replace_cli)) || fail "CLI already exists: $cli_path; use --replace-cli to back it up and replace it, or choose --cli-path"
+  if ((existed == 0)) || [[ ! -f "$metadata" ]] || [[ $(awk -F '\t' '$1=="cliPath"{print $2}' "$metadata") != "$cli_path" ]]; then
+    if ! ((existed)) || ! cli_belongs_to_data "$cli_path"; then
+      ((replace_cli)) || fail "CLI already exists: $cli_path; use --replace-cli to back it up and replace it, or choose --cli-path"
+    fi
   fi
 fi
 if ((existed)); then
@@ -614,7 +722,7 @@ fetch() {
 }
 if [[ -n "$release_url" ]]; then
   release_url=${release_url%/}
-  [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]] || fail 'Release URL must be an HTTPS version directory (loopback HTTP is allowed for testing)'
+  [[ "$release_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$ || "$release_url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[A-Za-z0-9._~/-]+$ ]] || trusted_master_release || fail 'Release URL must use HTTPS or the invited Master'
 fi
 fetch manifest.tsv
 [[ $(wc -c < "$work/manifest.tsv") -lt 65536 ]] || fail 'Manifest too large'
@@ -664,6 +772,53 @@ fi
 [[ $(wc -c < "$work/$cli_filename" | tr -d ' ') == "$cli_length" && $(sha256 "$work/$cli_filename") == "$cli_checksum" ]] || fail 'CLI checksum mismatch'
 chmod 700 "$work/$filename"
 chmod 700 "$work/$cli_filename"
+# Keep a complete, verified installer set on the Master. Older release layouts
+# without all three installers remain usable through the upstream join route.
+master_packages=
+if [[ "$role" == master && -n "${archive_name:-}" ]]; then
+  package_assets=$(awk -F '\t' '$1=="asset" && ($2=="install.sh" || $2=="native-install.sh" || $2=="Install.ps1") {print $2}' "$work/manifest.tsv" | LC_ALL=C sort -u | wc -l | tr -d ' ')
+  if [[ "$package_assets" == 3 ]]; then
+    master_packages=$work/master-packages
+    mkdir "$master_packages"
+    cp "$work/manifest.tsv" "$work/$archive_name" "$master_packages/"
+    for asset in install.sh native-install.sh Install.ps1; do
+      record=$(awk -F '\t' -v name="$asset" '$1=="asset" && $2==name {if(NF!=4) print "invalid"; else print $3 "\t" $4}' "$work/manifest.tsv")
+      IFS=$'\t' read -r asset_checksum asset_length <<< "$record"
+      [[ "$asset_checksum" =~ ^[a-f0-9]{64}$ && "$asset_length" =~ ^[0-9]+$ && "$record" != *$'\n'* ]] || fail "Invalid installer manifest entry: $asset"
+      fetch "$asset"
+      [[ $(wc -c < "$work/$asset" | tr -d ' ') == "$asset_length" && $(sha256 "$work/$asset") == "$asset_checksum" ]] || fail "Installer checksum mismatch: $asset"
+      cp "$work/$asset" "$master_packages/$asset"
+    done
+    # Offline bundles may include additional platforms. Retain only archives
+    # named by this exact manifest, and verify each one before publishing it.
+    if [[ -n "$package_dir" ]]; then
+      while IFS=$'\t' read -r kind asset_os asset_arch asset checksum length extra; do
+        [[ "$kind" == archive && "$asset" != "$archive_name" ]] || continue
+        [[ "$asset_os" =~ ^[a-z0-9]+$ && "$asset_arch" =~ ^[a-z0-9]+$ && ( "$asset" == "oss-transfer-$asset_os-$asset_arch.tar.gz" || "$asset" == "oss-transfer-$asset_os-$asset_arch.zip" ) && -z "$extra" && "$checksum" =~ ^[a-f0-9]{64}$ && "$length" =~ ^[0-9]+$ ]] || fail 'Invalid offline platform archive entry'
+        [[ -e "$package_dir/$asset" || -L "$package_dir/$asset" ]] || continue
+        [[ -f "$package_dir/$asset" && ! -L "$package_dir/$asset" ]] || fail "Offline archive must be a regular file: $asset"
+        [[ $(wc -c < "$package_dir/$asset" | tr -d ' ') == "$length" && $(sha256 "$package_dir/$asset") == "$checksum" ]] || fail "Offline archive checksum mismatch: $asset"
+        cp "$package_dir/$asset" "$master_packages/$asset"
+      done < "$work/manifest.tsv"
+    fi
+  fi
+fi
+publish_master_packages() {
+  [[ -n "$master_packages" ]] || return 0
+  local destination=$data_dir/packages staged previous
+  [[ ! -L "$destination" && ( ! -e "$destination" || -d "$destination" ) ]] || return 1
+  staged=$(mktemp -d "$data_dir/.packages-new.XXXXXX") || return 1
+  chmod 700 "$staged"
+  if ! cp "$master_packages/"* "$staged/"; then rm -rf -- "$staged"; return 1; fi
+  previous=$(mktemp -d "$data_dir/.packages-old.XXXXXX") || { rm -rf -- "$staged"; return 1; }
+  rmdir "$previous" || return 1
+  if [[ -d "$destination" ]] && ! mv "$destination" "$previous"; then rm -rf -- "$staged"; return 1; fi
+  if ! mv "$staged" "$destination"; then
+    if [[ -d "$previous" ]]; then mv "$previous" "$destination" || true; fi
+    rm -rf -- "$staged"; return 1
+  fi
+  [[ ! -d "$previous" ]] || rm -rf -- "$previous"
+}
 [[ $("$work/$filename" --version) == "oss-transfer-$role $version "* ]] || fail 'Binary version or platform check failed'
 [[ $("$work/$cli_filename" --version --json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') == "$version" ]] || fail 'CLI version or platform check failed'
 if ((existed)) || [[ -n "$adopt_config" ]]; then
@@ -721,7 +876,7 @@ maintain_backups() {
 finish_backup() {
   local path name
   [[ -n "$backup" ]] || return 0
-  if ((existed)); then
+  if ((existed && ${partial_backup:-0} == 0)); then
     if maintain_backups complete; then maintain_backups prune || true; fi
   else
     # CLI replacement and database adoption do not create a complete managed
@@ -733,12 +888,12 @@ finish_backup() {
     for path in "$backup"/* "$backup"/.[!.]* "$backup"/..?*; do
       [[ -e "$path" || -L "$path" ]] || continue
       name=${path##*/}
-      if [[ "$name" != database && "$name" != database.key && "$name" != service.json && "$name" != cli && "$name" != cli.cluster.json && "$name" != cli.local-auth.json && "$name" != data-cli.cluster.json && "$name" != data-cli.local-auth.json || ! -f "$path" || -L "$path" ]]; then
+      if [[ "$name" != database && "$name" != database.key && "$name" != service.json && "$name" != cli && "$name" != cli.cluster.json && "$name" != cli.local-auth.json && "$name" != data-cli.cluster.json && "$name" != data-cli.local-auth.json && "$name" != binary && "$name" != install.tsv && "$name" != unit || ! -f "$path" || -L "$path" ]]; then
         printf 'Warning: unexpected temporary backup contents; retained %s.\n' "$backup" >&2
         return 0
       fi
     done
-    if ! rm -f -- "$backup/database" "$backup/database.key" "$backup/service.json" "$backup/cli" "$backup/cli.cluster.json" "$backup/cli.local-auth.json" "$backup/data-cli.cluster.json" "$backup/data-cli.local-auth.json" || ! rmdir -- "$backup"; then
+    if ! rm -f -- "$backup/database" "$backup/database.key" "$backup/service.json" "$backup/cli" "$backup/cli.cluster.json" "$backup/cli.local-auth.json" "$backup/data-cli.cluster.json" "$backup/data-cli.local-auth.json" "$backup/binary" "$backup/install.tsv" "$backup/unit" || ! rmdir -- "$backup"; then
       printf 'Warning: could not remove temporary backup: %s\n' "$backup" >&2
     fi
   fi
@@ -1028,12 +1183,12 @@ rollback() {
       printf 'Database rollback incomplete. Current files retained; backup: %s\n' "$backup" >&2
       exit 1
     fi
-    cp -p "$backup/binary" "$binary.restore" && mv -f "$binary.restore" "$binary"
+    if [[ -f "$backup/binary" ]]; then cp -p "$backup/binary" "$binary.restore" && mv -f "$binary.restore" "$binary"; else rm -f "$binary"; fi
     cp -p "$backup/service.json" "$config"
-    cp -p "$backup/install.tsv" "$metadata"
+    if [[ -f "$backup/install.tsv" ]]; then cp -p "$backup/install.tsv" "$metadata"; else rm -f "$metadata"; fi
     if [[ -f "$backup/unit" ]]; then cp -p "$backup/unit" "$unit"; else rm -f "$unit"; fi
     if [[ "$platform" == linux ]]; then systemctl daemon-reload; fi
-    if ((was_active)); then
+    if ((was_active)) && [[ -f "$backup/binary" ]]; then
       prepare_start
       if start_service && wait_ready; then finish_agent_maintenance;
       else printf 'Rollback files restored, but the original service did not become ready. Check %s\n' "$log_file" >&2; fi
@@ -1071,9 +1226,9 @@ if ((existed)); then
   backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
   owned_backup=$backup
   printf 'Backup: %s\n' "$backup"
-  cp -p "$binary" "$backup/binary"
+  if [[ -f "$binary" ]]; then cp -p "$binary" "$backup/binary"; fi
   cp -p "$config" "$backup/service.json"
-  cp -p "$metadata" "$backup/install.tsv"
+  if [[ -f "$metadata" ]]; then cp -p "$metadata" "$backup/install.tsv"; fi
   if [[ -f "$unit" ]]; then cp -p "$unit" "$backup/unit"; fi
   if active; then was_active=1; fi
   if [[ "$platform" == linux ]] && systemctl is-enabled --quiet "$service_name"; then was_enabled=1; fi
@@ -1190,7 +1345,9 @@ if commit_start; then
   finish_backup
   if ((cli_migrated)); then rm -f "$previous_cli" "$previous_cli.cluster.json" "$previous_cli.local-auth.json"; fi
 fi
+if ! publish_master_packages; then fail 'Service installed, but could not retain Agent packages; rerun the installer to repair the package cache'; fi
 printf 'Installed %s %s. Service: %s\nConfiguration: %s\nLog: %s\n' "$role" "$version" "$service_name" "$config" "$log_file"
+printf 'Installation: %s\n' "$install_dir"
 printf 'CLI: %s\n' "$cli_path"
 printf 'Tasks: %q task list\n' "$cli_path"
 print_initial_credentials

@@ -114,11 +114,13 @@ class Lifecycle:
             version = current
             self.evidence[role] = {'version':output,'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
             rows.append(self.row(role,source))
-        if self.system!='Windows':
-            native=self.release/'native-install.sh'
-            shutil.copy2(args.repo/'deploy/native/install.sh',native)
-            payload=native.read_bytes()
-            rows.append('\t'.join(('asset',native.name,hashlib.sha256(payload).hexdigest(),str(len(payload)))))
+        for name,source in (('install.sh',args.repo/'install.sh'),
+                            ('native-install.sh',args.repo/'deploy/native/install.sh'),
+                            ('Install.ps1',args.repo/'deploy/native/Install.ps1')):
+            installer=self.release/name
+            shutil.copy2(source,installer)
+            payload=installer.read_bytes()
+            rows.append('\t'.join(('asset',name,hashlib.sha256(payload).hexdigest(),str(len(payload)))))
         self.version = version
         rows[1:1] = ['version\t'+version,'commit\tisolated-lifecycle-test']
         (self.release/'manifest.tsv').write_text('\n'.join(rows)+'\n', encoding="utf-8")
@@ -218,7 +220,7 @@ class Lifecycle:
             archive_suffix='.zip' if self.system=='Windows' else '.tar.gz'
             archive_name=f'oss-transfer-{self.os_name}-{self.arch}'+archive_suffix
             allowed={'/latest/manifest.tsv','/'+version_name+'/manifest.tsv','/'+version_name+'/'+archive_name}
-            if self.system!='Windows':allowed.add('/'+version_name+'/native-install.sh')
+            allowed.update('/'+version_name+'/'+name for name in ('install.sh','native-install.sh','Install.ps1'))
             require(set(requests)<=allowed and '/'+version_name+'/'+archive_name in requests,
                     'Installer did not use the verified archive, or requested a loose binary')
             self.record('latest_resolves_fixed_version_before_binary_download',requests=requests)
@@ -240,7 +242,7 @@ class Lifecycle:
             if adopt_config: command+=['-AdoptConfig',adopt_config]
             command+=['-CliPath',self.cli_path if role=='master' else self.agent_cli_path]
             if replace_cli:command+=['-ReplaceCli']
-            if role=='master':command+=['-Listen','127.0.0.1:'+str(self.port)]
+            if role=='master':command+=['-Listen','127.0.0.1:'+str(self.port),'-WithoutAgent']
             else:command+=['-MasterUrl',self.origin]
         else:
             command=['bash',self.args.repo/'install.sh','--role',role,('--release-url' if release_url else '--package-dir'),release_url or release or self.release,
@@ -251,7 +253,7 @@ class Lifecycle:
             if adopt_config:command+=['--adopt-config',adopt_config]
             command+=['--cli-path',self.cli_path if role=='master' else self.agent_cli_path]
             if replace_cli:command+=['--replace-cli']
-            if role=='master':command+=['--listen','127.0.0.1:'+str(self.port)]
+            if role=='master':command+=['--listen','127.0.0.1:'+str(self.port),'--without-agent']
             else:command+=['--master-url',self.origin]
         if discover:
             require(upgrade, 'Discovery is an upgrade operation')
@@ -536,10 +538,12 @@ func main(){
         self.record('installed_cli_verified_and_can_log_in')
         config=self.root/'master/config/service.json'
         config_bytes=config.read_bytes()
-        self.install('master',expect=1)
-        require(self.pid('master')==before,'Repeat install disturbed existing service')
+        self.install('master')
+        before=self.pid('master')
+        require(before>0,'Repeat install did not leave a running service')
         require(config.read_bytes()==config_bytes,'Repeat install changed configuration')
-        self.record('existing_install_requires_explicit_upgrade')
+        self.login()
+        self.record('repeat_install_reuses_configuration_data_and_password')
         invite=self.api('/api/master/agents/invitations',{'address':'lifecycle-agent','label':'persisted Agent label'})
         self.secrets.append(invite['inviteToken'])
         self.install('agent',token=invite['inviteToken'])
@@ -632,6 +636,29 @@ func main(){
         require(len(failed_backups)==1 and all(path.is_dir() and not (path/'backup.json').exists()
                                              for path in failed_backups), 'Failed upgrade backup was marked for automatic cleanup')
         self.record('failed_start_rolls_back_binary_database_config_and_running_service',pid=self.pid('master'))
+        # Uninstalling programs and service registrations must preserve the
+        # original database keys, credentials and node identity on a plain rerun.
+        key_hashes={path:hashlib.sha256(path.read_bytes()).hexdigest()
+                    for role in ('master','agent') for path in (self.root/role/'data').glob('*.db.key')}
+        require(len(key_hashes)==2,'Native services did not create matching database keys')
+        for remove_metadata in (False, True):
+            for role in ('agent','master'):
+                self.remove_service(role)
+                binaries=self.root/role/'bin'
+                if remove_metadata:
+                    shutil.rmtree(binaries)
+                else:
+                    (binaries/('oss-transfer-'+role+('.exe' if self.system=='Windows' else ''))).unlink()
+            self.install('master')
+            self.login()
+            self.install('agent')
+            require(config.read_bytes()==config_bytes and agent_config.read_bytes()==agent_bytes,
+                    'Reinstallation changed retained configuration')
+            require(all(path.exists() and hashlib.sha256(path.read_bytes()).hexdigest()==digest
+                        for path,digest in key_hashes.items()),'Reinstallation replaced a database key')
+            nodes=self.api('/api/master/nodes')['nodes']
+            require(len(nodes)==1 and nodes[0]['id']==member_id,'Reinstallation created a new Agent identity')
+            self.record('reinstall_from_retained_config_and_data' if remove_metadata else 'repair_missing_binary_from_retained_metadata')
         # Simulate a stopped manual installation or finalized V4 import: retain
         # databases/configuration, but remove this test's service registrations
         # and managed binaries. Adoption must neither reset setup nor re-enroll.

@@ -52,7 +52,7 @@ class EnrollmentInputTests(unittest.TestCase):
 
     def invoke(self, body, value):
         return subprocess.run(
-            ["bash", "-c", 'set -euo pipefail; source "$1"; ' + body, "test", str(self.functions), value],
+            ["bash", "-c", 'set -euo pipefail; release_url=; source "$1"; ' + body, "test", str(self.functions), value],
             text=True, capture_output=True, timeout=10)
 
     def test_master_origins_preserve_dns_ipv4_and_accept_ipv6(self):
@@ -309,7 +309,7 @@ class StartupCommitTests(unittest.TestCase):
 
     def invoke(self, body='', fail=''):
         start = self.source.rindex('\nprepare_start\n')
-        end = self.source.index("\nprintf 'Installed ", start)
+        end = self.source.index("\nif ! publish_master_packages", start)
         finish = self.source[start:end]
         script = '''set -eEuo pipefail
 trap 'printf rolled-back > "$TEST_ROOT/rollback"; exit 7' ERR
@@ -419,7 +419,7 @@ rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
 
     def test_end_only_follows_successful_readiness(self):
         start=self.source.rindex('\nprepare_start\n')
-        end=self.source.index("\nprintf 'Installed ",start)
+        end=self.source.index("\nif ! publish_master_packages",start)
         section=self.source[start:end]
         body='''
 platform=linux; existed=1; had_unit=1; was_enabled=0; cli_migrated=0
@@ -535,7 +535,7 @@ esac
         functions += '\n' + source[source.index('finish_agent_maintenance() {'):source.index('\nrollback() {')]
         functions += '\n' + source[source.index('cleanup() {'):source.index('\ntrap cleanup EXIT')]
         start = source.rindex('\nprepare_start\n')
-        finish = source[start:source.index("\nprintf 'Installed ", start)]
+        finish = source[start:source.index("\nif ! publish_master_packages", start)]
         body = '''set -eEuo pipefail
 work=$TEST_ROOT/work; filename=candidate
 backup_dir=$TEST_ROOT/backups; backup=$TEST_BACKUP; owned_backup=$backup
@@ -651,7 +651,7 @@ rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
                 body = '''set -euo pipefail
 install_dir=$TEST_ROOT/installed; backup_dir=$TEST_BACKUP_OVERRIDE
 role=; service_name=; config_dir=; cli_path=; data_dir=
-platform=linux; upgrade=1; user_service=0
+platform=linux; upgrade=1; user_service=0; root_dir=/opt/oss-transfer
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
 safe_path() { return 0; }
 systemctl() { return 0; }
@@ -662,6 +662,92 @@ if true; then
                                         env=dict(os.environ,TEST_ROOT=str(self.root),TEST_BACKUP_OVERRIDE=override))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), override or '/var/backups/oss-transfer/agent')
+
+
+class ReinstallationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-recovery-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = INSTALLER.read_text()
+
+    def discovery(self, role='master', service=''):
+        start = self.source.index('config_field() {')
+        end = self.source.index('\nif [[ -z "$release_url" && -z "$package_dir" ]]; then', start)
+        body = '''set -euo pipefail
+role=$TEST_ROLE; service_name=$TEST_SERVICE; root_dir=$TEST_ROOT/app
+platform=linux; user_service=0; upgrade=0; install_dir=; config_dir=; adopt_config=
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+safe_path() { return 0; }
+metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
+''' + self.source[start:end] + '\nprintf "%s\\n%s\\n%s\\n" "$install_dir" "$config_dir" "$upgrade"\n'
+        return subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
+                              env=dict(os.environ,TEST_ROOT=str(self.root),TEST_ROLE=role,TEST_SERVICE=service))
+
+    def test_existing_configuration_is_found_after_program_directory_removed(self):
+        config = self.root/'app/master/config'
+        config.mkdir(parents=True)
+        (config/'service.json').write_text('{"serviceName":"existing-master","dataDirectory":"/existing/data"}')
+        result = self.discovery()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [str(self.root/'app/master/bin'), str(config), '1'])
+
+    def test_existing_metadata_keeps_old_binary_directory(self):
+        directory = self.root/'app/agent'
+        directory.mkdir(parents=True)
+        (directory/'install.tsv').write_text('role\tagent\nserviceName\texisting-agent\n')
+        result = self.discovery('agent', 'existing-agent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [str(directory), '', '1'])
+        wrong = self.discovery('agent', 'different-cluster-agent')
+        self.assertEqual(wrong.returncode, 0, wrong.stderr)
+        self.assertEqual(wrong.stdout.splitlines(), ['', '', '0'])
+
+    def test_uninitialized_root_has_no_adoption(self):
+        result = self.discovery()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['', '', '0'])
+
+    def test_user_service_upgrade_stays_inside_explicit_root(self):
+        home = self.root/'home'
+        original = home/'Library/Application Support/OSS Transfer/master/bin'
+        selected = self.root/'custom/master/bin'
+        for directory in (original, selected):
+            directory.mkdir(parents=True)
+            (directory/'install.tsv').write_text('role\tmaster\nserviceName\tisolated-master\n')
+        start = self.source.index('    candidates=()')
+        end = self.source.index('    ((${#candidates[@]})) || fail', start)
+        body = '''set -euo pipefail
+root_dir=$TEST_ROOT/custom; root_explicit=1; platform=darwin; user_service=1; role=; service_name=
+metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
+''' + self.source[start:end] + '\nprintf "%s\\n" "${candidates[@]:-}"\n'
+        env = dict(os.environ,TEST_ROOT=str(self.root),HOME=str(home))
+        found = subprocess.run(['bash','-c',body],text=True,capture_output=True,env=env,timeout=5)
+        self.assertEqual(found.returncode,0,found.stderr)
+        self.assertEqual(found.stdout.strip(),str(selected))
+        (selected/'install.tsv').unlink()
+        absent = subprocess.run(['bash','-c',body],text=True,capture_output=True,env=env,timeout=5)
+        self.assertEqual(absent.returncode,0,absent.stderr)
+        self.assertEqual(absent.stdout.strip(),'')
+
+    def test_master_download_exception_requires_exact_invited_origin_and_path(self):
+        start = self.source.index('trusted_master_release() {')
+        end = self.source.index('\nif [[ -z "$release_url"', start)
+        body = 'set -euo pipefail; role=$1; master_url=$2; release_url=$3;\n' + self.source[start:end] + '\ntrusted_master_release'
+        for role, master, release, accepted in (
+            ('agent','http://10.1.0.43:1685','http://10.1.0.43:1685/api/agents/bootstrap/abc_123-DEF/files',True),
+            ('agent','http://[fd00::43]:1685','http://[fd00::43]:1685/api/agents/bootstrap/abc/files',True),
+            ('master','http://10.1.0.43:1685','http://10.1.0.43:1685/api/agents/bootstrap/abc/files',False),
+            ('agent','http://10.1.0.43:1685','http://10.1.0.44:1685/api/agents/bootstrap/abc/files',False),
+            ('agent','http://10.1.0.43:1685','http://10.1.0.43:1686/api/agents/bootstrap/abc/files',False),
+            ('agent','http://10.1.0.43:1685','http://10.1.0.43:1685/releases/v4.1.21',False),
+            ('agent','http://10.1.0.43:1685','http://10.1.0.43:1685/api/agents/bootstrap/../files',False),
+            ('agent','http://10.1.0.43:1685','http://10.1.0.43:1685/api/agents/bootstrap/abc/../files',False),
+            ('agent','http://10.1.0.43:1685','http://10.1.0.43:1685/api/agents/bootstrap/abc/files?next=evil',False),
+        ):
+            with self.subTest(role=role, release=release):
+                result = subprocess.run(['bash','-c',body,'test',role,master,release],text=True,capture_output=True,timeout=5)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
 
 class BackupSpaceTests(unittest.TestCase):
@@ -869,7 +955,7 @@ stop_service() { return 0; }
 
     def test_old_cli_removed_only_after_startup_is_committed(self):
         start=self.source.index('\nif commit_start; then\n')
-        finish=self.source[start:self.source.index("\nprintf 'Installed ",start)]
+        finish=self.source[start:self.source.index("\nif ! publish_master_packages",start)]
         for committed in (False,True):
             self.old.write_text('previous agent CLI')
             Path(str(self.old)+'.cluster.json').write_text('previous cluster')

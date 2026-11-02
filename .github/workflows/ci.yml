@@ -72,6 +72,7 @@ jobs:
           python3 .github/tests/test-source-selection.py -v
           python3 .github/tests/test-download-source.py -v
           python3 .github/tests/test-installer-startup.py -v
+          python3 .github/tests/test-combined-installer.py -v
           python3 .github/tests/test-packaging.py -v
           python3 .github/tests/test-oss-layout.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v

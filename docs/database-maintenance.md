@@ -22,18 +22,18 @@ For an Agent installed at the default Linux paths:
 
 ```sh
 sudo systemctl stop oss-transfer-agent
-sudo /opt/oss-transfer/agent/oss-transfer-agent \
-  --config /etc/oss-transfer/agent/service.json \
-  --compact-state /var/lib/oss-transfer/agent/agent.compact.db
+sudo /opt/oss-transfer/agent/bin/oss-transfer-agent \
+  --config /opt/oss-transfer/agent/config/service.json \
+  --compact-state /opt/oss-transfer/agent/data/agent.compact.db
 ```
 
 If compaction succeeds, keep the service stopped and install the verified copy. These commands preserve the original's owner and permissions and refuse to overwrite an existing `agent.before-compact.db`:
 
 ```sh
-sudo cp --attributes-only --preserve=mode,ownership /var/lib/oss-transfer/agent/agent.db /var/lib/oss-transfer/agent/agent.compact.db &&
-sudo mv -nT /var/lib/oss-transfer/agent/agent.db /var/lib/oss-transfer/agent/agent.before-compact.db &&
-sudo test ! -e /var/lib/oss-transfer/agent/agent.db &&
-sudo mv -nT /var/lib/oss-transfer/agent/agent.compact.db /var/lib/oss-transfer/agent/agent.db &&
+sudo cp --attributes-only --preserve=mode,ownership /opt/oss-transfer/agent/data/agent.db /opt/oss-transfer/agent/data/agent.compact.db &&
+sudo mv -nT /opt/oss-transfer/agent/data/agent.db /opt/oss-transfer/agent/data/agent.before-compact.db &&
+sudo test ! -e /opt/oss-transfer/agent/data/agent.db &&
+sudo mv -nT /opt/oss-transfer/agent/data/agent.compact.db /opt/oss-transfer/agent/data/agent.db &&
 sudo systemctl start oss-transfer-agent
 ```
 

@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -85,9 +85,69 @@ function New-TestArchive([string]$Fault='') {
     $bytes=[IO.File]::ReadAllBytes($path)
     $script:responses[$githubURL]=$bytes
     $script:responses[$githubAPI]=GitHub-JSON (Hash-Bytes $bytes) $bytes.Length
+    foreach ($path in @('install.sh','deploy/native/install.sh','deploy/native/Install.ps1')) {
+        $script:responses["https://raw.githubusercontent.com/MoonWX/oss-transfer/$fullCommit/$path"]=$utf8.GetBytes('Pinned installer '+$path)
+    }
     return Resolve-DownloadSource 'github' 'latest' 'amd64'
 }
 try {
+    Check 'noninteractive first Master includes Agent but reinstall does not add one' {
+        $selection=@($ast.FindAll({param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and
+            $node.Extent.Text.StartsWith("if (`$Role -eq 'master' -and -not `$Upgrade -and -not `$AdoptConfig -and -not `$WithAgent")
+        },$true))
+        Assert ($selection.Count -eq 1) 'Local Agent choice is ambiguous.'
+        $choice=[ScriptBlock]::Create($selection[0].Extent.Text)
+        $Role='master'; $Yes=$true; $Upgrade=$false; $AdoptConfig=''; $WithAgent=$false; $WithoutAgent=$false
+        . $choice
+        Assert $WithAgent 'Fresh noninteractive Master omitted its default Agent.'
+        $WithAgent=$false; $Upgrade=$true
+        . $choice
+        Assert (-not $WithAgent) 'Upgrade unexpectedly added an Agent.'
+        $Upgrade=$false; $AdoptConfig='retained-config.json'
+        . $choice
+        Assert (-not $WithAgent) 'Data recovery unexpectedly added an Agent.'
+        $AdoptConfig=''; $WithoutAgent=$true
+        . $choice
+        Assert (-not $WithAgent) 'Explicit Master-only selection was ignored.'
+    }
+    Check 'local Agent root follows the selected Master instead of another default cluster' {
+        $default='C:\ProgramData\OSS Transfer'
+        $legacy='C:\Program Files\OSS Transfer\master'
+        Assert ((Resolve-LocalAgentRoot $default $false 'D:\cluster\master\bin' $legacy) -ceq 'D:\cluster') 'Custom Master root was ignored.'
+        Assert ((Resolve-LocalAgentRoot $default $false 'D:\tools\master-bin' $legacy) -ceq 'D:\tools\oss-transfer-local-agent') 'Flat custom Master used the default cluster.'
+        Assert ((Resolve-LocalAgentRoot 'E:\explicit' $true 'D:\cluster\master\bin' $legacy) -ceq 'E:\explicit') 'Explicit root was ignored.'
+        Assert ((Resolve-LocalAgentRoot $default $false $legacy $legacy) -ceq $default) 'Legacy layout changed root.'
+        Assert ((Resolve-LocalAgentRoot $default $false ($default+'\master\bin') $legacy) -ceq $default) 'Default layout changed root.'
+    }
+    Check 'local Agent uses the published Master origin including IPv6' {
+        $data=Join-Path $work 'published-master'
+        [IO.Directory]::CreateDirectory($data) | Out-Null
+        $connection=Join-Path $data 'cli-cluster.json'
+        foreach ($origin in @('http://[::1]:1698','http://127.0.0.1:1685','http://10.1.0.43:1688')) {
+            [IO.File]::WriteAllText($connection,(@{role='master';masterUrl=$origin}|ConvertTo-Json))
+            Assert ((Read-PublishedMasterOrigin $data) -ceq $origin) 'Installer guessed a different Master origin.'
+            Assert (Test-MasterPackageUrl ($origin+'/api/agents/bootstrap/once/files') $origin) 'Published origin was rejected for package download.'
+        }
+        [IO.File]::WriteAllText($connection,'{"role":"agent","masterUrl":"http://127.0.0.1:1685"}')
+        Reject { Read-PublishedMasterOrigin $data } 'not published correctly'
+    }
+    Check 'Master downloads stay inside the selected invitation' {
+        $origin = 'http://10.1.0.43:1688'
+        $source = $origin+'/api/agents/bootstrap/abc_DEF-123/files'
+        Assert (Test-MasterPackageUrl $source $origin) 'Private Master URL was rejected.'
+        Assert (Test-ReleaseDownloadUrl ($source+'/Install.ps1') $source $origin) 'Master installer download was rejected.'
+        foreach ($other in @('http://10.1.0.44:1688','http://10.1.0.43:1685','https://10.1.0.43:1688','http://user:pass@10.1.0.43:1688')) {
+            Assert (-not (Test-MasterPackageUrl ($other+'/api/agents/bootstrap/abc/files') $origin)) 'Another origin was trusted.'
+        }
+        foreach ($other in @($origin+'/other/files', $source+'?token=other', $source+'#fragment', $source+'/../other')) {
+            Assert (-not (Test-MasterPackageUrl $other $origin)) 'Invalid package source was trusted.'
+        }
+        foreach ($target in @('https://elsewhere.example/Install.ps1', $origin+'/api/agents/bootstrap/other/files/Install.ps1', $source+'/../Install.ps1', $source+'/folder/Install.ps1')) {
+            Assert (-not (Test-ReleaseDownloadUrl $target $source $origin)) 'Invitation download escaped its source.'
+        }
+        Assert (Test-ReleaseDownloadUrl 'https://github.com/file.zip' 'https://mirror.example/v4.1.21' '') 'Original HTTPS source stopped working.'
+    }
     Check 'startup commit is atomic and failures only pause scan cleanup' {
         $script:readyFile = Join-Path $work 'ready'
         $script:launchId = 'a' * 64
@@ -412,11 +472,31 @@ if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was chan
         $manifest=Get-Content -LiteralPath (Join-Path $package 'manifest.tsv')
         Assert (@($manifest | Where-Object { $_.StartsWith("file`t"+"windows`t"+"amd64`t") }).Count -eq 3) 'Package roles missing.'
         Assert (@($manifest | Where-Object { $_ -ceq "commit`t$fullCommit" }).Count -eq 1) 'Manifest commit missing.'
-        Assert (@(Get-ChildItem -LiteralPath $package).Count -eq 2) 'Preflight unpacked arbitrary members.'
+        Assert (@($manifest | Where-Object { $_.StartsWith("asset`t") }).Count -eq 3) 'Pinned Agent installer assets missing.'
+        Assert (@(Get-ChildItem -LiteralPath $package).Count -eq 5) 'Preflight added unexpected files.'
     }
     Check 'outer checksum mismatch refuses before ZIP parsing' {
         $release=New-TestArchive; $release.Hash='0'*64
         Reject { New-GitHubPackage $release (Join-Path $work 'bad-outer') } 'Archive checksum mismatch'
+    }
+    Check 'Master caches supplied platforms and rejects altered installers or archives' {
+        $release=New-TestArchive
+        $PackageDir=Join-Path $work 'cache-source'
+        New-GitHubPackage $release $PackageDir
+        $foreign=Join-Path $PackageDir 'oss-transfer-linux-arm64.tar.gz'
+        [IO.File]::WriteAllText($foreign,'other-platform-archive')
+        $foreignHash=(Get-FileHash -LiteralPath $foreign -Algorithm SHA256).Hash.ToLowerInvariant()
+        $foreignSize=(Get-Item -LiteralPath $foreign).Length
+        Add-Content -LiteralPath (Join-Path $PackageDir 'manifest.tsv') -Value "archive`tlinux`tarm64`toss-transfer-linux-arm64.tar.gz`t$foreignHash`t$foreignSize"
+        $Role='master'; $manifest=Join-Path $PackageDir 'manifest.tsv'; $rows=@(Get-Content -LiteralPath $manifest)
+        $archiveName='oss-transfer-windows-amd64.zip'; $archivePath=Join-Path $PackageDir $archiveName
+        Prepare-MasterPackages
+        Assert (Test-Path -LiteralPath (Join-Path $script:masterPackageStage 'Install.ps1')) 'Windows installer was not cached.'
+        Assert (Test-Path -LiteralPath (Join-Path $script:masterPackageStage 'oss-transfer-linux-arm64.tar.gz')) 'Another supplied platform was not cached.'
+        [IO.File]::WriteAllText($foreign,'tampered')
+        Reject { Prepare-MasterPackages } 'Cached archive checksum mismatch'
+        [IO.File]::WriteAllText((Join-Path $PackageDir 'Install.ps1'),'tampered')
+        Reject { Prepare-MasterPackages } 'Installer checksum mismatch'
     }
     foreach ($case in @(@('platform','version, commit or platform'),@('commit','version, commit or platform'),@('checksum-duplicate','Duplicate package checksum'),@('binary','binary checksum'),@('missing','must occur once'),@('symlink','regular archive member'),@('duplicate','must occur once'))) {
         Check "reject archive $($case[0])" {

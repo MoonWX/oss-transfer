@@ -60,6 +60,7 @@ export default function AgentInvitationDialog({
   const [masterUrl, setMasterUrl] = useState(() => window.location.origin);
   const [invitation, setInvitation] = useState<AgentInvitation | null>(null);
   const [tab, setTab] = useState(0);
+  const [upstream, setUpstream] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef<AbortController | null>(null);
@@ -152,6 +153,7 @@ export default function AgentInvitationDialog({
       )
         throw new Error(t("加入指令不完整，请重新生成。"));
       setTab(0);
+      setUpstream(false);
       setInvitation(next);
     } catch (failure) {
       if (!controller.signal.aborted)
@@ -174,8 +176,13 @@ export default function AgentInvitationDialog({
         ? "Linux / macOS / FreeBSD"
         : t("传统部署"),
       command: invitation?.traditionalCommand,
+      upstreamCommand: invitation?.upstreamTraditionalCommand,
     },
-    { label: "Windows", command: invitation?.windowsCommand },
+    {
+      label: "Windows",
+      command: invitation?.windowsCommand,
+      upstreamCommand: invitation?.upstreamWindowsCommand,
+    },
     {
       label: t("直接运行"),
       command: invitation?.traditionalCommand
@@ -189,9 +196,14 @@ export default function AgentInvitationDialog({
     ): item is {
       label: string;
       command: string;
+      upstreamCommand?: string;
     } => !!item.command,
   );
-  const command = methods[tab]?.command || "";
+  const method = methods[tab];
+  const command =
+    (upstream && method?.upstreamCommand
+      ? method.upstreamCommand
+      : method?.command) || "";
   const expiry = invitation ? new Date(invitation.expiresAt) : null;
   return (
     <Dialog
@@ -280,6 +292,14 @@ export default function AgentInvitationDialog({
                 >
                   {t("复制指令")}
                 </Button>
+                {method?.upstreamCommand && (
+                  <Button
+                    onClick={() => setUpstream((value) => !value)}
+                    sx={{ mt: 1.5, ml: 1 }}
+                  >
+                    {upstream ? t("改从 Master 下载") : t("改用公网下载")}
+                  </Button>
+                )}
               </Box>
               <Typography variant="body2" color="text.secondary">
                 {expiry && !Number.isNaN(expiry.getTime())

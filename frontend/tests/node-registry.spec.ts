@@ -5,6 +5,8 @@ import type { AgentInvitation } from "../src/lib/nodeRegistry";
 const joinUrl = "https://transfer.example/api/agents/bootstrap/test-once";
 const traditionalCommand = `curl -fsSL '${joinUrl}' | bash`;
 const windowsCommand = `irm '${joinUrl}?platform=windows' | iex`;
+const upstreamTraditionalCommand = `curl -fsSL '${joinUrl}?source=upstream' | bash`;
+const upstreamWindowsCommand = `irm '${joinUrl}?platform=windows&source=upstream' | iex`;
 const nativeCommand = `./oss-transfer-agent --join-url '${joinUrl}'`;
 const dockerCommand = `curl -fsSL '${joinUrl}?method=compose' | bash`;
 
@@ -196,6 +198,8 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     nativeAgent: { available: true },
     windowsCommand,
     nativeCommand,
+    upstreamTraditionalCommand,
+    upstreamWindowsCommand,
   });
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
@@ -217,7 +221,31 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   await expect(
     dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
   ).toHaveValue(traditionalCommand);
+  await dialog
+    .getByRole("button", { name: "改用公网下载", exact: true })
+    .click();
+  await expect(
+    dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
+  ).toHaveValue(upstreamTraditionalCommand);
+  await dialog
+    .getByRole("button", { name: "改从 Master 下载", exact: true })
+    .click();
+  await expect(
+    dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
+  ).toHaveValue(traditionalCommand);
   await dialog.getByRole("tab", { name: "Windows", exact: true }).click();
+  await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
+    windowsCommand,
+  );
+  await dialog
+    .getByRole("button", { name: "改用公网下载", exact: true })
+    .click();
+  await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
+    upstreamWindowsCommand,
+  );
+  await dialog
+    .getByRole("button", { name: "改从 Master 下载", exact: true })
+    .click();
   await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
     windowsCommand,
   );
@@ -225,6 +253,12 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     dialog.getByRole("tab", { name: "直接运行", exact: true }),
   ).toHaveCount(0);
   await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
+  await expect(dialog.getByLabel("Docker 指令", { exact: true })).toHaveValue(
+    dockerCommand,
+  );
+  await expect(
+    dialog.getByRole("button", { name: /改用公网下载|改从 Master 下载/ }),
+  ).toHaveCount(0);
   await dialog
     .getByRole("tab", { name: "Linux / macOS / FreeBSD", exact: true })
     .click();

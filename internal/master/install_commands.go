@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -100,10 +101,14 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 	}
 	link := masterURL + "/api/agents/bootstrap/" + invite.Token
 	data := map[string]any{"id": tokenKey(invite.Token), "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": link, "nativeAgent": map[string]any{"available": false}, "nativeCommand": "./oss-transfer-agent --join-url " + shellQuote(link)}
-	if s.agentReleaseURL() != "" {
+	if s.agentReleaseURL() != "" || s.cachedAgentPackages() {
 		data["nativeAgent"] = map[string]any{"available": true}
 		data["traditionalCommand"] = bootstrapCommand(link)
 		data["windowsCommand"] = "irm " + psQuote(link+"?platform=windows") + " | iex"
+	}
+	if s.agentReleaseURL() != "" {
+		data["upstreamTraditionalCommand"] = bootstrapCommand(link + "?source=upstream")
+		data["upstreamWindowsCommand"] = "irm " + psQuote(link+"?platform=windows&source=upstream") + " | iex"
 	}
 	if s.options.AgentDockerImage != "" {
 		data["dockerCommand"] = bootstrapCommand(link + "?method=compose")
@@ -112,8 +117,9 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 }
 func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	method := r.URL.Query().Get("method")
+	source := r.URL.Query().Get("source")
 	windows := r.URL.Query().Get("platform") == "windows"
-	if method != "" && method != "native" && method != "compose" || windows && method == "compose" {
+	if method != "" && method != "native" && method != "compose" || windows && method == "compose" || source != "" && source != "upstream" {
 		fail(w, http.StatusBadRequest, "Unsupported Agent installation method")
 		return
 	}
@@ -121,7 +127,7 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusServiceUnavailable, "Agent container image is not configured")
 		return
 	}
-	if s.agentReleaseURL() == "" && method != "compose" {
+	if s.agentReleaseURL() == "" && method != "compose" && !s.cachedAgentPackages() {
 		fail(w, 503, "Agent release artifacts are not configured")
 		return
 	}
@@ -149,7 +155,23 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if method != "compose" && source != "upstream" {
+		root, _, cacheErr := s.openAgentPackages()
+		if cacheErr == nil {
+			root.Close()
+			s.masterAgentBootstrap(w, windows, token, masterURL)
+			return
+		}
+		if !errors.Is(cacheErr, os.ErrNotExist) {
+			fail(w, http.StatusServiceUnavailable, "Master Agent packages are invalid")
+			return
+		}
+	}
 	if s.agentReleaseURL() == "" {
+		if method != "compose" {
+			fail(w, http.StatusServiceUnavailable, "Upstream Agent artifacts are not configured")
+			return
+		}
 		s.containerAgentBootstrap(w, token, masterURL)
 		return
 	}
@@ -168,6 +190,42 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent %s --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), installerOptions, shellQuote(s.agentReleaseURL()), shellQuote(masterURL))
+}
+
+// All installer resources come from the same Master endpoint as enrollment.
+// The invitation is consumed only after downloads and local checks complete.
+func (s *Server) masterAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL string) {
+	releaseURL := masterURL + "/api/agents/bootstrap/" + token + "/files"
+	if windows {
+		fmt.Fprintf(w, `$ErrorActionPreference = 'Stop'
+$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
+$release = %s
+$architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+if ($architecture -notin @('amd64','arm64','x64')) { throw 'Unsupported Agent architecture.' }
+if ($architecture -eq 'x64') { $architecture = 'amd64' }
+try {
+  Invoke-RestMethod -Uri ($release + '/manifest.tsv?target=windows-' + $architecture) | Out-Null
+  Invoke-WebRequest -UseBasicParsing -Uri ($release + '/Install.ps1') -OutFile $installer
+  $env:TRANSFER_JOIN_TOKEN = %s
+  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -ReleaseUrl $release -MasterUrl %s -Yes
+} finally {
+  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item $installer -ErrorAction SilentlyContinue
+}
+`, psQuote(releaseURL), psQuote(token), psQuote(masterURL))
+		return
+	}
+	fmt.Fprintf(w, `#!/usr/bin/env bash
+set -euo pipefail
+installer=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+release=%s
+case "$(uname -s)" in Linux) platform=linux;; Darwin) platform=darwin;; FreeBSD) platform=freebsd;; *) echo 'Unsupported Agent system.' >&2; exit 1;; esac
+case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; armv7l|armv7) arch=armv7;; riscv64) arch=riscv64;; loongarch64|loong64) arch=loong64;; *) echo 'Unsupported Agent architecture.' >&2; exit 1;; esac
+curl -fsSL "$release/manifest.tsv?target=$platform-$arch" -o /dev/null
+curl -fsSL "$release/install.sh" -o "$installer"
+printf '%%s' %s | bash "$installer" --role agent --method native --release-url "$release" --master-url %s --token-stdin --yes "$@"
+`, shellQuote(releaseURL), shellQuote(token), shellQuote(masterURL))
 }
 
 func (s *Server) containerAgentBootstrap(w http.ResponseWriter, token, masterURL string) {

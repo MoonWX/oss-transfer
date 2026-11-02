@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by the standalone Unix installers. Keep this helper dependency-free.
 # GitHub supplies an authenticated SHA-256 digest for each uploaded release asset:
 # https://docs.github.com/en/rest/releases/assets#get-a-release-asset
@@ -137,7 +138,7 @@ transfer_source_member() {
 transfer_github_prepare() (
   set -o pipefail
   local requested=${1#v} platform=$2 arch=$3 destination=$4
-  local name root api tag digest size url actual version commit native_hash native_size role expected length payload
+  local name root api tag digest size url actual commit native_hash native_size role expected length payload installer installer_path
   case "$platform/$arch" in
     linux/amd64|linux/arm64|linux/armv7|linux/riscv64|linux/loong64|darwin/amd64|darwin/arm64|freebsd/amd64|freebsd/arm64) ;;
     *) transfer_source_error 'Unsupported GitHub release platform'; return 1;;
@@ -182,17 +183,25 @@ transfer_github_prepare() (
     printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$transfer_download_work/manifest.tsv" || return 1
   done
   printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$transfer_download_work/manifest.tsv" || return 1
-  # Older releases stored the installer under deploy/go. Keep both lookups
-  # pinned to the verified archive commit; never substitute the current branch.
-  if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/native/install.sh" "$transfer_download_work/native-install.sh" 1048576; then
-    transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/install.sh" "$transfer_download_work/native-install.sh" 1048576 || { transfer_source_error 'Cannot fetch the versioned native installer'; return 1; }
-  fi
-  [[ -s "$transfer_download_work/native-install.sh" ]] || { transfer_source_error 'Empty native installer'; return 1; }
-  native_hash=$(transfer_source_sha256 "$transfer_download_work/native-install.sh") || return 1
-  native_size=$(wc -c < "$transfer_download_work/native-install.sh" | tr -d '[:space:]') || return 1
-  printf 'asset\tnative-install.sh\t%s\t%s\n' "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
-  for name in "$name" manifest.tsv native-install.sh; do
+  # Keep all installers at the verified archive commit. A Master retains these
+  # files to install Agents without requiring their hosts to reach the internet.
+  for installer in native-install.sh install.sh Install.ps1; do
+    case "$installer" in
+      native-install.sh) installer_path=deploy/native/install.sh;;
+      Install.ps1) installer_path=deploy/native/Install.ps1;;
+      *) installer_path=install.sh;;
+    esac
+    if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/$installer_path" "$transfer_download_work/$installer" 1048576; then
+      [[ "$installer_path" == deploy/native/* ]] && transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/${installer_path#deploy/native/}" "$transfer_download_work/$installer" 1048576 || { transfer_source_error "Cannot fetch the versioned native installer: $installer"; return 1; }
+    fi
+    [[ -s "$transfer_download_work/$installer" ]] || { transfer_source_error "Empty installer: $installer"; return 1; }
+    native_hash=$(transfer_source_sha256 "$transfer_download_work/$installer") || return 1
+    native_size=$(wc -c < "$transfer_download_work/$installer" | tr -d '[:space:]') || return 1
+    printf 'asset\t%s\t%s\t%s\n' "$installer" "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
+  done
+  for name in "$name" manifest.tsv native-install.sh install.sh Install.ps1; do
     [[ ! -e "$destination/$name" && ! -L "$destination/$name" ]] || { transfer_source_error 'Package directory already contains release files'; return 1; }
   done
-  mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$destination/"
+  mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$transfer_download_work/install.sh" "$transfer_download_work/Install.ps1" "$destination/"
+
 )

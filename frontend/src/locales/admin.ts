@@ -1,4 +1,12 @@
 export const adminMessages: Record<string, { en: string; ja: string }> = {
+  "改从 Master 下载": {
+    en: "Download from Master",
+    ja: "Master からダウンロード",
+  },
+  改用公网下载: {
+    en: "Download from public sources",
+    ja: "公開サイトからダウンロード",
+  },
   已清理: { en: "Cleaned up", ja: "クリーンアップ済み" },
   "已受理清理；已移除节点的本地历史保留：{value1}。": {
     en: "Cleanup accepted. Local history remains on removed nodes: {value1}.",

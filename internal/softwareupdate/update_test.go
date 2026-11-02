@@ -168,10 +168,8 @@ func releaseServer(t *testing.T, archive []byte, tamper bool) (*client, *[]strin
 	paths := []string{}
 	var mu sync.Mutex
 	archiveName := "oss-transfer-" + strings.ReplaceAll(platform(), "/", "-") + ".tar.gz"
-	installerName := "native-install.sh"
 	if runtime.GOOS == "windows" {
 		archiveName = strings.TrimSuffix(archiveName, ".tar.gz") + ".zip"
-		installerName = "Install.ps1"
 	}
 	installer := []byte("# fixture native installer\n")
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -182,14 +180,14 @@ func releaseServer(t *testing.T, archive []byte, tamper bool) (*client, *[]strin
 		case r.URL.Path == "/cdn-cgi/trace":
 			_, _ = io.WriteString(w, "loc=CN\n")
 		case strings.HasSuffix(r.URL.Path, "release.json"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"format": "oss-transfer-release-v1", "version": "1.0.1", "tag": "v1.0.1", "commit": testCommit, "assets": []asset{{Name: archiveName, Size: int64(len(archive)), SHA256: digest(archive)}, {Name: installerName, Size: int64(len(installer)), SHA256: digest(installer)}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"format": "oss-transfer-release-v1", "version": "1.0.1", "tag": "v1.0.1", "commit": testCommit, "assets": []asset{{Name: archiveName, Size: int64(len(archive)), SHA256: digest(archive)}, {Name: "native-install.sh", Size: int64(len(installer)), SHA256: digest(installer)}, {Name: "install.sh", Size: int64(len(installer)), SHA256: digest(installer)}, {Name: "Install.ps1", Size: int64(len(installer)), SHA256: digest(installer)}}})
 		case strings.HasSuffix(r.URL.Path, archiveName):
 			if tamper {
 				archive = bytes.Clone(archive)
 				archive[len(archive)-1] ^= 1
 			}
 			_, _ = w.Write(archive)
-		case strings.HasSuffix(r.URL.Path, installerName):
+		case strings.HasSuffix(r.URL.Path, "install.sh"), strings.HasSuffix(r.URL.Path, "Install.ps1"):
 			_, _ = w.Write(installer)
 		default:
 			http.NotFound(w, r)
@@ -364,6 +362,11 @@ func TestHelperStagesBeforeInstallerAndNeverReportsFailedUpgradeAsSuccess(t *tes
 				}
 				if !strings.Contains(string(manifest), "commit\t"+testCommit) || !strings.Contains(string(manifest), "version\t1.0.1") {
 					t.Fatal(string(manifest))
+				}
+				for _, name := range []string{"install.sh", "native-install.sh", "Install.ps1"} {
+					if _, err := os.Stat(filepath.Join(stage, name)); err != nil || !strings.Contains(string(manifest), "asset\t"+name+"\t") {
+						t.Fatalf("Master upgrade package cannot serve Agent installer %s: %v", name, err)
+					}
 				}
 				if mode == "installer failure" {
 					_, _ = io.WriteString(cmd.Stderr, "Fixture rollback completed\n")

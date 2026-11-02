@@ -189,9 +189,9 @@ func (c *client) prepareFrom(ctx context.Context, stage, version, target, source
 		return "", err
 	}
 	name := "oss-transfer-" + strings.ReplaceAll(target, "/", "-")
-	ext, installer, sourcePath := ".tar.gz", "native-install.sh", "deploy/native/install.sh"
+	ext := ".tar.gz"
 	if strings.HasPrefix(target, "windows/") {
-		ext, installer, sourcePath = ".zip", "Install.ps1", "deploy/native/Install.ps1"
+		ext = ".zip"
 	}
 	archive, err := release.asset(name + ext)
 	if err != nil {
@@ -208,33 +208,44 @@ func (c *client) prepareFrom(ctx context.Context, stage, version, target, source
 	if release.Commit != "" && release.Commit != identity.commit {
 		return "", errors.New("Release commit differs from archive")
 	}
-	installerPath := filepath.Join(stage, installer)
-	var installerAsset asset
-	if source == "jdoss" {
-		installerAsset, err = release.asset(installer)
+	installerAssets := make([]asset, 0, 3)
+	for _, installer := range []string{"native-install.sh", "install.sh", "Install.ps1"} {
+		installerPath := filepath.Join(stage, installer)
+		var installerAsset asset
+		if source == "jdoss" {
+			installerAsset, err = release.asset(installer)
+			if err != nil {
+				return "", err
+			}
+			if installerAsset.Size > 1<<20 {
+				return "", errors.New("Installer is too large")
+			}
+			err = c.download(ctx, installerAsset, installerPath)
+		} else {
+			path := installer
+			if installer == "native-install.sh" {
+				path = "deploy/native/install.sh"
+			}
+			if installer == "Install.ps1" {
+				path = "deploy/native/Install.ps1"
+			}
+			file, createErr := os.OpenFile(installerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if createErr != nil {
+				return "", createErr
+			}
+			hash := sha256.New()
+			var n int64
+			n, err = c.fetch(ctx, "https://raw.githubusercontent.com/MoonWX/oss-transfer/"+identity.commit+"/"+path, 1<<20, io.MultiWriter(file, hash))
+			err = errors.Join(err, file.Close())
+			installerAsset = asset{Name: installer, Size: n, SHA256: hex.EncodeToString(hash.Sum(nil))}
+		}
 		if err != nil {
 			return "", err
 		}
-		if installerAsset.Size > 1<<20 {
-			return "", errors.New("Installer is too large")
+		if installerAsset.Size == 0 {
+			return "", errors.New("Empty native installer")
 		}
-		err = c.download(ctx, installerAsset, installerPath)
-	} else {
-		file, createErr := os.OpenFile(installerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if createErr != nil {
-			return "", createErr
-		}
-		hash := sha256.New()
-		var n int64
-		n, err = c.fetch(ctx, "https://raw.githubusercontent.com/MoonWX/oss-transfer/"+identity.commit+"/"+sourcePath, 1<<20, io.MultiWriter(file, hash))
-		err = errors.Join(err, file.Close())
-		installerAsset = asset{Name: installer, Size: n, SHA256: hex.EncodeToString(hash.Sum(nil))}
-	}
-	if err != nil {
-		return "", err
-	}
-	if installerAsset.Size == 0 {
-		return "", errors.New("Empty native installer")
+		installerAssets = append(installerAssets, installerAsset)
 	}
 	parts := strings.Split(target, "/")
 	var manifest strings.Builder
@@ -247,7 +258,10 @@ func (c *client) prepareFrom(ctx context.Context, stage, version, target, source
 		file := identity.files["oss-transfer-"+role+suffix]
 		fmt.Fprintf(&manifest, "file\t%s\t%s\t%s\toss-transfer-%s-%s-%s%s\t%s\t%d\n", parts[0], parts[1], role, role, parts[0], parts[1], suffix, file.SHA256, file.Size)
 	}
-	fmt.Fprintf(&manifest, "archive\t%s\t%s\t%s\t%s\t%d\nasset\t%s\t%s\t%d\n", parts[0], parts[1], archive.Name, archive.SHA256, archive.Size, installer, installerAsset.SHA256, installerAsset.Size)
+	fmt.Fprintf(&manifest, "archive\t%s\t%s\t%s\t%s\t%d\n", parts[0], parts[1], archive.Name, archive.SHA256, archive.Size)
+	for _, installerAsset := range installerAssets {
+		fmt.Fprintf(&manifest, "asset\t%s\t%s\t%d\n", installerAsset.Name, installerAsset.SHA256, installerAsset.Size)
+	}
 	if err = os.WriteFile(filepath.Join(stage, "manifest.tsv"), []byte(manifest.String()), 0600); err != nil {
 		return "", err
 	}

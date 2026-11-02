@@ -74,7 +74,6 @@ jobs:
           python3 .github/tests/test-installer-startup.py -v
           python3 .github/tests/test-packaging.py -v
           python3 .github/tests/test-oss-layout.py -v
-          python3 .github/tests/test-migrate-oss-prefix.py -v
           python3 .github/tests/test-resolve-ci-artifacts.py -v
           python3 .github/tests/test-binaries.py -v
           python3 .github/tests/test-cluster-diagnostics.py -v

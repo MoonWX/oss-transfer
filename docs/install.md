@@ -1,0 +1,74 @@
+# Install on other systems
+
+For Linux with systemd, use the [installation command](../README.md#install-the-master). The steps below cover other systems and custom paths. For hosts without internet access, use [offline installation](offline-install.md).
+
+## macOS
+
+Install a service for the current user:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh -o install.sh
+bash install.sh --role master --user
+```
+
+For a system service, use `sudo bash install.sh --role master` instead. The installer prints the service name and paths.
+
+## Windows
+
+Run in Administrator PowerShell:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/native/Install.ps1 -OutFile Install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master
+```
+
+In mainland China, the script is also available at `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/Install.ps1`.
+
+## FreeBSD
+
+Run as root:
+
+```sh
+pkg install -y bash curl
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh -o install.sh
+bash install.sh --role master
+```
+
+For all systems, sign in with the `admin` password printed by the installer. Add Agents from **Execution nodes → Add node**, choosing the operating system of each host.
+
+## Paths and ports
+
+Default Linux locations:
+
+| | Master | Agent |
+| --- | --- | --- |
+| Service | `oss-transfer-master` | `oss-transfer-agent` |
+| Programs | `/opt/oss-transfer/master` | `/opt/oss-transfer/agent` |
+| Configuration | `/etc/oss-transfer/master/service.json` | `/etc/oss-transfer/agent/service.json` |
+| Data | `/var/lib/oss-transfer/master` | `/var/lib/oss-transfer/agent` |
+| Upgrade backups | `/var/backups/oss-transfer/master` | `/var/backups/oss-transfer/agent` |
+
+The default Master port is `1685`. Change it with `--port 1785` in `install.sh`, or `-Listen '0.0.0.0:1785'` in `Install.ps1`. Use `--install-dir`, `--config-dir` or `--data-dir` for custom locations; these directories must not contain one another. Run `bash install.sh --help` for the options, or `Get-Help .\Install.ps1` on Windows. Upgrades reuse the installed paths.
+
+On Linux, check a service and its log with:
+
+```sh
+sudo systemctl status oss-transfer-master
+sudo tail -n 50 /var/lib/oss-transfer/master/logs/service.log
+```
+
+Replace `master` with `agent` to inspect an Agent. Other systems print their log paths during installation.
+
+## Reverse proxy
+
+Serve the application at the domain root, for example `https://transfer.example.com/`. Add this location to the domain's NGINX server block:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:1685;
+    proxy_set_header Host $http_host;
+    proxy_read_timeout 60s;
+}
+```
+
+Subpaths such as `/transfer/` are unsupported. When adding an Agent, choose a Master URL that the Agent can reach; it may use a private IP while the browser uses the proxy.

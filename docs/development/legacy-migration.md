@@ -101,7 +101,7 @@ The destination contains `master/master.db`, `agents/<instanceId>/agent.db`, the
 
 Each Agent must run on its intended execution host. Copy only its private directory there, preserving the absolute path recorded in `service.json`, directory mode `0700` and file mode `0600`. Keep Master state and raw exports on the Master host. Check that the old local source and target paths still resolve to the intended mounts.
 
-Use the native installer's [adoption flow](../../deploy/native/README.md#register-existing-data-as-a-service) for service registration. The service name and data path must match the generated configuration. For the Master in this example:
+Register the converted data with the installer's `--adopt-config` option. The service name and data path must match the generated configuration. For the Master in this example:
 
 ```sh
 RELEASE_URL=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest
@@ -225,4 +225,4 @@ OSS_TRANSFER_NATIVE_AGENT=/path/to/oss-transfer-agent \
   go test -count=1 ./internal/legacyimport -run '^TestRealV4FinalizedNativeProcesses$' -v
 ```
 
-This test copies the storage fixture, starts the finalized services, signs in with the old password and checks the Agent identity and saved 1 Mbps limit. It raises that isolated test limit through the administrator API, resumes tasks #7 and #8, and hashes all 520 source/target pairs. It also checks the recycle-bin task and reuse of four old successful results. Provider compatibility and performance are tracked separately in the [acceptance inventory](../migration-acceptance.md).
+This test copies the storage fixture, starts the finalized services, signs in with the old password and checks the Agent identity and saved 1 Mbps limit. It raises that isolated test limit through the administrator API, resumes tasks #7 and #8, and hashes all 520 source/target pairs. It also checks the recycle-bin task and reuse of four old successful results. Current release checks are described in the [acceptance guide](../../.github/acceptance/README.md).

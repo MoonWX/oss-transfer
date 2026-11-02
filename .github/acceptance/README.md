@@ -103,4 +103,4 @@ The `local-cli.py` check starts separate installed Master and Agent processes. I
 
 Scenarios write `evidence.json` and sanitized logs under their output directory. Bandwidth tests also save samples; package and image checks record artifact identities. CI retains the uploaded results for seven days.
 
-Performance comparisons are separate from release acceptance. `compare.py` compares a historical V4.0.x JAR package with Go using the same fixture; `cloud-compare.py` adds resource limits for an isolated Linux host. See [the migration record](../../docs/migration-acceptance.md) for measurements and remaining checks.
+`compare.py` compares a V4.0.x JAR package with Go using the same fixture and supplies the real-data migration fixture helper. These optional comparisons are separate from release acceptance.

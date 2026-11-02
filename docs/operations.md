@@ -24,11 +24,30 @@ Wait for active tasks to finish when possible. If you upgrade with tasks running
 
 Online replacement supports managed native installations. The updater verifies the release archive, downloads it before stopping the service, and runs the native installer in a separate process. The installer takes a temporary backup of the programs, configuration, service definition and stopped database. It deletes that backup after the new service passes its health check and confirms the installation. If startup fails, it attempts to restore the previous installation and keeps the recovery files. Agent transfers interrupted by the restart resume after it reconnects.
 
-Backups use the host's [default backup directory](../deploy/native/README.md#change-paths-and-startup-settings), even if an earlier installation saved a shared-storage path. An explicit `--backup-dir` or PowerShell `-BackupDir` selects another directory. Before stopping the service, the installer cleans eligible backups and checks available space. **Upgrade backups → Clean up backups** removes completed upgrade backups; failed backups and older backups without a completion marker are kept. Database backup progress is printed every 10 seconds, including the final disk sync.
+Backups use the host's [default backup directory](install.md#paths-and-ports), even if an earlier installation saved a shared-storage path. An explicit `--backup-dir` or PowerShell `-BackupDir` selects another directory. Before stopping the service, the installer cleans eligible backups and checks available space. **Upgrade backups → Clean up backups** removes completed upgrade backups; failed backups and older backups without a completion marker are kept. Database backup progress is printed every 10 seconds, including the final disk sync.
 
-For a planned downgrade, make a separate backup of each service's programs, configuration and stopped database before upgrading. Successful upgrades do not leave a rollback copy. See [manual recovery](../deploy/native/README.md#recover-from-a-failed-upgrade) if automatic rollback could not finish.
+For a planned downgrade, make a separate backup of each service's programs, configuration and stopped database before upgrading. Successful upgrades do not leave a rollback copy. See [manual recovery](#recover-from-a-failed-upgrade) if automatic rollback could not finish.
 
 The first upgrade from a version without online updates still uses the installation script. Containers use [Docker Compose updates](docker-compose.md); replacing a binary inside a running container would be lost when the container is recreated.
+
+## Recover from a failed upgrade
+
+Use the backup directory printed by the installer. Stop the affected service, then run a Master or Agent binary that can read both the current and backup database formats with `--config <backup-directory>/service.json --restore-state <backup-directory>/database`. Keep `database.key` beside the snapshot when present. The command restores the database to the data directory recorded in the saved configuration. If the installed database has lost its key, restore its matching `master.db.key` or `agent.db.key` from a backup of that same database first.
+
+Restore the saved program, configuration, installation metadata, service definition and CLI to their original locations, then start the service. Transferred files remain where they are. For your own backups, stop the service and copy its configuration and data directory, including `master.db.key` or `agent.db.key`; retain the matching program version for a planned downgrade.
+
+## Reset the administrator password
+
+For a default Linux installation:
+
+```sh
+sudo systemctl stop oss-transfer-master
+sudo /opt/oss-transfer/master/oss-transfer-master \
+  --config /etc/oss-transfer/master/service.json --reset-admin-password
+sudo systemctl start oss-transfer-master
+```
+
+Use the printed password to sign in and choose a new one. On other systems, stop the service and run its Master binary with the same arguments. Use the installation's actual paths if customized.
 
 ## Disconnected nodes
 
@@ -66,9 +85,9 @@ This continues the same traversal; changes behind its saved position may not be 
 
 **运维工具 → 版本更新** 更新 Master 后，在 **执行节点 → 版本更新** 点击“更新全部节点”，即可逐台更新可升级的 Agent。前一台重新连接、版本一致且安装完成后，才更新下一台；失败时停止队列。队列保存在 Master，关闭页面或重启 Master 后继续，也可以单独更新某个节点。原生安装会先下载并校验安装包，再由独立进程运行安装器，临时备份程序、配置、服务定义和已停止的数据库。新服务通过健康检查并确认安装成功后，删除本次备份；启动失败时尝试自动恢复旧安装，并保留恢复文件。Agent 重启导致中断的子任务会在重新连接后恢复。尚不支持在线升级的旧版本需先通过安装脚本升级一次；Docker 部署通过 Compose 更新。
 
-备份默认写入[本机的默认备份目录](../deploy/native/README.md#change-paths-and-startup-settings)，不再沿用历史安装保存的共享存储路径；需要其他位置时，显式传入 `--backup-dir`，PowerShell 使用 `-BackupDir`。安装器在停服务前清理符合条件的旧备份并检查空间，不足时保留运行中的服务。页面的“升级备份 → 清理备份”可删除成功升级留下的备份；失败备份和缺少完成标记的旧备份继续保留。数据库备份每 10 秒显示进度，包括最后的落盘同步。
+备份默认写入[本机的默认备份目录](install.md#paths-and-ports)，不再沿用历史安装保存的共享存储路径；需要其他位置时，显式传入 `--backup-dir`，PowerShell 使用 `-BackupDir`。安装器在停服务前清理符合条件的旧备份并检查空间，不足时保留运行中的服务。页面的“升级备份 → 清理备份”可删除成功升级留下的备份；失败备份和缺少完成标记的旧备份继续保留。数据库备份每 10 秒显示进度，包括最后的落盘同步。
 
-如果计划降级，升级前应另行备份各服务的程序、配置和已停止的数据库；成功升级后不会留下回退副本。自动回滚未完成时，按[手动恢复步骤](../deploy/native/README.md#recover-from-a-failed-upgrade)处理。
+如果计划降级，升级前应另行备份各服务的程序、配置和已停止的数据库；成功升级后不会留下回退副本。自动回滚未完成时，按[手动恢复步骤](#recover-from-a-failed-upgrade)处理。
 
 多节点任务中的 Agent 失联后，未完成子任务会自动交给原先选定的健康节点。参与节点都需要支持任务租约：Master 每 20 秒续期，失联 Agent 在 60 秒授权到期后停止启动新工作并取消当前传输；Master 再等待 10 秒后重新分配。节点回来后，双方都支持恢复隔离机制且共享目录检查通过，才会重新加入。程序先撤销旧执行授权，再发放新一轮授权。旧版 Agent 仍不重新加入该任务。
 

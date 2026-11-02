@@ -651,7 +651,7 @@ rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
                 body = '''set -euo pipefail
 install_dir=$TEST_ROOT/installed; backup_dir=$TEST_BACKUP_OVERRIDE
 role=; service_name=; config_dir=; cli_path=; data_dir=
-platform=linux; upgrade=1; user_service=0; root_dir=/opt/oss-transfer
+platform=linux; upgrade=1; user_service=0; root_dir=/opt/oss-transfer; root_explicit=0
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
 safe_path() { return 0; }
 systemctl() { return 0; }
@@ -662,6 +662,101 @@ if true; then
                                         env=dict(os.environ,TEST_ROOT=str(self.root),TEST_BACKUP_OVERRIDE=override))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), override or '/var/backups/oss-transfer/agent')
+
+
+class UnifiedInstallationRootTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-unified-root-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.cluster = self.root/'custom cluster'
+        self.install = self.cluster/'agent/bin'
+        self.config = self.cluster/'agent/config'
+        self.data = self.cluster/'agent/data'
+        for directory in (self.install, self.config, self.data):
+            directory.mkdir(parents=True)
+        (self.config/'service.json').write_text('{}')
+        binary = self.install/'oss-transfer-agent'
+        binary.write_text('#!/bin/sh\nprintf "dataDirectory\\t%s\\n" "$TEST_DATA"\n')
+        binary.chmod(0o755)
+        self.source = INSTALLER.read_text()
+
+    def upgrade_paths(self, marker=True, platform='linux', user=False, backup='', explicit_root=''):
+        metadata = ('role\tagent\nserviceName\toss-transfer-agent\nconfig\t'+
+                    str(self.config/'service.json')+'\ndataDir\t'+str(self.data)+
+                    '\nbackupDir\t/mnt/cfs/old-test-backup\n')
+        if marker:
+            metadata += 'rootDir\t'+str(self.cluster if marker is True else marker)+'\n'
+        (self.install/'install.tsv').write_text(metadata)
+        saved = self.source[self.source.index('  installed_metadata=$install_dir/install.tsv'):self.source.index('\nrole=${role:-master}')]
+        defaults = self.source[self.source.index('\nrole=${role:-master}'):self.source.index('\nfor path in "$install_dir"')]
+        body = '''set -euo pipefail
+install_dir=$TEST_INSTALL; backup_dir=$TEST_BACKUP
+role=; service_name=; config_dir=; cli_path=; data_dir=
+platform=$TEST_PLATFORM; upgrade=1; user_service=$TEST_USER
+root_dir=$TEST_DEFAULT_ROOT; root_explicit=$TEST_ROOT_EXPLICIT
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+safe_path() { return 0; }
+systemctl() { return 0; }
+launchctl() { return 0; }
+metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
+if true; then
+''' + saved + defaults + '\nprintf "%s\\n%s\\n%s\\n%s\\n" "$root_dir" "$backup_dir" "$config_dir" "$data_dir"\n'
+        default = '/opt/oss-transfer' if platform == 'linux' else '/Library/Application Support/OSS Transfer'
+        result = subprocess.run(['bash', '-c', body], text=True, capture_output=True, timeout=5,
+                                env=dict(os.environ, TEST_INSTALL=str(self.install), TEST_DATA=str(self.data),
+                                         TEST_BACKUP=str(backup), TEST_PLATFORM=platform, TEST_USER=str(int(user)),
+                                         TEST_DEFAULT_ROOT=str(explicit_root or default),
+                                         TEST_ROOT_EXPLICIT=str(int(bool(explicit_root)))))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.splitlines()
+
+    def test_discovered_managed_root_keeps_configuration_data_and_backup_together(self):
+        for platform, user in (('linux', False), ('darwin', False), ('darwin', True)):
+            with self.subTest(platform=platform, user=user):
+                self.assertEqual(self.upgrade_paths(platform=platform, user=user), [
+                    str(self.cluster), str(self.cluster/'agent/backups'), str(self.config), str(self.data)])
+
+    def test_legacy_lookalike_without_root_marker_uses_local_backup_default(self):
+        for platform, expected in (('linux', '/var/backups/oss-transfer/agent'),
+                                   ('darwin', '/Library/Application Support/OSS Transfer/agent/backups')):
+            with self.subTest(platform=platform):
+                paths = self.upgrade_paths(marker=False, platform=platform)
+                self.assertNotEqual(paths[0], str(self.cluster))
+                self.assertEqual(paths[1:], [expected, str(self.config), str(self.data)])
+
+    def test_wrong_root_marker_is_not_used(self):
+        paths = self.upgrade_paths(marker=self.root/'other cluster')
+        self.assertEqual(paths, ['/opt/oss-transfer', '/var/backups/oss-transfer/agent',
+                                 str(self.config), str(self.data)])
+
+    def test_explicit_overrides_take_priority_over_managed_root_defaults(self):
+        backup = self.root/'selected backup'
+        paths = self.upgrade_paths(backup=backup)
+        self.assertEqual(paths[:2], [str(self.cluster), str(backup)])
+        selected = self.root/'selected root'
+        paths = self.upgrade_paths(explicit_root=selected)
+        self.assertEqual(paths[0], str(selected))
+
+    def test_metadata_marks_only_an_actual_unified_layout(self):
+        start = self.source.index("printf 'role\\t%s\\nserviceName")
+        end = self.source.index('\nif [[ "$role" == agent && "$existed"', start)
+        writer = self.source[start:end]
+        for split in ('', 'install', 'config', 'data'):
+            with self.subTest(split=split):
+                metadata = self.root/'generated.tsv'
+                body = '''set -euo pipefail
+role=agent; service_name=test-agent; version=4.1.22
+root_dir=$TEST_ROOT; install_dir=$root_dir/agent/bin; config_dir=$root_dir/agent/config; data_dir=$root_dir/agent/data
+backup_dir=/explicit/backup; unit=/unused/test.service; cli_path=/unused/oss-transfer-cli
+metadata=$TEST_METADATA
+case "$TEST_SPLIT" in install) install_dir=/legacy/bin;; config) config_dir=/legacy/config;; data) data_dir=/legacy/data;; esac
+config=$config_dir/service.json
+''' + writer
+                result = subprocess.run(['bash', '-c', body], text=True, capture_output=True, timeout=5,
+                                        env=dict(os.environ, TEST_ROOT=str(self.cluster), TEST_METADATA=str(metadata), TEST_SPLIT=split))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual('rootDir\t'+str(self.cluster)+'\n' in metadata.read_text(), not bool(split))
 
 
 class ReinstallationTests(unittest.TestCase):

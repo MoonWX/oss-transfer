@@ -270,6 +270,18 @@ if (-not $ReleaseUrl -and -not $PackageDir) {
     } else { $ReleaseUrl = $resolved.ReleaseUrl }
 }
 
+function Read-InstallationRoot($Record,[string]$Directory) {
+    if (-not $Record.PSObject.Properties['rootDir'] -or -not $Record.rootDir) { return '' }
+    $savedRoot = [string]$Record.rootDir
+    $roleBase = Join-Path $savedRoot $Record.role
+    if (-not $Directory.Equals((Join-Path $roleBase 'bin'),[StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$Record.config).Equals((Join-Path (Join-Path $roleBase 'config') 'service.json'),[StringComparison]::OrdinalIgnoreCase) -or
+        -not $Record.PSObject.Properties['dataDir'] -or
+        -not ([string]$Record.dataDir).Equals((Join-Path $roleBase 'data'),[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Recorded installation root does not match its configuration and data directories.'
+    }
+    return $savedRoot
+}
 if ($Upgrade) {
     if (-not $InstallDir) {
         $candidates = @{}
@@ -337,11 +349,12 @@ if ($Upgrade) {
     if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or ((Get-Item -LiteralPath $recordPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'No managed installation found in the selected directory.' }
     $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
     if ($record.role -notin @('master','agent') -or ($Role -and $Role -ne $record.role)) { throw 'Installed role differs from -Role.' }
+    $savedRoot = Read-InstallationRoot $record $InstallDir
+    if (-not $rootExplicit -and $savedRoot) { $RootDir = $savedRoot }
     $Role = $record.role
     if (-not $ServiceName) { $ServiceName = $record.serviceName }
     if (-not $ConfigDir) { $ConfigDir = Split-Path $record.config -Parent }
     if (-not $CliPath -and $record.PSObject.Properties['cliPath']) { $CliPath = $record.cliPath }
-    if (-not $BackupDir -and $record.PSObject.Properties['backupDir']) { $BackupDir = $record.backupDir }
     if (-not $DataDir) {
         if (-not (Test-Path -LiteralPath $record.config -PathType Leaf) -or ((Get-Item -LiteralPath $record.config -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installed configuration is missing or linked.' }
         $savedConfig = Get-Content -LiteralPath $record.config -Raw | ConvertFrom-Json
@@ -376,11 +389,12 @@ if (-not $Upgrade -and -not $AdoptConfig -and (Test-Path -LiteralPath $retainedC
     Write-Host 'Retained configuration found; restoring this installation with its existing data.'
 }
 if ($ServiceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') { throw 'Invalid retained service name.' }
-function Resolve-BackupDirectory([string]$Requested,[string]$RoleName) {
+function Resolve-BackupDirectory([string]$Requested,[string]$RoleName,[string]$InstallationRoot = '') {
     if ($Requested) { return $Requested }
-    return Join-Path (Join-Path $env:ProgramData "OSS Transfer\$RoleName") 'backups'
+    if (-not $InstallationRoot) { $InstallationRoot = Join-Path $env:ProgramData 'OSS Transfer' }
+    return Join-Path (Join-Path $InstallationRoot $RoleName) 'backups'
 }
-if (-not $BackupDir) { $BackupDir = Join-Path $base 'backups' }
+$BackupDir = Resolve-BackupDirectory $BackupDir $Role $RootDir
 if ($Role -eq 'master' -and -not $Upgrade -and -not $AdoptConfig -and -not $WithAgent -and -not $WithoutAgent) {
     if ($Yes) { $WithAgent = $true }
     else { $WithAgent = (Read-Host 'Install an Agent on this host as well? [Y/n]') -notmatch '^[nN]$' }
@@ -953,7 +967,13 @@ try {
     Move-Item -LiteralPath ($CliPath+'.new') -Destination $CliPath -Force
     $cliChanged = $true
     if (-not $existing) { Copy-Item -LiteralPath $freshConfig -Destination $config }
-    Write-UTF8 $metadata (@{role=$Role; serviceName=$ServiceName; config=$config; version=$version; cliPath=$CliPath; backupDir=$BackupDir; dataDir=$DataDir} | ConvertTo-Json)
+    $installationRecord = @{role=$Role; serviceName=$ServiceName; config=$config; version=$version; cliPath=$CliPath; backupDir=$BackupDir; dataDir=$DataDir}
+    if ($InstallDir.Equals((Join-Path $base 'bin'),[StringComparison]::OrdinalIgnoreCase) -and
+        $ConfigDir.Equals((Join-Path $base 'config'),[StringComparison]::OrdinalIgnoreCase) -and
+        $DataDir.Equals((Join-Path $base 'data'),[StringComparison]::OrdinalIgnoreCase)) {
+        $installationRecord.rootDir = $RootDir
+    }
+    Write-UTF8 $metadata ($installationRecord | ConvertTo-Json)
     if (-not $existing -and -not $AdoptConfig -and $Role -eq 'agent') { $env:OSS_TRANSFER_JOIN_TOKEN = $env:TRANSFER_JOIN_TOKEN; Invoke-Native $binary @('--config',$config,'--master-url',$MasterUrl,'--enroll-only') | Out-Null }
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue

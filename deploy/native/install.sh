@@ -511,6 +511,7 @@ if ((upgrade)); then
     exit 0
   fi
   installed_metadata=$install_dir/install.tsv
+  saved_root_dir=
   if [[ -f "$installed_metadata" && ! -L "$installed_metadata" ]]; then
     saved_role=$(metadata_field "$installed_metadata" role)
     [[ "$saved_role" == master || "$saved_role" == agent ]] || fail 'Invalid installed role'
@@ -519,6 +520,7 @@ if ((upgrade)); then
     service_name=${service_name:-$(metadata_field "$installed_metadata" serviceName)}
     saved_config=$(metadata_field "$installed_metadata" config)
     saved_data=$(metadata_field "$installed_metadata" dataDir)
+    saved_root_dir=$(metadata_field "$installed_metadata" rootDir)
   else
     [[ -n "$role" && -n "$config_dir" ]] || fail 'No installation configuration found'
     saved_config=$config_dir/service.json
@@ -538,6 +540,13 @@ if ((upgrade)); then
   service_name=${service_name:-$(config_field "$saved_config" serviceName)}
   [[ -n "$service_name" && -n "$saved_data" ]] || fail 'Existing configuration must contain serviceName and dataDirectory'
   data_dir=${data_dir:-$saved_data}
+  # Only installations explicitly recorded as a unified layout retain their
+  # root during automatic discovery. Older backupDir values may point at
+  # temporary shared storage and are deliberately not inherited.
+  if ((root_explicit == 0)) && [[ -n "$saved_root_dir" && "$install_dir" == "$saved_root_dir/$role/bin" && "$config_dir" == "$saved_root_dir/$role/config" && "$data_dir" == "$saved_root_dir/$role/data" ]]; then
+    safe_path "$saved_root_dir"
+    root_dir=$saved_root_dir
+  fi
 fi
 role=${role:-master}
 if [[ "$platform" == linux && "${root_explicit:-0}" == 0 && -z "$install_dir" && "$upgrade" == 0 && -f "/opt/oss-transfer-go/$role/install.tsv" ]]; then
@@ -1275,6 +1284,9 @@ cli_changed=1
 if ((existed == 0)); then cp "$work/service.json" "$config"; chmod 600 "$config"; fi
 printf 'role\t%s\nserviceName\t%s\nconfig\t%s\nunit\t%s\nversion\t%s\n' "$role" "$service_name" "$config" "$unit" "$version" > "$metadata"
 printf 'cliPath\t%s\nbackupDir\t%s\ndataDir\t%s\n' "$cli_path" "$backup_dir" "$data_dir" >> "$metadata"
+if [[ "$install_dir" == "$root_dir/$role/bin" && "$config_dir" == "$root_dir/$role/config" && "$data_dir" == "$root_dir/$role/data" ]]; then
+  printf 'rootDir\t%s\n' "$root_dir" >> "$metadata"
+fi
 if [[ "$role" == agent && "$existed" == 0 && -z "$adopt_config" ]]; then
   OSS_TRANSFER_JOIN_TOKEN="$TRANSFER_JOIN_TOKEN" "$binary" --config "$config" --master-url "$master_url" --enroll-only
 fi

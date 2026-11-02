@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
+$names = @('Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -243,6 +243,24 @@ try {
         Assert-BackupSpace ([long](5GB+64MB)) ([long](6GB))
         Reject { Assert-BackupSpace ([long](5GB+64MB)) ([long](2GB)) } '5184 MiB'
         Reject { Assert-BackupSpace ([long](5GB+64MB)) ([long](2GB)) } 'The service has not been stopped'
+    }
+    Check 'managed installation roots keep backups local without inheriting historical backup paths' {
+        $customRoot = Join-Path $work 'custom-cluster-root'
+        $roleBase = Join-Path $customRoot 'master'
+        $directory = Join-Path $roleBase 'bin'
+        $record = [PSCustomObject]@{role='master'; config=(Join-Path (Join-Path $roleBase 'config') 'service.json'); dataDir=(Join-Path $roleBase 'data'); backupDir=(Join-Path $work 'old-shared-backups')}
+        Assert ((Read-InstallationRoot $record $directory) -ceq '') 'Legacy metadata acquired a new root.'
+        $default = Join-Path (Join-Path $env:ProgramData 'OSS Transfer/master') 'backups'
+        Assert ((Resolve-BackupDirectory '' 'master' (Read-InstallationRoot $record $directory)) -ceq $default) 'Upgrade reused a historical backup location.'
+        $record | Add-Member -NotePropertyName rootDir -NotePropertyValue $customRoot
+        $savedRoot = Read-InstallationRoot $record $directory
+        Assert ($savedRoot -ceq $customRoot) 'Managed root was not preserved.'
+        Assert ((Resolve-BackupDirectory '' 'master' $savedRoot) -ceq (Join-Path $roleBase 'backups')) 'Managed root lost its local backup directory.'
+        $requested = Join-Path $work 'explicit-backups'
+        Assert ((Resolve-BackupDirectory $requested 'master' $savedRoot) -ceq $requested) 'Explicit backup directory was ignored.'
+        Reject { Read-InstallationRoot $record (Join-Path $work 'different-bin') } 'Recorded installation root does not match'
+        $record.dataDir = Join-Path $work 'different-data'
+        Reject { Read-InstallationRoot $record $directory } 'Recorded installation root does not match'
     }
     Check 'temporary backups default to this host and preflight leaves no probe' {
         $default = Join-Path (Join-Path $env:ProgramData 'OSS Transfer\master') 'backups'

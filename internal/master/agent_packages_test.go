@@ -91,7 +91,11 @@ func TestMasterAgentPackagesJoinUsesOnlyMasterAndPreservesUpstream(t *testing.T)
 		t.Skip("Bash bootstrap")
 	}
 	f := newAgentHTTPFixture(t)
-	target := runtime.GOOS + "-" + runtime.GOARCH
+	arch := runtime.GOARCH
+	if arch == "arm" {
+		arch = "armv7"
+	}
+	target := runtime.GOOS + "-" + arch
 	_, _ = packageFixture(t, f, target)
 	invite, err := f.master.agents.registry.InviteForMaster("offline-agent", "", f.http.URL)
 	if err != nil {

@@ -155,7 +155,7 @@ const cliTaskCreateHelp = `创建迁移任务
 通用选项
   --conflict skip|overwrite       已存在对象的处理方式，默认 skip
   --overwrite                     等同 --conflict overwrite
-  --distribution affinity|balanced  任务分发方式，默认 affinity
+  --distribution affinity|balanced  任务分发方式，默认 balanced
   --balanced                      等同 --distribution balanced
   --date-after YYYY-MM-DDTHH:mm:ss  对象更新时间起点
   --date-before YYYY-MM-DDTHH:mm:ss 对象更新时间终点，须晚于起点

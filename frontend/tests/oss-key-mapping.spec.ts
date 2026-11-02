@@ -128,7 +128,7 @@ for (const scenario of cases) {
       sourceBucket: "media-archive",
       destS3Alias: "backup",
       destBucket: "media-backup",
-      distributionMode: "affinity",
+      distributionMode: "balanced",
       eligibleWorkerNodes: ["10.0.1.12", "10.0.1.13"],
       overwrite: false,
       ...scenario.expected,

@@ -322,7 +322,7 @@ list/trash の --limit は 1～10000、--before-id は古い記録、list --all 
 
   --conflict skip|overwrite         Existing-object policy; default skip
   --overwrite                       Same as --conflict overwrite
-  --distribution affinity|balanced  Default affinity
+  --distribution affinity|balanced  Default balanced
   --balanced                        Same as --distribution balanced
   --date-after YYYY-MM-DDTHH:mm:ss   Modified after this time
   --date-before YYYY-MM-DDTHH:mm:ss  Modified before this time; later than the start
@@ -362,7 +362,7 @@ check its task list before retrying. Creation is never retried automatically.
 
   --conflict skip|overwrite         既存オブジェクトの処理。既定: skip
   --overwrite                       --conflict overwrite と同じ
-  --distribution affinity|balanced  既定: affinity
+  --distribution affinity|balanced  既定: balanced
   --balanced                        --distribution balanced と同じ
   --date-after YYYY-MM-DDTHH:mm:ss   更新日時の開始条件
   --date-before YYYY-MM-DDTHH:mm:ss  更新日時の終了条件。開始より後を指定

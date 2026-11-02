@@ -43,7 +43,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 			return nil, cliErrorf("--%s 只能填写一次", flag)
 		}
 	}
-	row := map[string]interface{}{"distributionMode": "affinity"}
+	row := map[string]interface{}{"distributionMode": "balanced"}
 	if opts.Has("distribution") {
 		row["distributionMode"] = opts.Value("distribution")
 	}
@@ -260,7 +260,7 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 // The old import-tasks command has a different CSV schema from the WebUI. Keep
 // it explicit so a dateBefore or prefix can never silently become another field.
 func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, []string{"request-id"}, []string{"balanced"})
+	opts, err := parseCommandOptions(args, []string{"request-id", "distribution"}, []string{"balanced"})
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 		return nil, err
 	}
 	if len(opts.Positionals) != 1 {
-		return nil, cliErrorf("用法: import-tasks <文件> [--balanced]；旧格式为源连接/桶,目标连接/桶,dateAfter,dateBefore,prefix,overwrite")
+		return nil, cliErrorf("用法: import-tasks <文件> [--distribution affinity|balanced]；旧格式为源连接/桶,目标连接/桶,dateAfter,dateBefore,prefix,overwrite")
 	}
 	data, err := os.ReadFile(opts.Positionals[0])
 	if err != nil {
@@ -307,9 +307,15 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 		if overwrite != "" && overwrite != "true" && overwrite != "false" {
 			return nil, cliErrorf("旧格式 CSV 第 %d 行 overwrite 须为 true 或 false", line)
 		}
-		mode := "affinity"
-		if opts.Has("balanced") {
-			mode = "balanced"
+		mode := "balanced"
+		if opts.Has("distribution") {
+			mode = opts.Value("distribution")
+		}
+		if opts.Has("balanced") && mode != "balanced" {
+			return nil, cliErrorf("--balanced 与 --distribution affinity 冲突")
+		}
+		if mode != "affinity" && mode != "balanced" {
+			return nil, cliErrorf("--distribution 须为 affinity 或 balanced")
 		}
 		row := map[string]interface{}{"sourceS3Alias": sa, "sourceBucket": sb, "destS3Alias": da, "destBucket": db, "overwrite": overwrite == "true", "distributionMode": mode}
 		for index, field := range []string{"dateAfter", "dateBefore", "prefix"} {
@@ -438,7 +444,7 @@ func createReadCSV(data string) ([]map[string]interface{}, error) {
 		}
 		mode := strings.TrimSpace(cells[4])
 		if mode == "" {
-			mode = "affinity"
+			mode = "balanced"
 		}
 		row := map[string]interface{}{"sourceS3Alias": sa, "sourceBucket": sb, "destS3Alias": da, "destBucket": db, "overwrite": overwrite == "true", "distributionMode": mode}
 		if date := strings.TrimSpace(cells[2]); date != "" {

@@ -164,7 +164,7 @@ const freshForm = (): TransferForm => ({
   bindings: [{ executionNodeIp: "", localPath: "" }],
   eligibleWorkerNodes: null,
   conflictPolicy: "SKIP",
-  distributionMode: "affinity",
+  distributionMode: "balanced",
   dateAfter: "",
   dateBefore: "",
   taskBandwidthLimitMbps: "",
@@ -779,7 +779,7 @@ export default function CreateTransfer() {
             destBucket: destination[1],
             dateAfter: cells[2] || undefined,
             overwrite: cells[3]?.toLowerCase() === "true",
-            distributionMode: cells[4] || "affinity",
+            distributionMode: cells[4] || "balanced",
           };
         });
     } else {
@@ -1496,7 +1496,7 @@ export default function CreateTransfer() {
                 targetPrefix: "archive/",
               },
               overwrite: false,
-              distributionMode: "affinity",
+              distributionMode: "balanced",
             },
           ]
         : batchKind === "tasks"
@@ -1536,7 +1536,7 @@ export default function CreateTransfer() {
                   ],
                 },
                 conflictPolicy: "SKIP",
-                distributionMode: "affinity",
+                distributionMode: "balanced",
               },
               {
                 direction: "LOCAL_TO_OSS",
@@ -1552,7 +1552,7 @@ export default function CreateTransfer() {
               },
             ];
     return batchKind === "buckets" && batchFormat === "csv"
-      ? "source/source-bucket,destination/destination-bucket,,false,affinity"
+      ? "source/source-bucket,destination/destination-bucket,,false,balanced"
       : JSON.stringify(sample, null, 2);
   };
 

@@ -438,3 +438,14 @@ func TestLocalTaskExportRejectsConflictingSelectorsAndUnknownOptions(t *testing.
 		})
 	}
 }
+
+func TestOmittedDistributionModeIsBalanced(t *testing.T) {
+	for mode, want := range map[string]string{"": "BALANCED", "affinity": "AFFINITY", "balanced": "BALANCED"} {
+		row := ossTaskRequest()
+		row.DistributionMode = mode
+		spec, _, _, err := normalizeTaskRequest(row, "add-buckets")
+		if err != nil || spec.DistributionMode != want {
+			t.Fatalf("%q: mode %q, error %v; want %s", mode, spec.DistributionMode, err, want)
+		}
+	}
+}

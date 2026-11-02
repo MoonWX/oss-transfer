@@ -103,7 +103,7 @@ test("failed local precheck displays node error and blocks creation", async ({
     {
       direction: "OSS_TO_LOCAL",
       conflictPolicy: "SKIP",
-      distributionMode: "affinity",
+      distributionMode: "balanced",
       sourceEndpoint: {
         type: "OSS",
         s3Alias: "production",

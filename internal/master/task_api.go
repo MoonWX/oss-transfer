@@ -290,7 +290,7 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 		spec.Direction = "OSS_TO_OSS"
 	}
 	if spec.DistributionMode == "" {
-		spec.DistributionMode = "AFFINITY"
+		spec.DistributionMode = "BALANCED"
 	}
 	if spec.DistributionMode != "AFFINITY" && spec.DistributionMode != "BALANCED" {
 		return spec, nil, nil, errors.New("invalid distribution mode")

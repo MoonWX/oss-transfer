@@ -137,7 +137,7 @@ test.describe("locale changes preserve transfer input and API values", () => {
         destBucket: "media-backup",
         objectKey: sourceKey,
         keyMapping: { mode: "EXACT_KEY", targetKey },
-        distributionMode: "affinity",
+        distributionMode: "balanced",
         eligibleWorkerNodes: ["10.0.1.12", "10.0.1.13"],
         overwrite: false,
       },

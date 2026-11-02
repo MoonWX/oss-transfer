@@ -417,3 +417,67 @@ func TestImportPreservesExportedDateTimezoneAndPrecision(t *testing.T) {
 		t.Fatal("date range compared wall time instead of instants")
 	}
 }
+
+func TestCreateDistributionDefaultsToBalanced(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "balanced"},
+		{[]string{"--balanced"}, "balanced"},
+		{[]string{"--distribution", "affinity"}, "affinity"},
+	} {
+		client := creationTestClient(t, creationNodesExchange(), creationExchange{
+			method: "POST", path: "/add-buckets", response: `{"success":true,"addedCount":1,"creationIds":["c1"]}`,
+			inspect: func(rows []map[string]interface{}) {
+				if rows[0]["distributionMode"] != tc.want {
+					t.Fatalf("%v: distributionMode %v, want %s", tc.args, rows[0]["distributionMode"], tc.want)
+				}
+			},
+		})
+		if _, err := runTaskCreate(client, append([]string{"oss-to-oss", "source/src", "target/dst"}, tc.args...)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestImportDistributionDefaultsToBalanced(t *testing.T) {
+	csv := creationImportFile(t, "buckets.csv", "source/src,target/dst\n")
+	client := creationTestClient(t, creationExchange{
+		method: "POST", path: "/add-buckets", response: `{"success":true,"addedCount":1,"creationIds":["c1"]}`,
+		inspect: func(rows []map[string]interface{}) {
+			if rows[0]["distributionMode"] != "balanced" {
+				t.Fatal(rows)
+			}
+		},
+	})
+	if _, err := runTaskImport(client, []string{"buckets", csv}); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy := creationImportFile(t, "old.txt", "source/src,target/dst,,,,false\n")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "balanced"},
+		{[]string{"--distribution", "affinity"}, "affinity"},
+	} {
+		client := creationTestClient(t, creationExchange{
+			method: "POST", path: "/add-buckets", response: `{"success":true,"addedCount":1,"creationIds":["legacy-1"]}`,
+			inspect: func(rows []map[string]interface{}) {
+				if rows[0]["distributionMode"] != tc.want {
+					t.Fatalf("%v: distributionMode %v, want %s", tc.args, rows[0]["distributionMode"], tc.want)
+				}
+			},
+		})
+		if _, err := runLegacyTaskImport(client, append([]string{legacy}, tc.args...)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"--balanced", "--distribution", "affinity"}, {"--distribution", "fastest"}} {
+		if _, err := runLegacyTaskImport(creationTestClient(t), append([]string{legacy}, args...)); err == nil {
+			t.Fatalf("%v accepted", args)
+		}
+	}
+}

@@ -27,20 +27,28 @@ def eventually(check, timeout=30):
     raise AssertionError("condition was not satisfied before timeout")
 
 
-def api(origin, path, method="GET", body=None, token=None, expected=200):
+def api(origin, path, method="GET", body=None, token=None, expected=200, *, timings=None):
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
     request = Request(origin + path, data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
+    # Password hashing runs in the target CPU interpreter on emulated platforms.
+    timeout = 60 if method == "POST" and path in ("/api/auth/login", "/api/auth/change-password") else 10
+    started = time.monotonic()
     try:
-        response = urlopen(request, timeout=10)
-    except HTTPError as failure:
-        response = failure
-    with response:
-        status = response.status
-        result = json.load(response)
-    assert status == expected, (path, status, result.get("message"))
-    return result
+        try:
+            response = urlopen(request, timeout=timeout)
+        except HTTPError as failure:
+            response = failure
+        with response:
+            status = response.status
+            result = json.load(response)
+        assert status == expected, (path, status, result.get("message"))
+        return result
+    finally:
+        if timings is not None:
+            timings.append({"path": path, "timeoutSeconds": timeout,
+                            "seconds": round(time.monotonic() - started, 3)})
 
 
 def main():
@@ -62,6 +70,7 @@ def main():
     last_nodes = []
     last_worker_status = None
     phase = "Master startup"
+    authentication_timings = []
 
     def redact(text):
         text = re.sub(r'((?:Initial password|Setup token|初始密码|初始化密钥|\\u521d\\u59cb\\u5bc6\\u7801|\\u521d\\u59cb\\u5316\\u5bc6\\u94a5)[ \t]*(?:[:：]|\\uff1a))[ \t]*[^\s"\\]+', r"\1 [redacted]", text)
@@ -78,7 +87,7 @@ def main():
             observed.append({"name": name, "pid": process.pid, "exitCode": code, "running": code is None})
         payload = {"result": "failed", "phase": phase, "error": str(error), "completedChecks": checks,
                    "processes": observed, "lastNodesResponse": last_nodes,
-                   "lastWorkerStatusResponse": last_worker_status, "logs": {}}
+                   "lastWorkerStatusResponse": last_worker_status, "authenticationTimings": authentication_timings, "logs": {}}
         for log in root.glob("*.log"):
             try:
                 payload["logs"][log.name] = log.read_text(errors="replace", encoding="utf-8")
@@ -115,7 +124,7 @@ def main():
         master, log = spawn("master-first", args.master, "--listen", "127.0.0.1:0", "--data-dir", str(root / "master-data"))
         address = eventually(lambda: re.search(r"Master listening on (127\.0\.0\.1:\d+)", log.read_text(encoding="utf-8")))[1]
         origin = "http://" + address
-        phase = "Initial administrator login"
+        phase = "Embedded console and setup status"
         initial_password = eventually(lambda: re.search(r"Initial password: ([A-Za-z0-9_-]+)", log.read_text(encoding="utf-8")))[1]
         secrets.append(initial_password)
         with urlopen(origin + "/", timeout=10) as response:
@@ -131,15 +140,21 @@ def main():
         api(origin, "/api/master/nodes", expected=401)
         credentials = {"username": "admin", "password": "temporary runtime QA password"}
         secrets.append(credentials["password"])
-        login = api(origin, "/api/auth/login", "POST", dict(credentials, password=initial_password))
+        phase = "Initial administrator login"
+        login = api(origin, "/api/auth/login", "POST", dict(credentials, password=initial_password),
+                    timings=authentication_timings)
         assert login["user"]["mustChangePassword"] is True
         token = login["token"]
         secrets.append(token)
         api(origin, "/api/master/nodes", token=token, expected=403)
+        phase = "Initial administrator password change"
         changed = api(origin, "/api/auth/change-password", "POST",
-                      {"oldPassword": initial_password, "newPassword": credentials["password"]}, token)
+                      {"oldPassword": initial_password, "newPassword": credentials["password"]}, token,
+                      timings=authentication_timings)
         assert changed["user"]["mustChangePassword"] is False
-        api(origin, "/api/auth/login", "POST", dict(credentials, password=initial_password), expected=401)
+        phase = "Reject previous administrator password"
+        api(origin, "/api/auth/login", "POST", dict(credentials, password=initial_password), expected=401,
+            timings=authentication_timings)
         checks.append("embedded console and generated administrator password; initial session is restricted until password change")
         phase = "Initial Agent enrollment"
         agents = []
@@ -217,7 +232,7 @@ def main():
         assert len(remaining) == 1 and remaining[0]["address"] == "qa-node-2"
         assert agents[1].poll() is None
         checks.append("revocation disconnects only the selected Agent")
-        evidence = {"scope": "Go process setup, enrollment, crash recovery and revocation; no transfer claims", "checks": checks, "initialWorkerStatusResponse": initial_worker_status, "masterSha256": hashlib.sha256(args.master.read_bytes()).hexdigest(), "agentSha256": hashlib.sha256(args.agent.read_bytes()).hexdigest(), "platform": os.name}
+        evidence = {"scope": "Go process setup, enrollment, crash recovery and revocation; no transfer claims", "checks": checks, "authenticationTimings": authentication_timings, "initialWorkerStatusResponse": initial_worker_status, "masterSha256": hashlib.sha256(args.master.read_bytes()).hexdigest(), "agentSha256": hashlib.sha256(args.agent.read_bytes()).hexdigest(), "platform": os.name}
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(evidence, indent=2))
     except Exception as error:

@@ -14,9 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/storageconfig"
 )
@@ -174,8 +176,33 @@ func TestFailoverScannerAndInFlightTransferFinishWithIdenticalBytes(t *testing.T
 	}
 	p := takeoverParent(t, f, a.node, b.node)
 	runtime := f.master.tasks
-	runtime.leases.ttl, runtime.leases.margin = time.Second, 100*time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Leave room for race-instrumented storage and RPC work on shared runners,
+	// while still proving renewal beyond a full lease and real expiry on loss.
+	runtime.leases.ttl, runtime.leases.margin = 5*time.Second, 500*time.Millisecond
+	var replacementLeaseExpirations atomic.Int64
+	leaseCall := runtime.leases.call
+	runtime.leases.call = func(ctx context.Context, session agenttransport.Session, operation string, mutating bool, payload, result any) error {
+		err := leaseCall(ctx, session, operation, mutating, payload, result)
+		if session.NodeID == b.node.ID && leasePeerExpired(err) {
+			replacementLeaseExpirations.Add(1)
+		}
+		return err
+	}
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("replacement Agent lease-expired responses: %d", replacementLeaseExpirations.Load())
+		records, err := b.service.Jobs.List(context.Background(), p.ID, "", 256)
+		if err != nil {
+			t.Log("replacement Agent child diagnostics:", err)
+			return
+		}
+		for _, record := range records {
+			t.Logf("replacement Agent child %s: status=%s attempt=%d last error=%q", record.Job.ChildID, record.Status, record.Attempt, record.Error)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	startTakeoverLeaseLoop(t, ctx, runtime)
 	var lastErr error

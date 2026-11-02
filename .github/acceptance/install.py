@@ -507,7 +507,8 @@ func main(){
             installed = self.install('master',release_url=release_url,replace_cli=True)
         backups=list((self.root/'master/backups').glob('*/'+('cli.exe' if self.system=='Windows' else 'cli')))
         require(not backups,'Successful replacement retained its temporary CLI backup')
-        require(re.search(r'backup: ', installed.stdout, re.IGNORECASE), 'CLI replacement did not create a rollback copy')
+        require(re.search(r'(?:backup|临时备份)\s*[:：]\s*', installed.stdout, re.IGNORECASE),
+                'CLI replacement did not create a rollback copy')
         self.record('existing_cli_requires_explicit_replacement_and_removes_temporary_backup_after_success')
         before=self.pid('master')
         require(before>0,'Master has no service-owned PID')

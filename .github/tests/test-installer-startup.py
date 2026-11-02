@@ -14,6 +14,11 @@ INSTALLER = ROOT / "deploy/native/install.sh"
 PUBLIC_INSTALLER = ROOT / "install.sh"
 
 
+def installer_say(source):
+    """Keep isolated installer sections wired to their real message helper."""
+    return next(line for line in source.splitlines() if line.startswith('say() {')) + '\n'
+
+
 class InstallerGuidanceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -136,8 +141,7 @@ class StartupTests(unittest.TestCase):
         self.bin.mkdir()
         source = INSTALLER.read_text()
         self.functions = self.root / "functions.sh"
-        say = next(line for line in source.splitlines() if line.startswith('say() {'))
-        self.functions.write_text(say + '\n' + source[source.index("listener_address() {"):source.index("rollback() {")])
+        self.functions.write_text(installer_say(source) + source[source.index("listener_address() {"):source.index("rollback() {")])
         self.environment = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                                 QA_ROOT=str(self.root), QA_OWN_PID="0", QA_LISTEN="0.0.0.0:1685",
                                 QA_PLATFORM="linux", QA_EXISTED="0", QA_SS="", QA_SOCKET_STATUS="0",
@@ -328,7 +332,8 @@ class StartupCommitTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.source = INSTALLER.read_text()
-        self.function = self.source[self.source.index('commit_start() {'):self.source.index('\nprint_initial_credentials() {')]
+        self.function = installer_say(self.source)
+        self.function += self.source[self.source.index('commit_start() {'):self.source.index('\nprint_initial_credentials() {')]
         self.function += '\n' + self.source[self.source.index('finish_agent_maintenance() {'):self.source.index('\nrollback() {')]
 
     def invoke(self, body='', fail=''):
@@ -346,8 +351,10 @@ wait_ready() { [[ "$TEST_FAIL" != ready ]]; }
 systemctl() { [[ "$TEST_FAIL" != enable ]]; }
 finish_backup() { printf confirmed > "$TEST_ROOT/backup-finished"; }
 ''' + self.function + '\n' + body + '\n' + finish + '\nprintf installed\n'
-        return subprocess.run(['bash', '-c', script], text=True, capture_output=True, timeout=5,
-                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL=fail))
+        result = subprocess.run(['bash', '-c', script], text=True, capture_output=True, timeout=5,
+                                env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL=fail))
+        self.assertNotIn('command not found', result.stderr)
+        return result
 
     def test_commit_is_written_only_after_readiness_and_rollback_region(self):
         for phase in ('ready', 'enable'):
@@ -414,9 +421,11 @@ work=$TEST_ROOT; filename=candidate; config=$TEST_ROOT/service.json; backup=$TES
 role=agent; service_name=test-agent; agent_maintenance_started=0
 stop_service() { printf 'stop\\n' >> "$TEST_ROOT/events"; }
 rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
-''' + body
-        return subprocess.run(['bash','-c',script], text=True, capture_output=True, timeout=5,
-                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_MAINTENANCE_STATUS=str(status)))
+''' + installer_say(self.source) + body
+        result = subprocess.run(['bash','-c',script], text=True, capture_output=True, timeout=5,
+                                env=dict(os.environ, TEST_ROOT=str(self.root), TEST_MAINTENANCE_STATUS=str(status)))
+        self.assertNotIn('command not found', result.stderr)
+        return result
 
     def test_failed_maintenance_never_stops_agent_or_backs_up_database(self):
         start = self.source.index('  if [[ "$role" == agent ]]; then\n    printf \'Protecting Agent tasks')
@@ -554,7 +563,8 @@ esac
 
     def invoke(self, existed, fail=''):
         source = self.source
-        functions = source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
+        functions = installer_say(source)
+        functions += source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
         functions += '\n' + source[source.index('commit_start() {'):source.index('\nprint_initial_credentials() {')]
         functions += '\n' + source[source.index('finish_agent_maintenance() {'):source.index('\nrollback() {')]
         functions += '\n' + source[source.index('cleanup() {'):source.index('\ntrap cleanup EXIT')]
@@ -575,9 +585,11 @@ systemctl() { [[ "$TEST_FAIL" != enable ]]; }
 mv() { [[ "$TEST_FAIL" != commit ]] && command mv "$@"; }
 rollback() { printf rollback > "$TEST_ROOT/rollback"; exit 7; }
 ''' + functions + '\ntrap cleanup EXIT\ntrap rollback ERR INT TERM\n' + finish + '\nprintf installed\n'
-        return subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
-                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_BACKUP=str(self.backup),
-                                       TEST_EXISTED=str(existed), TEST_FAIL=fail))
+        result = subprocess.run(['bash','-c',body], text=True, capture_output=True, timeout=5,
+                                env=dict(os.environ, TEST_ROOT=str(self.root), TEST_BACKUP=str(self.backup),
+                                         TEST_EXISTED=str(existed), TEST_FAIL=fail))
+        self.assertNotIn('command not found', result.stderr)
+        return result
 
     def assert_unknown_preserved(self):
         self.assertEqual((self.unknown/'database').read_text(), 'keep unknown backup')

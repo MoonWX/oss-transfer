@@ -3,7 +3,7 @@ import { t } from "./i18n";
 
 const STORAGE_KEY = "oss-transfer-refresh-seconds";
 const CHANGE_EVENT = "oss-transfer-refresh-change";
-export const DEFAULT_REFRESH_SECONDS = 10;
+export const DEFAULT_REFRESH_SECONDS = 1;
 export const MIN_REFRESH_SECONDS = 1;
 export const MAX_REFRESH_SECONDS = 3600;
 export const REFRESH_PRESETS = [0, 1, 5, 10, 30, 60] as const;

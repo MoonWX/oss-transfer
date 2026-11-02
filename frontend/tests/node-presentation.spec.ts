@@ -53,6 +53,10 @@ test("task and subtask names include real IPs while links keep the node identity
   page,
 }) => {
   const requests = await setup(page);
+  // Pause auto-refresh so only scrolling could trigger another registry read.
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
   let registryReads = 0;
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === "/api/master/nodes")

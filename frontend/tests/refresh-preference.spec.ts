@@ -20,7 +20,7 @@ test("refresh frequency persists across overview, tasks, nodes and reload with c
   test.setTimeout(60_000);
   await mockApi(page);
   await page.goto("/tasks");
-  await expect(refreshChoice(page)).toHaveText("10 秒");
+  await expect(refreshChoice(page)).toHaveText("1 秒");
   await chooseRefresh(page, "暂停");
   await page.getByRole("link", { name: "概览", exact: true }).click();
   await expect(
@@ -251,4 +251,16 @@ test("storage write failure keeps the chosen refresh frequency for page navigati
     page.getByRole("heading", { name: "执行节点", exact: true }),
   ).toBeVisible();
   await expect(refreshChoice(page)).toHaveText("5 秒");
+});
+
+test("an earlier saved interval is kept after the default changes", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.addInitScript(
+    (key) => localStorage.setItem(key, "10"),
+    storageKey,
+  );
+  await page.goto("/tasks");
+  await expect(refreshChoice(page)).toHaveText("10 秒");
 });

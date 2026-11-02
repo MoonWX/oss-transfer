@@ -90,28 +90,75 @@ func TestMasterAgentPackagesJoinUsesOnlyMasterAndPreservesUpstream(t *testing.T)
 	if runtime.GOOS == "windows" {
 		t.Skip("Bash bootstrap")
 	}
-	f := newAgentHTTPFixture(t)
 	arch := runtime.GOARCH
 	if arch == "arm" {
 		arch = "armv7"
 	}
-	target := runtime.GOOS + "-" + arch
+	system := map[string]string{"linux": "Linux", "darwin": "Darwin", "freebsd": "FreeBSD"}[runtime.GOOS]
+	machine := arch
+	if arch == "armv7" {
+		machine = "armv7l"
+	} else if arch == "loong64" {
+		machine = "loongarch64"
+	}
+	testMasterAgentPackageBootstrap(t, runtime.GOOS+"-"+arch, system, machine)
+}
+
+func TestMasterAgentPackageBootstrapSelectsTargetArchitecture(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Bash bootstrap")
+	}
+	for _, target := range []struct{ arch, machine string }{
+		{"loong64", "loongarch64"},
+		{"armv7", "armv7l"},
+	} {
+		t.Run(target.arch, func(t *testing.T) {
+			testMasterAgentPackageBootstrap(t, "linux-"+target.arch, "Linux", target.machine)
+		})
+	}
+}
+
+func testMasterAgentPackageBootstrap(t *testing.T, target, system, machine string) {
+	t.Helper()
+	f := newAgentHTTPFixture(t)
 	_, _ = packageFixture(t, f, target)
-	invite, err := f.master.agents.registry.InviteForMaster("offline-agent", "", f.http.URL)
+	requestedTargets := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/files/manifest.tsv") {
+			requestedTargets <- r.URL.Query().Get("target")
+		}
+		f.master.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	invite, err := f.master.agents.registry.InviteForMaster("offline-agent", "", server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	link := f.http.URL + "/api/agents/bootstrap/" + invite.Token
+	link := server.URL + "/api/agents/bootstrap/" + invite.Token
 	code, raw := packageResponse(t, link)
 	if code != 200 || strings.Contains(string(raw), "invalid.example") || !strings.Contains(string(raw), "/files") {
 		t.Fatal(code, string(raw))
 	}
 	result := filepath.Join(t.TempDir(), "invocation")
+	// Under binfmt, this Go test uses the target CPU but Bash and uname still
+	// run on the host. Only this child process sees the joining Agent's system;
+	// the real bootstrap and HTTP requests must select that exact cached target.
+	shim := t.TempDir()
+	uname := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in -s) printf '%%s\\n' %s;; -m) printf '%%s\\n' %s;; *) exit 64;; esac\n", shellQuote(system), shellQuote(machine))
+	if err := os.WriteFile(filepath.Join(shim, "uname"), []byte(uname), 0700); err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command("bash", "-c", bootstrapCommand(link))
-	command.Env = append(os.Environ(), "PACKAGE_RESULT="+result)
+	command.Env = append(os.Environ(), "PACKAGE_RESULT="+result, "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("bootstrap failed: %v\n%s", err, output)
+	}
+	if len(requestedTargets) != 1 {
+		t.Fatalf("bootstrap requested %d platform manifests, wanted one for %s", len(requestedTargets), target)
+	}
+	if got := <-requestedTargets; got != target {
+		t.Fatalf("bootstrap requested host/wrong platform %q, wanted %q", got, target)
 	}
 	got, err := os.ReadFile(result)
 	if err != nil || !strings.Contains(string(got), "--release-url\n"+link+"/files\n") || !strings.HasSuffix(string(got), invite.Token) {

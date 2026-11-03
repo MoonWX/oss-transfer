@@ -22,11 +22,18 @@ func (e *Engine) SetConcurrency(children, objects int) error {
 		return ErrClosed
 	}
 	e.opts.MaxConcurrentJobs, e.opts.WorkersPerJob = children, objects
+	e.objectSlots.Store(int64(children * objects))
 	e.wakeConcurrency()
 	for _, attempt := range e.active {
 		attempt.wakeObjects()
 	}
 	return nil
+}
+
+// IdleObjectSlots is node object capacity (children x objects) not currently
+// copying an object. It is lock-free and may be briefly stale.
+func (e *Engine) IdleObjectSlots() int {
+	return int(max(0, e.objectSlots.Load()-e.activeObjects.Load()))
 }
 
 func (e *Engine) ObjectConcurrency() int {
@@ -53,6 +60,7 @@ func (e *Engine) acquireObject(ctx context.Context, attempt *activeAttempt) erro
 		}
 		if attempt.objects < e.opts.WorkersPerJob {
 			attempt.objects++
+			e.activeObjects.Add(1)
 			e.mu.Unlock()
 			return nil
 		}
@@ -69,6 +77,7 @@ func (e *Engine) acquireObject(ctx context.Context, attempt *activeAttempt) erro
 func (e *Engine) releaseObject(attempt *activeAttempt) {
 	e.mu.Lock()
 	attempt.objects--
+	e.activeObjects.Add(-1)
 	attempt.wakeObjects()
 	e.mu.Unlock()
 }

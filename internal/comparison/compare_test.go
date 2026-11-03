@@ -184,6 +184,23 @@ func TestTerminalStatusWaitsForStoresAndReleasesActiveSlot(t *testing.T) {
 	}
 }
 
+// waitWorkers blocks until every started comparison has written its terminal
+// state. The timeout is only a hang guard; correctness never depends on speed.
+func waitWorkers(t *testing.T, m *Manager) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { m.workers.Wait(); close(done) }()
+	guard := 5 * time.Minute
+	if d, ok := t.Deadline(); ok && time.Until(d)-10*time.Second < guard {
+		guard = time.Until(d) - 10*time.Second
+	}
+	select {
+	case <-done:
+	case <-time.After(guard):
+		t.Fatal("comparison worker did not exit")
+	}
+}
+
 func TestManagerCapsStoredDifferencesKeepsFullCountsAndPrunesOldRuns(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -202,32 +219,17 @@ func TestManagerCapsStoredDifferencesKeepsFullCountsAndPrunesOldRuns(t *testing.
 		t.Helper()
 		r := request()
 		r.ID = id
+		// The previous run's worker has exited, so its slot must be free.
+		if _, err = m.Start(r); err != nil {
+			t.Fatal(err)
+		}
 		// This checks durable retention of 10,003 differences, not disk speed.
-		// Shared Windows runners can need more than five seconds for the writes.
-		deadline := time.Now().Add(30 * time.Second)
-		for {
-			_, err = m.Start(r)
-			if err == nil {
-				break
-			}
-			if !errors.Is(err, ErrBusy) || time.Now().After(deadline) {
-				t.Fatal(err)
-			}
-			time.Sleep(time.Millisecond)
+		waitWorkers(t, m)
+		p, e := m.Get(id, 0, 50)
+		if e != nil || p.Status != "COMPLETED" {
+			t.Fatalf("comparison did not complete: %+v %v", p.Progress, e)
 		}
-		for {
-			p, e := m.Get(id, 0, 50)
-			if e != nil {
-				t.Fatal(e)
-			}
-			if p.Status == "COMPLETED" {
-				return p
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("comparison stuck: %+v", p)
-			}
-			time.Sleep(time.Millisecond)
-		}
+		return p
 	}
 	p := finish("oldest")
 	if p.Rows != MaxStoredDifferences || !p.RowsTruncated || p.Missing != int64(count) || p.Compared != int64(count) {
@@ -399,19 +401,9 @@ func TestManagerCancellationPersistenceAndSingleActiveBound(t *testing.T) {
 	if _, e = m.Cancel("test"); e != nil {
 		t.Fatal(e)
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		p, e := m.Get("test", 0, 50)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if p.Status == "CANCELED" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("cancel did not finish: %+v", p)
-		}
-		time.Sleep(time.Millisecond)
+	waitWorkers(t, m)
+	if p, e := m.Get("test", 0, 50); e != nil || p.Status != "CANCELED" {
+		t.Fatalf("cancel did not finish: %+v %v", p.Progress, e)
 	}
 	m.Close()
 	m, e = New(db, factory, nil)
@@ -447,20 +439,10 @@ func TestManagerBatchesOnlyDifferencesAndPagesResults(t *testing.T) {
 	if _, e = m.Start(request()); e != nil {
 		t.Fatal(e)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	var p Page
-	for {
-		p, e = m.Get("test", 0, 100)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if p.Status == "COMPLETED" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("comparison stuck: %+v", p)
-		}
-		time.Sleep(time.Millisecond)
+	waitWorkers(t, m)
+	p, e := m.Get("test", 0, 100)
+	if e != nil || p.Status != "COMPLETED" {
+		t.Fatalf("comparison did not complete: %+v %v", p.Progress, e)
 	}
 	if p.Compared != 141 || p.Matched != 1 || p.Missing != 140 || p.Rows != 140 || len(p.Items) != 100 || p.NextAfter != 100 {
 		t.Fatalf("wrong totals/pagination: %+v", p.Progress)

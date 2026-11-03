@@ -375,6 +375,15 @@ class PlatformPlanTests(unittest.TestCase):
         self.assertEqual(transfer[transfer.index("--scenario") + 1], "all")
         self.assertIn("--multipart-recovery", transfer)
         self.assertEqual(transfer[transfer.index("--exclusive-run-id") + 1], "plan-run")
+        self.assertEqual(transfer[transfer.index("--recovery-bandwidth-mbps") + 1], "16")
+
+    def test_recovery_bandwidth_can_be_lowered_for_one_platform(self):
+        with mock.patch.dict(RUNNER.RECOVERY_BANDWIDTH_MBPS, {"linux/riscv64": 8}):
+            for platform, expected in (("linux/riscv64", "8"), ("linux/amd64", "16")):
+                with self.subTest(platform=platform):
+                    self.args.platform = platform
+                    transfer = self.plan()["transfer"][0]["command"]
+                    self.assertEqual(transfer[transfer.index("--recovery-bandwidth-mbps") + 1], expected)
 
     def test_precompiled_plan_uses_inventory_verifier_and_target_fixtures(self):
         self.args.platform, self.args.race = "freebsd/arm64", False

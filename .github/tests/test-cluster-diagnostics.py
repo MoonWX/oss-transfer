@@ -199,5 +199,78 @@ class DiagnosticsTest(unittest.TestCase):
                     sampler.evaluate(rate, [total, total])
 
 
+class RecoveryInjectionTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.harness = object.__new__(CLUSTER.Harness)
+        self.harness.root = self.root
+        self.harness.args = types.SimpleNamespace(recovery_bandwidth_mbps=16, single_upload=False)
+        self.harness.buckets = {"source": "source", "rate": "rate"}
+        self.harness.nodes = ["agent-1", "agent-2"]
+
+    def test_finished_transfer_cannot_satisfy_an_injection_check(self):
+        CLUSTER.require_unfinished(False, 3, 256, "Stop", 16)
+        for finished, published in ((True, 0), (False, 256)):
+            with self.subTest(finished=finished, published=published):
+                with self.assertRaisesRegex(AssertionError, "finished before injection.*RECOVERY_BANDWIDTH_MBPS"):
+                    CLUSTER.require_unfinished(finished, published, 256, "Crash", 16)
+
+    def test_published_files_count_only_complete_targets(self):
+        manifest = {"a.bin": {"size": 4}, "b.bin": {"size": 4}, "c.bin": {"size": 4}}
+        (self.root / "a.bin").write_bytes(b"full")
+        (self.root / "b.bin").write_bytes(b"pa")
+        self.assertEqual(CLUSTER.published_files(self.root, manifest), ["a.bin"])
+
+    def test_stop_check_fails_loudly_when_the_upload_already_finished(self):
+        manifest = {f"{index:04d}.bin": {"size": 1} for index in range(256)}
+        self.harness.create = mock.Mock(return_value=7)
+        self.harness.list_objects = mock.Mock(return_value={"resume/" + key: 1 for key in manifest})
+        self.harness.task = mock.Mock(return_value={"status": "COMPLETED"})
+        self.harness.api = mock.Mock()
+        with self.assertRaisesRegex(AssertionError, "Stop test transfer finished before injection"):
+            self.harness.recovery(self.root, manifest)
+        self.harness.api.assert_not_called()
+        self.assertEqual(self.harness.create.call_args.args[1]["taskBandwidthLimitMbps"], 16)
+
+    def test_stop_that_arrives_after_completion_names_the_cause(self):
+        manifest = {f"{index:04d}.bin": {"size": 1} for index in range(256)}
+        self.harness.create = mock.Mock(return_value=7)
+        self.harness.list_objects = mock.Mock(return_value={"resume/0000.bin": 1, "resume/0001.bin": 1,
+                                                            "resume/0002.bin": 1, "resume/0003.bin": 1})
+        self.harness.task = mock.Mock(side_effect=[{"status": "RUNNING"}, {"status": "COMPLETED"}])
+        self.harness.api = mock.Mock()
+        self.harness.wait_task = mock.Mock(side_effect=AssertionError("Task 7 ended as COMPLETED"))
+        with self.assertRaisesRegex(AssertionError, "Stop test transfer finished before injection"):
+            self.harness.recovery(self.root, manifest)
+
+    def test_crash_hook_inspects_disk_after_both_kills_and_before_restart(self):
+        events = []
+        process = lambda name: mock.Mock(kill=lambda: events.append("kill " + name), wait=mock.Mock())
+        self.harness.master = process("master")
+        self.harness.agent_processes = [process("agent")]
+        self.harness.api = mock.Mock(return_value={"nodes": [{"address": "a", "id": 1}]})
+        self.harness.start_master = lambda: events.append("start master")
+        self.harness.start_agent = lambda index: events.append("start agent")
+        self.harness.online = mock.Mock(return_value=[{"address": "a", "id": 1}])
+        self.harness.task = mock.Mock(return_value={"status": "RUNNING"})
+        self.harness.kill_restart(7, killed=lambda: events.append("inspect"))
+        self.assertEqual(events, ["kill master", "kill agent", "inspect", "start master", "start agent"])
+
+    def test_fixtures_upload_before_the_exclusive_gate_and_measurements_after(self):
+        tree = ast.parse((ROOT / ".github/acceptance/cluster.py").read_text(encoding="utf-8"))
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        lines = {}
+        for node in ast.walk(main):
+            if isinstance(node, ast.Call):
+                name = getattr(node.func, "attr", getattr(node.func, "id", None))
+                if name in ("rate_fixture", "wait_for_exclusive", "bandwidth", "recovery"):
+                    lines.setdefault(name, []).append(node.lineno)
+        self.assertEqual(len(lines["rate_fixture"]), 2)
+        self.assertLess(max(lines["rate_fixture"]), min(lines["wait_for_exclusive"]))
+        self.assertLess(max(lines["wait_for_exclusive"]), min(lines["bandwidth"] + lines["recovery"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,9 @@ import time
 
 
 REQUIRED_GROUPS = ("unit", "control", "install")
+# Recovery task cap in Mbps. Lower a platform's entry if its transfer finishes
+# before the stop or crash can be injected; cluster.py fails loudly when it does.
+RECOVERY_BANDWIDTH_MBPS = {"default": 16}
 
 
 def write_json(path, value):
@@ -77,7 +80,8 @@ def plan(args, gate, run_id):
                                       "--output", output / "setup"], repo, evidence=output / "setup/evidence.json"),
         ]
     transfer = [py, scripts / "cluster.py", *common, *storage, "--output", output / "cluster", "--scenario", "all",
-                "--multipart-recovery", "--exclusive-gate", gate, "--exclusive-run-id", run_id]
+                "--multipart-recovery", "--exclusive-gate", gate, "--exclusive-run-id", run_id,
+                "--recovery-bandwidth-mbps", RECOVERY_BANDWIDTH_MBPS.get(args.platform, RECOVERY_BANDWIDTH_MBPS["default"])]
     if args.test_binaries:
         transfer += ["--multipart-test-binary", os.environ["QA_MULTIPART_TEST_BINARY"]]
     return {"unit": unit, "control": control, "install": installation,

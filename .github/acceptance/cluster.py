@@ -162,6 +162,25 @@ def local_bytes(directory):
     return size
 
 
+def published_files(directory, manifest):
+    """Manifest keys already published at their full size."""
+    done = []
+    for key, row in manifest.items():
+        try:
+            if (directory / key).stat().st_size == row["size"]:
+                done.append(key)
+        except FileNotFoundError:
+            pass
+    return done
+
+
+def require_unfinished(finished, published, total, injection, rate):
+    """A recovery check whose transfer ended first proves nothing; fail it loudly."""
+    require(not finished and published < total,
+            f"{injection} test transfer finished before injection ({published}/{total} objects at {rate} Mbps); "
+            "lower this platform's RECOVERY_BANDWIDTH_MBPS in run-platform.py")
+
+
 class GrowthSampler:
     def __init__(self, directories):
         self.directories = directories
@@ -831,12 +850,14 @@ class Harness:
         self.record("two concurrent 2 Mbps parents share each limit across two Agents", tasks=data,
                     seconds=time.monotonic() - started, physicalByteWindows=result, runningReportHTTPStatus=409)
 
-    def kill_restart(self, task_id):
+    def kill_restart(self, task_id, killed=None):
         identities = {node["address"]: node["id"] for node in self.api("/api/master/nodes")["nodes"]}
         self.master.kill()
         self.master.wait(timeout=10)
         self.agent_processes[0].kill()
         self.agent_processes[0].wait(timeout=10)
+        if killed:
+            killed()
         self.start_master()
         self.start_agent(0)
         nodes = eventually(self.online, "two Agents reconnect after process termination")
@@ -844,16 +865,23 @@ class Harness:
         require(self.task(task_id) is not None, "Restart lost the durable parent task")
 
     def recovery(self, directory, manifest):
-        body = self.upload_body(directory, self.buckets["source"], "resume/", 8, multi=not self.args.single_upload)
+        rate = self.args.recovery_bandwidth_mbps
+        body = self.upload_body(directory, self.buckets["source"], "resume/", rate, multi=not self.args.single_upload)
         task_id = self.create("/api/master/local-transfers", body, "stop-resume")
         eventually(lambda: len(self.list_objects(self.buckets["source"], "resume/")) >= 4,
                    "payload before stop", timeout=30)
+        require_unfinished(self.task(task_id)["status"] in TERMINAL, 0, 1, "Stop", rate)
         started = time.monotonic()
         self.api("/api/master/stop", {"taskIds": [task_id]})
-        stopped = self.wait_task(task_id, wanted="STOPPED", timeout=10)
+        try:
+            stopped = self.wait_task(task_id, wanted="STOPPED", timeout=10)
+        except AssertionError:
+            require_unfinished(self.task(task_id)["status"] == "COMPLETED", 0, 1, "Stop", rate)
+            raise
         elapsed = time.monotonic() - started
         require(elapsed < 8, f"Stop took {elapsed:.2f}s")
         before = self.list_objects(self.buckets["source"], "resume/")
+        require_unfinished(False, len(before), len(manifest), "Stop", rate)
         time.sleep(2)
         require(before == self.list_objects(self.buckets["source"], "resume/"), "Payload kept publishing after stop ACK")
         self.kill_restart(task_id)
@@ -865,10 +893,11 @@ class Harness:
         data = self.verify_task(task_id, manifest, both=not self.args.single_upload)
         self.verify_s3(self.buckets["source"], "resume/", manifest)
         self.record("stop ACK fences writes; Master/Agent restart retains stop and original parent", **data,
-                    stopSeconds=elapsed, objectsCommittedAtStop=len(before), creditedBeforeResume=stopped["putObjectCount"])
+                    stopSeconds=elapsed, objectsCommittedAtStop=len(before), creditedBeforeResume=stopped["putObjectCount"],
+                    taskBandwidthLimitMbps=rate)
 
         target = self.root / "crash-download"
-        body = self.download_body(self.buckets["rate"], "rate/", target, 8)
+        body = self.download_body(self.buckets["rate"], "rate/", target, rate)
         task_id = self.create("/api/master/local-transfers", body, "running-crash")
         eventually(lambda: local_bytes(target) >= 2 * MIB, "active payload before forced crash", timeout=30)
         def incomplete_payloads():
@@ -883,8 +912,11 @@ class Harness:
                     pass  # A writer may have published this file.
             return files
         incomplete = eventually(incomplete_payloads, "durably tracked incomplete local files before forced crash", timeout=10)
-        require(self.task(task_id)["status"] not in TERMINAL, "Crash test fixture finished before injection")
-        self.kill_restart(task_id)
+        require_unfinished(self.task(task_id)["status"] in TERMINAL, 0, 1, "Crash", rate)
+        # Inspect the disk between the kill and the restart: a fully published
+        # target means the crash landed after the transfer, not during it.
+        self.kill_restart(task_id, killed=lambda: require_unfinished(
+            False, len(published_files(target, manifest)), len(manifest), "Crash", rate))
         require(self.create("/api/master/local-transfers", body, "running-crash") == task_id, "Crash retry made another task")
         data = self.verify_task(task_id, manifest)
         orphans = self.verify_local(target, "rate", manifest)
@@ -895,7 +927,7 @@ class Harness:
             ]
         require(not orphans, "Restart left incomplete temporary files: " + ", ".join(orphans))
         self.record("SIGKILL during transfer recovers original work without duplicate progress", **data,
-                    temporaryFilesBeforeCrash=incomplete, orphanTemporaryFiles=orphans)
+                    temporaryFilesBeforeCrash=incomplete, orphanTemporaryFiles=orphans, taskBandwidthLimitMbps=rate)
 
     def close(self):
         for child in reversed(self.children):
@@ -943,6 +975,8 @@ def main():
     parser.add_argument("--single-upload", action="store_true", help="Use one Agent for upload until shared-root validation is ready")
     parser.add_argument("--exclusive-gate", type=Path, help="Wait for the platform runner's other groups before bandwidth and recovery")
     parser.add_argument("--exclusive-run-id", help="Identity of this platform run's gate")
+    parser.add_argument("--recovery-bandwidth-mbps", type=int, default=16,
+                        help="Task cap for the stop and crash recovery transfers; lower it if they finish before injection")
     args = parser.parse_args()
     if bool(args.exclusive_gate) != bool(args.exclusive_run_id) or (args.exclusive_gate and args.scenario != "all"):
         parser.error("Exclusive transfer requires a gate, its run ID, and --scenario all")
@@ -950,6 +984,8 @@ def main():
         parser.error("--weed is required without OSS_TRANSFER_QA_S3_CONFIG")
     if args.multipart_test_binary and not args.multipart_recovery:
         parser.error("--multipart-test-binary requires --multipart-recovery")
+    if args.recovery_bandwidth_mbps < 1:
+        parser.error("--recovery-bandwidth-mbps must be positive")
     h = Harness(args)
     try:
         h.start_s3()
@@ -965,12 +1001,14 @@ def main():
         h.node_settings()
         h.core()
         if args.scenario == "all":
+            # Fixture uploads are plain storage puts, not measurements; finish
+            # them while other groups still run.
+            _, bandwidth_manifest = h.rate_fixture(bandwidth=True)
+            directory, manifest = h.rate_fixture()
             if args.exclusive_gate:
                 h.evidence["exclusiveWindow"] = wait_for_exclusive(args.exclusive_gate, args.exclusive_run_id)
                 h.save()
-            _, bandwidth_manifest = h.rate_fixture(bandwidth=True)
             h.bandwidth(bandwidth_manifest)
-            directory, manifest = h.rate_fixture()
             h.recovery(directory, manifest)
         h.evidence["status"] = "PASSED"
         h.save()

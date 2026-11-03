@@ -1,21 +1,45 @@
 # Releases
 
-Push a `v*` tag to publish a version. The release workflow takes the packages and image built for that commit, uploads them to JD Cloud OSS and Docker Hub, then creates the GitHub Release.
+Push a `v*` tag to publish a version. The release workflow waits for CI on the tagged commit, takes the packages and image that CI built, uploads them to JD Cloud OSS and Docker Hub, and publishes the GitHub Release.
 
 ## Publish a version
 
 1. Update `VERSION` to the release number, for example `4.1.3` or `4.1.3-rc.1`.
-2. Commit the changes and push `main`.
-3. Tag that commit and push the tag. Release waits for its CI artifacts.
+2. Commit the change.
+3. Tag that commit and push the commit and the tag together.
 
 ```sh
-git push origin main
 version=$(cat VERSION)
 git tag -a "v$version" -m "OSS Transfer v$version"
-git push origin "refs/tags/v$version"
+git push --atomic origin main "v$version"
 ```
 
+`--atomic` updates both refs or neither. You do not need to wait for CI first: the release run waits up to 65 minutes for the `main` CI run on that commit and starts publishing as soon as it passes. If that CI run fails, the release run fails without publishing anything.
+
 The tag must match `VERSION` and point to the commit you intend to publish. Use a new version number when changing a published release.
+
+The GitHub Release is created as a draft while OSS and Docker Hub upload, and made public only after both succeed. A failed release run can leave a draft; the next run for that tag reuses it.
+
+### Fix a release before it is published
+
+If CI fails and a fix is needed, commit the fix and move the tag to it. Only do this while the GitHub Release is missing or still a draft; the new run overwrites any OSS files and Docker Hub tags an earlier run uploaded for that version. First cancel any release run for the tag that is still in progress, so it cannot publish the old commit:
+
+```sh
+gh run list --workflow release.yml --limit 5
+gh run cancel <run-id>
+```
+
+Then move the tag and push it with the fix:
+
+```sh
+version=$(cat VERSION)
+git tag -fa "v$version" -m "OSS Transfer v$version"
+git push --atomic origin main "+refs/tags/v$version"
+```
+
+The `+` forces only the tag. The tag push starts a new release run, which waits for CI on the fix commit.
+
+If CI failed for a reason unrelated to the code, rerun the failed CI jobs instead, then retry publication as described below.
 
 For a change to `VERSION` alone, CI reuses passing tests from a code-identical ancestor on `main`. It still rebuilds all archives and the image, checks the packaged program versions, and verifies checksums and image identity. Changes to code, dependencies, installers or workflows run the default suite. If no passing baseline can be verified, CI runs the default suite.
 
@@ -63,4 +87,4 @@ Set these repository secrets before releasing:
 | JD Cloud OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/` | `JDOSS_AK`, `JDOSS_SK` |
 | Docker Hub | `moonwx/osstransfer` | `DOCKER_USERNAME`, `DOCKER_PAT` |
 
-Publishing uses GitHub-hosted `ubuntu-latest` runners. See [release.yml](workflows/release.yml) for the upload order and timeouts.
+Publishing uses GitHub-hosted `ubuntu-latest` runners. See [release.yml](workflows/release.yml) for the upload order and timeouts. OSS uploads the version directory in parallel and updates `latest/` only after every versioned file has been uploaded, with `release.json` last.

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Reject ambiguous or misidentified release inputs before publishing assets."""
+import base64
 import hashlib
 import importlib.util
 import io
@@ -11,6 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 import textwrap
+import threading
 import unittest
 from unittest import mock
 import warnings
@@ -287,10 +289,15 @@ class Packaging(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertEqual({path.name for path in self.root.iterdir()}, {"packages"})
 
-    def github_publication(self, existing=False):
+    def github_publication(self, existing=False, step="Stage GitHub Release draft"):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        step = workflow.split("      - name: Publish GitHub Release\n", 1)[1]
-        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        block = workflow.split("      - name: " + step + "\n", 1)[1].split("        run: |\n", 1)[1]
+        lines = []
+        for line in block.splitlines(keepends=True):
+            if line.strip() and not line.startswith("          "):
+                break
+            lines.append(line)
+        script = textwrap.dedent("".join(lines))
         platform_dir = self.root / "deploy/native"
         platform_dir.mkdir(parents=True, exist_ok=True)
         for name in ("platforms.py", "platforms.json"):
@@ -330,6 +337,18 @@ if sys.argv[1:3] == ['release', 'view']:
                 self.assertEqual(len(assets), len(expected))
                 self.assertEqual(set(assets), expected)
                 self.assertEqual(uploads[0][1], "upload" if existing else "create")
+                if not existing:
+                    self.assertIn("--draft", uploads[0])
+                    self.assertIn("--verify-tag", uploads[0])
+                self.assertFalse(any("--draft=false" in command for command in commands))
+
+    def test_github_release_is_published_only_by_the_final_job(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("    needs: [oss, docker_hub, github_draft]\n", workflow.split("\n  release:\n", 1)[1])
+        self.assertIn("    needs: artifacts\n", workflow.split("\n  github_draft:\n", 1)[1].split("\n  release:\n", 1)[0])
+        result, commands = self.github_publication(step="Publish GitHub Release")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(commands, [["release", "edit", "v" + self.version, "--draft=false", "--prerelease", "--latest=false"]])
 
     def test_github_release_rejects_missing_archive_before_publishing(self):
         self.assemble()
@@ -352,27 +371,38 @@ if sys.argv[1:3] == ['release', 'view']:
         with self.assertRaises(ValueError):
             PUBLISH.verify(self.output, "v" + self.version, self.commit)
 
-    def uploaded(self, fail_at=None):
+    def uploaded(self, fail_at=None, remote=None, etag=None):
+        # Fake OSS bucket: puts and deletes change what later listings return.
         keys = []
+        remote = dict(remote or {})
+        lock = threading.Lock()
         def upload(command, **options):
+            self.assertEqual((options["env"]["AWS_RETRY_MODE"], options["env"]["AWS_MAX_ATTEMPTS"]), ("standard", "5"))
             if 'list-objects-v2' in command:
                 prefix = command[command.index('--prefix') + 1]
-                if prefix.endswith('/latest/'):
-                    names = PUBLISH.LATEST
-                else:
-                    self.assertEqual(prefix, 'oss-transfer/v' + self.version + '/')
-                    names = [path.name for path in self.output.iterdir()]
-                return subprocess.CompletedProcess(command, 0, stdout=json.dumps({
-                    'IsTruncated': False, 'Contents': [{'Key': prefix + name} for name in names]}), stderr='')
-            keys.append(command[command.index("--key") + 1])
+                with lock:
+                    rows = [{'Key': key, 'Size': len(data), 'ETag': etag(data) if etag else '"%s"' % hashlib.md5(data).hexdigest()}
+                            for key, data in sorted(remote.items()) if key.startswith(prefix)]
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps({'IsTruncated': False, 'Contents': rows}), stderr='')
+            key = command[command.index("--key") + 1]
+            with lock:
+                keys.append(key)
+                failed = fail_at == len(keys)
+            if failed:
+                raise subprocess.CalledProcessError(1, ["aws"])
             if "put-object" in command:
                 path = Path(command[command.index("--body") + 1])
                 self.assertTrue(path.is_file())
+                data = path.read_bytes()
+                self.assertEqual(command[command.index("--content-md5") + 1], base64.b64encode(hashlib.md5(data).digest()).decode())
+                with lock:
+                    remote[key] = data
             else:
                 self.assertIn("delete-object", command)
-                self.assertIn(keys[-1], ["oss-transfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
-            if fail_at == len(keys):
-                raise subprocess.CalledProcessError(1, ["aws"])
+                self.assertIn(key, ["oss-transfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
+                with lock:
+                    self.assertIn(key, remote)
+                    del remote[key]
         with mock.patch.dict(os.environ, AWS_ACCESS_KEY_ID="test", AWS_SECRET_ACCESS_KEY="test"), mock.patch.object(PUBLISH.subprocess, "run", side_effect=upload):
             if fail_at:
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -398,14 +428,30 @@ if sys.argv[1:3] == ['release', 'view']:
         keys = self.uploaded()
         versioned = ["oss-transfer/v4.1.0/" + path.name for path in sorted(self.output.iterdir())]
         latest = ["oss-transfer/latest/" + name for name in PUBLISH.LATEST]
-        self.assertEqual(keys, versioned + latest + ["oss-transfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
+        self.assertEqual(sorted(keys[:len(versioned)]), versioned)
+        # Absent retired keys are not deleted; release.json stays the last write.
+        self.assertEqual(keys[len(versioned):], latest)
+        self.assertEqual(latest[-1], "oss-transfer/latest/release.json")
+
+    def test_only_listed_retired_latest_files_are_deleted(self):
+        self.stable()
+        keys = self.uploaded(remote={"oss-transfer/latest/VERSION": b"4.0.0\n", "oss-transfer/latest/install.sh": b"old"})
+        self.assertEqual(keys[-1], "oss-transfer/latest/VERSION")
+        self.assertEqual([key for key in keys if "/latest/" in key],
+                         ["oss-transfer/latest/" + name for name in PUBLISH.LATEST] + ["oss-transfer/latest/VERSION"])
+
+    def test_remote_content_must_match_local_md5_when_etag_is_plain(self):
+        self.stable()
+        with self.assertRaisesRegex(ValueError, "ETag differs"):
+            self.uploaded(etag=lambda data: '"%s"' % hashlib.md5(data + b"x").hexdigest())
+        # Multipart-style ETags are not MD5s; key and size still verify.
+        self.assertTrue(self.uploaded(etag=lambda data: '"%s-2"' % hashlib.md5(data).hexdigest()))
 
     def test_failed_payload_upload_preserves_latest(self):
         self.stable()
         keys = self.uploaded(fail_at=3)
-        self.assertEqual(len(keys), 3)
+        self.assertGreaterEqual(len(keys), 3)
         self.assertFalse(any("/latest/" in key for key in keys))
-
 
 if __name__ == "__main__":
     unittest.main()

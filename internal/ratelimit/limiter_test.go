@@ -370,47 +370,55 @@ func TestLowerCapDoesNotReceiveRefundFromOldRevision(t *testing.T) {
 func TestStopAndGenerationChangeCancelWaitingReads(t *testing.T) {
 	for _, mode := range []string{"stop", "generation", "context", "close"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newFixture(t)
-			apply(t, f.limiter, 1, 1)
-			ctx, cancel := context.WithCancel(bg)
-			defer cancel()
-			input := &atomicCloser{Reader: bytes.NewReader([]byte("x"))}
-			r, err := f.limiter.Wrap(ctx, 1, 1, input, 1)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer r.Close()
-			done := make(chan error, 1)
-			go func() { _, err := r.Read(make([]byte, 1)); done <- err }()
-			time.Sleep(20 * time.Millisecond)
-			switch mode {
-			case "stop":
-				err = f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 1, Revision: 2, Stopped: true})
-			case "generation":
-				err = f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 2, Revision: 1})
-			case "context":
-				cancel()
-			case "close":
-				f.limiter.Close()
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case err := <-done:
-				if err == nil {
-					t.Fatal("cancelled budget read succeeded")
+			// The fake clock keeps the 1 byte/s grant from firing while database
+			// commits and goroutine wakeups run, however slow the runner is.
+			synctest.Test(t, func(t *testing.T) {
+				f := newFixture(t)
+				apply(t, f.limiter, 1, 1)
+				ctx, cancel := context.WithCancel(bg)
+				defer cancel()
+				input := &atomicCloser{Reader: bytes.NewReader([]byte("x"))}
+				r, err := f.limiter.Wrap(ctx, 1, 1, input, 1)
+				if err != nil {
+					t.Fatal(err)
 				}
-			case <-time.After(300 * time.Millisecond):
-				t.Fatal("cancel did not wake blocked reader")
-			}
-			deadline := time.Now().Add(time.Second)
-			for !input.closed.Load() && time.Now().Before(deadline) {
-				time.Sleep(time.Millisecond)
-			}
-			if !input.closed.Load() {
-				t.Fatal("underlying reader not closed on cancellation")
-			}
+				defer r.Close()
+				done := make(chan error, 1)
+				go func() { _, err := r.Read(make([]byte, 1)); done <- err }()
+				// Wait until Read is blocked on its budget without advancing the clock.
+				synctest.Wait()
+				select {
+				case err := <-done:
+					t.Fatalf("1 byte/s read did not wait: %v", err)
+				default:
+				}
+				switch mode {
+				case "stop":
+					err = f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 1, Revision: 2, Stopped: true})
+				case "generation":
+					err = f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 2, Revision: 1})
+				case "context":
+					cancel()
+				case "close":
+					f.limiter.Close()
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The change must release the reader before its budget timer fires.
+				synctest.Wait()
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("cancelled budget read succeeded")
+					}
+				default:
+					t.Fatal("cancel did not wake blocked reader")
+				}
+				if !input.closed.Load() {
+					t.Fatal("underlying reader not closed on cancellation")
+				}
+			})
 		})
 	}
 }

@@ -237,6 +237,33 @@ func mustBudget(t *testing.T, bytes int64) *UploadMemoryBudget {
 	return budget
 }
 
+// overlapGate holds the first n callers until all n are inside the counted
+// request window together, so concurrency peaks are forced rather than hoped
+// for from sleeps. The timeout is only a hang guard; a missing arrival shows
+// up as a failed peak assertion.
+func overlapGate(n int) func(context.Context) {
+	var mu sync.Mutex
+	arrived := 0
+	all := make(chan struct{})
+	return func(ctx context.Context) {
+		mu.Lock()
+		arrived++
+		if arrived == n {
+			close(all)
+		}
+		held := arrived <= n
+		mu.Unlock()
+		if !held {
+			return
+		}
+		select {
+		case <-all:
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second):
+		}
+	}
+}
+
 func rangedWrite(ctx context.Context, s *S3, size int64) (WriteResult, error) {
 	ranges, object, err := s.OpenRanges(ctx, "source", OpenOptions{})
 	if err != nil {
@@ -257,7 +284,16 @@ func TestRangedMultipartBorrowsIdleSlotsAndKeepsBaseWhenBusy(t *testing.T) {
 	}{{"idle", 100}, {"busy", 0}} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := newRangeS3(t, payload)
-			server.latency = 40 * time.Millisecond
+			// Busy keeps exactly the four base slots, all of which must reach
+			// PUT together; idle must get a fifth, borrowed slot into both.
+			want := 4
+			if tc.idle > 0 {
+				want = 5
+				getGate := overlapGate(want)
+				server.onRange = func(int64) { getGate(context.Background()) }
+			}
+			putGate := overlapGate(want)
+			server.onPart = func(ctx context.Context, _ int) { putGate(ctx) }
 			lender := idleLender(tc.idle)
 			s := server.store(t, mustBudget(t, DefaultUploadMemoryBytes), lender, t.TempDir())
 			result, err := rangedWrite(context.Background(), s, int64(len(payload)))
@@ -273,7 +309,7 @@ func TestRangedMultipartBorrowsIdleSlotsAndKeepsBaseWhenBusy(t *testing.T) {
 			if server.gets != 13 || server.ranged != 13 {
 				t.Fatalf("source requests gets%d ranged%d", server.gets, server.ranged)
 			}
-			if tc.idle > 0 && (server.putMax <= 4 || server.getMax <= 4) {
+			if tc.idle > 0 && (server.putMax < want || server.getMax < want) {
 				t.Fatalf("idle node did not lend slots: puts%d gets%d", server.putMax, server.getMax)
 			}
 			if tc.idle == 0 && (server.putMax != 4 || server.getMax > 4) {
@@ -289,7 +325,9 @@ func TestRangedMultipartBorrowsIdleSlotsAndKeepsBaseWhenBusy(t *testing.T) {
 func TestRangedPartsStayResidentWithinNodeBudget(t *testing.T) {
 	payload := rangedPayload(12)
 	server := newRangeS3(t, payload)
-	server.latency = 40 * time.Millisecond
+	// Four base parts plus at least one borrowed part must be in PUT at once.
+	putGate := overlapGate(5)
+	server.onPart = func(ctx context.Context, _ int) { putGate(ctx) }
 	budget := mustBudget(t, 8*minPartSize)
 	spool := t.TempDir()
 	s := server.store(t, budget, idleLender(100), spool)

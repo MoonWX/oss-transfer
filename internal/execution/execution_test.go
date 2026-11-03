@@ -315,14 +315,35 @@ func TestStopFencePrecedesCancelAndResumeWaitsOldAttempt(t *testing.T) {
 	f.acceptStart()
 	<-entered
 	before, _ := f.repo.Get(bg, f.job.ChildID)
-	stopCtx, cancel := context.WithTimeout(bg, 30*time.Millisecond)
-	defer cancel()
-	if err := f.engine.Stop(stopCtx, f.job.ChildID, 1); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("stop must wait blocked I/O: %v", err)
+	// End Stop's wait only once the fence is durable: a timer could expire
+	// before Stop even reaches its commit on a slow runner.
+	stopCtx, cancelStop := context.WithCancel(bg)
+	defer cancelStop()
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- f.engine.Stop(stopCtx, f.job.ChildID, 1) }()
+	var stopped Record
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Millisecond) {
+		stopped, _ = f.repo.Get(bg, f.job.ChildID)
+		if stopped.Status == Stopped && stopped.Attempt > before.Attempt {
+			break
+		}
+		select {
+		case err := <-stopErr:
+			t.Fatalf("stop returned before its fence was visible: %v %+v", err, stopped)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stop fence missing: %+v", stopped)
+		}
 	}
-	stopped, _ := f.repo.Get(bg, f.job.ChildID)
-	if stopped.Status != Stopped || stopped.Attempt <= before.Attempt {
-		t.Fatalf("stop fence missing: %+v", stopped)
+	select {
+	case err := <-stopErr:
+		t.Fatalf("stop returned before blocked I/O finished: %v", err)
+	default:
+	}
+	cancelStop()
+	if err := <-stopErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stop must wait blocked I/O: %v", err)
 	}
 	resumeCtx, done := context.WithTimeout(bg, 30*time.Millisecond)
 	defer done()

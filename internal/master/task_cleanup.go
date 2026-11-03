@@ -54,6 +54,9 @@ type taskCleanupRuntime struct {
 	active      map[int64]bool
 	retry       map[int64]map[string]cleanupRetry
 	nodeTimeout time.Duration
+	// Test hook: a positive result overrides nodeTimeout for that node, so a
+	// test can expire an offline node quickly without rushing online ones.
+	nodeTimeoutFor func(task.Node) time.Duration
 }
 
 func newTaskCleanupRuntime(t *taskRuntime) *taskCleanupRuntime {
@@ -220,7 +223,13 @@ func (c *taskCleanupRuntime) cleanNode(ctx context.Context, p task.Parent, node 
 		return result
 	}
 	request := agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation}
-	call, cancel := context.WithTimeout(ctx, c.nodeTimeout)
+	timeout := c.nodeTimeout
+	if c.nodeTimeoutFor != nil {
+		if d := c.nodeTimeoutFor(node); d > 0 {
+			timeout = d
+		}
+	}
+	call, cancel := context.WithTimeout(ctx, timeout)
 	result.err = s.agentCall(call, nodeSession(node), "parent_cleanup", true, request, &result.status)
 	cancel()
 	if agentStatus(result.err, http.StatusNotFound) {

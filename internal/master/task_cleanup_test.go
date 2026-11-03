@@ -50,7 +50,7 @@ func serveCleanupAgent(t *testing.T, f *agentHTTPFixture, node task.Node, respon
 
 func waitCleanup(t *testing.T, f *agentHTTPFixture, id int64, check func(task.Parent) bool) task.Parent {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // hang guard only
 	for {
 		p, err := f.master.tasks.repo.Get(id)
 		if err != nil {
@@ -90,14 +90,17 @@ func TestCleanupAdmissionDoesNotWaitForAgentAndDuplicatesAreIgnored(t *testing.T
 		return agenttransport.Response{Status: 200, Payload: json.RawMessage(`{"done":true,"recordsDeleted":12}`)}
 	})
 	f.master.Start()
-	before := time.Now()
-	code, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/permanent-delete", f.admin, map[string]any{"taskIds": []int64{p.ID}})
-	if code != 200 || body["accepted"] != float64(1) || time.Since(before) > time.Second {
-		t.Fatal("delete waited for Agent cleanup", code, body, time.Since(before))
+	// The Agent is held on release until the end of the test, so any reply
+	// here proves admission did not wait for it; the timeout is a hang guard.
+	client := *f.http.Client()
+	client.Timeout = 30 * time.Second
+	code, body := request(t, &client, "POST", f.http.URL+"/api/master/permanent-delete", f.admin, map[string]any{"taskIds": []int64{p.ID}})
+	if code != 200 || body["accepted"] != float64(1) {
+		t.Fatal("delete waited for Agent cleanup or was not admitted", code, body)
 	}
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("background cleanup never started")
 	}
 	code, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/permanent-delete", f.admin, map[string]any{"taskIds": []int64{p.ID}})
@@ -135,7 +138,14 @@ func TestCleanupQueueSurvivesMasterRestartAndOfflineNodeDoesNotBlockOtherNode(t 
 	// Restart before any node has acknowledged, without resubmitting deletion.
 	f.close()
 	f.open(t)
-	f.master.tasks.cleanup.nodeTimeout = 50 * time.Millisecond
+	// Only the offline node expires quickly; online b keeps the default
+	// timeout, so its single reply cannot be lost to a slow runner and retried.
+	f.master.tasks.cleanup.nodeTimeoutFor = func(node task.Node) time.Duration {
+		if node.ID == a.NodeID {
+			return 50 * time.Millisecond
+		}
+		return 0
+	}
 	var calls atomic.Int32
 	serveCleanupAgent(t, f, p.Spec.Nodes[1], func(_ context.Context, command agenttransport.Command) agenttransport.Response {
 		calls.Add(1)
@@ -152,7 +162,6 @@ func TestCleanupQueueSurvivesMasterRestartAndOfflineNodeDoesNotBlockOtherNode(t 
 	// must survive, so the finished node need not even reconnect.
 	f.close()
 	f.open(t)
-	f.master.tasks.cleanup.nodeTimeout = 50 * time.Millisecond
 	f.master.Start()
 	// The previously offline node reconnects. The durable operation finishes
 	// automatically; there is no second permanent-delete request.
@@ -273,7 +282,14 @@ func TestCleanupWaitingTasksDoNotStarveLaterReadyTask(t *testing.T) {
 	serveCleanupAgent(t, f, ready.Spec.Nodes[0], func(_ context.Context, _ agenttransport.Command) agenttransport.Response {
 		return agenttransport.Response{Status: 200, Payload: json.RawMessage(`{"done":true,"recordsDeleted":1}`)}
 	})
-	f.master.tasks.cleanup.nodeTimeout = 20 * time.Millisecond
+	// Only the offline node expires quickly, releasing its task slots; the
+	// online ready node keeps the default timeout to answer within.
+	f.master.tasks.cleanup.nodeTimeoutFor = func(node task.Node) time.Duration {
+		if node.ID == offline.NodeID {
+			return 20 * time.Millisecond
+		}
+		return 0
+	}
 	f.master.Start()
 	waitCleanup(t, f, ready.ID, func(p task.Parent) bool { return p.Purged })
 	for _, p := range waiting {

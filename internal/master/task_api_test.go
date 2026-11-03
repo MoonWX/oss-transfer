@@ -218,10 +218,16 @@ func TestTaskHTTPPaginationDetailsRecycleAndOfflineState(t *testing.T) {
 	if code, _ := request(t, f.http.Client(), "PUT", fmt.Sprintf("%s/api/master/tasks/%d/bandwidth-limit", f.http.URL, p.ID), f.admin, map[string]any{"limitMbps": 100}); code != 409 {
 		t.Fatal("ended task bandwidth editable", code)
 	}
-	started := time.Now()
+	// The offline node must be short-circuited rather than dialled: a dialled
+	// node would report the Agent call's error, not the offline message.
 	status, body = request(t, f.http.Client(), "GET", fmt.Sprintf("%s/api/master/tasks/%d/bandwidth-limit", f.http.URL, p.ID), f.admin, nil)
-	if status != 200 || body["data"].(map[string]any)["applied"] != false || time.Since(started) > time.Second {
-		t.Fatal("offline bandwidth status was slow or invented", status, body)
+	limit, _ := body["data"].(map[string]any)
+	nodes, _ := limit["nodes"].([]any)
+	if status != 200 || limit["applied"] != false || len(nodes) != 1 {
+		t.Fatal("offline bandwidth status was invented", status, body)
+	}
+	if node, _ := nodes[0].(map[string]any); node["applied"] != false || node["pending"] != false || (node["message"] != "执行节点未连接" && node["message"] != "Worker is not connected") {
+		t.Fatal("offline node was queried instead of short-circuited", body)
 	}
 }
 
@@ -252,13 +258,13 @@ func taskAPIAgent(t *testing.T, f *agentHTTPFixture) (*agentservice.Service, tas
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Error("Agent runner did not stop")
 		}
 		_ = service.Close(context.Background())
 		_ = db.Close()
 	})
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // hang guard only
 	for {
 		online, err := f.master.onlineAgents()
 		if err != nil {

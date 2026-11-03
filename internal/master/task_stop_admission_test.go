@@ -20,8 +20,10 @@ func TestStopHTTPAcceptsWithoutWaitingAndSurvivesRestart(t *testing.T) {
 	// Neither may hold the HTTP response after the stop intent is persisted.
 	var cancellations atomic.Int64
 	f.master.tasks.active[p.ID] = &taskRun{cancel: func() { cancellations.Add(1) }, done: make(chan struct{})}
+	// The run's done channel never closes and the Agent never polls, so a
+	// handler that waited on either would never answer; this is a hang guard.
 	client := *f.http.Client()
-	client.Timeout = time.Second
+	client.Timeout = 30 * time.Second
 	for pass, endpoint := range []string{"stop", "local-transfers/stop"} {
 		status, body := request(t, &client, "POST", f.http.URL+"/api/master/"+endpoint, f.admin, map[string]any{"taskIds": []int64{p.ID}})
 		if data, ok := body["data"].(map[string]any); ok {
@@ -89,8 +91,10 @@ func TestStopHTTPFinishesThroughBackgroundRuntime(t *testing.T) {
 	_, node := taskAPIAgent(t, f)
 	p := takeoverParent(t, f, node)
 	f.master.Start()
+	// The STOPPING status in the reply is the proof the handler did not wait
+	// for the online Agent; the client timeout is only a hang guard.
 	client := *f.http.Client()
-	client.Timeout = time.Second
+	client.Timeout = 30 * time.Second
 	status, body := request(t, &client, "POST", f.http.URL+"/api/master/stop", f.admin, map[string]any{"taskIds": []int64{p.ID}})
 	if status != http.StatusOK || body["accepted"] != float64(1) || body["failed"] != float64(0) {
 		t.Fatal(status, body)
@@ -98,7 +102,7 @@ func TestStopHTTPFinishesThroughBackgroundRuntime(t *testing.T) {
 	if detail := body["details"].([]any)[0].(map[string]any); detail["status"] != "STOPPING" {
 		t.Fatal("HTTP waited for the final stop", detail)
 	}
-	deadline := time.NewTimer(5 * time.Second)
+	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()

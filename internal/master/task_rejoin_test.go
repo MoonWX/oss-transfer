@@ -20,9 +20,11 @@ func TestReturningNodeRejoinsWithFreshEpochAndFutureAssignments(t *testing.T) {
 	a, b := takeoverTestAgent(t, f, "rejoin-a"), takeoverTestAgent(t, f, "rejoin-b")
 	p := takeoverParent(t, f, a.node, b.node)
 	runtime := f.master.tasks
-	runtime.leases.ttl = time.Second
+	// Nothing here needs real expiry (safeAfter is advanced by hand below), so
+	// the Agent lease must outlive every RPC and fsync until the final check.
+	runtime.leases.ttl = 30 * time.Second
 	runtime.leases.margin = time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	rows, err := runtime.repo.AssignPageAvailable(p.ID, p.Generation, []task.Assignment{{Number: 1, Objects: []transferstore.Object{{Key: "old", Size: 1}}}}, map[string]bool{b.node.ID: true})
 	if err != nil {

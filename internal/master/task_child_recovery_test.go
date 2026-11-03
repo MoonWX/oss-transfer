@@ -82,7 +82,7 @@ func recoveryHTTPFixture(t *testing.T, shared, old bool) (*agentHTTPFixture, *ag
 	if err = engine.Start(context.Background(), child.Job.ChildID, parent.Generation); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	record, err := engine.Wait(ctx, child.Job.ChildID)
 	cancel()
 	if err != nil || record.Status != execution.Recoverable {
@@ -202,9 +202,12 @@ func TestChildRecoveryHTTPReportsCapacityWithoutStartingAnotherAttempt(t *testin
 	}
 	before, _ := agent.Jobs.Get(context.Background(), child.Job.ChildID)
 	url := fmt.Sprintf("%s/api/master/tasks/%d/children/1/recover", f.http.URL, parent.ID)
-	start := time.Now()
-	code, body := request(t, f.http.Client(), "POST", url, f.admin, nil)
-	if code != 200 || body["data"].(map[string]any)["outcome"] != "WAITING_CAPACITY" || time.Since(start) > 3*time.Second {
+	// The blocker never finishes, so WAITING_CAPACITY can only come from an
+	// immediate capacity refusal; the client timeout is just a hang guard.
+	client := *f.http.Client()
+	client.Timeout = 30 * time.Second
+	code, body := request(t, &client, "POST", url, f.admin, nil)
+	if code != 200 || body["data"].(map[string]any)["outcome"] != "WAITING_CAPACITY" {
 		t.Fatal("full Agent pool was not reported promptly", code, body)
 	}
 	after, _ := agent.Jobs.Get(context.Background(), child.Job.ChildID)
@@ -264,11 +267,17 @@ func TestChildRecoveryHTTPConcurrentClicksAdmitOnlyOneAttempt(t *testing.T) {
 	if err != nil || after.Attempt != before.Attempt+1 || after.Job.Generation != before.Job.Generation {
 		t.Fatal(after, err)
 	}
-	deadline := time.Now().Add(time.Second)
+	// The first open blocks until cancellation, so a duplicate attempt would
+	// still be counted; the deadline only guards against a hang.
+	deadline := time.Now().Add(30 * time.Second)
 	for opens.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if opens.Load() != 1 {
-		t.Fatal("duplicate data-plane execution", opens.Load())
+	switch n := opens.Load(); n {
+	case 0:
+		t.Fatal("admitted attempt never opened the data plane")
+	case 1:
+	default:
+		t.Fatal("duplicate data-plane execution", n)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,8 +34,13 @@ func TestStopLeaseRequiresAnArmedExpiredOwner(t *testing.T) {
 	a, b := takeoverTestAgent(t, f, "stop-a"), takeoverTestAgent(t, f, "stop-b")
 	p := takeoverParent(t, f, a.node, b.node)
 	runtime := f.master.tasks
-	runtime.leases.ttl, runtime.leases.margin = time.Second, 50*time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// The Agent lease (ttl) still expires for real after a second, but the
+	// Master's view of expiry is driven by skew, so a slow runner can neither
+	// make the live owner look expired early nor stall the expiry check.
+	var skew atomic.Int64
+	runtime.leases.now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+	runtime.leases.ttl, runtime.leases.margin = time.Second, 30*time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	p, err := runtime.repo.EnableFailover(p.ID, p.Generation, false)
 	if err != nil {
@@ -65,6 +71,9 @@ func TestStopLeaseRequiresAnArmedExpiredOwner(t *testing.T) {
 		t.Fatal("early stop changed parent state", current.Status)
 	}
 	waitLeaseAuthorityEnds(t, ctx, a, p)
+	// Only after the Agent has really lost authority may the Master see the
+	// conservative margin as elapsed.
+	skew.Store(int64(time.Hour))
 	for {
 		stopped, err := runtime.nodeLeaseStopped(stopping, a.node)
 		if err != nil {
@@ -84,10 +93,9 @@ func TestStopLeaseRequiresAnArmedExpiredOwner(t *testing.T) {
 	if err := f.master.agentCall(ctx, nodeSession(b.node), "parent_stop", true, agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation}, nil); err != nil {
 		t.Fatal(err)
 	}
-	fast, endFast := context.WithTimeout(ctx, 500*time.Millisecond)
-	err = runtime.step(fast, p.ID)
-	endFast()
-	if err != nil {
+	// A call to the offline scanner would never be answered, so success under
+	// the test context proves step did not wait for it.
+	if err = runtime.step(ctx, p.ID); err != nil {
 		t.Fatal("expired offline scanner blocked stop reconciliation", err)
 	}
 	current, err = runtime.repo.Get(p.ID)
@@ -139,8 +147,10 @@ func TestStopAndResumeWithRetiredCompletedScannerPreservesTransferredBytes(t *te
 	}
 	p := takeoverParent(t, f, a.node, b.node)
 	runtime := f.master.tasks
-	runtime.leases.ttl, runtime.leases.margin = time.Second, 100*time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	// Leave room for race-instrumented storage and RPC work on shared runners:
+	// a delayed renewal must not cost the healthy owner its lease mid-transfer.
+	runtime.leases.ttl, runtime.leases.margin = 5*time.Second, 500*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	startTakeoverLeaseLoop(t, ctx, runtime)
 	for {
@@ -177,9 +187,11 @@ func TestStopAndResumeWithRetiredCompletedScannerPreservesTransferredBytes(t *te
 	if _, err := runtime.repo.Stop(p.ID); err != nil {
 		t.Fatal(err)
 	}
-	fast, endFast := context.WithTimeout(ctx, 500*time.Millisecond)
-	err = runtime.step(fast, p.ID)
-	endFast()
+	// The retired scanner is offline and would never answer; the bound only
+	// turns such a wait into a failure instead of a hang.
+	bounded, endBounded := context.WithTimeout(ctx, 20*time.Second)
+	err = runtime.step(bounded, p.ID)
+	endBounded()
 	if err != nil {
 		t.Fatal("stop waited for the retired scanner", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -114,6 +113,16 @@ func progressMetrics(p task.Parent, reports ...execution.ChildProgress) agentser
 	return agentservice.TaskRateSnapshot{ParentID: p.ID, Generation: p.Generation, ProgressSupported: true, Progress: reports}
 }
 
+// averageWithin checks a view's live average against clock readings taken
+// before and after building it. Elapsed time only grows, and the view truncates
+// it to whole milliseconds, so the exact value lies in this bracket however
+// slowly the views were built.
+func averageWithin(got, bytes float64, before, after time.Duration) bool {
+	lo := bytes / after.Seconds()
+	hi := bytes / (before - time.Millisecond).Seconds()
+	return got >= lo*(1-1e-9) && got <= hi*(1+1e-9)
+}
+
 func TestLiveProgressAverageBeforeAnyObjectCompletesAndAfterPartialFailure(t *testing.T) {
 	f, p := progressMasterFixture(t, 1)
 	const large int64 = 350 << 30
@@ -130,14 +139,16 @@ func TestLiveProgressAverageBeforeAnyObjectCompletesAndAfterPartialFailure(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, row := range []map[string]any{f.master.taskView(p), f.master.childView(p, c)} {
+	before := time.Since(*p.StartedAt)
+	rows := []map[string]any{f.master.taskView(p), f.master.childView(p, c)}
+	after := time.Since(*p.StartedAt)
+	for _, row := range rows {
 		if row["putObjectSize"] != int64(0) || row["averageSpeedIncludesInFlight"] != true {
 			t.Fatalf("in-flight bytes were credited as completed, or average remained durable-only: %+v", row)
 		}
 		got, ok := row["averageSpeedBytesPerSecond"].(float64)
-		want := float64(sample.InFlightBytes) / time.Since(*p.StartedAt).Seconds()
-		if !ok || math.Abs(got-want) > want*0.001 {
-			t.Fatalf("large file average = %v, want approximately %v", row["averageSpeedBytesPerSecond"], want)
+		if !ok || !averageWithin(got, float64(sample.InFlightBytes), before, after) {
+			t.Fatalf("large file average = %v, want %v bytes over %v..%v", row["averageSpeedBytesPerSecond"], sample.InFlightBytes, before, after)
 		}
 	}
 	// Failed/incomplete bytes must disappear from the final average even while
@@ -197,10 +208,11 @@ func TestLiveProgressMetricsDoNotDoubleCountCompletionDuringRPC(t *testing.T) {
 	if !fresh || entry.progress == nil || entry.progress.TotalBytes != large+50 || len(entry.progress.Children) != 1 || entry.progress.Children[0].Progress.ChildID != other.Job.ChildID {
 		t.Fatalf("completion was double counted or discarded another active child: %+v", entry.progress)
 	}
+	before := time.Since(*p.StartedAt)
 	row := f.master.taskView(p)
-	want := float64(large+50) / time.Since(*p.StartedAt).Seconds()
-	if got, ok := row["averageSpeedBytesPerSecond"].(float64); !ok || math.Abs(got-want) > want*0.001 {
-		t.Fatalf("average after ledger advance = %v, want approximately %v", row["averageSpeedBytesPerSecond"], want)
+	after := time.Since(*p.StartedAt)
+	if got, ok := row["averageSpeedBytesPerSecond"].(float64); !ok || !averageWithin(got, float64(large+50), before, after) {
+		t.Fatalf("average after ledger advance = %v, want %v bytes over %v..%v", row["averageSpeedBytesPerSecond"], large+50, before, after)
 	}
 }
 
@@ -222,14 +234,19 @@ func TestTaskSpeedFreshnessMatchesWhileFileProgressExpiresEarlier(t *testing.T) 
 	if !fresh || original.progress == nil {
 		t.Fatal("initial aggregate missing")
 	}
-	for _, age := range []time.Duration{2 * time.Second, 4 * time.Second, 9 * time.Second, 11 * time.Second} {
+	// Ages sit mid-band (file progress fresh for 3 s, task speed for
+	// taskRateMaxAge) so a multi-second stall cannot move a case across a limit.
+	for _, age := range []time.Duration{0, 6500 * time.Millisecond, 20 * time.Second} {
 		t.Run(age.String(), func(t *testing.T) {
 			entry := original
 			entry.observed = time.Now().Add(-age)
 			f.master.tasks.mu.Lock()
 			f.master.tasks.rates[p.ID] = entry
 			f.master.tasks.mu.Unlock()
-			for _, row := range []map[string]any{f.master.taskView(p), f.master.childView(p, c)} {
+			before := time.Since(*p.StartedAt)
+			rows := []map[string]any{f.master.taskView(p), f.master.childView(p, c)}
+			after := time.Since(*p.StartedAt)
+			for _, row := range rows {
 				average, hasAverage := row["averageSpeedBytesPerSecond"].(float64)
 				if age > taskRateMaxAge {
 					if row["currentSpeedBytesPerSecond"] != nil || hasAverage {
@@ -237,8 +254,7 @@ func TestTaskSpeedFreshnessMatchesWhileFileProgressExpiresEarlier(t *testing.T) 
 					}
 					continue
 				}
-				want := float64(sample.InFlightBytes) / time.Since(*p.StartedAt).Seconds()
-				if row["currentSpeedBytesPerSecond"] != float64(1234) || !hasAverage || math.Abs(average-want) > want*0.001 {
+				if row["currentSpeedBytesPerSecond"] != float64(1234) || !hasAverage || !averageWithin(average, float64(sample.InFlightBytes), before, after) {
 					t.Fatalf("one task speed expired before the other: %+v", row)
 				}
 			}

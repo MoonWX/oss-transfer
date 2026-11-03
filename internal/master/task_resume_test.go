@@ -25,10 +25,11 @@ func TestRetryHTTPPersistsAcceptanceWithoutWaitingForOfflineAgent(t *testing.T) 
 	if err := f.master.tasks.repo.Stopped(p.ID, p.Generation); err != nil {
 		t.Fatal(err)
 	}
-	// The Agent never polls. The HTTP call must still return its durable
-	// acceptance; waiting for any command acknowledgement would exceed this.
+	// The Agent never polls, so a handler that waited for any command
+	// acknowledgement would hold the response for agentCall's 30 s bound.
+	// The response and its RESUMING status are the proof; this is a hang guard.
 	client := *f.http.Client()
-	client.Timeout = time.Second
+	client.Timeout = 25 * time.Second
 	for index, route := range []string{"retry", "resume", "local-transfers/retry-failures"} {
 		status, body := request(t, &client, "POST", f.http.URL+"/api/master/"+route, f.admin, map[string]any{"taskIds": []int64{p.ID}})
 		if data, ok := body["data"].(map[string]any); ok {

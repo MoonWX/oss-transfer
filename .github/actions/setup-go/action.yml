@@ -1,24 +1,69 @@
 name: Set up Go
-description: Fetch the pinned official setup-go action through Git.
+description: Fetch the pinned official setup-go action through Git and restore a per-purpose Go cache.
 inputs:
   go-version-file:
     description: File containing the Go version.
     required: true
-  cache-dependency-path:
-    description: Dependency files used by the Go cache.
+  purpose:
+    description: Cache family; jobs that compile different objects must not share one (cross, tests, race).
     required: true
+outputs:
+  cache-key:
+    description: Key under which the caller saves the caches after its Go work.
+    value: ${{ steps.paths.outputs.key }}
+  cache-path:
+    description: Go build and module cache directories.
+    value: ${{ steps.paths.outputs.path }}
 runs:
   using: composite
   steps:
     # GitHub's codeload SHA archive endpoint can fail independently of Git.
-    # Keep this checkout until the official action's cache post-step finishes.
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: actions/setup-go
         ref: b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         path: output/ci-actions/setup-go
         persist-credentials: false
+    # setup-go's own cache is keyed on go.sum only and never re-saved, so it
+    # goes stale and Go trims it on restore. Callers save per commit instead.
     - uses: ./output/ci-actions/setup-go
       with:
         go-version-file: ${{ inputs.go-version-file }}
-        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        cache: false
+    - id: paths
+      shell: bash
+      env:
+        PURPOSE: ${{ inputs.purpose }}
+        DEPENDENCIES: ${{ hashFiles('go.sum', 'cli/go.sum') }}
+      run: |
+        [[ "$PURPOSE" =~ ^[a-z]+$ ]] || { echo "Invalid Go cache purpose: $PURPOSE" >&2; exit 1; }
+        prefix="go-$RUNNER_OS-$RUNNER_ARCH-$(go env GOVERSION)-$PURPOSE-"
+        {
+          printf 'key=%s%s-%s\n' "$prefix" "$DEPENDENCIES" "$GITHUB_SHA"
+          printf 'restore=%s%s-\n' "$prefix" "$DEPENDENCIES"
+          printf 'prefix=%s\n' "$prefix"
+          printf 'path<<GO_CACHE_PATHS\n%s\n%s\nGO_CACHE_PATHS\n' "$(go env GOCACHE)" "$(go env GOMODCACHE)"
+        } >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.path }}
+        key: ${{ steps.paths.outputs.key }}
+        restore-keys: |
+          ${{ steps.paths.outputs.restore }}
+          ${{ steps.paths.outputs.prefix }}
+    # Restored entries keep their old mtimes, and Go deletes entries older than
+    # five days once trim.txt is a day old. Trim relative to the previous run's
+    # trim.txt instead, then mark this run trimmed so Go keeps the rest.
+    - shell: bash
+      run: |
+        cache="$(go env GOCACHE)"
+        if command -v cygpath >/dev/null; then cache="$(cygpath -u "$cache")"; fi
+        mkdir -p "$cache"
+        now="$(date +%s)"
+        previous=""
+        if [[ -f "$cache/trim.txt" ]]; then previous="$(tr -d '[:space:]' < "$cache/trim.txt")"; fi
+        if ! [[ "$previous" =~ ^[0-9]+$ ]] || (( previous > now )); then previous="$now"; fi
+        minutes=$(( (now - previous + 5 * 86400) / 60 ))
+        find "$cache" -mindepth 2 -maxdepth 2 -type f -mmin "+$minutes" -delete
+        printf '%s\n' "$now" > "$cache/trim.txt"
+        du -sh "$cache" 2>/dev/null || true

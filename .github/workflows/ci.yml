@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   package:
-    name: Build packages and test programs
+    name: Build packages
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -53,46 +53,62 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            cli/go.sum
+          purpose: cross
       - run: npm ci --prefix frontend
-      - name: Check translations and preserve message parameters
-        if: steps.reuse.outputs.reuse_tests != 'true'
-        run: npm run test:messages --prefix frontend
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Reject corrupt or ambiguous release packages
-        run: |
-          python3 -m pip install -r .github/acceptance/requirements.txt
-          python3 scripts/sync-installer-source.py --check
-          python3 .github/tests/test-source-selection.py -v
-          python3 .github/tests/test-download-source.py -v
-          python3 .github/tests/test-installer-startup.py -v
-          python3 .github/tests/test-combined-installer.py -v
-          python3 .github/tests/test-packaging.py -v
-          python3 .github/tests/test-oss-layout.py -v
-          python3 .github/tests/test-resolve-ci-artifacts.py -v
-          python3 .github/tests/test-binaries.py -v
-          python3 .github/tests/test-cluster-diagnostics.py -v
-          python3 .github/tests/test-platform-runner.py -v
-          python3 .github/tests/test-host-s3.py -v
-          python3 .github/tests/test-docker-cleanup.py -v
-      - name: Build all candidate archives once
+      - name: Build all candidate archives once and reject corrupt or ambiguous release packages
         env:
           AGENT_ARTIFACT_BASE: https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
+          REUSE_TESTS: ${{ steps.reuse.outputs.reuse_tests }}
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then
             git status --short
             echo 'The build source changed before packaging.' >&2
             exit 1
           fi
+          python3 -m pip install -r .github/acceptance/requirements.txt
+          # The checks write only to temporary directories, so they overlap the
+          # Go build; their result still gates every upload below.
+          checks="$RUNNER_TEMP/checks"
+          mkdir -p "$checks"
+          (
+            status=0
+            if [[ "$REUSE_TESTS" != true ]]; then
+              npm run test:messages --prefix frontend > "$checks/test-messages.log" 2>&1 &
+              messages=$!
+            fi
+            if ! python3 scripts/sync-installer-source.py --check > "$checks/sync-installer-source.log" 2>&1; then
+              echo 'scripts/sync-installer-source.py --check' >> "$checks/failed"
+              status=1
+            fi
+            # shellcheck disable=SC2016 # Expanded by the per-file shell.
+            printf '%s\0' .github/tests/test-*.py | xargs -0 -P4 -I{} sh -c \
+              'python3 "$1" -v > "$2/$(basename "$1" .py).log" 2>&1 || { echo "$1" >> "$2/failed"; exit 1; }' _ {} "$checks" || status=1
+            if [[ -n "${messages:-}" ]] && ! wait "$messages"; then echo 'npm run test:messages' >> "$checks/failed"; status=1; fi
+            exit "$status"
+          ) &
+          checks_pid=$!
+          build_status=0
           BUILD_PLATFORMS="$(python3 deploy/native/platforms.py --list)"
           export BUILD_PLATFORMS
-          AGENT_ARTIFACT_VERSION="v$(cat VERSION)" AGENT_DOCKER_IMAGE="moonwx/osstransfer:$(cat VERSION)" bash scripts/build.sh
+          AGENT_ARTIFACT_VERSION="v$(cat VERSION)" AGENT_DOCKER_IMAGE="moonwx/osstransfer:$(cat VERSION)" bash scripts/build.sh || build_status=$?
+          checks_status=0
+          wait "$checks_pid" || checks_status=$?
+          for log in "$checks"/*.log; do
+            echo "::group::$(basename "$log" .log)"
+            cat "$log"
+            echo '::endgroup::'
+          done
+          if [[ "$checks_status" != 0 ]]; then
+            echo 'Release tooling checks failed:' >&2
+            cat "$checks/failed" >&2
+          fi
+          [[ "$build_status" == 0 && "$checks_status" == 0 ]]
       - name: Check the packaged program versions
         run: |
           smoke_dir="$(mktemp -d)"
@@ -104,7 +120,58 @@ jobs:
             printf '%s\n' "$identity"
             [[ "$identity" == *"$version"* && "$identity" == *"$commit"* ]]
           done
-      - name: Compile target tests alongside the release packages
+      - name: Assemble versioned native download assets
+        run: python3 deploy/native/release-assets.py --packages output/packages --output output/release-assets --version "$(cat VERSION)" --commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages
+          path: |
+            output/packages/*.tar.gz
+            output/packages/*.zip
+            output/packages/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: output/release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      # Pull requests only read caches; main and manual runs save per commit.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
+  test-programs:
+    name: Compile target test programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      reuse_tests: ${{ steps.reuse.outputs.reuse_tests }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Same decision as the package job; this job does not wait for it.
+      - name: Reuse passing tests for a version-only change
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/resolve-ci-artifacts.py --check-reuse
+      - uses: ./.github/actions/setup-go
+        if: steps.reuse.outputs.reuse_tests != 'true'
+        id: go
+        with:
+          go-version-file: go.mod
+          purpose: tests
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: steps.reuse.outputs.reuse_tests != 'true'
+        with:
+          python-version: '3.13'
+      - name: Compile target tests
         if: steps.reuse.outputs.reuse_tests != 'true'
         env:
           QA_FREEBSD_ARM64: ${{ inputs.freebsd_arm64 && 'true' || 'false' }}
@@ -128,26 +195,10 @@ jobs:
                   '--output', 'output/test-binaries/' + platform.replace('/', '-'),
               ], check=True)
 
-          with ThreadPoolExecutor(max_workers=2) as pool:
+          # Each target is one go test -c per module; their links overlap well.
+          with ThreadPoolExecutor(max_workers=len(platforms)) as pool:
               list(pool.map(compile_tests, platforms))
           PYTHON
-      - name: Assemble versioned native download assets
-        run: python3 deploy/native/release-assets.py --packages output/packages --output output/release-assets --version "$(cat VERSION)" --commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: packages
-          path: |
-            output/packages/*.tar.gz
-            output/packages/*.zip
-            output/packages/*.sha256
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-assets
-          path: output/release-assets/*
-          if-no-files-found: error
-          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
         with:
@@ -183,6 +234,11 @@ jobs:
           path: output/test-binaries/freebsd-arm64/
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.reuse.outputs.reuse_tests != 'true' && github.event_name != 'pull_request'
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
   image:
     if: inputs.freebsd_arm64 != true
     name: Build container image
@@ -231,7 +287,7 @@ jobs:
             output/oss-transfer-image.tar.sha256
           if-no-files-found: error
           retention-days: 7
-  native:
+  native-linux:
     if: needs.package.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
     name: Native ${{ matrix.platform }}
     needs: [package, image]
@@ -239,12 +295,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {platform: linux/amd64, arch: amd64, runner: ubuntu-latest, race: '-race'}
-          - {platform: linux/arm64, arch: arm64, runner: ubuntu-26.04-arm, race: '-race'}
-          - {platform: darwin/amd64, runner: macos-15-intel, race: '-race'}
-          - {platform: darwin/arm64, runner: macos-latest, race: '-race'}
-          - {platform: windows/amd64, runner: windows-latest, race: '-race'}
-          - {platform: windows/arm64, runner: windows-11-arm, race: ''}
+          - {platform: linux/amd64, name: linux-amd64, arch: amd64, runner: ubuntu-latest, race: '-race'}
+          - {platform: linux/arm64, name: linux-arm64, arch: arm64, runner: ubuntu-26.04-arm, race: '-race'}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     defaults:
@@ -255,11 +307,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            cli/go.sum
+          purpose: race
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -268,7 +319,6 @@ jobs:
           name: packages
           path: output/packages
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: runner.os == 'Linux'
         with:
           name: release-image
           path: output
@@ -279,7 +329,6 @@ jobs:
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
       - name: Load the verified image and prepare the Compose installer
-        if: runner.os == 'Linux'
         env:
           QA_ARCH: ${{ matrix.arch }}
         run: |
@@ -299,14 +348,17 @@ jobs:
         run: |
           args=(--platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance")
           if [[ -n "$RACE_FLAG" ]]; then args+=(--race); fi
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            args+=(--docker-image oss-transfer:qa --installer-manifest "$RUNNER_TEMP/installer-release/manifest.tsv")
-          fi
+          args+=(--docker-image oss-transfer:qa --installer-manifest "$RUNNER_TEMP/installer-release/manifest.tsv")
           python .github/acceptance/run-platform.py "${args[@]}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: evidence-${{ strategy.job-index }}
+          name: evidence-${{ matrix.name }}
           path: |
             ${{ runner.temp }}/acceptance/platform/evidence.json
             ${{ runner.temp }}/acceptance/platform/*.log
@@ -332,10 +384,87 @@ jobs:
             ${{ runner.temp }}/acceptance/setup/*.log
           if-no-files-found: ignore
           retention-days: 7
-  emulated:
+  native:
     if: needs.package.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
-    name: Linux ${{ matrix.arch }}
+    name: Native ${{ matrix.platform }}
+    # Only the Linux jobs load the container image, so these start without it.
     needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel, race: '-race'}
+          - {platform: darwin/arm64, name: darwin-arm64, runner: macos-latest, race: '-race'}
+          - {platform: windows/amd64, name: windows-amd64, runner: windows-latest, race: '-race'}
+          - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm, race: ''}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        id: go
+        with:
+          go-version-file: go.mod
+          purpose: race
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: output/packages
+      - name: Verify packages and prepare pinned S3 service
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m pip install -r .github/acceptance/requirements.txt
+          python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
+      - name: Check execution, administration and service lifecycle
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+          RACE_FLAG: ${{ matrix.race }}
+        run: |
+          args=(--platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance")
+          if [[ -n "$RACE_FLAG" ]]; then args+=(--race); fi
+          python .github/acceptance/run-platform.py "${args[@]}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: evidence-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/acceptance/platform/evidence.json
+            ${{ runner.temp }}/acceptance/platform/*.log
+            ${{ runner.temp }}/acceptance/unit/evidence.json
+            ${{ runner.temp }}/acceptance/unit/*.log
+            ${{ runner.temp }}/acceptance/smoke/evidence.json
+            ${{ runner.temp }}/acceptance/smoke/*.log
+            ${{ runner.temp }}/acceptance/cli/evidence.json
+            ${{ runner.temp }}/acceptance/cli/*.log
+            ${{ runner.temp }}/acceptance/local-cli/evidence.json
+            ${{ runner.temp }}/acceptance/local-cli/**/*.log
+            ${{ runner.temp }}/acceptance/cluster/evidence.json
+            ${{ runner.temp }}/acceptance/cluster/bandwidth-samples.json
+            ${{ runner.temp }}/acceptance/cluster/*.log
+            ${{ runner.temp }}/acceptance/install/evidence.json
+            ${{ runner.temp }}/acceptance/install/*-install-*.log
+            ${{ runner.temp }}/acceptance/inventory/evidence.json
+            ${{ runner.temp }}/acceptance/inventory/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+  emulated:
+    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+    name: Linux ${{ matrix.arch }}
+    needs: [package, test-programs]
     strategy:
       fail-fast: false
       matrix:
@@ -408,9 +537,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
   freebsd:
-    if: needs.package.outputs.reuse_tests != 'true'
+    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true'
     name: FreeBSD ${{ matrix.arch }}
-    needs: package
+    needs: [package, test-programs]
     strategy:
       fail-fast: false
       matrix:

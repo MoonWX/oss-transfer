@@ -20,7 +20,7 @@ ARTIFACT_NAMES = {
 }
 WAIT_SECONDS = 65 * 60
 POLL_SECONDS = 15
-BUILD_JOBS = {"Build packages and test programs", "Build container image"}
+BUILD_JOBS = {"Build packages", "Build container image"}
 
 
 def version_only_ancestors(commit, *, cwd=None):

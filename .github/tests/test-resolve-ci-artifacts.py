@@ -41,7 +41,7 @@ def job(name, conclusion="success", **extra):
             "status": "completed", "conclusion": conclusion, **extra}
 
 
-BUILD_JOBS = [job("Build packages and test programs"), job("Build container image")]
+BUILD_JOBS = [job("Build packages"), job("Build container image")]
 
 
 class Clock:
@@ -153,7 +153,10 @@ class ResolveTests(unittest.TestCase):
                        ancestor_runs={PARENT: [ANCESTOR_RUN]}, **kwargs)
 
     def test_version_only_cancelled_ci_uses_current_artifacts_and_green_ancestor(self):
+        # Test-program compilation is skipped inside a reused run; it carries
+        # no release artifact, so it is not a required build.
         result = self.resolve(self.cancelled_api(jobs=BUILD_JOBS + [
+            job("Compile target test programs", "success"),
             job("Native linux/amd64", "cancelled"), job("Docker linux/amd64", "success")]))
         self.assertEqual(result, {
             "ci_run_id": 123, "package_artifact_id": 501, "image_artifact_id": 502})

@@ -24,21 +24,37 @@ func TestTaskListAllFollowsCursorsAcrossEmptyFilteredPages(t *testing.T) {
 		case "":
 			result["tasks"] = []interface{}{taskTestRow(6, "OSS_TO_OSS", "FAILED"), taskTestRow(5, "OSS_TO_OSS", "FAILED")}
 			result["nextBeforeId"], result["failedTasks"] = 5, 2
-			result["totalPutObjectSize"] = int64(8 << 40)
+			result["totalPutObjectSize"], result["totalTransferredBytes"] = int64(8<<40), int64(8<<40+5)
 		case "5":
-			result["nextBeforeId"] = 3
+			result["nextBeforeId"], result["totalTransferredBytes"] = 3, 0
 		case "3":
 			result["tasks"] = []interface{}{taskTestRow(2, "OSS_TO_OSS", "FAILED")}
 			result["hasMore"], result["failedTasks"] = false, 1
-			result["totalPutObjectSize"] = int64(1 << 40)
+			result["totalPutObjectSize"], result["totalTransferredBytes"] = int64(1<<40), int64(1<<40+7)
 		default:
 			t.Fatalf("repeated or wrong cursor %s", r.URL)
 		}
 		adminTestJSON(t, w, result)
 	})
 	result, err := taskList(client, []string{"--all", "--status", "failed", "--limit", "2"})
-	if err != nil || !reflect.DeepEqual(calls, []string{"", "5", "3"}) || len(objectList(result["tasks"])) != 3 || result["hasMore"] != false || getInt(result, "failedTasks") != 3 || getInt64(result, "totalPutObjectSize") != 9<<40 {
+	if err != nil || !reflect.DeepEqual(calls, []string{"", "5", "3"}) || len(objectList(result["tasks"])) != 3 || result["hasMore"] != false || getInt(result, "failedTasks") != 3 || getInt64(result, "totalPutObjectSize") != 9<<40 || getInt64(result, "totalTransferredBytes") != 9<<40+12 {
 		t.Fatal("all-page list or summary incomplete", result, calls, err)
+	}
+}
+
+// One page from an older Master cannot contribute a zero live total.
+func TestTaskListAllDropsLiveTotalWhenAnyPageLacksIt(t *testing.T) {
+	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		result := map[string]interface{}{"tasks": []interface{}{taskTestRow(2, "OSS_TO_OSS", "RUNNING")}, "partial": false, "hasMore": false, "totalPutObjectSize": 10}
+		if r.URL.Query().Get("beforeId") == "" {
+			result["tasks"] = []interface{}{taskTestRow(3, "OSS_TO_OSS", "RUNNING")}
+			result["hasMore"], result["nextBeforeId"], result["totalTransferredBytes"] = true, 3, 50
+		}
+		adminTestJSON(t, w, result)
+	})
+	result, err := taskList(client, []string{"--all"})
+	if _, exists := result["totalTransferredBytes"]; err != nil || exists || getInt64(result, "totalPutObjectSize") != 20 {
+		t.Fatal("partial live total reported", result, err)
 	}
 }
 

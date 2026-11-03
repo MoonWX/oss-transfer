@@ -170,7 +170,6 @@ var cliMessages = map[string][2]string{
 	"CSV 第 %d 行须为2至5列: 源连接/桶,目标连接/桶,dateAfter,overwrite,distributionMode；其他字段请用 JSON": {"CSV row %d requires 2–5 columns: source connection/bucket,target connection/bucket,dateAfter,overwrite,distributionMode; use JSON for other fields", "CSV の %d 行目には 2～5 列が必要です: 転送元接続名/バケット,転送先接続名/バケット,dateAfter,overwrite,distributionMode。他の項目には JSON を使用してください"},
 	"EXACT_KEY 需要单个源 objectKey 和非空 targetKey":                                         {"EXACT_KEY requires a single source objectKey and non-empty targetKey", "EXACT_KEY には単一の転送元 objectKey と空でない targetKey が必要です"},
 	"Endpoint 必须是 http:// 或 https:// 地址，且不得包含用户名或密码":                                  {"Endpoint must be an http:// or https:// URL without a username or password", "Endpoint はユーザー名やパスワードを含まない http:// または https:// URL を指定してください"},
-	"ID\t方向\t状态\t来源\t目标\t已迁移/已扫描\t跳过\t失败\t执行节点":                                       {"ID\tDirection\tStatus\tSource\tTarget\tTransferred/Scanned\tSkipped\tFailed\tNode", "ID\t方向\t状態\t転送元\t転送先\t転送済み/スキャン済み\tスキップ\t失敗\t実行ノード"},
 	"JSON 须为任务对象数组: %w":                                                               {"JSON must be an array of task objects: %w", "JSON はタスクオブジェクトの配列で指定してください: %w"},
 	"LOCAL 端点需提供非空 nodeBindings 数组":                                                   {"LOCAL endpoints require a non-empty nodeBindings array", "LOCAL エンドポイントには空でない nodeBindings 配列が必要です"},
 	"OSS 端点 objectKey 与 prefix 不能同时填写":                                                {"OSS endpoint objectKey and prefix cannot be combined", "OSS エンドポイントの objectKey と prefix は併用できません"},
@@ -564,4 +563,12 @@ var cliMessages = map[string][2]string{
 	"用法: diff-objects <源目录> <有序目标清单> <输出目录>；详见 help tools": {"Usage: diff-objects <source-dir> <sorted-target-manifest> <output-dir>; see help tools", "使い方: diff-objects <転送元ディレクトリ> <ソート済み転送先マニフェスト> <出力ディレクトリ>。help tools を参照してください"},
 	"--false-positive 必须大于 0 且小于 1: %s":                    {"--false-positive must be greater than 0 and less than 1: %s", "--false-positive は 0 より大きく 1 より小さい値にしてください: %s"},
 	"用法: count-lines <目录>":                                 {"Usage: count-lines <directory>", "使い方: count-lines <ディレクトリ>"},
+
+	"ID\t方向\t状态\t来源\t目标\t已迁移/已扫描\t进度\t跳过\t失败\t执行节点": {"ID\tDirection\tStatus\tSource\tTarget\tTransferred/Scanned\tProgress\tSkipped\tFailed\tNode", "ID\t方向\t状態\t転送元\t転送先\t転送済み/スキャン済み\t進捗\tスキップ\t失敗\t実行ノード"},
+	"进度":        {"Progress", "進捗"},
+	"(含传输中 %s)": {"(includes %s in flight)", "(転送中 %s を含む)"},
+	"请求速率":      {"Request rate", "リクエストレート"},
+	"任务请求上限":    {"Task request limit", "タスクのリクエスト上限"},
+	"生效请求上限":    {"Effective request limit", "実効リクエスト上限"},
+	"不限":        {"unlimited", "無制限"},
 }

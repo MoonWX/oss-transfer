@@ -94,6 +94,7 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		if err := t.controller.BeforeRequest(request.Context(), info, kind, taskKind); err != nil {
 			return nil, err
 		}
+		t.controller.requests.add(info)
 	}
 	response, err := t.base.RoundTrip(request)
 	if err != nil {

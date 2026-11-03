@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
+	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 )
 
 // TaskRates counts bytes read from source streams, including repeated reads.
@@ -38,6 +39,8 @@ type TaskRateSnapshot struct {
 	Children          map[string]float64        `json:"children"`
 	ProgressSupported bool                      `json:"progressSupported"`
 	Progress          []execution.ChildProgress `json:"progress,omitempty"`
+	// Absent from older Agents; Master then reports observed requests as unknown.
+	Requests *nodecontrol.TaskRequests `json:"requests,omitempty"`
 }
 
 func NewTaskRates() *TaskRates {

@@ -35,6 +35,7 @@ type Controller struct {
 	next                  map[string]time.Time
 	changed               chan struct{}
 	samples               [6]sample
+	requests              *taskRequestCounter
 	consecutive           int
 	last503, nextRecovery time.Time
 	fault                 error
@@ -89,7 +90,7 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
-	c := &Controller{db: db, bytes: bytes, options: options, configured: configured, processID: hex.EncodeToString(nonce[:]), next: map[string]time.Time{}, changed: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
+	c := &Controller{db: db, bytes: bytes, options: options, configured: configured, processID: hex.EncodeToString(nonce[:]), next: map[string]time.Time{}, requests: newTaskRequestCounter(), changed: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
 	err := db.Update(func(tx *state.Tx) error {
 		found, err := tx.Get("node-control", "settings", &c.data)
 		if err != nil {

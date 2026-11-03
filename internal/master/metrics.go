@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
+	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
@@ -23,6 +24,10 @@ type taskRateCache struct {
 	children          map[string]float64
 	progressSupported bool
 	progress          *task.ProgressProjection
+	// Nil unless every node reported requests: a partial sum would read as a
+	// slower task rather than an unknown one.
+	requests   *nodecontrol.TaskRequestRates
+	nodeLimits map[string]nodecontrol.NodeRequestLimits
 }
 
 // Missing Agent responses invalidate the aggregate. Showing a partial sum as
@@ -88,6 +93,7 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	entry.progressSupported = entry.valid
 	var progressReports []task.ProgressReport
 	progressTruncated := false
+	requests, nodeLimits := &nodecontrol.TaskRequestRates{}, map[string]nodecontrol.NodeRequestLimits{}
 	for index, result := range results {
 		if !result.valid {
 			entry.valid = false
@@ -101,10 +107,22 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 			}
 			progressReports = append(progressReports, task.ProgressReport{NodeID: nodes[index].ID, EnrollmentID: nodes[index].EnrollmentID, Child: child})
 		}
+		if reported := result.rate.Requests; requests != nil && reported != nil && validRequestRates(*reported) {
+			requests.List += reported.Rates.List
+			requests.Get += reported.Rates.Get
+			requests.Head += reported.Rates.Head
+			requests.Put += reported.Rates.Put
+			nodeLimits[nodes[index].ID] = reported.NodeLimits
+		} else {
+			requests = nil
+		}
 		entry.total += result.rate.BytesPerSecond
 		for child, rate := range result.rate.Children {
 			entry.children[child] += rate
 		}
+	}
+	if entry.valid && requests != nil {
+		entry.requests, entry.nodeLimits = requests, nodeLimits
 	}
 	if !entry.valid && last.generation == p.Generation && last.progressSupported {
 		// A failed collection cannot establish that an Agent lacks progress
@@ -125,6 +143,14 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	t.mu.Unlock()
 }
 func validTaskRate(rate float64) bool { return rate >= 0 && !math.IsNaN(rate) && !math.IsInf(rate, 0) }
+func validRequestRates(r nodecontrol.TaskRequests) bool {
+	for _, value := range []float64{r.Rates.List, r.Rates.Get, r.Rates.Head, r.Rates.Put, r.NodeLimits.List, r.NodeLimits.Head, r.NodeLimits.Put} {
+		if !validTaskRate(value) {
+			return false
+		}
+	}
+	return true
+}
 func (t *taskRuntime) cachedRates(p task.Parent, maxAge time.Duration) (taskRateCache, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -154,7 +180,8 @@ func (s *Server) taskView(p task.Parent, sets ...nodeDisplaySet) map[string]any 
 	}
 	displays.task(row, p.Spec.Nodes)
 	s.addTaskRate(row, p, "")
-	s.addLiveAverage(row, p, nil)
+	s.addLiveProgress(row, p, nil)
+	s.addRequestRates(row, p)
 	return row
 }
 func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) map[string]any {
@@ -167,7 +194,7 @@ func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) 
 	}
 	displays.task(row, []task.Node{c.Node})
 	s.addTaskRate(row, p, c.Job.ChildID)
-	s.addLiveAverage(row, p, &c)
+	s.addLiveProgress(row, p, &c)
 	return row
 }
 func (s *Server) addTaskRate(row map[string]any, p task.Parent, child string) {

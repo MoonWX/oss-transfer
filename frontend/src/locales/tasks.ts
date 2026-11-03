@@ -2219,4 +2219,18 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "全 {count} 件のサブタスクを表示中",
   },
   全部: { en: "All", ja: "すべて" },
+  "含传输中 {value1}": {
+    en: "Includes {value1} in flight",
+    ja: "転送中 {value1} を含む",
+  },
+  请求速率: { en: "Request rate", ja: "リクエストレート" },
+  "任务上限 {value1}": {
+    en: "Task limit {value1}",
+    ja: "タスク上限 {value1}",
+  },
+  "生效上限 {value1}": {
+    en: "Effective limit {value1}",
+    ja: "実効上限 {value1}",
+  },
+  不限: { en: "unlimited", ja: "無制限" },
 };

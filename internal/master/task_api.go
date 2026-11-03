@@ -139,7 +139,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -999,7 +999,7 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 	truncated := next > 0
 	partial := truncated && !r.URL.Query().Has("limit") && !r.URL.Query().Has("beforeId")
 	rows := []map[string]any{}
-	result := map[string]any{"success": true, "partial": partial, "pageComplete": true, "hasMore": truncated, "tasks": rows, "pendingTasks": 0, "runningTasks": 0, "listDoneTasks": 0, "completedTasks": 0, "failedTasks": 0, "partialFailedTasks": 0, "stoppedTasks": 0, "totalPutObjectCount": int64(0), "totalPutObjectSize": int64(0), "totalFailedObjectCount": int64(0)}
+	result := map[string]any{"success": true, "partial": partial, "pageComplete": true, "hasMore": truncated, "tasks": rows, "pendingTasks": 0, "runningTasks": 0, "listDoneTasks": 0, "completedTasks": 0, "failedTasks": 0, "partialFailedTasks": 0, "stoppedTasks": 0, "totalPutObjectCount": int64(0), "totalPutObjectSize": int64(0), "totalTransferredBytes": int64(0), "totalFailedObjectCount": int64(0)}
 	q := r.URL.Query()
 	displays := s.nodeDisplaySnapshot()
 	for _, p := range parents {
@@ -1027,13 +1027,17 @@ func (s *Server) taskStatusHTTP(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/master/local-transfers" && p.Spec.Direction == "OSS_TO_OSS" {
 			continue
 		}
-		rows = append(rows, s.taskView(p, displays))
+		row := s.taskView(p, displays)
+		rows = append(rows, row)
 		metric := map[string]string{"RUNNING": "runningTasks", "WAITING": "pendingTasks", "COMPLETED": "completedTasks", "FAILED": "failedTasks", "PARTIAL_FAILED": "partialFailedTasks", "STOPPED": "stoppedTasks"}[taskStatusGroup(p.Status)]
 		if metric != "" {
 			result[metric] = result[metric].(int) + 1
 		}
 		result["totalPutObjectCount"] = result["totalPutObjectCount"].(int64) + p.Counters.Succeeded
 		result["totalPutObjectSize"] = result["totalPutObjectSize"].(int64) + p.Counters.SucceededBytes
+		// Includes fresh in-flight bytes; totalPutObjectSize stays durable.
+		transferred, _ := row["transferredBytes"].(int64)
+		result["totalTransferredBytes"] = result["totalTransferredBytes"].(int64) + transferred
 		result["totalFailedObjectCount"] = result["totalFailedObjectCount"].(int64) + p.Counters.Failed
 	}
 	result["nodeDisplays"] = displays.byAddress

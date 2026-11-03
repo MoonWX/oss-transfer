@@ -77,6 +77,12 @@ import {
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
 import {
+  byteProgress,
+  monotonicPercent,
+  taskPercent,
+  transferredBytes,
+} from "../lib/taskProgress";
+import {
   keyMappingLabels,
   mappingExample,
   type OssKeyMappingMode,
@@ -92,6 +98,7 @@ import ListPagination, {
 } from "../components/ListPagination";
 import TaskBandwidth from "../components/TaskBandwidth";
 import SubtaskDetails from "../components/SubtaskDetails";
+import TransferStatistics from "../components/TransferStatistics";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
 import {
   EmptyState,
@@ -178,20 +185,6 @@ function subtaskEndpoint(task: Task, source: boolean) {
   }
   return endpoint(task, source);
 }
-function progress(task: Task) {
-  const total = Number(task.listObjectCount || 0);
-  return total
-    ? Math.min(
-        100,
-        ((Number(task.putObjectCount || 0) +
-          Number(task.skippedObjectCount || 0)) /
-          total) *
-          100,
-      )
-    : task.status === "COMPLETED"
-      ? 100
-      : 0;
-}
 const scanFinished = (task: Task) =>
   !groupIncomplete(task) &&
   (typeof task.scanComplete === "boolean"
@@ -273,7 +266,10 @@ function Metrics({ data }: { data: any }) {
     },
     {
       label: tr("已迁移数据"),
-      value: formatBytes(data?.totalPutObjectSize),
+      // Includes fresh in-flight bytes; older Masters send the durable total only.
+      value: formatBytes(
+        data?.totalTransferredBytes ?? data?.totalPutObjectSize,
+      ),
       detail: tr("{value1} 个对象已传输", {
         value1: formatNumber(data?.totalPutObjectCount),
       }),
@@ -966,44 +962,7 @@ function TaskDetail({
           <Typography variant="h6" sx={{ mb: 2 }}>
             {tr("传输统计")}
           </Typography>
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 2.5,
-              mb: 3,
-            }}
-          >
-            {[
-              [tr("已扫描"), current.listObjectCount, current.listObjectSize],
-              [tr("已迁移"), current.putObjectCount, current.putObjectSize],
-              [
-                tr("已跳过"),
-                current.skippedObjectCount,
-                current.skippedObjectSize,
-              ],
-              [
-                tr("失败对象"),
-                current.failedObjectCount,
-                current.failedObjectSize,
-              ],
-            ].map(([label, count, bytes]) => (
-              <Box key={label}>
-                <Typography variant="caption" color="text.secondary">
-                  {label}
-                </Typography>
-                <Typography sx={{ fontWeight: 500 }}>
-                  {formatNumber(count)}{" "}
-                  <Box
-                    component="span"
-                    sx={{ fontSize: 12, color: "text.secondary" }}
-                  >
-                    / {formatBytes(bytes)}
-                  </Box>
-                </Typography>
-              </Box>
-            ))}
-          </Box>
+          <TransferStatistics task={current} />
           <Box sx={{ mb: 3 }}>
             <Button
               variant="outlined"
@@ -1292,6 +1251,25 @@ function TaskDetail({
                                 failed: formatNumber(shard.failedObjectCount),
                               })}
                             </Typography>
+                            {byteProgress(shard) &&
+                              typeof shard.progressPercent === "number" && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  display="block"
+                                  data-testid="child-byte-progress"
+                                >
+                                  {formatBytes(transferredBytes(shard))} /{" "}
+                                  {formatBytes(shard.listObjectSize)} ·{" "}
+                                  {Math.floor(
+                                    monotonicPercent(
+                                      shard,
+                                      shard.progressPercent,
+                                    ),
+                                  )}
+                                  %
+                                </Typography>
+                              )}
                           </Box>
                           <ArrowForwardRounded
                             sx={{ fontSize: 18, color: "text.secondary" }}
@@ -1882,19 +1860,32 @@ export default function TasksPage({
     const countsCurrent = handled <= scanned;
     const complete = scanFinished(task) && countsCurrent;
     const scanning = ["RUNNING", "LIST_DONE"].includes(task.status);
+    const percent = complete ? monotonicPercent(task, taskPercent(task)) : 0;
+    const counts = `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`;
+    const bytes = byteProgress(task);
     return (
       <Box sx={{ minWidth: 120 }}>
         <Stack direction="row" justifyContent="space-between" gap={1}>
-          <Typography variant="caption" color="text.secondary">
-            {countsCurrent
-              ? `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`
-              : tr("{value1} 已迁移", {
-                  value1: formatNumber(task.putObjectCount),
-                })}
-          </Typography>
+          <Tooltip
+            title={
+              bytes && countsCurrent
+                ? tr("{value1} 个对象", { value1: counts })
+                : ""
+            }
+          >
+            <Typography variant="caption" color="text.secondary">
+              {!countsCurrent
+                ? tr("{value1} 已迁移", {
+                    value1: formatNumber(task.putObjectCount),
+                  })
+                : bytes
+                  ? `${formatBytes(transferredBytes(task))} / ${formatBytes(task.listObjectSize)}`
+                  : counts}
+            </Typography>
+          </Tooltip>
           <Typography variant="caption">
             {complete
-              ? `${Math.floor(progress(task))}%`
+              ? `${Math.floor(percent)}%`
               : !countsCurrent
                 ? tr("统计更新中")
                 : task.status === "PENDING"
@@ -1906,7 +1897,7 @@ export default function TasksPage({
         </Stack>
         <LinearProgress
           variant={!complete && scanning ? "indeterminate" : "determinate"}
-          value={complete ? progress(task) : 0}
+          value={percent}
           color={
             task.failedObjectCount > 0
               ? "warning"

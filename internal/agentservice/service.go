@@ -452,6 +452,10 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		snapshot := s.Rates.Snapshot(request.ParentID, request.Generation)
 		snapshot.ProgressSupported = true
 		snapshot.Progress = s.Engine.Progress(request.ParentID, request.Generation)
+		if s.Nodes != nil {
+			requests := s.Nodes.TaskRequests(request.ParentID, request.Generation)
+			snapshot.Requests = &requests
+		}
 		return response(snapshot, nil)
 	case "task_progress":
 		var request struct {

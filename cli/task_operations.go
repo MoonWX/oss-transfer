@@ -23,6 +23,9 @@ func taskListPages(client *ApiClient, query url.Values, all bool) (map[string]in
 	seenIDs := map[int]bool{}
 	pages := 0
 	metrics := map[string]int64{}
+	// An older Master omits live totals; summing its pages as zero would
+	// understate the transferred amount, so the total is dropped instead.
+	liveTotals := true
 	displays := map[string]interface{}{}
 	for {
 		page, err := client.Get("/status?" + query.Encode())
@@ -57,6 +60,12 @@ func taskListPages(client *ApiClient, query url.Values, all bool) (map[string]in
 		for _, metric := range []string{"pendingTasks", "runningTasks", "listDoneTasks", "completedTasks", "failedTasks", "partialFailedTasks", "stoppedTasks", "totalPutObjectCount", "totalPutObjectSize", "totalFailedObjectCount"} {
 			metrics[metric] += getInt64(data, metric)
 		}
+		if _, ok := data["totalTransferredBytes"]; ok && liveTotals {
+			metrics["totalTransferredBytes"] += getInt64(data, "totalTransferredBytes")
+		} else {
+			liveTotals = false
+			delete(metrics, "totalTransferredBytes")
+		}
 		if nodeDisplays, ok := data["nodeDisplays"].(map[string]interface{}); ok {
 			for node, display := range nodeDisplays {
 				displays[node] = display
@@ -67,6 +76,9 @@ func taskListPages(client *ApiClient, query url.Values, all bool) (map[string]in
 		combined["nodeDisplays"] = displays
 		for metric, value := range metrics {
 			combined[metric] = value
+		}
+		if !liveTotals {
+			delete(combined, "totalTransferredBytes")
 		}
 		if incompleteResult(page) {
 			combined["partial"] = true

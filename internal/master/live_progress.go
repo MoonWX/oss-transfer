@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -22,38 +23,100 @@ func (t *taskRuntime) progressSnapshot(p task.Parent) (taskRateCache, bool) {
 // Live bytes are an observation, never durable success credit. Taking the
 // larger of two complete totals avoids adding an old in-flight sample to a
 // newer ledger that already includes that same object.
-func (s *Server) addLiveAverage(row map[string]any, p task.Parent, child *task.Child) {
-	if !liveTask(p.Status) || !liveTask(stringValue(row["status"])) || p.ResumeTiming != nil {
+//
+// transferredBytes is always set so clients need no fallback; inFlightBytes is
+// nil when a live task's sample is missing or stale (unknown, not zero).
+func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.Child) {
+	durable, _ := row["putObjectSize"].(int64)
+	row["transferredBytes"], row["inFlightBytes"], row["liveProgress"] = durable, int64(0), "NONE"
+	defer addProgressPercent(row)
+	if !liveTask(p.Status) || !liveTask(stringValue(row["status"])) {
 		return
 	}
+	row["inFlightBytes"], row["liveProgress"] = nil, "STALE"
 	entry, fresh := s.tasks.rateSnapshot(p)
+	if fresh && !entry.progressSupported {
+		// Older Agents report speed only. Keep their completed-object average.
+		row["liveProgress"] = "UNSUPPORTED"
+		return
+	}
 	if !entry.progressSupported {
 		return
 	}
 	if !fresh || entry.progress == nil {
 		// An unavailable live sample is unknown, not zero throughput.
-		delete(row, "averageSpeedBytesPerSecond")
+		if p.ResumeTiming == nil {
+			delete(row, "averageSpeedBytesPerSecond")
+		}
 		return
 	}
 	timing := p.ExecutionTime()
-	bytes := max(p.Counters.SucceededBytes, entry.progress.TotalBytes)
+	bytes := max(durable, entry.progress.TotalBytes)
 	if child != nil {
 		if child.Record == nil {
 			return
 		}
-		timing = child.Record.ExecutionTime()
-		bytes = child.Record.Counters.SucceededBytes
+		timing, bytes = child.Record.ExecutionTime(), durable
 		for _, sample := range entry.progress.Children {
 			if sample.Progress.ChildID == child.Job.ChildID && sample.Node.ID == child.Node.ID && sample.Node.EnrollmentID == child.Node.EnrollmentID && sample.Progress.Assignment == child.Job.Assignment && sample.Progress.Generation == child.Job.Generation && sample.Progress.Attempt >= child.Record.Attempt {
-				bytes = max(bytes, sample.Bytes)
+				bytes = max(durable, sample.Bytes)
 				break
 			}
 		}
+	}
+	row["transferredBytes"], row["inFlightBytes"], row["liveProgress"] = bytes, bytes-durable, "LIVE"
+	if p.ResumeTiming != nil {
+		return
 	}
 	if duration := timing.Duration(time.Now()); duration > 0 && !timing.Incomplete {
 		row["averageSpeedBytesPerSecond"] = float64(bytes) / duration.Seconds()
 		row["averageSpeedIncludesInFlight"] = true
 	}
+}
+
+// addProgressPercent computes the one percentage shown by the UI and CLI.
+// Bytes are the basis whenever sizes are known, so a single large object in
+// flight moves the bar; counts still gate 100% so pending zero-byte objects
+// and a final multipart commit cannot look finished. Failed bytes stay out,
+// as with counts. A sample that briefly overlaps a newly committed skip can
+// count those bytes twice for about one sample; the caps keep that harmless.
+func addProgressPercent(row map[string]any) {
+	count := func(name string) int64 {
+		switch value := row[name].(type) {
+		case int64:
+			return value
+		case int:
+			return int64(value)
+		}
+		return 0
+	}
+	total, totalBytes := count("listObjectCount"), count("listObjectSize")
+	handled := count("putObjectCount") + count("skippedObjectCount")
+	row["progressPercent"], row["progressBasis"] = nil, "COUNT"
+	if totalBytes > 0 {
+		row["progressBasis"] = "BYTES"
+	}
+	if stringValue(row["status"]) == "COMPLETED" {
+		row["progressPercent"] = float64(100)
+		return
+	}
+	// The denominator still grows during a scan, and handled > scanned means
+	// the counters are mid-update; clients keep their indeterminate states.
+	if complete, _ := row["scanComplete"].(bool); !complete || handled > total {
+		return
+	}
+	percent := float64(0)
+	if totalBytes > 0 {
+		percent = float64(count("transferredBytes")+count("skippedObjectSize")) / float64(totalBytes) * 100
+	} else if total > 0 {
+		percent = float64(handled) / float64(total) * 100
+	}
+	percent = min(percent, 100)
+	if handled < total {
+		percent = min(percent, 99.9)
+	}
+	// Truncate so 99.996 never rounds up to 100 in a client.
+	row["progressPercent"] = math.Floor(percent*100) / 100
 }
 
 type fileProgressReply struct {

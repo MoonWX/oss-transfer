@@ -511,6 +511,14 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	control := agentservice.ParentRequest{ParentID: p.ID, Generation: p.Generation, RetryFailed: true, InventorySource: p.Spec.InventoryID != ""}
 	scanControl := agentservice.ScanRequest{ParentID: p.ID, Generation: p.Generation, Epoch: p.ScannerEpoch()}
 	if p.Status == "STOPPING" {
+		// Agents keep draining until the stop is observed, so keep live bytes
+		// fresh meanwhile. A stopped parent is no longer live; skip that RPC.
+		stopped := false
+		defer func() {
+			if !stopped {
+				t.sampleRates(ctx, p)
+			}
+		}()
 		if err := t.stopMembers(ctx, p); err != nil {
 			return err
 		}
@@ -521,6 +529,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		if err := t.repo.Stopped(p.ID, p.Generation); err != nil {
 			return err
 		}
+		stopped = true
 		t.forgetStopObservation(p.ID)
 		return nil
 	}

@@ -46,7 +46,7 @@ func TestTaskProgressRPCReportsSupportAndDoesNotReadLedger(t *testing.T) {
 	}
 	result := call("task_metrics", `{"parentId":1,"generation":1}`)
 	var metrics TaskRateSnapshot
-	if result.Status != 200 || json.Unmarshal(result.Payload, &metrics) != nil || !metrics.ProgressSupported || metrics.ParentID != 1 || metrics.Generation != 1 || len(metrics.Progress) != 0 {
+	if result.Status != 200 || json.Unmarshal(result.Payload, &metrics) != nil || !metrics.ProgressSupported || metrics.ParentID != 1 || metrics.Generation != 1 || len(metrics.Progress) != 0 || metrics.Requests != nil {
 		t.Fatalf("metrics capability response: %d %s", result.Status, result.Payload)
 	}
 	result = call("task_progress", `{"parentId":1,"generation":1,"childId":"1-1"}`)

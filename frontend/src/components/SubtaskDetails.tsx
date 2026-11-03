@@ -16,10 +16,11 @@ import {
   CloseRounded,
   EastRounded,
 } from "@mui/icons-material";
-import { formatBytes, formatNumber, LoadingState, StatusChip } from "./Common";
+import { formatBytes, LoadingState, StatusChip } from "./Common";
 import { keyMappingLabels, type OssKeyMappingMode } from "../lib/ossKeyMapping";
 import ChildRecovery from "./ChildRecovery";
 import LiveFileProgress from "./LiveFileProgress";
+import TransferStatistics from "./TransferStatistics";
 import { useNodeLabels } from "../lib/workerStatus";
 import { taskNodeLabels } from "../lib/nodeRegistry";
 type Props = {
@@ -221,36 +222,7 @@ export default function SubtaskDetails({
           <Typography variant="h6" sx={{ mb: 2 }}>
             {t("传输统计")}
           </Typography>
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 2.5,
-              mb: 3,
-            }}
-          >
-            {[
-              [t("已扫描"), task.listObjectCount, task.listObjectSize],
-              [t("已迁移"), task.putObjectCount, task.putObjectSize],
-              [t("已跳过"), task.skippedObjectCount, task.skippedObjectSize],
-              [t("失败对象"), task.failedObjectCount, task.failedObjectSize],
-            ].map(([label, count, bytes]) => (
-              <Box key={label}>
-                <Typography variant="caption" color="text.secondary">
-                  {label}
-                </Typography>
-                <Typography sx={{ fontWeight: 500 }}>
-                  {count == null ? "—" : formatNumber(count)}{" "}
-                  <Box
-                    component="span"
-                    sx={{ fontSize: 12, color: "text.secondary" }}
-                  >
-                    / {bytes == null ? "—" : formatBytes(bytes)}
-                  </Box>
-                </Typography>
-              </Box>
-            ))}
-          </Box>
+          <TransferStatistics task={task} />
           <LiveFileProgress
             taskId={Number(childId.split("-")[0])}
             childNumber={Number(childId.split("-")[1])}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,10 +70,13 @@ type Broker struct {
 	bytes   int64
 	changed chan struct{}
 	closed  bool
+	waiting atomic.Int32
 }
 type BrokerStats struct {
 	Sessions, Pending, Queued int
-	PendingBytes              int64
+	// Waiting counts polls currently held for a command.
+	Waiting      int
+	PendingBytes int64
 }
 
 func NewBroker(options BrokerOptions) *Broker {
@@ -205,13 +209,14 @@ func (b *Broker) Call(ctx context.Context, s Session, r Request) (Response, erro
 	}
 }
 func (b *Broker) Poll(ctx context.Context, s Session) (Command, error) {
-	return b.poll(ctx, s, false)
+	return b.poll(ctx, s, false, true)
 }
 
 // poll's receipt mode leaves commands in the bounded queue until the HTTP
 // client confirms their delivery token. A successful server write does not
 // establish that a disconnected client actually received the command.
-func (b *Broker) poll(ctx context.Context, s Session, receipt bool) (Command, error) {
+// Without hold, an empty lane answers ErrNoCommand instead of waiting.
+func (b *Broker) poll(ctx context.Context, s Session, receipt, hold bool) (Command, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return Command{}, err
@@ -272,14 +277,19 @@ func (b *Broker) poll(ctx context.Context, s Session, receipt bool) (Command, er
 		}
 		changed := b.changed
 		b.mu.Unlock()
+		if !hold {
+			return Command{}, ErrNoCommand
+		}
 		var timer *time.Timer
 		var expired <-chan time.Time
 		if !nextLease.IsZero() {
 			timer = time.NewTimer(time.Until(nextLease))
 			expired = timer.C
 		}
+		b.waiting.Add(1)
 		select {
 		case <-ctx.Done():
+			b.waiting.Add(-1)
 			if timer != nil {
 				timer.Stop()
 			}
@@ -287,6 +297,7 @@ func (b *Broker) poll(ctx context.Context, s Session, receipt bool) (Command, er
 		case <-changed:
 		case <-expired:
 		}
+		b.waiting.Add(-1)
 		if timer != nil {
 			timer.Stop()
 		}
@@ -368,7 +379,7 @@ func (b *Broker) Complete(s Session, r Result) error {
 func (b *Broker) Stats() BrokerStats {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	s := BrokerStats{Sessions: len(b.lanes), Pending: len(b.pending), PendingBytes: b.bytes}
+	s := BrokerStats{Sessions: len(b.lanes), Pending: len(b.pending), Waiting: int(b.waiting.Load()), PendingBytes: b.bytes}
 	for _, l := range b.lanes {
 		s.Queued += len(l.queue)
 	}

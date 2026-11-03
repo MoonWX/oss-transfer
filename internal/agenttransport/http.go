@@ -10,11 +10,16 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const PollPath = "/api/agents/poll"
 const ResultPath = "/api/agents/result"
+
+// pollNoWait asks for an immediate answer. An Agent sends it only until its
+// first authenticated poll succeeds, so readiness does not wait out the hold.
+const pollNoWait = "wait=0"
 
 var ErrNoCommand = errors.New("no agent command available")
 
@@ -47,8 +52,8 @@ func (h HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), wait)
 		defer cancel()
-		c, err := h.Broker.poll(ctx, session, true)
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		c, err := h.Broker.poll(ctx, session, true, r.URL.RawQuery != pollNoWait)
+		if errors.Is(err, ErrNoCommand) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			w.WriteHeader(204)
 			return
 		}
@@ -125,6 +130,8 @@ type HTTPTransport struct {
 	origin, credential string
 	client             *http.Client
 	maxPayload         int
+	// connected is set by the first authenticated poll; later polls are held.
+	connected atomic.Bool
 }
 
 func NewHTTPTransport(origin, credential string, rt http.RoundTripper, maxPayload int) (*HTTPTransport, error) {
@@ -150,11 +157,18 @@ func (t *HTTPTransport) request(ctx context.Context, path, method string, body [
 	return t.client.Do(r)
 }
 func (t *HTTPTransport) Poll(ctx context.Context) (Command, error) {
-	resp, err := t.request(ctx, PollPath, http.MethodGet, nil)
+	path := PollPath
+	if !t.connected.Load() {
+		path += "?" + pollNoWait
+	}
+	resp, err := t.request(ctx, path, http.MethodGet, nil)
 	if err != nil {
 		return Command{}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 204 || resp.StatusCode == 200 {
+		t.connected.Store(true)
+	}
 	if resp.StatusCode == 204 {
 		return Command{}, ErrNoCommand
 	}

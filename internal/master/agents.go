@@ -25,6 +25,8 @@ type agentControl struct {
 	lastSeen      map[string]time.Time
 	remoteAddress map[string]string
 	nodeInfo      map[string]nodeRuntimeInfo
+	// Serializes node information writes so memory and storage agree.
+	nodeInfoWrite sync.Mutex
 	packageSlot   chan struct{}
 }
 
@@ -50,6 +52,9 @@ func installAgentRoutes(s *Server) error {
 		remoteAddress: make(map[string]string),
 		nodeInfo:      make(map[string]nodeRuntimeInfo),
 		packageSlot:   make(chan struct{}, 1),
+	}
+	if err := loadNodeInfo(s.store, a.nodeInfo); err != nil {
+		return err
 	}
 	members, err := a.registry.Members()
 	if err != nil {

@@ -3,6 +3,7 @@ package master
 import (
 	"encoding/json"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/MoonWX/oss-transfer/internal/cluster"
@@ -22,6 +23,39 @@ type nodeRuntimeInfo struct {
 	ips      []string
 }
 type nodeDisplaySet struct{ byID, byAddress map[string]NodeDisplay }
+
+// The last reported hostname and addresses survive a Master restart. Until an
+// Agent reports again, an Agent on the Master's own host is otherwise known
+// only by its loopback connection address.
+const nodeInfoBucket = "agent-node-info"
+
+type storedNodeInfo struct {
+	Hostname string   `json:"hostname,omitempty"`
+	IPs      []string `json:"localIps,omitempty"`
+}
+
+func loadNodeInfo(store *state.Store, into map[string]nodeRuntimeInfo) error {
+	return store.View(func(tx *state.Tx) error {
+		after := ""
+		for {
+			count := 0
+			if err := tx.Scan(nodeInfoBucket, "", after, 256, func(key string, raw json.RawMessage) error {
+				var stored storedNodeInfo
+				if err := json.Unmarshal(raw, &stored); err != nil {
+					return err
+				}
+				into[key] = nodeRuntimeInfo{stored.Hostname, stored.IPs}
+				after, count = key, count+1
+				return nil
+			}); err != nil {
+				return err
+			}
+			if count < 256 {
+				return nil
+			}
+		}
+	})
+}
 
 func makeNodeDisplay(address, label, remote string, info nodeRuntimeInfo) NodeDisplay {
 	name := strings.TrimSpace(label)
@@ -129,12 +163,31 @@ func (s *Server) rememberNodeInfo(id string, data map[string]any) {
 	if hostname == "" && len(ips) == 0 {
 		return
 	}
+	s.agents.nodeInfoWrite.Lock()
+	defer s.agents.nodeInfoWrite.Unlock()
 	s.agents.mu.Lock()
-	defer s.agents.mu.Unlock()
+	previous, known := s.agents.nodeInfo[id]
 	if s.agents.nodeInfo == nil {
 		s.agents.nodeInfo = map[string]nodeRuntimeInfo{}
 	}
 	s.agents.nodeInfo[id] = nodeRuntimeInfo{hostname, ips}
+	s.agents.mu.Unlock()
+	// Status polling repeats the same values; only a change is written.
+	if known && previous.hostname == hostname && slices.Equal(previous.ips, ips) {
+		return
+	}
+	if err := s.store.Update(func(tx *state.Tx) error {
+		return tx.Put(nodeInfoBucket, id, storedNodeInfo{hostname, ips})
+	}); err != nil {
+		// Forget the unsaved value so the next identical report retries.
+		s.agents.mu.Lock()
+		if known {
+			s.agents.nodeInfo[id] = previous
+		} else {
+			delete(s.agents.nodeInfo, id)
+		}
+		s.agents.mu.Unlock()
+	}
 }
 func addNodeDisplay(row map[string]any, display NodeDisplay) {
 	row["displayName"], row["displayAddress"], row["displayLabel"], row["identityOnly"] = display.DisplayName, display.DisplayAddress, display.DisplayLabel, display.IdentityOnly

@@ -99,3 +99,60 @@ func TestNodeDisplayResolvesExistingTasksAndRetainsRevokedNames(t *testing.T) {
 		t.Fatal("revoked name was lost after restart", afterRestart)
 	}
 }
+
+func TestNodeAddressesSurviveMasterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "restart.db")
+	db, err := state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := cluster.Member{ID: "node-local", Address: "jpfs-oss"}
+	if err := db.Update(func(tx *state.Tx) error { return tx.Put("agent-members", member.ID, member) }); err != nil {
+		t.Fatal(err)
+	}
+	report := map[string]any{"hostname": "jpfs-oss", "localIps": []any{"127.0.0.1", "10.1.0.43"}}
+	before := &Server{store: db, agents: &agentControl{remoteAddress: map[string]string{}, nodeInfo: map[string]nodeRuntimeInfo{}}}
+	before.rememberNodeInfo(member.ID, report)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	info := map[string]nodeRuntimeInfo{}
+	if err := loadNodeInfo(db, info); err != nil {
+		t.Fatal(err)
+	}
+	// After a restart the co-located Agent reconnects over loopback before it
+	// reports its addresses again.
+	after := &Server{store: db, agents: &agentControl{remoteAddress: map[string]string{member.ID: "::1"}, nodeInfo: info}}
+	if got := after.nodeDisplaySnapshot().lookup(member.ID, member.Address).DisplayLabel; got != "jpfs-oss (10.1.0.43)" {
+		t.Fatalf("label after restart = %q", got)
+	}
+
+	// A changed address replaces the stored one.
+	after.rememberNodeInfo(member.ID, map[string]any{"hostname": "jpfs-oss", "localIps": []any{"10.1.0.44"}})
+	reloaded := map[string]nodeRuntimeInfo{}
+	if err := loadNodeInfo(db, reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded[member.ID], nodeRuntimeInfo{"jpfs-oss", []string{"10.1.0.44"}}) {
+		t.Fatalf("stored info = %#v", reloaded[member.ID])
+	}
+}
+
+func TestUnsavedNodeAddressesAreRetried(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s := &Server{store: db, agents: &agentControl{remoteAddress: map[string]string{}, nodeInfo: map[string]nodeRuntimeInfo{}}}
+	s.rememberNodeInfo("node-one", map[string]any{"hostname": "storage-a", "localIps": []any{"10.1.0.43"}})
+	if _, kept := s.agents.nodeInfo["node-one"]; kept {
+		t.Fatal("an unsaved report would suppress the next identical write")
+	}
+}

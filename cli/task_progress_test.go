@@ -46,15 +46,20 @@ func TestTaskShowIncludesInFlightBytesAndRequestRates(t *testing.T) {
 		locale cliLocale
 		want   []string
 	}{
-		{localeZH, []string{"12708 / 7 GiB (含传输中 1 GiB)", "进度", "70%", "请求速率", "LIST 0 · GET 2.4 · HEAD 0 · PUT 85.2 次/秒", "任务请求上限", "LIST / GET 100 · HEAD 不限 · PUT 不限", "生效请求上限", "PUT 1400"}},
-		{localeEN, []string{"12708 / 7 GiB (includes 1 GiB in flight)", "Progress", "Request rate", "PUT 85.2 req/s", "Task request limit", "HEAD unlimited", "Effective request limit"}},
-		{localeJA, []string{"(転送中 1 GiB を含む)", "進捗", "リクエストレート", "PUT 85.2 回/秒", "実効リクエスト上限", "無制限"}},
+		{localeZH, []string{"12708 / 7 GiB", "进度", "70%", "请求速率", "LIST 0 · GET 2.4 · HEAD 0 · PUT 85.2 次/秒", "任务请求上限", "LIST / GET 100 · HEAD 不限 · PUT 不限", "生效请求上限", "PUT 1400"}},
+		{localeEN, []string{"12708 / 7 GiB", "Progress", "Request rate", "PUT 85.2 req/s", "Task request limit", "HEAD unlimited", "Effective request limit"}},
+		{localeJA, []string{"12708 / 7 GiB", "進捗", "リクエストレート", "PUT 85.2 回/秒", "実効リクエスト上限", "無制限"}},
 	} {
 		var output bytes.Buffer
 		renderTaskDetail(&cliLocaleWriter{Writer: &output, locale: test.locale}, task)
 		for _, want := range test.want {
 			if !strings.Contains(output.String(), want) {
 				t.Errorf("%s missing %q: %s", test.locale, want, output.String())
+			}
+		}
+		for _, note := range []string{"传输中", "in flight", "転送中"} {
+			if strings.Contains(output.String(), note) {
+				t.Errorf("%s shows an in-flight note %q: %s", test.locale, note, output.String())
 			}
 		}
 	}
@@ -64,7 +69,7 @@ func TestTaskShowIncludesInFlightBytesAndRequestRates(t *testing.T) {
 	delete(task, "inFlightBytes")
 	var output bytes.Buffer
 	renderTaskDetail(&output, task)
-	if !strings.Contains(output.String(), "12708 / 6 GiB") || strings.Contains(output.String(), "含传输中") || strings.Contains(output.String(), "次/秒") || strings.Contains(output.String(), "生效请求上限") {
+	if !strings.Contains(output.String(), "12708 / 6 GiB") || strings.Contains(output.String(), "次/秒") || strings.Contains(output.String(), "生效请求上限") {
 		t.Fatalf("unknown values were invented: %s", output.String())
 	}
 }

@@ -117,9 +117,8 @@ test("task details show in-flight bytes and observed request rates", async ({
   await page.goto("/tasks?taskId=61");
   const transferred = page.getByText("已迁移", { exact: true }).locator("..");
   await expect(transferred).toContainText("12,708 / 7 GiB");
-  await expect(transferred.getByTestId("transfer-in-flight")).toHaveText(
-    "含传输中 1 GiB",
-  );
+  // Bytes are the data actually moved; no separate in-flight note.
+  await expect(transferred).not.toContainText("传输中");
   // Request rates sit with the speeds under 执行信息, not in 传输统计.
   await expect(page.getByText("请求速率", { exact: true })).toHaveCount(1);
   const requests = page
@@ -158,7 +157,7 @@ test("task details show in-flight bytes and observed request rates", async ({
   await expect.poll(() => cells("实时")).toEqual(["—", "—", "—", "—"]);
   expect(await cells("生效上限")).toEqual(["100", "不限", "1,400"]);
   await expect(transferred).toContainText("12,708 / 6 GiB");
-  await expect(transferred.getByTestId("transfer-in-flight")).toHaveCount(0);
+  await expect(transferred).not.toContainText("传输中");
 });
 
 const rowOf = (page: Page) =>

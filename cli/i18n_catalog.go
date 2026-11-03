@@ -565,10 +565,9 @@ var cliMessages = map[string][2]string{
 	"用法: count-lines <目录>":                                 {"Usage: count-lines <directory>", "使い方: count-lines <ディレクトリ>"},
 
 	"ID\t方向\t状态\t来源\t目标\t已迁移/已扫描\t进度\t跳过\t失败\t执行节点": {"ID\tDirection\tStatus\tSource\tTarget\tTransferred/Scanned\tProgress\tSkipped\tFailed\tNode", "ID\t方向\t状態\t転送元\t転送先\t転送済み/スキャン済み\t進捗\tスキップ\t失敗\t実行ノード"},
-	"进度":        {"Progress", "進捗"},
-	"(含传输中 %s)": {"(includes %s in flight)", "(転送中 %s を含む)"},
-	"请求速率":      {"Request rate", "リクエストレート"},
-	"任务请求上限":    {"Task request limit", "タスクのリクエスト上限"},
-	"生效请求上限":    {"Effective request limit", "実効リクエスト上限"},
-	"不限":        {"unlimited", "無制限"},
+	"进度":     {"Progress", "進捗"},
+	"请求速率":   {"Request rate", "リクエストレート"},
+	"任务请求上限": {"Task request limit", "タスクのリクエスト上限"},
+	"生效请求上限": {"Effective request limit", "実効リクエスト上限"},
+	"不限":     {"unlimited", "無制限"},
 }

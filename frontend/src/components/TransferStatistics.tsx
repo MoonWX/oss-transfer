@@ -3,15 +3,14 @@ import { t, useI18n } from "../lib/i18n";
 import { transferredBytes } from "../lib/taskProgress";
 import { formatBytes, formatNumber } from "./Common";
 
-// Shared by parent and child details. "已迁移" bytes include fresh in-flight
-// bytes from the live sample; the object count stays completed objects only.
+// Shared by parent and child details. "已迁移" bytes are the data actually
+// moved, including partly copied objects; the count is completed objects.
 export default function TransferStatistics({
   task,
 }: {
   task: Record<string, any>;
 }) {
   useI18n();
-  const inFlight = Number(task.inFlightBytes || 0);
   return (
     <Box
       sx={{
@@ -29,13 +28,10 @@ export default function TransferStatistics({
           task.putObjectSize == null && task.transferredBytes == null
             ? null
             : transferredBytes(task),
-          inFlight > 0
-            ? t("含传输中 {value1}", { value1: formatBytes(inFlight) })
-            : null,
         ],
         [t("已跳过"), task.skippedObjectCount, task.skippedObjectSize],
         [t("失败对象"), task.failedObjectCount, task.failedObjectSize],
-      ].map(([label, count, bytes, hint]) => (
+      ].map(([label, count, bytes]) => (
         <Box key={label}>
           <Typography variant="caption" color="text.secondary">
             {label}
@@ -49,15 +45,6 @@ export default function TransferStatistics({
               / {bytes == null ? "—" : formatBytes(bytes)}
             </Box>
           </Typography>
-          {hint && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              data-testid="transfer-in-flight"
-            >
-              {hint}
-            </Typography>
-          )}
         </Box>
       ))}
     </Box>

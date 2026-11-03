@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"math"
 	"strconv"
@@ -35,18 +34,14 @@ func cliTaskProgress(task map[string]interface{}) string {
 	return percent((put + skipped) / total * 100)
 }
 
-// The object count stays completed objects; bytes include fresh in-flight
-// bytes when the Master reports them.
+// The object count stays completed objects; bytes are the data actually moved,
+// including partly copied objects, when the Master reports them.
 func cliTaskTransferred(out io.Writer, task map[string]interface{}) string {
 	key := "transferredBytes"
 	if _, ok := task[key]; !ok {
 		key = "putObjectSize"
 	}
-	text := cliTaskCount(task, "putObjectCount") + " / " + cliTaskSize(task, key)
-	if inFlight, ok := cliFinite(task["inFlightBytes"]); ok && inFlight > 0 && inFlight < math.MaxInt64 {
-		text += " " + fmt.Sprintf(cliText(out, "(含传输中 %s)"), formatSize(int64(inFlight)))
-	}
-	return text
+	return cliTaskCount(task, "putObjectCount") + " / " + cliTaskSize(task, key)
 }
 
 func cliRate(value interface{}) string {

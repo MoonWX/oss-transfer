@@ -42,11 +42,18 @@ type S3Config struct {
 	// PartConcurrency bounds concurrent upload requests; default 4, maximum 16.
 	PartConcurrency int
 	// MaxBufferedBytes bounds part payload buffers per Write; default 32 MiB.
-	// Larger parts use disk spooling; source reads remain sequential.
+	// Larger streamed parts use disk spooling; ranged parts never do.
 	MaxBufferedBytes int64
 	// UploadMemory is shared by all S3 clients on one Agent. A full budget waits
 	// before reading payloads; it never changes a memory part into a disk part.
 	UploadMemory *UploadMemoryBudget
+	// RangedReadMinSize is the smallest multipart object whose parts are read
+	// as independent source ranges when the caller offers them. Ranged parts
+	// are always resident in UploadMemory, so a nil budget disables them.
+	// Zero selects 128 MiB; a negative value disables ranged reads.
+	RangedReadMinSize int64
+	// PartLender lets ranged uploads borrow part slots while the node is idle.
+	PartLender *PartLender
 	// Parts exceeding their buffer share or 64 MiB are spooled here for retries.
 	SpoolDirectory   string
 	RetryMaxAttempts int
@@ -60,6 +67,8 @@ type S3 struct {
 	partConcurrency               int
 	maxBufferedBytes              int64
 	uploadMemory                  *UploadMemoryBudget
+	rangedMinSize                 int64
+	partLender                    *PartLender
 	connection                    S3ConnectionIdentity
 	alias                         string
 	uploadRegistry                S3UploadRegistry
@@ -99,6 +108,9 @@ func NewS3(config S3Config) (*S3, error) {
 	}
 	if config.PartSize < minPartSize || config.PartSize > maxPartSize {
 		return nil, errors.New("S3 part size must be between 5 MiB and 5 GiB")
+	}
+	if config.RangedReadMinSize == 0 {
+		config.RangedReadMinSize = defaultRangedMinSize
 	}
 	if config.RetryMaxAttempts == 0 {
 		config.RetryMaxAttempts = 3
@@ -145,7 +157,7 @@ func NewS3(config S3Config) (*S3, error) {
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
-	return &S3{client: client, bucket: config.Bucket, scope: config.Endpoint + "/" + config.Region + "/" + config.Bucket, partSize: config.PartSize, partConcurrency: config.PartConcurrency, maxBufferedBytes: config.MaxBufferedBytes, uploadMemory: config.UploadMemory, spoolDirectory: config.SpoolDirectory, connection: s3ConnectionIdentity(config)}, nil
+	return &S3{client: client, bucket: config.Bucket, scope: config.Endpoint + "/" + config.Region + "/" + config.Bucket, partSize: config.PartSize, partConcurrency: config.PartConcurrency, maxBufferedBytes: config.MaxBufferedBytes, uploadMemory: config.UploadMemory, rangedMinSize: config.RangedReadMinSize, partLender: config.PartLender, spoolDirectory: config.SpoolDirectory, connection: s3ConnectionIdentity(config)}, nil
 }
 
 func (s *S3) Close() error { return nil }
@@ -463,14 +475,8 @@ func readPartWithLimit(reader io.Reader, size int64, spool string, memoryLimit i
 }
 
 func (s *S3) multipart(ctx context.Context, key string, reader io.Reader, options WriteOptions) (result WriteResult, err error) {
-	partSize := s.partSize
-	needed := options.Size / 10000
-	if options.Size%10000 != 0 {
-		needed++
-	}
-	if needed > partSize {
-		partSize = needed
-	}
+	ranged := options.Ranges != nil && s.RangedWrite(options.Size)
+	partSize := s.multipartPartSize(options.Size, ranged)
 	if partSize > maxPartSize {
 		return result, errors.New("object exceeds S3 multipart capacity")
 	}
@@ -530,7 +536,13 @@ func (s *S3) multipart(ctx context.Context, key string, reader io.Reader, option
 		}
 		registered = true
 	}
-	parts, uploadErr := s.uploadParts(ctx, key, reader, options.Size, partSize, upload.UploadId)
+	var parts []types.CompletedPart
+	var uploadErr error
+	if ranged {
+		parts, uploadErr = s.uploadRangedParts(ctx, key, options.Ranges, options.Size, partSize, upload.UploadId)
+	} else {
+		parts, uploadErr = s.uploadParts(ctx, key, reader, options.Size, partSize, upload.UploadId)
+	}
 	if uploadErr != nil {
 		return result, uploadErr
 	}

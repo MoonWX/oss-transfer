@@ -21,6 +21,7 @@ type Factory struct {
 	PartSize              int64
 	PartConcurrency       int
 	UploadMemory          *transferstore.UploadMemoryBudget
+	PartLender            *transferstore.PartLender
 	SpoolDirectory        string
 	RetryMaxAttempts      int
 	HTTPClient            *http.Client
@@ -126,7 +127,7 @@ func (f *Factory) open(ctx context.Context, snapshot Snapshot, endpoint executio
 				return nil, err
 			}
 			settings.PartSize, settings.PartConcurrency = f.PartSize, f.PartConcurrency
-			settings.UploadMemory = f.UploadMemory
+			settings.UploadMemory, settings.PartLender = f.UploadMemory, f.PartLender
 			settings.SpoolDirectory, settings.RetryMaxAttempts = f.SpoolDirectory, f.RetryMaxAttempts
 			settings.HTTPClient = f.HTTPClient
 			if f.HTTPClientForEndpoint != nil {

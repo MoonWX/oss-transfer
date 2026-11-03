@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -37,6 +38,9 @@ type Engine struct {
 	closed      bool
 	cleanupWake chan struct{}
 	cleanupDone chan struct{}
+	// Mirrors of admission state for IdleObjectSlots, which storage consults
+	// per borrowed part and must never wait behind e.mu.
+	objectSlots, activeObjects atomic.Int64
 }
 
 func (e *Engine) Concurrency() (active, capacity int) {
@@ -80,6 +84,7 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, changed: make(chan struct{}), active: make(map[string]*activeAttempt), cleanupWake: make(chan struct{}, 1), cleanupDone: make(chan struct{})}
+	e.objectSlots.Store(int64(opts.MaxConcurrentJobs * opts.WorkersPerJob))
 	go e.cleanupLoop()
 	return e, nil
 }
@@ -602,30 +607,21 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 		destinationAbsent = true
 	}
-	input, metadata, err := source.Open(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
+	var object *objectProgress
+	if len(progress) > 0 {
+		object = progress[0]
+	}
+	var closers []io.Closer
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i].Close()
+		}
+	}()
+	reader, ranges, metadata, stage, err := e.openSource(ctx, job, item, expected, source, target, object, &closers)
 	if err != nil {
-		return fail("open source", err)
+		return fail(stage, err)
 	}
-	defer input.Close()
-	// Keep a direct cancellation path to the original input even when a limiter
-	// wraps it with a ReadCloser whose Close does not delegate correctly.
-	stopClosing := context.AfterFunc(ctx, func() { _ = input.Close() })
-	defer stopClosing()
-	var reader io.ReadCloser = input
-	if e.opts.DecorateReader != nil {
-		reader, err = e.opts.DecorateReader(ctx, job, item, input)
-		if err != nil {
-			return fail("prepare reader", err)
-		}
-		if reader == nil {
-			return fail("prepare reader", errors.New("nil decorated reader"))
-		}
-		defer reader.Close()
-	}
-	if len(progress) > 0 && progress[0] != nil {
-		reader = &progressReader{ReadCloser: reader, progress: progress[0]}
-	}
-	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata})
+	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges})
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {
@@ -640,4 +636,51 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 	}
 	result.Status = ItemSucceeded
 	return result
+}
+
+// openSource registers everything it opens in closers, which the caller closes
+// in reverse order after the write. A ranged source is used only when the
+// target would fetch this object in ranges; otherwise one stream is opened.
+func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected transferstore.Object, source, target transferstore.Store, object *objectProgress, closers *[]io.Closer) (io.Reader, transferstore.RangeFunc, transferstore.Object, string, error) {
+	if opener, ok := source.(transferstore.RangeOpener); ok {
+		if writer, ok := target.(transferstore.RangeWriter); ok && writer.RangedWrite(item.Source.Size) {
+			ranged, metadata, err := opener.OpenRanges(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
+			if err == nil {
+				*closers = append(*closers, ranged)
+				ranges := e.rangeReader(job, item, ranged, object)
+				// The whole object as one range only serves a target that streams
+				// after all; a ranged write never opens it.
+				input := &lazyReader{open: func() (io.ReadCloser, error) { return ranges(ctx, 0, item.Source.Size) }}
+				*closers = append(*closers, input)
+				return input, ranges, metadata, "", nil
+			}
+			if !errors.Is(err, transferstore.ErrUnsupported) {
+				return nil, nil, transferstore.Object{}, "open source", err
+			}
+		}
+	}
+	input, metadata, err := source.Open(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
+	if err != nil {
+		return nil, nil, transferstore.Object{}, "open source", err
+	}
+	*closers = append(*closers, input)
+	// Keep a direct cancellation path to the original input even when a limiter
+	// wraps it with a ReadCloser whose Close does not delegate correctly.
+	stopClosing := context.AfterFunc(ctx, func() { _ = input.Close() })
+	*closers = append(*closers, closerFunc(func() error { stopClosing(); return nil }))
+	var reader io.ReadCloser = input
+	if e.opts.DecorateReader != nil {
+		reader, err = e.opts.DecorateReader(ctx, job, item, input)
+		if err != nil {
+			return nil, nil, transferstore.Object{}, "prepare reader", err
+		}
+		if reader == nil {
+			return nil, nil, transferstore.Object{}, "prepare reader", errors.New("nil decorated reader")
+		}
+		*closers = append(*closers, reader)
+	}
+	if object != nil {
+		reader = &progressReader{ReadCloser: reader, progress: object}
+	}
+	return reader, nil, metadata, "", nil
 }

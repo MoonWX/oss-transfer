@@ -72,7 +72,9 @@ func New(store *state.Store, options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	factory := &storageconfig.Factory{Source: configs, SpoolDirectory: options.SpoolDirectory, UploadMemory: uploadMemory}
+	// Ranged uploads borrow part slots only while engine object slots are idle.
+	partLender := transferstore.NewPartLender()
+	factory := &storageconfig.Factory{Source: configs, SpoolDirectory: options.SpoolDirectory, UploadMemory: uploadMemory, PartLender: partLender}
 	limits, err := ratelimit.New(store, ratelimit.Options{})
 	if err != nil {
 		return nil, err
@@ -139,6 +141,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 		limits.Close()
 		return nil, err
 	}
+	partLender.SetIdle(engine.IdleObjectSlots)
 	scanner, err := discovery.New(store, factory, discovery.Options{ParentContext: leases.ParentContext, SpecContext: leases.SpecContext})
 	if err != nil {
 		_ = engine.Close(context.Background())

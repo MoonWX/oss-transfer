@@ -253,23 +253,43 @@ func (s *Local) Scan(ctx context.Context, options ListOptions, emit func(Object)
 }
 
 func (s *Local) Open(ctx context.Context, key string, options OpenOptions) (io.ReadCloser, Object, error) {
-	if err := ctx.Err(); err != nil {
+	file, info, object, err := s.openPinned(ctx, key, options)
+	if err != nil {
 		return nil, Object{}, err
+	}
+	reader := cancellable(ctx, file, func() error { return verifyPinned(key, file, info, object) })
+	return reader, object, nil
+}
+
+// OpenRanges serves concurrent ReadAt ranges from one pinned handle. Each range
+// repeats Open's EOF identity check when it finishes, so a change during the
+// copy fails the range that observes it.
+func (s *Local) OpenRanges(ctx context.Context, key string, options OpenOptions) (RangeSource, Object, error) {
+	file, info, object, err := s.openPinned(ctx, key, options)
+	if err != nil {
+		return nil, Object{}, err
+	}
+	return &localRanges{key: key, file: file, info: info, object: object}, object, nil
+}
+
+func (s *Local) openPinned(ctx context.Context, key string, options OpenOptions) (*os.File, os.FileInfo, Object, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Object{}, err
 	}
 	name, err := localKey(key, false)
 	if err != nil {
-		return nil, Object{}, err
+		return nil, nil, Object{}, err
 	}
 	info, err := s.root.Lstat(name)
 	if err != nil {
-		return nil, Object{}, localError(err)
+		return nil, nil, Object{}, localError(err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, Object{}, fmt.Errorf("%w: source is not a regular file", ErrInvalidKey)
+		return nil, nil, Object{}, fmt.Errorf("%w: source is not a regular file", ErrInvalidKey)
 	}
 	file, err := s.root.Open(name)
 	if err != nil {
-		return nil, Object{}, localError(err)
+		return nil, nil, Object{}, localError(err)
 	}
 	beforeOpen := info
 	info, err = file.Stat()
@@ -278,36 +298,58 @@ func (s *Local) Open(ctx context.Context, key string, options OpenOptions) (io.R
 		if err == nil {
 			err = ErrInvalidKey
 		}
-		return nil, Object{}, err
+		return nil, nil, Object{}, err
 	}
 	if !os.SameFile(beforeOpen, info) {
 		_ = file.Close()
-		return nil, Object{}, ErrSourceChanged
+		return nil, nil, Object{}, ErrSourceChanged
 	}
 	object, err := openedObject(key, file, info)
 	if err != nil {
 		_ = file.Close()
-		return nil, Object{}, err
+		return nil, nil, Object{}, err
 	}
 	if err := checkExpected(object, options.Expected); err != nil {
 		_ = file.Close()
-		return nil, Object{}, err
+		return nil, nil, Object{}, err
 	}
-	reader := cancellable(ctx, file, func() error {
-		latest, err := file.Stat()
-		if err != nil {
-			return err
-		}
-		if !os.SameFile(info, latest) {
-			return ErrSourceChanged
-		}
-		actual, err := openedObject(key, file, latest)
-		if err != nil {
-			return err
-		}
-		return checkExpected(actual, &object)
-	})
-	return reader, object, nil
+	return file, info, object, nil
+}
+
+func verifyPinned(key string, file *os.File, info os.FileInfo, object Object) error {
+	latest, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, latest) {
+		return ErrSourceChanged
+	}
+	actual, err := openedObject(key, file, latest)
+	if err != nil {
+		return err
+	}
+	return checkExpected(actual, &object)
+}
+
+type localRanges struct {
+	key    string
+	file   *os.File
+	info   os.FileInfo
+	object Object
+}
+
+func (r *localRanges) Close() error { return r.file.Close() }
+
+func (r *localRanges) OpenRange(ctx context.Context, offset, length int64) (io.ReadCloser, error) {
+	if offset < 0 || length <= 0 || offset > r.object.Size-length {
+		return nil, errors.New("source range is outside the object")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Closing a range must not close the shared handle.
+	section := io.NopCloser(io.NewSectionReader(r.file, offset, length))
+	return cancellable(ctx, section, func() error { return verifyPinned(r.key, r.file, r.info, r.object) }), nil
 }
 
 func (s *Local) Write(ctx context.Context, key string, input io.Reader, options WriteOptions) (result WriteResult, err error) {

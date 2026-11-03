@@ -89,3 +89,20 @@ func (b *UploadMemoryBudget) release(bytes int64) {
 	b.admit()
 	b.mu.Unlock()
 }
+
+// tryAcquire never waits and never overtakes a queued part. It also leaves
+// reserve bytes free, so newly admitted objects reach memory without waiting
+// for opportunistic parts to drain.
+func (b *UploadMemoryBudget) tryAcquire(bytes, reserve int64) (func(), bool) {
+	if b == nil || bytes <= 0 {
+		return nil, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.waiting.Len() > 0 || bytes > b.capacity-b.used-reserve {
+		return nil, false
+	}
+	b.used += bytes
+	var once sync.Once
+	return func() { once.Do(func() { b.release(bytes) }) }, true
+}

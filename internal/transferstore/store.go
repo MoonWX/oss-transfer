@@ -83,6 +83,34 @@ type WriteOptions struct {
 	ContentDisposition string
 	CacheControl       string
 	Metadata           map[string]string
+	// Ranges lets a ranged multipart write fetch each part independently. Each
+	// reader must yield exactly length bytes of the pinned source, then EOF;
+	// a failed read may be repeated with a new reader. Input is still required
+	// and is used by any path that streams.
+	Ranges RangeFunc
+}
+
+type RangeFunc func(ctx context.Context, offset, length int64) (io.ReadCloser, error)
+
+// RangeSource reads one pinned source version in independent byte ranges. It
+// is safe for concurrent use. A range read after the source changed fails with
+// ErrSourceChanged instead of returning bytes from another version.
+type RangeSource interface {
+	OpenRange(ctx context.Context, offset, length int64) (io.ReadCloser, error)
+	Close() error
+}
+
+// RangeOpener is implemented by sources that support ranged reads. Expected
+// is checked as in Open. ErrUnsupported means this object or provider cannot
+// serve ranges, and the caller should stream it with Open instead.
+type RangeOpener interface {
+	OpenRanges(ctx context.Context, key string, options OpenOptions) (RangeSource, Object, error)
+}
+
+// RangeWriter reports whether Write would use WriteOptions.Ranges for an
+// object of this size. Callers skip the extra range setup when it would not.
+type RangeWriter interface {
+	RangedWrite(size int64) bool
 }
 
 type WriteResult struct {

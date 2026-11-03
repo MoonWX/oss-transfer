@@ -312,6 +312,9 @@ test("recycle refresh reads tasks and nodes while paging and deletion preserve e
   page,
 }) => {
   await mockApi(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
   let rows = Array.from({ length: 27 }, (_, i) => ({
     ...tasks[3],
     taskIndex: 7000 + i,

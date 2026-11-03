@@ -98,6 +98,9 @@ test("far child deep links use a precise query and returning starts the priority
   page,
 }) => {
   const { reads } = await arrange(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
   await page.goto("/tasks?taskId=989&childTaskId=989-77&childNode=10.0.1.12");
   await expect(
     page.getByRole("heading", { name: "子任务 #989-77", exact: true }),
@@ -141,6 +144,9 @@ test("active subtasks use one direct filtered request and preserve both views wi
   page,
 }, testInfo) => {
   const { reads, children } = await arrange(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
   children[998].status = "RUNNING";
   children[999].status = "RUNNING";
   await page.goto("/tasks?taskId=989");
@@ -396,6 +402,9 @@ test("retrying an appended-page failure requests that same cursor and retains ea
   page,
 }) => {
   const { reads } = await arrange(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
   let attempts = 0;
   await page.route(
     "**/api/master/tasks/989/children?offset=25&limit=25&**",

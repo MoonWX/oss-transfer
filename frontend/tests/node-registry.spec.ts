@@ -498,6 +498,10 @@ async function openInvitation(page: Page, label = "新节点") {
 test("invitation closes only when its node joins and refreshes the node list", async ({
   page,
 }) => {
+  // setup() navigates, so pause polling first; only the join may refresh nodes.
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
   await setup(page, true);
   let joined = false;
   let checks = 0;

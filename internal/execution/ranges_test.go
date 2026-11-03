@@ -238,9 +238,16 @@ type gatedReader struct {
 	io.ReadCloser
 	ctx  context.Context
 	gate <-chan struct{}
+	// reading, when set, receives one value on the first Read: by then the
+	// writer has reserved the memory for the part it is filling.
+	reading chan<- struct{}
+	once    sync.Once
 }
 
 func (r *gatedReader) Read(p []byte) (int, error) {
+	if r.reading != nil {
+		r.once.Do(func() { r.reading <- struct{}{} })
+	}
 	select {
 	case <-r.gate:
 		return r.ReadCloser.Read(p)
@@ -285,6 +292,7 @@ func TestThrottledTaskStreamsAndLeavesSharedMemoryToOthers(t *testing.T) {
 	openServer, openTarget := newLendingTarget(t, budget, lender, 20*time.Millisecond)
 	gate := make(chan struct{})
 	entered := make(chan string, 16)
+	reading := make(chan struct{}, 1)
 	var mu sync.Mutex
 	var throttledSizes []int64
 	engine := &Engine{opts: Options{
@@ -297,7 +305,7 @@ func TestThrottledTaskStreamsAndLeavesSharedMemoryToOthers(t *testing.T) {
 			throttledSizes = append(throttledSizes, part.Source.Size)
 			mu.Unlock()
 			entered <- part.ID
-			return &gatedReader{ReadCloser: input, ctx: ctx, gate: gate}, nil
+			return &gatedReader{ReadCloser: input, ctx: ctx, gate: gate, reading: reading}, nil
 		},
 	}}
 	stat, _ := source.Stat(bg, "throttled.bin")
@@ -307,6 +315,13 @@ func TestThrottledTaskStreamsAndLeavesSharedMemoryToOthers(t *testing.T) {
 		slowDone <- engine.copyItem(bg, job, Item{ID: "slow", Source: stat, DestinationKey: "throttled.bin"}, source, slowTarget)
 	}()
 	waitAdmission(t, entered)
+	// Start the other task only once the throttled write holds its part;
+	// otherwise the other task may legitimately take all four slots first.
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("throttled write never started reading")
+	}
 	if lent := lender.Lent(); lent != 0 {
 		t.Fatal("throttled task borrowed part slots", lent)
 	}

@@ -2224,13 +2224,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "転送中 {value1} を含む",
   },
   请求速率: { en: "Request rate", ja: "リクエストレート" },
-  "任务上限 {value1}": {
-    en: "Task limit {value1}",
-    ja: "タスク上限 {value1}",
-  },
-  "生效上限 {value1}": {
-    en: "Effective limit {value1}",
-    ja: "実効上限 {value1}",
-  },
   不限: { en: "unlimited", ja: "無制限" },
+  "次/秒": { en: "req/s", ja: "回/秒" },
+  实时: { en: "Current", ja: "現在" },
+  任务上限: { en: "Task limit", ja: "タスク上限" },
+  生效上限: { en: "Effective limit", ja: "実効上限" },
 };

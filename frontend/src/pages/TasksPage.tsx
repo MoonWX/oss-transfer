@@ -5,6 +5,7 @@ import { taskNodeLabels, type NodeLabels } from "../lib/nodeRegistry";
 import type { NodeRegistry } from "../lib/nodeRegistry";
 import { parentTaskFilterStates, taskStatusGroup } from "../lib/taskStatus";
 import {
+  isValidElement,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -94,6 +95,7 @@ import ListPagination, {
 import TaskBandwidth from "../components/TaskBandwidth";
 import SubtaskDetails from "../components/SubtaskDetails";
 import TransferStatistics from "../components/TransferStatistics";
+import TaskRequestRates from "../components/TaskRequestRates";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
 import {
   EmptyState,
@@ -1028,6 +1030,12 @@ function TaskDetail({
                   : `${formatBytes(current.averageSpeedBytesPerSecond)}/s`,
               ],
               [
+                tr("请求速率"),
+                current.requestRates ? (
+                  <TaskRequestRates rates={current.requestRates} />
+                ) : null,
+              ],
+              [
                 tr("创建时间"),
                 current.createTime == null || current.createTime === ""
                   ? null
@@ -1107,19 +1115,27 @@ function TaskDetail({
                   key={label}
                   sx={{
                     display: "grid",
-                    gridTemplateColumns: "105px minmax(0, 1fr)",
-                    gap: 2,
+                    // A table value needs the full width on a phone, so its
+                    // label moves above it.
+                    gridTemplateColumns: isValidElement(value)
+                      ? { xs: "minmax(0, 1fr)", sm: "105px minmax(0, 1fr)" }
+                      : "105px minmax(0, 1fr)",
+                    gap: isValidElement(value) ? { xs: 0.75, sm: 2 } : 2,
                   }}
                 >
                   <Typography variant="body2" color="text.secondary">
                     {label}
                   </Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}
-                  >
-                    {String(value)}
-                  </Typography>
+                  {isValidElement(value) ? (
+                    value
+                  ) : (
+                    <Typography
+                      variant="body2"
+                      sx={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}
+                    >
+                      {String(value)}
+                    </Typography>
+                  )}
                 </Box>
               ))}
           </Stack>

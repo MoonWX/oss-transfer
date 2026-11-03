@@ -120,17 +120,32 @@ test("task details show in-flight bytes and observed request rates", async ({
   await expect(transferred.getByTestId("transfer-in-flight")).toHaveText(
     "含传输中 1 GiB",
   );
-  const requests = page.getByTestId("task-request-rates");
-  await expect(requests).toContainText("请求速率");
-  await expect(requests).toContainText(
-    "LIST 0 · GET 2.4 · HEAD 0 · PUT 85.2 次/秒",
-  );
-  await expect(requests).toContainText(
-    "任务上限 LIST / GET 100 · HEAD 不限 · PUT 不限",
-  );
-  await expect(requests).toContainText(
-    "生效上限 LIST / GET 100 · HEAD 不限 · PUT 1,400",
-  );
+  // Request rates sit with the speeds under 执行信息, not in 传输统计.
+  await expect(page.getByText("请求速率", { exact: true })).toHaveCount(1);
+  const requests = page
+    .getByText("平均速度", { exact: true })
+    .locator("../..")
+    .getByRole("table", { name: "请求速率" });
+  await expect(requests).toBeVisible();
+  const cells = async (name: string) =>
+    (
+      await requests
+        .getByRole("row")
+        .filter({ hasText: name })
+        .getByRole("cell")
+        .allTextContents()
+    ).slice(1);
+  expect(await requests.getByRole("columnheader").allTextContents()).toEqual([
+    "次/秒",
+    "LIST",
+    "GET",
+    "HEAD",
+    "PUT",
+  ]);
+  expect(await cells("实时")).toEqual(["0", "2.4", "0", "85.2"]);
+  // LIST and GET share one task limit, so that cell spans both columns.
+  expect(await cells("任务上限")).toEqual(["100", "不限", "不限"]);
+  expect(await cells("生效上限")).toEqual(["100", "不限", "1,400"]);
 
   // A stale sample or an unreachable Agent is unknown, never a smaller number.
   state.task = {
@@ -140,8 +155,8 @@ test("task details show in-flight bytes and observed request rates", async ({
     liveProgress: "STALE",
     requestRates: { ...state.task.requestRates, observed: null },
   };
-  await expect(requests).toContainText("—");
-  await expect(requests).not.toContainText("次/秒");
+  await expect.poll(() => cells("实时")).toEqual(["—", "—", "—", "—"]);
+  expect(await cells("生效上限")).toEqual(["100", "不限", "1,400"]);
   await expect(transferred).toContainText("12,708 / 6 GiB");
   await expect(transferred.getByTestId("transfer-in-flight")).toHaveCount(0);
 });

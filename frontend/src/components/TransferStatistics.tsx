@@ -1,6 +1,6 @@
 import { Box, Typography } from "@mui/material";
 import { t, useI18n } from "../lib/i18n";
-import { taskRequestRateText, transferredBytes } from "../lib/taskProgress";
+import { transferredBytes } from "../lib/taskProgress";
 import { formatBytes, formatNumber } from "./Common";
 
 // Shared by parent and child details. "已迁移" bytes include fresh in-flight
@@ -12,7 +12,6 @@ export default function TransferStatistics({
 }) {
   useI18n();
   const inFlight = Number(task.inFlightBytes || 0);
-  const requests = taskRequestRateText(task.requestRates);
   return (
     <Box
       sx={{
@@ -61,24 +60,6 @@ export default function TransferStatistics({
           )}
         </Box>
       ))}
-      {requests && (
-        <Box sx={{ gridColumn: "1 / -1" }} data-testid="task-request-rates">
-          <Typography variant="caption" color="text.secondary">
-            {t("请求速率")}
-          </Typography>
-          <Typography sx={{ fontWeight: 500 }}>{requests.value}</Typography>
-          {requests.detail.map((line) => (
-            <Typography
-              key={line}
-              variant="caption"
-              color="text.secondary"
-              display="block"
-            >
-              {line}
-            </Typography>
-          ))}
-        </Box>
-      )}
     </Box>
   );
 }

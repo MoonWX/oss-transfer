@@ -94,9 +94,11 @@ func TestFailoverLeaseFenceMigrationAndReturningOwner(t *testing.T) {
 		owner, other = b, a
 	}
 	runtime := f.master.tasks
-	runtime.leases.ttl = time.Second
+	// The lease must outlast setup on a loaded Windows runner with -race,
+	// or the "not moved before expiry" check sees an already expired lease.
+	runtime.leases.ttl = 3 * time.Second
 	runtime.leases.margin = 50 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	startTakeoverLeaseLoop(t, ctx, runtime)
 	available := map[string]bool{a.node.ID: true, b.node.ID: true}

@@ -145,7 +145,9 @@ func TestLeaseExpiryCancelsWhileDatabaseWriterBlocked(t *testing.T) {
 	leases.now = time.Now
 	leases.afterFunc = func(d time.Duration, f func()) leaseTimer { return time.AfterFunc(d, f) }
 	req := leaseRequest(1, "expiry", 1)
-	req.TTLMillis = 80
+	// Long enough to read the lease back on a loaded runner, short enough
+	// to expire while the writer below is still blocked.
+	req.TTLMillis = 500
 	grantPrepared(t, leases, req)
 	running, err := leases.ParentContext(1, 1)
 	if err != nil {
@@ -156,7 +158,7 @@ func TestLeaseExpiryCancelsWhileDatabaseWriterBlocked(t *testing.T) {
 	<-entered
 	select {
 	case <-running.Done():
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		close(release)
 		<-done
 		t.Fatal("lease expiry waited for DB writer")

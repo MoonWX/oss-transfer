@@ -37,7 +37,16 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 printf '%s\n' "$$" > "$lock/pid"
 stage=""
-cleanup() { if [[ -n "$stage" ]]; then rm -rf "$stage"; fi; rm -f "$lock/pid"; rmdir "$lock"; }
+cleanup() {
+  # Stop platform builds before deleting the stage they write into.
+  local pids
+  pids="$(jobs -p)"
+  # shellcheck disable=SC2086 # One PID per word.
+  if [[ -n "$pids" ]]; then kill $pids 2>/dev/null || true; wait 2>/dev/null || true; fi
+  if [[ -n "$stage" ]]; then rm -rf "$stage"; fi
+  rm -f "$lock/pid"
+  rmdir "$lock"
+}
 trap cleanup EXIT
 stage="$(mktemp -d "$root/output/.build.XXXXXX")"
 (
@@ -49,7 +58,8 @@ stage="$(mktemp -d "$root/output/.build.XXXXXX")"
 rm -rf internal/webui/assets
 mkdir -p internal/webui/assets
 cp -R frontend/dist/. internal/webui/assets/
-for platform in $platforms; do
+build_platform() {
+  local platform="$1" target_os target_arch go_arch go_arm name package extension program link_flags archive
   target_os="${platform%/*}"
   target_arch="${platform#*/}"
   IFS=$'\t' read -r target_os go_arch go_arm < <(python3 deploy/native/platforms.py --go-env "$platform")
@@ -97,5 +107,43 @@ PY
   fi
   (cd "$stage" && shasum -a 256 "$archive" > "$archive.sha256")
   mv "$stage/$archive" "$stage/$archive.sha256" "$root/output/packages/"
-  printf '%s\n' "$root/output/packages/$archive"
+  printf '%s\n' "$root/output/packages/$archive" > "$stage/${platform//\//-}.archive"
+}
+# shellcheck disable=SC2206 # Platform names are validated words.
+platform_list=($platforms)
+if [[ ${#platform_list[@]} -eq 1 ]]; then
+  build_platform "${platform_list[0]}"
+else
+  # Each platform is mostly a serial link; overlap them, logging per platform
+  # so failures stay readable. FIFO waits keep this working on bash 3.2.
+  parallel="${BUILD_PARALLEL:-4}"
+  [[ "$parallel" =~ ^[1-9][0-9]*$ ]] || { printf 'BUILD_PARALLEL must be a positive integer\n' >&2; exit 1; }
+  running=()
+  failed=()
+  finish() {
+    local pid="${running[0]%%:*}" platform="${running[0]#*:}"
+    running=("${running[@]:1}")
+    if wait "$pid"; then
+      printf 'Built %s\n' "$platform"
+    else
+      failed+=("$platform")
+    fi
+  }
+  for platform in "${platform_list[@]}"; do
+    if [[ ${#running[@]} -ge $parallel ]]; then finish; fi
+    build_platform "$platform" > "$stage/${platform//\//-}.log" 2>&1 &
+    running+=("$!:$platform")
+  done
+  while [[ ${#running[@]} -gt 0 ]]; do finish; done
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    for platform in "${failed[@]}"; do
+      printf '\n=== Build log for %s ===\n' "$platform" >&2
+      cat "$stage/${platform//\//-}.log" >&2
+    done
+    printf 'Failed to build: %s\n' "${failed[*]}" >&2
+    exit 1
+  fi
+fi
+for platform in "${platform_list[@]}"; do
+  cat "$stage/${platform//\//-}.archive"
 done

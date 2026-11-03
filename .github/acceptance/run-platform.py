@@ -37,12 +37,19 @@ def plan(args, gate, run_id):
                if sys.platform == "win32" else [
                    phase("installer-sources", [py, repo / ".github/tests/test-source-selection.py", "-v"], repo),
                    phase("download-sources", [py, repo / ".github/tests/test-download-source.py", "-v"], repo)])
+    # internal/master is the long pole and mostly waits on leases and restarts,
+    # so it runs as concurrent shards next to the remaining packages.
     if args.test_binaries:
+        parallel = "4" if (os.cpu_count() or 1) > 2 else "2"
         unit = [phase("unit", [py, scripts / "test-binaries.py", "run", "--platform", args.platform,
-                               "--directory", args.test_binaries, "--repo", repo, "--output", output / "unit", "--parallel", "2"], repo)]
+                               "--directory", args.test_binaries, "--repo", repo, "--output", output / "unit",
+                               "--parallel", parallel], repo)]
+        cli_unit = []
     else:
-        command = ["go", "test", "-count=1", "-timeout=15m", "-p", "2", *(["-race"] if args.race else []), "./..."]
-        unit = [phase("unit", command, repo), phase("cli-unit", command, repo / "cli")]
+        race = ["-race"] if args.race else []
+        unit = [phase("unit", [py, scripts / "go-unit.py", "--output", output / "unit",
+                               *(["--race"] if args.race else [])], repo)]
+        cli_unit = [phase("cli-unit", ["go", "test", "-count=1", "-timeout=15m", "-p", "2", *race, "./..."], repo / "cli")]
     version = (repo / "VERSION").read_text().strip()
     control = [
         phase("smoke", [py, scripts / "runtime-smoke.py", *common, "--output", output / "smoke",
@@ -52,6 +59,8 @@ def plan(args, gate, run_id):
         phase("local-cli", [py, scripts / "local-cli.py", *cli, "--output", output / "local-cli"], repo,
               evidence=output / "local-cli/evidence.json"),
         phase("inventory", [py, scripts / "inventory.py", *cli, *storage, "--output", output / "inventory"], repo),
+        # Short checks ride in the control group so the unit group starts at once.
+        *sources, *cli_unit,
     ]
     install = [*privileged, scripts / "install.py", *cli, "--repo", repo, "--output", output / "install",
                "--all-installed", "--target-platform", args.platform]
@@ -71,7 +80,7 @@ def plan(args, gate, run_id):
                 "--multipart-recovery", "--exclusive-gate", gate, "--exclusive-run-id", run_id]
     if args.test_binaries:
         transfer += ["--multipart-test-binary", os.environ["QA_MULTIPART_TEST_BINARY"]]
-    return {"unit": sources + unit, "control": control, "install": installation,
+    return {"unit": unit, "control": control, "install": installation,
             "transfer": [phase("transfer", transfer, repo)]}
 
 

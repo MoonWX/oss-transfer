@@ -4,6 +4,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,9 @@ SUPPORTED = ("linux/armv7", "linux/riscv64", "linux/loong64", "freebsd/amd64", "
 GO_OSES = set("aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos".split())
 GO_ARCHES = set("386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64 mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm".split())
 FIXTURES = {"failure-master": "QA_FAILURE_MASTER", "rollback-cli": "QA_ROLLBACK_CLI"}
+_UNIT = importlib.util.spec_from_file_location("go_unit", Path(__file__).with_name("go-unit.py"))
+SHARDS = importlib.util.module_from_spec(_UNIT)
+_UNIT.loader.exec_module(SHARDS)
 
 
 def digest(path):
@@ -159,6 +163,33 @@ def json_stream(text):
         text = text[end:]
 
 
+def compile_module(module, packages, output, environment, platform):
+    """Link every test package of one module in a single go invocation."""
+    # go test -c -o DIR/ names each executable after the last import path
+    # element, so two packages with the same name would overwrite each other.
+    names = {}
+    for package in packages:
+        name = package["ImportPath"].rsplit("/", 1)[-1] + ".test"
+        if name in names:
+            raise ValueError("Test executables would collide: " + names[name] + " and " + package["ImportPath"])
+        names[name] = package["ImportPath"]
+    if not names:
+        return []
+    staging = output / ("compile-" + ("root" if module == "." else module))
+    staging.mkdir()
+    print("Compile " + platform + " " + str(len(names)) + " test packages in " + module, flush=True)
+    # Without DWARF and the symbol table the executables are half the size;
+    # stack traces still carry function names and lines.
+    subprocess.run(["go", "test", "-c", "-trimpath", "-ldflags=-s -w", "-o", str(staging) + os.sep, "./..."],
+                   cwd=ROOT / module, env=environment, check=True, stdout=subprocess.DEVNULL)
+    produced = {path.name for path in staging.iterdir()}
+    if produced != set(names):
+        raise ValueError("Compiled test executables differ from the package list: " +
+                         repr(sorted(produced.symmetric_difference(names))))
+    built = [(package, staging / (package["ImportPath"].rsplit("/", 1)[-1] + ".test")) for package in packages]
+    return built
+
+
 def build(platform, output):
     target = PLATFORMS[platform]
     output = output.resolve()
@@ -178,19 +209,19 @@ def build(platform, output):
     for module in (".", "cli"):
         listing = subprocess.check_output(["go", "list", "-json", "./..."], cwd=ROOT / module,
                                           env=environment, text=True)
-        for package in json_stream(listing):
+        packages = [package for package in json_stream(listing)
+                    if package.get("TestGoFiles", []) + package.get("XTestGoFiles", [])]
+        for package, built in compile_module(module, packages, output, environment, platform):
             files = package.get("TestGoFiles", []) + package.get("XTestGoFiles", [])
-            if not files:
-                continue
             cwd = Path(package["Dir"]).relative_to(ROOT).as_posix()
             test_files = sorted((PurePosixPath(cwd) / name).as_posix() for name in files)
             listed_sources.update(test_files)
             binary = "bin/" + cwd.replace("/", "-") + ".test"
-            print("Compile " + platform + " " + package["ImportPath"], flush=True)
-            subprocess.run(["go", "test", "-c", "-trimpath", "-o", str(output / binary), package["ImportPath"]],
-                           cwd=ROOT / module, env=environment, check=True)
+            built.replace(output / binary)
             manifest["tests"].append({"package": package["ImportPath"], "cwd": cwd,
                                       "binary": binary, "testFiles": test_files, "sha256": digest(output / binary)})
+    for staging in output.glob("compile-*"):
+        staging.rmdir()
     if listed_sources != set(sources):
         raise ValueError("Go package discovery differs from test-source inventory: " +
                          repr(sorted(listed_sources.symmetric_difference(sources))))
@@ -308,15 +339,43 @@ def run(platform, directory, repo, output, parallel):
         manifest = verify(platform, directory, repo, publish_env=False)
         evidence.update(commit=manifest["commit"], goVersion=manifest["goVersion"], phase="run")
 
-        def execute(entry):
-            log = output / (entry["cwd"].replace("/", "-") + ".log")
+        timings = SHARDS.load_timings()
+        work = []
+        for entry in manifest["tests"]:
+            if entry["cwd"] != timings["package"]:
+                work.append({"entry": entry})
+                continue
+            # The same shards as native runs; the union check fails the run
+            # rather than skip a test this list or the timing file missed.
+            listing = subprocess.run([str(confined(directory.resolve(), entry["binary"])), "-test.list", "."],
+                                     cwd=confined(repo.resolve(), entry["cwd"], directory=True),
+                                     capture_output=True, text=True, timeout=300, check=True)
+            names = SHARDS.listed_tests(listing.stdout)
+            shards, unknown = SHARDS.plan_shards(names, timings["seconds"], timings["shards"])
+            evidence.update(listedTests=len(names), untimedTests=unknown)
+            print(f"Union check: {len(names)} listed tests in {entry['package']} = "
+                  f"{' + '.join(str(len(shard['tests'])) for shard in shards)} across {len(shards)} shards", flush=True)
+            for index, shard in enumerate(shards, 1):
+                work.append({"entry": entry, "shard": f"{index}/{len(shards)}", "tests": shard["tests"]})
+        # Longest first: the master shards, then known slow packages.
+        rank = {cwd: index for index, cwd in enumerate(timings["packageOrder"])}
+        work.sort(key=lambda item: (rank.get(item["entry"]["cwd"], len(rank)), item["entry"]["cwd"]))
+
+        def execute(item):
+            entry = item["entry"]
+            suffix = "-" + item["shard"].split("/")[0] if "shard" in item else ""
+            log = output / (entry["cwd"].replace("/", "-") + suffix + ".log")
             began = time.monotonic()
             result = {"package": entry["package"], "binary": entry["binary"], "sha256": entry["sha256"],
                       "log": log.name, "timeoutSeconds": package_timeout}
+            if "shard" in item:
+                result.update(shard=item["shard"], tests=len(item["tests"]))
             with log.open("w", encoding="utf-8") as stream:
                 process = None
                 try:
                     command = [str(confined(directory.resolve(), entry["binary"])), "-test.count=1", "-test.v", f"-test.timeout={package_timeout}s"]
+                    if "shard" in item:
+                        command.append("-test.run=" + SHARDS.run_pattern(item["tests"]))
                     process = subprocess.Popen(command, cwd=confined(repo.resolve(), entry["cwd"], directory=True),
                                                stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
                     result["exitCode"] = process.wait(timeout=package_timeout + 15)
@@ -338,16 +397,17 @@ def run(platform, directory, repo, output, parallel):
             completed = re.search(r"^PASS\r?$", text, re.MULTILINE) is not None
             result["result"] = "passed" if result["exitCode"] == 0 and completed and result["passedTests"] > 0 else "failed"
             result["skipped"] = re.findall(r"^\s*--- SKIP: (.+)$", text, re.MULTILINE)
-            print(result["result"] + " " + entry["package"] + " " + str(result["seconds"]) + "s", flush=True)
+            print(result["result"] + " " + entry["package"] + (" shard " + item["shard"] if "shard" in item else "")
+                  + " " + str(result["seconds"]) + "s", flush=True)
             if result["result"] != "passed":
                 print(text, file=sys.stderr, flush=True)
             return result
 
         with ThreadPoolExecutor(max_workers=parallel) as pool:
-            futures = [pool.submit(execute, entry) for entry in manifest["tests"]]
+            futures = [pool.submit(execute, item) for item in work]
             for future in as_completed(futures):
                 evidence["packages"].append(future.result())
-        evidence["packages"].sort(key=lambda item: item["package"])
+        evidence["packages"].sort(key=lambda item: (item["package"], item.get("shard", "")))
         evidence["result"] = "passed" if all(item["result"] == "passed" for item in evidence["packages"]) else "failed"
     except Exception as error:
         evidence["error"] = str(error)
@@ -373,7 +433,7 @@ def main():
             command.add_argument("--env-file", type=Path)
         else:
             command.add_argument("--output", type=Path, required=True)
-            command.add_argument("--parallel", type=int, choices=(1, 2), default=2)
+            command.add_argument("--parallel", type=int, choices=(1, 2, 3, 4), default=2)
     args = parser.parse_args()
     if args.command == "build":
         build(args.platform, args.output)

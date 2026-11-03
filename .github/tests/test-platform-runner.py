@@ -350,18 +350,27 @@ class PlatformPlanTests(unittest.TestCase):
             with self.subTest(platform=platform):
                 self.args.platform, self.args.race = platform, platform != "windows/arm64"
                 groups = self.plan()
+                # The main module runs through the shard runner, which owns the
+                # union check; the CLI module stays one plain go test.
+                self.assertEqual([step["name"] for step in groups["unit"]], ["unit"])
+                unit = groups["unit"][0]
+                self.assertEqual(unit["command"][1], str(ROOT / ".github/acceptance/go-unit.py"))
+                self.assertEqual(unit["cwd"], str(ROOT))
+                self.assertEqual("--race" in unit["command"], self.args.race)
+                self.assertEqual(unit["command"][unit["command"].index("--output") + 1], str(self.root / "unit"))
                 go_steps = [step for steps in groups.values() for step in steps if step["command"][0] == "go"]
-                self.assertEqual({step["cwd"] for step in go_steps}, {str(ROOT), str(ROOT / "cli")})
-                self.assertEqual(len(go_steps), 2)
-                for step in go_steps:
-                    command = step["command"]
-                    self.assertEqual(command[1], "test")
-                    self.assertIn("./...", command)
-                    self.assertIn("-timeout=15m", command)
-                    self.assertEqual("-race" in command, self.args.race)
-                    self.assertEqual(command[command.index("-p") + 1], "2")
-                    self.assertFalse(any(arg.startswith(("-run", "-skip")) for arg in command))
-        self.assertEqual({step["name"] for step in groups["control"]}, {"smoke", "cli", "local-cli", "inventory"})
+                self.assertEqual([step["name"] for step in go_steps], ["cli-unit"])
+                self.assertIn(go_steps[0], groups["control"])
+                command = go_steps[0]["command"]
+                self.assertEqual(go_steps[0]["cwd"], str(ROOT / "cli"))
+                self.assertEqual(command[1], "test")
+                self.assertIn("./...", command)
+                self.assertIn("-timeout=15m", command)
+                self.assertEqual("-race" in command, self.args.race)
+                self.assertEqual(command[command.index("-p") + 1], "2")
+                self.assertFalse(any(arg.startswith(("-run", "-skip")) for arg in command))
+        self.assertEqual([step["name"] for step in groups["control"]],
+                         ["smoke", "cli", "local-cli", "inventory", "installer-sources", "download-sources", "cli-unit"])
         transfer = groups["transfer"][0]["command"]
         self.assertEqual(transfer[transfer.index("--scenario") + 1], "all")
         self.assertIn("--multipart-recovery", transfer)
@@ -379,10 +388,13 @@ class PlatformPlanTests(unittest.TestCase):
         unit = next(step for step in groups["unit"] if step["name"] == "unit")
         command = unit["command"]
         self.assertEqual(command[1:3], [str(ROOT / ".github/acceptance/test-binaries.py"), "run"])
+        parallel = "4" if (os.cpu_count() or 1) > 2 else "2"
         for option, expected in (("--platform", "freebsd/arm64"), ("--directory", str(self.args.test_binaries)),
-                                 ("--repo", str(ROOT)), ("--parallel", "2")):
+                                 ("--repo", str(ROOT)), ("--parallel", parallel)):
             self.assertEqual(command[command.index(option) + 1], expected)
         self.assertFalse(any(arg.startswith(("-run", "-skip")) for arg in command))
+        self.assertEqual([step["name"] for step in groups["unit"]], ["unit"])
+        self.assertEqual([step["name"] for step in groups["control"]][-2:], ["installer-sources", "download-sources"])
         install = groups["install"][0]["command"]
         for option, variable in (("--failure-master-fixture", "QA_FAILURE_MASTER"), ("--rollback-cli-fixture", "QA_ROLLBACK_CLI")):
             self.assertEqual(install[install.index(option) + 1], fixtures[variable])

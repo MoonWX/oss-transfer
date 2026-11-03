@@ -206,6 +206,79 @@ class TestArtifacts(unittest.TestCase):
                 evidence = json.loads((output / "evidence.json").read_text())
                 self.assertEqual(evidence["packages"][0]["timeoutSeconds"], timeout)
 
+    def test_one_compile_per_module_rejects_colliding_or_missing_executables(self):
+        packages = [{"ImportPath": "github.com/MoonWX/oss-transfer/internal/task"},
+                    {"ImportPath": "github.com/MoonWX/oss-transfer/cmd/task"}]
+        with mock.patch.object(TESTS.subprocess, "run", side_effect=AssertionError("go must not run")):
+            with self.assertRaisesRegex(ValueError, "collide"):
+                TESTS.compile_module(".", packages, self.root, {}, "linux/armv7")
+        packages = [{"ImportPath": "github.com/MoonWX/oss-transfer/internal/task"},
+                    {"ImportPath": "github.com/MoonWX/oss-transfer/internal/agent"}]
+        calls = []
+
+        def go(command, **kwargs):
+            calls.append(command)
+            # A silently skipped package must not shrink the artifact.
+            (Path(command[command.index("-o") + 1]) / "task.test").write_bytes(b"binary")
+            return mock.Mock(returncode=0)
+
+        (self.root / "missing").mkdir()
+        with mock.patch.object(TESTS.subprocess, "run", side_effect=go):
+            with self.assertRaisesRegex(ValueError, "agent.test"):
+                TESTS.compile_module(".", packages, self.root / "missing", {}, "linux/armv7")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:5], ["go", "test", "-c", "-trimpath", "-ldflags=-s -w"])
+        self.assertEqual(calls[0][-1], "./...")
+
+    def test_master_runs_as_shards_that_cover_every_listed_test_once(self):
+        manifest = copy.deepcopy(self.manifest)
+        (self.repo / "internal/master").mkdir(parents=True)
+        master = {"cwd": "internal/master", "package": "github.com/MoonWX/oss-transfer/internal/master",
+                  "binary": "bin/internal-master.test", "sha256": "0" * 64, "testFiles": []}
+        manifest["tests"] = [manifest["tests"][1], master]
+        listed = ["TestA", "TestB", "TestC", "TestD", "TestUntimed"]
+        ran = self.root / "ran"
+        script = self.directory / master["binary"]
+        script.write_text("#!/bin/sh\n"
+                          "for arg; do case $arg in -test.list) printf '%s\\n' " + " ".join(listed) + "; exit 0;; "
+                          "-test.run=*) pattern=${arg#-test.run=};; esac; done\n"
+                          "for name in " + " ".join(listed) + "; do\n"
+                          "  if printf '%s\\n' \"$name\" | grep -Eq \"$pattern\"; then\n"
+                          "    echo \"$name\" >> '" + str(ran) + "'; echo \"--- PASS: $name (0.00s)\"; fi\n"
+                          "done\necho PASS\n")
+        script.chmod(0o755)
+        task = self.directory / manifest["tests"][0]["binary"]
+        task.write_text("#!/bin/sh\nprintf '%s\\n' '--- PASS: TestTask (0.00s)' PASS\n")
+        task.chmod(0o755)
+        timings = {"package": "internal/master", "shards": 3, "packageOrder": ["internal/master"],
+                   "seconds": {"TestA": 5, "TestB": 4, "TestC": 3, "TestD": 1}}
+        output = self.root / "sharded"
+        with mock.patch.object(TESTS, "verify", return_value=manifest), \
+                mock.patch.object(TESTS.SHARDS, "load_timings", return_value=timings):
+            self.assertEqual(TESTS.run("linux/armv7", self.directory, self.repo, output, 4), 0)
+        self.assertEqual(sorted(ran.read_text().split()), listed)
+        evidence = json.loads((output / "evidence.json").read_text())
+        shards = [item for item in evidence["packages"] if item["package"].endswith("/master")]
+        self.assertEqual([item["shard"] for item in shards], ["1/3", "2/3", "3/3"])
+        self.assertEqual(sum(item["tests"] for item in shards), len(listed))
+        self.assertEqual(evidence["untimedTests"], ["TestUntimed"])
+        self.assertEqual(len({item["log"] for item in evidence["packages"]}), 4)
+
+    def test_unparseable_master_listing_fails_the_run(self):
+        manifest = copy.deepcopy(self.manifest)
+        (self.repo / "internal/master").mkdir(parents=True)
+        manifest["tests"] = [{"cwd": "internal/master", "package": "github.com/MoonWX/oss-transfer/internal/master",
+                              "binary": "bin/internal-master.test", "sha256": "0" * 64, "testFiles": []}]
+        script = self.directory / "bin/internal-master.test"
+        script.write_text("#!/bin/sh\necho 'TestA'; echo 'fatal: cannot list'\n")
+        script.chmod(0o755)
+        output = self.root / "bad-listing"
+        with mock.patch.object(TESTS, "verify", return_value=manifest):
+            self.assertEqual(TESTS.run("linux/armv7", self.directory, self.repo, output, 4), 1)
+        evidence = json.loads((output / "evidence.json").read_text())
+        self.assertIn("Unexpected go test -list output", evidence["error"])
+        self.assertEqual(evidence["packages"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

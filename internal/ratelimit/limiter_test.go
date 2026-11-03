@@ -545,3 +545,36 @@ func TestRealExecutionSharesConfiguredByteBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestThrottledFollowsCurrentPartLimits(t *testing.T) {
+	f := newFixture(t)
+	if f.limiter.Throttled(1, 1) {
+		t.Fatal("unknown parent reported throttled")
+	}
+	for revision, tc := range []struct {
+		limit ParentLimit
+		want  bool
+	}{
+		{ParentLimit{}, false},
+		{ParentLimit{HeadQPS: 5}, false},
+		{ParentLimit{BandwidthBytesPerSecond: 1000}, true},
+		{ParentLimit{ListQPS: 5}, true},
+		{ParentLimit{PutQPS: 5}, true},
+		{ParentLimit{}, false},
+	} {
+		limit := tc.limit
+		limit.ParentID, limit.Generation, limit.Revision = 1, 1, uint64(revision+1)
+		if err := f.limiter.ApplyParent(bg, limit); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.limiter.Throttled(1, 1); got != tc.want {
+			t.Fatalf("limit %+v throttled=%v", limit, got)
+		}
+	}
+	if err := f.limiter.ApplyParent(bg, ParentLimit{ParentID: 1, Generation: 1, Revision: 7, PutQPS: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if f.limiter.Throttled(1, 2) {
+		t.Fatal("stale generation reported throttled")
+	}
+}

@@ -7,7 +7,7 @@ import (
 
 // TaskRequestRates are admitted HTTP attempts per second, retries included,
 // averaged over the last five complete seconds. GET counts object reads only;
-// the task LIST budget still admits both LIST and GET.
+// LIST includes ListParts. The task LIST budget admits LIST and GET.
 type TaskRequestRates struct {
 	List float64 `json:"list"`
 	Get  float64 `json:"get"`
@@ -56,7 +56,7 @@ func newTaskRequestCounter() *taskRequestCounter {
 
 func taskRequestIndex(operation string) int {
 	switch operation {
-	case "ListObjects", "ListBuckets":
+	case "ListObjects", "ListBuckets", "ListParts":
 		return 0
 	case "GetObject":
 		return 1

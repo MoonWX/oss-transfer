@@ -35,6 +35,7 @@ func TestTaskRequestRatesClassifyAdmittedAttemptsPerGeneration(t *testing.T) {
 		{"GET", "/bucket?list-type=2&prefix=a"}, // ListObjects
 		{"GET", "/bucket/a"},                    // GetObject
 		{"GET", "/bucket/b"},
+		{"GET", "/bucket/a?uploadId=u&max-parts=1"}, // ListParts counts as LIST
 		{"HEAD", "/bucket/a"},
 		{"PUT", "/bucket/a"}, // PutObject
 		{"PUT", "/bucket/a?partNumber=1&uploadId=u"},
@@ -53,7 +54,7 @@ func TestTaskRequestRatesClassifyAdmittedAttemptsPerGeneration(t *testing.T) {
 	}
 	advance(time.Second)
 	got := f.controller.TaskRequests(7, 2)
-	if want := (TaskRequestRates{List: 0.2, Get: 0.4, Head: 0.2, Put: 0.8}); got.Rates != want {
+	if want := (TaskRequestRates{List: 0.4, Get: 0.4, Head: 0.2, Put: 0.8}); got.Rates != want {
 		t.Fatalf("rates = %+v, want %+v", got.Rates, want)
 	}
 	if got.NodeLimits != (NodeRequestLimits{List: 50, Head: 70}) {

@@ -278,6 +278,20 @@ func (l *Limiter) Parent(id int64) (ParentLimit, error) {
 	}
 	return p.limit, nil
 }
+
+// Throttled reports whether this generation of a parent has a bandwidth, LIST
+// (which also admits object GETs) or PUT limit: the limits a resident upload
+// part can wait on. HEAD is never charged per part. A missing, stale or
+// unlimited parent is not throttled.
+func (l *Limiter) Throttled(id int64, generation uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p := l.parents[id]
+	if p == nil || p.limit.Generation != generation {
+		return false
+	}
+	return p.limit.BandwidthBytesPerSecond > 0 || p.limit.ListQPS > 0 || p.limit.PutQPS > 0
+}
 func (l *Limiter) Close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

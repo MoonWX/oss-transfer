@@ -160,6 +160,11 @@ type Options struct {
 	CommitBatchSize   int
 	CommitInterval    time.Duration
 	DecorateReader    ReaderDecorator
+	// TaskThrottled reports a task-level bandwidth or request limit. Such
+	// objects stream: the task cap already bounds their speed, and parallel
+	// ranges would hold shared upload memory while waiting on that cap.
+	// Consulted per object, so a changed limit applies to the next object.
+	TaskThrottled func(Job) bool
 }
 
 func terminal(s Status) bool {

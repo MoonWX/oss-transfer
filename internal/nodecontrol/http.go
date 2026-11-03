@@ -81,6 +81,9 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			if info.Bucket == "" && path == "" {
 				info.Operation = "ListBuckets"
 			}
+		} else if query.Has("uploadId") {
+			// Multipart bookkeeping, not an object read; still task LIST-charged.
+			info.Operation = "ListParts"
 		}
 	case "DELETE":
 		info.Operation = "AbortMultipartUpload"

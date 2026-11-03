@@ -87,6 +87,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 	configureNodeFactory(factory, nodes)
 	rates := NewTaskRates()
 	options.Execution.DecorateReader = rates.Decorator(nodes.Decorator(limits.Decorator))
+	options.Execution.TaskThrottled = func(job execution.Job) bool { return limits.Throttled(job.ParentID, job.Generation) }
 	jobs, err := execution.NewRepository(store, execution.RepositoryOptions{})
 	if err != nil {
 		nodes.Close()

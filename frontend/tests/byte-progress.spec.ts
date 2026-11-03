@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
+import { mockTaskChildren, revealChildren } from "./task-children-fixture";
 
 const GiB = 1024 ** 3;
 
@@ -75,14 +76,15 @@ test("a large object in flight moves byte progress instead of sitting at 99%", a
   await expect(page.getByRole("tooltip")).toContainText(
     "12,708 / 12,709 个对象",
   );
-  // A failed attempt drops its live bytes; the bar must not move backwards.
+  // A failed attempt drops its live bytes; the bar must not move backwards,
+  // and the byte label holds the same sample so the two never disagree.
   state.task = {
     ...state.task,
     transferredBytes: 6 * GiB,
     progressPercent: 60,
   };
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
-  await expect(row).toContainText("6 GiB / 10 GiB");
+  await expect(row).toContainText("7 GiB / 10 GiB");
   await expect(row).toContainText("70%");
   state.task = {
     ...state.task,
@@ -142,4 +144,120 @@ test("task details show in-flight bytes and observed request rates", async ({
   await expect(requests).not.toContainText("次/秒");
   await expect(transferred).toContainText("12,708 / 6 GiB");
   await expect(transferred.getByTestId("transfer-in-flight")).toHaveCount(0);
+});
+
+const rowOf = (page: Page) =>
+  page
+    .getByRole("row")
+    .filter({ has: page.getByRole("button", { name: "#61", exact: true }) });
+
+async function reachNinety(page: Page) {
+  const state = await arrange(page);
+  state.task = {
+    ...state.task,
+    listObjectCount: 1,
+    listObjectSize: 100 * GiB,
+    putObjectCount: 0,
+    putObjectSize: 0,
+    transferredBytes: 90 * GiB,
+    inFlightBytes: 90 * GiB,
+    progressPercent: 90,
+  };
+  await page.goto("/tasks");
+  const row = rowOf(page);
+  await expect(row).toContainText("90 GiB / 100 GiB");
+  await expect(row).toContainText("90%");
+  return { state, row };
+}
+
+for (const status of ["STOPPED", "FAILED", "PARTIAL_FAILED"]) {
+  test(`${status} after high in-flight progress shows the server's exact value`, async ({
+    page,
+  }) => {
+    const { state, row } = await reachNinety(page);
+    // Ending the task discards the in-flight bytes within the same generation.
+    state.task = {
+      ...state.task,
+      status,
+      transferredBytes: 0,
+      inFlightBytes: 0,
+      liveProgress: "NONE",
+      progressPercent: 0,
+    };
+    await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+    await expect(row).toContainText("0 B / 100 GiB");
+    await expect(row).toContainText("0%");
+    await expect(row).not.toContainText("90%");
+    await expect(row.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "0",
+    );
+  });
+}
+
+test("a stale sample drops the stored peak so later live samples start fresh", async ({
+  page,
+}) => {
+  const { state, row } = await reachNinety(page);
+  state.task = {
+    ...state.task,
+    transferredBytes: 0,
+    inFlightBytes: null,
+    liveProgress: "STALE",
+    progressPercent: 0,
+  };
+  await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+  await expect(row).toContainText("0 B / 100 GiB");
+  await expect(row).toContainText("0%");
+  state.task = {
+    ...state.task,
+    transferredBytes: 5 * GiB,
+    inFlightBytes: 5 * GiB,
+    liveProgress: "LIVE",
+    progressPercent: 5,
+  };
+  await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+  await expect(row).toContainText("5 GiB / 100 GiB");
+  await expect(row).toContainText("5%");
+});
+
+test("a failover reassignment restarts the child shard line from zero", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  const child = {
+    ...state.task,
+    parentTaskId: 61,
+    childTaskId: "61-1",
+    shardId: "61-1",
+    subtaskNumber: 1,
+    attempt: 1,
+    executionNodeName: "node-a",
+    listObjectCount: 1,
+    listObjectSize: 100 * GiB,
+    putObjectCount: 0,
+    putObjectSize: 0,
+    transferredBytes: 90 * GiB,
+    inFlightBytes: 90 * GiB,
+    progressPercent: 90,
+  };
+  const shards = { items: [child] };
+  state.task = { ...state.task, ossTaskGroup: true, shardCount: 1 } as any;
+  await mockTaskChildren(page, () => ({ parentTaskId: 61, ...shards }));
+  await page.goto("/tasks?taskId=61");
+  await revealChildren(page);
+  const line = page.getByTestId("child-byte-progress");
+  await expect(line).toHaveText("90 GiB / 100 GiB · 90%");
+  // Failover moves the child to another node in the same generation and the
+  // copy restarts; the old peak belongs to the discarded assignment.
+  shards.items = [
+    {
+      ...child,
+      executionNodeName: "node-b",
+      transferredBytes: 1 * GiB,
+      inFlightBytes: 1 * GiB,
+      progressPercent: 1,
+    },
+  ];
+  await expect(line).toHaveText("1 GiB / 100 GiB · 1%");
 });

@@ -76,12 +76,7 @@ import {
 } from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
-import {
-  byteProgress,
-  monotonicPercent,
-  taskPercent,
-  transferredBytes,
-} from "../lib/taskProgress";
+import { byteProgress, shownProgress, taskPercent } from "../lib/taskProgress";
 import {
   keyMappingLabels,
   mappingExample,
@@ -1252,24 +1247,25 @@ function TaskDetail({
                               })}
                             </Typography>
                             {byteProgress(shard) &&
-                              typeof shard.progressPercent === "number" && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  display="block"
-                                  data-testid="child-byte-progress"
-                                >
-                                  {formatBytes(transferredBytes(shard))} /{" "}
-                                  {formatBytes(shard.listObjectSize)} ·{" "}
-                                  {Math.floor(
-                                    monotonicPercent(
-                                      shard,
-                                      shard.progressPercent,
-                                    ),
-                                  )}
-                                  %
-                                </Typography>
-                              )}
+                              typeof shard.progressPercent === "number" &&
+                              (() => {
+                                const shown = shownProgress(
+                                  shard,
+                                  shard.progressPercent,
+                                );
+                                return (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    display="block"
+                                    data-testid="child-byte-progress"
+                                  >
+                                    {formatBytes(shown.bytes)} /{" "}
+                                    {formatBytes(shard.listObjectSize)} ·{" "}
+                                    {Math.floor(shown.percent)}%
+                                  </Typography>
+                                );
+                              })()}
                           </Box>
                           <ArrowForwardRounded
                             sx={{ fontSize: 18, color: "text.secondary" }}
@@ -1860,7 +1856,8 @@ export default function TasksPage({
     const countsCurrent = handled <= scanned;
     const complete = scanFinished(task) && countsCurrent;
     const scanning = ["RUNNING", "LIST_DONE"].includes(task.status);
-    const percent = complete ? monotonicPercent(task, taskPercent(task)) : 0;
+    const shown = shownProgress(task);
+    const percent = complete ? shown.percent : 0;
     const counts = `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`;
     const bytes = byteProgress(task);
     return (
@@ -1879,7 +1876,7 @@ export default function TasksPage({
                     value1: formatNumber(task.putObjectCount),
                   })
                 : bytes
-                  ? `${formatBytes(transferredBytes(task))} / ${formatBytes(task.listObjectSize)}`
+                  ? `${formatBytes(shown.bytes)} / ${formatBytes(task.listObjectSize)}`
                   : counts}
             </Typography>
           </Tooltip>

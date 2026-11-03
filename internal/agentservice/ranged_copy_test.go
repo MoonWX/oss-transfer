@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,6 +124,9 @@ func TestRangedCopyHonoursTaskBandwidthAndRequestLimits(t *testing.T) {
 			defer nodes.Close()
 			limit := tc.limit
 			limit.ParentID, limit.Generation, limit.Revision = 9, 1, 1
+			// No task request can be admitted before this instant, so the k-th
+			// LIST permit cannot be granted before origin + k*interval.
+			origin := time.Now()
 			if err := limits.ApplyParent(context.Background(), limit); err != nil {
 				t.Fatal(err)
 			}
@@ -177,10 +181,19 @@ func TestRangedCopyHonoursTaskBandwidthAndRequestLimits(t *testing.T) {
 				t.Fatalf("ranged copy exceeded the task limit: %v < %v", elapsed, tc.minimum)
 			}
 			if tc.limit.ListQPS > 0 {
+				// Server arrivals trail their client-side permits by a variable
+				// delay, so adjacent gaps can shrink on a slow runner. Arrival k
+				// is never earlier than permit k, which the limiter spaces one
+				// interval apart starting one interval after origin.
 				interval := time.Duration(float64(time.Second) / tc.limit.ListQPS)
-				for i := 1; i < len(bucket.gets); i++ {
-					if gap := bucket.gets[i].Sub(bucket.gets[i-1]); gap < interval*8/10 {
-						t.Fatalf("GETs %d and %d were %v apart", i-1, i, gap)
+				gets := slices.Clone(bucket.gets)
+				slices.SortFunc(gets, time.Time.Compare)
+				for i, at := range gets {
+					if since, want := at.Sub(origin), time.Duration(i+1)*interval; since < want {
+						t.Fatalf("GET %d arrived %v after origin, want >= %v", i+1, since, want)
+					}
+					if i > 0 {
+						t.Logf("GETs %d and %d were %v apart", i, i+1, at.Sub(gets[i-1]))
 					}
 				}
 			}

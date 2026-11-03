@@ -31,7 +31,7 @@ func receive(t *testing.T, ch <-chan callResult) callResult {
 	select {
 	case v := <-ch:
 		return v
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second): // hang guard only
 		t.Fatal("call did not finish")
 		return callResult{}
 	}
@@ -61,7 +61,7 @@ func idle(t *testing.T, b *Broker) {
 }
 func awaitPending(t *testing.T, b *Broker, n int) {
 	t.Helper()
-	deadline := time.After(time.Second)
+	deadline := time.After(30 * time.Second) // hang guard only
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -131,7 +131,9 @@ func TestBrokerRevocationAndReusedRequestID(t *testing.T) {
 	idle(t, b)
 }
 func TestBrokerBoundsCancellationAndExpiry(t *testing.T) {
-	b := broker(t, BrokerOptions{MaxQueuedPerNode: 1, MaxPending: 2, MaxPayloadBytes: 8, MaxPendingBytes: 2048, MaxCommandDuration: 50 * time.Millisecond})
+	// Calls that must end by cancel() or Close() get a cap no runner can hit;
+	// expiry is checked on its own broker below.
+	b := broker(t, BrokerOptions{MaxQueuedPerNode: 1, MaxPending: 2, MaxPayloadBytes: 8, MaxPendingBytes: 2048, MaxCommandDuration: time.Hour})
 	ctx, cancel := context.WithCancel(context.Background())
 	first := callAsync(b, ctx, testSession, Request{Operation: "read"})
 	awaitPending(t, b, 1)
@@ -146,11 +148,12 @@ func TestBrokerBoundsCancellationAndExpiry(t *testing.T) {
 		t.Fatal(got.err)
 	}
 	idle(t, b)
-	expired := callAsync(b, context.Background(), testSession, Request{Operation: "read"})
+	eb := broker(t, BrokerOptions{MaxCommandDuration: 50 * time.Millisecond})
+	expired := callAsync(eb, context.Background(), testSession, Request{Operation: "read"})
 	if got := receive(t, expired); !errors.Is(got.err, context.DeadlineExceeded) {
 		t.Fatal(got.err)
 	}
-	idle(t, b)
+	idle(t, eb)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	last := callAsync(b, ctx2, testSession, Request{Operation: "read"})
@@ -236,7 +239,7 @@ func startRunner(t *testing.T, r *Runner) (context.CancelFunc, <-chan error) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(2 * time.Second):
+		case <-time.After(30 * time.Second): // hang guard only
 			t.Error("runner failed to cancel")
 		}
 	})
@@ -276,7 +279,9 @@ func TestHTTPRoundTripReconnectAndMutationReplay(t *testing.T) {
 	idle(t, b)
 }
 func TestRunnerCancellationPreservesUnknownMutation(t *testing.T) {
-	b := broker(t, BrokerOptions{DeliveryLease: 25 * time.Millisecond})
+	// Default lease: a short one only races each HTTP poll+receipt round trip,
+	// and nothing here depends on lease expiry.
+	b := broker(t, BrokerOptions{})
 	client, _ := httpPair(t, b)
 	journal := NewMemoryJournal(10)
 	entered := make(chan struct{})
@@ -298,13 +303,13 @@ func TestRunnerCancellationPreservesUnknownMutation(t *testing.T) {
 	call := callAsync(b, callCtx, testSession, request)
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second): // hang guard only
 		t.Fatal("executor did not start")
 	}
 	cancelRun()
 	select {
 	case <-cancelObserved:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second): // hang guard only
 		t.Fatal("executor context not cancelled")
 	}
 	select {
@@ -312,7 +317,7 @@ func TestRunnerCancellationPreservesUnknownMutation(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second): // hang guard only
 		t.Fatal("runner did not stop")
 	}
 	cancelCall()
@@ -320,7 +325,7 @@ func TestRunnerCancellationPreservesUnknownMutation(t *testing.T) {
 	idle(t, b)
 	replacement := NewRunner(client, ExecutorFunc(func(context.Context, Command) (Response, error) { executions.Add(1); return Response{Status: 200}, nil }), journal, RunnerOptions{})
 	startRunner(t, replacement)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // hang guard only
 	defer cancel()
 	response, err := b.Call(ctx, testSession, request)
 	if err != nil || response.Status != 409 || !strings.Contains(string(response.Payload), "outcome_unknown") || executions.Load() != 1 {

@@ -141,24 +141,32 @@ func TestLeaseRestartAndRetirementAreDurable(t *testing.T) {
 	}
 }
 func TestLeaseExpiryCancelsWhileDatabaseWriterBlocked(t *testing.T) {
-	db, leases, _ := leaseFixture(t)
-	leases.now = time.Now
-	leases.afterFunc = func(d time.Duration, f func()) leaseTimer { return time.AfterFunc(d, f) }
-	req := leaseRequest(1, "expiry", 1)
-	// Long enough to read the lease back on a loaded runner, short enough
-	// to expire while the writer below is still blocked.
-	req.TTLMillis = 500
-	grantPrepared(t, leases, req)
+	db, leases, elapsed := leaseFixture(t)
+	// Capture the expiry timer callback so it fires on cue, not on a
+	// wall-clock TTL racing Grant's fsync on a slow runner.
+	fire := make(chan func(), 1)
+	leases.afterFunc = func(_ time.Duration, f func()) leaseTimer {
+		select {
+		case <-fire:
+		default:
+		}
+		fire <- f
+		return inertLeaseTimer{}
+	}
+	grantPrepared(t, leases, leaseRequest(1, "expiry", 1))
 	running, err := leases.ParentContext(1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	expire := <-fire
 	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() { done <- db.Update(func(*state.Tx) error { close(entered); <-release; return nil }) }()
 	<-entered
+	elapsed.Store(int64(1001 * time.Millisecond))
+	go expire() // the timer callback must not need the DB writer held above
 	select {
 	case <-running.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second): // hang guard only
 		close(release)
 		<-done
 		t.Fatal("lease expiry waited for DB writer")
@@ -237,7 +245,7 @@ func TestLeaseDeadlineCancelsEngineIOBeforeLedgerWriterReturns(t *testing.T) {
 	}
 	select {
 	case <-canceled:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second): // hang guard only
 		close(release)
 		<-done
 		t.Fatal("active engine I/O survived lease while ledger writer was blocked")
@@ -246,7 +254,7 @@ func TestLeaseDeadlineCancelsEngineIOBeforeLedgerWriterReturns(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // hang guard only
 	defer cancel()
 	record, err := engine.Wait(ctx, job.ChildID)
 	if err != nil || record.Status != execution.Recoverable {

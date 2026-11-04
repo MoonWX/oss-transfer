@@ -11,7 +11,7 @@ One Master serves the web console and API and schedules tasks. Agents run on hos
 ## Features
 
 - **Three directions:** object storage to object storage, local to object storage, and object storage to local. Transfer by prefix, single object or file list, and keep, add or replace key prefixes.
-- **Multi-node execution:** a task can run on several Agents. By default work is balanced by remaining bytes. Large objects are split into parts that several nodes upload in parallel.
+- **Multi-node execution:** a task can run on several Agents. By default work is balanced by remaining bytes. Each object is transferred by one Agent; objects of 128 MiB or more are split into parts that the Agent uploads in parallel, borrowing idle concurrency when available.
 - **Live progress:** progress and speed are based on bytes actually transferred. Task details also show the live LIST, GET, HEAD and PUT request rates and their effective limits.
 - **Rate control:** limit bandwidth and per-request-type QPS for each task and node. Changes to a running task take effect immediately, and node concurrency can be adjusted at any time.
 - **Fault recovery:** when an Agent loses contact, its unfinished child tasks move to healthy nodes. Scans resume from checkpoints, failed files can be retried individually, and a report can be exported when a task ends.

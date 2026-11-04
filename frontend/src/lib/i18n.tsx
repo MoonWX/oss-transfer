@@ -140,6 +140,18 @@ const subscribe = (listener: () => void) => {
   };
 };
 
+// English catalogs write counts in the plural ("{count} tasks"). A count of
+// exactly one takes the singular noun; other languages need no change.
+const PLURAL_NOUNS =
+  /\{([A-Za-z][A-Za-z0-9_]*)\} (seconds|minutes|hours|days|objects|files|tasks|nodes|agents|records|requests|bytes|retries)\b/g;
+function singularize(template: string, values: MessageValues) {
+  return template.replace(PLURAL_NOUNS, (match, key: string, noun: string) =>
+    Object.hasOwn(values, key) && String(values[key]) === "1"
+      ? `{${key}} ${noun === "retries" ? "retry" : noun.slice(0, -1)}`
+      : match,
+  );
+}
+
 /** Only application messages are translated; interpolation values stay verbatim. */
 export function translate(
   locale: Locale,
@@ -148,8 +160,9 @@ export function translate(
 ): string {
   const language = catalogLanguage(locale);
   const catalog = language ? catalogs[language] : undefined;
-  const template =
+  let template =
     catalog && Object.hasOwn(catalog, source) ? catalog[source] : source;
+  if (language === "en") template = singularize(template, values);
   return template.replace(
     /\{([A-Za-z][A-Za-z0-9_]*)\}/g,
     (placeholder, key: string) =>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -124,7 +125,36 @@ func localeOf(out io.Writer) cliLocale {
 		return localeZH
 	}
 }
-func cliText(out io.Writer, key string) string   { return localeOf(out).text(key) }
+func cliText(out io.Writer, key string) string { return localeOf(out).text(key) }
+
+// cliTextf formats a translated message; English counts of one take the singular.
+func cliTextf(out io.Writer, key string, args ...interface{}) string {
+	return localeOf(out).format(key, args...)
+}
+func (locale cliLocale) format(key string, args ...interface{}) string {
+	template := locale.text(key)
+	if locale == localeEN {
+		template = singularEnglish(template, args)
+	}
+	return fmt.Sprintf(template, args...)
+}
+
+// English catalog entries write counts in the plural ("%d parent tasks").
+var englishCount = regexp.MustCompile(`%d((?: [a-z]+)?) ([a-z]+)s\b`)
+
+func singularEnglish(template string, args []interface{}) string {
+	matches := englishCount.FindAllStringSubmatchIndex(template, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		m := matches[i]
+		// The fmt argument for this %d is the number of verbs before it.
+		index := strings.Count(strings.ReplaceAll(template[:m[0]], "%%", ""), "%")
+		if index >= len(args) || fmt.Sprint(args[index]) != "1" {
+			continue
+		}
+		template = template[:m[5]] + template[m[5]+1:]
+	}
+	return template
+}
 func (client *ApiClient) text(key string) string { return client.locale.text(key) }
 
 // Capture the message template before formatting. Only controlled templates and
@@ -152,7 +182,11 @@ func localizedCLIError(locale cliLocale, err error) string {
 			}
 		}
 		// fmt.Errorf handles %w without exposing fmt's invalid-verb diagnostic.
-		return fmt.Errorf(locale.text(own.key), args...).Error()
+		template := locale.text(own.key)
+		if locale == localeEN {
+			template = singularEnglish(template, args)
+		}
+		return fmt.Errorf(template, args...).Error()
 	}
 	return err.Error()
 }

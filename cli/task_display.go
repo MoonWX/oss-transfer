@@ -38,7 +38,7 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 			fmt.Fprintln(out, cliText(out, "正在整理子任务，请稍后重试。"))
 			return
 		}
-		fmt.Fprintf(out, cliText(out, "本页 %d 个子任务\n"), len(objectList(result["children"])))
+		fmt.Fprint(out, cliTextf(out, "本页 %d 个子任务\n", len(objectList(result["children"]))))
 		if cursor := getString(page, "nextCursor"); page["hasMore"] == true && cursor != "" && limit > 0 {
 			command := fmt.Sprintf("task children %d --cursor %s --limit %d --order priority", getInt(page, "parentTaskId"), quoteTaskCursor(cursor), limit)
 			if getString(page, "view") == "active" {

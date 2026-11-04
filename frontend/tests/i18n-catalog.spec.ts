@@ -76,6 +76,12 @@ test("only known messages translate; user data is inserted once and stays verbat
   }
   expect(translate("en-US", "登录")).toBe("Sign in");
   expect(translate("ja-JP", "登录")).toBe("ログイン");
+  expect(translate("en-US", "{p1} 秒", { p1: 1 })).toBe("1 second");
+  expect(translate("en-US", "{p1} 秒", { p1: 5 })).toBe("5 seconds");
+  expect(translate("en-US", "每 {seconds} 秒刷新", { seconds: 1 })).toBe(
+    "Refresh every 1 second",
+  );
+  expect(translate("ja-JP", "{p1} 秒", { p1: 1 })).toBe("1 秒");
   expect(normalizeLocale("ja_JP.UTF-8")).toBe("ja-JP");
   expect(normalizeLocale("zh-Hant")).toBe("zh-CN");
   expect(normalizeLocale("fr-FR")).toBeUndefined();

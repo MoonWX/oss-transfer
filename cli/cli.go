@@ -445,14 +445,14 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	}
 	if rows, ok := data["recycledTasks"]; ok {
 		renderTaskRows(out, objectList(rows), false)
-		fmt.Fprintf(out, cliText(out, "显示 %d 条回收站记录\n"), len(objectList(rows)))
+		fmt.Fprint(out, cliTextf(out, "显示 %d 条回收站记录\n", len(objectList(rows))))
 		renderTaskHistoryPage(out, data, "trash")
 		renderCLIAdminMessage(out, result)
 		return
 	}
 	if value, ok := data["tasks"]; ok {
 		renderTaskRows(out, objectList(value), false)
-		fmt.Fprintf(out, cliText(out, "显示 %d 个主任务\n"), len(objectList(value)))
+		fmt.Fprint(out, cliTextf(out, "显示 %d 个主任务\n", len(objectList(value))))
 		renderTaskHistoryPage(out, data, "list")
 		if msg := getString(data, "message"); msg != "" {
 			fmt.Fprintln(out, safeCLIText(msg))
@@ -554,7 +554,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(config["alias"]), safeCLIText(config["endpoint"]), credential("accessKey"), credential("secretKey"), option("useV2SignerType"), option("pathStyleEnable"))
 		}
 		w.Flush()
-		fmt.Fprintf(out, cliText(out, "共 %d 个存储连接\n"), len(configs))
+		fmt.Fprint(out, cliTextf(out, "共 %d 个存储连接\n", len(configs)))
 		renderCLIAdminMessage(out, result)
 		return true
 	}
@@ -591,7 +591,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, address, localeOf(out))), safeCLIText(address), role, state)
 		}
 		w.Flush()
-		fmt.Fprintf(out, cliText(out, "共 %d 个执行节点\n"), len(nodes))
+		fmt.Fprint(out, cliTextf(out, "共 %d 个执行节点\n", len(nodes)))
 		for _, node := range nodes {
 			address := getString(node, "address")
 			worker, _ := workers[address].(map[string]interface{})

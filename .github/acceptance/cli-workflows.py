@@ -140,9 +140,11 @@ class Workflows(cluster.Harness):
             require(shown["node"]["label"] == f"Worker {index + 1}", "Node label edit lost")
             require(shown["status"]["executionStatus"].get("maxConcurrentChildren") == 8 and shown["status"]["executionStatus"].get("objectsPerChild") == 4, "Node concurrency edit lost")
             self.cli("node", "details", node)
-        self.cli("agent", "remove", self.nodes[0], expected=1)
+        self.cli("agent", "remove", self.nodes[0], expected=2)
+        self.cli("node", "update", self.nodes[0], "--address", "192.0.2.1", expected=2)
         self.cli("limit", "set", "bandwidth", "12", "--unit", "Mbps", "--worker", self.nodes[0])
-        self.cli("limit", "set", "put", "33", "--worker", self.nodes[0])
+        # --node is the documented spelling; --worker stays accepted.
+        self.cli("limit", "set", "put", "33", "--node", self.nodes[0])
         self.cli("limit", "set", "list", "22", "--worker", self.nodes[0])
         self.cli("limit", "set", "head", "44", "--worker", self.nodes[0])
         status = self.cli("agent", "show", self.nodes[0])["status"]["rateLimit"]
@@ -167,7 +169,7 @@ class Workflows(cluster.Harness):
         self.cli("storage", "test", "fixture")
         buckets = self.cli("storage", "buckets", "fixture")
         require(all(bucket in json.dumps(buckets) for bucket in self.buckets.values()), "CLI buckets omitted fixture buckets")
-        self.cli("storage", "remove", "temporary", expected=1)
+        self.cli("storage", "remove", "temporary", expected=2)
         self.cli("storage", "remove", "temporary", "--yes")
         saved = self.cli("storage", "list")
         require('"temporary"' not in json.dumps(saved) and '"fixture"' in json.dumps(saved), "Storage delete/list differs")
@@ -250,6 +252,13 @@ class Workflows(cluster.Harness):
         self.cli("task", "create", *invalid, "--validate-only", expected=1)
         self.cli("task", "create", *invalid, expected=1)
         require({row["taskIndex"] for row in self.tasks()} == before, "Failed shared precheck created a task")
+        # A definite server rejection is a plain failure, not an uncertain partial result.
+        refused = self.cli("task", "create", "oss-to-oss", source, "missing-connection/" + self.buckets["destination"], expected=1)
+        require(refused.get("submissionStatus") == "rejected" and not refused.get("taskIds"), "Rejected creation was reported as uncertain")
+        # Flag mistakes are usage errors and name the flags that were typed.
+        usage = self.cli("task", "create", "oss-to-oss", source, destination, "--mapping", "add-prefix", expected=2)
+        require("--target-prefix" in usage.get("error", ""), "Create error did not name the missing flag")
+        require({row["taskIndex"] for row in self.tasks()} == before, "Rejected creation created a task")
         self.upload_id = self.create("local-to-oss", destination, "--binding", f"{self.nodes[0]}={upload}", "--binding", f"{self.nodes[1]}={upload}", "--target-prefix", "uploaded/", "--balanced")
         self.validate_counts(self.upload_id, self.payloads)
         self.verify_objects(self.buckets["destination"], "uploaded/", self.payloads)
@@ -525,6 +534,9 @@ class Workflows(cluster.Harness):
             require(cleared.get("clearedCount") == 0, "Unresolved exception was cleared")
             require(self.cli("exceptions", "list", "local", "--task-id", task_id)["total"] == 1, "Unresolved exception disappeared")
             failures.append((task_id, target, current["generation"]))
+        listed = self.cli("exceptions", "tasks", "local")
+        require({task_id for task_id, _, _ in failures} <= {int(row["taskIndex"]) for row in listed["exceptionTasks"]},
+                "exceptions tasks omitted tasks with failure records")
         for _, target, _ in failures:
             (target / "retry" / "blocked.bin").rmdir()
         # Race real independent CLI processes. At most one generation per task
@@ -578,7 +590,7 @@ class Workflows(cluster.Harness):
         self.wait(lambda: task_id in {row["taskIndex"] for row in self.tasks()}, "restored task in active list")
         self.cli("task", "delete", task_id)
         self.wait(in_trash, "task in recycle bin before purge")
-        self.cli("task", "purge", task_id, expected=1)
+        self.cli("task", "purge", task_id, expected=2)
         self.cli("task", "purge", task_id, "--yes")
         def purged():
             rows = data(self.cli("task", "cleanup-status", task_id))["tasks"]
@@ -612,7 +624,17 @@ class Workflows(cluster.Harness):
                 require(different["sourceSha256"] == digest(b"12345678") and different["destinationSha256"] == digest(b"87654321"), "Content comparison hashes differ from fixture")
             self.cli("object", "delete", operation)
             self.cli("object", "status", operation, expected=1)
-        self.record("prefix metadata comparison distinguishes same-size streaming SHA-256 content mismatch")
+        # Like the console, a bare two-bucket compare is a whole-bucket metadata job.
+        started = data(self.cli("object", "compare", "--source-bucket", "fixture/" + self.buckets["source"],
+                                "--dest-bucket", "fixture/" + self.buckets["destination"]))
+        operation = started["id"]
+        # --wait exits 0 (no differences), 4 (differences) or 3 (not comparable).
+        final = data(self.cli("object", "status", operation, "--wait", expected=(0, 3, 4), timeout=120))
+        require(final["status"] == "COMPLETED" and final["compared"] >= 2, "Whole-bucket comparison did not complete")
+        outcome = 3 if final["errors"] or final["changed"] else 4 if final["different"] + final["missing"] + final["extra"] else 0
+        require(self.commands[-1]["exitCode"] == outcome, "object status --wait exit code does not match the comparison outcome")
+        self.cli("object", "delete", operation)
+        self.record("prefix metadata comparison distinguishes same-size streaming SHA-256 content mismatch; bare compare waits for a whole-bucket result")
 
     def maintenance_and_logout(self):
         status = data(self.cli("update", "status"))
@@ -626,8 +648,8 @@ class Workflows(cluster.Harness):
             self.evidence["versionCheck"] = {"status": "SUCCESS", "version": check["version"]}
         rejected = self.cli("update", "master", "--version", "4.1.22", "--yes", expected=1)
         require(rejected.get("success") is not True and "version" not in rejected, "Update --version was swallowed by global version flag")
-        self.cli("update", "master", "--version", "4.1.22", expected=1)
-        self.cli("update", "agents", "--yes", expected=1)
+        self.cli("update", "master", "--version", "4.1.22", expected=2)
+        self.cli("update", "agents", "--yes", expected=2)
         backups = data(self.cli("backup", "list"))
         require(backups["master"]["supported"] is False, "Raw Master falsely supports service backups")
         self.cli("backup", "prune", "master", "--yes", expected=1)

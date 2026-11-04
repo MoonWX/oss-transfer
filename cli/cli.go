@@ -227,7 +227,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			retry = failures < watchFailureLimit
 		}
 		_, finished := watchOutcome(normalized, result)
-		if options.json && quietWait && callErr == nil && !finished {
+		if options.json && quietWait && (callErr == nil && !finished || retry) {
 			// --wait without --watch prints only the final JSON document.
 		} else if options.json {
 			if result == nil {

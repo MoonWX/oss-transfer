@@ -19,7 +19,7 @@ import (
 func cmdDiffObjects(args []string, outputs ...io.Writer) error {
 	out := offlineCLIOutput(outputs)
 	if len(args) < 3 {
-		return cliErrorf("用法: diff-objects <源目录> <有序目标清单> <输出目录>；详见 help tools")
+		return usageErrorf("用法: diff-objects <源目录> <有序目标清单> <输出目录>；详见 help tools")
 	}
 
 	srcDir := args[0]
@@ -37,7 +37,7 @@ func cmdDiffObjects(args []string, outputs ...io.Writer) error {
 		} else if args[i] == "--false-positive" && i+1 < len(args) {
 			rate, err := strconv.ParseFloat(args[i+1], 64)
 			if err != nil || rate <= 0 || rate >= 1 {
-				return cliErrorf("--false-positive 必须大于 0 且小于 1: %s", args[i+1])
+				return usageErrorf("--false-positive 必须大于 0 且小于 1: %s", args[i+1])
 			}
 			falsePositiveRate = rate
 			i++
@@ -45,7 +45,7 @@ func cmdDiffObjects(args []string, outputs ...io.Writer) error {
 	}
 
 	if mode != "bloom" && mode != "sort-merge" {
-		return cliErrorf("不支持的模式: %s，请使用 bloom 或 sort-merge", mode)
+		return usageErrorf("不支持的模式: %s，请使用 bloom 或 sort-merge", mode)
 	}
 
 	fmt.Fprintf(out, cliText(out, "提取增量对象...\n"))
@@ -644,7 +644,7 @@ func processSrcManifestWithCheck(srcFile, outputFile string, existsFunc func(str
 func cmdCountLines(args []string, outputs ...io.Writer) error {
 	out := offlineCLIOutput(outputs)
 	if len(args) < 1 {
-		return cliErrorf("用法: count-lines <目录>")
+		return usageErrorf("用法: count-lines <目录>")
 	}
 
 	dir := args[0]

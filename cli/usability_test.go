@@ -244,9 +244,25 @@ func TestCLIObjectStatusWaitExitReflectsOutcome(t *testing.T) {
 			t.Fatalf("%s: %d calls=%d %q %q", test.final, code, calls, out, stderr)
 		}
 	}
+	// A transient failure while waiting stays on stderr; stdout holds one document.
+	stepWatch(t, 1000)
+	calls := 0
+	code, out, stderr := runMockCLI(t, []string{"--lang", "en", "--json", "object", "status", "cmp-1", "--wait"}, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			io.WriteString(w, `{"success":false,"message":"restarting"}`)
+			return
+		}
+		io.WriteString(w, `{"status":"COMPLETED","compared":2,"matched":2}`)
+	})
+	var final map[string]interface{}
+	if code != 0 || json.Unmarshal([]byte(out), &final) != nil || !strings.Contains(stderr, "restarting") {
+		t.Fatalf("%d %q %q", code, out, stderr)
+	}
 	// --watch alone keeps polling a finished comparison and prints every frame.
 	stepWatch(t, 2)
-	code, out, _ := runMockCLI(t, []string{"--watch", "2", "--json", "object", "status", "cmp-1"}, func(w http.ResponseWriter, r *http.Request) {
+	code, out, _ = runMockCLI(t, []string{"--watch", "2", "--json", "object", "status", "cmp-1"}, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"status":"COMPLETED","compared":2,"matched":2}`)
 	})
 	if code != 130 || strings.Count(out, "\n") != 2 {

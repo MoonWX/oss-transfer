@@ -110,7 +110,8 @@ def main():
         assert rates[0]["workerIp"] == "cli-node" and rates[0]["bandwidth"]["limitBps"] == 12_000_000
         history = cli("limit", "history", "--limit", "10")
         assert history["adjustments"]
-        cli("agent", "remove", "cli-node", expected=1)
+        # A missing --yes is a usage error (exit 2) and never reaches the Master.
+        cli("agent", "remove", "cli-node", expected=2)
         checks.append("Agent enrollment, named-node administration, local roots and exact Mbps rate persistence")
 
         # Exceptions with no failures and the unsupported V4 fallback must not

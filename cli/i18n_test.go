@@ -176,7 +176,7 @@ func TestCLIOfflineToolsUseSelectedOutput(t *testing.T) {
 	for _, cmd := range []string{"count-lines", "diff-objects"} {
 		var out, stderr bytes.Buffer
 		code := runCLI([]string{"--lang", "en", cmd}, nil, &out, &stderr)
-		if code != 1 || !strings.Contains(stderr.String(), "Usage:") {
+		if code != 2 || !strings.Contains(stderr.String(), "Usage:") {
 			t.Fatal(code, stderr.String())
 		}
 	}

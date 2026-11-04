@@ -484,7 +484,17 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	}
 	attempt.progress.initialize(record.Counters.SucceededBytes)
 	results := make(chan ItemResult, e.opts.QueueSize)
+	// readerDone lets workers stop sending if run unwinds without draining
+	// (a panic); on every normal path run drains results until it closes.
+	// The target is closed by an earlier defer, so wait for the workers
+	// first: no Write may still be using it.
+	readerDone := make(chan struct{})
 	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		close(readerDone)
+		workers.Wait()
+	}()
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
@@ -508,7 +518,10 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				}
 				// A finished object is reported even after cancellation: the
 				// reader drains until every worker exits and persists it.
-				results <- result
+				select {
+				case results <- result:
+				case <-readerDone:
+				}
 			}(item)
 		}
 	}()
@@ -519,6 +532,10 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	pending := record.Counters.Total - record.Counters.Succeeded - record.Counters.Skipped - record.Counters.Failed
 	var received int64
 	var commitErr error
+	// fenced is set when a stop fence rejected a commit before the attempt
+	// was cancelled. Results are then kept, like after cancellation, and go
+	// through persistInterrupted, which credits them to the stopped attempt.
+	fenced := false
 	// Targets that defer durability (WriteOptions.DeferDurability) are synced
 	// once per result batch, before any result in it is persisted.
 	durable := func() error {
@@ -530,7 +547,7 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 		return nil
 	}
 	flush := func() {
-		if len(batch) == 0 || commitErr != nil || ctx.Err() != nil {
+		if len(batch) == 0 || commitErr != nil || fenced || ctx.Err() != nil {
 			return
 		}
 		err := durable()
@@ -539,6 +556,11 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 		}
 		if err != nil && err == ctx.Err() {
 			return // Cancelled meanwhile: the batch is persisted on the way out.
+		}
+		if errors.Is(err, ErrAttempt) || errors.Is(err, ErrStopped) {
+			// A stop fenced this attempt and is about to cancel it.
+			fenced = true
+			return
 		}
 		if err != nil {
 			commitErr = fmt.Errorf("persist object results: %w", err)
@@ -556,6 +578,10 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				if err := ctx.Err(); err != nil {
 					e.persistInterrupted(record, target, batch)
 					return nil, err
+				}
+				if fenced {
+					e.persistInterrupted(record, target, batch)
+					return nil, fmt.Errorf("persist object results: %w", ErrStopped)
 				}
 				if len(batch) > 0 {
 					if err := durable(); err != nil {

@@ -326,24 +326,65 @@ var ErrTempNamespaceGone = errors.New("temporary namespace parent directory was 
 // is missing, or resolves to another filesystem. The record must be kept.
 var ErrTempNamespaceUnreachable = errors.New("temporary namespace parent directory is not reachable")
 
-// openAbsoluteDir opens an absolute directory path. A path longer than the
-// platform limit is opened in pieces: the first piece by path, the rest
-// component by component through an os.Root, as the write path does.
+// openAbsoluteDir opens an absolute directory path with the same symlink
+// semantics as os.OpenRoot, which the write path uses for the Local root. A
+// path longer than the platform limit is opened in pieces: the first piece by
+// path, the rest one component at a time; a symlink met on the way is resolved
+// against the physical directory it is in and resolution restarts from its
+// target, as the kernel would.
 func openAbsoluteDir(name string) (*os.Root, error) {
-	const piece = 900
-	if len(name) <= piece {
+	return openLongDir(name, 0)
+}
+
+const longPathPiece = 900
+
+func openLongDir(name string, links int) (*os.Root, error) {
+	if len(name) <= longPathPiece {
 		return os.OpenRoot(name)
 	}
-	cut := strings.LastIndex(name[:piece], string(filepath.Separator))
+	cut := strings.LastIndex(name[:longPathPiece], string(filepath.Separator))
 	if cut <= 0 {
 		return os.OpenRoot(name)
 	}
-	first, err := os.OpenRoot(name[:cut])
+	// The physical path of the first piece, so relative link targets with
+	// ".." are resolved as the kernel resolves them.
+	current, err := filepath.EvalSymlinks(name[:cut])
 	if err != nil {
 		return nil, err
 	}
-	defer first.Close()
-	return first.OpenRoot(strings.TrimLeft(name[cut:], string(filepath.Separator)))
+	dir, err := os.OpenRoot(current)
+	if err != nil {
+		return nil, err
+	}
+	rest := strings.FieldsFunc(name[cut:], func(r rune) bool { return r == filepath.Separator })
+	for i, component := range rest {
+		info, err := dir.Lstat(component)
+		if err != nil {
+			dir.Close()
+			return nil, err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			target, err := dir.Readlink(component)
+			dir.Close()
+			if err != nil {
+				return nil, err
+			}
+			if links >= 40 {
+				return nil, fmt.Errorf("%s: too many levels of symbolic links", name)
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(current, target)
+			}
+			return openLongDir(filepath.Join(append([]string{target}, rest[i+1:]...)...), links+1)
+		}
+		next, err := dir.OpenRoot(component)
+		dir.Close()
+		if err != nil {
+			return nil, err
+		}
+		dir, current = next, filepath.Join(current, component)
+	}
+	return dir, nil
 }
 
 // identityDevice returns the filesystem part of a storage identity: the

@@ -1,6 +1,6 @@
 # Install on other systems
 
-For Linux with systemd, use the [installation command](../README.md#install-the-master). The steps below cover other systems and custom paths. For hosts without internet access, use [offline installation](offline-install.md).
+For Linux with systemd, use the [installation command](../README.md#1-install-the-master). The steps below cover other systems and custom paths. For hosts without internet access, use [offline installation](offline-install.md).
 
 ## macOS
 

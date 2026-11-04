@@ -193,7 +193,7 @@ func TestLeasedDeliveryRejectsStaleConfirmationAndResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	call := callAsync(b, ctx, testSession, Request{Operation: "read"})
-	first, err := b.poll(ctx, testSession, true)
+	first, err := b.poll(ctx, testSession, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestLeasedDeliveryRejectsStaleConfirmationAndResult(t *testing.T) {
 		t.Fatalf("unconfirmed result accepted: %v", err)
 	}
 	// The broker's lease timer wakes this blocked poll; no sleeps establish order.
-	second, err := b.poll(ctx, testSession, true)
+	second, err := b.poll(ctx, testSession, true, true)
 	if err != nil || second.RequestID != first.RequestID || second.DeliveryID == first.DeliveryID {
 		t.Fatalf("redelivery failed: first=%+v second=%+v error=%v", first, second, err)
 	}
@@ -236,7 +236,7 @@ func TestReceiptCannotReviveRevokedEnrollment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	first := callAsync(b, ctx, testSession, Request{RequestID: "reused", Operation: "read"})
-	command, err := b.poll(ctx, testSession, true)
+	command, err := b.poll(ctx, testSession, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

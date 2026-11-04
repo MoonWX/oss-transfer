@@ -295,8 +295,9 @@ func (e runtimeExecutor) Execute(ctx context.Context, command agenttransport.Com
 	return agenttransport.Response{Status: 501, Payload: json.RawMessage(`{"code":"unsupported_operation"}`)}, nil
 }
 
-// Readiness means the current credential was accepted, including an empty long
-// poll. Merely opening the database or restoring an old enrollment is not proof.
+// Readiness means the current credential was accepted, including an empty poll;
+// the transport's first poll is not held. Merely opening the database or
+// restoring an old enrollment is not proof.
 type readyTransport struct {
 	agenttransport.Transport
 	once   sync.Once

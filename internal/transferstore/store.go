@@ -97,9 +97,15 @@ type WriteOptions struct {
 
 // DurabilitySyncer makes every write that has returned before Sync was called
 // durable, including writes made with WriteOptions.DeferDurability. Close
-// performs the same work for writes that were never synced.
+// performs the same work for writes that were never synced. A failed Sync
+// keeps failing, so nothing is committed on top of writes of unknown state.
 type DurabilitySyncer interface {
 	Sync(ctx context.Context) error
+	// DeferExisting makes the next Sync also cover an existing object that a
+	// result relies on without this target having written it, such as the
+	// destination a SKIP result found. It may have been published, but not
+	// yet made durable, by another writer.
+	DeferExisting(ctx context.Context, key string) error
 }
 
 type RangeFunc func(ctx context.Context, offset, length int64) (io.ReadCloser, error)

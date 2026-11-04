@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +61,15 @@ func (r *eventRegistry) Register(_ context.Context, record LocalTempRecord) erro
 	r.records[record.ID] = record
 	r.mu.Unlock()
 	r.log.add("register")
+	return nil
+}
+func (r *eventRegistry) RegisterBatch(_ context.Context, records []LocalTempRecord) error {
+	r.mu.Lock()
+	for _, record := range records {
+		r.records[record.ID] = record
+	}
+	r.mu.Unlock()
+	r.log.add(fmt.Sprintf("register-batch %d", len(records)))
 	return nil
 }
 func (r *eventRegistry) Forget(_ context.Context, id string) error {
@@ -140,6 +150,32 @@ func writeDeferred(t *testing.T, local *Local, keys []string, overwrite bool) {
 	group.Wait()
 }
 
+// countBatches sums the sizes logged as "<prefix> N".
+func countBatches(log *eventLog, prefix string) (batches, total int) {
+	for _, event := range log.snapshot() {
+		var n int
+		if _, err := fmt.Sscanf(event, prefix+" %d", &n); err == nil {
+			batches++
+			total += n
+		}
+	}
+	return batches, total
+}
+
+func tempNames(t *testing.T, root string) []string {
+	t.Helper()
+	var names []string
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
+			names = append(names, path)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
 func TestLocalDeferredWritesBatchDirectorySyncsBeforeForget(t *testing.T) {
 	if !deferredDurabilitySupported {
 		t.Skip("durability is never deferred on this platform")
@@ -170,7 +206,13 @@ func TestLocalDeferredWritesBatchDirectorySyncsBeforeForget(t *testing.T) {
 			if n := log.count("payload "); n != len(keys) {
 				t.Fatalf("ordered payload syncs: got %d want %d", n, len(keys))
 			}
-			if log.count("dir ") != 0 || log.count("forget") != 0 || registry.pending() != len(keys) {
+			// Empty temporary files are registered ahead in doubling batches
+			// (1, 2, 4, 8 per directory), not one commit per object.
+			batches, reserved := countBatches(log, "register-batch")
+			if log.count("register ") != 0 || batches != 8 || reserved != 30 {
+				t.Fatalf("registrations were not batched: %d batches, %d files", batches, reserved)
+			}
+			if log.count("dir ") != 0 || log.count("forget") != 0 || registry.pending() != reserved {
 				t.Fatalf("durability work was not deferred: %v", log.snapshot())
 			}
 			if err := local.Sync(context.Background()); err != nil {
@@ -185,7 +227,7 @@ func TestLocalDeferredWritesBatchDirectorySyncsBeforeForget(t *testing.T) {
 					t.Fatalf("barrier did not sync each touched directory once before forgetting: %v", tail)
 				}
 			}
-			if tail[4] != fmt.Sprintf("forget-batch %d", len(keys)) || log.count("dir ") != 4 || registry.pending() != 0 {
+			if tail[4] != fmt.Sprintf("forget-batch %d", len(keys)) || log.count("dir ") != 4 || registry.pending() != reserved-len(keys) {
 				t.Fatalf("records were not cleared in one batch after the directory syncs: %v", tail)
 			}
 			// A second barrier has nothing left to do.
@@ -195,8 +237,14 @@ func TestLocalDeferredWritesBatchDirectorySyncsBeforeForget(t *testing.T) {
 			if err := local.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if log.count("release") != 2 {
-				t.Fatalf("namespaces were not released once each: %v", log.snapshot())
+			// Close removes the unused, empty reservations and clears their
+			// records in one batch without another directory fsync.
+			after := log.snapshot()[len(events):]
+			if registry.pending() != 0 || log.count("release") != 2 || log.count("dir ") != 4 || log.count(fmt.Sprintf("forget-batch %d", reserved-len(keys))) != 1 {
+				t.Fatalf("Close did not clean up reservations once: %v", after)
+			}
+			if names := tempNames(t, root); len(names) != 0 {
+				t.Fatalf("temporary files remain: %v", names)
 			}
 		})
 	}
@@ -220,19 +268,28 @@ func TestLocalCloseSyncsDeferredWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := log.snapshot()
-	want := []string{"forget-batch 3", "release"}
-	if got := events[len(events)-2:]; got[0] != want[0] || got[1] != want[1] || log.count("dir ") != 2 || registry.pending() != 0 {
+	_, reserved := countBatches(log, "register-batch")
+	if got := events[len(events)-2:]; got[0] != fmt.Sprintf("forget-batch %d", reserved) || got[1] != "release" || log.count("dir ") != 2 || registry.pending() != 0 {
 		t.Fatalf("Close did not finish deferred durability before releasing: %v", events)
 	}
 }
 
-func TestLocalFailedBarrierKeepsRecordsAndNamespaces(t *testing.T) {
+func TestLocalFailedBarrierPoisonsLaterBarriers(t *testing.T) {
 	if !deferredDurabilitySupported {
 		t.Skip("durability is never deferred on this platform")
 	}
 	root := t.TempDir()
 	log := &eventLog{}
-	hookSyncs(t, log, true)
+	fail := true
+	directory := syncDirectory
+	t.Cleanup(func() { syncDirectory = directory })
+	syncDirectory = func(file *os.File) error {
+		log.add("dir " + file.Name())
+		if fail {
+			return errors.New("injected directory sync failure")
+		}
+		return directory(file)
+	}
 	registry := newEventRegistry(log)
 	local, err := NewLocal(root)
 	if err != nil {
@@ -244,12 +301,20 @@ func TestLocalFailedBarrierKeepsRecordsAndNamespaces(t *testing.T) {
 		t.Fatal("failed directory sync was not reported")
 	}
 	// Restart recovery still owns both temporary names, through the namespace.
-	if registry.pending() != 2 || log.count("forget") != 0 {
+	if registry.pending() < 2 || log.count("forget") != 0 {
 		t.Fatalf("records were cleared without a durable barrier: %v", log.snapshot())
 	}
+	// Even once the disk recovers, nothing this Local wrote may be reported
+	// durable: the failed directories were never synced successfully.
+	fail = false
+	writeDeferred(t, local, []string{"x/c"}, false)
+	if err := local.Sync(context.Background()); err == nil {
+		t.Fatal("barrier succeeded after an earlier failure")
+	}
+	// The registry decides whether the namespace can go, so Close releases it.
 	_ = local.Close()
-	if log.count("release") != 0 || registry.pending() != 2 {
-		t.Fatalf("namespace released after a failed barrier: %v", log.snapshot())
+	if log.count("release") != 1 || log.count("forget") != 0 {
+		t.Fatalf("namespace was not released, or records were cleared: %v", log.snapshot())
 	}
 }
 
@@ -262,20 +327,96 @@ func TestLocalImmediateWriteKeepsPerFileDurability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer local.Close()
 	local.SetTempRegistry(registry)
 	for _, key := range []string{"a", "b"} {
 		if result, err := local.Write(context.Background(), key, strings.NewReader("value"), WriteOptions{Size: 5, Overwrite: true}); err != nil || !result.Committed {
 			t.Fatalf("write: %+v %v", result, err)
 		}
 	}
-	// Without DeferDurability, Write returns only after the record is cleared
-	// and nothing is left for a barrier.
-	if log.count("payload ") != 0 || log.count("forget") != 2 || registry.pending() != 0 {
+	// Without DeferDurability, Write returns only after its record is cleared
+	// and nothing is left for a barrier; only an unused reservation remains.
+	_, reserved := countBatches(log, "register-batch")
+	if log.count("payload ") != 0 || log.count("forget") != 2 || registry.pending() != reserved-2 {
 		t.Fatalf("immediate writes changed behavior: %v", log.snapshot())
 	}
 	before := len(log.snapshot())
 	if err := local.Sync(context.Background()); err != nil || len(log.snapshot()) != before {
 		t.Fatalf("barrier found deferred work after immediate writes: %v", err)
+	}
+	if err := local.Close(); err != nil || registry.pending() != 0 {
+		t.Fatalf("Close left reservations: %v", err)
+	}
+}
+
+func TestLocalSkipIsCoveredByNextBarrier(t *testing.T) {
+	if !deferredDurabilitySupported {
+		t.Skip("durability is never deferred on this platform")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "s"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"s/stat", "s/engine"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("existing"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := &eventLog{}
+	hookSyncs(t, log, false)
+	local, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	local.SetTempRegistry(newEventRegistry(log))
+	result, err := local.Write(context.Background(), "s/stat", strings.NewReader("new"), WriteOptions{Size: 3, DeferDurability: true})
+	if err != nil || !result.Skipped {
+		t.Fatalf("expected skip: %+v %v", result, err)
+	}
+	if err := local.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if log.count("dir ") != 1 {
+		t.Fatalf("a skipped write did not cover its directory entry: %v", log.snapshot())
+	}
+	if err := local.DeferExisting(context.Background(), "s/engine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if log.count("dir ") != 2 {
+		t.Fatalf("DeferExisting did not cover the directory entry: %v", log.snapshot())
+	}
+}
+
+// A destination directory replaced while a Local caches it is resolved again,
+// so no write goes through the stale handle.
+func TestLocalDirectoryCacheRevalidates(t *testing.T) {
+	root := t.TempDir()
+	local, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	write := func(key, body string) {
+		t.Helper()
+		if result, err := local.Write(context.Background(), key, strings.NewReader(body), WriteOptions{Size: int64(len(body)), Overwrite: true, DeferDurability: true}); err != nil || !result.Committed {
+			t.Fatalf("write %s: %+v %v", key, result, err)
+		}
+	}
+	write("d/a", "first")
+	if err := os.Rename(filepath.Join(root, "d"), filepath.Join(root, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	write("d/b", "second")
+	if _, err := os.Stat(filepath.Join(root, "moved", "b")); !os.IsNotExist(err) {
+		t.Fatalf("write followed the moved directory: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(root, "d", "b")); err != nil || string(body) != "second" {
+		t.Fatalf("write did not land in the current directory: %q %v", body, err)
+	}
+	if err := local.Sync(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

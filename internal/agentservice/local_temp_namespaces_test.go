@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -84,13 +85,27 @@ func TestLocalTempNamespaceRemovedAfterLastLocalCloses(t *testing.T) {
 	if err := second.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Released namespaces wait idle for reuse by the next job.
+	idle := stagingDirectories(t, filepath.Join(root, "out"))
+	if len(idle) != 1 {
+		t.Fatalf("idle namespace missing: %v", idle)
+	}
+	reuse := trackedLocal(t, registry, root)
+	deferredWrite(t, reuse, "out/r", "reused", true)
+	if names := stagingDirectories(t, filepath.Join(root, "out")); len(names) != 1 || names[0] != idle[0] {
+		t.Fatalf("idle namespace was not reused: %v %v", idle, names)
+	}
+	if err := reuse.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registry.sweepIdleNamespaces(context.Background(), time.Now().Add(time.Hour))
 	if names := stagingDirectories(t, filepath.Join(root, "out")); len(names) != 0 {
 		t.Fatalf("finished transfer left staging directories: %v", names)
 	}
 	if len(namespaceRecords(t, db)) != 0 || len(tempRecords(t, db)) != 0 {
 		t.Fatal("finished transfer left registry records")
 	}
-	for key, want := range map[string]string{"out/a": "first", "out/b": "second", "out/c": "third"} {
+	for key, want := range map[string]string{"out/a": "first", "out/b": "second", "out/c": "third", "out/r": "reused"} {
 		if body, err := os.ReadFile(filepath.Join(root, key)); err != nil || string(body) != want {
 			t.Fatalf("%s: %q %v", key, body, err)
 		}
@@ -101,6 +116,8 @@ func TestLocalTempNamespaceRemovedAfterLastLocalCloses(t *testing.T) {
 	if err := third.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Closing the registry removes idle namespaces without waiting.
+	registry.Close()
 	if len(stagingDirectories(t, filepath.Join(root, "out"))) != 0 || len(namespaceRecords(t, db)) != 0 {
 		t.Fatal("recreated namespace was not removed")
 	}

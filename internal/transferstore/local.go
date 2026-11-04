@@ -2,7 +2,6 @@ package transferstore
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -170,10 +169,16 @@ func (s *Local) List(ctx context.Context, options ListOptions) (Page, error) {
 			return err
 		}
 		if walkErr != nil {
+			if key != "." && vanished(walkErr) {
+				if entry != nil && entry.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			return walkErr
 		}
 		// Symlinks and special files are not migration objects, as in the legacy scanner.
-		if key != "." && entry.IsDir() && isLocalTempNamespace(s.root, key) {
+		if key != "." && entry.IsDir() && isTempNamespaceName(entry.Name()) {
 			return fs.SkipDir
 		}
 		if entry.IsDir() || !entry.Type().IsRegular() || !strings.HasPrefix(key, options.Prefix) ||
@@ -183,9 +188,15 @@ func (s *Local) List(ctx context.Context, options ListOptions) (Page, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if vanished(err) {
+				return nil
+			}
 			return err
 		}
 		probe, err := isSharedProbeFile(ctx, s.root, key, info)
+		if vanished(err) {
+			return nil
+		}
 		if err != nil || probe {
 			return err
 		}
@@ -194,6 +205,9 @@ func (s *Local) List(ctx context.Context, options ListOptions) (Page, error) {
 			return fs.SkipAll
 		}
 		object, err := storageObject(s.root, key, info)
+		if vanished(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -226,9 +240,15 @@ func (s *Local) Scan(ctx context.Context, options ListOptions, emit func(Object)
 			return err
 		}
 		if walkErr != nil {
+			if key != "." && vanished(walkErr) {
+				if entry != nil && entry.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			return walkErr
 		}
-		if key != "." && entry.IsDir() && isLocalTempNamespace(s.root, key) {
+		if key != "." && entry.IsDir() && isTempNamespaceName(entry.Name()) {
 			return fs.SkipDir
 		}
 		if entry.IsDir() || !entry.Type().IsRegular() || !strings.HasPrefix(key, options.Prefix) ||
@@ -237,13 +257,22 @@ func (s *Local) Scan(ctx context.Context, options ListOptions, emit func(Object)
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if vanished(err) {
+				return nil
+			}
 			return err
 		}
 		probe, err := isSharedProbeFile(ctx, s.root, key, info)
+		if vanished(err) {
+			return nil
+		}
 		if err != nil || probe {
 			return err
 		}
 		object, err := storageObject(s.root, key, info)
+		if vanished(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -377,98 +406,61 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		}
 		result.Object, err = s.Stat(ctx, key)
 		result.Committed = err == nil
+		if err == nil && options.DeferDurability {
+			err = s.DeferExisting(ctx, key)
+		}
 		return result, err
 	}
-	if prior, statErr := s.Stat(ctx, key); statErr == nil {
-		if !options.Overwrite {
-			return WriteResult{Object: prior, Skipped: true}, nil
-		}
-	} else if !errors.Is(statErr, ErrNotFound) {
-		return result, statErr
-	}
+	deferred := options.DeferDurability && deferredDurabilitySupported
 	parent, base := path.Dir(name), path.Base(name)
-	if err := s.root.MkdirAll(parent, 0o755); err != nil {
-		return result, err
-	}
-	directory, err := s.root.OpenRoot(parent)
+	entry, err := s.directory(parent, true)
 	if err != nil {
 		return result, err
 	}
-	defer directory.Close()
-	temporaryDirectory := directory
-	temporaryParentPath := filepath.Join(s.rootPath, filepath.FromSlash(parent))
-	if registry, ok := s.tempRegistry.(LocalTempNamespaceRegistry); ok {
-		namespace, namespaceErr := s.tempNamespace(ctx, registry, directory, temporaryParentPath)
-		if namespaceErr != nil {
-			return result, namespaceErr
+	// skipped reports an existing destination. A deferred caller commits the
+	// skip after its next Sync, which then covers this directory entry too.
+	skipped := func(prior Object, statErr error) (WriteResult, error) {
+		if statErr == nil && deferred {
+			s.markDirty(entry, dirtyDestination, "")
 		}
-		temporaryDirectory, err = OpenLocalTempNamespace(directory, namespace)
-		if err != nil {
-			return result, err
+		return WriteResult{Object: prior, Skipped: statErr == nil}, statErr
+	}
+	// The common case, an absent destination, needs one lookup in the cached
+	// directory; anything else takes the full Stat for its exact semantics.
+	if _, lookupErr := entry.root.Lstat(base); !errors.Is(lookupErr, fs.ErrNotExist) {
+		if prior, statErr := s.Stat(ctx, key); statErr == nil {
+			if !options.Overwrite {
+				return skipped(prior, nil)
+			}
+		} else if !errors.Is(statErr, ErrNotFound) {
+			return result, statErr
 		}
-		defer temporaryDirectory.Close()
-		temporaryParentPath = filepath.Join(temporaryParentPath, namespace.Name)
 	}
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return result, err
-	}
-	temporary := ".oss-transfer-" + hex.EncodeToString(nonce[:]) + ".tmp"
-	if s.tempRegistry != nil {
-		if !validHex(s.tempRegistry.OwnerID(), 32) {
-			return result, ErrTempIdentity
-		}
-		temporary = trackedTempName(s.tempRegistry.OwnerID(), hex.EncodeToString(nonce[:]))
-	}
-	file, err := temporaryDirectory.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	temp, err := s.tempFile(ctx, entry)
 	if err != nil {
 		return result, err
 	}
-	createdInfo, statErr := file.Stat()
-	if statErr != nil {
-		file.Close()
-		return result, statErr
-	}
-	createdIdentity, identityErr := openedIdentity(file, createdInfo)
-	if identityErr != nil {
-		file.Close()
-		return result, identityErr
-	}
-	registered, handedOff := false, false
+	file, temporary := temp.file, temp.name
+	registered := s.tempRegistry != nil
+	handedOff, tempGone := false, false
 	defer func() {
 		_ = file.Close()
-		if _, removeErr := removeLocalTempEntry(context.WithoutCancel(ctx), temporaryDirectory, temporary, createdIdentity, false); removeErr != nil {
-			err = errors.Join(err, fmt.Errorf("remove temporary file: %w", removeErr))
-			return // Keep its durable entry if cleanup did not succeed.
+		if !tempGone {
+			if _, removeErr := removeLocalTempEntry(context.WithoutCancel(ctx), entry.temp, temporary, temp.identity, false); removeErr != nil {
+				err = errors.Join(err, fmt.Errorf("remove temporary file: %w", removeErr))
+				return // Keep its durable entry if cleanup did not succeed.
+			}
 		}
 		if registered && !handedOff {
-			if syncErr := syncTempNamespace(temporaryDirectory); syncErr != nil {
+			if syncErr := syncTempNamespace(entry.temp); syncErr != nil {
 				err = errors.Join(err, fmt.Errorf("sync temporary cleanup: %w", syncErr))
 				return // Keep the journal until removal is durable.
 			}
-			if forgetErr := s.tempRegistry.Forget(context.WithoutCancel(ctx), hex.EncodeToString(nonce[:])); forgetErr != nil {
+			if forgetErr := s.tempRegistry.Forget(context.WithoutCancel(ctx), temp.id); forgetErr != nil {
 				err = errors.Join(err, fmt.Errorf("clear temporary file record: %w", forgetErr))
 			}
 		}
 	}()
-	if s.tempRegistry != nil {
-		parentInfo, statErr := temporaryDirectory.Stat(".")
-		if statErr != nil {
-			return result, statErr
-		}
-		parentIdentity, identityErr := storageIdentity(temporaryDirectory, ".", parentInfo)
-		if identityErr != nil {
-			return result, identityErr
-		}
-		record := LocalTempRecord{Owner: s.tempRegistry.OwnerID(), ID: hex.EncodeToString(nonce[:]), ParentPath: temporaryParentPath, ParentIdentity: parentIdentity, Name: temporary, FileIdentity: createdIdentity}
-		// Registration must commit before any input byte is written. A crash
-		// before this barrier leaves an empty file inside the durably registered
-		// private namespace, which startup recovery can safely remove.
-		if err := s.tempRegistry.Register(ctx, record); err != nil {
-			return result, err
-		}
-		registered = true
-	}
 	written, err := io.CopyBuffer(file, io.LimitReader(reader, options.Size), make([]byte, 256*1024))
 	if err != nil {
 		return result, err
@@ -481,7 +473,6 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	}
 	// A published file must be complete whenever it is visible: SKIP treats
 	// any existing destination as done, including after a crash.
-	deferred := options.DeferDurability && deferredDurabilitySupported
 	if deferred {
 		err = syncPayloadOrdered(file)
 	} else {
@@ -508,42 +499,33 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if options.Overwrite {
-		err = publishTempAcrossRoots(temporaryDirectory, directory, temporary, base, true, publicationIdentity)
-	} else {
-		// A hard link publishes a complete file without replacing a target created
-		// concurrently. Rename alone would race SKIP on Unix.
-		err = publishTempAcrossRoots(temporaryDirectory, directory, temporary, base, false, publicationIdentity)
-		if errors.Is(err, fs.ErrExist) {
-			prior, statErr := s.Stat(ctx, key)
-			return WriteResult{Object: prior, Skipped: statErr == nil}, statErr
-		}
+	tempHandle := entry.handle
+	if entry.tempFile != nil {
+		tempHandle = entry.tempFile
+	}
+	// A hard link publishes a complete file without replacing a target created
+	// concurrently. Rename alone would race SKIP on Unix.
+	err = publishTempAcrossDirs(entry.temp, tempHandle, entry.handle, temporary, base, options.Overwrite, publicationIdentity)
+	if !options.Overwrite && errors.Is(err, fs.ErrExist) {
+		return skipped(s.Stat(ctx, key))
 	}
 	if err != nil {
 		return result, err
 	}
+	tempGone = options.Overwrite // The rename consumed the temporary name.
 	result = WriteResult{Object: object, Committed: true}
 	if !options.Overwrite {
-		if _, err := removeLocalTempEntry(context.WithoutCancel(ctx), temporaryDirectory, temporary, createdIdentity, false); err != nil {
+		if _, err := removeLocalTempEntry(context.WithoutCancel(ctx), entry.temp, temporary, temp.identity, false); err != nil {
 			return result, fmt.Errorf("object committed but temporary link removal failed: %w", err)
 		}
+		tempGone = true
 	}
 	if deferred {
-		id := ""
-		if registered {
-			id = hex.EncodeToString(nonce[:])
-		}
-		directories := []*os.Root{directory}
-		if temporaryDirectory != directory {
-			directories = append(directories, temporaryDirectory)
-		}
-		if s.deferDirectories(id, directories...) == nil {
-			handedOff = registered
-			return result, nil
-		}
-		// Could not track the directories; make this write durable now.
+		s.markDirty(entry, dirtyDestination|dirtyStaging, temp.id)
+		handedOff = true
+		return result, nil
 	}
-	if err := syncPublished(directory, base); err != nil {
+	if err := syncPublished(entry.root, base); err != nil {
 		return result, fmt.Errorf("object committed but publication sync failed: %w", err)
 	}
 	return result, nil

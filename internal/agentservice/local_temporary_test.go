@@ -369,6 +369,10 @@ func (r *pauseBeforeRegistration) Register(context.Context, transferstore.LocalT
 	}
 }
 
+func (r *pauseBeforeRegistration) RegisterBatch(ctx context.Context, records []transferstore.LocalTempRecord) error {
+	return r.Register(ctx, records[0])
+}
+
 func assertLocalInventoryAndNoTemp(t *testing.T, local *transferstore.Local, root string, want ...string) {
 	t.Helper()
 	var actual []string

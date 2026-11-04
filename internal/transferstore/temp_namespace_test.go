@@ -106,13 +106,17 @@ func TestTempNamespaceRejectsReplacementAndMarkerChanges(t *testing.T) {
 	}
 }
 
-func TestLocalScanExcludesOnlyCompleteNamespaceMarkers(t *testing.T) {
+func TestLocalScanExcludesNamespacesByName(t *testing.T) {
 	root, _, record := makeTestNamespace(t)
 	real := filepath.Join(root, record.Name)
 	if err := os.WriteFile(filepath.Join(real, trackedTempName(record.Owner, strings.Repeat("ab", 16))), []byte("private incomplete payload"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Even a perfectly shaped name remains a user directory without the exact marker.
+	// Namespaces are created and removed while other nodes scan, so a
+	// directory with the exact name shape is skipped even without its marker.
+	if err := os.WriteFile(filepath.Join(root, namespacePrefix+"user-file"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	fakeName := namespaceName(record.Owner, strings.Repeat("ff", 16))
 	fake := filepath.Join(root, fakeName)
 	if err := os.Mkdir(fake, 0700); err != nil {
@@ -133,7 +137,7 @@ func TestLocalScanExcludesOnlyCompleteNamespaceMarkers(t *testing.T) {
 	if err := local.Scan(context.Background(), ListOptions{}, func(object Object) error { keys = append(keys, object.Key); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{fakeName + "/user", "normal"}
+	want := []string{namespacePrefix + "user-file", "normal"}
 	slices.Sort(want)
 	slices.Sort(keys)
 	if !slices.Equal(keys, want) {

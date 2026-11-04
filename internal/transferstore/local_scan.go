@@ -188,15 +188,18 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 		// Advance only after the entry has been successfully inspected. On
 		// callback failure the caller retains the preceding durable cursor.
 		if entry.IsDir() {
-			if !isLocalTempNamespace(s.root, key) &&
-				(strings.HasPrefix(key+"/", options.Prefix) || strings.HasPrefix(options.Prefix, key+"/")) {
-				child := localScanFrame{Name: entry.Name(), key: key}
-				if !scanEntryName(child.Name) {
-					return ErrInvalidKey
-				}
+			child := localScanFrame{Name: entry.Name(), key: key}
+			descend := !isTempNamespaceName(entry.Name()) &&
+				(strings.HasPrefix(key+"/", options.Prefix) || strings.HasPrefix(options.Prefix, key+"/"))
+			if descend {
 				if err := s.loadScanFrame(&child); err != nil {
-					return err
+					if !vanished(err) {
+						return err
+					}
+					descend = false // Deleted after its parent was listed.
 				}
+			}
+			if descend {
 				frame.After, frame.next = entry.Name(), frame.next+1
 				frames = append(frames, child)
 			} else {
@@ -206,22 +209,27 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 			if entry.Type().IsRegular() && strings.HasPrefix(key, options.Prefix) &&
 				(options.StartAfter == "" || key > options.StartAfter) {
 				info, err := s.root.Lstat(key)
-				if err != nil {
+				switch {
+				case vanished(err):
+					// Deleted after its directory was listed.
+				case err != nil:
 					return err
-				}
-				if !info.Mode().IsRegular() {
+				case !info.Mode().IsRegular():
 					return fmt.Errorf("%w: scan file %q was replaced", ErrSourceChanged, key)
-				}
-				probe, err := isSharedProbeFile(ctx, s.root, key, info)
-				if err != nil {
-					return err
-				}
-				if !probe {
-					object, err := storageObject(s.root, key, info)
-					if err != nil {
+				default:
+					probe, err := isSharedProbeFile(ctx, s.root, key, info)
+					if err != nil && !vanished(err) {
 						return err
 					}
-					objects = append(objects, object)
+					if err == nil && !probe {
+						object, err := storageObject(s.root, key, info)
+						if err != nil && !vanished(err) {
+							return err
+						}
+						if err == nil {
+							objects = append(objects, object)
+						}
+					}
 				}
 			}
 			frame.After, frame.next = entry.Name(), frame.next+1

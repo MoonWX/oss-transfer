@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -45,6 +46,20 @@ func (r *LocalTempRegistry) PrepareNamespace(ctx context.Context, parent *os.Roo
 	if err != nil {
 		return record, err
 	}
+	delete(r.idle, key)
+	if found && r.namespaces[key] == 0 {
+		// Nobody holds it, so a failed removal may have left it unusable.
+		// Finish that removal and start over instead of handing it out.
+		if check, openErr := transferstore.OpenLocalTempNamespace(parent, record); openErr == nil {
+			check.Close()
+		} else {
+			removed, removeErr := r.removeNamespace(ctx, key, record)
+			if !removed {
+				return record, errors.Join(openErr, removeErr)
+			}
+			found = false
+		}
+	}
 	if !found {
 		record, err = transferstore.CreateLocalTempNamespace(ctx, parent, parentPath, r.owner)
 		if err != nil {
@@ -71,10 +86,10 @@ func (r *LocalTempRegistry) namespaceRecord(key string, record *transferstore.Lo
 	return found, err
 }
 
-// ReleaseNamespace drops one PrepareNamespace reference. The last release
-// removes the staging directory and its record, so finished transfers do not
-// leave hidden directories behind. Callers release only after every temporary
-// file they created there is gone and its record has been cleared.
+// ReleaseNamespace drops one PrepareNamespace reference. After the last
+// release the namespace stays idle for namespaceIdleGrace, so consecutive jobs
+// writing into the same directory reuse it, and is then removed with its
+// record, so finished transfers do not leave hidden directories behind.
 func (r *LocalTempRegistry) ReleaseNamespace(ctx context.Context, record transferstore.LocalTempNamespace) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -91,8 +106,48 @@ func (r *LocalTempRegistry) ReleaseNamespace(ctx context.Context, record transfe
 	if r.closed {
 		return nil // Startup recovery removes it.
 	}
-	_, err := r.removeNamespace(context.WithoutCancel(ctx), key, record)
-	return err
+	r.idle[key] = idleNamespace{record: record, since: time.Now()}
+	return nil
+}
+
+// namespaceIdleGrace is how long a released namespace waits for reuse.
+const namespaceIdleGrace = 15 * time.Second
+
+type idleNamespace struct {
+	record transferstore.LocalTempNamespace
+	since  time.Time
+}
+
+func (r *LocalTempRegistry) sweepLoop() {
+	ticker := time.NewTicker(namespaceIdleGrace / 3)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.stopSweep:
+			return
+		case <-ticker.C:
+			r.mu.RLock()
+			if !r.closed {
+				r.sweepIdleNamespaces(context.Background(), time.Now().Add(-namespaceIdleGrace))
+			}
+			r.mu.RUnlock()
+		}
+	}
+}
+
+// sweepIdleNamespaces removes namespaces idle since before cutoff; a zero
+// cutoff removes all of them. A namespace that cannot be removed now is left
+// for restart recovery.
+func (r *LocalTempRegistry) sweepIdleNamespaces(ctx context.Context, cutoff time.Time) {
+	r.namespaceMu.Lock()
+	defer r.namespaceMu.Unlock()
+	for key, idle := range r.idle {
+		if !cutoff.IsZero() && idle.since.After(cutoff) {
+			continue
+		}
+		delete(r.idle, key)
+		_, _ = r.removeNamespace(ctx, key, idle.record)
+	}
 }
 
 // removeNamespace runs with no live reference: during recovery, or under

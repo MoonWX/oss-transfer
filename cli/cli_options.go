@@ -54,12 +54,13 @@ func parseCommandOptions(args, valueFlags, boolFlags []string) (commandOptions, 
 			name = strings.TrimPrefix(arg, "-")
 		}
 		key, value, equals := strings.Cut(name, "=")
+		typed := key // errors name the spelling the user typed
 		if canonical, ok := aliases[key]; ok {
 			key = canonical
 		}
 		if switches[key] {
 			if equals {
-				return o, usageErrorf("--%s 不接受值", key)
+				return o, usageErrorf("--%s 不接受值", typed)
 			}
 			o.Switches[key] = true
 			continue
@@ -69,7 +70,7 @@ func parseCommandOptions(args, valueFlags, boolFlags []string) (commandOptions, 
 		}
 		if !equals {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
-				return o, usageErrorf("--%s 缺少值", key)
+				return o, usageErrorf("--%s 缺少值", typed)
 			}
 			i++
 			value = args[i]

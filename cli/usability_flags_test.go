@@ -143,3 +143,22 @@ func TestExceptionTasksUsesConsoleEndpoint(t *testing.T) {
 		t.Fatalf("%d %s", code, out)
 	}
 }
+
+func TestWatchStopsOnPermanentHTTPErrors(t *testing.T) {
+	for status, want := range map[int]bool{400: false, 401: false, 403: false, 404: false, 409: false, 429: true, 500: true, 503: true} {
+		if got := watchRetryable(&apiHTTPError{Status: status}); got != want {
+			t.Errorf("watchRetryable(HTTP %d) = %v, want %v", status, got, want)
+		}
+	}
+}
+
+func TestNodeAliasErrorsNameTypedFlag(t *testing.T) {
+	_, err := parseCommandOptions([]string{"--node"}, []string{"worker"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "--node") || strings.Contains(err.Error(), "--worker") {
+		t.Fatalf("error = %v, want it to name --node", err)
+	}
+	_, err = adminOptions([]string{"--node", "a", "--node", "b"}, []string{"worker"}, nil, 0)
+	if err == nil || !strings.Contains(err.Error(), "--node/--worker") {
+		t.Fatalf("duplicate error = %v", err)
+	}
+}

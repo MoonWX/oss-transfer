@@ -42,6 +42,9 @@ func adminOptions(args, values, switches []string, count int) (commandOptions, e
 	if err == nil {
 		for name, supplied := range o.Values {
 			if len(supplied) > 1 {
+				if name == "node" || name == "worker" {
+					name = "node/--worker" // either spelling may have been typed
+				}
 				return o, usageErrorf("--%s 只能指定一次", name)
 			}
 		}

@@ -326,9 +326,12 @@ func watchRetryable(err error) bool {
 	if isUsageError(err) {
 		return false
 	}
+	// Retry only what can heal by itself: network failures, Master restarts
+	// (5xx) and rate limiting. Other 4xx answers (bad ID, bad request,
+	// sign-in) are permanent and stop on the first refresh.
 	var httpErr *apiHTTPError
-	if errors.As(err, &httpErr) && (httpErr.Status == 401 || httpErr.Status == 403) {
-		return false
+	if errors.As(err, &httpErr) {
+		return httpErr.Status >= 500 || httpErr.Status == 429
 	}
 	return true
 }

@@ -1373,7 +1373,7 @@ export default function TasksPage({
     try {
       const next = await api<{ tasks: Task[]; nextBeforeId?: number }>(
         `/api/master/status?beforeId=${nextHistoryCursor}&limit=1000`,
-        { signal: controller.signal },
+        { headers: { "X-Task-View": "summary" }, signal: controller.signal },
       );
       setHistoryTasks((previous) =>
         mergeTasks(mergeTasks(previous ?? [], data?.tasks ?? []), next.tasks),

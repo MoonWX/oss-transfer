@@ -34,6 +34,7 @@ type Repository struct {
 	db         Database
 	maxPending int64
 	now        func() time.Time
+	commits    commitGroup
 }
 type usage struct {
 	Pending int64 `json:"pending"`
@@ -535,15 +536,6 @@ func (r *Repository) stop(ctx context.Context, child string, generation uint64) 
 	})
 }
 
-func (r *Repository) commit(ctx context.Context, child string, generation, attempt uint64, results []ItemResult) (Record, error) {
-	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
-		if err := checkAttempt(tx, *j, generation, attempt); err != nil {
-			return err
-		}
-		return applyResults(j, results)
-	})
-}
-
 func applyResults(j *Record, results []ItemResult) error {
 	index := make(map[string]int, len(j.Results))
 	for i, item := range j.Results {
@@ -884,4 +876,33 @@ func (r *Repository) recoverRunning(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// GetIfChanged reads a record unless its stored bytes still match known, a
+// fingerprint returned by an earlier call. The fingerprint is a digest of the
+// stored value, so any change to the record (progress, attempt, state)
+// produces a new one; notModified therefore means the caller already holds
+// exactly this record. The digest is taken without decoding the record.
+func (r *Repository) GetIfChanged(ctx context.Context, child, known string) (out Record, fingerprint string, notModified bool, err error) {
+	key, err := jobKey(child)
+	if err != nil {
+		return Record{}, "", false, err
+	}
+	err = r.db.View(func(tx *state.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		digest, found := tx.StoredDigest(jobsBucket, key)
+		if !found {
+			return ErrNotFound
+		}
+		fingerprint = digest
+		if known != "" && digest == known {
+			notModified = true
+			return nil
+		}
+		out, err = load(tx, child)
+		return err
+	})
+	return
 }

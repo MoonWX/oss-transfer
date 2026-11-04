@@ -31,8 +31,10 @@ func TestFinalResultsAndCompletedStateUseOneDurableCommit(t *testing.T) {
 	if completed.Status != Completed || completed.Counters.Succeeded != 128 {
 		t.Fatalf("unexpected final result: %+v", completed.Counters)
 	}
-	if got := observed.updates.Load(); got != 3 {
-		t.Fatalf("accept, begin and final results must use three transactions; got %d", got)
+	// The production threshold (64) persists the first half early; the second
+	// half shares the completed state's commit rather than a separate one.
+	if got := observed.updates.Load(); got != 4 {
+		t.Fatalf("accept, begin, one early batch and final results must use four transactions; got %d", got)
 	}
 	f.assertFiles()
 	if err := f.engine.Close(bg); err != nil {

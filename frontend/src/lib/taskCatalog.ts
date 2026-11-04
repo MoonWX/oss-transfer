@@ -44,6 +44,7 @@ export async function loadTaskCatalog(
       pageComplete?: boolean;
       truncated?: boolean;
     }>(`/api/master/status?${query}`, {
+      headers: { "X-Task-View": "summary" },
       signal,
       timeoutMs: 15000,
     });

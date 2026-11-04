@@ -198,9 +198,9 @@ func BenchmarkTaskObserveControlPlane(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
 				if batched {
-					rows, err := runtime.observeNode(ctx, p, children, true)
-					if err != nil || len(rows) != 16 {
-						b.Fatal(len(rows), err)
+					rows, err := runtime.observeNode(ctx, p, children, nil, true)
+					if err != nil || len(rows.observations) != 16 {
+						b.Fatal(len(rows.observations), err)
 					}
 				} else {
 					for _, child := range children {

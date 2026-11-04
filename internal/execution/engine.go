@@ -23,6 +23,10 @@ type activeAttempt struct {
 	progress       *attemptProgress
 }
 
+// DefaultCommitBatchSize is the number of object results that triggers a
+// progress commit before CommitInterval elapses.
+const DefaultCommitBatchSize = 64
+
 // Engine owns task lifetimes, independently of the short-lived RPC contexts
 // passed to Accept and Start. One Engine may own a given Agent database at a time.
 type Engine struct {
@@ -71,7 +75,11 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 		opts.QueueSize = 16
 	}
 	if opts.CommitBatchSize == 0 {
-		opts.CommitBatchSize = 128
+		// A job holds at most 128 items and finish persists the final batch,
+		// so a threshold of 128 could never fire. At 64 an attempt that
+		// finishes half its job within one CommitInterval makes that half
+		// durable early, costing at most one extra commit per job.
+		opts.CommitBatchSize = DefaultCommitBatchSize
 	}
 	if opts.CommitInterval == 0 {
 		opts.CommitInterval = time.Second
@@ -102,6 +110,12 @@ func (e *Engine) Accept(ctx context.Context, job Job, inventorySource ...bool) (
 }
 func (e *Engine) Get(ctx context.Context, child string) (Record, error) {
 	return e.repo.Get(ctx, child)
+}
+
+// GetIfChanged returns the record and its stored fingerprint, or only
+// notModified when the record still has the fingerprint known.
+func (e *Engine) GetIfChanged(ctx context.Context, child, known string) (Record, string, bool, error) {
+	return e.repo.GetIfChanged(ctx, child, known)
 }
 func (e *Engine) Seal(ctx context.Context, child string, generation uint64) (Record, error) {
 	e.mu.Lock()

@@ -2,7 +2,6 @@ package task
 
 import (
 	"encoding/json"
-	"errors"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
@@ -63,28 +62,5 @@ func (r *Repository) EnsureListingIndex() error {
 // Recent pages visible tasks or recycle-bin entries without scanning purged
 // history. A single read transaction keeps the index and parent rows consistent.
 func (r *Repository) Recent(before int64, limit int, deleted bool) (parents []Parent, err error) {
-	if before < 0 || limit < 1 || limit > 10001 {
-		return nil, errors.New("invalid task page")
-	}
-	bucket, cursor := "master-task-visible", ""
-	if deleted {
-		bucket = "master-task-recycle"
-	}
-	if before > 0 {
-		cursor = key(before)
-	}
-	err = r.store.View(func(tx *state.Tx) error {
-		return tx.ScanReverse(bucket, cursor, limit, func(_ string, raw json.RawMessage) error {
-			var id int64
-			if err := json.Unmarshal(raw, &id); err != nil {
-				return err
-			}
-			p, err := get(tx, id)
-			if err == nil {
-				parents = append(parents, p)
-			}
-			return err
-		})
-	})
-	return
+	return r.recent(before, limit, deleted, false)
 }

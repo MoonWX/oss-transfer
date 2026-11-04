@@ -364,6 +364,9 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 	if c.Operation == "children_get" {
 		return s.childRecords(ctx, c)
 	}
+	if c.Operation == "children_poll" {
+		return s.childPoll(ctx, c)
+	}
 	if c.Operation == "scan_batches" {
 		return s.scanBatches(ctx, c)
 	}

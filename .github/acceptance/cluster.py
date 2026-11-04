@@ -916,7 +916,7 @@ class Harness:
         # Inspect the disk between the kill and the restart: a fully published
         # target means the crash landed after the transfer, not during it.
         self.kill_restart(task_id, killed=lambda: require_unfinished(
-            False, len(published_files(target, manifest)), len(manifest), "Crash", rate))
+            False, len(published_files(target / "rate", manifest)), len(manifest), "Crash", rate))
         require(self.create("/api/master/local-transfers", body, "running-crash") == task_id, "Crash retry made another task")
         data = self.verify_task(task_id, manifest)
         orphans = self.verify_local(target, "rate", manifest)

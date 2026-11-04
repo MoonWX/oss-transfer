@@ -258,6 +258,34 @@ class RecoveryInjectionTest(unittest.TestCase):
         self.harness.kill_restart(7, killed=lambda: events.append("inspect"))
         self.assertEqual(events, ["kill master", "kill agent", "inspect", "start master", "start agent"])
 
+    def test_crash_check_reads_the_download_layout_and_fails_when_fully_published(self):
+        manifest = {f"{index:04d}.bin": {"size": 1} for index in range(4)}
+        objects = {"resume/" + key: 1 for key in manifest}
+        listed = iter([{key: 1 for key in list(objects)[:index]} for index in (4, 2, 2, 2)])
+        self.harness.list_objects = mock.Mock(side_effect=lambda *args: next(listed, {"resume/0000.bin": 1, "resume/0001.bin": 1}))
+        self.harness.create = mock.Mock(side_effect=[7, 7, 8])
+        self.harness.api = mock.Mock()
+        self.harness.wait_task = mock.Mock(return_value={"putObjectCount": 2})
+        statuses = iter([{"status": "RUNNING"}, {"status": "STOPPED"}])
+        self.harness.task = mock.Mock(side_effect=lambda task_id: next(statuses, {"status": "RUNNING"}))
+        self.harness.verify_task = mock.Mock(return_value={})
+        self.harness.verify_s3 = mock.Mock()
+        self.harness.record = mock.Mock()
+        target = self.root / "crash-download"
+        # The download writes PREFIX/KEY under the target, as verify_local reads it.
+        (target / "rate").mkdir(parents=True)
+        (target / "rate" / (".oss-transfer-" + "0" * 64 + "-" + "0" * 32 + ".tmp")).write_bytes(b"x" * (2 * CLUSTER.MIB))
+        for key in manifest:
+            (target / "rate" / key).write_bytes(b"x")
+
+        def kill_restart(task_id, killed=None):
+            if killed:
+                killed()
+        self.harness.kill_restart = kill_restart
+        with mock.patch.object(CLUSTER.time, "sleep"), \
+                self.assertRaisesRegex(AssertionError, r"Crash test transfer finished before injection \(4/4"):
+            self.harness.recovery(self.root / "upload", manifest)
+
     def test_fixtures_upload_before_the_exclusive_gate_and_measurements_after(self):
         tree = ast.parse((ROOT / ".github/acceptance/cluster.py").read_text(encoding="utf-8"))
         main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")

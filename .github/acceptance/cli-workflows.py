@@ -227,7 +227,9 @@ class Workflows(cluster.Harness):
     def validate_counts(self, task_id, payloads):
         result = self.completed(task_id)
         require(result["listObjectCount"] == len(payloads), "Scanned object count differs from fixture")
-        require(result["putObjectCount"] == len(payloads) and result["failedObjectCount"] == 0, "Completed task counts differ from verified objects")
+        require(result["putObjectCount"] == len(payloads) and result["failedObjectCount"] == 0,
+                "Completed task counts differ from verified objects: put=%s failed=%s skipped=%s expected=%d" % (
+                    result.get("putObjectCount"), result.get("failedObjectCount"), result.get("skippedObjectCount"), len(payloads)))
         require(result["putObjectSize"] == sum(map(len, payloads.values())), "Completed task bytes differ from verified objects")
         return result
 

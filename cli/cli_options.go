@@ -45,7 +45,7 @@ func parseCommandOptions(args, valueFlags, boolFlags []string) (commandOptions, 
 			o.Positionals = append(o.Positionals, args[i+1:]...)
 			break
 		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
+		if !strings.HasPrefix(arg, "-") || arg == "-" || looksLikeID(arg, values, switches) {
 			o.Positionals = append(o.Positionals, arg)
 			continue
 		}
@@ -195,4 +195,18 @@ func nonEmptyCLICollection(value interface{}) bool {
 		return len(collection) > 0
 	}
 	return false
+}
+
+// looksLikeID reports whether a single-dash argument is a random identifier
+// (older comparison IDs are base64url and may start with '-') rather than an
+// option. Option names are short lowercase words; IDs are long and mixed-case.
+func looksLikeID(arg string, values, switches map[string]bool) bool {
+	if strings.HasPrefix(arg, "--") || len(arg) < 20 {
+		return false
+	}
+	name := strings.TrimPrefix(arg, "-")
+	if values[name] || switches[name] {
+		return false
+	}
+	return strings.ContainsAny(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789")
 }

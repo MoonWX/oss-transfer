@@ -47,7 +47,7 @@ func (s *Server) startComparison(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	id, err := randomToken()
+	id, err := comparisonID()
 	if err != nil {
 		fail(w, 500, "Cannot create comparison")
 		return
@@ -207,5 +207,16 @@ func (s *Server) cancelComparison(w http.ResponseWriter, r *http.Request) {
 	var result comparison.Progress
 	if s.comparisonCall(w, r, "comparison_cancel", map[string]any{"id": r.PathValue("id")}, &result) {
 		writeJSON(w, 200, result)
+	}
+}
+
+// comparisonID returns a random ID that cannot be mistaken for a command-line
+// option: base64url may start with '-', which CLIs parse as a flag.
+func comparisonID() (string, error) {
+	for {
+		id, err := randomToken()
+		if err != nil || id[0] != '-' {
+			return id, err
+		}
 	}
 }

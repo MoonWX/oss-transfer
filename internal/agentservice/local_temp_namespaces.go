@@ -181,7 +181,11 @@ func (r *LocalTempRegistry) removeNamespace(ctx context.Context, key string, rec
 	}
 	// Delete the directory before its record: an interruption in between is
 	// finished by the next recovery, which accepts a missing directory.
-	if err := transferstore.RemoveLocalTempNamespace(ctx, record); err != nil {
+	// When the parent directory is gone or replaced, the private namespace
+	// cannot be reached by its path any more; no record points into it
+	// (checked above), so only its database record is dropped. Otherwise
+	// every later write into a recreated directory would be refused.
+	if err := transferstore.RemoveLocalTempNamespace(ctx, record); err != nil && !errors.Is(err, transferstore.ErrTempNamespaceUnreachable) {
 		return false, err
 	}
 	err = r.store.Update(func(tx *state.Tx) error { return tx.Delete(localTempNamespacesBucket, key) })

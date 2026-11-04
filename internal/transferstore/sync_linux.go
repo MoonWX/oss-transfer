@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -27,9 +26,9 @@ import (
 // the complete payload, and the directory fsync in Local.Sync commits all of
 // it at once. Every other case (no journal, async commit, XFS realtime files,
 // network, FUSE, overlay, anything not confirmed) gets a full fsync here.
-func orderedFileSync(file *os.File) error {
+func orderedFileSync(file *os.File, cache *orderingCache) error {
 	fd := int(file.Fd())
-	if !writebackOrdersPublication(fd) {
+	if !writebackOrdersPublication(fd, cache) {
 		return file.Sync()
 	}
 	return unix.SyncFileRange(fd, 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
@@ -42,17 +41,18 @@ var (
 	globProc      = filepath.Glob
 )
 
-// ext4Modes caches the ext4 check per filesystem instance. The key includes
-// the filesystem ID (derived from the ext4 UUID), so a different filesystem
-// that reuses a device number is checked again instead of inheriting a result.
-var ext4Modes sync.Map // ext4Key -> bool
-
+// The ext4 check is cached per Local (one job), keyed by mount ID, device and
+// filesystem ID. A new mount, a reused device number or a cloned image is
+// checked again, and every job rereads the mount options. ext4 refuses to
+// change the data mode, journal checksums or async commit on remount, and
+// removing a journal needs an unmount, so a mount's answer cannot go stale.
 type ext4Key struct {
-	dev  uint64
-	fsid unix.Fsid
+	mount uint64
+	dev   uint64
+	fsid  unix.Fsid
 }
 
-func writebackOrdersPublication(fd int) bool {
+func writebackOrdersPublication(fd int, cache *orderingCache) bool {
 	var fs unix.Statfs_t
 	if unix.Fstatfs(fd, &fs) != nil {
 		return false
@@ -71,12 +71,16 @@ func writebackOrdersPublication(fd int) bool {
 	if unix.Fstat(fd, &st) != nil {
 		return false
 	}
-	key := ext4Key{dev: uint64(st.Dev), fsid: fs.Fsid}
-	if known, ok := ext4Modes.Load(key); ok {
+	var stx unix.Statx_t
+	if unix.Statx(fd, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &stx) != nil || stx.Mask&unix.STATX_MNT_ID == 0 {
+		return false // Without a mount ID the cached answer cannot be tied to a mount.
+	}
+	key := ext4Key{mount: stx.Mnt_id, dev: uint64(st.Dev), fsid: fs.Fsid}
+	if known, ok := cache.modes.Load(key); ok {
 		return known.(bool)
 	}
 	ordered := ext4OrdersWriteback(uint64(st.Dev))
-	ext4Modes.Store(key, ordered)
+	cache.modes.Store(key, ordered)
 	return ordered
 }
 

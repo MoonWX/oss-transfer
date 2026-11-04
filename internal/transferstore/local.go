@@ -178,10 +178,10 @@ func (s *Local) List(ctx context.Context, options ListOptions) (Page, error) {
 			return walkErr
 		}
 		// Symlinks and special files are not migration objects, as in the legacy scanner.
-		if key != "." && entry.IsDir() && isTempNamespaceName(entry.Name()) {
+		if key != "." && entry.IsDir() && isLocalTempNamespace(s.root, key) {
 			return fs.SkipDir
 		}
-		if entry.IsDir() || !entry.Type().IsRegular() || !strings.HasPrefix(key, options.Prefix) ||
+		if entry.IsDir() || !entry.Type().IsRegular() || isNamespaceInternal(key) || !strings.HasPrefix(key, options.Prefix) ||
 			(options.StartAfter != "" && key <= options.StartAfter) ||
 			(after != "" && walkCompare(key, after) <= 0) {
 			return nil
@@ -248,10 +248,10 @@ func (s *Local) Scan(ctx context.Context, options ListOptions, emit func(Object)
 			}
 			return walkErr
 		}
-		if key != "." && entry.IsDir() && isTempNamespaceName(entry.Name()) {
+		if key != "." && entry.IsDir() && isLocalTempNamespace(s.root, key) {
 			return fs.SkipDir
 		}
-		if entry.IsDir() || !entry.Type().IsRegular() || !strings.HasPrefix(key, options.Prefix) ||
+		if entry.IsDir() || !entry.Type().IsRegular() || isNamespaceInternal(key) || !strings.HasPrefix(key, options.Prefix) ||
 			(options.StartAfter != "" && key <= options.StartAfter) || (after != "" && walkCompare(key, after) <= 0) {
 			return nil
 		}
@@ -391,6 +391,9 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	if err != nil {
 		return result, err
 	}
+	if reservedKeyComponent(name) {
+		return result, fmt.Errorf("%w: key uses a reserved staging name", ErrInvalidKey)
+	}
 	stop := interruptInput(ctx, input)
 	defer stop()
 	reader := contextReader{ctx, input}
@@ -417,6 +420,7 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	if err != nil {
 		return result, err
 	}
+	defer s.release(entry)
 	// skipped reports an existing destination. A deferred caller commits the
 	// skip after its next Sync, which then covers this directory entry too.
 	skipped := func(prior Object, statErr error) (WriteResult, error) {
@@ -436,11 +440,12 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 			return result, statErr
 		}
 	}
-	temp, err := s.tempFile(ctx, entry)
+	file, temp, err := s.tempFile(ctx, entry)
 	if err != nil {
+		// A refused reservation keeps its record; recovery decides about it.
 		return result, err
 	}
-	file, temporary := temp.file, temp.name
+	temporary := temp.name
 	registered := s.tempRegistry != nil
 	handedOff, tempGone := false, false
 	defer func() {
@@ -474,7 +479,7 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	// A published file must be complete whenever it is visible: SKIP treats
 	// any existing destination as done, including after a crash.
 	if deferred {
-		err = syncPayloadOrdered(file)
+		err = syncPayloadOrdered(file, &s.durability.ordering)
 	} else {
 		err = file.Sync()
 	}

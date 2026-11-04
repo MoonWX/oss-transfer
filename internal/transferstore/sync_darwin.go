@@ -15,7 +15,7 @@ import (
 // or rename can never reach stable storage ahead of the payload. Local.Sync
 // then issues F_FULLFSYNC once per touched directory, which makes the whole
 // batch durable.
-func orderedFileSync(file *os.File) error {
+func orderedFileSync(file *os.File, _ *orderingCache) error {
 	if _, err := unix.FcntlInt(file.Fd(), unix.F_BARRIERFSYNC, 0); err == nil {
 		return nil
 	}

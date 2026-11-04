@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -185,15 +186,58 @@ func validNamespaceMarker(directory *os.Root, owner, id string) bool {
 	return err == nil && string(data) == expected
 }
 
-// isTempNamespaceName matches staging namespace names. Discovery skips them by
-// name: a namespace is created and removed while other nodes may be scanning
-// the same directory, so its marker may be incomplete or already gone.
+// isTempNamespaceName matches the shape of staging namespace names.
 func isTempNamespaceName(name string) bool {
 	if !strings.HasPrefix(name, namespacePrefix) {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(name, namespacePrefix), "-")
 	return len(parts) == 2 && validHex(parts[0], 32) && validHex(parts[1], 16)
+}
+
+// isTrackedTempName matches the shape of registered temporary file names.
+func isTrackedTempName(name string) bool {
+	if !strings.HasPrefix(name, ".oss-transfer-") || !strings.HasSuffix(name, ".tmp") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(name, ".oss-transfer-"), ".tmp"), "-")
+	return len(parts) == 2 && validHex(parts[0], 32) && validHex(parts[1], 16)
+}
+
+// isLocalTempNamespace reports a complete staging namespace: the exact name
+// shape and its ownership marker. Discovery skips it.
+func isLocalTempNamespace(root *os.Root, key string) bool {
+	name := path.Base(key)
+	if !isTempNamespaceName(name) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(name, namespacePrefix), "-")
+	directory, err := root.OpenRoot(key)
+	if err != nil {
+		return false
+	}
+	defer directory.Close()
+	return validNamespaceMarker(directory, parts[0], parts[1])
+}
+
+// isNamespaceInternal reports the marker or a temporary file inside a
+// directory shaped like a namespace. A namespace being created has no complete
+// marker yet, so discovery descends into it; its own files are still never
+// migration objects. Other files in such a directory are user data.
+func isNamespaceInternal(key string) bool {
+	name := path.Base(key)
+	return isTempNamespaceName(path.Base(path.Dir(key))) && (name == namespaceMarker || isTrackedTempName(name))
+}
+
+// reservedKeyComponent rejects destination keys that would collide with
+// staging names, which discovery hides.
+func reservedKeyComponent(key string) bool {
+	for _, component := range strings.Split(strings.TrimSuffix(key, "/"), "/") {
+		if isTempNamespaceName(component) || isTrackedTempName(component) {
+			return true
+		}
+	}
+	return false
 }
 
 // vanished reports an entry deleted while a directory walk was visiting it,
@@ -271,6 +315,11 @@ func RemoveUnregisteredNamespaceTemps(ctx context.Context, record LocalTempNames
 // than its ownership marker, so it was not removed.
 var ErrTempNamespaceInUse = errors.New("temporary namespace is not empty; retained")
 
+// ErrTempNamespaceUnreachable means the namespace's parent directory is gone
+// or is a different directory now (deleted, recreated, or not mounted), so
+// the namespace cannot be reached by its recorded path.
+var ErrTempNamespaceUnreachable = errors.New("temporary namespace parent directory is missing or replaced")
+
 // RemoveLocalTempNamespace deletes a database-owned staging namespace that
 // holds nothing but its marker. It also finishes a removal interrupted after
 // the marker was deleted, and succeeds when the namespace is already gone from
@@ -284,8 +333,11 @@ func RemoveLocalTempNamespace(ctx context.Context, record LocalTempNamespace) er
 		return err
 	}
 	parent, err := os.OpenRoot(record.ParentPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %w", ErrTempNamespaceUnreachable, err)
+	}
 	if err != nil {
-		return err // A missing mount may return; retain the durable record.
+		return err
 	}
 	defer parent.Close()
 	info, err := parent.Stat(".")
@@ -297,7 +349,7 @@ func RemoveLocalTempNamespace(ctx context.Context, record LocalTempNamespace) er
 		return err
 	}
 	if identity != record.ParentIdentity {
-		return ErrTempIdentity
+		return ErrTempNamespaceUnreachable
 	}
 	info, err = parent.Lstat(record.Name)
 	if errors.Is(err, fs.ErrNotExist) {

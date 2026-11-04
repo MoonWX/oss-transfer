@@ -23,6 +23,10 @@ type activeAttempt struct {
 	progress       *attemptProgress
 }
 
+// DefaultCommitBatchSize is the number of object results that triggers a
+// progress commit before CommitInterval elapses.
+const DefaultCommitBatchSize = 64
+
 // Engine owns task lifetimes, independently of the short-lived RPC contexts
 // passed to Accept and Start. One Engine may own a given Agent database at a time.
 type Engine struct {
@@ -71,7 +75,11 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 		opts.QueueSize = 16
 	}
 	if opts.CommitBatchSize == 0 {
-		opts.CommitBatchSize = 128
+		// A job holds at most 128 items and finish persists the final batch,
+		// so a threshold of 128 could never fire. At 64 an attempt that
+		// finishes half its job within one CommitInterval makes that half
+		// durable early, costing at most one extra commit per job.
+		opts.CommitBatchSize = DefaultCommitBatchSize
 	}
 	if opts.CommitInterval == 0 {
 		opts.CommitInterval = time.Second

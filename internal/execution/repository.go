@@ -34,6 +34,7 @@ type Repository struct {
 	db         Database
 	maxPending int64
 	now        func() time.Time
+	commits    commitGroup
 }
 type usage struct {
 	Pending int64 `json:"pending"`
@@ -532,15 +533,6 @@ func (r *Repository) stop(ctx context.Context, child string, generation uint64) 
 			j.Status = Stopped
 		}
 		return nil
-	})
-}
-
-func (r *Repository) commit(ctx context.Context, child string, generation, attempt uint64, results []ItemResult) (Record, error) {
-	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
-		if err := checkAttempt(tx, *j, generation, attempt); err != nil {
-			return err
-		}
-		return applyResults(j, results)
 	})
 }
 

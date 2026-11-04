@@ -289,7 +289,7 @@ class Packaging(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertEqual({path.name for path in self.root.iterdir()}, {"packages"})
 
-    def github_publication(self, existing=False, step="Stage GitHub Release draft"):
+    def github_publication(self, existing=False, step="Stage GitHub Release draft", view_error="release not found"):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         block = workflow.split("      - name: " + step + "\n", 1)[1].split("        run: |\n", 1)[1]
         lines = []
@@ -312,11 +312,13 @@ import json, os, sys
 with open(os.environ['GH_TEST_CALLS'], 'a') as stream:
     stream.write(json.dumps(sys.argv[1:]) + '\n')
 if sys.argv[1:3] == ['release', 'view']:
-    sys.exit(0 if os.environ['GH_TEST_EXISTS'] == '1' else 1)
+    if os.environ['GH_TEST_EXISTS'] == '1':
+        sys.exit(0)
+    sys.exit(os.environ['GH_TEST_VIEW_ERROR'])
 """)
         gh.chmod(0o755)
         environment = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
-                           GH_TEST_CALLS=str(calls), GH_TEST_EXISTS="1" if existing else "0",
+                           GH_TEST_CALLS=str(calls), GH_TEST_EXISTS="1" if existing else "0", GH_TEST_VIEW_ERROR=view_error,
                            RELEASE_TAG="v" + self.version)
         result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=self.root,
                                 env=environment, text=True, capture_output=True)
@@ -341,6 +343,14 @@ if sys.argv[1:3] == ['release', 'view']:
                     self.assertIn("--draft", uploads[0])
                     self.assertIn("--verify-tag", uploads[0])
                 self.assertFalse(any("--draft=false" in command for command in commands))
+
+    def test_github_draft_is_not_duplicated_when_lookup_fails(self):
+        self.assemble()
+        shutil.copytree(self.output, self.root / "output")
+        result, commands = self.github_publication(view_error="HTTP 502: Bad Gateway")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HTTP 502", result.stderr)
+        self.assertEqual([command[:2] for command in commands], [["release", "view"]])
 
     def test_github_release_is_published_only_by_the_final_job(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
@@ -371,7 +381,7 @@ if sys.argv[1:3] == ['release', 'view']:
         with self.assertRaises(ValueError):
             PUBLISH.verify(self.output, "v" + self.version, self.commit)
 
-    def uploaded(self, fail_at=None, remote=None, etag=None):
+    def uploaded(self, fail_at=None, remote=None, etag=None, raises=None):
         # Fake OSS bucket: puts and deletes change what later listings return.
         keys = []
         remote = dict(remote or {})
@@ -404,8 +414,8 @@ if sys.argv[1:3] == ['release', 'view']:
                     self.assertIn(key, remote)
                     del remote[key]
         with mock.patch.dict(os.environ, AWS_ACCESS_KEY_ID="test", AWS_SECRET_ACCESS_KEY="test"), mock.patch.object(PUBLISH.subprocess, "run", side_effect=upload):
-            if fail_at:
-                with self.assertRaises(subprocess.CalledProcessError):
+            if fail_at or raises:
+                with self.assertRaises(raises or subprocess.CalledProcessError):
                     PUBLISH.publish(self.output, "v" + self.version, self.commit)
             else:
                 PUBLISH.publish(self.output, "v" + self.version, self.commit)
@@ -442,8 +452,10 @@ if sys.argv[1:3] == ['release', 'view']:
 
     def test_remote_content_must_match_local_md5_when_etag_is_plain(self):
         self.stable()
-        with self.assertRaisesRegex(ValueError, "ETag differs"):
-            self.uploaded(etag=lambda data: '"%s"' % hashlib.md5(data + b"x").hexdigest())
+        keys = self.uploaded(etag=lambda data: '"%s"' % hashlib.md5(data + b"x").hexdigest(), raises=ValueError)
+        # The version directory is checked before latest/ can advance.
+        self.assertTrue(keys)
+        self.assertFalse(any("/latest/" in key for key in keys))
         # Multipart-style ETags are not MD5s; key and size still verify.
         self.assertTrue(self.uploaded(etag=lambda data: '"%s-2"' % hashlib.md5(data).hexdigest()))
 
@@ -452,6 +464,7 @@ if sys.argv[1:3] == ['release', 'view']:
         keys = self.uploaded(fail_at=3)
         self.assertGreaterEqual(len(keys), 3)
         self.assertFalse(any("/latest/" in key for key in keys))
+
 
 if __name__ == "__main__":
     unittest.main()

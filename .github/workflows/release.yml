@@ -166,12 +166,16 @@ jobs:
             [[ -f "$asset" && ! -L "$asset" ]] || { echo "Missing release archive: $asset" >&2; exit 1; }
           done
           # A retry finds the draft (or the already published release) and refreshes its archives.
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          # GitHub allows several drafts per tag, so create one only when none exists.
+          if view_error="$(gh release view "$RELEASE_TAG" 2>&1 >/dev/null)"; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
             if [[ "$RELEASE_TAG" = *-* ]]; then gh release edit "$RELEASE_TAG" "${release_flags[@]}"; fi
-          else
+          elif [[ "$view_error" = *"release not found"* ]]; then
             gh release create "$RELEASE_TAG" "${assets[@]}" --draft \
               --verify-tag --title "OSS Transfer $RELEASE_TAG" --generate-notes "${release_flags[@]}"
+          else
+            printf '%s\n' "$view_error" >&2
+            exit 1
           fi
   release:
     name: Publish GitHub Release

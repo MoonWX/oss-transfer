@@ -209,6 +209,8 @@ def publish(assets, tag, commit, dry_run=False):
         started = time.monotonic()
         upload_all(tag, names)
         log(f"Published {tag} in {time.monotonic() - started:.1f}s")
+        # Prove the version directory before latest/ can point clients at it.
+        verify_remote(tag, names)
         if latest:
             # Installers use manifest.tsv to choose the immutable version URL.
             # release.json is the final commit point for clients selecting latest.
@@ -223,8 +225,6 @@ def publish(assets, tag, commit, dry_run=False):
                     check=True, stdout=subprocess.DEVNULL)
                 log(f"Removed obsolete latest/{name}")
             log("Updated latest metadata")
-        verify_remote(tag, names)
-        if latest:
             verify_remote("latest", LATEST, None if retired else page)
 
 

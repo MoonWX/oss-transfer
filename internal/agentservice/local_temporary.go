@@ -43,7 +43,9 @@ type LocalTempRegistry struct {
 	owner       string
 	mu          sync.RWMutex
 	namespaceMu sync.Mutex
-	namespaces  map[string]int // namespace key -> live references; guarded by namespaceMu
+	namespaces  map[string]int           // namespace key -> live references; guarded by namespaceMu
+	idle        map[string]idleNamespace // released namespaces awaiting removal; guarded by namespaceMu
+	stopSweep   chan struct{}
 	ready       bool
 	closed      bool
 	queue       chan recoveryMutation
@@ -79,8 +81,9 @@ func NewLocalTempRegistry(store *state.Store) (*LocalTempRegistry, error) {
 	}); err != nil {
 		return nil, err
 	}
-	r := &LocalTempRegistry{store: store, owner: owner, namespaces: make(map[string]int), queue: make(chan recoveryMutation, 256), done: make(chan struct{})}
+	r := &LocalTempRegistry{store: store, owner: owner, namespaces: make(map[string]int), idle: make(map[string]idleNamespace), stopSweep: make(chan struct{}), queue: make(chan recoveryMutation, 256), done: make(chan struct{})}
 	go r.commitLoop()
+	go r.sweepLoop()
 	return r, nil
 }
 
@@ -164,22 +167,35 @@ func (r *LocalTempRegistry) Recover(ctx context.Context) (TempRecoveryReport, er
 }
 
 func (r *LocalTempRegistry) Register(ctx context.Context, record transferstore.LocalTempRecord) error {
-	if record.Owner != r.owner {
-		return errors.New("temporary file belongs to another database owner")
-	}
-	if err := transferstore.ValidateLocalTempRecord(record); err != nil {
-		return err
-	}
-	return r.submit(ctx, func(tx *state.Tx) error {
-		var old transferstore.LocalTempRecord
-		found, err := tx.Get(localTemporaryBucket, record.ID, &old)
-		if err != nil {
+	return r.RegisterBatch(ctx, []transferstore.LocalTempRecord{record})
+}
+
+// RegisterBatch records many temporary files in one group commit. Local
+// reserves empty temporary files this way instead of one commit per object.
+func (r *LocalTempRegistry) RegisterBatch(ctx context.Context, records []transferstore.LocalTempRecord) error {
+	for _, record := range records {
+		if record.Owner != r.owner {
+			return errors.New("temporary file belongs to another database owner")
+		}
+		if err := transferstore.ValidateLocalTempRecord(record); err != nil {
 			return err
 		}
-		if found && old != record {
-			return errors.New("temporary-file ID collision")
+	}
+	return r.submit(ctx, func(tx *state.Tx) error {
+		for _, record := range records {
+			var old transferstore.LocalTempRecord
+			found, err := tx.Get(localTemporaryBucket, record.ID, &old)
+			if err != nil {
+				return err
+			}
+			if found && old != record {
+				return errors.New("temporary-file ID collision")
+			}
+			if err := tx.Put(localTemporaryBucket, record.ID, record); err != nil {
+				return err
+			}
 		}
-		return tx.Put(localTemporaryBucket, record.ID, record)
+		return nil
 	})
 }
 
@@ -266,12 +282,18 @@ func (r *LocalTempRegistry) commitLoop() {
 
 func (r *LocalTempRegistry) Close() {
 	r.mu.Lock()
+	wasClosed := r.closed
 	if !r.closed {
 		r.closed = true
 		close(r.queue)
+		close(r.stopSweep)
 	}
 	r.mu.Unlock()
 	<-r.done
+	if !wasClosed {
+		// Engine I/O has stopped; idle namespaces need no grace period.
+		r.sweepIdleNamespaces(context.Background(), time.Time{})
+	}
 }
 
 func (r *LocalTempRegistry) Factory(base execution.StoreFactory) execution.StoreFactory {

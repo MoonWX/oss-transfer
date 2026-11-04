@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -14,57 +17,125 @@ import (
 // orderedFileSync runs before a write whose durability is deferred to
 // Local.Sync is published.
 //
-// On a journaled ext4 or XFS filesystem, waiting for writeback is enough to
-// order the payload before the publishing link or rename: writeback allocates
-// the blocks and updates the on-disk size in a journal transaction no later
-// than the one that records the new name, transactions commit in order, and
-// each commit flushes the device cache after the data writes completed. So a
-// name that survives a crash always refers to the complete payload, and the
-// directory fsync in Local.Sync commits all of it at once. Every other
-// filesystem (no journal, network, FUSE, overlay) gets a full fsync here.
+// On ext4 with an internal journal in data=ordered or data=journal mode
+// (without journal_async_commit), and on XFS for files on the data device,
+// waiting for writeback is enough to order the payload before the publishing
+// link or rename: writeback allocates the blocks and updates the on-disk size
+// in a journal transaction no later than the one that records the new name,
+// transactions commit in order, and each commit flushes the device cache
+// before its commit record. So a name that survives a crash always refers to
+// the complete payload, and the directory fsync in Local.Sync commits all of
+// it at once. Every other case (no journal, async commit, XFS realtime files,
+// network, FUSE, overlay, anything not confirmed) gets a full fsync here.
 func orderedFileSync(file *os.File) error {
 	fd := int(file.Fd())
-	if !journaledFilesystem(fd) {
+	if !writebackOrdersPublication(fd) {
 		return file.Sync()
 	}
 	return unix.SyncFileRange(fd, 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
 }
 
-var ext4Journals sync.Map // device number -> bool
+// Test hooks for the kernel interfaces read by the ext4 check.
+var (
+	readSysfsLink = os.Readlink
+	readProcFile  = os.ReadFile
+	globProc      = filepath.Glob
+)
 
-func journaledFilesystem(fd int) bool {
+// ext4Modes caches the ext4 check per filesystem instance. The key includes
+// the filesystem ID (derived from the ext4 UUID), so a different filesystem
+// that reuses a device number is checked again instead of inheriting a result.
+var ext4Modes sync.Map // ext4Key -> bool
+
+type ext4Key struct {
+	dev  uint64
+	fsid unix.Fsid
+}
+
+func writebackOrdersPublication(fd int) bool {
 	var fs unix.Statfs_t
 	if unix.Fstatfs(fd, &fs) != nil {
 		return false
 	}
 	switch fs.Type {
 	case unix.XFS_SUPER_MAGIC:
-		return true // XFS always logs metadata.
+		// Realtime files keep data on the rt device, which a log force never
+		// flushes; xfs_file_fsync flushes it explicitly.
+		realtime, ok := xfsRealtime(fd)
+		return ok && !realtime
 	case unix.EXT4_SUPER_MAGIC:
 	default:
 		return false
 	}
-	// ext2 and ext4 without a journal share this magic number.
 	var st unix.Stat_t
 	if unix.Fstat(fd, &st) != nil {
 		return false
 	}
-	if known, ok := ext4Journals.Load(st.Dev); ok {
+	key := ext4Key{dev: uint64(st.Dev), fsid: fs.Fsid}
+	if known, ok := ext4Modes.Load(key); ok {
 		return known.(bool)
 	}
-	journaled := ext4HasJournal(st.Dev)
-	ext4Journals.Store(st.Dev, journaled)
-	return journaled
+	ordered := ext4OrdersWriteback(uint64(st.Dev))
+	ext4Modes.Store(key, ordered)
+	return ordered
 }
 
-// ext4HasJournal reports whether jbd2 runs an internal journal for the
-// device; the kernel names it <block device>-<journal inode>. Anything it
-// cannot confirm, such as an external journal, counts as no journal.
-func ext4HasJournal(dev uint64) bool {
-	link, err := os.Readlink(fmt.Sprintf("/sys/dev/block/%d:%d", unix.Major(dev), unix.Minor(dev)))
+// ext4OrdersWriteback confirms an internal jbd2 journal (named
+// <block device>-<journal inode>) and safe mount options. ext2 and ext4
+// without a journal share the magic number; journal_async_commit writes the
+// commit record without flushing the data that preceded it. Anything it cannot
+// confirm, such as an external journal, counts as unsafe.
+func ext4OrdersWriteback(dev uint64) bool {
+	link, err := readSysfsLink(fmt.Sprintf("/sys/dev/block/%d:%d", unix.Major(dev), unix.Minor(dev)))
 	if err != nil {
 		return false
 	}
-	matches, err := filepath.Glob(filepath.Join("/proc/fs/jbd2", filepath.Base(link)+"-*"))
-	return err == nil && len(matches) > 0
+	name := filepath.Base(link)
+	matches, err := globProc(filepath.Join("/proc/fs/jbd2", name+"-*"))
+	if err != nil || len(matches) == 0 {
+		return false
+	}
+	options, err := readProcFile(filepath.Join("/proc/fs/ext4", name, "options"))
+	if err != nil {
+		return false
+	}
+	ordered := false
+	for _, option := range strings.Fields(string(options)) {
+		switch option {
+		case "data=ordered", "data=journal":
+			ordered = true
+		case "journal_async_commit", "nobarrier", "barrier=0":
+			return false
+		}
+	}
+	return ordered
+}
+
+// fsxattr mirrors struct fsxattr from linux/fs.h.
+type fsxattr struct {
+	xflags     uint32
+	extsize    uint32
+	nextents   uint32
+	projid     uint32
+	cowextsize uint32
+	pad        [8]byte
+}
+
+const fsXflagRealtime = 0x1
+
+// xfsRealtime reads FS_XFLAG_REALTIME. ok is false where the ioctl number is
+// not the generic encoding or the call fails, so callers fall back to fsync.
+func xfsRealtime(fd int) (realtime, ok bool) {
+	switch runtime.GOARCH {
+	case "amd64", "arm64", "386", "arm", "riscv64", "loong64", "s390x":
+	default:
+		return false, false
+	}
+	var attr fsxattr
+	// _IOR('X', 31, struct fsxattr)
+	const fsIocFsgetxattr = 2<<30 | uintptr(unsafe.Sizeof(fsxattr{}))<<16 | 'X'<<8 | 31
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), fsIocFsgetxattr, uintptr(unsafe.Pointer(&attr))); errno != 0 {
+		return false, false
+	}
+	return attr.xflags&fsXflagRealtime != 0, true
 }

@@ -40,8 +40,9 @@ func TestLocalTempRecoveryAfterCrashBeforeBarrier(t *testing.T) {
 	local := trackedLocal(t, registry, root)
 	deferredWrite(t, local, "out/linked", "published by link", false)
 	deferredWrite(t, local, "out/renamed", "published by rename", true)
+	// Two written plus reserved, still empty temporary files.
 	records := tempRecords(t, db)
-	if len(records) != 2 {
+	if len(records) < 2 {
 		t.Fatalf("deferred writes must stay registered until the barrier: %+v", records)
 	}
 	// Simulate lost directory updates: both temporary names come back as
@@ -66,7 +67,7 @@ func TestLocalTempRecoveryAfterCrashBeforeBarrier(t *testing.T) {
 
 	restarted, restartedDB := openTempRegistry(t, path)
 	report, err := restarted.Recover(context.Background())
-	if err != nil || report.Removed != 2 || report.RemovedNamespaces != 1 || len(report.Retained) != 0 {
+	if err != nil || report.Removed != len(records) || report.RemovedNamespaces != 1 || len(report.Retained) != 0 {
 		t.Fatalf("recovery after crash before barrier: %+v %v", report, err)
 	}
 	if len(tempRecords(t, restartedDB)) != 0 || len(namespaceRecords(t, restartedDB)) != 0 || len(stagingDirectories(t, filepath.Join(root, "out"))) != 0 {

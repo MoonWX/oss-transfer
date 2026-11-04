@@ -36,19 +36,8 @@ func verifyTempNamespace(root *os.Root) error {
 
 func syncTempNamespace(root *os.Root) error { return syncPublished(root, ".") }
 
-// The directory descriptors pin both names independently. A replacement of the
-// visible staging-directory path cannot substitute a different payload.
+// publishTempAcrossRoots opens both directories and publishes name as target.
 func publishTempAcrossRoots(source, destination *os.Root, name, target string, overwrite bool, expectedIdentity string) error {
-	if filepath.Base(name) != name || filepath.Base(target) != target || name == "." || target == "." || name == ".." || target == ".." || name == "" || target == "" || expectedIdentity == "" {
-		return ErrTempIdentity
-	}
-	info, err := source.Lstat(name)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() || fileIdentity(info) != expectedIdentity {
-		return ErrTempIdentity
-	}
 	from, err := source.Open(".")
 	if err != nil {
 		return err
@@ -59,8 +48,25 @@ func publishTempAcrossRoots(source, destination *os.Root, name, target string, o
 		return err
 	}
 	defer to.Close()
-	if overwrite {
-		return unix.Renameat(int(from.Fd()), name, int(to.Fd()), target)
+	return publishTempAcrossDirs(source, from, to, name, target, overwrite, expectedIdentity)
+}
+
+// The directory descriptors pin both names independently. A replacement of the
+// visible staging-directory path cannot substitute a different payload.
+// sourceDir must be the directory source refers to.
+func publishTempAcrossDirs(source *os.Root, sourceDir, destinationDir *os.File, name, target string, overwrite bool, expectedIdentity string) error {
+	if filepath.Base(name) != name || filepath.Base(target) != target || name == "." || target == "." || name == ".." || target == ".." || name == "" || target == "" || expectedIdentity == "" {
+		return ErrTempIdentity
 	}
-	return unix.Linkat(int(from.Fd()), name, int(to.Fd()), target, 0)
+	info, err := source.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || fileIdentity(info) != expectedIdentity {
+		return ErrTempIdentity
+	}
+	if overwrite {
+		return unix.Renameat(int(sourceDir.Fd()), name, int(destinationDir.Fd()), target)
+	}
+	return unix.Linkat(int(sourceDir.Fd()), name, int(destinationDir.Fd()), target, 0)
 }

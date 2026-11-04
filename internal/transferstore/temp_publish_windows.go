@@ -22,14 +22,6 @@ func syncTempNamespace(_ *os.Root) error { return nil }
 // directory from redirecting publication. Its identity is checked again before
 // the kernel rename/link operation, which uses that same file handle.
 func publishTempAcrossRoots(source, destination *os.Root, name, target string, overwrite bool, expectedIdentity string) error {
-	for _, component := range []string{name, target} {
-		if component == "" || component == "." || component == ".." || strings.ContainsAny(component, `/\`) || platformKey(component) != nil {
-			return ErrInvalidKey
-		}
-	}
-	if expectedIdentity == "" {
-		return ErrTempIdentity
-	}
 	sourceDir, err := source.Open(".")
 	if err != nil {
 		return err
@@ -40,6 +32,20 @@ func publishTempAcrossRoots(source, destination *os.Root, name, target string, o
 		return err
 	}
 	defer targetDir.Close()
+	return publishTempAcrossDirs(source, sourceDir, targetDir, name, target, overwrite, expectedIdentity)
+}
+
+// publishTempAcrossDirs publishes through already opened directory handles;
+// sourceDir must be the directory source refers to.
+func publishTempAcrossDirs(_ *os.Root, sourceDir, targetDir *os.File, name, target string, overwrite bool, expectedIdentity string) error {
+	for _, component := range []string{name, target} {
+		if component == "" || component == "." || component == ".." || strings.ContainsAny(component, `/\`) || platformKey(component) != nil {
+			return ErrInvalidKey
+		}
+	}
+	if expectedIdentity == "" {
+		return ErrTempIdentity
+	}
 	unicodeName, err := windows.NewNTUnicodeString(name)
 	if err != nil {
 		return err

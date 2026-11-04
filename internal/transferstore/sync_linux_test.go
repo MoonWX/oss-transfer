@@ -3,6 +3,7 @@
 package transferstore
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,11 +32,52 @@ func TestOrderedFileSyncFallsBackOutsideJournaledFilesystems(t *testing.T) {
 		if err := unix.Fstatfs(int(file.Fd()), &fs); err != nil {
 			t.Fatal(err)
 		}
-		journaled := journaledFilesystem(int(file.Fd()))
+		journaled := writebackOrdersPublication(int(file.Fd()))
 		if journaled && fs.Type != unix.EXT4_SUPER_MAGIC && fs.Type != unix.XFS_SUPER_MAGIC {
 			t.Fatalf("%s: filesystem %#x treated as journaled", filepath.Dir(file.Name()), fs.Type)
 		}
 		t.Logf("%s: filesystem %#x, journaled=%v", dir, fs.Type, journaled)
 		file.Close()
+	}
+}
+
+func TestExt4FastPathRequiresJournalAndSafeOptions(t *testing.T) {
+	link, glob, read := readSysfsLink, globProc, readProcFile
+	t.Cleanup(func() { readSysfsLink, globProc, readProcFile = link, glob, read })
+	readSysfsLink = func(string) (string, error) { return "../../devices/virtual/block/vdz1", nil }
+	journal := true
+	globProc = func(pattern string) ([]string, error) {
+		if pattern != "/proc/fs/jbd2/vdz1-*" {
+			t.Errorf("unexpected journal lookup %q", pattern)
+		}
+		if journal {
+			return []string{"/proc/fs/jbd2/vdz1-8"}, nil
+		}
+		return nil, nil
+	}
+	options := ""
+	readProcFile = func(name string) ([]byte, error) {
+		if name != "/proc/fs/ext4/vdz1/options" {
+			return nil, errors.New("unexpected file " + name)
+		}
+		return []byte(options), nil
+	}
+	for _, tc := range []struct {
+		journal bool
+		options string
+		want    bool
+	}{
+		{true, "rw\nbarrier\ndata=ordered\n", true},
+		{true, "rw\ndata=journal\n", true},
+		{false, "rw\ndata=ordered\n", false},
+		{true, "rw\ndata=writeback\n", false},
+		{true, "rw\njournal_async_commit\ndata=journal\n", false},
+		{true, "rw\nnobarrier\ndata=ordered\n", false},
+		{true, "rw\n", false},
+	} {
+		journal, options = tc.journal, tc.options
+		if got := ext4OrdersWriteback(unix.Mkdev(253, 1)); got != tc.want {
+			t.Errorf("journal=%v options=%q: got %v want %v", tc.journal, tc.options, got, tc.want)
+		}
 	}
 }

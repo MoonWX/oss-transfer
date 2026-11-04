@@ -185,22 +185,20 @@ func validNamespaceMarker(directory *os.Root, owner, id string) bool {
 	return err == nil && string(data) == expected
 }
 
-func isLocalTempNamespace(root *os.Root, key string) bool {
-	name := filepath.Base(filepath.FromSlash(key))
+// isTempNamespaceName matches staging namespace names. Discovery skips them by
+// name: a namespace is created and removed while other nodes may be scanning
+// the same directory, so its marker may be incomplete or already gone.
+func isTempNamespaceName(name string) bool {
 	if !strings.HasPrefix(name, namespacePrefix) {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(name, namespacePrefix), "-")
-	if len(parts) != 2 || !validHex(parts[0], 32) || !validHex(parts[1], 16) {
-		return false
-	}
-	directory, err := root.OpenRoot(key)
-	if err != nil {
-		return false
-	}
-	defer directory.Close()
-	return validNamespaceMarker(directory, parts[0], parts[1])
+	return len(parts) == 2 && validHex(parts[0], 32) && validHex(parts[1], 16)
 }
+
+// vanished reports an entry deleted while a directory walk was visiting it,
+// such as a staging namespace being removed. Discovery skips it.
+func vanished(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 
 // RemoveUnregisteredNamespaceTemps visits only one database-owned namespace.
 // It removes only empty, regular, owner-matching files that have no durable file

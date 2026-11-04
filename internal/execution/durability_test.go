@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +41,16 @@ func (b *barrierTarget) Write(ctx context.Context, key string, input io.Reader, 
 	return result, err
 }
 
+func (b *barrierTarget) DeferExisting(ctx context.Context, key string) error {
+	if err := b.Local.DeferExisting(ctx, key); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.written = append(b.written, key)
+	b.mu.Unlock()
+	return nil
+}
+
 func (b *barrierTarget) Sync(ctx context.Context) error {
 	b.checkLedger()
 	b.mu.Lock()
@@ -70,7 +82,7 @@ func (b *barrierTarget) checkLedger() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, result := range record.Results {
-		if result.Status == ItemSucceeded && !b.synced[result.Target.Key] {
+		if (result.Status == ItemSucceeded || result.Status == ItemSkipped) && !b.synced[result.Target.Key] {
 			b.unsafe = append(b.unsafe, result.Target.Key)
 		}
 	}
@@ -119,5 +131,30 @@ func TestEngineSyncFailureCommitsNoUnsyncedResult(t *testing.T) {
 	}
 	if target.syncs == 0 {
 		t.Fatal("engine never requested a durability barrier")
+	}
+}
+
+// A SKIP result relies on a destination another writer may not have synced,
+// so it is committed only after a barrier that covered it.
+func TestEngineSkipResultsWaitForTheirBarrier(t *testing.T) {
+	f, target := newBarrierFixture(t, 20, false)
+	f.job.ConflictPolicy = "SKIP"
+	for _, item := range f.job.Items[:12] {
+		path := filepath.Join(f.dst, item.DestinationKey)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.acceptStart()
+	record := f.wait()
+	if record.Status != Completed || record.Counters.Skipped != 12 || record.Counters.Succeeded != 8 {
+		t.Fatalf("unexpected record: %+v", record.Counters)
+	}
+	target.checkLedger()
+	if len(target.unsafe) != 0 {
+		t.Fatalf("results committed before their durability barrier: %v", target.unsafe)
 	}
 }

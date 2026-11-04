@@ -49,6 +49,7 @@ func BenchmarkLocalSmallFileDownload(b *testing.B) {
 	payload := bytes.Repeat([]byte{0x5a}, size)
 	b.SetBytes(int64(filesPerOp * size))
 	b.ResetTimer()
+	cpu := processCPU()
 	for op := 0; op < b.N; op++ {
 		var group sync.WaitGroup
 		errs := make(chan error, jobs)
@@ -69,6 +70,7 @@ func BenchmarkLocalSmallFileDownload(b *testing.B) {
 	}
 	b.StopTimer()
 	b.ReportMetric(float64(b.N*filesPerOp)/b.Elapsed().Seconds(), "files/s")
+	b.ReportMetric(float64((processCPU()-cpu).Microseconds())/float64(b.N*filesPerOp), "cpu-us/file")
 }
 
 func benchmarkLocalJob(registry *LocalTempRegistry, root, dir string, job, count, workers int, payload []byte) error {

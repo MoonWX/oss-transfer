@@ -631,6 +631,13 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 	if job.ConflictPolicy == "SKIP" {
 		existing, err := target.Stat(ctx, item.DestinationKey)
 		if err == nil {
+			// The skip is committed after the next barrier; make it cover the
+			// existing destination, which another writer may not have synced.
+			if syncer, ok := target.(transferstore.DurabilitySyncer); ok {
+				if err := syncer.DeferExisting(ctx, item.DestinationKey); err != nil {
+					return fail("check destination", err)
+				}
+			}
 			result.Status, result.Target = ItemSkipped, existing
 			return result
 		}

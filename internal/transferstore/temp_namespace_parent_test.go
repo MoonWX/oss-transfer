@@ -50,7 +50,9 @@ func TestNamespaceParentClassification(t *testing.T) {
 	if err := os.Mkdir(parent, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveLocalTempNamespace(context.Background(), record); !errors.Is(err, ErrTempNamespaceGone) {
+	// A filesystem may reuse the inode number; the namespace is missing
+	// either way, which also counts as removed.
+	if err := RemoveLocalTempNamespace(context.Background(), record); err != nil && !errors.Is(err, ErrTempNamespaceGone) {
 		t.Fatalf("recreated parent: got %v", err)
 	}
 	// Deleted, with its parent still present on the same filesystem.

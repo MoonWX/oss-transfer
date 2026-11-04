@@ -523,6 +523,29 @@ func (r *Repository) begin(ctx context.Context, child string, generation uint64,
 	})
 }
 
+// commitStopped credits results of the attempt a stop just interrupted. They
+// are transfers the attempt finished, and made durable, before it saw the
+// stop; Stop and StopParent wait for the attempt to exit, so this happens
+// before the stop is acknowledged. Only the attempt stopped last qualifies:
+// same generation, stopped exactly once since (Attempt advanced by one), and
+// not resumed or deleted. Without this, a resumed attempt would find those
+// objects at the destination and count them as skipped.
+func (r *Repository) commitStopped(ctx context.Context, child string, generation, attempt uint64, results []ItemResult) (Record, error) {
+	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
+		if j.Job.Generation != generation || j.Status != Stopped || j.Attempt != attempt+1 {
+			return ErrAttempt
+		}
+		p, ok, err := parent(tx, j.Job.ParentID)
+		if err != nil {
+			return err
+		}
+		if !ok || p.Generation != generation || p.Deleted {
+			return ErrGeneration
+		}
+		return applyResults(j, results)
+	})
+}
+
 func (r *Repository) stop(ctx context.Context, child string, generation uint64) (Record, error) {
 	return r.mutate(ctx, child, func(_ *state.Tx, j *Record) error {
 		if j.Job.Generation != generation {

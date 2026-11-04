@@ -9,6 +9,9 @@ import (
 
 func platformKey(string) error { return nil }
 
+// Directory fsync lets Unix batch publication durability in Local.Sync.
+const deferredDurabilitySupported = true
+
 func storageIdentity(_ *os.Root, _ string, info fs.FileInfo) (string, error) {
 	return fileIdentity(info), nil
 }

@@ -506,11 +506,24 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	pending := record.Counters.Total - record.Counters.Succeeded - record.Counters.Skipped - record.Counters.Failed
 	var received int64
 	var commitErr error
+	// Targets that defer durability (WriteOptions.DeferDurability) are synced
+	// once per result batch, before any result in it is persisted.
+	durable := func() error {
+		if syncer, ok := target.(transferstore.DurabilitySyncer); ok {
+			if err := syncer.Sync(ctx); err != nil {
+				return fmt.Errorf("sync destination: %w", err)
+			}
+		}
+		return nil
+	}
 	flush := func() {
 		if len(batch) == 0 || commitErr != nil || ctx.Err() != nil {
 			return
 		}
-		_, err := e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
+		err := durable()
+		if err == nil {
+			_, err = e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
+		}
 		if err != nil {
 			commitErr = fmt.Errorf("persist object results: %w", err)
 			cancel()
@@ -526,6 +539,11 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				}
 				if err := ctx.Err(); err != nil {
 					return nil, err
+				}
+				if len(batch) > 0 {
+					if err := durable(); err != nil {
+						return nil, fmt.Errorf("persist object results: %w", err)
+					}
 				}
 				return batch, nil
 			}
@@ -621,7 +639,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 	if err != nil {
 		return fail(stage, err)
 	}
-	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges})
+	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, DeferDurability: true})
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {

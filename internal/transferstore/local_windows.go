@@ -34,6 +34,10 @@ func platformKey(key string) error {
 	return nil
 }
 
+// Windows has no directory fsync to batch: syncPublished flushes the published
+// file itself, so every write stays durable before Write returns.
+const deferredDurabilitySupported = false
+
 func handleIdentity(file *os.File) (string, error) {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &info); err != nil {

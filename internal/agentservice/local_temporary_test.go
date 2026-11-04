@@ -120,7 +120,7 @@ func (h *tempHelper) kill() {
 	}
 }
 
-func openTempRegistry(t *testing.T, path string) (*LocalTempRegistry, *state.Store) {
+func openTempRegistry(t testing.TB, path string) (*LocalTempRegistry, *state.Store) {
 	t.Helper()
 	db, err := state.Open(path)
 	if err != nil {
@@ -135,7 +135,7 @@ func openTempRegistry(t *testing.T, path string) (*LocalTempRegistry, *state.Sto
 	return registry, db
 }
 
-func tempRecords(t *testing.T, db *state.Store) []transferstore.LocalTempRecord {
+func tempRecords(t testing.TB, db *state.Store) []transferstore.LocalTempRecord {
 	t.Helper()
 	var records []transferstore.LocalTempRecord
 	if err := db.View(func(tx *state.Tx) error {

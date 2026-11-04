@@ -88,6 +88,18 @@ type WriteOptions struct {
 	// a failed read may be repeated with a new reader. Input is still required
 	// and is used by any path that streams.
 	Ranges RangeFunc
+	// DeferDurability lets a target that implements DurabilitySyncer return
+	// before the publication is durable. A published object is still complete
+	// whenever it is visible, but the caller must call Sync before it records
+	// the result anywhere durable. Other targets ignore it.
+	DeferDurability bool
+}
+
+// DurabilitySyncer makes every write that has returned before Sync was called
+// durable, including writes made with WriteOptions.DeferDurability. Close
+// performs the same work for writes that were never synced.
+type DurabilitySyncer interface {
+	Sync(ctx context.Context) error
 }
 
 type RangeFunc func(ctx context.Context, offset, length int64) (io.ReadCloser, error)

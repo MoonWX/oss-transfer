@@ -15,7 +15,7 @@ import (
 func testSpec() Spec {
 	return Spec{Direction: "OSS_TO_OSS", Source: execution.Endpoint{Kind: "S3", Ref: "source", Bucket: "bucket"}, Destination: execution.Endpoint{Kind: "S3", Ref: "target", Bucket: "bucket"}, Nodes: []Node{{ID: "a", EnrollmentID: "ea"}, {ID: "b", EnrollmentID: "eb"}}, ConflictPolicy: "SKIP", DistributionMode: "BALANCED", TargetPrefix: "prefix"}
 }
-func openTest(t *testing.T, path string) (*state.Store, *Repository) {
+func openTest(t testing.TB, path string) (*state.Store, *Repository) {
 	t.Helper()
 	db, err := state.Open(path)
 	if err != nil {

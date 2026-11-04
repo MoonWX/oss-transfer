@@ -82,6 +82,9 @@ func installTaskRoutes(s *Server) error {
 	if err := s.tasks.repo.EnsureListingIndex(); err != nil {
 		return err
 	}
+	if err := s.tasks.repo.EnsureListingSummaries(); err != nil {
+		return err
+	}
 	for _, kind := range []string{"add-buckets", "import", "local-transfers"} {
 		s.mux.HandleFunc("POST /api/master/"+kind, s.adminOnly(s.createTaskHTTP(kind)))
 	}
@@ -967,7 +970,14 @@ func (s *Server) taskListPage(w http.ResponseWriter, r *http.Request, deleted bo
 			return nil, 0, false
 		}
 	}
-	parents, err := s.tasks.repo.Recent(before, limit+1, deleted)
+	// The console sends X-Task-View: summary on its list polls. Those rows are
+	// built from compact per-task summaries; the rendered rows and totals are the
+	// same as from full parents. Other callers (the CLI) keep reading parents.
+	recent := s.tasks.repo.Recent
+	if summaryTaskView(r) {
+		recent = s.tasks.repo.RecentSummaries
+	}
+	parents, err := recent(before, limit+1, deleted)
 	if err != nil {
 		fail(w, 500, "Cannot read task history")
 		return nil, 0, false
@@ -978,6 +988,10 @@ func (s *Server) taskListPage(w http.ResponseWriter, r *http.Request, deleted bo
 		next = parents[len(parents)-1].ID
 	}
 	return parents, next, true
+}
+
+func summaryTaskView(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Task-View")), "summary")
 }
 
 // Old clients use PENDING/LIST_DONE; filtering groups them without rewriting records.

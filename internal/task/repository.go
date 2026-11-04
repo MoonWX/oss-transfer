@@ -19,11 +19,14 @@ import (
 )
 
 type Repository struct {
-	store *state.Store
-	now   func() time.Time
+	store     *state.Store
+	now       func() time.Time
+	summaries *summaryCache
 }
 
-func New(store *state.Store) *Repository   { return &Repository{store: store, now: time.Now} }
+func New(store *state.Store) *Repository {
+	return &Repository{store: store, now: time.Now, summaries: newSummaryCache()}
+}
 func key(id int64) string                  { return fmt.Sprintf("%020d", id) }
 func childKey(id int64, number int) string { return fmt.Sprintf("%020d/%010d", id, number) }
 func digest(value any) string {
@@ -218,6 +221,9 @@ func saveAt(tx *state.Tx, p Parent, now time.Time) error {
 		return err
 	}
 	if err := syncListingIndex(tx, p); err != nil {
+		return err
+	}
+	if err := syncListingSummary(tx, p); err != nil {
 		return err
 	}
 	if !p.Deleted && !Ended(p.Status) {

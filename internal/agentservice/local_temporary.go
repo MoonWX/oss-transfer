@@ -24,9 +24,10 @@ type TempRecoveryIssue struct {
 	Namespace *transferstore.LocalTempNamespace `json:"namespace,omitempty"`
 }
 type TempRecoveryReport struct {
-	Removed  int                 `json:"removed"`
-	Missing  int                 `json:"missing"`
-	Retained []TempRecoveryIssue `json:"retained,omitempty"`
+	Removed           int                 `json:"removed"`
+	Missing           int                 `json:"missing"`
+	RemovedNamespaces int                 `json:"removedNamespaces,omitempty"`
+	Retained          []TempRecoveryIssue `json:"retained,omitempty"`
 }
 type recoveryMutation struct {
 	apply func(*state.Tx) error
@@ -42,6 +43,7 @@ type LocalTempRegistry struct {
 	owner       string
 	mu          sync.RWMutex
 	namespaceMu sync.Mutex
+	namespaces  map[string]int // namespace key -> live references; guarded by namespaceMu
 	ready       bool
 	closed      bool
 	queue       chan recoveryMutation
@@ -77,7 +79,7 @@ func NewLocalTempRegistry(store *state.Store) (*LocalTempRegistry, error) {
 	}); err != nil {
 		return nil, err
 	}
-	r := &LocalTempRegistry{store: store, owner: owner, queue: make(chan recoveryMutation, 256), done: make(chan struct{})}
+	r := &LocalTempRegistry{store: store, owner: owner, namespaces: make(map[string]int), queue: make(chan recoveryMutation, 256), done: make(chan struct{})}
 	go r.commitLoop()
 	return r, nil
 }
@@ -182,7 +184,20 @@ func (r *LocalTempRegistry) Register(ctx context.Context, record transferstore.L
 }
 
 func (r *LocalTempRegistry) Forget(ctx context.Context, id string) error {
-	return r.submit(ctx, func(tx *state.Tx) error { return tx.Delete(localTemporaryBucket, id) })
+	return r.ForgetBatch(ctx, []string{id})
+}
+
+// ForgetBatch clears many records in one group commit. Local calls it once per
+// durability barrier instead of once per file.
+func (r *LocalTempRegistry) ForgetBatch(ctx context.Context, ids []string) error {
+	return r.submit(ctx, func(tx *state.Tx) error {
+		for _, id := range ids {
+			if err := tx.Delete(localTemporaryBucket, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *LocalTempRegistry) submit(ctx context.Context, apply func(*state.Tx) error) error {

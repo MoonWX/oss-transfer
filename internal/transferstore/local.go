@@ -21,6 +21,7 @@ type Local struct {
 	scope        string
 	rootPath     string
 	tempRegistry LocalTempRegistry
+	durability   localDurability
 }
 
 // NewLocal opens an existing directory. It never creates the storage root.
@@ -49,8 +50,6 @@ func NewLocal(root string) (*Local, error) {
 	}
 	return &Local{root: r, scope: absolute + identity, rootPath: absolute}, nil
 }
-
-func (s *Local) Close() error { return s.root.Close() }
 
 func localKey(key string, allowDirectory bool) (string, error) {
 	if allowDirectory {
@@ -399,7 +398,7 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	temporaryDirectory := directory
 	temporaryParentPath := filepath.Join(s.rootPath, filepath.FromSlash(parent))
 	if registry, ok := s.tempRegistry.(LocalTempNamespaceRegistry); ok {
-		namespace, namespaceErr := registry.PrepareNamespace(ctx, directory, temporaryParentPath)
+		namespace, namespaceErr := s.tempNamespace(ctx, registry, directory, temporaryParentPath)
 		if namespaceErr != nil {
 			return result, namespaceErr
 		}
@@ -435,14 +434,14 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		file.Close()
 		return result, identityErr
 	}
-	registered := false
+	registered, handedOff := false, false
 	defer func() {
 		_ = file.Close()
 		if _, removeErr := removeLocalTempEntry(context.WithoutCancel(ctx), temporaryDirectory, temporary, createdIdentity, false); removeErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove temporary file: %w", removeErr))
 			return // Keep its durable entry if cleanup did not succeed.
 		}
-		if registered {
+		if registered && !handedOff {
 			if syncErr := syncTempNamespace(temporaryDirectory); syncErr != nil {
 				err = errors.Join(err, fmt.Errorf("sync temporary cleanup: %w", syncErr))
 				return // Keep the journal until removal is durable.
@@ -480,7 +479,15 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	if err := requireEOF(reader); err != nil {
 		return result, err
 	}
-	if err := file.Sync(); err != nil {
+	// A published file must be complete whenever it is visible: SKIP treats
+	// any existing destination as done, including after a crash.
+	deferred := options.DeferDurability && deferredDurabilitySupported
+	if deferred {
+		err = syncPayloadOrdered(file)
+	} else {
+		err = file.Sync()
+	}
+	if err != nil {
 		return result, err
 	}
 	info, err := file.Stat()
@@ -520,6 +527,21 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		if _, err := removeLocalTempEntry(context.WithoutCancel(ctx), temporaryDirectory, temporary, createdIdentity, false); err != nil {
 			return result, fmt.Errorf("object committed but temporary link removal failed: %w", err)
 		}
+	}
+	if deferred {
+		id := ""
+		if registered {
+			id = hex.EncodeToString(nonce[:])
+		}
+		directories := []*os.Root{directory}
+		if temporaryDirectory != directory {
+			directories = append(directories, temporaryDirectory)
+		}
+		if s.deferDirectories(id, directories...) == nil {
+			handedOff = registered
+			return result, nil
+		}
+		// Could not track the directories; make this write durable now.
 	}
 	if err := syncPublished(directory, base); err != nil {
 		return result, fmt.Errorf("object committed but publication sync failed: %w", err)

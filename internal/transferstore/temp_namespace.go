@@ -268,3 +268,96 @@ func RemoveUnregisteredNamespaceTemps(ctx context.Context, record LocalTempNames
 		}
 	}
 }
+
+// ErrTempNamespaceInUse means a staging namespace still holds entries other
+// than its ownership marker, so it was not removed.
+var ErrTempNamespaceInUse = errors.New("temporary namespace is not empty; retained")
+
+// RemoveLocalTempNamespace deletes a database-owned staging namespace that
+// holds nothing but its marker. It also finishes a removal interrupted after
+// the marker was deleted, and succeeds when the namespace is already gone from
+// its original parent. Callers must guarantee that no temporary file in it is
+// in use or still registered.
+func RemoveLocalTempNamespace(ctx context.Context, record LocalTempNamespace) error {
+	if err := ValidateLocalTempNamespace(record); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	parent, err := os.OpenRoot(record.ParentPath)
+	if err != nil {
+		return err // A missing mount may return; retain the durable record.
+	}
+	defer parent.Close()
+	info, err := parent.Stat(".")
+	if err != nil {
+		return err
+	}
+	identity, err := storageIdentity(parent, ".", info)
+	if err != nil {
+		return err
+	}
+	if identity != record.ParentIdentity {
+		return ErrTempIdentity
+	}
+	info, err = parent.Lstat(record.Name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		return ErrTempIdentity
+	}
+	if err := clearTempNamespace(parent, record); err != nil {
+		return err
+	}
+	if err := parent.Remove(record.Name); err != nil {
+		return err
+	}
+	return syncTempNamespace(parent)
+}
+
+// clearTempNamespace removes the marker of a verified, otherwise empty
+// namespace. Its handles are closed before the caller removes the directory.
+func clearTempNamespace(parent *os.Root, record LocalTempNamespace) error {
+	directory, err := parent.OpenRoot(record.Name)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	info, err := directory.Stat(".")
+	if err != nil {
+		return err
+	}
+	identity, err := storageIdentity(directory, ".", info)
+	if err != nil {
+		return err
+	}
+	if identity != record.DirectoryIdentity {
+		return ErrTempIdentity
+	}
+	if err := verifyTempNamespace(directory); err != nil {
+		return err
+	}
+	stream, err := directory.Open(".")
+	if err != nil {
+		return err
+	}
+	names, err := stream.Readdirnames(2)
+	stream.Close()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	switch {
+	case len(names) == 0:
+		return nil // The marker was removed before an interruption.
+	case len(names) > 1 || names[0] != namespaceMarker:
+		return ErrTempNamespaceInUse
+	case !validNamespaceMarker(directory, record.Owner, record.ID):
+		return ErrTempIdentity
+	}
+	return directory.Remove(namespaceMarker)
+}

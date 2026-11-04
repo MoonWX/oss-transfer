@@ -326,63 +326,43 @@ var ErrTempNamespaceGone = errors.New("temporary namespace parent directory was 
 // is missing, or resolves to another filesystem. The record must be kept.
 var ErrTempNamespaceUnreachable = errors.New("temporary namespace parent directory is not reachable")
 
-// openAbsoluteDir opens an absolute directory path with the same symlink
-// semantics as os.OpenRoot, which the write path uses for the Local root. A
-// path longer than the platform limit is opened in pieces: the first piece by
-// path, the rest one component at a time; a symlink met on the way is resolved
-// against the physical directory it is in and resolution restarts from its
-// target, as the kernel would.
+// errLongPathSymlink reports a symlink in the part of a long path that is
+// walked component by component. The walk does not follow it: resolving link
+// targets correctly needs physical ".." handling, so the namespace is treated
+// as unreachable (its record is kept) instead of risking the wrong directory.
+var errLongPathSymlink = errors.New("long path passes through a symbolic link")
+
+// openAbsoluteDir opens an absolute directory path. A path within the
+// platform limit is opened by the kernel, with its usual symlink semantics. A
+// longer path is opened in pieces: the first piece by the kernel, the rest
+// one component at a time, refusing any symlink there (errLongPathSymlink).
 func openAbsoluteDir(name string) (*os.Root, error) {
-	return openLongDir(name, 0)
-}
-
-const longPathPiece = 900
-
-func openLongDir(name string, links int) (*os.Root, error) {
-	if len(name) <= longPathPiece {
+	const piece = 900
+	if len(name) <= piece {
 		return os.OpenRoot(name)
 	}
-	cut := strings.LastIndex(name[:longPathPiece], string(filepath.Separator))
+	cut := strings.LastIndex(name[:piece], string(filepath.Separator))
 	if cut <= 0 {
 		return os.OpenRoot(name)
 	}
-	// The physical path of the first piece, so relative link targets with
-	// ".." are resolved as the kernel resolves them.
-	current, err := filepath.EvalSymlinks(name[:cut])
+	dir, err := os.OpenRoot(name[:cut])
 	if err != nil {
 		return nil, err
 	}
-	dir, err := os.OpenRoot(current)
-	if err != nil {
-		return nil, err
-	}
-	rest := strings.FieldsFunc(name[cut:], func(r rune) bool { return r == filepath.Separator })
-	for i, component := range rest {
+	for _, component := range strings.FieldsFunc(name[cut:], func(r rune) bool { return r == filepath.Separator }) {
 		info, err := dir.Lstat(component)
-		if err != nil {
-			dir.Close()
-			return nil, err
+		if err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			err = errLongPathSymlink
 		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			target, err := dir.Readlink(component)
-			dir.Close()
-			if err != nil {
-				return nil, err
-			}
-			if links >= 40 {
-				return nil, fmt.Errorf("%s: too many levels of symbolic links", name)
-			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(current, target)
-			}
-			return openLongDir(filepath.Join(append([]string{target}, rest[i+1:]...)...), links+1)
+		var next *os.Root
+		if err == nil {
+			next, err = dir.OpenRoot(component)
 		}
-		next, err := dir.OpenRoot(component)
 		dir.Close()
 		if err != nil {
 			return nil, err
 		}
-		dir, current = next, filepath.Join(current, component)
+		dir = next
 	}
 	return dir, nil
 }
@@ -402,7 +382,12 @@ func classifyMissingParent(record LocalTempNamespace, current string) error {
 	device := identityDevice(record.ParentIdentity)
 	if current == "" {
 		for dir := filepath.Dir(record.ParentPath); ; dir = filepath.Dir(dir) {
-			if root, err := openAbsoluteDir(dir); err == nil {
+			root, err := openAbsoluteDir(dir)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				// Only a clean "missing" under an existing ancestor is evidence.
+				return fmt.Errorf("%w: %w", ErrTempNamespaceUnreachable, err)
+			}
+			if err == nil {
 				info, statErr := root.Stat(".")
 				if statErr == nil {
 					current, statErr = storageIdentity(root, ".", info)
@@ -437,6 +422,9 @@ func RemoveLocalTempNamespace(ctx context.Context, record LocalTempNamespace) er
 		return err
 	}
 	parent, err := openAbsoluteDir(record.ParentPath)
+	if errors.Is(err, errLongPathSymlink) {
+		return fmt.Errorf("%w: %w", ErrTempNamespaceUnreachable, err)
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return classifyMissingParent(record, "")
 	}

@@ -75,7 +75,19 @@ func TestFlushRejectedByStopFenceKeepsResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			close(release)
-			stopped := f.wait()
+			// The rest of the stop: cancel the attempt and wait for it.
+			if stopParent {
+				err = f.engine.StopParent(bg, f.job.ParentID, 1)
+			} else {
+				err = f.engine.Stop(bg, f.job.ChildID, 1)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			stopped, err := f.repo.Get(bg, f.job.ChildID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if stopped.Status != Stopped || stopped.Counters.Succeeded != 3 {
 				t.Fatalf("fenced flush dropped published results: %s %+v", stopped.Status, stopped.Counters)
 			}

@@ -42,6 +42,9 @@ type Engine struct {
 	closed      bool
 	cleanupWake chan struct{}
 	cleanupDone chan struct{}
+	// creditWaiting is a test hook called when an interrupted attempt starts
+	// waiting for its stop before crediting results.
+	creditWaiting func()
 	// Mirrors of admission state for IdleObjectSlots, which storage consults
 	// per borrowed part and must never wait behind e.mu.
 	objectSlots, activeObjects atomic.Int64
@@ -256,7 +259,11 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 		// This uses an independent context so graceful process shutdown records a
 		// recoverable attempt. An explicit stop fence will reject the old attempt.
 		_, finishErr := e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr, finalResults...)
-		if finishErr != nil && runErr == nil && len(finalResults) > 0 {
+		if stopFence(finishErr) && runErr == nil && len(finalResults) > 0 {
+			// A stop fenced the attempt after its last result: the results
+			// are durable (run's barrier) and belong to the stopped attempt.
+			e.creditInterrupted(ctx, record, finalResults)
+		} else if finishErr != nil && runErr == nil && len(finalResults) > 0 {
 			// Keep the same recovery behavior as a failed periodic result commit.
 			// Stop/generation fences also reject this retry, so an old attempt
 			// can never regain ownership by recording its persistence error.
@@ -554,10 +561,10 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 		if err == nil {
 			_, err = e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
 		}
-		if err != nil && err == ctx.Err() {
+		if err != nil && ctx.Err() != nil {
 			return // Cancelled meanwhile: the batch is persisted on the way out.
 		}
-		if errors.Is(err, ErrAttempt) || errors.Is(err, ErrStopped) {
+		if stopFence(err) {
 			// A stop fenced this attempt and is about to cancel it.
 			fenced = true
 			return
@@ -576,18 +583,24 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 					return nil, commitErr
 				}
 				if err := ctx.Err(); err != nil {
-					e.persistInterrupted(record, target, batch)
+					e.persistInterrupted(ctx, record, target, batch)
 					return nil, err
 				}
 				if fenced {
-					e.persistInterrupted(record, target, batch)
+					e.persistInterrupted(ctx, record, target, batch)
 					return nil, fmt.Errorf("persist object results: %w", ErrStopped)
 				}
 				if len(batch) > 0 {
 					if err := durable(); err != nil {
+						if ctx.Err() != nil {
+							e.persistInterrupted(ctx, record, target, batch)
+							return nil, ctx.Err()
+						}
 						return nil, fmt.Errorf("persist object results: %w", err)
 					}
 				}
+				// finish commits this batch; a stop fencing the attempt
+				// before that is handled by runAttempt (creditInterrupted).
 				return batch, nil
 			}
 			if commitErr == nil {
@@ -605,27 +618,57 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	}
 }
 
-// interruptedCommitTimeout bounds the final commit of a cancelled attempt.
+// interruptedCommitTimeout bounds waiting for a stop in progress and the
+// final commit of an interrupted attempt.
 const interruptedCommitTimeout = 30 * time.Second
 
-// persistInterrupted commits the results a cancelled attempt already has, so
-// objects it published are not later counted as skipped. The barrier comes
-// first, as for every commit. A stop fences the attempt before cancelling it,
-// so its results go through commitStopped; other cancellations (shutdown, a
-// lost lease) leave the attempt current. Failures leave the items pending.
-func (e *Engine) persistInterrupted(record Record, target transferstore.Store, batch []ItemResult) {
+// stopFence reports a commit rejected because a stop or generation fence
+// already superseded this attempt.
+func stopFence(err error) bool { return errors.Is(err, ErrAttempt) || errors.Is(err, ErrStopped) }
+
+// persistInterrupted makes the results an interrupted attempt already has
+// durable (the barrier comes first, as for every commit) and credits them.
+func (e *Engine) persistInterrupted(stopCtx context.Context, record Record, target transferstore.Store, batch []ItemResult) {
 	if len(batch) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), interruptedCommitTimeout)
-	defer cancel()
 	if syncer, ok := target.(transferstore.DurabilitySyncer); ok {
-		if syncer.Sync(ctx) != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), interruptedCommitTimeout)
+		err := syncer.Sync(ctx)
+		cancel()
+		if err != nil {
 			return
 		}
 	}
+	e.creditInterrupted(stopCtx, record, batch)
+}
+
+// creditInterrupted commits durable results of an attempt that was cancelled
+// or fenced, so objects it published are not later counted as skipped.
+//
+// A fence rejection means a stop is in progress. Every stop updates the
+// child's ledger (Stopped, Attempt+1) before it cancels the attempt, but a
+// parent fence and the per-child updates are separate transactions, so the
+// rejection can come before the child is marked. Waiting for stopCtx, the
+// attempt's context, to be cancelled therefore waits for the ledger update;
+// then commitStopped credits the stopped attempt. Cancellations without a
+// fence (shutdown, a lost lease) leave the attempt current and commit
+// normally. If the wait times out or both commits are refused, the items
+// stay pending: the next attempt rechecks them.
+func (e *Engine) creditInterrupted(stopCtx context.Context, record Record, batch []ItemResult) {
+	if hook := e.creditWaiting; hook != nil {
+		hook()
+	}
+	timer := time.NewTimer(interruptedCommitTimeout)
+	select {
+	case <-stopCtx.Done():
+	case <-timer.C:
+	}
+	timer.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), interruptedCommitTimeout)
+	defer cancel()
 	_, err := e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
-	if errors.Is(err, ErrAttempt) || errors.Is(err, ErrStopped) {
+	if stopFence(err) {
 		_, _ = e.repo.commitStopped(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
 	}
 }

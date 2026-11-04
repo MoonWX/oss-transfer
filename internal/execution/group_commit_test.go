@@ -315,3 +315,63 @@ func BenchmarkProgressCommits(b *testing.B) {
 		})
 	}
 }
+
+// A panic in the leader's batch fails that batch's callers, re-panics in the
+// leader, and leaves the group usable for later commits.
+func TestGroupCommitLeaderPanicDoesNotStrandQueue(t *testing.T) {
+	f := newFixture(t, 2)
+	gated := &gatedDB{db: f.db}
+	f.repo, _ = NewRepository(gated, RepositoryOptions{})
+	records := runningChildren(t, f, 4)
+	release, entered := gated.hold()
+	f.repo.commits.queued = func(depth int) {
+		if depth == 2 {
+			close(release)
+		}
+	}
+	batches := 0
+	f.repo.commits.batching = func(batch []*commitRequest) {
+		batches++
+		if batches == 2 {
+			panic("injected")
+		}
+	}
+	type outcome struct {
+		err      error
+		panicked any
+	}
+	results := make([]outcome, 3)
+	var wg sync.WaitGroup
+	commit := func(i int) {
+		defer wg.Done()
+		defer func() { results[i].panicked = recover() }()
+		r := records[i]
+		_, results[i].err = f.repo.commit(bg, r.Job.ChildID, 1, r.Attempt, succeeded("1"))
+	}
+	wg.Add(1)
+	go commit(0)
+	<-entered
+	wg.Add(2)
+	go commit(1)
+	go commit(2)
+	wg.Wait()
+	if results[0].err != nil || results[0].panicked != nil {
+		t.Fatalf("first leader: %+v", results[0])
+	}
+	leaders, failed := 0, 0
+	for _, o := range results[1:] {
+		if o.panicked != nil {
+			leaders++
+		} else if o.err != nil {
+			failed++
+		}
+	}
+	if leaders != 1 || failed != 1 {
+		t.Fatalf("panicking batch outcomes %+v; want one re-panicking leader and one failed follower", results[1:])
+	}
+	f.repo.commits.batching = nil
+	r := records[3]
+	if _, err := f.repo.commit(bg, r.Job.ChildID, 1, r.Attempt, succeeded("1")); err != nil {
+		t.Fatal("group stranded after panic:", err)
+	}
+}

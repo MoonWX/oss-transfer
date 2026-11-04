@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -41,6 +42,8 @@ type commitGroup struct {
 	running bool
 	// queued is a test hook called after a request joins the queue.
 	queued func(depth int)
+	// batching is a test hook called by the leader before it commits a batch.
+	batching func(batch []*commitRequest)
 }
 
 func (r *Repository) commit(ctx context.Context, child string, generation, attempt uint64, results []ItemResult) (Record, error) {
@@ -66,8 +69,11 @@ func (r *Repository) commit(ctx context.Context, child string, generation, attem
 	g.mu.Lock()
 	batch := append([]*commitRequest(nil), g.queue[:min(len(g.queue), maxGroupCommit)]...)
 	g.queue = append(g.queue[:0:0], g.queue[len(batch):]...)
+	hookBatch := g.batching
 	g.mu.Unlock()
-	r.commitBatch(batch)
+	// A panic must not strand the queue: hand over and wake everyone first,
+	// then re-raise it in the leader's own attempt as before grouping.
+	failure := r.commitBatchSafely(batch, hookBatch)
 	g.mu.Lock()
 	if len(g.queue) > 0 {
 		next := g.queue[0]
@@ -82,7 +88,28 @@ func (r *Repository) commit(ctx context.Context, child string, generation, attem
 			other.wake <- struct{}{}
 		}
 	}
+	if failure != nil {
+		panic(failure)
+	}
 	return req.record, req.err
+}
+
+// commitBatchSafely commits a batch and turns a panic into an error for every
+// request in it. Whether anything committed is unknown, so callers fail their
+// attempt; applying results again later is idempotent.
+func (r *Repository) commitBatchSafely(batch []*commitRequest, hook func([]*commitRequest)) (failure any) {
+	defer func() {
+		if failure = recover(); failure != nil {
+			for _, req := range batch {
+				req.record, req.err = Record{}, fmt.Errorf("progress commit aborted: %v", failure)
+			}
+		}
+	}()
+	if hook != nil {
+		hook(batch)
+	}
+	r.commitBatch(batch)
+	return nil
 }
 
 func applyCommit(tx *state.Tx, j *Record, generation, attempt uint64, results []ItemResult) error {

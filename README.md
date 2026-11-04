@@ -6,6 +6,8 @@ OSS Transfer is a distributed data migration tool. It copies data between S3-com
 
 One Master serves the web console and API and schedules tasks. Agents run on hosts close to the data and do the scanning and transfers. Everything can be done in a browser or from the command line.
 
+![Transfer tasks page: one task running on two Agents, two completed](docs/images/overview.en.png)
+
 ## Features
 
 - **Three directions:** object storage to object storage, local to object storage, and object storage to local. Transfer by prefix, single object or file list, and keep, add or replace key prefixes.
@@ -57,20 +59,47 @@ Open `http://<master-ip>:1685` and sign in as `admin` with the random password p
 
 ### 3. Add Agents
 
-1. Open **Execution nodes → Add node**.
-2. Enter a node name and a Master address the Agent can reach.
-3. Generate the invitation, then copy the command for the Agent's operating system and run it on that host.
+Open the **Execution nodes** page and choose **Add node** in the top right.
 
-The Agent downloads its installer and package from the Master. If the Agent and Master share a private network, use the Master's private address; the browser can keep using a public address or a reverse proxy.
+![Execution nodes page with the Add node button outlined in red](docs/images/add-node.en.png)
+
+Enter a node name and a Master address the Agent can reach, then choose **Generate join commands**. The dialog offers commands for Linux / macOS / FreeBSD, Windows and Docker:
+
+1. The join command for the selected system. Switch tabs first if the Agent host runs Windows or you want to use Docker.
+2. Choose **Copy command** and run it on the Agent host.
+
+<p align="center"><img src="docs/images/join-command.en.png" width="720" alt="Add node dialog with the join command and the Copy command button outlined in red"></p>
+
+Native installs download the installer and package from the Master by default; choose **Download from public sources** to fetch them from the internet instead. The Docker command pulls the Agent image. The join credential works once and expires. If the Agent and Master share a private network, use the Master's private address; the browser can keep using a public address or a reverse proxy.
 
 ### 4. Create a transfer
 
-1. Add the source and destination object stores on the **Storage connections** page.
-2. On the **Transfer tasks** page, choose **Create transfer**, then select the direction, source, destination and Agents.
-3. For local files, enter paths on the Agent hosts and pass the directory preflight check. The Agent service account needs read access to the source for uploads and write access to the destination for downloads.
-4. Create the task. It scans first, then starts transferring.
+First add the source and destination object stores: on the **Storage connections** page, choose **Add connection**. By default the connection is checked when you save it.
 
-From the **Transfer tasks** page you can follow progress, adjust limits, stop or resume the task, retry failed files and download the report when it finishes.
+![Storage connections page with the Add connection button outlined in red](docs/images/storage.en.png)
+
+Then choose **Create transfer** in the top left and fill in the numbered areas:
+
+1. **Direction:** object storage to object storage, object storage to local, or local to object storage.
+2. **Source and destination:** select the storage connections and buckets. You can limit the transfer to a prefix or a single object and change the destination key names. For local files, enter paths on the Agent hosts and pass the directory preflight check.
+3. **Transfer options:** select the Agents, what to do when the destination already exists, and the distribution mode (balanced by default; for uploads it follows the number of bound Agents). Date filters and task limits are below.
+4. Choose **Create a transfer task**. The task scans first, then starts transferring.
+
+![Create transfer page with the direction, source and destination, transfer options and create button outlined in order](docs/images/create.en.png)
+
+For uploads, the Agent service account needs read access to the source directory; for downloads, it needs write access to the destination directory.
+
+### 5. Follow progress
+
+On the **Transfer tasks** page, choose a task to open its details:
+
+1. Stop or resume the task. **Adjust** (shown as **Set limit** when no bandwidth limit is set) changes the bandwidth and request limits while it runs.
+2. **Transfer statistics:** scanned, transferred, skipped and failed objects with their sizes, updated live from bytes actually transferred.
+3. **Request rate:** actual LIST, GET, HEAD and PUT requests per second, with the task limits and the limits in effect.
+
+<p align="center"><img src="docs/images/task-detail.en.png" width="440" alt="Task details with stop and limit controls, transfer statistics and request rates outlined in red"></p>
+
+On the **Exceptions** page, retry a task's failed objects or resume a stopped task; objects already transferred are not copied again. Once a task stops or finishes, you can export its report.
 
 ## Command line
 

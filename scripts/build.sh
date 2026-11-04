@@ -92,9 +92,13 @@ import re
 import sys
 for name in ('README.md', 'README.zh-CN.md'):
     path = Path(sys.argv[1]) / name
+    raw = 'https://raw.githubusercontent.com/MoonWX/oss-transfer/' + sys.argv[2] + '/'
+    # Screenshots are not packaged; point images at the matching commit.
+    text = re.sub(r'(\]\(|src=")(docs/images/[^)"]+)', lambda match: match[1] + raw + match[2],
+                  path.read_text(encoding='utf-8'))
     text = re.sub(r'\]\(((?:docs|deploy|\.github)/[^)]+|docker-compose\.yml|\.env\.example)\)',
                   lambda match: '](https://github.com/MoonWX/oss-transfer/blob/' + sys.argv[2] + '/' + match[1] + ')',
-                  path.read_text(encoding='utf-8'))
+                  text)
     path.write_text(text, encoding='utf-8')
 PY
   (cd "$package" && shasum -a 256 oss-transfer-* VERSION > SHA256SUMS)

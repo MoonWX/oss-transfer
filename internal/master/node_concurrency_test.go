@@ -1,6 +1,9 @@
 package master
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Uses the real Master API and reverse Agent channel, then reopens the Agent DB.
 func TestNodeConcurrencyAppliedImmediatelyAndPersists(t *testing.T) {
@@ -56,11 +59,24 @@ func TestNodeConcurrencyAppliedImmediatelyAndPersists(t *testing.T) {
 	a.close(t)
 	a.open(t)
 	assertLimits(3, 6)
-	status, body = request(t, f.http.Client(), "GET", f.http.URL+"/api/master/worker-status", f.admin, nil)
-	if status != 200 {
-		t.Fatal(status, body)
+	// The reopened Agent reports again only after it reconnects; wait for its
+	// entry instead of assuming the reconnect has already happened.
+	var load map[string]any
+	for deadline := time.Now().Add(30 * time.Second); load == nil; {
+		status, body = request(t, f.http.Client(), "GET", f.http.URL+"/api/master/worker-status", f.admin, nil)
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		workers, _ := body["workers"].(map[string]any)
+		worker, _ := workers[a.address].(map[string]any)
+		load, _ = worker["executionStatus"].(map[string]any)
+		if load == nil {
+			if time.Now().After(deadline) {
+				t.Fatal("reopened Agent never reported its status", body)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
-	load := body["workers"].(map[string]any)[a.address].(map[string]any)["executionStatus"].(map[string]any)
 	if load["maxConcurrentChildren"] != float64(3) || load["objectsPerChild"] != float64(6) {
 		t.Fatal("status did not report applied settings", load)
 	}

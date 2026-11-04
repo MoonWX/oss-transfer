@@ -126,11 +126,23 @@ func TestNodeHTTPSettingsReachEachAgentAndSurviveRestart(t *testing.T) {
 	}
 	a.close(t)
 	a.open(t)
-	status, body = call("GET", "/api/master/worker-status", nil)
-	if status != 200 || body["complete"] != true {
-		t.Fatal(status, body)
+	// The reopened Agent reports again only after it reconnects; wait for a
+	// complete status that includes it rather than assuming it already has.
+	var workers map[string]any
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		status, body = call("GET", "/api/master/worker-status", nil)
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		workers, _ = body["workers"].(map[string]any)
+		reopened, _ := workers[a.address].(map[string]any)
+		if body["complete"] == true && reopened["rateLimit"] != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reopened Agent never reported a complete status", body)
+		}
 	}
-	workers := body["workers"].(map[string]any)
 	if len(workers) != 2 {
 		t.Fatal("lost a registered Agent", workers)
 	}

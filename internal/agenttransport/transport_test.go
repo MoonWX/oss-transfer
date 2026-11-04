@@ -380,12 +380,9 @@ func TestJournalBoundedAndNoMutationWithoutJournal(t *testing.T) {
 func TestHTTPReEnrollmentInvalidatesLongPoll(t *testing.T) {
 	b := broker(t, BrokerOptions{})
 	replacement := Session{NodeID: testSession.NodeID, EnrollmentID: "enrollment-new"}
-	entered := make(chan struct{})
-	var once sync.Once
 	server := httptest.NewServer(HTTPHandler{Broker: b, Authenticate: func(r *http.Request) (Session, error) {
 		switch r.Header.Get("X-Agent-Key") {
 		case "old":
-			once.Do(func() { close(entered) })
 			return testSession, nil
 		case "new":
 			return replacement, nil
@@ -395,25 +392,35 @@ func TestHTTPReEnrollmentInvalidatesLongPoll(t *testing.T) {
 	defer server.Close()
 	oldClient, _ := NewHTTPTransport(server.URL, "old", nil, 0)
 	newClient, _ := NewHTTPTransport(server.URL, "new", nil, 0)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// A fresh transport's first poll is answered at once; only the next one is
+	// a long poll, which is what replacement must wake.
+	if _, err := oldClient.Poll(ctx); !errors.Is(err, ErrNoCommand) {
+		t.Fatal("first poll of a fresh transport was not answered at once", err)
+	}
 	oldPoll := make(chan error, 1)
 	go func() { _, err := oldClient.Poll(ctx); oldPoll <- err }()
-	select {
-	case <-entered:
-	case <-ctx.Done():
-		t.Fatal("long poll never arrived")
+	for b.Stats().Waiting == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("long poll never started waiting")
+		case <-time.After(time.Millisecond):
+		}
 	}
 	if err := b.Activate(replacement); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case err := <-oldPoll:
-		if err == nil {
-			t.Fatal("old long poll survived enrollment replacement")
+		if err == nil || errors.Is(err, ErrNoCommand) {
+			t.Fatal("old long poll survived enrollment replacement", err)
 		}
 	case <-ctx.Done():
 		t.Fatal("revocation did not wake long poll")
+	}
+	if _, err := newClient.Poll(ctx); !errors.Is(err, ErrNoCommand) {
+		t.Fatal("first poll of the replacement transport was not answered at once", err)
 	}
 	call := callAsync(b, ctx, replacement, Request{Operation: "read"})
 	c, err := newClient.Poll(ctx)

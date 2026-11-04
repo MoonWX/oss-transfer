@@ -234,6 +234,18 @@ func agentClient(t *testing.T, f *agentHTTPFixture, credential string) *agenttra
 	return client
 }
 
+// A fresh Agent transport's first poll is answered at once, possibly before
+// the command queued by the caller arrives; later polls wait as usual.
+func pollAgentCommand(t *testing.T, client *agenttransport.HTTPTransport) (agenttransport.Command, error) {
+	t.Helper()
+	for {
+		command, err := client.Poll(context.Background())
+		if !errors.Is(err, agenttransport.ErrNoCommand) {
+			return command, err
+		}
+	}
+}
+
 func TestAgentHTTPEnrollmentCommandsRestartAndRevocation(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	invite, credential := f.invite(t, "node-a.example"), agentCredential(t)
@@ -266,7 +278,7 @@ func TestAgentHTTPEnrollmentCommandsRestartAndRevocation(t *testing.T) {
 	}
 	client := agentClient(t, f, credential)
 	first := beginAgentCall(t, f, session, "health-1")
-	command, err := client.Poll(context.Background())
+	command, err := pollAgentCommand(t, client)
 	if err != nil || command.Session != session || command.Operation != "status" {
 		t.Fatal("authenticated command poll failed", err)
 	}
@@ -290,7 +302,7 @@ func TestAgentHTTPEnrollmentCommandsRestartAndRevocation(t *testing.T) {
 	}
 	client = agentClient(t, f, credential)
 	pending := beginAgentCall(t, f, session, "health-2")
-	command, err = client.Poll(context.Background())
+	command, err = pollAgentCommand(t, client)
 	if err != nil {
 		t.Fatal("persisted credential cannot poll after restart", err)
 	}

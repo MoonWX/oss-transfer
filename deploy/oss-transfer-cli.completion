@@ -11,10 +11,10 @@ _oss_transfer_cli_completion() {
         delete-fallback-objs clear-fallback diff-objects import-inventory count-lines help"
     local create_flags="--node --binding --prefix --object-key --mapping --target-prefix --target-key \
         --target-relative-path --conflict --distribution --date-after --date-before --bandwidth-mbps --list-qps --head-qps --put-qps \
-        --overwrite --balanced --validate-only --request-id"
+        --overwrite --validate-only --request-id"
     local storage_flags="--endpoint --region --session-token-env --session-token-file --clear-session-token --access-key-env --access-key-file --secret-key-env --secret-key-file \
         --validate --v2-signer --path-style"
-    local exception_flags="--task-id --source-bucket --dest-bucket --worker --limit --offset --direction --endpoint --storage-id"
+    local exception_flags="--task-id --source-bucket --dest-bucket --node --limit --offset --direction --endpoint --storage-id"
     local flags="" choices="" command="" action="" i skip=0 word
     local -a positional=()
 
@@ -52,7 +52,7 @@ _oss_transfer_cli_completion() {
         --unit) choices="bps Kbps Mbps Gbps" ;;
         --validate) choices="true false" ;;
         --v2-signer|--path-style) choices="true false inherit" ;;
-        --status) choices="PENDING RUNNING LIST_DONE RECOVERABLE RESUMING STOPPING STOPPED COMPLETED PARTIAL_FAILED FAILED" ;;
+        --status) choices="PENDING WAITING RUNNING LIST_DONE RECOVERABLE RESUMING STOPPING STOPPED COMPLETED PARTIAL_FAILED FAILED" ;;
         --direction)
             if [[ $command == exceptions ]]; then choices="OSS_TO_LOCAL LOCAL_TO_OSS";
             else choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
@@ -78,12 +78,12 @@ _oss_transfer_cli_completion() {
         task)
             case "$action" in
                 "") choices="list show children progress cleanup-status recover-child create import stop resume start retry delete trash restore purge bandwidth limits report" ;;
-                list) flags="--status --source --dest --worker --direction --search --all --before-id --limit" ;;
+                list) flags="--status --source --dest --node --direction --search --all --before-id --limit" ;;
                 show) flags="--child --node --offset --limit" ;;
                 progress) flags="--child --generation" ;;
                 retry) flags="--all --yes" ;;
                 children) flags="--offset --limit --active --order --cursor" ;;
-                trash) flags="--task-id --worker --direction --search --before-id --limit" ;;
+                trash) flags="--task-id --node --direction --search --before-id --limit" ;;
                 create)
                     flags="$create_flags"
                     if ((${#positional[@]} == 2)); then choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
@@ -98,11 +98,11 @@ _oss_transfer_cli_completion() {
             esac ;;
         node)
             case "$action" in
-                "") choices="list show details network add invite update remove" ;;
+                "") choices="list show details network update remove" ;;
                 add) flags="--label" ;;
                 network) flags="--public-url --agent-url" ;;
                 invite) flags="--label --address --master-url" ;;
-                update) flags="--label --address --child-concurrency --object-concurrency" ;;
+                update) flags="--label --local-root --clear-local-roots --child-concurrency --object-concurrency" ;;
                 remove) flags="--yes" ;;
             esac ;;
         agent)
@@ -122,48 +122,51 @@ _oss_transfer_cli_completion() {
             case "$action" in
                 "") choices="list set history adjustment" ;;
                 set)
-                    flags="--worker --all --unit"
+                    flags="--node --all --unit"
                     if ((${#positional[@]} == 2)); then choices="list put head bandwidth";
                     elif ((${#positional[@]} == 3)); then choices="unlimited"; fi ;;
                 history) flags="--limit" ;;
-                adjustment) flags="--worker --event-id --cursor" ;;
+                adjustment) flags="--node --event-id --cursor" ;;
             esac ;;
         exceptions)
             case "$action" in
-                "") choices="list export clear" ;;
+                "") choices="list export clear tasks" ;;
+                tasks)
+                    flags="--search --limit"
+                    if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
                 list|export)
                     flags="$exception_flags"
                     [[ $action == export ]] && flags="$flags --output"
                     if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
                 clear)
-                    flags="--all --yes --task-id --worker --direction --source-bucket --dest-bucket --endpoint"
+                    flags="--all --yes --task-id --node --direction --source-bucket --dest-bucket --endpoint"
                     if ((${#positional[@]} == 2)); then choices="failed fallback local"; fi ;;
             esac ;;
         update)
             if [[ -z $action ]]; then choices="status check master agent agents";
-            elif [[ $action == master || $action == agent || $action == agents ]]; then flags="--version --worker --all --yes"; fi ;;
+            elif [[ $action == master || $action == agent || $action == agents ]]; then flags="--version --node --all --yes"; fi ;;
         backup)
             if [[ -z $action ]]; then choices="list prune";
-            elif [[ $action == prune ]]; then choices="master agent"; flags="--worker --yes"; fi ;;
+            elif [[ $action == prune ]]; then choices="master agent"; flags="--node --yes"; fi ;;
         object)
             if [[ -z $action ]]; then choices="compare status cancel delete";
-            elif [[ $action == status ]]; then flags="--after --limit";
-            elif [[ $action == compare ]]; then flags="--source-bucket --source-key --dest-bucket --dest-key --source-prefix --dest-prefix --scope --mode"; fi ;;
+            elif [[ $action == status ]]; then flags="--after --limit --wait";
+            elif [[ $action == compare ]]; then flags="--source-bucket --source-key --dest-bucket --dest-key --source-prefix --dest-prefix --scope --mode --metadata-lookup"; fi ;;
         login) flags="--username --password-stdin --password-env --password-file" ;;
         change-password) flags="--old-password-env --old-password-file --new-password-env --new-password-file" ;;
         add-task) flags="$create_flags --dateAfter --dateBefore" ;;
         import-tasks) flags="--balanced --request-id"; if [[ $cur != -* ]]; then _filedir; return; fi ;;
-        list-task|status) flags="--status --source --dest --worker --direction --search --all --before-id --limit" ;;
+        list-task|status) flags="--status --source --dest --node --direction --search --all --before-id --limit" ;;
         show-task) flags="--child --node --offset --limit" ;;
-        list-deleted) flags="--task-id --worker --direction --search" ;;
+        list-deleted) flags="--task-id --node --direction --search" ;;
         permanent-delete|remove-s3-config|delete-failed-objs|clear-failed|delete-fallback-objs|clear-fallback) flags="--yes" ;;
         export-report) flags="--output" ;;
         list-rate-limit-history|rate-limit-history) flags="--limit" ;;
         set-rate-limit) if ((${#positional[@]} == 1)); then choices="list put head bandwidth"; fi ;;
-        list-failed-objs|failed|list-fallback-objs|fallback) flags="--task-id --taskIndex --source-bucket --dest-bucket --worker --limit" ;;
+        list-failed-objs|failed|list-fallback-objs|fallback) flags="--task-id --taskIndex --source-bucket --dest-bucket --node --limit" ;;
         diff-objects) flags="--mode --false-positive"; if [[ $cur != -* ]]; then _filedir; return; fi ;;
         count-lines) _filedir -d; return ;;
-    import-inventory) flags="--overwrite --node --request-id" ;;
+        import-inventory) flags="--overwrite --node --request-id" ;;
     esac
     if [[ $cur == -* ]]; then choices="$globals $flags"; fi
     COMPREPLY=($(compgen -W "$choices" -- "$cur"))

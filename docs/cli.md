@@ -58,15 +58,38 @@ oss-transfer-cli task report "$TRANSFER_TASK" --output "task-$TRANSFER_TASK.zip"
 
 ## Create tasks and set limits
 
-The CLI supports object storage to object storage, uploads and downloads. Help lists each direction's required paths, storage connections and nodes:
+The CLI supports object storage to object storage, downloads and uploads. Storage connections such as `source` and `target` must exist first (`oss-transfer-cli storage list`). Each create command prints the new task ID and the command that follows it.
+
+Copy a prefix between buckets (oss-to-oss). `--node` selects execution nodes and can be repeated; without it, all available nodes are used:
+
+```sh
+oss-transfer-cli task create oss-to-oss source/photos target/archive --prefix 2026/ --node 10.0.0.2
+oss-transfer-cli task show 13 --watch 5
+```
+
+Download a prefix to a directory on an Agent (oss-to-local):
+
+```sh
+oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/
+oss-transfer-cli task show 14 --watch 5
+```
+
+Upload a directory on an Agent (local-to-oss). The distribution follows the number of `--binding` nodes, so `--distribution` is ignored for uploads:
+
+```sh
+oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/data/upload --target-prefix backup/
+oss-transfer-cli task show 15 --watch 5
+```
+
+Replace `13`, `14` and `15` with the ID printed by `task create`. To rename keys while copying, add `--mapping add-prefix --target-prefix PREFIX` or `--mapping replace-prefix --prefix SOURCE --target-prefix TARGET`. `--date-after` and `--date-before` accept `YYYY-MM-DD`, `YYYY-MM-DDTHH:mm[:ss]` or RFC3339. Times without an offset use the Master's time zone; use an offset such as `2026-09-01T00:00:00+08:00` for exact boundaries.
+
+Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task. Help lists every option:
 
 ```sh
 oss-transfer-cli help task create
 oss-transfer-cli help task import
 oss-transfer-cli help storage
 ```
-
-Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task.
 
 Adjust a running task's limits:
 
@@ -87,16 +110,17 @@ oss-transfer-cli agent invite --label storage-01
 Run the printed join command on the new node. The invitation includes an ID for `agent invite-status`. If Agents need a private Master address, set `--master-url` when creating the invitation. `node update` supports live changes to `--child-concurrency` and `--object-concurrency`.
 
 ```sh
+oss-transfer-cli exceptions tasks failed
 oss-transfer-cli exceptions list failed --task-id "$TRANSFER_TASK"
 oss-transfer-cli task retry "$TRANSFER_TASK"
 oss-transfer-cli exceptions clear failed --task-id "$TRANSFER_TASK" --yes
 ```
 
-Clearing removes only records resolved by a successful retry or skip. Unresolved failures remain visible. Use `local` for local-transfer failures, or `fallback` to inspect fallback records.
+`exceptions tasks` lists the tasks that have exception records, like the console's task picker. Clearing removes only records resolved by a successful retry or skip. Unresolved failures remain visible. Use `local` for local-transfer failures, or `fallback` to inspect fallback records.
 
 ## Compare stored objects
 
-`object compare` checks one object with `--scope object`, or a bucket/prefix with `--scope prefix`. `--mode metadata` compares metadata; `--mode content` streams both objects through SHA-256 without staging them on disk. Use `object status`, `object cancel` and `object delete` with the returned comparison ID. [Comparison details](operations.md#compare-objects) describe the checks; `help object` lists the arguments.
+`object compare --source-bucket source/photos --dest-bucket target/archive` compares two whole buckets by metadata, as the console does by default. Add `--source-prefix`/`--dest-prefix` to compare prefixes, or `--source-key`/`--dest-key` to compare one object. `--mode content` streams both objects through SHA-256 without staging them on disk. Use `object status`, `object cancel` and `object delete` with the returned comparison ID. `object status ID --watch 5` follows progress; `object status ID --wait` waits for the result and exits with 0 when nothing differs, 4 when differences are found, 3 when some objects could not be compared, and 1 when the comparison failed or was canceled. `--metadata-lookup` reads the metadata of two objects immediately without starting a comparison. [Comparison details](operations.md#compare-objects) describe the checks; `help object` lists the arguments.
 
 ## Update the cluster
 
@@ -106,15 +130,26 @@ oss-transfer-cli update status
 oss-transfer-cli help update
 ```
 
-Update a Master with `update master --version VERSION --yes`, then run `update agents --all --yes` to bring Agents to its version. To select one Agent, use `update agent --worker NODE --yes`. Follow the result with `update status --watch 5`; accepting the request does not mean the upgrade has finished. Online upgrades require a managed native installation.
+Update a Master with `update master --version VERSION --yes`, then run `update agents --all --yes` to bring Agents to its version. To select one Agent, use `update agent --node NODE --yes`. Follow the result with `update status --watch 5`; accepting the request does not mean the upgrade has finished. Online upgrades require a managed native installation.
 
-`backup list` shows upgrade backups. `backup prune master --yes` or `backup prune agent --worker NODE --yes` removes only backups the service marks as removable.
+`backup list` shows upgrade backups. `backup prune master --yes` or `backup prune agent --node NODE --yes` removes only backups the service marks as removable.
 
 ## Language and scripts
 
 The CLI follows the system language, with English as the fallback. Save a preference with `config set language en`, `zh`, `ja` or `auto`. `--lang` overrides it for one command.
 
-Use `--json` for structured output. Exit codes are 0 for success, 1 for a failed operation, 2 for invalid arguments, 3 for an incomplete or uncertain result, and 130 for interruption. Read-only commands support `--watch 5`.
+Use `--json` for structured output. Exit codes are 0 for success, 1 for a failed operation (including a creation request the server rejected), 2 for invalid arguments or usage, 3 for an incomplete or uncertain result, and 130 for interruption; `object status --wait` uses 4 for differences. Read-only commands support `--watch 5`. A failed refresh prints the error and retries at the next interval; watching stops on a sign-in or permission error, or after 10 consecutive failures. Commands that select a node accept `--node`; the older spelling `--worker` still works.
+
+## Shell completion
+
+Bash completion is provided as `deploy/oss-transfer-cli.completion` in the source tree. It requires the bash-completion package and never contacts the cluster. Load it for the current user, or install it for everyone:
+
+```bash
+echo "source /path/to/oss-transfer-cli.completion" >> ~/.bashrc
+sudo cp deploy/oss-transfer-cli.completion /etc/bash_completion.d/oss-transfer-cli
+```
+
+On macOS, install Bash and bash-completion with Homebrew and copy the file to `$(brew --prefix)/etc/bash_completion.d/`. zsh is not supported yet.
 
 Account login asks for the password without displaying it. Changing an account password requires that account's login; local service access does not change web-console passwords. `logout` closes an account session and does not remove the installed service's local access.
 

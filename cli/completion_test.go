@@ -37,7 +37,10 @@ printf '%s\n' "${COMPREPLY[@]}"
 		{[]string{"oss-transfer-cli", "agent", ""}, []string{"invite", "list", "show", "update", "remove"}},
 		{[]string{"oss-transfer-cli", "agent", "update", "node-one", "--"}, []string{"--local-root", "--clear-local-roots"}},
 		{[]string{"oss-transfer-cli", "agent", "invite", "--"}, []string{"--label", "--address", "--master-url"}},
-		{[]string{"oss-transfer-cli", "node", ""}, []string{"invite", "details", "network"}},
+		{[]string{"oss-transfer-cli", "node", ""}, []string{"details", "network", "update"}},
+		{[]string{"oss-transfer-cli", "exceptions", ""}, []string{"tasks"}},
+		{[]string{"oss-transfer-cli", "object", "status", "cmp-1", "--"}, []string{"--wait"}},
+		{[]string{"oss-transfer-cli", "object", "compare", "--"}, []string{"--metadata-lookup"}},
 		{[]string{"oss-transfer-cli", "agent", ""}, []string{"details"}},
 		{[]string{"oss-transfer-cli", "node", "network", "--"}, []string{"--public-url", "--agent-url"}},
 		{[]string{"oss-transfer-cli", "task", ""}, []string{"restore", "purge"}},
@@ -45,7 +48,7 @@ printf '%s\n' "${COMPREPLY[@]}"
 		{[]string{"oss-transfer-cli", "task", "create", "oss-to-oss", "source/src", "target/dst", "--"}, []string{"--list-qps", "--head-qps", "--put-qps"}},
 		{[]string{"oss-transfer-cli", "task", "children", "224", "--"}, []string{"--offset", "--limit"}},
 		{[]string{"oss-transfer-cli", "task", "show", "224", "--"}, []string{"--child", "--node", "--offset", "--limit"}},
-		{[]string{"oss-transfer-cli", "task", "trash", "--"}, []string{"--task-id", "--worker", "--direction", "--search"}},
+		{[]string{"oss-transfer-cli", "task", "trash", "--"}, []string{"--task-id", "--node", "--direction", "--search"}},
 	} {
 		args := append([]string{"-c", script, "completion-test", "../deploy/oss-transfer-cli.completion"}, test.words...)
 		output, err := exec.Command(bash, args...).CombinedOutput()

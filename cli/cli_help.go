@@ -15,8 +15,8 @@ const cliHelp = `OSS Transfer CLI
   task stop|resume|start|retry <ID...>
   task delete <ID...>            将任务记录移入回收站
   task trash                     查看及筛选回收站任务
-  task restore <ID...>            从回收站恢复指定任务
-  task purge <ID...> --yes        永久删除回收站内指定记录
+  task restore <ID...>           从回收站恢复指定任务
+  task purge <ID...> --yes       永久删除回收站内指定记录
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps 值 --head-qps 值 --put-qps 值]
   task report <ID> [--output 文件.zip]
@@ -29,8 +29,8 @@ const cliHelp = `OSS Transfer CLI
 
 限速与排障
   limit list|set|history|adjustment
-  exceptions list|export|clear <failed|fallback|local>
-  object compare ...             比对存储桶、前缀或单个对象
+  exceptions list|export|clear|tasks <failed|fallback|local>
+  object compare|status ...      比对存储桶、前缀或单个对象，并查看进度
   update status|check            查看集群版本或检查新版本
   update master|agent|agents ...  更新服务
   backup list|prune ...          查看或清理升级备份
@@ -54,7 +54,7 @@ const cliHelp = `OSS Transfer CLI
 
 全局选项
   --host <URL>                   临时连接其他 Master，默认使用所在集群
-  --lang auto|zh|en|ja            临时指定语言
+  --lang auto|zh|en|ja           临时指定语言
   --json                         输出结构化 JSON；持续刷新时每次一行
   --verbose                      将请求路径及 HTTP 状态写入标准错误
   --watch <秒|5s>                每隔 1–3600 整数秒刷新，只支持只读查询
@@ -75,7 +75,8 @@ const cliHelp = `OSS Transfer CLI
   选择节点统一使用 --node（旧写法 --worker 仍然可用）。
   新任务受理后自动执行；已受理、预检通过均不代表迁移完成。
   删除节点、存储连接、永久删除任务及清空异常需要 --yes。
-  查询不完整会保留节点错误；退出码 0=成功，1=操作失败，2=命令错误，3=结果不完整，130=用户中断。
+  查询不完整会保留节点错误；退出码 0=成功，1=操作失败，2=命令错误，3=结果不完整，130=用户中断；
+  object status --wait 发现差异时返回 4。
   OSS_TRANSFER_MASTER_SERVER 可设置默认服务地址；密钥和密码请用环境变量或文件。
   OSS_TRANSFER_CLI_CONFIG_DIR 可指定配置和会话目录，须为绝对路径。
   默认跟随系统语言；无法识别时使用英文。config set language zh 可保存为中文，auto 恢复跟随系统。
@@ -136,7 +137,8 @@ const cliTaskHelp = `任务管理
   oss-transfer-cli task report 224 --output ./task-224.zip
   oss-transfer-cli task trash --direction oss-to-local --node 10.0.0.2
 
-状态：RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
+状态：PENDING、WAITING、RUNNING、LIST_DONE、RECOVERABLE、RESUMING、STOPPING、STOPPED、COMPLETED、PARTIAL_FAILED、FAILED。
+未加 --all 时，list 的筛选只作用于最新一页（默认 100 个）任务；查找更早的匹配任务请加 --all。
 操作按指定主任务逐项检查，批量请求分批提交；不会重试已在执行中的任务。
 子任务默认按状态优先级读取 25 项；--active 只看进行中，--cursor 继续读取。
 按编号查看可用 --order id 或 --offset；--limit 为 1–200，不改变子任务编号。
@@ -155,10 +157,9 @@ const cliTaskCreateHelp = `创建迁移任务
 通用选项
   --conflict skip|overwrite       已存在对象的处理方式，默认 skip
   --overwrite                     等同 --conflict overwrite
-  --distribution affinity|balanced  任务分发方式，默认 balanced
-  --balanced                      等同 --distribution balanced
-  --date-after YYYY-MM-DDTHH:mm:ss  对象更新时间起点
-  --date-before YYYY-MM-DDTHH:mm:ss 对象更新时间终点，须晚于起点
+  --distribution affinity|balanced  任务分发方式，默认 balanced；local-to-oss 忽略此项
+  --date-after YYYY-MM-DD[THH:mm[:ss]]  对象更新时间起点
+  --date-before YYYY-MM-DD[THH:mm[:ss]] 对象更新时间终点，须晚于起点
   --bandwidth-mbps <值>            任务带宽上限，0.1–1000000 Mbps
   --list-qps/--head-qps/--put-qps <值>  所有执行节点合计的任务请求上限
       --list-qps 同时限制 LIST 列举与 GET 对象读取
@@ -183,11 +184,15 @@ OSS 间迁移
   本地上传根据绑定节点数量选择分发方式；多个节点须绑定同一逻辑目录。
 
 示例
-  oss-transfer-cli task create oss-to-oss source/photos target/archive --node 10.0.0.2 --prefix 2026/ --balanced
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --node 10.0.0.2 --prefix 2026/
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --prefix 2026/ --mapping add-prefix --target-prefix backup/
   oss-transfer-cli task create oss-to-oss source/photos target/archive --object-key a.jpg --mapping exact-key --target-key backup/a.jpg
   oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/ --validate-only
   oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/
   oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/data/upload --target-prefix backup/
+  oss-transfer-cli task show <ID> --watch 5      创建后跟踪进度
+
+不带时区的时间（含仅日期）按 Master 所在时区解释；需要精确边界时请使用带时区的 RFC3339，如 2026-09-01T00:00:00+08:00。
 
 连接名须先通过 storage 添加；本地路径属于执行节点，支持 /data、C:\data 和 UNC 共享目录。
 本地迁移提交前会自动预检；创建受理后自动执行，请继续查询任务状态。
@@ -342,7 +347,7 @@ bandwidth 默认单位 Mbps；其他类型单位为次/秒，不接受 --unit。
 `
 
 const cliExceptionsHelp = `异常记录
-用法：oss-transfer-cli exceptions list|export|clear <类型> [选项]
+用法：oss-transfer-cli exceptions list|export|clear|tasks <类型> [选项]
 
 类型
   failed     迁移失败对象
@@ -350,6 +355,8 @@ const cliExceptionsHelp = `异常记录
   local      本地迁移失败
 
 查询
+  tasks failed|fallback|local [--search 任务ID] [--limit 100]
+                       列出有异常记录的任务（与网页异常页的任务选择相同）
   list failed|fallback [--task-id ID] [--source-bucket 桶] [--dest-bucket 桶]
                        [--node 节点] [--limit 1000]
   list local [--task-id ID] [--node 节点] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
@@ -369,6 +376,7 @@ const cliExceptionsHelp = `异常记录
   --all 与筛选条件不能同时使用。
 
 示例
+  oss-transfer-cli exceptions tasks failed
   oss-transfer-cli exceptions list failed --task-id 224 --limit 1000
   oss-transfer-cli exceptions export failed --task-id 224 --output task-224-failures.csv
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
@@ -381,13 +389,19 @@ complete/partial 表示节点返回是否完整；truncated 表示记录被数�
 `
 
 const cliObjectHelp = `对象比对
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive
   oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
   oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
-  oss-transfer-cli object status <比对ID> [--after 50 --limit 100]
+  oss-transfer-cli object compare --metadata-lookup --source-bucket source/photos --source-key a.jpg --dest-bucket target/archive --dest-key a.jpg
+  oss-transfer-cli object status <比对ID> [--after 50 --limit 100] [--wait]
+  oss-transfer-cli object status <比对ID> --watch 5
   oss-transfer-cli object cancel <比对ID>
   oss-transfer-cli object delete <比对ID>
 
-prefix 范围不填前缀时比对整个桶；两端按去掉前缀后的 Key 对应。
+compare 默认按 prefix 范围、metadata 模式比对，与网页一致；指定 --source-key/--dest-key 时比对单个对象。
+不填前缀时比对整个桶；两端按去掉前缀后的 Key 对应。
+--metadata-lookup 不创建比对任务，只立即读取两个对象的元数据（须指定两端 Bucket 和 Key）。
+status --wait 持续查询到比对结束：0=无差异，4=发现差异，3=有对象无法比对或比对期间变化，1=失败、取消或中断。
 metadata 检查大小、Content-Type、Content-Encoding、Content-Disposition、Cache-Control 和自定义元数据，不读取内容。
 content 完整流式读取两端对象，计算 SHA-256，不将对象写入本地文件。会产生读取流量。
 ETag、修改时间和存储类型不作为跨存储一致依据。比对期间变化的对象单独列出。

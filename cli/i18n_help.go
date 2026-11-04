@@ -95,8 +95,8 @@ Tasks
   task stop|resume|start|retry <ID...>
   task delete <ID...>             Move records to trash
   task trash                      List deleted task records
-  task restore <ID...>             Restore selected tasks from the trash
-  task purge <ID...> --yes         Permanently remove selected trash records
+  task restore <ID...>            Restore selected tasks from the trash
+  task purge <ID...> --yes        Permanently remove selected trash records
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps N --head-qps N --put-qps N]
   task report <ID> [--output file.zip]
@@ -109,11 +109,11 @@ Nodes and storage
 
 Limits and diagnostics
   limit list|set|history|adjustment
-  exceptions list|export|clear <failed|fallback|local>
+  exceptions list|export|clear|tasks <failed|fallback|local>
   update status|check
   update master|agent|agents ...
   backup list|prune ...
-  object compare ...              Compare buckets, prefixes or objects
+  object compare|status ...       Compare buckets, prefixes or objects and follow progress
 
 Account
   login --username admin --password-stdin
@@ -134,7 +134,7 @@ Inventory tools
 
 Global options
   --host <URL>                    Override the automatically detected cluster Master
-  --lang auto|zh|en|ja             Override language for this invocation
+  --lang auto|zh|en|ja            Override language for this invocation
   --json                          Structured JSON; one line per --watch refresh
   --verbose                       Write request paths and HTTP status to stderr
   --watch <seconds|5s>            Refresh read-only queries every 1–3600 seconds
@@ -153,7 +153,8 @@ Select parent IDs explicitly: 224,225 or 224-226. Commands never default to all 
 Select nodes with --node; the older spelling --worker still works.
 New tasks start automatically. Acceptance or prechecks do not confirm completion.
 Removing nodes/connections, purging tasks and clearing exceptions require --yes.
-Exit codes: 0 success, 1 operation failed, 2 command error, 3 incomplete, 130 interrupted.
+Exit codes: 0 success, 1 operation failed, 2 command error, 3 incomplete, 130 interrupted;
+object status --wait returns 4 when differences are found.
 On an installed Master or Agent, the service owner or system administrator can use the local cluster without login. Other clusters require login.
 OSS_TRANSFER_MASTER_SERVER sets the address. Use files or environment variables for credentials.
 OSS_TRANSFER_CLI_CONFIG_DIR sets the configuration and session directory; use an absolute path.
@@ -173,8 +174,8 @@ Help groups: {{HELP_TOPICS}}.
   task stop|resume|start|retry <ID...>
   task delete <ID...>             記録をごみ箱に移動
   task trash                      ごみ箱の記録を表示
-  task restore <ID...>             指定したタスクをごみ箱から復元
-  task purge <ID...> --yes         指定したごみ箱の記録を完全削除
+  task restore <ID...>            指定したタスクをごみ箱から復元
+  task purge <ID...> --yes        指定したごみ箱の記録を完全削除
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps N --head-qps N --put-qps N]
   task report <ID> [--output ファイル.zip]
@@ -187,11 +188,11 @@ Help groups: {{HELP_TOPICS}}.
 
 制限と診断
   limit list|set|history|adjustment
-  exceptions list|export|clear <failed|fallback|local>
+  exceptions list|export|clear|tasks <failed|fallback|local>
   update status|check
   update master|agent|agents ...
   backup list|prune ...
-  object compare ...              バケット、プレフィックス、オブジェクトの比較
+  object compare|status ...       バケット、プレフィックス、オブジェクトの比較と進捗確認
 
 アカウント
   login --username admin --password-stdin
@@ -212,7 +213,7 @@ Help groups: {{HELP_TOPICS}}.
 
 グローバルオプション
   --host <URL>                    自動検出したクラスタの Master を一時的に変更
-  --lang auto|zh|en|ja             今回の表示言語を指定
+  --lang auto|zh|en|ja            今回の表示言語を指定
   --json                          JSON で出力。--watch 時は更新ごとに 1 行
   --verbose                       リクエストパスと HTTP 状態を標準エラーに出力
   --watch <秒|5s>                 読み取り専用の照会を 1～3600 秒ごとに更新
@@ -233,6 +234,7 @@ Master または Agent の実行ユーザーやシステム管理者は、本機
 新規タスクは自動開始します。受理や事前チェックの成功は転送完了を示しません。
 ノード・接続の削除、タスクの完全削除、例外記録のクリアには --yes が必要です。
 終了コード: 0 成功、1 操作失敗、2 コマンドエラー、3 不完全な結果、130 中断。
+object status --wait は差異が見つかると 4 を返します。
 OSS_TRANSFER_MASTER_SERVER で接続先を設定します。認証情報はファイルか環境変数を使用します。
 OSS_TRANSFER_CLI_CONFIG_DIR は設定とセッションの保存先です。絶対パスで指定してください。
 既定はシステム言語で、判定できない場合は英語です。config set language ja で保存し、auto で自動選択に戻します。
@@ -275,7 +277,8 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   import buckets|tasks|local <file> [options]
   See help task create and help task import.
 
-States: RUNNING, STOPPING, RESUMING, COMPLETED, PARTIAL_FAILED, FAILED, STOPPED.
+States: PENDING, WAITING, RUNNING, LIST_DONE, RECOVERABLE, RESUMING, STOPPING, STOPPED, COMPLETED, PARTIAL_FAILED, FAILED.
+Without --all, list filters apply only to the newest page (100 tasks by default); add --all to search older tasks.
 Actions read selected parent IDs and submit in bounded batches; running tasks are not retried.
 Child pages default to 25 results in status priority order. --active selects ongoing work; --cursor continues.
 Use --order id or --offset for numbering order; --limit is 1–200.
@@ -319,7 +322,8 @@ Deleting records does not delete source or target objects.
   import buckets|tasks|local <ファイル> [オプション]
   詳細は help task create と help task import を参照してください。
 
-状態: RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
+状態: PENDING、WAITING、RUNNING、LIST_DONE、RECOVERABLE、RESUMING、STOPPING、STOPPED、COMPLETED、PARTIAL_FAILED、FAILED。
+--all を指定しない場合、list の絞り込みは最新のページ（既定 100 件）にのみ適用されます。古いタスクも探すには --all を追加してください。
 指定した親タスクを個別に確認し、分割して送信します。実行中のタスクは再試行しません。
 子タスクは状態の優先順で 25 件ずつ取得します。--active は進行中のみ、--cursor は続きの取得です。
 --order id または --offset で番号順に表示します。--limit は 1～200 です。
@@ -335,10 +339,9 @@ list/trash の --limit は 1～10000、--before-id は古い記録、list --all 
 
   --conflict skip|overwrite         Existing-object policy; default skip
   --overwrite                       Same as --conflict overwrite
-  --distribution affinity|balanced  Default balanced
-  --balanced                        Same as --distribution balanced
-  --date-after YYYY-MM-DDTHH:mm:ss   Modified after this time
-  --date-before YYYY-MM-DDTHH:mm:ss  Modified before this time; later than the start
+  --distribution affinity|balanced  Default balanced; ignored for local-to-oss
+  --date-after YYYY-MM-DD[THH:mm[:ss]]   Modified after this time
+  --date-before YYYY-MM-DD[THH:mm[:ss]]  Modified before this time; later than the start
   --bandwidth-mbps <value>           Additional task limit, 0.1–1000000 Mbps
   --list-qps/--head-qps/--put-qps <value>  Task request limits across all selected nodes
       --list-qps covers both LIST operations and GET object reads.
@@ -362,6 +365,15 @@ Local transfers
           An exact target key requires one file on one node.
   Upload distribution follows the binding count; multiple nodes must bind the same logical directory.
 
+Examples
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --node 10.0.0.2 --prefix 2026/
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --prefix 2026/ --mapping add-prefix --target-prefix backup/
+  oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/
+  oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/data/upload --target-prefix backup/
+  oss-transfer-cli task show <ID> --watch 5      Follow progress after creation
+
+Times without an offset, including date-only values, use the Master's time zone. For exact
+boundaries use RFC3339 with an offset, such as 2026-09-01T00:00:00+08:00.
 Register connection aliases with storage first. Paths belong to execution nodes;
 /data, C:\data and UNC paths are supported. Local transfers run prechecks before submission.
 Accepted tasks start automatically; query task status for completion.
@@ -375,10 +387,9 @@ check its task list before retrying. Creation is never retried automatically.
 
   --conflict skip|overwrite         既存オブジェクトの処理。既定: skip
   --overwrite                       --conflict overwrite と同じ
-  --distribution affinity|balanced  既定: balanced
-  --balanced                        --distribution balanced と同じ
-  --date-after YYYY-MM-DDTHH:mm:ss   更新日時の開始条件
-  --date-before YYYY-MM-DDTHH:mm:ss  更新日時の終了条件。開始より後を指定
+  --distribution affinity|balanced  既定: balanced。local-to-oss では無視
+  --date-after YYYY-MM-DD[THH:mm[:ss]]   更新日時の開始条件
+  --date-before YYYY-MM-DD[THH:mm[:ss]]  更新日時の終了条件。開始より後を指定
   --bandwidth-mbps <値>              タスクの追加上限。0.1～1000000 Mbps
   --list-qps/--head-qps/--put-qps <値>  選択した全ノード合計のタスクリクエスト上限
       --list-qps は LIST 列挙と GET オブジェクト読み取りの両方に適用。
@@ -402,6 +413,15 @@ OSS 間転送
                 単一 Key の指定は 1 ノード上の 1 ファイルに限ります。
   分配方式はノード数に従います。複数ノードには同じ論理ディレクトリを指定してください。
 
+例
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --node 10.0.0.2 --prefix 2026/
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --prefix 2026/ --mapping add-prefix --target-prefix backup/
+  oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/
+  oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/data/upload --target-prefix backup/
+  oss-transfer-cli task show <ID> --watch 5      作成後に進捗を確認
+
+タイムゾーンを含まない日時（日付のみを含む）は Master のタイムゾーンで解釈します。正確な境界には
+2026-09-01T00:00:00+08:00 のようなオフセット付き RFC3339 を使用してください。
 接続エイリアスは先に storage で登録してください。パスは実行ノード上のパスです。
 /data、C:\data、UNC パスに対応します。ローカル転送は送信前に事前チェックを行います。
 受理されたタスクは自動開始します。完了はタスク状態で確認してください。
@@ -661,9 +681,11 @@ bandwidth の既定単位は Mbps、他の制限は回/秒で、--unit は使え
 詳細には nextCursor、done、historyComplete、プロセスの再起動情報が保持されます。
 `},
 	cliExceptionsHelp: {`Exception records
-Usage: oss-transfer-cli exceptions list|export|clear <type> [options]
+Usage: oss-transfer-cli exceptions list|export|clear|tasks <type> [options]
 
 Types: failed (failed objects), fallback (legacy SDK records; unsupported by Go), local (local failures).
+  tasks failed|fallback|local [--search TASK_ID] [--limit 100]
+                       List tasks that have exception records, as the console's task picker does
   list failed|fallback [--task-id ID] [--source-bucket BUCKET] [--dest-bucket BUCKET]
                        [--node NODE] [--limit 1000]
   list local [--task-id ID] [--node NODE] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
@@ -681,12 +703,15 @@ Filters: --task-id, --node, --direction, --source-bucket, --dest-bucket, --endpo
 complete/partial describe node coverage; truncated describes the size cap. Legacy caps may return
 truncatedWorkers; use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
 
+  oss-transfer-cli exceptions tasks failed
   oss-transfer-cli exceptions export failed --task-id 224 --output task-224-failures.csv
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
 `, `例外記録
-使い方: oss-transfer-cli exceptions list|export|clear <種別> [オプション]
+使い方: oss-transfer-cli exceptions list|export|clear|tasks <種別> [オプション]
 
 種別: failed（失敗オブジェクト）、fallback（旧 SDK 記録。Go は未対応）、local（ローカル転送の失敗）。
+  tasks failed|fallback|local [--search タスクID] [--limit 100]
+                       例外記録のあるタスクを一覧表示（コンソールのタスク選択と同じ）
   list failed|fallback [--task-id ID] [--source-bucket バケット] [--dest-bucket バケット]
                        [--node ノード] [--limit 1000]
   list local [--task-id ID] [--node ノード] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
@@ -705,17 +730,25 @@ complete/partial は応答の完全性、truncated は件数上限による省�
 truncatedWorkers が返された場合、詳細には ZIP レポートを使用してください。
 ダウンロード成功は転送データの検証完了を示しません。
 
+  oss-transfer-cli exceptions tasks failed
   oss-transfer-cli exceptions export failed --task-id 224 --output task-224-failures.csv
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
 `},
 	cliObjectHelp: {`Compare objects
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive
   oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
   oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
-  oss-transfer-cli object status <comparison-id> [--after 50 --limit 100]
+  oss-transfer-cli object compare --metadata-lookup --source-bucket source/photos --source-key a.jpg --dest-bucket target/archive --dest-key a.jpg
+  oss-transfer-cli object status <comparison-id> [--after 50 --limit 100] [--wait]
+  oss-transfer-cli object status <comparison-id> --watch 5
   oss-transfer-cli object cancel <comparison-id>
   oss-transfer-cli object delete <comparison-id>
 
+Like the console, compare defaults to scope prefix and mode metadata; --source-key/--dest-key compare one object.
 Empty prefixes compare whole buckets. Keys are matched after removing each prefix.
+--metadata-lookup starts no comparison; it reads the metadata of two objects at once (both buckets and keys required).
+status --wait polls until the comparison ends: 0 no differences, 4 differences found, 3 objects could not be compared
+or changed during the run, 1 failed, canceled or interrupted.
 metadata checks size, Content-Type, Content-Encoding, Content-Disposition, Cache-Control and custom metadata without reading content.
 content streams both complete objects into SHA-256 without writing object files locally. Read traffic is charged by your provider.
 ETag, modification time and storage class do not determine equality across stores. Objects changed during comparison are reported separately.
@@ -723,12 +756,18 @@ Comparisons run in the background. status returns counts and paged differences; 
 Each node retains 10 comparisons, with up to 10,000 difference rows each. All objects are counted. delete removes finished comparison records only.
 Keys and prefixes are passed unchanged. Quote shell metacharacters and spaces.
 `, `オブジェクトの比較
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive
   oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
   oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
-  oss-transfer-cli object status <比較 ID> [--after 50 --limit 100]
+  oss-transfer-cli object compare --metadata-lookup --source-bucket source/photos --source-key a.jpg --dest-bucket target/archive --dest-key a.jpg
+  oss-transfer-cli object status <比較 ID> [--after 50 --limit 100] [--wait]
+  oss-transfer-cli object status <比較 ID> --watch 5
   oss-transfer-cli object cancel <比較 ID>
   oss-transfer-cli object delete <比較 ID>
 
+compare はコンソールと同じく既定で scope prefix、mode metadata です。--source-key/--dest-key を指定すると単一オブジェクトを比較します。
+--metadata-lookup は比較ジョブを作成せず、2 つのオブジェクトのメタデータを即時に取得します（両側のバケットと Key が必要）。
+status --wait は比較終了まで照会します: 0 差異なし、4 差異あり、3 比較できない・比較中に変更されたオブジェクトあり、1 失敗・取消・中断。
 プレフィックスが空の場合はバケット全体を比較します。それぞれのプレフィックスを除いた Key で対応付けます。
 metadata はサイズ、Content-Type、Content-Encoding、Content-Disposition、Cache-Control、カスタムメタデータを確認し、内容を読み取りません。
 content は両側の内容を最後までストリームで読み、SHA-256 を計算します。ローカルファイルは作成しません。読み取り通信が発生します。

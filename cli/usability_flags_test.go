@@ -162,3 +162,14 @@ func TestNodeAliasErrorsNameTypedFlag(t *testing.T) {
 		t.Fatalf("duplicate error = %v", err)
 	}
 }
+
+func TestDashLeadingIDsAreArguments(t *testing.T) {
+	id := "-bwMV38HaZT0QmE6QCGzVCXUgga0wZKK1nxzDyBPK6o"
+	o, err := parseCommandOptions([]string{id, "--wait"}, nil, []string{"wait"})
+	if err != nil || len(o.Positionals) != 1 || o.Positionals[0] != id || !o.Switches["wait"] {
+		t.Fatalf("options = %+v, err = %v", o, err)
+	}
+	if _, err := parseCommandOptions([]string{"-josn"}, nil, []string{"json"}); err == nil {
+		t.Fatal("a mistyped short option must still be rejected")
+	}
+}

@@ -28,6 +28,33 @@ type multipartTarget struct {
 	aborted           int
 	latency           time.Duration
 	putActive, putMax int
+	// hold, when set, runs inside each UploadPart while it counts as active.
+	hold func(context.Context)
+}
+
+// partOverlap keeps the first n part uploads open until n are in flight
+// together, so a peak above the base slots does not depend on scheduling.
+func partOverlap(n int) func(context.Context) {
+	var mu sync.Mutex
+	arrived := 0
+	all := make(chan struct{})
+	return func(ctx context.Context) {
+		mu.Lock()
+		arrived++
+		if arrived == n {
+			close(all)
+		}
+		held := arrived <= n
+		mu.Unlock()
+		if !held {
+			return
+		}
+		select {
+		case <-all:
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second): // hang guard only
+		}
+	}
 }
 
 func newMultipartTarget(t *testing.T, budget *transferstore.UploadMemoryBudget) (*multipartTarget, *transferstore.S3) {
@@ -58,8 +85,12 @@ func (m *multipartTarget) serve(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		m.putActive++
 		m.putMax = max(m.putMax, m.putActive)
+		hold := m.hold
 		m.mu.Unlock()
 		data, _ := io.ReadAll(r.Body)
+		if hold != nil {
+			hold(r.Context())
+		}
 		time.Sleep(m.latency)
 		m.mu.Lock()
 		m.putActive--
@@ -388,8 +419,12 @@ func TestUnthrottledTaskBorrowsAndLimitChangesApplyToNextObject(t *testing.T) {
 	if reads, puts := copyOnce(); reads != 1 || puts > 4 {
 		t.Fatalf("throttled object: reads%d puts%d", reads, puts)
 	}
-	// Limit removed while the task runs: the next object is ranged again.
+	// Limit removed while the task runs: the next object is ranged again. A
+	// fifth concurrent part can only come from a borrowed slot.
 	throttled.Store(false)
+	server.mu.Lock()
+	server.hold = partOverlap(5)
+	server.mu.Unlock()
 	if reads, puts := copyOnce(); reads != 12 || puts <= 4 {
 		t.Fatalf("unthrottled object did not borrow: reads%d puts%d", reads, puts)
 	}

@@ -33,6 +33,12 @@ type rangedBucket struct {
 	gets     []time.Time
 	active   int
 	maxParts int
+	// holdParts, when set, keeps the first holdParts part uploads open until
+	// that many are in flight together, so peak concurrency does not depend
+	// on how the runner happens to schedule them.
+	holdParts int
+	arrived   int
+	overlap   chan struct{}
 }
 
 func (b *rangedBucket) serve(w http.ResponseWriter, r *http.Request) {
@@ -61,8 +67,20 @@ func (b *rangedBucket) serve(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		b.active++
 		b.maxParts = max(b.maxParts, b.active)
+		b.arrived++
+		held := b.arrived <= b.holdParts
+		if b.holdParts > 0 && b.arrived == b.holdParts {
+			close(b.overlap)
+		}
 		b.mu.Unlock()
 		data, _ := io.ReadAll(r.Body)
+		if held {
+			select {
+			case <-b.overlap:
+			case <-r.Context().Done():
+			case <-time.After(30 * time.Second): // hang guard only
+			}
+		}
 		time.Sleep(30 * time.Millisecond)
 		number, _ := strconv.Atoi(q.Get("partNumber"))
 		b.mu.Lock()
@@ -105,6 +123,10 @@ func TestRangedCopyHonoursTaskBandwidthAndRequestLimits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := bytes.Repeat([]byte("0123456789abcdef"), 8*partSize/16)
 			bucket := &rangedBucket{data: payload, parts: map[int][]byte{}}
+			if tc.name == "unlimited" {
+				// A fifth concurrent part can only come from a borrowed slot.
+				bucket.holdParts, bucket.overlap = 5, make(chan struct{})
+			}
 			server := httptest.NewServer(http.HandlerFunc(bucket.serve))
 			defer server.Close()
 			db, err := state.Open(filepath.Join(t.TempDir(), "agent.db"))

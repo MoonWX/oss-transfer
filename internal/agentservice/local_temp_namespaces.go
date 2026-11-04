@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 
@@ -22,6 +23,7 @@ func namespaceKey(parent string) string {
 
 // PrepareNamespace commits the directory identity before Local creates any
 // payload file. Existing namespaces are never replaced or adopted by pathname.
+// Each successful call holds a reference until ReleaseNamespace.
 func (r *LocalTempRegistry) PrepareNamespace(ctx context.Context, parent *os.Root, parentPath string) (transferstore.LocalTempNamespace, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -33,38 +35,105 @@ func (r *LocalTempRegistry) PrepareNamespace(ctx context.Context, parent *os.Roo
 		return record, err
 	}
 	key := namespaceKey(parentPath)
-	read := func() (bool, error) {
-		var found bool
-		err := r.store.View(func(tx *state.Tx) error {
-			var err error
-			found, err = tx.Get(localTempNamespacesBucket, key, &record)
-			return err
-		})
-		if err == nil && found {
-			if record.Owner != r.owner || filepath.Clean(record.ParentPath) != filepath.Clean(parentPath) {
-				return false, transferstore.ErrTempIdentity
-			}
-			err = transferstore.ValidateLocalTempNamespace(record)
-		}
-		return found, err
-	}
-	if found, err := read(); err != nil || found {
-		return record, err
-	}
-	// First use is serialized; subsequent writes only read the committed record.
+	// Serialized with removal. Local calls this once per directory per job.
 	r.namespaceMu.Lock()
 	defer r.namespaceMu.Unlock()
-	if found, err := read(); err != nil || found {
-		return record, err
+	found, err := r.namespaceRecord(key, &record)
+	if err == nil && found && (record.Owner != r.owner || filepath.Clean(record.ParentPath) != filepath.Clean(parentPath)) {
+		err = transferstore.ErrTempIdentity
 	}
-	var err error
-	record, err = transferstore.CreateLocalTempNamespace(ctx, parent, parentPath, r.owner)
 	if err != nil {
 		return record, err
 	}
-	err = r.store.Update(func(tx *state.Tx) error { return tx.Put(localTempNamespacesBucket, key, record) })
-	return record, err
+	if !found {
+		record, err = transferstore.CreateLocalTempNamespace(ctx, parent, parentPath, r.owner)
+		if err != nil {
+			return record, err
+		}
+		if err := r.store.Update(func(tx *state.Tx) error { return tx.Put(localTempNamespacesBucket, key, record) }); err != nil {
+			return record, err
+		}
+	}
+	r.namespaces[key]++
+	return record, nil
 }
+
+func (r *LocalTempRegistry) namespaceRecord(key string, record *transferstore.LocalTempNamespace) (bool, error) {
+	var found bool
+	err := r.store.View(func(tx *state.Tx) error {
+		var err error
+		found, err = tx.Get(localTempNamespacesBucket, key, record)
+		return err
+	})
+	if err == nil && found {
+		err = transferstore.ValidateLocalTempNamespace(*record)
+	}
+	return found, err
+}
+
+// ReleaseNamespace drops one PrepareNamespace reference. The last release
+// removes the staging directory and its record, so finished transfers do not
+// leave hidden directories behind. Callers release only after every temporary
+// file they created there is gone and its record has been cleared.
+func (r *LocalTempRegistry) ReleaseNamespace(ctx context.Context, record transferstore.LocalTempNamespace) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	key := namespaceKey(record.ParentPath)
+	r.namespaceMu.Lock()
+	defer r.namespaceMu.Unlock()
+	if r.namespaces[key] <= 0 {
+		return errors.New("temporary namespace released more often than prepared")
+	}
+	if r.namespaces[key]--; r.namespaces[key] > 0 {
+		return nil
+	}
+	delete(r.namespaces, key)
+	if r.closed {
+		return nil // Startup recovery removes it.
+	}
+	_, err := r.removeNamespace(context.WithoutCancel(ctx), key, record)
+	return err
+}
+
+// removeNamespace runs with no live reference: during recovery, or under
+// namespaceMu after the last release. A namespace that still has temporary-file
+// records is kept, because recovery opens those files through it.
+func (r *LocalTempRegistry) removeNamespace(ctx context.Context, key string, record transferstore.LocalTempNamespace) (bool, error) {
+	var stored transferstore.LocalTempNamespace
+	found, err := r.namespaceRecord(key, &stored)
+	if err != nil || !found || stored != record {
+		return false, err
+	}
+	directory := filepath.Join(record.ParentPath, record.Name)
+	tracked := false
+	if err := r.store.View(func(tx *state.Tx) error {
+		return tx.Scan(localTemporaryBucket, "", "", math.MaxInt, func(_ string, raw json.RawMessage) error {
+			var temp transferstore.LocalTempRecord
+			if err := json.Unmarshal(raw, &temp); err != nil {
+				return err
+			}
+			if filepath.Clean(temp.ParentPath) == directory {
+				tracked = true
+				return errStopScan
+			}
+			return nil
+		})
+	}); err != nil && !errors.Is(err, errStopScan) {
+		return false, err
+	}
+	if tracked {
+		return false, nil
+	}
+	// Delete the directory before its record: an interruption in between is
+	// finished by the next recovery, which accepts a missing directory.
+	if err := transferstore.RemoveLocalTempNamespace(ctx, record); err != nil {
+		return false, err
+	}
+	err = r.store.Update(func(tx *state.Tx) error { return tx.Delete(localTempNamespacesBucket, key) })
+	return err == nil, err
+}
+
+var errStopScan = errors.New("stop scan")
 
 func (r *LocalTempRegistry) recoverNamespaces(ctx context.Context, registered map[string]bool, report *TempRecoveryReport) error {
 	after := ""
@@ -98,6 +167,19 @@ func (r *LocalTempRegistry) recoverNamespaces(ctx context.Context, registered ma
 				count, err = transferstore.RemoveUnregisteredNamespaceTemps(ctx, record, registered)
 			}
 			report.Removed += count
+			if record.Owner == r.owner {
+				// Recovery runs before any I/O, so no namespace is in use. This
+				// also finishes a removal interrupted after deleting the marker
+				// or the directory, which the sweep above reports as an error.
+				removed, removeErr := r.removeNamespace(ctx, namespaceKey(record.ParentPath), record)
+				switch {
+				case removed:
+					report.RemovedNamespaces++
+					err = nil
+				case err == nil && !errors.Is(removeErr, transferstore.ErrTempNamespaceInUse):
+					err = removeErr
+				}
+			}
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()

@@ -36,6 +36,10 @@ type taskRuntime struct {
 	sharedProofs map[int64]string
 	rates        map[int64]taskRateCache
 	observeAfter map[int64]int
+	// observeCache and pollNodes implement not-modified observation (DB-2).
+	observeCache map[int64]*taskObserveState
+	pollNodes    map[string]bool
+	now          func() time.Time
 	stopProgress map[int64]*stopObservation
 	stopWaits    map[int64]stopWait
 	wake         chan struct{}
@@ -479,6 +483,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	}
 	if p.Deleted || task.Ended(p.Status) {
 		t.forgetStopObservation(p.ID)
+		t.forgetObserve(p.ID)
 		return nil
 	}
 	if p.Status == "RESUMING" && (p.ActiveTime == nil || (p.ResumeAfter == nil && p.Scheduling == nil)) {
@@ -564,7 +569,9 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	defer func() { resultErr = errors.Join(memberErr, resultErr) }()
 	// Observations do not require the scanner. Preserve healthy peers' progress
 	// even when the original scanner is down or a shared-mount check must wait.
-	if p.Status == "RUNNING" {
+	// A pass that found every outstanding child unchanged backs off the next
+	// passes until the earliest child is due again (see task_observe_cache.go).
+	if p.Status == "RUNNING" && !t.observeQuiet(p) {
 		if err := t.observeAvailable(ctx, p, 64, available); err != nil {
 			memberErr = errors.Join(memberErr, err)
 		}
@@ -721,6 +728,7 @@ func (t *taskRuntime) dispatchAvailable(ctx context.Context, p task.Parent, cont
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	t.wakeObserve(p.ID)
 	if err := t.deliverChildren(ctx, p, children); err != nil {
 		return err
 	}
@@ -745,14 +753,16 @@ func (t *taskRuntime) observeAvailable(ctx context.Context, p task.Parent, limit
 	t.mu.Lock()
 	after := t.observeAfter[p.ID]
 	t.mu.Unlock()
-	children, err := t.repo.Outstanding(p.ID, after, limit)
-	if err == nil && len(children) == 0 && after > 0 {
-		children, err = t.repo.Outstanding(p.ID, 0, limit)
+	start := after
+	heads, err := t.repo.OutstandingHeads(p.ID, after, limit)
+	if err == nil && len(heads) == 0 && after > 0 {
+		start = 0
+		heads, err = t.repo.OutstandingHeads(p.ID, 0, limit)
 	}
 	if err != nil {
 		return err
 	}
-	if len(children) == 0 {
+	if len(heads) == 0 {
 		return nil
 	}
 	// Advance the whole bounded page, including unavailable peers. A slow
@@ -761,30 +771,40 @@ func (t *taskRuntime) observeAvailable(ctx context.Context, p task.Parent, limit
 	if t.observeAfter == nil {
 		t.observeAfter = map[int64]int{}
 	}
-	t.observeAfter[p.ID] = children[len(children)-1].Job.Number
+	t.observeAfter[p.ID] = heads[len(heads)-1].Child.Job.Number
 	t.mu.Unlock()
+	through := heads[len(heads)-1].Child.Job.Number
+	if len(heads) < limit {
+		through = math.MaxInt
+	}
+	children, known := t.observePlan(p, heads, start, through)
 	groups := groupChildrenByNode(children)
-	observed := make([][]task.Observation, len(groups))
+	observed := make([]nodeObservation, len(groups))
 	unavailable := make([]bool, len(groups))
 	err = parallelChildNodes(ctx, groups, func(index int, children []task.Child) error {
 		if available != nil && !available[children[0].Node.ID] {
 			return nil
 		}
 		var nodeErr error
-		observed[index], nodeErr = t.observeNode(ctx, p, children, available != nil)
+		observed[index], nodeErr = t.observeNode(ctx, p, children, known, available != nil)
 		unavailable[index] = nodeErr != nil
 		return nodeErr
 	})
-	observations := make([]task.Observation, 0, len(children))
+	result := nodeObservation{fingerprints: map[int]string{}}
 	for index, group := range groups {
-		observations = append(observations, observed[index]...)
+		result.observations = append(result.observations, observed[index].observations...)
+		result.notModified = append(result.notModified, observed[index].notModified...)
+		for number, fingerprint := range observed[index].fingerprints {
+			result.fingerprints[number] = fingerprint
+		}
 		if available != nil && unavailable[index] {
 			delete(available, group[0].Node.ID)
 		}
 	}
 	// Persist healthy peers' reports even when a different peer times out.
-	err = errors.Join(err, t.repo.ObserveBatch(p.ID, p.Generation, observations))
-	return err
+	batchErr := t.repo.ObserveBatch(p.ID, p.Generation, result.observations)
+	t.observeRecorded(p, heads, result, batchErr == nil, start == 0 && len(heads) < limit && err == nil)
+	return errors.Join(err, batchErr)
 }
 
 func (s *Server) checkTaskEnrollments(p task.Parent) error {

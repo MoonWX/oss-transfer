@@ -877,3 +877,32 @@ func (r *Repository) recoverRunning(ctx context.Context) error {
 		}
 	}
 }
+
+// GetIfChanged reads a record unless its stored bytes still match known, a
+// fingerprint returned by an earlier call. The fingerprint is a digest of the
+// stored value, so any change to the record (progress, attempt, state)
+// produces a new one; notModified therefore means the caller already holds
+// exactly this record. The digest is taken without decoding the record.
+func (r *Repository) GetIfChanged(ctx context.Context, child, known string) (out Record, fingerprint string, notModified bool, err error) {
+	key, err := jobKey(child)
+	if err != nil {
+		return Record{}, "", false, err
+	}
+	err = r.db.View(func(tx *state.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		digest, found := tx.StoredDigest(jobsBucket, key)
+		if !found {
+			return ErrNotFound
+		}
+		fingerprint = digest
+		if known != "" && digest == known {
+			notModified = true
+			return nil
+		}
+		out, err = load(tx, child)
+		return err
+	})
+	return
+}

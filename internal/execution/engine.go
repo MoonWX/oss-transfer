@@ -111,6 +111,12 @@ func (e *Engine) Accept(ctx context.Context, job Job, inventorySource ...bool) (
 func (e *Engine) Get(ctx context.Context, child string) (Record, error) {
 	return e.repo.Get(ctx, child)
 }
+
+// GetIfChanged returns the record and its stored fingerprint, or only
+// notModified when the record still has the fingerprint known.
+func (e *Engine) GetIfChanged(ctx context.Context, child, known string) (Record, string, bool, error) {
+	return e.repo.GetIfChanged(ctx, child, known)
+}
 func (e *Engine) Seal(ctx context.Context, child string, generation uint64) (Record, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

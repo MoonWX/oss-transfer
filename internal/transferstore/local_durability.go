@@ -45,6 +45,8 @@ const (
 	maxTempReserve = 16
 	// maxCachedDirs bounds the idle directory entries a Local keeps open.
 	// Each holds up to four descriptors; entries in use are never evicted.
+	// Evicted entries that still owe a directory fsync stay open until a
+	// Sync covers them; past maxCachedDirs of those, Write runs that Sync.
 	maxCachedDirs = 8
 )
 
@@ -192,15 +194,20 @@ func (s *Local) directory(parent string, create bool) (*localDir, error) {
 	entry.lastUse = d.clock
 	d.dirs[parent] = entry
 	d.open[entry] = true
-	evict := s.evictionCandidates()
+	victims := s.evictionCandidates()
 	d.mu.Unlock()
-	s.evict(evict)
+	// A clean victim closes now. One that owes a directory fsync stays open
+	// until a Sync covers it: every fsync and its outcome belong to Sync, so
+	// no barrier can report success for a directory whose fsync failed.
+	for _, victim := range victims {
+		s.release(victim)
+	}
 	return entry, nil
 }
 
 // evictionCandidates retires the least recently used idle entries beyond
-// maxCachedDirs and returns them, each with an extra user held so they stay
-// open until evict has synced them. The caller holds d.mu.
+// maxCachedDirs and returns them with an extra user held, which the caller
+// releases. The caller holds d.mu.
 func (s *Local) evictionCandidates() []*localDir {
 	d := &s.durability
 	var victims []*localDir
@@ -221,28 +228,19 @@ func (s *Local) evictionCandidates() []*localDir {
 	return victims
 }
 
-// evict makes the retired entries' pending directory changes durable now, so
-// their descriptors can be closed before the next Sync. Their temporary-file
-// records are still cleared only by Sync, after these fsyncs.
-func (s *Local) evict(victims []*localDir) {
+// tooManyRetired reports that evicted entries waiting for a Sync hold more
+// descriptors than the cache itself may.
+func (s *Local) tooManyRetired() bool {
 	d := &s.durability
-	for _, entry := range victims {
-		d.mu.Lock()
-		dirs := d.dirty[entry]
-		d.mu.Unlock()
-		if dirs != 0 {
-			err := syncEntry(entry, dirs)
-			d.mu.Lock()
-			if err != nil && d.failed == nil {
-				d.failed = fmt.Errorf("sync local destination: %w", err)
-			}
-			if err == nil {
-				delete(d.dirty, entry)
-			}
-			d.mu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	retired := 0
+	for entry := range d.open {
+		if entry.retired {
+			retired++
 		}
-		s.release(entry)
 	}
+	return retired > maxCachedDirs
 }
 
 // retire removes entry from the cache and closes it if possible. The caller

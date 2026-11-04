@@ -65,7 +65,7 @@ func removeLocalTemp(ctx context.Context, record LocalTempRecord, emptyOnly bool
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	root, err := os.OpenRoot(record.ParentPath)
+	root, err := openAbsoluteDir(record.ParentPath)
 	if err != nil {
 		return false, err // A missing mount may return; retain its durable record.
 	}

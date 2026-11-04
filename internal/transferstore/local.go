@@ -416,6 +416,11 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	}
 	deferred := options.DeferDurability && deferredDurabilitySupported
 	parent, base := path.Dir(name), path.Base(name)
+	if deferred && s.tooManyRetired() {
+		// Bound descriptors: a barrier lets evicted directories close. Its
+		// failure sticks to the Local and is reported by the caller's Sync.
+		_ = s.Sync(ctx)
+	}
 	entry, err := s.directory(parent, true)
 	if err != nil {
 		return result, err

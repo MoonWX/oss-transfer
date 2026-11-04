@@ -248,7 +248,7 @@ func vanished(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 // It removes only empty, regular, owner-matching files that have no durable file
 // record. Registered/replaced files and nonempty or foreign files are retained.
 func RemoveUnregisteredNamespaceTemps(ctx context.Context, record LocalTempNamespace, registered map[string]bool) (int, error) {
-	parent, err := os.OpenRoot(record.ParentPath)
+	parent, err := openAbsoluteDir(record.ParentPath)
 	if err != nil {
 		return 0, err
 	}
@@ -315,10 +315,73 @@ func RemoveUnregisteredNamespaceTemps(ctx context.Context, record LocalTempNames
 // than its ownership marker, so it was not removed.
 var ErrTempNamespaceInUse = errors.New("temporary namespace is not empty; retained")
 
-// ErrTempNamespaceUnreachable means the namespace's parent directory is gone
-// or is a different directory now (deleted, recreated, or not mounted), so
-// the namespace cannot be reached by its recorded path.
-var ErrTempNamespaceUnreachable = errors.New("temporary namespace parent directory is missing or replaced")
+// ErrTempNamespaceGone means there is positive evidence that the namespace's
+// parent directory was deleted (and perhaps recreated): the path now resolves
+// to a different directory, or is missing below an existing directory, on the
+// same filesystem as recorded. The namespace went with it.
+var ErrTempNamespaceGone = errors.New("temporary namespace parent directory was deleted")
+
+// ErrTempNamespaceUnreachable means the parent directory cannot be reached
+// now but may come back, for example a volume that is not mounted: the path
+// is missing, or resolves to another filesystem. The record must be kept.
+var ErrTempNamespaceUnreachable = errors.New("temporary namespace parent directory is not reachable")
+
+// openAbsoluteDir opens an absolute directory path. A path longer than the
+// platform limit is opened in pieces: the first piece by path, the rest
+// component by component through an os.Root, as the write path does.
+func openAbsoluteDir(name string) (*os.Root, error) {
+	const piece = 900
+	if len(name) <= piece {
+		return os.OpenRoot(name)
+	}
+	cut := strings.LastIndex(name[:piece], string(filepath.Separator))
+	if cut <= 0 {
+		return os.OpenRoot(name)
+	}
+	first, err := os.OpenRoot(name[:cut])
+	if err != nil {
+		return nil, err
+	}
+	defer first.Close()
+	return first.OpenRoot(strings.TrimLeft(name[cut:], string(filepath.Separator)))
+}
+
+// identityDevice returns the filesystem part of a storage identity: the
+// device on Unix, the volume serial number on Windows.
+func identityDevice(identity string) string {
+	parts := strings.SplitN(strings.TrimPrefix(identity, "/"), "/", 2)
+	return parts[0]
+}
+
+// classifyMissingParent decides whether a recorded parent that no longer
+// matches was deleted or is only unreachable. current is the identity the
+// path resolves to now, or empty when the path is missing; then the nearest
+// existing ancestor decides.
+func classifyMissingParent(record LocalTempNamespace, current string) error {
+	device := identityDevice(record.ParentIdentity)
+	if current == "" {
+		for dir := filepath.Dir(record.ParentPath); ; dir = filepath.Dir(dir) {
+			if root, err := openAbsoluteDir(dir); err == nil {
+				info, statErr := root.Stat(".")
+				if statErr == nil {
+					current, statErr = storageIdentity(root, ".", info)
+				}
+				root.Close()
+				if statErr != nil {
+					return fmt.Errorf("%w: %w", ErrTempNamespaceUnreachable, statErr)
+				}
+				break
+			}
+			if filepath.Dir(dir) == dir {
+				return ErrTempNamespaceUnreachable
+			}
+		}
+	}
+	if device != "" && identityDevice(current) == device {
+		return ErrTempNamespaceGone
+	}
+	return ErrTempNamespaceUnreachable
+}
 
 // RemoveLocalTempNamespace deletes a database-owned staging namespace that
 // holds nothing but its marker. It also finishes a removal interrupted after
@@ -332,9 +395,9 @@ func RemoveLocalTempNamespace(ctx context.Context, record LocalTempNamespace) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	parent, err := os.OpenRoot(record.ParentPath)
+	parent, err := openAbsoluteDir(record.ParentPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%w: %w", ErrTempNamespaceUnreachable, err)
+		return classifyMissingParent(record, "")
 	}
 	if err != nil {
 		return err
@@ -349,7 +412,7 @@ func RemoveLocalTempNamespace(ctx context.Context, record LocalTempNamespace) er
 		return err
 	}
 	if identity != record.ParentIdentity {
-		return ErrTempNamespaceUnreachable
+		return classifyMissingParent(record, identity)
 	}
 	info, err = parent.Lstat(record.Name)
 	if errors.Is(err, fs.ErrNotExist) {

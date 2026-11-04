@@ -123,8 +123,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.JDOSS_AK }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.JDOSS_SK }}
         run: python3 deploy/native/publish-oss.py --assets output --tag "$RELEASE_TAG"
-  release:
-    needs: [artifacts, oss, docker_hub]
+  github_draft:
+    name: Stage GitHub Release draft
+    # Drafts stay hidden from installers and the releases API, so this can run
+    # alongside OSS and Docker Hub; the release job publishes it after both.
+    needs: artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -148,7 +151,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: python3 deploy/native/publish-oss.py --assets output --tag "$RELEASE_TAG" --dry-run
-      - name: Publish GitHub Release
+      - name: Stage GitHub Release draft
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -162,10 +165,32 @@ jobs:
           for asset in "${assets[@]}"; do
             [[ -f "$asset" && ! -L "$asset" ]] || { echo "Missing release archive: $asset" >&2; exit 1; }
           done
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          # A retry finds the draft (or the already published release) and refreshes its archives.
+          # GitHub allows several drafts per tag, so create one only when none exists.
+          if view_error="$(gh release view "$RELEASE_TAG" 2>&1 >/dev/null)"; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
             if [[ "$RELEASE_TAG" = *-* ]]; then gh release edit "$RELEASE_TAG" "${release_flags[@]}"; fi
-          else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
+          elif [[ "$view_error" = *"release not found"* ]]; then
+            gh release create "$RELEASE_TAG" "${assets[@]}" --draft \
               --verify-tag --title "OSS Transfer $RELEASE_TAG" --generate-notes "${release_flags[@]}"
+          else
+            printf '%s\n' "$view_error" >&2
+            exit 1
           fi
+  release:
+    name: Publish GitHub Release
+    needs: [oss, docker_hub, github_draft]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          release_flags=()
+          if [[ "$RELEASE_TAG" = *-* ]]; then release_flags=(--prerelease --latest=false); fi
+          gh release edit "$RELEASE_TAG" --draft=false "${release_flags[@]}"

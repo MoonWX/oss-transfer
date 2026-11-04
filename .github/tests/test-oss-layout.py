@@ -92,6 +92,23 @@ class OSSLayout(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "paginated"):
             PUBLISH.verify_listing({"IsTruncated": True, "Contents": rows, "NextContinuationToken": "next"}, "v" + VERSION, names)
 
+    def test_remote_listing_checks_content_against_local_files(self):
+        local = {name: (hashlib.md5(name.encode()).hexdigest(), len(name)) for name in PUBLISH.LATEST}
+        def page(etag=lambda md5: '"' + md5 + '"', size=lambda value: value):
+            return {"IsTruncated": False, "Contents": [
+                {"Key": "oss-transfer/latest/" + name, "ETag": etag(md5), "Size": size(length)}
+                for name, (md5, length) in local.items()]}
+        self.assertEqual(PUBLISH.verify_listing(page(), "latest", PUBLISH.LATEST, local), 4)
+        self.assertEqual(PUBLISH.verify_listing(page(lambda md5: md5.upper()), "latest", PUBLISH.LATEST, local), 4)
+        # Multipart or missing ETags are not MD5s, so key and size decide.
+        for etag in (lambda md5: '"' + md5 + '-3"', lambda md5: None):
+            self.assertEqual(PUBLISH.verify_listing(page(etag), "latest", PUBLISH.LATEST, local), 4)
+        with self.assertRaisesRegex(ValueError, "ETag differs"):
+            PUBLISH.verify_listing(page(lambda md5: '"' + "0" * 32 + '"'), "latest", PUBLISH.LATEST, local)
+        for size in (lambda value: value + 1, lambda value: None, lambda value: True):
+            with self.subTest(size=size(1)), self.assertRaisesRegex(ValueError, "size differs"):
+                PUBLISH.verify_listing(page(size=size), "latest", PUBLISH.LATEST, local)
+
     def test_latest_listing_rejects_retired_metadata(self):
         rows = [{"Key": "oss-transfer/latest/" + name} for name in PUBLISH.LATEST]
         self.assertEqual(PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", PUBLISH.LATEST), 4)

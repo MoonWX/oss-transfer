@@ -189,7 +189,7 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 		// callback failure the caller retains the preceding durable cursor.
 		if entry.IsDir() {
 			child := localScanFrame{Name: entry.Name(), key: key}
-			descend := !isTempNamespaceName(entry.Name()) &&
+			descend := !isLocalTempNamespace(s.root, key) &&
 				(strings.HasPrefix(key+"/", options.Prefix) || strings.HasPrefix(options.Prefix, key+"/"))
 			if descend {
 				if err := s.loadScanFrame(&child); err != nil {
@@ -206,7 +206,7 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 				frame.After, frame.next = entry.Name(), frame.next+1
 			}
 		} else {
-			if entry.Type().IsRegular() && strings.HasPrefix(key, options.Prefix) &&
+			if entry.Type().IsRegular() && !isNamespaceInternal(key) && strings.HasPrefix(key, options.Prefix) &&
 				(options.StartAfter == "" || key > options.StartAfter) {
 				info, err := s.root.Lstat(key)
 				switch {

@@ -38,21 +38,35 @@ type LocalTempNamespaceReleaser interface {
 	ReleaseNamespace(context.Context, LocalTempNamespace) error
 }
 
-// maxTempReserve bounds how many empty temporary files one destination
-// directory registers ahead of use. Reservations double from one, so a
-// directory that receives a single object registers a single file.
-const maxTempReserve = 16
+const (
+	// maxTempReserve bounds how many empty temporary files one destination
+	// directory registers ahead of use. Reservations double from one, so a
+	// directory that receives a single object registers a single file.
+	maxTempReserve = 16
+	// maxCachedDirs bounds the idle directory entries a Local keeps open.
+	// Each holds up to four descriptors; entries in use are never evicted.
+	maxCachedDirs = 8
+)
 
-// localDir caches one resolved destination directory for the life of a Local.
-// Every use first re-resolves the path through the root and compares the
-// directory identity, so a replaced or moved directory is never written
-// through a stale handle; the check costs one path walk instead of the
-// MkdirAll, OpenRoot, namespace validation and directory opens it replaces.
+// localDir caches one resolved destination directory. Every use first
+// re-resolves the path through the root and compares the directory identity,
+// so a replaced or moved directory is never written through a stale handle;
+// the check costs one path walk instead of the MkdirAll, OpenRoot, namespace
+// validation and directory opens it replaces.
+//
+// users, lastUse, retired and closed are guarded by localDurability.mu. An
+// entry is closed only once it is retired (evicted or replaced), unused and
+// has nothing left for a Sync to fsync.
 type localDir struct {
 	parent string // slash path below the root
 	info   fs.FileInfo
 	root   *os.Root // pinned destination directory
 	handle *os.File // same directory: publication target and fsync handle
+
+	users   int
+	lastUse uint64
+	retired bool
+	closed  bool
 
 	setup     sync.Mutex // guards the namespace fields and the reserve
 	staged    bool       // namespace fields are set
@@ -66,12 +80,16 @@ type localDir struct {
 	nextBatch int
 }
 
-// reservedTemp is an empty, registered temporary file not yet used.
+// reservedTemp names an empty, registered temporary file not yet used. It is
+// reopened by name and identity when used, so reservations hold no descriptor.
 type reservedTemp struct {
-	file     *os.File
 	name, id string
 	identity string
 }
+
+// orderingCache remembers per filesystem whether orderedFileSync may skip
+// the full fsync. It lives as long as one Local.
+type orderingCache struct{ modes sync.Map }
 
 // localDurability holds the directory cache and the work that deferred writes
 // still owe.
@@ -84,12 +102,14 @@ type reservedTemp struct {
 // still owns the temporary name, so a crash at any point leaves either a
 // complete published object or a registered temporary file to remove.
 type localDurability struct {
+	ordering    orderingCache
 	syncMu      sync.Mutex // one Sync at a time, so a returning Sync covers all earlier writes
 	namespaceMu sync.Mutex // serializes PrepareNamespace calls
+	openMu      sync.Mutex // serializes cache misses, so each directory is opened once
 	mu          sync.Mutex
 	dirs        map[string]*localDir // current cache, by parent path
-	all         []*localDir          // every entry ever opened; closed by Close
-	openMu      sync.Mutex           // serializes cache misses, so each directory is opened once
+	open        map[*localDir]bool   // every entry not yet closed
+	clock       uint64
 	dirty       map[*localDir]dirtyDirs
 	forget      []string // temporary-file record IDs to clear after the fsyncs
 	failed      error    // a failed Sync; every later Sync reports it
@@ -105,12 +125,17 @@ const (
 )
 
 // directory returns the cached, revalidated entry for parent, creating the
-// directory when create is set.
+// directory when create is set. The caller must release the entry.
 func (s *Local) directory(parent string, create bool) (*localDir, error) {
 	d := &s.durability
 	lookup := func() (*localDir, error) {
 		d.mu.Lock()
 		entry := d.dirs[parent]
+		if entry != nil {
+			entry.users++
+			d.clock++
+			entry.lastUse = d.clock
+		}
 		d.mu.Unlock()
 		if entry == nil {
 			return nil, nil
@@ -119,11 +144,15 @@ func (s *Local) directory(parent string, create bool) (*localDir, error) {
 		if err == nil && info.IsDir() && os.SameFile(info, entry.info) {
 			return entry, nil
 		}
+		// Replaced or removed: retire it and resolve again. A pending Sync
+		// still fsyncs it before it is closed.
+		d.mu.Lock()
+		s.retire(entry)
+		d.mu.Unlock()
+		s.release(entry)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
-		// Replaced or removed: resolve again. The old entry stays open until
-		// Close in case a pending Sync still needs its handle.
 		return nil, nil
 	}
 	if entry, err := lookup(); entry != nil || err != nil {
@@ -154,15 +183,126 @@ func (s *Local) directory(parent string, create bool) (*localDir, error) {
 		root.Close()
 		return nil, err
 	}
-	entry := &localDir{parent: parent, info: info, root: root, handle: handle}
+	entry := &localDir{parent: parent, info: info, root: root, handle: handle, users: 1}
 	d.mu.Lock()
 	if d.dirs == nil {
-		d.dirs = make(map[string]*localDir)
+		d.dirs, d.open = make(map[string]*localDir), make(map[*localDir]bool)
 	}
+	d.clock++
+	entry.lastUse = d.clock
 	d.dirs[parent] = entry
-	d.all = append(d.all, entry)
+	d.open[entry] = true
+	evict := s.evictionCandidates()
 	d.mu.Unlock()
+	s.evict(evict)
 	return entry, nil
+}
+
+// evictionCandidates retires the least recently used idle entries beyond
+// maxCachedDirs and returns them, each with an extra user held so they stay
+// open until evict has synced them. The caller holds d.mu.
+func (s *Local) evictionCandidates() []*localDir {
+	d := &s.durability
+	var victims []*localDir
+	for len(d.dirs) > maxCachedDirs {
+		var oldest *localDir
+		for _, entry := range d.dirs {
+			if entry.users == 0 && (oldest == nil || entry.lastUse < oldest.lastUse) {
+				oldest = entry
+			}
+		}
+		if oldest == nil {
+			break // Every entry is in use; they are released later.
+		}
+		oldest.users++
+		s.retire(oldest)
+		victims = append(victims, oldest)
+	}
+	return victims
+}
+
+// evict makes the retired entries' pending directory changes durable now, so
+// their descriptors can be closed before the next Sync. Their temporary-file
+// records are still cleared only by Sync, after these fsyncs.
+func (s *Local) evict(victims []*localDir) {
+	d := &s.durability
+	for _, entry := range victims {
+		d.mu.Lock()
+		dirs := d.dirty[entry]
+		d.mu.Unlock()
+		if dirs != 0 {
+			err := syncEntry(entry, dirs)
+			d.mu.Lock()
+			if err != nil && d.failed == nil {
+				d.failed = fmt.Errorf("sync local destination: %w", err)
+			}
+			if err == nil {
+				delete(d.dirty, entry)
+			}
+			d.mu.Unlock()
+		}
+		s.release(entry)
+	}
+}
+
+// retire removes entry from the cache and closes it if possible. The caller
+// holds d.mu.
+func (s *Local) retire(entry *localDir) {
+	d := &s.durability
+	if d.dirs[entry.parent] == entry {
+		delete(d.dirs, entry.parent)
+	}
+	entry.retired = true
+}
+
+// release drops one user of entry and closes it once it is retired, unused
+// and clean.
+func (s *Local) release(entry *localDir) {
+	d := &s.durability
+	d.mu.Lock()
+	entry.users--
+	closeIt := entry.retired && entry.users == 0 && d.dirty[entry] == 0 && !entry.closed
+	if closeIt {
+		entry.closed = true
+		delete(d.open, entry)
+	}
+	d.mu.Unlock()
+	if closeIt {
+		s.closeEntry(entry)
+	}
+}
+
+// closeEntry removes the entry's unused reservations and closes its
+// descriptors. An unused reservation is empty: if its removal is lost in a
+// crash, recovery removes the empty unregistered file anyway, so its record
+// is cleared by the next Sync without another staging-directory fsync.
+func (s *Local) closeEntry(entry *localDir) error {
+	var err error
+	entry.setup.Lock()
+	var forget []string
+	for _, temp := range entry.reserve {
+		if _, removeErr := removeLocalTempEntry(context.Background(), entry.temp, temp.name, temp.identity, true); removeErr != nil {
+			err = errors.Join(err, removeErr)
+			continue // Keep its record; recovery handles it.
+		}
+		forget = append(forget, temp.id)
+	}
+	entry.reserve = nil
+	if entry.tempFile != nil {
+		entry.tempFile.Close()
+	}
+	if entry.temp != nil && entry.temp != entry.root {
+		entry.temp.Close()
+	}
+	entry.handle.Close()
+	entry.root.Close()
+	entry.setup.Unlock()
+	if len(forget) > 0 {
+		s.durability.mu.Lock()
+		s.durability.forget = append(s.durability.forget, forget...)
+		s.durability.mu.Unlock()
+	}
+	return err
 }
 
 // staging returns the directory that holds entry's temporary files, opening
@@ -219,33 +359,58 @@ func (s *Local) staging(ctx context.Context, entry *localDir) error {
 	return nil
 }
 
-// tempFile returns a new, empty temporary file in entry's staging directory.
-// With a registry its record is durable before the caller writes any byte; a
-// crash then leaves a registered file that restart recovery removes.
-func (s *Local) tempFile(ctx context.Context, entry *localDir) (reservedTemp, error) {
+// tempFile returns a new, empty temporary file in entry's staging directory,
+// open for writing. With a registry its record is durable before the caller
+// writes any byte; a crash then leaves a registered file that restart
+// recovery removes.
+func (s *Local) tempFile(ctx context.Context, entry *localDir) (*os.File, reservedTemp, error) {
 	entry.setup.Lock()
 	defer entry.setup.Unlock()
 	if err := s.staging(ctx, entry); err != nil {
-		return reservedTemp{}, err
+		return nil, reservedTemp{}, err
 	}
 	if s.tempRegistry == nil {
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
-			return reservedTemp{}, err
+			return nil, reservedTemp{}, err
 		}
 		return createTemp(entry.temp, ".oss-transfer-"+hex.EncodeToString(nonce[:])+".tmp", "")
 	}
 	if !validHex(s.tempRegistry.OwnerID(), 32) {
-		return reservedTemp{}, ErrTempIdentity
+		return nil, reservedTemp{}, ErrTempIdentity
 	}
 	if len(entry.reserve) == 0 {
 		if err := s.reserveTemps(ctx, entry); err != nil {
-			return reservedTemp{}, err
+			return nil, reservedTemp{}, err
 		}
 	}
 	temp := entry.reserve[0]
 	entry.reserve = entry.reserve[1:]
-	return temp, nil
+	file, err := openReserved(entry.temp, temp)
+	return file, temp, err
+}
+
+// openReserved reopens a reservation, refusing a replaced or nonempty file.
+// On refusal the record stays, so the caller's cleanup and recovery keep
+// treating the name as the original file.
+func openReserved(directory *os.Root, temp reservedTemp) (*os.File, error) {
+	file, err := directory.OpenFile(temp.name, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err == nil {
+		var identity string
+		identity, err = openedIdentity(file, info)
+		if err == nil && (identity != temp.identity || !info.Mode().IsRegular() || info.Size() != 0) {
+			err = ErrTempIdentity
+		}
+	}
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 // reserveTemps creates a batch of empty temporary files and registers them in
@@ -261,7 +426,6 @@ func (s *Local) reserveTemps(ctx context.Context, entry *localDir) error {
 	records := make([]LocalTempRecord, 0, count)
 	discard := func() {
 		for _, temp := range temps {
-			temp.file.Close()
 			// Unregistered and empty: safe to remove; recovery would too.
 			_, _ = removeLocalTempEntry(context.WithoutCancel(ctx), entry.temp, temp.name, temp.identity, true)
 		}
@@ -273,11 +437,12 @@ func (s *Local) reserveTemps(ctx context.Context, entry *localDir) error {
 			return err
 		}
 		id := hex.EncodeToString(nonce[:])
-		temp, err := createTemp(entry.temp, trackedTempName(owner, id), id)
+		file, temp, err := createTemp(entry.temp, trackedTempName(owner, id), id)
 		if err != nil {
 			discard()
 			return err
 		}
+		file.Close()
 		temps = append(temps, temp)
 		records = append(records, LocalTempRecord{Owner: owner, ID: id, ParentPath: entry.tempPath, ParentIdentity: entry.tempIdent, Name: temp.name, FileIdentity: temp.identity})
 	}
@@ -306,21 +471,21 @@ func (s *Local) reserveTemps(ctx context.Context, entry *localDir) error {
 	return nil
 }
 
-func createTemp(directory *os.Root, name, id string) (reservedTemp, error) {
+func createTemp(directory *os.Root, name, id string) (*os.File, reservedTemp, error) {
 	file, err := directory.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return reservedTemp{}, err
+		return nil, reservedTemp{}, err
 	}
 	info, err := file.Stat()
 	if err == nil {
 		var identity string
 		if identity, err = openedIdentity(file, info); err == nil {
-			return reservedTemp{file: file, name: name, id: id, identity: identity}, nil
+			return file, reservedTemp{name: name, id: id, identity: identity}, nil
 		}
 	}
 	file.Close()
 	_ = directory.Remove(name)
-	return reservedTemp{}, err
+	return nil, reservedTemp{}, err
 }
 
 // markDirty records which directories of entry changed, and the
@@ -353,13 +518,34 @@ func (s *Local) DeferExisting(_ context.Context, key string) error {
 		return err
 	}
 	s.markDirty(entry, dirtyDestination, "")
+	s.release(entry)
 	return nil
+}
+
+// syncEntry fsyncs the directories of entry named by dirs.
+func syncEntry(entry *localDir, dirs dirtyDirs) error {
+	staging := entry.tempFile
+	if staging == nil {
+		// Without a namespace the staging directory is the destination.
+		staging = entry.handle
+		if dirs&dirtyStaging != 0 {
+			dirs = dirtyDestination
+		}
+	}
+	var err error
+	if dirs&dirtyDestination != 0 {
+		err = errors.Join(err, syncDirectory(entry.handle))
+	}
+	if dirs&dirtyStaging != 0 {
+		err = errors.Join(err, syncDirectory(staging))
+	}
+	return err
 }
 
 // Sync makes every deferred write that returned before the call durable, then
 // clears their temporary-file records in one registry commit. After a failure
 // it keeps failing, so no later result can be committed on top of writes
-// whose durability is unknown.
+// whose durability is unknown. Retired entries are closed once synced.
 func (s *Local) Sync(ctx context.Context) error {
 	d := &s.durability
 	d.syncMu.Lock()
@@ -371,23 +557,16 @@ func (s *Local) Sync(ctx context.Context) error {
 	}
 	dirty, ids := d.dirty, d.forget
 	d.dirty, d.forget = nil, nil
+	for entry := range dirty {
+		entry.users++ // Keep it open while it is synced.
+	}
 	d.mu.Unlock()
 	var err error
 	for entry, dirs := range dirty {
-		staging := entry.tempFile
-		if staging == nil {
-			// Without a namespace the staging directory is the destination.
-			staging = entry.handle
-			if dirs&dirtyStaging != 0 {
-				dirs = dirtyDestination
-			}
-		}
-		if dirs&dirtyDestination != 0 {
-			err = errors.Join(err, syncDirectory(entry.handle))
-		}
-		if dirs&dirtyStaging != 0 {
-			err = errors.Join(err, syncDirectory(staging))
-		}
+		err = errors.Join(err, syncEntry(entry, dirs))
+	}
+	for entry := range dirty {
+		s.release(entry)
 	}
 	if err == nil && len(ids) > 0 {
 		ctx = context.WithoutCancel(ctx)
@@ -442,41 +621,39 @@ func (s *Local) tempNamespace(ctx context.Context, registry LocalTempNamespaceRe
 func (s *Local) Close() error {
 	d := &s.durability
 	d.mu.Lock()
-	entries := d.all
+	var entries []*localDir
+	for entry := range d.open {
+		entries = append(entries, entry)
+	}
 	d.mu.Unlock()
+	// Remove unused reservations first, so their records go with this Sync.
 	var err error
 	for _, entry := range entries {
 		entry.setup.Lock()
-		for _, temp := range entry.reserve {
-			temp.file.Close()
-			if _, removeErr := removeLocalTempEntry(context.Background(), entry.temp, temp.name, temp.identity, true); removeErr != nil {
-				err = errors.Join(err, removeErr)
-				continue // Keep its record; recovery handles it.
-			}
-			// An unused reservation is empty. If its removal is lost in a
-			// crash, recovery removes the empty unregistered file anyway, so
-			// the record can go without another staging-directory fsync.
-			s.durability.mu.Lock()
-			s.durability.forget = append(s.durability.forget, temp.id)
-			s.durability.mu.Unlock()
-		}
+		reserve := entry.reserve
 		entry.reserve = nil
 		entry.setup.Unlock()
+		for _, temp := range reserve {
+			if _, removeErr := removeLocalTempEntry(context.Background(), entry.temp, temp.name, temp.identity, true); removeErr != nil {
+				err = errors.Join(err, removeErr)
+				continue
+			}
+			d.mu.Lock()
+			d.forget = append(d.forget, temp.id)
+			d.mu.Unlock()
+		}
 	}
 	err = errors.Join(err, s.Sync(context.Background()))
 	d.mu.Lock()
 	namespaces := d.namespaces
-	d.namespaces, d.dirs, d.all = nil, nil, nil
+	entries = entries[:0]
+	for entry := range d.open {
+		entries = append(entries, entry)
+	}
+	d.namespaces, d.dirs, d.open, d.dirty = nil, nil, nil, nil
 	d.mu.Unlock()
 	for _, entry := range entries {
-		if entry.tempFile != nil {
-			entry.tempFile.Close()
-		}
-		if entry.temp != nil && entry.temp != entry.root {
-			entry.temp.Close()
-		}
-		entry.handle.Close()
-		entry.root.Close()
+		err = errors.Join(err, s.closeEntry(entry))
 	}
 	// The registry keeps any namespace a surviving temporary-file record
 	// still points into, so release unconditionally.

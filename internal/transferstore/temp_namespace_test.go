@@ -106,24 +106,27 @@ func TestTempNamespaceRejectsReplacementAndMarkerChanges(t *testing.T) {
 	}
 }
 
-func TestLocalScanExcludesNamespacesByName(t *testing.T) {
+func TestLocalScanExcludesOnlyNamespaceContents(t *testing.T) {
 	root, _, record := makeTestNamespace(t)
 	real := filepath.Join(root, record.Name)
 	if err := os.WriteFile(filepath.Join(real, trackedTempName(record.Owner, strings.Repeat("ab", 16))), []byte("private incomplete payload"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Namespaces are created and removed while other nodes scan, so a
-	// directory with the exact name shape is skipped even without its marker.
 	if err := os.WriteFile(filepath.Join(root, namespacePrefix+"user-file"), []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// A perfectly shaped name without the exact marker is a user directory,
+	// or a namespace still being created: its user files are listed, but a
+	// marker or temporary file inside it never is.
 	fakeName := namespaceName(record.Owner, strings.Repeat("ff", 16))
 	fake := filepath.Join(root, fakeName)
 	if err := os.Mkdir(fake, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fake, "user"), []byte("keep"), 0600); err != nil {
-		t.Fatal(err)
+	for name, body := range map[string]string{"user": "keep", namespaceMarker: "partial", trackedTempName(record.Owner, strings.Repeat("cd", 16)): ""} {
+		if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, "normal"), []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
@@ -137,7 +140,7 @@ func TestLocalScanExcludesNamespacesByName(t *testing.T) {
 	if err := local.Scan(context.Background(), ListOptions{}, func(object Object) error { keys = append(keys, object.Key); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{namespacePrefix + "user-file", "normal"}
+	want := []string{namespacePrefix + "user-file", fakeName + "/user", "normal"}
 	slices.Sort(want)
 	slices.Sort(keys)
 	if !slices.Equal(keys, want) {
@@ -161,6 +164,21 @@ func TestLocalScanExcludesNamespacesByName(t *testing.T) {
 	slices.Sort(listed)
 	if !slices.Equal(listed, want) {
 		t.Fatalf("list=%v want=%v", listed, want)
+	}
+}
+
+// Keys the tool's own discovery would hide are refused on write.
+func TestLocalWriteRejectsStagingNames(t *testing.T) {
+	local, err := NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	owner, id := strings.Repeat("ab", 32), strings.Repeat("cd", 16)
+	for _, key := range []string{namespaceName(owner, id) + "/file", "dir/" + trackedTempName(owner, id), namespaceName(owner, id) + "/"} {
+		if _, err := local.Write(context.Background(), key, strings.NewReader(""), WriteOptions{}); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("%s: got %v, want ErrInvalidKey", key, err)
+		}
 	}
 }
 

@@ -121,9 +121,9 @@ func hookSyncs(t *testing.T, log *eventLog, failDirectory bool) {
 	t.Helper()
 	payload, directory := syncPayloadOrdered, syncDirectory
 	t.Cleanup(func() { syncPayloadOrdered, syncDirectory = payload, directory })
-	syncPayloadOrdered = func(file *os.File) error {
+	syncPayloadOrdered = func(file *os.File, cache *orderingCache) error {
 		log.add("payload " + filepath.Base(file.Name()))
-		return payload(file)
+		return payload(file, cache)
 	}
 	syncDirectory = func(file *os.File) error {
 		log.add("dir " + file.Name())

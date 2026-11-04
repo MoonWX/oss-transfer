@@ -1,17 +1,28 @@
 package main
 
+import "strings"
+
 // Select translated help through the same router used for Chinese, including aliases.
 func helpForLocale(args []string, locale cliLocale) string {
 	source := helpFor(args)
+	text := source
 	if translated, ok := cliHelpTranslations[source]; ok {
 		if locale == localeEN {
-			return translated[0]
+			text = translated[0]
 		}
 		if locale == localeJA {
-			return translated[1]
+			text = translated[1]
 		}
 	}
-	return source
+	switch locale {
+	case localeEN:
+		text = strings.ReplaceAll(text, "{{HELP_TOPICS}}", strings.Join(helpTopics, ", "))
+	case localeJA:
+		text = strings.ReplaceAll(text, "{{HELP_TOPICS}}", strings.Join(helpTopics, "、"))
+	default:
+		text = strings.ReplaceAll(text, "{{HELP_TOPICS}}", strings.Join(helpTopics, "、help "))
+	}
+	return text
 }
 
 var cliHelpTranslations = map[string][2]string{
@@ -19,7 +30,7 @@ var cliHelpTranslations = map[string][2]string{
   oss-transfer-cli update status
   oss-transfer-cli update check
   oss-transfer-cli update master --version 4.1.20 --yes
-  oss-transfer-cli update agent --worker NODE --yes
+  oss-transfer-cli update agent --node NODE --yes
   oss-transfer-cli update agents --all --yes
 
 Agents default to the Master's current version; --version selects another release.
@@ -28,7 +39,7 @@ Follow queued updates with update status --watch 5. Acceptance is not completion
   oss-transfer-cli update status
   oss-transfer-cli update check
   oss-transfer-cli update master --version 4.1.20 --yes
-  oss-transfer-cli update agent --worker ノード --yes
+  oss-transfer-cli update agent --node ノード --yes
   oss-transfer-cli update agents --all --yes
 
 Agent は既定で Master の現在のバージョンに更新します。--version で変更できます。
@@ -37,13 +48,13 @@ update status --watch 5 で結果を確認します。受付は更新完了を�
 	cliBackupHelp: {`Upgrade backups
   oss-transfer-cli backup list
   oss-transfer-cli backup prune master --yes
-  oss-transfer-cli backup prune agent --worker NODE --yes
+  oss-transfer-cli backup prune agent --node NODE --yes
 
 Removes only backups marked removable; recovery backups for failed upgrades remain.
 `, `アップグレードのバックアップ
   oss-transfer-cli backup list
   oss-transfer-cli backup prune master --yes
-  oss-transfer-cli backup prune agent --worker ノード --yes
+  oss-transfer-cli backup prune agent --node ノード --yes
 
 削除可能なバックアップのみ削除し、失敗した更新の復元用バックアップは残します。
 `},
@@ -91,7 +102,7 @@ Tasks
   task report <ID> [--output file.zip]
 
 Nodes and storage
-  node list|show|details|network|add|invite|update|remove
+  node list|show|details|network|update|remove
   agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove
   storage buckets|test <alias>
@@ -139,6 +150,7 @@ Examples
   oss-transfer-cli help task create
 
 Select parent IDs explicitly: 224,225 or 224-226. Commands never default to all tasks.
+Select nodes with --node; the older spelling --worker still works.
 New tasks start automatically. Acceptance or prechecks do not confirm completion.
 Removing nodes/connections, purging tasks and clearing exceptions require --yes.
 Exit codes: 0 success, 1 operation failed, 2 command error, 3 incomplete, 130 interrupted.
@@ -147,7 +159,7 @@ OSS_TRANSFER_MASTER_SERVER sets the address. Use files or environment variables 
 OSS_TRANSFER_CLI_CONFIG_DIR sets the configuration and session directory; use an absolute path.
 Language follows the system, with English as fallback. Save a preference with config set language en; auto restores system selection.
 --lang and OSS_TRANSFER_LANG override the saved preference. JSON keys, enums and user data remain unchanged.
-Help groups: task, task create, task import, node, agent, storage, limit, exceptions, object, login, config, tools.
+Help groups: {{HELP_TOPICS}}.
 `, `OSS Transfer CLI
 使い方: oss-transfer-cli [グローバルオプション] <コマンド> [引数]
 
@@ -168,7 +180,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   task report <ID> [--output ファイル.zip]
 
 ノードとストレージ
-  node list|show|details|network|add|invite|update|remove
+  node list|show|details|network|update|remove
   agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove
   storage buckets|test <接続名>
@@ -217,6 +229,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
 
 Master または Agent の実行ユーザーやシステム管理者は、本機のクラスタをログインなしで利用できます。別クラスタには login が必要です。
 親 ID は 224,225 や 224-226 のように明示してください。既定で全タスクを選択しません。
+ノードは --node で指定します（従来の --worker も使用できます）。
 新規タスクは自動開始します。受理や事前チェックの成功は転送完了を示しません。
 ノード・接続の削除、タスクの完全削除、例外記録のクリアには --yes が必要です。
 終了コード: 0 成功、1 操作失敗、2 コマンドエラー、3 不完全な結果、130 中断。
@@ -224,12 +237,12 @@ OSS_TRANSFER_MASTER_SERVER で接続先を設定します。認証情報はフ�
 OSS_TRANSFER_CLI_CONFIG_DIR は設定とセッションの保存先です。絶対パスで指定してください。
 既定はシステム言語で、判定できない場合は英語です。config set language ja で保存し、auto で自動選択に戻します。
 --lang と OSS_TRANSFER_LANG は保存した設定より優先されます。JSON のキー、列挙値、利用者のデータは変わりません。
-ヘルプ: task、task create、task import、node、agent、setup、storage、limit、exceptions、object、login、config、tools。
+ヘルプ: {{HELP_TOPICS}}。
 `},
 	cliTaskHelp: {`Task management
 Usage: oss-transfer-cli task <subcommand> [arguments]
 
-  list [--status STATUS] [--source BUCKET] [--dest BUCKET] [--worker NODE]
+  list [--status STATUS] [--source BUCKET] [--dest BUCKET] [--node NODE]
        [--direction oss-to-oss|oss-to-local|local-to-oss] [--search TEXT]
        [--limit 100] [--before-id ID] [--all]
   show <ID> [--offset 0] [--limit 25]
@@ -239,7 +252,7 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   cleanup-status <ID...>
   retry --all --yes
   recover-child <ID-N>            Try to resume a subtask within the node's concurrency limit
-  trash [--task-id ID] [--worker NODE] [--direction DIRECTION] [--search TEXT]
+  trash [--task-id ID] [--node NODE] [--direction DIRECTION] [--search TEXT]
         [--limit 100] [--before-id ID] [--all]
 
   stop <ID...>                     Stop and retain progress
@@ -273,7 +286,7 @@ Deleting records does not delete source or target objects.
 `, `タスク管理
 使い方: oss-transfer-cli task <サブコマンド> [引数]
 
-  list [--status 状態] [--source バケット] [--dest バケット] [--worker ノード]
+  list [--status 状態] [--source バケット] [--dest バケット] [--node ノード]
        [--direction oss-to-oss|oss-to-local|local-to-oss] [--search 文字列]
        [--limit 100] [--before-id ID] [--all]
   show <ID> [--offset 0] [--limit 25]
@@ -283,7 +296,7 @@ Deleting records does not delete source or target objects.
   cleanup-status <ID...>
   retry --all --yes
   recover-child <ID-N>            ノードの同時実行数制限内で子タスクの再開を試行
-  trash [--task-id ID] [--worker ノード] [--direction 方向] [--search 文字列]
+  trash [--task-id ID] [--node ノード] [--direction 方向] [--search 文字列]
         [--limit 100] [--before-id ID] [--all]
 
   stop <ID...>                     進捗を保持して停止
@@ -458,18 +471,17 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   show <node>                     Node runtime status
   details <node>                  Host, interface IPs and mounted directories
   network [--public-url URL] [--agent-url URL]
-  add <node> [--label name]        Generate Agent join commands
-  invite [--address node] [--label name] [--master-url URL]
-  update <node> [--address new-address] [--label name]
+  update <node> [--label name]
   update <node> --child-concurrency 32 --object-concurrency 4
   remove <node> --yes              Remove the registration
 
   oss-transfer-cli node list --watch 5
-  oss-transfer-cli node add 10.0.0.2 --label data-node
+  oss-transfer-cli agent invite --address 10.0.0.2 --label data-node
+  oss-transfer-cli node update 10.0.0.2 --label standby-node
   oss-transfer-cli node remove 10.0.0.2 --yes
 
-Use the Node ID column from node list to select a node in commands. Add nodes with agent invite; --address accepts a name, IPv4 or IPv6 and is generated when omitted.
-Agent addresses cannot be edited after registration; join again when replacing a node.
+Use the Node ID column from node list to select a node in commands. Add nodes with agent invite (see help agent).
+An enrolled Agent's address cannot be changed. To move a node, enroll the replacement Agent at the new address, then remove the old node.
 node network retains legacy address settings. New invitations use the current CLI connection address.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
 Use --json for queue/raw rate data; use limit list for limits.
@@ -480,18 +492,17 @@ Use --json for queue/raw rate data; use limit list for limits.
   show <ノード>                   稼働状態を表示
   details <ノード>                ホスト、インターフェース IP、マウントを表示
   network [--public-url URL] [--agent-url URL]
-  add <ノード> [--label 名前]      Agent 参加コマンドを生成
-  invite [--address ノード] [--label 名前] [--master-url URL]
-  update <ノード> [--address 新アドレス] [--label 名前]
+  update <ノード> [--label 名前]
   update <ノード> --child-concurrency 32 --object-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli node list --watch 5
-  oss-transfer-cli node add 10.0.0.2 --label data-node
+  oss-transfer-cli agent invite --address 10.0.0.2 --label data-node
+  oss-transfer-cli node update 10.0.0.2 --label standby-node
   oss-transfer-cli node remove 10.0.0.2 --yes
 
-コマンドのノード指定には node list の「ノード ID」列を使います。追加は agent invite を使い、--address は名前、IPv4、IPv6 に対応します。省略時は自動生成されます。
-登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
+コマンドのノード指定には node list の「ノード ID」列を使います。追加は agent invite を使います（help agent を参照）。
+参加済み Agent のアドレスは変更できません。移行する場合は新しいアドレスで代替の Agent を参加させてから、古いノードを削除してください。
 node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。
 キューや速度の生データは --json、上限は limit list で確認できます。
@@ -612,17 +623,17 @@ Connection tests validate listing; actual operations validate read and write per
 Usage: oss-transfer-cli limit <subcommand> [arguments]
 
   list                            Target/running limits and automatic adjustment status
-  set <list|put|head|bandwidth> <value|unlimited> (--worker NODE|--all)
+  set <list|put|head|bandwidth> <value|unlimited> (--node NODE|--all)
        [--unit bps|Kbps|Mbps|Gbps]
   history [--limit 50]             Recent changes; maximum 1000 per node
-  adjustment --worker NODE --event-id ID [--cursor CURSOR]
+  adjustment --node NODE --event-id ID [--cursor CURSOR]
 
-  oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
+  oss-transfer-cli limit set bandwidth 200 --node 10.0.0.2
   oss-transfer-cli limit set bandwidth 1 --unit Gbps --all
   oss-transfer-cli limit set put 500 --all
-  oss-transfer-cli limit set bandwidth unlimited --worker 10.0.0.2
+  oss-transfer-cli limit set bandwidth unlimited --node 10.0.0.2
   oss-transfer-cli limit list --watch 5
-  oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
+  oss-transfer-cli limit adjustment --node 10.0.0.2 --event-id EVENT_ID
 
 bandwidth defaults to Mbps; other limits use requests/second and reject --unit.
 Values must be greater than zero; use unlimited to remove a limit.
@@ -632,17 +643,17 @@ Adjustment details retain nextCursor, done, historyComplete and process restart 
 使い方: oss-transfer-cli limit <サブコマンド> [引数]
 
   list                            目標上限、動作上限、自動調整の状態を表示
-  set <list|put|head|bandwidth> <値|unlimited> (--worker ノード|--all)
+  set <list|put|head|bandwidth> <値|unlimited> (--node ノード|--all)
        [--unit bps|Kbps|Mbps|Gbps]
   history [--limit 50]             最近の調整。ノードごとに最大 1000 件
-  adjustment --worker ノード --event-id ID [--cursor カーソル]
+  adjustment --node ノード --event-id ID [--cursor カーソル]
 
-  oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
+  oss-transfer-cli limit set bandwidth 200 --node 10.0.0.2
   oss-transfer-cli limit set bandwidth 1 --unit Gbps --all
   oss-transfer-cli limit set put 500 --all
-  oss-transfer-cli limit set bandwidth unlimited --worker 10.0.0.2
+  oss-transfer-cli limit set bandwidth unlimited --node 10.0.0.2
   oss-transfer-cli limit list --watch 5
-  oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
+  oss-transfer-cli limit adjustment --node 10.0.0.2 --event-id EVENT_ID
 
 bandwidth の既定単位は Mbps、他の制限は回/秒で、--unit は使えません。
 値は 0 より大きくしてください。解除には unlimited を使用します。
@@ -654,8 +665,8 @@ Usage: oss-transfer-cli exceptions list|export|clear <type> [options]
 
 Types: failed (failed objects), fallback (legacy SDK records; unsupported by Go), local (local failures).
   list failed|fallback [--task-id ID] [--source-bucket BUCKET] [--dest-bucket BUCKET]
-                       [--worker NODE] [--limit 1000]
-  list local [--task-id ID] [--worker NODE] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
+                       [--node NODE] [--limit 1000]
+  list local [--task-id ID] [--node NODE] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
              [--endpoint VALUE] [--storage-id ID] [--offset 0] [--limit 25]
   export failed|fallback --output file.csv [same filters as list]
   export local --output file.zip
@@ -666,7 +677,7 @@ CSV contains this query's records and completeness/truncation indicators; existi
 Local ZIP exports all local task reports without filters; use task report for one task.
 Only ended or stopped tasks can be exported. Clear removes recovered or skipped exception records;
 unresolved failures and tasks remain. Use filters or --all, not both.
-Filters: --task-id, --worker, --direction, --source-bucket, --dest-bucket, --endpoint.
+Filters: --task-id, --node, --direction, --source-bucket, --dest-bucket, --endpoint.
 complete/partial describe node coverage; truncated describes the size cap. Legacy caps may return
 truncatedWorkers; use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
 
@@ -677,8 +688,8 @@ truncatedWorkers; use ZIP reports for more records. A downloaded report does not
 
 種別: failed（失敗オブジェクト）、fallback（旧 SDK 記録。Go は未対応）、local（ローカル転送の失敗）。
   list failed|fallback [--task-id ID] [--source-bucket バケット] [--dest-bucket バケット]
-                       [--worker ノード] [--limit 1000]
-  list local [--task-id ID] [--worker ノード] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
+                       [--node ノード] [--limit 1000]
+  list local [--task-id ID] [--node ノード] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
              [--endpoint 値] [--storage-id ID] [--offset 0] [--limit 25]
   export failed|fallback --output ファイル.csv [list と同じ絞り込み条件]
   export local --output ファイル.zip
@@ -689,7 +700,7 @@ CSV は今回の記録と完全性・件数省略の情報を出力します。�
 ローカル ZIP は絞り込まず全ローカルタスクを出力します。単一タスクには task report を使用します。
 出力できるのは終了・停止したタスクのみです。削除するのは回復済み・スキップ済みの例外記録です。
 未解決の失敗とタスクは残ります。絞り込み条件と --all は併用できません。
-絞り込み: --task-id、--worker、--direction、--source-bucket、--dest-bucket、--endpoint。
+絞り込み: --task-id、--node、--direction、--source-bucket、--dest-bucket、--endpoint。
 complete/partial は応答の完全性、truncated は件数上限による省略を示します。
 truncatedWorkers が返された場合、詳細には ZIP レポートを使用してください。
 ダウンロード成功は転送データの検証完了を示しません。

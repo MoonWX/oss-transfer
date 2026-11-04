@@ -34,7 +34,7 @@ func masterOrigin(value, flag string) (string, error) {
 		valid = err == nil && port > 0 && port <= 65535
 	}
 	if !valid {
-		return "", cliErrorf("--%s 须为不含路径的 HTTP 或 HTTPS 地址", flag)
+		return "", usageErrorf("--%s 须为不含路径的 HTTP 或 HTTPS 地址", flag)
 	}
 	return strings.TrimRight(u.String(), "/"), nil
 }

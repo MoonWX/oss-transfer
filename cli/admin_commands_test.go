@@ -121,34 +121,82 @@ func TestAdminDestructiveCommandsRequireTargetsAndConfirmation(t *testing.T) {
 	}
 }
 
-func TestAdminNodeUpdatePreservesLabel(t *testing.T) {
+func TestAdminNodeUpdateSendsOnlyEditableFields(t *testing.T) {
 	calls := 0
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if calls == 1 {
-			if r.Method != "GET" || r.URL.Path != "/api/master/nodes" {
-				t.Fatalf("unexpected registry request: %s %s", r.Method, r.URL)
-			}
-			adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"address": "10.0.0.2", "label": "迁移节点"}}}})
-			return
-		}
 		if r.Method != "PUT" || r.URL.Path != "/api/master/nodes/10.0.0.2" {
 			t.Fatalf("unexpected update: %s %s", r.Method, r.URL)
 		}
-		if body := adminTestBody(t, r); body["label"] != "迁移节点" || body["address"] != "10.0.0.3" {
+		if body := adminTestBody(t, r); body["label"] != "迁移节点" || body["address"] != nil {
 			t.Fatalf("unexpected body: %#v", body)
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true})
 	})
-	if _, err := runAdminCommand(client, "node", []string{"update", "10.0.0.2", "--address", "10.0.0.3"}); err != nil {
+	if _, err := runAdminCommand(client, "node", []string{"update", "10.0.0.2", "--label", " 迁移节点 "}); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 {
+	if calls != 1 {
 		t.Fatalf("calls = %d", calls)
+	}
+	// The Master always refuses address changes, so the CLI refuses them first.
+	for _, args := range [][]string{{"update", "10.0.0.2", "--address", "10.0.0.3"}, {"update", "10.0.0.2", "--address=10.0.0.3", "--label", "x"}} {
+		_, err := runAdminCommand(client, "node", args)
+		if err == nil || !isUsageError(err) || !strings.Contains(localizedCLIError(localeEN, err), "enroll the replacement Agent") {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	// Labels follow the server limit of 128 bytes: 50 CJK characters are 150 bytes.
+	if _, err := runAdminCommand(client, "node", []string{"update", "10.0.0.2", "--label", strings.Repeat("节", 50)}); err == nil || !isUsageError(err) {
+		t.Fatalf("oversized label accepted: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("rejected update reached the server: %d", calls)
 	}
 	for _, address := range []string{"10.0.0.2:2222", "host/name", "01.2.3.4", "224.0.0.1"} {
 		if _, err := runAdminCommand(client, "node", []string{"add", address}); err == nil {
 			t.Errorf("invalid IPv4 accepted: %s", address)
+		}
+	}
+}
+
+func TestAdminObjectCompareDefaultsToComparisonJobs(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want map[string]interface{}
+	}{
+		{[]string{"--source-bucket", "src/a", "--dest-bucket", "dst/b"}, map[string]interface{}{"scope": "prefix", "mode": "metadata", "sourcePrefix": "", "destPrefix": ""}},
+		{[]string{"--source-bucket", "src/a", "--dest-bucket", "dst/b", "--source-key", "k1", "--dest-key", "k2"}, map[string]interface{}{"scope": "object", "mode": "metadata", "sourcePrefix": "k1", "destPrefix": "k2"}},
+		{[]string{"--source-bucket", "src/a", "--dest-bucket", "dst/b", "--source-prefix", "p/", "--mode", "content"}, map[string]interface{}{"scope": "prefix", "mode": "content", "sourcePrefix": "p/", "destPrefix": ""}},
+	} {
+		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" || r.URL.Path != "/api/master/comparisons" {
+				t.Fatalf("%v: unexpected request %s %s", test.args, r.Method, r.URL)
+			}
+			body := adminTestBody(t, r)
+			if body["sourceBucket"] != "src/a" || body["destBucket"] != "dst/b" {
+				t.Fatalf("%v: %#v", test.args, body)
+			}
+			for key, value := range test.want {
+				if body[key] != value {
+					t.Fatalf("%v: %s = %#v", test.args, key, body[key])
+				}
+			}
+			adminTestJSON(t, w, map[string]interface{}{"success": true, "id": "cmp-1"})
+		})
+		if _, err := runAdminCommand(client, "object", append([]string{"compare"}, test.args...)); err != nil {
+			t.Fatalf("%v: %v", test.args, err)
+		}
+	}
+	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) { t.Fatalf("invalid compare reached server: %s", r.URL) })
+	for _, args := range [][]string{
+		{"compare", "--source-bucket", "src/a", "--dest-bucket", "dst/b", "--source-key", "k1"},
+		{"compare", "--source-bucket", "src", "--dest-bucket", "dst/b"},
+		{"compare", "--metadata-lookup", "--source-bucket", "src/a", "--dest-bucket", "dst/b", "--source-key", "k1"},
+		{"compare", "--metadata-lookup", "--scope", "object", "--source-bucket", "src/a", "--dest-bucket", "dst/b", "--source-key", "k1", "--dest-key", "k2"},
+	} {
+		if _, err := runAdminCommand(client, "object", args); err == nil || !isUsageError(err) {
+			t.Fatalf("%v: %v", args, err)
 		}
 	}
 }
@@ -435,7 +483,7 @@ func TestAdminObjectComparePreservesExactKeysAndPartialResponse(t *testing.T) {
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true, "partial": true, "complete": false, "sourceMetadata": map[string]interface{}{"exists": true}, "destMetadata": map[string]interface{}{"queryStatus": "UNAVAILABLE"}})
 	})
-	args := []string{"compare", "--source-bucket", "source/my-bucket", "--source-key", " a+b/&?#对象 ", "--dest-bucket", "dest/other-bucket", "--dest-key", "dest/file"}
+	args := []string{"compare", "--metadata-lookup", "--source-bucket", "source/my-bucket", "--source-key", " a+b/&?#对象 ", "--dest-bucket", "dest/other-bucket", "--dest-key", "dest/file"}
 	result, err := runAdminCommand(client, "object", args)
 	if err != nil {
 		t.Fatal(err)

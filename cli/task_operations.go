@@ -33,7 +33,8 @@ func taskListPages(client *ApiClient, query url.Values, all bool) (map[string]in
 			result = page
 		}
 		if err != nil {
-			if result != nil {
+			// Only earlier pages make the list partial; a failed first page is a plain failure.
+			if result != nil && pages > 0 {
 				responseData(result)["partial"] = true
 				responseData(result)["pageError"] = localizedCLIError(client.locale, err)
 			}
@@ -160,7 +161,7 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 	var tasks map[int]map[string]interface{}
 	if opts.Has("all") {
 		if !opts.Has("yes") || len(opts.Positionals) > 0 {
-			return nil, cliErrorf("重试所有失败任务请使用 task retry --all --yes，且不要指定任务 ID")
+			return nil, usageErrorf("重试所有失败任务请使用 task retry --all --yes，且不要指定任务 ID")
 		}
 		page, err := taskListPages(client, url.Values{"includeSubtasks": {"false"}}, true)
 		if err != nil {
@@ -346,14 +347,14 @@ func taskProgress(client *ApiClient, args []string) (map[string]interface{}, err
 		parentID, parentErr := taskID(parent)
 		childNumber, childErr := taskID(number)
 		if !ok || parentErr != nil || childErr != nil || parentID != id {
-			return nil, cliErrorf("子任务编号应为 %d-序号，序号从 1 开始", id)
+			return nil, usageErrorf("子任务编号应为 %d-序号，序号从 1 开始", id)
 		}
 		query.Set("childNumber", strconv.Itoa(childNumber))
 	}
 	if opts.Has("generation") {
 		generation, err := strconv.ParseUint(opts.Value("generation"), 10, 64)
 		if err != nil || generation == 0 {
-			return nil, cliErrorf("--generation 必须为正整数")
+			return nil, usageErrorf("--generation 必须为正整数")
 		}
 		query.Set("generation", strconv.FormatUint(generation, 10))
 	}

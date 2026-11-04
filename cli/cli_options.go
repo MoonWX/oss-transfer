@@ -30,6 +30,15 @@ func parseCommandOptions(args, valueFlags, boolFlags []string) (commandOptions, 
 	for _, name := range boolFlags {
 		switches[name] = true
 	}
+	// --node and --worker both select a node; accept either spelling wherever
+	// a command takes one, so scripts written for either keep working.
+	aliases := map[string]string{}
+	if values["node"] && !values["worker"] {
+		aliases["worker"] = "node"
+	}
+	if values["worker"] && !values["node"] {
+		aliases["node"] = "worker"
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -45,19 +54,22 @@ func parseCommandOptions(args, valueFlags, boolFlags []string) (commandOptions, 
 			name = strings.TrimPrefix(arg, "-")
 		}
 		key, value, equals := strings.Cut(name, "=")
+		if canonical, ok := aliases[key]; ok {
+			key = canonical
+		}
 		if switches[key] {
 			if equals {
-				return o, cliErrorf("--%s 不接受值", key)
+				return o, usageErrorf("--%s 不接受值", key)
 			}
 			o.Switches[key] = true
 			continue
 		}
 		if !values[key] {
-			return o, cliErrorf("未知选项 %s；使用 --help 查看用法", arg)
+			return o, usageErrorf("未知选项 %s；使用 --help 查看用法", arg)
 		}
 		if !equals {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
-				return o, cliErrorf("--%s 缺少值", key)
+				return o, usageErrorf("--%s 缺少值", key)
 			}
 			i++
 			value = args[i]
@@ -71,13 +83,13 @@ func taskID(text string) (int, error) {
 	text = strings.TrimPrefix(text, "#")
 	id, err := strconv.ParseInt(text, 10, 32)
 	if err != nil || id <= 0 {
-		return 0, cliErrorf("无效主任务 ID: %q", text)
+		return 0, usageErrorf("无效主任务 ID: %q", text)
 	}
 	return int(id), nil
 }
 func taskIDs(args []string) ([]int, error) {
 	if len(args) == 0 {
-		return nil, cliErrorf("请明确指定任务 ID，如 224 或 224,225；不会默认处理所有任务")
+		return nil, usageErrorf("请明确指定任务 ID，如 224 或 224,225；不会默认处理所有任务")
 	}
 	ids := []int{}
 	seen := map[int]bool{}
@@ -92,11 +104,11 @@ func taskIDs(args []string) ([]int, error) {
 			if hasRange {
 				end, err = taskID(hi)
 				if err != nil || end < start {
-					return nil, cliErrorf("无效任务范围 %q", part)
+					return nil, usageErrorf("无效任务范围 %q", part)
 				}
 			}
 			if end-start > 9999 || len(ids)+(end-start+1) > 10000 {
-				return nil, cliErrorf("单次最多指定 10000 个任务")
+				return nil, usageErrorf("单次最多指定 10000 个任务")
 			}
 			for id := start; id <= end; id++ {
 				if !seen[id] {

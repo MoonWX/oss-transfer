@@ -14,7 +14,7 @@ var maintenanceVersion = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)
 
 func runMaintenanceCommand(client *ApiClient, group string, args []string) (map[string]interface{}, error) {
 	if len(args) == 0 {
-		return nil, cliErrorf("缺少 %s 子命令，请运行 oss-transfer-cli %s --help", group, group)
+		return nil, usageErrorf("缺少 %s 子命令，请运行 oss-transfer-cli %s --help", group, group)
 	}
 	switch group {
 	case "update":
@@ -22,13 +22,13 @@ func runMaintenanceCommand(client *ApiClient, group string, args []string) (map[
 	case "backup":
 		return runBackupMaintenance(client, args[0], args[1:])
 	default:
-		return nil, cliErrorf("未知命令组: %s", group)
+		return nil, usageErrorf("未知命令组: %s", group)
 	}
 }
 
 func updateVersion(value string) (string, error) {
 	if len(value) > 64 || !maintenanceVersion.MatchString(value) {
-		return "", cliErrorf("--version 必须是发布版本号，如 4.1.22")
+		return "", usageErrorf("--version 必须是发布版本号，如 4.1.22")
 	}
 	return strings.TrimPrefix(value, "v"), nil
 }
@@ -44,7 +44,7 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		return client.Get("/software-updates")
 	}
 	if action != "master" && action != "agent" && action != "agents" {
-		return nil, cliErrorf("未知 update 子命令: %s", action)
+		return nil, usageErrorf("未知 update 子命令: %s", action)
 	}
 	o, err := adminOptions(args, []string{"version", "worker"}, []string{"all", "yes"}, 0)
 	if err != nil {
@@ -57,11 +57,11 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	switch action {
 	case "master":
 		if !o.Has("version") || o.Has("worker") || o.Has("all") {
-			return nil, cliErrorf("用法: update master --version 版本 --yes")
+			return nil, usageErrorf("用法: update master --version 版本 --yes")
 		}
 	case "agent":
 		if !o.Has("worker") || o.Has("all") {
-			return nil, cliErrorf("用法: update agent --worker 节点 [--version 版本] --yes")
+			return nil, usageErrorf("用法: update agent --node 节点 [--version 版本] --yes")
 		}
 		if err := adminNodeAddress(o.Value("worker")); err != nil {
 			return nil, err
@@ -69,7 +69,7 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		path = "/software-updates/agents/" + url.PathEscape(o.Value("worker"))
 	case "agents":
 		if !o.Has("all") || o.Has("worker") {
-			return nil, cliErrorf("用法: update agents --all [--version 版本] --yes")
+			return nil, usageErrorf("用法: update agents --all [--version 版本] --yes")
 		}
 	}
 	version := ""
@@ -114,23 +114,23 @@ func runBackupMaintenance(client *ApiClient, action string, args []string) (map[
 		switch o.Positionals[0] {
 		case "master":
 			if o.Has("worker") {
-				return nil, cliErrorf("用法: backup prune master --yes")
+				return nil, usageErrorf("用法: backup prune master --yes")
 			}
 			path += "/master/prune"
 		case "agent":
 			if !o.Has("worker") {
-				return nil, cliErrorf("用法: backup prune agent --worker 节点 --yes")
+				return nil, usageErrorf("用法: backup prune agent --node 节点 --yes")
 			}
 			if err := adminNodeAddress(o.Value("worker")); err != nil {
 				return nil, err
 			}
 			path += "/agents/" + url.PathEscape(o.Value("worker")) + "/prune"
 		default:
-			return nil, cliErrorf("备份清理必须明确选择 master 或 agent")
+			return nil, usageErrorf("备份清理必须明确选择 master 或 agent")
 		}
 		return backupRequestClient(client).Post(path, map[string]interface{}{})
 	default:
-		return nil, cliErrorf("未知 backup 子命令: %s", action)
+		return nil, usageErrorf("未知 backup 子命令: %s", action)
 	}
 }
 

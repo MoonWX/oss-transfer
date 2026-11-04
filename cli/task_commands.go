@@ -13,7 +13,7 @@ import (
 
 func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, error) {
 	if len(args) == 0 {
-		return nil, cliErrorf("请指定 task 子命令，使用 task --help 查看")
+		return nil, usageErrorf("请指定 task 子命令，使用 task --help 查看")
 	}
 	action, args := args[0], args[1:]
 	switch action {
@@ -54,7 +54,7 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 			return taskControlBatches(client, action, []taskControlGroup{{path: "/restore", ids: ids}}, nil)
 		}
 		if !opts.Has("yes") {
-			return nil, cliErrorf("永久删除指定任务记录不可恢复；确认后添加 --yes")
+			return nil, usageErrorf("永久删除指定任务记录不可恢复；确认后添加 --yes")
 		}
 		return taskControlBatches(client, action, []taskControlGroup{{path: "/permanent-delete", ids: ids}}, nil)
 	case "bandwidth":
@@ -64,7 +64,7 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 	case "report":
 		return taskReport(client, args)
 	default:
-		return nil, cliErrorf("未知 task 子命令 %q", action)
+		return nil, usageErrorf("未知 task 子命令 %q", action)
 	}
 }
 
@@ -78,7 +78,7 @@ func taskRecoverChild(client *ApiClient, args []string) (map[string]interface{},
 	parentID, parentErr := taskID(parent)
 	childNumber, childErr := taskID(number)
 	if !ok || !regexp.MustCompile(`^[1-9][0-9]*-[1-9][0-9]*$`).MatchString(childID) || parentErr != nil || childErr != nil {
-		return nil, cliErrorf("子任务编号应为 主任务ID-序号，序号从 1 开始")
+		return nil, usageErrorf("子任务编号应为 主任务ID-序号，序号从 1 开始")
 	}
 	return client.Post(fmt.Sprintf("/tasks/%d/children/%d/recover", parentID, childNumber), map[string]interface{}{})
 }
@@ -102,7 +102,7 @@ func taskTrash(client *ApiClient, args []string) (map[string]interface{}, error)
 	}
 	direction := strings.ToUpper(strings.ReplaceAll(opts.Value("direction"), "-", "_"))
 	if direction != "" && direction != "OSS_TO_OSS" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
-		return nil, cliErrorf("无效迁移方向 %q", opts.Value("direction"))
+		return nil, usageErrorf("无效迁移方向 %q", opts.Value("direction"))
 	}
 	query := url.Values{}
 	if err := taskPageQuery(opts, query); err != nil {
@@ -177,7 +177,7 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 		return nil, err
 	}
 	if len(opts.Positionals) > 0 {
-		return nil, cliErrorf("task list 不接受位置参数")
+		return nil, usageErrorf("task list 不接受位置参数")
 	}
 	query := url.Values{}
 	query.Set("includeSubtasks", "false")
@@ -194,13 +194,13 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 		switch status {
 		case "PENDING", "WAITING", "RUNNING", "LIST_DONE", "RECOVERABLE", "RESUMING", "STOPPING", "STOPPED", "COMPLETED", "PARTIAL_FAILED", "FAILED":
 		default:
-			return nil, cliErrorf("无效任务状态 %q", status)
+			return nil, usageErrorf("无效任务状态 %q", status)
 		}
 		query.Set("status", status)
 	}
 	direction := strings.ToUpper(strings.ReplaceAll(opts.Value("direction"), "-", "_"))
 	if direction != "" && direction != "OSS_TO_OSS" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
-		return nil, cliErrorf("无效迁移方向 %q", opts.Value("direction"))
+		return nil, usageErrorf("无效迁移方向 %q", opts.Value("direction"))
 	}
 	result, err := taskListPages(client, query, opts.Has("all") || opts.Has("a"))
 	if err != nil {
@@ -219,6 +219,16 @@ func taskList(client *ApiClient, args []string) (map[string]interface{}, error) 
 	sort.SliceStable(filtered, func(i, j int) bool { return getInt(filtered[i], "taskIndex") > getInt(filtered[j], "taskIndex") })
 	responseData(result)["tasks"] = filtered
 	responseData(result)["filteredCount"] = len(filtered)
+	if !opts.Has("all") && !opts.Has("a") {
+		for _, flag := range []string{"status", "source", "dest", "worker", "node", "direction", "search"} {
+			if opts.Has(flag) {
+				// Filters cover only this page; say so instead of implying "no matches".
+				limit, _ := strconv.Atoi(query.Get("limit"))
+				responseData(result)["filterWindow"] = limit
+				break
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -228,11 +238,14 @@ func taskPageQuery(opts commandOptions, query url.Values) error {
 			continue
 		}
 		if len(opts.Values[flag]) != 1 {
-			return cliErrorf("--%s 只能指定一次", flag)
+			return usageErrorf("--%s 只能指定一次", flag)
 		}
 		value, err := strconv.ParseInt(opts.Value(flag), 10, 64)
-		if err != nil || value <= 0 || flag == "limit" && value > 10000 {
-			return cliErrorf("--%s 必须为正整数；--limit 不得超过 10000", flag)
+		if err != nil || value <= 0 {
+			return usageErrorf("--%s 必须为正整数", flag)
+		}
+		if flag == "limit" && value > 10000 {
+			return usageErrorf("--limit 不得超过 10000")
 		}
 		name := flag
 		if flag == "before-id" {
@@ -420,7 +433,7 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 	}
 	if opts.Has("node") {
 		if !opts.Has("child") {
-			return nil, cliErrorf("--node 仅用于选择 --child 对应节点")
+			return nil, usageErrorf("--node 仅用于选择 --child 对应节点")
 		}
 		if err := adminNodeAddress(opts.Value("node")); err != nil {
 			return nil, err
@@ -429,13 +442,13 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 	var childNumber int
 	if opts.Has("child") {
 		if childrenOnly || opts.Has("offset") || opts.Has("limit") || opts.Has("active") || opts.Has("cursor") || opts.Has("order") {
-			return nil, cliErrorf("--child 仅用于 task show，且不能与分页选项同时使用")
+			return nil, usageErrorf("--child 仅用于 task show，且不能与分页选项同时使用")
 		}
 		parentText, childText, hasNumber := strings.Cut(strings.TrimPrefix(opts.Value("child"), "#"), "-")
 		parentID, parentErr := taskID(parentText)
 		childNumber, err = taskID(childText)
 		if !hasNumber || parentErr != nil || err != nil || parentID != id {
-			return nil, cliErrorf("子任务编号应为 %d-序号，序号从 1 开始", id)
+			return nil, usageErrorf("子任务编号应为 %d-序号，序号从 1 开始", id)
 		}
 	}
 	query := url.Values{"offset": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(limit)}}
@@ -450,14 +463,14 @@ func taskShow(client *ApiClient, args []string, childrenOnly bool) (map[string]i
 		}
 	}
 	if order != "priority" && order != "id" {
-		return nil, cliErrorf("--order 必须为 priority 或 id")
+		return nil, usageErrorf("--order 必须为 priority 或 id")
 	}
 	if order == "priority" {
 		query.Set("order", order)
 	}
 	if opts.Has("cursor") {
 		if order != "priority" || strings.TrimSpace(opts.Value("cursor")) == "" {
-			return nil, cliErrorf("--cursor 必须为非空游标，且需要按 priority 排序")
+			return nil, usageErrorf("--cursor 必须为非空游标，且需要按 priority 排序")
 		}
 		query.Set("cursor", opts.Value("cursor"))
 	}
@@ -655,7 +668,7 @@ func taskBandwidth(client *ApiClient, args []string) (map[string]interface{}, er
 		return nil, err
 	}
 	if len(opts.Positionals) < 1 || len(opts.Positionals) > 2 {
-		return nil, cliErrorf("用法: task bandwidth <ID> [Mbps|unlimited]")
+		return nil, usageErrorf("用法: task bandwidth <ID> [Mbps|unlimited]")
 	}
 	id, err := taskID(opts.Positionals[0])
 	if err != nil {
@@ -669,7 +682,7 @@ func taskBandwidth(client *ApiClient, args []string) (map[string]interface{}, er
 	if opts.Positionals[1] != "unlimited" {
 		n, err := strconv.ParseFloat(opts.Positionals[1], 64)
 		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0.1 || n > 1000000 {
-			return nil, cliErrorf("任务带宽为 0.1–1000000 Mbps；取消额外限制使用 unlimited")
+			return nil, usageErrorf("任务带宽为 0.1–1000000 Mbps；取消额外限制使用 unlimited")
 		}
 		value = n
 	}
@@ -681,7 +694,7 @@ func taskReport(client *ApiClient, args []string) (map[string]interface{}, error
 		return nil, err
 	}
 	if len(opts.Positionals) != 1 {
-		return nil, cliErrorf("用法: task report <ID> [--output 文件.zip]")
+		return nil, usageErrorf("用法: task report <ID> [--output 文件.zip]")
 	}
 	id, err := taskID(opts.Positionals[0])
 	if err != nil {

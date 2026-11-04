@@ -7,20 +7,20 @@ import (
 
 func validateCreationRequestID(id string) error {
 	if len(id) == 0 || len(id) > 220 {
-		return cliErrorf("--request-id 须为 1–220 个字符")
+		return usageErrorf("--request-id 须为 1–220 个字符")
 	}
 	for _, c := range id {
 		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':' {
 			continue
 		}
-		return cliErrorf("--request-id 仅支持字母、数字和 - _ . :")
+		return usageErrorf("--request-id 仅支持字母、数字和 - _ . :")
 	}
 	return nil
 }
 
 func creationRequestIDOption(opts commandOptions) (string, error) {
 	if len(opts.Values["request-id"]) > 1 {
-		return "", cliErrorf("--request-id 只能填写一次")
+		return "", usageErrorf("--request-id 只能填写一次")
 	}
 	id := opts.Value("request-id")
 	if opts.Has("request-id") {

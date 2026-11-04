@@ -165,7 +165,7 @@ func runInventoryImport(client *ApiClient, args []string) (map[string]interface{
 		return nil, err
 	}
 	if len(opts.Positionals) != 3 {
-		return nil, cliErrorf("用法: import-inventory <源连接/桶> <目标连接/桶> <本机清单目录> [--node 节点] [--overwrite] [--request-id 标识]")
+		return nil, usageErrorf("用法: import-inventory <源连接/桶> <目标连接/桶> <本机清单目录> [--node 节点] [--overwrite] [--request-id 标识]")
 	}
 	rootID, err := creationRequestIDOption(opts)
 	if err != nil {

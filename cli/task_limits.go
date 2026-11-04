@@ -21,7 +21,7 @@ func taskRequestLimitOptions(opts commandOptions) (map[string]interface{}, error
 		}
 		n, err := strconv.ParseFloat(value, 64)
 		if err != nil || !validTaskQPS(n) {
-			return nil, cliErrorf("--%s 需为 0 或 0.000001–1000000000；取消限制可用 unlimited", flag)
+			return nil, usageErrorf("--%s 需为 0 或 0.000001–1000000000；取消限制可用 unlimited", flag)
 		}
 		limits[field] = n
 	}
@@ -56,7 +56,7 @@ func taskLimits(client *ApiClient, args []string) (map[string]interface{}, error
 		if value := opts.Value("bandwidth-mbps"); value != "unlimited" {
 			n, err := strconv.ParseFloat(value, 64)
 			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0.1 || n > 1000000 {
-				return nil, cliErrorf("任务带宽为 0.1–1000000 Mbps；取消额外限制使用 unlimited")
+				return nil, usageErrorf("任务带宽为 0.1–1000000 Mbps；取消额外限制使用 unlimited")
 			}
 			limit = n
 		}

@@ -4,7 +4,7 @@ const cliUpdateHelp = `服务升级
   oss-transfer-cli update status
   oss-transfer-cli update check
   oss-transfer-cli update master --version 4.1.20 --yes
-  oss-transfer-cli update agent --worker 节点 --yes
+  oss-transfer-cli update agent --node 节点 --yes
   oss-transfer-cli update agents --all --yes
 
 Agent 默认更新到 Master 当前版本，也可用 --version 指定版本。
@@ -14,7 +14,7 @@ Agent 默认更新到 Master 当前版本，也可用 --version 指定版本。
 const cliBackupHelp = `升级备份
   oss-transfer-cli backup list
   oss-transfer-cli backup prune master --yes
-  oss-transfer-cli backup prune agent --worker 节点 --yes
+  oss-transfer-cli backup prune agent --node 节点 --yes
 
 只清理服务认定可清理的备份；失败升级的恢复备份保留。
 `

@@ -209,10 +209,10 @@ func TestCLICatalogCoversControlledMessagesAndFormats(t *testing.T) {
 			}
 			idx := -1
 			if id, ok := c.Fun.(*ast.Ident); ok {
-				if id.Name == "cliText" {
+				if id.Name == "cliText" || id.Name == "cliTextf" {
 					idx = 1
 				}
-				if id.Name == "cliErrorf" {
+				if id.Name == "cliErrorf" || id.Name == "usageErrorf" {
 					idx = 0
 				}
 			}

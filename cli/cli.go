@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 
 type globalOptions struct {
 	host                         string
+	hostSource                   string // where host came from, for connection hints
 	json, verbose, help, version bool
 	watch                        time.Duration
 	args                         []string
@@ -23,6 +25,9 @@ type globalOptions struct {
 
 func parseGlobals(args []string) (globalOptions, error) {
 	o := globalOptions{host: os.Getenv("OSS_TRANSFER_MASTER_SERVER")}
+	if o.host != "" {
+		o.hostSource = "OSS_TRANSFER_MASTER_SERVER"
+	}
 	if len(args) == 1 && args[0] == "-v" {
 		o.version = true
 		return o, nil
@@ -60,6 +65,7 @@ func parseGlobals(args []string) (globalOptions, error) {
 					return o, cliErrorf("--host 缺少值")
 				}
 				o.host = value
+				o.hostSource = "--host"
 			} else {
 				duration, err := time.ParseDuration(value)
 				if err != nil {
@@ -100,6 +106,10 @@ func parseGlobals(args []string) (globalOptions, error) {
 	}
 	if o.host == "" {
 		var err error
+		o.hostSource = "auto"
+		if preference, loadErr := loadCLIPreferences(); loadErr == nil && preference.Master != "" {
+			o.hostSource = "config"
+		}
 		o.host, err = discoveredMaster()
 		if err != nil {
 			return o, err
@@ -134,6 +144,10 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		return 0
 	}
 	if len(options.args) == 0 || options.help || options.args[0] == "help" {
+		if topic := unknownHelpTopic(options.args); topic != "" {
+			fmt.Fprint(errors, cliTextf(errors, "错误: 未知帮助主题 %q；可用主题: %s\n", topic, helpTopicList()))
+			return 2
+		}
 		fmt.Fprint(output, helpForLocale(options.args, language))
 		return 0
 	}
@@ -150,8 +164,13 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		return 2
 	}
 	if options.watch > 0 && !watchable(normalized) {
-		fmt.Fprintln(errors, cliText(errors, "错误: --watch 仅用于任务、节点、限速和异常的只读查询"))
+		fmt.Fprintln(errors, cliText(errors, "错误: --watch 仅用于只读查询，如任务、节点、限速、异常和对象比对状态"))
 		return 2
+	}
+	// object status --wait polls like --watch and stops at the final state.
+	quietWait := comparisonWait(normalized) && options.watch == 0
+	if quietWait {
+		options.watch = comparisonWaitInterval
 	}
 	client := NewApiClient(options.host)
 	client.locale = language
@@ -199,9 +218,18 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			client.SetAuthToken(token)
 		}
 	}
+	failures := 0
 	for {
 		result, callErr := dispatchCLI(client, normalized, input, options.host)
-		if options.json {
+		retry := callErr != nil && options.watch > 0 && ctx.Err() == nil && watchRetryable(callErr)
+		if retry {
+			failures++
+			retry = failures < watchFailureLimit
+		}
+		_, finished := watchOutcome(normalized, result)
+		if options.json && quietWait && callErr == nil && !finished {
+			// --wait without --watch prints only the final JSON document.
+		} else if options.json {
 			if result == nil {
 				result = map[string]interface{}{}
 			}
@@ -210,49 +238,134 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 				result["error"] = localizedCLIError(language, callErr)
 			}
 			encoder := json.NewEncoder(output)
-			if options.watch == 0 {
+			if options.watch == 0 || quietWait {
 				encoder.SetIndent("", "  ")
 			}
 			if err := encoder.Encode(sanitizeOutput(result)); err != nil {
 				fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, err))
 				return 1
 			}
-		} else if result != nil {
+		} else if result != nil && !(options.watch > 0 && callErr != nil) {
+			// A failed watch refresh keeps the previous frame on screen instead of
+			// replacing it with a partial one.
 			if options.watch > 0 {
 				fmt.Fprintln(output, time.Now().Format("2006-01-02 15:04:05"))
 			}
-			renderCLIResult(output, result)
+			if !renderCreationResult(output, result, normalized) {
+				renderCLIResult(output, result)
+			}
 		}
 		if callErr != nil {
-			fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
-			if ctx.Err() != nil {
-				return 130
+			if retry {
+				fmt.Fprintln(errors, time.Now().Format("2006-01-02 15:04:05"), cliText(errors, "错误:"), localizedCLIError(language, callErr))
+				fmt.Fprint(errors, cliTextf(errors, "提示: 刷新失败（连续 %d 次），%s 后重试；连续 %d 次失败将停止。\n", failures, options.watch, watchFailureLimit))
+			} else {
+				fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
+				for _, hint := range cliErrorHints(errors, callErr, options) {
+					fmt.Fprintln(errors, hint)
+				}
+				if options.watch > 0 && failures >= watchFailureLimit {
+					fmt.Fprint(errors, cliTextf(errors, "提示: 已连续 %d 次刷新失败，停止监视。\n", failures))
+				}
+				if ctx.Err() != nil {
+					return 130
+				}
+				if isUsageError(callErr) {
+					return 2
+				}
+				if result["submissionStatus"] == "rejected" {
+					return 1
+				}
+				if incompleteResult(result) {
+					return 3
+				}
+				return 1
 			}
-			if incompleteResult(result) {
-				return 3
-			}
-			return 1
-		}
-		partial := incompleteResult(result)
-		if partial {
-			fmt.Fprintln(errors, cliText(errors, "提示: 返回不完整，当前结果不代表全量。"))
-			renderIncomplete(errors, result)
-		}
-		if options.watch == 0 {
+		} else {
+			failures = 0
+			partial := incompleteResult(result)
 			if partial {
-				return 3
+				fmt.Fprintln(errors, cliText(errors, "提示: 返回不完整，当前结果不代表全量。"))
+				renderIncomplete(errors, result)
 			}
-			return 0
+			if code, done := watchOutcome(normalized, result); done {
+				return code
+			}
+			if options.watch == 0 {
+				if partial {
+					return 3
+				}
+				return 0
+			}
 		}
-		timer := time.NewTimer(options.watch)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !watchWait(ctx, options.watch) {
 			return 130
-		case <-timer.C:
 		}
 	}
 }
+
+// watchWait sleeps between refreshes and reports false when interrupted.
+// Tests replace it to step through refreshes without real delays.
+var watchWait = func(ctx context.Context, interval time.Duration) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// watchFailureLimit bounds consecutive failed refreshes before --watch gives up.
+const watchFailureLimit = 10
+
+// A refresh may fail because of a network blip or a Master restart. Retrying
+// cannot fix a usage error or missing permission, so those stop the watch.
+func watchRetryable(err error) bool {
+	if isUsageError(err) {
+		return false
+	}
+	var httpErr *apiHTTPError
+	if errors.As(err, &httpErr) && (httpErr.Status == 401 || httpErr.Status == 403) {
+		return false
+	}
+	return true
+}
+
+// cliErrorHints suggests a recovery for connection and sign-in failures.
+func cliErrorHints(out io.Writer, err error, options globalOptions) []string {
+	var httpErr *apiHTTPError
+	if errors.As(err, &httpErr) {
+		if httpErr.Status == 401 {
+			return []string{cliText(out, "提示: 请先运行 oss-transfer-cli login 登录，或在已安装的节点上以服务所有者身份运行。")}
+		}
+		return nil
+	}
+	if !isTransportError(err) {
+		return nil
+	}
+	source := map[string]string{
+		"--host":                     cliText(out, "--host 参数"),
+		"OSS_TRANSFER_MASTER_SERVER": cliText(out, "环境变量 OSS_TRANSFER_MASTER_SERVER"),
+		"config":                     cliText(out, "config set master 保存的地址"),
+	}[options.hostSource]
+	if source == "" {
+		source = cliText(out, "本机安装信息自动发现")
+	}
+	return []string{cliTextf(out, "提示: 无法连接 Master %s（地址来源: %s）。请确认 Master 正在运行，或使用 --host / config set master 选择其他地址。", options.host, source)}
+}
+
+func isTransportError(err error) bool {
+	for err != nil {
+		if own, ok := err.(*cliMessageError); ok && own.key == "请求失败: %w" {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
+}
+
 func watchable(args []string) bool {
 	if len(args) < 2 {
 		return false
@@ -276,7 +389,9 @@ func watchable(args []string) bool {
 	case "limit":
 		return args[1] == "list" || args[1] == "history" || args[1] == "adjustment"
 	case "exceptions":
-		return args[1] == "list"
+		return args[1] == "list" || args[1] == "tasks"
+	case "object":
+		return args[1] == "status"
 	}
 	return false
 }
@@ -299,7 +414,7 @@ func dispatchCLI(client *ApiClient, args []string, input io.Reader, host string)
 	case "import-inventory":
 		return runInventoryImport(client, args[1:])
 	default:
-		return nil, cliErrorf("未知命令 %q；使用 --help 查看用法", args[0])
+		return nil, usageErrorf("未知命令 %q；使用 --help 查看用法", args[0])
 	}
 }
 
@@ -326,11 +441,11 @@ func normalizeCLICommand(args []string) ([]string, error) {
 		"add-task": {"task", "create", "oss-to-oss"}, "import-tasks": {"task", "import-legacy"},
 	}
 	if command == "set-s3-config" {
-		return nil, cliErrorf("请使用 storage add/update；凭据通过 --access-key-env/--secret-key-env 或文件读取，避免出现在命令历史中")
+		return nil, usageErrorf("请使用 storage add/update；凭据通过 --access-key-env/--secret-key-env 或文件读取，避免出现在命令历史中")
 	}
 	if command == "set-rate-limit" {
 		if len(rest) < 2 || len(rest) > 3 {
-			return nil, cliErrorf("用法: set-rate-limit <list|put|head|bandwidth> <值> [IP]")
+			return nil, usageErrorf("用法: set-rate-limit <list|put|head|bandwidth> <值> [IP]")
 		}
 		kind, value := rest[0], rest[1]
 		converted := []string{"limit", "set", kind, value}
@@ -437,7 +552,7 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 			return
 		}
 	}
-	if renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) {
+	if renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) || renderExceptionTasks(out, result) {
 		return
 	}
 	if renderAdminTable(out, result, data) {
@@ -453,6 +568,8 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	if value, ok := data["tasks"]; ok {
 		renderTaskRows(out, objectList(value), false)
 		fmt.Fprint(out, cliTextf(out, "显示 %d 个主任务\n", len(objectList(value))))
+		renderTaskListSummary(out, data, objectList(value))
+		renderTaskFilterScope(out, data)
 		renderTaskHistoryPage(out, data, "list")
 		if msg := getString(data, "message"); msg != "" {
 			fmt.Fprintln(out, safeCLIText(msg))

@@ -17,7 +17,7 @@ import (
 // runAdminCommand uses the same master APIs as the console.
 func runAdminCommand(client *ApiClient, group string, args []string) (map[string]interface{}, error) {
 	if len(args) == 0 {
-		return nil, cliErrorf("缺少 %s 子命令，请运行 oss-transfer-cli %s --help", group, group)
+		return nil, usageErrorf("缺少 %s 子命令，请运行 oss-transfer-cli %s --help", group, group)
 	}
 	switch group {
 	case "node":
@@ -33,7 +33,7 @@ func runAdminCommand(client *ApiClient, group string, args []string) (map[string
 	case "object":
 		return runObjectAdmin(client, args[0], args[1:])
 	default:
-		return nil, cliErrorf("未知命令组: %s", group)
+		return nil, usageErrorf("未知命令组: %s", group)
 	}
 }
 
@@ -42,30 +42,30 @@ func adminOptions(args, values, switches []string, count int) (commandOptions, e
 	if err == nil {
 		for name, supplied := range o.Values {
 			if len(supplied) > 1 {
-				return o, cliErrorf("--%s 只能指定一次", name)
+				return o, usageErrorf("--%s 只能指定一次", name)
 			}
 		}
 	}
 	if err == nil && len(o.Positionals) != count {
-		err = cliErrorf("需要 %d 个位置参数，实际收到 %d 个", count, len(o.Positionals))
+		err = usageErrorf("需要 %d 个位置参数，实际收到 %d 个", count, len(o.Positionals))
 	}
 	return o, err
 }
 
 func adminConfirmed(o commandOptions) error {
 	if !o.Has("yes") {
-		return cliErrorf("此操作需要明确确认，请检查目标后添加 --yes")
+		return usageErrorf("此操作需要明确确认，请检查目标后添加 --yes")
 	}
 	return nil
 }
 
 func adminNodeAddress(value string) error {
 	if !utf8.ValidString(value) || len(value) == 0 || len(value) > 256 {
-		return cliErrorf("请指定有效的节点名称、IPv4 或 IPv6 地址")
+		return usageErrorf("请指定有效的节点名称、IPv4 或 IPv6 地址")
 	}
 	if ip := net.ParseIP(value); ip != nil {
 		if ip.IsUnspecified() || ip.IsMulticast() {
-			return cliErrorf("不能使用未指定或组播地址")
+			return usageErrorf("不能使用未指定或组播地址")
 		}
 		return nil
 	}
@@ -75,11 +75,11 @@ func adminNodeAddress(value string) error {
 			onlyNumbers = false
 		}
 		if !(unicode.IsLetter(ch) || unicode.IsDigit(ch) || ch == '-' || ch == '_' || ch == '.') {
-			return cliErrorf("节点名称不能包含端口、空格或路径分隔符")
+			return usageErrorf("节点名称不能包含端口、空格或路径分隔符")
 		}
 	}
 	if onlyNumbers || value == "." || value == ".." {
-		return cliErrorf("无效节点地址")
+		return usageErrorf("无效节点地址")
 	}
 	return nil
 }
@@ -93,11 +93,16 @@ func adminData(value map[string]interface{}) map[string]interface{} {
 
 func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	if action == "update" {
+		// The Master never changes an enrolled Agent's address; say so before any request.
 		for _, arg := range args {
-			if arg == "--child-concurrency" || strings.HasPrefix(arg, "--child-concurrency=") || arg == "--object-concurrency" || strings.HasPrefix(arg, "--object-concurrency=") {
-				return agentUpdate(client, args)
+			if arg == "--" {
+				break
+			}
+			if arg == "--address" || strings.HasPrefix(arg, "--address=") {
+				return nil, usageErrorf("已加入的 Agent 地址不能修改；请在新地址加入替换的 Agent，再移除旧节点")
 			}
 		}
+		return agentUpdate(client, args)
 	}
 	switch action {
 	case "network":
@@ -139,13 +144,10 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 		result["partial"] = len(failed) > 0
 		result["failedWorkers"] = failed
 		return result, nil
-	case "add", "update", "remove":
+	case "add", "remove":
 		values, switches := []string{}, []string{}
 		if action != "remove" {
 			values = append(values, "label")
-		}
-		if action == "update" {
-			values = append(values, "address")
 		}
 		if action == "remove" {
 			switches = append(switches, "yes")
@@ -164,47 +166,14 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			}
 			return client.Delete("/nodes/" + url.PathEscape(original))
 		}
-		address, label := original, o.Value("label")
-		if action == "update" {
-			if !o.Has("address") && !o.Has("label") {
-				return nil, cliErrorf("请通过 --address 或 --label 指定要修改的字段")
-			}
-			if o.Has("address") {
-				address = o.Value("address")
-				if err := adminNodeAddress(address); err != nil {
-					return nil, err
-				}
-			}
-			if !o.Has("label") {
-				registry, err := client.Get("/nodes")
-				if err != nil {
-					return registry, err
-				}
-				found := false
-				for _, raw := range adminArray(adminData(registry)["nodes"]) {
-					node, _ := raw.(map[string]interface{})
-					if node["address"] == original {
-						label, _ = node["label"].(string)
-						found = true
-						break
-					}
-				}
-				if !found {
-					return nil, cliErrorf("节点未注册: %s", original)
-				}
-			}
-		}
+		label := o.Value("label")
 		if len([]rune(label)) > 80 || strings.ContainsAny(label, "\r\n") {
-			return nil, cliErrorf("节点名称不能超过 80 个字符或包含换行")
+			return nil, usageErrorf("节点名称不能超过 80 个字符或包含换行")
 		}
-		body := map[string]interface{}{"address": address, "label": strings.TrimSpace(label)}
-		if action == "add" {
-			body["masterUrl"] = strings.TrimSuffix(client.baseUrl, "/api/master")
-			return client.Post("/agents/invitations", body)
-		}
-		return client.Put("/nodes/"+url.PathEscape(original), body)
+		body := map[string]interface{}{"address": original, "label": strings.TrimSpace(label), "masterUrl": strings.TrimSuffix(client.baseUrl, "/api/master")}
+		return client.Post("/agents/invitations", body)
 	default:
-		return nil, cliErrorf("未知 node 子命令: %s", action)
+		return nil, usageErrorf("未知 node 子命令: %s", action)
 	}
 }
 
@@ -218,7 +187,7 @@ func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]
 		return agentUpdate(client, args)
 	}
 	if action != "invite" {
-		return nil, cliErrorf("未知 agent 子命令: %s", action)
+		return nil, usageErrorf("未知 agent 子命令: %s", action)
 	}
 	o, err := adminOptions(args, []string{"label", "address", "master-url"}, nil, 0)
 	if err != nil {
@@ -231,7 +200,7 @@ func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]
 		}
 	}
 	if len([]rune(label)) > 80 || strings.ContainsAny(label, "\r\n") {
-		return nil, cliErrorf("节点名称不能超过 80 个字符或包含换行")
+		return nil, usageErrorf("节点名称不能超过 80 个字符或包含换行")
 	}
 	masterURL := strings.TrimSuffix(client.baseUrl, "/api/master")
 	if o.Has("master-url") {
@@ -292,7 +261,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			return nil, err
 		}
 		if o.Has("clear-session-token") && (o.Has("session-token-env") || o.Has("session-token-file")) {
-			return nil, cliErrorf("--clear-session-token 不能与 --session-token-env 或 --session-token-file 同时使用")
+			return nil, usageErrorf("--clear-session-token 不能与 --session-token-env 或 --session-token-file 同时使用")
 		}
 		alias := o.Positionals[0]
 		if err := adminAlias(alias); err != nil {
@@ -301,7 +270,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		body := map[string]interface{}{"alias": alias, "validate": true, "useV2SignerType": nil, "pathStyleEnable": nil}
 		if action == "update" {
 			if len(o.Values) == 0 && !o.Has("clear-session-token") {
-				return nil, cliErrorf("请指定至少一个要修改的字段")
+				return nil, usageErrorf("请指定至少一个要修改的字段")
 			}
 			current, err := client.Get("/s3-config")
 			if err != nil {
@@ -351,18 +320,18 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 					body[field] = false
 				case "inherit":
 					if flag == "validate" {
-						return nil, cliErrorf("--validate 只支持 true 或 false")
+						return nil, usageErrorf("--validate 只支持 true 或 false")
 					}
 					body[field] = nil
 				default:
-					return nil, cliErrorf("--%s 需使用 true、false%s", flag, map[bool]string{true: "", false: " 或 inherit"}[flag == "validate"])
+					return nil, usageErrorf("--%s 需使用 true、false%s", flag, map[bool]string{true: "", false: " 或 inherit"}[flag == "validate"])
 				}
 			}
 		}
 		access, _ := body["accessKey"].(string)
 		secret, _ := body["secretKey"].(string)
 		if (access == "") != (secret == "") {
-			return nil, cliErrorf("更换凭据时，请同时提供 Access Key 和 Secret Key")
+			return nil, usageErrorf("更换凭据时，请同时提供 Access Key 和 Secret Key")
 		}
 		required := []string{"endpoint"}
 		if action == "add" || access != "" || secret != "" {
@@ -371,25 +340,25 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		for _, field := range required {
 			value, _ := body[field].(string)
 			if strings.TrimSpace(value) == "" || (field != "endpoint" && value == "********") {
-				return nil, cliErrorf("缺少 %s，请提供 Endpoint 或对应密钥的环境变量/文件", field)
+				return nil, usageErrorf("缺少 %s，请提供 Endpoint 或对应密钥的环境变量/文件", field)
 			}
 		}
 		endpoint, err := url.Parse(body["endpoint"].(string))
 		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil {
-			return nil, cliErrorf("Endpoint 必须是 http:// 或 https:// 地址，且不得包含用户名或密码")
+			return nil, usageErrorf("Endpoint 必须是 http:// 或 https:// 地址，且不得包含用户名或密码")
 		}
 		if action == "add" {
 			return client.Post("/s3-config", body)
 		}
 		return client.Put("/s3-config/"+url.PathEscape(alias), body)
 	default:
-		return nil, cliErrorf("未知 storage 子命令: %s", action)
+		return nil, usageErrorf("未知 storage 子命令: %s", action)
 	}
 }
 
 func adminAlias(alias string) error {
 	if strings.TrimSpace(alias) == "" || strings.TrimSpace(alias) != alias || strings.ContainsAny(alias, "/\\\r\n") || alias == "." || alias == ".." {
-		return cliErrorf("连接名称不能为空、含首尾空白或包含路径分隔符")
+		return usageErrorf("连接名称不能为空、含首尾空白或包含路径分隔符")
 	}
 	return nil
 }
@@ -397,7 +366,7 @@ func adminAlias(alias string) error {
 func adminCredential(o commandOptions, flag string) (string, bool, error) {
 	env, file := o.Value(flag+"-env"), o.Value(flag+"-file")
 	if o.Has(flag+"-env") && o.Has(flag+"-file") {
-		return "", false, cliErrorf("--%s-env 和 --%s-file 不能同时使用", flag, flag)
+		return "", false, usageErrorf("--%s-env 和 --%s-file 不能同时使用", flag, flag)
 	}
 	if !o.Has(flag+"-env") && !o.Has(flag+"-file") {
 		return "", false, nil
@@ -407,7 +376,7 @@ func adminCredential(o commandOptions, flag string) (string, bool, error) {
 		var found bool
 		value, found = os.LookupEnv(env)
 		if !found {
-			return "", false, cliErrorf("密钥环境变量未设置: %s", env)
+			return "", false, usageErrorf("密钥环境变量未设置: %s", env)
 		}
 	} else {
 		data, err := os.ReadFile(file)
@@ -417,7 +386,7 @@ func adminCredential(o commandOptions, flag string) (string, bool, error) {
 		value = strings.TrimRight(string(data), "\r\n")
 	}
 	if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n") {
-		return "", false, cliErrorf("--%s 的密钥不能为空或包含换行", flag)
+		return "", false, usageErrorf("--%s 的密钥不能为空或包含换行", flag)
 	}
 	return value, true, nil
 }
@@ -471,7 +440,7 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 			return nil, err
 		}
 		if o.Value("worker") == "" || o.Value("event-id") == "" {
-			return nil, cliErrorf("调节详情需要 --worker 和 --event-id")
+			return nil, usageErrorf("调节详情需要 --node 和 --event-id")
 		}
 		if err := adminNodeAddress(o.Value("worker")); err != nil {
 			return nil, err
@@ -493,10 +462,10 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 		}
 		kind := o.Positionals[0]
 		if kind != "list" && kind != "put" && kind != "head" && kind != "bandwidth" {
-			return nil, cliErrorf("限速类型必须是 list、put、head 或 bandwidth")
+			return nil, usageErrorf("限速类型必须是 list、put、head 或 bandwidth")
 		}
 		if o.Has("worker") == o.Has("all") {
-			return nil, cliErrorf("请指定 --worker <IPv4> 或 --all，且不能同时使用")
+			return nil, usageErrorf("请指定 --node <IPv4> 或 --all，且不能同时使用")
 		}
 		if o.Has("worker") {
 			if err := adminNodeAddress(o.Value("worker")); err != nil {
@@ -513,13 +482,13 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 		}
 		return client.Post(path, map[string]interface{}{"qps": value})
 	default:
-		return nil, cliErrorf("未知 limit 子命令: %s", action)
+		return nil, usageErrorf("未知 limit 子命令: %s", action)
 	}
 }
 
 func adminRate(kind, raw, unit string) (float64, error) {
 	if kind != "bandwidth" && unit != "" {
-		return 0, cliErrorf("--unit 只用于 bandwidth，其他类型单位为次/秒")
+		return 0, usageErrorf("--unit 只用于 bandwidth，其他类型单位为次/秒")
 	}
 	multiplier := float64(1)
 	if kind == "bandwidth" {
@@ -530,7 +499,7 @@ func adminRate(kind, raw, unit string) (float64, error) {
 		var ok bool
 		multiplier, ok = units[unit]
 		if !ok {
-			return 0, cliErrorf("带宽单位必须为 bps、Kbps、Mbps 或 Gbps；默认 Mbps")
+			return 0, usageErrorf("带宽单位必须为 bps、Kbps、Mbps 或 Gbps；默认 Mbps")
 		}
 	}
 	if raw == "unlimited" {
@@ -539,7 +508,7 @@ func adminRate(kind, raw, unit string) (float64, error) {
 	value, err := strconv.ParseFloat(raw, 64)
 	value *= multiplier
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
-		return 0, cliErrorf("限速须为大于 0 的有限数值；取消限速请明确使用 unlimited")
+		return 0, usageErrorf("限速须为大于 0 的有限数值；取消限速请明确使用 unlimited")
 	}
 	return value, nil
 }
@@ -550,14 +519,18 @@ func adminInteger(o commandOptions, name string, fallback, min, max int) (int, e
 	}
 	value, err := strconv.Atoi(o.Value(name))
 	if err != nil || value < min || value > max {
-		return 0, cliErrorf("--%s 必须是 %d 到 %d 之间的整数", name, min, max)
+		return 0, usageErrorf("--%s 必须是 %d 到 %d 之间的整数", name, min, max)
 	}
 	return value, nil
 }
 
 func runObjectAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	if action == "status" || action == "cancel" || action == "delete" {
-		o, err := adminOptions(args, []string{"after", "limit"}, nil, 1)
+		switches := []string{}
+		if action == "status" {
+			switches = append(switches, "wait")
+		}
+		o, err := adminOptions(args, []string{"after", "limit"}, switches, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -579,60 +552,66 @@ func runObjectAdmin(client *ApiClient, action string, args []string) (map[string
 		return client.Get(path + "?" + url.Values{"after": {strconv.Itoa(after)}, "limit": {strconv.Itoa(limit)}}.Encode())
 	}
 	if action != "compare" {
-		return nil, cliErrorf("未知 object 子命令: %s", action)
+		return nil, usageErrorf("未知 object 子命令: %s", action)
 	}
 	fields := map[string]string{"source-bucket": "sourceBucket", "source-key": "sourceKey", "dest-bucket": "destBucket", "dest-key": "destKey"}
-	o, err := adminOptions(args, []string{"source-bucket", "source-key", "dest-bucket", "dest-key", "source-prefix", "dest-prefix", "scope", "mode"}, nil, 0)
+	o, err := adminOptions(args, []string{"source-bucket", "source-key", "dest-bucket", "dest-key", "source-prefix", "dest-prefix", "scope", "mode"}, []string{"metadata-lookup"}, 0)
 	if err != nil {
 		return nil, err
 	}
-	if o.Has("scope") || o.Has("mode") || o.Has("source-prefix") || o.Has("dest-prefix") {
-		scope, mode := o.Value("scope"), o.Value("mode")
-		if scope == "" {
-			scope = "prefix"
-			if o.Has("source-key") || o.Has("dest-key") {
-				scope = "object"
+	if o.Has("metadata-lookup") {
+		// Synchronous one-shot lookup of two objects' metadata, without a comparison job.
+		if o.Has("scope") || o.Has("mode") || o.Has("source-prefix") || o.Has("dest-prefix") {
+			return nil, usageErrorf("--metadata-lookup 只查询两个对象的元数据，不能与 --scope、--mode 或前缀选项同时使用")
+		}
+		query := url.Values{}
+		for _, flag := range []string{"source-bucket", "source-key", "dest-bucket", "dest-key"} {
+			value := o.Value(flag)
+			if value == "" {
+				return nil, usageErrorf("对象比对需要 --%s", flag)
 			}
-		}
-		if mode == "" {
-			mode = "metadata"
-		}
-		if scope != "prefix" && scope != "object" || mode != "metadata" && mode != "content" {
-			return nil, cliErrorf("比对范围须为 prefix 或 object，模式须为 metadata 或 content")
-		}
-		if scope == "prefix" && (o.Has("source-key") || o.Has("dest-key")) || scope == "object" && (o.Has("source-prefix") || o.Has("dest-prefix")) {
-			return nil, cliErrorf("范围比对使用 --source-prefix/--dest-prefix，单对象使用 --source-key/--dest-key")
-		}
-		source, dest := o.Value("source-prefix"), o.Value("dest-prefix")
-		if scope == "object" {
-			source, dest = o.Value("source-key"), o.Value("dest-key")
-			if source == "" || dest == "" {
-				return nil, cliErrorf("单对象比对须同时指定源和目标 Key")
+			if strings.HasSuffix(flag, "bucket") {
+				parts := strings.Split(value, "/")
+				if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+					return nil, usageErrorf("--%s 必须使用 连接名称/Bucket 格式", flag)
+				}
 			}
+			query.Set(fields[flag], value)
 		}
-		for _, flag := range []string{"source-bucket", "dest-bucket"} {
-			parts := strings.Split(o.Value(flag), "/")
-			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-				return nil, cliErrorf("--%s 必须使用 连接名称/Bucket 格式", flag)
-			}
-		}
-		return client.Post("/comparisons", map[string]interface{}{"sourceBucket": o.Value("source-bucket"), "destBucket": o.Value("dest-bucket"), "sourcePrefix": source, "destPrefix": dest, "mode": mode, "scope": scope})
+		return client.Get("/object-metadata?" + query.Encode())
 	}
-	query := url.Values{}
-	for flag, field := range fields {
-		value := o.Value(flag)
-		if value == "" {
-			return nil, cliErrorf("对象比对需要 --%s", flag)
+	// Like the console, every comparison is a background job: whole buckets or
+	// prefixes by default, a single object when a key is given.
+	scope, mode := o.Value("scope"), o.Value("mode")
+	if scope == "" {
+		scope = "prefix"
+		if o.Has("source-key") || o.Has("dest-key") {
+			scope = "object"
 		}
-		if strings.HasSuffix(flag, "bucket") {
-			parts := strings.Split(value, "/")
-			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-				return nil, cliErrorf("--%s 必须使用 连接名称/Bucket 格式", flag)
-			}
-		}
-		query.Set(field, value)
 	}
-	return client.Get("/object-metadata?" + query.Encode())
+	if mode == "" {
+		mode = "metadata"
+	}
+	if scope != "prefix" && scope != "object" || mode != "metadata" && mode != "content" {
+		return nil, usageErrorf("比对范围须为 prefix 或 object，模式须为 metadata 或 content")
+	}
+	if scope == "prefix" && (o.Has("source-key") || o.Has("dest-key")) || scope == "object" && (o.Has("source-prefix") || o.Has("dest-prefix")) {
+		return nil, usageErrorf("范围比对使用 --source-prefix/--dest-prefix，单对象使用 --source-key/--dest-key")
+	}
+	source, dest := o.Value("source-prefix"), o.Value("dest-prefix")
+	if scope == "object" {
+		source, dest = o.Value("source-key"), o.Value("dest-key")
+		if source == "" || dest == "" {
+			return nil, usageErrorf("单对象比对须同时指定源和目标 Key")
+		}
+	}
+	for _, flag := range []string{"source-bucket", "dest-bucket"} {
+		parts := strings.Split(o.Value(flag), "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, usageErrorf("--%s 必须使用 连接名称/Bucket 格式", flag)
+		}
+	}
+	return client.Post("/comparisons", map[string]interface{}{"sourceBucket": o.Value("source-bucket"), "destBucket": o.Value("dest-bucket"), "sourcePrefix": source, "destPrefix": dest, "mode": mode, "scope": scope})
 }
 
 func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
@@ -643,10 +622,10 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 		}
 		kind := o.Positionals[0]
 		if kind != "failed" && kind != "fallback" && kind != "local" {
-			return nil, cliErrorf("异常类型必须是 failed、fallback 或 local")
+			return nil, usageErrorf("异常类型必须是 failed、fallback 或 local")
 		}
 		if o.Has("all") == (len(o.Values) > 0) {
-			return nil, cliErrorf("请指定清理筛选条件或 --all，不能同时使用")
+			return nil, usageErrorf("请指定清理筛选条件或 --all，不能同时使用")
 		}
 		if err := adminConfirmed(o); err != nil {
 			return nil, err
@@ -658,7 +637,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 		for flag, field := range map[string]string{"worker": "workerNode", "direction": "direction", "source-bucket": "sourceBucket", "dest-bucket": "destBucket", "endpoint": "endpoint"} {
 			if o.Has(flag) {
 				if strings.TrimSpace(o.Value(flag)) == "" {
-					return nil, cliErrorf("--%s 不能为空", flag)
+					return nil, usageErrorf("--%s 不能为空", flag)
 				}
 				body[field] = o.Value(flag)
 			}
@@ -698,8 +677,11 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 		}
 		return result, err
 	}
+	if action == "tasks" {
+		return exceptionTasks(client, args)
+	}
 	if action != "list" && action != "export" {
-		return nil, cliErrorf("未知 exceptions 子命令: %s", action)
+		return nil, usageErrorf("未知 exceptions 子命令: %s", action)
 	}
 	flags := []string{"task-id", "source-bucket", "dest-bucket", "worker", "limit", "offset", "direction", "endpoint", "storage-id"}
 	if action == "export" {
@@ -711,15 +693,15 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	}
 	kind := o.Positionals[0]
 	if kind != "failed" && kind != "fallback" && kind != "local" {
-		return nil, cliErrorf("异常类型必须是 failed、fallback 或 local")
+		return nil, usageErrorf("异常类型必须是 failed、fallback 或 local")
 	}
 	if action == "export" && o.Value("output") == "" {
-		return nil, cliErrorf("导出需要 --output <文件路径>")
+		return nil, usageErrorf("导出需要 --output <文件路径>")
 	}
 	if kind == "local" && action == "export" {
 		for key := range o.Values {
 			if key != "output" {
-				return nil, cliErrorf("本地迁移报告 API 导出所有已结束或停止任务的 ZIP，不支持 --%s 筛选；单任务报告请使用 task report", key)
+				return nil, usageErrorf("本地迁移报告 API 导出所有已结束或停止任务的 ZIP，不支持 --%s 筛选；单任务报告请使用 task report", key)
 			}
 		}
 		if err := client.Download("GET", "/api/master/local-transfers/report", nil, o.Value("output")); err != nil {
@@ -749,7 +731,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 func adminLocalExceptions(client *ApiClient, o commandOptions) (map[string]interface{}, error) {
 	for _, flag := range []string{"source-bucket", "dest-bucket"} {
 		if o.Has(flag) {
-			return nil, cliErrorf("local 不支持 --%s，请使用 --endpoint 筛选", flag)
+			return nil, usageErrorf("local 不支持 --%s，请使用 --endpoint 筛选", flag)
 		}
 	}
 	limit, err := adminInteger(o, "limit", 25, 1, 1000)
@@ -777,7 +759,7 @@ func adminLocalExceptions(client *ApiClient, o commandOptions) (map[string]inter
 		}
 	}
 	if direction := o.Value("direction"); direction != "" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
-		return nil, cliErrorf("local 的 --direction 必须为 OSS_TO_LOCAL 或 LOCAL_TO_OSS")
+		return nil, usageErrorf("local 的 --direction 必须为 OSS_TO_LOCAL 或 LOCAL_TO_OSS")
 	}
 	response, err := client.Get("/local-transfers/failures?" + query.Encode())
 	if err != nil {
@@ -817,7 +799,7 @@ func adminLocalExceptions(client *ApiClient, o commandOptions) (map[string]inter
 func adminOSSExceptions(client *ApiClient, kind string, o commandOptions) (map[string]interface{}, error) {
 	for _, flag := range []string{"offset", "direction", "endpoint", "storage-id"} {
 		if o.Has(flag) {
-			return nil, cliErrorf("%s 不支持 --%s", kind, flag)
+			return nil, usageErrorf("%s 不支持 --%s", kind, flag)
 		}
 	}
 	limit, err := adminInteger(o, "limit", 1000, 1, 10000)

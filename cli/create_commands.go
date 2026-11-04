@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -25,22 +26,22 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		return nil, err
 	}
 	if len(opts.Positionals) == 0 {
-		return nil, cliErrorf("用法: task create oss-to-oss <源连接/桶> <目标连接/桶>，或 task create oss-to-local|local-to-oss <连接/桶> --binding 节点IP=/绝对路径")
+		return nil, usageErrorf("用法: task create oss-to-oss <源连接/桶> <目标连接/桶>，或 task create oss-to-local|local-to-oss <连接/桶> --binding 节点IP=/绝对路径")
 	}
 	direction := strings.ToUpper(strings.ReplaceAll(opts.Positionals[0], "-", "_"))
 	if direction != "OSS_TO_OSS" && direction != "OSS_TO_LOCAL" && direction != "LOCAL_TO_OSS" {
-		return nil, cliErrorf("迁移方向须为 oss-to-oss、oss-to-local 或 local-to-oss")
+		return nil, usageErrorf("迁移方向须为 oss-to-oss、oss-to-local 或 local-to-oss")
 	}
 	want := 2
 	if direction == "OSS_TO_OSS" {
 		want = 3
 	}
 	if len(opts.Positionals) != want {
-		return nil, cliErrorf("%s 需要 %d 个连接/桶参数", opts.Positionals[0], want-1)
+		return nil, usageErrorf("%s 需要 %d 个连接/桶参数", opts.Positionals[0], want-1)
 	}
 	for flag, values := range opts.Values {
 		if flag != "node" && flag != "binding" && len(values) > 1 {
-			return nil, cliErrorf("--%s 只能填写一次", flag)
+			return nil, usageErrorf("--%s 只能填写一次", flag)
 		}
 	}
 	row := map[string]interface{}{"distributionMode": "balanced"}
@@ -49,12 +50,12 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	}
 	if opts.Has("balanced") {
 		if opts.Has("distribution") && opts.Value("distribution") != "balanced" {
-			return nil, cliErrorf("--balanced 与 --distribution affinity 冲突")
+			return nil, usageErrorf("--balanced 与 --distribution affinity 冲突")
 		}
 		row["distributionMode"] = "balanced"
 	}
 	if row["distributionMode"] != "affinity" && row["distributionMode"] != "balanced" {
-		return nil, cliErrorf("--distribution 须为 affinity 或 balanced")
+		return nil, usageErrorf("--distribution 须为 affinity 或 balanced")
 	}
 	conflict := "SKIP"
 	if opts.Has("conflict") {
@@ -62,19 +63,19 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	}
 	if opts.Has("overwrite") {
 		if opts.Has("conflict") && conflict != "OVERWRITE" {
-			return nil, cliErrorf("--overwrite 与 --conflict skip 冲突")
+			return nil, usageErrorf("--overwrite 与 --conflict skip 冲突")
 		}
 		conflict = "OVERWRITE"
 	}
 	if conflict != "SKIP" && conflict != "OVERWRITE" {
-		return nil, cliErrorf("--conflict 须为 skip 或 overwrite")
+		return nil, usageErrorf("--conflict 须为 skip 或 overwrite")
 	}
 	if opts.Has("prefix") && opts.Has("object-key") {
-		return nil, cliErrorf("--prefix 与 --object-key 不能同时填写")
+		return nil, usageErrorf("--prefix 与 --object-key 不能同时填写")
 	}
 	for _, flag := range []string{"prefix", "object-key", "target-key"} {
 		if opts.Has(flag) && opts.Value(flag) == "" {
-			return nil, cliErrorf("--%s 不能为空", flag)
+			return nil, usageErrorf("--%s 不能为空", flag)
 		}
 	}
 	for flag, field := range map[string]string{"date-after": "dateAfter", "date-before": "dateBefore"} {
@@ -85,7 +86,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	if opts.Has("bandwidth-mbps") {
 		limit, err := strconv.ParseFloat(opts.Value("bandwidth-mbps"), 64)
 		if err != nil || math.IsNaN(limit) || math.IsInf(limit, 0) || limit < 0.1 || limit > 1000000 {
-			return nil, cliErrorf("任务带宽须为 0.1–1,000,000 Mbps")
+			return nil, usageErrorf("任务带宽须为 0.1–1,000,000 Mbps")
 		}
 		row["taskBandwidthLimitMbps"] = limit
 	}
@@ -99,15 +100,15 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	}
 	alias, bucket, err := createParseOssEndpoint(opts.Positionals[1])
 	if err != nil {
-		return nil, err
+		return nil, asUsageError(err)
 	}
 	if direction == "OSS_TO_OSS" {
 		if opts.Has("binding") || opts.Has("target-relative-path") || opts.Has("validate-only") {
-			return nil, cliErrorf("--binding、--target-relative-path 和 --validate-only 仅适用于本地迁移")
+			return nil, usageErrorf("--binding、--target-relative-path 和 --validate-only 仅适用于本地迁移")
 		}
 		destAlias, destBucket, err := createParseOssEndpoint(opts.Positionals[2])
 		if err != nil {
-			return nil, err
+			return nil, asUsageError(err)
 		}
 		row["sourceS3Alias"], row["sourceBucket"] = alias, bucket
 		row["destS3Alias"], row["destBucket"] = destAlias, destBucket
@@ -117,8 +118,11 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		mode := "PRESERVE"
 		if opts.Has("mapping") {
 			mode = strings.ToUpper(strings.ReplaceAll(opts.Value("mapping"), "-", "_"))
-		} else if opts.Has("target-prefix") || opts.Has("target-key") {
-			return nil, cliErrorf("请用 --mapping 指定目标命名方式")
+		} else if opts.Has("target-prefix") {
+			// add-prefix and replace-prefix are both plausible; never guess.
+			return nil, usageErrorf("--target-prefix 需要同时指定 --mapping add-prefix（在 Key 前添加前缀）或 --mapping replace-prefix（替换 --prefix 指定的源前缀）")
+		} else if opts.Has("target-key") {
+			return nil, usageErrorf("--target-key 需要同时指定 --mapping exact-key 和 --object-key")
 		}
 		mapping := map[string]interface{}{"mode": mode}
 		createCopyOption(mapping, opts, "target-prefix", "targetPrefix")
@@ -131,7 +135,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		}
 		row["keyMapping"] = mapping
 		if err := createValidateRow(row, "buckets"); err != nil {
-			return nil, err
+			return nil, createFlagError(err)
 		}
 		nodes, err := createSelectNodes(client, opts.Values["node"])
 		if err != nil {
@@ -141,7 +145,11 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		return createSubmit(client, "buckets", []map[string]interface{}{row}, false, requestID)
 	}
 	if opts.Has("node") || opts.Has("mapping") {
-		return nil, cliErrorf("本地迁移请用 --binding 绑定节点；--node 和 --mapping 仅适用于 OSS 间迁移")
+		return nil, usageErrorf("本地迁移请用 --binding 绑定节点；--node 和 --mapping 仅适用于 OSS 间迁移")
+	}
+	if direction == "LOCAL_TO_OSS" && (opts.Has("distribution") || opts.Has("balanced")) && client.errors != nil {
+		// The Master derives upload distribution from the bindings and ignores the flag.
+		fmt.Fprintln(client.errors, cliText(client.errors, "提示: 本地上传的分发方式由 --binding 数量决定（一个节点为 affinity，多个节点为 balanced），已忽略 --distribution/--balanced。"))
 	}
 	bindings, err := createParseBindings(opts.Values["binding"])
 	if err != nil {
@@ -152,7 +160,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	row["direction"], row["conflictPolicy"] = direction, conflict
 	if direction == "OSS_TO_LOCAL" {
 		if opts.Has("target-prefix") || opts.Has("target-key") {
-			return nil, cliErrorf("下载的本地命名请使用 --target-relative-path（仅单对象）")
+			return nil, usageErrorf("下载的本地命名请使用 --target-relative-path（仅单对象）")
 		}
 		createCopyOption(oss, opts, "prefix", "prefix")
 		createCopyOption(oss, opts, "object-key", "objectKey")
@@ -160,20 +168,20 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		row["sourceEndpoint"], row["destinationEndpoint"] = oss, local
 	} else {
 		if opts.Has("prefix") || opts.Has("object-key") || opts.Has("target-relative-path") {
-			return nil, cliErrorf("上传的源范围由 --binding 路径决定，目标请使用 --target-prefix 或 --target-key")
+			return nil, usageErrorf("上传的源范围由 --binding 路径决定，目标请使用 --target-prefix 或 --target-key")
 		}
 		if opts.Has("target-prefix") && opts.Has("target-key") {
-			return nil, cliErrorf("--target-prefix 与 --target-key 不能同时填写")
+			return nil, usageErrorf("--target-prefix 与 --target-key 不能同时填写")
 		}
 		if opts.Has("target-prefix") && opts.Value("target-prefix") == "" {
-			return nil, cliErrorf("--target-prefix 不能为空")
+			return nil, usageErrorf("--target-prefix 不能为空")
 		}
 		createCopyOption(oss, opts, "target-prefix", "prefix")
 		createCopyOption(oss, opts, "target-key", "objectKey")
 		row["sourceEndpoint"], row["destinationEndpoint"] = local, oss
 	}
 	if err := createValidateRow(row, "local"); err != nil {
-		return nil, err
+		return nil, createFlagError(err)
 	}
 	return createSubmit(client, "local", []map[string]interface{}{row}, opts.Has("validate-only"), requestID)
 }
@@ -189,28 +197,28 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 	}
 	for name, values := range opts.Values {
 		if len(values) > 1 {
-			return nil, cliErrorf("--%s 只能填写一次", name)
+			return nil, usageErrorf("--%s 只能填写一次", name)
 		}
 	}
 	if len(opts.Positionals) < 1 || len(opts.Positionals) > 2 {
-		return nil, cliErrorf("用法: task import buckets|tasks|local <文件> [--format json|csv] [--validate-only]")
+		return nil, usageErrorf("用法: task import buckets|tasks|local <文件> [--format json|csv] [--validate-only]")
 	}
 	kind := opts.Positionals[0]
 	if kind != "buckets" && kind != "tasks" && kind != "local" {
-		return nil, cliErrorf("导入类型须为 buckets（存储桶迁移）、tasks（子任务）或 local（本地迁移）")
+		return nil, usageErrorf("导入类型须为 buckets（存储桶迁移）、tasks（子任务）或 local（本地迁移）")
 	}
 	path := opts.Value("file")
 	if len(opts.Positionals) == 2 {
 		if opts.Has("file") {
-			return nil, cliErrorf("文件只能通过位置参数或 --file 指定一次")
+			return nil, usageErrorf("文件只能通过位置参数或 --file 指定一次")
 		}
 		path = opts.Positionals[1]
 	}
 	if path == "" {
-		return nil, cliErrorf("请指定导入文件")
+		return nil, usageErrorf("请指定导入文件")
 	}
 	if opts.Has("validate-only") && kind != "local" {
-		return nil, cliErrorf("--validate-only 仅适用于本地迁移预检")
+		return nil, usageErrorf("--validate-only 仅适用于本地迁移预检")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -231,14 +239,14 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 		}
 	case "csv":
 		if kind != "buckets" {
-			return nil, cliErrorf("CSV 仅支持 buckets；tasks 和 local 请使用 JSON")
+			return nil, usageErrorf("CSV 仅支持 buckets；tasks 和 local 请使用 JSON")
 		}
 		rows, err = createReadCSV(string(data))
 		if err != nil {
 			return nil, err
 		}
 	default:
-		return nil, cliErrorf("--format 须为 json 或 csv")
+		return nil, usageErrorf("--format 须为 json 或 csv")
 	}
 	if len(rows) == 0 {
 		return nil, cliErrorf("任务数据必须是非空数组")
@@ -269,7 +277,7 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 		return nil, err
 	}
 	if len(opts.Positionals) != 1 {
-		return nil, cliErrorf("用法: import-tasks <文件> [--distribution affinity|balanced]；旧格式为源连接/桶,目标连接/桶,dateAfter,dateBefore,prefix,overwrite")
+		return nil, usageErrorf("用法: import-tasks <文件> [--distribution affinity|balanced]；旧格式为源连接/桶,目标连接/桶,dateAfter,dateBefore,prefix,overwrite")
 	}
 	data, err := os.ReadFile(opts.Positionals[0])
 	if err != nil {
@@ -312,10 +320,10 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 			mode = opts.Value("distribution")
 		}
 		if opts.Has("balanced") && mode != "balanced" {
-			return nil, cliErrorf("--balanced 与 --distribution affinity 冲突")
+			return nil, usageErrorf("--balanced 与 --distribution affinity 冲突")
 		}
 		if mode != "affinity" && mode != "balanced" {
-			return nil, cliErrorf("--distribution 须为 affinity 或 balanced")
+			return nil, usageErrorf("--distribution 须为 affinity 或 balanced")
 		}
 		row := map[string]interface{}{"sourceS3Alias": sa, "sourceBucket": sb, "destS3Alias": da, "destBucket": db, "overwrite": overwrite == "true", "distributionMode": mode}
 		for index, field := range []string{"dateAfter", "dateBefore", "prefix"} {
@@ -334,6 +342,54 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 	return createSubmit(client, "buckets", rows, false, requestID)
 }
 
+// createFlagError restates a row validation error with the flags the user
+// typed, instead of the JSON field and enum names shared with task import.
+func createFlagError(err error) error {
+	own, ok := err.(*cliMessageError)
+	if !ok {
+		return asUsageError(err)
+	}
+	flags := map[string]string{"dateAfter": "--date-after", "dateBefore": "--date-before", "targetPrefix": "--target-prefix", "targetKey": "--target-key", "sourcePrefix": "--prefix", "prefix": "--prefix", "objectKey": "--object-key", "targetRelativePath": "--target-relative-path"}
+	flag := func(value interface{}) interface{} {
+		if name, ok := value.(string); ok && flags[name] != "" {
+			return flags[name]
+		}
+		return value
+	}
+	mapping := func(value interface{}) interface{} {
+		return strings.ToLower(strings.ReplaceAll(fmt.Sprint(value), "_", "-"))
+	}
+	switch own.key {
+	case "ADD_PREFIX 需要非空 targetPrefix":
+		return usageErrorf("--mapping add-prefix 需要非空的 --target-prefix")
+	case "REPLACE_PREFIX 的 sourcePrefix 必须与源 prefix 完全一致且非空":
+		return usageErrorf("--mapping replace-prefix 需要非空的 --prefix（要替换的源前缀）")
+	case "EXACT_KEY 需要单个源 objectKey 和非空 targetKey":
+		return usageErrorf("--mapping exact-key 需要 --object-key 和非空的 --target-key")
+	case "keyMapping.mode 须为 PRESERVE、ADD_PREFIX、REPLACE_PREFIX 或 EXACT_KEY":
+		return usageErrorf("--mapping 须为 preserve、add-prefix、replace-prefix 或 exact-key")
+	case "%v 不使用 %s":
+		if len(own.args) == 2 {
+			return usageErrorf("--mapping %s 不使用 %s", mapping(own.args[0]), flag(own.args[1]))
+		}
+	case "%s 格式错误，应为 YYYY-MM-DD、YYYY-MM-DDTHH:mm:ss 或 RFC3339", "%s 须为日期时间字符串":
+		if len(own.args) == 1 {
+			return usageErrorf("%s 格式错误，应为 YYYY-MM-DD、YYYY-MM-DDTHH:mm:ss 或 RFC3339", flag(own.args[0]))
+		}
+	case "结束时间必须晚于开始时间":
+		return usageErrorf("--date-before 必须晚于 --date-after")
+	case "targetRelativePath 仅适用于单对象下载并须为非空相对路径":
+		return usageErrorf("--target-relative-path 仅适用于单对象下载（需同时指定 --object-key），且不能为空")
+	case "targetRelativePath 须为本地目录内的相对路径":
+		return usageErrorf("--target-relative-path 须为本地目录内的相对路径")
+	case "targetRelativePath 不允许包含 ..":
+		return usageErrorf("--target-relative-path 不允许包含 ..")
+	case "OSS 端点 objectKey 与 prefix 不能同时填写":
+		return usageErrorf("--target-prefix 与 --target-key 不能同时填写")
+	}
+	return asUsageError(err)
+}
+
 func createCopyOption(target map[string]interface{}, opts commandOptions, flag, field string) {
 	if opts.Has(flag) {
 		target[field] = opts.Value(flag)
@@ -350,18 +406,18 @@ func createParseOssEndpoint(value string) (string, string, error) {
 
 func createParseBindings(values []string) ([]interface{}, error) {
 	if len(values) == 0 {
-		return nil, cliErrorf("本地迁移至少需要一个 --binding 节点IP=/绝对路径")
+		return nil, usageErrorf("本地迁移至少需要一个 --binding 节点IP=/绝对路径")
 	}
 	bindings := make([]interface{}, 0, len(values))
 	seen := map[string]bool{}
 	for _, value := range values {
 		parts := strings.SplitN(value, "=", 2)
 		if len(parts) != 2 || adminNodeAddress(strings.TrimSpace(parts[0])) != nil || !agentAbsolutePath(parts[1]) {
-			return nil, cliErrorf("节点路径绑定格式错误: %q，应为节点=绝对路径", value)
+			return nil, usageErrorf("节点路径绑定格式错误: %q，应为节点=绝对路径", value)
 		}
 		ip := strings.TrimSpace(parts[0])
 		if seen[ip] {
-			return nil, cliErrorf("同一执行节点只能绑定一次: %s", ip)
+			return nil, usageErrorf("同一执行节点只能绑定一次: %s", ip)
 		}
 		seen[ip] = true
 		bindings = append(bindings, map[string]interface{}{"executionNodeIp": ip, "localPath": parts[1]})
@@ -480,6 +536,10 @@ func createValidateRow(row map[string]interface{}, kind string) error {
 			return cliErrorf("%s 须为日期时间字符串", field)
 		}
 		s = strings.ReplaceAll(strings.TrimSpace(s), " ", "T")
+		if len(s) == 10 {
+			// Date only, as the Master accepts: midnight in the Master's time zone.
+			s += "T00:00"
+		}
 		if len(s) == 16 {
 			s += ":00"
 		}
@@ -488,7 +548,7 @@ func createValidateRow(row map[string]interface{}, kind string) error {
 			parsed, err = time.Parse(time.RFC3339Nano, s)
 		}
 		if err != nil {
-			return cliErrorf("%s 格式错误，应为 YYYY-MM-DDTHH:mm:ss 或 RFC3339", field)
+			return cliErrorf("%s 格式错误，应为 YYYY-MM-DD、YYYY-MM-DDTHH:mm:ss 或 RFC3339", field)
 		}
 		dates[i] = parsed
 		row[field] = s
@@ -771,10 +831,20 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 	}
 	count, confirmed := data[countField].(float64)
 	unknown, _ := data["unknownCount"].(float64)
-	rejected, _ := data["rejectedCount"].(float64)
+	rejected, rejectedKnown := data["rejectedCount"].(float64)
+	requested := float64(len(rows))
 	result["requestedCount"] = len(rows)
-	if data["partial"] == true || unknown > 0 || rejected > 0 || !confirmed || count != float64(len(rows)) {
+	if confirmed && count == 0 && rejectedKnown && rejected == requested && unknown == 0 && len(creationTaskIDs(result)) == 0 {
+		// Every row was refused and nothing is in doubt: this is a definite failure.
+		// The reason may be transient, so a plain retry can still help.
+		result["submissionStatus"] = "rejected"
+		return result, cliErrorf("服务端拒绝了创建请求，未创建任务: %s", creationRejectionText(data, len(rows)))
+	}
+	if data["partial"] == true || unknown > 0 || rejected > 0 || !confirmed || count != requested {
 		result["submissionStatus"] = "partial"
+		if confirmed && unknown == 0 && rejectedKnown && rejected > 0 && count+rejected == requested && len(creationTaskIDs(result)) == int(count) {
+			return result, creationSubmissionError(cliErrorf("已创建 %d 个任务，%d 个被拒绝（见上方列表）", int(count), int(rejected)), requestID)
+		}
 		return result, creationSubmissionError(cliErrorf("提交结果未完全确认；部分任务可能已受理，请核对返回的任务编号"), requestID)
 	}
 	result["submissionStatus"] = "accepted"

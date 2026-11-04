@@ -47,19 +47,19 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		return nil, err
 	}
 	if len(o.Positionals) != 1 || len(o.Values["label"]) > 1 || !o.Has("label") && !o.Has("local-root") && !o.Has("clear-local-roots") && !o.Has("child-concurrency") && !o.Has("object-concurrency") {
-		return nil, cliErrorf("用法: agent update <节点> [--label 名称] [--child-concurrency 数量] [--object-concurrency 数量] [--local-root 目录 ... | --clear-local-roots]")
+		return nil, usageErrorf("用法: agent update <节点> [--label 名称] [--child-concurrency 数量] [--object-concurrency 数量] [--local-root 目录 ... | --clear-local-roots]")
 	}
 	if err := adminNodeAddress(o.Positionals[0]); err != nil {
 		return nil, err
 	}
 	if o.Has("clear-local-roots") && o.Has("local-root") {
-		return nil, cliErrorf("--local-root 和 --clear-local-roots 不能同时使用")
+		return nil, usageErrorf("--local-root 和 --clear-local-roots 不能同时使用")
 	}
 	body := map[string]interface{}{}
 	if o.Has("label") {
 		label := strings.TrimSpace(o.Value("label"))
 		if !utf8.ValidString(label) || len(label) > 128 || strings.ContainsAny(label, "\x00\r\n") {
-			return nil, cliErrorf("节点名称不能超过 128 字节或包含换行")
+			return nil, usageErrorf("节点名称不能超过 128 字节或包含换行")
 		}
 		body["label"] = label
 	}
@@ -68,7 +68,7 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		seen := map[string]bool{}
 		for _, root := range o.Values["local-root"] {
 			if !agentAbsolutePath(root) || seen[root] {
-				return nil, cliErrorf("登记目录必须是非重复的节点绝对路径: %s", root)
+				return nil, usageErrorf("登记目录必须是非重复的节点绝对路径: %s", root)
 			}
 			seen[root] = true
 			roots = append(roots, root)
@@ -86,13 +86,13 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		}
 		value, err := strconv.Atoi(o.Value(field.flag))
 		if err != nil || len(o.Values[field.flag]) != 1 || value < 1 || value > field.max {
-			return nil, cliErrorf("--%s 必须是 1–%d 的整数", field.flag, field.max)
+			return nil, usageErrorf("--%s 必须是 1–%d 的整数", field.flag, field.max)
 		}
 		body[field.key] = value
 	}
 	if children, ok := body["maxConcurrentChildren"].(int); ok {
 		if objects, ok := body["objectsPerChild"].(int); ok && children*objects > 256 {
-			return nil, cliErrorf("子任务并发与对象并发的乘积不能超过 256")
+			return nil, usageErrorf("子任务并发与对象并发的乘积不能超过 256")
 		}
 	}
 	return client.Put("/nodes/"+url.PathEscape(o.Positionals[0]), body)
@@ -123,11 +123,11 @@ func agentInviteStatus(client *ApiClient, args []string) (map[string]interface{}
 	}
 	id := o.Positionals[0]
 	if len(id) == 0 || len(id) > 256 || strings.ContainsAny(id, "/\\?#% \t\r\n\x00") {
-		return nil, cliErrorf("请指定加入邀请 ID，而不是加入链接或密钥")
+		return nil, usageErrorf("请指定加入邀请 ID，而不是加入链接或密钥")
 	}
 	for _, char := range id {
 		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_') {
-			return nil, cliErrorf("请指定加入邀请 ID，而不是加入链接或密钥")
+			return nil, usageErrorf("请指定加入邀请 ID，而不是加入链接或密钥")
 		}
 	}
 	return client.Get("/agents/invitations/" + url.PathEscape(id))

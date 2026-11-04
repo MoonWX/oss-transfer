@@ -163,10 +163,38 @@ type cliMessageError struct {
 	key      string
 	args     []interface{}
 	original error
+	// usage marks a command-line mistake (exit 2) rather than a failed operation (exit 1).
+	usage bool
 }
 
 func cliErrorf(key string, args ...interface{}) error {
 	return &cliMessageError{key: key, args: args, original: fmt.Errorf(key, args...)}
+}
+
+// usageErrorf reports invalid arguments or flags; runCLI exits 2 for these.
+func usageErrorf(key string, args ...interface{}) error {
+	return &cliMessageError{key: key, args: args, original: fmt.Errorf(key, args...), usage: true}
+}
+
+// asUsageError keeps a validation message but marks it as a command-line mistake.
+func asUsageError(err error) error {
+	if own, ok := err.(*cliMessageError); ok && !own.usage {
+		copy := *own
+		copy.usage = true
+		return &copy
+	}
+	return err
+}
+
+// isUsageError reports whether err, or an error it wraps, is a usage error.
+func isUsageError(err error) bool {
+	for err != nil {
+		if own, ok := err.(*cliMessageError); ok && own.usage {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
 }
 func (e *cliMessageError) Error() string { return e.original.Error() }
 func (e *cliMessageError) Unwrap() error { return e.original }

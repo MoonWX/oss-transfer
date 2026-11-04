@@ -22,7 +22,7 @@ const cliHelp = `OSS Transfer CLI
   task report <ID> [--output 文件.zip]
 
 节点与存储
-  node list|show|details|network|add|invite|update|remove
+  node list|show|details|network|update|remove
   agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove  管理存储连接
   storage buckets|test <连接名>  列举 Bucket 并验证连接
@@ -72,6 +72,7 @@ const cliHelp = `OSS Transfer CLI
 说明
   在本机 Master 或 Agent 上，服务运行用户或系统管理员无需登录。连接其他集群使用 login。
   批量操作须明确指定主任务 ID，可用 224,225 或 224-226；不会默认操作全部任务。
+  选择节点统一使用 --node（旧写法 --worker 仍然可用）。
   新任务受理后自动执行；已受理、预检通过均不代表迁移完成。
   删除节点、存储连接、永久删除任务及清空异常需要 --yes。
   查询不完整会保留节点错误；退出码 0=成功，1=操作失败，2=命令错误，3=结果不完整，130=用户中断。
@@ -80,8 +81,7 @@ const cliHelp = `OSS Transfer CLI
   默认跟随系统语言；无法识别时使用英文。config set language zh 可保存为中文，auto 恢复跟随系统。
   --lang 和 OSS_TRANSFER_LANG 可临时覆盖已保存设置。
   JSON 字段名、枚举值和用户数据保持原样。
-  帮助：help task、help task create、help task import、help node、help storage、
-        help agent、help setup、help limit、help exceptions、help object、help update、help backup、help login、help config、help tools。
+  帮助：help {{HELP_TOPICS}}。
 `
 
 const cliTaskHelp = `任务管理
@@ -89,7 +89,7 @@ const cliTaskHelp = `任务管理
 
 查询
   list [--status 状态] [--source 源Bucket] [--dest 目标Bucket]
-       [--worker 节点] [--direction oss-to-oss|oss-to-local|local-to-oss]
+       [--node 节点] [--direction oss-to-oss|oss-to-local|local-to-oss]
        [--search 关键词] [--all] [--limit 100] [--before-id ID]
   show <ID> [--offset 0] [--limit 25]
   show <ID> --child ID-序号 [--node 节点]
@@ -97,7 +97,7 @@ const cliTaskHelp = `任务管理
   progress <ID> [--child ID-序号] [--generation N] 查看文件进度
   cleanup-status <ID...>          查看后台清理结果
   recover-child <ID-序号>         立即尝试恢复子任务，仍遵守节点并发上限
-  trash [--task-id ID] [--worker 节点] [--direction 方向] [--search 关键词]
+  trash [--task-id ID] [--node 节点] [--direction 方向] [--search 关键词]
 
 操作
   stop <ID...>                    停止传输并保留进度
@@ -134,7 +134,7 @@ const cliTaskHelp = `任务管理
   oss-transfer-cli task bandwidth 224 unlimited
   oss-transfer-cli task limits 224 --list-qps 100 --head-qps 500 --put-qps 200
   oss-transfer-cli task report 224 --output ./task-224.zip
-  oss-transfer-cli task trash --direction oss-to-local --worker 10.0.0.2
+  oss-transfer-cli task trash --direction oss-to-local --node 10.0.0.2
 
 状态：RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
 操作按指定主任务逐项检查，批量请求分批提交；不会重试已在执行中的任务。
@@ -235,20 +235,18 @@ const cliNodeHelp = `执行节点
   show <节点>                     查看节点运行状态
   details <节点>                  查看主机、网卡 IP 和挂载目录
   network [--public-url URL] [--agent-url URL]
-  add <节点> [--label 名称]        生成指定地址的 Agent 加入指令
-  invite [--address 节点] [--label 名称] [--master-url URL]
-  update <节点> [--address 新地址] [--label 名称]
+  update <节点> [--label 名称]
   update <节点> --child-concurrency 32 --object-concurrency 4
   remove <节点> --yes              移除指定节点注册
 
 示例
   oss-transfer-cli node list --watch 5
-  oss-transfer-cli node add 10.0.0.2 --label 数据节点
+  oss-transfer-cli agent invite --address 10.0.0.2 --label 数据节点
   oss-transfer-cli node update 10.0.0.2 --label 备用节点
   oss-transfer-cli node remove 10.0.0.2 --yes
 
-命令中的节点使用 node list 的“节点标识”列。新增节点使用 agent invite，--address 支持名称、IPv4 和 IPv6；省略时自动生成。
-Agent 地址注册后不能直接修改，替换节点需重新加入。
+命令中的节点使用 node list 的“节点标识”列。新增节点使用 agent invite（详见 help agent）。
+Agent 地址加入后不能修改；更换地址时在新地址加入替换的 Agent，再移除旧节点。
 node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
@@ -323,19 +321,19 @@ const cliLimitHelp = `节点限速
 用法：oss-transfer-cli limit <子命令> [参数]
 
   list                            查看目标上限、运行上限和自动调节状态
-  set <list|put|head|bandwidth> <数值|unlimited> (--worker 节点|--all)
+  set <list|put|head|bandwidth> <数值|unlimited> (--node 节点|--all)
        [--unit bps|Kbps|Mbps|Gbps]
   history [--limit 50]             查看各节点最近的调节记录，最多 1000 条/节点
-  adjustment --worker 节点 --event-id ID [--cursor 游标]
+  adjustment --node 节点 --event-id ID [--cursor 游标]
 
 示例
-  oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
+  oss-transfer-cli limit set bandwidth 200 --node 10.0.0.2
   oss-transfer-cli limit set bandwidth 1 --unit Gbps --all
   oss-transfer-cli limit set put 500 --all
-  oss-transfer-cli limit set bandwidth unlimited --worker 10.0.0.2
+  oss-transfer-cli limit set bandwidth unlimited --node 10.0.0.2
   oss-transfer-cli limit list --watch 5
   oss-transfer-cli limit history --limit 50
-  oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
+  oss-transfer-cli limit adjustment --node 10.0.0.2 --event-id EVENT_ID
 
 bandwidth 默认单位 Mbps；其他类型单位为次/秒，不接受 --unit。
 数值须大于 0；移除上限须明确使用 unlimited，不将无效数值转成不限速。
@@ -353,8 +351,8 @@ const cliExceptionsHelp = `异常记录
 
 查询
   list failed|fallback [--task-id ID] [--source-bucket 桶] [--dest-bucket 桶]
-                       [--worker 节点] [--limit 1000]
-  list local [--task-id ID] [--worker 节点] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
+                       [--node 节点] [--limit 1000]
+  list local [--task-id ID] [--node 节点] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
              [--endpoint 值] [--storage-id ID] [--offset 0] [--limit 25]
 
 导出
@@ -367,7 +365,7 @@ const cliExceptionsHelp = `异常记录
   clear failed|local --task-id ID --yes
   clear failed|local --all --yes
   仅清理已恢复或已跳过的异常记录，保留未解决的失败，不删除任务。
-  支持 --worker、--direction、--source-bucket、--dest-bucket、--endpoint 筛选；
+  支持 --node、--direction、--source-bucket、--dest-bucket、--endpoint 筛选；
   --all 与筛选条件不能同时使用。
 
 示例
@@ -432,6 +430,22 @@ import-inventory 读取本机目录中的 .incr 文件，每行一个 UTF-8 Key�
 --node 可重复填写；未指定时由 Master 选择执行节点。此命令需要 Go Master。
 连接中断后，保留原文件和参数，用输出的 --request-id 重试，不会重复创建已受理的任务。
 `
+
+// helpTopics lists every help group once so all languages show the same set.
+var helpTopics = []string{"task", "task create", "task import", "node", "agent", "setup", "storage", "limit", "exceptions", "object", "update", "backup", "login", "config", "tools"}
+
+func helpTopicList() string { return strings.Join(helpTopics, ", ") }
+
+// unknownHelpTopic returns the requested topic when no help group matches it.
+func unknownHelpTopic(args []string) string {
+	if len(args) > 0 && args[0] == "help" {
+		args = args[1:]
+	}
+	if len(args) == 0 || helpFor(args[:1]) != cliHelp {
+		return ""
+	}
+	return args[0]
+}
 
 func helpFor(args []string) string {
 	if len(args) > 0 && args[0] == "help" {

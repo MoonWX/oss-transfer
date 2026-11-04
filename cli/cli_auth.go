@@ -126,14 +126,14 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 		if allowStdin {
 			stdin = cliErrorf("或 --%s-stdin", name)
 		}
-		return "", cliErrorf("请为 %s 指定一种输入方式：环境变量、文件%s", name, stdin)
+		return "", usageErrorf("请为 %s 指定一种输入方式：环境变量、文件%s", name, stdin)
 	}
 	var value string
 	if opts.Has(name + "-env") {
 		var found bool
 		value, found = os.LookupEnv(opts.Value(name + "-env"))
 		if !found {
-			return "", cliErrorf("环境变量 %s 未设置", opts.Value(name+"-env"))
+			return "", usageErrorf("环境变量 %s 未设置", opts.Value(name+"-env"))
 		}
 	}
 	if opts.Has(name + "-file") {
@@ -145,7 +145,7 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 	}
 	if opts.Has(name + "-stdin") {
 		if !allowStdin {
-			return "", cliErrorf("不支持 stdin")
+			return "", usageErrorf("不支持 stdin")
 		}
 		data, err := io.ReadAll(io.LimitReader(input, 65537))
 		if err != nil {
@@ -158,7 +158,7 @@ func authSecret(opts commandOptions, name string, input io.Reader, allowStdin bo
 		value = strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r")
 	}
 	if len(value) == 0 || len(value) > 65536 {
-		return "", cliErrorf("密码不能为空或超过 65536 字节")
+		return "", usageErrorf("密码不能为空或超过 65536 字节")
 	}
 	return value, nil
 }
@@ -172,7 +172,7 @@ func (client *ApiClient) promptPassword(input io.Reader, label string) (string, 
 	}
 	file, ok := input.(*os.File)
 	if !ok || !term.IsTerminal(int(file.Fd())) {
-		return "", cliErrorf("非交互终端请使用密码环境变量、文件或 --password-stdin")
+		return "", usageErrorf("非交互终端请使用密码环境变量、文件或 --password-stdin")
 	}
 	output := client.errors
 	if output == nil {
@@ -185,7 +185,7 @@ func (client *ApiClient) promptPassword(input io.Reader, label string) (string, 
 		return "", err
 	}
 	if len(value) == 0 || len(value) > 65536 {
-		return "", cliErrorf("密码不能为空或超过 65536 字节")
+		return "", usageErrorf("密码不能为空或超过 65536 字节")
 	}
 	return string(value), nil
 }
@@ -205,7 +205,7 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 			return nil, err
 		}
 		if len(opts.Positionals) > 0 {
-			return nil, cliErrorf("login 不接受位置参数")
+			return nil, usageErrorf("login 不接受位置参数")
 		}
 		username := strings.TrimSpace(opts.Value("username"))
 		if username == "" {
@@ -235,7 +235,7 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		return result, nil
 	case "logout", "whoami":
 		if len(args) != 0 {
-			return nil, cliErrorf("%s 不接受额外参数", command)
+			return nil, usageErrorf("%s 不接受额外参数", command)
 		}
 		if command == "whoami" {
 			return client.Request("GET", "/api/auth/current", nil)
@@ -254,7 +254,7 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 			return nil, err
 		}
 		if len(opts.Positionals) > 0 {
-			return nil, cliErrorf("change-password 不接受位置参数")
+			return nil, usageErrorf("change-password 不接受位置参数")
 		}
 		old, err := client.passwordValue(opts, "old-password", "当前密码：", input, false)
 		if err != nil {
@@ -270,10 +270,10 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 				return nil, err
 			}
 			if confirmation != next {
-				return nil, cliErrorf("两次输入的密码不一致")
+				return nil, usageErrorf("两次输入的密码不一致")
 			}
 		}
 		return client.Request("POST", "/api/auth/change-password", map[string]string{"oldPassword": old, "newPassword": next})
 	}
-	return nil, cliErrorf("未知账户命令")
+	return nil, usageErrorf("未知账户命令")
 }

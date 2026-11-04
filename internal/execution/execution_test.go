@@ -351,16 +351,19 @@ func TestStopFencePrecedesCancelAndResumeWaitsOldAttempt(t *testing.T) {
 		t.Fatalf("new attempt overtook blocked previous I/O: %v", err)
 	}
 	releaseOnce.Do(func() { close(release) })
+	// The write finished before the attempt saw the stop, so its durable
+	// result is credited to the stopped attempt before the attempt exits;
+	// the record stays stopped.
 	r := f.wait()
-	if r.Status != Stopped || r.Counters.Succeeded != 0 {
-		t.Fatalf("old result crossed stop fence: %+v", r)
+	if r.Status != Stopped || r.Counters.Succeeded != 1 {
+		t.Fatalf("published result of the stopped attempt was lost: %+v", r)
 	}
 	if err := f.engine.Resume(bg, f.job.ChildID, 1, false); err != nil {
 		t.Fatal(err)
 	}
 	r = f.wait()
-	if r.Status != Completed || r.Counters.Skipped != 1 || r.Counters.Succeeded != 0 {
-		t.Fatalf("at-least-once recovery did not honor SKIP: %+v", r)
+	if r.Status != Completed || r.Counters.Skipped != 0 || r.Counters.Succeeded != 1 {
+		t.Fatalf("resumed attempt recounted its own published object: %+v", r)
 	}
 	f.assertFiles()
 }

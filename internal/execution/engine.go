@@ -503,13 +503,12 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 					return
 				}
 				result := e.copyResolvedItem(ctx, record, item, source, target, attempt.progress)
-				if ctx.Err() != nil {
-					return
+				if ctx.Err() != nil && result.Status == ItemFailed {
+					return // Most likely the cancellation itself; the item stays pending.
 				}
-				select {
-				case results <- result:
-				case <-ctx.Done():
-				}
+				// A finished object is reported even after cancellation: the
+				// reader drains until every worker exits and persists it.
+				results <- result
 			}(item)
 		}
 	}()
@@ -538,6 +537,9 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 		if err == nil {
 			_, err = e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
 		}
+		if err != nil && err == ctx.Err() {
+			return // Cancelled meanwhile: the batch is persisted on the way out.
+		}
 		if err != nil {
 			commitErr = fmt.Errorf("persist object results: %w", err)
 			cancel()
@@ -552,6 +554,7 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 					return nil, commitErr
 				}
 				if err := ctx.Err(); err != nil {
+					e.persistInterrupted(record, target, batch)
 					return nil, err
 				}
 				if len(batch) > 0 {
@@ -573,6 +576,31 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 		case <-ticker.C:
 			flush()
 		}
+	}
+}
+
+// interruptedCommitTimeout bounds the final commit of a cancelled attempt.
+const interruptedCommitTimeout = 30 * time.Second
+
+// persistInterrupted commits the results a cancelled attempt already has, so
+// objects it published are not later counted as skipped. The barrier comes
+// first, as for every commit. A stop fences the attempt before cancelling it,
+// so its results go through commitStopped; other cancellations (shutdown, a
+// lost lease) leave the attempt current. Failures leave the items pending.
+func (e *Engine) persistInterrupted(record Record, target transferstore.Store, batch []ItemResult) {
+	if len(batch) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interruptedCommitTimeout)
+	defer cancel()
+	if syncer, ok := target.(transferstore.DurabilitySyncer); ok {
+		if syncer.Sync(ctx) != nil {
+			return
+		}
+	}
+	_, err := e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
+	if errors.Is(err, ErrAttempt) || errors.Is(err, ErrStopped) {
+		_, _ = e.repo.commitStopped(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
 	}
 }
 

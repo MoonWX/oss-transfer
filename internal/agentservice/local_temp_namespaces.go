@@ -17,6 +17,12 @@ import (
 
 const localTempNamespacesBucket = "agent-local-temp-namespaces"
 
+// retainedNamespaceKey stores a namespace that could not be removed when its
+// parent got a new namespace, so one parent path can have several records.
+func retainedNamespaceKey(record transferstore.LocalTempNamespace) string {
+	return namespaceKey(record.ParentPath) + "-" + record.ID
+}
+
 func namespaceKey(parent string) string {
 	digest := sha256.Sum256([]byte(filepath.Clean(parent)))
 	return hex.EncodeToString(digest[:])
@@ -55,7 +61,18 @@ func (r *LocalTempRegistry) PrepareNamespace(ctx context.Context, parent *os.Roo
 		} else {
 			removed, removeErr := r.removeNamespace(ctx, key, record)
 			if !removed {
-				return record, errors.Join(openErr, removeErr)
+				// It cannot be removed now (its parent may only be unmounted,
+				// or records still point into it). Keep the record under its
+				// own key for later recoveries, and give the directory that is
+				// here now a fresh namespace.
+				if err := r.store.Update(func(tx *state.Tx) error {
+					if err := tx.Delete(localTempNamespacesBucket, key); err != nil {
+						return err
+					}
+					return tx.Put(localTempNamespacesBucket, retainedNamespaceKey(record), record)
+				}); err != nil {
+					return record, errors.Join(openErr, removeErr, err)
+				}
 			}
 			found = false
 		}
@@ -181,11 +198,11 @@ func (r *LocalTempRegistry) removeNamespace(ctx context.Context, key string, rec
 	}
 	// Delete the directory before its record: an interruption in between is
 	// finished by the next recovery, which accepts a missing directory.
-	// When the parent directory is gone or replaced, the private namespace
-	// cannot be reached by its path any more; no record points into it
-	// (checked above), so only its database record is dropped. Otherwise
-	// every later write into a recreated directory would be refused.
-	if err := transferstore.RemoveLocalTempNamespace(ctx, record); err != nil && !errors.Is(err, transferstore.ErrTempNamespaceUnreachable) {
+	// When the parent directory was deleted (positive evidence, on the same
+	// filesystem), the namespace went with it; no record points into it
+	// (checked above), so only its database record is dropped. A parent that
+	// is merely unreachable keeps its record.
+	if err := transferstore.RemoveLocalTempNamespace(ctx, record); err != nil && !errors.Is(err, transferstore.ErrTempNamespaceGone) {
 		return false, err
 	}
 	err = r.store.Update(func(tx *state.Tx) error { return tx.Delete(localTempNamespacesBucket, key) })
@@ -201,23 +218,25 @@ func (r *LocalTempRegistry) recoverNamespaces(ctx context.Context, registered ma
 			return err
 		}
 		var records []transferstore.LocalTempNamespace
+		var keys []string
 		if err := r.store.View(func(tx *state.Tx) error {
 			return tx.Scan(localTempNamespacesBucket, "", after, 128, func(key string, raw json.RawMessage) error {
 				var record transferstore.LocalTempNamespace
 				if err := json.Unmarshal(raw, &record); err != nil {
 					return err
 				}
-				if key != namespaceKey(record.ParentPath) {
+				if key != namespaceKey(record.ParentPath) && key != retainedNamespaceKey(record) {
 					return errors.New("temporary namespace record key mismatch")
 				}
 				records = append(records, record)
+				keys = append(keys, key)
 				after = key
 				return nil
 			})
 		}); err != nil {
 			return err
 		}
-		for _, record := range records {
+		for i, record := range records {
 			var count int
 			var err error
 			if record.Owner != r.owner {
@@ -230,7 +249,7 @@ func (r *LocalTempRegistry) recoverNamespaces(ctx context.Context, registered ma
 				// Recovery runs before any I/O, so no namespace is in use. This
 				// also finishes a removal interrupted after deleting the marker
 				// or the directory, which the sweep above reports as an error.
-				removed, removeErr := r.removeNamespace(ctx, namespaceKey(record.ParentPath), record)
+				removed, removeErr := r.removeNamespace(ctx, keys[i], record)
 				switch {
 				case removed:
 					report.RemovedNamespaces++

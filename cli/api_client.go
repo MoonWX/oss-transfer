@@ -107,11 +107,6 @@ func (c *ApiClient) sendRequest(req *http.Request) (map[string]interface{}, erro
 	return decodeAPIResponse(resp.StatusCode, responseBody)
 }
 
-// Retain the original internal entry point for existing callers.
-func (c *ApiClient) request(method, path string, body interface{}) (map[string]interface{}, error) {
-	return c.Request(method, path, body)
-}
-
 func (c *ApiClient) newRequest(method, path string, body interface{}) (*http.Request, error) {
 	if c.configurationError != nil {
 		return nil, c.configurationError
@@ -333,62 +328,4 @@ func validateReportArchive(path string) error {
 		}
 	}
 	return nil
-}
-
-func (c *ApiClient) PrintJson(result map[string]interface{}) error {
-	output, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(output))
-	return nil
-}
-
-func (c *ApiClient) PrintJsonWithFilter(result map[string]interface{}, filterKey string) error {
-	if data, ok := result[filterKey]; ok {
-		result = map[string]interface{}{filterKey: data}
-	}
-	return c.PrintJson(result)
-}
-
-func parseBucketPair(input string) (map[string]interface{}, error) {
-	parts := strings.Split(input, ",")
-	if len(parts) < 2 {
-		return nil, cliErrorf("格式错误，至少需要: 源S3别名/源bucket,目标S3别名/目标bucket")
-	}
-
-	srcParts := strings.SplitN(parts[0], "/", 2)
-	if len(srcParts) != 2 {
-		return nil, cliErrorf("源格式错误，应为: 别名/bucket名")
-	}
-
-	destParts := strings.SplitN(parts[1], "/", 2)
-	if len(destParts) != 2 {
-		return nil, cliErrorf("目标格式错误，应为: 别名/bucket名")
-	}
-
-	result := map[string]interface{}{
-		"sourceS3Alias": srcParts[0],
-		"sourceBucket":  srcParts[1],
-		"destS3Alias":   destParts[0],
-		"destBucket":    destParts[1],
-	}
-
-	if len(parts) >= 3 && parts[2] != "" {
-		result["dateAfter"] = parts[2]
-	}
-
-	if len(parts) >= 4 && parts[3] != "" {
-		result["dateBefore"] = parts[3]
-	}
-
-	if len(parts) >= 5 && parts[4] != "" {
-		result["prefix"] = parts[4]
-	}
-
-	if len(parts) >= 6 && parts[5] != "" {
-		result["overwrite"] = parts[5] == "true"
-	}
-
-	return result, nil
 }

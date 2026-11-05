@@ -217,7 +217,7 @@ func (r *Repository) FinishQueuedHandoff(id int64, intent QueuedHandoff, release
 			if err != nil {
 				return err
 			}
-			target, err = chooseNode(tx, p, other, available)
+			target, err = chooseTakeoverNode(tx, p, other, available)
 			if err != nil {
 				return ErrFailoverTarget
 			}

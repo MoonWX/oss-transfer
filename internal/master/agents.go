@@ -335,7 +335,8 @@ func (s *Server) removeAgentNode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, parent := range parents {
-				for _, node := range parent.Spec.Nodes {
+				// A member removed from the task is fenced and no longer participates.
+				for _, node := range parent.CurrentNodes() {
 					if node.ID == found.ID {
 						a.mu.Unlock()
 						fail(w, 409, "Stop active tasks before removing this Agent")

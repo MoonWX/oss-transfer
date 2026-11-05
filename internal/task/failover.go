@@ -240,7 +240,7 @@ func (r *Repository) PrepareFailover(id int64, generation uint64, nodeID string,
 			if child.Node.ID != nodeID || child.Record != nil && child.Record.Status == execution.Completed {
 				continue
 			}
-			node, err := chooseNode(tx, placement, other, available)
+			node, err := chooseTakeoverNode(tx, placement, other, available)
 			if err != nil {
 				return ErrFailoverTarget
 			}

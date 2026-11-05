@@ -17,12 +17,15 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from "@mui/material";
 import { RefreshRounded, SystemUpdateAltRounded } from "@mui/icons-material";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
 import { displayNode, type NodeDisplay } from "../lib/nodeRegistry";
+import { isPrerelease, newerVersion, validVersion } from "../lib/semver";
 import BackupManagement from "./BackupManagement";
 
 type SoftwareInfo = {
@@ -32,6 +35,7 @@ type SoftwareInfo = {
   platform?: string;
   supported: boolean;
   reason?: string;
+  prereleaseUpdates?: boolean;
 };
 type Update = {
   id?: string;
@@ -74,7 +78,14 @@ type Target = {
   allAgents?: boolean;
   name: string;
   version: string;
+  // Chosen through the hidden specific-version entry; sends allowPrerelease.
+  explicit?: boolean;
 };
+
+// The specific-version entry stays hidden unless the page is opened with
+// /tools?tab=updates&channel=prerelease (see docs/operations.md).
+const prereleaseChannelParam = "channel";
+const prereleaseChannelValue = "prerelease";
 
 const busyUpdate = (update?: Update) =>
   ["QUEUED", "DOWNLOADING", "APPLYING"].includes(update?.phase ?? "");
@@ -105,14 +116,6 @@ function reason(info?: SoftwareInfo | null) {
     return t("此安装方式暂不支持在线升级，请使用安装脚本升级。");
   return "";
 }
-function newer(target: string, current: string) {
-  if (!/^\d+\.\d+\.\d+$/.test(target) || !/^\d+\.\d+\.\d+$/.test(current))
-    return false;
-  const a = target.split(".").map(Number),
-    b = current.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
-  return false;
-}
 
 export default function SoftwareUpdates({
   agentsOnly = false,
@@ -127,6 +130,11 @@ export default function SoftwareUpdates({
   const [target, setTarget] = useState<Target>();
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
+  const [params] = useSearchParams();
+  const prereleaseChannel =
+    !agentsOnly &&
+    params.get(prereleaseChannelParam) === prereleaseChannelValue;
+  const [requestedVersion, setRequestedVersion] = useState("");
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const firstCheck = useRef(false);
@@ -211,7 +219,12 @@ export default function SoftwareUpdates({
           : target.address
             ? `/api/master/software-updates/agents/${encodeURIComponent(target.address)}`
             : "/api/master/software-updates/master",
-        { method: "POST", body: { version: target.version } },
+        {
+          method: "POST",
+          body: target.explicit
+            ? { version: target.version, allowPrerelease: true }
+            : { version: target.version },
+        },
       );
       generation.current++;
       setSnapshot(
@@ -241,8 +254,13 @@ export default function SoftwareUpdates({
   const eligible = (node: AgentSoftware) =>
     !!node.info?.supported &&
     !node.unavailable &&
-    newer(version, node.info?.version ?? "") &&
+    newerVersion(version, node.info?.version ?? "") &&
+    // Agents follow a prerelease Master only if they accept the explicit flag.
+    (!isPrerelease(version) || !!node.info?.prereleaseUpdates) &&
     !busyUpdate(node.update);
+  const requested = requestedVersion.trim().replace(/^v/, "");
+  const requestedValid =
+    validVersion(requested) && newerVersion(requested, version);
   const eligibleCount = snapshot?.agents.filter(eligible).length ?? 0;
   const queuedItem = (node: AgentSoftware) =>
     queue?.items.find((item) => item.address === node.address);
@@ -368,6 +386,58 @@ export default function SoftwareUpdates({
               )}
             </Stack>
           )}
+          {prereleaseChannel && (
+            <Box
+              component="section"
+              aria-label={t("指定版本")}
+              sx={{ mt: 3, pt: 2, borderTop: 1, borderColor: "divider" }}
+            >
+              <Typography variant="subtitle1">{t("指定版本")}</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {t("用于测试预发布（beta/rc）版本。正常更新只提供稳定版。")}
+              </Typography>
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                gap={2}
+                alignItems={{ sm: "flex-start" }}
+              >
+                <TextField
+                  size="small"
+                  label={t("版本号")}
+                  placeholder="4.1.29-beta.1"
+                  value={requestedVersion}
+                  onChange={(event) => setRequestedVersion(event.target.value)}
+                  error={!!requested && !requestedValid}
+                  helperText={
+                    requested && !requestedValid
+                      ? t("请输入比当前更新的版本号，如 4.1.29-beta.1")
+                      : " "
+                  }
+                  inputProps={{ maxLength: 65, spellCheck: false }}
+                />
+                <Button
+                  variant="outlined"
+                  disabled={
+                    !requestedValid ||
+                    !master.info?.supported ||
+                    masterBusy ||
+                    queueBusy ||
+                    !!error
+                  }
+                  onClick={() => {
+                    setStartError("");
+                    setTarget({
+                      name: "Master",
+                      version: requested,
+                      explicit: true,
+                    });
+                  }}
+                >
+                  {t("安装指定版本")}
+                </Button>
+              </Stack>
+            </Box>
+          )}
         </Paper>
       )}
       {!!snapshot?.agents.length && (
@@ -480,9 +550,18 @@ export default function SoftwareUpdates({
         maxWidth="xs"
       >
         <DialogTitle>
-          {t("更新 {name}", { name: target?.name ?? "" })}
+          {target?.explicit
+            ? t("安装实验版本 {version}？", { version: target.version })
+            : t("更新 {name}", { name: target?.name ?? "" })}
         </DialogTitle>
         <DialogContent>
+          {target?.explicit && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {t(
+                "这是实验性的预发布版本，不会出现在正常更新中，可能包含未完成的功能或问题。请仅在测试环境或明确需要时安装；之后可在新的稳定版发布时正常更新。",
+              )}
+            </Alert>
+          )}
           <Typography>
             {t(
               "将安装 {version}，服务会重启。安装器会备份当前版本，启动失败时回退。",
@@ -492,6 +571,11 @@ export default function SoftwareUpdates({
           {(target?.address || target?.allAgents) && (
             <Typography sx={{ mt: 1 }} color="text.secondary">
               {t("正在执行的子任务会中断，节点重新连接后自动恢复。")}
+            </Typography>
+          )}
+          {target?.explicit && (
+            <Typography sx={{ mt: 1 }} color="text.secondary">
+              {t("执行节点可在之后跟随 Master 更新到此版本。")}
             </Typography>
           )}
           {target?.allAgents && (
@@ -517,7 +601,11 @@ export default function SoftwareUpdates({
             disabled={starting}
             onClick={() => void start()}
           >
-            {starting ? t("正在提交") : t("确认更新")}
+            {starting
+              ? t("正在提交")
+              : target?.explicit
+                ? t("确认安装实验版本")
+                : t("确认更新")}
           </Button>
         </DialogActions>
       </Dialog>

@@ -15,6 +15,67 @@ func helpForLocale(args []string, locale cliLocale) string {
 }
 
 var cliHelpTranslations = map[string][2]string{
+	cliTaskNodesHelp: {`Change task execution nodes
+Usage:
+  oss-transfer-cli task nodes <ID>
+  oss-transfer-cli task nodes <ID> [--add NODE ...] [--remove NODE ...] [--binding NODE=/absolute/path ...] [--now] [--yes]
+
+Without --add or --remove, shows the current execution nodes, their state, the scanner,
+pending subtasks, each node's bandwidth and QPS share, removed nodes and Agents that can be added.
+
+Options
+  --add NODE           Add an execution node; repeat or separate with commas
+  --remove NODE        Remove an execution node; repeat or separate with commas
+  --binding NODE=PATH  Local transfers need one shared directory for each added node
+  --now                Remove now: running work is revoked and continues on the remaining nodes;
+                       by default a node leaves after its current work finishes
+  --yes                Submit; without it the change and preflight results are only shown
+  --request-id ID      Retry safely with the printed request ID when a result is unknown
+  --expected-revision N  Reuse the printed membership revision when retrying
+
+Notes
+  The default removal assigns no new work, hands queued work to other nodes and leaves after running work finishes.
+  Local transfers check the shared directory first; nothing is submitted when the preflight fails.
+  While nodes are joining or draining, you can only cancel a join, remove a draining node now, or add it back.
+  If someone else changed the membership first, the Master rejects the change; review it again and resubmit.
+  Stopped or failed tasks can be changed and apply on resume; completed and single-object/single-file tasks cannot.
+
+Examples
+  oss-transfer-cli task nodes 224
+  oss-transfer-cli task nodes 224 --add 10.0.0.3 --yes
+  oss-transfer-cli task nodes 224 --remove 10.0.0.2 --now --yes
+  oss-transfer-cli task nodes 225 --add 10.0.0.3 --binding 10.0.0.3=/mnt/share --yes
+`, `タスクの実行ノードの変更
+使い方:
+  oss-transfer-cli task nodes <ID>
+  oss-transfer-cli task nodes <ID> [--add ノード ...] [--remove ノード ...] [--binding ノード=/絶対パス ...] [--now] [--yes]
+
+--add と --remove を指定しない場合は、現在の実行ノード、状態、スキャンノード、未完了の子タスク、
+ノードごとの帯域と QPS の割り当て、削除済みノード、追加可能な Agent を表示します。
+
+オプション
+  --add ノード          実行ノードを追加。複数回指定またはカンマ区切り
+  --remove ノード       実行ノードを削除。複数回指定またはカンマ区切り
+  --binding ノード=パス  ローカル転送では追加する各ノードに共有ディレクトリを 1 つ指定
+  --now                 即時削除: 実行中の処理を取り消し、残りのノードで継続。
+                        既定では実行中の処理の完了後に削除
+  --yes                 送信を確定。指定しない場合は変更内容と事前チェック結果のみ表示
+  --request-id ID       結果が未確認のとき、表示されたリクエスト ID で安全に再試行
+  --expected-revision N  再試行時に表示されたメンバー版を指定
+
+説明
+  既定の削除では新しい処理を割り当てず、待機中の処理を他のノードへ渡し、実行中の処理の完了後に離脱します。
+  ローカル転送では先に共有ディレクトリを確認し、不合格の場合は送信しません。
+  ノードの追加・削除が進行中は、追加の取り消し、削除中ノードの即時削除、または再追加による削除の取り消しのみ可能です。
+  他の操作が先にメンバーを変更した場合、Master は変更を拒否します。再確認してから送信してください。
+  停止・失敗したタスクも変更でき、再開時に反映されます。完了済みや単一オブジェクト/単一ファイルのタスクは変更できません。
+
+例
+  oss-transfer-cli task nodes 224
+  oss-transfer-cli task nodes 224 --add 10.0.0.3 --yes
+  oss-transfer-cli task nodes 224 --remove 10.0.0.2 --now --yes
+  oss-transfer-cli task nodes 225 --add 10.0.0.3 --binding 10.0.0.3=/mnt/share --yes
+`},
 	cliUpdateHelp: {`Service updates
   oss-transfer-cli update status
   oss-transfer-cli update check
@@ -88,6 +149,7 @@ Tasks
   task purge <ID...> --yes         Permanently remove selected trash records
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps N --head-qps N --put-qps N]
+  task nodes <ID> [--add NODE] [--remove NODE [--now]] [--yes]  Show or change execution nodes
   task report <ID> [--output file.zip]
 
 Nodes and storage
@@ -165,6 +227,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   task purge <ID...> --yes         指定したごみ箱の記録を完全削除
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps N --head-qps N --put-qps N]
+  task nodes <ID> [--add ノード] [--remove ノード [--now]] [--yes]  実行ノードを表示・変更
   task report <ID> [--output ファイル.zip]
 
 ノードとストレージ
@@ -255,6 +318,9 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   bandwidth <ID>                  Show the task bandwidth limit
   bandwidth <ID> <Mbps|unlimited>  Set/remove the task's additional limit
   report <ID> [--output file.zip]  Export an ended or stopped task's ZIP report
+  nodes <ID>                       Show execution nodes, addable Agents and per-node shares
+  nodes <ID> --add NODE --remove NODE [--now] [--yes]
+      Change execution nodes; see help task nodes for details
 
   create oss-to-oss <source-alias/bucket> <target-alias/bucket> [options]
   create oss-to-local <source-alias/bucket> --binding node=/target/path [options]
@@ -299,6 +365,9 @@ Deleting records does not delete source or target objects.
   bandwidth <ID>                  タスクの帯域幅上限を表示
   bandwidth <ID> <Mbps|unlimited>  タスクの追加上限を設定・解除
   report <ID> [--output file.zip]  終了・停止したタスクの ZIP レポートを出力
+  nodes <ID>                       実行ノード、追加可能な Agent、ノードごとの割り当てを表示
+  nodes <ID> --add ノード --remove ノード [--now] [--yes]
+      実行ノードを変更。詳細は help task nodes を参照
 
   create oss-to-oss <転送元接続名/バケット> <転送先接続名/バケット> [オプション]
   create oss-to-local <転送元接続名/バケット> --binding ノード=/転送先パス [オプション]

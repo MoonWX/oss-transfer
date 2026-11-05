@@ -136,6 +136,8 @@ Update when no tasks are running, if possible.
 
 Each update takes a backup first and deletes it after the new version passes its health check. If startup fails, the previous version is restored. You can also update by rerunning the install command.
 
+Update checks only offer stable releases. Prereleases (betas) are installed only when you choose an exact version; see [trying a prerelease](docs/operations.md#try-a-prerelease).
+
 To reinstall, keep each role's `config` directory and its entire `data` directory, including the `.db.key` file. The installer then reuses the existing accounts, tasks and node identities. Before a planned downgrade, make a separate backup before updating. See [operations](docs/operations.md) for details.
 
 ## Things to know

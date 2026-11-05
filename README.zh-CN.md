@@ -51,7 +51,7 @@ curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/inst
 
 按提示选择 Master 和原生服务，并决定是否同时安装本机 Agent。本机 Agent 安装后会自动加入集群。程序、配置和数据默认放在 `/opt/oss-transfer/`。
 
-macOS、Windows、FreeBSD 和自定义目录的安装方法见[安装选项](docs/install.md)，无法联网的环境见[离线安装](docs/offline-install.zh-CN.md)。
+macOS、Windows、FreeBSD 和自定义目录的安装方法见[安装选项](docs/install.zh-CN.md)，无法联网的环境见[离线安装](docs/offline-install.zh-CN.md)。
 
 ### 2. 登录
 
@@ -112,7 +112,7 @@ oss-transfer-cli task limits <任务ID> --put-qps 200 --bandwidth-mbps 100
 oss-transfer-cli node list
 ```
 
-CLI 可以完成页面上的全部操作，并支持 `--json` 输出，方便写脚本。远程登录、创建任务等用法见 [CLI 文档](docs/cli.md)。
+CLI 可以完成页面上的全部操作，并支持 `--json` 输出，方便写脚本。远程登录、创建任务等用法见 [CLI 文档](docs/cli.zh-CN.md)。
 
 ## Docker Compose
 
@@ -136,11 +136,13 @@ docker compose logs master
 
 升级前会自动备份，新版本通过健康检查后删除备份；启动失败时会自动回滚。也可以重新运行安装命令来升级。
 
-需要重装时，保留各角色的 `config` 目录和完整的 `data` 目录，包括 `.db.key` 密钥文件，安装器会继续使用原来的账号、任务和节点身份。计划降级时，应在升级前另外备份。详见[运维说明](docs/operations.md)。
+检测更新只提供正式版。预发布（beta）版本只有在指定精确版本时才会安装，见[试用预发布版本](docs/operations.zh-CN.md#试用预发布版本)。
+
+需要重装时，保留各角色的 `config` 目录和完整的 `data` 目录，包括 `.db.key` 密钥文件，安装器会继续使用原来的账号、任务和节点身份。计划降级时，应在升级前另外备份。详见[运维说明](docs/operations.zh-CN.md)。
 
 ## 注意事项
 
-- **`SKIP` 不比较内容**：目标端已有同名对象或文件时直接跳过。需要确认内容一致时，使用[对象比对](docs/operations.md#compare-objects)。
+- **`SKIP` 不比较内容**：目标端已有同名对象或文件时直接跳过。需要确认内容一致时，使用[对象比对](docs/operations.zh-CN.md#对象比对)。
 - **本地路径是 Agent 主机上的路径**：多个节点处理同一个本地目录时，这个目录必须是共享目录。各节点的挂载路径可以不同，预检会写入一个小文件，确认它们指向同一个目录。
 - **续扫不是持续同步**：断点续扫只是继续同一轮扫描，不保证发现断点之前的数据变化。需要迁移固定数据集时，应保持源端不变或使用快照。
 
@@ -159,11 +161,11 @@ docker compose logs master
 
 | 文档 | 内容 |
 | --- | --- |
-| [安装选项](docs/install.md) | 各系统的安装方法、目录、端口、重装和反向代理 |
+| [安装选项](docs/install.zh-CN.md) | 各系统的安装方法、目录、端口、重装和反向代理 |
 | [离线安装](docs/offline-install.zh-CN.md) | 在无法联网的环境中安装 |
 | [Docker Compose](docs/docker-compose.md) | 容器部署、目录挂载和升级 |
-| [CLI](docs/cli.md) | 命令行的全部用法 |
-| [运维说明](docs/operations.md) | 并发、对象比对、升级、故障转移、断点续扫、重置密码 |
+| [CLI](docs/cli.zh-CN.md) | 命令行的全部用法 |
+| [运维说明](docs/operations.zh-CN.md) | 并发、对象比对、升级、故障转移、断点续扫、重置密码 |
 | [数据库维护](docs/database-maintenance.md) | 回收数据库文件空间 |
 | [从 V4.0.x 升级](docs/migration.md) | 旧版本数据的离线转换 |
 

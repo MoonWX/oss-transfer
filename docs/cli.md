@@ -1,5 +1,7 @@
 # Use the CLI
 
+[中文](cli.zh-CN.md)
+
 The command-line interface (CLI) manages the same tasks and settings as the web console. On an installed Master or Agent, run it as the service owner or system administrator: it uses the local cluster without a login or address argument.
 
 ```sh
@@ -107,6 +109,14 @@ oss-transfer-cli help update
 ```
 
 Update a Master with `update master --version VERSION --yes`, then run `update agents --all --yes` to bring Agents to its version. To select one Agent, use `update agent --worker NODE --yes`. Follow the result with `update status --watch 5`; accepting the request does not mean the upgrade has finished. Online upgrades require a managed native installation.
+
+`update check` only reports stable releases. To install a prerelease such as `4.1.29-beta.1`, give the exact version and confirm it explicitly:
+
+```sh
+oss-transfer-cli update master --version 4.1.29-beta.1 --allow-prerelease --yes
+```
+
+Without `--allow-prerelease`, a prerelease version is rejected before any request with exit code 2. The same applies when `update agent` or `update agents` is given a prerelease `--version`. Without `--version`, Agents follow the Master's current version, including a prerelease, without the flag. See [prerelease updates](operations.md#try-a-prerelease).
 
 `backup list` shows upgrade backups. `backup prune master --yes` or `backup prune agent --worker NODE --yes` removes only backups the service marks as removable.
 

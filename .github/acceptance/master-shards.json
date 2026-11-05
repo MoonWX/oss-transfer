@@ -207,7 +207,7 @@
     "TestTaskStepAcknowledgesDurablePrefixWithFullDispatchQueue": 0.94,
     "TestUnsavedNodeAddressesAreRetried": 0.01,
     "TestUpgradedAgentReceivesTheChoiceOnItsNextDelivery": 1.1,
-        "TestWindowsAgentCommandRunsDownloadedInstaller": 0,
+    "TestWindowsAgentCommandRunsDownloadedInstaller": 0,
     "TestPlannedChangeRemovingFinishedScannerRecordsNoTaskError": 2.76,
     "TestPlannedChangeRemovingScannerMidScanResumesFromCheckpoint": 4.34,
     "TestPlannedChangeJoinRecordsNoTaskError": 2.86,

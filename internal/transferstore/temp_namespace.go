@@ -341,6 +341,13 @@ func openAbsoluteDir(name string) (*os.Root, error) {
 	if len(name) <= piece {
 		return os.OpenRoot(name)
 	}
+	// Let the kernel resolve anything within the platform limit (PATH_MAX is
+	// 1024 on darwin, 4096 on Linux), following symlinks as the write path's
+	// os.OpenRoot did. Walk component by component only when that open fails
+	// for a reason other than a missing directory, e.g. ENAMETOOLONG.
+	if dir, err := os.OpenRoot(name); err == nil || errors.Is(err, fs.ErrNotExist) {
+		return dir, err
+	}
 	cut := strings.LastIndex(name[:piece], string(filepath.Separator))
 	if cut <= 0 {
 		return os.OpenRoot(name)

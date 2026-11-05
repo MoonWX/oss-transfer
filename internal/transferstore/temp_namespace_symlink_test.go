@@ -5,6 +5,7 @@ package transferstore
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -49,7 +50,9 @@ func writeNamespace(t *testing.T, base, key string) LocalTempNamespace {
 // so its record is kept and retried, and is never mistaken for deleted.
 func TestLongPathThroughSymlinkIsUnreachableNotGone(t *testing.T) {
 	base := t.TempDir()
-	chain := longChain(base, 1200)
+	// Longer than PATH_MAX everywhere (4096 on Linux), so the kernel cannot
+	// open it and the component walk must refuse the link.
+	chain := longChain(base, 4300)
 	root, err := os.OpenRoot(base)
 	if err != nil {
 		t.Fatal(err)
@@ -134,5 +137,40 @@ func TestLongPathWithLongPhysicalPrefixIsReachable(t *testing.T) {
 	defer dir.Close()
 	if _, err := dir.Lstat(namespace.Name); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("namespace remains: %v", err)
+	}
+}
+
+// Paths over the walk threshold but within PATH_MAX are opened by the kernel,
+// following an in-tree symlink exactly as the write path did, so their
+// namespaces are still removed.
+func TestMidLengthPathThroughSymlinkIsRemoved(t *testing.T) {
+	// Resolve the temp dir itself (/var -> /private/var on darwin) so the
+	// kernel's own symlink expansion stays within darwin's 1024-byte limit.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := longChain(base, 905)
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	deep := strings.Join(chain, "/")
+	if err := root.MkdirAll(deep+"/real", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Symlink("real", deep+"/link"); err != nil {
+		t.Fatal(err)
+	}
+	namespace := writeNamespace(t, base, deep+"/link/file")
+	if n := len(namespace.ParentPath); n <= 900 || n >= 1010 {
+		t.Fatalf("test needs a ParentPath between 900 and 1010 bytes, got %d", n)
+	}
+	if err := RemoveLocalTempNamespace(context.Background(), namespace); err != nil {
+		t.Fatalf("mid-length symlinked namespace not removed: %v", err)
+	}
+	if _, err := root.Lstat(deep + "/real/" + namespace.Name); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("namespace directory still present: %v", err)
 	}
 }

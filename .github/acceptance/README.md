@@ -1,5 +1,7 @@
 # Acceptance tests
 
+[中文](README.zh-CN.md)
+
 CI builds the release archives once, then runs their Master, Agent and CLI against SeaweedFS 4.48. A separate S3 client reads destination objects and compares their keys, lengths and SHA-256 hashes with the source fixture. Release publishes the archives and image from that CI run.
 
 ## Platforms

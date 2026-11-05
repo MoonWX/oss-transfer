@@ -1,5 +1,7 @@
 # Docker Compose
 
+[中文](docker-compose.zh-CN.md)
+
 Use Compose when the directories available to each Agent are known in advance. [Native installation](../README.md) is easier when Agents need access to changing host paths. The Master hosts the console; Agents perform transfers.
 
 ## Start the Master

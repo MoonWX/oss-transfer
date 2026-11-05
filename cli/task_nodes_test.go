@@ -27,7 +27,7 @@ func taskNodesTestView(local bool) map[string]interface{} {
 				"share": map[string]interface{}{"bandwidthBytesPerSecond": 500000, "listQps": 0, "headQps": 25, "putQps": 0}},
 			map[string]interface{}{"id": "node-c", "address": "10.0.0.4", "displayName": "gamma", "displayAddress": "10.0.0.4", "state": "JOINING", "scanner": false, "online": true, "share": nil},
 		},
-		"removedNodes": []interface{}{map[string]interface{}{"id": "node-z", "address": "10.0.0.9", "displayLabel": "zeta (10.0.0.9)", "removedAt": 1730000000000}},
+		"removedNodes": []interface{}{map[string]interface{}{"id": "node-z", "address": "10.0.0.9", "displayLabel": "zeta (10.0.0.9)", "removedAt": int64(1730000000000)}},
 		"candidates": []interface{}{
 			map[string]interface{}{"id": "node-d", "address": "10.0.0.3", "displayName": "delta", "displayAddress": "10.0.0.3", "eligible": true, "reason": ""},
 			map[string]interface{}{"id": "node-e", "address": "10.0.0.5", "displayName": "epsilon", "displayAddress": "10.0.0.5", "eligible": false, "reason": "Agent 版本过旧"},

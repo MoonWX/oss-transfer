@@ -116,7 +116,10 @@ func TestPurgeOfflineOrUnknownEnrollmentRequiresCleanupAcknowledgement(t *testin
 		t.Run(name, func(t *testing.T) {
 			p := purgeFixtureTask(t, f, session, name)
 			stopAndRecyclePurgeFixture(t, f, p)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			// A hang guard only: slow CI runners (Windows, emulated targets) need
+			// seconds here. The behaviour under test is the short per-node
+			// timeout below, not how fast the whole step completes.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			if _, err := f.master.controlTask(ctx, p.ID, "permanent-delete"); err != nil {
 				t.Fatal("offline node prevented durable admission", err)

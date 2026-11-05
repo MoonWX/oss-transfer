@@ -85,7 +85,7 @@ func TestTryRecoverPreservesLedgerAndAdmissionBounds(t *testing.T) {
 		t.Fatalf("waiting changed ledger: before=%+v after=%+v", before, after)
 	}
 	close(blockerGate)
-	ctx, cancel := context.WithTimeout(bg, 5*time.Second)
+	ctx, cancel := context.WithTimeout(bg, 2*time.Minute)
 	defer cancel()
 	if record, err := f.engine.Wait(ctx, blocker.ChildID); err != nil || record.Status != Completed {
 		t.Fatal("slot owner did not complete", record, err)

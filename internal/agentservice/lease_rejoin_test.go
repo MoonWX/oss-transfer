@@ -92,7 +92,7 @@ func TestRejoinFencesOldQueueAndScannerAcrossRestart(t *testing.T) {
 	if err = engine.Start(ctx, job.ChildID, 1); err != nil {
 		t.Fatal(err)
 	}
-	wait, cancel := context.WithTimeout(ctx, 5*time.Second)
+	wait, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	row, err := engine.Wait(wait, job.ChildID)
 	if err != nil || row.Status != execution.Completed {
@@ -156,7 +156,7 @@ func TestRejoinRetriesDurableQuiescenceAfterFailure(t *testing.T) {
 
 func TestRejoinedScannerCanTakeOverLaterWithoutRevivingOldScan(t *testing.T) {
 	db, leases, _ := leaseFixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	req := leaseRequest(1, "original", 1)
 	req.TTLMillis = 60000

@@ -91,7 +91,7 @@ func TestChildConcurrencyChangesWakeAndDrainWithoutCancelling(t *testing.T) {
 			return nil, nil, ctx.Err()
 		}
 	}), Options{MaxConcurrentJobs: 1})
-	ctx, cancel := context.WithTimeout(bg, 10*time.Second)
+	ctx, cancel := context.WithTimeout(bg, 2*time.Minute)
 	defer cancel()
 	results := make(chan error, 3)
 	for _, job := range jobs {

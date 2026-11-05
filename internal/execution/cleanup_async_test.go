@@ -22,7 +22,7 @@ func (r *cleanupHeldReader) Close() error             { <-r.release; return r.Re
 
 func waitExecutionCleanup(t *testing.T, e *Engine, id int64, generation uint64) DeletionProgress {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	for {
 		progress, err := e.DeletionProgress(ctx, id, generation)

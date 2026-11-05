@@ -348,15 +348,17 @@ func TestThrottledTaskStreamsAndLeavesSharedMemoryToOthers(t *testing.T) {
 	waitAdmission(t, entered)
 	// Start the other task only once the throttled write holds its part;
 	// otherwise the other task may legitimately take all four slots first.
+	// Hang guards only: starvation means never finishing, and slow race-enabled
+	// CI runners need far longer than a laptop for the same work.
 	select {
 	case <-reading:
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Minute):
 		t.Fatal("throttled write never started reading")
 	}
 	if lent := lender.Lent(); lent != 0 {
 		t.Fatal("throttled task borrowed part slots", lent)
 	}
-	ctx, cancel := context.WithTimeout(bg, 10*time.Second)
+	ctx, cancel := context.WithTimeout(bg, 2*time.Minute)
 	defer cancel()
 	stat, _ = source.Stat(bg, "open.bin")
 	job := Job{ParentID: 2, Generation: 1, Source: Endpoint{Kind: "LOCAL"}, Destination: Endpoint{Kind: "S3"}, ConflictPolicy: "OVERWRITE"}

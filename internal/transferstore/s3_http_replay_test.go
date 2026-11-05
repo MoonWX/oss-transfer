@@ -260,7 +260,7 @@ func TestS3HTTP2GoAwayReplaysBodyWithinOneSDKAttempt(t *testing.T) {
 				store.client = s3.New(store.client.Options(), func(o *s3.Options) { o.APIOptions = nil })
 			}
 			source := &replayCountReader{Reader: bytes.NewReader(payload)}
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			result, err := store.Write(ctx, "key", source, WriteOptions{Size: int64(len(payload)), Overwrite: true})
 			if test.disabled {

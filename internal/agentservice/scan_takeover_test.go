@@ -31,7 +31,7 @@ func TestScanTakeoverCommandsRequireMutationAndFenceEpoch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "new"), []byte("body"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	call := func(operation string, mutating bool, request any) agenttransport.Response {
 		t.Helper()

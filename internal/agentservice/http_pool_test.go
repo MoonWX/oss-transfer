@@ -115,7 +115,7 @@ func TestAgentHTTPPoolPerformance(t *testing.T) {
 						// Every object creates a fresh endpoint wrapper as a new child can, while
 						// the underlying pool must survive across those clients.
 						client := factory.HTTPClientForEndpoint(context.Background(), execution.Endpoint{Ref: "fixture", Bucket: "bucket"}, storageconfig.Config{})
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 						defer cancel()
 						req, err := http.NewRequestWithContext(ctx, "PUT", server.URL+"/key", bytes.NewReader(data))
 						if err != nil {

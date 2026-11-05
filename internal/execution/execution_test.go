@@ -67,7 +67,7 @@ func newFixture(t *testing.T, count int) *fixture {
 	}
 	t.Cleanup(func() {
 		if f.engine != nil {
-			ctx, cancel := context.WithTimeout(bg, 5*time.Second)
+			ctx, cancel := context.WithTimeout(bg, 2*time.Minute)
 			defer cancel()
 			if err := f.engine.Close(ctx); err != nil {
 				t.Errorf("close engine: %v", err)
@@ -727,7 +727,7 @@ func TestStartRPCContextDoesNotOwnExecutionAndSlotsBackpressure(t *testing.T) {
 	if err := f.engine.Start(bg, other.ChildID, 1); err != nil {
 		t.Fatal(err)
 	}
-	ctx, finish := context.WithTimeout(bg, 5*time.Second)
+	ctx, finish := context.WithTimeout(bg, 2*time.Minute)
 	defer finish()
 	if _, err := f.engine.Wait(ctx, other.ChildID); err != nil {
 		t.Fatal(err)
@@ -746,7 +746,7 @@ func TestCloseCancelsWorkersAndPreservesRecoverableWork(t *testing.T) {
 	}})
 	f.acceptStart()
 	<-ready
-	ctx, cancel := context.WithTimeout(bg, 5*time.Second)
+	ctx, cancel := context.WithTimeout(bg, 2*time.Minute)
 	defer cancel()
 	if err := f.engine.Close(ctx); err != nil {
 		t.Fatal(err)

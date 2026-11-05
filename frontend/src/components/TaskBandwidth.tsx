@@ -16,6 +16,7 @@ import {
 import { SpeedRounded } from "@mui/icons-material";
 import { api, ApiError, useNotify } from "../lib/api";
 import { useNodeLabels } from "../lib/workerStatus";
+import { useStableMessages } from "../lib/stableMessages";
 import type { NodeDisplay } from "../lib/nodeRegistry";
 import {
   formatTaskBandwidth,
@@ -65,11 +66,14 @@ export default function TaskBandwidth({
   active,
   refreshMs,
   completed = false,
+  live = !completed,
 }: {
   taskId: number;
   active: boolean;
   refreshMs: number;
   completed?: boolean;
+  /** Running, stopping or resuming: limits are still being delivered. */
+  live?: boolean;
 }) {
   useI18n();
   const nodeLabel = useNodeLabels();
@@ -238,6 +242,15 @@ export default function TaskBandwidth({
     status?.nodes.filter((node) => !node.applied && !node.pending) || [];
   const partial =
     status && !status.applied && (!status.pending || failures.length > 0);
+  // Outside the edit dialog, show only a mismatch that persists while the task
+  // runs: a node change briefly leaves a member on its previous share until it
+  // receives the new one. An ended task's mismatch is final and shows at once.
+  const settledPartial =
+    useStableMessages(partial ? ["partial"] : [], status, {
+      enabled: live,
+      refreshMs,
+      scope: taskId,
+    }).length > 0;
   const warning = (
     <Alert
       severity="warning"
@@ -337,7 +350,7 @@ export default function TaskBandwidth({
           {t("无法读取任务限速：{error}", { error: readError })}
         </Alert>
       )}
-      {!open && partial && warning}
+      {!open && settledPartial && warning}
       <Dialog
         open={open && active}
         onClose={() => {

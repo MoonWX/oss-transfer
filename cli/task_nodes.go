@@ -381,6 +381,19 @@ func renderTaskNodeNotes(out io.Writer, membership map[string]interface{}) {
 	if membership["pending"] == true {
 		fmt.Fprintln(out, cliText(out, "有节点正在加入或移出；完成前只能取消加入、立即移出正在移出的节点或撤回移出。"))
 	}
+	// The node view reports the scan as {"scan": {"phase"}}; task rows as scanPhase.
+	phase := getString(membership, "scanPhase")
+	if scan, ok := membership["scan"].(map[string]interface{}); ok {
+		phase = getString(scan, "phase")
+	}
+	switch phase {
+	case "COMPLETE":
+		fmt.Fprintln(out, cliText(out, "扫描已完成，不再需要扫描节点。"))
+	case "HANDOFF":
+		fmt.Fprintln(out, cliText(out, "扫描正在移交给新的扫描节点，从 Master 保存的断点继续。"))
+	case "WAITING":
+		fmt.Fprintln(out, cliText(out, "原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描。"))
+	}
 }
 
 func renderTaskNodeRows(out io.Writer, nodes []map[string]interface{}, local bool) {
@@ -443,6 +456,12 @@ func taskNodeState(out io.Writer, node map[string]interface{}) string {
 	}
 	if node["online"] == false && state != "DISCONNECTED" {
 		label += cliText(out, "，离线")
+	}
+	switch getString(node, "progress") {
+	case "LEASE_EXPIRY":
+		label += cliText(out, "，执行租约到期后离开")
+	case "RECONNECT":
+		label += cliText(out, "，重新连接后离开")
 	}
 	return label
 }

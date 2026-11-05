@@ -87,7 +87,7 @@ Unspecified fields keep their values. LIST limits also cover GET reads; PUT incl
 
 ## Change a task's execution nodes
 
-Show which Agents run a task, their state, the scanner, pending child tasks, each node's share of the task limits, removed nodes and the Agents that can be added:
+Show which Agents run a task, their state, the scanner, pending child tasks, each node's share of the task limits, removed nodes and the Agents that can be added. Only a node that is scanning (or taking over the scan) is marked as the scanner; once the scan has finished, a note says so instead. An offline node that is being removed is shown as leaving when its execution lease expires, or, for a task without lease fencing, after it reconnects:
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK"

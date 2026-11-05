@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,8 @@ type taskRuntime struct {
 	rangedSupport rangedDownloadSupport
 	// rangedQuery replaces the capability query in tests.
 	rangedQuery func(context.Context, task.Node) (int, error)
+	// Latest bandwidth/QPS policy delivery per task and node (see policyDelivered).
+	deliveries map[int64]map[string]policyDelivery
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
@@ -87,6 +90,7 @@ func (t *taskRuntime) loop() {
 	timer := time.NewTicker(250 * time.Millisecond)
 	defer timer.Stop()
 	var after int64
+	cycle := map[int64]bool{} // active task IDs seen in this pass over the list
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -98,8 +102,15 @@ func (t *taskRuntime) loop() {
 		if err != nil {
 			continue
 		}
+		for _, p := range parents {
+			cycle[p.ID] = true
+		}
 		if len(parents) < 32 {
 			after = 0
+			// A task that ended or was deleted outside a step leaves the
+			// active list; drop what the runtime remembered about it.
+			t.pruneDeliveries(cycle)
+			cycle = map[int64]bool{}
 		} else {
 			after = parents[len(parents)-1].ID
 		}
@@ -122,14 +133,7 @@ func (t *taskRuntime) loop() {
 				defer t.workers.Done()
 				defer cancel()
 				defer func() { t.mu.Lock(); delete(t.active, p.ID); close(run.done); t.mu.Unlock() }()
-				err := t.step(ctx, p.ID)
-				if ctx.Err() == nil {
-					message := ""
-					if err != nil && !isStopAwaitingAcknowledgement(err) {
-						message = err.Error()
-					}
-					_ = t.repo.RuntimeProblem(p.ID, p.Generation, message)
-				}
+				_ = t.recordStep(ctx, p.ID, p.Generation)
 			}()
 		}
 	}
@@ -341,7 +345,9 @@ func (t *taskRuntime) policies(ctx context.Context, p task.Parent) error {
 	var problems []error
 	var displays nodeDisplaySet
 	for i, node := range p.ActiveNodes() {
-		if err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil); err != nil {
+		err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
+		t.notePolicyDelivery(p, node.ID, err)
+		if err != nil {
 			if len(problems) == 0 {
 				displays = t.server.nodeDisplaySnapshot()
 			}
@@ -442,6 +448,7 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 		go func() {
 			defer workers.Done()
 			if t.server.softwareUpdateBlocksNode(node.ID) {
+				t.notePolicyDelivery(p, node.ID, errors.New("Agent update is in progress"))
 				mu.Lock()
 				problems = append(problems, fmt.Errorf("Agent %s is updating; its assigned work remains on that node", displays.lookup(node.ID, node.Address).DisplayLabel))
 				mu.Unlock()
@@ -464,6 +471,7 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 			if err == nil && p.Spec.Destination.Kind == "LOCAL" {
 				err = t.server.agentCall(callCtx, nodeSession(node), "local_prepare", true, agentservice.PathRequest{Path: node.LocalRoot}, nil)
 			}
+			t.notePolicyDelivery(p, node.ID, err)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -484,6 +492,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	}
 	if p.Deleted || task.Ended(p.Status) {
 		t.forgetStopObservation(p.ID)
+		t.forgetPolicyDeliveries(p.ID)
 		return nil
 	}
 	if p.Status == "RESUMING" && (p.ActiveTime == nil || (p.ResumeAfter == nil && p.Scheduling == nil)) {
@@ -544,6 +553,12 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		return err
 	}
 	available, memberErr := t.prepareMembers(ctx, p, snapshot)
+	// Members admitted later in this step (a joining or returning node) are
+	// prepared by the next step; they are not unavailable.
+	prepared := map[string]bool{}
+	for _, node := range p.ActiveNodes() {
+		prepared[node.ID] = true
+	}
 	p, err = t.reconcileFailover(ctx, p, available)
 	if err != nil {
 		return err
@@ -560,11 +575,17 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	scanControl.Epoch = p.ScannerEpoch()
 	if p.Failover != nil && p.Failover.Enabled {
 		// Retired peers are no longer required for progress or control ACKs.
+		// A node the user is removing leaves through the same lease fence when
+		// it is offline; the node view reports that wait as removal progress.
 		memberErr = nil
+		var waiting []string
 		for _, node := range p.ActiveNodes() {
-			if !available[node.ID] {
-				memberErr = errors.New("Waiting for an unavailable node's execution lease to expire")
+			if !available[node.ID] && prepared[node.ID] && !plannedLeaving(p, node.ID) {
+				waiting = append(waiting, t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel)
 			}
+		}
+		if len(waiting) > 0 {
+			memberErr = fmt.Errorf("Waiting for the execution lease of unavailable node %s to expire", strings.Join(waiting, ", "))
 		}
 	}
 	defer func() { resultErr = errors.Join(memberErr, membershipErr, resultErr) }()
@@ -602,7 +623,13 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		if removedScannerDone(p) {
 			return nil
 		}
-		return errors.New("Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes")
+		if plannedScannerHandoff(p) {
+			// The scan moves once the leaving scanner is fenced; the node view
+			// shows this as a scan handoff, not as a reconnect wait.
+			return nil
+		}
+		scanning := p.ScannerNode()
+		return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel)
 	}
 	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {
 		return errors.New("Waiting for all task nodes to acknowledge recovery")

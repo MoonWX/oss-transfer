@@ -87,7 +87,7 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 
 ## 调整任务的执行节点
 
-查看执行任务的 Agent 及其状态、扫描节点、待完成的子任务、各节点分得的任务限速份额、已移除的节点以及可以添加的 Agent：
+查看执行任务的 Agent 及其状态、扫描节点、待完成的子任务、各节点分得的任务限速份额、已移除的节点以及可以添加的 Agent。只有正在扫描（或正在接管扫描）的节点标记为扫描节点；扫描结束后改为提示扫描已完成。正在移出的离线节点会注明在执行租约到期后离开；没有租约隔离的任务则注明在重新连接后离开：
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK"

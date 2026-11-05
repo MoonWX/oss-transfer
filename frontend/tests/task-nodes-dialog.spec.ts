@@ -569,3 +569,380 @@ test("a draining node can only be kept when the task cannot remove nodes now", a
     node.getByRole("button", { name: /^保留 .*10\.0\.1\.13/ }),
   ).toBeEnabled();
 });
+
+async function openLiveDialog(page: Page) {
+  await page.goto("/tasks?taskId=1048");
+  const edit = page.getByRole("button", { name: "编辑节点", exact: true });
+  await advanceUntilVisible(page, edit);
+  await edit.click();
+  return dialog(page);
+}
+
+async function refreshEverySecond(page: Page) {
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+}
+
+test("the open dialog refreshes statistics live and keeps selections, paths and preflight results", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let round = 0;
+  const view = () =>
+    nodesView({
+      localTransfer: true,
+      direction: "OSS_TO_LOCAL",
+      nodes: [
+        member("10.0.1.12", { scanner: true, pendingChildren: 5 + round * 4 }),
+        member("10.0.1.13", {
+          pendingChildren: 2,
+          share: { bandwidthBytesPerSecond: round > 0 ? 1048576 : 0 },
+        }),
+      ],
+    });
+  const { gets } = await setup(page, {
+    view,
+    post: (body, route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: {
+            accepted: !body.dryRun,
+            dryRun: !!body.dryRun,
+            valid: true,
+            nodeBindings: [
+              {
+                executionNodeIp: "10.0.1.14",
+                localPath: body.bindings?.[0]?.localPath,
+                valid: true,
+                pathType: "DIRECTORY",
+              },
+            ],
+            validationErrors: [],
+            view: view(),
+          },
+        },
+      }),
+  });
+  const box = await openLiveDialog(page);
+  const scanner = box.getByTestId("task-node-10.0.1.12");
+  const leaving = box.getByTestId("task-node-10.0.1.13");
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*5(?!\d)/ }),
+  );
+  // Choose a removal and an addition with its path, and pass the preflight.
+  await box.getByRole("button", { name: /^移出 .*10\.0\.1\.13/ }).click();
+  await box.getByRole("button", { name: "添加 Agent", exact: true }).click();
+  await page.getByRole("menuitem", { name: /10\.0\.1\.14/ }).click();
+  const path = box.getByRole("textbox", {
+    name: /10\.0\.1\.14 的本地绝对路径/,
+  });
+  await advanceUntilVisible(page, path); // the menu closes on the paused clock
+  await path.fill("/mnt/share");
+  await box.getByRole("button", { name: "预检", exact: true }).click();
+  const passed = box.getByRole("alert").filter({ hasText: "预检通过" });
+  await expect(passed).toBeVisible();
+  // Statistics follow the Master while every choice stays as it was.
+  round = 1;
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*9(?!\d)/ }),
+  );
+  await expect(leaving).toContainText(/带宽份额\s*1(\.0)? MiB\/s/);
+  await expect(leaving).toHaveAttribute("data-marked", "remove");
+  await expect(box.getByTestId("task-node-add-10.0.1.14")).toContainText(
+    "将添加",
+  );
+  await expect(path).toHaveValue("/mnt/share");
+  await expect(passed).toBeVisible();
+  await expect(footer(page)).toHaveText(
+    "待提交：添加 1 个节点 · 移出 1 个节点",
+  );
+  await expect(preview(page)).toBeEnabled();
+  // The confirmation step keeps the view it summarises.
+  await preview(page).click();
+  const summary = box.getByTestId("task-nodes-summary");
+  await expect(summary).toContainText("10.0.1.14 (/mnt/share)");
+  const confirming = gets();
+  round = 2;
+  await page.clock.runFor(5000);
+  expect(gets()).toBe(confirming);
+  await expect(summary).toContainText("10.0.1.14 (/mnt/share)");
+  await box.getByRole("button", { name: "返回修改", exact: true }).click();
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*13(?!\d)/ }),
+  );
+  await expect(leaving).toHaveAttribute("data-marked", "remove");
+  await expect(path).toHaveValue("/mnt/share");
+  await expect(passed).toBeVisible();
+});
+
+test("a hidden page pauses the dialog refresh and one failed refresh keeps the last view", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let pendingChildren = 2;
+  let failures = 0;
+  const { gets } = await setup(page, {
+    view: () =>
+      nodesView({
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.13", { pendingChildren }),
+        ],
+      }),
+  });
+  await page.route("**/api/master/tasks/1048/nodes", async (route) => {
+    if (route.request().method() === "GET" && failures > 0) {
+      failures--;
+      await route.fulfill({
+        status: 500,
+        json: { success: false, message: "暂时不可用" },
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  const box = await openLiveDialog(page);
+  const node = box.getByTestId("task-node-10.0.1.13");
+  await advanceUntilVisible(
+    page,
+    node.filter({ hasText: /未完成子任务\s*2(?!\d)/ }),
+  );
+  const setHidden = (hidden: boolean) =>
+    page.evaluate((value) => {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        get: () => value,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+  await setHidden(true);
+  const hidden = gets();
+  pendingChildren = 6;
+  await page.clock.runFor(5000);
+  expect(gets()).toBe(hidden);
+  // Becoming visible refreshes at once, without waiting for the interval.
+  await setHidden(false);
+  await expect(node).toContainText(/未完成子任务\s*6(?!\d)/);
+  // One failed background refresh keeps the view quietly; two are reported.
+  failures = 1;
+  pendingChildren = 7;
+  await advanceUntilVisible(
+    page,
+    node.filter({ hasText: /未完成子任务\s*7(?!\d)/ }),
+  );
+  await expect(box.getByText(/无法读取执行节点/)).toHaveCount(0);
+  failures = 2;
+  await advanceUntilVisible(page, box.getByText(/无法读取执行节点/));
+  await expect(node).toContainText(/未完成子任务\s*7(?!\d)/);
+});
+
+test("the scan state replaces the scanner tag once the scan has finished", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let phase = "HANDOFF";
+  await setup(page, {
+    view: () =>
+      nodesView({
+        pending: phase === "HANDOFF",
+        scan: { phase, complete: phase === "COMPLETE" },
+        nodes: [
+          member("10.0.1.12", { scanner: phase === "HANDOFF" }),
+          member("10.0.1.13", {
+            state: phase === "HANDOFF" ? "DRAINING" : "ACTIVE",
+            drainMode: phase === "HANDOFF" ? "drain" : "",
+            online: phase !== "HANDOFF",
+            ...(phase === "HANDOFF" ? { progress: "LEASE_EXPIRY" } : {}),
+          }),
+        ],
+      }),
+  });
+  const box = await openLiveDialog(page);
+  const scan = box.getByTestId("task-nodes-scan");
+  // A new scanner taking over is labelled, and the handoff is explained.
+  await advanceUntilVisible(page, scan.filter({ hasText: "正在移交扫描" }));
+  await expect(
+    box
+      .getByTestId("task-node-10.0.1.12")
+      .getByText("扫描节点", { exact: true }),
+  ).toBeVisible();
+  await expect(box.getByTestId("task-node-10.0.1.13")).toContainText(
+    "节点离线，执行租约到期后离开，其任务由其他节点继续",
+  );
+  phase = "COMPLETE";
+  await advanceUntilVisible(page, box.getByText("扫描已完成", { exact: true }));
+  await expect(scan).toHaveText("扫描已完成，不再需要扫描节点");
+  await expect(box.getByText("扫描节点", { exact: true })).toHaveCount(0);
+  await expect(box.getByTestId("task-node-10.0.1.13")).not.toContainText(
+    "执行租约到期",
+  );
+});
+
+test("without lease fencing an offline leaving node is shown waiting to reconnect", async ({
+  page,
+}) => {
+  await setup(page, {
+    view: () =>
+      nodesView({
+        pending: true,
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.13", {
+            state: "DRAINING",
+            drainMode: "drain",
+            online: false,
+            progress: "RECONNECT",
+          }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const node = dialog(page).getByTestId("task-node-10.0.1.13");
+  await expect(node).toContainText(
+    "节点离线，重新连接并完成或移交其任务后离开",
+  );
+  await expect(node).not.toContainText("执行租约到期");
+});
+
+test("a refresh still in flight when the change is previewed does not alter the confirmation", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let eligible = true;
+  await setup(page, {
+    view: () =>
+      nodesView({
+        candidates: [
+          { id: "node-14", address: "10.0.1.14", eligible, reason: "" },
+        ],
+      }),
+  });
+  let hold: Promise<void> | undefined;
+  let release: () => void = () => {};
+  let held = 0;
+  await page.route("**/api/master/tasks/1048/nodes", async (route) => {
+    if (route.request().method() === "GET" && hold) {
+      held++;
+      await hold;
+      // The page may have cancelled this read.
+      await route.fallback().catch(() => undefined);
+      return;
+    }
+    await route.fallback();
+  });
+  const box = await openLiveDialog(page);
+  await box.getByRole("button", { name: "添加 Agent", exact: true }).click();
+  await page.getByRole("menuitem", { name: /10\.0\.1\.14/ }).click();
+  const added = box.getByTestId("task-node-add-10.0.1.14");
+  await advanceUntilVisible(page, added);
+  // A background read starts, and the Master's answer will no longer offer
+  // the chosen Agent.
+  hold = new Promise<void>((resolve) => (release = resolve));
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(250);
+      return held;
+    })
+    .toBeGreaterThan(0);
+  eligible = false;
+  await preview(page).click();
+  const summary = box.getByTestId("task-nodes-summary");
+  await expect(summary).toContainText("10.0.1.14");
+  release();
+  hold = undefined;
+  // Give a late response every chance to land before checking again.
+  await page.waitForTimeout(500);
+  await expect(summary).toContainText("10.0.1.14");
+  await expect(
+    box.getByRole("button", { name: "添加 1 个节点", exact: true }),
+  ).toBeEnabled();
+});
+
+test("a retry left open on the confirmation step does not stop live refresh after the change", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let pendingChildren = 3;
+  const view = (pending = false) =>
+    nodesView({
+      pending,
+      nodes: [
+        member("10.0.1.12", { scanner: true, pendingChildren }),
+        member("10.0.1.13", pending ? { state: "DRAINING" } : {}),
+      ],
+    });
+  await setup(page, {
+    view: () => view(true),
+    post: (body, route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: {
+            accepted: true,
+            dryRun: false,
+            valid: true,
+            nodeBindings: [],
+            validationErrors: [],
+            view: view(true),
+          },
+        },
+      }),
+  });
+  let failures = 0;
+  let hold: Promise<void> | undefined;
+  let release: () => void = () => {};
+  let held = 0;
+  await page.route("**/api/master/tasks/1048/nodes", async (route) => {
+    if (route.request().method() === "GET" && failures > 0) {
+      failures--;
+      await route.fulfill({
+        status: 500,
+        json: { success: false, message: "暂时不可用" },
+      });
+      return;
+    }
+    if (route.request().method() === "GET" && hold) {
+      held++;
+      await hold;
+      await route.fallback().catch(() => undefined);
+      return;
+    }
+    await route.fallback();
+  });
+  const box = await openLiveDialog(page);
+  const scanner = box.getByTestId("task-node-10.0.1.12");
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*3(?!\d)/ }),
+  );
+  await box
+    .getByRole("button", { name: /^改为立即移出 .*10\.0\.1\.13/ })
+    .click();
+  // Two failed refreshes report the problem with a retry action.
+  failures = 2;
+  const problem = box.getByText(/无法读取执行节点/);
+  await advanceUntilVisible(page, problem);
+  await preview(page).click();
+  // The retry stays open while the change is confirmed.
+  hold = new Promise<void>((resolve) => (release = resolve));
+  await box.getByRole("button", { name: "重试", exact: true }).click();
+  await expect.poll(() => held).toBe(1);
+  await box.getByRole("button", { name: "移出 1 个节点", exact: true }).click();
+  await expect(page.getByText("执行节点变更已提交。")).toBeVisible();
+  release();
+  hold = undefined;
+  // Live refresh continues with the change in progress, and the earlier read
+  // failure no longer shows.
+  pendingChildren = 8;
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*8(?!\d)/ }),
+  );
+  await expect(problem).toHaveCount(0);
+});

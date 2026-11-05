@@ -2445,4 +2445,104 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   },
   "移出（{mode}）": { en: "Remove ({mode})", ja: "除外（{mode}）" },
   返回修改: { en: "Back to edit", ja: "編集に戻る" },
+  // Scan state and removal progress in the node dialog.
+  扫描已完成: { en: "Scan complete", ja: "スキャン完了" },
+  "扫描已完成，不再需要扫描节点": {
+    en: "The scan is complete; no scanning node is needed",
+    ja: "スキャンは完了しました。スキャンノードは不要です",
+  },
+  "正在移交扫描，从 Master 保存的断点继续": {
+    en: "Handing over the scan; it continues from the Master's checkpoint",
+    ja: "スキャンを引き継ぎ中です。Master が保存したチェックポイントから続行します",
+  },
+  "原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描": {
+    en: "The scanning node has left; another node takes over the scan from the Master's checkpoint",
+    ja: "スキャンノードが離脱しました。別のノードが Master のチェックポイントからスキャンを引き継ぎます",
+  },
+  "节点离线，执行租约到期后离开，其任务由其他节点继续": {
+    en: "Offline; it leaves when its execution lease expires and its work continues on the other nodes",
+    ja: "オフラインです。実行リースの期限切れ後に離脱し、作業は他のノードで続行されます",
+  },
+  // Runtime messages from the Master (src/lib/runtimeMessages.ts).
+  "错误详情：{detail}": { en: "Details: {detail}", ja: "詳細：{detail}" },
+  "节点离线，重新连接并完成或移交其任务后离开": {
+    en: "Offline; it leaves after it reconnects and finishes or hands off its work",
+    ja: "オフラインです。再接続して作業を完了または引き渡した後に離脱します",
+  },
+  "等待不可用节点 {node} 的执行租约到期": {
+    en: "Waiting for the execution lease of unavailable node {node} to expire",
+    ja: "利用できないノード {node} の実行リースの期限切れを待っています",
+  },
+  "等待扫描节点 {node} 重新连接；已分配的子任务仍保留在原节点": {
+    en: "Waiting for scanning node {node} to reconnect; assigned subtasks stay on their nodes",
+    ja: "スキャンノード {node} の再接続を待っています。割り当て済みのサブタスクは元のノードに残ります",
+  },
+  等待不可用节点的执行租约到期: {
+    en: "Waiting for an unavailable node's execution lease to expire",
+    ja: "利用できないノードの実行リースの期限切れを待っています",
+  },
+  "等待扫描节点重新连接；已分配的子任务仍保留在原节点": {
+    en: "Waiting for the scanning node to reconnect; assigned subtasks stay on their nodes",
+    ja: "スキャンノードの再接続を待っています。割り当て済みのサブタスクは元のノードに残ります",
+  },
+  等待所有任务节点确认恢复: {
+    en: "Waiting for all task nodes to confirm the resume",
+    ja: "すべてのタスクノードによる再開の確認を待っています",
+  },
+  该节点已永久退出此任务: {
+    en: "This node has permanently left the task",
+    ja: "このノードはタスクから完全に離脱しました",
+  },
+  该节点在此任务中的执行权已收回: {
+    en: "This node's authority for the task has been revoked",
+    ja: "このノードのタスク実行権は取り消されました",
+  },
+  "节点的执行租约已过期，正在重新授权": {
+    en: "The node's execution lease expired; granting a new one",
+    ja: "ノードの実行リースが期限切れになりました。再付与しています",
+  },
+  "执行节点 {node} 不可用，已分配的工作仍保留在该节点：{reason}": {
+    en: "Agent {node} is unavailable; its assigned work stays on it: {reason}",
+    ja: "Agent {node} を利用できません。割り当て済みの作業はこのノードに残ります：{reason}",
+  },
+  "执行节点 {node} 正在更新，已分配的工作仍保留在该节点": {
+    en: "Agent {node} is updating; its assigned work stays on it",
+    ja: "Agent {node} は更新中です。割り当て済みの作業はこのノードに残ります",
+  },
+  "无法隔离待移出的执行节点 {node}：{reason}": {
+    en: "Agent {node} could not be fenced for removal: {reason}",
+    ja: "除外する Agent {node} を隔離できません：{reason}",
+  },
+  "执行节点 {node} 的限速未生效：{reason}": {
+    en: "Agent {node} did not apply the task limits: {reason}",
+    ja: "Agent {node} にタスクの制限が適用されていません：{reason}",
+  },
+  "执行节点 {node} 无法验证原共享目录：{reason}": {
+    en: "Agent {node} cannot verify the original shared directory: {reason}",
+    ja: "Agent {node} は元の共有ディレクトリを検証できません：{reason}",
+  },
+  等待所有任务节点验证共享目录: {
+    en: "Waiting for every task node to verify the shared directory",
+    ja: "すべてのタスクノードによる共有ディレクトリの検証を待っています",
+  },
+  原共享目录尚未验证: {
+    en: "The original shared directory has not been verified",
+    ja: "元の共有ディレクトリはまだ検証されていません",
+  },
+  没有可用于验证共享目录的节点: {
+    en: "No node is available to verify the shared directory",
+    ja: "共有ディレクトリを検証できるノードがありません",
+  },
+  "Master 正在停止": {
+    en: "The Master is stopping",
+    ja: "Master を停止しています",
+  },
+  请求超时: {
+    en: "The request timed out",
+    ja: "リクエストがタイムアウトしました",
+  },
+  请求已取消: {
+    en: "The request was cancelled",
+    ja: "リクエストはキャンセルされました",
+  },
 };

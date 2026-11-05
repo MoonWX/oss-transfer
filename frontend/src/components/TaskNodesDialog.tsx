@@ -302,8 +302,13 @@ export default function TaskNodesDialog({
   const validAdds = adds.filter(
     (address) =>
       candidateByAddress.get(address)?.eligible ||
-      byAddress.get(address)?.state === "DRAINING",
+      byAddress.get(address)?.state === "DRAINING" ||
+      byAddress.get(address)?.state === "REMOVING",
   );
+  // Re-adding a leaving member cancels its removal and keeps its binding;
+  // only Agents that are not members yet join and need a path.
+  const joinAdds = validAdds.filter((address) => !byAddress.has(address));
+  const cancels = validAdds.length - joinAdds.length;
   const validRemoves = removes.filter((address) => {
     const state = byAddress.get(address)?.state;
     return !!state && state !== "REMOVING";
@@ -313,7 +318,7 @@ export default function TaskNodesDialog({
   const effectiveMode: Mode = nowDisabled ? "drain" : mode;
   const local = !!view?.localTransfer;
   const bindings = local
-    ? validAdds.map((address) => ({
+    ? joinAdds.map((address) => ({
         executionNodeIp: address,
         localPath: (paths[address] ?? "").trim(),
       }))
@@ -321,7 +326,7 @@ export default function TaskNodesDialog({
   const change = {
     add: validAdds,
     remove: validRemoves,
-    ...(local && validAdds.length ? { bindings } : {}),
+    ...(local && joinAdds.length ? { bindings } : {}),
     ...(validRemoves.length ? { mode: effectiveMode } : {}),
     expectedGeneration: view?.generation,
     expectedNodeRevision: view?.nodeRevision,
@@ -334,11 +339,12 @@ export default function TaskNodesDialog({
       !validRemoves.includes(node.address),
   ).length;
   const empty = validAdds.length === 0 && validRemoves.length === 0;
-  const lastNode = remaining === 0 && validAdds.length === 0;
+  // Joining Agents do not count: the task needs a working member until they join.
+  const lastNode = remaining + cancels === 0;
   const pathMissing = bindings.some(
     (binding) => !isAbsoluteAgentPath(binding.localPath),
   );
-  const needsPreflight = local && validAdds.length > 0;
+  const needsPreflight = local && joinAdds.length > 0;
   const preflightPassed =
     !needsPreflight ||
     (preflight?.fingerprint === fingerprint && preflight.valid);
@@ -461,7 +467,7 @@ export default function TaskNodesDialog({
     const state = memberStateLabel(node);
     const share = shareLabel(node.share);
     const name = label(node.address || node.id || "", node);
-    const draining = node.state === "DRAINING";
+    const draining = node.state === "DRAINING" || node.state === "REMOVING";
     return (
       <Paper
         key={node.id || node.address}
@@ -521,23 +527,25 @@ export default function TaskNodesDialog({
             </Typography>
           )}
         </Stack>
-        {node.state !== "REMOVING" && (
+        {(node.state !== "REMOVING" || draining) && (
           <Stack direction="row" gap={2} flexWrap="wrap">
-            <FormControlLabel
-              control={
-                <Checkbox
-                  size="small"
-                  checked={validRemoves.includes(node.address)}
-                  disabled={!editable || submitting}
-                  onChange={() => toggle(removes, setRemoves, node.address)}
-                />
-              }
-              label={
-                <Typography variant="body2">
-                  {t("移除 {node}", { node: name })}
-                </Typography>
-              }
-            />
+            {node.state !== "REMOVING" && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={validRemoves.includes(node.address)}
+                    disabled={!editable || submitting}
+                    onChange={() => toggle(removes, setRemoves, node.address)}
+                  />
+                }
+                label={
+                  <Typography variant="body2">
+                    {t("移除 {node}", { node: name })}
+                  </Typography>
+                }
+              />
+            )}
             {draining && (
               <FormControlLabel
                 control={
@@ -547,21 +555,21 @@ export default function TaskNodesDialog({
                     disabled={!editable || submitting}
                     onChange={() => {
                       toggle(adds, setAdds, node.address);
-                      if (node.localPath && paths[node.address] == null)
-                        setPaths({ ...paths, [node.address]: node.localPath });
                     }}
                   />
                 }
                 label={
                   <Typography variant="body2">
-                    {t("取消排空，保留 {node}", { node: name })}
+                    {node.state === "REMOVING"
+                      ? t("取消立即移除，保留 {node}", { node: name })
+                      : t("取消排空，保留 {node}", { node: name })}
                   </Typography>
                 }
               />
             )}
           </Stack>
         )}
-        {local && validAdds.includes(node.address) && bindingField(node)}
+        {local && joinAdds.includes(node.address) && bindingField(node)}
       </Paper>
     );
   };
@@ -844,7 +852,7 @@ export default function TaskNodesDialog({
                 {t("添加：{nodes}", {
                   nodes: validAdds
                     .map((address) =>
-                      local
+                      local && joinAdds.includes(address)
                         ? `${summaryLabel(address)} (${(paths[address] ?? "").trim()})`
                         : summaryLabel(address),
                     )

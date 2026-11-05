@@ -125,7 +125,9 @@ func tempFileSize(root, owner string) int64 {
 	size := int64(-1)
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err == nil && !entry.IsDir() && strings.Contains(entry.Name(), owner) && strings.HasSuffix(entry.Name(), ".tmp") {
-			if info, err := entry.Info(); err == nil {
+			// Stat the file itself: on Windows the directory entry's size
+			// is not updated while the writer keeps the file open.
+			if info, err := os.Stat(path); err == nil {
 				size = info.Size()
 			}
 		}
@@ -177,7 +179,7 @@ func startTempHelperAt(t *testing.T, database, root, point string) *tempHelper {
 		if helper.owner == "" {
 			t.Fatal("crash helper exited before writing payload")
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(2 * time.Minute): // hang guard only
 		t.Fatal("crash helper did not write payload")
 	}
 	return helper

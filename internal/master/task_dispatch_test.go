@@ -71,7 +71,8 @@ func testDispatchPage(t *testing.T, failDelivery bool, scanFault string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Hang guard only: slow runners may need far longer than a fast laptop.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var mu sync.Mutex
 	reads, acknowledgements, acknowledgedThrough := 0, 0, int64(0)

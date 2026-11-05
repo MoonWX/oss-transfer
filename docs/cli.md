@@ -1,5 +1,7 @@
 # Use the CLI
 
+[中文](cli.zh-CN.md)
+
 The command-line interface (CLI) manages the same tasks and settings as the web console. On an installed Master or Agent, run it as the service owner or system administrator: it uses the local cluster without a login or address argument.
 
 ```sh
@@ -76,6 +78,38 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
 Unspecified fields keep their values. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are shared across selected Agents, and node limits still apply.
+
+## Change a task's execution nodes
+
+Show which Agents run a task, their state, the scanner, pending child tasks, each node's share of the task limits, removed nodes and the Agents that can be added:
+
+```sh
+oss-transfer-cli task nodes "$TRANSFER_TASK"
+```
+
+Add or remove Agents while the task exists. `--add` and `--remove` can be repeated or take comma-separated lists. Without `--yes`, the command prints the planned change (and the preflight result for local transfers) and submits nothing:
+
+```sh
+oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --yes
+oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --yes
+oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --now --yes
+```
+
+- By default a removed node drains: it receives no new work, its queued work moves to the other nodes, and it leaves once its running work finishes.
+- `--now` revokes the node's running work, which continues on the remaining nodes. Some tasks do not support it; `task nodes` then shows the reason.
+- A node being added shows `Joining` until it passes the handshake and shared-directory check. Only then does it receive work.
+
+Uploads and downloads need one shared directory per added node. The CLI runs the Master's shared-directory preflight before it submits, and stops if any binding fails:
+
+```sh
+oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --binding 10.0.0.3=/mnt/share --yes
+```
+
+Only one change can be in progress. While nodes are joining or draining, the Master accepts only three changes: removing a joining node (cancels the join), removing a draining node with `--now`, or adding a draining node back (cancels the drain). It rejects anything else with a message. Each change carries the membership revision the CLI read. If someone changed the nodes in the meantime, the Master rejects the change; run `task nodes` again and resubmit. Stopped or failed tasks can be changed; the change applies on resume. Completed tasks and single-object or single-file tasks cannot be changed.
+
+When a connection fails before the result is known, the CLI prints a request ID and membership revision. Check `task nodes` first. To retry, keep the same arguments and add the printed `--request-id` and `--expected-revision`; the Master returns the original result instead of applying the change twice.
+
+`task show` lists the node membership too. It marks joining and draining nodes and shows each node's effective share. [Execution node changes](operations.md#change-a-tasks-execution-nodes) describe fencing, bandwidth redistribution and limits.
 
 ## Manage nodes and exceptions
 

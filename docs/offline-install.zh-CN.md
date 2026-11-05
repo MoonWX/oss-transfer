@@ -78,5 +78,5 @@ Windows 在原安装命令上加 `-Upgrade`，Agent 使用 `-Role agent`。升�
 - Unix 主机提前装好 Bash、curl、tar 和 SHA-256 工具；Linux 使用 systemd。FreeBSD 可在断网前执行 `pkg install -y bash curl`。没有 `sudo` 时，以 root 运行安装命令。
 - 所有包必须来自同一版本。Master 离线时，缺少的 Agent 平台包需补到原安装文件夹，再按上面的 Master 升级命令导入；这会重启 Master。
 - 邀请有有效期且只能使用一次。过期后重新生成即可。
-- 升级成功会删除本次临时备份，失败时会尝试恢复并保留备份。计划降级时，应提前另做备份，见[备份与恢复](operations.md#update-installed-services)。
+- 升级成功会删除本次临时备份，失败时会尝试恢复并保留备份。计划降级时，应提前另做备份，见[备份与恢复](operations.zh-CN.md#更新已安装的服务)。
 - 本文安装的是原生服务。离线 Docker 部署还需要提前准备容器镜像。

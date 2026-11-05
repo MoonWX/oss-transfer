@@ -144,9 +144,9 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "Install this version",
     ja: "このバージョンをインストール",
   },
-  "请输入比当前更新的版本号，如 4.1.29-beta.1": {
-    en: "Enter a version newer than the current one, such as 4.1.29-beta.1",
-    ja: "現在より新しいバージョンを入力してください（例: 4.1.29-beta.1）",
+  "请输入比当前更新的预发布版本号，如 4.1.29-beta.1": {
+    en: "Enter a prerelease version newer than the current one, such as 4.1.29-beta.1",
+    ja: "現在より新しいプレリリース版を入力してください（例: 4.1.29-beta.1）",
   },
   "安装实验版本 {version}？": {
     en: "Install experimental build {version}?",

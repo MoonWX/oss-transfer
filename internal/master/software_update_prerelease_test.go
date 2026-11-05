@@ -54,7 +54,10 @@ func TestSoftwareUpdateOffersStableAndRequiresExplicitPrerelease(t *testing.T) {
 	for _, tc := range []struct {
 		version string
 		status  int
-	}{{"4.1.30-beta.9", 502}, {"4.1.27-beta.1", 409}, {"4.1.28", 409}, {"4.1.30-beta.01", 400}, {"latest", 400}} {
+	}{{"4.1.30-beta.9", 502}, {"4.1.27-beta.1", 409}, {"4.1.28", 409}, {"4.1.30-beta.01", 400}, {"latest", 400},
+		// A stable version never uses the opt-in channel: without a recent check
+		// of that exact release it is refused, and nothing is resolved for it.
+		{"4.1.30", 409}} {
 		if status, body := call("POST", "/api/master/software-updates/master", map[string]any{"version": tc.version, "allowPrerelease": true}); status != tc.status {
 			t.Fatalf("%s: status=%d body=%v", tc.version, status, body)
 		}

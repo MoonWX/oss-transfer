@@ -158,6 +158,12 @@ func (s *Server) updateMasterSoftwareHTTP(w http.ResponseWriter, r *http.Request
 		fail(w, 400, softwareupdate.ErrPrereleaseNotAllowed.Error())
 		return
 	}
+	// The opt-in channel installs prereleases only. A stable version always
+	// takes the normal path, which requires a recent check of the latest
+	// release, even if the client also sent the prerelease flag.
+	if request.AllowPrerelease && softwareupdate.ValidVersion(request.Version) && !softwareupdate.IsPrerelease(request.Version) {
+		request.AllowPrerelease = false
+	}
 	if request.AllowPrerelease {
 		resolver, ok := s.options.Updater.(softwareupdate.VersionResolver)
 		if !ok || !s.options.Updater.Info().Supported {

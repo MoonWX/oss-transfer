@@ -111,7 +111,7 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		if prerelease && !o.Has("allow-prerelease") {
 			return nil, cliUsageErrorf("%s 是预发布（实验）版本，正常更新不会提供；确认安装请同时指定 --allow-prerelease", version)
 		}
-		if action == "master" && o.Has("allow-prerelease") {
+		if action == "master" && prerelease && o.Has("allow-prerelease") {
 			return client.Post(path, map[string]interface{}{"version": version, "allowPrerelease": true})
 		}
 	} else {

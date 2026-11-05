@@ -259,8 +259,12 @@ export default function SoftwareUpdates({
     (!isPrerelease(version) || !!node.info?.prereleaseUpdates) &&
     !busyUpdate(node.update);
   const requested = requestedVersion.trim().replace(/^v/, "");
+  // The hidden entry installs prereleases only; stable releases use the
+  // normal checked-update flow.
   const requestedValid =
-    validVersion(requested) && newerVersion(requested, version);
+    validVersion(requested) &&
+    isPrerelease(requested) &&
+    newerVersion(requested, version);
   const eligibleCount = snapshot?.agents.filter(eligible).length ?? 0;
   const queuedItem = (node: AgentSoftware) =>
     queue?.items.find((item) => item.address === node.address);
@@ -410,7 +414,7 @@ export default function SoftwareUpdates({
                   error={!!requested && !requestedValid}
                   helperText={
                     requested && !requestedValid
-                      ? t("请输入比当前更新的版本号，如 4.1.29-beta.1")
+                      ? t("请输入比当前更新的预发布版本号，如 4.1.29-beta.1")
                       : " "
                   }
                   inputProps={{ maxLength: 65, spellCheck: false }}

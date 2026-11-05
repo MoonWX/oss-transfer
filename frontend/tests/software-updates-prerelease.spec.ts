@@ -145,11 +145,16 @@ test("prerelease channel installs an exact version only after a warning confirma
   });
   await expect(install).toBeDisabled();
   const input = entry.getByRole("textbox", { name: "版本号" });
-  for (const invalid of ["4.1.27-beta.1", "4.1.29-beta.01", "latest"]) {
+  for (const invalid of [
+    "4.1.27-beta.1",
+    "4.1.29-beta.01",
+    "latest",
+    "4.1.30",
+  ]) {
     await input.fill(invalid);
     await expect(install).toBeDisabled();
     await expect(
-      entry.getByText("请输入比当前更新的版本号，如 4.1.29-beta.1", {
+      entry.getByText("请输入比当前更新的预发布版本号，如 4.1.29-beta.1", {
         exact: true,
       }),
     ).toBeVisible();

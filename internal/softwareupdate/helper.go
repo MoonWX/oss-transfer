@@ -25,7 +25,7 @@ func runHelper(requestPath string, client *client, execute func(*exec.Cmd) error
 		return err
 	}
 	work := filepath.Join(req.Options.DataDirectory, "runtime", "updates", req.ID)
-	if !idPattern.MatchString(req.ID) || !stableVersion.MatchString(req.Version) || compareVersions(req.Version, req.Options.Version) <= 0 || requestPath != filepath.Join(work, "request.json") {
+	if !idPattern.MatchString(req.ID) || checkRequested(req.Version, req.AllowPrerelease) != nil || !Newer(req.Version, req.Options.Version) || requestPath != filepath.Join(work, "request.json") {
 		return errors.New("Invalid update request identity")
 	}
 	statusPath := filepath.Join(filepath.Dir(work), "status.json")
@@ -76,7 +76,7 @@ func runHelper(requestPath string, client *client, execute func(*exec.Cmd) error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
-	stage, _, err := client.prepare(ctx, work, req.Version, platform())
+	stage, _, err := client.prepare(ctx, work, req.Version, req.AllowPrerelease, platform())
 	if err != nil {
 		return err
 	}

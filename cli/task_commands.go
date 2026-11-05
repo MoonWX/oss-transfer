@@ -61,6 +61,8 @@ func runTaskCommand(client *ApiClient, args []string) (map[string]interface{}, e
 		return taskBandwidth(client, args)
 	case "limits":
 		return taskLimits(client, args)
+	case "nodes":
+		return taskNodes(client, args)
 	case "report":
 		return taskReport(client, args)
 	default:

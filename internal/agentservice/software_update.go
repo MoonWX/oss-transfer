@@ -66,14 +66,17 @@ func (s *Service) softwareCommand(ctx context.Context, command agenttransport.Co
 		reply, err := badRequest(errors.New("operation requires a mutating command"))
 		return reply, true, err
 	}
+	// The Master sends allowPrerelease only when it asks this Agent to follow
+	// the Master's own prerelease version.
 	var request struct {
-		Version string `json:"version"`
+		Version         string `json:"version"`
+		AllowPrerelease bool   `json:"allowPrerelease,omitempty"`
 	}
 	if err := decode(command.Payload, &request); err != nil {
 		return finish(nil, err)
 	}
 	s.softwareMu.Lock()
 	defer s.softwareMu.Unlock()
-	status, err := s.Updater.Start(ctx, request.Version)
+	status, err := s.Updater.Start(ctx, request.Version, request.AllowPrerelease)
 	return finish(status, err)
 }

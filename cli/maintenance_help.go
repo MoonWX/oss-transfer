@@ -4,10 +4,13 @@ const cliUpdateHelp = `服务升级
   oss-transfer-cli update status
   oss-transfer-cli update check
   oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update master --version 4.1.21-beta.1 --allow-prerelease --yes
   oss-transfer-cli update agent --worker 节点 --yes
   oss-transfer-cli update agents --all --yes
 
 Agent 默认更新到 Master 当前版本，也可用 --version 指定版本。
+检测新版本只提供稳定版。预发布（beta/rc）版本仅在明确指定 --version 并加
+--allow-prerelease 时安装；Master 运行预发布版本时，Agent 可跟随到同一版本。
 请求受理后使用 update status --watch 5 查看结果；受理不代表升级完成。
 `
 

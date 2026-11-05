@@ -15,6 +15,9 @@ func (t *taskRuntime) rebalanceQueued(ctx context.Context, p task.Parent, availa
 	}
 	var err error
 	p, err = t.repo.EnsureQueuedRebalance(p.ID, p.Generation)
+	if err == nil {
+		p, err = t.repo.EnsureDrainRebalance(p.ID, p.Generation)
+	}
 	if err != nil || p.Failover.Rebalance == nil {
 		return err
 	}

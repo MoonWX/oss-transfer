@@ -134,4 +134,35 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "{count} nodes can be updated. Each must recover before the next starts; a failure stops the queue.",
     ja: "更新可能なノードは {count} 台です。前のノードの復旧後に次へ進み、失敗した場合は停止します。",
   },
+  指定版本: { en: "Specific version", ja: "バージョンを指定" },
+  "用于测试预发布（beta/rc）版本。正常更新只提供稳定版。": {
+    en: "For testing prerelease (beta/rc) builds. Normal updates only offer stable releases.",
+    ja: "プレリリース（beta/rc）版のテスト用です。通常の更新では安定版のみを提供します。",
+  },
+  版本号: { en: "Version", ja: "バージョン" },
+  安装指定版本: {
+    en: "Install this version",
+    ja: "このバージョンをインストール",
+  },
+  "请输入比当前更新的预发布版本号，如 4.1.29-beta.1": {
+    en: "Enter a prerelease version newer than the current one, such as 4.1.29-beta.1",
+    ja: "現在より新しいプレリリース版を入力してください（例: 4.1.29-beta.1）",
+  },
+  "安装实验版本 {version}？": {
+    en: "Install experimental build {version}?",
+    ja: "実験版 {version} をインストールしますか？",
+  },
+  "这是实验性的预发布版本，不会出现在正常更新中，可能包含未完成的功能或问题。请仅在测试环境或明确需要时安装；之后可在新的稳定版发布时正常更新。":
+    {
+      en: "This is an experimental prerelease build. It is never offered by normal updates and may contain unfinished features or defects. Install it only for testing or when you specifically need it; you can update normally once a newer stable release is published.",
+      ja: "これは実験的なプレリリース版で、通常の更新では提供されません。未完成の機能や不具合を含む可能性があります。テスト環境や明確に必要な場合のみインストールしてください。新しい安定版の公開後は通常どおり更新できます。",
+    },
+  "执行节点可在之后跟随 Master 更新到此版本。": {
+    en: "Agents can then follow the Master to this version.",
+    ja: "その後、Agent は Master に合わせてこのバージョンに更新できます。",
+  },
+  确认安装实验版本: {
+    en: "Install experimental build",
+    ja: "実験版をインストール",
+  },
 };

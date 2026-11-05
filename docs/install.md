@@ -1,5 +1,7 @@
 # Install on other systems
 
+[中文](install.zh-CN.md)
+
 For Linux with systemd, use the [installation command](../README.md#1-install-the-master). The steps below cover other systems and custom paths. For hosts without internet access, use [offline installation](offline-install.md).
 
 ## macOS
@@ -35,6 +37,28 @@ bash install.sh --role master
 ```
 
 For all systems, sign in with the `admin` password printed by the installer. The native Master installer offers to install a local Agent too. Add other Agents from **Execution nodes → Add node**.
+
+## Install a specific or prerelease version
+
+Installers use the latest stable release by default. To install a fixed version, including a prerelease such as `4.1.29-beta.1`, pass it explicitly:
+
+```sh
+bash install.sh --role master --version 4.1.29-beta.1
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -Version 4.1.29-beta.1
+```
+
+The installer verifies a prerelease exactly like a stable release: the GitHub release digest for that tag or the versioned OSS manifest, never `latest`. Rerunning the installer with `--upgrade` and `--version` upgrades an existing installation to that version, including from a prerelease to its stable release. Agents added from the console download the Master's own version.
+
+For Docker Compose, set the exact image tag in `.env`; `latest` and `X.Y` only follow stable releases:
+
+```dotenv
+OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.29-beta.1
+```
+
+Return to a stable image by setting the stable tag (or `latest`) once it is newer than the prerelease. Prereleases are experimental; see [trying a prerelease](operations.md#try-a-prerelease) for online updates and returning to stable.
 
 ## Paths and ports
 

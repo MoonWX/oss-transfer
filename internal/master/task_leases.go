@@ -318,7 +318,7 @@ func (l *taskLeases) leaseTick(ctx context.Context, e *taskLeaseEntry) (time.Dur
 		}
 		return l.retryInterval, false
 	}
-	if p.Deleted || task.Ended(p.Status) || p.Failover == nil || !p.Failover.Enabled || p.NodeRetired(row.Node.ID) {
+	if p.Deleted || task.Ended(p.Status) || p.Failover == nil || !p.Failover.Enabled || p.NodeRetired(row.Node.ID) || !leaseOwnerCurrent(p, row) {
 		return 0, true
 	}
 	if p.Status == "STOPPING" {
@@ -334,4 +334,20 @@ func (l *taskLeases) leaseTick(ctx context.Context, e *taskLeaseEntry) (time.Dur
 	next = e.renewAt
 	e.mu.Unlock()
 	return max(next.Sub(l.now()), time.Millisecond), false
+}
+
+// leaseOwnerCurrent reports whether a lease record still names a member whose
+// ownership epoch is current or being admitted. A cancelled join can leave a
+// record for a node that is no longer a member (or holds a never-finished
+// epoch); its worker parks until a new rejoin wakes it.
+func leaseOwnerCurrent(p task.Parent, row taskLeaseRecord) bool {
+	member := false
+	for _, node := range p.Spec.Nodes {
+		member = member || node.ID == row.Node.ID
+	}
+	if !member {
+		return false
+	}
+	epoch := p.NodeEpoch(row.Node.ID)
+	return row.OwnerEpoch == epoch || p.Failover != nil && p.Failover.Rejoining[row.Node.ID] == row.OwnerEpoch && row.OwnerEpoch > 0
 }

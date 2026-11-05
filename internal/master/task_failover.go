@@ -188,18 +188,25 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 	if err != nil {
 		return p, err
 	}
-	if p.NodeRetired(p.ScannerNode().ID) && (p.Status == "RESUMING" || !(p.ScanComplete && p.DispatchedThrough >= p.ScannedBatches)) {
-		for _, node := range p.ActiveNodes() {
-			if available[node.ID] {
-				p, err = t.repo.BeginScannerFailover(p.ID, p.Generation, node.ID)
-				break
-			}
-		}
-	}
+	p, err = t.moveRetiredScanner(p, available)
 	if err == nil {
 		p, err = t.rejoinAvailableNodes(ctx, p)
 	}
 	return p, err
+}
+
+// moveRetiredScanner hands scanning to a verified available member through the
+// checkpoint takeover path once the scanner has been fenced.
+func (t *taskRuntime) moveRetiredScanner(p task.Parent, available map[string]bool) (task.Parent, error) {
+	if !p.NodeRetired(p.ScannerNode().ID) || !(p.Status == "RESUMING" || !(p.ScanComplete && p.DispatchedThrough >= p.ScannedBatches)) {
+		return p, nil
+	}
+	for _, node := range p.PlacementNodes() {
+		if available[node.ID] {
+			return t.repo.BeginScannerFailover(p.ID, p.Generation, node.ID)
+		}
+	}
+	return p, nil
 }
 
 func (t *taskRuntime) seedTakeoverScanner(ctx context.Context, p task.Parent) (bool, error) {

@@ -142,6 +142,18 @@ func (s *Server) closeSoftwareUpdates() {
 	}
 }
 
+// agentUpdateCommand targets the Master's version. allowPrerelease is sent
+// only for a prerelease Master, so stable updates keep the payload that older
+// Agents (which reject unknown fields) accept, and a stable Master can never
+// hand an Agent a prerelease.
+func agentUpdateCommand(version string) map[string]any {
+	command := map[string]any{"version": version}
+	if softwareupdate.IsPrerelease(version) {
+		command["allowPrerelease"] = true
+	}
+	return command
+}
+
 type agentSoftware struct {
 	Info   softwareupdate.Info   `json:"info"`
 	Update softwareupdate.Status `json:"update"`
@@ -266,7 +278,13 @@ func (s *Server) stepSoftwareQueue(parent context.Context) {
 				return
 			}
 			if !newerSoftware(q.Version, remote.Info.Version) {
-				finish("SKIPPED", "VERSION", "Only older stable Agent releases can be updated")
+				finish("SKIPPED", "VERSION", "Only Agents older than the Master version can be updated")
+				return
+			}
+			// Agents follow a prerelease only when it is the Master's own
+			// version. Older Agents cannot accept the explicit flag.
+			if softwareupdate.IsPrerelease(q.Version) && !remote.Info.PrereleaseUpdates {
+				finish("SKIPPED", "PRERELEASE_UNSUPPORTED", "This Agent cannot install prerelease builds online; upgrade it with the installer")
 				return
 			}
 			item.Phase, item.StartedAt, item.UpdatedAt = "UPDATING", time.Now().UTC(), time.Now().UTC()
@@ -277,7 +295,7 @@ func (s *Server) stepSoftwareQueue(parent context.Context) {
 		}
 		ctx, cancel = context.WithTimeout(parent, 10*time.Second)
 		var result softwareupdate.Status
-		err = s.agentCall(ctx, member.Session(), "software_update", true, map[string]string{"version": q.Version}, &result)
+		err = s.agentCall(ctx, member.Session(), "software_update", true, agentUpdateCommand(q.Version), &result)
 		cancel()
 		if err != nil {
 			var remoteError *AgentError

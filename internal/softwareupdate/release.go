@@ -24,17 +24,45 @@ const (
 	archiveLimit int64 = 1 << 30
 )
 
-var stableVersion = regexp.MustCompile(`^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$`)
 var commitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 var shaPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
+// Errors shared by every layer that accepts a requested version. Their text is
+// stable because the Master translates exact messages for the console.
+var (
+	ErrInvalidVersion       = errors.New("Invalid release version")
+	ErrPrereleaseNotAllowed = errors.New("Prerelease versions can only be installed with explicit prerelease confirmation")
+	ErrNotNewer             = errors.New("Only a newer release can be installed")
+)
+
+// Controller is implemented by the native updater. Start installs exactly the
+// requested version; allowPrerelease must be true for a prerelease version and
+// is never implied by Check, which only reports the latest stable release.
 type Controller interface {
 	Info() Info
 	Status() Status
-	Start(context.Context, string) (Status, error)
+	Start(ctx context.Context, version string, allowPrerelease bool) (Status, error)
 	Check(context.Context) (Release, error)
 }
+
+// VersionResolver verifies that an explicitly requested release is published
+// with trusted metadata before any update work is queued.
+type VersionResolver interface {
+	Resolve(ctx context.Context, version string, allowPrerelease bool) (Release, error)
+}
+
+// checkRequested validates a requested version against the opt-in policy.
+func checkRequested(version string, allowPrerelease bool) error {
+	if !ValidVersion(version) {
+		return ErrInvalidVersion
+	}
+	if IsPrerelease(version) && !allowPrerelease {
+		return ErrPrereleaseNotAllowed
+	}
+	return nil
+}
+
 type Release struct {
 	Version string `json:"version"`
 	Tag     string `json:"tag"`
@@ -108,13 +136,18 @@ func (c *client) sourceOrder(ctx context.Context) []string {
 	}
 	return []string{"github", "jdoss"}
 }
-func (c *client) release(ctx context.Context, version string) (Release, error) {
-	if version != "latest" && !stableVersion.MatchString(version) {
-		return Release{}, errors.New("Invalid release version")
+
+// release fetches "latest" (always the latest stable release) or one exact
+// version. A prerelease is returned only for an exact version with opt-in.
+func (c *client) release(ctx context.Context, version string, allowPrerelease bool) (Release, error) {
+	if version != "latest" {
+		if err := checkRequested(version, allowPrerelease); err != nil {
+			return Release{}, err
+		}
 	}
 	var errs []error
 	for _, source := range c.sourceOrder(ctx) {
-		release, err := c.releaseFrom(ctx, source, version)
+		release, err := c.releaseFrom(ctx, source, version, allowPrerelease)
 		if err == nil {
 			return release, nil
 		}
@@ -122,8 +155,10 @@ func (c *client) release(ctx context.Context, version string) (Release, error) {
 	}
 	return Release{}, errors.Join(errs...)
 }
-func (c *client) releaseFrom(ctx context.Context, source, version string) (Release, error) {
+func (c *client) releaseFrom(ctx context.Context, source, version string, allowPrerelease bool) (Release, error) {
 	var release Release
+	// "latest" never selects a prerelease, even if the flag is set.
+	prereleaseAllowed := allowPrerelease && version != "latest"
 	if source == "jdoss" {
 		path := "latest"
 		if version != "latest" {
@@ -165,8 +200,11 @@ func (c *client) releaseFrom(ctx context.Context, source, version string) (Relea
 		if err := c.metadata(ctx, githubAPI+path, &document); err != nil {
 			return release, err
 		}
-		if document.Draft || document.Prerelease {
-			return release, errors.New("Only published stable releases can be installed")
+		if document.Draft {
+			return release, errors.New("Draft releases cannot be installed")
+		}
+		if document.Prerelease && !prereleaseAllowed {
+			return release, ErrPrereleaseNotAllowed
 		}
 		release = Release{Version: strings.TrimPrefix(document.Tag, "v"), Tag: document.Tag, source: source}
 		for _, a := range document.Assets {
@@ -181,8 +219,11 @@ func (c *client) releaseFrom(ctx context.Context, source, version string) (Relea
 	} else {
 		return release, errors.New("Unknown release source")
 	}
-	if !stableVersion.MatchString(release.Version) || release.Tag != "v"+release.Version || (version != "latest" && version != release.Version) {
-		return Release{}, errors.New("Release version does not match the requested stable version")
+	if !ValidVersion(release.Version) || release.Tag != "v"+release.Version || (version != "latest" && version != release.Version) {
+		return Release{}, errors.New("Release version does not match the requested version")
+	}
+	if IsPrerelease(release.Version) && !prereleaseAllowed {
+		return Release{}, ErrPrereleaseNotAllowed
 	}
 	seen := map[string]bool{}
 	for _, a := range release.assets {

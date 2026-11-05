@@ -33,7 +33,7 @@ func (p Parent) NeedsQueuedRebalance() bool {
 	if p.Failover == nil || !p.Failover.Enabled {
 		return false
 	}
-	if p.Failover.Rebalance != nil {
+	if p.Failover.Rebalance != nil || p.Membership != nil && len(p.Membership.Draining) > 0 {
 		return true
 	}
 	for _, node := range p.ActiveNodes() {
@@ -140,7 +140,9 @@ func (r *Repository) NextQueuedHandoff(id int64, generation uint64, available ma
 			if err != nil {
 				continue
 			}
-			if target.ID == c.Node.ID || !b.Targets[target.ID] {
+			// A draining owner gives up every queued child, regardless of balance.
+			_, draining := p.NodeDraining(c.Node.ID)
+			if target.ID == c.Node.ID || !draining && !b.Targets[target.ID] {
 				continue
 			}
 			from, err := addLoad(p.Scheduling.Nodes[c.Node.ID], other[c.Node.ID], 1)
@@ -153,7 +155,7 @@ func (r *Repository) NextQueuedHandoff(id int64, generation uint64, available ma
 			}
 			weight := pendingWeight(childPending(c))
 			// Avoid moving a large child if that merely swaps the imbalance.
-			if p.Spec.DistributionMode == "BALANCED" && (weight <= 0 || weight >= pendingWeight(from)-pendingWeight(to)) {
+			if !draining && p.Spec.DistributionMode == "BALANCED" && (weight <= 0 || weight >= pendingWeight(from)-pendingWeight(to)) {
 				continue
 			}
 			if err := state.RequireSchema(tx, "master", state.SchemaTaskHandoff); err != nil {
@@ -210,12 +212,12 @@ func (r *Repository) FinishQueuedHandoff(id int64, intent QueuedHandoff, release
 			return err
 		}
 		target := intent.Target
-		if p.NodeRetired(target.ID) || !available[target.ID] {
+		if _, draining := p.NodeDraining(target.ID); draining || p.NodeRetired(target.ID) || !available[target.ID] {
 			other, err := otherPending(tx, p)
 			if err != nil {
 				return err
 			}
-			target, err = chooseNode(tx, p, other, available)
+			target, err = chooseTakeoverNode(tx, p, other, available)
 			if err != nil {
 				return ErrFailoverTarget
 			}

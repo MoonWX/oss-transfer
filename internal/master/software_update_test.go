@@ -17,7 +17,11 @@ type fakeSoftwareUpdater struct {
 	status  softwareupdate.Status
 	release softwareupdate.Release
 	started []string
-	err     error
+	allowed []bool
+	// published limits Resolve to these versions when non-nil.
+	published map[string]bool
+	resolved  []string
+	err       error
 }
 
 func TestSoftwareUpdateQueueSurvivesMasterRestartAndSerializesAgents(t *testing.T) {
@@ -219,10 +223,23 @@ func (u *fakeSoftwareUpdater) Check(context.Context) (softwareupdate.Release, er
 	defer u.mu.Unlock()
 	return u.release, u.err
 }
-func (u *fakeSoftwareUpdater) Start(_ context.Context, version string) (softwareupdate.Status, error) {
+func (u *fakeSoftwareUpdater) Resolve(_ context.Context, version string, allowPrerelease bool) (softwareupdate.Release, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.resolved = append(u.resolved, version)
+	if u.published != nil && !u.published[version] {
+		return softwareupdate.Release{}, errors.New("release not found")
+	}
+	if softwareupdate.IsPrerelease(version) && !allowPrerelease {
+		return softwareupdate.Release{}, softwareupdate.ErrPrereleaseNotAllowed
+	}
+	return softwareupdate.Release{Version: version}, nil
+}
+func (u *fakeSoftwareUpdater) Start(_ context.Context, version string, allowPrerelease bool) (softwareupdate.Status, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.started = append(u.started, version)
+	u.allowed = append(u.allowed, allowPrerelease)
 	u.status = softwareupdate.Status{ID: fmt.Sprintf("update-%d", len(u.started)), Version: version, Phase: "QUEUED"}
 	return u.status, u.err
 }
@@ -232,7 +249,7 @@ func TestSoftwareVersionComparison(t *testing.T) {
 		target, current string
 		want            bool
 	}{
-		{"4.1.15", "4.1.14", true}, {"4.1.10", "4.1.9", true}, {"4.1.14", "4.1.14", false}, {"4.1.9", "4.1.14", false}, {"4.2.0", "4.1.99", true}, {"4.1.15-rc.1", "4.1.14", false}, {"4.1.15", "4.1.0-dev", false}, {"garbage", "4.1.14", false},
+		{"4.1.15", "4.1.14", true}, {"4.1.10", "4.1.9", true}, {"4.1.14", "4.1.14", false}, {"4.1.9", "4.1.14", false}, {"4.2.0", "4.1.99", true}, {"4.1.15-rc.1", "4.1.14", true}, {"4.1.15-rc.1", "4.1.15", false}, {"4.1.15", "4.1.0-dev", false}, {"garbage", "4.1.14", false},
 	} {
 		if got := newerSoftware(tc.target, tc.current); got != tc.want {
 			t.Fatalf("%s > %s: %v", tc.target, tc.current, got)

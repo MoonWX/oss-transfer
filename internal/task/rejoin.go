@@ -23,7 +23,7 @@ func (r *Repository) BeginNodeRejoin(id int64, generation uint64, nodeID string)
 		if err != nil {
 			return err
 		}
-		if !p.NodeRetired(nodeID) || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding || !p.CanRejoinScanner(nodeID) {
+		if !p.NodeRetired(nodeID) || p.NodeRemoved(nodeID) || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding || !p.CanRejoinScanner(nodeID) {
 			return ErrState
 		}
 		if value := p.Failover.Rejoining[nodeID]; value > 0 {
@@ -55,7 +55,7 @@ func (r *Repository) FinishNodeRejoin(id int64, generation uint64, nodeID string
 		if !p.NodeRetired(nodeID) && p.NodeEpoch(nodeID) == epoch {
 			return errUnchanged
 		}
-		if !p.NodeRetired(nodeID) || p.Failover.Rejoining[nodeID] != epoch || epoch == 0 || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding || p.BudgetRevision == math.MaxUint64 {
+		if !p.NodeRetired(nodeID) || p.NodeRemoved(nodeID) || p.Failover.Rejoining[nodeID] != epoch || epoch == 0 || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding || p.BudgetRevision == math.MaxUint64 {
 			return ErrState
 		}
 		if p.Failover.NodeEpochs == nil {
@@ -64,6 +64,9 @@ func (r *Repository) FinishNodeRejoin(id int64, generation uint64, nodeID string
 		p.Failover.NodeEpochs[nodeID] = epoch
 		delete(p.Failover.Retired, nodeID)
 		delete(p.Failover.Rejoining, nodeID)
+		if p.Membership != nil {
+			delete(p.Membership.Joining, nodeID)
+		}
 		if p.Failover.Rebalance == nil {
 			p.Failover.Rebalance = &RebalanceState{}
 		}

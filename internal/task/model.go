@@ -84,6 +84,7 @@ type Parent struct {
 	Scheduling        *SchedulingState   `json:"scheduling,omitempty"`
 	ChildOrder        *ChildOrderState   `json:"childOrder,omitempty"`
 	Failover          *FailoverState     `json:"failover,omitempty"`
+	Membership        *MembershipState   `json:"membership,omitempty"`
 }
 
 type Child struct {

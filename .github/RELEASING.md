@@ -1,5 +1,7 @@
 # Releases
 
+[中文](RELEASING.zh-CN.md)
+
 Push a `v*` tag to publish a version. The release workflow waits for CI on the tagged commit, takes the packages and image that CI built, uploads them to JD Cloud OSS and Docker Hub, and publishes the GitHub Release.
 
 ## Publish a version
@@ -61,6 +63,25 @@ gh workflow run release.yml --ref main -f tag=v4.1.7
 
 This keeps the tag and its artifacts unchanged.
 
+## Publish a beta
+
+A prerelease is any version with a SemVer prerelease suffix, such as `4.1.29-beta.1` or `4.1.29-rc.1`. Publish it exactly like a stable release: set `VERSION`, commit, tag `v4.1.29-beta.1` and push. Use dot-separated identifiers so ordering is predictable (`beta.2` before `beta.10`, `beta` before `rc`, every prerelease before `4.1.29`). Do not use build metadata (`+...`), leading zeros in numeric identifiers (`beta.01`), or a `-dev` suffix, which is reserved for unreleased builds; such versions cannot be installed online.
+
+What a beta touches:
+
+- GitHub creates the release as a **prerelease** and does not mark it latest.
+- OSS uploads only the versioned directory `oss-transfer/v4.1.29-beta.1/`. `oss-transfer/latest/` keeps pointing at the last stable release.
+- Docker Hub receives only the exact tag `4.1.29-beta.1`; `X.Y`, `latest` and other aliases stay on the stable release.
+
+What it does not touch: default installer runs, **Check for updates** in the console, `update check` in the CLI and Compose files using `latest` all keep resolving the latest stable release. No installation is offered a prerelease.
+
+To try a beta:
+
+- New installation: run the installer with `--version 4.1.29-beta.1` (PowerShell `-Version 4.1.29-beta.1`), or set `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.29-beta.1` for Compose. See [installing a specific version](../docs/install.md#install-a-specific-or-prerelease-version).
+- Existing managed installation: open `/tools?tab=updates&channel=prerelease` in the console, or run `oss-transfer-cli update master --version 4.1.29-beta.1 --allow-prerelease --yes`. Agents can then follow the Master's version. See [prerelease updates](../docs/operations.md#try-a-prerelease).
+
+When the stable `4.1.29` is published, installations running any `4.1.29-*` prerelease are offered it by the normal update check, because a release outranks its prereleases.
+
 ## Published files
 
 GitHub Release contains the eleven platform archives listed in [platforms.json](../deploy/native/platforms.json). Each archive includes Master, Agent, CLI, documentation and checksums. Installation scripts live in the repository.
@@ -72,7 +93,7 @@ Installers choose OSS for a mainland Chinese public IP and GitHub elsewhere. Git
 | Version | OSS location | GitHub | Docker Hub tags |
 | --- | --- | --- | --- |
 | `vX.Y.Z` | `oss-transfer/vX.Y.Z/` | Release | `X.Y.Z`, `X.Y`, `latest` |
-| `vX.Y.Z-rc.N` | `oss-transfer/vX.Y.Z-rc.N/` | Prerelease | `X.Y.Z-rc.N` |
+| `vX.Y.Z-rc.N`, `vX.Y.Z-beta.N` | `oss-transfer/vX.Y.Z-rc.N/` | Prerelease | `X.Y.Z-rc.N` |
 
 Stable releases update four files under `oss-transfer/latest/`: `install.sh`, `Install.ps1`, `manifest.tsv` and `release.json`. Installers resolve this metadata to a fixed version before downloading an archive. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
 

@@ -93,6 +93,9 @@ import ListPagination, {
   rememberPageSize,
 } from "../components/ListPagination";
 import TaskBandwidth from "../components/TaskBandwidth";
+import TaskNodesDialog, {
+  TaskMembershipNodes,
+} from "../components/TaskNodesDialog";
 import SubtaskDetails from "../components/SubtaskDetails";
 import TransferStatistics from "../components/TransferStatistics";
 import TaskRequestRates from "../components/TaskRequestRates";
@@ -376,6 +379,7 @@ function TaskDetail({
   const nodeLabel = useNodeLabels();
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
+  const [nodesOpen, setNodesOpen] = useState<number>();
   const recovery = useTaskRecovery();
   const recoveryState =
     taskId === undefined ? undefined : recovery.states[taskId];
@@ -919,6 +923,15 @@ function TaskDetail({
               {view.operationError}
             </Alert>
           )}
+          {nodesOpen === current.taskIndex && (
+            <TaskNodesDialog
+              taskId={current.taskIndex}
+              open={!!taskId}
+              refreshMs={refreshMs}
+              onClose={() => setNodesOpen(undefined)}
+              onChanged={onRefresh}
+            />
+          )}
           <TaskBandwidth
             completed={current.status === "COMPLETED"}
             key={current.taskIndex}
@@ -1009,7 +1022,43 @@ function TaskDetail({
           </Typography>
           <Stack gap={2}>
             {[
-              [tr("执行节点"), workers(current, nodeLabel)],
+              [
+                tr("执行节点"),
+                current.executionMembership ? (
+                  <Stack
+                    direction="row"
+                    gap={1}
+                    alignItems="flex-start"
+                    justifyContent="space-between"
+                  >
+                    {Array.isArray(current.executionMembership.nodes) &&
+                    current.executionMembership.nodes.length ? (
+                      <TaskMembershipNodes
+                        nodes={current.executionMembership.nodes}
+                        nodeLabel={nodeLabel}
+                      />
+                    ) : (
+                      <Typography
+                        variant="body2"
+                        sx={{ overflowWrap: "anywhere" }}
+                      >
+                        {workers(current, nodeLabel)}
+                      </Typography>
+                    )}
+                    {current.status !== "COMPLETED" && (
+                      <Button
+                        size="small"
+                        sx={{ flexShrink: 0 }}
+                        onClick={() => setNodesOpen(current.taskIndex)}
+                      >
+                        {tr("编辑节点")}
+                      </Button>
+                    )}
+                  </Stack>
+                ) : (
+                  workers(current, nodeLabel)
+                ),
+              ],
               [
                 tr("节点分发方式"),
                 current.distributionMode === "balanced"

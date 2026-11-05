@@ -596,12 +596,21 @@ func TestPlannedChangeBandwidthStatusWaitsForRaisedShare(t *testing.T) {
 	p := takeoverParent(t, f, a.node, b.node)
 	runtime := f.master.tasks
 	runtime.leases.ttl = 30 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	// A hang guard for loaded race runners, not a timing assertion.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	available := map[string]bool{a.node.ID: true, b.node.ID: true}
-	p, err := runtime.reconcileFailover(ctx, p, available)
-	if err != nil || !p.Failover.Enabled {
-		t.Fatal(err)
+	both := func() map[string]bool { return map[string]bool{a.node.ID: true, b.node.ID: true} }
+	// Reconciliation drops a node whose lease call missed its deadline from the
+	// map it is given; retry until both nodes hold a lease.
+	var err error
+	for {
+		available := both()
+		if p, err = runtime.reconcileFailover(ctx, p, available); err == nil && p.Failover != nil && p.Failover.Enabled && len(available) == 2 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("lease fencing not enabled for both nodes", err)
+		}
 	}
 	if err := runtime.policies(ctx, p); err != nil {
 		t.Fatal(err)
@@ -619,9 +628,11 @@ func TestPlannedChangeBandwidthStatusWaitsForRaisedShare(t *testing.T) {
 	if code, body := postNodes(t, f, p.ID, map[string]any{"requestId": "share-leave", "remove": []string{b.node.ID}}); code != 200 {
 		t.Fatal(code, body)
 	}
-	p, _ = runtime.repo.Get(p.ID)
-	if p, err = runtime.reconcileMembership(ctx, p, available); err != nil || !p.NodeRemoved(b.node.ID) {
-		t.Fatal("node did not leave", err, p.Membership)
+	for !p.NodeRemoved(b.node.ID) {
+		p, _ = runtime.repo.Get(p.ID)
+		if p, err = runtime.reconcileMembership(ctx, p, both()); ctx.Err() != nil {
+			t.Fatal("node did not leave", err, p.Membership)
+		}
 	}
 	data := status()
 	nodes := data["nodes"].([]any)

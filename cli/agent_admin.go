@@ -79,7 +79,7 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		flag, key string
 		max       int
 	}{
-		{"child-concurrency", "maxConcurrentChildren", 64}, {"object-concurrency", "objectsPerChild", 32},
+		{"child-concurrency", "maxConcurrentChildren", 256}, {"object-concurrency", "objectsPerChild", 64},
 	} {
 		if !o.Has(field.flag) {
 			continue
@@ -91,8 +91,8 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		body[field.key] = value
 	}
 	if children, ok := body["maxConcurrentChildren"].(int); ok {
-		if objects, ok := body["objectsPerChild"].(int); ok && children*objects > 256 {
-			return nil, cliErrorf("子任务并发与对象并发的乘积不能超过 256")
+		if objects, ok := body["objectsPerChild"].(int); ok && children*objects > 1024 {
+			return nil, cliErrorf("子任务并发与对象并发的乘积不能超过 1024")
 		}
 	}
 	return client.Put("/nodes/"+url.PathEscape(o.Positionals[0]), body)

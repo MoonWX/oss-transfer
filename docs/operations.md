@@ -6,7 +6,7 @@
 
 Open **Execution nodes → Edit node** to change child-task concurrency and the object concurrency within each child. The defaults are 32 children and 4 objects per child, allowing up to 128 simultaneous object transfers on a node. Existing saved settings are retained.
 
-Changes apply to running work and survive a restart. Reducing a limit lets the current requests finish before admitting more. Increasing it can help when the network is underused; node and task bandwidth/QPS limits still apply. Child concurrency accepts 1–64, object concurrency 1–32, with a combined maximum of 256.
+Changes apply to running work and survive a restart. Reducing a limit lets the current requests finish before admitting more. Increasing it can help when the network is underused; node and task bandwidth/QPS limits still apply. Child concurrency accepts 1–256, object concurrency 1–64, with a combined maximum of 1024.
 
 ## Compare objects
 

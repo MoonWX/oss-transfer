@@ -24,8 +24,8 @@ func configureNodeFactory(factory *storageconfig.Factory, nodes *nodecontrol.Con
 			// The standard two idle connections per host cause small-object
 			// batches to reconnect repeatedly. Keep a bounded Agent-wide pool;
 			// request and byte admission still happen above this transport.
-			pool.MaxIdleConns = max(pool.MaxIdleConns, 1024)
-			pool.MaxIdleConnsPerHost = max(pool.MaxIdleConnsPerHost, 256)
+			pool.MaxIdleConns = max(pool.MaxIdleConns, 2048)
+			pool.MaxIdleConnsPerHost = max(pool.MaxIdleConnsPerHost, 1024)
 			base = pool
 		}
 		factory.HTTPClient = &http.Client{Transport: base}

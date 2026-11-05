@@ -9,7 +9,7 @@ import (
 // ValidateConcurrency bounds the total active object requests on a node.
 // Multipart requests also retain their existing per-upload bounds and node QPS.
 func ValidateConcurrency(children, objects int) error {
-	if children < 1 || children > 64 || objects < 1 || objects > 32 || children*objects > 256 {
+	if children < 1 || children > 256 || objects < 1 || objects > 64 || children*objects > 1024 {
 		return ErrInvalid
 	}
 	return nil

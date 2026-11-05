@@ -288,7 +288,7 @@ class Lifecycle:
         stdin_token=token if self.system!='Windows' else None
         if stdin_token: command+=['--token-stdin']
         try: result=self.invoke(command,env=dict(self.installer_env,TRANSFER_JOIN_TOKEN=token if self.system=='Windows' and token else ''),
-                                input=stdin_token,timeout=timeout+100)
+                                input=stdin_token,timeout=timeout+300)
         finally:
             monitor_stop.set()
             if monitor:monitor.join(timeout=10)

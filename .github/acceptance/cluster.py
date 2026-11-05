@@ -1056,7 +1056,12 @@ def wait_for_exclusive(gate, run_id, timeout=1200):
     required = {"unit", "control", "install"}
 
     def ready():
-        state = json.loads(gate.read_text(encoding="utf-8"))
+        try:
+            state = json.loads(gate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # The runner replaces the gate atomically; on Windows a read can
+            # race the replacement. Poll again rather than fail.
+            return None
         require(state.get("runId") == run_id, "Exclusive transfer gate belongs to another run")
         groups = state.get("requiredGroups", [])
         require(len(groups) == len(required) and set(groups) == required, "Exclusive transfer gate omitted a required group")

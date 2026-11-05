@@ -22,7 +22,16 @@ RECOVERY_BANDWIDTH_MBPS = {"default": 16}
 def write_json(path, value):
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    # Windows refuses to replace a file another process has open; the transfer
+    # group polls the gate file, so retry briefly instead of failing the run.
+    for attempt in range(100):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == 99:
+                raise
+            time.sleep(0.05)
 
 
 def phase(name, command, cwd, *, evidence=None):

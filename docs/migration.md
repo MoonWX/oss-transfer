@@ -1,5 +1,7 @@
 # Upgrade from V4.0.x to V4.1.x
 
+[中文](migration.zh-CN.md)
+
 V4.0.x data needs an offline conversion before it can be used by V4.1.x. The converter keeps accounts, storage connections, node limits, task history and the recycle bin. Unfinished tasks enter the new installation stopped.
 
 For a fresh installation, follow the [installation instructions](../README.md). For an existing V4.1.x installation, use [software updates](operations.md#update-installed-services).

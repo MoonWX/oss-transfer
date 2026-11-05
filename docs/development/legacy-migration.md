@@ -1,5 +1,7 @@
 # Convert V4.0.x state to V4.1.x
 
+[中文](legacy-migration.zh-CN.md)
+
 Use `oss-transfer-master migrate` to convert V4.0.x databases before starting V4.1.x services. Conversion preserves accounts, storage connections, task history, report coverage and recycle-bin state. Unfinished tasks stay stopped until explicitly resumed.
 
 The process runs on Linux or macOS and writes to a new directory. Keep the original installation stopped and retain its backups until the converted services and task results have been checked.

@@ -26,7 +26,7 @@ func TestNodeAndAgentConcurrencyCommandsUseSameAPI(t *testing.T) {
 func TestConcurrencyCLIRejectsInvalidBoundsBeforeRequest(t *testing.T) {
 	client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("invalid bounds sent to server") })
 	for _, args := range [][]string{
-		{"--child-concurrency", "0"}, {"--object-concurrency", "33"}, {"--child-concurrency", "2.5"}, {"--child-concurrency", "64", "--object-concurrency", "32"}, {"--object-concurrency", "1", "--object-concurrency", "2"},
+		{"--child-concurrency", "0"}, {"--object-concurrency", "65"}, {"--child-concurrency", "2.5"}, {"--child-concurrency", "256", "--object-concurrency", "64"}, {"--object-concurrency", "1", "--object-concurrency", "2"},
 	} {
 		if _, err := agentUpdate(client, append([]string{"storage-node"}, args...)); err == nil {
 			t.Fatal("invalid concurrency accepted", args)

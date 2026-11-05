@@ -874,9 +874,9 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Changes apply immediately. Lowering concurrency lets active transfers finish.",
     ja: "保存するとすぐに適用されます。並列数を減らしても転送中のオブジェクトは完了まで続行します。",
   },
-  "子任务并发为 1–64，对象并发为 1–32，两者乘积不能超过 256。": {
-    en: "Use 1–64 subtasks and 1–32 objects per subtask, with a combined limit of 256 objects.",
-    ja: "サブタスクは 1–64、各サブタスクのオブジェクトは 1–32、両者の積は 256 以下にしてください。",
+  "子任务并发为 1–256，对象并发为 1–64，两者乘积不能超过 1024。": {
+    en: "Use 1–256 subtasks and 1–64 objects per subtask, with a combined limit of 1024 objects.",
+    ja: "サブタスクは 1–256、各サブタスクのオブジェクトは 1–64、両者の積は 1024 以下にしてください。",
   },
   "升级节点后可调整并发。": {
     en: "Update this node to adjust concurrency.",

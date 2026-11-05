@@ -169,14 +169,14 @@ export default function NodesPage() {
       nodeEdit.concurrencyEditable &&
       (!Number.isInteger(children) ||
         children < 1 ||
-        children > 64 ||
+        children > 256 ||
         !Number.isInteger(objects) ||
         objects < 1 ||
-        objects > 32 ||
-        children * objects > 256)
+        objects > 64 ||
+        children * objects > 1024)
     ) {
       setNodeError(
-        t("子任务并发为 1–64，对象并发为 1–32，两者乘积不能超过 256。"),
+        t("子任务并发为 1–256，对象并发为 1–64，两者乘积不能超过 1024。"),
       );
       return;
     }
@@ -847,7 +847,7 @@ export default function NodesPage() {
                       fullWidth
                       value={nodeEdit.children}
                       disabled={nodeSaving}
-                      slotProps={{ htmlInput: { min: 1, max: 64, step: 1 } }}
+                      slotProps={{ htmlInput: { min: 1, max: 256, step: 1 } }}
                       onChange={(event) =>
                         setNodeEdit(
                           (value) =>
@@ -861,7 +861,7 @@ export default function NodesPage() {
                       fullWidth
                       value={nodeEdit.objects}
                       disabled={nodeSaving}
-                      slotProps={{ htmlInput: { min: 1, max: 32, step: 1 } }}
+                      slotProps={{ htmlInput: { min: 1, max: 64, step: 1 } }}
                       onChange={(event) =>
                         setNodeEdit(
                           (value) =>

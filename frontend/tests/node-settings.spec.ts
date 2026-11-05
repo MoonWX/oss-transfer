@@ -202,11 +202,11 @@ test("invalid combined concurrency stays in the editor without submitting", asyn
   const dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });
   await dialog
     .getByRole("spinbutton", { name: "子任务并发", exact: true })
-    .fill("64");
+    .fill("256");
   await dialog
     .getByRole("spinbutton", { name: "每个子任务的对象并发", exact: true })
-    .fill("32");
+    .fill("64");
   await dialog.getByRole("button", { name: "保存节点", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toContainText("两者乘积不能超过 256");
+  await expect(dialog.getByRole("alert")).toContainText("两者乘积不能超过 1024");
   expect(state.writes).toEqual([]);
 });

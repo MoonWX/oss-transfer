@@ -171,12 +171,12 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Invalid node label")
 		return
 	}
-	if change.Children != nil && (*change.Children < 1 || *change.Children > 64) || change.Objects != nil && (*change.Objects < 1 || *change.Objects > 32) {
-		fail(w, 400, "Child concurrency must be 1–64 and objects per child must be 1–32")
+	if change.Children != nil && (*change.Children < 1 || *change.Children > 256) || change.Objects != nil && (*change.Objects < 1 || *change.Objects > 64) {
+		fail(w, 400, "Child concurrency must be 1–256 and objects per child must be 1–64")
 		return
 	}
-	if change.Children != nil && change.Objects != nil && *change.Children**change.Objects > 256 {
-		fail(w, 400, "Child concurrency × objects per child must not exceed 256")
+	if change.Children != nil && change.Objects != nil && *change.Children**change.Objects > 1024 {
+		fail(w, 400, "Child concurrency × objects per child must not exceed 1024")
 		return
 	}
 	settingsChanged := change.Roots != nil || change.Children != nil || change.Objects != nil

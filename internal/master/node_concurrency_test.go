@@ -47,7 +47,7 @@ func TestNodeConcurrencyAppliedImmediatelyAndPersists(t *testing.T) {
 		t.Fatal(status, body)
 	}
 	assertLimits(3, 6)
-	for _, invalid := range []map[string]any{{"maxConcurrentChildren": 0}, {"objectsPerChild": 33}, {"maxConcurrentChildren": 64, "objectsPerChild": 32}, {"maxConcurrentChildren": 64}} {
+	for _, invalid := range []map[string]any{{"maxConcurrentChildren": 0}, {"objectsPerChild": 65}, {"maxConcurrentChildren": 256, "objectsPerChild": 64}, {"maxConcurrentChildren": 257}} {
 		if status, _ := call(invalid); status != 400 {
 			t.Fatal("invalid setting accepted", invalid, status)
 		}

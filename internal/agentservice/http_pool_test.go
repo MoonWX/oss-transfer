@@ -34,7 +34,7 @@ func TestAgentHTTPPoolHonorsCustomClient(t *testing.T) {
 	factory = &storageconfig.Factory{}
 	configureNodeFactory(factory, nil)
 	pool, ok := factory.HTTPClient.Transport.(*http.Transport)
-	if !ok || pool == http.DefaultTransport || pool.MaxIdleConnsPerHost != 256 || pool.MaxIdleConns != 1024 {
+	if !ok || pool == http.DefaultTransport || pool.MaxIdleConnsPerHost != 1024 || pool.MaxIdleConns != 2048 {
 		t.Fatal("missing bounded shared idle pool")
 	}
 }

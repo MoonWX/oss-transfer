@@ -1048,7 +1048,8 @@ function TaskDetail({
                     {current.status !== "COMPLETED" && (
                       <Button
                         size="small"
-                        sx={{ flexShrink: 0 }}
+                        // Text aligns with the first node name.
+                        sx={{ flexShrink: 0, mt: "-5px", mr: -1.5 }}
                         onClick={() => setNodesOpen(current.taskIndex)}
                       >
                         {tr("编辑节点")}

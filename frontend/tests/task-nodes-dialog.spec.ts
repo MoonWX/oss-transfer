@@ -129,7 +129,19 @@ async function openDialog(page: Page) {
   await expect(dialog(page)).toBeVisible();
 }
 
-test("task detail shows membership states and shares and adds an Agent after confirmation", async ({
+const footer = (page: Page) => dialog(page).getByTestId("task-nodes-footer");
+const preview = (page: Page) =>
+  dialog(page).getByRole("button", { name: "预览变更", exact: true });
+
+async function pickAgent(page: Page, address: RegExp) {
+  await dialog(page)
+    .getByRole("button", { name: "添加 Agent", exact: true })
+    .click();
+  await page.getByRole("menuitem", { name: address }).click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+}
+
+test("task detail lists node names with quiet states and adds an Agent after confirmation", async ({
   page,
 }) => {
   const { posts } = await setup(page, {
@@ -147,29 +159,41 @@ test("task detail shows membership states and shares and adds an Agent after con
   });
   await page.goto("/tasks?taskId=1048");
   const row = page.getByTestId("task-membership-nodes");
-  await expect(row.getByText("排空中", { exact: true })).toBeVisible();
+  await expect(row.getByRole("listitem")).toHaveCount(4);
+  await expect(row.getByText("移出中", { exact: true })).toHaveCount(2);
   await expect(row.getByText("加入中", { exact: true })).toBeVisible();
-  await expect(row.getByText("立即移除中", { exact: true })).toBeVisible();
-  await expect(
-    row.getByText("带宽份额 488.3 KiB/s", { exact: true }),
-  ).toBeVisible();
+  // Shares and roles live in the dialog, not in the detail list.
+  await expect(row).not.toContainText("带宽份额");
+  await expect(row).not.toContainText("扫描");
+  await expect(row.getByRole("listitem").first()).toHaveText(
+    "master (10.0.1.12)",
+  );
   await page.getByRole("button", { name: "编辑节点", exact: true }).click();
   const box = dialog(page);
-  await expect(box.getByText("扫描节点", { exact: true })).toBeVisible();
-  await expect(box.getByText("未完成子任务 2", { exact: true })).toBeVisible();
-  await expect(
-    box.getByRole("checkbox", { name: /添加 .*10\.0\.1\.15/ }),
-  ).toBeDisabled();
-  await expect(box.getByText("Agent 版本过旧", { exact: true })).toBeVisible();
-  const next = box.getByRole("button", { name: "下一步", exact: true });
-  await expect(next).toBeDisabled();
-  await box.getByRole("checkbox", { name: /添加 .*10\.0\.1\.14/ }).check();
-  await next.click();
-  await expect(box.getByTestId("task-nodes-summary")).toContainText(
-    "添加：10.0.1.14",
+  const scanner = box.getByTestId("task-node-10.0.1.12");
+  await expect(scanner.getByText("扫描节点", { exact: true })).toBeVisible();
+  await expect(scanner).toContainText(/带宽份额\s*不限/);
+  await expect(box.getByTestId("task-node-10.0.1.13")).toContainText(
+    /未完成子任务\s*2/,
   );
-  await expect(box.getByTestId("task-nodes-summary")).not.toContainText("移除");
-  await box.getByRole("button", { name: "确认变更", exact: true }).click();
+  await expect(preview(page)).toBeDisabled();
+  await expect(footer(page)).toHaveText("选择要添加或移出的节点");
+  await expect(box.getByText("1 个在线 Agent 可添加。")).toBeVisible();
+  await box.getByRole("button", { name: "添加 Agent", exact: true }).click();
+  const old = page.getByRole("menuitem", { name: /10\.0\.1\.15/ });
+  await expect(old).toHaveAttribute("aria-disabled", "true");
+  await expect(old).toContainText("Agent 版本过旧");
+  await page.getByRole("menuitem", { name: /10\.0\.1\.14/ }).click();
+  await expect(box.getByTestId("task-node-add-10.0.1.14")).toContainText(
+    "将添加",
+  );
+  await expect(footer(page)).toHaveText("待提交：添加 1 个节点");
+  await preview(page).click();
+  const summary = box.getByTestId("task-nodes-summary");
+  await expect(summary).toContainText("添加10.0.1.14");
+  await expect(summary).not.toContainText("移出");
+  await expect(footer(page)).toHaveText("变更将立即开始生效。");
+  await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
   await expect(dialog(page)).toHaveCount(0);
   await expect(page.getByText("执行节点变更已提交。")).toBeVisible();
   expect(posts).toHaveLength(1);
@@ -188,17 +212,27 @@ for (const mode of ["drain", "now"] as const) {
     await openDialog(page);
     const box = dialog(page);
     await expect(box.getByRole("radio")).toHaveCount(0);
-    await box.getByRole("checkbox", { name: /移除 .*10\.0\.1\.13/ }).check();
-    await expect(box.getByRole("radio", { name: /^排空后移除/ })).toBeChecked();
+    await box.getByRole("button", { name: /^移出 .*10\.0\.1\.13/ }).click();
+    const node = box.getByTestId("task-node-10.0.1.13");
+    await expect(node).toHaveAttribute("data-marked", "remove");
+    await expect(node).toContainText("将移出");
+    await expect(box.getByRole("radio", { name: /^平滑移出/ })).toBeChecked();
+    await expect(box.getByText("正在传输的子任务完成后离开")).toBeVisible();
+    await expect(
+      box.getByText("正在传输的子任务转给其他节点继续"),
+    ).toBeVisible();
+    await expect(footer(page)).toHaveText("待提交：移出 1 个节点");
     if (mode === "now")
-      await box.getByRole("radio", { name: /^立即移除/ }).check();
-    await box.getByRole("button", { name: "下一步", exact: true }).click();
+      await box.getByRole("radio", { name: /^立即移出/ }).check();
+    await preview(page).click();
     const summary = box.getByTestId("task-nodes-summary");
-    await expect(summary).toContainText("移除：agent (10.0.1.13)");
     await expect(summary).toContainText(
-      mode === "now" ? "移除方式：立即移除" : "移除方式：排空后移除",
+      mode === "now" ? "移出（立即移出）" : "移出（平滑移出）",
     );
-    await box.getByRole("button", { name: "确认变更", exact: true }).click();
+    await expect(summary).toContainText("agent (10.0.1.13)");
+    await box
+      .getByRole("button", { name: "移出 1 个节点", exact: true })
+      .click();
     await expect(dialog(page)).toHaveCount(0);
     expect(posts).toEqual([
       {
@@ -213,6 +247,27 @@ for (const mode of ["drain", "now"] as const) {
   });
 }
 
+test("a marked removal can be undone from the keyboard and the mode choice disappears", async ({
+  page,
+}) => {
+  await setup(page);
+  await openDialog(page);
+  const box = dialog(page);
+  await box.getByRole("button", { name: /^移出 .*10\.0\.1\.13/ }).click();
+  await expect(box.getByRole("radiogroup", { name: "移出方式" })).toBeVisible();
+  const undo = box.getByRole("button", { name: /^撤销移出 .*10\.0\.1\.13/ });
+  await undo.focus();
+  await page.keyboard.press("Enter");
+  await expect(box.getByRole("radio")).toHaveCount(0);
+  await expect(box.getByTestId("task-node-10.0.1.13")).not.toHaveAttribute(
+    "data-marked",
+  );
+  await expect(preview(page)).toBeDisabled();
+  await expect(
+    box.getByRole("button", { name: /^移出 .*10\.0\.1\.13/ }),
+  ).toBeVisible();
+});
+
 test("remove now is disabled with the server reason and removing every node is blocked", async ({
   page,
 }) => {
@@ -222,18 +277,14 @@ test("remove now is disabled with the server reason and removing every node is b
   });
   await openDialog(page);
   const box = dialog(page);
-  await box.getByRole("checkbox", { name: /移除 .*10\.0\.1\.12/ }).check();
-  await expect(box.getByRole("radio", { name: /^立即移除/ })).toBeDisabled();
+  await box.getByRole("button", { name: /^移出 .*10\.0\.1\.12/ }).click();
+  await expect(box.getByRole("radio", { name: /^立即移出/ })).toBeDisabled();
   await expect(
     box.getByText("单节点扫描任务不支持", { exact: true }),
   ).toBeVisible();
-  await box.getByRole("checkbox", { name: /移除 .*10\.0\.1\.13/ }).check();
-  await expect(
-    box.getByText("至少保留一个执行节点", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    box.getByRole("button", { name: "下一步", exact: true }),
-  ).toBeDisabled();
+  await box.getByRole("button", { name: /^移出 .*10\.0\.1\.13/ }).click();
+  await expect(footer(page)).toHaveText("至少保留一个执行节点");
+  await expect(preview(page)).toBeDisabled();
 });
 
 test("local transfers require an absolute binding path and a passing preflight", async ({
@@ -268,13 +319,14 @@ test("local transfers require an absolute binding path and a passing preflight",
   });
   await openDialog(page);
   const box = dialog(page);
-  await box.getByRole("checkbox", { name: /添加 .*10\.0\.1\.14/ }).check();
-  const next = box.getByRole("button", { name: "下一步", exact: true });
+  await pickAgent(page, /10\.0\.1\.14/);
+  const next = preview(page);
   const preflight = box.getByRole("button", { name: "预检", exact: true });
   const path = box.getByRole("textbox", {
     name: /10\.0\.1\.14 的本地绝对路径/,
   });
   await expect(next).toBeDisabled();
+  await expect(footer(page)).toHaveText("填写新节点的本地绝对路径后才能继续");
   await expect(preflight).toBeDisabled();
   await path.fill("relative/dir");
   await expect(
@@ -282,6 +334,7 @@ test("local transfers require an absolute binding path and a passing preflight",
   ).toBeVisible();
   await expect(preflight).toBeDisabled();
   await path.fill("/mnt/share");
+  await expect(footer(page)).toHaveText("预检通过后才能继续");
   await preflight.click();
   await expect(box.getByText("预检未通过", { exact: true })).toBeVisible();
   await expect(box.getByText("共享目录标记不一致").first()).toBeVisible();
@@ -299,7 +352,7 @@ test("local transfers require an absolute binding path and a passing preflight",
   await expect(box.getByTestId("task-nodes-summary")).toContainText(
     "10.0.1.14 (/mnt/share2)",
   );
-  await box.getByRole("button", { name: "确认变更", exact: true }).click();
+  await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
   await expect(dialog(page)).toHaveCount(0);
   expect(posts.map((body) => !!body.dryRun)).toEqual([true, true, true, false]);
   expect(posts.at(-1)).toEqual({
@@ -311,6 +364,28 @@ test("local transfers require an absolute binding path and a passing preflight",
     expectedNodeRevision: 3,
   });
   expect(posts[0]).not.toHaveProperty("requestId");
+});
+
+test("a chosen Agent can be dropped again before submitting", async ({
+  page,
+}) => {
+  await setup(page);
+  await openDialog(page);
+  const box = dialog(page);
+  await pickAgent(page, /10\.0\.1\.14/);
+  await box.getByRole("button", { name: /^撤销添加 .*10\.0\.1\.14/ }).click();
+  await expect(box.getByTestId("task-node-add-10.0.1.14")).toHaveCount(0);
+  await expect(preview(page)).toBeDisabled();
+});
+
+test("without online Agents the add section shows an empty state", async ({
+  page,
+}) => {
+  await setup(page, { view: () => nodesView({ candidates: [] }) });
+  await openDialog(page);
+  const box = dialog(page);
+  await expect(box.getByText("没有可添加的在线 Agent")).toBeVisible();
+  await expect(box.getByRole("button", { name: "添加 Agent" })).toHaveCount(0);
 });
 
 test("a rejected change shows the server message and keeps the dialog open", async ({
@@ -329,19 +404,19 @@ test("a rejected change shows the server message and keeps the dialog open", asy
   });
   await openDialog(page);
   const box = dialog(page);
-  await box.getByRole("checkbox", { name: /添加 .*10\.0\.1\.14/ }).check();
-  await box.getByRole("button", { name: "下一步", exact: true }).click();
-  await box.getByRole("button", { name: "确认变更", exact: true }).click();
+  await pickAgent(page, /10\.0\.1\.14/);
+  await preview(page).click();
+  await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
   await expect(
     box.getByText("上一次节点变更尚未完成", { exact: true }),
   ).toBeVisible();
-  await expect(box.getByRole("button", { name: "下一步" })).toBeVisible();
+  await expect(preview(page)).toBeVisible();
   expect(posts).toHaveLength(1);
   // The rejected change reloads the current membership.
   await expect.poll(gets).toBeGreaterThanOrEqual(2);
   // A retry after a rejection uses a fresh request identity.
-  await box.getByRole("button", { name: "下一步", exact: true }).click();
-  await box.getByRole("button", { name: "确认变更", exact: true }).click();
+  await preview(page).click();
+  await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
   await expect.poll(() => posts.length).toBe(2);
   expect(posts[1].requestId).not.toBe(posts[0].requestId);
 });
@@ -362,12 +437,16 @@ test("non-editable tasks show the reason and disable every change", async ({
   });
   await openDialog(page);
   const box = dialog(page);
-  await expect(box.getByText("任务正在停止", { exact: true })).toBeVisible();
-  for (const checkbox of await box.getByRole("checkbox").all())
-    await expect(checkbox).toBeDisabled();
+  await expect(box.getByRole("alert").getByText("任务正在停止")).toBeVisible();
+  const removals = box.getByRole("button", { name: /^移出 / });
+  await expect(removals).toHaveCount(2);
+  for (const button of await removals.all())
+    await expect(button).toBeDisabled();
   await expect(
-    box.getByRole("button", { name: "下一步", exact: true }),
+    box.getByRole("button", { name: "添加 Agent", exact: true }),
   ).toBeDisabled();
+  await expect(preview(page)).toBeDisabled();
+  await expect(footer(page)).toHaveText("任务正在停止");
 });
 
 test("older masters without membership keep the plain node list", async ({
@@ -407,23 +486,86 @@ test("pending changes show progress, refresh it and allow escalating a draining 
   await advanceUntilVisible(page, edit);
   await edit.click();
   const box = dialog(page);
+  const draining = box.getByTestId("task-node-10.0.1.13");
   await advanceUntilVisible(
     page,
-    box.getByText("剩余 4 个子任务待移交或完成", { exact: true }),
+    draining.filter({ hasText: /待完成或移交\s*4(?!\d)/ }),
   );
+  await expect(draining.getByText("平滑移出中", { exact: true })).toBeVisible();
   await expect(box.getByText(/上一次节点变更仍在进行中/)).toBeVisible();
   await expect(
     box.getByText("正在完成握手与检查，加入后开始分配任务"),
   ).toBeVisible();
+  await expect(
+    box.getByRole("button", { name: /^取消加入 .*10\.0\.1\.14/ }),
+  ).toBeVisible();
   remaining = 1;
   await advanceUntilVisible(
     page,
-    box.getByText("剩余 1 个子任务待移交或完成", { exact: true }),
+    draining.filter({ hasText: /待完成或移交\s*1(?!\d)/ }),
   );
-  await box.getByRole("checkbox", { name: /移除 .*10\.0\.1\.13/ }).check();
-  await box.getByRole("radio", { name: /^立即移除/ }).check();
-  await box.getByRole("button", { name: "下一步", exact: true }).click();
-  await box.getByRole("button", { name: "确认变更", exact: true }).click();
+  await box
+    .getByRole("button", { name: /^改为立即移出 .*10\.0\.1\.13/ })
+    .click();
+  await expect(box.getByRole("radio", { name: /^立即移出/ })).toBeChecked();
+  await preview(page).click();
+  await box.getByRole("button", { name: "移出 1 个节点", exact: true }).click();
   await expect.poll(() => posts.length).toBe(1);
   expect(posts[0]).toMatchObject({ remove: ["10.0.1.13"], mode: "now" });
+});
+
+test("cancelling a joining node submits its removal", async ({ page }) => {
+  const { posts } = await setup(page, {
+    view: () =>
+      nodesView({
+        pending: true,
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.14", { state: "JOINING", share: null }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const box = dialog(page);
+  await box.getByRole("button", { name: /^取消加入 .*10\.0\.1\.14/ }).click();
+  await preview(page).click();
+  await box.getByRole("button", { name: "移出 1 个节点", exact: true }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({ add: [], remove: ["10.0.1.14"] });
+});
+
+test("the dialog fills a phone screen and keeps the footer reachable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 700 });
+  await setup(page);
+  await openDialog(page);
+  const box = dialog(page);
+  expect((await box.boundingBox())?.width).toBe(375);
+  await box.getByRole("button", { name: /^移出 .*10\.0\.1\.13/ }).click();
+  await expect(footer(page)).toBeInViewport();
+  await expect(preview(page)).toBeInViewport();
+});
+
+test("a draining node can only be kept when the task cannot remove nodes now", async ({
+  page,
+}) => {
+  await setup(page, {
+    view: () =>
+      nodesView({
+        pending: true,
+        nowSupported: false,
+        nowReason: "独占目录不支持接管",
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.13", { state: "DRAINING", drainMode: "drain" }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const node = dialog(page).getByTestId("task-node-10.0.1.13");
+  await expect(node.getByRole("button")).toHaveCount(1);
+  await expect(
+    node.getByRole("button", { name: /^保留 .*10\.0\.1\.13/ }),
+  ).toBeEnabled();
 });

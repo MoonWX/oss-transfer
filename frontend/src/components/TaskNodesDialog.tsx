@@ -1,9 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -11,17 +18,23 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
-  Paper,
+  ListItemText,
+  Menu,
+  MenuItem,
   Radio,
   RadioGroup,
   Stack,
   TextField,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
+import { alpha, useTheme, type Theme } from "@mui/material/styles";
+import { AddRounded, UndoRounded } from "@mui/icons-material";
 import { api, ApiError, useNotify } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
 import { useNodeLabels } from "../lib/workerStatus";
 import type { NodeDisplay, NodeLabels } from "../lib/nodeRegistry";
+import { groupedCardRadius, radii } from "../theme";
 import { formatBytes, formatNumber } from "./Common";
 
 export type NodeShare = {
@@ -110,14 +123,18 @@ function isAbsoluteAgentPath(value: string) {
   );
 }
 
+const leaving = (state?: string) =>
+  state === "DRAINING" || state === "REMOVING";
+
+/** Membership state of a node that does not take work normally; "" when active. */
 export function memberStateLabel(node: { state?: string; drainMode?: string }) {
   switch (node.state) {
     case "JOINING":
       return t("加入中");
     case "DRAINING":
-      return t("排空中");
+      return t("平滑移出中");
     case "REMOVING":
-      return t("立即移除中");
+      return t("立即移出中");
     case "DISCONNECTED":
       return t("已失联");
     default:
@@ -125,10 +142,11 @@ export function memberStateLabel(node: { state?: string; drainMode?: string }) {
   }
 }
 
-const stateColor = (state?: string) =>
+type StateColor = "info" | "warning" | "error" | "default";
+const stateColor = (state?: string): StateColor =>
   state === "JOINING"
     ? "info"
-    : state === "DRAINING" || state === "REMOVING"
+    : leaving(state)
       ? "warning"
       : state === "DISCONNECTED"
         ? "error"
@@ -142,7 +160,26 @@ export function shareLabel(share: NodeShare | undefined) {
     : t("不限");
 }
 
-/** Execution nodes of a task row with their membership states. */
+/** Request shares that are actually limited; unlimited ones are left out. */
+function qpsShareLabel(share: NodeShare | undefined) {
+  if (!share) return "";
+  const parts = (
+    [
+      ["LIST", share.listQps],
+      ["HEAD", share.headQps],
+      ["PUT", share.putQps],
+    ] as const
+  )
+    .filter(([, value]) => value != null && value > 0)
+    .map(([name, value]) => `${name} ${formatNumber(value)}`);
+  return parts.length ? `${parts.join(" · ")} ${t("次/秒")}` : "";
+}
+
+/**
+ * Execution nodes in the task detail list: one name per line. Only nodes that
+ * do not take work normally carry a short state; shares and roles are in the
+ * node dialog.
+ */
 export function TaskMembershipNodes({
   nodes,
   nodeLabel,
@@ -152,45 +189,104 @@ export function TaskMembershipNodes({
 }) {
   useI18n();
   return (
-    <Stack gap={0.5} data-testid="task-membership-nodes">
+    <Box
+      component="ul"
+      data-testid="task-membership-nodes"
+      sx={{ m: 0, p: 0, listStyle: "none", minWidth: 0 }}
+    >
       {nodes.map((node) => {
-        const state = memberStateLabel(node);
-        const share = shareLabel(node.share);
+        const state = leaving(node.state)
+          ? t("移出中")
+          : memberStateLabel(node);
+        const color = stateColor(node.state);
         return (
-          <Stack
+          <Typography
             key={node.id || node.address}
-            direction="row"
-            gap={0.75}
-            alignItems="center"
-            flexWrap="wrap"
+            component="li"
+            variant="body2"
+            sx={{ overflowWrap: "anywhere" }}
           >
-            <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-              {nodeLabel(node.address || node.id, node)}
-            </Typography>
+            {nodeLabel(node.address || node.id, node)}
             {state && (
-              <Chip
-                size="small"
-                variant="outlined"
-                color={stateColor(node.state)}
-                label={state}
-              />
-            )}
-            {node.scanner && (
-              <Typography variant="caption" color="text.secondary">
-                {t("扫描")}
+              <Typography
+                component="span"
+                variant="caption"
+                sx={{
+                  ml: 1,
+                  color:
+                    color === "default" ? "text.secondary" : `${color}.main`,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {state}
               </Typography>
             )}
-            {share && (
-              <Typography variant="caption" color="text.secondary">
-                {t("带宽份额 {value}", { value: share })}
-              </Typography>
-            )}
-          </Stack>
+          </Typography>
         );
       })}
-    </Stack>
+    </Box>
   );
 }
+
+/** A labelled value in a node row; the label column keeps rows aligned. */
+function Field({
+  label,
+  children,
+  grow,
+}: {
+  label: string;
+  children: ReactNode;
+  grow?: boolean;
+}) {
+  return (
+    <Box
+      sx={{
+        minWidth: 0,
+        flex: grow ? "1 1 12rem" : "0 0 auto",
+        width: grow ? undefined : { sm: "8.5rem" },
+      }}
+    >
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        component="div"
+        sx={{ lineHeight: 1.5 }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
+        component="div"
+        sx={{
+          lineHeight: 1.5,
+          overflowWrap: "anywhere",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {children}
+      </Typography>
+    </Box>
+  );
+}
+
+type Tone = "remove" | "add" | undefined;
+const rowSx = (index: number, count: number, tone: Tone) => (theme: Theme) => {
+  const color =
+    tone === "remove"
+      ? theme.palette.error.main
+      : tone === "add"
+        ? theme.palette.primary.main
+        : undefined;
+  return {
+    border: "1px solid",
+    borderColor: color ?? theme.palette.divider,
+    backgroundColor: color ? alpha(color, 0.06) : "transparent",
+    borderRadius: groupedCardRadius(index, count),
+    px: { xs: 1.5, sm: 2 },
+    py: 1.25,
+    minWidth: 0,
+  };
+};
 
 export default function TaskNodesDialog({
   taskId,
@@ -208,6 +304,9 @@ export default function TaskNodesDialog({
   useI18n();
   const nodeLabel = useNodeLabels();
   const notify = useNotify();
+  const theme = useTheme();
+  const phone = useMediaQuery(theme.breakpoints.down("sm"));
+  const ids = useId();
   const path = `/api/master/tasks/${taskId}/nodes`;
   const [view, setView] = useState<NodesView>();
   const [loading, setLoading] = useState(false);
@@ -221,6 +320,7 @@ export default function TaskNodesDialog({
   const [step, setStep] = useState<"edit" | "confirm">("edit");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const sequence = useRef(0);
   const controller = useRef<AbortController | null>(null);
   const reading = useRef(false);
@@ -268,6 +368,7 @@ export default function TaskNodesDialog({
     setPreflight(undefined);
     setStep("edit");
     setError("");
+    setMenuAnchor(null);
     pendingRequest.current = undefined;
     void load();
     return () => {
@@ -294,16 +395,16 @@ export default function TaskNodesDialog({
     () => new Map(nodes.map((node) => [node.address, node])),
     [nodes],
   );
+  const candidates = view?.candidates || [];
   const candidateByAddress = useMemo(
-    () => new Map((view?.candidates || []).map((node) => [node.address, node])),
-    [view?.candidates],
+    () => new Map(candidates.map((node) => [node.address, node])),
+    [candidates],
   );
   // Selections that the latest view no longer offers are dropped.
   const validAdds = adds.filter(
     (address) =>
       candidateByAddress.get(address)?.eligible ||
-      byAddress.get(address)?.state === "DRAINING" ||
-      byAddress.get(address)?.state === "REMOVING",
+      leaving(byAddress.get(address)?.state),
   );
   // Re-adding a leaving member cancels its removal and keeps its binding;
   // only Agents that are not members yet join and need a path.
@@ -461,115 +562,197 @@ export default function TaskNodesDialog({
     nodeLabel(address, display);
   const summaryLabel = (address: string) =>
     label(address, byAddress.get(address) || candidateByAddress.get(address));
+  const locked = !editable || submitting;
 
-  const nodeRow = (node: MemberNode) => {
+  const nodeRow = (node: MemberNode, index: number) => {
     const state = memberStateLabel(node);
     const share = shareLabel(node.share);
+    const qps = qpsShareLabel(node.share);
     const name = label(node.address || node.id || "", node);
-    const draining = node.state === "DRAINING" || node.state === "REMOVING";
-    return (
-      <Paper
-        key={node.id || node.address}
-        variant="outlined"
-        sx={{ px: 1.5, py: 1 }}
-        data-testid={`task-node-${node.address}`}
-      >
-        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-            {name}
-          </Typography>
-          {state && (
-            <Chip
+    const isLeaving = leaving(node.state);
+    const removing = validRemoves.includes(node.address);
+    const keeping = isLeaving && validAdds.includes(node.address);
+    const tone: Tone = removing ? "remove" : keeping ? "add" : undefined;
+    const marker = removing ? t("将移出") : keeping ? t("将保留") : "";
+    const actions: ReactNode[] = [];
+    if (removing || keeping)
+      actions.push(
+        <Button
+          key="undo"
+          size="small"
+          color="inherit"
+          startIcon={<UndoRounded />}
+          disabled={locked}
+          aria-label={
+            removing
+              ? t("撤销移出 {node}", { node: name })
+              : t("撤销保留 {node}", { node: name })
+          }
+          onClick={() => {
+            if (removing) toggle(removes, setRemoves, node.address);
+            else toggle(adds, setAdds, node.address);
+          }}
+        >
+          {t("撤销")}
+        </Button>,
+      );
+    else {
+      if (isLeaving)
+        actions.push(
+          <Button
+            key="keep"
+            size="small"
+            disabled={locked}
+            aria-label={t("保留 {node}", { node: name })}
+            onClick={() => toggle(adds, setAdds, node.address)}
+          >
+            {t("保留")}
+          </Button>,
+        );
+      // Escalating a drain needs immediate removal; without it the draining
+      // node can only be kept.
+      if (node.state === "DRAINING") {
+        if (!nowDisabled)
+          actions.push(
+            <Button
+              key="now"
               size="small"
-              variant="outlined"
-              color={stateColor(node.state)}
-              label={state}
-            />
-          )}
-          {node.scanner && (
-            <Chip size="small" variant="outlined" label={t("扫描节点")} />
-          )}
-          {node.online === false && node.state !== "DISCONNECTED" && (
-            <Chip size="small" color="error" label={t("离线")} />
-          )}
-        </Stack>
+              disabled={locked}
+              aria-label={t("改为立即移出 {node}", { node: name })}
+              onClick={() => {
+                toggle(removes, setRemoves, node.address);
+                setMode("now");
+              }}
+            >
+              {t("改为立即移出")}
+            </Button>,
+          );
+      } else if (!isLeaving)
+        actions.push(
+          <Button
+            key="remove"
+            size="small"
+            disabled={locked}
+            aria-label={
+              node.state === "JOINING"
+                ? t("取消加入 {node}", { node: name })
+                : t("移出 {node}", { node: name })
+            }
+            onClick={() => toggle(removes, setRemoves, node.address)}
+          >
+            {node.state === "JOINING" ? t("取消加入") : t("移出")}
+          </Button>,
+        );
+    }
+    return (
+      <Box
+        component="li"
+        key={node.id || node.address}
+        sx={rowSx(index, nodes.length, tone)}
+        data-testid={`task-node-${node.address}`}
+        data-marked={tone || undefined}
+      >
         <Stack
           direction="row"
-          gap={1.5}
+          columnGap={1}
+          alignItems="flex-start"
+          justifyContent="space-between"
+          // On a phone, two actions move below the name instead of squeezing it.
           flexWrap="wrap"
-          sx={{ mt: 0.5, color: "text.secondary" }}
         >
-          {share && (
-            <Typography variant="caption">
-              {t("带宽份额 {value}", { value: share })}
+          <Stack
+            direction="row"
+            gap={1}
+            alignItems="center"
+            flexWrap="wrap"
+            sx={{ minWidth: 0, py: 0.25, flex: "1 1 14rem" }}
+          >
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 500,
+                overflowWrap: "anywhere",
+                ...(removing && {
+                  textDecoration: "line-through",
+                  color: "text.secondary",
+                }),
+              }}
+            >
+              {name}
             </Typography>
-          )}
-          {node.pendingChildren != null && (
-            <Typography variant="caption">
-              {draining || node.state === "REMOVING"
-                ? t("剩余 {count} 个子任务待移交或完成", {
-                    count: formatNumber(node.pendingChildren),
-                  })
-                : t("未完成子任务 {count}", {
-                    count: formatNumber(node.pendingChildren),
-                  })}
-            </Typography>
-          )}
-          {node.state === "JOINING" && (
-            <Typography variant="caption">
-              {t("正在完成握手与检查，加入后开始分配任务")}
-            </Typography>
-          )}
-          {node.localPath && (
-            <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>
-              {node.localPath}
-            </Typography>
-          )}
-        </Stack>
-        {(node.state !== "REMOVING" || draining) && (
-          <Stack direction="row" gap={2} flexWrap="wrap">
-            {node.state !== "REMOVING" && (
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={validRemoves.includes(node.address)}
-                    disabled={!editable || submitting}
-                    onChange={() => toggle(removes, setRemoves, node.address)}
-                  />
-                }
-                label={
-                  <Typography variant="body2">
-                    {t("移除 {node}", { node: name })}
-                  </Typography>
-                }
+            {marker && (
+              <Typography
+                variant="caption"
+                sx={{
+                  fontWeight: 500,
+                  color: removing ? "error.main" : "primary.main",
+                }}
+              >
+                {marker}
+              </Typography>
+            )}
+            {node.scanner && (
+              <Typography variant="caption" color="text.secondary">
+                {t("扫描节点")}
+              </Typography>
+            )}
+            {state && (
+              <Chip
+                size="small"
+                variant="outlined"
+                color={stateColor(node.state)}
+                label={state}
               />
             )}
-            {draining && (
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={validAdds.includes(node.address)}
-                    disabled={!editable || submitting}
-                    onChange={() => {
-                      toggle(adds, setAdds, node.address);
-                    }}
-                  />
-                }
-                label={
-                  <Typography variant="body2">
-                    {node.state === "REMOVING"
-                      ? t("取消立即移除，保留 {node}", { node: name })
-                      : t("取消排空，保留 {node}", { node: name })}
-                  </Typography>
-                }
+            {node.online === false && node.state !== "DISCONNECTED" && (
+              <Chip
+                size="small"
+                variant="outlined"
+                color="error"
+                label={t("离线")}
               />
             )}
           </Stack>
+          <Stack
+            direction="row"
+            gap={0.5}
+            sx={{ flexShrink: 0, mr: -1, mt: -0.25, ml: "auto" }}
+          >
+            {actions}
+          </Stack>
+        </Stack>
+        <Stack
+          direction="row"
+          columnGap={2}
+          rowGap={0.5}
+          flexWrap="wrap"
+          sx={{ mt: 0.5, opacity: removing ? 0.7 : 1 }}
+        >
+          {node.pendingChildren != null && (
+            <Field label={isLeaving ? t("待完成或移交") : t("未完成子任务")}>
+              {formatNumber(node.pendingChildren)}
+            </Field>
+          )}
+          {/* Joining nodes get their share once they join. */}
+          <Field label={t("带宽份额")}>{share || "—"}</Field>
+          {qps && <Field label={t("请求份额")}>{qps}</Field>}
+          {node.localPath && (
+            <Field label={t("本地路径")} grow>
+              {node.localPath}
+            </Field>
+          )}
+        </Stack>
+        {node.state === "JOINING" && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="div"
+            sx={{ mt: 0.5 }}
+          >
+            {t("正在完成握手与检查，加入后开始分配任务")}
+          </Typography>
         )}
-        {local && joinAdds.includes(node.address) && bindingField(node)}
-      </Paper>
+      </Box>
     );
   };
 
@@ -580,7 +763,7 @@ export default function TaskNodesDialog({
     );
     const invalid = value.trim() !== "" && !isAbsoluteAgentPath(value.trim());
     return (
-      <Box sx={{ mt: 1 }}>
+      <Box sx={{ mt: 1.5 }}>
         <TextField
           size="small"
           fullWidth
@@ -588,7 +771,7 @@ export default function TaskNodesDialog({
             node: label(node.address, node),
           })}
           value={value}
-          disabled={!editable || submitting}
+          disabled={locked}
           error={invalid || (check ? !check.valid : false)}
           helperText={
             invalid
@@ -608,15 +791,366 @@ export default function TaskNodesDialog({
     );
   };
 
-  const candidates = view?.candidates || [];
-  const canConfirm =
-    editable &&
-    !empty &&
-    !lastNode &&
-    !pathMissing &&
-    preflightPassed &&
-    !submitting &&
-    !checking;
+  const addRow = (address: string, index: number) => {
+    const candidate = candidateByAddress.get(address);
+    const name = label(address, candidate);
+    return (
+      <Box
+        component="li"
+        key={address}
+        sx={rowSx(index, joinAdds.length, "add")}
+        data-testid={`task-node-add-${address}`}
+      >
+        <Stack
+          direction="row"
+          gap={1}
+          alignItems="flex-start"
+          justifyContent="space-between"
+        >
+          <Stack
+            direction="row"
+            gap={1}
+            alignItems="center"
+            flexWrap="wrap"
+            sx={{ minWidth: 0, py: 0.25 }}
+          >
+            <Typography
+              variant="body2"
+              sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+            >
+              {name}
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{ fontWeight: 500, color: "primary.main" }}
+            >
+              {t("将添加")}
+            </Typography>
+          </Stack>
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<UndoRounded />}
+            disabled={locked}
+            aria-label={t("撤销添加 {node}", { node: name })}
+            onClick={() => toggle(adds, setAdds, address)}
+            sx={{ flexShrink: 0, mr: -1, mt: -0.25 }}
+          >
+            {t("撤销")}
+          </Button>
+        </Stack>
+        {local && candidate && bindingField(candidate)}
+      </Box>
+    );
+  };
+
+  const eligible = candidates.filter((candidate) => candidate.eligible);
+  const offered = candidates.filter(
+    (candidate) => !validAdds.includes(candidate.address),
+  );
+  const offeredEligible = offered.filter((candidate) => candidate.eligible);
+
+  const sectionTitle = (text: string, count?: number, id?: string) => (
+    <Typography variant="subtitle2" id={id}>
+      {text}
+      {count != null && (
+        <Typography
+          component="span"
+          variant="subtitle2"
+          color="text.secondary"
+          sx={{ ml: 1 }}
+        >
+          {formatNumber(count)}
+        </Typography>
+      )}
+    </Typography>
+  );
+
+  const addSection = (
+    <Box component="section" aria-labelledby={`${ids}-add`}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={1}
+        sx={{ mb: 1, minHeight: 32 }}
+      >
+        {sectionTitle(t("添加节点"), undefined, `${ids}-add`)}
+        {candidates.length > 0 && (
+          <Button
+            size="small"
+            startIcon={<AddRounded />}
+            disabled={locked || offered.length === 0}
+            aria-haspopup="menu"
+            aria-expanded={menuAnchor ? "true" : undefined}
+            aria-controls={menuAnchor ? `${ids}-menu` : undefined}
+            onClick={(event) => setMenuAnchor(event.currentTarget)}
+            sx={{ mr: -1 }}
+          >
+            {t("添加 Agent")}
+          </Button>
+        )}
+      </Stack>
+      <Menu
+        id={`${ids}-menu`}
+        anchorEl={menuAnchor}
+        open={!!menuAnchor}
+        onClose={() => setMenuAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { sx: { maxWidth: 420, minWidth: 260 } } }}
+      >
+        {offered.map((candidate) => (
+          <MenuItem
+            key={candidate.id || candidate.address}
+            disabled={!candidate.eligible}
+            onClick={() => {
+              toggle(adds, setAdds, candidate.address);
+              setMenuAnchor(null);
+            }}
+            sx={{
+              whiteSpace: "normal",
+              "&.Mui-disabled": { opacity: 1 },
+            }}
+          >
+            <ListItemText
+              primary={label(candidate.address, candidate)}
+              secondary={
+                candidate.eligible
+                  ? undefined
+                  : candidate.reason || t("暂不可添加")
+              }
+              slotProps={{
+                primary: {
+                  variant: "body2",
+                  color: candidate.eligible ? "text.primary" : "text.disabled",
+                  sx: { overflowWrap: "anywhere" },
+                },
+                secondary: { variant: "caption" },
+              }}
+            />
+          </MenuItem>
+        ))}
+      </Menu>
+      {candidates.length === 0 ? (
+        <Box
+          sx={{
+            border: "1px dashed",
+            borderColor: "divider",
+            borderRadius: radii.inset,
+            px: 2,
+            py: 2,
+            textAlign: "center",
+          }}
+        >
+          <Typography variant="body2">{t("没有可添加的在线 Agent")}</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {t("Agent 上线并完成注册后会出现在这里。")}
+          </Typography>
+        </Box>
+      ) : joinAdds.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {eligible.length === 0
+            ? t("在线 Agent 暂不满足加入条件，可在列表中查看原因。")
+            : offeredEligible.length === 0
+              ? t("所有可添加的 Agent 都已选择。")
+              : t("{count} 个在线 Agent 可添加。", {
+                  count: formatNumber(offeredEligible.length),
+                })}
+        </Typography>
+      ) : (
+        <Stack component="ul" gap={0.5} sx={{ m: 0, p: 0, listStyle: "none" }}>
+          {joinAdds.map(addRow)}
+        </Stack>
+      )}
+      {needsPreflight && (
+        <Box sx={{ mt: 1.5 }}>
+          <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap">
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={locked || pathMissing || checking}
+              onClick={() => void runPreflight()}
+              startIcon={
+                checking ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : undefined
+              }
+            >
+              {t("预检")}
+            </Button>
+            {!preflightPassed && preflight?.fingerprint !== fingerprint && (
+              <Typography variant="caption" color="text.secondary">
+                {t("本地传输需要预检通过后才能提交")}
+              </Typography>
+            )}
+          </Stack>
+          {preflight?.fingerprint === fingerprint && (
+            <Alert
+              severity={preflight.valid ? "success" : "error"}
+              sx={{ mt: 1 }}
+            >
+              <Typography variant="body2">
+                {preflight.valid ? t("预检通过") : t("预检未通过")}
+              </Typography>
+              {preflight.errors.map((message) => (
+                <Typography key={message} variant="body2">
+                  {message}
+                </Typography>
+              ))}
+              {preflight.bindings.map((binding) => (
+                <Typography
+                  key={binding.executionNodeIp}
+                  variant="body2"
+                  sx={{ overflowWrap: "anywhere" }}
+                >
+                  {label(binding.executionNodeIp, binding)}：
+                  {binding.valid ? t("通过") : binding.message || t("未通过")}
+                </Typography>
+              ))}
+            </Alert>
+          )}
+        </Box>
+      )}
+    </Box>
+  );
+
+  const modeOption = (value: Mode, title: string, description: string) => {
+    const disabled = submitting || (value === "now" && nowDisabled);
+    const selected = effectiveMode === value;
+    return (
+      <FormControlLabel
+        value={value}
+        disabled={disabled}
+        control={<Radio size="small" sx={{ mt: -0.5 }} />}
+        label={
+          <Box>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              {title}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+            >
+              {description}
+            </Typography>
+          </Box>
+        }
+        sx={{
+          m: 0,
+          alignItems: "flex-start",
+          border: "1px solid",
+          borderColor: selected && !disabled ? "primary.main" : "divider",
+          borderRadius: radii.control,
+          px: 1,
+          py: 1,
+          pr: 1.5,
+          "&:has(.Mui-focusVisible)": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 2,
+          },
+          "& .MuiFormControlLabel-label.Mui-disabled .MuiTypography-caption": {
+            color: "text.secondary",
+          },
+        }}
+      />
+    );
+  };
+
+  const modeSection = validRemoves.length > 0 && (
+    <Box component="section">
+      <Typography variant="subtitle2" id={`${ids}-mode`} sx={{ mb: 1 }}>
+        {t("移出方式")}
+      </Typography>
+      <RadioGroup
+        aria-labelledby={`${ids}-mode`}
+        value={effectiveMode}
+        onChange={(event) => {
+          setMode(event.target.value as Mode);
+          setError("");
+        }}
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
+          gap: 1,
+        }}
+      >
+        {modeOption(
+          "drain",
+          t("平滑移出（推荐）"),
+          t("正在传输的子任务完成后离开"),
+        )}
+        {modeOption(
+          "now",
+          t("立即移出"),
+          nowDisabled
+            ? view?.nowReason || t("当前任务不支持立即移出")
+            : t("正在传输的子任务转给其他节点继续"),
+        )}
+      </RadioGroup>
+    </Box>
+  );
+
+  // What the change does, one clause per kind, for the footer and the
+  // confirmation button.
+  const parts = [
+    joinAdds.length ? t("添加 {count} 个节点", { count: joinAdds.length }) : "",
+    validRemoves.length
+      ? t("移出 {count} 个节点", { count: validRemoves.length })
+      : "",
+    cancels ? t("保留 {count} 个节点", { count: cancels }) : "",
+  ].filter(Boolean);
+  const kinds = parts.length;
+  const confirmLabel = kinds === 1 ? parts[0] : t("提交变更");
+  const blocked = !editable
+    ? view?.reason || t("当前任务不可调整执行节点")
+    : empty
+      ? t("选择要添加或移出的节点")
+      : lastNode
+        ? t("至少保留一个执行节点")
+        : pathMissing
+          ? t("填写新节点的本地绝对路径后才能继续")
+          : checking
+            ? t("正在预检…")
+            : !preflightPassed
+              ? t("预检通过后才能继续")
+              : "";
+  const canConfirm = !blocked && !submitting;
+  const footerText =
+    step === "confirm"
+      ? view?.status === "RUNNING"
+        ? t("变更将立即开始生效。")
+        : t("变更将在任务继续运行时生效。")
+      : blocked || t("待提交：{changes}", { changes: parts.join(" · ") });
+  const footerWarning = step === "edit" && editable && !empty && lastNode;
+
+  const modeLabel = effectiveMode === "now" ? t("立即移出") : t("平滑移出");
+  const summarySection = (title: string, items: ReactNode[], note?: string) => (
+    <Box>
+      <Typography variant="caption" color="text.secondary" component="div">
+        {title}
+      </Typography>
+      <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+        {items.map((item, index) => (
+          <Typography
+            key={index}
+            component="li"
+            variant="body2"
+            sx={{ overflowWrap: "anywhere" }}
+          >
+            {item}
+          </Typography>
+        ))}
+      </Box>
+      {note && (
+        <Typography variant="caption" color="text.secondary" component="div">
+          {note}
+        </Typography>
+      )}
+    </Box>
+  );
 
   return (
     <Dialog
@@ -626,6 +1160,7 @@ export default function TaskNodesDialog({
       }}
       maxWidth="sm"
       fullWidth
+      fullScreen={phone}
       aria-labelledby="task-nodes-title"
     >
       <DialogTitle id="task-nodes-title">
@@ -659,7 +1194,7 @@ export default function TaskNodesDialog({
           </Alert>
         )}
         {view && step === "edit" && (
-          <Stack gap={2}>
+          <Stack gap={3}>
             {!view.editable && (
               <Alert severity="info">
                 {view.reason || t("当前任务不可调整执行节点")}
@@ -668,216 +1203,55 @@ export default function TaskNodesDialog({
             {view.editable && view.pending && (
               <Alert severity="info" role="status">
                 {t(
-                  "上一次节点变更仍在进行中。此时只能取消加入中的节点、将排空中的节点改为立即移除，或保留排空中的节点。",
+                  "上一次节点变更仍在进行中。完成前只能取消加入中的节点、保留正在移出的节点，或把平滑移出改为立即移出。",
                 )}
               </Alert>
             )}
-            <Box>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                {t("当前节点")}
-              </Typography>
-              <Stack gap={1}>{nodes.map(nodeRow)}</Stack>
-            </Box>
-            <Box>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                {t("添加节点")}
-              </Typography>
-              {candidates.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  {t("没有可添加的在线 Agent")}
-                </Typography>
-              ) : (
-                <Stack gap={1}>
-                  {candidates.map((candidate) => (
-                    <Paper
-                      key={candidate.id || candidate.address}
-                      variant="outlined"
-                      sx={{ px: 1.5, py: 0.5 }}
-                    >
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            size="small"
-                            checked={validAdds.includes(candidate.address)}
-                            disabled={
-                              !editable || !candidate.eligible || submitting
-                            }
-                            onChange={() =>
-                              toggle(adds, setAdds, candidate.address)
-                            }
-                          />
-                        }
-                        label={
-                          <Box>
-                            <Typography variant="body2">
-                              {t("添加 {node}", {
-                                node: label(candidate.address, candidate),
-                              })}
-                            </Typography>
-                            {!candidate.eligible && (
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                              >
-                                {candidate.reason || t("暂不可添加")}
-                              </Typography>
-                            )}
-                          </Box>
-                        }
-                      />
-                      {local &&
-                        validAdds.includes(candidate.address) &&
-                        bindingField(candidate)}
-                    </Paper>
-                  ))}
-                </Stack>
-              )}
-            </Box>
-            {validRemoves.length > 0 && (
-              <Box>
-                <Typography variant="subtitle2" id="task-nodes-mode">
-                  {t("移除方式")}
-                </Typography>
-                <RadioGroup
-                  aria-labelledby="task-nodes-mode"
-                  value={effectiveMode}
-                  onChange={(event) => {
-                    setMode(event.target.value as Mode);
-                    setError("");
-                  }}
-                >
-                  <FormControlLabel
-                    value="drain"
-                    disabled={submitting}
-                    control={<Radio size="small" />}
-                    label={
-                      <Box>
-                        <Typography variant="body2">
-                          {t("排空后移除（推荐）")}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {t(
-                            "不再分配新任务，排队中的任务移交其他节点，进行中的任务完成后节点退出。",
-                          )}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                  <FormControlLabel
-                    value="now"
-                    disabled={submitting || nowDisabled}
-                    control={<Radio size="small" />}
-                    label={
-                      <Box>
-                        <Typography variant="body2">{t("立即移除")}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {nowDisabled
-                            ? view.nowReason || t("当前任务不支持立即移除")
-                            : t(
-                                "进行中的任务会被停止，并由剩余节点从已保存的进度继续。",
-                              )}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                </RadioGroup>
+            <Box component="section" aria-labelledby={`${ids}-current`}>
+              <Box sx={{ mb: 1 }}>
+                {sectionTitle(t("当前节点"), nodes.length, `${ids}-current`)}
               </Box>
-            )}
-            {lastNode && !empty && (
-              <Alert severity="warning">{t("至少保留一个执行节点")}</Alert>
-            )}
-            {needsPreflight && (
-              <Box>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  disabled={!editable || pathMissing || checking || submitting}
-                  onClick={() => void runPreflight()}
-                  startIcon={
-                    checking ? (
-                      <CircularProgress size={16} color="inherit" />
-                    ) : undefined
-                  }
-                >
-                  {t("预检")}
-                </Button>
-                {preflight?.fingerprint === fingerprint && (
-                  <Alert
-                    severity={preflight.valid ? "success" : "error"}
-                    sx={{ mt: 1 }}
-                  >
-                    <Typography variant="body2">
-                      {preflight.valid ? t("预检通过") : t("预检未通过")}
-                    </Typography>
-                    {preflight.errors.map((message) => (
-                      <Typography key={message} variant="body2">
-                        {message}
-                      </Typography>
-                    ))}
-                    {preflight.bindings.map((binding) => (
-                      <Typography
-                        key={binding.executionNodeIp}
-                        variant="body2"
-                        sx={{ overflowWrap: "anywhere" }}
-                      >
-                        {label(binding.executionNodeIp, binding)}：
-                        {binding.valid
-                          ? t("通过")
-                          : binding.message || t("未通过")}
-                      </Typography>
-                    ))}
-                  </Alert>
-                )}
-                {!preflightPassed && preflight?.fingerprint !== fingerprint && (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", mt: 0.5 }}
-                  >
-                    {t("本地传输需要预检通过后才能提交")}
-                  </Typography>
-                )}
-              </Box>
-            )}
+              <Stack
+                component="ul"
+                gap={0.5}
+                sx={{ m: 0, p: 0, listStyle: "none" }}
+              >
+                {nodes.map(nodeRow)}
+              </Stack>
+            </Box>
+            {modeSection}
+            {addSection}
           </Stack>
         )}
         {view && step === "confirm" && (
-          <Stack gap={1.5} data-testid="task-nodes-summary">
+          <Stack gap={2} data-testid="task-nodes-summary">
             <Typography variant="body2">
               {t("请确认以下执行节点变更：")}
             </Typography>
-            {validAdds.length > 0 && (
-              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                {t("添加：{nodes}", {
-                  nodes: validAdds
-                    .map((address) =>
-                      local && joinAdds.includes(address)
-                        ? `${summaryLabel(address)} (${(paths[address] ?? "").trim()})`
-                        : summaryLabel(address),
-                    )
-                    .join(", "),
-                })}
-              </Typography>
-            )}
-            {validRemoves.length > 0 && (
-              <>
-                <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                  {t("移除：{nodes}", {
-                    nodes: validRemoves.map(summaryLabel).join(", "),
-                  })}
-                </Typography>
-                <Typography variant="body2">
-                  {effectiveMode === "now"
-                    ? t("移除方式：立即移除")
-                    : t("移除方式：排空后移除")}
-                </Typography>
-              </>
-            )}
-            <Typography variant="caption" color="text.secondary">
-              {view.status === "RUNNING"
-                ? t("变更将立即开始生效。")
-                : t("变更将在任务继续运行时生效。")}
-            </Typography>
+            {joinAdds.length > 0 &&
+              summarySection(
+                t("添加"),
+                joinAdds.map((address) =>
+                  local
+                    ? `${summaryLabel(address)} (${(paths[address] ?? "").trim()})`
+                    : summaryLabel(address),
+                ),
+              )}
+            {cancels > 0 &&
+              summarySection(
+                t("保留（取消移出）"),
+                validAdds
+                  .filter((address) => byAddress.has(address))
+                  .map(summaryLabel),
+              )}
+            {validRemoves.length > 0 &&
+              summarySection(
+                t("移出（{mode}）", { mode: modeLabel }),
+                validRemoves.map(summaryLabel),
+                effectiveMode === "now"
+                  ? t("正在传输的子任务转给其他节点继续")
+                  : t("正在传输的子任务完成后离开"),
+              )}
           </Stack>
         )}
         {error && (
@@ -886,42 +1260,69 @@ export default function TaskNodesDialog({
           </Alert>
         )}
       </DialogContent>
-      <DialogActions>
-        {step === "confirm" ? (
-          <>
-            <Button disabled={submitting} onClick={() => setStep("edit")}>
-              {t("返回修改")}
-            </Button>
-            <Button
-              variant="contained"
-              disabled={!canConfirm}
-              onClick={() => void submit()}
-              startIcon={
-                submitting ? (
-                  <CircularProgress size={16} color="inherit" />
-                ) : undefined
-              }
-            >
-              {submitting ? t("正在提交") : t("确认变更")}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button disabled={submitting} onClick={onClose}>
-              {t("关闭")}
-            </Button>
-            <Button
-              variant="contained"
-              disabled={!canConfirm}
-              onClick={() => {
-                setError("");
-                setStep("confirm");
-              }}
-            >
-              {t("下一步")}
-            </Button>
-          </>
+      <DialogActions
+        sx={{
+          flexWrap: "wrap",
+          gap: 1,
+          "& > :not(style) ~ :not(style)": { ml: 0 },
+          borderTop: phone ? 1 : 0,
+          borderColor: "divider",
+          pt: phone ? 1.5 : undefined,
+        }}
+      >
+        {view && (
+          <Typography
+            variant="body2"
+            role="status"
+            id={`${ids}-footer`}
+            data-testid="task-nodes-footer"
+            sx={{
+              flex: "1 1 14rem",
+              minWidth: 0,
+              color: footerWarning ? "warning.main" : "text.secondary",
+            }}
+          >
+            {footerText}
+          </Typography>
         )}
+        <Stack direction="row" gap={1} sx={{ ml: "auto" }}>
+          {step === "confirm" ? (
+            <>
+              <Button disabled={submitting} onClick={() => setStep("edit")}>
+                {t("返回修改")}
+              </Button>
+              <Button
+                variant="contained"
+                disabled={!canConfirm}
+                onClick={() => void submit()}
+                startIcon={
+                  submitting ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : undefined
+                }
+              >
+                {submitting ? t("正在提交") : confirmLabel}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button disabled={submitting} onClick={onClose}>
+                {t("关闭")}
+              </Button>
+              <Button
+                variant="contained"
+                disabled={!canConfirm}
+                aria-describedby={view ? `${ids}-footer` : undefined}
+                onClick={() => {
+                  setError("");
+                  setStep("confirm");
+                }}
+              >
+                {t("预览变更")}
+              </Button>
+            </>
+          )}
+        </Stack>
       </DialogActions>
     </Dialog>
   );

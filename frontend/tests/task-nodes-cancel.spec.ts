@@ -85,9 +85,9 @@ async function setup(page: Page) {
 }
 
 // Re-adding a leaving node keeps its binding: no path, no preflight.
-for (const [address, label] of [
-  ["10.0.1.13", "取消排空，保留"],
-  ["10.0.1.16", "取消立即移除，保留"],
+for (const [address, state] of [
+  ["10.0.1.13", "平滑移出中"],
+  ["10.0.1.16", "立即移出中"],
 ] as const) {
   test(`local transfers cancel a removal without a binding (${address})`, async ({
     page,
@@ -96,9 +96,15 @@ for (const [address, label] of [
     await page.goto("/tasks?taskId=1048");
     await page.getByRole("button", { name: "编辑节点", exact: true }).click();
     const box = page.getByRole("dialog", { name: "任务 #1048 执行节点" });
+    const node = box.getByTestId(`task-node-${address}`);
+    await expect(node.getByText(state, { exact: true })).toBeVisible();
     await box
-      .getByRole("checkbox", { name: new RegExp(`${label} .*${address}`) })
-      .check();
+      .getByRole("button", { name: new RegExp(`^保留 .*${address}`) })
+      .click();
+    await expect(node).toHaveAttribute("data-marked", "add");
+    await expect(node).toContainText("将保留");
+    // Keeping a leaving node is not a removal: no mode choice.
+    await expect(box.getByRole("radio")).toHaveCount(0);
     await expect(
       box.getByRole("button", { name: "预检", exact: true }),
     ).toHaveCount(0);
@@ -107,8 +113,16 @@ for (const [address, label] of [
         name: new RegExp(`${address} 的本地绝对路径`),
       }),
     ).toHaveCount(0);
-    await box.getByRole("button", { name: "下一步", exact: true }).click();
-    await box.getByRole("button", { name: "确认变更", exact: true }).click();
+    await expect(box.getByTestId("task-nodes-footer")).toHaveText(
+      "待提交：保留 1 个节点",
+    );
+    await box.getByRole("button", { name: "预览变更", exact: true }).click();
+    await expect(box.getByTestId("task-nodes-summary")).toContainText(
+      "保留（取消移出）",
+    );
+    await box
+      .getByRole("button", { name: "保留 1 个节点", exact: true })
+      .click();
     await expect.poll(() => posts.length).toBe(1);
     expect(posts[0].add).toEqual([address]);
     expect(posts[0]).not.toHaveProperty("bindings");

@@ -929,6 +929,113 @@ class Harness:
         self.record("SIGKILL during transfer recovers original work without duplicate progress", **data,
                     temporaryFilesBeforeCrash=incomplete, orphanTemporaryFiles=orphans, taskBandwidthLimitMbps=rate)
 
+    def membership_fixture(self):
+        """Many small children so a serialized Agent keeps queued work to hand off."""
+        directory = self.root / "membership-fixture"
+        directory.mkdir()
+        manifest = {}
+        for index in range(1024):
+            key = f"{index:04d}.bin"
+            block = hashlib.sha256(("membership:" + str(index)).encode()).digest()
+            (directory / key).write_bytes(block * 1024)  # 32 KiB
+            manifest[key] = {"size": 32 * 1024, "sha256": sha256(directory / key)}
+
+        def put(key):
+            with (directory / key).open("rb") as body:
+                self.s3.put_object(Bucket=self.buckets["rate"], Key="members/" + key, Body=body)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(put, manifest))
+        return manifest
+
+    def nodes_view(self, task_id):
+        return self.api(f"/api/master/tasks/{task_id}/nodes")
+
+    def node_state(self, task_id, address):
+        view = self.nodes_view(task_id)
+        row = next((node for node in view["nodes"] if node["address"] == address), None)
+        removed = any(node["address"] == address for node in view["removedNodes"])
+        return view, (row["state"] if row else "REMOVED" if removed else None)
+
+    def copy_body(self, prefix, nodes, rate):
+        return {"sourceS3Alias": "cluster-qa", "sourceBucket": self.buckets["rate"], "destS3Alias": "cluster-qa",
+                "destBucket": self.buckets["destination"], "prefix": "members/", "eligibleWorkerNodes": nodes,
+                "distributionMode": "balanced", "conflictPolicy": "OVERWRITE", "taskBandwidthLimitMbps": rate,
+                "keyMapping": {"mode": "REPLACE_PREFIX", "sourcePrefix": "members/", "targetPrefix": prefix}}
+
+    def require_shares_within(self, view, rate):
+        total = int(rate * 125000)
+        shares = [node["share"]["bandwidthBytesPerSecond"] for node in view["nodes"] if node.get("share")]
+        require(shares and all(value > 0 for value in shares) and sum(shares) <= total,
+                f"Per-node bandwidth shares exceed the task limit: {shares} > {total}")
+        return shares
+
+    def node_membership(self):
+        manifest = self.membership_fixture()
+        rate = self.args.recovery_bandwidth_mbps
+        first, second = self.nodes
+        # One child at a time per Agent leaves never-started children queued,
+        # which is exactly the work the handoff protocol may move.
+        for node in self.nodes:
+            self.api("/api/master/nodes/" + node, {"maxConcurrentChildren": 1}, method="PUT")
+        try:
+            task_id = self.create("/api/master/add-buckets", self.copy_body("members-added/", [first], rate), "members-add")
+            eventually(lambda: (lambda row: row and row["status"] not in TERMINAL and row["putObjectCount"] >= 1
+                                and row["childCount"] >= 3)(self.task(task_id)),
+                       "payload on the first Agent before adding the second", timeout=60)
+            view = self.nodes_view(task_id)
+            require(view["editable"] and [node["address"] for node in view["nodes"]] == [first],
+                    f"Unexpected initial membership: {view}")
+            require(any(row["address"] == second and row["eligible"] for row in view["candidates"]),
+                    "The second Agent was not offered as an eligible candidate")
+            change = {"requestId": "members-add-1", "add": [second], "expectedNodeRevision": view["nodeRevision"]}
+            accepted = self.api(f"/api/master/tasks/{task_id}/nodes", change)
+            require(accepted["accepted"] and not accepted["replayed"], f"Add was not accepted: {accepted}")
+            replay = self.api(f"/api/master/tasks/{task_id}/nodes", change)
+            require(replay["replayed"] and replay["view"]["nodeRevision"] == accepted["view"]["nodeRevision"],
+                    "Replayed node change was applied twice")
+            joined, _ = eventually(lambda: (lambda pair: pair if pair[1] == "ACTIVE" else None)(self.node_state(task_id, second)),
+                                   "added Agent joins the running task", timeout=90)
+            shares = self.require_shares_within(joined, rate)
+            require(len(shares) == 2, f"Joined task does not divide its limit between two Agents: {shares}")
+            status = self.task(task_id)["status"]
+            require(status not in TERMINAL,
+                    f"Add test transfer finished before the second Agent joined at {rate} Mbps; lower RECOVERY_BANDWIDTH_MBPS")
+            data = self.verify_task(task_id, manifest, both=False)
+            require(all(data["bytesByNode"].get(node, 0) > 0 for node in self.nodes),
+                    "Both Agents must transfer objects after the second joined: " + str(data["bytesByNode"]))
+            self.verify_s3(self.buckets["destination"], "members-added/", manifest)
+            self.record("adding an Agent mid-run joins placement, splits the bandwidth limit and keeps exactly-once accounting",
+                        **data, sharesAfterJoin=shares, taskBandwidthLimitMbps=rate)
+
+            task_id = self.create("/api/master/add-buckets", self.copy_body("members-drained/", self.nodes, rate), "members-drain")
+            eventually(lambda: (lambda row: row and row["status"] not in TERMINAL and row["putObjectCount"] >= 1
+                                and row["childCount"] >= 3)(self.task(task_id)),
+                       "payload on both Agents before draining one", timeout=60)
+            view = self.nodes_view(task_id)
+            removal = self.api(f"/api/master/tasks/{task_id}/nodes",
+                               {"requestId": "members-drain-1", "remove": [second], "mode": "drain",
+                                "expectedNodeRevision": view["nodeRevision"]})
+            require(removal["accepted"], f"Drain was not accepted: {removal}")
+            states = {self.node_state(task_id, second)[1]}
+            left = eventually(lambda: (lambda pair: pair if pair[1] == "REMOVED" else states.add(pair[1]))(self.node_state(task_id, second)),
+                              "draining Agent leaves the task", timeout=90)
+            status = self.task(task_id)["status"]
+            require(status not in TERMINAL,
+                    f"Drain test transfer finished before the Agent left at {rate} Mbps; lower RECOVERY_BANDWIDTH_MBPS")
+            shares = self.require_shares_within(left[0], rate)
+            require(len(shares) == 1, f"Remaining Agent did not take the whole limit: {shares}")
+            data = self.verify_task(task_id, manifest, both=False)
+            self.verify_s3(self.buckets["destination"], "members-drained/", manifest)
+            task = self.task(task_id)
+            require([node["address"] for node in task.get("executionNodes", [])] == [first],
+                    "A removed Agent is still listed as an execution node")
+            self.record("draining an Agent mid-run hands off its queue, lets it leave and completes with exact accounting",
+                        **data, observedStates=sorted(state for state in states if state), sharesAfterLeave=shares,
+                        taskBandwidthLimitMbps=rate)
+        finally:
+            for node in self.nodes:
+                self.api("/api/master/nodes/" + node, {"maxConcurrentChildren": 32}, method="PUT")
+
     def close(self):
         for child in reversed(self.children):
             if child.poll() is None:
@@ -968,7 +1075,7 @@ def main():
     for name in ("master", "agent", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--weed", type=Path, help="Verified local S3 fixture binary; omitted with OSS_TRANSFER_QA_S3_CONFIG")
-    parser.add_argument("--scenario", choices=("core", "all"), default="all")
+    parser.add_argument("--scenario", choices=("core", "nodes", "all"), default="all")
     parser.add_argument("--fixture", type=Path, help="Read an existing Java/Go shared fixture; never modify it")
     parser.add_argument("--multipart-recovery", action="store_true", help="Run the real S3 crash-recovery integration test using the current source")
     parser.add_argument("--multipart-test-binary", type=Path, help="Use a precompiled target-platform Agent test executable; requires --multipart-recovery")
@@ -998,8 +1105,11 @@ def main():
         result = h.api("/api/master/s3-config", h.storage)
         require(result["successCount"] == 2, "Storage configuration was not applied by both Agents")
         h.record("native Master and two Agents run with an empty executable PATH; storage validated through Agent")
-        h.node_settings()
-        h.core()
+        if args.scenario == "nodes":
+            h.node_membership()
+        else:
+            h.node_settings()
+            h.core()
         if args.scenario == "all":
             # Fixture uploads are plain storage puts, not measurements; finish
             # them while other groups still run.
@@ -1010,6 +1120,7 @@ def main():
                 h.save()
             h.bandwidth(bandwidth_manifest)
             h.recovery(directory, manifest)
+            h.node_membership()
         h.evidence["status"] = "PASSED"
         h.save()
         print("Evidence: " + str(h.root), flush=True)

@@ -184,16 +184,15 @@ func (p Parent) CheckNodeChange(change NodeChange) error {
 			}
 			continue
 		}
-		drain, draining := p.NodeDraining(node.ID)
+		_, draining := p.NodeDraining(node.ID)
 		switch {
 		case p.NodeRemoved(node.ID):
 			if pending {
 				return p.pendingRejection()
 			}
-		case draining && drain.Mode == DrainModeDrain:
-			// Cancels the drain; allowed while other changes are pending.
 		case draining:
-			return rejectMembership("ALREADY_MEMBER", "Agent %s is already being removed immediately", node.Address)
+			// Cancels the drain or the not yet fenced immediate removal; always
+			// allowed, so a pending change can be undone.
 		case p.NodeJoining(node.ID):
 			return rejectMembership("ALREADY_MEMBER", "Agent %s is already joining this task", node.Address)
 		case p.NodeRetired(node.ID):
@@ -218,6 +217,9 @@ func (p Parent) CheckNodeChange(change NodeChange) error {
 			if drain.Mode == DrainModeNow || change.Mode == DrainModeDrain {
 				return rejectMembership("CHANGE_PENDING", "Agent %s is already being removed", node.Address)
 			}
+		case p.NodeRetired(id):
+			// A disconnected peer whose work was taken over; removing it only
+			// prevents its rejoin and is allowed while other changes are pending.
 		default:
 			if pending {
 				return p.pendingRejection()
@@ -228,7 +230,11 @@ func (p Parent) CheckNodeChange(change NodeChange) error {
 	if change.Mode == DrainModeNow && len(change.Remove) > 0 && !after.TakeoverAllowed() {
 		return rejectMembership("NOW_UNSUPPORTED", "Immediate removal needs takeover support: OSS-to-OSS or a verified shared directory")
 	}
-	if len(after.PlacementNodes())+len(after.Membership.Joining) == 0 {
+	// Joining nodes do not count: until a joiner completes its handshake (it
+	// may never), the task needs a member that can receive work. A change that
+	// does not reduce an already empty placement set (cancelling a join) stays
+	// possible.
+	if len(after.PlacementNodes()) == 0 && len(p.PlacementNodes()) > 0 {
 		return rejectMembership("LAST_NODE", "At least one execution node must remain")
 	}
 	if len(after.Spec.Nodes) > 1024 {
@@ -253,7 +259,7 @@ func (p Parent) pendingRejection() error {
 			names = append(names, node.Address+" (leaving)")
 		}
 	}
-	return rejectMembership("CHANGE_PENDING", "A previous node change is still in progress: %s. Wait for it to finish, cancel a join, re-add a draining node, or remove a draining node immediately", strings.Join(names, ", "))
+	return rejectMembership("CHANGE_PENDING", "A previous node change is still in progress: %s. Wait for it to finish, cancel a join, re-add a leaving node, remove a draining node immediately, or remove a disconnected node", strings.Join(names, ", "))
 }
 
 // applyNodeChange returns a copy of p with the request applied. It does not
@@ -309,9 +315,12 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			p.Spec.Nodes = append(p.Spec.Nodes, node)
 		}
 		m.Joining[node.ID] = now
+		// An added node must be able to receive work, otherwise it would only
+		// dilute the working node's bandwidth/QPS share: affinity placement
+		// switches to balanced placement when a node joins.
+		p.Spec.DistributionMode = "BALANCED"
 		if p.Spec.Direction == "LOCAL_TO_OSS" {
 			p.Spec.SharedLocalSource = true
-			p.Spec.DistributionMode = "BALANCED"
 		}
 	}
 	for _, id := range change.Remove {

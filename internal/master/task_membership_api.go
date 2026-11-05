@@ -143,7 +143,9 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	if err != nil {
 		return nil, &membershipFailure{status: 500, message: localizeContext(ctx, "Cannot read task")}
 	}
-	if requestKey != "" && !request.DryRun {
+	// A seen key replays even for a dry run, so a client retrying an
+	// unknown outcome is never told that its accepted change failed preflight.
+	if requestKey != "" {
 		seen, err := s.tasks.repo.NodeRequestSeen(id, requestKey, fingerprint)
 		if errors.Is(err, task.ErrConflict) {
 			return nil, membershipReject(ctx, "CONFLICT", "This request ID was already used for a different node change")
@@ -184,12 +186,22 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	label := func(node task.Node) string { return displays.lookup(node.ID, node.Address).DisplayLabel }
 	local := p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL"
 	var joining []task.Node
+	kept := 0
 	for _, value := range add {
 		if node, ok := byKey[value]; ok {
 			if _, draining := p.NodeDraining(node.ID); draining {
+				// Cancelling a removal keeps the node's binding. Clients may omit
+				// it or repeat the existing path; a different path is rejected.
 				change.Add = append(change.Add, node)
-				if _, bound := bindings[node.Address]; bound {
-					return nil, bad("A draining node keeps its existing binding")
+				path, bound := bindings[node.Address]
+				if !bound {
+					path, bound = bindings[node.ID]
+				}
+				if bound {
+					if path != node.LocalRoot {
+						return nil, bad("A draining node keeps its existing binding")
+					}
+					kept++
 				}
 				continue
 			}
@@ -215,7 +227,7 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	if !local && len(bindings) > 0 {
 		return nil, bad("Only local transfers accept node bindings")
 	}
-	if local && len(bindings) != len(joining) {
+	if local && len(bindings) != len(joining)+kept {
 		return nil, bad("Provide exactly one local path for each added node")
 	}
 	if err := p.CheckNodeChange(change); err != nil {
@@ -238,15 +250,18 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	failoverReady := p.Failover != nil && p.Failover.Enabled
 	for _, node := range p.ActiveNodes() {
 		member, reachable := online[node.ID]
+		// Without lease fencing (never enabled, including stopped tasks) an
+		// offline member could still hold unfenced work, and a join could not
+		// be admitted: every current member must be reachable.
 		if !reachable || member.EnrollmentID != node.EnrollmentID {
-			if failoverReady || task.Ended(p.Status) {
+			if failoverReady {
 				continue // Offline members are fenced by lease expiry.
 			}
 			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is offline; reconnect it before changing this task's nodes", label(node))
 		}
 		caps, err := s.tasks.capabilities(ctx, node)
 		if err != nil {
-			if failoverReady || task.Ended(p.Status) {
+			if failoverReady {
 				continue
 			}
 			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is offline; reconnect it before changing this task's nodes", label(node))

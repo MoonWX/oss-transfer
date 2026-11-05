@@ -594,6 +594,9 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			memberErr = nil
 			return nil
 		}
+		if removedScannerDone(p) {
+			return nil
+		}
 		return errors.New("Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes")
 	}
 	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {

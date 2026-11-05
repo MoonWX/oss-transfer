@@ -336,3 +336,11 @@ func trimmedList(values []string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// removedScannerDone reports a removed scanner whose scan is complete and fully
+// assigned. It never returns, and the task needs no scanner any more: the step
+// only waits for transfers instead of reporting a disconnected scanner.
+func removedScannerDone(p task.Parent) bool {
+	scanner := p.ScannerNode().ID
+	return scanner != "" && p.NodeRemoved(scanner) && p.Status == "RUNNING" && p.ScanComplete && p.DispatchedThrough >= p.ScannedBatches
+}

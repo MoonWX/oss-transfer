@@ -189,3 +189,21 @@ func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad, available 
 	}
 	return node, nil
 }
+
+// chooseTakeoverNode places work that must leave its owner (failover or an
+// already released handoff). It prefers placement members, but falls back to
+// draining members that are still active: failover counts them as capacity, so
+// the target set must match or the migration could never finish. A draining
+// node that receives such work runs it or hands it off again before leaving.
+func chooseTakeoverNode(tx *state.Tx, p Parent, other map[string]PendingLoad, available map[string]bool) (Node, error) {
+	node, err := chooseNode(tx, p, other, available)
+	if err == nil || p.Membership == nil || len(p.Membership.Draining) == 0 {
+		return node, err
+	}
+	fallback := p
+	membership := *p.Membership
+	membership.Draining = nil
+	fallback.Membership = &membership
+	fallback.Spec.DistributionMode = "BALANCED"
+	return chooseNode(tx, fallback, other, available)
+}

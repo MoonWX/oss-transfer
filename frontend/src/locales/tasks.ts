@@ -2264,6 +2264,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "ハンドシェイクとチェックを実行中です。参加後に作業が割り当てられます",
   },
   "移除 {node}": { en: "Remove {node}", ja: "{node} を削除" },
+  "取消立即移除，保留 {node}": {
+    en: "Cancel immediate removal and keep {node}",
+    ja: "即時削除を取り消して {node} を残す",
+  },
   "取消排空，保留 {node}": {
     en: "Cancel draining and keep {node}",
     ja: "ドレインを取り消して {node} を残す",

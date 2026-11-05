@@ -580,6 +580,7 @@ var cliMessages = map[string][2]string{
 	"服务未返回任务 #%d 的执行节点信息；请升级 Master 后重试":                                                {"The server returned no execution nodes for task #%d; upgrade the Master and retry", "タスク #%d の実行ノード情報が返されませんでした。Master を更新してから再試行してください"},
 	"任务 #%d 当前不能调整执行节点: %s":                                                             {"Task #%d execution nodes cannot be changed now: %s", "タスク #%d の実行ノードは現在変更できません: %s"},
 	"任务 #%d 不支持立即移出: %s":                                                                {"Task #%d does not support immediate removal: %s", "タスク #%d は即時削除に対応していません: %s"},
+	"重新加入排空中的节点会沿用原路径，无需 --binding: %s":                                                 {"Re-adding a draining node keeps its existing path; omit --binding: %s", "削除中のノードを維持する場合は既存のパスを使うため --binding は不要です: %s"},
 	"本地迁移任务需为每个加入的节点指定一个 --binding 节点=/绝对路径":                                            {"Local transfers need one --binding NODE=/absolute/path for each added node", "ローカル転送では追加する各ノードに --binding ノード=/絶対パス を 1 つずつ指定してください"},
 	"--binding 仅适用于本地迁移任务":                                                              {"--binding only applies to local transfer tasks", "--binding はローカル転送タスク専用です"},
 	"节点共享目录预检失败，尚未提交变更: %w":                                                             {"Shared directory preflight failed; no change was submitted: %w", "共有ディレクトリの事前チェックに失敗しました。変更は送信していません: %w"},

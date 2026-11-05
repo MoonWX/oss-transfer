@@ -87,7 +87,26 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		}
 	}
 	local := view["localTransfer"] == true
-	if local && len(bindings) != len(add) {
+	// Re-adding a draining node cancels its drain and keeps its existing path;
+	// only nodes that actually join need a binding.
+	draining := map[string]bool{}
+	for _, node := range objectList(view["nodes"]) {
+		if getString(node, "state") == "DRAINING" {
+			draining[getString(node, "address")], draining[getString(node, "id")] = true, true
+		}
+	}
+	joins := 0
+	for _, node := range add {
+		if !draining[node] {
+			joins++
+		}
+	}
+	for _, binding := range bindings {
+		if draining[getString(binding.(map[string]interface{}), "executionNodeIp")] {
+			return nil, asUsageError(cliErrorf("重新加入排空中的节点会沿用原路径，无需 --binding: %s", getString(binding.(map[string]interface{}), "executionNodeIp")))
+		}
+	}
+	if local && len(bindings) != joins {
 		return nil, asUsageError(cliErrorf("本地迁移任务需为每个加入的节点指定一个 --binding 节点=/绝对路径"))
 	}
 	if !local && len(bindings) > 0 {
@@ -105,7 +124,10 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		plan["bindings"] = bindings
 	}
 	preview := map[string]interface{}{"taskNodesPlan": plan, "view": view}
-	if local {
+	// A retry with --request-id may follow an accepted change: the Master
+	// replays the stored result, while a fresh preflight would see the new
+	// membership and fail. Only new requests with joining nodes preflight.
+	if local && joins > 0 && !opts.Has("request-id") {
 		// The dry run persists nothing, so it carries no request identity: the
 		// accepted request below must not collide with a stored dry-run body.
 		dry := map[string]interface{}{"dryRun": true}

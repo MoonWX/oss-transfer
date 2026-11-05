@@ -178,7 +178,8 @@ func (s *Server) taskView(p task.Parent, sets ...nodeDisplaySet) map[string]any 
 	} else {
 		displays = s.nodeDisplaySnapshot()
 	}
-	displays.task(row, p.Spec.Nodes)
+	displays.task(row, p.CurrentNodes())
+	row["executionMembership"] = s.membershipSummary(p, displays)
 	s.addTaskRate(row, p, "")
 	s.addLiveProgress(row, p, nil)
 	s.addRequestRates(row, p)

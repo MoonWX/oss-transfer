@@ -79,6 +79,38 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 
 未指定的字段保持原值。LIST 限制同时适用于 GET 读取；PUT 包括分片上传请求。任务限速由所选 Agent 共享，节点限速仍然生效。
 
+## 调整任务的执行节点
+
+查看执行任务的 Agent 及其状态、扫描节点、待完成的子任务、各节点分得的任务限速份额、已移除的节点以及可以添加的 Agent：
+
+```sh
+oss-transfer-cli task nodes "$TRANSFER_TASK"
+```
+
+任务存在期间可以添加或移除 Agent。`--add` 和 `--remove` 可以重复使用，也可以用逗号分隔多个值。不加 `--yes` 时，命令只打印计划的调整（本地传输还会打印预检结果），不提交任何更改：
+
+```sh
+oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --yes
+oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --yes
+oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --now --yes
+```
+
+- 默认以排空方式移除：节点不再接收新工作，其排队的工作转给其他节点，正在运行的工作完成后离开。
+- `--now` 撤销该节点正在运行的工作，由其余节点继续执行。部分任务不支持此方式，`task nodes` 会显示原因。
+- 正在添加的节点显示为“加入中”，通过握手和共享目录检查后才会接收工作。
+
+上传和下载任务需要为每个新增节点指定一个共享目录。CLI 提交前会运行 Master 的共享目录预检，任一绑定失败都会停止：
+
+```sh
+oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --binding 10.0.0.3=/mnt/share --yes
+```
+
+同一时间只能有一个调整在进行。有节点正在加入或排空时，Master 只接受三类调整：移除加入中的节点（取消加入）、用 `--now` 移除排空中的节点、重新添加排空中的节点（取消排空）。其他调整会被拒绝并给出原因。每次调整都带有 CLI 读取到的成员版本；如果期间有人修改了节点，Master 会拒绝本次调整，请重新运行 `task nodes` 后再提交。已停止或失败的任务可以调整，恢复时生效。已完成的任务以及单对象、单文件任务不能调整。
+
+连接在结果返回前中断时，CLI 会打印请求 ID 和成员版本。请先用 `task nodes` 核对。需要重试时，保持原有参数并加上打印出的 `--request-id` 和 `--expected-revision`；Master 会返回原来的结果，不会重复执行调整。
+
+`task show` 也会列出节点成员，标出加入中和排空中的节点，并显示每个节点实际分得的份额。隔离、带宽重新分配和限制条件见[调整任务的执行节点](operations.zh-CN.md#调整任务的执行节点)。
+
 ## 管理节点和异常
 
 ```sh
@@ -108,7 +140,7 @@ oss-transfer-cli update status
 oss-transfer-cli help update
 ```
 
-用 `update master --version 版本 --yes` 更新 Master，再运行 `update agents --all --yes` 把 Agent 更新到它的版本。只更新一个 Agent 时，使用 `update agent --worker 节点 --yes`。用 `update status --watch 5` 跟踪结果；请求被受理并不代表升级已经完成。在线升级需要托管的原生安装。
+用 `update master --version VERSION --yes` 更新 Master，再运行 `update agents --all --yes` 把 Agent 更新到它的版本。只更新一个 Agent 时，使用 `update agent --worker NODE --yes`。用 `update status --watch 5` 跟踪结果；请求被受理并不代表升级已经完成。在线升级需要托管的原生安装。
 
 `update check` 只报告正式版。安装 `4.1.29-beta.1` 这类预发布版本时，需要指定精确版本并明确确认：
 
@@ -118,7 +150,7 @@ oss-transfer-cli update master --version 4.1.29-beta.1 --allow-prerelease --yes
 
 不加 `--allow-prerelease` 时，预发布版本会在发送任何请求之前被拒绝，退出码为 2。为 `update agent` 或 `update agents` 指定预发布的 `--version` 时同样如此。不指定 `--version` 时，Agent 跟随 Master 的当前版本（包括预发布版本），无需该标志。见[预发布版本更新](operations.zh-CN.md#试用预发布版本)。
 
-`backup list` 显示升级备份。`backup prune master --yes` 或 `backup prune agent --worker 节点 --yes` 只删除服务认定可清理的备份。
+`backup list` 显示升级备份。`backup prune master --yes` 或 `backup prune agent --worker NODE --yes` 只删除服务认定可清理的备份。
 
 ## 语言和脚本
 

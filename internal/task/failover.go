@@ -41,6 +41,9 @@ type FailoverState struct {
 }
 
 func (p Parent) NodeRetired(id string) bool {
+	if p.NodeJoining(id) || p.NodeRemoved(id) {
+		return true
+	}
 	if p.Failover == nil {
 		return false
 	}
@@ -165,6 +168,15 @@ func (r *Repository) BeginFailover(id int64, generation uint64, nodeID string) (
 		}
 		p.Failover.Retired[nodeID] = RetiredNode{RetiredAt: now}
 		p.Failover.Migrations[nodeID] = FailoverMigration{Through: p.ChildCount, StartedAt: now}
+		// A node with a pending removal leaves for good once it is fenced,
+		// whether it drained, was removed immediately or lost contact.
+		if _, draining := p.NodeDraining(nodeID); draining {
+			delete(p.Membership.Draining, nodeID)
+			if p.Membership.Removed == nil {
+				p.Membership.Removed = map[string]time.Time{}
+			}
+			p.Membership.Removed[nodeID] = now
+		}
 		p.BudgetRevision++
 		return r.save(tx, p)
 	}))

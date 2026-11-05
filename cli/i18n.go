@@ -176,11 +176,21 @@ func cliUsageErrorf(key string, args ...interface{}) error {
 	return &cliMessageError{key: key, args: args, original: fmt.Errorf(key, args...), usage: true}
 }
 
-func isCLIUsageError(err error) bool {
-	own, ok := err.(*cliMessageError)
-	return ok && own.usage
-}
 func (e *cliMessageError) Error() string { return e.original.Error() }
+
+// asUsageError marks a command-line mistake so the process exits with 2.
+func asUsageError(err error) error {
+	if own, ok := err.(*cliMessageError); ok {
+		marked := *own
+		marked.usage = true
+		return &marked
+	}
+	return err
+}
+func isCLIUsageError(err error) bool {
+	var own *cliMessageError
+	return errors.As(err, &own) && own.usage
+}
 func (e *cliMessageError) Unwrap() error { return e.original }
 func localizedCLIError(locale cliLocale, err error) string {
 	if err == nil {

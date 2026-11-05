@@ -79,6 +79,7 @@ type bindingCheck struct {
 
 func installTaskRoutes(s *Server) error {
 	installInventoryRoutes(s)
+	installTaskMembershipRoutes(s)
 	if err := s.tasks.repo.EnsureListingIndex(); err != nil {
 		return err
 	}
@@ -139,7 +140,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -782,7 +783,7 @@ func taskDTO(p task.Parent) map[string]any {
 	spec := p.Spec
 	nodes := []string{}
 	bindings := []taskBinding{}
-	for _, node := range spec.Nodes {
+	for _, node := range p.CurrentNodes() {
 		nodes = append(nodes, node.Address)
 		if node.LocalRoot != "" {
 			local := node.LocalRoot
@@ -878,6 +879,7 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 	// differ from the node that scanned the shared source.
 	p.Spec.Source, p.Spec.Destination = c.Job.Source, c.Job.Destination
 	p.Spec.Nodes = []task.Node{c.Node}
+	p.Membership = nil
 	row := taskDTO(p)
 	row["taskIndex"] = p.ID
 	row["childTaskId"] = c.Job.ChildID

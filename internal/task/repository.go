@@ -523,7 +523,7 @@ func (r *Repository) UpdateLimits(id int64, mbps *float64, limits *execution.Req
 		if err := validate(p.Spec); err != nil {
 			return err
 		}
-		if p.Spec.BandwidthMbps > 0 && math.Floor(p.Spec.BandwidthMbps*125000) < float64(len(p.Spec.Nodes)) {
+		if p.Spec.BandwidthMbps > 0 && math.Floor(p.Spec.BandwidthMbps*125000) < float64(len(p.CurrentNodes())) {
 			return errors.New("bandwidth budget is too small for the selected Agents")
 		}
 		if !reflect.DeepEqual(before, p.Spec) {
@@ -1012,6 +1012,9 @@ func (r *Repository) FinishIfReady(id int64, generation uint64) (bool, error) {
 		}
 		now := r.now().UTC()
 		p.FinishedAt = &now
+		if p.Status == "COMPLETED" {
+			p.settleMembership(now)
+		}
 		finished = true
 		return r.save(tx, p)
 	})

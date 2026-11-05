@@ -25,7 +25,7 @@ func (t *taskRuntime) rejoinAvailableNodes(ctx context.Context, p task.Parent) (
 		members[m.ID] = m.EnrollmentID
 	}
 	for _, node := range p.Spec.Nodes {
-		if !p.NodeRetired(node.ID) || !p.CanRejoinScanner(node.ID) || members[node.ID] != node.EnrollmentID {
+		if !p.NodeRetired(node.ID) || p.NodeRemoved(node.ID) || !p.CanRejoinScanner(node.ID) || members[node.ID] != node.EnrollmentID {
 			continue
 		}
 		maintenance, maintenanceErr := t.server.agentUnderMaintenance(node.ID)

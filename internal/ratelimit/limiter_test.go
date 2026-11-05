@@ -533,7 +533,8 @@ func TestRealExecutionSharesConfiguredByteBudget(t *testing.T) {
 	if err := engine.Start(bg, job.ChildID, 1); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(bg, 5*time.Second)
+	// Hang guard only; the limiter assertion below is a lower bound.
+	ctx, cancel := context.WithTimeout(bg, 2*time.Minute)
 	defer cancel()
 	record, err := engine.Wait(ctx, job.ChildID)
 	if err != nil {

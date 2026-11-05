@@ -98,7 +98,11 @@ func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.
 	if p.Status != "RUNNING" {
 		return nil, nil
 	}
-	err = t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, childAcceptance(p, child), nil)
+	request, err := t.acceptRequest(callCtx, p, child)
+	if err != nil {
+		return nil, err
+	}
+	err = t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, request, nil)
 	var agentErr *AgentError
 	if child.Job.SharedLocalSource && errors.As(err, &agentErr) && agentErr.Message == agentservice.ErrSharedVerificationRequired.Error() {
 		return nil, nil

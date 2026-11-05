@@ -313,6 +313,11 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 	switch strings.ToLower(row.RangedDownload) {
 	case "", "auto":
 	case execution.RangedDownloadOff:
+		// Checked here as well as in task validation, so the preflight
+		// endpoint rejects the same rows as creation.
+		if spec.Direction != "OSS_TO_LOCAL" {
+			return spec, nil, nil, errors.New(rangedDownloadOffLocalOnly)
+		}
 		spec.RangedDownload = execution.RangedDownloadOff
 	default:
 		return spec, nil, nil, errors.New("rangedDownload must be auto or off")
@@ -1569,6 +1574,8 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
 }
+
+const rangedDownloadOffLocalOnly = "rangedDownload off applies only to downloads to a local directory"
 
 // rangedDownloadView reports a task's ranged-download choice; tasks created
 // before the option existed are automatic.

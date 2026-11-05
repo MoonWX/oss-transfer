@@ -111,6 +111,10 @@ func validate(job Job) (string, error) {
 	job.Assignment = 0
 	job.OwnerEpoch = 0
 	job.DiscoveryComplete = false
+	// The ranged-download choice is how to transfer, not which work: the
+	// Master omits it for Agents that predate it, so a later delivery to the
+	// upgraded Agent may add it to the same child.
+	job.RangedDownload = ""
 	data, err := json.Marshal(job)
 	if err != nil {
 		return "", err
@@ -341,6 +345,7 @@ func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventor
 				return ErrConflict
 			}
 			result = existing
+			result.Job.RangedDownload = job.RangedDownload
 			if existing.Job.Generation < job.Generation {
 				result.Results = append([]ItemResult(nil), existing.Results...)
 				activateGeneration(&result, p)

@@ -413,9 +413,15 @@ func (m *Leases) Close() {
 		m.closeLocked(p)
 	}
 }
+
+// RangedDownloadProtocol is advertised by Agents that accept a job's
+// rangedDownload field. The Master omits the field for older Agents, which
+// stream every object anyway.
+const RangedDownloadProtocol = 1
+
 func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	return map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1}
+	return map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol}
 }

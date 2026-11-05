@@ -41,6 +41,9 @@ type taskRuntime struct {
 	wake         chan struct{}
 	leases       *taskLeases
 	cleanup      *taskCleanupRuntime
+	// rangedSupport decides whether a node's Agent understands a job's
+	// rangedDownload field.
+	rangedSupport rangedDownloadSupport
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {

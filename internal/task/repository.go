@@ -660,6 +660,11 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	}
 	expectedJob := child.Job
 	expectedJob.Generation = p.Generation
+	// An Agent that predates the ranged-download choice received (and
+	// reports) the job without it; see master.acceptRequest.
+	if record.Job.RangedDownload == "" {
+		expectedJob.RangedDownload = ""
+	}
 	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(expectedJob) {
 		return false, ErrConflict
 	}

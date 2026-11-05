@@ -61,7 +61,11 @@ const SchemaEncryptedCredentials = 9
 // SchemaTaskHandoff prevents replaying work revoked for queue rebalancing.
 const SchemaTaskHandoff = 10
 
-const latestSchema = SchemaTaskHandoff
+// SchemaTaskMembership prevents older Masters from discarding pending node
+// joins, drains and removals when they rewrite a task.
+const SchemaTaskMembership = 11
+
+const latestSchema = SchemaTaskMembership
 
 type databaseFormat struct {
 	Role          string `json:"role"`

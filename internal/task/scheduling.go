@@ -151,7 +151,7 @@ func otherPending(tx *state.Tx, p Parent) (map[string]PendingLoad, error) {
 }
 
 func chooseNode(tx *state.Tx, p Parent, other map[string]PendingLoad, available map[string]bool) (Node, error) {
-	nodes := p.ActiveNodes()
+	nodes := p.PlacementNodes()
 	if len(nodes) == 0 {
 		return Node{}, errors.New("no selected execution node is available")
 	}

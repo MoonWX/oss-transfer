@@ -17,7 +17,7 @@ var cleanupBuckets = []string{
 	"master-task-children", "master-task-outstanding", childOrderBucket, allChildOrderBucket,
 	"master-task-load", "master-task-exceptions", "master-task-exceptions-hidden",
 	"master-task-legacy-children", "master-task-legacy-history", "master-task-legacy-order",
-	"master-task-leases",
+	"master-task-leases", nodeRequestBucket,
 }
 
 type CleanupNodeProgress struct {

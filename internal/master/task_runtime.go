@@ -543,6 +543,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	p, membershipErr := t.reconcileMembership(ctx, p, available)
 	if err := t.rebalanceQueued(ctx, p, available); err != nil {
 		memberErr = errors.Join(memberErr, err)
 	}
@@ -561,7 +562,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			}
 		}
 	}
-	defer func() { resultErr = errors.Join(memberErr, resultErr) }()
+	defer func() { resultErr = errors.Join(memberErr, membershipErr, resultErr) }()
 	// Observations do not require the scanner. Preserve healthy peers' progress
 	// even when the original scanner is down or a shared-mount check must wait.
 	if p.Status == "RUNNING" {

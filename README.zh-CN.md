@@ -126,7 +126,7 @@ docker compose up -d master
 docker compose logs master
 ```
 
-在日志中找到 `admin` 的初始密码，然后登录。添加 Agent 时，在 **执行节点 → 添加节点** 中选择 **Docker**。镜像地址是 `moonwx/osstransfer`，目录挂载和升级方法见 [Docker Compose](docs/docker-compose.md)。
+在日志中找到 `admin` 的初始密码，然后登录。添加 Agent 时，在 **执行节点 → 添加节点** 中选择 **Docker**。镜像地址是 `moonwx/osstransfer`，目录挂载和升级方法见 [Docker Compose](docs/docker-compose.zh-CN.md)。
 
 ## 升级
 
@@ -162,11 +162,11 @@ docker compose logs master
 | --- | --- |
 | [安装选项](docs/install.md) | 各系统的安装方法、目录、端口、重装和反向代理 |
 | [离线安装](docs/offline-install.zh-CN.md) | 在无法联网的环境中安装 |
-| [Docker Compose](docs/docker-compose.md) | 容器部署、目录挂载和升级 |
+| [Docker Compose](docs/docker-compose.zh-CN.md) | 容器部署、目录挂载和升级 |
 | [CLI](docs/cli.zh-CN.md) | 命令行的全部用法 |
 | [运维说明](docs/operations.zh-CN.md) | 并发、对象比对、升级、故障转移、调整执行节点、断点续扫、重置密码 |
-| [数据库维护](docs/database-maintenance.md) | 回收数据库文件空间 |
-| [从 V4.0.x 升级](docs/migration.md) | 旧版本数据的离线转换 |
+| [数据库维护](docs/database-maintenance.zh-CN.md) | 回收数据库文件空间 |
+| [从 V4.0.x 升级](docs/migration.zh-CN.md) | 旧版本数据的离线转换 |
 
 ## 从源码构建
 

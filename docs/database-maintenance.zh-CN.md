@@ -1,0 +1,48 @@
+# 数据库空间
+
+[English](database-maintenance.md)
+
+数据库保存对象名称、扫描断点、子任务分配和传输结果。对象内容在端点之间流式传输，不写入数据库。小文件数量达到百万级时，影响数据库大小的主要是对象数量，而不是对象总大小。
+
+未结束的扫描会保留一份索引，用于恢复时去重和检测源端变化。扫描完成后，Agent 在后台以小事务分批删除该索引。Master 将某个扫描批次持久保存为子任务、确认接收并授权释放后，Agent 会在后台删除这个扫描批次，即使扫描仍在进行。未确认的批次继续保留以便投递；重试和报告使用的执行记录也会保留。永久删除任务会清除其扫描和执行记录；停止任务或移入回收站则会保留这些记录。
+
+新写入使用紧凑的对象记录格式，并在压缩能节省空间时压缩较大的值。已有的未压缩记录仍可读取。清理会让数据页可被复用，但不会缩小数据库文件在磁盘上的大小。
+
+Master 和 Agent 数据库中的存储凭证都使用 AES-256-GCM 加密。每个数据库旁边都有自己的 `.key` 文件，仅允许对应的服务账号和系统管理员读取。备份数据库时要一并保存密钥；只复制数据库无法得到可用的凭证备份。这一机制保护的是在没有密钥的情况下被复制走的数据库，无法防御能同时读取这两个文件的账号。
+
+首次启动会迁移已有的存储配置。旧的明文可能仍留在数据库未使用的页中，直到执行一次离线压缩重写文件。压缩会让新数据库不再包含这些页；它不会清除旧备份，也不保证物理磁盘层面的擦除。以后重启不会再次重写整个数据库。
+
+永久删除在后台执行。清理完成前，回收站会显示清理阶段、已删除记录数和已完成节点。关闭页面或重启服务不会丢弃该操作。离线节点恢复后会自动重试；已明确移除的节点会保留其本地历史。在 CLI 中可使用 `oss-transfer-cli task trash` 查看进度。清理只删除任务记录，不删除源端或目标端文件。
+
+原生安装只有在安装器确认启动成功后才会授权释放。这样，如果升级回滚了 Master 的数据库，扫描副本仍然保留。旧版 Master 和安装器不会授权释放，因此它们已确认的批次会继续保留；在授权前已经结束的任务也会保留这些批次。
+
+## 回收磁盘空间
+
+压缩数据库前先停止对应服务。压缩会写入一个单独的文件，紧凑排列数据页，转换旧的 Agent 扫描索引记录，并压缩符合条件的值。发布新文件前会逐条校验所有记录。原文件保持不变，已存在的输出文件也绝不会被覆盖。每 10 秒输出一次进度。
+
+对于安装在默认 Linux 路径下的 Agent：
+
+```sh
+sudo systemctl stop oss-transfer-agent
+sudo /opt/oss-transfer/agent/bin/oss-transfer-agent \
+  --config /opt/oss-transfer/agent/config/service.json \
+  --compact-state /opt/oss-transfer/agent/data/agent.compact.db
+```
+
+压缩成功后，保持服务停止状态，并安装经过校验的副本。以下命令会保留原文件的属主和权限，并且拒绝覆盖已存在的 `agent.before-compact.db`：
+
+```sh
+sudo cp --attributes-only --preserve=mode,ownership /opt/oss-transfer/agent/data/agent.db /opt/oss-transfer/agent/data/agent.compact.db &&
+sudo mv -nT /opt/oss-transfer/agent/data/agent.db /opt/oss-transfer/agent/data/agent.before-compact.db &&
+sudo test ! -e /opt/oss-transfer/agent/data/agent.db &&
+sudo mv -nT /opt/oss-transfer/agent/data/agent.compact.db /opt/oss-transfer/agent/data/agent.db &&
+sudo systemctl start oss-transfer-agent
+```
+
+删除保留的原文件前，先确认节点已重新连接，且其任务和报告都在。对于 Master，将这些命令中的 `agent` 替换为 `master`。如果安装时自定义了路径和服务名，请使用实际的路径和服务名。
+
+对于加密数据库，压缩还会写入 `agent.compact.db.key`，其密钥与 `agent.db.key` 相同。安装压缩后的文件时，保留原位置的 `agent.db.key`。保留的任何数据库备份旁边都要存放一份该密钥；确认启动正常后，可以删除多出来的压缩副本密钥。
+
+目标位置需要有足够空间容纳压缩副本。工具在每个写事务前检查剩余空间，至少预留 256 MiB 外加下一次数据库扩展所需的空间。如果失败，它会删除临时输出，原文件保持完好；此时使用原文件重启服务即可。维护期间其他程序仍可能占用磁盘空间。
+
+紧凑存储使用数据库 schema 4，自动接管任务需要 schema 5，释放已确认的扫描批次会把 Agent 数据库升级到 schema 6。接受后台删除需要 schema 7；故障切换后执行节点重新加入任务需要 schema 8。凭证加密需要 schema 9，队列移交需要 schema 10。旧版程序无法打开其不支持的 schema 的数据库。如需降级，请同时恢复升级前制作的对应数据库备份和旧版程序。

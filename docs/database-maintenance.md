@@ -1,5 +1,7 @@
 # Database space
 
+[中文](database-maintenance.zh-CN.md)
+
 The database stores object names, scan checkpoints, assignments and transfer results. Object contents are streamed between endpoints. With millions of small files, the number of objects matters more to database size than their total size.
 
 An unfinished scan keeps an index for deduplication and source-change detection during recovery. After scanning completes, the Agent removes this index in small background transactions. Once the Master has durably saved a batch as child tasks, acknowledged it and authorized its release, the Agent removes that scan batch in the background, even while scanning continues. Unacknowledged batches remain available for delivery; execution records used by retries and reports are retained. Permanently deleting a task removes its scan and execution records; stopping a task or moving it to the recycle bin retains them.
@@ -44,27 +46,3 @@ For an encrypted database, compaction also writes `agent.compact.db.key` using t
 The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
 
 Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion requires schema 7; rejoining a task node after failover requires schema 8. Credential encryption requires schema 9, and queue handoff requires schema 10. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
-
-## 中文说明
-
-数据库保存对象名称、扫描进度、子任务和传输结果，不保存对象内容。小文件越多，所需的元数据空间越大。
-
-未结束的扫描需要保留去重索引，用于恢复和检测源文件变化。扫描完成后，Agent 在后台分批清理索引。Master 将扫描批次持久保存为子任务、确认接收并授权释放后，Agent 就会分批释放这些扫描批次，无需等待扫描结束。未确认批次继续保留，重试和报告使用的执行记录也继续保留。永久删除任务时才清理扫描和执行记录；停止任务、移入回收站不会删除这些数据。
-
-原生安装必须等安装器确认启动成功后才授权回收，防止升级失败、Master 恢复旧数据库后丢失扫描清单。旧版 Master 或旧安装器不发放释放授权；在授权前已经结束的任务也暂时保留扫描批次。
-
-新写入会减少重复字段，并对较大的记录进行无损压缩。旧记录仍可读取。清理后，数据库可以复用空闲页，但文件本身不会自动缩小。
-
-Master 和 Agent 的存储凭证使用 AES-256-GCM 加密，密钥保存在各自数据库旁的 `.key` 文件中，只允许服务账号和系统管理员读取。备份必须同时保留数据库和密钥；只有数据库无法恢复凭证。这能保护单独泄露的数据库，不能防御同时拥有数据库和密钥读取权限的账号。
-
-首次启动会迁移已有存储配置。旧明文可能仍留在数据库空闲页中，需要执行一次离线压缩才能从新数据库中去掉；旧备份不会随之改变，也不等同于物理磁盘擦除。以后启动不会重复整理整库。
-
-永久删除在后台执行。回收站会显示清理阶段、已清理记录数和已完成节点数，清理完成后才移除任务。关闭页面或重启服务不会丢失清理进度；离线节点恢复后自动继续，已经明确移除的节点保留其本地历史。CLI 可通过 `oss-transfer-cli task trash` 查看进度。清理只删除任务记录，不删除源文件或目标文件。
-
-要把空间归还给文件系统，先停止对应服务，再执行上面的 `--compact-state` 命令。它生成并逐条验证一个新文件，不改动原库；成功后才执行第二组命令替换文件、启动服务。默认 Linux 安装可以直接使用示例，Master 将其中的 `agent` 替换为 `master`；自定义安装使用实际路径和服务名。
-
-加密库压缩后还会生成 `agent.compact.db.key`，内容与原来的 `agent.db.key` 相同。换库时保留原来的 `agent.db.key`；保留旧数据库备份时，也要配套保存密钥副本。新服务验证正常后，可以删除多出的压缩副本密钥。
-
-操作期间需要额外空间容纳副本。程序每批写入前检查剩余空间，至少保留 256 MiB 和下一次扩展所需空间；失败时清理临时副本，原库不变。启动后确认节点、任务和报告正常，再删除保留的原库。
-
-压缩存储使用数据库 schema 4，自动接管任务使用 schema 5，释放已确认扫描批次后 Agent 数据库使用 schema 6。后台删除使用 schema 7，故障节点重新加入使用 schema 8，凭证加密使用 schema 9，排队任务移交使用 schema 10。旧程序不能读取超出其支持范围的格式。降级时需要同时恢复升级前的数据库备份和对应程序。

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -18,8 +19,9 @@ import (
 )
 
 type updateController struct {
-	mu     sync.Mutex
-	status softwareupdate.Status
+	mu      sync.Mutex
+	status  softwareupdate.Status
+	allowed []bool
 }
 
 func TestAgentUpdateDoesNotWaitForOccupiedTransferSlots(t *testing.T) {
@@ -91,11 +93,44 @@ func (u *updateController) Status() softwareupdate.Status {
 func (u *updateController) Check(context.Context) (softwareupdate.Release, error) {
 	return softwareupdate.Release{Version: "4.1.16"}, nil
 }
-func (u *updateController) Start(_ context.Context, version string) (softwareupdate.Status, error) {
+func (u *updateController) Start(_ context.Context, version string, allowPrerelease bool) (softwareupdate.Status, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.allowed = append(u.allowed, allowPrerelease)
 	u.status = softwareupdate.Status{Version: version, Phase: "QUEUED"}
 	return u.status, nil
+}
+
+func TestAgentUpdateCommandCarriesExplicitPrereleaseFlag(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	updater := &updateController{}
+	s, err := New(db, Options{Updater: updater})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	for _, payload := range []string{`{"version":"4.1.16"}`, `{"version":"4.1.16-beta.1","allowPrerelease":true}`, `{"version":"4.1.16","allowPrerelease":false}`} {
+		updater.mu.Lock()
+		updater.status = softwareupdate.Status{}
+		updater.mu.Unlock()
+		reply, err := s.Execute(context.Background(), agenttransport.Command{Request: agenttransport.Request{Operation: "software_update", Mutating: true, Payload: json.RawMessage(payload)}})
+		if err != nil || reply.Status != 200 {
+			t.Fatal(payload, reply, err)
+		}
+	}
+	reply, err := s.Execute(context.Background(), agenttransport.Command{Request: agenttransport.Request{Operation: "software_update", Mutating: true, Payload: json.RawMessage(`{"version":"4.1.16","channel":"beta"}`)}})
+	if err == nil && reply.Status == 200 {
+		t.Fatal("unknown update fields must remain rejected", reply)
+	}
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	if want := []bool{false, true, false}; !reflect.DeepEqual(updater.allowed, want) {
+		t.Fatalf("allowPrerelease = %v, want %v", updater.allowed, want)
+	}
 }
 
 func TestAgentUpdateFencesNewWorkButRetainsReadAndStopCommands(t *testing.T) {

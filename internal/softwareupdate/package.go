@@ -167,14 +167,14 @@ func validateArchive(path, version, target string) (packageIdentity, error) {
 	return identity, nil
 }
 
-func (c *client) prepare(ctx context.Context, work, version, target string) (string, string, error) {
+func (c *client) prepare(ctx context.Context, work, version string, allowPrerelease bool, target string) (string, string, error) {
 	var errs []error
 	for index, source := range c.sourceOrder(ctx) {
 		stage := filepath.Join(work, fmt.Sprintf("package-%d", index))
 		if err := privateDirectory(stage); err != nil {
 			return "", "", err
 		}
-		commit, err := c.prepareFrom(ctx, stage, version, target, source)
+		commit, err := c.prepareFrom(ctx, stage, version, allowPrerelease, target, source)
 		if err == nil {
 			return stage, commit, nil
 		}
@@ -183,8 +183,8 @@ func (c *client) prepare(ctx context.Context, work, version, target string) (str
 	}
 	return "", "", errors.Join(errs...)
 }
-func (c *client) prepareFrom(ctx context.Context, stage, version, target, source string) (string, error) {
-	release, err := c.releaseFrom(ctx, source, version)
+func (c *client) prepareFrom(ctx context.Context, stage, version string, allowPrerelease bool, target, source string) (string, error) {
+	release, err := c.releaseFrom(ctx, source, version, allowPrerelease)
 	if err != nil {
 		return "", err
 	}

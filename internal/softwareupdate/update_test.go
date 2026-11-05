@@ -253,7 +253,7 @@ func TestStartRejectsDowngradesAndIsConcurrentIdempotent(t *testing.T) {
 		return regular(request)
 	}}
 	for _, version := range []string{"1.0.0", "0.9.9", "1.0.1-rc.1", "https://other.test/install.sh", "2.01.0"} {
-		if _, err := manager.Start(context.Background(), version); err == nil {
+		if _, err := manager.Start(context.Background(), version, false); err == nil {
 			t.Fatalf("accepted %q", version)
 		}
 	}
@@ -264,7 +264,7 @@ func TestStartRejectsDowngradesAndIsConcurrentIdempotent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			status, err := manager.Start(context.Background(), "1.0.1")
+			status, err := manager.Start(context.Background(), "1.0.1", false)
 			results <- status
 			errs <- err
 		}()
@@ -289,14 +289,14 @@ func TestStartRejectsDowngradesAndIsConcurrentIdempotent(t *testing.T) {
 	if launches != 1 {
 		t.Fatalf("launched %d helpers", launches)
 	}
-	if _, err := manager.Start(context.Background(), "1.0.2"); err == nil {
+	if _, err := manager.Start(context.Background(), "1.0.2", false); err == nil {
 		t.Fatal("accepted a competing update")
 	}
 	// A new service process may already report the target version while the
 	// independent installer is still doing its readiness check.
 	restarted := &Manager{options: options, executable: executable, info: Info{Supported: true}}
 	restarted.options.Version = "1.0.1"
-	if status, err := restarted.Start(context.Background(), "1.0.1"); err != nil || status.ID != id {
+	if status, err := restarted.Start(context.Background(), "1.0.1", false); err != nil || status.ID != id {
 		t.Fatalf("restart lost active update idempotency: %+v %v", status, err)
 	}
 }
@@ -308,7 +308,7 @@ func TestDownloadPolicyRejectsInsecureRedirectAndUnstableRelease(t *testing.T) {
 		t.Fatal("accepted an HTTP downgrade")
 	}
 	for _, version := range []string{"1.0.1-rc.1", "v1.0.1/../../other", "https://other.invalid/archive"} {
-		if _, err := client.release(context.Background(), version); err == nil {
+		if _, err := client.release(context.Background(), version, false); err == nil {
 			t.Fatalf("accepted %q", version)
 		}
 	}

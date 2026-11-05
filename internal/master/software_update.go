@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -145,18 +144,49 @@ func (s *Server) checkSoftwareUpdatesHTTP(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) updateMasterSoftwareHTTP(w http.ResponseWriter, r *http.Request) {
+	// Normal updates install the checked latest stable release. An explicit
+	// version (the console's hidden prerelease entry or the CLI) requires
+	// allowPrerelease and is verified against published metadata instead.
 	var request struct {
-		Version string `json:"version"`
+		Version         string `json:"version"`
+		AllowPrerelease bool   `json:"allowPrerelease"`
 	}
 	if !readJSON(w, r, &request) {
 		return
 	}
-	s.updates.mu.Lock()
-	checked := s.updates.latest != nil && s.updates.latest.Version == request.Version && time.Since(s.updates.checkedAt) < time.Hour
-	s.updates.mu.Unlock()
-	if !checked || s.options.Updater == nil {
-		fail(w, 409, "Check the latest version before updating")
+	if softwareupdate.IsPrerelease(request.Version) && !request.AllowPrerelease {
+		fail(w, 400, softwareupdate.ErrPrereleaseNotAllowed.Error())
 		return
+	}
+	if request.AllowPrerelease {
+		resolver, ok := s.options.Updater.(softwareupdate.VersionResolver)
+		if !ok || !s.options.Updater.Info().Supported {
+			fail(w, 409, "Online updates are unavailable for this installation")
+			return
+		}
+		if !softwareupdate.ValidVersion(request.Version) {
+			fail(w, 400, softwareupdate.ErrInvalidVersion.Error())
+			return
+		}
+		if !softwareupdate.Newer(request.Version, s.options.Updater.Info().Version) {
+			fail(w, 409, softwareupdate.ErrNotNewer.Error())
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		_, err := resolver.Resolve(ctx, request.Version, true)
+		cancel()
+		if err != nil {
+			fail(w, 502, "The requested release could not be verified; check the version and try again")
+			return
+		}
+	} else {
+		s.updates.mu.Lock()
+		checked := s.updates.latest != nil && s.updates.latest.Version == request.Version && time.Since(s.updates.checkedAt) < time.Hour
+		s.updates.mu.Unlock()
+		if !checked || s.options.Updater == nil {
+			fail(w, 409, "Check the latest version before updating")
+			return
+		}
 	}
 	s.updates.queueMu.Lock()
 	defer s.updates.queueMu.Unlock()
@@ -164,7 +194,7 @@ func (s *Server) updateMasterSoftwareHTTP(w http.ResponseWriter, r *http.Request
 		fail(w, 409, "Wait for Agent updates to finish before updating the Master")
 		return
 	}
-	result, err := s.options.Updater.Start(r.Context(), request.Version)
+	result, err := s.options.Updater.Start(r.Context(), request.Version, request.AllowPrerelease)
 	if err != nil {
 		fail(w, 409, err.Error())
 		return
@@ -199,32 +229,8 @@ func updateInProgress(phase string) bool {
 	return phase == "QUEUED" || phase == "DOWNLOADING" || phase == "APPLYING"
 }
 
-// Stable versions compare numerically; a development build is never silently downgraded.
+// Versions compare by SemVer precedence (4.1.29-beta.1 < 4.1.29); a
+// development build is never silently replaced or downgraded.
 func newerSoftware(target, current string) bool {
-	parse := func(v string) ([3]int, bool) {
-		var out [3]int
-		parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
-		if len(parts) != 3 {
-			return out, false
-		}
-		for i, part := range parts {
-			n, err := strconv.Atoi(part)
-			if err != nil || n < 0 {
-				return out, false
-			}
-			out[i] = n
-		}
-		return out, true
-	}
-	a, ok := parse(target)
-	b, oldOK := parse(current)
-	if !ok || !oldOK {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
+	return softwareupdate.Newer(strings.TrimPrefix(target, "v"), strings.TrimPrefix(current, "v"))
 }

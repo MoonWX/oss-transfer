@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +32,9 @@ type Info struct {
 	Supported bool   `json:"supported"`
 	Reason    string `json:"reason,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	// PrereleaseUpdates advertises that software_update accepts the explicit
+	// allowPrerelease flag. Older Agents omit it and reject unknown fields.
+	PrereleaseUpdates bool `json:"prereleaseUpdates,omitempty"`
 }
 
 type Status struct {
@@ -56,10 +58,11 @@ type installation struct {
 }
 
 type request struct {
-	ID         string  `json:"id"`
-	Version    string  `json:"version"`
-	Options    Options `json:"options"`
-	Executable string  `json:"executable"`
+	ID              string  `json:"id"`
+	Version         string  `json:"version"`
+	AllowPrerelease bool    `json:"allowPrerelease,omitempty"`
+	Options         Options `json:"options"`
+	Executable      string  `json:"executable"`
 }
 
 type Manager struct {
@@ -76,7 +79,7 @@ type Manager struct {
 func New(options Options) *Manager {
 	executable, _ := os.Executable()
 	m := &Manager{options: options, executable: executable, client: newClient(), launch: launchHelper}
-	m.info = Info{Role: options.Role, Version: options.Version, Commit: options.Commit, Platform: platform()}
+	m.info = Info{Role: options.Role, Version: options.Version, Commit: options.Commit, Platform: platform(), PrereleaseUpdates: true}
 	err := checkContainer()
 	var installed installation
 	if err == nil {
@@ -110,7 +113,8 @@ func (m *Manager) Check(ctx context.Context) (Release, error) {
 		return release, nil
 	}
 	m.mu.Unlock()
-	release, err := m.client.release(ctx, "latest")
+	// Automatic offers only consider the latest stable release.
+	release, err := m.client.release(ctx, "latest", false)
 	if err != nil {
 		return Release{}, err
 	}
@@ -118,6 +122,16 @@ func (m *Manager) Check(ctx context.Context) (Release, error) {
 	m.release, m.lastCheck = release, time.Now()
 	m.mu.Unlock()
 	return release, nil
+}
+
+// Resolve verifies the published metadata of one exact version. It does not
+// change the cached latest-stable result returned by Check.
+func (m *Manager) Resolve(ctx context.Context, version string, allowPrerelease bool) (Release, error) {
+	version = strings.TrimPrefix(version, "v")
+	if err := checkRequested(version, allowPrerelease); err != nil {
+		return Release{}, err
+	}
+	return m.client.release(ctx, version, allowPrerelease)
 }
 
 func (m *Manager) statusPath() string {
@@ -157,7 +171,7 @@ func StartsWork(operation string) bool {
 
 func InProgress(phase string) bool { return active(phase) }
 
-func (m *Manager) Start(ctx context.Context, version string) (Status, error) {
+func (m *Manager) Start(ctx context.Context, version string, allowPrerelease bool) (Status, error) {
 	if err := ctx.Err(); err != nil {
 		return Status{}, err
 	}
@@ -169,8 +183,8 @@ func (m *Manager) Start(ctx context.Context, version string) (Status, error) {
 		return Status{}, errors.New(message)
 	}
 	version = strings.TrimPrefix(version, "v")
-	if !stableVersion.MatchString(version) {
-		return Status{}, errors.New("Only a newer stable release can be installed")
+	if err := checkRequested(version, allowPrerelease); err != nil {
+		return Status{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -181,8 +195,8 @@ func (m *Manager) Start(ctx context.Context, version string) (Status, error) {
 		}
 		return previous, errors.New("Another update is already in progress")
 	}
-	if compareVersions(version, m.options.Version) <= 0 {
-		return Status{}, errors.New("Only a newer stable release can be installed")
+	if !Newer(version, m.options.Version) {
+		return Status{}, ErrNotNewer
 	}
 	if _, err := inspectInstallation(m.options, m.executable); err != nil {
 		return Status{}, err
@@ -204,7 +218,7 @@ func (m *Manager) Start(ctx context.Context, version string) (Status, error) {
 	requestPath := filepath.Join(work, "request.json")
 	err := copyRegular(m.executable, helper, 0755, 512<<20)
 	if err == nil {
-		err = writeJSON(requestPath, request{ID: id, Version: version, Options: m.options, Executable: m.executable})
+		err = writeJSON(requestPath, request{ID: id, Version: version, AllowPrerelease: allowPrerelease && IsPrerelease(version), Options: m.options, Executable: m.executable})
 	}
 	if err == nil {
 		err = m.launch(helper, requestPath, filepath.Join(work, "helper.log"))
@@ -222,8 +236,10 @@ func inspectInstallation(options Options, executable string) (installation, erro
 	if options.Role != "master" && options.Role != "agent" {
 		return installed, errors.New("Unsupported service role")
 	}
-	if !stableVersion.MatchString(options.Version) {
-		return installed, errors.New("Online updates require a stable installed release")
+	// Stable and prerelease installations can both be updated; development
+	// builds have no comparable release version.
+	if !ValidVersion(options.Version) {
+		return installed, errors.New("Online updates require an installed release version")
 	}
 	for _, path := range []string{options.DataDirectory, options.ConfigPath, executable} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n\t") {
@@ -312,24 +328,6 @@ func executableSuffix() string {
 		return ".exe"
 	}
 	return ""
-}
-
-func compareVersions(a, b string) int {
-	if !stableVersion.MatchString(a) || !stableVersion.MatchString(b) {
-		return 0
-	}
-	x, y := strings.Split(a, "."), strings.Split(b, ".")
-	for i := range x {
-		left, _ := strconv.ParseUint(x[i], 10, 32)
-		right, _ := strconv.ParseUint(y[i], 10, 32)
-		if left < right {
-			return -1
-		}
-		if left > right {
-			return 1
-		}
-	}
-	return 0
 }
 
 func regular(path string) error {

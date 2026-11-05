@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-var maintenanceVersion = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+var maintenanceVersion = regexp.MustCompile(`^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$`)
+var prereleaseIdentifier = regexp.MustCompile(`^[0-9A-Za-z-]+$`)
+var numericIdentifier = regexp.MustCompile(`^[0-9]+$`)
 
 func runMaintenanceCommand(client *ApiClient, group string, args []string) (map[string]interface{}, error) {
 	if len(args) == 0 {
@@ -26,11 +28,36 @@ func runMaintenanceCommand(client *ApiClient, group string, args []string) (map[
 	}
 }
 
-func updateVersion(value string) (string, error) {
-	if len(value) > 64 || !maintenanceVersion.MatchString(value) {
-		return "", cliErrorf("--version 必须是发布版本号，如 4.1.22")
+// releaseVersion mirrors the service's SemVer rules: MAJOR.MINOR.PATCH with an
+// optional prerelease (4.1.29-beta.1), no leading zeros, no build metadata and
+// bounded lengths. It reports whether the version is a prerelease.
+func releaseVersion(value string) (string, bool, bool) {
+	value = strings.TrimPrefix(value, "v")
+	core, pre, hasPre := strings.Cut(value, "-")
+	if len(value) > 64 || !maintenanceVersion.MatchString(core) {
+		return "", false, false
 	}
-	return strings.TrimPrefix(value, "v"), nil
+	if !hasPre {
+		return value, false, true
+	}
+	identifiers := strings.Split(pre, ".")
+	if len(identifiers) > 8 || identifiers[0] == "dev" {
+		return "", false, false
+	}
+	for _, identifier := range identifiers {
+		if len(identifier) > 32 || !prereleaseIdentifier.MatchString(identifier) || numericIdentifier.MatchString(identifier) && (len(identifier) > 9 || len(identifier) > 1 && identifier[0] == '0') {
+			return "", false, false
+		}
+	}
+	return value, true, true
+}
+
+func updateVersion(value string) (string, bool, error) {
+	version, prerelease, ok := releaseVersion(value)
+	if !ok {
+		return "", false, cliErrorf("--version 必须是发布版本号，如 4.1.22")
+	}
+	return version, prerelease, nil
 }
 
 func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
@@ -46,7 +73,7 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	if action != "master" && action != "agent" && action != "agents" {
 		return nil, cliErrorf("未知 update 子命令: %s", action)
 	}
-	o, err := adminOptions(args, []string{"version", "worker"}, []string{"all", "yes"}, 0)
+	o, err := adminOptions(args, []string{"version", "worker"}, []string{"all", "yes", "allow-prerelease"}, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +84,7 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	switch action {
 	case "master":
 		if !o.Has("version") || o.Has("worker") || o.Has("all") {
-			return nil, cliErrorf("用法: update master --version 版本 --yes")
+			return nil, cliErrorf("用法: update master --version 版本 [--allow-prerelease] --yes")
 		}
 	case "agent":
 		if !o.Has("worker") || o.Has("all") {
@@ -74,9 +101,18 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	}
 	version := ""
 	if o.Has("version") {
-		version, err = updateVersion(o.Value("version"))
+		var prerelease bool
+		version, prerelease, err = updateVersion(o.Value("version"))
 		if err != nil {
 			return nil, err
+		}
+		// A chosen prerelease is an experimental build that normal updates
+		// never offer; installing it needs a second, explicit flag.
+		if prerelease && !o.Has("allow-prerelease") {
+			return nil, cliUsageErrorf("%s 是预发布（实验）版本，正常更新不会提供；确认安装请同时指定 --allow-prerelease", version)
+		}
+		if action == "master" && o.Has("allow-prerelease") {
+			return client.Post(path, map[string]interface{}{"version": version, "allowPrerelease": true})
 		}
 	} else {
 		// Agents follow the running Master's version, never a newer release or
@@ -87,7 +123,9 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		}
 		master, _ := adminData(snapshot)["master"].(map[string]interface{})
 		info, _ := master["info"].(map[string]interface{})
-		version, err = updateVersion(getString(info, "version"))
+		// The Master's own version is the explicit choice, so Agents may
+		// follow a prerelease Master without --allow-prerelease.
+		version, _, err = updateVersion(getString(info, "version"))
 		if err != nil {
 			return nil, cliErrorf("无法确定 Master 的发布版本，请先查看 update status")
 		}

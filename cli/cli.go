@@ -228,6 +228,9 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			if ctx.Err() != nil {
 				return 130
 			}
+			if isCLIUsageError(callErr) {
+				return 2
+			}
 			if incompleteResult(result) {
 				return 3
 			}

@@ -163,10 +163,22 @@ type cliMessageError struct {
 	key      string
 	args     []interface{}
 	original error
+	// usage marks command-line misuse detected before any request; the CLI
+	// exits with status 2 for these.
+	usage bool
 }
 
 func cliErrorf(key string, args ...interface{}) error {
 	return &cliMessageError{key: key, args: args, original: fmt.Errorf(key, args...)}
+}
+
+func cliUsageErrorf(key string, args ...interface{}) error {
+	return &cliMessageError{key: key, args: args, original: fmt.Errorf(key, args...), usage: true}
+}
+
+func isCLIUsageError(err error) bool {
+	own, ok := err.(*cliMessageError)
+	return ok && own.usage
 }
 func (e *cliMessageError) Error() string { return e.original.Error() }
 func (e *cliMessageError) Unwrap() error { return e.original }

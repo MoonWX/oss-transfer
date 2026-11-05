@@ -141,7 +141,7 @@ _oss_transfer_cli_completion() {
             esac ;;
         update)
             if [[ -z $action ]]; then choices="status check master agent agents";
-            elif [[ $action == master || $action == agent || $action == agents ]]; then flags="--version --worker --all --yes"; fi ;;
+            elif [[ $action == master || $action == agent || $action == agents ]]; then flags="--version --allow-prerelease --worker --all --yes"; fi ;;
         backup)
             if [[ -z $action ]]; then choices="list prune";
             elif [[ $action == prune ]]; then choices="master agent"; flags="--worker --yes"; fi ;;

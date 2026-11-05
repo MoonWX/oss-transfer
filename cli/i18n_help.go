@@ -19,19 +19,26 @@ var cliHelpTranslations = map[string][2]string{
   oss-transfer-cli update status
   oss-transfer-cli update check
   oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update master --version 4.1.21-beta.1 --allow-prerelease --yes
   oss-transfer-cli update agent --worker NODE --yes
   oss-transfer-cli update agents --all --yes
 
 Agents default to the Master's current version; --version selects another release.
+Update checks offer stable releases only. A prerelease (beta/rc) is installed only
+with an exact --version plus --allow-prerelease; Agents may follow a prerelease Master.
 Follow queued updates with update status --watch 5. Acceptance is not completion.
 `, `サービス更新
   oss-transfer-cli update status
   oss-transfer-cli update check
   oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update master --version 4.1.21-beta.1 --allow-prerelease --yes
   oss-transfer-cli update agent --worker ノード --yes
   oss-transfer-cli update agents --all --yes
 
 Agent は既定で Master の現在のバージョンに更新します。--version で変更できます。
+更新の確認では安定版のみを提示します。プレリリース（beta/rc）は --version で正確に
+指定し --allow-prerelease を付けた場合のみインストールします。Master がプレリリースの
+場合、Agent は同じバージョンに追従できます。
 update status --watch 5 で結果を確認します。受付は更新完了を意味しません。
 `},
 	cliBackupHelp: {`Upgrade backups

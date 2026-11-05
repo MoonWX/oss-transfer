@@ -10,44 +10,42 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
-// rangedSupportTTL bounds how long a capability answer is reused. A stale
-// answer is safe either way: a job without the field streams (see
-// execution.Job.RangedDownload), and a field sent to an Agent that no longer
-// understands it only fails deliveries until the answer expires.
+// rangedSupportTTL bounds how long a positive capability answer is reused. A
+// field sent to an Agent that no longer understands it (a downgrade) only
+// fails deliveries until the answer expires.
 const rangedSupportTTL = time.Minute
 
-type rangedAnswer struct {
-	supported bool
-	until     time.Time
-}
-
-// rangedDownloadSupport remembers which Agents advertised
-// agentservice.RangedDownloadProtocol.
+// rangedDownloadSupport remembers Agents that advertised
+// agentservice.RangedDownloadProtocol. Negative answers are not kept: a child
+// delivered without the field streams for good (see execution.Job), so an
+// Agent upgraded in place must be asked again on its next delivery rather
+// than be served a remembered "unsupported". Only an Agent that is still old
+// is asked on every delivery. A slow query that started before an upgrade
+// cannot erase a newer positive answer, because nothing negative is stored.
 type rangedDownloadSupport struct {
-	mu      sync.Mutex
-	answers map[string]rangedAnswer
+	mu    sync.Mutex
+	until map[string]time.Time
 }
 
 func (r *rangedDownloadSupport) supported(ctx context.Context, node task.Node, query func(context.Context, task.Node) (int, error)) (bool, error) {
 	now := time.Now()
 	r.mu.Lock()
-	if answer, ok := r.answers[node.ID]; ok && now.Before(answer.until) {
+	if until, ok := r.until[node.ID]; ok && now.Before(until) {
 		r.mu.Unlock()
-		return answer.supported, nil
+		return true, nil
 	}
 	r.mu.Unlock()
 	protocol, err := query(ctx, node)
-	if err != nil {
+	if err != nil || protocol < agentservice.RangedDownloadProtocol {
 		return false, err
 	}
-	supported := protocol >= agentservice.RangedDownloadProtocol
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.answers == nil {
-		r.answers = map[string]rangedAnswer{}
+	if r.until == nil {
+		r.until = map[string]time.Time{}
 	}
-	r.answers[node.ID] = rangedAnswer{supported: supported, until: now.Add(rangedSupportTTL)}
-	return supported, nil
+	r.until[node.ID] = now.Add(rangedSupportTTL)
+	return true, nil
 }
 
 func (t *taskRuntime) rangedDownloadProtocol(ctx context.Context, node task.Node) (int, error) {
@@ -68,8 +66,10 @@ func (t *taskRuntime) rangedDownloadProtocol(ctx context.Context, node task.Node
 // without the field streams. A current Agent therefore receives the task's
 // choice spelled out ("auto" or "off"), while an Agent that predates the
 // field, and would reject it, receives none and streams, which is all it
-// can do anyway. A child it accepted keeps streaming after that Agent is
-// upgraded, so an "off" choice can never be lost to a rolling upgrade.
+// can do anyway. Any child delivered without the field keeps streaming,
+// including after that Agent is upgraded, so an "off" choice can never be
+// lost to a rolling upgrade; an "auto" child ranges again after the task is
+// stopped and resumed, which delivers the choice anew.
 func (t *taskRuntime) acceptRequest(ctx context.Context, p task.Parent, child task.Child) (agentservice.ChildAcceptRequest, error) {
 	request := childAcceptance(p, child)
 	if child.Job.Destination.Kind != "LOCAL" {

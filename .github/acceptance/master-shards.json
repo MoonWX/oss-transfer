@@ -106,11 +106,10 @@
     "TestRangedDownloadChoiceAppliesToTheSeed": 0,
     "TestRangedDownloadIsReportedAndSurvivesExportImport": 0,
     "TestRangedDownloadRequestNormalization": 0,
-    "TestRangedSupportReusesAnswersPerNode": 0,
+    "TestRangedSupportRemembersOnlyPositiveAnswers": 0,
     "TestRemoveNowRevokesRunningWorkOnLiveNode": 1.8,
     "TestNodeChangeAPIRejections": 1.6,
     "TestNodeChangeRejectsCompletedAndSingleObjectTasks": 1.0,
-    "TestStaleCapabilityAnswerFallsBackToStreaming": 1.01,
     "TestStoppedTaskWithoutFencingRejectsChangesWithOfflineMember": 1.0,
     "TestLocalDrainCancelAcceptsExistingBinding": 1.2,
     "TestDryRunWithSeenRequestIDReplays": 1.0,
@@ -206,6 +205,7 @@
     "TestTaskSpeedFreshnessMatchesWhileFileProgressExpiresEarlier": 1.05,
     "TestTaskStepAcknowledgesDurablePrefixWithFullDispatchQueue": 0.94,
     "TestUnsavedNodeAddressesAreRetried": 0.01,
+    "TestUpgradedAgentReceivesTheChoiceOnItsNextDelivery": 1.1,
     "TestWindowsAgentCommandRunsDownloadedInstaller": 0
   }
 }

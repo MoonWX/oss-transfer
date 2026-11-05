@@ -110,13 +110,34 @@ func rangedDownloadTask(t *testing.T, runtime *taskRuntime, node task.Node, name
 	return p, child
 }
 
+// retryAgentCall repeats an idempotent Master-to-Agent call, as the task loop
+// does on its next cycle: a call can time out while a restarted Agent
+// reconnects. ctx is the hang guard.
+func retryAgentCall(t *testing.T, ctx context.Context, call func() error) {
+	t.Helper()
+	for {
+		err := call()
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("Agent call kept failing: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond) // pacing between attempts, not a deadline
+	}
+}
+
 // observeAndReport runs the Master's observation of one child, then its
 // report export after the child has ended, through the real Agent calls.
 func observeAndReport(t *testing.T, ctx context.Context, runtime *taskRuntime, agent *rangedAgent, p task.Parent, child task.Child) execution.Record {
 	t.Helper()
-	record, err := runtime.observeOne(ctx, p, child, nil)
-	if err != nil || record == nil {
-		t.Fatalf("observation: %v %v", record, err)
+	var record *execution.Record
+	retryAgentCall(t, ctx, func() (err error) {
+		record, err = runtime.observeOne(ctx, p, child, nil)
+		return err
+	})
+	if record == nil {
+		t.Fatal("observation returned no record")
 	}
 	if err := runtime.repo.Observe(p.ID, p.Generation, 1, *record); err != nil {
 		t.Fatalf("Master rejected the Agent's record: %v", err)
@@ -176,9 +197,9 @@ func TestRangedDownloadChoiceAcrossAgentVersions(t *testing.T) {
 	}
 }
 
-// One answer per node is reused, whether or not the Agent supports the
-// field; failed queries are not remembered.
-func TestRangedSupportReusesAnswersPerNode(t *testing.T) {
+// Only a positive answer is reused: an Agent that does not support the field
+// (or cannot be asked) is asked again on every delivery.
+func TestRangedSupportRemembersOnlyPositiveAnswers(t *testing.T) {
 	var support rangedDownloadSupport
 	queries := map[string]int{}
 	protocols := map[string]int{"new": agentservice.RangedDownloadProtocol, "old": 0}
@@ -199,32 +220,42 @@ func TestRangedSupportReusesAnswersPerNode(t *testing.T) {
 			t.Fatal("failed query reported an answer")
 		}
 	}
-	if queries["new"] != 1 || queries["old"] != 1 || queries["offline"] != 3 {
+	if queries["new"] != 1 || queries["old"] != 3 || queries["offline"] != 3 {
 		t.Fatalf("queries %v", queries)
+	}
+	// An Agent upgraded after answering "unsupported" is recognised at once.
+	protocols["old"] = agentservice.RangedDownloadProtocol
+	if got, err := support.supported(context.Background(), task.Node{ID: "old"}, query); err != nil || !got {
+		t.Fatal("upgraded Agent still treated as unsupported", err)
 	}
 }
 
-// A stale "unsupported" answer reaching an Agent that has just been upgraded
-// delivers the job without the field, which streams: the safe direction.
-func TestStaleCapabilityAnswerFallsBackToStreaming(t *testing.T) {
+// An Agent asked while it was old and then upgraded in place receives the
+// task's choice on its next delivery, for Auto and Off tasks alike.
+func TestUpgradedAgentReceivesTheChoiceOnItsNextDelivery(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // hang guard only
 	defer cancel()
 	runtime := f.master.tasks
-	agent := rangedTestAgent(t, f, "ranged-race", true)
-	p, child := rangedDownloadTask(t, runtime, agent.node, "race", execution.RangedDownloadOff)
-	if supported, err := runtime.rangedSupport.supported(ctx, agent.node, runtime.rangedDownloadProtocol); err != nil || supported {
-		t.Fatal("old Agent reported support", err)
+	for _, test := range []struct{ name, choice, delivered string }{
+		{"auto", "", execution.RangedDownloadAuto},
+		{"off", execution.RangedDownloadOff, execution.RangedDownloadOff},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			agent := rangedTestAgent(t, f, "ranged-upgrade-"+test.name, true)
+			p, child := rangedDownloadTask(t, runtime, agent.node, "upgrade-"+test.name, test.choice)
+			if supported, err := runtime.rangedSupport.supported(ctx, agent.node, runtime.rangedDownloadProtocol); err != nil || supported {
+				t.Fatal("old Agent reported support", err)
+			}
+			agent.upgrade()
+			retryAgentCall(t, ctx, func() error { return runtime.deliverChildren(ctx, p, []task.Child{child}) })
+			record, err := agent.service.Engine.Get(ctx, child.Job.ChildID)
+			if err != nil || record.Job.RangedDownload != test.delivered {
+				t.Fatalf("upgraded Agent received %q, want %q (%v)", record.Job.RangedDownload, test.delivered, err)
+			}
+			observeAndReport(t, ctx, runtime, agent, p, child)
+		})
 	}
-	agent.upgrade()
-	if err := runtime.deliverChildren(ctx, p, []task.Child{child}); err != nil {
-		t.Fatal(err)
-	}
-	record, err := agent.service.Engine.Get(ctx, child.Job.ChildID)
-	if err != nil || record.Job.RangedDownload != "" {
-		t.Fatalf("stale answer delivered %q (%v)", record.Job.RangedDownload, err)
-	}
-	observeAndReport(t, ctx, runtime, agent, p, child)
 }
 
 // A takeover seed carries its own copy of the job; both get the same choice.

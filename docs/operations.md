@@ -22,7 +22,7 @@ Download tasks (object storage to a local directory) have a **Ranged download** 
 
 From the CLI, add `--ranged-download off` to `task create oss-to-local` (see [CLI](cli.md#create-tasks-and-set-limits)). In the API and in import files, a task request row takes `"rangedDownload": "auto"` or `"off"`; omitting it means auto, and `off` is rejected for tasks whose destination is not a local directory. Task details and exported rows include `rangedDownload`.
 
-Agents from before this option never download in ranges, so they already behave as Off. During a rolling upgrade the Master sends the choice only to Agents that report support for it. A child task accepted by an older Agent keeps one stream per object even after that Agent is upgraded, for Auto tasks too; stop and resume the task to let those children use ranges. An Off choice is therefore never lost during an upgrade.
+Agents from before this option never download in ranges, so they already behave as Off. During a rolling upgrade the Master sends the choice only to Agents that report support for it, and asks an Agent that did not support it again on its next delivery. A child task delivered without the choice keeps one stream per object, for Auto tasks too, until the task is stopped and resumed. This covers children accepted by an Agent before it was upgraded and children delivered by a Master from before this option, including to Agents that were already upgraded. An Off choice is therefore never lost during an upgrade.
 
 ## Compare objects
 

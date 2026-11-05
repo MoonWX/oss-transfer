@@ -2230,14 +2230,7 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "実行ノード情報が無効です。再試行してください。",
   },
   加入中: { en: "Joining", ja: "参加中" },
-  排空中: { en: "Draining", ja: "ドレイン中" },
-  立即移除中: { en: "Removing now", ja: "即時削除中" },
   已失联: { en: "Disconnected", ja: "接続断" },
-  扫描: { en: "Scanner", ja: "スキャン" },
-  "带宽份额 {value}": {
-    en: "Bandwidth share {value}",
-    ja: "帯域幅の割り当て {value}",
-  },
   "预检失败，请重试。": {
     en: "Preflight check failed. Try again.",
     ja: "事前チェックに失敗しました。再試行してください。",
@@ -2250,27 +2243,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Submission failed. Try again.",
     ja: "送信に失敗しました。再試行してください。",
   },
-  扫描节点: { en: "Scanner node", ja: "スキャンノード" },
-  "剩余 {count} 个子任务待移交或完成": {
-    en: "Subtasks left to hand off or finish: {count}",
-    ja: "引き継ぎまたは完了待ちのサブタスク: {count}",
-  },
-  "未完成子任务 {count}": {
-    en: "Unfinished subtasks: {count}",
-    ja: "未完了のサブタスク: {count}",
-  },
   "正在完成握手与检查，加入后开始分配任务": {
     en: "Completing handshake and checks; work is assigned after it joins",
     ja: "ハンドシェイクとチェックを実行中です。参加後に作業が割り当てられます",
-  },
-  "移除 {node}": { en: "Remove {node}", ja: "{node} を削除" },
-  "取消立即移除，保留 {node}": {
-    en: "Cancel immediate removal and keep {node}",
-    ja: "即時削除を取り消して {node} を残す",
-  },
-  "取消排空，保留 {node}": {
-    en: "Cancel draining and keep {node}",
-    ja: "ドレインを取り消して {node} を残す",
   },
   "{node} 的本地绝对路径": {
     en: "Absolute local path on {node}",
@@ -2297,36 +2272,12 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Execution nodes of this task cannot be changed",
     ja: "このタスクの実行ノードは変更できません",
   },
-  "上一次节点变更仍在进行中。此时只能取消加入中的节点、将排空中的节点改为立即移除，或保留排空中的节点。":
-    {
-      en: "A previous node change is still in progress. Until it finishes you can only cancel a joining node, switch a draining node to immediate removal, or keep a draining node.",
-      ja: "前回のノード変更がまだ進行中です。完了するまでは、参加中のノードの取り消し、ドレイン中のノードの即時削除への切り替え、またはドレイン中のノードの維持のみ行えます。",
-    },
   当前节点: { en: "Current nodes", ja: "現在のノード" },
   "没有可添加的在线 Agent": {
     en: "No online Agents available to add",
     ja: "追加できるオンラインの Agent はありません",
   },
-  "添加 {node}": { en: "Add {node}", ja: "{node} を追加" },
   暂不可添加: { en: "Cannot be added now", ja: "現在は追加できません" },
-  移除方式: { en: "Removal mode", ja: "削除方法" },
-  "排空后移除（推荐）": {
-    en: "Drain, then remove (recommended)",
-    ja: "ドレイン後に削除（推奨）",
-  },
-  "不再分配新任务，排队中的任务移交其他节点，进行中的任务完成后节点退出。": {
-    en: "No new work is assigned, queued work moves to other nodes, and the node leaves once its running work finishes.",
-    ja: "新しい作業は割り当てられず、待機中の作業は他のノードへ移り、実行中の作業が完了するとノードが離脱します。",
-  },
-  立即移除: { en: "Remove now", ja: "今すぐ削除" },
-  当前任务不支持立即移除: {
-    en: "This task does not support immediate removal",
-    ja: "このタスクは即時削除に対応していません",
-  },
-  "进行中的任务会被停止，并由剩余节点从已保存的进度继续。": {
-    en: "Running work is stopped and continues on the remaining nodes from saved progress.",
-    ja: "実行中の作業は停止され、残りのノードが保存済みの進捗から再開します。",
-  },
   至少保留一个执行节点: {
     en: "Keep at least one execution node",
     ja: "実行ノードを少なくとも 1 つ残してください",
@@ -2340,16 +2291,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Confirm the following execution node change:",
     ja: "次の実行ノードの変更を確認してください:",
   },
-  "添加：{nodes}": { en: "Add: {nodes}", ja: "追加: {nodes}" },
-  "移除：{nodes}": { en: "Remove: {nodes}", ja: "削除: {nodes}" },
-  "移除方式：立即移除": {
-    en: "Removal mode: remove now",
-    ja: "削除方法: 今すぐ削除",
-  },
-  "移除方式：排空后移除": {
-    en: "Removal mode: drain, then remove",
-    ja: "削除方法: ドレイン後に削除",
-  },
   "变更将立即开始生效。": {
     en: "The change takes effect immediately.",
     ja: "変更はすぐに有効になります。",
@@ -2358,6 +2299,117 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The change takes effect when the task resumes.",
     ja: "変更はタスクの再開時に有効になります。",
   },
+  平滑移出中: { en: "Leaving gracefully", ja: "段階的に除外中" },
+  立即移出中: { en: "Removing now", ja: "即時除外中" },
+  移出中: { en: "Leaving", ja: "除外中" },
+  将移出: { en: "Will be removed", ja: "除外予定" },
+  将保留: { en: "Will be kept", ja: "維持予定" },
+  将添加: { en: "Will be added", ja: "追加予定" },
+  撤销: { en: "Undo", ja: "元に戻す" },
+  "撤销移出 {node}": {
+    en: "Undo removing {node}",
+    ja: "{node} の除外を元に戻す",
+  },
+  "撤销保留 {node}": {
+    en: "Undo keeping {node}",
+    ja: "{node} の維持を元に戻す",
+  },
+  "撤销添加 {node}": {
+    en: "Undo adding {node}",
+    ja: "{node} の追加を元に戻す",
+  },
+  保留: { en: "Keep", ja: "維持" },
+  "保留 {node}": { en: "Keep {node}", ja: "{node} を維持" },
+  改为立即移出: { en: "Remove now instead", ja: "すぐに除外に切り替え" },
+  "改为立即移出 {node}": {
+    en: "Remove {node} now instead",
+    ja: "{node} をすぐに除外に切り替え",
+  },
+  取消加入: { en: "Cancel joining", ja: "参加を取り消す" },
+  "取消加入 {node}": {
+    en: "Cancel joining {node}",
+    ja: "{node} の参加を取り消す",
+  },
+  移出: { en: "Remove", ja: "除外" },
+  "移出 {node}": { en: "Remove {node}", ja: "{node} を除外" },
+  待完成或移交: { en: "To finish or hand off", ja: "完了または引き継ぎ待ち" },
+  带宽份额: { en: "Bandwidth share", ja: "帯域幅の割り当て" },
+  请求份额: { en: "Request share", ja: "リクエストの割り当て" },
+  扫描节点: { en: "Scanner node", ja: "スキャンノード" },
+  "添加 Agent": { en: "Add Agent", ja: "Agent を追加" },
+  "Agent 上线并完成注册后会出现在这里。": {
+    en: "Agents appear here once they are online and registered.",
+    ja: "Agent がオンラインになり登録されると、ここに表示されます。",
+  },
+  "在线 Agent 暂不满足加入条件，可在列表中查看原因。": {
+    en: "No online Agent can join yet; open the list to see why.",
+    ja: "参加条件を満たすオンラインの Agent はまだありません。理由は一覧で確認できます。",
+  },
+  "所有可添加的 Agent 都已选择。": {
+    en: "Every Agent that can be added is selected.",
+    ja: "追加できる Agent はすべて選択済みです。",
+  },
+  "{count} 个在线 Agent 可添加。": {
+    en: "Online Agents that can be added: {count}",
+    ja: "追加できるオンラインの Agent: {count}",
+  },
+  移出方式: { en: "Removal mode", ja: "除外方法" },
+  "平滑移出（推荐）": {
+    en: "Remove gracefully (recommended)",
+    ja: "段階的に除外（推奨）",
+  },
+  平滑移出: { en: "Remove gracefully", ja: "段階的に除外" },
+  立即移出: { en: "Remove now", ja: "すぐに除外" },
+  正在传输的子任务完成后离开: {
+    en: "Leaves after its running subtasks finish",
+    ja: "実行中のサブタスクが完了してから離脱します",
+  },
+  正在传输的子任务转给其他节点继续: {
+    en: "Running subtasks continue on other nodes",
+    ja: "実行中のサブタスクは他のノードで続行されます",
+  },
+  当前任务不支持立即移出: {
+    en: "This task does not support immediate removal",
+    ja: "このタスクはすぐに除外できません",
+  },
+  "添加 {count} 个节点": {
+    en: "Add {count} nodes",
+    ja: "{count} 個のノードを追加",
+  },
+  "移出 {count} 个节点": {
+    en: "Remove {count} nodes",
+    ja: "{count} 個のノードを除外",
+  },
+  "保留 {count} 个节点": {
+    en: "Keep {count} nodes",
+    ja: "{count} 個のノードを維持",
+  },
+  提交变更: { en: "Submit change", ja: "変更を送信" },
+  预览变更: { en: "Review change", ja: "変更を確認" },
+  选择要添加或移出的节点: {
+    en: "Choose nodes to add or remove",
+    ja: "追加または除外するノードを選択してください",
+  },
+  填写新节点的本地绝对路径后才能继续: {
+    en: "Enter the absolute local path for each new node to continue",
+    ja: "続行するには、新しいノードのローカル絶対パスを入力してください",
+  },
+  "正在预检…": { en: "Running preflight check…", ja: "事前チェック中…" },
+  预检通过后才能继续: {
+    en: "Pass the preflight check to continue",
+    ja: "続行するには事前チェックに合格してください",
+  },
+  "待提交：{changes}": { en: "Pending: {changes}", ja: "未送信: {changes}" },
+  "上一次节点变更仍在进行中。完成前只能取消加入中的节点、保留正在移出的节点，或把平滑移出改为立即移出。":
+    {
+      en: "A previous node change is still in progress. Until it finishes you can only cancel a joining node, keep a leaving node, or switch a graceful removal to remove now.",
+      ja: "前回のノード変更がまだ進行中です。完了するまでは、参加中のノードの取り消し、除外中のノードの維持、または段階的な除外からすぐに除外への切り替えのみ行えます。",
+    },
+  添加: { en: "Add", ja: "追加" },
+  "保留（取消移出）": {
+    en: "Keep (cancel removal)",
+    ja: "維持（除外を取り消す）",
+  },
+  "移出（{mode}）": { en: "Remove ({mode})", ja: "除外（{mode}）" },
   返回修改: { en: "Back to edit", ja: "編集に戻る" },
-  确认变更: { en: "Confirm change", ja: "変更を確定" },
 };

@@ -67,6 +67,8 @@ type taskCreateRequest struct {
 	StartKey               string                   `json:"startKey"`
 	EndKey                 string                   `json:"endKey"`
 	Marker                 string                   `json:"marker"`
+	// RangedDownload is "auto" (default) or "off" for LOCAL destinations.
+	RangedDownload string `json:"rangedDownload,omitempty"`
 }
 type bindingCheck struct {
 	taskBinding
@@ -307,6 +309,18 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 			return spec, nil, nil, errors.New("overwrite and conflictPolicy disagree")
 		}
 		spec.ConflictPolicy = row.ConflictPolicy
+	}
+	switch strings.ToLower(row.RangedDownload) {
+	case "", "auto":
+	case execution.RangedDownloadOff:
+		// Checked here as well as in task validation, so the preflight
+		// endpoint rejects the same rows as creation.
+		if spec.Direction != "OSS_TO_LOCAL" {
+			return spec, nil, nil, errors.New(rangedDownloadOffLocalOnly)
+		}
+		spec.RangedDownload = execution.RangedDownloadOff
+	default:
+		return spec, nil, nil, errors.New("rangedDownload must be auto or off")
 	}
 	if err := execution.ValidateRequestLimits(row.RequestLimits); err != nil {
 		return spec, nil, nil, err
@@ -812,7 +826,7 @@ func taskDTO(p task.Parent) map[string]any {
 		}
 		return out
 	}
-	row := map[string]any{"taskIndex": p.ID, "parentTaskId": p.ID, "generation": p.Generation, "direction": spec.Direction, "status": p.Status, "autoStart": true, "sourceS3Alias": spec.Source.Ref, "sourceBucket": spec.Source.Bucket, "destS3Alias": spec.Destination.Ref, "destBucket": spec.Destination.Bucket, "sourceEndpoint": endpoint(spec.Source, true), "destinationEndpoint": endpoint(spec.Destination, false), "eligibleWorkerNodes": nodes, "participatingWorkerNodes": nodes, "nodeBindings": bindings, "conflictPolicy": spec.ConflictPolicy, "overwrite": spec.ConflictPolicy == "OVERWRITE", "distributionMode": strings.ToLower(spec.DistributionMode), "prefix": spec.Prefix, "objectKey": spec.ObjectKey, "startKey": spec.StartKey, "endKey": spec.EndKey, "scanComplete": p.ScanComplete, "listObjectCount": max(p.ScannedObjects, p.Counters.Total), "listObjectSize": max(p.ScannedBytes, p.Counters.TotalBytes), "putObjectCount": p.Counters.Succeeded, "putObjectSize": p.Counters.SucceededBytes, "skippedObjectCount": p.Counters.Skipped, "skippedObjectSize": p.Counters.SkippedBytes, "failedObjectCount": p.Counters.Failed, "failedObjectSize": p.Counters.FailedBytes, "createTime": p.CreatedAt.UnixMilli(), "errorMessage": p.Error, "childCount": p.ChildCount, "partial": false}
+	row := map[string]any{"taskIndex": p.ID, "parentTaskId": p.ID, "generation": p.Generation, "direction": spec.Direction, "status": p.Status, "autoStart": true, "sourceS3Alias": spec.Source.Ref, "sourceBucket": spec.Source.Bucket, "destS3Alias": spec.Destination.Ref, "destBucket": spec.Destination.Bucket, "sourceEndpoint": endpoint(spec.Source, true), "destinationEndpoint": endpoint(spec.Destination, false), "eligibleWorkerNodes": nodes, "participatingWorkerNodes": nodes, "nodeBindings": bindings, "conflictPolicy": spec.ConflictPolicy, "overwrite": spec.ConflictPolicy == "OVERWRITE", "rangedDownload": rangedDownloadView(spec.RangedDownload), "distributionMode": strings.ToLower(spec.DistributionMode), "prefix": spec.Prefix, "objectKey": spec.ObjectKey, "startKey": spec.StartKey, "endKey": spec.EndKey, "scanComplete": p.ScanComplete, "listObjectCount": max(p.ScannedObjects, p.Counters.Total), "listObjectSize": max(p.ScannedBytes, p.Counters.TotalBytes), "putObjectCount": p.Counters.Succeeded, "putObjectSize": p.Counters.SucceededBytes, "skippedObjectCount": p.Counters.Skipped, "skippedObjectSize": p.Counters.SkippedBytes, "failedObjectCount": p.Counters.Failed, "failedObjectSize": p.Counters.FailedBytes, "createTime": p.CreatedAt.UnixMilli(), "errorMessage": p.Error, "childCount": p.ChildCount, "partial": false}
 	if spec.InventoryID != "" {
 		row["inventoryManifestId"] = spec.InventoryID
 	}
@@ -1559,4 +1573,15 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 		failed = failed || (node["applied"] != true && node["pending"] != true)
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
+}
+
+const rangedDownloadOffLocalOnly = "rangedDownload off applies only to downloads to a local directory"
+
+// rangedDownloadView reports a task's ranged-download choice; tasks created
+// before the option existed are automatic.
+func rangedDownloadView(value string) string {
+	if value == execution.RangedDownloadOff {
+		return value
+	}
+	return "auto"
 }

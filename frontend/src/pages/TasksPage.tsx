@@ -1066,6 +1066,15 @@ function TaskDetail({
                   ? tr("均衡分发")
                   : tr("亲和分发"),
               ],
+              [
+                tr("分段下载"),
+                // Only local destinations have the option; old tasks are auto.
+                current.direction === "OSS_TO_LOCAL"
+                  ? current.rangedDownload === "off"
+                    ? tr("停用")
+                    : tr("自动")
+                  : null,
+              ],
               [tr("共享存储 ID"), current.storageId],
               [
                 tr("当前速度"),

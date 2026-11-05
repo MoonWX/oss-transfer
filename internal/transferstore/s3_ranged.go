@@ -62,7 +62,7 @@ func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc
 	defer cancel()
 	count := int((size + partSize - 1) / partSize)
 	parts := make([]types.CompletedPart, count)
-	slots := &rangedSlots{s: s, base: make(chan struct{}, min(s.partConcurrency, count)), finished: make(chan struct{}, 1)}
+	slots := newRangedSlots(s.partLender, s.partConcurrency, count, s.uploadMemory)
 	var group sync.WaitGroup
 	var failure sync.Once
 	var firstError error
@@ -102,90 +102,13 @@ func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc
 	return parts, nil
 }
 
-type rangedSlots struct {
-	s        *S3
-	base     chan struct{}
-	finished chan struct{}
-	mu       sync.Mutex
-	borrowed int
-}
-
-// done wakes a dispatcher waiting for a slot to retry borrowing.
-func (r *rangedSlots) done() {
-	select {
-	case r.finished <- struct{}{}:
-	default:
-	}
-}
-
-func (r *rangedSlots) acquire(ctx context.Context, length int64) (func(), error) {
-	for {
-		select {
-		case r.base <- struct{}{}:
-			return r.baseMemory(ctx, length)
-		default:
-		}
-		if release, ok := r.borrow(length); ok {
-			return release, nil
-		}
-		select {
-		case r.base <- struct{}{}:
-			return r.baseMemory(ctx, length)
-		case <-r.finished:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
-func (r *rangedSlots) baseMemory(ctx context.Context, length int64) (func(), error) {
-	release, err := r.s.uploadMemory.acquire(ctx, length)
-	if err != nil {
-		<-r.base
-		return nil, err
-	}
-	return func() { release(); <-r.base }, nil
-}
-
-func (r *rangedSlots) borrow(length int64) (func(), bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if cap(r.base)+r.borrowed >= maxPartSlots {
-		return nil, false
-	}
-	returnSlot, ok := r.s.partLender.tryBorrow(r.s.partConcurrency)
-	if !ok {
-		return nil, false
-	}
-	releaseMemory, ok := r.s.uploadMemory.tryAcquire(length, r.s.uploadMemory.capacity/4)
-	if !ok {
-		returnSlot()
-		return nil, false
-	}
-	r.borrowed++
-	return func() {
-		releaseMemory()
-		returnSlot()
-		r.mu.Lock()
-		r.borrowed--
-		r.mu.Unlock()
-	}, true
-}
-
 // uploadRange buffers the range before sending it, so SDK retries replay the
 // same bytes. Interrupted body reads are retried with a fresh conditional
 // range; a changed source, a length mismatch and cancellation are not.
 func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uploadID *string, number int32, offset, length int64) (*string, error) {
 	data := make([]byte, int(length))
-	for attempt := 1; ; attempt++ {
-		err := readRange(ctx, ranges, offset, data)
-		if err == nil {
-			break
-		}
-		var interrupted rangeBodyError
-		if attempt >= rangeReadAttempts || ctx.Err() != nil || !errors.As(err, &interrupted) {
-			return nil, err
-		}
+	if err := readRangeRetrying(ctx, ranges, offset, data); err != nil {
+		return nil, err
 	}
 	output, err := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: uploadID, PartNumber: aws.Int32(number), Body: bytes.NewReader(data), ContentLength: aws.Int64(length)})
 	if err != nil {
@@ -195,6 +118,19 @@ func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uplo
 		return nil, errors.New("S3 returned an empty ETag for part " + strconv.Itoa(int(number)))
 	}
 	return output.ETag, nil
+}
+
+// readRangeRetrying fills data from one range. An interrupted body is read
+// again with a fresh conditional range, at most rangeReadAttempts times; a
+// changed source, a length mismatch and cancellation are final.
+func readRangeRetrying(ctx context.Context, ranges RangeFunc, offset int64, data []byte) error {
+	for attempt := 1; ; attempt++ {
+		err := readRange(ctx, ranges, offset, data)
+		var interrupted rangeBodyError
+		if err == nil || attempt >= rangeReadAttempts || ctx.Err() != nil || !errors.As(err, &interrupted) {
+			return err
+		}
+	}
 }
 
 // rangeBodyError marks a transport failure after a range was opened.
@@ -231,6 +167,13 @@ func readRange(ctx context.Context, ranges RangeFunc, offset int64, data []byte)
 	if err == nil {
 		err = requireEOF(reader)
 	}
+	return rangeReadError(ctx, err)
+}
+
+// rangeReadError marks a failure while reading an opened range as worth
+// another conditional read, unless it is final: cancellation, a changed or
+// missing source, or a length the source cannot satisfy.
+func rangeReadError(ctx context.Context, err error) error {
 	if err == nil || ctx.Err() != nil || errors.Is(err, ErrSourceChanged) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrNotFound) ||
 		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err

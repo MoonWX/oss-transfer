@@ -8,6 +8,22 @@ Open **Execution nodes → Edit node** to change child-task concurrency and the 
 
 Changes apply to running work and survive a restart. Reducing a limit lets the current requests finish before admitting more. Increasing it can help when the network is underused; node and task bandwidth/QPS limits still apply. Child concurrency accepts 1–256, object concurrency 1–64, with a combined maximum of 1024.
 
+## Large objects
+
+Within one Agent, an object of 128 MiB or more is transferred as parallel byte ranges instead of one stream. Uploads to OSS send the ranges as multipart parts. Downloads to a local directory fetch 8 MiB ranges concurrently but write the temporary file strictly in order, as one sequential stream: a range that arrives early waits in memory until the ranges before it are written. Network and FUSE filesystems that are slow at scattered writes therefore see the same write pattern as a single-stream download. The file is synced and published under its final name only after every range has been written, so a failed, stopped or interrupted download never leaves a partial file at the destination; a temporary file left by a crash is removed when the Agent restarts.
+
+Each object is guaranteed four concurrent ranges and borrows up to 16 while the node has idle object slots. A single large object can therefore use an otherwise idle node, while a busy node is not oversubscribed. A downloaded range holds its slot and its memory until it is written, so each object keeps at most 16 ranges (128 MiB) in memory, and all uploads and downloads on an Agent share its 256 MiB transfer memory budget. When the disk falls behind, fetching pauses. Every range is a separate conditional GET pinned to the source version: it counts against the task's LIST / GET request limit (node request limits do not cover object GETs; node bandwidth still applies), and a source changed during the transfer fails the object. An interrupted range is fetched again, up to three reads in total. A task with its own bandwidth, LIST / GET or PUT limit transfers each object as one stream, because that limit already bounds its speed; a HEAD-only limit does not change this.
+
+Live progress counts the bytes of all ranges together and does not move backwards when a range is fetched again.
+
+### Ranged download option
+
+Download tasks (object storage to a local directory) have a **Ranged download** option in the **Transfer options** section of **Create transfer**: **Auto (default)** or **Off**. Auto, described above, is right for almost every task. Choose Off only if parallel range reads cause trouble, for example storage that throttles many concurrent GET requests or an Agent short of memory, or when support asks; every object of that task is then downloaded as one sequential stream. The choice is fixed when the task is created and kept through stop, resume, retry and node changes. Task details show it, and tasks created before this option behave as Auto.
+
+From the CLI, add `--ranged-download off` to `task create oss-to-local` (see [CLI](cli.md#create-tasks-and-set-limits)). In the API and in import files, a task request row takes `"rangedDownload": "auto"` or `"off"`; omitting it means auto, and `off` is rejected for tasks whose destination is not a local directory. Task details and exported rows include `rangedDownload`.
+
+Agents from before this option never download in ranges, so they already behave as Off. During a rolling upgrade the Master sends the choice only to Agents that report support for it, and asks an Agent that did not support it again on its next delivery. A child task delivered without the choice keeps one stream per object, for Auto tasks too, until the task is stopped and resumed. This covers children accepted by an Agent before it was upgraded and children delivered by a Master from before this option, including to Agents that were already upgraded. An Off choice is therefore never lost during an upgrade.
+
 ## Compare objects
 
 Under **Tools → Compare objects**, choose a single object or a bucket/prefix on each side. For prefix comparison, the source prefix is replaced with the target prefix: `images/a.jpg` under `images/` matches `backup/a.jpg` under `backup/`. An empty prefix covers the whole bucket. Results include objects missing from either side.

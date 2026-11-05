@@ -54,6 +54,12 @@ var cliMessages = map[string][2]string{
 	"正在检查新版本":          {"Checking for updates", "更新を確認中"},
 	"Agent 更新队列: %s\n": {"Agent update queue: %s\n", "Agent 更新キュー: %s\n"},
 
+	"--ranged-download 仅适用于目标为本地目录的任务（oss-to-local）":    {"--ranged-download applies only to tasks whose destination is a local directory (oss-to-local)", "--ranged-download は転送先がローカルディレクトリのタスク（oss-to-local）専用です"},
+	"--ranged-download 须为 auto 或 off":                   {"--ranged-download must be auto or off", "--ranged-download は auto または off を指定してください"},
+	"rangedDownload 须为 auto 或 off":                      {"rangedDownload must be auto or off", "rangedDownload は auto または off を指定してください"},
+	"rangedDownload 为 off 仅适用于目标为本地目录的任务（OSS_TO_LOCAL）": {"rangedDownload off applies only to tasks whose destination is a local directory (OSS_TO_LOCAL)", "rangedDownload の off は転送先がローカルディレクトリのタスク（OSS_TO_LOCAL）専用です"},
+	"分段下载": {"Ranged download", "範囲分割ダウンロード"},
+
 	"请指定清理筛选条件或 --all，不能同时使用":         {"Specify cleanup filters or --all, not both", "絞り込み条件または --all を指定してください。併用はできません"},
 	"Master 不支持安全清理已处理记录，请先升级 Master": {"Upgrade Master before clearing resolved records", "処理済み記録を削除するには、Master を更新してください"},
 

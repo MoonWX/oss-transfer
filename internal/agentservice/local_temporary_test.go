@@ -2,6 +2,7 @@ package agentservice
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,9 +66,77 @@ func TestTempRegistryCrashHelper(t *testing.T) {
 	} else {
 		local.SetTempRegistry(registry)
 	}
-	_, err = local.Write(context.Background(), "destination.bin", &crashTempReader{owner: registry.OwnerID()}, transferstore.WriteOptions{Size: 64 << 20, Overwrite: true})
+	options := transferstore.WriteOptions{Size: 64 << 20, Overwrite: true}
+	if os.Getenv("OSS_TRANSFER_TEMP_POINT") == "ranged" {
+		budget, err := transferstore.NewUploadMemoryBudget(64 << 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, ChunkSize: 1 << 20, PartConcurrency: 4, Memory: budget}); err != nil {
+			t.Fatal(err)
+		}
+		options.Ranges = crashRangeFunc(registry.OwnerID(), os.Getenv("OSS_TRANSFER_TEMP_ROOT"))
+	}
+	_, err = local.Write(context.Background(), "destination.bin", &crashTempReader{owner: registry.OwnerID()}, options)
 	t.Fatalf("crash helper unexpectedly returned: %v", err)
 }
+
+// crashRangeFunc serves 1 MiB chunks 0, 1 and 3 completely, while chunk 2
+// stalls after 64 KiB. Once chunks 0 and 1 are on disk and chunk 3 waits in
+// memory behind the gap, the helper reports READY and blocks, so the kill
+// lands with a partial, strictly sequential temporary file.
+func crashRangeFunc(owner, root string) transferstore.RangeFunc {
+	var thirdDone atomic.Bool
+	go func() {
+		for {
+			if thirdDone.Load() && tempFileSize(root, owner) == 2<<20 {
+				fmt.Println("READY " + owner)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	return func(_ context.Context, offset, length int64) (io.ReadCloser, error) {
+		full := bytes.NewReader(bytes.Repeat([]byte{0x72}, int(length)))
+		if offset != 2<<20 && offset <= 3<<20 {
+			return io.NopCloser(readerFunc(func(buffer []byte) (int, error) {
+				n, err := full.Read(buffer)
+				if err == io.EOF && offset == 3<<20 {
+					thirdDone.Store(true)
+				}
+				return n, err
+			})), nil
+		}
+		first := true
+		return io.NopCloser(readerFunc(func(buffer []byte) (int, error) {
+			if first {
+				first = false
+				return full.Read(buffer[:min(len(buffer), 64*1024)])
+			}
+			for {
+				time.Sleep(time.Hour)
+			}
+		})), nil
+	}
+}
+
+// tempFileSize returns the size of this owner's temporary file, or -1.
+func tempFileSize(root, owner string) int64 {
+	size := int64(-1)
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.Contains(entry.Name(), owner) && strings.HasSuffix(entry.Name(), ".tmp") {
+			if info, err := entry.Info(); err == nil {
+				size = info.Size()
+			}
+		}
+		return nil
+	})
+	return size
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(buffer []byte) (int, error) { return f(buffer) }
 
 type tempHelper struct {
 	command *exec.Cmd
@@ -213,6 +283,49 @@ func TestLocalTempRecoveryAfterKillPreservesOtherAgentAndUserFiles(t *testing.T)
 	if report, err := secondRegistry.Recover(context.Background()); err != nil || report.Removed != 1 {
 		t.Fatalf("other owner recovery failed: %+v %v", report, err)
 	}
+}
+
+// A ranged write killed while chunks are in flight must not publish the
+// partial file, and startup recovery removes it.
+func TestLocalTempRecoveryAfterKillDuringRangedWrite(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "destination.bin"), []byte("previous complete target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(t.TempDir(), "agent.db")
+	helper := startTempHelperAt(t, database, root, "ranged")
+	helper.kill()
+	registry, db := openTempRegistry(t, database)
+	records := tempRecords(t, db)
+	if len(records) != 1 {
+		t.Fatalf("ranged payload was written without a durable temp record: %+v", records)
+	}
+	partial := filepath.Join(records[0].ParentPath, records[0].Name)
+	// Only the in-order prefix reaches the file: chunk 3 was fetched but
+	// waited behind the stalled chunk 2.
+	contents, err := os.ReadFile(partial)
+	if err != nil || !bytes.Equal(contents, bytes.Repeat([]byte{0x72}, 2<<20)) {
+		t.Fatalf("expected exactly the first two chunks on disk: %d bytes, %v", len(contents), err)
+	}
+	if body, err := os.ReadFile(filepath.Join(root, "destination.bin")); err != nil || string(body) != "previous complete target" {
+		t.Fatalf("partial ranged write was published: %v", err)
+	}
+	report, err := registry.Recover(context.Background())
+	if err != nil || report.Removed != 1 || len(report.Retained) != 0 {
+		t.Fatalf("recovery failed: %+v %v", report, err)
+	}
+	if len(tempRecords(t, db)) != 0 {
+		t.Fatal("successful cleanup left journal record")
+	}
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
+		t.Fatalf("partial ranged file remains: %v", err)
+	}
+	local, err := transferstore.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	assertLocalInventoryAndNoTemp(t, local, root, "destination.bin")
 }
 
 func TestLocalTempRecoveryRetainsReplacedFile(t *testing.T) {

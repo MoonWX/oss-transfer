@@ -204,7 +204,7 @@ func BenchmarkTaskObserveControlPlane(b *testing.B) {
 					}
 				} else {
 					for _, child := range children {
-						row, err := runtime.observeOne(ctx, p, child, nil)
+						row, err := runtime.observeOne(ctx, runtime.newRangedPass(), p, child, nil)
 						if err != nil || row == nil {
 							b.Fatal(err)
 						}

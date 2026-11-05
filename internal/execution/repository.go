@@ -88,6 +88,9 @@ func validate(job Job) (string, error) {
 	if job.ParentID < 1 || job.Number < 1 || job.ChildID != fmt.Sprintf("%d-%d", job.ParentID, job.Number) || job.Generation == 0 {
 		return "", errors.New("invalid child identity or generation")
 	}
+	if job.RangedDownload != "" && job.RangedDownload != RangedDownloadAuto && job.RangedDownload != RangedDownloadOff {
+		return "", errors.New("ranged download must be auto or off")
+	}
 	if job.ConflictPolicy != "SKIP" && job.ConflictPolicy != "OVERWRITE" {
 		return "", errors.New("conflict policy must be SKIP or OVERWRITE")
 	}
@@ -111,6 +114,10 @@ func validate(job Job) (string, error) {
 	job.Assignment = 0
 	job.OwnerEpoch = 0
 	job.DiscoveryComplete = false
+	// The ranged-download choice is how to transfer, not which work: the
+	// Master omits it for Agents that predate it, so a later delivery to the
+	// upgraded Agent may add it to the same child.
+	job.RangedDownload = ""
 	data, err := json.Marshal(job)
 	if err != nil {
 		return "", err
@@ -341,6 +348,7 @@ func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventor
 				return ErrConflict
 			}
 			result = existing
+			result.Job.RangedDownload = job.RangedDownload
 			if existing.Job.Generation < job.Generation {
 				result.Results = append([]ItemResult(nil), existing.Results...)
 				activateGeneration(&result, p)

@@ -733,6 +733,15 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		bandwidth = fmt.Sprint(value, " Mbps")
 	}
 	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	if taskDirection(task) == "OSS_TO_LOCAL" {
+		// Parent rows always carry the setting (older tasks report auto); a child
+		// row without it inherits the parent's, so do not guess a value there.
+		ranged := getString(task, "rangedDownload")
+		if ranged == "" && getString(task, "childTaskId") == "" {
+			ranged = "auto"
+		}
+		fields = append(fields, [2]string{cliText(out, "分段下载"), ranged})
+	}
 	fields = append(fields, cliTaskRequestRates(out, task)...)
 	if limits, ok := task["requestLimits"].(map[string]interface{}); ok {
 		scope := cliText(out, "所有执行节点合计")

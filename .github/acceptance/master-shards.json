@@ -102,6 +102,12 @@
     "TestNewAdministratorRequiresPasswordAwareReaderAfterPasswordChange": 12.31,
     "TestAddNodeGrantsLeaseOnlyAfterExistingSharesShrink": 2.2,
     "TestDrainRemovalFencesBeforeRaisingShares": 2.0,
+    "TestOldAgentIsAskedOncePerPass": 1.94,
+    "TestRangedDownloadChoiceAcrossAgentVersions": 2.21,
+    "TestRangedDownloadChoiceAppliesToTheSeed": 0,
+    "TestRangedDownloadIsReportedAndSurvivesExportImport": 0,
+    "TestRangedDownloadRequestNormalization": 0,
+    "TestRangedSupportRemembersOnlyPositiveAnswers": 0,
     "TestRemoveNowRevokesRunningWorkOnLiveNode": 1.8,
     "TestNodeChangeAPIRejections": 1.6,
     "TestNodeChangeRejectsCompletedAndSingleObjectTasks": 1.0,
@@ -200,6 +206,7 @@
     "TestTaskSpeedFreshnessMatchesWhileFileProgressExpiresEarlier": 1.05,
     "TestTaskStepAcknowledgesDurablePrefixWithFullDispatchQueue": 0.94,
     "TestUnsavedNodeAddressesAreRetried": 0.01,
+    "TestUpgradedAgentReceivesTheChoiceOnItsNextDelivery": 1.1,
     "TestWindowsAgentCommandRunsDownloadedInstaller": 0
   }
 }

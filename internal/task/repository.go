@@ -62,6 +62,15 @@ func (r *Repository) RuntimeProblem(id int64, generation uint64, message string)
 		return r.save(tx, p)
 	}))
 }
+
+// sameWork drops the ranged-download choice before two jobs are compared: it
+// is how to transfer, not which work. Agents receive it spelled out ("auto"
+// or "off") or, when they predate it, not at all; see master.acceptRequest.
+func sameWork(job execution.Job) execution.Job {
+	job.RangedDownload = ""
+	return job
+}
+
 func validate(spec Spec) error {
 	if spec.InventoryID != "" && (!inventory.ValidID(spec.InventoryID) || spec.Direction != "OSS_TO_OSS" || spec.Prefix != "" || spec.ObjectKey != "" || spec.StartKey != "" || spec.EndKey != "" || spec.ModifiedFrom != nil || spec.ModifiedUntil != nil) {
 		return inventory.ErrInvalid
@@ -84,6 +93,9 @@ func validate(spec Spec) error {
 	}
 	if spec.ConflictPolicy != "SKIP" && spec.ConflictPolicy != "OVERWRITE" {
 		return errors.New("conflict policy must be SKIP or OVERWRITE")
+	}
+	if spec.RangedDownload != "" && (spec.RangedDownload != execution.RangedDownloadOff || spec.Destination.Kind != "LOCAL") {
+		return errors.New("ranged download can only be turned off for a LOCAL destination")
 	}
 	if spec.DistributionMode != "BALANCED" && spec.DistributionMode != "AFFINITY" {
 		return errors.New("distribution mode must be BALANCED or AFFINITY")
@@ -392,6 +404,7 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, OwnerEpoch: p.NodeEpoch(node.ID), Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
 	job.SharedLocalSource = p.Spec.SharedLocalSource
 	job.SharedLocalDestination = p.Spec.SharedLocalDestination
+	job.RangedDownload = p.Spec.RangedDownload
 	if job.Source.Kind == "LOCAL" {
 		job.Source.Root = node.LocalRoot
 	}
@@ -656,7 +669,7 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	}
 	expectedJob := child.Job
 	expectedJob.Generation = p.Generation
-	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(expectedJob) {
+	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(sameWork(record.Job)) != digest(sameWork(expectedJob)) {
 		return false, ErrConflict
 	}
 	if child.Record != nil && (record.Attempt < child.Record.Attempt || (record.Attempt == child.Record.Attempt && record.UpdatedAt.Before(child.Record.UpdatedAt))) {

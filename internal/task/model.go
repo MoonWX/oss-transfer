@@ -42,11 +42,14 @@ type Spec struct {
 	Marker                 string                   `json:"marker,omitempty"`
 	SharedLocalSource      bool                     `json:"sharedLocalSource,omitempty"`
 	SharedLocalDestination bool                     `json:"sharedLocalDestination,omitempty"`
-	ModifiedFrom           *time.Time               `json:"modifiedFrom,omitempty"`
-	ModifiedUntil          *time.Time               `json:"modifiedUntil,omitempty"`
-	ConflictPolicy         string                   `json:"conflictPolicy"`
-	DistributionMode       string                   `json:"distributionMode"`
-	BandwidthMbps          float64                  `json:"bandwidthMbps"`
+	// RangedDownload is empty (automatic) or execution.RangedDownloadOff. It
+	// only applies to LOCAL destinations and never changes after creation.
+	RangedDownload   string     `json:"rangedDownload,omitempty"`
+	ModifiedFrom     *time.Time `json:"modifiedFrom,omitempty"`
+	ModifiedUntil    *time.Time `json:"modifiedUntil,omitempty"`
+	ConflictPolicy   string     `json:"conflictPolicy"`
+	DistributionMode string     `json:"distributionMode"`
+	BandwidthMbps    float64    `json:"bandwidthMbps"`
 }
 
 type Parent struct {

@@ -16,6 +16,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	opts, err := parseCommandOptions(args, []string{
 		"node", "binding", "prefix", "object-key", "mapping", "target-prefix", "target-key",
 		"target-relative-path", "conflict", "distribution", "date-after", "date-before", "bandwidth-mbps", "request-id", "list-qps", "head-qps", "put-qps",
+		"ranged-download",
 	}, []string{"overwrite", "balanced", "validate-only"})
 	if err != nil {
 		return nil, err
@@ -42,6 +43,10 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		if flag != "node" && flag != "binding" && len(values) > 1 {
 			return nil, cliErrorf("--%s 只能填写一次", flag)
 		}
+	}
+	rangedDownload, err := createRangedDownloadOption(opts, direction)
+	if err != nil {
+		return nil, err
 	}
 	row := map[string]interface{}{"distributionMode": "balanced"}
 	if opts.Has("distribution") {
@@ -157,6 +162,10 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		createCopyOption(oss, opts, "prefix", "prefix")
 		createCopyOption(oss, opts, "object-key", "objectKey")
 		createCopyOption(row, opts, "target-relative-path", "targetRelativePath")
+		// "auto" is the server default; omit it so default requests stay unchanged.
+		if rangedDownload == "off" {
+			row["rangedDownload"] = rangedDownload
+		}
 		row["sourceEndpoint"], row["destinationEndpoint"] = oss, local
 	} else {
 		if opts.Has("prefix") || opts.Has("object-key") || opts.Has("target-relative-path") {
@@ -251,7 +260,11 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 			row["distributionMode"] = "balanced"
 		}
 		if err := createValidateRow(row, kind); err != nil {
-			return nil, cliErrorf("第 %d 项: %w", i+1, err)
+			wrapped := cliErrorf("第 %d 项: %w", i+1, err)
+			if isCLIUsageError(err) {
+				wrapped = asUsageError(wrapped)
+			}
+			return nil, wrapped
 		}
 	}
 	return createSubmit(client, kind, rows, opts.Has("validate-only"), requestID)
@@ -332,6 +345,36 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 		return nil, cliErrorf("文件中没有迁移请求")
 	}
 	return createSubmit(client, "buckets", rows, false, requestID)
+}
+
+// Ranged download only changes how an Agent reads objects it writes to a local
+// directory, so the option exists only for oss-to-local tasks.
+func createRangedDownloadOption(opts commandOptions, direction string) (string, error) {
+	if !opts.Has("ranged-download") {
+		return "", nil
+	}
+	if direction != "OSS_TO_LOCAL" {
+		return "", asUsageError(cliErrorf("--ranged-download 仅适用于目标为本地目录的任务（oss-to-local）"))
+	}
+	value := strings.ToLower(strings.TrimSpace(opts.Value("ranged-download")))
+	if value != "auto" && value != "off" {
+		return "", asUsageError(cliErrorf("--ranged-download 须为 auto 或 off"))
+	}
+	return value, nil
+}
+
+func createValidateRangedDownload(row map[string]interface{}) error {
+	value, present := row["rangedDownload"]
+	if !present || value == nil {
+		return nil
+	}
+	if s, ok := value.(string); !ok || s != "auto" && s != "off" {
+		return asUsageError(cliErrorf("rangedDownload 须为 auto 或 off"))
+	}
+	if value == "off" && row["direction"] != "OSS_TO_LOCAL" {
+		return asUsageError(cliErrorf("rangedDownload 为 off 仅适用于目标为本地目录的任务（OSS_TO_LOCAL）"))
+	}
+	return nil
 }
 
 func createCopyOption(target map[string]interface{}, opts commandOptions, flag, field string) {
@@ -459,6 +502,9 @@ func createValidateRow(row map[string]interface{}, kind string) error {
 		if id, ok := value.(string); !ok || id != "" {
 			return cliErrorf("清单任务请使用原 .incr 文件执行 import-inventory；普通任务 JSON 不包含完整 Key 清单")
 		}
+	}
+	if err := createValidateRangedDownload(row); err != nil {
+		return err
 	}
 	if value := row["taskBandwidthLimitMbps"]; value != nil {
 		n, ok := value.(float64)

@@ -52,10 +52,15 @@ func parallelChildNodes(ctx context.Context, groups [][]task.Child, visit func(i
 }
 
 func (t *taskRuntime) deliverChildren(ctx context.Context, p task.Parent, children []task.Child) error {
+	pass := t.newRangedPass()
 	return parallelChildNodes(ctx, groupChildrenByNode(children), func(_ int, group []task.Child) error {
 		for _, child := range group {
+			request, err := t.acceptRequest(ctx, pass, p, child)
+			if err != nil {
+				return err
+			}
 			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, childAcceptance(p, child), nil)
+			err = t.server.agentCall(callCtx, nodeSession(child.Node), "child_accept", true, request, nil)
 			cancel()
 			if err != nil {
 				return err

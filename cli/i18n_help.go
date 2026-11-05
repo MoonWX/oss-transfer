@@ -421,6 +421,12 @@ Local transfers
   --validate-only                   Precheck nodes and paths without creating tasks
   Download: --prefix <prefix> or --object-key <key>
             --target-relative-path <path> for a single-object download
+            --ranged-download auto|off Default auto: inside one Agent, objects of 128 MiB or
+                more are read as concurrent byte ranges and written to the file in order.
+                off uses one sequential stream per object; choose it only when the target
+                storage or network handles parallel range reads badly (memory-constrained
+                Agents, storage that throttles concurrent GETs) or when support asks.
+                Fixed for the task's lifetime, including resume, retry and node changes.
   Upload: --target-prefix <prefix> or --target-key <key>
           An exact target key requires one file on one node.
   Upload distribution follows the binding count; multiple nodes must bind the same logical directory.
@@ -461,6 +467,12 @@ OSS 間転送
   --validate-only                   作成せずにノードとパスを事前チェック
   ダウンロード: --prefix <プレフィックス> または --object-key <Key>
                 --target-relative-path <パス> は単一オブジェクトのみ
+                --ranged-download auto|off 既定: auto。1 つの Agent 内で 128 MiB 以上の
+                    オブジェクトをバイト範囲ごとに並列取得し、ファイルへ順番に書き込みます。
+                    off はオブジェクトごとに 1 本の順次ストリームで取得します。転送先の
+                    ストレージやネットワークが並列の範囲取得に向かない場合（Agent のメモリ
+                    不足、同時 GET を制限するストレージ）やサポートの指示時のみ使用します。
+                    再開、再試行、ノード変更後もタスクの間は変わりません。
   アップロード: --target-prefix <プレフィックス> または --target-key <Key>
                 単一 Key の指定は 1 ノード上の 1 ファイルに限ります。
   分配方式はノード数に従います。複数ノードには同じ論理ディレクトリを指定してください。
@@ -491,6 +503,8 @@ CSV columns (no header; last three optional):
 
 JSON uses WebUI API request fields. Example for buckets:
   [{"sourceS3Alias":"source","sourceBucket":"photos","destS3Alias":"target","destBucket":"archive","eligibleWorkerNodes":["10.0.0.2"],"distributionMode":"balanced"}]
+local download rows (OSS_TO_LOCAL) may set "rangedDownload":"auto" or "off"; omitted means auto.
+Same meaning as task create --ranged-download; other directions reject off.
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -518,6 +532,8 @@ CSV の列（ヘッダーなし、最後の 3 列は省略可能）:
 
 JSON は WebUI API の項目を使用します。buckets の例:
   [{"sourceS3Alias":"source","sourceBucket":"photos","destS3Alias":"target","destBucket":"archive","eligibleWorkerNodes":["10.0.0.2"],"distributionMode":"balanced"}]
+local のダウンロード行（OSS_TO_LOCAL）では "rangedDownload":"auto" または "off" を指定できます。
+省略時は auto です。意味は task create --ranged-download と同じで、他の方向では off を指定できません。
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only

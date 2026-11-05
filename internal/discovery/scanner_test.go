@@ -113,7 +113,9 @@ func waitReached(t *testing.T, reached <-chan struct{}) {
 
 func waitStatus(t *testing.T, scanner *Scanner, wanted Status) State {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// Hang guard only: a loaded race-enabled runner can take far longer than
+	// a few seconds to settle a scan that is correct.
+	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		current, err := scanner.Status(context.Background(), 1)
 		if err != nil {

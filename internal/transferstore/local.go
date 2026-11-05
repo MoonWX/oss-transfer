@@ -21,6 +21,7 @@ type Local struct {
 	scope        string
 	rootPath     string
 	tempRegistry LocalTempRegistry
+	ranged       LocalRangedOptions
 }
 
 // NewLocal opens an existing directory. It never creates the storage root.
@@ -47,7 +48,7 @@ func NewLocal(root string) (*Local, error) {
 		_ = r.Close()
 		return nil, err
 	}
-	return &Local{root: r, scope: absolute + identity, rootPath: absolute}, nil
+	return &Local{root: r, scope: absolute + identity, rootPath: absolute, ranged: LocalRangedOptions{MinSize: defaultRangedMinSize, ChunkSize: defaultLocalChunkSize, PartConcurrency: defaultLocalPartConcurrency}}, nil
 }
 
 func (s *Local) Close() error { return s.root.Close() }
@@ -470,15 +471,23 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		}
 		registered = true
 	}
-	written, err := io.CopyBuffer(file, io.LimitReader(reader, options.Size), make([]byte, 256*1024))
-	if err != nil {
-		return result, err
-	}
-	if written != options.Size {
-		return result, fmt.Errorf("%w: expected %d, read %d", ErrSizeMismatch, options.Size, written)
-	}
-	if err := requireEOF(reader); err != nil {
-		return result, err
+	if options.Ranges != nil && s.RangedWrite(options.Size) {
+		// Ranges are fetched concurrently but appended in order, exactly as a
+		// stream would be; the file is published only after every byte.
+		if err := s.writeRanges(ctx, file, options.Ranges, options.Size); err != nil {
+			return result, err
+		}
+	} else {
+		written, err := io.CopyBuffer(file, io.LimitReader(reader, options.Size), make([]byte, localCopyBuffer))
+		if err != nil {
+			return result, err
+		}
+		if written != options.Size {
+			return result, fmt.Errorf("%w: expected %d, read %d", ErrSizeMismatch, options.Size, written)
+		}
+		if err := requireEOF(reader); err != nil {
+			return result, err
+		}
 	}
 	if err := file.Sync(); err != nil {
 		return result, err
@@ -486,6 +495,9 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	info, err := file.Stat()
 	if err != nil {
 		return result, err
+	}
+	if info.Size() != options.Size {
+		return result, fmt.Errorf("%w: expected %d, wrote %d", ErrSizeMismatch, options.Size, info.Size())
 	}
 	object, err := openedObject(key, file, info)
 	if err != nil {

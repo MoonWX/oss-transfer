@@ -701,6 +701,39 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Overwrite existing objects or files",
     ja: "既存のオブジェクトまたはファイルを上書き",
   },
+  分段下载: {
+    en: "Ranged download",
+    ja: "範囲分割ダウンロード",
+  },
+  "自动（默认）": {
+    en: "Auto (default)",
+    ja: "自動（既定）",
+  },
+  自动: {
+    en: "Auto",
+    ja: "自動",
+  },
+  停用: {
+    en: "Off",
+    ja: "オフ",
+  },
+  "自动适合绝大多数场景：128 MiB 及以上的对象按字节范围并发下载并按顺序写入。仅当执行节点内存受限、存储限制大量并发 GET 请求，或技术支持建议时选择停用；创建后不可更改。":
+    {
+      en: "Auto is right for almost everyone: objects of 128 MiB or more are downloaded as concurrent byte ranges and written in order. Choose Off only for memory-constrained agents, storage that throttles many concurrent GET requests, or when support asks. This cannot be changed after creation.",
+      ja: "ほとんどの場合は「自動」が適しています。128 MiB 以上のオブジェクトはバイト範囲ごとに並行ダウンロードし、順番に書き込みます。実行ノードのメモリが少ない場合、多数の同時 GET リクエストを制限するストレージの場合、またはサポートから指示があった場合のみ「オフ」を選択してください。作成後は変更できません。",
+    },
+  " · 分段下载已停用": {
+    en: " · Ranged download off",
+    ja: " · 範囲分割ダウンロード：オフ",
+  },
+  "rangedDownload 必须是 auto 或 off。": {
+    en: "rangedDownload must be auto or off.",
+    ja: "rangedDownload は auto または off にしてください。",
+  },
+  "仅目标为本地目录（OSS_TO_LOCAL）的任务可以设置 rangedDownload: off。": {
+    en: "rangedDownload: off is only allowed for tasks whose destination is a local directory (OSS_TO_LOCAL).",
+    ja: "rangedDownload: off は、転送先がローカルディレクトリ（OSS_TO_LOCAL）のタスクでのみ指定できます。",
+  },
   节点分发方式: {
     en: "Distribution mode",
     ja: "ノード配分方式",
@@ -783,10 +816,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Field reference",
     ja: "フィールドの説明",
   },
-  "direction：OSS_TO_LOCAL 或 LOCAL_TO_OSS；sourceEndpoint / destinationEndpoint：OSS 端提供 type、s3Alias、bucket 和可选 objectKey / prefix；LOCAL 端提供 type、nodeBindings，多节点绑定必须访问同一份共享数据。LOCAL_TO_OSS 按节点数自动分发，单文件仅支持一个节点。可选 conflictPolicy、dateAfter、dateBefore、targetRelativePath；OSS_TO_LOCAL 可选 distributionMode。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。":
+  "direction：OSS_TO_LOCAL 或 LOCAL_TO_OSS；sourceEndpoint / destinationEndpoint：OSS 端提供 type、s3Alias、bucket 和可选 objectKey / prefix；LOCAL 端提供 type、nodeBindings，多节点绑定必须访问同一份共享数据。LOCAL_TO_OSS 按节点数自动分发，单文件仅支持一个节点。可选 conflictPolicy、dateAfter、dateBefore、targetRelativePath；OSS_TO_LOCAL 可选 distributionMode 和 rangedDownload（auto 或 off，默认 auto）。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。":
     {
-      en: "direction: OSS_TO_LOCAL or LOCAL_TO_OSS. sourceEndpoint / destinationEndpoint: the OSS endpoint requires type, s3Alias, bucket, and optionally objectKey / prefix; the LOCAL endpoint requires type and nodeBindings. Multiple agents must access the same shared data. LOCAL_TO_OSS distributes work based on agent count; single files support one agent only. Optional: conflictPolicy, dateAfter, dateBefore, targetRelativePath; OSS_TO_LOCAL also supports distributionMode. taskBandwidthLimitMbps: task-wide limit in Mbps, 0.1–1,000,000. Omit or use null to apply only agent limits.",
-      ja: "direction：OSS_TO_LOCAL または LOCAL_TO_OSS。sourceEndpoint / destinationEndpoint：OSS 側には type、s3Alias、bucket と任意の objectKey / prefix、LOCAL 側には type と nodeBindings を指定します。複数ノードは同じ共有データにアクセスする必要があります。LOCAL_TO_OSS はノード数に応じて自動配分され、単一ファイルは1ノードのみ対応します。任意項目：conflictPolicy、dateAfter、dateBefore、targetRelativePath。OSS_TO_LOCAL は distributionMode も指定できます。taskBandwidthLimitMbps：タスク全体の帯域幅上限（Mbps、0.1–1,000,000）。省略または null の場合はノードの制限のみ適用します。",
+      en: "direction: OSS_TO_LOCAL or LOCAL_TO_OSS. sourceEndpoint / destinationEndpoint: the OSS endpoint requires type, s3Alias, bucket, and optionally objectKey / prefix; the LOCAL endpoint requires type and nodeBindings. Multiple agents must access the same shared data. LOCAL_TO_OSS distributes work based on agent count; single files support one agent only. Optional: conflictPolicy, dateAfter, dateBefore, targetRelativePath; OSS_TO_LOCAL also supports distributionMode and rangedDownload (auto or off; default auto). taskBandwidthLimitMbps: task-wide limit in Mbps, 0.1–1,000,000. Omit or use null to apply only agent limits.",
+      ja: "direction：OSS_TO_LOCAL または LOCAL_TO_OSS。sourceEndpoint / destinationEndpoint：OSS 側には type、s3Alias、bucket と任意の objectKey / prefix、LOCAL 側には type と nodeBindings を指定します。複数ノードは同じ共有データにアクセスする必要があります。LOCAL_TO_OSS はノード数に応じて自動配分され、単一ファイルは1ノードのみ対応します。任意項目：conflictPolicy、dateAfter、dateBefore、targetRelativePath。OSS_TO_LOCAL は distributionMode と rangedDownload（auto または off、既定は auto）も指定できます。taskBandwidthLimitMbps：タスク全体の帯域幅上限（Mbps、0.1–1,000,000）。省略または null の場合はノードの制限のみ適用します。",
     },
   "sourceS3Alias / destS3Alias：连接名称；sourceBucket / destBucket：存储桶；prefix：源前缀筛选，objectKey：单个源对象，二者互斥。{value1}keyMapping 省略或 null 保留完整源 Key；mode 可选 PRESERVE、ADD_PREFIX（targetPrefix）、REPLACE_PREFIX（sourcePrefix 与源筛选前缀一致，targetPrefix 可为空）、EXACT_KEY（仅单对象，targetKey）。ADD_PREFIX 末尾缺少 / 时补一个；REPLACE_PREFIX 字面替换且不补 /；所有 Key 和前缀均保留空格与斜杠。dateAfter / dateBefore：修改时间范围，格式 YYYY-MM-DDTHH:mm:ss；overwrite：是否覆盖；distributionMode：affinity 或 balanced。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。":
     {

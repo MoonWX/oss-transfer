@@ -338,6 +338,15 @@ export default function TaskNodesDialog({
     body: Record<string, unknown>;
   }>(undefined);
 
+  // Invalidates any read in flight and clears its state, so that its late
+  // response is ignored and the next refresh can start.
+  const cancelRead = useCallback(() => {
+    ++sequence.current;
+    controller.current?.abort();
+    reading.current = false;
+    setLoading(false);
+  }, []);
+
   // A background refresh only replaces the displayed view. One failed refresh
   // keeps the last view; a second consecutive failure is reported.
   const load = useCallback(
@@ -393,12 +402,8 @@ export default function TaskNodesDialog({
     pendingRequest.current = undefined;
     backgroundFailures.current = 0;
     void load();
-    return () => {
-      ++sequence.current;
-      controller.current?.abort();
-      reading.current = false;
-    };
-  }, [open, load]);
+    return cancelRead;
+  }, [open, load, cancelRead]);
 
   // Keep node statistics and membership progress live while the dialog is
   // open, at the console's refresh interval and only while the page is
@@ -417,14 +422,9 @@ export default function TaskNodesDialog({
       document.removeEventListener("visibilitychange", refresh);
       // Entering the confirmation step or submitting: a refresh still in
       // flight must not replace the view being confirmed or the POST result.
-      if (reading.current) {
-        ++sequence.current;
-        controller.current?.abort();
-        reading.current = false;
-        setLoading(false);
-      }
+      if (reading.current) cancelRead();
     };
-  }, [open, step, submitting, refreshMs, load]);
+  }, [open, step, submitting, refreshMs, load, cancelRead]);
 
   const nodes = view?.nodes || [];
   const byAddress = useMemo(
@@ -564,9 +564,12 @@ export default function TaskNodesDialog({
       });
       pendingRequest.current = undefined;
       const next = response.data.view;
-      // The change's own view is newer than any read that may still be open.
-      ++sequence.current;
-      controller.current?.abort();
+      // The change's own view is newer than any read that may still be open
+      // (for example a retry clicked on the confirmation step), and it
+      // supersedes an earlier read failure.
+      cancelRead();
+      setLoadError("");
+      backgroundFailures.current = 0;
       notify(t("执行节点变更已提交。"));
       onChanged?.();
       setAdds([]);

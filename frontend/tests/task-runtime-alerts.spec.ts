@@ -271,6 +271,49 @@ test("incomplete data from the child page is observed even without a new task sn
   expect(responses).toBe(before);
 });
 
+test("re-renders do not count as refreshes for the incomplete-data warning", async ({
+  page,
+}) => {
+  await installPausedClock(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  await mockApi(page);
+  // Only the second status answer reports incomplete data (the development
+  // build may discard the first); every later read stalls. So incomplete data
+  // is observed in exactly one task snapshot.
+  let responses = 0;
+  await page.route("**/api/master/status", async (route) => {
+    const n = ++responses;
+    if (n > 2) return; // never answered
+    await route.fulfill({
+      json: {
+        success: true,
+        partial: n === 2,
+        totalTasks: tasks.length,
+        tasks: tasks.map((task) =>
+          task.taskIndex === 1048
+            ? { ...task, ossTaskGroup: true, storageId: `snapshot-${n}` }
+            : task,
+        ),
+      },
+    });
+  });
+  await page.goto("/tasks?taskId=1048");
+  await advanceUntilVisible(
+    page,
+    page.getByText("snapshot-2", { exact: true }),
+  );
+  await page.clock.runFor(1000); // the detail panel's opening transition
+  // Load the child page, whose data object is rebuilt on every render.
+  await page.getByTestId("task-children-region").scrollIntoViewIfNeeded();
+  for (let second = 0; second < 10; second++) await page.clock.runFor(1000);
+  expect(responses).toBeGreaterThan(2);
+  await expect(
+    page.getByText("任务信息不完整，请刷新或检查执行节点。"),
+  ).toHaveCount(0);
+});
+
 test("an ended task's node-limit mismatch shows at once", async ({ page }) => {
   await installPausedClock(page);
   await mockApi(page);

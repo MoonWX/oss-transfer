@@ -207,6 +207,7 @@
     "TestPlannedChangeRemovingOfflineScannerReportsProgress": 22.45,
     "TestPlannedChangeBandwidthStatusWaitsForRaisedShare": 2.0,
     "TestWithoutPlannedProblemsKeepsRealProblems": 0,
-    "TestPlannedChangeOfflineLeaverProgressFollowsFencing": 1.0
+    "TestPlannedChangeOfflineLeaverProgressFollowsFencing": 1.0,
+    "TestPlannedChangePolicyDeliveriesAreForgotten": 1.0
   }
 }

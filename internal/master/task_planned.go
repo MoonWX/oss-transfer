@@ -88,12 +88,18 @@ func runtimeProblemMessage(err error) string {
 // left out; the node view reports them as progress.
 func (t *taskRuntime) recordStep(ctx context.Context, id int64, generation uint64) error {
 	err := t.step(ctx, id)
+	current, readErr := t.repo.Get(id)
+	if readErr != nil || current.Deleted || current.Purged || task.Ended(current.Status) {
+		// The task usually ends inside a step and then leaves the active list,
+		// so this is the place to forget its policy deliveries.
+		t.forgetPolicyDeliveries(id)
+	}
 	if ctx.Err() != nil {
 		return err
 	}
 	message := ""
 	if err != nil && !isStopAwaitingAcknowledgement(err) {
-		if current, readErr := t.repo.Get(id); readErr == nil {
+		if readErr == nil {
 			err = withoutPlannedProblems(current, err)
 		}
 		message = runtimeProblemMessage(err)
@@ -167,6 +173,17 @@ func (t *taskRuntime) policyAttempted(parentID int64, nodeID string, generation,
 	defer t.mu.Unlock()
 	last, ok := t.deliveries[parentID][nodeID]
 	return ok && (last.generation > generation || last.generation == generation && last.revision >= revision)
+}
+
+// pruneDeliveries keeps only the deliveries of the given (active) tasks.
+func (t *taskRuntime) pruneDeliveries(active map[int64]bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id := range t.deliveries {
+		if !active[id] {
+			delete(t.deliveries, id)
+		}
+	}
 }
 
 func (t *taskRuntime) forgetPolicyDeliveries(parentID int64) {

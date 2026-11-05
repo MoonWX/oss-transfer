@@ -222,6 +222,12 @@ func plannedChangeProblem(line string, changing []string) bool {
 	if strings.Contains(line, agentservice.ErrLeaseRetired.Error()) {
 		return true
 	}
+	// A leaving or joining node is still a working member until it is fenced
+	// or after it is admitted. On a loaded runner one of its calls can miss
+	// the step's 5 s deadline; that is load, not the node change.
+	if strings.HasSuffix(line, context.DeadlineExceeded.Error()) {
+		return false
+	}
 	for _, label := range changing {
 		if strings.Contains(line, label) {
 			return true
@@ -639,5 +645,42 @@ func TestPlannedChangeBandwidthStatusWaitsForRaisedShare(t *testing.T) {
 	}
 	if data := status(); data["applied"] != true || data["pending"] != false {
 		t.Fatal("raised share not applied", data)
+	}
+}
+
+// The runtime forgets a task's policy deliveries when the task ends inside a
+// step, and prunes tasks that left the active list in any other way.
+func TestPlannedChangePolicyDeliveriesAreForgotten(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	runtime := f.master.tasks
+	node := task.Node{ID: "node", EnrollmentID: "enrollment", Address: "node.example"}
+	p := takeoverParent(t, f, node)
+	runtime.notePolicyDelivery(p, node.ID, nil)
+	gone := task.Parent{ID: p.ID + 1000}
+	runtime.notePolicyDelivery(gone, node.ID, nil)
+	if err := runtime.repo.ScanProgress(p.ID, p.Generation, 0, 0, 0, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	// The step finishes the empty task; it leaves the active list at once.
+	_ = runtime.recordStep(ctx, p.ID, p.Generation)
+	if current, err := runtime.repo.Get(p.ID); err != nil || current.Status != "COMPLETED" {
+		t.Fatal("task did not finish", current.Status, err)
+	}
+	if runtime.policyAttempted(p.ID, node.ID, p.Generation, p.BudgetRevision) {
+		t.Fatal("a finished task's deliveries were kept")
+	}
+	if !runtime.policyAttempted(gone.ID, node.ID, 0, 0) {
+		t.Fatal("unrelated deliveries were dropped by the step")
+	}
+	runtime.pruneDeliveries(map[int64]bool{p.ID: true})
+	if runtime.policyAttempted(gone.ID, node.ID, 0, 0) {
+		t.Fatal("deliveries of a task outside the active list were kept")
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if len(runtime.deliveries) != 0 {
+		t.Fatal("deliveries remain", runtime.deliveries)
 	}
 }

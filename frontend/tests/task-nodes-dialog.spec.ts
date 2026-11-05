@@ -863,3 +863,86 @@ test("a refresh still in flight when the change is previewed does not alter the 
     box.getByRole("button", { name: "添加 1 个节点", exact: true }),
   ).toBeEnabled();
 });
+
+test("a retry left open on the confirmation step does not stop live refresh after the change", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let pendingChildren = 3;
+  const view = (pending = false) =>
+    nodesView({
+      pending,
+      nodes: [
+        member("10.0.1.12", { scanner: true, pendingChildren }),
+        member("10.0.1.13", pending ? { state: "DRAINING" } : {}),
+      ],
+    });
+  await setup(page, {
+    view: () => view(true),
+    post: (body, route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: {
+            accepted: true,
+            dryRun: false,
+            valid: true,
+            nodeBindings: [],
+            validationErrors: [],
+            view: view(true),
+          },
+        },
+      }),
+  });
+  let failures = 0;
+  let hold: Promise<void> | undefined;
+  let release: () => void = () => {};
+  let held = 0;
+  await page.route("**/api/master/tasks/1048/nodes", async (route) => {
+    if (route.request().method() === "GET" && failures > 0) {
+      failures--;
+      await route.fulfill({
+        status: 500,
+        json: { success: false, message: "暂时不可用" },
+      });
+      return;
+    }
+    if (route.request().method() === "GET" && hold) {
+      held++;
+      await hold;
+      await route.fallback().catch(() => undefined);
+      return;
+    }
+    await route.fallback();
+  });
+  const box = await openLiveDialog(page);
+  const scanner = box.getByTestId("task-node-10.0.1.12");
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*3(?!\d)/ }),
+  );
+  await box
+    .getByRole("button", { name: /^改为立即移出 .*10\.0\.1\.13/ })
+    .click();
+  // Two failed refreshes report the problem with a retry action.
+  failures = 2;
+  const problem = box.getByText(/无法读取执行节点/);
+  await advanceUntilVisible(page, problem);
+  await preview(page).click();
+  // The retry stays open while the change is confirmed.
+  hold = new Promise<void>((resolve) => (release = resolve));
+  await box.getByRole("button", { name: "重试", exact: true }).click();
+  await expect.poll(() => held).toBe(1);
+  await box.getByRole("button", { name: "移出 1 个节点", exact: true }).click();
+  await expect(page.getByText("执行节点变更已提交。")).toBeVisible();
+  release();
+  hold = undefined;
+  // Live refresh continues with the change in progress, and the earlier read
+  // failure no longer shows.
+  pendingChildren = 8;
+  await advanceUntilVisible(
+    page,
+    scanner.filter({ hasText: /未完成子任务\s*8(?!\d)/ }),
+  );
+  await expect(problem).toHaveCount(0);
+});

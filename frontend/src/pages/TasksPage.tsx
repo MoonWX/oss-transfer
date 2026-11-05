@@ -616,10 +616,13 @@ function TaskDetail({
     stability,
   );
   // Incomplete data can come from the task or from its separately loaded
-  // child page; either one arriving is a new observation.
+  // child page. A new task snapshot, or a change in the child page's answer,
+  // is a new observation; a re-render is not (the child data object is
+  // rebuilt on every render).
+  const pagePartial = !!pageData?.partial;
   const partialSnapshot = useMemo(
-    () => ({ current, pageData }),
-    [current, pageData],
+    () => ({ current, pagePartial }),
+    [current, pagePartial],
   );
   const partialShown =
     useStableMessages(

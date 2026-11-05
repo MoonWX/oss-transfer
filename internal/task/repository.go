@@ -62,6 +62,15 @@ func (r *Repository) RuntimeProblem(id int64, generation uint64, message string)
 		return r.save(tx, p)
 	}))
 }
+
+// sameWork drops the ranged-download choice before two jobs are compared: it
+// is how to transfer, not which work. Agents receive it spelled out ("auto"
+// or "off") or, when they predate it, not at all; see master.acceptRequest.
+func sameWork(job execution.Job) execution.Job {
+	job.RangedDownload = ""
+	return job
+}
+
 func validate(spec Spec) error {
 	if spec.InventoryID != "" && (!inventory.ValidID(spec.InventoryID) || spec.Direction != "OSS_TO_OSS" || spec.Prefix != "" || spec.ObjectKey != "" || spec.StartKey != "" || spec.EndKey != "" || spec.ModifiedFrom != nil || spec.ModifiedUntil != nil) {
 		return inventory.ErrInvalid
@@ -660,12 +669,7 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	}
 	expectedJob := child.Job
 	expectedJob.Generation = p.Generation
-	// An Agent that predates the ranged-download choice received (and
-	// reports) the job without it; see master.acceptRequest.
-	if record.Job.RangedDownload == "" {
-		expectedJob.RangedDownload = ""
-	}
-	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(record.Job) != digest(expectedJob) {
+	if record.Job.ChildID != child.Job.ChildID || record.Job.Generation != p.Generation || digest(sameWork(record.Job)) != digest(sameWork(expectedJob)) {
 		return false, ErrConflict
 	}
 	if child.Record != nil && (record.Attempt < child.Record.Attempt || (record.Attempt == child.Record.Attempt && record.UpdatedAt.Before(child.Record.UpdatedAt))) {

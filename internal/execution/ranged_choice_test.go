@@ -10,8 +10,34 @@ import (
 	"testing"
 )
 
-// A task that turned ranged downloads off streams every object, however
-// large and however idle the node; an automatic task uses ranges.
+// The choice is not part of a child's identity: a redelivery that adds it
+// (as on resume after the Agent was upgraded) is the same work and updates
+// the stored job, which the next attempt reads; unknown values are rejected.
+func TestRedeliveryUpdatesTheRangedDownloadChoice(t *testing.T) {
+	f := newFixture(t, 1)
+	if _, err := f.repo.Accept(bg, f.job); err != nil {
+		t.Fatal(err)
+	}
+	next := f.job
+	next.RangedDownload = RangedDownloadAuto
+	record, err := f.repo.Accept(bg, next)
+	if err != nil || record.Job.RangedDownload != RangedDownloadAuto {
+		t.Fatalf("redelivery: %q (%v)", record.Job.RangedDownload, err)
+	}
+	if stored, err := f.repo.Get(bg, f.job.ChildID); err != nil || stored.Job.RangedDownload != RangedDownloadAuto {
+		t.Fatalf("stored job keeps %q (%v)", stored.Job.RangedDownload, err)
+	}
+	bad := next
+	bad.RangedDownload = "on"
+	if _, err := f.repo.Accept(bg, bad); err == nil {
+		t.Fatal("unknown ranged-download value accepted")
+	}
+}
+
+// Only an explicit "auto" lets a LOCAL destination use ranges. A task that
+// turned ranged downloads off, and a job without the field (accepted by an
+// Agent that predated it, then recovered after an upgrade), stream every
+// object however large and however idle the node.
 func TestTaskRangedDownloadChoice(t *testing.T) {
 	payload := downloadPayload(8*localTestPart + 5)
 	lender := idlePartLender(100)
@@ -19,7 +45,7 @@ func TestTaskRangedDownloadChoice(t *testing.T) {
 	for _, test := range []struct {
 		choice              string
 		gets, ranged, reads int64
-	}{{RangedDownloadOff, 1, 0, 1}, {"", 10, 10, 9}} {
+	}{{RangedDownloadOff, 1, 0, 1}, {"", 1, 0, 1}, {RangedDownloadAuto, 10, 10, 9}} {
 		var decorations atomic.Int64
 		engine := &Engine{opts: Options{DecorateReader: func(_ context.Context, _ Job, _ Item, input io.ReadCloser) (io.ReadCloser, error) {
 			decorations.Add(1)

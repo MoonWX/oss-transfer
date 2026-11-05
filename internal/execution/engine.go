@@ -640,11 +640,14 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 
 // openSource registers everything it opens in closers, which the caller closes
 // in reverse order after the write. A ranged source is used only when the
-// target would fetch this object in ranges, the task is not throttled and did
-// not turn ranged downloads off; otherwise one stream is opened.
+// target would fetch this object in ranges, the task is not throttled and, for
+// a LOCAL destination, the job allows it; otherwise one stream is opened.
 func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected transferstore.Object, source, target transferstore.Store, object *objectProgress, closers *[]io.Closer) (io.Reader, transferstore.RangeFunc, transferstore.Object, string, error) {
 	throttled := e.opts.TaskThrottled != nil && e.opts.TaskThrottled(job)
-	if opener, ok := source.(transferstore.RangeOpener); ok && !throttled && job.RangedDownload != RangedDownloadOff {
+	// A LOCAL destination ranges only on the Master's explicit "auto": a job
+	// accepted without the field (an older Master or Agent) keeps streaming.
+	allowed := job.Destination.Kind != "LOCAL" || job.RangedDownload == RangedDownloadAuto
+	if opener, ok := source.(transferstore.RangeOpener); ok && !throttled && allowed {
 		if writer, ok := target.(transferstore.RangeWriter); ok && writer.RangedWrite(item.Source.Size) {
 			ranged, metadata, err := opener.OpenRanges(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
 			if err == nil {

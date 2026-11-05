@@ -416,7 +416,7 @@ func (m *Leases) Close() {
 
 // RangedDownloadProtocol is advertised by Agents that accept a job's
 // rangedDownload field. The Master omits the field for older Agents, which
-// stream every object anyway.
+// stream every object anyway; a job without it always streams.
 const RangedDownloadProtocol = 1
 
 func (s *Service) LeaseCapabilities() map[string]any {

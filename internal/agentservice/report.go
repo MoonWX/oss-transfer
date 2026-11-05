@@ -39,7 +39,12 @@ type ReportPage struct {
 	Items      []ReportItem     `json:"items"`
 }
 
+// ReportJobDigest identifies a child's work for report export. The
+// ranged-download choice is left out: Agents hold it as delivered ("auto",
+// "off" or, for an Agent that predated it, nothing), while the Master stores
+// the task's choice.
 func ReportJobDigest(job execution.Job) string {
+	job.RangedDownload = ""
 	data, _ := json.Marshal(job)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])

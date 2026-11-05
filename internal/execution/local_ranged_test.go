@@ -79,7 +79,7 @@ func downloadPayload(size int) []byte {
 }
 
 func s3ToLocalJob(parent int64) Job {
-	return Job{ParentID: parent, Generation: 1, Source: Endpoint{Kind: "S3"}, Destination: Endpoint{Kind: "LOCAL"}, ConflictPolicy: "OVERWRITE"}
+	return Job{ParentID: parent, Generation: 1, Source: Endpoint{Kind: "S3"}, Destination: Endpoint{Kind: "LOCAL"}, ConflictPolicy: "OVERWRITE", RangedDownload: RangedDownloadAuto}
 }
 
 // monotonicSampler records the reported progress after every read, in one

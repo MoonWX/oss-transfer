@@ -22,7 +22,7 @@
 
 使用 CLI 时，在 `task create oss-to-local` 中加上 `--ranged-download off`（见 [CLI](cli.zh-CN.md#创建任务和设置限速)）。在 API 和导入文件中，任务请求行可写 `"rangedDownload": "auto"` 或 `"off"`；省略即为 auto，目标不是本地目录的任务不接受 `off`。任务详情和导出行包含 `rangedDownload`。
 
-该选项出现之前的 Agent 从不分段下载，本身就等同于停用。滚动升级期间，Master 只把该选项发给报告支持它的 Agent；旧 Agent 照常执行停用分段下载的任务。
+该选项出现之前的 Agent 从不分段下载，本身就等同于停用。滚动升级期间，Master 只把该选项发给报告支持它的 Agent。旧 Agent 已接收的子任务在该 Agent 升级后仍按单一数据流下载每个对象，自动任务也一样；停止并恢复任务后，这些子任务才会使用分段下载。因此升级过程中不会丢失“停用”选择。
 
 ## 对象比对
 

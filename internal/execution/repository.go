@@ -88,6 +88,9 @@ func validate(job Job) (string, error) {
 	if job.ParentID < 1 || job.Number < 1 || job.ChildID != fmt.Sprintf("%d-%d", job.ParentID, job.Number) || job.Generation == 0 {
 		return "", errors.New("invalid child identity or generation")
 	}
+	if job.RangedDownload != "" && job.RangedDownload != RangedDownloadAuto && job.RangedDownload != RangedDownloadOff {
+		return "", errors.New("ranged download must be auto or off")
+	}
 	if job.ConflictPolicy != "SKIP" && job.ConflictPolicy != "OVERWRITE" {
 		return "", errors.New("conflict policy must be SKIP or OVERWRITE")
 	}

@@ -79,16 +79,24 @@ type Job struct {
 	// Local device/inode identity differs between mounts on different nodes.
 	SharedLocalSource      bool `json:"sharedLocalSource,omitempty"`
 	SharedLocalDestination bool `json:"sharedLocalDestination,omitempty"`
-	// RangedDownload is the task's choice for LOCAL destinations: empty
-	// (automatic) or RangedDownloadOff, which streams every object.
+	// RangedDownload says whether objects written to a LOCAL destination may
+	// be fetched in ranges. Only RangedDownloadAuto allows it; an empty value
+	// (a Master or Agent from before the choice existed) and
+	// RangedDownloadOff stream every object. The Master stores a task's
+	// choice as empty (automatic) or "off" and spells it out on delivery to
+	// Agents that support it. It is not part of the job's identity.
 	RangedDownload    string `json:"rangedDownload,omitempty"`
 	Items             []Item `json:"items"`
 	DiscoveryComplete bool   `json:"discoveryComplete"`
 }
 
-// RangedDownloadOff makes a task write every object to its LOCAL destination
-// as one sequential stream. The empty value is automatic.
-const RangedDownloadOff = "off"
+const (
+	// RangedDownloadAuto lets an Agent fetch large objects in ranges.
+	RangedDownloadAuto = "auto"
+	// RangedDownloadOff makes a task write every object to its LOCAL
+	// destination as one sequential stream.
+	RangedDownloadOff = "off"
+)
 
 type ItemResult struct {
 	// ResolvedSource is pinned durably before reading an inventory key that was

@@ -20,6 +20,9 @@ import (
 type AgentError struct {
 	Status  int
 	Message string
+	// NodeID identifies the Agent that replied, so a reply from a node the
+	// task removed on purpose can be told apart from a real problem.
+	NodeID string
 }
 
 func (e *AgentError) Error() string { return e.Message }
@@ -56,7 +59,7 @@ func (s *Server) agentCall(ctx context.Context, session agenttransport.Session, 
 		if problem.Message == "" {
 			problem.Message = fmt.Sprintf("Agent returned HTTP %d", response.Status)
 		}
-		return &AgentError{response.Status, problem.Message}
+		return &AgentError{Status: response.Status, Message: problem.Message, NodeID: session.NodeID}
 	}
 	if into != nil {
 		return json.Unmarshal(response.Payload, into)

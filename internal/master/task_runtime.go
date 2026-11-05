@@ -117,14 +117,7 @@ func (t *taskRuntime) loop() {
 				defer t.workers.Done()
 				defer cancel()
 				defer func() { t.mu.Lock(); delete(t.active, p.ID); close(run.done); t.mu.Unlock() }()
-				err := t.step(ctx, p.ID)
-				if ctx.Err() == nil {
-					message := ""
-					if err != nil && !isStopAwaitingAcknowledgement(err) {
-						message = err.Error()
-					}
-					_ = t.repo.RuntimeProblem(p.ID, p.Generation, message)
-				}
+				_ = t.recordStep(ctx, p.ID, p.Generation)
 			}()
 		}
 	}
@@ -539,6 +532,12 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		return err
 	}
 	available, memberErr := t.prepareMembers(ctx, p, snapshot)
+	// Members admitted later in this step (a joining or returning node) are
+	// prepared by the next step; they are not unavailable.
+	prepared := map[string]bool{}
+	for _, node := range p.ActiveNodes() {
+		prepared[node.ID] = true
+	}
 	p, err = t.reconcileFailover(ctx, p, available)
 	if err != nil {
 		return err
@@ -555,9 +554,11 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	scanControl.Epoch = p.ScannerEpoch()
 	if p.Failover != nil && p.Failover.Enabled {
 		// Retired peers are no longer required for progress or control ACKs.
+		// A node the user is removing leaves through the same lease fence when
+		// it is offline; the node view reports that wait as removal progress.
 		memberErr = nil
 		for _, node := range p.ActiveNodes() {
-			if !available[node.ID] {
+			if !available[node.ID] && prepared[node.ID] && !plannedLeaving(p, node.ID) {
 				memberErr = errors.New("Waiting for an unavailable node's execution lease to expire")
 			}
 		}
@@ -595,6 +596,11 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			return nil
 		}
 		if removedScannerDone(p) {
+			return nil
+		}
+		if plannedScannerHandoff(p) {
+			// The scan moves once the leaving scanner is fenced; the node view
+			// shows this as a scan handoff, not as a reconnect wait.
 			return nil
 		}
 		return errors.New("Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes")

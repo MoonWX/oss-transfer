@@ -962,6 +962,22 @@ class Harness:
                 "distributionMode": "balanced", "conflictPolicy": "OVERWRITE", "taskBandwidthLimitMbps": rate,
                 "keyMapping": {"mode": "REPLACE_PREFIX", "sourcePrefix": "members/", "targetPrefix": prefix}}
 
+    def planned_task_errors(self, task_id, errors):
+        """Sample the task while a requested node change is in progress.
+
+        Every stage of a planned change (joining, draining, fencing, moving the
+        scan) is progress in the node view. Any task error seen meanwhile is
+        recorded; only a scrubbed, bounded excerpt is kept.
+        """
+        task = self.task(task_id)
+        message = (task or {}).get("errorMessage") or ""
+        if message and len(errors) < 5:
+            errors.append(self.scrub(message)[:300])
+        return task
+
+    def require_no_planned_errors(self, errors, change):
+        require(not errors, f"A planned node change ({change}) was reported as a task error: {errors}")
+
     def require_shares_within(self, view, rate):
         total = int(rate * 125000)
         shares = [node["share"]["bandwidthBytesPerSecond"] for node in view["nodes"] if node.get("share")]
@@ -993,8 +1009,15 @@ class Harness:
             replay = self.api(f"/api/master/tasks/{task_id}/nodes", change)
             require(replay["replayed"] and replay["view"]["nodeRevision"] == accepted["view"]["nodeRevision"],
                     "Replayed node change was applied twice")
-            joined, _ = eventually(lambda: (lambda pair: pair if pair[1] == "ACTIVE" else None)(self.node_state(task_id, second)),
+            errors = []
+            joined, _ = eventually(lambda: self.planned_task_errors(task_id, errors) and
+                                   (lambda pair: pair if pair[1] == "ACTIVE" else None)(self.node_state(task_id, second)),
                                    "added Agent joins the running task", timeout=90)
+            # The first steps after admission prepare the joiner; they are not a fault either.
+            for _ in range(6):
+                self.planned_task_errors(task_id, errors)
+                time.sleep(0.25)
+            self.require_no_planned_errors(errors, "add")
             shares = self.require_shares_within(joined, rate)
             require(len(shares) == 2, f"Joined task does not divide its limit between two Agents: {shares}")
             status = self.task(task_id)["status"]
@@ -1005,7 +1028,7 @@ class Harness:
                     "Both Agents must transfer objects after the second joined: " + str(data["bytesByNode"]))
             self.verify_s3(self.buckets["destination"], "members-added/", manifest)
             self.record("adding an Agent mid-run joins placement, splits the bandwidth limit and keeps exactly-once accounting",
-                        **data, sharesAfterJoin=shares, taskBandwidthLimitMbps=rate)
+                        **data, sharesAfterJoin=shares, taskBandwidthLimitMbps=rate, plannedChangeErrors=0)
 
             task_id = self.create("/api/master/add-buckets", self.copy_body("members-drained/", self.nodes, rate), "members-drain")
             eventually(lambda: (lambda row: row and row["status"] not in TERMINAL and row["putObjectCount"] >= 1
@@ -1017,8 +1040,14 @@ class Harness:
                                 "expectedNodeRevision": view["nodeRevision"]})
             require(removal["accepted"], f"Drain was not accepted: {removal}")
             states = {self.node_state(task_id, second)[1]}
-            left = eventually(lambda: (lambda pair: pair if pair[1] == "REMOVED" else states.add(pair[1]))(self.node_state(task_id, second)),
+            errors = []
+            left = eventually(lambda: self.planned_task_errors(task_id, errors) and
+                              (lambda pair: pair if pair[1] == "REMOVED" else states.add(pair[1]))(self.node_state(task_id, second)),
                               "draining Agent leaves the task", timeout=90)
+            for _ in range(6):
+                self.planned_task_errors(task_id, errors)
+                time.sleep(0.25)
+            self.require_no_planned_errors(errors, "drain")
             status = self.task(task_id)["status"]
             require(status not in TERMINAL,
                     f"Drain test transfer finished before the Agent left at {rate} Mbps; lower RECOVERY_BANDWIDTH_MBPS")
@@ -1031,6 +1060,48 @@ class Harness:
                     "A removed Agent is still listed as an execution node")
             self.record("draining an Agent mid-run hands off its queue, lets it leave and completes with exact accounting",
                         **data, observedStates=sorted(state for state in states if state), sharesAfterLeave=shares,
+                        taskBandwidthLimitMbps=rate, plannedChangeErrors=0)
+
+            # Remove the scanning Agent immediately: its running work and, if the
+            # scan is still serving batches, the scan move to the other Agent.
+            task_id = self.create("/api/master/add-buckets", self.copy_body("members-scanner/", self.nodes, rate), "members-scanner")
+            eventually(lambda: (lambda row: row and row["status"] not in TERMINAL and row["putObjectCount"] >= 1
+                                and row["childCount"] >= 3)(self.task(task_id)),
+                       "payload on both Agents before removing the scanner", timeout=60)
+            view = self.nodes_view(task_id)
+            scanners = [node["address"] for node in view["nodes"] if node.get("scanner")]
+            phase = (view.get("scan") or {}).get("phase")
+            require(scanners == [first] or (not scanners and phase == "COMPLETE"),
+                    f"The scanning Agent is not labelled: {scanners}, phase {phase}")
+            removal = self.api(f"/api/master/tasks/{task_id}/nodes",
+                               {"requestId": "members-scanner-1", "remove": [first], "mode": "now",
+                                "expectedNodeRevision": view["nodeRevision"]})
+            require(removal["accepted"], f"Scanner removal was not accepted: {removal}")
+            errors, labels = [], set()
+            def scanner_left():
+                self.planned_task_errors(task_id, errors)
+                current, state = self.node_state(task_id, first)
+                phase = (current.get("scan") or {}).get("phase")
+                marked = tuple(node["address"] for node in current["nodes"] if node.get("scanner"))
+                labels.add((phase, marked))
+                return current if state == "REMOVED" else None
+            left = eventually(scanner_left, "scanning Agent leaves the task", timeout=90)
+            for _ in range(6):
+                self.planned_task_errors(task_id, errors)
+                time.sleep(0.25)
+            self.require_no_planned_errors(errors, "remove the scanner now")
+            phase = (left.get("scan") or {}).get("phase")
+            marked = [node["address"] for node in left["nodes"] if node.get("scanner")]
+            require(marked == ([] if phase == "COMPLETE" else [second]),
+                    f"After the scanner left, the view marks {marked} in phase {phase}")
+            data = self.verify_task(task_id, manifest, both=False)
+            self.verify_s3(self.buckets["destination"], "members-scanner/", manifest)
+            final = self.nodes_view(task_id)
+            require((final.get("scan") or {}).get("phase") == "COMPLETE" and
+                    not [node for node in final["nodes"] if node.get("scanner")],
+                    "A completed scan still marks a scanning Agent")
+            self.record("removing the scanning Agent mid-run moves its work and scan without a task error",
+                        **data, scanPhasesSeen=sorted({phase or "" for phase, _ in labels}), plannedChangeErrors=0,
                         taskBandwidthLimitMbps=rate)
         finally:
             for node in self.nodes:

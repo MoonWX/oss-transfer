@@ -99,6 +99,11 @@ import TaskNodesDialog, {
 import SubtaskDetails from "../components/SubtaskDetails";
 import TransferStatistics from "../components/TransferStatistics";
 import TaskRequestRates from "../components/TaskRequestRates";
+import {
+  runtimeMessageLines,
+  runtimeMessageText,
+} from "../lib/runtimeMessages";
+import { useStableMessages } from "../lib/stableMessages";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
 import {
   EmptyState,
@@ -596,6 +601,23 @@ function TaskDetail({
   // Polling follows the live task above; only presentation survives the exit.
   const view = lastView.current;
   const current = view?.current;
+  // A running task's runtime problems can be raised and cleared by a single
+  // reconciliation step (for example while nodes join or leave). Show only
+  // problems that persist; an ended task's error is final and shows at once.
+  const liveTask =
+    !!current &&
+    ["RUNNING", "LIST_DONE", "RESUMING", "STOPPING", "PENDING"].includes(
+      current.status,
+    );
+  const stability = { enabled: liveTask, refreshMs, scope: current?.taskIndex };
+  const errorLines = useStableMessages(
+    runtimeMessageLines(current?.errorMessage),
+    current,
+    stability,
+  );
+  const partialShown =
+    useStableMessages(view?.partial ? ["partial"] : [], current, stability)
+      .length > 0;
   const childId = view?.childId;
   const childNode = view?.childNode;
   const sourceObjectKey =
@@ -940,14 +962,22 @@ function TaskDetail({
             refreshMs={refreshMs}
           />
           <ErrorAlert error={view?.error || null} onRetry={onRefresh} />
-          {view?.partial && (
+          {partialShown && (
             <Alert severity="warning" sx={{ mb: 2 }}>
               {tr("任务信息不完整，请刷新或检查执行节点。")}
             </Alert>
           )}
-          {current.errorMessage && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {current.errorMessage}
+          {errorLines.length > 0 && (
+            <Alert
+              severity="error"
+              sx={{ mb: 2, overflowWrap: "anywhere" }}
+              data-testid="task-runtime-alert"
+            >
+              {errorLines.map((line) => (
+                <Typography key={line} variant="body2">
+                  {runtimeMessageText(line)}
+                </Typography>
+              ))}
             </Alert>
           )}
           <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>

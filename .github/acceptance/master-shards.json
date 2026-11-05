@@ -200,6 +200,12 @@
     "TestTaskSpeedFreshnessMatchesWhileFileProgressExpiresEarlier": 1.05,
     "TestTaskStepAcknowledgesDurablePrefixWithFullDispatchQueue": 0.94,
     "TestUnsavedNodeAddressesAreRetried": 0.01,
-    "TestWindowsAgentCommandRunsDownloadedInstaller": 0
+    "TestWindowsAgentCommandRunsDownloadedInstaller": 0,
+    "TestPlannedChangeRemovingFinishedScannerRecordsNoTaskError": 2.76,
+    "TestPlannedChangeRemovingScannerMidScanResumesFromCheckpoint": 4.34,
+    "TestPlannedChangeJoinRecordsNoTaskError": 2.86,
+    "TestPlannedChangeRemovingOfflineScannerReportsProgress": 22.45,
+    "TestPlannedChangeBandwidthStatusWaitsForRaisedShare": 2.0,
+    "TestWithoutPlannedProblemsKeepsRealProblems": 0
   }
 }

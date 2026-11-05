@@ -1513,7 +1513,12 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				err := s.agentCall(ctx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}.Session(), "bandwidth_parent_status", false, map[string]any{"parentId": parent.ID}, &policy)
 				expected := parentPolicy(parent, index)
 				matches := err == nil && policy.Generation == expected.Generation && policy.Revision == expected.Revision && policy.BandwidthBytesPerSecond == expected.BandwidthBytesPerSecond && policy.ListQPS == expected.ListQPS && policy.HeadQPS == expected.HeadQPS && policy.PutQPS == expected.PutQPS && policy.Stopped == expected.Stopped
-				pending := err == nil && !matches && (parent.Status == "STOPPING" || parent.Status == "RESUMING") &&
+				// The runtime delivers a newer policy asynchronously: after a stop or
+				// resume, and while running after a node joins or leaves (each
+				// membership step raises the budget revision). An older policy is
+				// still being delivered, not a fault; a mismatch at the same
+				// revision, or any mismatch once stopped, remains a fault.
+				pending := err == nil && !matches && (parent.Status == "STOPPING" || parent.Status == "RESUMING" || parent.Status == "RUNNING") &&
 					(policy.Generation < expected.Generation || (policy.Generation == expected.Generation && policy.Revision < expected.Revision))
 				item := map[string]any{"address": node.Address, "applied": matches, "pending": pending}
 				addNodeDisplay(item, displays.lookup(node.ID, node.Address))

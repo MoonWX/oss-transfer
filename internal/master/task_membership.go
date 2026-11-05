@@ -122,6 +122,10 @@ func (t *taskRuntime) leaveTask(ctx context.Context, p task.Parent, node task.No
 		name := t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
 		return p, fmt.Errorf("Agent %s could not be fenced for removal: %w", name, err)
 	}
+	// From here on the node refuses this task's work. The rest of this step
+	// must not address it as an available member: its "retired" replies are
+	// expected and would otherwise surface as a task error.
+	delete(available, node.ID)
 	if now {
 		// Collect the fenced node's latest durable progress so completed
 		// objects are not repeated by the replacement owner.
@@ -183,6 +187,13 @@ func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online 
 	}
 	pending := p.PendingChildren()
 	local := p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL"
+	// Only a member that scans now, or takes the scan over from the Master's
+	// checkpoint, is the scanner. A finished scan needs none, and a fenced
+	// scanner waiting for its replacement is not a member that scans.
+	scanner := ""
+	if phase := scanPhase(p); phase == scanPhaseScanning || phase == scanPhaseHandoff {
+		scanner = p.ScannerNode().ID
+	}
 	nodes := []map[string]any{}
 	for _, node := range p.CurrentNodes() {
 		state, mode := "ACTIVE", ""
@@ -197,7 +208,7 @@ func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online 
 		case p.NodeRetired(node.ID):
 			state = "DISCONNECTED"
 		}
-		row := map[string]any{"id": node.ID, "address": node.Address, "state": state, "drainMode": mode, "scanner": p.ScannerNode().ID == node.ID, "share": nil}
+		row := map[string]any{"id": node.ID, "address": node.Address, "state": state, "drainMode": mode, "scanner": scanner != "" && scanner == node.ID, "share": nil}
 		if share, ok := shares[node.ID]; ok {
 			row["share"] = share
 		}
@@ -206,6 +217,11 @@ func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online 
 		}
 		if online != nil {
 			row["online"] = online[node.ID] == node.EnrollmentID
+			if draining && !row["online"].(bool) {
+				// A leaving node that is offline leaves once its execution
+				// lease expires; its work then moves to the remaining nodes.
+				row["progress"] = "LEASE_EXPIRY"
+			}
 		}
 		if local {
 			row["localPath"] = node.LocalRoot
@@ -225,7 +241,7 @@ func (s *Server) membershipSummary(p task.Parent, displays nodeDisplaySet) map[s
 			draining = append(draining, node.Address)
 		}
 	}
-	return map[string]any{"nodeRevision": p.NodeRevision(), "pending": p.MembershipPending(), "nodes": s.membershipNodes(p, displays, nil), "joining": joining, "draining": draining}
+	return map[string]any{"nodeRevision": p.NodeRevision(), "pending": p.MembershipPending(), "nodes": s.membershipNodes(p, displays, nil), "joining": joining, "draining": draining, "scanPhase": scanPhase(p)}
 }
 
 func membershipReason(ctx context.Context, err error) string {
@@ -263,6 +279,7 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 		view["bandwidthLimitMbps"] = p.Spec.BandwidthMbps
 	}
 	view["nodes"] = s.membershipNodes(p, displays, online)
+	view["scan"] = map[string]any{"phase": scanPhase(p), "complete": scanFinished(p)}
 	removed := []map[string]any{}
 	current := map[string]bool{}
 	for _, node := range p.CurrentNodes() {
@@ -342,5 +359,5 @@ func trimmedList(values []string) ([]string, error) {
 // only waits for transfers instead of reporting a disconnected scanner.
 func removedScannerDone(p task.Parent) bool {
 	scanner := p.ScannerNode().ID
-	return scanner != "" && p.NodeRemoved(scanner) && p.Status == "RUNNING" && p.ScanComplete && p.DispatchedThrough >= p.ScannedBatches
+	return scanner != "" && p.NodeRemoved(scanner) && p.Status == "RUNNING" && scanFinished(p)
 }

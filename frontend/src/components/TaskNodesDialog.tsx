@@ -55,6 +55,8 @@ export type MemberNode = NodeDisplay & {
   localPath?: string;
   pendingChildren?: number;
   share?: NodeShare;
+  /** LEASE_EXPIRY: an offline leaving node that leaves once its lease expires. */
+  progress?: string;
 };
 type Candidate = NodeDisplay & {
   id?: string;
@@ -78,6 +80,8 @@ type NodesView = {
   nodes: MemberNode[];
   removedNodes?: (NodeDisplay & { id?: string; address: string })[];
   candidates: Candidate[];
+  /** SCANNING, HANDOFF, WAITING or COMPLETE; older Masters omit it. */
+  scan?: { phase?: string; complete?: boolean };
 };
 type BindingCheck = NodeDisplay & {
   executionNodeIp: string;
@@ -324,38 +328,52 @@ export default function TaskNodesDialog({
   const sequence = useRef(0);
   const controller = useRef<AbortController | null>(null);
   const reading = useRef(false);
-  const pendingRequest = useRef<{ id: string; fingerprint: string }>(undefined);
+  const backgroundFailures = useRef(0);
+  const pendingRequest = useRef<{
+    id: string;
+    selection: string;
+    body: Record<string, unknown>;
+  }>(undefined);
 
-  const load = useCallback(async () => {
-    const current = ++sequence.current;
-    controller.current?.abort();
-    const next = new AbortController();
-    controller.current = next;
-    reading.current = true;
-    setLoading(true);
-    try {
-      const response = await api<{ data?: NodesView }>(path, {
-        signal: next.signal,
-      });
-      if (current === sequence.current) {
-        setView(readView(response.data));
-        setLoadError("");
+  // A background refresh only replaces the displayed view. One failed refresh
+  // keeps the last view; a second consecutive failure is reported.
+  const load = useCallback(
+    async (background = false) => {
+      const current = ++sequence.current;
+      controller.current?.abort();
+      const next = new AbortController();
+      controller.current = next;
+      reading.current = true;
+      setLoading(true);
+      try {
+        const response = await api<{ data?: NodesView }>(path, {
+          signal: next.signal,
+        });
+        if (current === sequence.current) {
+          setView(readView(response.data));
+          setLoadError("");
+          backgroundFailures.current = 0;
+        }
+      } catch (failure) {
+        if (
+          current === sequence.current &&
+          !(failure instanceof DOMException && failure.name === "AbortError") &&
+          (!background || ++backgroundFailures.current >= 2)
+        )
+          setLoadError(
+            failure instanceof Error
+              ? failure.message
+              : t("读取失败，请重试。"),
+          );
+      } finally {
+        if (current === sequence.current) {
+          reading.current = false;
+          setLoading(false);
+        }
       }
-    } catch (failure) {
-      if (
-        current === sequence.current &&
-        !(failure instanceof DOMException && failure.name === "AbortError")
-      )
-        setLoadError(
-          failure instanceof Error ? failure.message : t("读取失败，请重试。"),
-        );
-    } finally {
-      if (current === sequence.current) {
-        reading.current = false;
-        setLoading(false);
-      }
-    }
-  }, [path]);
+    },
+    [path],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -370,6 +388,7 @@ export default function TaskNodesDialog({
     setError("");
     setMenuAnchor(null);
     pendingRequest.current = undefined;
+    backgroundFailures.current = 0;
     void load();
     return () => {
       ++sequence.current;
@@ -378,17 +397,23 @@ export default function TaskNodesDialog({
     };
   }, [open, load]);
 
-  // Follow joining and draining progress while the dialog is open. The
-  // confirmation step keeps the view it summarises.
-  const pending = !!view?.pending;
+  // Keep node statistics and membership progress live while the dialog is
+  // open, at the console's refresh interval and only while the page is
+  // visible. A refresh replaces only the displayed view: selections, paths and
+  // preflight results are keyed by node and survive it. The confirmation step
+  // keeps the view it summarises.
   useEffect(() => {
-    if (!open || !pending || step !== "edit" || submitting || refreshMs <= 0)
-      return;
-    const timer = window.setInterval(() => {
-      if (!document.hidden && !reading.current) void load();
-    }, refreshMs);
-    return () => window.clearInterval(timer);
-  }, [open, pending, step, submitting, refreshMs, load]);
+    if (!open || step !== "edit" || submitting || refreshMs <= 0) return;
+    const refresh = () => {
+      if (!document.hidden && !reading.current) void load(true);
+    };
+    const timer = window.setInterval(refresh, refreshMs);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [open, step, submitting, refreshMs, load]);
 
   const nodes = view?.nodes || [];
   const byAddress = useMemo(
@@ -424,15 +449,20 @@ export default function TaskNodesDialog({
         localPath: (paths[address] ?? "").trim(),
       }))
     : [];
-  const change = {
+  const selection = {
     add: validAdds,
     remove: validRemoves,
     ...(local && joinAdds.length ? { bindings } : {}),
     ...(validRemoves.length ? { mode: effectiveMode } : {}),
+  };
+  const change = {
+    ...selection,
     expectedGeneration: view?.generation,
     expectedNodeRevision: view?.nodeRevision,
   };
-  const fingerprint = JSON.stringify(change);
+  // What the user chose. Live refreshes do not change it, so a passed
+  // preflight stays valid while statistics update.
+  const fingerprint = JSON.stringify(selection);
   // Matches the Master's rule: only active members that keep receiving work
   // count; joining, draining and disconnected members do not.
   const remaining = nodes.filter(
@@ -499,19 +529,21 @@ export default function TaskNodesDialog({
 
   async function submit() {
     if (!view || submitting || empty || lastNode || !preflightPassed) return;
-    if (pendingRequest.current?.fingerprint !== fingerprint)
+    // A retry of the same change resends the same request, including the ID
+    // and the membership revision it was based on, so a lost response cannot
+    // apply the change twice even after a refresh brought a newer revision.
+    if (pendingRequest.current?.selection !== fingerprint) {
+      const id = Array.from(
+        crypto.getRandomValues(new Uint8Array(16)),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("");
       pendingRequest.current = {
-        id: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-          byte.toString(16).padStart(2, "0"),
-        ).join(""),
-        fingerprint,
+        id,
+        selection: fingerprint,
+        body: { requestId: id, ...change },
       };
-    // A retry of the same change reuses the request ID so a lost response
-    // cannot apply the change twice.
-    const body = {
-      requestId: pendingRequest.current.id,
-      ...change,
-    };
+    }
+    const body = pendingRequest.current.body;
     setSubmitting(true);
     setError("");
     try {
@@ -752,9 +784,31 @@ export default function TaskNodesDialog({
             {t("正在完成握手与检查，加入后开始分配任务")}
           </Typography>
         )}
+        {node.progress === "LEASE_EXPIRY" && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="div"
+            sx={{ mt: 0.5 }}
+          >
+            {t("节点离线，执行租约到期后离开，其任务由其他节点继续")}
+          </Typography>
+        )}
       </Box>
     );
   };
+
+  // Where the scan stands. Members carry the scanner tag only while one scans
+  // (including a new scanner taking over); afterwards the dialog says so here.
+  const scanPhase = view?.scan?.phase;
+  const scanNote =
+    scanPhase === "COMPLETE"
+      ? t("扫描已完成，不再需要扫描节点")
+      : scanPhase === "HANDOFF"
+        ? t("正在移交扫描，从 Master 保存的断点继续")
+        : scanPhase === "WAITING"
+          ? t("原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描")
+          : "";
 
   const bindingField = (node: { address: string } & NodeDisplay) => {
     const value = paths[node.address] ?? "";
@@ -1208,9 +1262,35 @@ export default function TaskNodesDialog({
               </Alert>
             )}
             <Box component="section" aria-labelledby={`${ids}-current`}>
-              <Box sx={{ mb: 1 }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                gap={1}
+                flexWrap="wrap"
+                sx={{ mb: 1 }}
+              >
                 {sectionTitle(t("当前节点"), nodes.length, `${ids}-current`)}
-              </Box>
+                {scanPhase === "COMPLETE" && (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    color="success"
+                    label={t("扫描已完成")}
+                  />
+                )}
+              </Stack>
+              {scanNote && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  component="div"
+                  data-testid="task-nodes-scan"
+                  sx={{ mb: 1 }}
+                >
+                  {scanNote}
+                </Typography>
+              )}
               <Stack
                 component="ul"
                 gap={0.5}

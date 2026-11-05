@@ -2225,4 +2225,135 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   实时: { en: "Current", ja: "現在" },
   任务上限: { en: "Task limit", ja: "タスク上限" },
   生效上限: { en: "Effective limit", ja: "実効上限" },
+  "执行节点信息无效，请重试。": {
+    en: "Invalid execution node information. Try again.",
+    ja: "実行ノード情報が無効です。再試行してください。",
+  },
+  加入中: { en: "Joining", ja: "参加中" },
+  排空中: { en: "Draining", ja: "ドレイン中" },
+  立即移除中: { en: "Removing now", ja: "即時削除中" },
+  已失联: { en: "Disconnected", ja: "接続断" },
+  扫描: { en: "Scanner", ja: "スキャン" },
+  "带宽份额 {value}": {
+    en: "Bandwidth share {value}",
+    ja: "帯域幅の割り当て {value}",
+  },
+  "预检失败，请重试。": {
+    en: "Preflight check failed. Try again.",
+    ja: "事前チェックに失敗しました。再試行してください。",
+  },
+  "执行节点变更已提交。": {
+    en: "Execution node change submitted.",
+    ja: "実行ノードの変更を送信しました。",
+  },
+  "提交失败，请重试。": {
+    en: "Submission failed. Try again.",
+    ja: "送信に失敗しました。再試行してください。",
+  },
+  扫描节点: { en: "Scanner node", ja: "スキャンノード" },
+  "剩余 {count} 个子任务待移交或完成": {
+    en: "Subtasks left to hand off or finish: {count}",
+    ja: "引き継ぎまたは完了待ちのサブタスク: {count}",
+  },
+  "未完成子任务 {count}": {
+    en: "Unfinished subtasks: {count}",
+    ja: "未完了のサブタスク: {count}",
+  },
+  "正在完成握手与检查，加入后开始分配任务": {
+    en: "Completing handshake and checks; work is assigned after it joins",
+    ja: "ハンドシェイクとチェックを実行中です。参加後に作業が割り当てられます",
+  },
+  "移除 {node}": { en: "Remove {node}", ja: "{node} を削除" },
+  "取消排空，保留 {node}": {
+    en: "Cancel draining and keep {node}",
+    ja: "ドレインを取り消して {node} を残す",
+  },
+  "{node} 的本地绝对路径": {
+    en: "Absolute local path on {node}",
+    ja: "{node} のローカル絶対パス",
+  },
+  预检通过: { en: "Preflight passed", ja: "事前チェックに合格しました" },
+  与任务其他节点指向同一共享目录: {
+    en: "Must point to the same shared directory as the task's other nodes",
+    ja: "タスクの他のノードと同じ共有ディレクトリを指定してください",
+  },
+  "任务 #{id} 执行节点": {
+    en: "Task #{id} execution nodes",
+    ja: "タスク #{id} の実行ノード",
+  },
+  "读取执行节点…": {
+    en: "Loading execution nodes…",
+    ja: "実行ノードを読み込み中…",
+  },
+  "无法读取执行节点：{error}": {
+    en: "Unable to load execution nodes: {error}",
+    ja: "実行ノードを読み込めません: {error}",
+  },
+  当前任务不可调整执行节点: {
+    en: "Execution nodes of this task cannot be changed",
+    ja: "このタスクの実行ノードは変更できません",
+  },
+  "上一次节点变更仍在进行中。此时只能取消加入中的节点、将排空中的节点改为立即移除，或保留排空中的节点。":
+    {
+      en: "A previous node change is still in progress. Until it finishes you can only cancel a joining node, switch a draining node to immediate removal, or keep a draining node.",
+      ja: "前回のノード変更がまだ進行中です。完了するまでは、参加中のノードの取り消し、ドレイン中のノードの即時削除への切り替え、またはドレイン中のノードの維持のみ行えます。",
+    },
+  当前节点: { en: "Current nodes", ja: "現在のノード" },
+  "没有可添加的在线 Agent": {
+    en: "No online Agents available to add",
+    ja: "追加できるオンラインの Agent はありません",
+  },
+  "添加 {node}": { en: "Add {node}", ja: "{node} を追加" },
+  暂不可添加: { en: "Cannot be added now", ja: "現在は追加できません" },
+  移除方式: { en: "Removal mode", ja: "削除方法" },
+  "排空后移除（推荐）": {
+    en: "Drain, then remove (recommended)",
+    ja: "ドレイン後に削除（推奨）",
+  },
+  "不再分配新任务，排队中的任务移交其他节点，进行中的任务完成后节点退出。": {
+    en: "No new work is assigned, queued work moves to other nodes, and the node leaves once its running work finishes.",
+    ja: "新しい作業は割り当てられず、待機中の作業は他のノードへ移り、実行中の作業が完了するとノードが離脱します。",
+  },
+  立即移除: { en: "Remove now", ja: "今すぐ削除" },
+  当前任务不支持立即移除: {
+    en: "This task does not support immediate removal",
+    ja: "このタスクは即時削除に対応していません",
+  },
+  "进行中的任务会被停止，并由剩余节点从已保存的进度继续。": {
+    en: "Running work is stopped and continues on the remaining nodes from saved progress.",
+    ja: "実行中の作業は停止され、残りのノードが保存済みの進捗から再開します。",
+  },
+  至少保留一个执行节点: {
+    en: "Keep at least one execution node",
+    ja: "実行ノードを少なくとも 1 つ残してください",
+  },
+  预检: { en: "Preflight", ja: "事前チェック" },
+  本地传输需要预检通过后才能提交: {
+    en: "Local transfers need a passing preflight check before submitting",
+    ja: "ローカル転送は事前チェックに合格してから送信できます",
+  },
+  "请确认以下执行节点变更：": {
+    en: "Confirm the following execution node change:",
+    ja: "次の実行ノードの変更を確認してください:",
+  },
+  "添加：{nodes}": { en: "Add: {nodes}", ja: "追加: {nodes}" },
+  "移除：{nodes}": { en: "Remove: {nodes}", ja: "削除: {nodes}" },
+  "移除方式：立即移除": {
+    en: "Removal mode: remove now",
+    ja: "削除方法: 今すぐ削除",
+  },
+  "移除方式：排空后移除": {
+    en: "Removal mode: drain, then remove",
+    ja: "削除方法: ドレイン後に削除",
+  },
+  "变更将立即开始生效。": {
+    en: "The change takes effect immediately.",
+    ja: "変更はすぐに有効になります。",
+  },
+  "变更将在任务继续运行时生效。": {
+    en: "The change takes effect when the task resumes.",
+    ja: "変更はタスクの再開時に有効になります。",
+  },
+  返回修改: { en: "Back to edit", ja: "編集に戻る" },
+  确认变更: { en: "Confirm change", ja: "変更を確定" },
 };

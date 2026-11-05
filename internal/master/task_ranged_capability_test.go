@@ -133,7 +133,7 @@ func observeAndReport(t *testing.T, ctx context.Context, runtime *taskRuntime, a
 	t.Helper()
 	var record *execution.Record
 	retryAgentCall(t, ctx, func() (err error) {
-		record, err = runtime.observeOne(ctx, p, child, nil)
+		record, err = runtime.observeOne(ctx, runtime.newRangedPass(), p, child, nil)
 		return err
 	})
 	if record == nil {

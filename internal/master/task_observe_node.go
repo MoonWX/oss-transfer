@@ -19,6 +19,7 @@ func (t *taskRuntime) observeNode(ctx context.Context, p task.Parent, children [
 	var observations []task.Observation
 	var problems []error
 	legacy := false
+	pass := t.newRangedPass()
 	for offset := 0; offset < len(children); {
 		if err := ctx.Err(); err != nil {
 			return observations, errors.Join(append(problems, err)...)
@@ -56,7 +57,7 @@ func (t *taskRuntime) observeNode(ctx context.Context, p task.Parent, children [
 			if rows != nil {
 				row = &rows[index]
 			}
-			record, err := t.observeOne(ctx, p, child, row)
+			record, err := t.observeOne(ctx, pass, p, child, row)
 			if err != nil {
 				problems = append(problems, err)
 				if stopOnError || ctx.Err() != nil {
@@ -71,7 +72,7 @@ func (t *taskRuntime) observeNode(ctx context.Context, p task.Parent, children [
 	return observations, errors.Join(append(problems, ctx.Err())...)
 }
 
-func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.Child, row *agentservice.ChildRecord) (*execution.Record, error) {
+func (t *taskRuntime) observeOne(ctx context.Context, pass *rangedPass, p task.Parent, child task.Child, row *agentservice.ChildRecord) (*execution.Record, error) {
 	if p.HandoffPending(child.Job.Number) {
 		return nil, nil
 	}
@@ -98,7 +99,7 @@ func (t *taskRuntime) observeOne(ctx context.Context, p task.Parent, child task.
 	if p.Status != "RUNNING" {
 		return nil, nil
 	}
-	request, err := t.acceptRequest(callCtx, p, child)
+	request, err := t.acceptRequest(callCtx, pass, p, child)
 	if err != nil {
 		return nil, err
 	}

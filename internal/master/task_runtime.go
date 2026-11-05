@@ -44,6 +44,8 @@ type taskRuntime struct {
 	// rangedSupport decides whether a node's Agent understands a job's
 	// rangedDownload field.
 	rangedSupport rangedDownloadSupport
+	// rangedQuery replaces the capability query in tests.
+	rangedQuery func(context.Context, task.Node) (int, error)
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {

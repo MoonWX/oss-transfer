@@ -52,9 +52,10 @@ func parallelChildNodes(ctx context.Context, groups [][]task.Child, visit func(i
 }
 
 func (t *taskRuntime) deliverChildren(ctx context.Context, p task.Parent, children []task.Child) error {
+	pass := t.newRangedPass()
 	return parallelChildNodes(ctx, groupChildrenByNode(children), func(_ int, group []task.Child) error {
 		for _, child := range group {
-			request, err := t.acceptRequest(ctx, p, child)
+			request, err := t.acceptRequest(ctx, pass, p, child)
 			if err != nil {
 				return err
 			}

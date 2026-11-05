@@ -48,6 +48,41 @@ func (r *rangedDownloadSupport) supported(ctx context.Context, node task.Node, q
 	return true, nil
 }
 
+// rangedPass memoizes one answer per node, positive or negative, for one
+// delivery or observation pass, so an Agent that is still old is asked once
+// per pass rather than before every child; the next pass asks again and so
+// notices an upgrade. It is safe for concurrent use by node groups.
+type rangedPass struct {
+	t       *taskRuntime
+	mu      sync.Mutex
+	answers map[string]bool
+}
+
+func (t *taskRuntime) newRangedPass() *rangedPass {
+	return &rangedPass{t: t, answers: map[string]bool{}}
+}
+
+func (r *rangedPass) supported(ctx context.Context, node task.Node) (bool, error) {
+	r.mu.Lock()
+	answer, known := r.answers[node.ID]
+	r.mu.Unlock()
+	if known {
+		return answer, nil
+	}
+	query := r.t.rangedDownloadProtocol
+	if r.t.rangedQuery != nil {
+		query = r.t.rangedQuery
+	}
+	answer, err := r.t.rangedSupport.supported(ctx, node, query)
+	if err != nil {
+		return false, err
+	}
+	r.mu.Lock()
+	r.answers[node.ID] = answer
+	r.mu.Unlock()
+	return answer, nil
+}
+
 func (t *taskRuntime) rangedDownloadProtocol(ctx context.Context, node task.Node) (int, error) {
 	var caps struct {
 		RangedDownloadProtocol int `json:"rangedDownloadProtocol"`
@@ -70,12 +105,12 @@ func (t *taskRuntime) rangedDownloadProtocol(ctx context.Context, node task.Node
 // including after that Agent is upgraded, so an "off" choice can never be
 // lost to a rolling upgrade; an "auto" child ranges again after the task is
 // stopped and resumed, which delivers the choice anew.
-func (t *taskRuntime) acceptRequest(ctx context.Context, p task.Parent, child task.Child) (agentservice.ChildAcceptRequest, error) {
+func (t *taskRuntime) acceptRequest(ctx context.Context, pass *rangedPass, p task.Parent, child task.Child) (agentservice.ChildAcceptRequest, error) {
 	request := childAcceptance(p, child)
 	if child.Job.Destination.Kind != "LOCAL" {
 		return request, nil
 	}
-	supported, err := t.rangedSupport.supported(ctx, child.Node, t.rangedDownloadProtocol)
+	supported, err := pass.supported(ctx, child.Node)
 	if err != nil {
 		return request, err
 	}

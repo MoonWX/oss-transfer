@@ -102,6 +102,7 @@
     "TestNewAdministratorRequiresPasswordAwareReaderAfterPasswordChange": 12.31,
     "TestAddNodeGrantsLeaseOnlyAfterExistingSharesShrink": 2.2,
     "TestDrainRemovalFencesBeforeRaisingShares": 2.0,
+    "TestOldAgentIsAskedOncePerPass": 1.94,
     "TestRangedDownloadChoiceAcrossAgentVersions": 2.21,
     "TestRangedDownloadChoiceAppliesToTheSeed": 0,
     "TestRangedDownloadIsReportedAndSurvivesExportImport": 0,

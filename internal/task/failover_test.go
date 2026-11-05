@@ -354,6 +354,7 @@ func TestFailoverSharedPathsPinsAndRepeatedMigration(t *testing.T) {
 				spec.SharedLocalSource = true
 			} else {
 				spec.Destination = execution.Endpoint{Kind: "LOCAL", Root: "/original"}
+				spec.RangedDownload = execution.RangedDownloadOff
 			}
 			p, _ := createFailoverTask(t, repo, spec, 1)
 			p = enableFailoverTest(t, db, repo, p, direction == "OSS_TO_LOCAL")
@@ -369,6 +370,9 @@ func TestFailoverSharedPathsPinsAndRepeatedMigration(t *testing.T) {
 				job := moved[0].Job
 				if direction == "LOCAL_TO_OSS" && job.Source.Root != moved[0].Node.LocalRoot || direction == "OSS_TO_LOCAL" && (job.Destination.Root != moved[0].Node.LocalRoot || !job.SharedLocalDestination) {
 					t.Fatal("replacement mount path or proof flag missing", job)
+				}
+				if job.RangedDownload != spec.RangedDownload {
+					t.Fatal("node replacement changed the ranged-download choice", job.RangedDownload)
 				}
 			}
 		})

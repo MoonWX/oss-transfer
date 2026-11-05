@@ -107,15 +107,8 @@ func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc
 // range; a changed source, a length mismatch and cancellation are not.
 func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uploadID *string, number int32, offset, length int64) (*string, error) {
 	data := make([]byte, int(length))
-	for attempt := 1; ; attempt++ {
-		err := readRange(ctx, ranges, offset, data)
-		if err == nil {
-			break
-		}
-		var interrupted rangeBodyError
-		if attempt >= rangeReadAttempts || ctx.Err() != nil || !errors.As(err, &interrupted) {
-			return nil, err
-		}
+	if err := readRangeRetrying(ctx, ranges, offset, data); err != nil {
+		return nil, err
 	}
 	output, err := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: uploadID, PartNumber: aws.Int32(number), Body: bytes.NewReader(data), ContentLength: aws.Int64(length)})
 	if err != nil {
@@ -125,6 +118,19 @@ func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uplo
 		return nil, errors.New("S3 returned an empty ETag for part " + strconv.Itoa(int(number)))
 	}
 	return output.ETag, nil
+}
+
+// readRangeRetrying fills data from one range. An interrupted body is read
+// again with a fresh conditional range, at most rangeReadAttempts times; a
+// changed source, a length mismatch and cancellation are final.
+func readRangeRetrying(ctx context.Context, ranges RangeFunc, offset int64, data []byte) error {
+	for attempt := 1; ; attempt++ {
+		err := readRange(ctx, ranges, offset, data)
+		var interrupted rangeBodyError
+		if err == nil || attempt >= rangeReadAttempts || ctx.Err() != nil || !errors.As(err, &interrupted) {
+			return err
+		}
+	}
 }
 
 // rangeBodyError marks a transport failure after a range was opened.

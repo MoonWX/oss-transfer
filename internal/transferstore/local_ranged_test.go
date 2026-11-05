@@ -155,8 +155,15 @@ func rangedLocal(t *testing.T, options LocalRangedOptions) (*Local, string, *ran
 	if options.MinSize == 0 {
 		options.MinSize = 1
 	}
-	if options.PartSize == 0 {
-		options.PartSize = testRangePart
+	if options.ChunkSize == 0 {
+		options.ChunkSize = testRangePart
+	}
+	if options.Memory == nil {
+		budget, err := NewUploadMemoryBudget(64 << 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.Memory = budget
 	}
 	if err := s.SetRangedWrites(options); err != nil {
 		t.Fatal(err)
@@ -245,22 +252,36 @@ func TestLocalRangedWriteReassemblesEverySize(t *testing.T) {
 
 func TestLocalRangedWriteSelection(t *testing.T) {
 	s, _ := localFixture(t)
+	if s.RangedWrite(10 << 30) {
+		t.Fatal("ranged writes selected without a memory budget")
+	}
+	budget, _ := NewUploadMemoryBudget(DefaultUploadMemoryBytes)
+	if err := s.SetRangedWrites(LocalRangedOptions{Memory: budget}); err != nil {
+		t.Fatal(err)
+	}
 	for size, want := range map[int64]bool{0: false, 1 << 20: false, 128<<20 - 1: false, 128 << 20: true, 10 << 30: true} {
 		if got := s.RangedWrite(size); got != want {
 			t.Errorf("default RangedWrite(%d) = %v", size, got)
 		}
 	}
-	for size, part := range map[int64]int64{128 << 20: 16 << 20, 1 << 30: 16 << 20, 2 << 30: 32 << 20, 3<<30 + 1: 49 << 20, 100 << 30: 64 << 20} {
-		if got := s.rangedPartSize(size); got != part {
-			t.Errorf("part size for %d = %d, want %d", size, got, part)
-		}
+	if s.ranged.ChunkSize != 8<<20 || s.ranged.PartConcurrency != 4 {
+		t.Fatalf("defaults %+v", s.ranged)
 	}
-	if err := s.SetRangedWrites(LocalRangedOptions{MinSize: -1}); err != nil || s.RangedWrite(10<<30) {
+	small, _ := NewUploadMemoryBudget(4 << 20)
+	if err := s.SetRangedWrites(LocalRangedOptions{Memory: small}); err != nil || s.RangedWrite(10<<30) {
+		t.Fatal("chunks larger than the memory budget still selected", err)
+	}
+	if err := s.SetRangedWrites(LocalRangedOptions{MinSize: -1, Memory: budget}); err != nil || s.RangedWrite(10<<30) {
 		t.Fatal("disabled ranged writes still selected", err)
 	}
 	for _, concurrency := range []int{-1, 17} {
 		if err := s.SetRangedWrites(LocalRangedOptions{PartConcurrency: concurrency}); err == nil {
 			t.Fatal("accepted part concurrency", concurrency)
+		}
+	}
+	for _, chunk := range []int64{-1, 65 << 20} {
+		if err := s.SetRangedWrites(LocalRangedOptions{ChunkSize: chunk}); err == nil {
+			t.Fatal("accepted chunk size", chunk)
 		}
 	}
 	// A streamed write ignores Ranges when the object is a single range.
@@ -540,6 +561,9 @@ func TestLocalRangedWriteCancellationStopsEveryReader(t *testing.T) {
 	assertOnlyFiles(t, root)
 	if registry.pending() != 0 {
 		t.Fatal("temporary record kept after cancellation")
+	}
+	if used, waiting := memoryState(s.ranged.Memory); used != 0 || waiting != 0 {
+		t.Fatalf("cancellation kept memory: used=%d waiting=%d", used, waiting)
 	}
 }
 

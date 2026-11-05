@@ -117,9 +117,9 @@ func (f *Factory) open(ctx context.Context, snapshot Snapshot, endpoint executio
 		if err != nil {
 			return nil, err
 		}
-		// Large writes fetch concurrent source ranges and borrow the same idle
-		// node capacity as ranged uploads.
-		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{PartConcurrency: f.PartConcurrency, PartLender: f.PartLender}); err != nil {
+		// Large writes fetch concurrent source ranges, appended in order, and
+		// share the idle node capacity and memory budget of ranged uploads.
+		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{PartConcurrency: f.PartConcurrency, PartLender: f.PartLender, Memory: f.UploadMemory}); err != nil {
 			_ = local.Close()
 			return nil, err
 		}

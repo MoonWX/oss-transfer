@@ -182,6 +182,10 @@ OSS 间迁移
   --validate-only                  只执行节点和路径预检，不创建任务
   下载：--prefix <前缀> 或 --object-key <Key>
         --target-relative-path <相对路径> 仅用于单对象下载
+        --ranged-download auto|off 默认 auto：单个 Agent 内 128 MiB 及以上的对象按字节范围
+            并发读取并按顺序写入文件；off 为每个对象单流顺序下载，仅在目标存储或网络
+            不适合并发分段读取（Agent 内存紧张、存储限制并发 GET）或技术支持要求时使用。
+            创建后在续传、重试和调整节点时保持不变。
   上传：--target-prefix <目标前缀> 或 --target-key <目标Key>
         指定目标 Key 仅适用于单节点上的单文件。
   本地上传根据绑定节点数量选择分发方式；多个节点须绑定同一逻辑目录。
@@ -220,6 +224,8 @@ buckets CSV 列顺序（后 3 列可省略，无表头）
 
 JSON 使用 WebUI 对应 API 的请求字段，例如 buckets：
   [{"sourceS3Alias":"source","sourceBucket":"photos","destS3Alias":"target","destBucket":"archive","eligibleWorkerNodes":["10.0.0.2"],"distributionMode":"balanced"}]
+local 下载请求（OSS_TO_LOCAL）可设置 "rangedDownload":"auto" 或 "off"，省略即 auto；
+含义同 task create --ranged-download，其他方向不接受 off。
 
 示例
   oss-transfer-cli task import buckets ./buckets.csv

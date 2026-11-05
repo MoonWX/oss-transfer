@@ -53,7 +53,11 @@ func downloadFixture(t *testing.T, payload []byte, concurrency int, lender *tran
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = target.Close() })
-	if err := target.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, PartSize: localTestPart, PartConcurrency: concurrency, PartLender: lender}); err != nil {
+	memory, err := transferstore.NewUploadMemoryBudget(64 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, ChunkSize: localTestPart, PartConcurrency: concurrency, PartLender: lender, Memory: memory}); err != nil {
 		t.Fatal(err)
 	}
 	stat, err := source.Stat(bg, "source")
@@ -316,7 +320,8 @@ func TestEngineRangedDownloadIntegrityFuzz(t *testing.T) {
 			}
 			defer target.Close()
 			lender := idlePartLender(rng.IntN(2) * 50)
-			if err := target.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, PartSize: localTestPart, PartConcurrency: 1 + rng.IntN(6), PartLender: lender}); err != nil {
+			memory, _ := transferstore.NewUploadMemoryBudget([]int64{localTestPart, 3 * localTestPart, 64 << 20}[rng.IntN(3)])
+			if err := target.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, ChunkSize: localTestPart, PartConcurrency: 1 + rng.IntN(6), PartLender: lender, Memory: memory}); err != nil {
 				t.Error(err)
 				return
 			}

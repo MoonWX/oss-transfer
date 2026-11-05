@@ -70,6 +70,12 @@ oss-transfer-cli help storage
 
 Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task.
 
+Downloads to a local directory (`oss-to-local`) accept `--ranged-download auto|off`. The default, `auto`, has each Agent download objects of 128 MiB or more as concurrent byte ranges and write them to the file in order, using idle node capacity. This is right for almost every task. `off` downloads each object as one sequential stream; choose it only when the target storage or network handles parallel range downloads badly (memory-constrained Agents, storage that throttles many concurrent GETs), or when support asks. The setting is fixed for the task's lifetime and is kept on resume, retry and node changes. `task show` displays it for local-destination tasks. Other directions reject the flag. In `task import local` JSON, the matching field is `"rangedDownload": "auto"` or `"off"`.
+
+```sh
+oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --ranged-download off
+```
+
 Adjust a running task's limits:
 
 ```sh

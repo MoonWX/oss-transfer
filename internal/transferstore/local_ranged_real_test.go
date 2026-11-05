@@ -88,7 +88,7 @@ func TestRealS3RangedLocalDownload(t *testing.T) {
 		}
 		lender := NewPartLender()
 		lender.SetIdle(func() int { return mode.idle })
-		if err := target.SetRangedWrites(LocalRangedOptions{MinSize: mode.min, PartLender: lender}); err != nil {
+		if err := target.SetRangedWrites(LocalRangedOptions{MinSize: mode.min, PartLender: lender, Memory: budget}); err != nil {
 			t.Fatal(err)
 		}
 		var times []time.Duration

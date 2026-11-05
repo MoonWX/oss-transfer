@@ -48,7 +48,7 @@ func NewLocal(root string) (*Local, error) {
 		_ = r.Close()
 		return nil, err
 	}
-	return &Local{root: r, scope: absolute + identity, rootPath: absolute, ranged: LocalRangedOptions{MinSize: defaultRangedMinSize, PartConcurrency: defaultLocalPartConcurrency}}, nil
+	return &Local{root: r, scope: absolute + identity, rootPath: absolute, ranged: LocalRangedOptions{MinSize: defaultRangedMinSize, ChunkSize: defaultLocalChunkSize, PartConcurrency: defaultLocalPartConcurrency}}, nil
 }
 
 func (s *Local) Close() error { return s.root.Close() }
@@ -472,12 +472,8 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		registered = true
 	}
 	if options.Ranges != nil && s.RangedWrite(options.Size) {
-		// Sizing happens after registration, so an unregistered temporary file
-		// is still always empty. Every range then fills its own region; the
-		// file is published only after all of them delivered every byte.
-		if err := file.Truncate(options.Size); err != nil {
-			return result, err
-		}
+		// Ranges are fetched concurrently but appended in order, exactly as a
+		// stream would be; the file is published only after every byte.
 		if err := s.writeRanges(ctx, file, options.Ranges, options.Size); err != nil {
 			return result, err
 		}

@@ -493,7 +493,12 @@ func runLocalRangedFaultScenario(root string, seed uint64, positiveControl bool)
 	defer target.Close()
 	registry := newRangeRegistry()
 	target.SetTempRegistry(registry)
-	if err := target.SetRangedWrites(LocalRangedOptions{MinSize: 1, PartSize: partSize, PartConcurrency: concurrency, PartLender: lender}); err != nil {
+	memory, err := NewUploadMemoryBudget([]int64{partSize, 3 * partSize, 64 << 20}[rng.IntN(3)])
+	if err != nil {
+		out.critical = append(out.critical, err.Error())
+		return out
+	}
+	if err := target.SetRangedWrites(LocalRangedOptions{MinSize: 1, ChunkSize: partSize, PartConcurrency: concurrency, PartLender: lender, Memory: memory}); err != nil {
 		out.critical = append(out.critical, err.Error())
 		return out
 	}
@@ -544,8 +549,8 @@ func runLocalRangedFaultScenario(root string, seed uint64, positiveControl bool)
 	if err != nil && cfg.MutateAt < 0 && cancelAfter < 0 && (len(cfg.GetKinds) == 0 || onlySlow(cfg)) {
 		out.unexpected = "fault-free scenario failed: " + err.Error()
 	}
-	if lender.Lent() != 0 || registry.pending() != 0 {
-		out.leak = fmt.Sprintf("lent=%d temporary records=%d", lender.Lent(), registry.pending())
+	if used, waiting := memoryState(memory); lender.Lent() != 0 || registry.pending() != 0 || used != 0 || waiting != 0 {
+		out.leak = fmt.Sprintf("lent=%d temporary records=%d memory used=%d waiting=%d", lender.Lent(), registry.pending(), used, waiting)
 	}
 	return out
 }

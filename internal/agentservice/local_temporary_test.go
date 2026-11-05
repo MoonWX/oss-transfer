@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,45 +68,70 @@ func TestTempRegistryCrashHelper(t *testing.T) {
 	}
 	options := transferstore.WriteOptions{Size: 64 << 20, Overwrite: true}
 	if os.Getenv("OSS_TRANSFER_TEMP_POINT") == "ranged" {
-		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, PartSize: 1 << 20, PartConcurrency: crashRanges}); err != nil {
+		budget, err := transferstore.NewUploadMemoryBudget(64 << 20)
+		if err != nil {
 			t.Fatal(err)
 		}
-		options.Ranges = crashRangeFunc(registry.OwnerID())
+		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, ChunkSize: 1 << 20, PartConcurrency: 4, Memory: budget}); err != nil {
+			t.Fatal(err)
+		}
+		options.Ranges = crashRangeFunc(registry.OwnerID(), os.Getenv("OSS_TRANSFER_TEMP_ROOT"))
 	}
 	_, err = local.Write(context.Background(), "destination.bin", &crashTempReader{owner: registry.OwnerID()}, options)
 	t.Fatalf("crash helper unexpectedly returned: %v", err)
 }
 
-const crashRanges = 4
-
-// crashRangeFunc delivers the first 64 KiB of each range. Once every range
-// has written its chunk and asked for more, the helper reports READY and
-// blocks, so the kill lands while several regions are partly filled.
-func crashRangeFunc(owner string) transferstore.RangeFunc {
-	var mu sync.Mutex
-	waiting := 0
-	return func(context.Context, int64, int64) (io.ReadCloser, error) {
+// crashRangeFunc serves 1 MiB chunks 0, 1 and 3 completely, while chunk 2
+// stalls after 64 KiB. Once chunks 0 and 1 are on disk and chunk 3 waits in
+// memory behind the gap, the helper reports READY and blocks, so the kill
+// lands with a partial, strictly sequential temporary file.
+func crashRangeFunc(owner, root string) transferstore.RangeFunc {
+	var thirdDone atomic.Bool
+	go func() {
+		for {
+			if thirdDone.Load() && tempFileSize(root, owner) == 2<<20 {
+				fmt.Println("READY " + owner)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	return func(_ context.Context, offset, length int64) (io.ReadCloser, error) {
+		full := bytes.NewReader(bytes.Repeat([]byte{0x72}, int(length)))
+		if offset != 2<<20 && offset <= 3<<20 {
+			return io.NopCloser(readerFunc(func(buffer []byte) (int, error) {
+				n, err := full.Read(buffer)
+				if err == io.EOF && offset == 3<<20 {
+					thirdDone.Store(true)
+				}
+				return n, err
+			})), nil
+		}
 		first := true
 		return io.NopCloser(readerFunc(func(buffer []byte) (int, error) {
 			if first {
 				first = false
-				n := min(len(buffer), 64*1024)
-				for i := range buffer[:n] {
-					buffer[i] = 0x72
-				}
-				return n, nil
+				return full.Read(buffer[:min(len(buffer), 64*1024)])
 			}
-			mu.Lock()
-			waiting++
-			if waiting == crashRanges {
-				fmt.Println("READY " + owner)
-			}
-			mu.Unlock()
 			for {
 				time.Sleep(time.Hour)
 			}
 		})), nil
 	}
+}
+
+// tempFileSize returns the size of this owner's temporary file, or -1.
+func tempFileSize(root, owner string) int64 {
+	size := int64(-1)
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.Contains(entry.Name(), owner) && strings.HasSuffix(entry.Name(), ".tmp") {
+			if info, err := entry.Info(); err == nil {
+				size = info.Size()
+			}
+		}
+		return nil
+	})
+	return size
 }
 
 type readerFunc func([]byte) (int, error)
@@ -260,8 +285,8 @@ func TestLocalTempRecoveryAfterKillPreservesOtherAgentAndUserFiles(t *testing.T)
 	}
 }
 
-// A ranged write killed while its ranges fill a preallocated file must not
-// publish the partial file, and startup recovery removes it.
+// A ranged write killed while chunks are in flight must not publish the
+// partial file, and startup recovery removes it.
 func TestLocalTempRecoveryAfterKillDuringRangedWrite(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "destination.bin"), []byte("previous complete target"), 0600); err != nil {
@@ -276,19 +301,11 @@ func TestLocalTempRecoveryAfterKillDuringRangedWrite(t *testing.T) {
 		t.Fatalf("ranged payload was written without a durable temp record: %+v", records)
 	}
 	partial := filepath.Join(records[0].ParentPath, records[0].Name)
-	info, err := os.Stat(partial)
-	if err != nil || info.Size() != 64<<20 {
-		t.Fatalf("expected the preallocated partial file: %v %v", info, err)
-	}
+	// Only the in-order prefix reaches the file: chunk 3 was fetched but
+	// waited behind the stalled chunk 2.
 	contents, err := os.ReadFile(partial)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index := range int64(crashRanges) {
-		region := contents[index<<20 : index<<20+64*1024]
-		if !bytes.Equal(region, bytes.Repeat([]byte{0x72}, len(region))) {
-			t.Fatalf("range %d did not reach its region before the kill", index)
-		}
+	if err != nil || !bytes.Equal(contents, bytes.Repeat([]byte{0x72}, 2<<20)) {
+		t.Fatalf("expected exactly the first two chunks on disk: %d bytes, %v", len(contents), err)
 	}
 	if body, err := os.ReadFile(filepath.Join(root, "destination.bin")); err != nil || string(body) != "previous complete target" {
 		t.Fatalf("partial ranged write was published: %v", err)

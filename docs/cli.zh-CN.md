@@ -70,6 +70,12 @@ oss-transfer-cli help storage
 
 本地传输执行与控制台相同的预检。`--validate-only` 只检查配置，不创建任务。
 
+下载到本地目录（`oss-to-local`）时可使用 `--ranged-download auto|off`。默认值 `auto` 让每个 Agent 把 128 MiB 及以上的对象按字节范围并发下载、按顺序写入文件，利用节点的空闲能力，几乎所有任务都应保持默认。`off` 对每个对象使用单个顺序流下载；仅在目标存储或网络不适合并发分段下载（Agent 内存紧张、存储会限制大量并发 GET）或技术支持要求时使用。该设置在任务整个生命周期内固定，续传、重试和调整节点时保持不变。`task show` 会为目标为本地的任务显示该设置。其他方向不接受此参数。`task import local` 的 JSON 中对应字段为 `"rangedDownload": "auto"` 或 `"off"`。
+
+```sh
+oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --ranged-download off
+```
+
 调整运行中任务的限速：
 
 ```sh

@@ -102,6 +102,7 @@ type TransferForm = {
   eligibleWorkerNodes: string[] | null;
   conflictPolicy: "SKIP" | "OVERWRITE";
   distributionMode: "affinity" | "balanced";
+  rangedDownload: RangedDownload;
   dateAfter: string;
   dateBefore: string;
   taskBandwidthLimitMbps: string;
@@ -109,6 +110,8 @@ type TransferForm = {
   headQps: string;
   putQps: string;
 };
+// Only downloads into a local directory can turn ranged downloads off.
+type RangedDownload = "auto" | "off";
 type Precheck = {
   valid: boolean;
   nodeBindings: Array<
@@ -165,6 +168,7 @@ const freshForm = (): TransferForm => ({
   eligibleWorkerNodes: null,
   conflictPolicy: "SKIP",
   distributionMode: "balanced",
+  rangedDownload: "auto",
   dateAfter: "",
   dateBefore: "",
   taskBandwidthLimitMbps: "",
@@ -189,6 +193,8 @@ function cleanMappingFields(form: TransferForm): TransferForm {
     next.ossTargetPrefix = "";
   if (next.ossMappingMode !== "EXACT_KEY") next.ossTargetKey = "";
   if (next.sourceMode === "all") next.sourceSelection = "";
+  // A hidden choice must not come back when the user returns to a download.
+  if (next.direction !== "OSS_TO_LOCAL") next.rangedDownload = "auto";
   return next;
 }
 
@@ -211,6 +217,18 @@ function validateOssDestination(
       tr("{value1}源和目标不能是同一存储桶，请选择其他目标存储桶。", {
         value1: context,
       }),
+    );
+}
+
+function validateRangedDownload(value: unknown, localDestination: boolean) {
+  if (value == null) return;
+  if (value !== "auto" && value !== "off")
+    throw new Error(tr("rangedDownload 必须是 auto 或 off。"));
+  if (value === "off" && !localDestination)
+    throw new Error(
+      tr(
+        "仅目标为本地目录（OSS_TO_LOCAL）的任务可以设置 rangedDownload: off。",
+      ),
     );
 }
 
@@ -242,6 +260,7 @@ function readDraft(): Draft | null {
       ) ||
       !["SKIP", "OVERWRITE"].includes(form.conflictPolicy) ||
       !["affinity", "balanced"].includes(form.distributionMode) ||
+      !["auto", "off"].includes(form.rangedDownload) ||
       !Array.isArray(form.bindings) ||
       form.bindings.length === 0 ||
       form.bindings.some(
@@ -726,6 +745,11 @@ export default function CreateTransfer() {
         form.direction === "OSS_TO_LOCAL" && form.sourceMode === "object"
           ? optional(form.targetRelativePath)
           : undefined,
+      // The default is omitted so requests stay unchanged for "auto".
+      rangedDownload:
+        form.direction === "OSS_TO_LOCAL" && form.rangedDownload === "off"
+          ? "off"
+          : undefined,
     };
   };
 
@@ -799,6 +823,10 @@ export default function CreateTransfer() {
       try {
         validateTaskBandwidth(row.taskBandwidthLimitMbps);
         validateTaskRequestLimits(row.requestLimits);
+        validateRangedDownload(
+          row.rangedDownload,
+          batchKind === "local" && row.direction === "OSS_TO_LOCAL",
+        );
       } catch (error) {
         throw new Error(
           tr("第 {value1} 项：{value2}", {
@@ -1871,6 +1899,24 @@ export default function CreateTransfer() {
                         onChange={(e) => update({ dateBefore: e.target.value })}
                         slotProps={{ inputLabel: { shrink: true } }}
                       />
+                      {form.direction === "OSS_TO_LOCAL" && (
+                        <TextField
+                          select
+                          label={tr("分段下载")}
+                          value={form.rangedDownload}
+                          onChange={(e) =>
+                            update({
+                              rangedDownload: e.target.value as RangedDownload,
+                            })
+                          }
+                          helperText={tr(
+                            "自动适合绝大多数场景：128 MiB 及以上的对象按字节范围并发下载并按顺序写入。仅当执行节点内存受限、存储限制大量并发 GET 请求，或技术支持建议时选择停用；创建后不可更改。",
+                          )}
+                        >
+                          <MenuItem value="auto">{tr("自动（默认）")}</MenuItem>
+                          <MenuItem value="off">{tr("停用")}</MenuItem>
+                        </TextField>
+                      )}
                       <Box sx={{ gridColumn: "1 / -1" }}>
                         <Divider sx={{ mb: 2.5 }} />
                         <Stack
@@ -2057,7 +2103,7 @@ export default function CreateTransfer() {
                       >
                         {batchKind === "local"
                           ? tr(
-                              "direction：OSS_TO_LOCAL 或 LOCAL_TO_OSS；sourceEndpoint / destinationEndpoint：OSS 端提供 type、s3Alias、bucket 和可选 objectKey / prefix；LOCAL 端提供 type、nodeBindings，多节点绑定必须访问同一份共享数据。LOCAL_TO_OSS 按节点数自动分发，单文件仅支持一个节点。可选 conflictPolicy、dateAfter、dateBefore、targetRelativePath；OSS_TO_LOCAL 可选 distributionMode。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。",
+                              "direction：OSS_TO_LOCAL 或 LOCAL_TO_OSS；sourceEndpoint / destinationEndpoint：OSS 端提供 type、s3Alias、bucket 和可选 objectKey / prefix；LOCAL 端提供 type、nodeBindings，多节点绑定必须访问同一份共享数据。LOCAL_TO_OSS 按节点数自动分发，单文件仅支持一个节点。可选 conflictPolicy、dateAfter、dateBefore、targetRelativePath；OSS_TO_LOCAL 可选 distributionMode 和 rangedDownload（auto 或 off，默认 auto）。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。",
                             )
                           : tr(
                               "sourceS3Alias / destS3Alias：连接名称；sourceBucket / destBucket：存储桶；prefix：源前缀筛选，objectKey：单个源对象，二者互斥。{value1}keyMapping 省略或 null 保留完整源 Key；mode 可选 PRESERVE、ADD_PREFIX（targetPrefix）、REPLACE_PREFIX（sourcePrefix 与源筛选前缀一致，targetPrefix 可为空）、EXACT_KEY（仅单对象，targetKey）。ADD_PREFIX 末尾缺少 / 时补一个；REPLACE_PREFIX 字面替换且不补 /；所有 Key 和前缀均保留空格与斜杠。dateAfter / dateBefore：修改时间范围，格式 YYYY-MM-DDTHH:mm:ss；overwrite：是否覆盖；distributionMode：affinity 或 balanced。taskBandwidthLimitMbps：任务带宽上限，单位 Mbps，0.1–1,000,000；省略或 null 表示仅使用节点限速。",
@@ -2223,6 +2269,11 @@ export default function CreateTransfer() {
                     {tab === 0
                       ? `${form.conflictPolicy === "SKIP" ? tr("跳过同名对象或文件") : tr("覆盖同名对象或文件")} · ${distributionLabel(effectiveDistributionMode, form.direction)}`
                       : tr("提交前请核对存储连接和迁移路径。")}
+                    {tab === 0 &&
+                    form.direction === "OSS_TO_LOCAL" &&
+                    form.rangedDownload === "off"
+                      ? tr(" · 分段下载已停用")
+                      : ""}
                     {tab === 0 &&
                     form.taskBandwidthLimitMbps.trim() &&
                     Number.isFinite(Number(form.taskBandwidthLimitMbps)) &&

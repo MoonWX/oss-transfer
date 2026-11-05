@@ -77,11 +77,18 @@ type Job struct {
 	ConflictPolicy string         `json:"conflictPolicy"`
 	// SharedLocalSource is only scheduled after Agent-local shared-root proof.
 	// Local device/inode identity differs between mounts on different nodes.
-	SharedLocalSource      bool   `json:"sharedLocalSource,omitempty"`
-	SharedLocalDestination bool   `json:"sharedLocalDestination,omitempty"`
-	Items                  []Item `json:"items"`
-	DiscoveryComplete      bool   `json:"discoveryComplete"`
+	SharedLocalSource      bool `json:"sharedLocalSource,omitempty"`
+	SharedLocalDestination bool `json:"sharedLocalDestination,omitempty"`
+	// RangedDownload is the task's choice for LOCAL destinations: empty
+	// (automatic) or RangedDownloadOff, which streams every object.
+	RangedDownload    string `json:"rangedDownload,omitempty"`
+	Items             []Item `json:"items"`
+	DiscoveryComplete bool   `json:"discoveryComplete"`
 }
+
+// RangedDownloadOff makes a task write every object to its LOCAL destination
+// as one sequential stream. The empty value is automatic.
+const RangedDownloadOff = "off"
 
 type ItemResult struct {
 	// ResolvedSource is pinned durably before reading an inventory key that was

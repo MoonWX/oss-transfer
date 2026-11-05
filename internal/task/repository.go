@@ -85,6 +85,9 @@ func validate(spec Spec) error {
 	if spec.ConflictPolicy != "SKIP" && spec.ConflictPolicy != "OVERWRITE" {
 		return errors.New("conflict policy must be SKIP or OVERWRITE")
 	}
+	if spec.RangedDownload != "" && (spec.RangedDownload != execution.RangedDownloadOff || spec.Destination.Kind != "LOCAL") {
+		return errors.New("ranged download can only be turned off for a LOCAL destination")
+	}
 	if spec.DistributionMode != "BALANCED" && spec.DistributionMode != "AFFINITY" {
 		return errors.New("distribution mode must be BALANCED or AFFINITY")
 	}
@@ -392,6 +395,7 @@ func assignChild(tx *state.Tx, p *Parent, number int, objects []transferstore.Ob
 	job := execution.Job{RequestLimits: p.Spec.RequestLimits, ChildID: fmt.Sprintf("%d-%d", p.ID, number), ParentID: p.ID, Number: number, Generation: p.Generation, OwnerEpoch: p.NodeEpoch(node.ID), Source: p.Spec.Source, Destination: p.Spec.Destination, ConflictPolicy: p.Spec.ConflictPolicy, DiscoveryComplete: true}
 	job.SharedLocalSource = p.Spec.SharedLocalSource
 	job.SharedLocalDestination = p.Spec.SharedLocalDestination
+	job.RangedDownload = p.Spec.RangedDownload
 	if job.Source.Kind == "LOCAL" {
 		job.Source.Root = node.LocalRoot
 	}

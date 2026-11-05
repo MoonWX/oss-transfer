@@ -87,11 +87,12 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		}
 	}
 	local := view["localTransfer"] == true
-	// Re-adding a draining node cancels its drain and keeps its existing path;
-	// only nodes that actually join need a binding.
+	// Re-adding a draining node (or one being removed immediately but not yet
+	// fenced) cancels its removal and keeps its existing path; only nodes that
+	// actually join need a binding.
 	draining := map[string]bool{}
 	for _, node := range objectList(view["nodes"]) {
-		if getString(node, "state") == "DRAINING" {
+		if state := getString(node, "state"); state == "DRAINING" || state == "REMOVING" {
 			draining[getString(node, "address")], draining[getString(node, "id")] = true, true
 		}
 	}
@@ -101,12 +102,16 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 			joins++
 		}
 	}
+	// A retry with --request-id may replay a change the Master already
+	// accepted, after which the current view no longer shows the cancelled
+	// removal. The Master's request fingerprint is the authority then.
+	retry := opts.Has("request-id")
 	for _, binding := range bindings {
-		if draining[getString(binding.(map[string]interface{}), "executionNodeIp")] {
+		if !retry && draining[getString(binding.(map[string]interface{}), "executionNodeIp")] {
 			return nil, asUsageError(cliErrorf("重新加入排空中的节点会沿用原路径，无需 --binding: %s", getString(binding.(map[string]interface{}), "executionNodeIp")))
 		}
 	}
-	if local && len(bindings) != joins {
+	if local && !retry && len(bindings) != joins {
 		return nil, asUsageError(cliErrorf("本地迁移任务需为每个加入的节点指定一个 --binding 节点=/绝对路径"))
 	}
 	if !local && len(bindings) > 0 {

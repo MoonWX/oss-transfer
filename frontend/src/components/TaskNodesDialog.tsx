@@ -332,11 +332,10 @@ export default function TaskNodesDialog({
     expectedNodeRevision: view?.nodeRevision,
   };
   const fingerprint = JSON.stringify(change);
+  // Matches the Master's rule: only active members that keep receiving work
+  // count; joining, draining and disconnected members do not.
   const remaining = nodes.filter(
-    (node) =>
-      node.state !== "REMOVING" &&
-      node.state !== "DRAINING" &&
-      !validRemoves.includes(node.address),
+    (node) => node.state === "ACTIVE" && !validRemoves.includes(node.address),
   ).length;
   const empty = validAdds.length === 0 && validRemoves.length === 0;
   // Joining Agents do not count: the task needs a working member until they join.

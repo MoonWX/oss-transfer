@@ -46,3 +46,33 @@ func TestTaskNodesLocalRetrySkipsPreflightAndReplays(t *testing.T) {
 		t.Fatalf("retry did not reach the replay: %v", result)
 	}
 }
+
+// Cancelling an immediate removal that is not fenced yet also keeps the path.
+func TestTaskNodesLocalRemovingCancelNeedsNoBinding(t *testing.T) {
+	master := &taskNodesFakeMaster{view: taskNodesTestView(true)}
+	nodes := master.view["nodes"].([]interface{})
+	nodes[1].(map[string]interface{})["state"], nodes[1].(map[string]interface{})["drainMode"] = "REMOVING", "now"
+	client := adminTestClient(t, master.handler(t))
+	if _, err := runTaskCommand(client, []string{"nodes", "12", "--add", "10.0.0.2", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(master.posts) != 1 || master.posts[0]["dryRun"] != nil {
+		t.Fatalf("cancelling an immediate removal must submit without preflight: %v", master.posts)
+	}
+}
+
+// Retrying an accepted drain cancel: the node now shows ACTIVE, but the CLI
+// must still send the original request so the Master can replay it.
+func TestTaskNodesRetryOfAcceptedCancelReachesReplay(t *testing.T) {
+	master := &taskNodesFakeMaster{view: taskNodesTestView(true)}
+	nodes := master.view["nodes"].([]interface{})
+	nodes[1].(map[string]interface{})["state"], nodes[1].(map[string]interface{})["drainMode"] = "ACTIVE", ""
+	master.respond = func(body map[string]interface{}) (int, interface{}) {
+		return 200, map[string]interface{}{"success": true, "data": map[string]interface{}{"accepted": true, "replayed": true, "valid": true, "view": master.view}}
+	}
+	client := adminTestClient(t, master.handler(t))
+	result, err := runTaskCommand(client, []string{"nodes", "12", "--add", "10.0.0.2", "--request-id", "r1", "--expected-revision", "3", "--yes"})
+	if err != nil || len(master.posts) != 1 || responseData(result)["replayed"] != true {
+		t.Fatalf("retry did not reach the replay: %v %v %v", err, master.posts, result)
+	}
+}

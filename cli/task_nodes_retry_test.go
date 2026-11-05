@@ -76,3 +76,32 @@ func TestTaskNodesRetryOfAcceptedCancelReachesReplay(t *testing.T) {
 		t.Fatalf("retry did not reach the replay: %v %v %v", err, master.posts, result)
 	}
 }
+
+// After an accepted change the CLI summarizes it instead of printing the
+// edit-restriction notes, which read like errors while the change runs.
+func TestTaskNodesAcceptedOutputIsASummary(t *testing.T) {
+	master := &taskNodesFakeMaster{view: taskNodesTestView(false)}
+	after := taskNodesTestView(false)
+	after["editable"], after["reason"] = false, "A node change is in progress"
+	after["candidates"] = []interface{}{}
+	master.respond = func(body map[string]interface{}) (int, interface{}) {
+		return 200, map[string]interface{}{"success": true, "data": map[string]interface{}{"accepted": true, "valid": true, "view": after}}
+	}
+	for _, lang := range []string{"zh", "en"} {
+		code, stdout, stderr := runMockCLI(t, []string{"--lang", lang, "task", "nodes", "12", "--remove", "10.0.0.1", "--yes"}, master.handler(t))
+		if code != 0 {
+			t.Fatalf("%s: exit %d: %s", lang, code, stderr)
+		}
+		want := map[string][]string{"zh": {"已受理执行节点变更", "移出: 10.0.0.1（平滑移出", "task nodes 12 --watch 5"}, "en": {"Execution node change accepted", "Removing: 10.0.0.1 (drain", "task nodes 12 --watch 5"}}[lang]
+		for _, text := range want {
+			if !strings.Contains(stdout, text) {
+				t.Fatalf("%s output lacks %q:\n%s", lang, text, stdout)
+			}
+		}
+		for _, text := range []string{"A node change is in progress", "当前不能调整", "没有可加入", "No other online Agents"} {
+			if strings.Contains(stdout, text) {
+				t.Fatalf("%s output still shows %q:\n%s", lang, text, stdout)
+			}
+		}
+	}
+}

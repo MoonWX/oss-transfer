@@ -166,6 +166,7 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 	}
 	if result != nil {
 		result["requestId"] = requestID
+		result["taskNodesChange"] = map[string]interface{}{"taskId": id, "add": add, "remove": remove, "mode": mode}
 	}
 	return result, err
 }
@@ -235,7 +236,14 @@ func renderTaskNodesResult(out io.Writer, result map[string]interface{}) bool {
 				fmt.Fprintf(out, cliText(out, "已受理执行节点变更（请求标识 %s）。\n"), safeCLIText(getString(result, "requestId")))
 			}
 			renderTaskNodeBindingChecks(out, objectList(data["nodeBindings"]))
-			renderTaskNodesView(out, view)
+			if data["accepted"] == true {
+				// A successful change: summarize what was requested and the
+				// resulting members, without the edit-restriction notes that
+				// read like errors while the change itself is still running.
+				renderTaskNodesAccepted(out, result, view)
+			} else {
+				renderTaskNodesView(out, view)
+			}
 			return true
 		}
 	}
@@ -348,6 +356,25 @@ func renderTaskNodesView(out io.Writer, view map[string]interface{}) {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, identity, localeOf(out))), safeCLIText(identity), eligible, safeCLIText(dashIfEmpty(getString(node, "reason"))))
 	}
 	w.Flush()
+}
+
+func renderTaskNodesAccepted(out io.Writer, result, view map[string]interface{}) {
+	change, _ := result["taskNodesChange"].(map[string]interface{})
+	if added := cliStringList(change["add"]); len(added) > 0 {
+		fmt.Fprintf(out, cliText(out, "加入: %s\n"), safeCLIText(strings.Join(added, ", ")))
+	}
+	if removed := cliStringList(change["remove"]); len(removed) > 0 {
+		mode := cliText(out, "平滑移出：正在传输的子任务完成后离开")
+		if getString(change, "mode") == "now" {
+			mode = cliText(out, "立即移出：正在传输的子任务转给其他节点继续")
+		}
+		fmt.Fprintf(out, cliText(out, "移出: %s（%s）\n"), safeCLIText(strings.Join(removed, ", ")), mode)
+	}
+	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatus(getString(view, "status"))))
+	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true)
+	if view["pending"] == true {
+		fmt.Fprintf(out, cliText(out, "变更会在后台完成；查看进度: oss-transfer-cli task nodes %d --watch 5\n"), getInt(view, "taskId"))
+	}
 }
 
 func renderTaskNodeNotes(out io.Writer, membership map[string]interface{}) {

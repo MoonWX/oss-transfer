@@ -1,6 +1,7 @@
 package transferstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -428,3 +429,176 @@ func TestLocalRangedConcurrentModificationFuzz(t *testing.T) {
 }
 
 var _ = aws.String
+
+// runLocalRangedFaultScenario downloads the fault server's source into a
+// ranged Local write. A success must publish exactly the original bytes; any
+// failure must leave the previous target (or none) and no temporary file.
+func runLocalRangedFaultScenario(root string, seed uint64, positiveControl bool) fuzzOutcome {
+	rng := rand.New(rand.NewPCG(seed, 13))
+	const partSize = 256 << 10
+	size := fuzzSize(rng, partSize)
+	cfg := faultConfig{MutateAt: -1}
+	cancelAfter := time.Duration(-1)
+	mode := rng.IntN(8)
+	switch mode {
+	case 0: // clean
+	case 1, 2:
+		cfg.GetKinds, cfg.GetRate = retryableGets, []float64{0.1, 0.3, 0.6}[rng.IntN(3)]
+	case 3, 4:
+		cfg.GetKinds, cfg.GetRate = allGets, []float64{0.05, 0.2, 0.5}[rng.IntN(3)]
+		cfg.ProbeFaults = rng.IntN(4) == 0
+	case 5:
+		cfg.MutateAt = rng.IntN(int(size/partSize) + 2)
+		cfg.IgnoreIfMatch = rng.IntN(2) == 0
+		cfg.GetKinds, cfg.GetRate = []fsGet{gSlow}, 0.5
+	case 6:
+		cancelAfter = time.Duration(rng.Int64N(int64(200 * time.Millisecond)))
+		cfg.GetKinds, cfg.GetRate = []fsGet{gSlow}, 0.5
+	default:
+		cfg.GetKinds, cfg.GetRate = allGets, 0.15
+		if rng.IntN(2) == 0 {
+			cfg.MutateAt = rng.IntN(int(size/partSize) + 2)
+			cfg.IgnoreIfMatch = rng.IntN(2) == 0
+		}
+		if rng.IntN(3) == 0 {
+			cancelAfter = time.Duration(rng.Int64N(int64(300 * time.Millisecond)))
+		}
+	}
+	if positiveControl {
+		cfg = faultConfig{MutateAt: -1, GetKinds: []fsGet{gShiftedBody}, GetRate: 0.5}
+		cancelAfter = -1
+	}
+	concurrency := 1 + rng.IntN(8)
+	idle := []int{0, 0, 3, 100}[rng.IntN(4)]
+	sdkAttempts := 2 + rng.IntN(4)
+	overwrite := rng.IntN(2) == 0
+	previous := rng.IntN(2) == 0 && overwrite
+	payload := fuzzPayload(rng, size)
+	server := newFaultS3(payload, partSize, cfg, seed)
+	defer server.Close()
+	out := fuzzOutcome{seed: seed, desc: fmt.Sprintf("local seed=%d mode=%d size=%d parts=%d conc=%d idle=%d sdkAttempts=%d overwrite=%v previous=%v cancel=%v cfg={get %.2f %d kinds probe=%v mutateAt=%d ignoreIfMatch=%v}", seed, mode, size, (size+partSize-1)/partSize, concurrency, idle, sdkAttempts, overwrite, previous, cancelAfter, cfg.GetRate, len(cfg.GetKinds), cfg.ProbeFaults, cfg.MutateAt, cfg.IgnoreIfMatch)}
+	source, err := NewS3(S3Config{Endpoint: server.server.URL, Bucket: "bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, RetryMaxAttempts: sdkAttempts, HTTPClient: server.server.Client()})
+	if err != nil {
+		out.critical = append(out.critical, err.Error())
+		return out
+	}
+	fastRetries(source, sdkAttempts)
+	lender := NewPartLender()
+	lender.SetIdle(func() int { return idle })
+	target, err := NewLocal(root)
+	if err != nil {
+		out.critical = append(out.critical, err.Error())
+		return out
+	}
+	defer target.Close()
+	registry := newRangeRegistry()
+	target.SetTempRegistry(registry)
+	if err := target.SetRangedWrites(LocalRangedOptions{MinSize: 1, PartSize: partSize, PartConcurrency: concurrency, PartLender: lender}); err != nil {
+		out.critical = append(out.critical, err.Error())
+		return out
+	}
+	if !target.RangedWrite(size) {
+		out.err = errors.New("skipped: not ranged")
+		return out
+	}
+	if previous {
+		if err := os.WriteFile(filepath.Join(root, "target"), []byte("previous"), 0o600); err != nil {
+			out.critical = append(out.critical, err.Error())
+			return out
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if cancelAfter >= 0 {
+		timer := time.AfterFunc(cancelAfter, cancel)
+		defer timer.Stop()
+	}
+	result, err := func() (WriteResult, error) {
+		ranges, object, err := source.OpenRanges(ctx, "source", OpenOptions{Expected: &Object{Key: "source", Size: size}})
+		if err != nil {
+			return WriteResult{}, err
+		}
+		defer ranges.Close()
+		return target.Write(ctx, "target", strings.NewReader("unused"), WriteOptions{Size: object.Size, Overwrite: overwrite, Ranges: ranges.OpenRange})
+	}()
+	out.err, out.committed = err, result.Committed
+	out.violations = server.Violations()
+	out.counts = server.Counts()
+	got, readErr := os.ReadFile(filepath.Join(root, "target"))
+	switch {
+	case err == nil && (!result.Committed || readErr != nil || !bytes.Equal(got, payload)):
+		out.critical = append(out.critical, fmt.Sprintf("Write succeeded but committed=%v read=%v equal=%v", result.Committed, readErr, bytes.Equal(got, payload)))
+	case err != nil && result.Committed:
+		out.critical = append(out.critical, fmt.Sprintf("Write failed (%v) after publication", err))
+	case err != nil && previous && string(got) != "previous":
+		out.critical = append(out.critical, "failed write replaced the previous target")
+	case err != nil && !previous && readErr == nil:
+		out.critical = append(out.critical, fmt.Sprintf("failed write published %d bytes", len(got)))
+	}
+	if entries, _ := os.ReadDir(root); len(entries) > 1 || (len(entries) == 1 && entries[0].Name() != "target") {
+		out.critical = append(out.critical, fmt.Sprintf("temporary file left behind: %v", entries))
+	}
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		out.unexpected = "hang until 90s deadline: " + err.Error()
+	}
+	if err != nil && cfg.MutateAt < 0 && cancelAfter < 0 && (len(cfg.GetKinds) == 0 || onlySlow(cfg)) {
+		out.unexpected = "fault-free scenario failed: " + err.Error()
+	}
+	if lender.Lent() != 0 || registry.pending() != 0 {
+		out.leak = fmt.Sprintf("lent=%d temporary records=%d", lender.Lent(), registry.pending())
+	}
+	return out
+}
+
+func TestLocalRangedDownloadIntegrityFuzz(t *testing.T) {
+	scenarios := envInt("RANGED_FUZZ_LOCAL_TARGET", 30)
+	base := uint64(envInt("RANGED_FUZZ_SEED", 20261103))
+	outcomes := map[string]int{}
+	faults := map[string]int{}
+	var mu sync.Mutex
+	var group sync.WaitGroup
+	sem := make(chan struct{}, 6)
+	for i := range scenarios {
+		root := t.TempDir()
+		seed := base + uint64(i)
+		group.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer group.Done()
+			defer func() { <-sem }()
+			out := runLocalRangedFaultScenario(root, seed, false)
+			mu.Lock()
+			defer mu.Unlock()
+			outcomes[classify(out.err)]++
+			for k, v := range out.counts {
+				faults[k] += v
+			}
+			if len(out.critical) > 0 {
+				t.Errorf("CRITICAL %s: %v err=%v", out.desc, out.critical, out.err)
+			}
+			if out.leak != "" {
+				t.Errorf("LEAK %s: %s err=%v", out.desc, out.leak, out.err)
+			}
+			if out.unexpected != "" {
+				t.Errorf("UNEXPECTED %s: %s", out.desc, out.unexpected)
+			}
+		}()
+	}
+	group.Wait()
+	t.Logf("outcomes %v", sortedCounts(outcomes))
+	t.Logf("injected %v", sortedCounts(faults))
+}
+
+// The local harness must notice a server that lies about which bytes it sent.
+func TestLocalRangedFaultHarnessPositiveControl(t *testing.T) {
+	detected := 0
+	for seed := uint64(1); seed <= 6; seed++ {
+		if out := runLocalRangedFaultScenario(t.TempDir(), seed, true); len(out.critical) > 0 {
+			detected++
+		}
+	}
+	if detected == 0 {
+		t.Fatal("shifted-body server was never detected; the integrity checks are blind")
+	}
+	t.Logf("positive control detected %d/6", detected)
+}

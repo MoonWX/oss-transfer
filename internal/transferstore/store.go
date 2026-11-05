@@ -83,7 +83,8 @@ type WriteOptions struct {
 	ContentDisposition string
 	CacheControl       string
 	Metadata           map[string]string
-	// Ranges lets a ranged multipart write fetch each part independently. Each
+	// Ranges lets a ranged write (S3 multipart, or a large Local file) fetch
+	// each part independently. Each
 	// reader must yield exactly length bytes of the pinned source, then EOF;
 	// a failed read may be repeated with a new reader. Input is still required
 	// and is used by any path that streams.

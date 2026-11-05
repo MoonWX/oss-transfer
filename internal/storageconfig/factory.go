@@ -113,7 +113,17 @@ func (f *Factory) open(ctx context.Context, snapshot Snapshot, endpoint executio
 		if endpoint.Root == "" || !filepath.IsAbs(endpoint.Root) || strings.ContainsRune(endpoint.Root, '\x00') || endpoint.Ref != "" || endpoint.Bucket != "" {
 			return nil, invalid("LOCAL endpoint requires an absolute root without a connection or bucket")
 		}
-		return transferstore.NewLocal(endpoint.Root)
+		local, err := transferstore.NewLocal(endpoint.Root)
+		if err != nil {
+			return nil, err
+		}
+		// Large writes fetch concurrent source ranges and borrow the same idle
+		// node capacity as ranged uploads.
+		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{PartConcurrency: f.PartConcurrency, PartLender: f.PartLender}); err != nil {
+			_ = local.Close()
+			return nil, err
+		}
+		return local, nil
 	case "S3":
 		if endpoint.Root != "" || !validAlias(endpoint.Ref) {
 			return nil, invalid("S3 endpoint requires a connection alias without a local root")

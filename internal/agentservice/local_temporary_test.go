@@ -2,6 +2,7 @@ package agentservice
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,9 +66,52 @@ func TestTempRegistryCrashHelper(t *testing.T) {
 	} else {
 		local.SetTempRegistry(registry)
 	}
-	_, err = local.Write(context.Background(), "destination.bin", &crashTempReader{owner: registry.OwnerID()}, transferstore.WriteOptions{Size: 64 << 20, Overwrite: true})
+	options := transferstore.WriteOptions{Size: 64 << 20, Overwrite: true}
+	if os.Getenv("OSS_TRANSFER_TEMP_POINT") == "ranged" {
+		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, PartSize: 1 << 20, PartConcurrency: crashRanges}); err != nil {
+			t.Fatal(err)
+		}
+		options.Ranges = crashRangeFunc(registry.OwnerID())
+	}
+	_, err = local.Write(context.Background(), "destination.bin", &crashTempReader{owner: registry.OwnerID()}, options)
 	t.Fatalf("crash helper unexpectedly returned: %v", err)
 }
+
+const crashRanges = 4
+
+// crashRangeFunc delivers the first 64 KiB of each range. Once every range
+// has written its chunk and asked for more, the helper reports READY and
+// blocks, so the kill lands while several regions are partly filled.
+func crashRangeFunc(owner string) transferstore.RangeFunc {
+	var mu sync.Mutex
+	waiting := 0
+	return func(context.Context, int64, int64) (io.ReadCloser, error) {
+		first := true
+		return io.NopCloser(readerFunc(func(buffer []byte) (int, error) {
+			if first {
+				first = false
+				n := min(len(buffer), 64*1024)
+				for i := range buffer[:n] {
+					buffer[i] = 0x72
+				}
+				return n, nil
+			}
+			mu.Lock()
+			waiting++
+			if waiting == crashRanges {
+				fmt.Println("READY " + owner)
+			}
+			mu.Unlock()
+			for {
+				time.Sleep(time.Hour)
+			}
+		})), nil
+	}
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(buffer []byte) (int, error) { return f(buffer) }
 
 type tempHelper struct {
 	command *exec.Cmd
@@ -213,6 +258,57 @@ func TestLocalTempRecoveryAfterKillPreservesOtherAgentAndUserFiles(t *testing.T)
 	if report, err := secondRegistry.Recover(context.Background()); err != nil || report.Removed != 1 {
 		t.Fatalf("other owner recovery failed: %+v %v", report, err)
 	}
+}
+
+// A ranged write killed while its ranges fill a preallocated file must not
+// publish the partial file, and startup recovery removes it.
+func TestLocalTempRecoveryAfterKillDuringRangedWrite(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "destination.bin"), []byte("previous complete target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(t.TempDir(), "agent.db")
+	helper := startTempHelperAt(t, database, root, "ranged")
+	helper.kill()
+	registry, db := openTempRegistry(t, database)
+	records := tempRecords(t, db)
+	if len(records) != 1 {
+		t.Fatalf("ranged payload was written without a durable temp record: %+v", records)
+	}
+	partial := filepath.Join(records[0].ParentPath, records[0].Name)
+	info, err := os.Stat(partial)
+	if err != nil || info.Size() != 64<<20 {
+		t.Fatalf("expected the preallocated partial file: %v %v", info, err)
+	}
+	contents, err := os.ReadFile(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range int64(crashRanges) {
+		region := contents[index<<20 : index<<20+64*1024]
+		if !bytes.Equal(region, bytes.Repeat([]byte{0x72}, len(region))) {
+			t.Fatalf("range %d did not reach its region before the kill", index)
+		}
+	}
+	if body, err := os.ReadFile(filepath.Join(root, "destination.bin")); err != nil || string(body) != "previous complete target" {
+		t.Fatalf("partial ranged write was published: %v", err)
+	}
+	report, err := registry.Recover(context.Background())
+	if err != nil || report.Removed != 1 || len(report.Retained) != 0 {
+		t.Fatalf("recovery failed: %+v %v", report, err)
+	}
+	if len(tempRecords(t, db)) != 0 {
+		t.Fatal("successful cleanup left journal record")
+	}
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
+		t.Fatalf("partial ranged file remains: %v", err)
+	}
+	local, err := transferstore.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	assertLocalInventoryAndNoTemp(t, local, root, "destination.bin")
 }
 
 func TestLocalTempRecoveryRetainsReplacedFile(t *testing.T) {

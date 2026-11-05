@@ -34,6 +34,24 @@ type objectProgress struct {
 	item  ObjectProgress
 	order int
 	bytes atomic.Int64
+	peak  atomic.Int64
+}
+
+// transferred is the highest live byte count observed for this object. A
+// retried range withdraws its bytes until it reads them again; reporting the
+// peak keeps the progress of one object attempt from moving backwards, and
+// it never exceeds the object size.
+func (o *objectProgress) transferred() int64 {
+	current := min(o.item.Size, max(int64(0), o.bytes.Load()))
+	for {
+		peak := o.peak.Load()
+		if current <= peak {
+			return peak
+		}
+		if o.peak.CompareAndSwap(peak, current) {
+			return current
+		}
+	}
 }
 
 type attemptProgress struct {
@@ -103,7 +121,7 @@ func (p *attemptProgress) snapshot(details bool) (ChildProgress, []ObjectProgres
 		if details {
 			objects = append(objects, object)
 		} else {
-			child.InFlightBytes += min(object.item.Size, max(int64(0), object.bytes.Load()))
+			child.InFlightBytes += object.transferred()
 		}
 	}
 	var items []ObjectProgress
@@ -112,7 +130,7 @@ func (p *attemptProgress) snapshot(details bool) (ChildProgress, []ObjectProgres
 		items = make([]ObjectProgress, 0, len(objects))
 		for _, object := range objects {
 			item := object.item
-			item.TransferredBytes = min(item.Size, max(int64(0), object.bytes.Load()))
+			item.TransferredBytes = object.transferred()
 			item.Stage = "TRANSFERRING"
 			if item.TransferredBytes == item.Size {
 				item.Stage = "FINALIZING"

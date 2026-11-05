@@ -8,6 +8,14 @@ Open **Execution nodes → Edit node** to change child-task concurrency and the 
 
 Changes apply to running work and survive a restart. Reducing a limit lets the current requests finish before admitting more. Increasing it can help when the network is underused; node and task bandwidth/QPS limits still apply. Child concurrency accepts 1–256, object concurrency 1–64, with a combined maximum of 1024.
 
+## Large objects
+
+Within one Agent, an object of 128 MiB or more is transferred as parallel byte ranges instead of one stream. Uploads to OSS send the ranges as multipart parts. Downloads to a local directory fetch the ranges concurrently, 16–64 MiB each depending on the object size, and write each range directly into its place in a temporary file. The file is synced and published under its final name only after every range has arrived, so a failed, stopped or interrupted download never leaves a partial file at the destination; a temporary file left by a crash is removed when the Agent restarts.
+
+Each object is guaranteed four concurrent ranges and borrows up to 16 while the node has idle object slots. A single large object can therefore use an otherwise idle node, while a busy node is not oversubscribed. Every range is a separate conditional GET pinned to the source version: it counts against node and task request limits, and a source changed during the transfer fails the object. An interrupted range is fetched again, at most three times. A task with its own bandwidth or QPS limit transfers each object as one stream, because that limit already bounds its speed.
+
+Live progress counts the bytes of all ranges together and does not move backwards when a range is fetched again.
+
 ## Compare objects
 
 Under **Tools → Compare objects**, choose a single object or a bucket/prefix on each side. For prefix comparison, the source prefix is replaced with the target prefix: `images/a.jpg` under `images/` matches `backup/a.jpg` under `backup/`. An empty prefix covers the whole bucket. Results include objects missing from either side.

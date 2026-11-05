@@ -457,8 +457,11 @@ func taskNodeState(out io.Writer, node map[string]interface{}) string {
 	if node["online"] == false && state != "DISCONNECTED" {
 		label += cliText(out, "，离线")
 	}
-	if getString(node, "progress") == "LEASE_EXPIRY" {
+	switch getString(node, "progress") {
+	case "LEASE_EXPIRY":
 		label += cliText(out, "，执行租约到期后离开")
+	case "RECONNECT":
+		label += cliText(out, "，重新连接后离开")
 	}
 	return label
 }

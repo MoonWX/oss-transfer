@@ -615,9 +615,18 @@ function TaskDetail({
     current,
     stability,
   );
+  // Incomplete data can come from the task or from its separately loaded
+  // child page; either one arriving is a new observation.
+  const partialSnapshot = useMemo(
+    () => ({ current, pageData }),
+    [current, pageData],
+  );
   const partialShown =
-    useStableMessages(view?.partial ? ["partial"] : [], current, stability)
-      .length > 0;
+    useStableMessages(
+      view?.partial ? ["partial"] : [],
+      partialSnapshot,
+      stability,
+    ).length > 0;
   const childId = view?.childId;
   const childNode = view?.childNode;
   const sourceObjectKey =
@@ -956,6 +965,7 @@ function TaskDetail({
           )}
           <TaskBandwidth
             completed={current.status === "COMPLETED"}
+            live={liveTask}
             key={current.taskIndex}
             taskId={current.taskIndex}
             active={!!taskId}

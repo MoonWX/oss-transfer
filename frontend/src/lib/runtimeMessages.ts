@@ -12,6 +12,19 @@ export const runtimeMessageRules: readonly {
   values?: readonly ("node" | "reason")[];
 }[] = [
   {
+    pattern:
+      /^Waiting for the execution lease of unavailable node (.+) to expire$/s,
+    message: "等待不可用节点 {node} 的执行租约到期",
+    values: ["node"],
+  },
+  {
+    pattern:
+      /^Waiting for scanning node (.+) to reconnect; existing child tasks remain assigned to their original nodes$/s,
+    message: "等待扫描节点 {node} 重新连接；已分配的子任务仍保留在原节点",
+    values: ["node"],
+  },
+  // Wording of Masters before v4.1.31, without the node name.
+  {
     pattern: /^Waiting for an unavailable node's execution lease to expire$/,
     message: "等待不可用节点的执行租约到期",
   },

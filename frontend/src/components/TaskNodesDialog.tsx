@@ -55,7 +55,10 @@ export type MemberNode = NodeDisplay & {
   localPath?: string;
   pendingChildren?: number;
   share?: NodeShare;
-  /** LEASE_EXPIRY: an offline leaving node that leaves once its lease expires. */
+  /**
+   * An offline leaving node: LEASE_EXPIRY leaves once its lease expires;
+   * RECONNECT (no lease fencing) leaves after it reconnects.
+   */
   progress?: string;
 };
 type Candidate = NodeDisplay & {
@@ -412,6 +415,14 @@ export default function TaskNodesDialog({
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
+      // Entering the confirmation step or submitting: a refresh still in
+      // flight must not replace the view being confirmed or the POST result.
+      if (reading.current) {
+        ++sequence.current;
+        controller.current?.abort();
+        reading.current = false;
+        setLoading(false);
+      }
     };
   }, [open, step, submitting, refreshMs, load]);
 
@@ -553,6 +564,9 @@ export default function TaskNodesDialog({
       });
       pendingRequest.current = undefined;
       const next = response.data.view;
+      // The change's own view is newer than any read that may still be open.
+      ++sequence.current;
+      controller.current?.abort();
       notify(t("执行节点变更已提交。"));
       onChanged?.();
       setAdds([]);
@@ -792,6 +806,16 @@ export default function TaskNodesDialog({
             sx={{ mt: 0.5 }}
           >
             {t("节点离线，执行租约到期后离开，其任务由其他节点继续")}
+          </Typography>
+        )}
+        {node.progress === "RECONNECT" && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="div"
+            sx={{ mt: 0.5 }}
+          >
+            {t("节点离线，重新连接并完成或移交其任务后离开")}
           </Typography>
         )}
       </Box>

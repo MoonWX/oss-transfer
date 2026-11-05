@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,8 @@ type taskRuntime struct {
 	wake         chan struct{}
 	leases       *taskLeases
 	cleanup      *taskCleanupRuntime
+	// Latest bandwidth/QPS policy delivery per task and node (see policyDelivered).
+	deliveries map[int64]map[string]policyDelivery
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
@@ -329,7 +332,9 @@ func (t *taskRuntime) policies(ctx context.Context, p task.Parent) error {
 	var problems []error
 	var displays nodeDisplaySet
 	for i, node := range p.ActiveNodes() {
-		if err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil); err != nil {
+		err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
+		t.notePolicyDelivery(p, node.ID, err)
+		if err != nil {
 			if len(problems) == 0 {
 				displays = t.server.nodeDisplaySnapshot()
 			}
@@ -430,6 +435,7 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 		go func() {
 			defer workers.Done()
 			if t.server.softwareUpdateBlocksNode(node.ID) {
+				t.notePolicyDelivery(p, node.ID, errors.New("Agent update is in progress"))
 				mu.Lock()
 				problems = append(problems, fmt.Errorf("Agent %s is updating; its assigned work remains on that node", displays.lookup(node.ID, node.Address).DisplayLabel))
 				mu.Unlock()
@@ -452,6 +458,7 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 			if err == nil && p.Spec.Destination.Kind == "LOCAL" {
 				err = t.server.agentCall(callCtx, nodeSession(node), "local_prepare", true, agentservice.PathRequest{Path: node.LocalRoot}, nil)
 			}
+			t.notePolicyDelivery(p, node.ID, err)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -472,6 +479,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	}
 	if p.Deleted || task.Ended(p.Status) {
 		t.forgetStopObservation(p.ID)
+		t.forgetPolicyDeliveries(p.ID)
 		return nil
 	}
 	if p.Status == "RESUMING" && (p.ActiveTime == nil || (p.ResumeAfter == nil && p.Scheduling == nil)) {
@@ -557,10 +565,14 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		// A node the user is removing leaves through the same lease fence when
 		// it is offline; the node view reports that wait as removal progress.
 		memberErr = nil
+		var waiting []string
 		for _, node := range p.ActiveNodes() {
 			if !available[node.ID] && prepared[node.ID] && !plannedLeaving(p, node.ID) {
-				memberErr = errors.New("Waiting for an unavailable node's execution lease to expire")
+				waiting = append(waiting, t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel)
 			}
+		}
+		if len(waiting) > 0 {
+			memberErr = fmt.Errorf("Waiting for the execution lease of unavailable node %s to expire", strings.Join(waiting, ", "))
 		}
 	}
 	defer func() { resultErr = errors.Join(memberErr, membershipErr, resultErr) }()
@@ -603,7 +615,8 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			// shows this as a scan handoff, not as a reconnect wait.
 			return nil
 		}
-		return errors.New("Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes")
+		scanning := p.ScannerNode()
+		return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel)
 	}
 	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {
 		return errors.New("Waiting for all task nodes to acknowledge recovery")

@@ -2432,6 +2432,18 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   },
   // Runtime messages from the Master (src/lib/runtimeMessages.ts).
   "错误详情：{detail}": { en: "Details: {detail}", ja: "詳細：{detail}" },
+  "节点离线，重新连接并完成或移交其任务后离开": {
+    en: "Offline; it leaves after it reconnects and finishes or hands off its work",
+    ja: "オフラインです。再接続して作業を完了または引き渡した後に離脱します",
+  },
+  "等待不可用节点 {node} 的执行租约到期": {
+    en: "Waiting for the execution lease of unavailable node {node} to expire",
+    ja: "利用できないノード {node} の実行リースの期限切れを待っています",
+  },
+  "等待扫描节点 {node} 重新连接；已分配的子任务仍保留在原节点": {
+    en: "Waiting for scanning node {node} to reconnect; assigned subtasks stay on their nodes",
+    ja: "スキャンノード {node} の再接続を待っています。割り当て済みのサブタスクは元のノードに残ります",
+  },
   等待不可用节点的执行租约到期: {
     en: "Waiting for an unavailable node's execution lease to expire",
     ja: "利用できないノードの実行リースの期限切れを待っています",

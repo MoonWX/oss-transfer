@@ -131,8 +131,46 @@ func scanPhase(p task.Parent) string {
 }
 
 // plannedScannerHandoff reports a scanner that is unavailable because the user
-// asked to remove it. The scan moves to another node after the scanner has
-// been fenced (or its lease has expired); this is not a reconnect wait.
+// asked to remove it. With lease fencing the scan moves to another node after
+// the scanner has been fenced (or its lease has expired); this is not a
+// reconnect wait. Without fencing the scanner must reconnect.
 func plannedScannerHandoff(p task.Parent) bool {
-	return plannedLeaving(p, p.ScannerNode().ID)
+	return p.Failover != nil && p.Failover.Enabled && plannedLeaving(p, p.ScannerNode().ID)
+}
+
+// policyDelivery is the runtime's latest attempt to deliver a task's limits to
+// one node.
+type policyDelivery struct {
+	generation uint64
+	revision   uint64
+}
+
+// notePolicyDelivery records an attempt, successful or not, to deliver p's
+// current limits to a node.
+func (t *taskRuntime) notePolicyDelivery(p task.Parent, nodeID string, _ error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.deliveries == nil {
+		t.deliveries = map[int64]map[string]policyDelivery{}
+	}
+	if t.deliveries[p.ID] == nil {
+		t.deliveries[p.ID] = map[string]policyDelivery{}
+	}
+	t.deliveries[p.ID][nodeID] = policyDelivery{generation: p.Generation, revision: p.BudgetRevision}
+}
+
+// policyAttempted reports whether the runtime has already tried to deliver the
+// given (or a newer) revision to the node. Until then an Agent still holding an
+// older policy is waiting for delivery; afterwards the mismatch is a fault.
+func (t *taskRuntime) policyAttempted(parentID int64, nodeID string, generation, revision uint64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	last, ok := t.deliveries[parentID][nodeID]
+	return ok && (last.generation > generation || last.generation == generation && last.revision >= revision)
+}
+
+func (t *taskRuntime) forgetPolicyDeliveries(parentID int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.deliveries, parentID)
 }

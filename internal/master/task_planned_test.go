@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
+	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
@@ -163,6 +164,8 @@ type plannedHarness struct {
 	runtime *taskRuntime
 	ctx     context.Context
 	a, b    *takeoverAgent
+	// Labels of the nodes a test is adding or removing (see step).
+	changing []string
 }
 
 func newPlannedHarness(t *testing.T, objects int) *plannedHarness {
@@ -181,6 +184,13 @@ func newPlannedHarness(t *testing.T, objects int) *plannedHarness {
 	if code != http.StatusOK {
 		t.Fatal("storage setup", code, body)
 	}
+	// Distinct labels let a test tell which node a runtime problem names.
+	for _, agent := range []*takeoverAgent{a, b} {
+		label := strings.TrimSuffix(agent.node.Address, ".example")
+		if code, body := request(t, f.http.Client(), "PUT", f.http.URL+"/api/master/nodes/"+agent.node.Address, f.admin, map[string]any{"label": label}); code != http.StatusOK {
+			t.Fatal("label", code, body)
+		}
+	}
 	runtime := f.master.tasks
 	runtime.leases.ttl = 30 * time.Second
 	// A hang guard for slow race-instrumented runners, not a timing assertion.
@@ -190,22 +200,37 @@ func newPlannedHarness(t *testing.T, objects int) *plannedHarness {
 }
 
 // step runs reconciliation the way the Master's loop does until done reports
-// true, and fails as soon as a task error has been recorded. It covers the
-// stages of a node change.
+// true. It fails as soon as a recorded runtime problem belongs to the node
+// change: the fenced node's "retired" reply, or any line naming a node being
+// added or removed (h.changing). A heavily loaded runner can make a healthy
+// remaining Agent miss a step's 5 s deadline; that real, correctly reported
+// problem names the healthy node and does not fail the test.
 func (h *plannedHarness) step(id int64, what string, done func(task.Parent) bool) task.Parent {
 	h.t.Helper()
-	return h.reconcile(id, what, true, done)
+	return h.reconcile(id, what, h.changing, done)
 }
 
-// settle runs reconciliation before or after a node change. A heavily loaded
-// runner can make a healthy Agent miss a step's deadline, which is reported as
-// a runtime problem; outside the change only a failed task fails the test.
+// settle runs reconciliation before or after a node change, where only a
+// failed task fails the test.
 func (h *plannedHarness) settle(id int64, what string, done func(task.Parent) bool) task.Parent {
 	h.t.Helper()
-	return h.reconcile(id, what, false, done)
+	return h.reconcile(id, what, nil, done)
 }
 
-func (h *plannedHarness) reconcile(id int64, what string, strict bool, done func(task.Parent) bool) task.Parent {
+// plannedChangeProblem reports a runtime problem line caused by a node change.
+func plannedChangeProblem(line string, changing []string) bool {
+	if strings.Contains(line, agentservice.ErrLeaseRetired.Error()) {
+		return true
+	}
+	for _, label := range changing {
+		if strings.Contains(line, label) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *plannedHarness) reconcile(id int64, what string, changing []string, done func(task.Parent) bool) task.Parent {
 	h.t.Helper()
 	for {
 		p, err := h.runtime.repo.Get(id)
@@ -216,8 +241,16 @@ func (h *plannedHarness) reconcile(id int64, what string, strict bool, done func
 		if p, err = h.runtime.repo.Get(id); err != nil {
 			h.t.Fatal(err)
 		}
-		if strict && p.RuntimeError != "" || p.Error != "" || p.Status == "FAILED" || p.Status == "PARTIAL_FAILED" {
-			h.t.Fatalf("%s: task error recorded: status=%s runtime=%q error=%q", what, p.Status, p.RuntimeError, p.Error)
+		if p.Error != "" || p.Status == "FAILED" || p.Status == "PARTIAL_FAILED" {
+			h.t.Fatalf("%s: task failed: status=%s runtime=%q error=%q", what, p.Status, p.RuntimeError, p.Error)
+		}
+		for _, line := range strings.Split(p.RuntimeError, "\n") {
+			if changing != nil && plannedChangeProblem(line, changing) {
+				h.t.Fatalf("%s: task error recorded: %q", what, p.RuntimeError)
+			}
+			if line != "" {
+				h.t.Logf("%s: runtime problem not caused by the change: %q", what, line)
+			}
 		}
 		if done(p) {
 			return p
@@ -304,6 +337,7 @@ func TestPlannedChangeRemovingFinishedScannerRecordsNoTaskError(t *testing.T) {
 	if ids, phase := scanners(h.view(p.ID)); len(ids) != 0 || phase != scanPhaseComplete {
 		t.Fatal("finished scan still shows a scanner", ids, phase)
 	}
+	h.changing = []string{"planned-a"}
 	h.change(p.ID, map[string]any{"requestId": "remove-scanner", "remove": []string{h.a.node.ID}, "mode": "now"})
 	p = h.step(p.ID, "scanner removed", func(p task.Parent) bool { return p.NodeRemoved(h.a.node.ID) })
 	// Further steps still address nothing to the removed node.
@@ -340,6 +374,7 @@ func TestPlannedChangeRemovingScannerMidScanResumesFromCheckpoint(t *testing.T) 
 	if ids, phase := scanners(h.view(p.ID)); len(ids) != 1 || ids[0] != h.a.node.ID || phase != scanPhaseScanning {
 		t.Fatal("scanning member not labelled", ids, phase)
 	}
+	h.changing = []string{"planned-a"}
 	h.change(p.ID, map[string]any{"requestId": "drain-scanner", "remove": []string{h.a.node.ID}, "mode": "drain"})
 	p = h.step(p.ID, "scanner drained and removed", func(p task.Parent) bool { return p.NodeRemoved(h.a.node.ID) })
 	if p.ScannerNode().ID != h.b.node.ID || p.Failover.ScannerThrough < 1 {
@@ -378,6 +413,7 @@ func TestPlannedChangeJoinRecordsNoTaskError(t *testing.T) {
 	p := takeoverParent(t, h.f, h.a.node)
 	startTakeoverLeaseLoop(t, h.ctx, h.runtime)
 	p = h.settle(p.ID, "first child running", func(p task.Parent) bool { return p.DispatchedThrough >= 1 })
+	h.changing = []string{"planned-b"}
 	h.change(p.ID, map[string]any{"requestId": "join-b", "add": []string{h.b.node.ID}})
 	p = h.step(p.ID, "joined", func(p task.Parent) bool { return !p.NodeJoining(h.b.node.ID) && len(p.ActiveNodes()) == 2 })
 	for range 3 {
@@ -439,9 +475,10 @@ func TestPlannedChangeRemovingOfflineScannerReportsProgress(t *testing.T) {
 		t.Fatalf("an unexpected disconnect was not reported: %+v", current)
 	}
 	p, _ = h.runtime.repo.Get(p.ID)
-	if p.RuntimeError != "Waiting for an unavailable node's execution lease to expire\nWaiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes" {
+	if p.RuntimeError != "Waiting for the execution lease of unavailable node planned-a (127.0.0.1) to expire\nWaiting for scanning node planned-a (127.0.0.1) to reconnect; existing child tasks remain assigned to their original nodes" {
 		t.Fatalf("unexpected disconnect problem: %q", p.RuntimeError)
 	}
+	h.changing = []string{"planned-a"}
 	h.change(p.ID, map[string]any{"requestId": "remove-offline-scanner", "remove": []string{h.a.node.ID}, "mode": "drain"})
 	p = h.step(p.ID, "removal accepted", func(task.Parent) bool { return true })
 	// A poll that was in flight when the runner stopped may have refreshed the
@@ -482,7 +519,7 @@ func TestWithoutPlannedProblemsKeepsRealProblems(t *testing.T) {
 	retired := func(node string) error {
 		return &AgentError{Status: 409, Message: agentservice.ErrLeaseRetired.Error(), NodeID: node}
 	}
-	real := errors.New("Waiting for an unavailable node's execution lease to expire")
+	real := errors.New("Waiting for the execution lease of unavailable node planned-b to expire")
 	if err := withoutPlannedProblems(p, errors.Join(retired(removed), fmt.Errorf("scan: %w", retired(removed)))); err != nil {
 		t.Fatal("planned retirement kept", err)
 	}
@@ -497,6 +534,42 @@ func TestWithoutPlannedProblemsKeepsRealProblems(t *testing.T) {
 	}
 	if runtimeProblemMessage(errors.Join(real, real, errors.New(" "))) != real.Error() {
 		t.Fatal("repeated or blank lines kept")
+	}
+	// Without lease fencing a leaving scanner must reconnect: that wait is real.
+	scanning := task.Parent{Spec: task.Spec{Nodes: []task.Node{{ID: current}, {ID: removed}}}, Membership: &task.MembershipState{Draining: map[string]task.NodeDrain{current: {Mode: task.DrainModeDrain}}}}
+	if plannedScannerHandoff(scanning) {
+		t.Fatal("a scanner without lease fencing cannot be handed off")
+	}
+	scanning.Failover = &task.FailoverState{Enabled: true}
+	if !plannedScannerHandoff(scanning) {
+		t.Fatal("a fenced leaving scanner is handed off")
+	}
+}
+
+// An offline leaving node waits for its lease only when lease fencing exists;
+// otherwise it leaves after it reconnects.
+func TestPlannedChangeOfflineLeaverProgressFollowsFencing(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	p := task.Parent{Spec: task.Spec{Source: execution.Endpoint{Kind: "S3"}, Destination: execution.Endpoint{Kind: "S3"}, Nodes: []task.Node{{ID: "keep", EnrollmentID: "e1", Address: "keep.example"}, {ID: "leave", EnrollmentID: "e2", Address: "leave.example"}}},
+		Membership: &task.MembershipState{Draining: map[string]task.NodeDrain{"leave": {Mode: task.DrainModeDrain}}}}
+	progress := func(p task.Parent) any {
+		for _, row := range f.master.membershipNodes(p, f.master.nodeDisplaySnapshot(), map[string]string{"keep": "e1"}) {
+			if row["id"] == "leave" {
+				return row["progress"]
+			}
+		}
+		return nil
+	}
+	if got := progress(p); got != "RECONNECT" {
+		t.Fatal("without lease fencing", got)
+	}
+	p.Failover = &task.FailoverState{Enabled: true}
+	if got := progress(p); got != "LEASE_EXPIRY" {
+		t.Fatal("with lease fencing", got)
+	}
+	p.Spec.Source = execution.Endpoint{Kind: "LOCAL"} // an exclusive local source cannot be taken over
+	if got := progress(p); got != "RECONNECT" {
+		t.Fatal("without takeover support", got)
 	}
 }
 
@@ -541,6 +614,18 @@ func TestPlannedChangeBandwidthStatusWaitsForRaisedShare(t *testing.T) {
 	nodes := data["nodes"].([]any)
 	if data["applied"] != false || data["pending"] != true || len(nodes) != 1 || nodes[0].(map[string]any)["pending"] != true {
 		t.Fatal("raised share reported as a fault before delivery", data)
+	}
+	// Once the runtime has tried and failed to deliver it, the older policy is
+	// a fault again: it would otherwise read as "syncing" for ever.
+	failed, stop := context.WithCancel(ctx)
+	stop()
+	if err := runtime.policies(failed, p); err == nil {
+		t.Fatal("delivery on a cancelled context succeeded")
+	}
+	data = status()
+	nodes = data["nodes"].([]any)
+	if data["applied"] != false || data["pending"] != false || nodes[0].(map[string]any)["pending"] != false {
+		t.Fatal("undelivered share still reported as pending", data)
 	}
 	if err := runtime.policies(ctx, p); err != nil {
 		t.Fatal(err)

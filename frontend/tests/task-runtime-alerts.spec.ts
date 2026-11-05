@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
 import { advanceUntilVisible, installPausedClock } from "./clock";
 import { runtimeMessageRules } from "../src/lib/runtimeMessages";
@@ -7,19 +7,27 @@ import { buildCatalog } from "../src/locales/index.ts";
 type Json = Record<string, any>;
 
 const RETIRED = "this node is permanently retired from the parent task";
-const LEASE = "Waiting for an unavailable node's execution lease to expire";
+const LEASE =
+  "Waiting for the execution lease of unavailable node scanner (10.0.1.12) to expire";
 const SCANNER =
-  "Waiting for the scanning node to reconnect; existing child tasks remain assigned to their original nodes";
+  "Waiting for scanning node scanner (10.0.1.12) to reconnect; existing child tasks remain assigned to their original nodes";
+const OLD_LEASE = "Waiting for an unavailable node's execution lease to expire";
 
 /**
  * The task detail polls /api/master/status every second on a paused clock.
  * `row(n)` describes task #1048 in the n-th response; every response carries
  * its number as the storage ID, so a test knows which one is on screen.
  */
-async function setup(page: Page, row: (n: number) => Json) {
+async function setup(
+  page: Page,
+  row: (n: number) => Json,
+  refresh = "1",
+  routes?: () => Promise<void>,
+) {
   await installPausedClock(page);
-  await page.addInitScript(() =>
-    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  await page.addInitScript(
+    (seconds) => localStorage.setItem("oss-transfer-refresh-seconds", seconds),
+    refresh,
   );
   await mockApi(page);
   let responses = 0;
@@ -37,6 +45,7 @@ async function setup(page: Page, row: (n: number) => Json) {
       },
     });
   });
+  await routes?.();
   await page.goto("/tasks?taskId=1048");
   return { responses: () => responses };
 }
@@ -56,6 +65,16 @@ async function nextRefresh(page: Page, responses: () => number) {
 }
 
 const alert = (page: Page) => page.getByTestId("task-runtime-alert");
+
+/** Advances the paused clock one second at a time until the target shows. */
+async function secondsUntilVisible(page: Page, target: Locator, limit = 20) {
+  for (let second = 0; second < limit; second++) {
+    if (await target.isVisible()) return second;
+    await page.clock.runFor(1000);
+  }
+  await expect(target).toBeVisible();
+  return limit;
+}
 
 test("a runtime error from a single refresh never flashes", async ({
   page,
@@ -85,8 +104,8 @@ test("a persistent runtime error appears translated, one line per problem, and s
   }
   const lines = alert(page).locator("p");
   await expect(lines).toHaveText([
-    "等待不可用节点的执行租约到期",
-    "等待扫描节点重新连接；已分配的子任务仍保留在原节点",
+    "等待不可用节点 scanner (10.0.1.12) 的执行租约到期",
+    "等待扫描节点 scanner (10.0.1.12) 重新连接；已分配的子任务仍保留在原节点",
   ]);
   await expect(alert(page)).not.toContainText("Waiting");
   // One refresh without the problem does not hide it.
@@ -123,7 +142,7 @@ test.describe("English", () => {
     page,
   }) => {
     const { responses } = await setup(page, () => ({
-      errorMessage: `Agent planned-b (10.0.1.13) is unavailable; its assigned work remains on that node: context deadline exceeded\nunexpected EOF`,
+      errorMessage: `Agent planned-b (10.0.1.13) is unavailable; its assigned work remains on that node: context deadline exceeded\n${OLD_LEASE}\nunexpected EOF`,
     }));
     while (!(await alert(page).isVisible())) {
       await nextRefresh(page, responses);
@@ -131,6 +150,7 @@ test.describe("English", () => {
     }
     await expect(alert(page).locator("p")).toHaveText([
       "Agent planned-b (10.0.1.13) is unavailable; its assigned work stays on it: The request timed out",
+      OLD_LEASE,
       "Details: unexpected EOF",
     ]);
   });
@@ -194,4 +214,94 @@ test("every runtime message rule has a complete catalog entry", () => {
         expect(catalog[rule.message]).toContain(`{${name}}`);
     }
   }
+});
+
+test("incomplete data from the child page is observed even without a new task snapshot", async ({
+  page,
+}) => {
+  // Real time: scrolling the child region into view needs running timers.
+  // Automatic refresh is off, so the task snapshot never changes afterwards.
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "0"),
+  );
+  await mockApi(page);
+  let responses = 0;
+  await page.route("**/api/master/status", (route) => {
+    responses++;
+    return route.fulfill({
+      json: {
+        success: true,
+        totalTasks: tasks.length,
+        tasks: tasks.map((task) =>
+          task.taskIndex === 1048 ? { ...task, ossTaskGroup: true } : task,
+        ),
+      },
+    });
+  });
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let childReads = 0;
+  await page.route("**/api/master/tasks/1048/children*", async (route) => {
+    childReads++;
+    await held;
+    await route.fulfill({
+      json: {
+        success: true,
+        data: {
+          parentTaskId: 1048,
+          offset: 0,
+          limit: 25,
+          items: [],
+          totalCount: 0,
+          partial: true,
+        },
+      },
+    });
+  });
+  await page.goto("/tasks?taskId=1048");
+  await page.getByTestId("task-children-region").scrollIntoViewIfNeeded();
+  await expect.poll(() => childReads).toBeGreaterThan(0);
+  const before = responses;
+  release();
+  // After the four-second stable period; the timeout is only a hang guard.
+  await expect(
+    page.getByText("任务信息不完整，请刷新或检查执行节点。"),
+  ).toBeVisible({ timeout: 20_000 });
+  // Only the child page changed; no new task snapshot arrived meanwhile.
+  expect(responses).toBe(before);
+});
+
+test("an ended task's node-limit mismatch shows at once", async ({ page }) => {
+  await installPausedClock(page);
+  await mockApi(page);
+  await page.route("**/api/master/status", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        totalTasks: tasks.length,
+        tasks: tasks.map((task) =>
+          task.taskIndex === 1048 ? { ...task, status: "STOPPED" } : task,
+        ),
+      },
+    }),
+  );
+  await page.route("**/api/master/tasks/1048/bandwidth-limit", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          limitMbps: 101,
+          applied: false,
+          pending: false,
+          sharedTaskCount: 1,
+          canEdit: true,
+          nodes: [{ address: "10.0.1.13", applied: false, pending: false }],
+        },
+      },
+    }),
+  );
+  await page.goto("/tasks?taskId=1048");
+  await advanceUntilVisible(page, page.getByText("带宽上限 101 Mbps"));
+  // No further clock time: the warning must not wait for a stable period.
+  await expect(page.getByText("部分节点未生效")).toBeVisible();
 });

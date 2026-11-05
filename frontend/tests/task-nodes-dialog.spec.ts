@@ -783,3 +783,83 @@ test("the scan state replaces the scanner tag once the scan has finished", async
     "执行租约到期",
   );
 });
+
+test("without lease fencing an offline leaving node is shown waiting to reconnect", async ({
+  page,
+}) => {
+  await setup(page, {
+    view: () =>
+      nodesView({
+        pending: true,
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.13", {
+            state: "DRAINING",
+            drainMode: "drain",
+            online: false,
+            progress: "RECONNECT",
+          }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const node = dialog(page).getByTestId("task-node-10.0.1.13");
+  await expect(node).toContainText(
+    "节点离线，重新连接并完成或移交其任务后离开",
+  );
+  await expect(node).not.toContainText("执行租约到期");
+});
+
+test("a refresh still in flight when the change is previewed does not alter the confirmation", async ({
+  page,
+}) => {
+  await refreshEverySecond(page);
+  let eligible = true;
+  await setup(page, {
+    view: () =>
+      nodesView({
+        candidates: [
+          { id: "node-14", address: "10.0.1.14", eligible, reason: "" },
+        ],
+      }),
+  });
+  let hold: Promise<void> | undefined;
+  let release: () => void = () => {};
+  let held = 0;
+  await page.route("**/api/master/tasks/1048/nodes", async (route) => {
+    if (route.request().method() === "GET" && hold) {
+      held++;
+      await hold;
+      // The page may have cancelled this read.
+      await route.fallback().catch(() => undefined);
+      return;
+    }
+    await route.fallback();
+  });
+  const box = await openLiveDialog(page);
+  await box.getByRole("button", { name: "添加 Agent", exact: true }).click();
+  await page.getByRole("menuitem", { name: /10\.0\.1\.14/ }).click();
+  const added = box.getByTestId("task-node-add-10.0.1.14");
+  await advanceUntilVisible(page, added);
+  // A background read starts, and the Master's answer will no longer offer
+  // the chosen Agent.
+  hold = new Promise<void>((resolve) => (release = resolve));
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(250);
+      return held;
+    })
+    .toBeGreaterThan(0);
+  eligible = false;
+  await preview(page).click();
+  const summary = box.getByTestId("task-nodes-summary");
+  await expect(summary).toContainText("10.0.1.14");
+  release();
+  hold = undefined;
+  // Give a late response every chance to land before checking again.
+  await page.waitForTimeout(500);
+  await expect(summary).toContainText("10.0.1.14");
+  await expect(
+    box.getByRole("button", { name: "添加 1 个节点", exact: true }),
+  ).toBeEnabled();
+});

@@ -1084,8 +1084,10 @@ class Harness:
                 phase = (current.get("scan") or {}).get("phase")
                 marked = tuple(node["address"] for node in current["nodes"] if node.get("scanner"))
                 labels.add((phase, marked))
-                return current if state == "REMOVED" else None
-            left = eventually(scanner_left, "scanning Agent leaves the task", timeout=90)
+                # The removal is committed before the scan moves; in between the
+                # view reports WAITING (no member scans yet). Wait past it.
+                return current if state == "REMOVED" and phase != "WAITING" else None
+            left = eventually(scanner_left, "scanning Agent leaves the task and the scan settles", timeout=90)
             for _ in range(6):
                 self.planned_task_errors(task_id, errors)
                 time.sleep(0.25)

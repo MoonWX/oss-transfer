@@ -13,10 +13,12 @@ type Entry = {
 
 /**
  * Hysteresis for runtime alerts that a single reconciliation step can raise
- * and clear again. A message appears once it has been present in two
- * consecutive snapshots (one when automatic refresh is off) and for at least
- * `stableMs`; once shown, it stays until it has been absent for as many
- * snapshots and as long. `snapshot` must change identity with every refresh.
+ * and clear again. A message appears once it has been present for at least
+ * `stableMs`; once shown, it stays until it has been absent as long. With a
+ * refresh interval no longer than `stableMs` it must also have been present
+ * (or absent) in two consecutive snapshots, so a single refresh never decides;
+ * slower or no automatic refresh relies on time alone, so the delay stays
+ * bounded. `snapshot` must change identity with every refresh.
  * Disabled, the messages pass through unchanged (for example once a task has
  * ended and its error no longer changes).
  */
@@ -38,9 +40,9 @@ export function useStableMessages(
 ): string[] {
   const entries = useRef(new Map<string, Entry>());
   const last = useRef<{ snapshot: unknown; scope: unknown }>(undefined);
-  const [, rerender] = useState(0);
+  const [renders, rerender] = useState(0);
   const now = Date.now();
-  const minimum = refreshMs > 0 ? 2 : 1;
+  const minimum = refreshMs > 0 && refreshMs <= stableMs ? 2 : 1;
   if (!enabled || (last.current && last.current.scope !== scope)) {
     entries.current.clear();
     last.current = undefined;
@@ -85,7 +87,9 @@ export function useStableMessages(
         else if (now < at) due = Math.min(due, at);
       }
     }
-  // Re-evaluate when a threshold passes, even if no refresh arrives then.
+  // Re-evaluate when a threshold passes, even if no refresh arrives then. A
+  // timer that fires before the wall clock reaches the threshold (clock steps,
+  // timer rounding) re-arms on the render it causes.
   useEffect(() => {
     if (!Number.isFinite(due)) return;
     const timer = window.setTimeout(
@@ -93,7 +97,7 @@ export function useStableMessages(
       Math.max(0, due - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [due]);
+  }, [due, renders]);
   if (!enabled) return [...new Set(messages)];
   return [...entries.current]
     .filter(([, entry]) => entry.shown)

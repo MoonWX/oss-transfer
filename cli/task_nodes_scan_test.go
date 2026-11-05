@@ -31,6 +31,17 @@ func TestTaskNodesShowsScanPhaseAndLeaseExpiry(t *testing.T) {
 			t.Errorf("%s: lease-expiry progress missing:\n%s\n%s", phase, chinese, english)
 		}
 	}
+	// Without lease fencing an offline leaver waits for its reconnect.
+	view := taskNodesTestView(false)
+	leaver := view["nodes"].([]interface{})[1].(map[string]interface{})
+	leaver["online"], leaver["progress"] = false, "RECONNECT"
+	result, err := runTaskCommand(adminTestClient(t, (&taskNodesFakeMaster{view: view}).handler(t)), []string{"nodes", "12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := renderTaskNodesForTest(result, localeEN); !strings.Contains(text, "leaves after it reconnects") || strings.Contains(text, "lease expires") {
+		t.Fatal(text)
+	}
 	// Task rows carry the phase as scanPhase; a running scan adds no note.
 	for phase, want := range map[string]string{"COMPLETE": "扫描已完成", "SCANNING": ""} {
 		var buffer bytes.Buffer

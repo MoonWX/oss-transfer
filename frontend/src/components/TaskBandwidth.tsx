@@ -66,11 +66,14 @@ export default function TaskBandwidth({
   active,
   refreshMs,
   completed = false,
+  live = !completed,
 }: {
   taskId: number;
   active: boolean;
   refreshMs: number;
   completed?: boolean;
+  /** Running, stopping or resuming: limits are still being delivered. */
+  live?: boolean;
 }) {
   useI18n();
   const nodeLabel = useNodeLabels();
@@ -239,11 +242,12 @@ export default function TaskBandwidth({
     status?.nodes.filter((node) => !node.applied && !node.pending) || [];
   const partial =
     status && !status.applied && (!status.pending || failures.length > 0);
-  // Outside the edit dialog, show only a mismatch that persists: a node change
-  // briefly leaves a member on its previous share until it receives the new one.
+  // Outside the edit dialog, show only a mismatch that persists while the task
+  // runs: a node change briefly leaves a member on its previous share until it
+  // receives the new one. An ended task's mismatch is final and shows at once.
   const settledPartial =
     useStableMessages(partial ? ["partial"] : [], status, {
-      enabled: !completed,
+      enabled: live,
       refreshMs,
       scope: taskId,
     }).length > 0;

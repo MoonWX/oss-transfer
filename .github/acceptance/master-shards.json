@@ -206,6 +206,7 @@
     "TestPlannedChangeJoinRecordsNoTaskError": 2.86,
     "TestPlannedChangeRemovingOfflineScannerReportsProgress": 22.45,
     "TestPlannedChangeBandwidthStatusWaitsForRaisedShare": 2.0,
-    "TestWithoutPlannedProblemsKeepsRealProblems": 0
+    "TestWithoutPlannedProblemsKeepsRealProblems": 0,
+    "TestPlannedChangeOfflineLeaverProgressFollowsFencing": 1.0
   }
 }

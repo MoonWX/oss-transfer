@@ -194,6 +194,8 @@ func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online 
 	if phase := scanPhase(p); phase == scanPhaseScanning || phase == scanPhaseHandoff {
 		scanner = p.ScannerNode().ID
 	}
+	// Only lease fencing lets an offline node's work move without it.
+	fenced := p.Failover != nil && p.Failover.Enabled && p.TakeoverAllowed()
 	nodes := []map[string]any{}
 	for _, node := range p.CurrentNodes() {
 		state, mode := "ACTIVE", ""
@@ -218,9 +220,15 @@ func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online 
 		if online != nil {
 			row["online"] = online[node.ID] == node.EnrollmentID
 			if draining && !row["online"].(bool) {
-				// A leaving node that is offline leaves once its execution
-				// lease expires; its work then moves to the remaining nodes.
-				row["progress"] = "LEASE_EXPIRY"
+				if fenced {
+					// A leaving node that is offline leaves once its execution
+					// lease expires; its work then moves to the remaining nodes.
+					row["progress"] = "LEASE_EXPIRY"
+				} else {
+					// Without lease fencing nothing can take its work over: it
+					// leaves after it reconnects and finishes or hands off its work.
+					row["progress"] = "RECONNECT"
+				}
 			}
 		}
 		if local {

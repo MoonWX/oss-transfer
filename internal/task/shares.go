@@ -25,6 +25,13 @@ import (
 // rejects every older revision after that). A reduction and a raise may be in
 // one commit; the raise can only spend slack that already exists, so the
 // reduction always takes effect first.
+//
+// The reserves of the nodes that may transfer (they hold a task lease) always
+// sum within the total; while a total changes, within the larger of the old
+// and new totals. A share may therefore rise up to its node's reserve without
+// spending slack. A joining node adds its reserve before it may transfer; its
+// lease is granted only once all reserves, released durably (FoldShares),
+// fit the total.
 
 // ShareRates holds one node's rate in every task-scoped dimension. Zero means
 // unlimited in that dimension.

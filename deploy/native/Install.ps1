@@ -174,15 +174,14 @@ function Get-ZipEntryHash($Entry) {
     try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
     finally { $sha.Dispose(); $stream.Dispose() }
 }
-function New-GitHubPackage($Release,[string]$Directory) {
-    [IO.Directory]::CreateDirectory($Directory) | Out-Null
-    $archivePath = Join-Path $Directory $Release.Name
-    Invoke-SourceRequest $Release.Url 600 $archivePath
-    if ((Get-Item -LiteralPath $archivePath).Length -ne $Release.Size -or (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Release.Hash) { throw 'Archive checksum mismatch.' }
+# Verify a Windows platform archive through its internal SHA256SUMS and VERSION
+# and return its manifest rows. An empty expected version accepts the version
+# recorded in a locally copied archive, which has no external metadata.
+function New-ArchiveManifest([string]$ArchivePath,[string]$Name,[string]$Architecture,[string]$Hash,[long]$Size,[string]$ExpectedVersion) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    $zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
-        $root = "oss-transfer-windows-$($Release.Architecture)/"
+        $root = "oss-transfer-windows-$Architecture/"
         $versionEntry = Get-RegularZipEntry $zip ($root+'VERSION') 65535
         $sumEntry = Get-RegularZipEntry $zip ($root+'SHA256SUMS') 65535
         $checksums = @{}
@@ -199,7 +198,7 @@ function New-GitHubPackage($Release,[string]$Directory) {
             if ($line -cnotmatch '^([A-Za-z]+): (.+)$' -or $fields.ContainsKey($Matches[1])) { throw 'Invalid package VERSION entry.' }
             $fields[$Matches[1]] = $Matches[2]
         }
-        if ($fields['Version'] -cne $Release.Version.Substring(1) -or $fields['Platform'] -cne "windows/$($Release.Architecture)" -or $fields['FullCommit'] -cnotmatch '^[a-f0-9]{40}$' -or $fields['Commit'] -cnotmatch '^[a-f0-9]{7,40}$' -or -not $fields['FullCommit'].StartsWith($fields['Commit'],[StringComparison]::Ordinal)) { throw 'Package version, commit or platform differs from the release.' }
+        if (($ExpectedVersion -and $fields['Version'] -cne $ExpectedVersion) -or $fields['Version'] -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\z' -or $fields['Platform'] -cne "windows/$Architecture" -or $fields['FullCommit'] -cnotmatch '^[a-f0-9]{40}$' -or $fields['Commit'] -cnotmatch '^[a-f0-9]{7,40}$' -or -not $fields['FullCommit'].StartsWith($fields['Commit'],[StringComparison]::Ordinal)) { throw 'Package version, commit or platform differs from the release.' }
         $manifest = [Collections.Generic.List[string]]::new()
         $manifest.Add("format`toss-transfer-go-v1")
         $manifest.Add("version`t$($fields['Version'])")
@@ -208,35 +207,90 @@ function New-GitHubPackage($Release,[string]$Directory) {
             $member = "oss-transfer-$program.exe"
             $entry = Get-RegularZipEntry $zip ($root+$member) 2147483647
             if (-not $checksums.ContainsKey($member) -or (Get-ZipEntryHash $entry) -cne $checksums[$member]) { throw 'Package binary checksum mismatch.' }
-            $manifest.Add("file`twindows`t$($Release.Architecture)`t$program`toss-transfer-$program-windows-$($Release.Architecture).exe`t$($checksums[$member])`t$($entry.Length)")
+            $manifest.Add("file`twindows`t$Architecture`t$program`toss-transfer-$program-windows-$Architecture.exe`t$($checksums[$member])`t$($entry.Length)")
         }
-        $manifest.Add("archive`twindows`t$($Release.Architecture)`t$($Release.Name)`t$($Release.Hash)`t$($Release.Size)")
-        foreach ($assetName in @('install.sh','native-install.sh','Install.ps1')) {
-            $paths = switch ($assetName) {
-                'native-install.sh' { @('deploy/native/install.sh','deploy/go/install.sh') }
-                'Install.ps1' { @('deploy/native/Install.ps1','deploy/go/Install.ps1') }
-                default { @('install.sh') }
-            }
-            $assetPath = Join-Path $Directory $assetName
-            $downloaded = $false
-            foreach ($path in $paths) {
-                try {
-                    Invoke-SourceRequest "https://raw.githubusercontent.com/MoonWX/oss-transfer/$($fields['FullCommit'])/$path" 60 $assetPath
-                    $downloaded = $true
-                    break
-                } catch [Net.WebException] { }
-            }
-            if (-not $downloaded) { throw "Could not download the pinned installer: $assetName" }
-            $assetSize = (Get-Item -LiteralPath $assetPath).Length
-            if ($assetSize -lt 1 -or $assetSize -gt 1048576) { throw 'Installer has an invalid size.' }
-            $assetHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            $manifest.Add("asset`t$assetName`t$assetHash`t$assetSize")
-        }
-        [IO.File]::WriteAllText((Join-Path $Directory 'manifest.tsv'),(($manifest -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
+        $manifest.Add("archive`twindows`t$Architecture`t$Name`t$Hash`t$Size")
+        return @{Rows=$manifest; Commit=$fields['FullCommit']}
     } finally { $zip.Dispose() }
+}
+function Add-InstallerAsset($Manifest,[string]$Path,[string]$Name) {
+    $assetSize = (Get-Item -LiteralPath $Path).Length
+    if ($assetSize -lt 1 -or $assetSize -gt 1048576) { throw 'Installer has an invalid size.' }
+    $assetHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Manifest.Add("asset`t$Name`t$assetHash`t$assetSize")
+}
+function New-GitHubPackage($Release,[string]$Directory) {
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    $archivePath = Join-Path $Directory $Release.Name
+    Invoke-SourceRequest $Release.Url 600 $archivePath
+    if ((Get-Item -LiteralPath $archivePath).Length -ne $Release.Size -or (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Release.Hash) { throw 'Archive checksum mismatch.' }
+    $archive = New-ArchiveManifest $archivePath $Release.Name $Release.Architecture $Release.Hash $Release.Size $Release.Version.Substring(1)
+    $manifest = $archive.Rows
+    foreach ($assetName in @('install.sh','native-install.sh','Install.ps1')) {
+        $paths = switch ($assetName) {
+            'native-install.sh' { @('deploy/native/install.sh','deploy/go/install.sh') }
+            'Install.ps1' { @('deploy/native/Install.ps1','deploy/go/Install.ps1') }
+            default { @('install.sh') }
+        }
+        $assetPath = Join-Path $Directory $assetName
+        $downloaded = $false
+        foreach ($path in $paths) {
+            try {
+                Invoke-SourceRequest "https://raw.githubusercontent.com/MoonWX/oss-transfer/$($archive.Commit)/$path" 60 $assetPath
+                $downloaded = $true
+                break
+            } catch [Net.WebException] { }
+        }
+        if (-not $downloaded) { throw "Could not download the pinned installer: $assetName" }
+        Add-InstallerAsset $manifest $assetPath $assetName
+    }
+    [IO.File]::WriteAllText((Join-Path $Directory 'manifest.tsv'),(($manifest -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
+}
+function Test-LocalReleaseFile([string]$Path) {
+    return (Test-Path -LiteralPath $Path -PathType Leaf) -and -not ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+# Offline bundles: release files beside this script, then in the current
+# directory. A script piped into PowerShell has no directory and keeps downloading.
+function Find-LocalPackageDirectory([string]$ScriptRoot,[string]$Architecture) {
+    if (-not $ScriptRoot) { return '' }
+    foreach ($directory in @($ScriptRoot,(Get-Location).ProviderPath)) {
+        foreach ($name in @('manifest.tsv',"oss-transfer-windows-$Architecture.zip")) {
+            if (Test-LocalReleaseFile (Join-Path $directory $name)) { return $directory }
+        }
+    }
+    return ''
+}
+# Build manifest.tsv for an archive copied from a GitHub Release without any
+# network access; the archive's internal checksums are still verified.
+function New-LocalPackage([string]$Source,[string]$Architecture,[string]$Directory,[string]$Installer) {
+    $name = "oss-transfer-windows-$Architecture.zip"
+    $sourceArchive = Join-Path $Source $name
+    if (-not (Test-LocalReleaseFile $sourceArchive)) {
+        throw ((Get-InstallText '{0} has neither manifest.tsv nor {1}. Copy the complete release (manifest.tsv, {1}, Install.ps1) from the GitHub Release or https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/ into one directory.' '{0} 中既没有 manifest.tsv，也没有本机所需的 {1}。请从 GitHub Release 或 https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/ 下载完整发布文件（manifest.tsv、{1}、Install.ps1）放入同一目录。') -f $Source,$name)
+    }
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    $archivePath = Join-Path $Directory $name
+    Copy-Item -LiteralPath $sourceArchive -Destination $archivePath
+    $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $archive = New-ArchiveManifest $archivePath $name $Architecture $hash (Get-Item -LiteralPath $archivePath).Length ''
+    $manifest = $archive.Rows
+    foreach ($assetName in @('install.sh','native-install.sh','Install.ps1')) {
+        $candidate = Join-Path $Source $assetName
+        if (-not (Test-LocalReleaseFile $candidate)) {
+            if ($assetName -ne 'Install.ps1' -or -not $Installer -or -not (Test-LocalReleaseFile $Installer)) { continue }
+            $candidate = $Installer
+        }
+        $assetPath = Join-Path $Directory $assetName
+        Copy-Item -LiteralPath $candidate -Destination $assetPath
+        Add-InstallerAsset $manifest $assetPath $assetName
+    }
+    [IO.File]::WriteAllText((Join-Path $Directory 'manifest.tsv'),(($manifest -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
 }
 
 $Version = Normalize-ReleaseVersion $Version
+# PowerShell names are case-insensitive: $version later holds the manifest version.
+$requestedVersion = $Version
+$localDetected = $false
 $sourceWork = $null
 try {
 if ($env:OS -ne 'Windows_NT') { throw 'This installer requires Windows.' }
@@ -271,6 +325,15 @@ if (-not $Upgrade -and -not $AdoptConfig) {
 }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $arch = switch ($architecture) { 'x64' {'amd64'} 'arm64' {'arm64'} default {throw 'Unsupported CPU architecture.'} }
+# A copied offline bundle beside this script (or in the current directory) is
+# installed directly; nothing is downloaded. -Source forces a download.
+if (-not $ReleaseUrl -and -not $PackageDir -and $Source -eq 'auto') {
+    $PackageDir = Find-LocalPackageDirectory $PSScriptRoot $arch
+    if ($PackageDir) {
+        $localDetected = $true
+        Write-Host ((Get-InstallText 'Using local release files (offline): {0}' '使用本地安装包目录（离线）：{0}') -f $PackageDir)
+    }
+}
 if (-not $ReleaseUrl -and -not $PackageDir) {
     $resolved = Resolve-DownloadSource $Source $Version $arch
     Write-Host ((Get-InstallText 'Download source: {0} ({1})' '下载源：{0}（{1}）') -f $resolved.Source,$resolved.Version)
@@ -280,6 +343,14 @@ if (-not $ReleaseUrl -and -not $PackageDir) {
         New-GitHubPackage $resolved $sourceWork
         $PackageDir = $sourceWork
     } else { $ReleaseUrl = $resolved.ReleaseUrl }
+}
+if ($PackageDir -and -not (Test-Path -LiteralPath (Join-Path $PackageDir 'manifest.tsv'))) {
+    if (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) { throw ((Get-InstallText 'Package directory not found: {0}' '安装包目录不存在：{0}') -f $PackageDir) }
+    $sourceWork = Join-Path ([IO.Path]::GetTempPath()) ('oss-transfer-source-'+[Guid]::NewGuid().ToString('N'))
+    Protect-Directory $sourceWork
+    New-LocalPackage $PackageDir $arch $sourceWork $PSCommandPath
+    Write-Host ((Get-InstallText 'No manifest.tsv found; verified {0} with its internal checksums.' '未找到 manifest.tsv，已按压缩包内置校验和验证 {0}。') -f (Join-Path $PackageDir "oss-transfer-windows-$arch.zip"))
+    $PackageDir = $sourceWork
 }
 
 function Read-InstallationRoot($Record,[string]$Directory) {
@@ -897,6 +968,9 @@ try {
     if ($versions.Count -ne 1) { throw 'Invalid version entry.' }
     $version = ($versions[0] -split "`t")[1]
     if ($version -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$') { throw 'Invalid release version.' }
+    if ((Get-Variable localDetected -ValueOnly -ErrorAction SilentlyContinue) -and $requestedVersion -ne 'latest' -and $requestedVersion -cne ('v'+$version)) {
+        throw ((Get-InstallText 'Local release files are version {0}, not {1}; remove -Version or use -Source to download.' '本地安装包版本为 {0}，不是 {1}；请去掉 -Version，或使用 -Source 在线下载。') -f $version,$requestedVersion.Substring(1))
+    }
     if ($ReleaseUrl.EndsWith('/latest',[StringComparison]::Ordinal)) {
         if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { throw 'Invalid latest release version.' }
         $latestHash = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash

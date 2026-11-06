@@ -162,10 +162,13 @@ jobs:
           assets=()
           archive_names="$(python3 deploy/native/platforms.py --archives)"
           while IFS= read -r archive; do assets+=("output/$archive"); done <<< "$archive_names"
+          # The installers, manifest and checksums make a GitHub download a
+          # complete offline bundle, identical to OSS latest/.
+          for name in manifest.tsv SHA256SUMS install.sh native-install.sh Install.ps1; do assets+=("output/$name"); done
           for asset in "${assets[@]}"; do
-            [[ -f "$asset" && ! -L "$asset" ]] || { echo "Missing release archive: $asset" >&2; exit 1; }
+            [[ -f "$asset" && ! -L "$asset" ]] || { echo "Missing release file: $asset" >&2; exit 1; }
           done
-          # A retry finds the draft (or the already published release) and refreshes its archives.
+          # A retry finds the draft (or the already published release) and refreshes its files.
           # GitHub allows several drafts per tag, so create one only when none exists.
           if view_error="$(gh release view "$RELEASE_TAG" 2>&1 >/dev/null)"; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber

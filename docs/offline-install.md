@@ -6,28 +6,29 @@ Prepare the files on a connected machine and copy them to the Master. Other Agen
 
 ## 1. Prepare the files
 
-Run this in Bash on a connected machine. It downloads the latest stable release for a Master and Agents all running Linux amd64 (x86-64):
+On a connected machine, download the release files into one folder. Two sources hold the same complete set:
+
+- JD Cloud OSS, a fixed URL for the latest stable release: `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/<file>`. For a specific version, replace `latest` with the tag, for example `v4.1.33`.
+- The assets of a [GitHub Release](https://github.com/MoonWX/oss-transfer/releases).
+
+Download `install.sh`, `native-install.sh`, `manifest.tsv`, `Install.ps1` for Windows, and the archive of each platform you install. For example, for a Master and Agents all running Linux amd64 (x86-64):
 
 ```bash
 (
 set -euo pipefail
-base=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
-version=$(curl -fsSL "$base/latest/manifest.tsv" | awk -F '\t' '$1 == "version" {print "v" $2}')
-[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
-archives=(oss-transfer-linux-amd64.tar.gz)
-bundle="oss-transfer-$version-offline"
-base="$base/$version"
-mkdir -p "$bundle"
-for file in install.sh native-install.sh Install.ps1 manifest.tsv "${archives[@]}"; do
-  curl -fL --retry 2 "$base/$file" -o "$bundle/$file" || exit 1
+base=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest
+mkdir -p oss-transfer-offline
+for file in install.sh native-install.sh Install.ps1 manifest.tsv oss-transfer-linux-amd64.tar.gz; do
+  curl -fL --retry 2 "$base/$file" -o "oss-transfer-offline/$file"
 done
 )
 ```
 
-If the hosts use different platforms, include their package names in `archives=(...)`, for example `archives=(oss-transfer-linux-amd64.tar.gz oss-transfer-linux-arm64.tar.gz)`. Download each platform once.
+Add an archive for each other platform you use. Download each platform once.
 
 | Target | Archive |
 | --- | --- |
+| Linux amd64 | `oss-transfer-linux-amd64.tar.gz` |
 | Linux arm64 | `oss-transfer-linux-arm64.tar.gz` |
 | macOS | `oss-transfer-darwin-amd64.tar.gz` or `oss-transfer-darwin-arm64.tar.gz` |
 | FreeBSD | `oss-transfer-freebsd-amd64.tar.gz` or `oss-transfer-freebsd-arm64.tar.gz` |
@@ -35,20 +36,24 @@ If the hosts use different platforms, include their package names in `archives=(
 
 Apple Silicon uses `arm64`. Linux also has `armv7`, `riscv64` and `loong64` packages with the same naming pattern.
 
+If you only have this host's archive and the installer, for example from an older GitHub Release, the installer still works offline: it verifies the archive with the checksums inside it and builds `manifest.tsv` locally. The complete set is still preferred, because `manifest.tsv` also verifies the archive file itself and lets the Master serve Agents on other platforms.
+
 ## 2. Copy and install the Master
 
 Copy the whole folder to the offline host. Keep the archives compressed. On Linux, open a terminal in that folder and run:
 
 ```bash
-sudo bash install.sh --role master --package-dir "$PWD"
+sudo bash install.sh --role master
 ```
+
+The installer uses the release files in its own folder (or the current folder), prints `Using local release files (offline): <folder>` and does not access the network. Use `--package-dir DIR` to choose another folder, or `--source github|jdoss` to download instead.
 
 Choose whether to install an Agent on the Master host; it joins automatically. Open `http://<master-ip>:1685`, sign in as `admin` with the password printed by the installer, and choose a new password.
 
 macOS and FreeBSD use the same command. For a macOS user service, omit `sudo` and add `--user`; keep that option when upgrading. On FreeBSD, run as root if `sudo` is unavailable. On Windows, open Administrator PowerShell in the copied folder:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -PackageDir $PWD.Path
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master
 ```
 
 ## 3. Add Agents
@@ -64,12 +69,12 @@ An online Master can fetch packages for other platforms as needed. Choose **Down
 Prepare a new version folder using step 1 and copy it to each host being upgraded. Stop active tasks, update the Master, then update Agents one at a time. Run the command for the host's role from the new folder:
 
 ```bash
-sudo bash native-install.sh --role master --upgrade --package-dir "$PWD" --yes
+sudo bash native-install.sh --role master --upgrade --yes
 # On each Agent host:
-sudo bash native-install.sh --role agent --upgrade --package-dir "$PWD" --yes
+sudo bash native-install.sh --role agent --upgrade --yes
 ```
 
-On Windows, add `-Upgrade` to the installation command and use `-Role agent` for Agents. Upgrades keep configuration, tasks and node identities. Check that all nodes are online at the new version before resuming tasks.
+Installers from older releases do not detect the folder automatically; add `--package-dir "$PWD"` (Windows: `-PackageDir $PWD.Path`) for them. On Windows, add `-Upgrade` to the installation command and use `-Role agent` for Agents. Upgrades keep configuration, tasks and node identities. Check that all nodes are online at the new version before resuming tasks.
 
 To reinstall after removing the programs, keep the original configuration and entire data directory, including the `.db.key` file. Rerun the installer with the original paths if you customized them; see [reinstallation](install.md#reinstall-without-losing-data).
 

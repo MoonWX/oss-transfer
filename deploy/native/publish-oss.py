@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish verified Go assets to a version directory, then advance latest metadata."""
+"""Publish verified Go assets to a version directory, then mirror all of them into latest/."""
 import argparse
 import base64
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
@@ -19,7 +19,12 @@ import time
 ENDPOINT = "https://s3.cn-north-1.jdcloud-oss.com"
 BUCKET = "moonwx"
 PREFIX = "oss-transfer"
-LATEST = ("install.sh", "Install.ps1", "manifest.tsv", "release.json")
+# latest/ mirrors every release file, so it is one fixed URL for a complete
+# offline bundle. Installers read manifest.tsv to choose the immutable version
+# directory and release.json is the final commit point, so both are written
+# last, after every file they name is already in place.
+POINTERS = ("manifest.tsv", "release.json")
+STALE_ARCHIVE = re.compile(r"oss-transfer-[a-z0-9]+-[a-z0-9]+\.(?:tar\.gz|zip)")
 # Only these obsolete mutable URLs are removed, and only when still listed. Old
 # version directories still serve the installers and binaries used by Masters
 # pinned to those releases.
@@ -120,7 +125,7 @@ def verify(directory, tag, commit):
             raise ValueError("Release checksum mismatch: " + name)
         if name in records and (records[name]["sha256"] != checksum or records[name]["size"] != path.stat().st_size):
             raise ValueError("Release manifest differs from asset: " + name)
-    if not set(LATEST).issubset(expected):
+    if not set(POINTERS).issubset(expected):
         raise ValueError("Release is missing installer metadata")
     return sorted(expected)
 
@@ -212,20 +217,25 @@ def publish(assets, tag, commit, dry_run=False):
         # Prove the version directory before latest/ can point clients at it.
         verify_remote(tag, names)
         if latest:
-            # Installers use manifest.tsv to choose the immutable version URL.
-            # release.json is the final commit point for clients selecting latest.
-            for name in LATEST:
+            # Archives, installers and SHA256SUMS first; then the pointers, so a
+            # client never reads a manifest that names a missing file.
+            upload_all("latest", [name for name in names if name not in POINTERS])
+            for name in POINTERS:
                 upload("latest", name)
             page = listing("latest")
             rows = page.get("Contents", []) if isinstance(page, dict) else []
             present = {row.get("Key") for row in rows if isinstance(row, dict)}
-            retired = [name for name in RETIRED_LATEST if f"{PREFIX}/latest/{name}" in present]
-            for name in retired:
-                aws("s3api", "delete-object", "--bucket", BUCKET, "--key", f"{PREFIX}/latest/{name}",
+            prefix = f"{PREFIX}/latest/"
+            listed = {key[len(prefix):] for key in present if isinstance(key, str) and key.startswith(prefix)}
+            # Only obsolete mutable URLs and archives of platforms no longer
+            # released are removed; anything else unexpected fails verification.
+            removed = sorted(name for name in listed if name not in names and (name in RETIRED_LATEST or STALE_ARCHIVE.fullmatch(name)))
+            for name in removed:
+                aws("s3api", "delete-object", "--bucket", BUCKET, "--key", prefix + name,
                     check=True, stdout=subprocess.DEVNULL)
                 log(f"Removed obsolete latest/{name}")
-            log("Updated latest metadata")
-            verify_remote("latest", LATEST, None if retired else page)
+            log("Updated latest release files")
+            verify_remote("latest", names, None if removed else page)
 
 
 if __name__ == "__main__":

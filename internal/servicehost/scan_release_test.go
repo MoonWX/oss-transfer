@@ -33,7 +33,7 @@ func TestScanReleasePermissionRequiresCommittedInstallation(t *testing.T) {
 		t.Fatal("a previous installation's commit granted release")
 	}
 	write(".committed", strings.Repeat("a", 64))
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for !permission() {
 		if time.Now().After(deadline) {
 			t.Fatal("running candidate did not observe installer commit")

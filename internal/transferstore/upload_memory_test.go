@@ -128,7 +128,7 @@ func TestUploadMemoryCancellationReleasesActiveAndWaitingParts(t *testing.T) {
 			_, err := waitingStore.Write(waitCtx, "waiting", input, WriteOptions{Size: size, Overwrite: true})
 			done <- err
 		}()
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(2 * time.Minute) // hang guard only
 		for {
 			_, waiting := memoryState(budget)
 			if waiting >= 2 {

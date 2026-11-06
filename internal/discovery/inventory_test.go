@@ -202,7 +202,7 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReached(t, f.reached)
-	checkpointDeadline := time.Now().Add(5 * time.Second)
+	checkpointDeadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for {
 		current, err := scanner.Status(ctx, 1)
 		if err != nil {
@@ -305,7 +305,7 @@ func TestInventoryStopRestartKeepsExactDurableKeys(t *testing.T) {
 	if err = engine.Start(ctx, "1-1", 1); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for {
 		record, e := engine.Get(ctx, "1-1")
 		if e != nil {

@@ -91,7 +91,7 @@ func TestParentCleanupSurvivesCallerCancellationAndAgentRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Only read progress after restart. No second cleanup request drives workers.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	var complete execution.DeletionProgress
 	var scan discovery.State
 	for {

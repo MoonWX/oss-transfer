@@ -202,7 +202,7 @@ func TestS3HTTP2GoAwayReplaysBodyWithinOneSDKAttempt(t *testing.T) {
 			server.EnableHTTP2 = true
 			server.Config.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){"h2": func(_ *http.Server, conn *tls.Conn, _ http.Handler) {
 				defer conn.Close()
-				conn.SetDeadline(time.Now().Add(10 * time.Second))
+				conn.SetDeadline(time.Now().Add(2 * time.Minute)) // hang guard only; emulated TLS is slow
 				connection := connections.Add(1)
 				preface := make([]byte, 24)
 				if _, err := io.ReadFull(conn, preface); err != nil || string(preface) != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {

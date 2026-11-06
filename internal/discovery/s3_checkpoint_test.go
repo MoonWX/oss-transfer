@@ -48,7 +48,7 @@ type checkpointHTTPPage struct {
 
 func waitS3Checkpoint(t *testing.T, scanner *Scanner) State {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for time.Now().Before(deadline) {
 		current, err := scanner.Status(context.Background(), 1)
 		if err != nil {

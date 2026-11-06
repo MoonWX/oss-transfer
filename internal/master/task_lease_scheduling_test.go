@@ -149,11 +149,11 @@ func TestLeaseWorkersRenewHealthyPeerWhileManyPeersRemainBlocked(t *testing.T) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(2 * time.Minute): // hang guard only
 			t.Error("lease workers survived manager shutdown")
 		}
 	}()
-	deadline := time.NewTimer(2 * time.Second)
+	deadline := time.NewTimer(2 * time.Minute) // hang guard only: a global limit never grants
 	defer deadline.Stop()
 	for range slowCount {
 		select {

@@ -120,6 +120,7 @@ func TestBackgroundPurgeAdmissionRestartFencesAndNeighborIntegrity(t *testing.T)
 	var pages int
 	for {
 		pages++
+		before := *p.Cleanup
 		p, done, err = repo.PurgePage(context.Background(), p.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -131,8 +132,10 @@ func TestBackgroundPurgeAdmissionRestartFencesAndNeighborIntegrity(t *testing.T)
 		if done {
 			break
 		}
-		if pages > 100 {
-			t.Fatal("cleanup failed to converge")
+		// Pages end at a time budget, so a slow runner needs more of them. Each
+		// must still delete a record or finish a bucket, which bounds the loop.
+		if p.Cleanup.LocalRecordsDeleted <= before.LocalRecordsDeleted && p.Cleanup.BucketIndex <= before.BucketIndex {
+			t.Fatalf("cleanup page %d made no progress: %+v", pages, p.Cleanup)
 		}
 	}
 	if !p.Purged || p.Cleanup.Status != "DONE" || p.Cleanup.LocalRecordsDeleted != count*3+3 || p.Cleanup.RecordsDeleted != count*3+3+10 {

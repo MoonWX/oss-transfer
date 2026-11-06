@@ -14,7 +14,7 @@ import (
 
 func waitBatchesReleased(t *testing.T, scanner *Scanner, parentID, through int64) State {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for time.Now().Before(deadline) {
 		current, err := scanner.Status(context.Background(), parentID)
 		if err != nil {

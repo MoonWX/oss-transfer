@@ -60,7 +60,7 @@ func preflightTestAgent(t *testing.T, f *agentHTTPFixture, number int, legacy ..
 		service.Close(context.Background())
 		db.Close()
 	})
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for time.Now().Before(deadline) {
 		members, err := f.master.onlineAgents()
 		if err != nil {

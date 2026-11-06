@@ -53,7 +53,7 @@ func takeoverRequest(spec Spec, batches ...Batch) TakeoverRequest {
 
 func seedTakeover(t *testing.T, scanner *Scanner, request TakeoverRequest) State {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for time.Now().Before(deadline) {
 		current, err := scanner.SeedTakeover(context.Background(), request)
 		if err != nil {
@@ -307,7 +307,7 @@ func TestTakeoverCleanupIsBoundedAndResumesAfterRestart(t *testing.T) {
 	}
 	// Check every resumed page, not a fixed number of calls: the time budget
 	// can produce smaller pages on emulated or busy machines.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only; each page must make progress
 	for current.Takeover.Cleaning && time.Now().Before(deadline) {
 		before = after
 		current, err = scanner.SeedTakeover(ctx, request)

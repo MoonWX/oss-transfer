@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 type requestContextKey struct{}
@@ -55,20 +56,16 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	info.Key = path
 	query := request.URL.Query()
-	kind := ""
 	switch request.Method {
 	case "HEAD":
-		kind = "head"
 		info.Operation = "HeadObject"
 	case "PUT":
-		kind = "put"
 		info.Operation = "PutObject"
 		if query.Has("partNumber") {
 			info.Operation = "UploadPart"
 			info.PartNumber, _ = strconv.Atoi(query.Get("partNumber"))
 		}
 	case "POST":
-		kind = "put"
 		info.Operation = "CompleteMultipartUpload"
 		if query.Has("uploads") {
 			info.Operation = "CreateMultipartUpload"
@@ -76,7 +73,6 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	case "GET":
 		info.Operation = "GetObject"
 		if info.Key == "" || query.Has("list-type") || query.Has("prefix") || query.Has("delimiter") {
-			kind = "list"
 			info.Operation = "ListObjects"
 			if info.Bucket == "" && path == "" {
 				info.Operation = "ListBuckets"
@@ -88,6 +84,8 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	case "DELETE":
 		info.Operation = "AbortMultipartUpload"
 	}
+	// Object GETs, multipart listings and aborts have no node request limit.
+	kind := operationLimit(info.Operation)
 	taskKind := kind
 	if request.Method == "GET" && taskKind == "" {
 		// V4's task LIST budget also covered object reads during downloads.
@@ -104,8 +102,24 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	info.StatusCode = response.StatusCode
-	if response.StatusCode == 503 {
-		info.Message = "Storage service returned HTTP 503"
+	// Every attempt the SDK makes passes here, retries and the final one
+	// included. Error codes are read for all error statuses because services
+	// also report throttling such as SlowDown with statuses other than 503.
+	if response.StatusCode >= 400 && response.Body != nil && request.Method != http.MethodHead {
+		body := response.Body
+		prefix, readErr := io.ReadAll(io.LimitReader(body, 64<<10))
+		response.Body = &replayBody{Reader: io.MultiReader(bytes.NewReader(prefix), body), Closer: body}
+		if readErr == nil {
+			var problem struct {
+				Code string `xml:"Code"`
+			}
+			if xml.Unmarshal(prefix, &problem) == nil && safeCode(problem.Code) {
+				info.ErrorCode = problem.Code
+			}
+		}
+	}
+	if transferstore.IsThrottleResponse(response.StatusCode, info.ErrorCode) {
+		info.Message = "Storage service returned HTTP " + strconv.Itoa(response.StatusCode)
 		info.RequestID = bounded(response.Header.Get("X-Amz-Request-Id"), 256)
 		if info.RequestID == "" {
 			info.RequestID = bounded(response.Header.Get("X-Oss-Request-Id"), 256)
@@ -114,19 +128,6 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			info.RequestID = bounded(response.Header.Get("X-Jdcloud-Request-Id"), 256)
 		}
 		info.ExtendedRequestID = bounded(response.Header.Get("X-Amz-Id-2"), 512)
-		if response.Body != nil {
-			body := response.Body
-			prefix, readErr := io.ReadAll(io.LimitReader(body, 64<<10))
-			response.Body = &replayBody{Reader: io.MultiReader(bytes.NewReader(prefix), body), Closer: body}
-			if readErr == nil {
-				var problem struct {
-					Code string `xml:"Code"`
-				}
-				if xml.Unmarshal(prefix, &problem) == nil && safeCode(problem.Code) {
-					info.ErrorCode = problem.Code
-				}
-			}
-		}
 	}
 	if err := t.controller.ObserveResponse(info); err != nil {
 		if response.Body != nil {

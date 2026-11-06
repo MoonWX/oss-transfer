@@ -18,7 +18,14 @@ type NodeControlConfig struct {
 	AutoAdjust             *AutoAdjustConfig `json:"autoAdjust,omitempty"`
 }
 
+// A limit is lowered when ThrottleThreshold throttling responses (HTTP
+// 429/503 or a throttling error code), at least ThrottleRatio of that limit's
+// responses, arrive within ThrottleWindowMS. Consecutive503Threshold is the
+// earlier name of ThrottleThreshold and is still accepted.
 type AutoAdjustConfig struct {
+	ThrottleThreshold       *int     `json:"throttleThreshold,omitempty"`
+	ThrottleRatio           *float64 `json:"throttleRatio,omitempty"`
+	ThrottleWindowMS        *int64   `json:"throttleWindowMs,omitempty"`
 	Consecutive503Threshold *int     `json:"consecutive503Threshold,omitempty"`
 	ReduceFactor            *float64 `json:"reduceFactor,omitempty"`
 	IncreaseFactor          *float64 `json:"increaseFactor,omitempty"`
@@ -29,7 +36,7 @@ type AutoAdjustConfig struct {
 // Options preserves the current no-config defaults. A migration must supply
 // resolved effective V4 values; absence here is not a claim about an old node.
 func (c *NodeControlConfig) Options() (nodecontrol.Options, error) {
-	out := nodecontrol.Options{ListQPS: 100, PutQPS: 1400, HeadQPS: 2800, BandwidthBitsPerSecond: 2_000_000_000, UseZeroDefaults: true, Threshold: 20, ReduceFactor: 0.9, IncreaseFactor: 1.2, MinQPS: 200, RecoveryInterval: 10 * time.Second}
+	out := nodecontrol.Options{ListQPS: 100, PutQPS: 1400, HeadQPS: 2800, BandwidthBitsPerSecond: 2_000_000_000, UseZeroDefaults: true, Threshold: 5, ThrottleRatio: 0.01, ThrottleWindow: 5 * time.Second, ReduceFactor: 0.9, IncreaseFactor: 1.2, MinQPS: 200, RecoveryInterval: 10 * time.Second}
 	if c == nil {
 		return out, nil
 	}
@@ -57,17 +64,30 @@ func (c *NodeControlConfig) Options() (nodecontrol.Options, error) {
 		*setting.target = v
 	}
 	if auto := c.AutoAdjust; auto != nil {
-		if auto.Consecutive503Threshold != nil {
-			if *auto.Consecutive503Threshold < 1 || *auto.Consecutive503Threshold > 1_000_000 {
-				return nodecontrol.Options{}, errors.New("nodeControl 503 threshold must be 1–1000000")
+		threshold := auto.ThrottleThreshold
+		if threshold == nil {
+			threshold = auto.Consecutive503Threshold
+		} else if auto.Consecutive503Threshold != nil && *auto.Consecutive503Threshold != *threshold {
+			return nodecontrol.Options{}, errors.New("nodeControl throttleThreshold and its old name consecutive503Threshold disagree")
+		}
+		if threshold != nil {
+			if *threshold < 1 || *threshold > 1_000_000 {
+				return nodecontrol.Options{}, errors.New("nodeControl throttling threshold must be 1–1000000")
 			}
-			out.Threshold = *auto.Consecutive503Threshold
+			out.Threshold = *threshold
+		}
+		if auto.ThrottleWindowMS != nil {
+			if *auto.ThrottleWindowMS < 1000 || *auto.ThrottleWindowMS > 60_000 {
+				return nodecontrol.Options{}, errors.New("nodeControl throttleWindowMs must be 1000–60000")
+			}
+			out.ThrottleWindow = time.Duration(*auto.ThrottleWindowMS) * time.Millisecond
 		}
 		for _, setting := range []struct {
 			value  *float64
 			target *float64
 			valid  func(float64) bool
 		}{
+			{auto.ThrottleRatio, &out.ThrottleRatio, func(v float64) bool { return v > 0 && v <= 1 }},
 			{auto.ReduceFactor, &out.ReduceFactor, func(v float64) bool { return v > 0 && v < 1 }},
 			{auto.IncreaseFactor, &out.IncreaseFactor, func(v float64) bool { return v > 1 }},
 			{auto.MinQPS, &out.MinQPS, func(v float64) bool { return v > 0 }},

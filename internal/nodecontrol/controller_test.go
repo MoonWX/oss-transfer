@@ -97,22 +97,24 @@ func TestPersistentSettingsAutoIncidentRecoveryAndConfigurationSource(t *testing
 		t.Fatal("equal saved/configured value must show CONFIG")
 	}
 	must(t, f.controller.SetRate(ctx, "bandwidth", 8*32768))
+	useClock(f.controller, time.Now())
 	trigger := RequestContext{StatusCode: 503, Operation: "UploadPart", TaskID: 77, PartNumber: 2, RequestID: "request-123"}
 	must(t, f.controller.ObserveResponse(trigger))
 	if rate(t, f.controller, "put")["state"] != "NORMAL" {
 		t.Fatal("warning appeared before reduction")
 	}
-	must(t, f.controller.ObserveResponse(RequestContext{StatusCode: 200}))
-	must(t, f.controller.ObserveResponse(trigger))
-	if rate(t, f.controller, "put")["state"] != "NORMAL" {
-		t.Fatal("successful response did not reset consecutive counter")
-	}
+	must(t, f.controller.ObserveResponse(RequestContext{StatusCode: 200, Operation: "UploadPart"}))
 	must(t, f.controller.ObserveResponse(trigger))
 	if got := rate(t, f.controller, "put"); got["limitQps"] != float64(50) || got["manualLimitQps"] != float64(100) || got["state"] != "REDUCED" {
-		t.Fatalf("wrong PUT reduction: %v", got)
+		t.Fatalf("a success between throttling responses hid them, or wrong PUT reduction: %v", got)
 	}
-	if rate(t, f.controller, "head")["limitQps"] != float64(100) || rate(t, f.controller, "list")["limitQps"] != float64(50) || f.limits.Node().BandwidthBytesPerSecond != 32768 {
-		t.Fatal("reduction changed unrelated budgets or did not lower HEAD")
+	must(t, f.controller.ObserveResponse(trigger))
+	must(t, f.controller.ObserveResponse(trigger))
+	if rate(t, f.controller, "put")["limitQps"] != float64(50) {
+		t.Fatal("one burst lowered the limit twice within a window")
+	}
+	if rate(t, f.controller, "head")["limitQps"] != float64(200) || rate(t, f.controller, "list")["limitQps"] != float64(50) || f.limits.Node().BandwidthBytesPerSecond != 32768 {
+		t.Fatal("throttled PUTs changed unrelated budgets")
 	}
 	history, err := f.controller.History(50)
 	must(t, err)
@@ -141,8 +143,12 @@ func TestPersistentSettingsAutoIncidentRecoveryAndConfigurationSource(t *testing
 	}
 	detail, err = f.controller.Detail(id, "")
 	must(t, err)
-	if detail.IncidentActive || len(detail.Events) < 6 || !detail.Done || !detail.HistoryComplete {
+	// 50 → 60 → 72 → 86.4 → 100: the reduction and four recovery steps.
+	if detail.IncidentActive || len(detail.Events) != 5 || !detail.Done || !detail.HistoryComplete {
 		t.Fatalf("recovery timeline incomplete: %+v", detail)
+	}
+	if trigger := detail.TriggerEvent; trigger.ThrottleCount != 2 || trigger.ThrottleResponses != 3 || trigger.ThrottleThreshold != 2 || trigger.ThrottleRatio != 0.01 || trigger.ThrottleWindowMS != 5000 || trigger.Consecutive503Count != 0 {
+		t.Fatalf("reduction did not record its window evidence: %+v", trigger)
 	}
 }
 
@@ -377,7 +383,7 @@ func TestSDKMultipartRetrySpendsEveryActualAttempt(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	store, err := transferstore.NewS3(transferstore.S3Config{Endpoint: server.URL, Bucket: "bucket", AccessKey: "fixture-ak", SecretKey: "fixture-sk", PathStyle: true, PartSize: 5 << 20, RetryMaxAttempts: 2, HTTPClient: &http.Client{Transport: f.controller.Transport(nil, RequestContext{Bucket: "bucket", PathStyle: true, TaskID: 7, Generation: 1})}})
+	store, err := transferstore.NewS3(transferstore.S3Config{Endpoint: server.URL, Bucket: "bucket", AccessKey: "fixture-ak", SecretKey: "fixture-sk", PathStyle: true, PartSize: 5 << 20, RetryMaxAttempts: 2, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond, HTTPClient: &http.Client{Transport: f.controller.Transport(nil, RequestContext{Bucket: "bucket", PathStyle: true, TaskID: 7, Generation: 1})}})
 	must(t, err)
 	defer store.Close()
 	data := bytes.Repeat([]byte{7}, (5<<20)+1)
@@ -405,8 +411,8 @@ func TestSDKMultipartRetrySpendsEveryActualAttempt(t *testing.T) {
 	}
 	history, err := f.controller.History(10)
 	must(t, err)
-	if len(history) != 2 || history[0].TriggerRequest.Operation != "UploadPart" {
-		t.Fatal("actual retry failure not recorded as multipart incident")
+	if len(history) != 1 || history[0].Type != "put" || history[0].TriggerRequest.Operation != "UploadPart" {
+		t.Fatalf("actual retry failure not recorded as a PUT reduction: %+v", history)
 	}
 }
 

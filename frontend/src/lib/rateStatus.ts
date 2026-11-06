@@ -36,8 +36,16 @@ export type Adjustment = NodeDisplay & {
   manualTarget?: number | null;
   previousManualTarget?: number | null;
   reasonCode?: string | null;
+  // Reductions recorded before the throttle window.
   consecutive503Count?: number | null;
   consecutive503Threshold?: number | null;
+  // Throttling and all responses of the limit in the window that lowered it.
+  throttleCount?: number | null;
+  throttleResponses?: number | null;
+  throttleThreshold?: number | null;
+  throttleRatio?: number | null;
+  throttleWindowMs?: number | null;
+  measuredQps?: number | null;
   factor?: number | null;
   minQps?: number | null;
   incidentId?: string | null;
@@ -67,9 +75,12 @@ export type AutoAdjust = {
   increaseFactor: number;
   reduceFactor: number;
   minQps: number;
-  consecutive503Threshold: number;
-  consecutive503Count: number;
-  last503At?: number | null;
+  throttleThreshold?: number;
+  throttleRatio?: number;
+  throttleWindowMs?: number;
+  throttleCount?: number;
+  throttleResponses?: number;
+  lastThrottleAt?: number | null;
   nextRecoveryAt?: number | null;
   measurementIntervalMs?: number;
   lastMeasurementAt?: number | null;

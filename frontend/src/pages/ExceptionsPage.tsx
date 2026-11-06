@@ -60,6 +60,9 @@ import {
 } from "@mui/icons-material";
 import { api, ApiError, download, getToken, useNotify } from "../lib/api";
 import FailedTaskRetryDialog from "../components/FailedTaskRetryDialog";
+import RunningFailureRetry, {
+  canRetryRunningFailures,
+} from "../components/RunningFailureRetry";
 import ListPagination, {
   rememberPageSize,
   savedPageSize,
@@ -68,6 +71,7 @@ import {
   canRetrySnapshot,
   useTaskRecovery,
   useVisibleRecoveryTasks,
+  type RecoveryTaskSnapshot,
 } from "../lib/taskRecovery";
 import {
   EmptyState,
@@ -641,9 +645,11 @@ export default function ExceptionsPage() {
       setBusy(false);
     }
   }
-  async function retry(taskId: number) {
+  async function retry(taskId: number, snapshot?: RecoveryTaskSnapshot) {
+    // A fresh snapshot replaces an older displayed one (see RunningFailureRetry).
     const displayed =
-      taskId === undefined ? undefined : visibleTasks.tasks[taskId];
+      snapshot ??
+      (taskId === undefined ? undefined : visibleTasks.tasks[taskId]);
     if (
       taskId === undefined ||
       taskId !== actionTaskId ||
@@ -1231,25 +1237,42 @@ export default function ExceptionsPage() {
               {tr("任务 #{id}", { id: actionTaskId })}
             </Typography>
             {actionSnapshot && <StatusChip status={actionSnapshot.status} />}
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={
-                actionPhase === "completed" ? (
-                  <CheckCircleOutlineRounded />
-                ) : actionPhase && actionPhase !== "unavailable" ? (
-                  <CircularProgress size={16} color="inherit" />
-                ) : actionSnapshot?.status === "STOPPED" ? (
-                  <PlayArrowRounded />
-                ) : (
-                  <ReplayRounded />
-                )
-              }
-              onClick={() => void retry(actionTaskId)}
-              disabled={busy || !!actionPhase}
-            >
-              {actionLabel}
-            </Button>
+            {canRetryRunningFailures(
+              actionSnapshot && { ...actionSnapshot, taskIndex: actionTaskId },
+            ) && !recovery.states[actionTaskId] ? (
+              <RunningFailureRetry
+                task={{ ...actionSnapshot!, taskIndex: actionTaskId }}
+                size="small"
+                disabled={busy}
+                onSubmitted={() => void load(true)}
+                onStale={(fresh) => {
+                  visibleTasks.update(actionTaskId, fresh);
+                  // An ended task keeps the ordinary retry of a new generation.
+                  if (canRetrySnapshot(fresh)) void retry(actionTaskId, fresh);
+                  else notify(tr("任务状态已更新，请查看任务详情。"), "info");
+                }}
+              />
+            ) : (
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={
+                  actionPhase === "completed" ? (
+                    <CheckCircleOutlineRounded />
+                  ) : actionPhase && actionPhase !== "unavailable" ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : actionSnapshot?.status === "STOPPED" ? (
+                    <PlayArrowRounded />
+                  ) : (
+                    <ReplayRounded />
+                  )
+                }
+                onClick={() => void retry(actionTaskId)}
+                disabled={busy || !!actionPhase}
+              >
+                {actionLabel}
+              </Button>
+            )}
             <Button
               size="small"
               component={RouterLink}

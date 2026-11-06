@@ -638,4 +638,10 @@ var cliMessages = map[string][2]string{
 	"已断开，工作已由其他节点接管":    {"Disconnected; work taken over by other nodes", "切断済み（処理は他のノードが引き継ぎ済み）"},
 	"，离线":               {", offline", "、オフライン"},
 	"执行节点成员（成员版本 %d）\n": {"Execution node membership (revision %d)\n", "実行ノードのメンバー（メンバー版 %d）\n"},
+
+	// Retrying the failed objects of a running task.
+	"重试方式":  {"Retry mode", "再試行方式"},
+	"重试子任务": {"Retried subtasks", "再試行した子タスク"},
+	"重试对象":  {"Retried objects", "再試行したオブジェクト"},
+	"主节点未执行运行中重试；请升级主节点后重试失败项": {"The Master did not retry the running task; upgrade the Master to retry its failed objects", "Master は実行中タスクを再試行しませんでした。失敗項目を再試行するには Master を更新してください"},
 }

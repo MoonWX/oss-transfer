@@ -2,6 +2,7 @@ package master
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,10 +71,20 @@ func TestExceptionsHTTPFiltersClearAndLocalEnvelope(t *testing.T) {
 	if code != 200 || body["supported"] != false || body["totalCount"] != float64(0) || body["complete"] != true {
 		t.Fatal("legacy fallback invented an event", code, body)
 	}
+	// Retrying a running task retries its failed objects in place, never by
+	// resuming a new generation. This node is not an enrolled Agent, so the
+	// retry is refused with its reason.
 	code, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/retry-failures", f.admin, map[string]any{"taskIds": []int64{ids[1]}})
 	result := body["data"].(map[string]any)
-	if code != 200 || result["failed"] != float64(0) || result["ignored"] != float64(1) || result["accepted"] != float64(0) {
-		t.Fatal("running task retry was not ignored in the local envelope", code, body)
+	details, _ := result["details"].([]any)
+	if code != 200 || result["accepted"] != float64(0) || result["failed"] != float64(1) || len(details) != 1 {
+		t.Fatal("running task retry was not refused in the local envelope", code, body)
+	}
+	if detail := details[0].(map[string]any); detail["mode"] != "FAILED_OBJECTS" || detail["status"] != "RUNNING" || detail["generation"] != float64(1) || !strings.Contains(fmt.Sprint(detail["message"]), "re-enrolled") {
+		t.Fatal("running task retry did not explain the refused in-place retry", detail)
+	}
+	if running, err := f.master.tasks.repo.Get(ids[1]); err != nil || running.Generation != 1 || running.Status != "RUNNING" || running.FailedChildren != 1 {
+		t.Fatal("refused running retry changed the task", running, err)
 	}
 	if code, _ := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/failed/clear", "", nil); code != 401 {
 		t.Fatal("unauthenticated clear", code)

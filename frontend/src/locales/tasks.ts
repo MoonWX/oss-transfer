@@ -1,4 +1,36 @@
 export const tasksMessages: Record<string, { en: string; ja: string }> = {
+  "重试运行中任务的失败项？": {
+    en: "Retry failed objects of the running task?",
+    ja: "実行中タスクの失敗項目を再試行しますか？",
+  },
+  "仅重新传输任务 #{id} 中已结束子任务的失败对象（当前共 {count} 个失败对象）。正在进行的传输不会中断，已成功或已跳过的对象不会重复传输。":
+    {
+      en: "Only the failed objects of finished child tasks of task #{id} are transferred again ({count} failed objects now). Transfers in progress are not interrupted, and succeeded or skipped objects are not transferred again.",
+      ja: "タスク #{id} の終了したサブタスクの失敗オブジェクトのみを再転送します（現在 {count} 件）。進行中の転送は中断されず、成功またはスキップしたオブジェクトは再転送されません。",
+    },
+  "仍在运行的子任务中的失败对象，需等该子任务结束后再重试。": {
+    en: "Failed objects of child tasks that are still running can be retried after those child tasks finish.",
+    ja: "実行中のサブタスクの失敗オブジェクトは、そのサブタスクの終了後に再試行できます。",
+  },
+  "已开始重试任务 #{id} 的 {objects} 个失败对象（{children} 个子任务），正在进行的传输不受影响。":
+    {
+      en: "Retrying {objects} failed objects ({children} child tasks) of task #{id}; transfers in progress continue.",
+      ja: "タスク #{id} の失敗オブジェクト {objects} 件（サブタスク {children} 件）の再試行を開始しました。進行中の転送は継続します。",
+    },
+  "部分失败项未能重试：{value1}": {
+    en: "Some failed objects could not be retried: {value1}",
+    ja: "一部の失敗項目は再試行できませんでした：{value1}",
+  },
+  "没有可立即重试的失败对象。": {
+    en: "No failed objects can be retried right now.",
+    ja: "今すぐ再試行できる失敗オブジェクトはありません。",
+  },
+  "还有更多失败的子任务，稍后可再次重试。": {
+    en: " More child tasks have failed objects; retry again later.",
+    ja: "失敗オブジェクトのあるサブタスクがほかにもあります。後で再度再試行してください。",
+  },
+  "重试中…": { en: "Retrying…", ja: "再試行中…" },
+  确认重试: { en: "Confirm retry", ja: "再試行を確定" },
   "正在提交停止请求…": {
     en: "Sending stop request…",
     ja: "停止リクエストを送信中…",

@@ -224,7 +224,13 @@ export function useTaskRecovery() {
   };
 }
 
-export type RecoveryTaskSnapshot = { status: string; generation?: number };
+export type RecoveryTaskSnapshot = {
+  status: string;
+  generation?: number;
+  failedObjectCount?: number;
+  legacyHistorical?: boolean;
+  migrationRecoveryRequired?: boolean;
+};
 export function canRetrySnapshot(snapshot?: RecoveryTaskSnapshot) {
   return (
     !!snapshot &&

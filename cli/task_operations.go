@@ -187,6 +187,7 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 	groups := []taskControlGroup{}
 	groupIndex := map[string]int{}
 	generations := map[int]uint64{}
+	running := map[int]bool{}
 	for _, id := range ids {
 		row := tasks[id]
 		status := getString(row, "status")
@@ -197,6 +198,11 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 			allowed = exploring || status == "RUNNING" || status == "LIST_DONE" || status == "PENDING" || status == "WAITING" || status == "RESUMING" || status == "RECOVERABLE"
 		case "resume", "retry":
 			allowed = !exploring && (status == "STOPPED" || status == "FAILED" || status == "PARTIAL_FAILED")
+			// Retrying a running task retries only the failed objects of its
+			// finished subtasks, in place, without interrupting the transfer.
+			if action == "retry" && !exploring && status == "RUNNING" {
+				allowed, running[id] = true, true
+			}
 		case "start":
 			allowed = !localTask(row) && row["autoStart"] != true && status == "PENDING" && !exploring
 		case "delete":
@@ -228,7 +234,16 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 		}
 		groups[index].ids = append(groups[index].ids, id)
 	}
-	return taskControlBatches(client, action, groups, generations)
+	result, err := taskControlBatches(client, action, groups, generations)
+	if len(running) > 0 && result != nil {
+		for _, detail := range objectList(result["details"]) {
+			// A Master without the in-place retry ignores a running task.
+			if running[getInt(detail, "taskId")] && detail["ignored"] == true && detail["mode"] == nil {
+				detail["message"] = client.text("主节点未执行运行中重试；请升级主节点后重试失败项")
+			}
+		}
+	}
+	return result, err
 }
 
 // Batch size bounds one request, not the selection. Never replay a timed out

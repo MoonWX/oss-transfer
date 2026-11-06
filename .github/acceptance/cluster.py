@@ -40,6 +40,18 @@ MIB = 1024 * 1024
 TERMINAL = {"COMPLETED", "STOPPED", "FAILED", "PARTIAL_FAILED"}
 
 
+def bandwidth_allowance(rate):
+    """Bytes a task may write beyond rate × elapsed in one sampled window.
+
+    Each Agent keeps up to 100 ms of its share as earned credit, at least
+    64 KiB, and holds at most one reserved read of 64 KiB or 100 ms of it,
+    so all Agents together may pass the limit by 100 ms of it plus their
+    floors and reads. The 256 KiB covers those and sampling jitter for two
+    Agents; a slower CPU must not hide an unenforced cap.
+    """
+    return int(rate * 0.1) + 256 * 1024
+
+
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -207,9 +219,8 @@ class GrowthSampler:
         require(len(self.samples) >= 30, "Bandwidth test produced too few physical-byte samples")
         # Each parent has two nonempty objects, one reader per Agent. At the
         # fixture's 2 Mbps cap, each Agent can retain 64 KiB of earned credit
-        # plus one <=12.5 KB reserved read. Allow 256 KiB for those boundaries
-        # and sampling jitter; a slower CPU must not hide an unenforced cap.
-        allowance = 256 * 1024
+        # plus one <=12.5 KB reserved read (see bandwidth_allowance).
+        allowance = bandwidth_allowance(rate)
         results = []
         for column, total in enumerate(expected_bytes, 1):
             windows = []
@@ -1069,7 +1080,7 @@ class Harness:
             except Exception:
                 if not preserving_error:
                     raise
-        allowance = 256 * 1024
+        allowance = bandwidth_allowance(limit)
         windows = []
         samples = sampler.samples
         for first in range(0, len(samples), 5):

@@ -156,7 +156,7 @@ func (r *Repository) BeginFailover(id int64, generation uint64, nodeID string) (
 		if len(p.ActiveNodes()) < 2 {
 			return ErrFailoverTarget
 		}
-		if p.BudgetRevision == math.MaxUint64 {
+		if budgetExhausted(p) {
 			return ErrConflict
 		}
 		now := r.now().UTC()
@@ -177,7 +177,12 @@ func (r *Repository) BeginFailover(id int64, generation uint64, nodeID string) (
 			}
 			p.Membership.Removed[nodeID] = now
 		}
-		p.BudgetRevision++
+		// The node is fenced: it can no longer transfer, so its reserve is
+		// released and the remaining nodes may be raised in this commit.
+		leaveShares(&p, nodeID)
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
 		return r.save(tx, p)
 	}))
 	return

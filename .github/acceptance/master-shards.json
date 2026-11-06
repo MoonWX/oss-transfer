@@ -215,6 +215,17 @@
     "TestPlannedChangeBandwidthStatusWaitsForRaisedShare": 2.0,
     "TestWithoutPlannedProblemsKeepsRealProblems": 0,
     "TestPlannedChangeOfflineLeaverProgressFollowsFencing": 1.0,
-    "TestPlannedChangePolicyDeliveriesAreForgotten": 1.0
+    "TestPlannedChangePolicyDeliveriesAreForgotten": 1.0,
+    "TestIdleShareMovesToBusyNode": 1.98,
+    "TestRaiseWaitsForReductionAck": 1.08,
+    "TestLostReductionAckKeepsReserved": 1.09,
+    "TestMasterRestartDoesNotRaiseBeforeReAck": 1.11,
+    "TestIdleDebounceCommitCount": 1.14,
+    "TestConflictNeverMarksUnavailable": 1.11,
+    "TestLimitLowerNeverRaisesBeforeAck": 1.09,
+    "TestOfflineMemberKeepsReserved": 6.18,
+    "TestBandwidthParentPayloadStrictDecode": 0,
+    "TestJoinProceedsWithSlackDespiteOfflinePeer": 1.32,
+    "TestBandwidthStatusFollowsReallocation": 1.09
   }
 }

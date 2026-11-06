@@ -46,7 +46,7 @@ func TestStopHTTPAcceptsWithoutWaitingAndSurvivesRestart(t *testing.T) {
 	}
 	delete(f.master.tasks.active, p.ID)
 	before, err := f.master.tasks.repo.Get(p.ID)
-	if err != nil || before.Generation != p.Generation || before.BudgetRevision != p.BudgetRevision+1 {
+	if err != nil || before.Generation != p.Generation || before.BudgetRevision != p.BudgetRevision+2 {
 		t.Fatal(before, err)
 	}
 	f.close()

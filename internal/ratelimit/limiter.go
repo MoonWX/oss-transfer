@@ -255,7 +255,7 @@ func (l *Limiter) ApplyParent(ctx context.Context, p ParentLimit) error {
 		for i, value := range []float64{p.ListQPS, p.HeadQPS, p.PutQPS} {
 			previous := []float64{old.limit.ListQPS, old.limit.HeadQPS, old.limit.PutQPS}[i]
 			if value != previous {
-				old.requestNext[i] = time.Time{}
+				old.requestNext[i] = reanchorRequest(old.requestNext[i], previous, value)
 			}
 		}
 		old.limit = p

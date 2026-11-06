@@ -56,6 +56,13 @@ export type MemberNode = NodeDisplay & {
   pendingChildren?: number;
   share?: NodeShare;
   /**
+   * How the task limits are divided for this node: busy nodes share them,
+   * idle nodes keep a small floor. Older Masters (equal split) omit it.
+   */
+  demand?: "busy" | "idle" | string;
+  /** The node still holds its previous share until it confirms a reduction. */
+  adjusting?: boolean;
+  /**
    * An offline leaving node: LEASE_EXPIRY leaves once its lease expires;
    * RECONNECT (no lease fencing) leaves after it reconnects.
    */
@@ -165,6 +172,18 @@ export function shareLabel(share: NodeShare | undefined) {
   return share.bandwidthBytesPerSecond > 0
     ? `${formatBytes(share.bandwidthBytesPerSecond)}/s`
     : t("不限");
+}
+
+/** The node's demand under dynamic allocation; empty for an equal split. */
+export function demandLabel(node: Pick<MemberNode, "demand" | "adjusting">) {
+  const base =
+    node.demand === "busy"
+      ? t("按需（忙）")
+      : node.demand === "idle"
+        ? t("空闲（已释放）")
+        : "";
+  if (!base) return "";
+  return node.adjusting ? `${base} · ${t("调整中：等待节点确认降额")}` : base;
 }
 
 /** Request shares that are actually limited; unlimited ones are left out. */
@@ -617,6 +636,7 @@ export default function TaskNodesDialog({
     const state = memberStateLabel(node);
     const share = shareLabel(node.share);
     const qps = qpsShareLabel(node.share);
+    const demand = node.share ? demandLabel(node) : "";
     const name = label(node.address || node.id || "", node);
     const isLeaving = leaving(node.state);
     const removing = validRemoves.includes(node.address);
@@ -785,6 +805,7 @@ export default function TaskNodesDialog({
           {/* Joining nodes get their share once they join. */}
           <Field label={t("带宽份额")}>{share || "—"}</Field>
           {qps && <Field label={t("请求份额")}>{qps}</Field>}
+          {demand && <Field label={t("需求")}>{demand}</Field>}
           {node.localPath && (
             <Field label={t("本地路径")} grow>
               {node.localPath}

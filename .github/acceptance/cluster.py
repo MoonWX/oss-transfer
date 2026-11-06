@@ -985,6 +985,114 @@ class Harness:
                 f"Per-node bandwidth shares exceed the task limit: {shares} > {total}")
         return shares
 
+    def dynamic_share_fixture(self):
+        """One large object in the first dispatch batch, one small in the second."""
+        directory = self.root / "dynamic-fixture"
+        directory.mkdir()
+        manifest = {}
+        for index in range(129):
+            # The scanner cuts 128-object batches: the large object's child goes
+            # to one Agent, the small object's child to the other, which then
+            # has nothing left while the large object is still transferring.
+            size = 24 * MIB if index == 0 else 256 * 1024 if index == 128 else 0
+            key = f"{index:04d}.bin"
+            block = hashlib.sha256(("dynamic:" + str(index)).encode()).digest() * 2048
+            with (directory / key).open("wb") as stream:
+                remaining = size
+                while remaining:
+                    piece = block[:min(remaining, len(block))]
+                    stream.write(piece)
+                    remaining -= len(piece)
+            manifest[key] = {"size": size, "sha256": sha256(directory / key)}
+
+        def put(key):
+            with (directory / key).open("rb") as body:
+                self.s3.put_object(Bucket=self.buckets["rate"], Key="dynamic/" + key, Body=body)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(put, manifest))
+        return manifest
+
+    def dynamic_share(self):
+        """An idle Agent releases its share of the task limit to the busy one.
+
+        Every node-view sample must keep the shares within the limit. Once one
+        Agent has finished its only child, the other must hold at least
+        T * (1 - 1/64) - 1 bytes per second. Physical bytes written stay
+        within the task limit (the bandwidth scenario's upper-bound check);
+        throughput is recorded, never asserted.
+        """
+        manifest = self.dynamic_share_fixture()
+        rate = self.args.recovery_bandwidth_mbps
+        limit = int(rate * 125000)
+        destination = self.root / "dynamic-share"
+        total = sum(row["size"] for row in manifest.values())
+        started = time.monotonic()
+        sampler = GrowthSampler([destination])
+        views = []
+        try:
+            with sampler:
+                task_id = self.create("/api/master/local-transfers",
+                                      self.download_body(self.buckets["rate"], "dynamic/", destination, rate), "dynamic-share")
+
+                def released():
+                    view = self.nodes_view(task_id)
+                    shares = self.require_shares_within(view, rate)
+                    nodes = [node for node in view["nodes"] if node.get("share")]
+                    views.append({"seconds": round(time.monotonic() - started, 2), "allocation": view.get("allocation"),
+                                  "nodes": [{"address": node["address"], "demand": node.get("demand"),
+                                             "adjusting": node.get("adjusting"), "pendingChildren": node.get("pendingChildren"),
+                                             "bandwidthBytesPerSecond": node["share"]["bandwidthBytesPerSecond"]} for node in nodes]})
+                    busy = [node for node in nodes if node.get("demand") == "busy"]
+                    idle = [node for node in nodes if node.get("demand") == "idle"]
+                    if (view.get("allocation") == "dynamic" and len(nodes) == 2 and len(busy) == 1 and len(idle) == 1
+                            and not idle[0].get("adjusting")
+                            and busy[0]["share"]["bandwidthBytesPerSecond"] >= limit * (1 - 1 / 64) - 1):
+                        return view, shares
+                    return None
+
+                view, shares = eventually(released, "the idle Agent's share moves to the busy Agent", timeout=90)
+                status = self.task(task_id)["status"]
+                require(status not in TERMINAL,
+                        f"Dynamic share transfer finished before the share moved at {rate} Mbps; lower RECOVERY_BANDWIDTH_MBPS")
+                busy = next(node for node in view["nodes"] if node.get("demand") == "busy")
+
+                def finished():
+                    self.require_shares_within(self.nodes_view(task_id), rate)
+                    row = self.task(task_id)
+                    return row if row and row["status"] in TERMINAL else None
+                eventually(finished, "dynamic share transfer completes", timeout=180)
+        finally:
+            preserving_error = sys.exc_info()[0] is not None
+            try:
+                (self.root / "dynamic-share-samples.json").write_text(
+                    json.dumps({"bytes": sampler.samples, "views": views}) + "\n", encoding="utf-8")
+            except Exception:
+                if not preserving_error:
+                    raise
+        allowance = 256 * 1024
+        windows = []
+        samples = sampler.samples
+        for first in range(0, len(samples), 5):
+            start = samples[first]
+            if not 0 < start[1] < total * 0.65:
+                continue
+            end = next((row for row in samples[first + 1:] if row[0] - start[0] >= 5), None)
+            if end is None or end[1] >= total:
+                continue
+            elapsed, amount = end[0] - start[0], end[1] - start[1]
+            require(amount <= limit * elapsed + allowance,
+                    f"Dynamic share task exceeded its bandwidth limit: {amount} bytes/{elapsed:.2f}s")
+            windows.append({"seconds": elapsed, "bytes": amount, "bytesPerSecond": amount / elapsed})
+        require(windows, "Dynamic share task produced no useful 5-second bandwidth window")
+        require(max(row["bytesPerSecond"] for row in windows) > limit * 0.45,
+                "Bandwidth upper-bound check was vacuous: transfer made too little progress")
+        data = self.verify_task(task_id, manifest, both=False)
+        self.verify_local(destination, "dynamic", manifest)
+        self.record("an idle Agent releases its share of the task limit to the busy Agent, never exceeding the limit",
+                    **data, taskBandwidthLimitMbps=rate, busyAgent=busy["address"], sharesAfterRelease=shares,
+                    nodeViewSamples=len(views), physicalByteWindows=windows,
+                    seconds=time.monotonic() - started)
+
     def node_membership(self):
         manifest = self.membership_fixture()
         rate = self.args.recovery_bandwidth_mbps
@@ -1153,7 +1261,7 @@ def main():
     for name in ("master", "agent", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--weed", type=Path, help="Verified local S3 fixture binary; omitted with OSS_TRANSFER_QA_S3_CONFIG")
-    parser.add_argument("--scenario", choices=("core", "nodes", "all"), default="all")
+    parser.add_argument("--scenario", choices=("core", "nodes", "dynamic_share", "all"), default="all")
     parser.add_argument("--fixture", type=Path, help="Read an existing Java/Go shared fixture; never modify it")
     parser.add_argument("--multipart-recovery", action="store_true", help="Run the real S3 crash-recovery integration test using the current source")
     parser.add_argument("--multipart-test-binary", type=Path, help="Use a precompiled target-platform Agent test executable; requires --multipart-recovery")
@@ -1185,6 +1293,8 @@ def main():
         h.record("native Master and two Agents run with an empty executable PATH; storage validated through Agent")
         if args.scenario == "nodes":
             h.node_membership()
+        elif args.scenario == "dynamic_share":
+            h.dynamic_share()
         else:
             h.node_settings()
             h.core()
@@ -1197,6 +1307,7 @@ def main():
                 h.evidence["exclusiveWindow"] = wait_for_exclusive(args.exclusive_gate, args.exclusive_run_id)
                 h.save()
             h.bandwidth(bandwidth_manifest)
+            h.dynamic_share()
             h.recovery(directory, manifest)
             h.node_membership()
         h.evidence["status"] = "PASSED"

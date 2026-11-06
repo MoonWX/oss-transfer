@@ -211,16 +211,38 @@ func TestDrainRemovalFencesBeforeRaisingShares(t *testing.T) {
 	if p, err = runtime.reconcileMembership(ctx, p, available); err != nil || p.NodeRemoved(b.node.ID) {
 		t.Fatal("drained node left with a running child", err)
 	}
+	// While it runs a child the draining node is busy and keeps its share.
+	for range 3 {
+		p = shareStep(t, ctx, runtime, p.ID, available)
+	}
+	if got := appliedBandwidth(t, b, p.ID); got != 500_000 {
+		t.Fatal("a draining node with a running child lost its share", got)
+	}
 	done := running
 	done.Status, done.Attempt, done.UpdatedAt = execution.Completed, 2, time.Now()
 	if err := runtime.repo.Observe(p.ID, p.Generation, 1, done); err != nil {
 		t.Fatal(err)
 	}
+	// With no child left it is idle: it drops to the floor first, and only
+	// after that reduction is acknowledged is the other node raised.
+	for range 3 {
+		p = shareStep(t, ctx, runtime, p.ID, available)
+	}
+	floor := int64(1_000_000 / 128)
+	if got := appliedBandwidth(t, b, p.ID); got != floor {
+		t.Fatal("drained node kept more than the idle floor", got)
+	}
+	if got := appliedBandwidth(t, a, p.ID); got != 1_000_000-floor {
+		t.Fatal("remaining node not raised by the released share", got)
+	}
 	fenced := false
 	call := runtime.leases.call
 	runtime.leases.call = func(ctx context.Context, session agenttransport.Session, op string, mutating bool, in, out any) error {
 		if op == "lease_retire" && session.NodeID == b.node.ID {
-			if got := appliedBandwidth(t, a, p.ID); got != 500_000 {
+			if got := appliedBandwidth(t, a, p.ID) + appliedBandwidth(t, b, p.ID); got > 1_000_000 {
+				t.Error("shares exceed the total before the leaving node was fenced", got)
+			}
+			if got := appliedBandwidth(t, a, p.ID); got != 1_000_000-floor {
 				t.Error("share raised before the leaving node was fenced", got)
 			}
 			fenced = true

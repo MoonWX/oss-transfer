@@ -1502,6 +1502,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	displays := s.nodeDisplaySnapshot()
 	activeNodes := parent.ActiveNodes()
+	busy := task.ShareBusy(parent)
 	nodes := make([]map[string]any, len(activeNodes))
 	observed := make([]*ratelimit.ParentLimit, len(activeNodes))
 	// All lookups share one deadline, and a bounded set of workers. A dead
@@ -1537,6 +1538,10 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				pending := err == nil && !matches && older && (parent.Status == "STOPPING" || parent.Status == "RESUMING" ||
 					parent.Status == "RUNNING" && !s.tasks.policyAttempted(parent.ID, node.ID, expected.Generation, expected.Revision))
 				item := map[string]any{"address": node.Address, "applied": matches, "pending": pending}
+				item["share"] = map[string]any{"bandwidthBytesPerSecond": max(expected.BandwidthBytesPerSecond, 0), "listQps": expected.ListQPS, "headQps": expected.HeadQPS, "putQps": expected.PutQPS}
+				for key, value := range shareView(parent, busy, node.ID) {
+					item[key] = value
+				}
 				addNodeDisplay(item, displays.lookup(node.ID, node.Address))
 				if err != nil {
 					item["message"] = err.Error()
@@ -1564,7 +1569,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			nodes[index]["applied"] = false
 			nodes[index]["pending"] = policy.Generation < latest.Generation ||
-				(policy.Generation == latest.Generation && policy.Revision <= latest.BudgetRevision)
+				(policy.Generation == latest.Generation && policy.Revision <= task.WireRevision(latest))
 		}
 		parent = latest
 		value = nil
@@ -1579,7 +1584,8 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 		pending = pending || node["pending"] == true
 		failed = failed || (node["applied"] != true && node["pending"] != true)
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes}})
+	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes,
+		"allocation": shareAllocation(parent), "shareCommits": s.tasks.shareCommits(parent.ID)}})
 }
 
 const rangedDownloadOffLocalOnly = "rangedDownload off applies only to downloads to a local directory"

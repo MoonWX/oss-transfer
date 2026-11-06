@@ -2368,6 +2368,17 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   待完成或移交: { en: "To finish or hand off", ja: "完了または引き継ぎ待ち" },
   带宽份额: { en: "Bandwidth share", ja: "帯域幅の割り当て" },
   请求份额: { en: "Request share", ja: "リクエストの割り当て" },
+  需求: { en: "Demand", ja: "需要" },
+  "按需（忙）": { en: "On demand (busy)", ja: "需要に応じて（ビジー）" },
+  "空闲（已释放）": { en: "Idle (released)", ja: "アイドル（解放済み）" },
+  等待任务节点确认降低后的带宽份额: {
+    en: "Waiting for task nodes to apply their reduced bandwidth share",
+    ja: "タスクノードが削減後の帯域幅の割り当てを適用するのを待っています",
+  },
+  "调整中：等待节点确认降额": {
+    en: "Adjusting: waiting for the node to confirm its reduction",
+    ja: "調整中：ノードによる削減の確認待ち",
+  },
   扫描节点: { en: "Scanner node", ja: "スキャンノード" },
   "添加 Agent": { en: "Add Agent", ja: "Agent を追加" },
   "Agent 上线并完成注册后会出现在这里。": {

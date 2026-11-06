@@ -196,7 +196,11 @@ func (r *Repository) CreateChecked(spec Spec, requestKey string, check func(*sta
 			return errors.New("task ID space exhausted")
 		}
 		now := r.now().UTC()
-		p = Parent{ID: int64(next), Spec: spec, Generation: 1, BudgetRevision: 1, Status: "RUNNING", CreatedAt: now, StartedAt: &now, Fingerprint: fingerprint, ActiveTime: &execution.ActiveTime{StartedAt: &now}}
+		p = Parent{ID: int64(next), Spec: spec, Generation: 1, Status: "RUNNING", CreatedAt: now, StartedAt: &now, Fingerprint: fingerprint, ActiveTime: &execution.ActiveTime{StartedAt: &now}}
+		seedShares(&p)
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
 		if spec.InventoryID != "" {
 			if err := inventory.BindTaskTx(tx, spec.InventoryID, p.ID, fingerprint); err != nil {
 				return err
@@ -219,6 +223,9 @@ func save(tx *state.Tx, p Parent) error { return saveAt(tx, p, time.Now().UTC())
 func (r *Repository) save(tx *state.Tx, p Parent) error { return saveAt(tx, p, r.now().UTC()) }
 
 func saveAt(tx *state.Tx, p Parent, now time.Time) error {
+	if err := checkShares(&p); err != nil {
+		return err
+	}
 	// Leave older accepted recoveries identifiable until PrepareResume derives
 	// their prior end from child history. Index maintenance must not erase this.
 	if p.ActiveTime != nil || p.Status != "RESUMING" {
@@ -540,7 +547,12 @@ func (r *Repository) UpdateLimits(id int64, mbps *float64, limits *execution.Req
 			return errors.New("bandwidth budget is too small for the selected Agents")
 		}
 		if !reflect.DeepEqual(before, p.Spec) {
-			p.BudgetRevision++
+			if p.Shares != nil {
+				changeShareLimits(&p, before)
+			}
+			if err := bumpBudget(&p); err != nil {
+				return err
+			}
 		}
 		return r.save(tx, p)
 	})
@@ -810,7 +822,10 @@ func (r *Repository) RequestStop(id int64) (p Parent, admitted bool, err error) 
 		if Ended(p.Status) || p.Status == "STOPPING" {
 			return nil
 		}
-		p.BudgetRevision++
+		// The stopped flag is derived from the status; shares stay as they are.
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
 		p.Status = "STOPPING"
 		p.RuntimeError = ""
 		admitted = true
@@ -889,7 +904,7 @@ func (r *Repository) resume(id int64, expected *uint64, ignoreActive bool) (p Pa
 		if p.Legacy != nil && p.Legacy.NeedsReconciliation {
 			return ErrLegacyRecovery
 		}
-		if p.Generation == ^uint64(0) || p.BudgetRevision == ^uint64(0) {
+		if p.Generation == ^uint64(0) || budgetExhausted(p) {
 			return ErrGeneration
 		}
 		timing := p.ExecutionTime()
@@ -899,13 +914,18 @@ func (r *Repository) resume(id int64, expected *uint64, ignoreActive bool) (p Pa
 		}
 		p.ActiveTime = &timing
 		p.Generation++
-		p.BudgetRevision++
 		p.Status = "RESUMING"
 		p.FinishedAt = nil
 		p.Error, p.RuntimeError = "", ""
 		after := 0
 		p.ResumeAfter = &after
 		p.Scheduling = &SchedulingState{Nodes: map[string]PendingLoad{}}
+		// The new generation fences every older one on the Agents, so the
+		// allocation starts over (this also converts an equal-split task).
+		seedShares(&p)
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
 		accepted = true
 		return r.save(tx, p)
 	})
@@ -1027,6 +1047,7 @@ func (r *Repository) FinishIfReady(id int64, generation uint64) (bool, error) {
 		p.FinishedAt = &now
 		if p.Status == "COMPLETED" {
 			p.settleMembership(now)
+			pruneShares(&p)
 		}
 		finished = true
 		return r.save(tx, p)

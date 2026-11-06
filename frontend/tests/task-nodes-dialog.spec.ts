@@ -946,3 +946,52 @@ test("a retry left open on the confirmation step does not stop live refresh afte
   );
   await expect(problem).toHaveCount(0);
 });
+
+test("node dialog shows each node's demand under dynamic allocation", async ({
+  page,
+}) => {
+  await setup(page, {
+    view: () =>
+      nodesView({
+        allocation: "dynamic",
+        bandwidthLimitMbps: 1000,
+        nodes: [
+          member("10.0.1.12", {
+            scanner: true,
+            pendingChildren: 1,
+            demand: "busy",
+            adjusting: false,
+            share: { bandwidthBytesPerSecond: 124023438 },
+          }),
+          member("10.0.1.13", {
+            demand: "idle",
+            adjusting: true,
+            share: { bandwidthBytesPerSecond: 976562 },
+          }),
+          member("10.0.1.14", { state: "JOINING", share: null }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const box = dialog(page);
+  await expect(box.getByTestId("task-node-10.0.1.12")).toContainText(
+    /需求\s*按需（忙）/,
+  );
+  const idle = box.getByTestId("task-node-10.0.1.13");
+  await expect(idle).toContainText(/需求\s*空闲（已释放）/);
+  await expect(idle).toContainText("调整中：等待节点确认降额");
+  // A joining node has no share yet, so no demand either.
+  await expect(box.getByTestId("task-node-10.0.1.14")).not.toContainText(
+    "需求",
+  );
+});
+
+test("node dialog keeps older equal-split views without a demand field", async ({
+  page,
+}) => {
+  await setup(page);
+  await openDialog(page);
+  await expect(
+    dialog(page).getByTestId("task-node-10.0.1.12"),
+  ).not.toContainText("需求");
+});

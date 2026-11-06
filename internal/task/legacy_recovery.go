@@ -86,7 +86,7 @@ func (r *Repository) RequestLegacyRecovery(id int64, resolved Spec, expected *ui
 		if err := validate(resolved); err != nil {
 			return err
 		}
-		if p.Generation == ^uint64(0) || p.BudgetRevision == ^uint64(0) {
+		if p.Generation == ^uint64(0) || budgetExhausted(p) {
 			return ErrGeneration
 		}
 		if err := tx.Put("master-task-legacy-original", key(id), p); err != nil {
@@ -95,7 +95,6 @@ func (r *Repository) RequestLegacyRecovery(id int64, resolved Spec, expected *ui
 		p.Spec = resolved
 		p.Fingerprint = digest(resolved)
 		p.Generation++
-		p.BudgetRevision++
 		p.Status = "RESUMING"
 		p.ScannedObjects = 0
 		p.ScannedBytes = 0
@@ -116,6 +115,10 @@ func (r *Repository) RequestLegacyRecovery(id int64, resolved Spec, expected *ui
 		p.FinishedAt = nil
 		p.Legacy.NeedsReconciliation = false
 		p.Legacy.RecoveryStarted = true
+		seedShares(&p)
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
 		accepted = true
 		return r.save(tx, p)
 	})

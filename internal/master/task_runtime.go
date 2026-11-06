@@ -49,6 +49,8 @@ type taskRuntime struct {
 	rangedQuery func(context.Context, task.Node) (int, error)
 	// Latest bandwidth/QPS policy delivery per task and node (see policyDelivered).
 	deliveries map[int64]map[string]policyDelivery
+	// Acknowledged share revisions and idle counts (see task_shares.go).
+	shares shareRuntime
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
@@ -327,26 +329,18 @@ func (s *Server) changeTaskLimits(ctx context.Context, id int64, mbps *float64, 
 	})
 	return
 }
+
+// parentPolicy is the policy every sender delivers to the index-th active
+// node: the node's dynamic share, or the equal split of an older task.
 func parentPolicy(p task.Parent, index int) ratelimit.ParentLimit {
-	total := int64(math.Floor(p.Spec.BandwidthMbps * 125000))
-	p.Spec.Nodes = p.ActiveNodes()
-	members := int64(len(p.Spec.Nodes))
-	rate := int64(0)
-	if total > 0 {
-		rate = total / members
-		if int64(index) < total%members {
-			rate++
-		}
-	}
-	return task.ApplyRequestLimits(ratelimit.ParentLimit{ParentID: p.ID, Generation: p.Generation, Revision: p.BudgetRevision, BandwidthBytesPerSecond: rate, Stopped: p.Status == "STOPPING" || p.Status == "STOPPED"}, p.Spec)
+	return p.NodePolicy(index)
 }
 func (t *taskRuntime) policies(ctx context.Context, p task.Parent) error {
 	// Offline members keep their reserved share until their old attempts are fenced.
 	var problems []error
 	var displays nodeDisplaySet
 	for i, node := range p.ActiveNodes() {
-		err := t.server.agentCall(ctx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
-		t.notePolicyDelivery(p, node.ID, err)
+		err := t.deliverPolicy(ctx, p, i, node)
 		if err != nil {
 			if len(problems) == 0 {
 				displays = t.server.nodeDisplaySnapshot()
@@ -403,7 +397,7 @@ func (t *taskRuntime) stopMembers(ctx context.Context, p task.Parent) error {
 				results <- fmt.Errorf("Agent %s stop: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err)
 				return
 			}
-			err = t.server.agentCall(callCtx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
+			err = t.deliverPolicy(callCtx, p, i, node)
 			if err != nil {
 				results <- fmt.Errorf("Agent %s stopped budget: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err)
 			}
@@ -464,9 +458,12 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 			defer cancel()
 			err := t.server.syncStorage(callCtx, cluster.Member{ID: node.ID, EnrollmentID: node.EnrollmentID}, snapshot)
 			if err == nil {
-				// Keep the original member index/count so an isolated peer keeps
-				// its reserved budget rather than accidentally exceeding a limit.
-				err = t.server.agentCall(callCtx, nodeSession(node), "bandwidth_parent", true, parentPolicy(p, i), nil)
+				// The bandwidth result is recorded on its own: a later local
+				// preparation failure must not lose this acknowledgement.
+				err = t.deliverPolicy(callCtx, p, i, node)
+				if staleLimit(err) {
+					err = t.redeliverStale(callCtx, p, node, err)
+				}
 			}
 			if err == nil && p.Spec.Destination.Kind == "LOCAL" {
 				err = t.server.agentCall(callCtx, nodeSession(node), "local_prepare", true, agentservice.PathRequest{Path: node.LocalRoot}, nil)
@@ -559,6 +556,8 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	for _, node := range p.ActiveNodes() {
 		prepared[node.ID] = true
 	}
+	// Divide the limits by demand before anything below can end the step.
+	p = t.reallocateShares(ctx, p, available)
 	p, err = t.reconcileFailover(ctx, p, available)
 	if err != nil {
 		return err
@@ -701,6 +700,11 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if pendingDispatchCapacity(p) > 0 {
 		if err := t.dispatchAvailable(ctx, p, scanControl, available); err != nil {
 			return err
+		}
+		// Work placed on a node whose share was released raises it now,
+		// not one step later.
+		if current, err := t.repo.Get(p.ID); err == nil && t.releasedNowBusy(current) {
+			t.reallocateWoken(ctx, current, available)
 		}
 	}
 	finished, err := t.repo.FinishIfReady(p.ID, p.Generation)

@@ -145,10 +145,28 @@ func (l *taskLeases) renew(ctx context.Context, p task.Parent, node task.Node) e
 		// A returned member adds another consumer. Existing members must first
 		// acknowledge their reduced share, including when prepareMembers only
 		// partly succeeded, or the combined rate could exceed the task limit.
-		if err := l.runtime.policies(ctx, p); err != nil {
-			return err
+		if p.Shares == nil {
+			if err := l.runtime.policies(ctx, p); err != nil {
+				return err
+			}
+		} else {
+			// With dynamic shares the ledger tells what every member may still
+			// enforce. Release the reserves of members that applied their
+			// reduced share durably, then grant only when the joiner applied
+			// its own share and all reserves fit the totals. An offline member
+			// that still reserves its old share blocks the grant only when it
+			// matters.
+			_ = l.runtime.policies(ctx, p)
+			folded, err := l.runtime.repo.FoldShares(p.ID, p.Generation, task.WireRevision(p), l.runtime.shareAckedNodes(p))
+			if err != nil {
+				return err
+			}
+			if folded.Generation != p.Generation || task.WireRevision(folded) != task.WireRevision(p) || !l.runtime.shareAcked(folded, node.ID) || !task.SharesFit(folded) {
+				return errors.New("waiting for task nodes to apply their reduced bandwidth share")
+			}
 		}
-		e.record.BudgetRevision = p.BudgetRevision
+		// Only a non-zero value matters: the gate has been passed.
+		e.record.BudgetRevision = task.WireRevision(p)
 	}
 	now := l.now()
 	if now.Before(e.renewAt) && e.record.Generation == p.Generation {

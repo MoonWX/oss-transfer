@@ -83,11 +83,11 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-Unspecified fields keep their values. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are shared across selected Agents, and node limits still apply.
+Unspecified fields keep their values. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are totals: the Master divides them among the active Agents by demand, so a node that has work gets most of the limit while idle nodes keep a small floor ([task limits across nodes](operations.md#task-limits-across-nodes)). Node limits still apply.
 
 ## Change a task's execution nodes
 
-Show which Agents run a task, their state, the scanner, pending child tasks, each node's share of the task limits, removed nodes and the Agents that can be added. Only a node that is scanning (or taking over the scan) is marked as the scanner; once the scan has finished, a note says so instead. An offline node that is being removed is shown as leaving when its execution lease expires, or, for a task without lease fencing, after it reconnects:
+Show which Agents run a task, their state, the scanner, pending child tasks, each node's demand and current share of the task limits, removed nodes and the Agents that can be added. The demand column reads *On demand (busy)* or *Idle (released)*, with *adjusting* while a node still has to confirm a reduction; an older Master, which divides limits equally, shows `—`. Only a node that is scanning (or taking over the scan) is marked as the scanner; once the scan has finished, a note says so instead. An offline node that is being removed is shown as leaving when its execution lease expires, or, for a task without lease fencing, after it reconnects:
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK"

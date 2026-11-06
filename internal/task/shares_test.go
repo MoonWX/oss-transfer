@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
@@ -699,7 +700,20 @@ func runShareModel(t *testing.T, seed uint64) {
 				idle[id] = random.IntN(2) == 0
 			}
 			next := clone(m.p)
-			if reallocate(&next, m.acked(), idle) {
+			var acked []string
+			for id := range m.acked() {
+				acked = append(acked, id)
+			}
+			before := clone(m.p)
+			pending := ReallocationPending(m.p, acked, idle)
+			if !reflect.DeepEqual(before, clone(m.p)) {
+				t.Fatal("the read-only check changed the snapshot")
+			}
+			changed := reallocate(&next, m.acked(), idle)
+			if pending != changed {
+				t.Fatal("the read-only check disagrees with the pass", pending, changed)
+			}
+			if changed {
 				m.commit(next)
 				for _, id := range members() {
 					m.send(m.p, id)

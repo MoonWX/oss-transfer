@@ -729,6 +729,30 @@ func (r *Repository) ReallocateShares(id int64, generation, wire uint64, acked [
 	return
 }
 
+// ReallocationPending reports, without writing, whether an allocation pass
+// on this snapshot would commit. The runtime asks before opening a write
+// transaction, so a settled task costs no database write lock per step. A
+// missing scheduling index is rebuilt only inside the transaction, so such a
+// snapshot always answers true.
+func ReallocationPending(p Parent, acked []string, idle map[string]bool) bool {
+	if p.Scheduling == nil {
+		return true
+	}
+	if p.Shares != nil {
+		shares := *p.Shares
+		shares.Nodes = make(map[string]NodeShare, len(p.Shares.Nodes))
+		for id, entry := range p.Shares.Nodes {
+			shares.Nodes[id] = entry
+		}
+		p.Shares = &shares
+	}
+	ack := make(map[string]bool, len(acked))
+	for _, nodeID := range acked {
+		ack[nodeID] = true
+	}
+	return reallocate(&p, ack, idle)
+}
+
 // reallocate is one allocation pass; it reports whether p must be committed
 // under a new revision.
 func reallocate(p *Parent, acked, idle map[string]bool) bool {

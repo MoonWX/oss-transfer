@@ -202,7 +202,11 @@ func (t *taskRuntime) reallocate(ctx context.Context, p task.Parent, available m
 		if ctx.Err() != nil {
 			return p
 		}
-		next, changed, err := t.repo.ReallocateShares(p.ID, p.Generation, task.WireRevision(p), t.shareAckedNodes(p), idle)
+		acked := t.shareAckedNodes(p)
+		if !task.ReallocationPending(p, acked, idle) {
+			return p
+		}
+		next, changed, err := t.repo.ReallocateShares(p.ID, p.Generation, task.WireRevision(p), acked, idle)
 		if err != nil || !changed {
 			return p
 		}

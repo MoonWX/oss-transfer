@@ -17,6 +17,49 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
+// A ranged download sizes its window by the lower of the task's share and the
+// node bandwidth limit, so a node limit bounds tasks without limits of their
+// own too; only a task limit makes the task throttled.
+func TestTaskLimitsTakeTheLowerOfShareAndNodeLimit(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	limits, err := ratelimit.New(db, ratelimit.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer limits.Close()
+	ctx := context.Background()
+	if err := limits.ApplyParent(ctx, ratelimit.ParentLimit{ParentID: 1, Generation: 1, Revision: 1, BandwidthBytesPerSecond: 100 << 20, ListQPS: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := limits.ApplyParent(ctx, ratelimit.ParentLimit{ParentID: 2, Generation: 1, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	budgets := taskLimits(limits)
+	for revision, tc := range []struct {
+		node, throttledBytes, openBytes int64
+	}{
+		{0, 100 << 20, 0},
+		{10 << 20, 10 << 20, 10 << 20},
+		{200 << 20, 100 << 20, 200 << 20},
+	} {
+		if tc.node > 0 {
+			if err := limits.ApplyNode(ctx, ratelimit.NodeLimit{Revision: uint64(revision), BandwidthBytesPerSecond: tc.node}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if budget, throttled := budgets(execution.Job{ParentID: 1, Generation: 1}); !throttled || budget != (transferstore.RangeBudget{BytesPerSecond: tc.throttledBytes, RequestsPerSecond: 5}) {
+			t.Errorf("node %d: throttled task budget %+v throttled=%v", tc.node, budget, throttled)
+		}
+		if budget, throttled := budgets(execution.Job{ParentID: 2, Generation: 1}); throttled || budget != (transferstore.RangeBudget{BytesPerSecond: tc.openBytes}) {
+			t.Errorf("node %d: open task budget %+v throttled=%v", tc.node, budget, throttled)
+		}
+	}
+}
+
 // A throttled task whose share covers many chunks a second downloads to LOCAL
 // in ranges, and its source bytes still never outrun the share: the bucket
 // grants no initial burst and at most one credit window, so the copy cannot

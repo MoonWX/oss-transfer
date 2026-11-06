@@ -1,36 +1,55 @@
 // Package readorder lets the concurrent source reads of one ranged write wait
 // for bandwidth in offset order. A ranged write sets a Turn in the context of
-// each range it fetches; a bandwidth limiter holds that Turn while the read
-// waits for tokens, and not while it reads.
+// each range it fetches. A bandwidth limiter waits for a read's tokens inside
+// Turn.Serve, and the read uses its source only after Serve returns.
 //
 // Without an order, a limiter shares its rate evenly among the waiting ranges,
 // so a window of equal chunks that started together also finishes together.
 // A writer that appends chunks in offset order then receives the whole window
-// at once and writes it while the network has nothing left to fetch. Handing
-// tokens to the lowest waiting range first makes chunks complete one after
-// another, in the order they are written. Only the wait is ordered: a range
+// at once and writes it while the network has nothing left to fetch. Serving
+// the lowest waiting range first, and letting it take over from a higher
+// range that is still waiting for tokens, makes chunks complete one after
+// another in the order they are written. Only the wait is ordered: a range
 // whose connection has no data yet holds no turn, so later ranges still take
 // any rate the earlier ones cannot.
+//
+// A range passed over for MaxPassedOver is served next, whatever its rank.
+// Its request is already open, and servers and proxies close a response they
+// cannot send for about a minute (nginx send_timeout, Ceph RGW's request
+// timeout, load balancer idle timeouts), which would cost the range a second
+// GET.
 package readorder
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
+	"time"
 )
 
-// Queue orders the turns of one ranged write. At most one of its turns is
-// held at a time, and a released queue passes to the lowest waiting rank.
+// MaxPassedOver bounds how long a waiting range can be passed over by lower
+// ranks: well under the common one-minute send timeouts.
+const MaxPassedOver = 10 * time.Second
+
+// ErrPreempted is what a reserve function passed to Serve returns, having
+// taken nothing, once its yield channel is closed.
+var ErrPreempted = errors.New("a lower range took over the bandwidth wait")
+
+// Queue orders the turns of one ranged write. At most one turn holds it at a
+// time.
 type Queue struct {
 	mu      sync.Mutex
-	held    bool // a turn holds the queue, or was handed it and has not woken
+	holder  *waiter // nil while the queue is free
 	waiting []*waiter
 }
 
 type waiter struct {
-	rank    int64
-	ready   chan struct{}
-	granted bool
+	rank      int64
+	since     time.Time     // when this read began waiting
+	ready     chan struct{} // closed when the read is handed the queue
+	yield     chan struct{} // closed when a lower rank takes over; nil if none may
+	preempted bool
 }
 
 func NewQueue() *Queue { return &Queue{} }
@@ -55,69 +74,101 @@ func From(ctx context.Context) Turn {
 	return turn
 }
 
-// Wait blocks until t holds its queue. On success the caller must call Done
-// exactly once; on cancellation the queue is passed on and Wait returns the
-// context's cause.
-func (t Turn) Wait(ctx context.Context) error {
+// Serve calls reserve while t holds its queue and returns what reserve
+// returns. When a lower rank starts waiting, reserve's yield channel closes;
+// reserve must then return ErrPreempted without taking anything, and Serve
+// waits for the queue again, keeping the time it began waiting. A read that
+// cannot be preempted gets a nil channel. The zero Turn calls reserve(nil).
+func (t Turn) Serve(ctx context.Context, reserve func(yield <-chan struct{}) error) error {
 	q := t.queue
 	if q == nil {
-		return nil
+		return reserve(nil)
+	}
+	w := &waiter{rank: t.rank, since: time.Now()}
+	for {
+		yield, err := q.acquire(ctx, w)
+		if err != nil {
+			return err
+		}
+		err = reserve(yield)
+		q.mu.Lock()
+		q.handOff()
+		q.mu.Unlock()
+		if !errors.Is(err, ErrPreempted) {
+			return err
+		}
+	}
+}
+
+// acquire waits until w holds the queue and returns w's yield channel. On
+// cancellation it leaves the queue, or passes it on if it was just handed it.
+func (q *Queue) acquire(ctx context.Context, w *waiter) (<-chan struct{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, context.Cause(ctx)
 	}
 	q.mu.Lock()
-	if !q.held {
-		q.held = true // a free queue has no waiters
+	if q.holder == nil {
+		q.grant(w, true) // a free queue has no waiters
+		yield := w.yield
 		q.mu.Unlock()
-		return nil
+		return yield, nil
 	}
-	w := &waiter{rank: t.rank, ready: make(chan struct{})}
+	w.ready = make(chan struct{})
 	q.waiting = append(q.waiting, w)
+	if h := q.holder; h.yield != nil && !h.preempted && w.rank < h.rank {
+		h.preempted = true
+		close(h.yield)
+	}
 	q.mu.Unlock()
 	select {
 	case <-w.ready:
-		return nil
+		return w.yield, nil
 	case <-ctx.Done():
 		q.mu.Lock()
-		granted := w.granted
-		if !granted {
+		if q.holder == w {
+			q.handOff()
+		} else {
 			i := slices.Index(q.waiting, w)
 			q.waiting = slices.Delete(q.waiting, i, i+1)
 		}
 		q.mu.Unlock()
-		if granted {
-			q.release()
-		}
-		return context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	}
 }
 
-// Done releases a turn held after a successful Wait.
-func (t Turn) Done() {
-	if t.queue != nil {
-		t.queue.release()
-	}
-}
-
-func (q *Queue) release() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.handOff()
-}
-
-// handOff passes a released queue to the lowest waiting rank, or frees it.
-// The caller holds q.mu.
+// handOff passes the queue to the next waiter, or frees it. A waiter passed
+// over for MaxPassedOver goes first, longest waiting first, and cannot be
+// preempted; otherwise the lowest rank does. The caller holds q.mu.
 func (q *Queue) handOff() {
+	q.holder = nil
 	if len(q.waiting) == 0 {
-		q.held = false
 		return
 	}
-	next := 0
+	oldest, lowest := 0, 0
 	for i, w := range q.waiting {
-		if w.rank < q.waiting[next].rank {
-			next = i
+		if w.since.Before(q.waiting[oldest].since) {
+			oldest = i
 		}
+		if w.rank < q.waiting[lowest].rank {
+			lowest = i
+		}
+	}
+	next, passedOver := lowest, time.Since(q.waiting[oldest].since) >= MaxPassedOver
+	if passedOver {
+		next = oldest
 	}
 	w := q.waiting[next]
 	q.waiting = slices.Delete(q.waiting, next, next+1)
-	w.granted = true
+	q.grant(w, !passedOver)
 	close(w.ready)
+}
+
+// grant makes w the holder. The caller holds q.mu.
+func (q *Queue) grant(w *waiter, preemptible bool) {
+	q.holder = w
+	w.preempted = false
+	w.yield = nil
+	if preemptible {
+		w.yield = make(chan struct{})
+	}
 }

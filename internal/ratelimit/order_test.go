@@ -29,10 +29,12 @@ func readRanked(f *fixture, queue *readorder.Queue, rank int64, input io.Reader,
 	return nil
 }
 
-// Ranges of one ordered write share a parent bucket lowest rank first, so they
-// finish one after another instead of together at the end, as an even share
-// would have them: the k-th range finishes before about k+2 ranges' worth of
-// bytes have passed the limiter. The fake clock makes the grants exact.
+// Ranges of one ordered write share a parent bucket lowest rank first: a range
+// that returns from its source read takes over from a higher one still
+// waiting for tokens. They finish one after another instead of together at
+// the end, as an even share would have them: the k-th range finishes once k
+// ranges' worth of bytes have passed the limiter. The fake clock makes the
+// grants exact.
 func TestOrderedRangesTakeBandwidthLowestRankFirst(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
@@ -50,10 +52,9 @@ func TestOrderedRangesTakeBandwidthLowestRankFirst(t *testing.T) {
 				finished <- passed.Load()
 			}()
 		}
-		// Before the low ranks queue up, one higher rank may take a read.
-		const slack = 4 * 64 << 10
+		const slack = 64 << 10 // one read
 		for k := range int64(ranges) {
-			if at, limit := <-finished, (k+2)*length+slack; at > limit {
+			if at, limit := <-finished, (k+1)*length+slack; at > limit {
 				t.Fatalf("range %d of %d finished after %d bytes, want at most %d", k+1, ranges, at, limit)
 			}
 		}

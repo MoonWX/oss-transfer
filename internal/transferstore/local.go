@@ -471,10 +471,10 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		}
 		registered = true
 	}
-	if window := s.windowSlots(options.RangeBudget); options.Ranges != nil && s.RangedWrite(options.Size) && (options.RangeBudget == nil || window >= 2) {
+	if options.Ranges != nil && s.RangedWrite(options.Size) && s.windowSlots(options.RangeBudget) >= 2 {
 		// Ranges are fetched concurrently but appended in order, exactly as a
 		// stream would be; the file is published only after every byte.
-		if err := s.writeRanges(ctx, file, options.Ranges, options.Size, window); err != nil {
+		if err := s.writeRanges(ctx, file, options.Ranges, options.Size, options.RangeBudget); err != nil {
 			return result, err
 		}
 	} else {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/readorder"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
@@ -378,10 +379,18 @@ type reservation struct {
 	parentID                                 int64
 }
 
-func (l *Limiter) reserve(ctx context.Context, id int64, generation uint64, wanted int) (reservation, error) {
+// reserve waits until both budgets cover a read of up to wanted bytes and
+// takes it. Once yield is closed it returns readorder.ErrPreempted without
+// taking anything; a nil yield never closes.
+func (l *Limiter) reserve(ctx context.Context, id int64, generation uint64, wanted int, yield <-chan struct{}) (reservation, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return reservation{}, context.Cause(ctx)
+		}
+		select {
+		case <-yield:
+			return reservation{}, readorder.ErrPreempted
+		default:
 		}
 		l.mu.Lock()
 		p, err := l.checkParent(id, generation)
@@ -420,6 +429,9 @@ func (l *Limiter) reserve(ctx context.Context, id int64, generation uint64, want
 				default:
 				}
 			}
+		case <-yield:
+			timer.Stop()
+			return reservation{}, readorder.ErrPreempted
 		case <-ctx.Done():
 			timer.Stop()
 			return reservation{}, context.Cause(ctx)

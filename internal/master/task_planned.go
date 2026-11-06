@@ -162,7 +162,11 @@ func (t *taskRuntime) notePolicyDelivery(p task.Parent, nodeID string, _ error) 
 	if t.deliveries[p.ID] == nil {
 		t.deliveries[p.ID] = map[string]policyDelivery{}
 	}
-	t.deliveries[p.ID][nodeID] = policyDelivery{generation: p.Generation, revision: p.BudgetRevision}
+	last, ok := t.deliveries[p.ID][nodeID]
+	revision := task.WireRevision(p)
+	if !ok || p.Generation > last.generation || p.Generation == last.generation && revision > last.revision {
+		t.deliveries[p.ID][nodeID] = policyDelivery{generation: p.Generation, revision: revision}
+	}
 }
 
 // policyAttempted reports whether the runtime has already tried to deliver the
@@ -184,10 +188,21 @@ func (t *taskRuntime) pruneDeliveries(active map[int64]bool) {
 			delete(t.deliveries, id)
 		}
 	}
+	for id := range t.shares.acks {
+		if !active[id] {
+			t.forgetShares(id)
+		}
+	}
+	for id := range t.shares.idle {
+		if !active[id] {
+			t.forgetShares(id)
+		}
+	}
 }
 
 func (t *taskRuntime) forgetPolicyDeliveries(parentID int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.deliveries, parentID)
+	t.forgetShares(parentID)
 }

@@ -65,7 +65,7 @@ func TestAddNodeDuringScanJoinsPlacementAfterRejoin(t *testing.T) {
 	}
 	p = enableFailoverTest(t, db, repo, p, false)
 	p = joinNode(t, repo, p, "c")
-	if p.NodeJoining("c") || p.NodeRetired("c") || len(p.ActiveNodes()) != 2 || p.BudgetRevision != revision+1 || p.NodeEpoch("c") != 1 {
+	if p.NodeJoining("c") || p.NodeRetired("c") || len(p.ActiveNodes()) != 2 || p.BudgetRevision != revision+2 || p.NodeEpoch("c") != 1 {
 		t.Fatal("join did not take effect", p.Membership, p.Failover)
 	}
 	available := map[string]bool{"a": true, "c": true}
@@ -170,7 +170,7 @@ func TestRemoveDrainHandsOffQueueWaitsAndFences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.NodeRemoved("a") || p.MembershipPending() || len(p.ActiveNodes()) != 1 || p.BudgetRevision != before.BudgetRevision+1 {
+	if !p.NodeRemoved("a") || p.MembershipPending() || len(p.ActiveNodes()) != 1 || p.BudgetRevision != before.BudgetRevision+2 {
 		t.Fatal("node did not leave", p.Membership)
 	}
 	if _, _, err := repo.PrepareFailover(p.ID, p.Generation, "a", map[string]bool{"b": true}); err != nil {

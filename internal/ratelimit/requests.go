@@ -30,14 +30,8 @@ func (l *Limiter) TryRequest(parentID int64, generation uint64, kind string, not
 		return 0, l.changed, errors.New("invalid request kind")
 	}
 	now := time.Now()
-	interval := time.Duration(0)
+	interval := requestInterval(rate)
 	if rate > 0 {
-		seconds := math.Ceil(float64(time.Second) / rate)
-		if seconds >= float64(math.MaxInt64) {
-			interval = time.Duration(math.MaxInt64)
-		} else {
-			interval = time.Duration(seconds)
-		}
 		if p.requestNext[index].IsZero() {
 			p.requestNext[index] = now.Add(interval)
 		}
@@ -53,4 +47,34 @@ func (l *Limiter) TryRequest(parentID int64, generation uint64, kind string, not
 		p.requestNext[index] = now.Add(interval)
 	}
 	return 0, l.changed, nil
+}
+
+// requestInterval is the spacing of admitted requests at rate per second.
+func requestInterval(rate float64) time.Duration {
+	if rate <= 0 {
+		return 0
+	}
+	seconds := math.Ceil(float64(time.Second) / rate)
+	if seconds >= float64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(seconds)
+}
+
+// maxReanchoredInterval keeps re-anchoring away from time overflow: slower
+// rates restart their spacing as before.
+const maxReanchoredInterval = 100 * 365 * 24 * time.Hour
+
+// reanchorRequest moves the next permit of a changed QPS within the same
+// generation: the previous permit was admitted one old interval before next,
+// so the next one is due one new interval after it. A raise no longer waits a
+// whole new interval from the change, and a reduction still spaces the next
+// request by the new interval. Without a previous permit nothing changes: the
+// first request starts the spacing.
+func reanchorRequest(next time.Time, previous, rate float64) time.Time {
+	before, after := requestInterval(previous), requestInterval(rate)
+	if next.IsZero() || before <= 0 || after <= 0 || before > maxReanchoredInterval || after > maxReanchoredInterval {
+		return time.Time{}
+	}
+	return next.Add(after - before)
 }

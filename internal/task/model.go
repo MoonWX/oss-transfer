@@ -88,6 +88,10 @@ type Parent struct {
 	ChildOrder        *ChildOrderState   `json:"childOrder,omitempty"`
 	Failover          *FailoverState     `json:"failover,omitempty"`
 	Membership        *MembershipState   `json:"membership,omitempty"`
+	// Shares divides the task limits among active nodes by demand. Tasks
+	// created before dynamic shares have none until every member has applied
+	// their equal split; see ShareState.
+	Shares *ShareState `json:"shares,omitempty"`
 }
 
 type Child struct {

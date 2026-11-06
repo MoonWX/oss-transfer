@@ -181,9 +181,12 @@ func (t *taskRuntime) leaveTask(ctx context.Context, p task.Parent, node task.No
 // membershipNodes describes current members for task rows and the node view.
 func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online map[string]string) []map[string]any {
 	shares := map[string]map[string]any{}
+	allocation := map[string]map[string]any{}
+	busy := task.ShareBusy(p)
 	for i, node := range p.ActiveNodes() {
 		policy := parentPolicy(p, i)
 		shares[node.ID] = map[string]any{"bandwidthBytesPerSecond": max(policy.BandwidthBytesPerSecond, 0), "listQps": policy.ListQPS, "headQps": policy.HeadQPS, "putQps": policy.PutQPS}
+		allocation[node.ID] = shareView(p, busy, node.ID)
 	}
 	pending := p.PendingChildren()
 	local := p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL"
@@ -213,6 +216,11 @@ func (s *Server) membershipNodes(p task.Parent, displays nodeDisplaySet, online 
 		row := map[string]any{"id": node.ID, "address": node.Address, "state": state, "drainMode": mode, "scanner": scanner != "" && scanner == node.ID, "share": nil}
 		if share, ok := shares[node.ID]; ok {
 			row["share"] = share
+			// demand: busy or idle; adjusting: the node still holds more than
+			// its share until it acknowledges a reduction.
+			for key, value := range allocation[node.ID] {
+				row[key] = value
+			}
 		}
 		if pending != nil {
 			row["pendingChildren"] = pending[node.ID]
@@ -286,6 +294,7 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 	if p.Spec.BandwidthMbps > 0 {
 		view["bandwidthLimitMbps"] = p.Spec.BandwidthMbps
 	}
+	view["allocation"] = shareAllocation(p)
 	view["nodes"] = s.membershipNodes(p, displays, online)
 	view["scan"] = map[string]any{"phase": scanPhase(p), "complete": scanFinished(p)}
 	removed := []map[string]any{}

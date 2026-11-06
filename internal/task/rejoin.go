@@ -55,7 +55,7 @@ func (r *Repository) FinishNodeRejoin(id int64, generation uint64, nodeID string
 		if !p.NodeRetired(nodeID) && p.NodeEpoch(nodeID) == epoch {
 			return errUnchanged
 		}
-		if !p.NodeRetired(nodeID) || p.NodeRemoved(nodeID) || p.Failover.Rejoining[nodeID] != epoch || epoch == 0 || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding || p.BudgetRevision == math.MaxUint64 {
+		if !p.NodeRetired(nodeID) || p.NodeRemoved(nodeID) || p.Failover.Rejoining[nodeID] != epoch || epoch == 0 || len(p.Failover.Migrations) > 0 || p.Failover.ScannerSeeding || budgetExhausted(p) {
 			return ErrState
 		}
 		if p.Failover.NodeEpochs == nil {
@@ -79,7 +79,12 @@ func (r *Repository) FinishNodeRejoin(id int64, generation uint64, nodeID string
 		}
 		p.Failover.RebalancedEpochs[nodeID] = epoch
 		p.Failover.Rebalance.After, p.Failover.Rebalance.Pass = 0, 0
-		p.BudgetRevision++
+		if p.Shares != nil {
+			rejoinShares(&p, nodeID)
+		}
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
 		return r.save(tx, p)
 	}))
 	return

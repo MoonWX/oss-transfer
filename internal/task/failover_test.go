@@ -109,7 +109,7 @@ func TestFailoverBatchesPreserveResultsCountersAndResumeAfterRestart(t *testing.
 	before, _ := repo.Get(p.ID)
 	p = enableFailoverTest(t, db, repo, p, false)
 	p, err := repo.BeginFailover(p.ID, p.Generation, "a")
-	if err != nil || !p.NodeRetired("a") || p.Generation != before.Generation || p.BudgetRevision != before.BudgetRevision+1 {
+	if err != nil || !p.NodeRetired("a") || p.Generation != before.Generation || p.BudgetRevision != before.BudgetRevision+2 {
 		t.Fatal("retirement did not retain generation and advance budget", p, err)
 	}
 	if done, err := repo.FinishIfReady(p.ID, p.Generation); err != nil || done {

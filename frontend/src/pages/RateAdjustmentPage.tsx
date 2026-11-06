@@ -313,10 +313,44 @@ function DetailContent({
                       gap: 2.5,
                     }}
                   >
-                    <Field
-                      label={tr("节点 503 计数 / 阈值")}
-                      value={`${trigger.consecutive503Count ?? tr("未记录")} / ${trigger.consecutive503Threshold ?? tr("未记录")}`}
-                    />
+                    {trigger.throttleCount != null ? (
+                      <>
+                        <Field
+                          label={tr("限流响应 / 该类请求")}
+                          value={tr("{value1} / {value2}（{value3} 秒内）", {
+                            value1: trigger.throttleCount,
+                            value2: trigger.throttleResponses ?? "—",
+                            value3: (trigger.throttleWindowMs ?? 0) / 1000,
+                          })}
+                        />
+                        <Field
+                          label={tr("降速条件")}
+                          value={tr(
+                            "至少 {value1} 次，且不低于该类请求的 {value2}%",
+                            {
+                              value1: trigger.throttleThreshold ?? "—",
+                              value2: Number(
+                                ((trigger.throttleRatio ?? 0) * 100).toFixed(2),
+                              ),
+                            },
+                          )}
+                        />
+                        {trigger.measuredQps != null &&
+                          trigger.measuredQps > 0 && (
+                            <Field
+                              label={tr("降速前实测速率")}
+                              value={tr("{value1} 次/秒", {
+                                value1: trigger.measuredQps,
+                              })}
+                            />
+                          )}
+                      </>
+                    ) : (
+                      <Field
+                        label={tr("节点 503 计数 / 阈值")}
+                        value={`${trigger.consecutive503Count ?? tr("未记录")} / ${trigger.consecutive503Threshold ?? tr("未记录")}`}
+                      />
+                    )}
                     {trigger.factor != null && (
                       <Field
                         label={tr("降速幅度")}

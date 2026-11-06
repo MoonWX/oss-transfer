@@ -18,7 +18,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -55,13 +54,22 @@ type S3Config struct {
 	// PartLender lets ranged uploads borrow part slots while the node is idle.
 	PartLender *PartLender
 	// Parts exceeding their buffer share or 64 MiB are spooled here for retries.
-	SpoolDirectory   string
+	SpoolDirectory string
+	// RetryMaxAttempts bounds attempts for ordinary retryable errors (default 3).
 	RetryMaxAttempts int
-	HTTPClient       *http.Client
+	// Throttled requests (HTTP 429/503 or a throttling error code) have their
+	// own limit: ThrottleRetryMaxAttempts attempts in total (default 10, at
+	// least RetryMaxAttempts), waiting before retry n a random time below
+	// ThrottleRetryBaseDelay·2^(n-1) (default 1 s), at most
+	// ThrottleRetryMaxDelay (default 20 s).
+	ThrottleRetryMaxAttempts                      int
+	ThrottleRetryBaseDelay, ThrottleRetryMaxDelay time.Duration
+	HTTPClient                                    *http.Client
 }
 
 type S3 struct {
 	client                        *s3.Client
+	retryer                       *s3Retryer
 	bucket, scope, spoolDirectory string
 	partSize                      int64
 	partConcurrency               int
@@ -118,12 +126,23 @@ func NewS3(config S3Config) (*S3, error) {
 	if config.RetryMaxAttempts < 1 || config.RetryMaxAttempts > 20 {
 		return nil, errors.New("S3 retry attempts must be between 1 and 20")
 	}
+	if config.ThrottleRetryMaxAttempts == 0 {
+		config.ThrottleRetryMaxAttempts = defaultThrottleRetryAttempts
+	}
+	if config.ThrottleRetryBaseDelay == 0 {
+		config.ThrottleRetryBaseDelay = defaultThrottleRetryBase
+	}
+	if config.ThrottleRetryMaxDelay == 0 {
+		config.ThrottleRetryMaxDelay = defaultThrottleRetryMax
+	}
+	if config.ThrottleRetryMaxAttempts < 1 || config.ThrottleRetryMaxAttempts > 100 || config.ThrottleRetryBaseDelay < 0 || config.ThrottleRetryMaxDelay < config.ThrottleRetryBaseDelay || config.ThrottleRetryMaxDelay > 10*time.Minute {
+		return nil, errors.New("S3 throttling retries need 1–100 attempts and delays from 0 to 10 minutes")
+	}
+	retryer := newS3Retryer(config.RetryMaxAttempts, config.ThrottleRetryMaxAttempts, config.ThrottleRetryBaseDelay, config.ThrottleRetryMaxDelay)
 	sdkConfig := aws.Config{
 		Region:      config.Region,
 		Credentials: credentials.NewStaticCredentialsProvider(config.AccessKey, config.SecretKey, config.SessionToken),
-		Retryer: func() aws.Retryer {
-			return retry.NewStandard(func(o *retry.StandardOptions) { o.MaxAttempts = config.RetryMaxAttempts })
-		},
+		Retryer:     func() aws.Retryer { return retryer },
 	}
 	if config.HTTPClient != nil {
 		httpClient := *config.HTTPClient
@@ -140,7 +159,7 @@ func NewS3(config S3Config) (*S3, error) {
 			}
 		}
 		o.HTTPClient = &s3DiagnosticClient{next: o.HTTPClient, credentials: []string{config.AccessKey, config.SecretKey, config.SessionToken}}
-		o.APIOptions = append(o.APIOptions, addS3RequestReplay)
+		o.APIOptions = append(o.APIOptions, addS3RequestReplay, addS3RetryCount)
 		if config.Endpoint != "" {
 			o.BaseEndpoint = aws.String(config.Endpoint)
 		}
@@ -157,7 +176,7 @@ func NewS3(config S3Config) (*S3, error) {
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
-	return &S3{client: client, bucket: config.Bucket, scope: config.Endpoint + "/" + config.Region + "/" + config.Bucket, partSize: config.PartSize, partConcurrency: config.PartConcurrency, maxBufferedBytes: config.MaxBufferedBytes, uploadMemory: config.UploadMemory, rangedMinSize: config.RangedReadMinSize, partLender: config.PartLender, spoolDirectory: config.SpoolDirectory, connection: s3ConnectionIdentity(config)}, nil
+	return &S3{client: client, retryer: retryer, bucket: config.Bucket, scope: config.Endpoint + "/" + config.Region + "/" + config.Bucket, partSize: config.PartSize, partConcurrency: config.PartConcurrency, maxBufferedBytes: config.MaxBufferedBytes, uploadMemory: config.UploadMemory, rangedMinSize: config.RangedReadMinSize, partLender: config.PartLender, spoolDirectory: config.SpoolDirectory, connection: s3ConnectionIdentity(config)}, nil
 }
 
 func (s *S3) Close() error { return nil }
@@ -385,6 +404,10 @@ func (s *S3) Write(ctx context.Context, key string, input io.Reader, options Wri
 		}
 		request := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: body.reader, ContentLength: aws.Int64(options.Size), Metadata: copyMetadata(options.Metadata)}
 		setPutMetadata(request, options)
+		// A throttled attempt (HTTP 429/503) stored nothing, so the SDK can
+		// retry this conditional PUT as is. A retry that finds an object, for
+		// example one stored by an attempt whose response was lost, gets 412
+		// and is resolved below like any concurrent writer.
 		if !options.Overwrite {
 			request.IfNoneMatch = aws.String("*")
 		}

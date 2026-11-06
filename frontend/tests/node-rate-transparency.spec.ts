@@ -284,6 +284,42 @@ test("legacy nodes and partial history do not invent targets or reasons", async 
   await expect(page.getByText("未记录详情", { exact: true })).toBeVisible();
 });
 
+test("history explains a throttle-window reduction", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/master/rate-limit/history?*", async (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        adjustments: [
+          {
+            id: "test-process:7",
+            workerIp: nodeIp,
+            type: "put",
+            previousValue: 1000,
+            value: 702,
+            manualTarget: null,
+            reasonCode: "OSS_503",
+            throttleCount: 37,
+            throttleResponses: 412,
+            throttleThreshold: 5,
+            throttleRatio: 0.01,
+            throttleWindowMs: 5000,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/nodes");
+  await page.getByRole("tab", { name: "限速历史", exact: true }).click();
+  await expect(
+    page.getByRole("cell", {
+      name: "OSS 限流响应（HTTP 503、429 或 SlowDown 等）：5 秒内 37 次，占该类请求的 9%。",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
 test("node rate details fit a 360px mobile viewport", async ({
   page,
 }, testInfo) => {

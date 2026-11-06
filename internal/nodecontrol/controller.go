@@ -17,6 +17,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/ratelimit"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 type sample struct {
@@ -25,23 +26,26 @@ type sample struct {
 }
 
 type Controller struct {
-	db                    *state.Store
-	bytes                 ByteLimiter
-	options               Options
-	configured            map[string]float64
-	mu                    sync.Mutex
-	data                  persisted
-	processID             string
-	next                  map[string]time.Time
-	changed               chan struct{}
-	samples               [6]sample
-	requests              *taskRequestCounter
-	consecutive           int
-	last503, nextRecovery time.Time
-	fault                 error
-	closed                bool
-	stop                  chan struct{}
-	done                  chan struct{}
+	db           *state.Store
+	bytes        ByteLimiter
+	options      Options
+	configured   map[string]float64
+	mu           sync.Mutex
+	data         persisted
+	processID    string
+	now          func() time.Time // read under mu; tests replace it
+	next         map[string]time.Time
+	changed      chan struct{}
+	samples      [6]sample
+	requests     *taskRequestCounter
+	throttles    [throttleBuckets]throttleSample
+	lastThrottle time.Time
+	cooldown     [throttleOther]time.Time
+	nextRecovery [throttleOther]time.Time
+	fault        error
+	closed       bool
+	stop         chan struct{}
+	done         chan struct{}
 }
 
 func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, error) {
@@ -62,8 +66,17 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 			options.BandwidthBitsPerSecond = 2_000_000_000
 		}
 	}
+	// Five throttling responses that are at least 1% of a limit's responses in
+	// five seconds: enough evidence at a few requests per second, while sporadic
+	// errors among a busy node's thousands of requests lower nothing.
 	if options.Threshold == 0 {
-		options.Threshold = 20
+		options.Threshold = 5
+	}
+	if options.ThrottleRatio == 0 {
+		options.ThrottleRatio = 0.01
+	}
+	if options.ThrottleWindow == 0 {
+		options.ThrottleWindow = 5 * time.Second
 	}
 	if options.ReduceFactor == 0 {
 		options.ReduceFactor = 0.9
@@ -77,9 +90,11 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 	if options.RecoveryInterval == 0 {
 		options.RecoveryInterval = 10 * time.Second
 	}
-	if options.Threshold < 1 || options.Threshold > 1_000_000 || options.ReduceFactor <= 0 || options.ReduceFactor >= 1 || !finite(options.ReduceFactor) || options.IncreaseFactor <= 1 || !finite(options.IncreaseFactor) || options.MinQPS <= 0 || !finite(options.MinQPS) || options.RecoveryInterval <= 0 {
+	if options.Threshold < 1 || options.Threshold > 1_000_000 || !(options.ThrottleRatio > 0 && options.ThrottleRatio <= 1) || options.ThrottleWindow < time.Second || options.ThrottleWindow > time.Minute || options.ReduceFactor <= 0 || options.ReduceFactor >= 1 || !finite(options.ReduceFactor) || options.IncreaseFactor <= 1 || !finite(options.IncreaseFactor) || options.MinQPS <= 0 || !finite(options.MinQPS) || options.RecoveryInterval <= 0 {
 		return nil, ErrInvalid
 	}
+	// The window is counted in whole one-second buckets.
+	options.ThrottleWindow = (options.ThrottleWindow + time.Second - 1).Truncate(time.Second)
 	configured := map[string]float64{"list": options.ListQPS, "put": options.PutQPS, "head": options.HeadQPS, "bandwidth": options.BandwidthBitsPerSecond}
 	for kind, value := range configured {
 		if !validRate(kind, value) {
@@ -90,7 +105,7 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
-	c := &Controller{db: db, bytes: bytes, options: options, configured: configured, processID: hex.EncodeToString(nonce[:]), next: map[string]time.Time{}, requests: newTaskRequestCounter(), changed: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
+	c := &Controller{db: db, bytes: bytes, options: options, configured: configured, processID: hex.EncodeToString(nonce[:]), now: time.Now, next: map[string]time.Time{}, requests: newTaskRequestCounter(), changed: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
 	err := db.Update(func(tx *state.Tx) error {
 		found, err := tx.Get("node-control", "settings", &c.data)
 		if err != nil {
@@ -139,7 +154,9 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 			return nil, err
 		}
 	}
-	c.nextRecovery = time.Now().Add(options.RecoveryInterval)
+	for index := range c.nextRecovery {
+		c.nextRecovery[index] = time.Now().Add(options.RecoveryInterval)
+	}
 	go c.recoverLoop()
 	return c, nil
 }
@@ -178,12 +195,14 @@ func (c *Controller) healthy() error {
 	return c.fault
 }
 
-func (c *Controller) event(next *persisted, kind string, old, value, oldTarget, target float64, reason, incident string, trigger *RequestContext) Adjustment {
+func (c *Controller) event(next *persisted, kind string, old, value, oldTarget, target float64, reason, incident string, trigger *RequestContext, evidence *throttleEvidence) Adjustment {
 	next.Sequence++
 	event := Adjustment{ID: fmt.Sprintf("%s:%d", c.processID, next.Sequence), ProcessID: c.processID, Sequence: next.Sequence, Type: kind, Value: value, PreviousValue: old, PreviousManualTarget: oldTarget, ManualTarget: target, Manual: reason == "MANUAL_SET", Timestamp: time.Now().UnixMilli(), ReasonCode: reason, IncidentID: incident, DetailsAvailable: true, IntervalMS: c.options.RecoveryInterval.Milliseconds(), IncreaseFactor: c.options.IncreaseFactor, TriggerRequest: trigger}
-	if reason == "OSS_503" {
-		event.Consecutive503Count = c.consecutive
-		event.Consecutive503Threshold = c.options.Threshold
+	if evidence != nil {
+		event.ThrottleCount, event.ThrottleResponses = evidence.count, evidence.responses
+		event.ThrottleThreshold, event.ThrottleRatio = c.options.Threshold, c.options.ThrottleRatio
+		event.ThrottleWindowMS = c.options.ThrottleWindow.Milliseconds()
+		event.MeasuredQPS = evidence.measured
 		event.Factor = c.options.ReduceFactor
 		event.MinQPS = c.options.MinQPS
 	}
@@ -248,7 +267,7 @@ func (c *Controller) SetRate(ctx context.Context, kind string, value float64) er
 	next.Overrides[kind] = value
 	next.Effective[kind] = value
 	delete(next.Incidents, kind)
-	event := c.event(&next, kind, previous, value, target, value, "MANUAL_SET", "", nil)
+	event := c.event(&next, kind, previous, value, target, value, "MANUAL_SET", "", nil, nil)
 	if err := c.commit(next, []Adjustment{event}); err != nil {
 		if kind == "bandwidth" {
 			c.fault = fmt.Errorf("bandwidth applied but adjustment persistence failed: %w", err)
@@ -315,7 +334,7 @@ func kindIndex(kind string) int {
 	return -1
 }
 func (c *Controller) addSample(index int, amount int64) {
-	second := time.Now().Unix()
+	second := c.now().Unix()
 	entry := &c.samples[second%6]
 	if entry.second != second {
 		*entry = sample{second: second}
@@ -372,92 +391,108 @@ func (c *Controller) Wait(ctx context.Context, kind string) error {
 	}
 }
 
+// ObserveResponse records one storage response. Throttling (HTTP 429/503 or a
+// throttling error code) lowers the limit of the operation it answered once
+// the window holds Threshold such responses that are at least ThrottleRatio of
+// that limit's responses. Successes in between do not reset the count, so
+// throttling interleaved with hundreds of concurrent successes is still seen.
+// A reduction blocks the next one of that limit for a window, so one burst
+// lowers a limit once instead of down to MinQPS.
 func (c *Controller) ObserveResponse(request RequestContext) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.healthy(); err != nil {
 		return err
 	}
-	if request.StatusCode >= 200 && request.StatusCode < 400 {
-		c.consecutive = 0
+	now := c.now()
+	index := throttleIndex(request.Operation)
+	bucket := c.throttleBucket(now.Unix())
+	bucket.responses[index]++
+	if !transferstore.IsThrottleResponse(request.StatusCode, request.ErrorCode) {
 		return nil
 	}
-	if request.StatusCode != 503 {
+	bucket.throttled[index]++
+	c.lastThrottle = now
+	if index == throttleOther {
 		return nil
 	}
-	if c.consecutive < math.MaxInt {
-		c.consecutive++
-	}
-	c.last503 = time.Now()
-	c.nextRecovery = c.last503.Add(c.options.RecoveryInterval)
-	if c.consecutive < c.options.Threshold {
+	throttled, responses := c.throttleWindow(now, index)
+	if throttled < int64(c.options.Threshold) || float64(throttled) < c.options.ThrottleRatio*float64(responses) {
 		return nil
 	}
+	// Sustained throttling postpones recovery, also at the lowest limit.
+	c.nextRecovery[index] = now.Add(c.options.RecoveryInterval)
+	if now.Before(c.cooldown[index]) {
+		return nil
+	}
+	kind := throttleKinds[index]
+	old, target := c.data.Effective[kind], c.target(c.data, kind)
+	minimum := math.Min(target, c.options.MinQPS)
+	if target <= 0 || old <= minimum {
+		return nil
+	}
+	evidence := throttleEvidence{count: throttled, responses: responses, measured: c.peakRate(now, index)}
+	from := old
+	if evidence.measured > 0 {
+		from = math.Min(from, evidence.measured)
+	}
+	value := math.Max(minimum, from*c.options.ReduceFactor)
 	next := clone(c.data)
-	events := []Adjustment{}
-	incident := next.Incidents["put"]
-	if incident == "" {
-		incident = next.Incidents["head"]
-	}
+	incident := next.Incidents[kind]
 	if incident == "" {
 		incident = fmt.Sprintf("%s-%d", c.processID, next.Sequence+1)
 	}
-	for _, kind := range []string{"put", "head"} {
-		old, target := next.Effective[kind], c.target(next, kind)
-		minimum := math.Min(target, c.options.MinQPS)
-		if target <= 0 || old <= minimum {
-			continue
-		}
-		value := math.Max(minimum, old*c.options.ReduceFactor)
-		next.Effective[kind] = value
-		next.Incidents[kind] = incident
-		events = append(events, c.event(&next, kind, old, value, target, target, "OSS_503", incident, &request))
-	}
-	if len(events) == 0 {
-		return nil
-	}
-	if err := c.commit(next, events); err != nil {
+	next.Effective[kind] = value
+	next.Incidents[kind] = incident
+	event := c.event(&next, kind, old, value, target, target, "OSS_503", incident, &request, &evidence)
+	if err := c.commit(next, []Adjustment{event}); err != nil {
 		c.fault = fmt.Errorf("automatic adjustment persistence failed: %w", err)
 		return c.fault
 	}
+	c.cooldown[index] = now.Add(c.options.ThrottleWindow)
 	return nil
 }
 
+// Tick raises each lowered limit by IncreaseFactor once a RecoveryInterval has
+// passed without sustained throttling of it, until it reaches its target.
 func (c *Controller) Tick(now time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.healthy(); err != nil {
 		return err
 	}
-	if now.Before(c.nextRecovery) {
+	due := []int{}
+	for index, kind := range throttleKinds {
+		if target := c.target(c.data, kind); target > 0 && c.data.Effective[kind] < target && !now.Before(c.nextRecovery[index]) {
+			due = append(due, index)
+		}
+	}
+	if len(due) == 0 {
 		return nil
 	}
 	next := clone(c.data)
 	events := []Adjustment{}
-	for _, kind := range []string{"put", "head"} {
+	for _, index := range due {
+		kind := throttleKinds[index]
 		old, target := next.Effective[kind], c.target(next, kind)
-		if target <= 0 || old >= target {
-			continue
-		}
 		value := math.Min(target, old*c.options.IncreaseFactor)
 		reason := "RECOVERY_STEP"
 		if value == target {
 			reason = "RECOVERED"
 		}
-		incident := next.Incidents[kind]
-		events = append(events, c.event(&next, kind, old, value, target, target, reason, incident, nil))
+		events = append(events, c.event(&next, kind, old, value, target, target, reason, next.Incidents[kind], nil, nil))
 		next.Effective[kind] = value
 		if value == target {
 			delete(next.Incidents, kind)
 		}
 	}
-	if len(events) > 0 {
-		if err := c.commit(next, events); err != nil {
-			c.fault = fmt.Errorf("recovery adjustment persistence failed: %w", err)
-			return c.fault
-		}
+	if err := c.commit(next, events); err != nil {
+		c.fault = fmt.Errorf("recovery adjustment persistence failed: %w", err)
+		return c.fault
 	}
-	c.nextRecovery = now.Add(c.options.RecoveryInterval)
+	for _, index := range due {
+		c.nextRecovery[index] = now.Add(c.options.RecoveryInterval)
+	}
 	return nil
 }
 func (c *Controller) recoverLoop() {
@@ -493,7 +528,7 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 	if err := c.healthy(); err != nil {
 		return nil, err
 	}
-	now := time.Now()
+	now := c.now()
 	result := map[string]any{}
 	var totals [4]int64
 	// Completed one-second buckets form a sliding 5-second measurement. Reading
@@ -561,12 +596,24 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 	for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
 		recent[i], recent[j] = recent[j], recent[i]
 	}
-	auto := map[string]any{"processId": c.processID, "observedAt": now.UnixMilli(), "sequence": c.data.Sequence, "events": recent, "intervalMs": c.options.RecoveryInterval.Milliseconds(), "increaseFactor": c.options.IncreaseFactor, "reduceFactor": c.options.ReduceFactor, "minQps": c.options.MinQPS, "consecutive503Threshold": c.options.Threshold, "consecutive503Count": c.consecutive, "measurementIntervalMs": 5000, "lastMeasurementAt": now.Truncate(time.Second).UnixMilli()}
-	if !c.last503.IsZero() {
-		auto["last503At"] = c.last503.UnixMilli()
+	// Throttling and all responses in the current window, over every operation.
+	var throttled, responses int64
+	for index := 0; index <= throttleOther; index++ {
+		count, total := c.throttleWindow(now, index)
+		throttled, responses = throttled+count, responses+total
 	}
-	if len(c.data.Incidents) > 0 {
-		auto["nextRecoveryAt"] = c.nextRecovery.UnixMilli()
+	auto := map[string]any{"processId": c.processID, "observedAt": now.UnixMilli(), "sequence": c.data.Sequence, "events": recent, "intervalMs": c.options.RecoveryInterval.Milliseconds(), "increaseFactor": c.options.IncreaseFactor, "reduceFactor": c.options.ReduceFactor, "minQps": c.options.MinQPS, "throttleThreshold": c.options.Threshold, "throttleRatio": c.options.ThrottleRatio, "throttleWindowMs": c.options.ThrottleWindow.Milliseconds(), "throttleCount": throttled, "throttleResponses": responses, "measurementIntervalMs": 5000, "lastMeasurementAt": now.Truncate(time.Second).UnixMilli()}
+	if !c.lastThrottle.IsZero() {
+		auto["lastThrottleAt"] = c.lastThrottle.UnixMilli()
+	}
+	var nextRecovery time.Time
+	for index, kind := range throttleKinds {
+		if _, active := c.data.Incidents[kind]; active && (nextRecovery.IsZero() || c.nextRecovery[index].Before(nextRecovery)) {
+			nextRecovery = c.nextRecovery[index]
+		}
+	}
+	if !nextRecovery.IsZero() {
+		auto["nextRecoveryAt"] = nextRecovery.UnixMilli()
 	}
 	result["autoAdjust"] = auto
 	return result, nil

@@ -18,8 +18,12 @@ func pointer[T any](value T) *T { return &value }
 
 func TestNodeControlConfigurationDefaultsZeroAndCustomValues(t *testing.T) {
 	defaults, err := (*servicehost.NodeControlConfig)(nil).Options()
-	if err != nil || defaults.ListQPS != 100 || defaults.PutQPS != 1400 || defaults.HeadQPS != 2800 || defaults.BandwidthBitsPerSecond != 2_000_000_000 || defaults.RecoveryInterval != 10*time.Second {
+	if err != nil || defaults.ListQPS != 100 || defaults.PutQPS != 1400 || defaults.HeadQPS != 2800 || defaults.BandwidthBitsPerSecond != 2_000_000_000 || defaults.RecoveryInterval != 10*time.Second || defaults.Threshold != 5 || defaults.ThrottleRatio != 0.01 || defaults.ThrottleWindow != 5*time.Second {
 		t.Fatalf("defaults changed: %+v %v", defaults, err)
+	}
+	throttle := &servicehost.NodeControlConfig{AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleThreshold: pointer(9), Consecutive503Threshold: pointer(9), ThrottleRatio: pointer(0.05), ThrottleWindowMS: pointer(int64(3000))}}
+	if got, err := throttle.Options(); err != nil || got.Threshold != 9 || got.ThrottleRatio != 0.05 || got.ThrottleWindow != 3*time.Second {
+		t.Fatalf("throttle settings lost: %+v %v", got, err)
 	}
 	config := &servicehost.NodeControlConfig{ListQPS: pointer(0.0), BandwidthBitsPerSecond: pointer(0.0), AutoAdjust: &servicehost.AutoAdjustConfig{Consecutive503Threshold: pointer(12), ReduceFactor: pointer(0.75), IncreaseFactor: pointer(1.1), MinQPS: pointer(20.0), RecoveryIntervalMS: pointer(int64(2500))}}
 	got, err := config.Options()
@@ -36,6 +40,9 @@ func TestNodeControlConfigCheckedBeforeStarting(t *testing.T) {
 		{AutoAdjust: &servicehost.AutoAdjustConfig{Consecutive503Threshold: pointer(0)}}, {AutoAdjust: &servicehost.AutoAdjustConfig{ReduceFactor: pointer(1.0)}},
 		{AutoAdjust: &servicehost.AutoAdjustConfig{IncreaseFactor: pointer(1.0)}}, {AutoAdjust: &servicehost.AutoAdjustConfig{MinQPS: pointer(0.0)}},
 		{AutoAdjust: &servicehost.AutoAdjustConfig{RecoveryIntervalMS: pointer(int64(0))}}, {AutoAdjust: &servicehost.AutoAdjustConfig{RecoveryIntervalMS: pointer(int64(math.MaxInt64))}},
+		{AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleThreshold: pointer(0)}}, {AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleThreshold: pointer(5), Consecutive503Threshold: pointer(20)}},
+		{AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleRatio: pointer(0.0)}}, {AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleRatio: pointer(1.5)}},
+		{AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleWindowMS: pointer(int64(999))}}, {AutoAdjust: &servicehost.AutoAdjustConfig{ThrottleWindowMS: pointer(int64(60_001))}},
 	} {
 		base.NodeControl = bad
 		encoded, _ := json.Marshal(base)

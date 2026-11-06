@@ -109,7 +109,7 @@ func TestV2SignerRefreshesDateAndIncludesSessionToken(t *testing.T) {
 func TestS3V2SDKMultipartRetryProtocol(t *testing.T) {
 	p := newProtocolS3(t)
 	p.failFirstPart = true
-	store, err := NewS3(S3Config{Endpoint: p.server.URL, Region: "test-region", Bucket: "test-bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", SignatureVersion: "v2", PathStyle: true, PartSize: minPartSize, RetryMaxAttempts: 2, HTTPClient: p.server.Client()})
+	store, err := NewS3(S3Config{Endpoint: p.server.URL, Region: "test-region", Bucket: "test-bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", SignatureVersion: "v2", PathStyle: true, PartSize: minPartSize, RetryMaxAttempts: 2, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond, HTTPClient: p.server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

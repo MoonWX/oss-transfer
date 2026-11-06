@@ -23,10 +23,17 @@ type ByteLimiter interface {
 
 // All bandwidth values exposed to the legacy UI are bits/second. The shared
 // execution limiter uses bytes/second; conversion happens only at this boundary.
+//
+// Automatic adjustment counts throttling responses (HTTP 429/503 or a
+// throttling error code) per request limit over ThrottleWindow. A limit is
+// lowered once the window holds at least Threshold of them and they are at
+// least ThrottleRatio of that limit's responses, then not again for one window.
 type Options struct {
 	ListQPS, PutQPS, HeadQPS, BandwidthBitsPerSecond float64
 	UseZeroDefaults                                  bool
 	Threshold                                        int
+	ThrottleRatio                                    float64
+	ThrottleWindow                                   time.Duration
 	ReduceFactor, IncreaseFactor, MinQPS             float64
 	RecoveryInterval                                 time.Duration
 }
@@ -51,26 +58,35 @@ type RequestContext struct {
 }
 
 type Adjustment struct {
-	ID                      string          `json:"id"`
-	ProcessID               string          `json:"processId"`
-	Sequence                uint64          `json:"sequence"`
-	Type                    string          `json:"type"`
-	Value                   float64         `json:"value"`
-	PreviousValue           float64         `json:"previousValue"`
-	ManualTarget            float64         `json:"manualTarget"`
-	PreviousManualTarget    float64         `json:"previousManualTarget"`
-	Manual                  bool            `json:"manual"`
-	Timestamp               int64           `json:"timestamp"`
-	ReasonCode              string          `json:"reasonCode"`
-	IncidentID              string          `json:"incidentId,omitempty"`
-	DetailsAvailable        bool            `json:"detailsAvailable"`
-	Consecutive503Count     int             `json:"consecutive503Count,omitempty"`
-	Consecutive503Threshold int             `json:"consecutive503Threshold,omitempty"`
-	Factor                  float64         `json:"factor,omitempty"`
-	MinQPS                  float64         `json:"minQps,omitempty"`
-	IntervalMS              int64           `json:"intervalMs"`
-	IncreaseFactor          float64         `json:"increaseFactor"`
-	TriggerRequest          *RequestContext `json:"triggerRequest,omitempty"`
+	ID                   string  `json:"id"`
+	ProcessID            string  `json:"processId"`
+	Sequence             uint64  `json:"sequence"`
+	Type                 string  `json:"type"`
+	Value                float64 `json:"value"`
+	PreviousValue        float64 `json:"previousValue"`
+	ManualTarget         float64 `json:"manualTarget"`
+	PreviousManualTarget float64 `json:"previousManualTarget"`
+	Manual               bool    `json:"manual"`
+	Timestamp            int64   `json:"timestamp"`
+	ReasonCode           string  `json:"reasonCode"`
+	IncidentID           string  `json:"incidentId,omitempty"`
+	DetailsAvailable     bool    `json:"detailsAvailable"`
+	// Reductions saved before the throttle window record consecutive 503s.
+	Consecutive503Count     int `json:"consecutive503Count,omitempty"`
+	Consecutive503Threshold int `json:"consecutive503Threshold,omitempty"`
+	// Evidence of a reduction: throttling and all responses of the limit in
+	// the window, the rule's settings, and the peak admitted rate it started from.
+	ThrottleCount     int64           `json:"throttleCount,omitempty"`
+	ThrottleResponses int64           `json:"throttleResponses,omitempty"`
+	ThrottleThreshold int             `json:"throttleThreshold,omitempty"`
+	ThrottleRatio     float64         `json:"throttleRatio,omitempty"`
+	ThrottleWindowMS  int64           `json:"throttleWindowMs,omitempty"`
+	MeasuredQPS       float64         `json:"measuredQps,omitempty"`
+	Factor            float64         `json:"factor,omitempty"`
+	MinQPS            float64         `json:"minQps,omitempty"`
+	IntervalMS        int64           `json:"intervalMs"`
+	IncreaseFactor    float64         `json:"increaseFactor"`
+	TriggerRequest    *RequestContext `json:"triggerRequest,omitempty"`
 }
 
 type persisted struct {

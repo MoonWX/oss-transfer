@@ -1224,6 +1224,11 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "OSS returned HTTP 503; count {value1}, threshold {value2}.",
     ja: "OSS が HTTP 503 を返しました。件数 {value1}、しきい値 {value2}。",
   },
+  "OSS 限流响应（HTTP 503、429 或 SlowDown 等）：{value1} 秒内 {value2} 次，占该类请求的 {value3}%。":
+    {
+      en: "Storage throttling (HTTP 503, 429, SlowDown or similar): {value2} responses in {value1} s, {value3}% of these requests.",
+      ja: "OSS のスロットリング応答（HTTP 503、429、SlowDown など）：{value1} 秒間に {value2} 件、この種類のリクエストの {value3}%。",
+    },
   "OSS 返回 HTTP 503，触发节点降速。": {
     en: "OSS returned HTTP 503, triggering a node limit reduction.",
     ja: "OSS の HTTP 503 応答により、ノードの上限を引き下げました。",

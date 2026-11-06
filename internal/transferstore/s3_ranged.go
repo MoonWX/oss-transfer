@@ -123,6 +123,12 @@ func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uplo
 // readRangeRetrying fills data from one range. An interrupted body is read
 // again with a fresh conditional range, at most rangeReadAttempts times; a
 // changed source, a length mismatch and cancellation are final.
+//
+// Only body interruptions repeat a read. A GET the service keeps throttling
+// fails when the SDK's attempts run out (10 for throttling, 3 otherwise), and
+// that error is final here, so the retries do not multiply on their own. One
+// range costs at most rangeReadAttempts × 10 GETs, and only when each of its
+// reads opened successfully and was then cut off.
 func readRangeRetrying(ctx context.Context, ranges RangeFunc, offset int64, data []byte) error {
 	for attempt := 1; ; attempt++ {
 		err := readRange(ctx, ranges, offset, data)

@@ -18,7 +18,7 @@ func memoryState(b *UploadMemoryBudget) (int64, int) {
 
 func budgetStore(t *testing.T, server *protocolS3, budget *UploadMemoryBudget, spool string) *S3 {
 	t.Helper()
-	s, err := NewS3(S3Config{Endpoint: server.server.URL, Bucket: "test-bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, PartSize: minPartSize, PartConcurrency: 3, MaxBufferedBytes: 15 << 20, UploadMemory: budget, SpoolDirectory: spool, HTTPClient: server.server.Client(), RetryMaxAttempts: 2})
+	s, err := NewS3(S3Config{Endpoint: server.server.URL, Bucket: "test-bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, PartSize: minPartSize, PartConcurrency: 3, MaxBufferedBytes: 15 << 20, UploadMemory: budget, SpoolDirectory: spool, HTTPClient: server.server.Client(), RetryMaxAttempts: 2, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

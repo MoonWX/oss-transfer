@@ -239,6 +239,43 @@ test("adjustment history appends the next page and refreshes from the first page
   await expect(records).not.toContainText("已恢复目标");
 });
 
+test("a throttle-window reduction shows its evidence and rule", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  const { consecutive503Count, consecutive503Threshold, ...base } = change(
+    1,
+    702,
+    "OSS_503",
+  );
+  const trigger = {
+    ...base,
+    throttleCount: 37,
+    throttleResponses: 412,
+    throttleThreshold: 5,
+    throttleRatio: 0.01,
+    throttleWindowMs: 5000,
+    measuredQps: 780,
+  };
+  state.response = {
+    ...detailResponse(),
+    event: trigger,
+    triggerEvent: trigger,
+    events: [trigger],
+  };
+  await page.goto(detailsPath);
+  for (const text of [
+    "限流响应 / 该类请求",
+    "37 / 412（5 秒内）",
+    "降速条件",
+    "至少 5 次，且不低于该类请求的 1%",
+    "降速前实测速率",
+    "780 次/秒",
+  ])
+    await expect(page.getByText(text, { exact: true })).toBeVisible();
+  await expect(page.getByText("节点 503 计数 / 阈值")).toHaveCount(0);
+});
+
 test("old records explicitly report missing request details", async ({
   page,
 }) => {

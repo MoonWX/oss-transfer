@@ -63,7 +63,7 @@ func newProtocolS3(t *testing.T) *protocolS3 {
 }
 func (p *protocolS3) store(t *testing.T) *S3 {
 	t.Helper()
-	s, err := NewS3(S3Config{Endpoint: p.server.URL, Region: "test-region", Bucket: "test-bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, PartSize: minPartSize, PartConcurrency: 1, RetryMaxAttempts: 2, HTTPClient: p.server.Client()})
+	s, err := NewS3(S3Config{Endpoint: p.server.URL, Region: "test-region", Bucket: "test-bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, PartSize: minPartSize, PartConcurrency: 1, RetryMaxAttempts: 2, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond, HTTPClient: p.server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

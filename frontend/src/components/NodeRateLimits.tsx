@@ -70,6 +70,19 @@ export const adjustmentReason = (event: Adjustment) => {
     case "MANUAL_SET":
       return t("用户修改上限，保存后立即生效。");
     case "OSS_503":
+      if (event.throttleCount != null && event.throttleWindowMs != null)
+        return t(
+          "OSS 限流响应（HTTP 503、429 或 SlowDown 等）：{value1} 秒内 {value2} 次，占该类请求的 {value3}%。",
+          {
+            value1: formatNumber(event.throttleWindowMs / 1000),
+            value2: formatNumber(event.throttleCount),
+            value3: percentText(
+              (event.throttleCount /
+                Math.max(1, event.throttleResponses ?? 0)) *
+                100,
+            ),
+          },
+        );
       return event.consecutive503Count != null &&
         event.consecutive503Threshold != null
         ? t("OSS 返回 HTTP 503；计数 {value1}，阈值 {value2}。", {
@@ -107,9 +120,11 @@ export default function NodeRateLimits({
   useI18n();
   const nodeLabel = useNodeLabels();
   const uncertain = stale || refreshMs === 0;
-  const activeAdjustments = [rateLimit?.put, rateLimit?.head].filter(
-    (rate) => rate?.state === "REDUCED" || rate?.state === "RECOVERING",
-  );
+  const activeAdjustments = [
+    rateLimit?.list,
+    rateLimit?.put,
+    rateLimit?.head,
+  ].filter((rate) => rate?.state === "REDUCED" || rate?.state === "RECOVERING");
   const latestAdjustment = activeAdjustments
     .map((rate) => rate?.lastAdjustment)
     .filter((event): event is Adjustment => Boolean(event))
@@ -169,7 +184,7 @@ export default function NodeRateLimits({
             (target != null &&
               configuredTarget != null &&
               target === configuredTarget);
-          const hasRecoveryStatus = type === "put" || type === "head";
+          const hasRecoveryStatus = type !== "bandwidth";
           const recovered = !uncertain && rate?.state === "RECOVERED";
           const recovering = !uncertain && rate?.state === "RECOVERING";
           const stateLabel = uncertain

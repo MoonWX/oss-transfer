@@ -1960,6 +1960,26 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Agent 503 count / threshold",
     ja: "ノードの503回数 / しきい値",
   },
+  "限流响应 / 该类请求": {
+    en: "Throttling responses / requests of this type",
+    ja: "スロットリング応答 / この種類のリクエスト",
+  },
+  "{value1} / {value2}（{value3} 秒内）": {
+    en: "{value1} / {value2} (within {value3} s)",
+    ja: "{value1} / {value2}（{value3} 秒以内）",
+  },
+  降速条件: {
+    en: "Reduction rule",
+    ja: "引き下げ条件",
+  },
+  "至少 {value1} 次，且不低于该类请求的 {value2}%": {
+    en: "At least {value1}, and at least {value2}% of requests of this type",
+    ja: "{value1} 件以上、かつこの種類のリクエストの {value2}% 以上",
+  },
+  降速前实测速率: {
+    en: "Measured rate before reduction",
+    ja: "引き下げ前の実測レート",
+  },
   降速幅度: {
     en: "Reduction",
     ja: "引き下げ率",

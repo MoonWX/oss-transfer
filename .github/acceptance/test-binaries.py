@@ -20,7 +20,12 @@ ROOT = Path(__file__).resolve().parents[2]
 PLATFORMS = {row["os"] + "/" + row["arch"]: row for row in
              json.loads((ROOT / "deploy/native/platforms.json").read_text(encoding="utf-8"))}
 SUPPORTED = ("linux/armv7", "linux/riscv64", "linux/loong64", "freebsd/amd64", "freebsd/arm64")
+# Native acceptance runs no Go toolchain: these platforms receive only the
+# executables it would otherwise compile from source.
+NATIVE = ("linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64")
+MULTIPART_PACKAGE = "internal/agentservice"
 GO_OSES = set("aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos".split())
+UNIX_OSES = set("aix android darwin dragonfly freebsd hurd illumos ios linux netbsd openbsd solaris".split())
 GO_ARCHES = set("386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64 mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm".split())
 FIXTURES = {"failure-master": "QA_FAILURE_MASTER", "rollback-cli": "QA_ROLLBACK_CLI"}
 _UNIT = importlib.util.spec_from_file_location("go_unit", Path(__file__).with_name("go-unit.py"))
@@ -34,6 +39,12 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
+
+
+def source_digest(path):
+    # A Windows checkout may convert source files to CRLF; the build host's LF
+    # copy of the same commit must still match.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def confined(root, relative, directory=False):
@@ -120,7 +131,7 @@ def selected_test(path, target, go_version):
     match = re.match(r"go1\.(\d+)", go_version)
     if not match:
         raise ValueError("Unrecognized Go version: " + go_version)
-    tags = {target["os"], target["goarch"], "unix", "gc"}
+    tags = {target["os"], target["goarch"], "gc"} | ({"unix"} if target["os"] in UNIX_OSES else set())
     tags.update("go1." + str(number) for number in range(1, int(match[1]) + 1))
     text = path.read_text(encoding="utf-8")
     constraint = re.search(r"^//go:build (.+)$", text, re.MULTILINE)
@@ -150,7 +161,7 @@ def source_inventory(repo, target, go_version):
                 if selected_test(path, target, go_version):
                     relative = path.relative_to(repo).as_posix()
                     confined(repo, relative)
-                    result[relative] = digest(path)
+                    result[relative] = source_digest(path)
     return result
 
 
@@ -190,7 +201,7 @@ def compile_module(module, packages, output, environment, platform):
     return built
 
 
-def build(platform, output):
+def start_build(platform, output):
     target = PLATFORMS[platform]
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -202,6 +213,56 @@ def build(platform, output):
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if commit != commit_identity(ROOT):
         raise ValueError("Build checkout differs from GITHUB_SHA")
+    return target, output, environment, go_version, commit
+
+
+def build_fixtures(manifest, output, environment, extension=""):
+    for name in FIXTURES:
+        source = ".github/acceptance/fixtures/" + name + ".go"
+        binary = "bin/" + name + extension
+        subprocess.run(["go", "build", "-trimpath", "-o", str(output / binary), str(confined(ROOT, source))],
+                       cwd=ROOT, env=environment, check=True)
+        manifest["fixtures"].append({"name": name, "source": source, "sourceSha256": source_digest(ROOT / source),
+                                     "binary": binary, "sha256": digest(output / binary)})
+
+
+def finish_build(manifest, output, target, go_version, sources):
+    if select_sources(source_inventory(ROOT, target, go_version), manifest) != sources:
+        raise ValueError("Test sources changed while compiling the artifact")
+    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != manifest["commit"]:
+        raise ValueError("Git checkout changed while compiling the artifact")
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def select_sources(sources, manifest):
+    """A fixture bundle covers only the multipart test package's sources."""
+    if manifest.get("kind") != "fixtures":
+        return sources
+    return {path: value for path, value in sources.items() if str(PurePosixPath(path).parent) == MULTIPART_PACKAGE}
+
+
+def build_native(platform, output):
+    """Compile what native acceptance would otherwise build from source, for one target."""
+    target, output, environment, go_version, commit = start_build(platform, output)
+    extension = ".exe" if target["os"] == "windows" else ""
+    manifest = {"schema": 1, "kind": "fixtures", "platform": platform, "commit": commit, "goVersion": go_version,
+                "tests": [], "fixtures": []}
+    sources = select_sources(source_inventory(ROOT, target, go_version), manifest)
+    if not sources:
+        raise ValueError("The multipart recovery package has no tests for " + platform)
+    manifest["testSources"] = sources
+    binary = "bin/" + MULTIPART_PACKAGE.replace("/", "-") + ".test" + extension
+    subprocess.run(["go", "test", "-c", "-trimpath", "-ldflags=-s -w", "-o", str(output / binary), "./" + MULTIPART_PACKAGE],
+                   cwd=ROOT, env=environment, check=True, stdout=subprocess.DEVNULL)
+    manifest["tests"].append({"package": "github.com/MoonWX/oss-transfer/" + MULTIPART_PACKAGE, "cwd": MULTIPART_PACKAGE,
+                              "binary": binary, "testFiles": sorted(sources), "sha256": digest(output / binary)})
+    build_fixtures(manifest, output, environment, extension)
+    finish_build(manifest, output, target, go_version, sources)
+    print(f"Built native acceptance fixtures for {platform}")
+
+
+def build(platform, output):
+    target, output, environment, go_version, commit = start_build(platform, output)
     sources = source_inventory(ROOT, target, go_version)
     manifest = {"schema": 1, "platform": platform, "commit": commit, "goVersion": go_version,
                 "testSources": sources, "tests": [], "fixtures": []}
@@ -225,18 +286,8 @@ def build(platform, output):
     if listed_sources != set(sources):
         raise ValueError("Go package discovery differs from test-source inventory: " +
                          repr(sorted(listed_sources.symmetric_difference(sources))))
-    for name in FIXTURES:
-        source = ".github/acceptance/fixtures/" + name + ".go"
-        binary = "bin/" + name
-        subprocess.run(["go", "build", "-trimpath", "-o", str(output / binary), str(confined(ROOT, source))],
-                       cwd=ROOT, env=environment, check=True)
-        manifest["fixtures"].append({"name": name, "source": source, "sourceSha256": digest(ROOT / source),
-                                     "binary": binary, "sha256": digest(output / binary)})
-    if source_inventory(ROOT, target, go_version) != sources:
-        raise ValueError("Test sources changed while compiling the artifact")
-    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != commit:
-        raise ValueError("Git checkout changed while compiling the artifact")
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    build_fixtures(manifest, output, environment)
+    finish_build(manifest, output, target, go_version, sources)
     print(f"Built {len(manifest['tests'])} test packages for {platform}")
 
 
@@ -251,12 +302,28 @@ def verify_elf(path, platform):
         raise ValueError("Test executable has the wrong platform: " + str(path))
 
 
+def verify_native(path, platform):
+    # Mach-O and PE checks live with the package verifier.
+    spec = importlib.util.spec_from_file_location("test_binaries_prepare", Path(__file__).with_name("prepare.py"))
+    package_check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_check)
+    target = PLATFORMS[platform]
+    try:
+        package_check.verify_binary(path, target["os"], target["arch"])
+    except ValueError:
+        raise ValueError("Test executable has the wrong platform: " + str(path)) from None
+
+
 def verify(platform, directory, repo, env_file=None, publish_env=True):
     directory, repo = directory.resolve(), repo.resolve()
     manifest = json.loads(confined(directory, "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("schema") != 1 or manifest.get("platform") != platform or manifest.get("commit") != commit_identity(repo):
         raise ValueError("Test manifest schema, platform or commit differs from this checkout")
-    sources = source_inventory(repo, PLATFORMS[platform], manifest.get("goVersion", ""))
+    # Native platforms receive only the fixtures acceptance would compile; the
+    # emulated and VM platforms receive every test package.
+    if (manifest.get("kind") == "fixtures") != (platform in NATIVE):
+        raise ValueError("Test manifest kind does not match platform " + platform)
+    sources = select_sources(source_inventory(repo, PLATFORMS[platform], manifest.get("goVersion", "")), manifest)
     if not sources or manifest.get("testSources") != sources:
         raise ValueError("Test-source inventory is incomplete or differs from this checkout")
     expected_cwds = {str(PurePosixPath(path).parent) for path in sources}
@@ -272,7 +339,7 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
         path = confined(directory, binary)
         if not re.fullmatch(r"[0-9a-f]{64}", entry.get("sha256", "")) or digest(path) != entry["sha256"]:
             raise ValueError("Test executable checksum mismatch: " + binary)
-        verify_elf(path, platform)
+        (verify_native if platform in NATIVE else verify_elf)(path, platform)
         executable_paths.append(path)
         return path
 
@@ -295,7 +362,7 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
             raise ValueError("Test package omits or repeats source files: " + package)
         seen_files.update(files)
         path = executable(entry)
-        if cwd == "internal/agentservice":
+        if cwd == MULTIPART_PACKAGE:
             values["QA_MULTIPART_TEST_BINARY"] = str(path)
     if seen_cwds != expected_cwds or seen_files != set(sources):
         raise ValueError("Test manifest omits packages from this checkout")
@@ -306,7 +373,7 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
             raise ValueError("Unknown or repeated test fixture: " + name)
         fixture_names.add(name)
         source = ".github/acceptance/fixtures/" + name + ".go"
-        if entry.get("source") != source or digest(confined(repo, source)) != entry.get("sourceSha256"):
+        if entry.get("source") != source or source_digest(confined(repo, source)) != entry.get("sourceSha256"):
             raise ValueError("Fixture source differs from this checkout: " + name)
         values[FIXTURES[name]] = str(executable(entry))
     if fixture_names != set(FIXTURES) or "QA_MULTIPART_TEST_BINARY" not in values:
@@ -327,10 +394,10 @@ def verify(platform, directory, repo, env_file=None, publish_env=True):
     return manifest
 
 
-def run(platform, directory, repo, output, parallel):
+def run(platform, directory, repo, output, parallel, scope="full"):
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    evidence = {"platform": platform, "result": "failed", "phase": "verify", "packages": []}
+    evidence = {"platform": platform, "result": "failed", "phase": "verify", "scope": scope, "packages": []}
     # Match the native go test package deadline. Emulated packages contain
     # the same tests; their individual operation deadlines stay unchanged.
     package_timeout = 900
@@ -340,8 +407,18 @@ def run(platform, directory, repo, output, parallel):
         evidence.update(commit=manifest["commit"], goVersion=manifest["goVersion"], phase="run")
 
         timings = SHARDS.load_timings()
+        # The platform scope is go-unit.py's: the same skipped packages and the
+        # same platform-sensitive internal/master tests.
+        limited = timings.get("platformScope", {}) if scope == "platform" else {}
+        skipped = sorted(limited.get("skipPackages", []))
+        unknown_skips = sorted(set(skipped) - {entry["cwd"] for entry in manifest["tests"]})
+        if unknown_skips:
+            raise ValueError("Platform scope skips unknown packages: " + ", ".join(unknown_skips))
+        evidence["skippedPackages"] = skipped
         work = []
         for entry in manifest["tests"]:
+            if entry["cwd"] in skipped:
+                continue
             if entry["cwd"] != timings["package"]:
                 work.append({"entry": entry})
                 continue
@@ -351,9 +428,15 @@ def run(platform, directory, repo, output, parallel):
                                      cwd=confined(repo.resolve(), entry["cwd"], directory=True),
                                      capture_output=True, text=True, timeout=300, check=True)
             names = SHARDS.listed_tests(listing.stdout)
-            shards, unknown = SHARDS.plan_shards(names, timings["seconds"], timings["shards"])
-            evidence.update(listedTests=len(names), untimedTests=unknown)
-            print(f"Union check: {len(names)} listed tests in {entry['package']} = "
+            selected, count = names, timings["shards"]
+            if scope == "platform":
+                selected = SHARDS.platform_tests(names, confined(repo.resolve(), entry["cwd"], directory=True),
+                                                 limited.get("packageTestFiles", []))
+                count = limited.get("shards", 1)
+                evidence["platformTests"] = selected
+            shards, unknown = SHARDS.plan_shards(selected, timings["seconds"], count)
+            evidence.update(listedTests=len(names), selectedTests=len(selected), untimedTests=unknown)
+            print(f"Union check: {len(selected)} of {len(names)} listed tests in {entry['package']} = "
                   f"{' + '.join(str(len(shard['tests'])) for shard in shards)} across {len(shards)} shards", flush=True)
             for index, shard in enumerate(shards, 1):
                 work.append({"entry": entry, "shard": f"{index}/{len(shards)}", "tests": shard["tests"]})
@@ -456,12 +539,15 @@ def run(platform, directory, repo, output, parallel):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    build_parser = commands.add_parser("build")
+    build_parser = commands.add_parser("build", help="every test package, for an emulated or VM platform")
     build_parser.add_argument("--platform", choices=SUPPORTED, required=True)
     build_parser.add_argument("--output", type=Path, required=True)
+    native_parser = commands.add_parser("build-native", help="only the acceptance fixtures, for a native platform")
+    native_parser.add_argument("--platform", choices=NATIVE, required=True)
+    native_parser.add_argument("--output", type=Path, required=True)
     for name in ("verify", "run"):
         command = commands.add_parser(name)
-        command.add_argument("--platform", choices=SUPPORTED, required=True)
+        command.add_argument("--platform", choices=SUPPORTED + NATIVE if name == "verify" else SUPPORTED, required=True)
         command.add_argument("--directory", type=Path, required=True)
         command.add_argument("--repo", type=Path, required=True)
         if name == "verify":
@@ -469,14 +555,17 @@ def main():
         else:
             command.add_argument("--output", type=Path, required=True)
             command.add_argument("--parallel", type=int, choices=(1, 2, 3, 4), default=2)
+            command.add_argument("--scope", choices=("full", "platform"), default="full")
     args = parser.parse_args()
     if args.command == "build":
         build(args.platform, args.output)
+    elif args.command == "build-native":
+        build_native(args.platform, args.output)
     elif args.command == "verify":
         manifest = verify(args.platform, args.directory, args.repo, args.env_file)
         print(f"Verified {len(manifest['tests'])} test packages for {args.platform}")
     else:
-        return run(args.platform, args.directory, args.repo, args.output, args.parallel)
+        return run(args.platform, args.directory, args.repo, args.output, args.parallel, args.scope)
     return 0
 
 

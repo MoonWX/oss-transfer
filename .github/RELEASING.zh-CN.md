@@ -45,7 +45,7 @@ git push --atomic origin main "+refs/tags/v$version"
 
 只修改 `VERSION` 时，CI 会复用 `main` 上代码相同的祖先提交已通过的测试。它仍会重新构建全部安装包和镜像，检查打包后的程序版本，并校验校验和与镜像身份。修改代码、依赖、安装脚本或工作流时运行默认测试集；无法确认可用的通过基线时，也运行默认测试集。
 
-默认 CI 测试十个平台。FreeBSD arm64 的安装包会构建并检查，但运行时测试是可选的。需要单独运行完整的 FreeBSD arm64 测试时：
+默认 CI 测试十个平台。全部 Go 测试在 Linux amd64 上运行；其他平台运行与平台相关的部分，QEMU 和 FreeBSD 平台只运行核心传输，而不是全部传输场景。每晚运行一次完整范围，覆盖所有平台的全部测试，不影响发布（见[测试范围](acceptance/README.zh-CN.md#测试范围)）。FreeBSD arm64 的安装包会构建并检查，但运行时测试是可选的。需要单独运行完整的 FreeBSD arm64 测试时：
 
 ```sh
 gh workflow run ci.yml --ref main -f freebsd_arm64=true

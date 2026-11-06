@@ -4,10 +4,19 @@ on:
     branches: [main]
   pull_request:
     paths: ['install.sh', 'build.sh', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'cmd/**', 'internal/**', 'go.mod', 'go.sum', 'VERSION', 'scripts/build.sh', 'scripts/sync-installer-source.py', '.github/actions/**', 'deploy/native/**', 'docs/migration.md', 'frontend/**', 'cli/**', '.github/acceptance/**', '.github/tests/**', '.github/scripts/resolve-ci-artifacts.py', '.github/workflows/ci.yml', '.github/workflows/release.yml', 'deploy/verify-release-image.sh']
+  schedule:
+    # Nightly full scope (02:40 UTC+8): every Go test on every platform and
+    # every transfer scenario on the emulated and FreeBSD platforms.
+    - cron: '40 18 * * *'
   workflow_dispatch:
     inputs:
       freebsd_arm64:
         description: Run only the full FreeBSD ARM64 suite
+        required: false
+        type: boolean
+        default: false
+      full_suite:
+        description: Run the nightly full scope instead of the push scope
         required: false
         type: boolean
         default: false
@@ -17,6 +26,10 @@ permissions:
 env:
   PYTHONUTF8: '1'
   PYTHONDONTWRITEBYTECODE: '1'
+  # platform (pushes, pull requests): every Go test on linux/amd64, the
+  # platform-sensitive scope on the other platforms, and core transfers on the
+  # emulated and FreeBSD platforms. full: everything everywhere.
+  QA_SCOPE: ${{ (github.event_name == 'schedule' || inputs.full_suite || inputs.freebsd_arm64) && 'full' || 'platform' }}
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -38,7 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/resolve-ci-artifacts.py --check-reuse
-      - name: Record FreeBSD ARM64 acceptance scope
+      - name: Record acceptance scope
         env:
           QA_FREEBSD_ARM64: ${{ inputs.freebsd_arm64 && 'true' || 'false' }}
         run: |
@@ -46,6 +59,7 @@ jobs:
             echo 'Only the full FreeBSD ARM64 runtime suite is enabled. Other platform suites and the image build are not scheduled.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'FreeBSD ARM64: runtime acceptance is not scheduled. Its archive remains in the release build matrix.' >> "$GITHUB_STEP_SUMMARY"
+            echo "Test scope: $QA_SCOPE (see .github/acceptance/README.md#scheduling)." >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -185,20 +199,33 @@ jobs:
           import sys
 
           helper = Path('.github/acceptance/test-binaries.py')
-          platforms = runpy.run_path(str(helper))['SUPPORTED']
+          targets = runpy.run_path(str(helper))
           arm64_only = os.environ['QA_FREEBSD_ARM64'] == 'true'
-          platforms = [platform for platform in platforms if (platform == 'freebsd/arm64') == arm64_only]
+          platforms = [platform for platform in targets['SUPPORTED'] if (platform == 'freebsd/arm64') == arm64_only]
+          # Native acceptance runs without Go: it receives only the multipart
+          # test executable and the two installer failure fixtures.
+          native = [] if arm64_only else list(targets['NATIVE'])
 
-          def compile_tests(platform):
+          def compile_tests(command, platform, directory):
               subprocess.run([
-                  sys.executable, str(helper), 'build', '--platform', platform,
-                  '--output', 'output/test-binaries/' + platform.replace('/', '-'),
+                  sys.executable, str(helper), command, '--platform', platform,
+                  '--output', directory + '/' + platform.replace('/', '-'),
               ], check=True)
 
           # Each target is one go test -c per module; their links overlap well.
-          with ThreadPoolExecutor(max_workers=len(platforms)) as pool:
-              list(pool.map(compile_tests, platforms))
+          jobs = [('build', platform, 'output/test-binaries') for platform in platforms]
+          jobs += [('build-native', platform, 'output/acceptance-fixtures') for platform in native]
+          with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+              for future in [pool.submit(compile_tests, *job) for job in jobs]:
+                  future.result()
           PYTHON
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+        with:
+          name: acceptance-fixtures
+          path: output/acceptance-fixtures/
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
         with:
@@ -239,6 +266,74 @@ jobs:
         with:
           path: ${{ steps.go.outputs.cache-path }}
           key: ${{ steps.go.outputs.cache-key }}
+  go-tests:
+    if: ${{ !inputs.freebsd_arm64 }}
+    name: Go tests ${{ matrix.platform }}
+    # Go tests need no package, so they start with the build instead of after
+    # it, and no acceptance group competes with them for CPU.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every test, once, on the fastest runner; the others run the
+          # platform-sensitive scope on pushes and every test nightly.
+          - {platform: linux/amd64, name: linux-amd64, runner: ubuntu-latest, race: true, scope: full}
+          - {platform: linux/arm64, name: linux-arm64, runner: ubuntu-26.04-arm, race: true}
+          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel, race: true}
+          - {platform: darwin/arm64, name: darwin-arm64, runner: macos-latest, race: true}
+          - {platform: windows/amd64, name: windows-amd64, runner: windows-latest, race: true}
+          - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm, race: false}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      # Same decision as the package job; this job does not wait for it.
+      - name: Reuse passing tests for a version-only change
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/resolve-ci-artifacts.py --check-reuse
+      # The family the native acceptance jobs used to save, so the first run
+      # restores a warm cache; Windows arm64 builds without -race in it.
+      - uses: ./.github/actions/setup-go
+        if: steps.reuse.outputs.reuse_tests != 'true'
+        id: go
+        with:
+          go-version-file: go.mod
+          purpose: race
+      - name: Run Go tests of both modules
+        if: steps.reuse.outputs.reuse_tests != 'true'
+        env:
+          QA_TEST_SCOPE: ${{ matrix.scope || env.QA_SCOPE }}
+          QA_RACE: ${{ matrix.race }}
+        run: |
+          args=(--output "$RUNNER_TEMP/unit" --scope "$QA_TEST_SCOPE")
+          if [[ "$QA_RACE" == true ]]; then args+=(--race); fi
+          python .github/acceptance/go-unit.py "${args[@]}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.reuse.outputs.reuse_tests != 'true' && github.event_name != 'pull_request'
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.reuse.outputs.reuse_tests != 'true'
+        with:
+          name: unit-evidence-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/unit/evidence.json
+            ${{ runner.temp }}/unit/*.log
+          if-no-files-found: ignore
+          retention-days: 7
   image:
     if: inputs.freebsd_arm64 != true
     name: Build container image
@@ -276,7 +371,8 @@ jobs:
           sbom: false
       - name: Verify the archived image identities
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          # The runner image ships skopeo; refresh package lists only without it.
+          command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo; }
           (cd output && sha256sum oss-transfer-image.tar > oss-transfer-image.tar.sha256)
           bash deploy/verify-release-image.sh "v$(cat VERSION)" output --ci-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -288,15 +384,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   native-linux:
-    if: needs.package.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
     name: Native ${{ matrix.platform }}
-    needs: [package, image]
+    needs: [package, test-programs, image]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {platform: linux/amd64, name: linux-amd64, arch: amd64, runner: ubuntu-latest, race: '-race'}
-          - {platform: linux/arm64, name: linux-arm64, arch: arm64, runner: ubuntu-26.04-arm, race: '-race'}
+          - {platform: linux/amd64, name: linux-amd64, arch: amd64, runner: ubuntu-latest}
+          - {platform: linux/arm64, name: linux-arm64, arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     defaults:
@@ -306,11 +402,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
-        id: go
-        with:
-          go-version-file: go.mod
-          purpose: race
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -322,17 +413,23 @@ jobs:
         with:
           name: release-image
           path: output
-      - name: Verify packages and prepare pinned S3 service
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: acceptance-fixtures
+          path: output/acceptance-fixtures
+      - name: Verify packages and fixtures and prepare pinned S3 service
         env:
           QA_PLATFORM: ${{ matrix.platform }}
+          QA_NAME: ${{ matrix.name }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
+          python .github/acceptance/test-binaries.py verify --platform "$QA_PLATFORM" --directory "output/acceptance-fixtures/$QA_NAME" --repo "$GITHUB_WORKSPACE"
       - name: Load the verified image and prepare the Compose installer
         env:
           QA_ARCH: ${{ matrix.arch }}
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo; }
           python deploy/native/verify-image.py --archive output/oss-transfer-image.tar --version "$(cat VERSION)" --commit "$GITHUB_SHA"
           skopeo --command-timeout 3m --override-os linux --override-arch "$QA_ARCH" copy \
             oci-archive:output/oss-transfer-image.tar "docker-archive:$RUNNER_TEMP/image.tar:oss-transfer:qa"
@@ -344,17 +441,9 @@ jobs:
       - name: Check execution, administration and service lifecycle
         env:
           QA_PLATFORM: ${{ matrix.platform }}
-          RACE_FLAG: ${{ matrix.race }}
         run: |
-          args=(--platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance")
-          if [[ -n "$RACE_FLAG" ]]; then args+=(--race); fi
-          args+=(--docker-image oss-transfer:qa --installer-manifest "$RUNNER_TEMP/installer-release/manifest.tsv")
-          python .github/acceptance/run-platform.py "${args[@]}"
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: github.event_name != 'pull_request'
-        with:
-          path: ${{ steps.go.outputs.cache-path }}
-          key: ${{ steps.go.outputs.cache-key }}
+          python .github/acceptance/run-platform.py --platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance" --unit none \
+            --docker-image oss-transfer:qa --installer-manifest "$RUNNER_TEMP/installer-release/manifest.tsv"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -362,17 +451,15 @@ jobs:
           path: |
             ${{ runner.temp }}/acceptance/platform/evidence.json
             ${{ runner.temp }}/acceptance/platform/*.log
-            ${{ runner.temp }}/acceptance/unit/evidence.json
-            ${{ runner.temp }}/acceptance/unit/*.log
             ${{ runner.temp }}/acceptance/smoke/evidence.json
             ${{ runner.temp }}/acceptance/smoke/*.log
             ${{ runner.temp }}/acceptance/cli/evidence.json
             ${{ runner.temp }}/acceptance/cli/*.log
             ${{ runner.temp }}/acceptance/local-cli/evidence.json
             ${{ runner.temp }}/acceptance/local-cli/**/*.log
-            ${{ runner.temp }}/acceptance/cluster/evidence.json
-            ${{ runner.temp }}/acceptance/cluster/bandwidth-samples.json
-            ${{ runner.temp }}/acceptance/cluster/*.log
+            ${{ runner.temp }}/acceptance/cluster*/evidence.json
+            ${{ runner.temp }}/acceptance/cluster*/*-samples.json
+            ${{ runner.temp }}/acceptance/cluster*/*.log
             ${{ runner.temp }}/acceptance/install/evidence.json
             ${{ runner.temp }}/acceptance/install/*-install-*.log
             ${{ runner.temp }}/acceptance/inventory/evidence.json
@@ -385,18 +472,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
   native:
-    if: needs.package.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
     name: Native ${{ matrix.platform }}
     # Only the Linux jobs load the container image, so these start without it.
-    needs: package
+    needs: [package, test-programs]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel, race: '-race'}
-          - {platform: darwin/arm64, name: darwin-arm64, runner: macos-latest, race: '-race'}
-          - {platform: windows/amd64, name: windows-amd64, runner: windows-latest, race: '-race'}
-          - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm, race: ''}
+          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel, install: here}
+          - {platform: darwin/arm64, name: darwin-arm64, runner: macos-latest, install: here}
+          # Installation is the longest group on Windows (PowerShell); its own
+          # job keeps it off the path to the measured transfers.
+          - {platform: windows/amd64, name: windows-amd64, runner: windows-latest, install: separate}
+          - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm, install: separate}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     defaults:
@@ -406,11 +495,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
-        id: go
-        with:
-          go-version-file: go.mod
-          purpose: race
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -418,25 +502,23 @@ jobs:
         with:
           name: packages
           path: output/packages
-      - name: Verify packages and prepare pinned S3 service
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: acceptance-fixtures
+          path: output/acceptance-fixtures
+      - name: Verify packages and fixtures and prepare pinned S3 service
         env:
           QA_PLATFORM: ${{ matrix.platform }}
+          QA_NAME: ${{ matrix.name }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
+          python .github/acceptance/test-binaries.py verify --platform "$QA_PLATFORM" --directory "output/acceptance-fixtures/$QA_NAME" --repo "$GITHUB_WORKSPACE"
       - name: Check execution, administration and service lifecycle
         env:
           QA_PLATFORM: ${{ matrix.platform }}
-          RACE_FLAG: ${{ matrix.race }}
-        run: |
-          args=(--platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance")
-          if [[ -n "$RACE_FLAG" ]]; then args+=(--race); fi
-          python .github/acceptance/run-platform.py "${args[@]}"
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: github.event_name != 'pull_request'
-        with:
-          path: ${{ steps.go.outputs.cache-path }}
-          key: ${{ steps.go.outputs.cache-key }}
+          QA_INSTALL: ${{ matrix.install }}
+        run: python .github/acceptance/run-platform.py --platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance" --unit none --install "$QA_INSTALL"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -444,21 +526,72 @@ jobs:
           path: |
             ${{ runner.temp }}/acceptance/platform/evidence.json
             ${{ runner.temp }}/acceptance/platform/*.log
-            ${{ runner.temp }}/acceptance/unit/evidence.json
-            ${{ runner.temp }}/acceptance/unit/*.log
             ${{ runner.temp }}/acceptance/smoke/evidence.json
             ${{ runner.temp }}/acceptance/smoke/*.log
             ${{ runner.temp }}/acceptance/cli/evidence.json
             ${{ runner.temp }}/acceptance/cli/*.log
             ${{ runner.temp }}/acceptance/local-cli/evidence.json
             ${{ runner.temp }}/acceptance/local-cli/**/*.log
-            ${{ runner.temp }}/acceptance/cluster/evidence.json
-            ${{ runner.temp }}/acceptance/cluster/bandwidth-samples.json
-            ${{ runner.temp }}/acceptance/cluster/*.log
+            ${{ runner.temp }}/acceptance/cluster*/evidence.json
+            ${{ runner.temp }}/acceptance/cluster*/*-samples.json
+            ${{ runner.temp }}/acceptance/cluster*/*.log
             ${{ runner.temp }}/acceptance/install/evidence.json
             ${{ runner.temp }}/acceptance/install/*-install-*.log
             ${{ runner.temp }}/acceptance/inventory/evidence.json
             ${{ runner.temp }}/acceptance/inventory/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+  native-install:
+    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+    name: Install ${{ matrix.platform }}
+    needs: [package, test-programs]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: windows/amd64, name: windows-amd64, runner: windows-latest}
+          - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: output/packages
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: acceptance-fixtures
+          path: output/acceptance-fixtures
+      - name: Verify packages and fixtures
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+          QA_NAME: ${{ matrix.name }}
+        run: |
+          python -m pip install -r .github/acceptance/requirements.txt
+          python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
+          python .github/acceptance/test-binaries.py verify --platform "$QA_PLATFORM" --directory "output/acceptance-fixtures/$QA_NAME" --repo "$GITHUB_WORKSPACE"
+      - name: Check native installation, upgrade and rollback
+        env:
+          QA_PLATFORM: ${{ matrix.platform }}
+        run: python .github/acceptance/run-platform.py --platform "$QA_PLATFORM" --output "$RUNNER_TEMP/acceptance" --unit none --install only
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: install-evidence-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/acceptance/platform/evidence.json
+            ${{ runner.temp }}/acceptance/platform/*.log
+            ${{ runner.temp }}/acceptance/install/evidence.json
+            ${{ runner.temp }}/acceptance/install/*-install-*.log
           if-no-files-found: ignore
           retention-days: 7
   emulated:
@@ -473,7 +606,7 @@ jobs:
           - {arch: riscv64, interpreter: riscv64}
           - {arch: loong64, interpreter: loongarch64}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -493,8 +626,13 @@ jobs:
         env:
           QA_INTERPRETER: ${{ matrix.interpreter }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-user qemu-user-binfmt binfmt-support
+          packages=(qemu-user qemu-user-binfmt binfmt-support)
+          # The runner image's package lists are usually current; a slow mirror
+          # once spent six minutes in apt-get update, so refresh only on failure.
+          if ! sudo apt-get install -y --no-install-recommends "${packages[@]}"; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          fi
           if [[ -f "/var/lib/binfmts/qemu-$QA_INTERPRETER" ]]; then
             sudo update-binfmts --enable "qemu-$QA_INTERPRETER"
           else
@@ -511,7 +649,13 @@ jobs:
       - name: Check execution, administration and service lifecycle
         env:
           QA_ARCH: ${{ matrix.arch }}
-        run: python .github/acceptance/run-platform.py --platform "linux/$QA_ARCH" --test-binaries output/test-binaries
+        run: |
+          # Pushes run core transfers here; bandwidth, recovery and node-change
+          # scenarios run on the six native platforms and here nightly.
+          transfer=core
+          if [[ "$QA_SCOPE" == full ]]; then transfer=full; fi
+          python .github/acceptance/run-platform.py --platform "linux/$QA_ARCH" --test-binaries output/test-binaries \
+            --unit "$QA_SCOPE" --transfer "$transfer"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
@@ -521,9 +665,9 @@ jobs:
             output/platform/*.log
             output/smoke/evidence.json
             output/smoke/*.log
-            output/cluster/evidence.json
-            output/cluster/bandwidth-samples.json
-            output/cluster/*.log
+            output/cluster*/evidence.json
+            output/cluster*/*-samples.json
+            output/cluster*/*.log
             output/unit/evidence.json
             output/unit/*.log
             output/cli/evidence.json
@@ -595,7 +739,7 @@ jobs:
           arch: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
           cpu: ${{ matrix.arch == 'arm64' && '2' || '' }}
           copyback: false
-          envs: QA_ARCH GITHUB_SHA
+          envs: QA_ARCH QA_SCOPE GITHUB_SHA
           prepare: |
             set -e
             pkg install -y bash curl python311 ca_root_nss
@@ -619,7 +763,10 @@ jobs:
             "$py" .github/acceptance/prepare.py --platform "freebsd/$QA_ARCH" --directory /tmp/oss-transfer-package --external-s3-fixture
             "$py" .github/acceptance/test-binaries.py verify --platform "freebsd/$QA_ARCH" --directory output/test-binaries --repo "$PWD" --env-file /tmp/oss-qa-tests.env
             . /tmp/oss-qa-tests.env
-            "$py" .github/acceptance/run-platform.py --platform "freebsd/$QA_ARCH" --test-binaries output/test-binaries --bin-dir /tmp/oss-transfer-package
+            transfer=core
+            if [ "$QA_SCOPE" = full ]; then transfer=full; fi
+            "$py" .github/acceptance/run-platform.py --platform "freebsd/$QA_ARCH" --test-binaries output/test-binaries --bin-dir /tmp/oss-transfer-package \
+              --unit "$QA_SCOPE" --transfer "$transfer"
             TESTS
             mkdir -p output
             printf '%s\n' "$status" > output/freebsd-exit-code
@@ -671,7 +818,7 @@ jobs:
             --include='/freebsd-exit-code' --include='/freebsd-guest-diagnostics.json' \
             --include='/platform/' --include='/platform/evidence.json' --include='/platform/*.log' \
             --include='/smoke/' --include='/smoke/evidence.json' --include='/smoke/*.log' \
-            --include='/cluster/' --include='/cluster/evidence.json' --include='/cluster/bandwidth-samples.json' --include='/cluster/*.log' \
+            --include='/cluster*/' --include='/cluster*/evidence.json' --include='/cluster*/*-samples.json' --include='/cluster*/*.log' \
             --include='/unit/' --include='/unit/evidence.json' --include='/unit/*.log' \
             --include='/cli/' --include='/cli/evidence.json' --include='/cli/*.log' \
             --include='/local-cli/' --include='/local-cli/**/' --include='/local-cli/evidence.json' --include='/local-cli/**/*.log' \
@@ -698,9 +845,9 @@ jobs:
             output/platform/*.log
             output/smoke/evidence.json
             output/smoke/*.log
-            output/cluster/evidence.json
-            output/cluster/bandwidth-samples.json
-            output/cluster/*.log
+            output/cluster*/evidence.json
+            output/cluster*/*-samples.json
+            output/cluster*/*.log
             output/unit/evidence.json
             output/unit/*.log
             output/cli/evidence.json

@@ -80,7 +80,8 @@ jobs:
           merge-multiple: true
           path: output
       - name: Install image transfer tool
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+        # The runner image ships skopeo; refresh package lists only without it.
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo; }
       - name: Publish and verify Docker Hub image
         timeout-minutes: 20
         env:

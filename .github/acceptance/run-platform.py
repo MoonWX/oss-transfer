@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one platform's complete acceptance, with an exclusive transfer window."""
+"""Run one platform's acceptance groups concurrently, with an exclusive transfer window."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
@@ -13,17 +13,26 @@ import threading
 import time
 
 
-REQUIRED_GROUPS = ("unit", "control", "install")
+# Groups that share a runner with the transfers. Go tests join as "unit" when
+# they run here (emulated and VM platforms, or a local run); native CI runs
+# them in separate jobs, and Windows CI also runs installation separately.
+RUNNER_GROUPS = ("unit", "control", "install")
+# Each transfer group drives its own SeaweedFS, Master and two Agents, so the
+# measured scenarios run side by side instead of one after another.
+TRANSFER_GROUPS = ("transfer", "recovery", "nodes")
+FIXTURE_VARIABLES = ("QA_FAILURE_MASTER", "QA_ROLLBACK_CLI", "QA_MULTIPART_TEST_BINARY")
 # Recovery task cap in Mbps. Lower a platform's entry if its transfer finishes
 # before the stop or crash can be injected; cluster.py fails loudly when it does.
 RECOVERY_BANDWIDTH_MBPS = {"default": 16}
+# Lines of a failed phase's log repeated in the job log.
+FAILURE_TAIL_LINES = 150
 
 
 def write_json(path, value):
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     # Windows refuses to replace a file another process has open; the transfer
-    # group polls the gate file, so retry briefly instead of failing the run.
+    # groups poll the gate file, so retry briefly instead of failing the run.
     for attempt in range(100):
         try:
             temporary.replace(path)
@@ -38,6 +47,14 @@ def phase(name, command, cwd, *, evidence=None):
     return {"name": name, "command": [str(arg) for arg in command], "cwd": str(cwd), "evidence": evidence}
 
 
+def verified_fixtures():
+    """Executables published by test-binaries.py verify, or None to build them from source."""
+    present = {name: os.environ[name] for name in FIXTURE_VARIABLES if os.environ.get(name)}
+    if present and len(present) != len(FIXTURE_VARIABLES):
+        raise ValueError("Set every verified fixture or none: " + ", ".join(FIXTURE_VARIABLES))
+    return present or None
+
+
 def plan(args, gate, run_id):
     repo, output, py = args.repo, args.output, sys.executable
     scripts = repo / ".github/acceptance"
@@ -49,36 +66,13 @@ def plan(args, gate, run_id):
                if sys.platform == "win32" else [
                    phase("installer-sources", [py, repo / ".github/tests/test-source-selection.py", "-v"], repo),
                    phase("download-sources", [py, repo / ".github/tests/test-download-source.py", "-v"], repo)])
-    # internal/master is the long pole and mostly waits on leases and restarts,
-    # so it runs as concurrent shards next to the remaining packages.
-    if args.test_binaries:
-        parallel = "4" if (os.cpu_count() or 1) > 2 else "2"
-        unit = [phase("unit", [py, scripts / "test-binaries.py", "run", "--platform", args.platform,
-                               "--directory", args.test_binaries, "--repo", repo, "--output", output / "unit",
-                               "--parallel", parallel], repo)]
-        cli_unit = []
-    else:
-        race = ["-race"] if args.race else []
-        unit = [phase("unit", [py, scripts / "go-unit.py", "--output", output / "unit",
-                               *(["--race"] if args.race else [])], repo)]
-        cli_unit = [phase("cli-unit", ["go", "test", "-count=1", "-timeout=15m", "-p", "2", *race, "./..."], repo / "cli")]
-    version = (repo / "VERSION").read_text().strip()
-    control = [
-        phase("smoke", [py, scripts / "runtime-smoke.py", *common, "--output", output / "smoke",
-                        "--expect-agent-release-url", "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v" + version,
-                        "--expect-agent-image", "moonwx/osstransfer:" + version], repo),
-        phase("cli", [py, scripts / "cli.py", *cli, "--output", output / "cli"], repo),
-        phase("local-cli", [py, scripts / "local-cli.py", *cli, "--output", output / "local-cli"], repo,
-              evidence=output / "local-cli/evidence.json"),
-        phase("inventory", [py, scripts / "inventory.py", *cli, *storage, "--output", output / "inventory"], repo),
-        # Short checks ride in the control group so the unit group starts at once.
-        *sources, *cli_unit,
-    ]
+    groups = {}
+    fixtures = verified_fixtures()
     install = [*privileged, scripts / "install.py", *cli, "--repo", repo, "--output", output / "install",
                "--all-installed", "--target-platform", args.platform]
-    if args.test_binaries:
-        install += ["--failure-master-fixture", os.environ["QA_FAILURE_MASTER"],
-                    "--rollback-cli-fixture", os.environ["QA_ROLLBACK_CLI"]]
+    if fixtures:
+        install += ["--failure-master-fixture", fixtures["QA_FAILURE_MASTER"],
+                    "--rollback-cli-fixture", fixtures["QA_ROLLBACK_CLI"]]
     installation = [phase("install", install, repo, evidence=output / "install/evidence.json")]
     if args.docker_image:
         installation += [
@@ -88,23 +82,75 @@ def plan(args, gate, run_id):
                                       "--manifest", args.installer_manifest, "--image", args.docker_image,
                                       "--output", output / "setup"], repo, evidence=output / "setup/evidence.json"),
         ]
-    transfer = [py, scripts / "cluster.py", *common, *storage, "--output", output / "cluster", "--scenario", "all",
-                "--multipart-recovery", "--exclusive-gate", gate, "--exclusive-run-id", run_id,
-                "--recovery-bandwidth-mbps", RECOVERY_BANDWIDTH_MBPS.get(args.platform, RECOVERY_BANDWIDTH_MBPS["default"])]
-    if args.test_binaries:
-        transfer += ["--multipart-test-binary", os.environ["QA_MULTIPART_TEST_BINARY"]]
-    return {"unit": unit, "control": control, "install": installation,
-            "transfer": [phase("transfer", transfer, repo)]}
+    if args.install == "only":
+        return {"install": installation}
+    # internal/master is the long pole and mostly waits on leases and restarts,
+    # so both runners split it into concurrent shards next to the other packages.
+    if args.unit != "none" and args.test_binaries:
+        parallel = "4" if (os.cpu_count() or 1) > 2 else "2"
+        groups["unit"] = [phase("unit", [py, scripts / "test-binaries.py", "run", "--platform", args.platform,
+                                        "--directory", args.test_binaries, "--repo", repo, "--output", output / "unit",
+                                        "--parallel", parallel, "--scope", args.unit], repo)]
+    elif args.unit != "none":
+        groups["unit"] = [phase("unit", [py, scripts / "go-unit.py", "--output", output / "unit", "--scope", args.unit,
+                                        *(["--race"] if args.race else [])], repo)]
+    version = (repo / "VERSION").read_text().strip()
+    groups["control"] = [
+        phase("smoke", [py, scripts / "runtime-smoke.py", *common, "--output", output / "smoke",
+                        "--expect-agent-release-url", "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v" + version,
+                        "--expect-agent-image", "moonwx/osstransfer:" + version], repo),
+        phase("cli", [py, scripts / "cli.py", *cli, "--output", output / "cli"], repo),
+        phase("local-cli", [py, scripts / "local-cli.py", *cli, "--output", output / "local-cli"], repo,
+              evidence=output / "local-cli/evidence.json"),
+        phase("inventory", [py, scripts / "inventory.py", *cli, *storage, "--output", output / "inventory"], repo),
+        *sources,
+    ]
+    if args.install == "here":
+        groups["install"] = installation
+    rate = RECOVERY_BANDWIDTH_MBPS.get(args.platform, RECOVERY_BANDWIDTH_MBPS["default"])
+
+    def cluster(name, scenario, directory, *extra, gated=True):
+        command = [py, scripts / "cluster.py", *common, *storage, "--output", output / directory, "--scenario", scenario,
+                   "--recovery-bandwidth-mbps", rate, *extra]
+        if gated:
+            command += ["--exclusive-gate", gate, "--exclusive-run-id", run_id]
+        return [phase(name, command, repo)]
+
+    multipart = ["--multipart-recovery", *(["--multipart-test-binary", fixtures["QA_MULTIPART_TEST_BINARY"]] if fixtures else [])]
+    if args.transfer == "core":
+        # Three transfer directions and multipart crash recovery; nothing is
+        # measured, so there is no exclusive window to wait for.
+        groups["transfer"] = cluster("transfer", "core", "cluster", *multipart, gated=False)
+    else:
+        groups["transfer"] = cluster("transfer", "transfer", "cluster", *multipart)
+        groups["recovery"] = cluster("recovery", "recovery", "cluster-recovery")
+        groups["nodes"] = cluster("nodes", "nodes", "cluster-nodes")
+    return groups
+
+
+def failure_tail(path):
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        return "Log unavailable: " + str(error)
+    skipped = len(lines) - FAILURE_TAIL_LINES
+    return "\n".join((["[" + str(skipped) + " earlier lines are in the uploaded log]"] if skipped > 0 else [])
+                     + lines[-FAILURE_TAIL_LINES:])
 
 
 class Runner:
     def __init__(self, directory, groups, run_id, *, timeout=1200):
-        if set(groups) != {*REQUIRED_GROUPS, "transfer"} or any(not steps for steps in groups.values()):
-            raise ValueError("Every platform must run unit, control, install and transfer groups")
+        names = set(groups)
+        # Which groups a job runs is the plan's decision (see plan() and its
+        # tests); reject names no plan produces and groups without phases.
+        if not names or not names <= {*RUNNER_GROUPS, *TRANSFER_GROUPS} or any(not steps for steps in groups.values()):
+            raise ValueError("Unknown or empty acceptance groups: " + ", ".join(sorted(names)))
         names = [step["name"] for steps in groups.values() for step in steps]
         if len(names) != len(set(names)):
             raise ValueError("Acceptance phase names must be unique")
         self.directory, self.groups, self.run_id, self.timeout = directory, groups, run_id, timeout
+        # Measured transfers wait for every other group on this runner.
+        self.required = [name for name in RUNNER_GROUPS if name in groups]
         self.gate = directory / "exclusive-gate.json"
         self.lock = threading.Lock()
         self.cancelled = threading.Event()
@@ -114,7 +160,7 @@ class Runner:
 
     def open_gate(self, status):
         write_json(self.gate, {"runId": self.run_id, "status": status,
-                              "requiredGroups": list(REQUIRED_GROUPS), "groups": self.result["groups"]})
+                              "requiredGroups": self.required, "groups": self.result["groups"]})
 
     def save(self):
         write_json(self.directory / "evidence.json", self.result)
@@ -179,6 +225,11 @@ class Runner:
                     self.processes.discard(process)
                 self.result["phases"].append(row)
                 self.save()
+                if row["status"] != "PASSED" and process is not None:
+                    # The job log shows why a phase failed without downloading
+                    # the evidence artifact.
+                    print("::group::" + step["name"] + " log (" + row["error"] + ")\n"
+                          + failure_tail(log_path) + "\n::endgroup::", flush=True)
             print(row["status"] + " " + step["name"] + " (" + str(row["seconds"]) + "s); " + str(log_path), flush=True)
         return row["status"] == "PASSED"
 
@@ -187,7 +238,7 @@ class Runner:
 
     def run(self):
         began = time.monotonic()
-        pool = ThreadPoolExecutor(max_workers=4)
+        pool = ThreadPoolExecutor(max_workers=len(self.groups))
         try:
             futures = {pool.submit(self.run_group, name, steps): name for name, steps in self.groups.items()}
             for future in as_completed(futures):
@@ -199,7 +250,7 @@ class Runner:
                     # and the installer has confirmed that its services are gone.
                     if any(value == "FAILED" for value in self.result["groups"].values()):
                         self.open_gate("FAILED")
-                    elif all(self.result["groups"].get(group) == "PASSED" for group in REQUIRED_GROUPS):
+                    elif all(self.result["groups"].get(group) == "PASSED" for group in self.required):
                         self.open_gate("READY")
                     self.save()
             self.result["status"] = "PASSED" if all(value == "PASSED" for value in self.result["groups"].values()) else "FAILED"
@@ -227,6 +278,15 @@ def main():
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--test-binaries", type=Path)
     parser.add_argument("--race", action="store_true")
+    parser.add_argument("--unit", choices=("full", "platform", "none"), default="full",
+                        help="Go tests on this runner: every test, the platform-sensitive scope, or none "
+                             "(native CI runs them in a separate job)")
+    parser.add_argument("--transfer", choices=("full", "core"), default="full",
+                        help="full: every transfer scenario in three clusters; core: transfer directions and "
+                             "multipart recovery only")
+    parser.add_argument("--install", choices=("here", "separate", "only"), default="here",
+                        help="here: installation runs beside the other groups; separate: another job runs it; "
+                             "only: run just the installation")
     parser.add_argument("--docker-image")
     parser.add_argument("--installer-manifest", type=Path)
     args = parser.parse_args()
@@ -249,11 +309,14 @@ def main():
         setattr(args, name, path)
     if args.weed is None and not os.environ.get("OSS_TRANSFER_QA_S3_CONFIG"):
         parser.error("Missing verified S3 fixture")
+    try:
+        fixtures = verified_fixtures()
+    except ValueError as error:
+        parser.error(str(error))
     if args.test_binaries:
         args.test_binaries = args.test_binaries.resolve(strict=True)
-        for variable in ("QA_FAILURE_MASTER", "QA_ROLLBACK_CLI", "QA_MULTIPART_TEST_BINARY"):
-            if not os.environ.get(variable):
-                parser.error("Missing verified fixture " + variable)
+        if not fixtures:
+            parser.error("Missing verified fixtures " + ", ".join(FIXTURE_VARIABLES))
     if args.race and args.test_binaries:
         parser.error("Precompiled target tests do not support --race")
     directory = args.output / "platform"

@@ -1252,8 +1252,9 @@ class Harness:
 
 def wait_for_exclusive(gate, run_id, timeout=1200):
     """Require this run's other groups to exit before measuring bandwidth."""
-    # Go unit tests join the window only when they run on the same machine.
-    minimum, allowed = {"control", "install"}, {"unit", "control", "install"}
+    # The runner names the groups that share this machine: Go tests and the
+    # installer may run in jobs of their own.
+    allowed = {"unit", "control", "install"}
 
     def ready():
         try:
@@ -1264,8 +1265,8 @@ def wait_for_exclusive(gate, run_id, timeout=1200):
             return None
         require(state.get("runId") == run_id, "Exclusive transfer gate belongs to another run")
         groups = state.get("requiredGroups", [])
-        require(isinstance(groups, list) and len(groups) == len(set(groups)) and minimum <= set(groups) <= allowed,
-                "Exclusive transfer gate omitted a required group")
+        require(isinstance(groups, list) and groups and len(groups) == len(set(groups)) and set(groups) <= allowed,
+                "Exclusive transfer gate lists invalid required groups")
         require(state.get("status") in ("WAITING", "READY"), "Another acceptance group failed before exclusive transfer")
         if state["status"] == "WAITING":
             return None

@@ -383,6 +383,10 @@ class SystemdCompatibilityTests(unittest.TestCase):
                 self.assertNotIn('ss -H', source)
                 # Bash 4.2 treats an empty "${array[@]}" as unset under set -u.
                 self.assertNotIn('"${original_args[@]}"', source.replace('${original_args[@]+"${original_args[@]}"}', ''))
+                # A Master URL may be an IPv6 literal; curl 7.29 globs brackets.
+                for line in source.splitlines():
+                    if line.lstrip().startswith('curl ') and ('"$release_url/' in line or '"$origin/' in line):
+                        self.assertIn('--globoff', line)
 
     def test_systemd_unit_uses_only_systemd_219_directives(self):
         start = self.source.index('if [[ "$platform" == linux ]]; then\n  cat > "$unit" <<EOF\n')

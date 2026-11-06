@@ -959,12 +959,12 @@ if ((upgrade)); then
       pin_work=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-version.XXXXXX")
       trap 'rm -rf -- "$pin_work"' EXIT
       protocol=https; [[ "$release_url" != http://* ]] || protocol=http,https
-      curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/latest.tsv"
+      curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/latest.tsv"
       [[ $(wc -c < "$pin_work/latest.tsv") -lt 65536 && $(metadata_field "$pin_work/latest.tsv" format) == oss-transfer-go-v1 ]] || fail 'Invalid release manifest'
       pinned_version=$(metadata_field "$pin_work/latest.tsv" version)
       [[ "$pinned_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid latest release version'
       release_url="${release_url%/latest}/v$pinned_version"
-      curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/versioned.tsv"
+      curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/versioned.tsv"
       [[ $(sha256 "$pin_work/latest.tsv") == "$(sha256 "$pin_work/versioned.tsv")" ]] || fail 'Latest and versioned release manifests differ; retry after publication finishes'
     fi
     for directory in "${candidates[@]}"; do
@@ -1198,7 +1198,8 @@ fetch() {
     [[ -f "$package_dir/$name" && ! -L "$package_dir/$name" ]] || fail "Release file missing: $name"
     cp "$package_dir/$name" "$work/$name"
   else
-    curl --fail --silent --show-error --location --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/$name" -o "$work/$name"
+    # An invited Master may be an IPv6 literal; curl 7.29 would glob its brackets.
+    curl --fail --silent --show-error --location --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/$name" -o "$work/$name"
   fi
 }
 if [[ -n "$release_url" ]]; then
@@ -2182,8 +2183,9 @@ verify_local_agent_cluster() {
   [[ "$token" == otcli1.* && "$token" != *$'\n'* ]] || fail 'Existing Agent credential is invalid; its data has been kept'
   # A retained Agent must belong to this Master. This also accepts an existing
   # identity using a private IP instead of the local Master's loopback origin.
+  # The origin is often http://[::1]:PORT; curl 7.29 would glob its brackets.
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
-    curl --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 "$origin/api/auth/current" -o /dev/null ||
+    curl --config - --fail --silent --show-error --globoff --connect-timeout 5 --max-time 15 "$origin/api/auth/current" -o /dev/null ||
     fail 'Existing Agent belongs to another cluster or its identity is unavailable; its data has been kept'
 }
 install_local_agent() {
@@ -2291,7 +2293,8 @@ fetch() {
     cp "$package_dir/$name" "$stage/$name"
   else
     [[ "$release_url" != http://* ]] || protocol=http,https
-    curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 15 --max-time 600 --retry 2 "$release_url/$name" -o "$stage/$name"
+    # An inviting Master may be an IPv6 literal; curl 7.29 would glob its brackets.
+    curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 15 --max-time 600 --retry 2 "$release_url/$name" -o "$stage/$name"
   fi
 }
 fetch manifest.tsv

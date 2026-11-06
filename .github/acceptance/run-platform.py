@@ -215,9 +215,11 @@ class Runner:
                     raise RuntimeError("Docker acceptance did not confirm success and cleanup")
             row["status"] = "PASSED"
         except Exception as error:
+            # Record first: terminate() itself can fail (EPERM on a sudo
+            # child), and the failure tail below needs the error.
+            row["error"] = type(error).__name__ + ": " + str(error)
             if process is not None:
                 self.terminate(process)
-            row["error"] = type(error).__name__ + ": " + str(error)
         finally:
             row["seconds"] = round(time.monotonic() - started, 3)
             with self.lock:

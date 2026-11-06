@@ -415,9 +415,22 @@ def run(platform, directory, repo, output, parallel, scope="full"):
         if unknown_skips:
             raise ValueError("Platform scope skips unknown packages: " + ", ".join(unknown_skips))
         evidence["skippedPackages"] = skipped
+        # linux/amd64 always takes the 64-bit branch, so word-size tests of a
+        # skipped package still run on the 32-bit target.
+        word_size = limited.get("wordSizeTests", {}) if platform in ("linux/armv7",) else {}
         work = []
         for entry in manifest["tests"]:
             if entry["cwd"] in skipped:
+                names = word_size.get(entry["cwd"], [])
+                if names:
+                    listing = subprocess.run([str(confined(directory.resolve(), entry["binary"])), "-test.list", "."],
+                                             cwd=confined(repo.resolve(), entry["cwd"], directory=True),
+                                             capture_output=True, text=True, timeout=300, check=True)
+                    missing = sorted(set(names) - set(SHARDS.listed_tests(listing.stdout)))
+                    if missing:
+                        raise ValueError("go test -list does not report word-size tests: " + ", ".join(missing))
+                    evidence.setdefault("wordSizeTests", []).extend(names)
+                    work.append({"entry": entry, "shard": "1/1", "tests": sorted(names)})
                 continue
             if entry["cwd"] != timings["package"]:
                 work.append({"entry": entry})

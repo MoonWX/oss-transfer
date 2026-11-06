@@ -337,40 +337,17 @@ class Harness:
         return data
 
     def start_s3(self):
-        process = None
+        def client(endpoint, access, secret):
+            return boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1",
+                                aws_access_key_id=access, aws_secret_access_key=secret,
+                                config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
+                                              connect_timeout=2, read_timeout=30, retries={"max_attempts": 1},
+                                              request_checksum_calculation="when_required",
+                                              response_checksum_validation="when_required"))
+
         if self.external_s3:
             access, secret, endpoint = (self.external_s3[key] for key in ("accessKey", "secretKey", "endpoint"))
-        else:
-            access, secret = "cluster-qa-" + secrets.token_hex(8), secrets.token_urlsafe(32)
-            self.secrets.extend([access, secret])
-            ports = store_qa.reserve_ports(8)
-            flags = ["master.port", "master.port.grpc", "volume.port", "volume.port.grpc",
-                     "filer.port", "filer.port.grpc", "s3.port", "s3.port.grpc"]
-            directory = self.root / "seaweed-data"
-            directory.mkdir()
-            arguments = ["mini", "-dir=" + str(directory), "-ip=127.0.0.1", "-ip.bind=127.0.0.1",
-                         "-admin.ui=false", "-webdav=false", "-s3.port.iceberg=0", "-s3.port.lance=0"]
-            arguments += [f"-{flag}={port}" for flag, port in zip(flags, ports)]
-            process, _ = self.spawn("seaweedfs", self.args.weed, arguments,
-                                    dict(self.environment, AWS_ACCESS_KEY_ID=access, AWS_SECRET_ACCESS_KEY=secret))
-            self.s3_process = process
-            endpoint = "http://127.0.0.1:" + str(ports[6])
-        self.s3 = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1",
-                              aws_access_key_id=access, aws_secret_access_key=secret,
-                              config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
-                                            connect_timeout=2, read_timeout=30, retries={"max_attempts": 1},
-                                            request_checksum_calculation="when_required",
-                                            response_checksum_validation="when_required"))
-
-        def ready():
-            require(process is None or process.poll() is None, "SeaweedFS exited before readiness")
-            try:
-                self.s3.list_buckets()
-                return True
-            except Exception:
-                return False
-
-        if self.external_s3:
+            self.s3 = client(endpoint, access, secret)
             # The host has already checked readiness. Authentication/connectivity
             # failures here are fatal; never silently launch a different fixture.
             try:
@@ -378,7 +355,43 @@ class Harness:
             except Exception:
                 raise RuntimeError("External S3 fixture authentication/connectivity check failed") from None
         else:
-            eventually(ready, "authenticated SeaweedFS readiness")
+            access, secret = "cluster-qa-" + secrets.token_hex(8), secrets.token_urlsafe(32)
+            self.secrets.extend([access, secret])
+            flags = ["master.port", "master.port.grpc", "volume.port", "volume.port.grpc",
+                     "filer.port", "filer.port.grpc", "s3.port", "s3.port.grpc"]
+            # Parallel clusters on one runner reserve ports with bind-then-close
+            # at the same moment; a port taken in between makes SeaweedFS exit.
+            # Only that conflict is retried, with fresh ports and data.
+            attempts = 3
+            for attempt in range(attempts):
+                ports = store_qa.reserve_ports(8)
+                directory = self.root / ("seaweed-data" if attempt == 0 else f"seaweed-data-{attempt}")
+                directory.mkdir()
+                arguments = ["mini", "-dir=" + str(directory), "-ip=127.0.0.1", "-ip.bind=127.0.0.1",
+                             "-admin.ui=false", "-webdav=false", "-s3.port.iceberg=0", "-s3.port.lance=0"]
+                arguments += [f"-{flag}={port}" for flag, port in zip(flags, ports)]
+                process, log = self.spawn("seaweedfs", self.args.weed, arguments,
+                                          dict(self.environment, AWS_ACCESS_KEY_ID=access, AWS_SECRET_ACCESS_KEY=secret))
+                self.s3_process = process
+                endpoint = "http://127.0.0.1:" + str(ports[6])
+                self.s3 = client(endpoint, access, secret)
+
+                def ready(process=process):
+                    require(process.poll() is None, "SeaweedFS exited before readiness")
+                    try:
+                        self.s3.list_buckets()
+                        return True
+                    except Exception:
+                        return False
+
+                try:
+                    eventually(ready, "authenticated SeaweedFS readiness")
+                    break
+                except Exception:
+                    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+                    conflict = re.search(r"address already in use|port allocation failed", text, re.IGNORECASE)
+                    if process.poll() is None or attempt == attempts - 1 or not conflict:
+                        raise
         suffix = secrets.token_hex(4)
         self.buckets = {name: "cluster-" + name + "-" + suffix for name in ("source", "destination", "rate")}
         for bucket in self.buckets.values():

@@ -32,7 +32,9 @@ def load_timings(path=None):
     scope = data.get("platformScope", {})
     if (not isinstance(scope.get("skipPackages", []), list)
             or not isinstance(scope.get("packageTestFiles", []), list)
-            or type(scope.get("shards", 1)) is not int or scope.get("shards", 1) < 1):
+            or type(scope.get("shards", 1)) is not int or scope.get("shards", 1) < 1
+            or not isinstance(scope.get("wordSizeTests", {}), dict)
+            or not all(isinstance(names, list) for names in scope.get("wordSizeTests", {}).values())):
         raise ValueError("Invalid platform scope: " + str(path))
     return data
 

@@ -10,10 +10,21 @@
     "internal/agent"
   ],
   "platformScope": {
-    "_comment": "Push CI runs every test on linux/amd64 and this platform-sensitive scope on the other platforms; nightly and manual full runs use every test everywhere. skipPackages hold platform-neutral coordination logic. Of the package above, only the tests declared in packageTestFiles run: their results depend on the operating system.",
-    "skipPackages": ["internal/task"],
-    "packageTestFiles": ["agent_packages_test.go", "backups_test.go", "install_commands_test.go"],
-    "shards": 2
+    "_comment": "Push CI runs every test on linux/amd64 and this platform-sensitive scope on the other platforms; nightly and manual full runs use every test everywhere. skipPackages hold platform-neutral coordination logic. Of the package above, only the tests declared in packageTestFiles run: their results depend on the operating system. wordSizeTests still run on 32-bit targets (linux/armv7) even inside skipped packages: they check word-size behaviour that linux/amd64 cannot.",
+    "skipPackages": [
+      "internal/task"
+    ],
+    "packageTestFiles": [
+      "agent_packages_test.go",
+      "backups_test.go",
+      "install_commands_test.go"
+    ],
+    "shards": 2,
+    "wordSizeTests": {
+      "internal/task": [
+        "TestLegacyChildNumberUsesSameSigned32BitBoundsOnEveryArchitecture"
+      ]
+    }
   },
   "seconds": {
     "TestAPIAuthLanguagesAreRequestScoped": 0.85,

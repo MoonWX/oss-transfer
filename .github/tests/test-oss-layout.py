@@ -18,6 +18,8 @@ def module(name, filename):
 
 
 PUBLISH = module("oss_layout_publish", "publish-oss.py")
+# latest/ mirrors the complete release.
+LATEST = tuple(sorted(PUBLISH.release_names()))
 VERSION = "4.1.5"
 COMMIT = "a" * 40
 
@@ -93,28 +95,28 @@ class OSSLayout(unittest.TestCase):
             PUBLISH.verify_listing({"IsTruncated": True, "Contents": rows, "NextContinuationToken": "next"}, "v" + VERSION, names)
 
     def test_remote_listing_checks_content_against_local_files(self):
-        local = {name: (hashlib.md5(name.encode()).hexdigest(), len(name)) for name in PUBLISH.LATEST}
+        local = {name: (hashlib.md5(name.encode()).hexdigest(), len(name)) for name in LATEST}
         def page(etag=lambda md5: '"' + md5 + '"', size=lambda value: value):
             return {"IsTruncated": False, "Contents": [
                 {"Key": "oss-transfer/latest/" + name, "ETag": etag(md5), "Size": size(length)}
                 for name, (md5, length) in local.items()]}
-        self.assertEqual(PUBLISH.verify_listing(page(), "latest", PUBLISH.LATEST, local), 4)
-        self.assertEqual(PUBLISH.verify_listing(page(lambda md5: md5.upper()), "latest", PUBLISH.LATEST, local), 4)
+        self.assertEqual(PUBLISH.verify_listing(page(), "latest", LATEST, local), len(LATEST))
+        self.assertEqual(PUBLISH.verify_listing(page(lambda md5: md5.upper()), "latest", LATEST, local), len(LATEST))
         # Multipart or missing ETags are not MD5s, so key and size decide.
         for etag in (lambda md5: '"' + md5 + '-3"', lambda md5: None):
-            self.assertEqual(PUBLISH.verify_listing(page(etag), "latest", PUBLISH.LATEST, local), 4)
+            self.assertEqual(PUBLISH.verify_listing(page(etag), "latest", LATEST, local), len(LATEST))
         with self.assertRaisesRegex(ValueError, "ETag differs"):
-            PUBLISH.verify_listing(page(lambda md5: '"' + "0" * 32 + '"'), "latest", PUBLISH.LATEST, local)
+            PUBLISH.verify_listing(page(lambda md5: '"' + "0" * 32 + '"'), "latest", LATEST, local)
         for size in (lambda value: value + 1, lambda value: None, lambda value: True):
             with self.subTest(size=size(1)), self.assertRaisesRegex(ValueError, "size differs"):
-                PUBLISH.verify_listing(page(size=size), "latest", PUBLISH.LATEST, local)
+                PUBLISH.verify_listing(page(size=size), "latest", LATEST, local)
 
     def test_latest_listing_rejects_retired_metadata(self):
-        rows = [{"Key": "oss-transfer/latest/" + name} for name in PUBLISH.LATEST]
-        self.assertEqual(PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", PUBLISH.LATEST), 4)
+        rows = [{"Key": "oss-transfer/latest/" + name} for name in LATEST]
+        self.assertEqual(PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", LATEST), len(LATEST))
         rows.append({"Key": "oss-transfer/latest/VERSION"})
         with self.assertRaisesRegex(ValueError, "unexpected files"):
-            PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", PUBLISH.LATEST)
+            PUBLISH.verify_listing({"IsTruncated": False, "Contents": rows}, "latest", LATEST)
 
 
 if __name__ == "__main__":

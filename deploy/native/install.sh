@@ -191,13 +191,63 @@ transfer_source_member() {
   tar -xOzf "$archive" -- "$member" > "$destination"
 }
 
+transfer_source_text() { if [[ "${OSS_TRANSFER_INSTALL_LANG:-en}" == zh ]]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
+
+# Verify a platform archive through its internal SHA256SUMS and VERSION, then
+# write manifest.tsv beside it in WORK. An empty expected version accepts the
+# version recorded in the archive (an offline copy has no external metadata).
+transfer_archive_manifest() (
+  set -o pipefail
+  local work=$1 platform=$2 arch=$3 digest=$4 size=$5 expected_version=$6
+  local root=oss-transfer-$platform-$arch name actual version commit role payload expected length
+  name=$root.tar.gz
+  transfer_source_member "$work/$name" "$root/VERSION" "$work/VERSION" && transfer_source_member "$work/$name" "$root/SHA256SUMS" "$work/SHA256SUMS" || { transfer_source_error 'Invalid archive metadata members'; return 1; }
+  [[ $(wc -c < "$work/VERSION") -lt 4096 && $(wc -c < "$work/SHA256SUMS") -lt 4096 ]] || { transfer_source_error 'Archive metadata too large'; return 1; }
+  actual=$(awk -v platform="$platform/$arch" -v version="$expected_version" '
+    { separator=index($0,": "); if (!separator) exit 1; key=substr($0,1,separator-1); value=substr($0,separator+2); if (key in fields) exit 1; fields[key]=value }
+    END {
+      if (version!="" && fields["Version"]!=version) exit 1
+      if (fields["Version"] !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/ || fields["Platform"]!=platform || length(fields["FullCommit"])!=40 || fields["FullCommit"] ~ /[^a-f0-9]/) exit 1
+      print fields["Version"] "\t" fields["FullCommit"]
+    }
+  ' "$work/VERSION") || { transfer_source_error 'Archive identity does not match the release'; return 1; }
+  IFS=$'\t' read -r version commit <<< "$actual" || return 1
+  # Exactly three executables and VERSION are checksummed by scripts/build.sh.
+  awk '
+    NF!=2 { bad=1; exit 1 }
+    { hash=$1; name=$2; sub(/^\*/,"",name); if (length(hash)!=64 || hash ~ /[^a-f0-9]/ || name !~ /^(oss-transfer-(master|agent|cli)|VERSION)$/ || name in seen) { bad=1; exit 1 }; seen[name]=1; print name "\t" hash; count++ }
+    END { if (bad || count!=4) exit 1 }
+  ' "$work/SHA256SUMS" > "$work/checksums.tsv" || { transfer_source_error 'Invalid internal checksum manifest'; return 1; }
+  expected=$(awk -F '\t' '$1=="VERSION" {print $2}' "$work/checksums.tsv")
+  [[ $(transfer_source_sha256 "$work/VERSION") == "$expected" ]] || { transfer_source_error 'Archive VERSION checksum mismatch'; return 1; }
+  printf 'format\toss-transfer-go-v1\nversion\t%s\ncommit\t%s\n' "$version" "$commit" > "$work/manifest.tsv" || return 1
+  for role in master agent cli; do
+    payload=oss-transfer-$role
+    transfer_source_member "$work/$name" "$root/$payload" "$work/$payload" || { transfer_source_error "Invalid archive executable: $role"; return 1; }
+    expected=$(awk -F '\t' -v name="$payload" '$1==name {print $2}' "$work/checksums.tsv")
+    [[ $(transfer_source_sha256 "$work/$payload") == "$expected" ]] || { transfer_source_error "Archive executable checksum mismatch: $role"; return 1; }
+    length=$(wc -c < "$work/$payload" | tr -d '[:space:]') || return 1
+    [[ "$length" != 0 ]] || { transfer_source_error "Empty archive executable: $role"; return 1; }
+    printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$work/manifest.tsv" || return 1
+  done
+  printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$work/manifest.tsv"
+)
+
+transfer_asset_row() {
+  local path=$1 name=$2 hash size
+  [[ -s "$path" ]] || { transfer_source_error "Empty installer: $name"; return 1; }
+  hash=$(transfer_source_sha256 "$path") || return 1
+  size=$(wc -c < "$path" | tr -d '[:space:]') || return 1
+  printf 'asset\t%s\t%s\t%s\n' "$name" "$hash" "$size"
+}
+
 # Produce a local package directory for the existing native installer. The
 # archive digest comes from GitHub; the installer is pinned to the FullCommit
 # recorded inside that verified archive, never to a moving branch or latest.
 transfer_github_prepare() (
   set -o pipefail
   local requested=${1#v} platform=$2 arch=$3 destination=$4
-  local name root api tag digest size url actual commit native_hash native_size role expected length payload installer installer_path
+  local name root api tag digest size url actual commit installer installer_path
   case "$platform/$arch" in
     linux/amd64|linux/arm64|linux/armv7|linux/riscv64|linux/loong64|darwin/amd64|darwin/arm64|freebsd/amd64|freebsd/arm64) ;;
     *) transfer_source_error 'Unsupported GitHub release platform'; return 1;;
@@ -216,32 +266,8 @@ transfer_github_prepare() (
   [[ "$requested" == latest || "$tag" == v$requested ]] || { transfer_source_error 'GitHub release version mismatch'; return 1; }
   transfer_source_fetch "$url" "$transfer_download_work/$name" "$size" || { transfer_source_error 'Cannot download GitHub release archive'; return 1; }
   [[ $(wc -c < "$transfer_download_work/$name" | tr -d '[:space:]') == "$size" && $(transfer_source_sha256 "$transfer_download_work/$name") == "$digest" ]] || { transfer_source_error 'GitHub archive checksum mismatch'; return 1; }
-  transfer_source_member "$transfer_download_work/$name" "$root/VERSION" "$transfer_download_work/VERSION" && transfer_source_member "$transfer_download_work/$name" "$root/SHA256SUMS" "$transfer_download_work/SHA256SUMS" || { transfer_source_error 'Invalid archive metadata members'; return 1; }
-  [[ $(wc -c < "$transfer_download_work/VERSION") -lt 4096 && $(wc -c < "$transfer_download_work/SHA256SUMS") -lt 4096 ]] || { transfer_source_error 'Archive metadata too large'; return 1; }
-  actual=$(awk -v platform="$platform/$arch" -v version="${tag#v}" '
-    { separator=index($0,": "); if (!separator) exit 1; key=substr($0,1,separator-1); value=substr($0,separator+2); if (key in fields) exit 1; fields[key]=value }
-    END { if (fields["Version"]!=version || fields["Platform"]!=platform || length(fields["FullCommit"])!=40 || fields["FullCommit"] ~ /[^a-f0-9]/) exit 1; print fields["FullCommit"] }
-  ' "$transfer_download_work/VERSION") || { transfer_source_error 'Archive identity does not match the release'; return 1; }
-  commit=$actual
-  # Exactly three executables and VERSION are checksummed by scripts/build.sh.
-  awk '
-    NF!=2 { bad=1; exit 1 }
-    { hash=$1; name=$2; sub(/^\*/,"",name); if (length(hash)!=64 || hash ~ /[^a-f0-9]/ || name !~ /^(oss-transfer-(master|agent|cli)|VERSION)$/ || name in seen) { bad=1; exit 1 }; seen[name]=1; print name "\t" hash; count++ }
-    END { if (bad || count!=4) exit 1 }
-  ' "$transfer_download_work/SHA256SUMS" > "$transfer_download_work/checksums.tsv" || { transfer_source_error 'Invalid internal checksum manifest'; return 1; }
-  expected=$(awk -F '\t' '$1=="VERSION" {print $2}' "$transfer_download_work/checksums.tsv")
-  [[ $(transfer_source_sha256 "$transfer_download_work/VERSION") == "$expected" ]] || { transfer_source_error 'Archive VERSION checksum mismatch'; return 1; }
-  printf 'format\toss-transfer-go-v1\nversion\t%s\ncommit\t%s\n' "${tag#v}" "$commit" > "$transfer_download_work/manifest.tsv" || return 1
-  for role in master agent cli; do
-    payload=oss-transfer-$role
-    transfer_source_member "$transfer_download_work/$name" "$root/$payload" "$transfer_download_work/$payload" || { transfer_source_error "Invalid archive executable: $role"; return 1; }
-    expected=$(awk -F '\t' -v name="$payload" '$1==name {print $2}' "$transfer_download_work/checksums.tsv")
-    [[ $(transfer_source_sha256 "$transfer_download_work/$payload") == "$expected" ]] || { transfer_source_error "Archive executable checksum mismatch: $role"; return 1; }
-    length=$(wc -c < "$transfer_download_work/$payload" | tr -d '[:space:]') || return 1
-    [[ "$length" != 0 ]] || { transfer_source_error "Empty archive executable: $role"; return 1; }
-    printf 'file\t%s\t%s\t%s\t%s-%s-%s\t%s\t%s\n' "$platform" "$arch" "$role" "$payload" "$platform" "$arch" "$expected" "$length" >> "$transfer_download_work/manifest.tsv" || return 1
-  done
-  printf 'archive\t%s\t%s\t%s\t%s\t%s\n' "$platform" "$arch" "$name" "$digest" "$size" >> "$transfer_download_work/manifest.tsv" || return 1
+  transfer_archive_manifest "$transfer_download_work" "$platform" "$arch" "$digest" "$size" "${tag#v}" || return 1
+  commit=$(awk -F '\t' '$1=="commit" {print $2}' "$transfer_download_work/manifest.tsv")
   # Keep all installers at the verified archive commit. A Master retains these
   # files to install Agents without requiring their hosts to reach the internet.
   for installer in native-install.sh install.sh Install.ps1; do
@@ -253,10 +279,7 @@ transfer_github_prepare() (
     if ! transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/$installer_path" "$transfer_download_work/$installer" 1048576; then
       [[ "$installer_path" == deploy/native/* ]] && transfer_source_fetch "https://raw.githubusercontent.com/MoonWX/oss-transfer/$commit/deploy/go/${installer_path#deploy/native/}" "$transfer_download_work/$installer" 1048576 || { transfer_source_error "Cannot fetch the versioned native installer: $installer"; return 1; }
     fi
-    [[ -s "$transfer_download_work/$installer" ]] || { transfer_source_error "Empty installer: $installer"; return 1; }
-    native_hash=$(transfer_source_sha256 "$transfer_download_work/$installer") || return 1
-    native_size=$(wc -c < "$transfer_download_work/$installer" | tr -d '[:space:]') || return 1
-    printf 'asset\t%s\t%s\t%s\n' "$installer" "$native_hash" "$native_size" >> "$transfer_download_work/manifest.tsv" || return 1
+    transfer_asset_row "$transfer_download_work/$installer" "$installer" >> "$transfer_download_work/manifest.tsv" || return 1
   done
   for name in "$name" manifest.tsv native-install.sh install.sh Install.ps1; do
     [[ ! -e "$destination/$name" && ! -L "$destination/$name" ]] || { transfer_source_error 'Package directory already contains release files'; return 1; }
@@ -264,6 +287,60 @@ transfer_github_prepare() (
   mv "$transfer_download_work/$root.tar.gz" "$transfer_download_work/manifest.tsv" "$transfer_download_work/native-install.sh" "$transfer_download_work/install.sh" "$transfer_download_work/Install.ps1" "$destination/"
 
 )
+
+# Offline variant: build manifest.tsv for this host's platform archive copied
+# from a GitHub Release, without any network access. The archive's internal
+# SHA256SUMS and VERSION are still verified. Installers beside the archive, or
+# the NAME PATH fallbacks after DESTINATION, are recorded as release assets.
+transfer_local_prepare() (
+  set -o pipefail
+  local source=$1 platform=$2 arch=$3 destination=$4 name installer candidate index
+  local -a fallbacks=("${@:5}")
+  name=oss-transfer-$platform-$arch.tar.gz
+  [[ -d "$destination" && ! -L "$destination" ]] || { transfer_source_error 'Package directory must be a regular directory'; return 1; }
+  if [[ ! -f "$source/$name" || -L "$source/$name" ]]; then
+    transfer_source_error "$(transfer_source_text \
+      "$source has neither manifest.tsv nor $name. Copy the complete release (manifest.tsv, $name, install.sh, native-install.sh) from the GitHub Release or https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/ into one directory." \
+      "$source 中既没有 manifest.tsv，也没有本机所需的 ${name}。请从 GitHub Release 或 https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/ 下载完整发布文件（manifest.tsv、${name}、install.sh、native-install.sh）放入同一目录。")"
+    return 1
+  fi
+  transfer_download_work=$(mktemp -d "$destination/.local-package.XXXXXX") || return 1
+  trap 'rm -rf -- "$transfer_download_work"' EXIT
+  cp "$source/$name" "$transfer_download_work/$name" || return 1
+  transfer_archive_manifest "$transfer_download_work" "$platform" "$arch" \
+    "$(transfer_source_sha256 "$transfer_download_work/$name")" "$(wc -c < "$transfer_download_work/$name" | tr -d '[:space:]')" '' || return 1
+  for installer in native-install.sh install.sh Install.ps1; do
+    candidate=
+    if [[ -f "$source/$installer" && ! -L "$source/$installer" ]]; then candidate=$source/$installer
+    else
+      for ((index = 0; index + 1 < ${#fallbacks[@]}; index += 2)); do
+        if [[ "${fallbacks[index]}" == "$installer" && -f "${fallbacks[index+1]}" ]]; then candidate=${fallbacks[index+1]}; break; fi
+      done
+    fi
+    [[ -n "$candidate" ]] || continue
+    cp "$candidate" "$transfer_download_work/$installer" || return 1
+    transfer_asset_row "$transfer_download_work/$installer" "$installer" >> "$transfer_download_work/manifest.tsv" || return 1
+  done
+  for installer in "$name" manifest.tsv native-install.sh install.sh Install.ps1; do
+    [[ ! -e "$destination/$installer" && ! -L "$destination/$installer" ]] || { transfer_source_error 'Package directory already contains release files'; return 1; }
+    [[ ! -e "$transfer_download_work/$installer" ]] || mv "$transfer_download_work/$installer" "$destination/" || return 1
+  done
+)
+
+# Offline bundles: use release files beside the installer, then in the current
+# directory. A piped installer has no file of its own and keeps downloading.
+transfer_local_package_dir() {
+  local script=$1 platform=$2 arch=$3 directory
+  [[ -n "$script" && -f "$script" ]] || return 1
+  for directory in "$(cd "$(dirname "$script")" && pwd -P)" "$(pwd -P)"; do
+    if [[ -f "$directory/manifest.tsv" && ! -L "$directory/manifest.tsv" ]] ||
+       [[ -f "$directory/oss-transfer-$platform-$arch.tar.gz" && ! -L "$directory/oss-transfer-$platform-$arch.tar.gz" ]]; then
+      printf '%s\n' "$directory"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # END embedded download source
 role=
@@ -293,6 +370,8 @@ upgrade=0
 yes=0
 user_service=0
 startup_timeout=120
+local_detected=0
+local_stage=
 lang=${OSS_TRANSFER_INSTALL_LANG:-}
 say() { if [[ "${lang:-en}" == zh ]]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
 usage() {
@@ -430,17 +509,35 @@ trusted_master_release() {
   [[ "$suffix" =~ ^[A-Za-z0-9_-]+$ ]]
 }
 if [[ -z "$release_url" && -z "$package_dir" ]]; then
-  selected_source=$(transfer_select_source "$source" "$requested_version") || fail 'Cannot select a download source; use --source or --release-url'
-  printf '%s: %s\n' "$(say 'Download source' '下载源')" "$selected_source"
-  if [[ "$selected_source" == github ]]; then
-    source_stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-download.XXXXXX")
-    trap 'rm -rf -- "$source_stage"' EXIT
-    transfer_github_prepare "$requested_version" "$platform" "$arch" "$source_stage" || fail 'GitHub release verification failed'
-    bash "${BASH_SOURCE[0]}" "${original_args[@]}" --package-dir "$source_stage"
-    exit 0
+  # A copied offline bundle beside this installer (or in the current
+  # directory) is used directly and never triggers a download.
+  if [[ "$source" == auto ]] && package_dir=$(transfer_local_package_dir "${BASH_SOURCE[0]:-}" "$platform" "$arch"); then
+    local_detected=1
+    printf '%s: %s\n' "$(say 'Using local release files (offline)' '使用本地安装包目录（离线）')" "$package_dir"
+  else
+    package_dir=
+    selected_source=$(transfer_select_source "$source" "$requested_version") || fail 'Cannot select a download source; use --source or --release-url'
+    printf '%s: %s\n' "$(say 'Download source' '下载源')" "$selected_source"
+    if [[ "$selected_source" == github ]]; then
+      source_stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-download.XXXXXX")
+      trap 'rm -rf -- "$source_stage"' EXIT
+      transfer_github_prepare "$requested_version" "$platform" "$arch" "$source_stage" || fail 'GitHub release verification failed'
+      bash "${BASH_SOURCE[0]}" "${original_args[@]}" --package-dir "$source_stage"
+      exit 0
+    fi
+    release_part=$requested_version; [[ "$requested_version" == latest ]] || release_part=v$requested_version
+    release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$release_part
   fi
-  release_part=$requested_version; [[ "$requested_version" == latest ]] || release_part=v$requested_version
-  release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$release_part
+fi
+# An archive copied from a GitHub Release has no manifest.tsv beside it. Build
+# one from the archive's internal checksums without contacting any server.
+if [[ -n "$package_dir" && ! -e "$package_dir/manifest.tsv" ]]; then
+  [[ -d "$package_dir" ]] || fail "$(say "Package directory not found: $package_dir" "安装包目录不存在：$package_dir")"
+  local_stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-local.XXXXXX")
+  trap 'rm -rf -- "$local_stage"' EXIT
+  transfer_local_prepare "$package_dir" "$platform" "$arch" "$local_stage" native-install.sh "${BASH_SOURCE[0]:-}" || fail "$(say 'Offline package verification failed' '离线安装包校验失败')"
+  say "No manifest.tsv found; verified $package_dir/oss-transfer-$platform-$arch.tar.gz with its internal checksums." "未找到 manifest.tsv，已按压缩包内置校验和验证 $package_dir/oss-transfer-$platform-$arch.tar.gz。"
+  package_dir=$local_stage
 fi
 if ((upgrade)); then
   if [[ -z "$install_dir" ]]; then
@@ -513,7 +610,8 @@ if ((upgrade)); then
       if [[ -n "$release_url" ]]; then
         bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" --release-url "$release_url" --yes
       else
-        bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" --yes
+        # Pass the resolved local directory so each child stays offline.
+        bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" ${package_dir:+--package-dir "$package_dir"} --yes
       fi
     done
     exit 0
@@ -725,6 +823,7 @@ had_unit=0
 cleanup() {
   local result=$?
   rm -rf -- "$work"
+  [[ -z "${local_stage:-}" ]] || rm -rf -- "$local_stage"
   if [[ -n "$backup" && -d "$backup" ]]; then printf 'Backup retained: %s\n' "$backup" >&2; fi
   return "$result"
 }
@@ -748,6 +847,9 @@ fetch manifest.tsv
 [[ $(awk -F '\t' '$1=="format"{print $2}' "$work/manifest.tsv") == oss-transfer-go-v1 ]] || fail 'Unknown release format'
 version=$(awk -F '\t' '$1=="version"{print $2}' "$work/manifest.tsv")
 [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]] || fail 'Invalid release version'
+if ((local_detected)) && [[ "$requested_version" != latest && "$requested_version" != "$version" ]]; then
+  fail "$(say "Local release files are version $version, not $requested_version; remove --version or use --source to download" "本地安装包版本为 ${version}，不是 ${requested_version}；请去掉 --version，或使用 --source 在线下载")"
+fi
 if [[ "$release_url" == */latest ]]; then
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail 'Invalid latest release version'
   latest_manifest_sha=$(sha256 "$work/manifest.tsv")

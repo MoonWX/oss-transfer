@@ -6,28 +6,29 @@
 
 ## 1. 准备安装文件
 
-在联网机器的 Bash 中执行。下面下载最新正式版，适用于 Master 和 Agent 都是 Linux amd64（x86-64）的情况：
+在联网机器上把发布文件下载到同一个文件夹。以下两个来源的文件完全相同：
+
+- 京东云 OSS，最新正式版的固定地址：`https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/<文件名>`。需要指定版本时，把 `latest` 换成版本号，例如 `v4.1.33`。
+- [GitHub Release](https://github.com/MoonWX/oss-transfer/releases) 中的附件。
+
+需要下载 `install.sh`、`native-install.sh`、`manifest.tsv`、Windows 使用的 `Install.ps1`，以及每个目标平台的压缩包。例如 Master 和 Agent 都是 Linux amd64（x86-64）时：
 
 ```bash
 (
 set -euo pipefail
-base=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer
-version=$(curl -fsSL "$base/latest/manifest.tsv" | awk -F '\t' '$1 == "version" {print "v" $2}')
-[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
-archives=(oss-transfer-linux-amd64.tar.gz)
-bundle="oss-transfer-$version-offline"
-base="$base/$version"
-mkdir -p "$bundle"
-for file in install.sh native-install.sh Install.ps1 manifest.tsv "${archives[@]}"; do
-  curl -fL --retry 2 "$base/$file" -o "$bundle/$file" || exit 1
+base=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest
+mkdir -p oss-transfer-offline
+for file in install.sh native-install.sh Install.ps1 manifest.tsv oss-transfer-linux-amd64.tar.gz; do
+  curl -fL --retry 2 "$base/$file" -o "oss-transfer-offline/$file"
 done
 )
 ```
 
-如果 Master 和 Agent 的平台不同，把所需包名一起写入 `archives=(...)`，例如 `archives=(oss-transfer-linux-amd64.tar.gz oss-transfer-linux-arm64.tar.gz)`。每个平台只需下载一份。
+用到其他平台时，再加上对应的压缩包。每个平台只需下载一份。
 
 | 目标主机 | 压缩包 |
 | --- | --- |
+| Linux amd64 | `oss-transfer-linux-amd64.tar.gz` |
 | Linux arm64 | `oss-transfer-linux-arm64.tar.gz` |
 | macOS | `oss-transfer-darwin-amd64.tar.gz` 或 `oss-transfer-darwin-arm64.tar.gz` |
 | FreeBSD | `oss-transfer-freebsd-amd64.tar.gz` 或 `oss-transfer-freebsd-arm64.tar.gz` |
@@ -35,20 +36,24 @@ done
 
 Apple Silicon 使用 `arm64`。Linux 另有 `armv7`、`riscv64` 和 `loong64` 包，命名方式相同。
 
+如果手上只有本机平台的压缩包和安装脚本（例如来自较早的 GitHub Release），也可以离线安装：安装器会用压缩包内置的校验和验证文件，并在本地生成 `manifest.tsv`。仍建议准备完整文件，因为 `manifest.tsv` 还会校验压缩包本身，Master 也能据此为其他平台的 Agent 提供安装包。
+
 ## 2. 拷贝并安装 Master
 
 将整个文件夹拷贝到离线主机，压缩包无需解压。Linux 在该文件夹中打开终端并执行：
 
 ```bash
-sudo bash install.sh --role master --package-dir "$PWD"
+sudo bash install.sh --role master
 ```
+
+安装器会使用脚本所在文件夹（或当前文件夹）中的发布文件，输出 `使用本地安装包目录（离线）: <文件夹>`，且不会访问网络。需要使用其他文件夹时加 `--package-dir DIR`；需要改为在线下载时加 `--source github|jdoss`。
 
 按提示选择是否同时安装本机 Agent；选择安装后，它会自动加入集群。打开 `http://<master-ip>:1685`，使用 `admin` 和安装器输出的初始密码登录，再设置自己的密码。
 
 macOS 和 FreeBSD 使用同样的命令。macOS 安装当前用户服务时，去掉 `sudo` 并加上 `--user`，升级时也要保留该参数。FreeBSD 没有 `sudo` 时，切换到 root 执行。Windows 在拷贝后的文件夹中打开管理员 PowerShell：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -PackageDir $PWD.Path
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master
 ```
 
 ## 3. 添加 Agent
@@ -64,12 +69,12 @@ Master 能联网时会按需补齐其他平台的包。需要让 Agent 自行从
 按第 1 步准备新版本文件夹，并拷贝到需要升级的各台主机。停止正在运行的任务，先升级 Master，再逐台升级 Agent。在新文件夹中执行对应命令：
 
 ```bash
-sudo bash native-install.sh --role master --upgrade --package-dir "$PWD" --yes
+sudo bash native-install.sh --role master --upgrade --yes
 # 在各台 Agent 主机上执行：
-sudo bash native-install.sh --role agent --upgrade --package-dir "$PWD" --yes
+sudo bash native-install.sh --role agent --upgrade --yes
 ```
 
-Windows 在原安装命令上加 `-Upgrade`，Agent 使用 `-Role agent`。升级保留原配置、任务和节点身份。确认各节点都已在线且版本一致后，再继续任务。
+较早版本的安装器不会自动识别文件夹，需要加 `--package-dir "$PWD"`（Windows 为 `-PackageDir $PWD.Path`）。Windows 在原安装命令上加 `-Upgrade`，Agent 使用 `-Role agent`。升级保留原配置、任务和节点身份。确认各节点都已在线且版本一致后，再继续任务。
 
 删除程序后重装，要保留原配置和完整数据目录，包括 `.db.key` 文件。重新运行安装命令即可；使用过自定义目录时，填写原路径。具体见[重装说明](install.zh-CN.md#重装且不丢失数据)。
 

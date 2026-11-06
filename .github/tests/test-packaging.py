@@ -325,10 +325,11 @@ if sys.argv[1:3] == ['release', 'view']:
         commands = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
         return result, commands
 
-    def test_github_release_uploads_only_supported_platform_archives(self):
+    def test_github_release_uploads_a_complete_offline_bundle(self):
         self.assemble()
         shutil.copytree(self.output, self.root / "output")
         expected = {"output/" + PACKAGE.TARGETS.archive_name(*platform) for platform in PACKAGE.PLATFORMS}
+        expected |= {"output/" + name for name in ("manifest.tsv", "SHA256SUMS", "install.sh", "native-install.sh", "Install.ps1")}
         for existing in (False, True):
             with self.subTest(existing_release=existing):
                 result, commands = self.github_publication(existing)
@@ -366,7 +367,7 @@ if sys.argv[1:3] == ['release', 'view']:
         (self.root / "output/oss-transfer-windows-arm64.zip").unlink()
         result, commands = self.github_publication()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Missing release archive", result.stderr)
+        self.assertIn("Missing release file", result.stderr)
         self.assertEqual(commands, [])
 
     def test_publish_refuses_unlisted_or_changed_payloads(self):
@@ -409,7 +410,8 @@ if sys.argv[1:3] == ['release', 'view']:
                     remote[key] = data
             else:
                 self.assertIn("delete-object", command)
-                self.assertIn(key, ["oss-transfer/latest/"+name for name in PUBLISH.RETIRED_LATEST])
+                name = key.removeprefix("oss-transfer/latest/")
+                self.assertTrue(name in PUBLISH.RETIRED_LATEST or PUBLISH.STALE_ARCHIVE.fullmatch(name), key)
                 with lock:
                     self.assertIn(key, remote)
                     del remote[key]
@@ -433,22 +435,31 @@ if sys.argv[1:3] == ['release', 'view']:
         self.assertTrue(keys)
         self.assertTrue(all(key.startswith("oss-transfer/v4.1.0-test/") for key in keys))
 
-    def test_latest_advances_only_after_all_versioned_uploads(self):
+    def test_latest_mirrors_every_release_file_after_versioned_uploads(self):
         self.stable()
         keys = self.uploaded()
-        versioned = ["oss-transfer/v4.1.0/" + path.name for path in sorted(self.output.iterdir())]
-        latest = ["oss-transfer/latest/" + name for name in PUBLISH.LATEST]
+        names = sorted(path.name for path in self.output.iterdir())
+        versioned = ["oss-transfer/v4.1.0/" + name for name in names]
         self.assertEqual(sorted(keys[:len(versioned)]), versioned)
-        # Absent retired keys are not deleted; release.json stays the last write.
-        self.assertEqual(keys[len(versioned):], latest)
-        self.assertEqual(latest[-1], "oss-transfer/latest/release.json")
+        latest = keys[len(versioned):]
+        # Every archive, installer and SHA256SUMS lands before the pointers;
+        # manifest.tsv then release.json are the final writes.
+        self.assertEqual(sorted(latest), ["oss-transfer/latest/" + name for name in names])
+        self.assertEqual(latest[-2:], ["oss-transfer/latest/manifest.tsv", "oss-transfer/latest/release.json"])
+        for name in ("native-install.sh", "SHA256SUMS", "install.sh", "Install.ps1", PACKAGE.TARGETS.archive_name("linux", "amd64")):
+            self.assertIn("oss-transfer/latest/" + name, latest[:-2])
 
-    def test_only_listed_retired_latest_files_are_deleted(self):
+    def test_only_retired_files_and_stale_archives_are_deleted_from_latest(self):
         self.stable()
-        keys = self.uploaded(remote={"oss-transfer/latest/VERSION": b"4.0.0\n", "oss-transfer/latest/install.sh": b"old"})
-        self.assertEqual(keys[-1], "oss-transfer/latest/VERSION")
-        self.assertEqual([key for key in keys if "/latest/" in key],
-                         ["oss-transfer/latest/" + name for name in PUBLISH.LATEST] + ["oss-transfer/latest/VERSION"])
+        stale = "oss-transfer/latest/oss-transfer-linux-mips64.tar.gz"
+        keys = self.uploaded(remote={"oss-transfer/latest/VERSION": b"4.0.0\n", "oss-transfer/latest/install.sh": b"old", stale: b"old"})
+        self.assertEqual(sorted(keys[-2:]), sorted(["oss-transfer/latest/VERSION", stale]))
+        self.assertEqual(keys[-3], "oss-transfer/latest/release.json")
+
+    def test_unknown_latest_file_fails_verification_without_deletion(self):
+        self.stable()
+        keys = self.uploaded(remote={"oss-transfer/latest/notes.txt": b"manual"}, raises=ValueError)
+        self.assertEqual(keys[-1], "oss-transfer/latest/release.json")
 
     def test_remote_content_must_match_local_md5_when_etag_is_plain(self):
         self.stable()

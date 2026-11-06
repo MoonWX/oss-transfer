@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -257,6 +258,112 @@ shutil.copyfile(source,args[args.index('-o')+1])
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('PINNED_INSTALLER', result.stdout)
         self.assertNotIn(INSTALLER_URL, self.log.read_text())
+
+    def local_prepare(self, source, *fallbacks):
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; shift; transfer_local_prepare "$@" || exit $?',
+             "test", str(HELPER), str(source), "linux", "amd64", str(self.package), *fallbacks],
+            env=self.env, capture_output=True, text=True,
+        )
+
+    def test_local_archive_without_manifest_is_verified_offline(self):
+        source = self.root / "copied"
+        source.mkdir()
+        shutil.copyfile(self.archive, source / ARCHIVE)
+        (source / "install.sh").write_text("public installer\n")
+        fallback = self.root / "embedded-native.sh"
+        fallback.write_text("embedded native installer\n")
+        result = self.local_prepare(source, "native-install.sh", str(fallback))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.log.exists(), "offline preparation made a request")
+        self.assertEqual({p.name for p in self.package.iterdir()}, {ARCHIVE, "manifest.tsv", "native-install.sh", "install.sh"})
+        manifest = (self.package / "manifest.tsv").read_text()
+        self.assertIn(f"version\t{TAG[1:]}\ncommit\t{COMMIT}\n", manifest)
+        self.assertEqual(sum(line.startswith("file\t") for line in manifest.splitlines()), 3)
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        self.assertIn(f"archive\tlinux\tamd64\t{ARCHIVE}\t{digest}\t{self.archive.stat().st_size}\n", manifest)
+        self.assertIn("asset\tnative-install.sh\t" + hashlib.sha256(b"embedded native installer\n").hexdigest(), manifest)
+
+    def test_local_archive_with_wrong_inner_checksum_is_refused(self):
+        self.make_archive(lambda entries: [(name, body + b"corrupt" if name.endswith("/oss-transfer-master") else body, kind)
+                                           for name, body, kind in entries])
+        source = self.root / "copied"
+        source.mkdir()
+        shutil.copyfile(self.archive, source / ARCHIVE)
+        result = self.local_prepare(source)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum mismatch", result.stderr)
+        self.assertEqual(list(self.package.iterdir()), [])
+
+    def test_missing_manifest_and_archive_lists_required_files(self):
+        source = self.root / "empty"
+        source.mkdir()
+        for language, phrase in (("en", "Copy the complete release"), ("zh", "下载完整发布文件")):
+            result = subprocess.run(
+                ["bash", "-c", 'source "$1"; shift; transfer_local_prepare "$@"', "test", str(HELPER),
+                 str(source), "linux", "amd64", str(self.package)],
+                env=dict(self.env, OSS_TRANSFER_INSTALL_LANG=language), capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(phrase, result.stderr)
+            for name in ("manifest.tsv", ARCHIVE, "native-install.sh"):
+                self.assertIn(name, result.stderr)
+
+    def test_install_script_embeds_the_current_native_installer(self):
+        source = (ROOT / "install.sh").read_text()
+        block = source.split("# BEGIN embedded native installer\n", 1)[1].split("# END embedded native installer\n", 1)[0]
+        result = subprocess.run(["bash", "-c", block + "\ntransfer_embedded_native_installer"], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, (ROOT / "deploy/native/install.sh").read_bytes())
+
+    def offline_installer(self, bundle, *arguments, cwd=None):
+        self.public_installer_shims()
+        return subprocess.run(
+            ['bash', str(bundle / 'install.sh'), '--role', 'master', '--yes', '--lang', 'en',
+             '--install-dir', str(self.root.resolve()/'service'), '--data-dir', str(self.root.resolve()/'data'), *arguments],
+            env=dict(self.env, TMPDIR=str(self.root.resolve())), text=True, capture_output=True, cwd=cwd or self.root,
+        )
+
+    def public_installer_shims(self):
+        for name, body in {
+            'uname': 'case "$1" in -s) echo Linux;; -m) echo x86_64;; esac',
+            'id': 'echo 0',
+            'docker': 'exit 1',
+        }.items():
+            path = self.root / 'bin' / name
+            path.write_text('#!/bin/sh\n' + body + '\n')
+            path.chmod(0o755)
+
+    def test_copied_archive_and_installers_install_offline_without_manifest(self):
+        bundle = self.root / 'bundle'
+        bundle.mkdir()
+        shutil.copyfile(ROOT / 'install.sh', bundle / 'install.sh')
+        shutil.copyfile(self.archive, bundle / ARCHIVE)
+        (bundle / 'native-install.sh').write_text('#!/bin/bash\nprintf "LOCAL_NATIVE\\n"\nprintf "%s\\n" "$@"\nexit 99\n')
+        result = self.offline_installer(bundle)
+        self.assertEqual(result.returncode, 99, result.stderr)
+        self.assertIn('Using local release files (offline): ' + str(bundle.resolve()), result.stdout)
+        self.assertIn('No manifest.tsv found', result.stdout)
+        self.assertIn('LOCAL_NATIVE\n', result.stdout)
+        self.assertIn('--package-dir\n', result.stdout)
+        self.assertNotIn('--release-url', result.stdout)
+        self.assertNotIn('Download source', result.stdout)
+        self.assertFalse(self.log.exists(), 'offline installation made a network request')
+        self.assertEqual({p.name for p in bundle.iterdir()}, {'install.sh', ARCHIVE, 'native-install.sh'})
+
+    def test_offline_bundle_in_current_directory_rejects_other_version(self):
+        bundle = self.root / 'bundle'
+        bundle.mkdir()
+        shutil.copyfile(self.archive, bundle / ARCHIVE)
+        tools = self.root / 'tools'
+        tools.mkdir()
+        shutil.copyfile(ROOT / 'install.sh', tools / 'install.sh')
+        self.public_installer_shims()
+        result = subprocess.run(['bash', str(tools / 'install.sh'), '--role', 'master', '--yes', '--lang', 'zh', '--version', '9.9.9'],
+                                env=dict(self.env, TMPDIR=str(self.root.resolve())), text=True, capture_output=True, cwd=bundle)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('使用本地安装包目录（离线）: ' + str(bundle.resolve()), result.stdout)
+        self.assertIn('本地安装包版本为 4.1.5，不是 9.9.9', result.stderr)
+        self.assertFalse(self.log.exists(), 'offline installation made a network request')
 
     def test_public_compose_installer_accepts_internally_prepared_github_package(self):
         result = self.public_installer('compose')

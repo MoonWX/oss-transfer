@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Resolve-InstallLanguage','Get-InstallText','Get-MasterAccessUrl','Show-MasterAccess','Show-InstallationSummary','Show-InitialCredentials','Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-GitHubPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
+$names = @('Resolve-InstallLanguage','Get-InstallText','Get-MasterAccessUrl','Show-MasterAccess','Show-InstallationSummary','Show-InitialCredentials','Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-ArchiveManifest','Add-InstallerAsset','New-GitHubPackage','Test-LocalReleaseFile','Find-LocalPackageDirectory','New-LocalPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -724,6 +724,26 @@ if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was chan
         Assert (@($manifest | Where-Object { $_ -ceq "commit`t$fullCommit" }).Count -eq 1) 'Manifest commit missing.'
         Assert (@($manifest | Where-Object { $_.StartsWith("asset`t") }).Count -eq 3) 'Pinned Agent installer assets missing.'
         Assert (@(Get-ChildItem -LiteralPath $package).Count -eq 5) 'Preflight added unexpected files.'
+    }
+    Check 'copied archive without manifest builds an offline package without requests' {
+        $release=New-TestArchive
+        $source=Join-Path $work 'offline-source'
+        [IO.Directory]::CreateDirectory($source) | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $source $release.Name),$script:responses[$githubURL])
+        $installerCopy=Join-Path $work 'running-Install.ps1'
+        [IO.File]::WriteAllText($installerCopy,'running installer')
+        Assert ((Find-LocalPackageDirectory $source 'amd64') -eq $source) 'Copied archive was not detected.'
+        Assert (-not (Find-LocalPackageDirectory '' 'amd64')) 'A piped installer must not use local files.'
+        $script:requests.Clear()
+        $package=Join-Path $work 'offline-package'
+        New-LocalPackage $source 'amd64' $package $installerCopy
+        Assert ($script:requests.Count -eq 0) 'Offline package made a network request.'
+        $manifest=Get-Content -LiteralPath (Join-Path $package 'manifest.tsv')
+        Assert (@($manifest | Where-Object { $_.StartsWith("file`t"+"windows`t"+"amd64`t") }).Count -eq 3) 'Offline package roles missing.'
+        Assert (@($manifest | Where-Object { $_ -ceq "version`t4.1.5" }).Count -eq 1) 'Offline package version missing.'
+        Assert (@($manifest | Where-Object { $_.StartsWith("archive`t"+"windows`t"+"amd64`t"+$release.Name+"`t"+$release.Hash) }).Count -eq 1) 'Offline archive row missing.'
+        Assert (@($manifest | Where-Object { $_.StartsWith("asset`t"+"Install.ps1`t") }).Count -eq 1) 'Running installer was not recorded.'
+        Reject { New-LocalPackage (Join-Path $work 'valid-package-missing') 'amd64' (Join-Path $work 'offline-empty') '' } 'manifest.tsv'
     }
     Check 'outer checksum mismatch refuses before ZIP parsing' {
         $release=New-TestArchive; $release.Hash='0'*64

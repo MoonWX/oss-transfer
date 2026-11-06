@@ -269,13 +269,27 @@ func TestSharesValidationRejectsMissingNode(t *testing.T) {
 		t.Fatal("a new task starts with shares one revision below its budget", p.Shares, p.BudgetRevision)
 	}
 	for name, mutate := range map[string]func(*Parent){
-		"missing node":     func(p *Parent) { delete(p.Shares.Nodes, "b") },
-		"revision":         func(p *Parent) { p.BudgetRevision++ },
-		"above reserve":    func(p *Parent) { e := p.Shares.Nodes["a"]; e.Share.Bandwidth = e.Reserved.Bandwidth + 1; p.Shares.Nodes["a"] = e },
-		"sum above total":  func(p *Parent) { e := p.Shares.Nodes["a"]; e.Share.Bandwidth += 1 << 20; e.Reserved = e.Share; p.Shares.Nodes["a"] = e },
-		"zero share":       func(p *Parent) { e := p.Shares.Nodes["a"]; e.Share.Bandwidth = 0; p.Shares.Nodes["a"] = e },
-		"retired, kept":    func(p *Parent) { p.Failover = &FailoverState{Enabled: true, Retired: map[string]RetiredNode{"b": {}}} },
-		"undivided capped": func(p *Parent) { e := p.Shares.Nodes["a"]; e.Share.List = 3; e.Reserved.List = 3; p.Shares.Nodes["a"] = e },
+		"missing node": func(p *Parent) { delete(p.Shares.Nodes, "b") },
+		"revision":     func(p *Parent) { p.BudgetRevision++ },
+		"above reserve": func(p *Parent) {
+			e := p.Shares.Nodes["a"]
+			e.Share.Bandwidth = e.Reserved.Bandwidth + 1
+			p.Shares.Nodes["a"] = e
+		},
+		"sum above total": func(p *Parent) {
+			e := p.Shares.Nodes["a"]
+			e.Share.Bandwidth += 1 << 20
+			e.Reserved = e.Share
+			p.Shares.Nodes["a"] = e
+		},
+		"zero share":    func(p *Parent) { e := p.Shares.Nodes["a"]; e.Share.Bandwidth = 0; p.Shares.Nodes["a"] = e },
+		"retired, kept": func(p *Parent) { p.Failover = &FailoverState{Enabled: true, Retired: map[string]RetiredNode{"b": {}}} },
+		"undivided capped": func(p *Parent) {
+			e := p.Shares.Nodes["a"]
+			e.Share.List = 3
+			e.Reserved.List = 3
+			p.Shares.Nodes["a"] = e
+		},
 	} {
 		current, _ := repo.Get(p.ID)
 		data, _ := json.Marshal(current)

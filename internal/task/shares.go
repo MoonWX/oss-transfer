@@ -232,7 +232,9 @@ func ShareBusy(p Parent) map[string]bool {
 		}
 	}
 	undispatched := !p.ScanComplete || p.DispatchedThrough < p.ScannedBatches
-	queued := p.NeedsQueuedRebalance()
+	// A drain or rejoin only arms queue rebalancing; it does not give the
+	// remaining nodes work. Nodes become busy when a handoff is actually
+	// pending (below) or when moved children arrive.
 	var handoff *QueuedHandoff
 	if p.Failover != nil && p.Failover.Rebalance != nil {
 		handoff = p.Failover.Rebalance.Pending
@@ -242,7 +244,7 @@ func ShareBusy(p Parent) map[string]bool {
 		id := node.ID
 		busy[id] = p.Scheduling.Nodes[id].Children > 0 ||
 			handoff != nil && (handoff.Source.ID == id || handoff.Target.ID == id) ||
-			placement[id] && (undispatched || queued) ||
+			placement[id] && undispatched ||
 			id == scanner && !p.ScanComplete // the scan needs LIST requests
 	}
 	return busy

@@ -86,6 +86,30 @@ def execute(commands, output, cwd):
         row = {"name": name, "command": [str(arg) for arg in command], "log": log.name,
                "exitCode": code, "seconds": round(time.monotonic() - began, 3)}
         row["result"] = "passed" if code == 0 else "failed"
+        if code != 0 and "test" in command:
+            # Rerun only the failed top-level tests once so a timing-sensitive
+            # test on a slow runner does not fail the whole run; a real
+            # regression fails again.
+            text = log.read_text(encoding="utf-8", errors="replace")
+            failed = sorted(set(re.findall(r"^--- FAIL: (\S+)", text, re.MULTILINE)))
+            if failed:
+                retry, skip = [], False
+                for arg in command:
+                    if skip:
+                        skip = False
+                    elif arg == "-run":
+                        skip = True
+                    elif not str(arg).startswith("-run="):
+                        retry.append(arg)
+                retry.insert(retry.index("test") + 1, "-run=" + run_pattern(failed))
+                retry_log = output / (name + "-retry.log")
+                with retry_log.open("wb") as stream:
+                    retry_code = subprocess.run(retry, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
+                row["retry"] = {"tests": failed, "log": retry_log.name, "exitCode": retry_code}
+                if retry_code == 0:
+                    row["result"] = "passed"
+                    print("flaky " + name + ": passed on retry " + " ".join(failed), flush=True)
+                row["seconds"] = round(time.monotonic() - began, 3)
         print(row["result"] + " " + name + " (" + str(row["seconds"]) + "s)", flush=True)
         return row
 

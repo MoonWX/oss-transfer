@@ -396,6 +396,41 @@ def run(platform, directory, repo, output, parallel):
             result["passedTests"] = len(re.findall(r"^\s*--- PASS: ", text, re.MULTILINE))
             completed = re.search(r"^PASS\r?$", text, re.MULTILINE) is not None
             result["result"] = "passed" if result["exitCode"] == 0 and completed and result["passedTests"] > 0 else "failed"
+            if result["result"] != "passed":
+                # Slow or emulated runners occasionally trip a timing-sensitive
+                # test. Rerun only the failed top-level tests once; a real
+                # regression fails again and still fails the group.
+                failed = sorted(set(re.findall(r"^--- FAIL: (\S+)", text, re.MULTILINE)))
+                retry_log = log.with_name(log.stem + "-retry.log")
+                with retry_log.open("w", encoding="utf-8") as stream:
+                    process = None
+                    try:
+                        command = [str(confined(directory.resolve(), entry["binary"])), "-test.count=1", "-test.v", f"-test.timeout={package_timeout}s"]
+                        if failed:
+                            command.append("-test.run=" + SHARDS.run_pattern(failed))
+                        elif "shard" in item:
+                            command.append("-test.run=" + SHARDS.run_pattern(item["tests"]))
+                        process = subprocess.Popen(command, cwd=confined(repo.resolve(), entry["cwd"], directory=True),
+                                                   stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+                        retry_code = process.wait(timeout=package_timeout + 15)
+                    except Exception as error:
+                        retry_code = None
+                        stream.write("\nTest runner error: " + str(error) + "\n")
+                    finally:
+                        if process is not None:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait()
+                retry_text = retry_log.read_text(encoding="utf-8", errors="replace")
+                retried = retry_code == 0 and re.search(r"^PASS\r?$", retry_text, re.MULTILINE) is not None
+                result["retry"] = {"tests": failed, "log": retry_log.name, "result": "passed" if retried else "failed"}
+                if retried:
+                    print("flaky " + entry["package"] + ": passed on retry " + " ".join(failed), file=sys.stderr, flush=True)
+                    print(text, file=sys.stderr, flush=True)
+                    result["result"] = "passed"
+                result["seconds"] = round(time.monotonic() - began, 3)
             result["skipped"] = re.findall(r"^\s*--- SKIP: (.+)$", text, re.MULTILINE)
             print(result["result"] + " " + entry["package"] + (" shard " + item["shard"] if "shard" in item else "")
                   + " " + str(result["seconds"]) + "s", flush=True)

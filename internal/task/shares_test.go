@@ -246,10 +246,10 @@ func TestShareBusyRules(t *testing.T) {
 	draining := p
 	draining.Failover = &FailoverState{Enabled: true}
 	draining.Membership = &MembershipState{Draining: map[string]NodeDrain{"n01": {Mode: DrainModeDrain}}}
-	if b := ShareBusy(draining); b["n01"] {
-		// The drain arms queue rebalancing, which keeps placement nodes busy;
-		// the draining node itself is not a placement node.
-		t.Fatal("a draining node without children is idle", b)
+	if b := ShareBusy(draining); b["n01"] || b["n02"] {
+		// Arming queue rebalancing alone gives no node work: an idle
+		// remaining node must not keep its share while another node drains.
+		t.Fatal("a drain alone makes no node busy", b)
 	}
 	setBusy(&draining, map[string]bool{"n01": true})
 	if b := ShareBusy(draining); !b["n01"] {

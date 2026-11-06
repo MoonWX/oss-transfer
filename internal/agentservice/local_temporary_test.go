@@ -624,3 +624,42 @@ func TestLocalTempPublicationFailureRetainsSameNameReplacement(t *testing.T) {
 		t.Fatal("cleanup forgot unresolved replacement record")
 	}
 }
+
+// Deleting a target directory and recreating it (an operator clearing the
+// target before re-running a task) must not leave every later write failing
+// on the old staging namespace's recorded identity.
+func TestLocalTempNamespaceRecreatedAfterDirectoryRemoval(t *testing.T) {
+	registry, _ := openTempRegistry(t, filepath.Join(t.TempDir(), "agent.db"))
+	if _, err := registry.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	root := filepath.Join(base, "target")
+	write := func(key string) {
+		t.Helper()
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		local, err := transferstore.NewLocal(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer local.Close()
+		local.SetTempRegistry(registry)
+		if result, err := local.Write(context.Background(), key, strings.NewReader("value"), transferstore.WriteOptions{Size: 5, Overwrite: true}); err != nil || !result.Committed {
+			t.Fatalf("write %s: %+v %v", key, result, err)
+		}
+	}
+	write("dir/first")
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	write("dir/second")
+	if err := os.RemoveAll(filepath.Join(root, "dir")); err != nil {
+		t.Fatal(err)
+	}
+	write("dir/third")
+	// A namespace directory that still exists keeps being verified, never
+	// silently replaced.
+	write("dir/fourth")
+}

@@ -112,6 +112,24 @@ func CreateLocalTempNamespace(ctx context.Context, parent *os.Root, parentPath, 
 	return record, nil
 }
 
+// LocalTempNamespaceGone reports whether a registered namespace no longer
+// exists under parent: the directory was deleted, or the parent itself was
+// removed and recreated. Its temporary files went with it, so the record can
+// be replaced by a fresh namespace. An existing entry with the recorded name
+// is never treated as gone; OpenLocalTempNamespace still verifies it.
+func LocalTempNamespaceGone(parent *os.Root, record LocalTempNamespace) (bool, error) {
+	if err := ValidateLocalTempNamespace(record); err != nil {
+		return false, err
+	}
+	if _, err := parent.Lstat(record.Name); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
 // OpenLocalTempNamespace pins the original parent and rejects replacements,
 // symlinks, changed permissions and missing/modified ownership markers.
 func OpenLocalTempNamespace(parent *os.Root, record LocalTempNamespace) (*os.Root, error) {

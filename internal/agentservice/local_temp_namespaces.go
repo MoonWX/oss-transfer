@@ -48,16 +48,30 @@ func (r *LocalTempRegistry) PrepareNamespace(ctx context.Context, parent *os.Roo
 		}
 		return found, err
 	}
-	if found, err := read(); err != nil || found {
+	found, err := read()
+	if err != nil {
 		return record, err
 	}
-	// First use is serialized; subsequent writes only read the committed record.
+	if found {
+		gone, goneErr := transferstore.LocalTempNamespaceGone(parent, record)
+		if goneErr != nil || !gone {
+			return record, goneErr
+		}
+	}
+	// First use, or replacing a namespace whose directory was deleted (for
+	// example when the target directory was removed and recreated), is
+	// serialized; subsequent writes only read the committed record.
 	r.namespaceMu.Lock()
 	defer r.namespaceMu.Unlock()
-	if found, err := read(); err != nil || found {
+	if found, err = read(); err != nil {
 		return record, err
 	}
-	var err error
+	if found {
+		gone, goneErr := transferstore.LocalTempNamespaceGone(parent, record)
+		if goneErr != nil || !gone {
+			return record, goneErr
+		}
+	}
 	record, err = transferstore.CreateLocalTempNamespace(ctx, parent, parentPath, r.owner)
 	if err != nil {
 		return record, err

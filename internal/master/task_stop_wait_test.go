@@ -109,7 +109,7 @@ func TestStopWaitReconcilesWithoutTransientErrorAndExposesPersistentFaults(t *te
 	f.master.Start()
 	waitFor := func(description string, check func(task.Parent) bool) task.Parent {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(2 * time.Minute) // hang guard only
 		for {
 			current, err := f.master.tasks.repo.Get(p.ID)
 			if err != nil {

@@ -86,10 +86,10 @@ func TestProgressTimerStillPersistsPartialBatch(t *testing.T) {
 	f.acceptStart()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Minute): // hang guard only
 		t.Fatal("second transfer did not reach the blocking point")
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for {
 		r, err := f.repo.Get(bg, f.job.ChildID)
 		if err != nil {

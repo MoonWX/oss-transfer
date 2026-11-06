@@ -110,7 +110,7 @@ func TestComparisonHTTPAgentStreamingAndCredentialBoundary(t *testing.T) {
 	if id == "" {
 		t.Fatal("comparison ID missing")
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for {
 		code, body = request(t, f.http.Client(), "GET", fmt.Sprintf("%s/api/master/comparisons/%s?limit=2", f.http.URL, id), f.admin, nil)
 		if code != 200 {

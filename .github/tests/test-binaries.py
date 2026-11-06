@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check that target-test artifacts cannot silently omit tests or change identity."""
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -264,6 +265,58 @@ class TestArtifacts(unittest.TestCase):
         self.assertEqual(evidence["untimedTests"], ["TestUntimed"])
         self.assertEqual(len({item["log"] for item in evidence["packages"]}), 4)
 
+    def test_platform_scope_skips_neutral_packages_and_runs_declared_master_tests(self):
+        manifest = copy.deepcopy(self.manifest)
+        (self.repo / "internal/master").mkdir(parents=True)
+        (self.repo / "internal/master/platform_test.go").write_text(
+            "package master\n\nfunc TestB(t *testing.T) {}\nfunc TestD(t *testing.T) {}\n")
+        master = {"cwd": "internal/master", "package": "github.com/MoonWX/oss-transfer/internal/master",
+                  "binary": "bin/internal-master.test", "sha256": "0" * 64, "testFiles": []}
+        manifest["tests"] = [manifest["tests"][0], manifest["tests"][1], master]
+        listed = ["TestA", "TestB", "TestC", "TestD"]
+        ran = self.root / "ran-platform"
+        script = self.directory / master["binary"]
+        script.write_text("#!/bin/sh\n"
+                          "for arg; do case $arg in -test.list) printf '%s\\n' " + " ".join(listed) + "; exit 0;; "
+                          "-test.run=*) pattern=${arg#-test.run=};; esac; done\n"
+                          "for name in " + " ".join(listed) + "; do\n"
+                          "  if printf '%s\\n' \"$name\" | grep -Eq \"$pattern\"; then\n"
+                          "    echo \"$name\" >> '" + str(ran) + "'; echo \"--- PASS: $name (0.00s)\"; fi\n"
+                          "done\necho PASS\n")
+        script.chmod(0o755)
+        for item in manifest["tests"][:2]:
+            path = self.directory / item["binary"]
+            path.write_text("#!/bin/sh\necho " + item["cwd"] + " >> '" + str(ran) + "'\n"
+                            "printf '%s\\n' '--- PASS: TestOther (0.00s)' PASS\n")
+            path.chmod(0o755)
+        timings = {"package": "internal/master", "shards": 3, "packageOrder": ["internal/master"],
+                   "platformScope": {"skipPackages": ["internal/task"], "packageTestFiles": ["platform_test.go"], "shards": 2},
+                   "seconds": {"TestA": 5, "TestB": 4, "TestC": 3, "TestD": 1}}
+        output = self.root / "platform-scope"
+        with mock.patch.object(TESTS, "verify", return_value=manifest), \
+                mock.patch.object(TESTS.SHARDS, "load_timings", return_value=timings):
+            self.assertEqual(TESTS.run("linux/armv7", self.directory, self.repo, output, 4, "platform"), 0)
+        self.assertEqual(sorted(ran.read_text().split()), ["TestB", "TestD", "internal/agentservice"])
+        evidence = json.loads((output / "evidence.json").read_text())
+        self.assertEqual((evidence["scope"], evidence["skippedPackages"], evidence["platformTests"]),
+                         ("platform", ["internal/task"], ["TestB", "TestD"]))
+        self.assertEqual([item["shard"] for item in evidence["packages"] if "shard" in item], ["1/2", "2/2"])
+        # The same artifact under the full scope runs every package and test.
+        ran.unlink()
+        with mock.patch.object(TESTS, "verify", return_value=manifest), \
+                mock.patch.object(TESTS.SHARDS, "load_timings", return_value=timings):
+            self.assertEqual(TESTS.run("linux/armv7", self.directory, self.repo, self.root / "full-scope", 4), 0)
+        self.assertEqual(sorted(ran.read_text().split()), listed + ["internal/agentservice", "internal/task"])
+
+    def test_platform_scope_rejects_a_skipped_package_missing_from_the_artifact(self):
+        timings = {"package": "internal/master", "shards": 3, "packageOrder": [], "seconds": {},
+                   "platformScope": {"skipPackages": ["internal/renamed"], "packageTestFiles": []}}
+        output = self.root / "renamed"
+        with mock.patch.object(TESTS, "verify", return_value=self.manifest), \
+                mock.patch.object(TESTS.SHARDS, "load_timings", return_value=timings):
+            self.assertEqual(TESTS.run("linux/armv7", self.directory, self.repo, output, 4, "platform"), 1)
+        self.assertIn("skips unknown packages", json.loads((output / "evidence.json").read_text())["error"])
+
     def test_unparseable_master_listing_fails_the_run(self):
         manifest = copy.deepcopy(self.manifest)
         (self.repo / "internal/master").mkdir(parents=True)
@@ -278,6 +331,100 @@ class TestArtifacts(unittest.TestCase):
         evidence = json.loads((output / "evidence.json").read_text())
         self.assertIn("Unexpected go test -list output", evidence["error"])
         self.assertEqual(evidence["packages"], [])
+
+
+class NativeFixtureArtifacts(unittest.TestCase):
+    """Native acceptance runs no Go: it gets only the executables it would compile."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="native fixtures ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.repo, self.directory = self.root / "repo", self.root / "fixtures"
+        self.repo.mkdir()
+        (self.directory / "bin").mkdir(parents=True)
+        self.commit = "c" * 40
+        environment = mock.patch.dict(os.environ, {"GITHUB_SHA": self.commit, "GITHUB_ENV": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+        (self.repo / "go.mod").write_text("module github.com/MoonWX/oss-transfer\n")
+        # A Windows checkout converts sources to CRLF; the Linux build saw LF.
+        sources = {"internal/agentservice/recovery_test.go": "package agentservice\r\n",
+                   "internal/agentservice/local_path_linux_test.go": "//go:build linux\n\npackage agentservice\n",
+                   "internal/task/integer_test.go": "package task\n"}
+        for relative, text in sources.items():
+            path = self.repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.encode())
+        self.manifest = {"schema": 1, "kind": "fixtures", "platform": "windows/arm64", "commit": self.commit,
+                         "goVersion": "go1.26.5", "tests": [], "fixtures": [],
+                         "testSources": {"internal/agentservice/recovery_test.go":
+                                         hashlib.sha256(b"package agentservice\n").hexdigest()}}
+        binary = "bin/internal-agentservice.test.exe"
+        self.pe(binary)
+        self.manifest["tests"].append({"package": "github.com/MoonWX/oss-transfer/internal/agentservice",
+                                       "cwd": "internal/agentservice", "binary": binary,
+                                       "testFiles": ["internal/agentservice/recovery_test.go"],
+                                       "sha256": TESTS.digest(self.directory / binary)})
+        for name in TESTS.FIXTURES:
+            source = ".github/acceptance/fixtures/" + name + ".go"
+            path = self.repo / source
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("package main\n")
+            self.pe("bin/" + name + ".exe")
+            self.manifest["fixtures"].append({"name": name, "source": source, "sourceSha256": TESTS.source_digest(path),
+                                              "binary": "bin/" + name + ".exe",
+                                              "sha256": TESTS.digest(self.directory / ("bin/" + name + ".exe"))})
+        self.save()
+
+    def pe(self, binary, machine=0xAA64):
+        data = bytearray(128)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 60, 64)
+        data[64:68] = b"PE\0\0"
+        struct.pack_into("<H", data, 68, machine)
+        (self.directory / binary).write_bytes(data)
+
+    def save(self):
+        (self.directory / "manifest.json").write_text(json.dumps(self.manifest))
+
+    def test_fixture_bundle_publishes_all_three_executables_for_its_platform(self):
+        env_file = self.root / "fixtures.env"
+        manifest = TESTS.verify("windows/arm64", self.directory, self.repo, env_file=env_file)
+        self.assertEqual(len(manifest["tests"]), 1)
+        text = env_file.read_text()
+        for variable in ("QA_MULTIPART_TEST_BINARY", "QA_FAILURE_MASTER", "QA_ROLLBACK_CLI"):
+            self.assertIn("export " + variable + "=", text)
+        self.assertIn("internal-agentservice.test.exe", text)
+
+    def test_fixture_bundle_rejects_wrong_kind_platform_architecture_or_source(self):
+        with self.assertRaisesRegex(ValueError, "platform or commit differs"):
+            TESTS.verify("windows/amd64", self.directory, self.repo)
+        # An emulated platform needs every test package, never a fixture bundle.
+        self.manifest["platform"] = "linux/armv7"
+        self.save()
+        with self.assertRaisesRegex(ValueError, "kind does not match"):
+            TESTS.verify("linux/armv7", self.directory, self.repo)
+        self.manifest["platform"] = "windows/amd64"
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Test executable has the wrong platform"):
+            TESTS.verify("windows/amd64", self.directory, self.repo)
+        self.manifest["platform"] = "windows/arm64"
+        del self.manifest["kind"]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "kind does not match"):
+            TESTS.verify("windows/arm64", self.directory, self.repo)
+        self.manifest["kind"] = "fixtures"
+        self.save()
+        (self.repo / "internal/agentservice/new_test.go").write_text("package agentservice\n")
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            TESTS.verify("windows/arm64", self.directory, self.repo)
+
+    def test_windows_constraints_exclude_unix_only_tests(self):
+        path = self.repo / "internal/agentservice/unix_test.go"
+        path.write_text("//go:build unix\n\npackage agentservice\n")
+        self.assertFalse(TESTS.selected_test(path, TESTS.PLATFORMS["windows/arm64"], "go1.26.5"))
+        self.assertTrue(TESTS.selected_test(path, TESTS.PLATFORMS["darwin/arm64"], "go1.26.5"))
 
 
 if __name__ == "__main__":

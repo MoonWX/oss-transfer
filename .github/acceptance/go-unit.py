@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run the main module's Go tests with internal/master split into concurrent shards."""
+"""Run the Go tests of both modules with internal/master split into concurrent shards.
+
+--scope full runs every test. --scope platform runs the platform-sensitive part:
+every package except the platform-neutral ones listed in master-shards.json,
+and of internal/master only the tests declared in its listed files.
+"""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -12,6 +17,8 @@ import time
 TIMINGS = Path(__file__).with_name("master-shards.json")
 # Benchmarks only run with -bench; every other listed name runs under go test.
 LISTED = re.compile(r"(Test|Example|Fuzz)\w*")
+# A top-level test function as go test -list reports it.
+DECLARED = re.compile(r"^func (Test\w+)\(\s*\w+\s+\*testing\.T\s*\)", re.MULTILINE)
 # Matches the go test package deadline used before sharding.
 TIMEOUT = "-timeout=15m"
 
@@ -22,6 +29,11 @@ def load_timings(path=None):
     shards, seconds = data["shards"], data["seconds"]
     if type(shards) is not int or shards < 1 or not isinstance(seconds, dict):
         raise ValueError("Invalid shard timing list: " + str(path))
+    scope = data.get("platformScope", {})
+    if (not isinstance(scope.get("skipPackages", []), list)
+            or not isinstance(scope.get("packageTestFiles", []), list)
+            or type(scope.get("shards", 1)) is not int or scope.get("shards", 1) < 1):
+        raise ValueError("Invalid platform scope: " + str(path))
     return data
 
 
@@ -38,6 +50,31 @@ def listed_tests(text):
     if not names or len(names) != len(set(names)):
         raise ValueError("go test -list returned no tests or duplicate names")
     return names
+
+
+def declared_tests(directory, files):
+    """Top-level tests declared in the named files; a missing or empty file fails."""
+    names = []
+    for name in files:
+        path = Path(directory) / name
+        if Path(name).name != name or not name.endswith("_test.go") or not path.is_file():
+            raise ValueError("Platform test file is missing: " + str(path))
+        found = DECLARED.findall(path.read_text(encoding="utf-8"))
+        if not found:
+            raise ValueError("Platform test file declares no tests: " + str(path))
+        names.extend(found)
+    if len(names) != len(set(names)):
+        raise ValueError("Platform test files declare a test twice")
+    return sorted(names)
+
+
+def platform_tests(listed, directory, files):
+    """The listed package's platform-sensitive tests; a stale file list fails."""
+    declared = declared_tests(directory, files)
+    missing = sorted(set(declared) - set(listed))
+    if missing:
+        raise ValueError("go test -list does not report platform tests: " + ", ".join(missing))
+    return declared
 
 
 def plan_shards(names, seconds, count):
@@ -72,14 +109,17 @@ def ordered_packages(packages, order):
 
 
 def execute(commands, output, cwd):
-    """Run named commands concurrently, each into its own log; return per-command rows."""
+    """Run named commands concurrently, each into its own log; return per-command rows.
+
+    A command is (name, argv) or (name, argv, directory); cwd is the default directory.
+    """
     def start(item):
-        name, command = item
+        name, command, directory = (*item, cwd) if len(item) == 2 else item
         log = output / (name + ".log")
         began = time.monotonic()
         with log.open("wb") as stream:
             try:
-                code = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
+                code = subprocess.run(command, cwd=directory, stdout=stream, stderr=subprocess.STDOUT).returncode
             except OSError as error:
                 stream.write(("Cannot start: " + str(error) + "\n").encode())
                 code = None
@@ -104,7 +144,7 @@ def execute(commands, output, cwd):
                 retry.insert(retry.index("test") + 1, "-run=" + run_pattern(failed))
                 retry_log = output / (name + "-retry.log")
                 with retry_log.open("wb") as stream:
-                    retry_code = subprocess.run(retry, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
+                    retry_code = subprocess.run(retry, cwd=directory, stdout=stream, stderr=subprocess.STDOUT).returncode
                 row["retry"] = {"tests": failed, "log": retry_log.name, "exitCode": retry_code}
                 if retry_code == 0:
                     row["result"] = "passed"
@@ -118,38 +158,54 @@ def execute(commands, output, cwd):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--race", action="store_true")
+    parser.add_argument("--scope", choices=("full", "platform"), default="full")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     repo = Path.cwd()
     timings = load_timings()
+    scope = timings.get("platformScope", {}) if args.scope == "platform" else {}
     race = ["-race"] if args.race else []
     module = subprocess.check_output(["go", "list", "-m"], text=True).strip()
     master = module + "/" + timings["package"]
-    others = [name for name in subprocess.check_output(["go", "list", "./..."], text=True).split() if name != master]
+    skipped = sorted(module + "/" + name for name in scope.get("skipPackages", []))
+    packages = subprocess.check_output(["go", "list", "./..."], text=True).split()
+    missing = sorted(set(skipped) - set(packages))
+    others = [name for name in packages if name != master and name not in skipped]
     order = [module + "/" + name for name in timings["packageOrder"]]
-    evidence = {"result": "failed", "race": args.race, "commands": []}
+    evidence = {"result": "failed", "race": args.race, "scope": args.scope, "skippedPackages": skipped,
+                "commands": []}
     started = time.monotonic()
+    # The rest of the module and the CLI module need no listing; start them
+    # while the master test binary compiles for -list.
+    background = [("others", ["go", "test", "-count=1", TIMEOUT, "-p", "2", *race, *ordered_packages(others, order)])]
+    if (repo / "cli/go.mod").is_file():
+        background.append(("cli", ["go", "test", "-count=1", TIMEOUT, "-p", "2", *race, "./..."], repo / "cli"))
     pool = ThreadPoolExecutor(max_workers=1)
-    # The rest of the module needs no listing; start it while the master test
-    # binary compiles for -list.
-    rest = pool.submit(execute, [("others", ["go", "test", "-count=1", TIMEOUT, "-p", "2", *race,
-                                            *ordered_packages(others, order)])], output, repo)
+    rest = pool.submit(execute, background, output, repo)
     rows = []
     try:
+        if missing:
+            # A renamed package would otherwise silently join the platform scope.
+            raise ValueError("Platform scope skips unknown packages: " + ", ".join(missing))
         listing = subprocess.run(["go", "test", *race, "-list", ".", master], cwd=repo,
                                  capture_output=True, text=True)
         if listing.returncode != 0:
             print(listing.stdout + listing.stderr, file=sys.stderr, flush=True)
             raise RuntimeError("go test -list failed for " + master)
         names = listed_tests(listing.stdout)
-        shards, unknown = plan_shards(names, timings["seconds"], timings["shards"])
-        evidence.update(listedTests=len(names), untimedTests=unknown,
+        selected, count = names, timings["shards"]
+        if args.scope == "platform":
+            selected = platform_tests(names, repo / timings["package"], scope.get("packageTestFiles", []))
+            count = scope.get("shards", 1)
+            evidence["platformTests"] = selected
+        shards, unknown = plan_shards(selected, timings["seconds"], count)
+        evidence.update(listedTests=len(names), selectedTests=len(selected), untimedTests=unknown,
                         shards=[{"tests": len(s["tests"]), "estimatedSeconds": round(s["seconds"], 1)} for s in shards])
-        print(f"Union check: {len(names)} listed tests in {timings['package']} = "
+        print(f"Union check: {len(selected)} of {len(names)} listed tests in {timings['package']} = "
               f"{' + '.join(str(len(s['tests'])) for s in shards)} across {len(shards)} shards", flush=True)
         if unknown:
             print("Untimed tests assigned to the lightest shard: " + ", ".join(unknown), flush=True)

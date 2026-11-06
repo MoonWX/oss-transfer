@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -156,15 +157,64 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sorted(name for shard in self.ran() for name in shard), sorted(self.listed))
         self.assertEqual(len(self.ran()), 3)
         self.assertEqual(evidence["untimedTests"], ["ExampleE", "TestUntimed"])
-        self.assertIn("Union check: 6 listed tests", completed.stdout)
+        self.assertIn("Union check: 6 of 6 listed tests", completed.stdout)
         runs = [call for call in self.calls() if call[0] == "test" and "-list" not in call]
         self.assertTrue(all("-race" in call and "-count=1" in call and "-timeout=15m" in call for call in runs))
         others = next(call for call in runs if "-run" not in call)
         self.assertEqual(others[-2:], ["example.test/module/internal/slow", "example.test/module/internal/fast"])
         self.assertNotIn("example.test/module/internal/master", others)
         self.assertEqual({row["name"] for row in evidence["commands"]}, {"master-1", "master-2", "master-3", "others"})
+        self.assertEqual((evidence["scope"], evidence["skippedPackages"]), ("full", []))
         for row in evidence["commands"]:
             self.assertTrue((self.root / "out" / row["log"]).is_file())
+
+    def test_cli_module_runs_beside_the_main_module_with_the_same_flags(self):
+        (self.root / "cli").mkdir()
+        (self.root / "cli/go.mod").write_text("module oss-transfer-cli\n")
+        completed, evidence = self.run_unit("--race")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        cli = next(row for row in evidence["commands"] if row["name"] == "cli")
+        self.assertEqual(cli["command"], ["go", "test", "-count=1", "-timeout=15m", "-p", "2", "-race", "./..."])
+        self.assertEqual(cli["result"], "passed")
+
+    def test_platform_scope_skips_neutral_packages_and_runs_only_declared_master_tests(self):
+        master = self.root / "internal/master"
+        master.mkdir(parents=True)
+        (master / "platform_test.go").write_text(
+            "package master\n\nfunc TestB(t *testing.T) {}\n\nfunc helper(t *testing.T) {}\n"
+            "func TestUntimed(t *testing.T) {}\n")
+        self.timings.write_text(json.dumps({"package": "internal/master", "shards": 3,
+                                            "packageOrder": ["internal/master", "internal/slow"],
+                                            "platformScope": {"skipPackages": ["internal/slow"],
+                                                              "packageTestFiles": ["platform_test.go"], "shards": 2},
+                                            "seconds": {"TestA": 5, "TestB": 4, "TestC": 3, "TestD": 1}}))
+        completed, evidence = self.run_unit("--scope", "platform")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(sorted(name for shard in self.ran() for name in shard), ["TestB", "TestUntimed"])
+        self.assertEqual(len(self.ran()), 2)
+        self.assertEqual(evidence["platformTests"], ["TestB", "TestUntimed"])
+        self.assertEqual((evidence["scope"], evidence["skippedPackages"]), ("platform", ["example.test/module/internal/slow"]))
+        others = next(call for call in self.calls() if call[0] == "test" and "-run" not in call and "-list" not in call)
+        self.assertEqual(others[-1:], ["example.test/module/internal/fast"])
+        self.assertIn("Union check: 2 of 6 listed tests", completed.stdout)
+
+    def test_platform_scope_fails_closed_on_stale_configuration(self):
+        master = self.root / "internal/master"
+        master.mkdir(parents=True)
+        (master / "platform_test.go").write_text("package master\n\nfunc TestGone(t *testing.T) {}\n")
+        for scope, error in (({"skipPackages": [], "packageTestFiles": ["platform_test.go"]}, "does not report platform tests"),
+                             ({"skipPackages": [], "packageTestFiles": ["missing_test.go"]}, "Platform test file is missing"),
+                             ({"skipPackages": ["internal/renamed"], "packageTestFiles": []}, "skips unknown packages")):
+            with self.subTest(error=error):
+                for path in (self.state / "calls.jsonl", self.state / "ran.jsonl"):
+                    path.unlink(missing_ok=True)
+                self.timings.write_text(json.dumps({"package": "internal/master", "shards": 3, "packageOrder": [],
+                                                    "platformScope": scope, "seconds": {}}))
+                completed, evidence = self.run_unit("--scope", "platform")
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(error, evidence["error"])
+                self.assertEqual(self.ran(), [])
+                shutil.rmtree(self.root / "out")
 
     def test_failing_shard_or_other_packages_fail_the_run_after_all_finish(self):
         for change, failed in (({"failShard": "TestC"}, "master"), ({"othersExit": 1}, "others")):

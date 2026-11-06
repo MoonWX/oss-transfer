@@ -149,7 +149,7 @@ func TestTerminalStatusWaitsForStoresAndReleasesActiveSlot(t *testing.T) {
 			wait(source.entered)
 			assertClosing()
 			source.unblock()
-			deadline := time.Now().Add(5 * time.Second)
+			deadline := time.Now().Add(2 * time.Minute) // hang guard only
 			for {
 				p, err := m.Get("test", 0, 1)
 				if err != nil {

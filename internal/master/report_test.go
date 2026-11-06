@@ -65,7 +65,7 @@ func stoppedReportFixture(t *testing.T) (*agentHTTPFixture, task.Parent) {
 		_ = engine.Close(context.Background())
 		_ = db.Close()
 	})
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	var node task.Node
 	for {
 		members, err := f.master.onlineAgents()

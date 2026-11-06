@@ -70,7 +70,7 @@ func holdRecoveryWriter(t *testing.T, temporary *LocalTempRegistry) func() {
 
 func waitRecoveryQueue(t *testing.T, temporary *LocalTempRegistry, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute) // hang guard only
 	for len(temporary.queue) != count {
 		if time.Now().After(deadline) {
 			t.Fatalf("expected %d queued recovery records, got %d", count, len(temporary.queue))

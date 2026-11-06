@@ -32,12 +32,23 @@ import zipfile
 import boto3
 from botocore.config import Config
 
+# botocore sends "Expect: 100-continue" even with an empty body. SeaweedFS
+# answers such a PUT without a 100 response, which leaves that pooled
+# connection broken: the next PUT with a body on it waits out the 30-second
+# read timeout before a retry. Fixtures with empty objects lost about 30
+# seconds per upload. Drop the header for empty bodies only.
+os.environ.setdefault("BOTO_EXPERIMENTAL__NO_EMPTY_CONTINUE", "true")
+
 
 HELPERS = importlib.util.spec_from_file_location("store_qa", Path(__file__).with_name("store-qa.py"))
 store_qa = importlib.util.module_from_spec(HELPERS)
 HELPERS.loader.exec_module(store_qa)
 MIB = 1024 * 1024
 TERMINAL = {"COMPLETED", "STOPPED", "FAILED", "PARTIAL_FAILED"}
+SCENARIOS = ("core", "transfer", "recovery", "nodes", "dynamic_share", "all")
+# Scenarios that measure bandwidth or inject stops and crashes; with a gate
+# they wait for the other acceptance groups on this runner.
+MEASURED = ("transfer", "recovery", "nodes", "all")
 
 
 def bandwidth_allowance(rate):
@@ -251,6 +262,7 @@ class Harness:
         self.root = args.output.resolve()
         self.root.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.children, self.streams, self.secrets = [], [], []
+        self.s3_process = None
         self.external_s3 = external_s3_fixture()
         if self.external_s3:
             self.secrets.extend([self.external_s3["accessKey"], self.external_s3["secretKey"]])
@@ -341,6 +353,7 @@ class Harness:
             arguments += [f"-{flag}={port}" for flag, port in zip(flags, ports)]
             process, _ = self.spawn("seaweedfs", self.args.weed, arguments,
                                     dict(self.environment, AWS_ACCESS_KEY_ID=access, AWS_SECRET_ACCESS_KEY=secret))
+            self.s3_process = process
             endpoint = "http://127.0.0.1:" + str(ports[6])
         self.s3 = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1",
                               aws_access_key_id=access, aws_secret_access_key=secret,
@@ -1023,7 +1036,7 @@ class Harness:
             list(pool.map(put, manifest))
         return manifest
 
-    def dynamic_share(self):
+    def dynamic_share(self, manifest=None):
         """An idle Agent releases its share of the task limit to the busy one.
 
         Every node-view sample must keep the shares within the limit. Once one
@@ -1032,7 +1045,7 @@ class Harness:
         within the task limit (the bandwidth scenario's upper-bound check);
         throughput is recorded, never asserted.
         """
-        manifest = self.dynamic_share_fixture()
+        manifest = manifest or self.dynamic_share_fixture()
         rate = self.args.recovery_bandwidth_mbps
         limit = int(rate * 125000)
         destination = self.root / "dynamic-share"
@@ -1104,8 +1117,8 @@ class Harness:
                     nodeViewSamples=len(views), physicalByteWindows=windows,
                     seconds=time.monotonic() - started)
 
-    def node_membership(self):
-        manifest = self.membership_fixture()
+    def node_membership(self, manifest=None):
+        manifest = manifest or self.membership_fixture()
         rate = self.args.recovery_bandwidth_mbps
         first, second = self.nodes
         # One child at a time per Agent leaves never-started children queued,
@@ -1231,7 +1244,12 @@ class Harness:
     def close(self):
         for child in reversed(self.children):
             if child.poll() is None:
-                child.terminate()
+                # The S3 fixture is disposable and its filer spends about ten
+                # seconds in a graceful stop; Agents and Master stop gracefully.
+                if child is self.s3_process:
+                    child.kill()
+                else:
+                    child.terminate()
                 try:
                     child.wait(timeout=15)
                 except subprocess.TimeoutExpired:
@@ -1245,7 +1263,9 @@ class Harness:
 
 def wait_for_exclusive(gate, run_id, timeout=1200):
     """Require this run's other groups to exit before measuring bandwidth."""
-    required = {"unit", "control", "install"}
+    # The runner names the groups that share this machine: Go tests and the
+    # installer may run in jobs of their own.
+    allowed = {"unit", "control", "install"}
 
     def ready():
         try:
@@ -1256,11 +1276,12 @@ def wait_for_exclusive(gate, run_id, timeout=1200):
             return None
         require(state.get("runId") == run_id, "Exclusive transfer gate belongs to another run")
         groups = state.get("requiredGroups", [])
-        require(len(groups) == len(required) and set(groups) == required, "Exclusive transfer gate omitted a required group")
+        require(isinstance(groups, list) and groups and len(groups) == len(set(groups)) and set(groups) <= allowed,
+                "Exclusive transfer gate lists invalid required groups")
         require(state.get("status") in ("WAITING", "READY"), "Another acceptance group failed before exclusive transfer")
         if state["status"] == "WAITING":
             return None
-        require(all(state.get("groups", {}).get(name) == "PASSED" for name in required),
+        require(all(state.get("groups", {}).get(name) == "PASSED" for name in groups),
                 "Exclusive transfer started before every other group passed")
         return state
 
@@ -1272,7 +1293,10 @@ def main():
     for name in ("master", "agent", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--weed", type=Path, help="Verified local S3 fixture binary; omitted with OSS_TRANSFER_QA_S3_CONFIG")
-    parser.add_argument("--scenario", choices=("core", "nodes", "dynamic_share", "all"), default="all")
+    parser.add_argument("--scenario", choices=SCENARIOS, default="all",
+                        help="core: the three transfer directions; transfer: core, then bandwidth and demand-based "
+                             "shares; recovery: stop/restart and crash recovery; nodes: execution node changes; "
+                             "dynamic_share: demand-based shares only; all: every scenario in one cluster")
     parser.add_argument("--fixture", type=Path, help="Read an existing Java/Go shared fixture; never modify it")
     parser.add_argument("--multipart-recovery", action="store_true", help="Run the real S3 crash-recovery integration test using the current source")
     parser.add_argument("--multipart-test-binary", type=Path, help="Use a precompiled target-platform Agent test executable; requires --multipart-recovery")
@@ -1282,8 +1306,8 @@ def main():
     parser.add_argument("--recovery-bandwidth-mbps", type=int, default=16,
                         help="Task cap for the stop and crash recovery transfers; lower it if they finish before injection")
     args = parser.parse_args()
-    if bool(args.exclusive_gate) != bool(args.exclusive_run_id) or (args.exclusive_gate and args.scenario != "all"):
-        parser.error("Exclusive transfer requires a gate, its run ID, and --scenario all")
+    if bool(args.exclusive_gate) != bool(args.exclusive_run_id) or (args.exclusive_gate and args.scenario not in MEASURED):
+        parser.error("Exclusive transfer requires a gate, its run ID, and a measured scenario: " + ", ".join(MEASURED))
     if not args.weed and not os.environ.get("OSS_TRANSFER_QA_S3_CONFIG"):
         parser.error("--weed is required without OSS_TRANSFER_QA_S3_CONFIG")
     if args.multipart_test_binary and not args.multipart_recovery:
@@ -1302,25 +1326,33 @@ def main():
         result = h.api("/api/master/s3-config", h.storage)
         require(result["successCount"] == 2, "Storage configuration was not applied by both Agents")
         h.record("native Master and two Agents run with an empty executable PATH; storage validated through Agent")
-        if args.scenario == "nodes":
-            h.node_membership()
-        elif args.scenario == "dynamic_share":
-            h.dynamic_share()
-        else:
+        steps = {"core": ("core",), "transfer": ("core", "bandwidth", "dynamic_share"),
+                 "recovery": ("recovery",), "nodes": ("nodes",), "dynamic_share": ("dynamic_share",),
+                 "all": ("core", "bandwidth", "dynamic_share", "recovery", "nodes")}[args.scenario]
+        if "core" in steps:
             h.node_settings()
             h.core()
-        if args.scenario == "all":
-            # Fixture uploads are plain storage puts, not measurements; finish
-            # them while other groups still run.
+        # Fixture uploads are plain storage puts, not measurements; finish
+        # them while other groups still run.
+        if "bandwidth" in steps:
             _, bandwidth_manifest = h.rate_fixture(bandwidth=True)
+        if "dynamic_share" in steps:
+            dynamic_manifest = h.dynamic_share_fixture()
+        if "recovery" in steps:
             directory, manifest = h.rate_fixture()
-            if args.exclusive_gate:
-                h.evidence["exclusiveWindow"] = wait_for_exclusive(args.exclusive_gate, args.exclusive_run_id)
-                h.save()
+        if "nodes" in steps:
+            membership_manifest = h.membership_fixture()
+        if args.exclusive_gate:
+            h.evidence["exclusiveWindow"] = wait_for_exclusive(args.exclusive_gate, args.exclusive_run_id)
+            h.save()
+        if "bandwidth" in steps:
             h.bandwidth(bandwidth_manifest)
-            h.dynamic_share()
+        if "dynamic_share" in steps:
+            h.dynamic_share(dynamic_manifest)
+        if "recovery" in steps:
             h.recovery(directory, manifest)
-            h.node_membership()
+        if "nodes" in steps:
+            h.node_membership(membership_manifest)
         h.evidence["status"] = "PASSED"
         h.save()
         print("Evidence: " + str(h.root), flush=True)

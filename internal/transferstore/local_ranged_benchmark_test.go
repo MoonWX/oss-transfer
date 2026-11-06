@@ -242,7 +242,7 @@ func benchmarkDownload(b *testing.B, source *S3, object Object, payload []byte, 
 				}
 				err = scatteredRanges(ctx, file, ranges.OpenRange, size, 16<<20, 16)
 			} else {
-				err = target.writeRanges(ctx, file, ranges.OpenRange, size)
+				err = target.writeRanges(ctx, file, ranges.OpenRange, size, maxPartSlots)
 			}
 			_ = ranges.Close()
 			if err != nil {

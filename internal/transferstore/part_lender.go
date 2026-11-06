@@ -70,10 +70,13 @@ type rangedSlots struct {
 	finished  chan struct{}
 	mu        sync.Mutex
 	borrowed  int
+	// limit caps base plus borrowed slots; it is maxPartSlots unless a
+	// throttled write bounds its window (see RangeBudget).
+	limit int
 }
 
 func newRangedSlots(lender *PartLender, perObject, count int, memory *UploadMemoryBudget) *rangedSlots {
-	return &rangedSlots{lender: lender, perObject: perObject, memory: memory, base: make(chan struct{}, max(1, min(perObject, count))), finished: make(chan struct{}, 1)}
+	return &rangedSlots{lender: lender, perObject: perObject, memory: memory, base: make(chan struct{}, max(1, min(perObject, count))), finished: make(chan struct{}, 1), limit: maxPartSlots}
 }
 
 // done wakes a dispatcher waiting for a slot to retry borrowing.
@@ -123,7 +126,7 @@ func (r *rangedSlots) baseMemory(ctx context.Context, length int64) (func(), err
 func (r *rangedSlots) borrow(length int64) (func(), bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cap(r.base)+r.borrowed >= maxPartSlots {
+	if cap(r.base)+r.borrowed >= r.limit {
 		return nil, false
 	}
 	returnSlot, ok := r.lender.tryBorrow(r.perObject)

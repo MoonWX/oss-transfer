@@ -158,7 +158,7 @@ func TestLocalRangedWriteBackpressureWhenWriterStalls(t *testing.T) {
 	}
 	writer := &recordingWriter{entered: make(chan struct{}), block: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- s.writeRanges(context.Background(), writer, harness.ranges, size) }()
+	go func() { done <- s.writeRanges(context.Background(), writer, harness.ranges, size, maxPartSlots) }()
 	<-writer.entered
 	fetched.Wait()
 	for range 3 { // the stalled writer keeps every slot: no further fetch
@@ -222,7 +222,7 @@ func TestLocalRangedWriteFailsOnWriterError(t *testing.T) {
 	size := int64(20 * testRangePart)
 	harness := newRangeHarness(t, randomPayload(41, size), 41)
 	writer := &recordingWriter{failAt: 2}
-	err := s.writeRanges(context.Background(), writer, harness.ranges, size)
+	err := s.writeRanges(context.Background(), writer, harness.ranges, size, maxPartSlots)
 	if err == nil || !strings.Contains(err.Error(), "no space") {
 		t.Fatal(err)
 	}

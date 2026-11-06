@@ -64,6 +64,27 @@ func (s *Local) RangedWrite(size int64) bool {
 	return r.MinSize >= 0 && r.Memory != nil && r.ChunkSize > 0 && size >= r.MinSize && size > r.ChunkSize && r.ChunkSize <= r.Memory.capacity
 }
 
+// RangedWriteWithin reports whether a throttled write of this size still
+// fetches ranges: about one second of the budget must cover at least two
+// chunks, so a ranged window beats one stream without pinning more memory
+// than the task drains in that second.
+func (s *Local) RangedWriteWithin(size int64, budget RangeBudget) bool {
+	return s.RangedWrite(size) && s.windowSlots(&budget) >= 2
+}
+
+// windowSlots is the most chunks one object may hold at once: maxPartSlots
+// without a budget, otherwise the chunks of about one second of the budget.
+func (s *Local) windowSlots(budget *RangeBudget) int {
+	if budget == nil || s.ranged.ChunkSize <= 0 {
+		return maxPartSlots
+	}
+	window := budget.Window(s.ranged.ChunkSize)
+	if window == 0 {
+		return maxPartSlots
+	}
+	return int(min(int64(maxPartSlots), window/s.ranged.ChunkSize))
+}
+
 // writeRanges fetches chunks concurrently and writes them strictly in offset
 // order, so the file only ever grows by sequential appends: network and FUSE
 // filesystems that are slow at scattered writes see one ordinary stream.
@@ -78,12 +99,19 @@ func (s *Local) RangedWrite(size int64) bool {
 // The first failure cancels every fetch and the writer. writeRanges returns
 // only after all of its goroutines have stopped and every reservation has
 // been released, so nothing touches w after it returns.
-func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFunc, size int64) error {
+//
+// window caps base plus borrowed slots (at least one). A throttled object's
+// fetches wait on the task limiter while holding their chunk's memory, so its
+// window is about one second of the task share (windowSlots): it never pins
+// more of the shared budget than the task drains in that time.
+func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFunc, size int64, window int) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	chunkSize := s.ranged.ChunkSize
 	count := (size + chunkSize - 1) / chunkSize
-	slots := newRangedSlots(s.ranged.PartLender, s.ranged.PartConcurrency, int(min(count, maxPartSlots)), s.ranged.Memory)
+	window = max(1, min(window, maxPartSlots))
+	slots := newRangedSlots(s.ranged.PartLender, min(s.ranged.PartConcurrency, window), int(min(count, int64(window))), s.ranged.Memory)
+	slots.limit = window
 	var failure sync.Once
 	var firstError error
 	fail := func(err error) {

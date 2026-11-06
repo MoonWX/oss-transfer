@@ -313,6 +313,8 @@ func idlePartLender(idle int) *transferstore.PartLender {
 	return lender
 }
 
+// An S3 target cannot bound its multipart window to a task share, so a
+// throttled object streams there however large the share.
 func TestThrottledTaskStreamsAndLeavesSharedMemoryToOthers(t *testing.T) {
 	source, payload := rangedSource(t, "throttled.bin", "open.bin")
 	// Room for four 5 MiB parts: a ranged write blocked on its task limiter
@@ -327,7 +329,9 @@ func TestThrottledTaskStreamsAndLeavesSharedMemoryToOthers(t *testing.T) {
 	var mu sync.Mutex
 	var throttledSizes []int64
 	engine := &Engine{opts: Options{
-		TaskThrottled: func(job Job) bool { return job.ParentID == 1 },
+		TaskLimits: func(job Job) (transferstore.RangeBudget, bool) {
+			return transferstore.RangeBudget{BytesPerSecond: 1 << 40}, job.ParentID == 1
+		},
 		DecorateReader: func(ctx context.Context, job Job, part Item, input io.ReadCloser) (io.ReadCloser, error) {
 			if job.ParentID != 1 {
 				return input, nil
@@ -392,7 +396,9 @@ func TestUnthrottledTaskBorrowsAndLimitChangesApplyToNextObject(t *testing.T) {
 	var throttled atomic.Bool
 	var reads atomic.Int64
 	engine := &Engine{opts: Options{
-		TaskThrottled: func(Job) bool { return throttled.Load() },
+		TaskLimits: func(Job) (transferstore.RangeBudget, bool) {
+			return transferstore.RangeBudget{BytesPerSecond: 1 << 40}, throttled.Load()
+		},
 		DecorateReader: func(_ context.Context, _ Job, _ Item, input io.ReadCloser) (io.ReadCloser, error) {
 			reads.Add(1)
 			return input, nil

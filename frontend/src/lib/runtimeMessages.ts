@@ -46,6 +46,10 @@ export const runtimeMessageRules: readonly {
     message: "该节点在此任务中的执行权已收回",
   },
   {
+    pattern: /^waiting for task nodes to apply their reduced bandwidth share$/,
+    message: "等待任务节点确认降低后的带宽份额",
+  },
+  {
     pattern: /^parent execution lease expired; a new lease ID is required$/,
     message: "节点的执行租约已过期，正在重新授权",
   },

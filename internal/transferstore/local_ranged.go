@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"sync"
+
+	"github.com/MoonWX/oss-transfer/internal/readorder"
 )
 
 const (
@@ -104,6 +106,12 @@ func (s *Local) windowSlots(budget *RangeBudget) int {
 // fetches wait on the task limiter while holding their chunk's memory, so its
 // window is about one second of the task share (windowSlots): it never pins
 // more of the shared budget than the task drains in that time.
+//
+// Fetches wait for bandwidth in chunk order (readorder): under a limit, an
+// even share would finish the whole window together and leave the network
+// idle while the writer drains it, at the end of every object above all.
+// Served lowest chunk first, chunks complete one after another as the writer
+// needs them.
 func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFunc, size int64, window int) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -120,6 +128,7 @@ func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFun
 		}
 	}
 	buffers := sync.Pool{New: func() any { buffer := make([]byte, chunkSize); return &buffer }}
+	turns := readorder.NewQueue()
 	order := newChunkOrder(count)
 	writer := make(chan struct{})
 	go func() {
@@ -144,7 +153,7 @@ func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFun
 			defer fetchers.Done()
 			buffer := buffers.Get().(*[]byte)
 			data := (*buffer)[:length]
-			if err := readRangeRetrying(ctx, ranges, offset, data); err != nil {
+			if err := readRangeRetrying(readorder.With(ctx, turns, index), ranges, offset, data); err != nil {
 				buffers.Put(buffer)
 				release()
 				fail(err)

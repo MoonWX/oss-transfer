@@ -26,12 +26,17 @@ var (
 const settingsBucket = "bandwidth_settings"
 const parentsBucket = "bandwidth_parents"
 
-// Keep at most one millisecond of earned credit at high rates. A single
-// 64 KiB bucket discards credit whenever a sub-millisecond timer wakes late,
-// even with a ready source and destination. This bounded window tolerates
-// scheduler jitter without preloading tokens or changing the read-size bound.
-const creditWindow = time.Millisecond
-const maximumCreditBytes = 1 << 20
+// Keep up to 100 ms of earned credit, at most 16 MiB and at least one read.
+// A stream is idle on the limiter while it writes what it read, and a waiting
+// reader wakes late (Go rounds sub-millisecond timer waits on Linux up to a
+// millisecond): credit earned in those gaps beyond the bucket is discarded.
+// A one-millisecond bucket, under two 64 KiB reads at 1000 Mbps, held a
+// throttled download to about two thirds of its share. The burst stays
+// bounded: over any interval a node or parent grants at most its rate times
+// the interval plus this credit, no credit accrues before the first read, and
+// a policy change discards it.
+const creditWindow = 100 * time.Millisecond
+const maximumCreditBytes = 16 << 20
 
 type NodeLimit struct {
 	Revision                uint64 `json:"revision"`

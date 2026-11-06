@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
+	"github.com/MoonWX/oss-transfer/internal/readorder"
 )
 
 // Decorator is directly assignable to execution.Options.DecorateReader. Install
@@ -35,7 +36,7 @@ func (l *Limiter) Wrap(ctx context.Context, parentID int64, generation uint64, i
 	parentCtx := p.ctx
 	l.mu.Unlock()
 	readCtx, cancel := context.WithCancelCause(ctx)
-	r := &reader{limiter: l, input: input, ctx: readCtx, cancel: cancel, parentID: parentID, generation: generation, remaining: size}
+	r := &reader{limiter: l, input: input, ctx: readCtx, cancel: cancel, parentID: parentID, generation: generation, remaining: size, turn: readorder.From(ctx)}
 	r.stopParent = context.AfterFunc(parentCtx, func() { cancel(context.Cause(parentCtx)) })
 	r.stopInput = context.AfterFunc(readCtx, func() { r.closeInput() })
 	return r, nil
@@ -49,6 +50,7 @@ type reader struct {
 	parentID              int64
 	generation            uint64
 	remaining             int64
+	turn                  readorder.Turn
 	readMu                sync.Mutex
 	closeOnce             sync.Once
 	closeErr              error
@@ -67,7 +69,13 @@ func (r *reader) Read(p []byte) (int, error) {
 	} else {
 		wanted = 1
 	} // bounded EOF check; extra source data remains detectable
+	// A range of an ordered write waits for tokens only in its turn (see
+	// readorder), and reads its source after passing the turn on.
+	if err := r.turn.Wait(r.ctx); err != nil {
+		return 0, err
+	}
 	ticket, err := r.limiter.reserve(r.ctx, r.parentID, r.generation, wanted)
+	r.turn.Done()
 	if err != nil {
 		return 0, err
 	}

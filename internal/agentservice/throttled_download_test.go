@@ -24,7 +24,7 @@ import (
 func TestThrottledLocalDownloadRangesWithinTaskShare(t *testing.T) {
 	const chunk = 256 << 10
 	const rate = 8 << 20
-	const burst = 1 << 20 // the limiter's maximum credit window
+	const burst = rate / 10 // the limiter's credit window: 100 ms of the rate
 	payload := bytes.Repeat([]byte("0123456789abcdef"), 32*chunk/16)
 	bucket := &rangedBucket{data: payload, parts: map[int][]byte{}}
 	server := httptest.NewServer(http.HandlerFunc(bucket.serve))

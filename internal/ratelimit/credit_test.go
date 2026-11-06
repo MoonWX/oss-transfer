@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -78,9 +79,9 @@ func TestCreditWindowEarnsBudgetWithoutInitialOrUnboundedIdleBurst(t *testing.T)
 		rate     int64
 		capacity float64
 	}{
-		{"low-rate-keeps-existing-chunk-bound", 12500000, 65536},
-		{"2000-Mbps-one-millisecond", 250000000, 250000},
-		{"extreme-rate-capped-at-one-MiB", 1 << 50, 1048576},
+		{"low-rate-keeps-one-read", 500000, 65536},
+		{"1000-Mbps-100-milliseconds", 125000000, 12500000},
+		{"extreme-rate-capped-at-16-MiB", 1 << 50, 16 << 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			start := time.Unix(1000, 0)
@@ -142,12 +143,62 @@ func TestRefundCannotExceedEarnedWindowBound(t *testing.T) {
 	// Multiple in-flight short reads may return their reservations together.
 	// Even matching revisions must not enlarge the node or parent burst bound.
 	ticket := reservation{size: 64 << 10, nodeRevision: 1, parentRevision: 1, generation: 1, parentID: 1}
-	for range 16 {
+	for range 2 * maximumCreditBytes / ticket.size {
 		f.limiter.refund(ticket, ticket.size)
 	}
 	f.limiter.mu.Lock()
 	defer f.limiter.mu.Unlock()
-	if f.limiter.nodeBudget.tokens != 250000 || f.limiter.parents[1].budget.tokens != 250000 {
-		t.Fatal("refunded credit exceeded the one-millisecond bound")
+	if f.limiter.nodeBudget.tokens != maximumCreditBytes || f.limiter.parents[1].budget.tokens != maximumCreditBytes {
+		t.Fatal("refunded credit exceeded the 16 MiB burst bound")
 	}
+}
+
+// zeroes yields any number of bytes; limiter tests need counts, not content.
+type zeroes struct{}
+
+func (zeroes) Read(p []byte) (int, error) { return len(p), nil }
+
+// A stream alternates source reads with writes, here to a target that writes
+// 400 MiB/s but stalls for 20 ms after every 8 MiB. It earns credit while it
+// writes and keeps up to 100 ms of it, so after each stall it reads ahead and
+// still reaches its 1000 Mbps share (a 1 ms bucket held it to about 80%). The
+// fake clock makes this exact, and the bucket's own accounting bounds it from
+// above: from an empty bucket, no stream reads more than its rate times the
+// elapsed time.
+func TestStreamWithWriteStallsKeepsItsShare(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		const rate = 125000000
+		const size = 128 << 20
+		apply(t, f.limiter, 0, rate)
+		r, err := f.limiter.Wrap(bg, 1, 1, io.NopCloser(io.LimitReader(zeroes{}, size)), size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		// io.Copy into an *os.File, as Local.Write streams, reads 32 KiB at a time.
+		buffer := make([]byte, 32<<10)
+		start := time.Now()
+		var read int64
+		var elapsed time.Duration
+		for read < size {
+			n, err := r.Read(buffer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			read += int64(n)
+			elapsed = time.Since(start)
+			write := time.Duration(int64(n) * int64(time.Second) / (400 << 20))
+			if read/(8<<20) != (read-int64(n))/(8<<20) {
+				write += 20 * time.Millisecond
+			}
+			time.Sleep(write)
+		}
+		if allowed := rate * elapsed.Seconds(); float64(size) > allowed+1 {
+			t.Fatalf("stream exceeded its share: %d bytes in %v, allowed %.0f", size, elapsed, allowed)
+		}
+		if share := float64(size) / elapsed.Seconds() / rate; share < 0.95 {
+			t.Fatalf("stream reached %.1f%% of its share in %v", share*100, elapsed)
+		}
+	})
 }

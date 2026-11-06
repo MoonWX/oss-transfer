@@ -201,7 +201,13 @@ jobs:
           helper = Path('.github/acceptance/test-binaries.py')
           targets = runpy.run_path(str(helper))
           arm64_only = os.environ['QA_FREEBSD_ARM64'] == 'true'
-          platforms = [platform for platform in targets['SUPPORTED'] if (platform == 'freebsd/arm64') == arm64_only]
+          if arm64_only:
+              platforms = ['freebsd/arm64']
+          elif os.environ['QA_SCOPE'] == 'full':
+              platforms = [platform for platform in targets['SUPPORTED'] if platform != 'freebsd/arm64']
+          else:
+              # Pushes test FreeBSD amd64 only; the QEMU platforms run nightly.
+              platforms = ['freebsd/amd64']
           # Native acceptance runs without Go: it receives only the multipart
           # test executable and the two installer failure fixtures.
           native = [] if arm64_only else list(targets['NATIVE'])
@@ -227,21 +233,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64 && env.QA_SCOPE == 'full'
         with:
           name: test-binaries-linux-armv7
           path: output/test-binaries/linux-armv7/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64 && env.QA_SCOPE == 'full'
         with:
           name: test-binaries-linux-riscv64
           path: output/test-binaries/linux-riscv64/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+        if: steps.reuse.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64 && env.QA_SCOPE == 'full'
         with:
           name: test-binaries-linux-loong64
           path: output/test-binaries/linux-loong64/
@@ -317,7 +323,8 @@ jobs:
           QA_TEST_SCOPE: ${{ matrix.scope || env.QA_SCOPE }}
           QA_RACE: ${{ matrix.race }}
         run: |
-          args=(--output "$RUNNER_TEMP/unit" --scope "$QA_TEST_SCOPE")
+          # Nothing else runs here, so three packages share the runner at once.
+          args=(--output "$RUNNER_TEMP/unit" --scope "$QA_TEST_SCOPE" --parallel 3)
           if [[ "$QA_RACE" == true ]]; then args+=(--race); fi
           python .github/acceptance/go-unit.py "${args[@]}"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -480,10 +487,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel, install: here}
+          # Installation is the longest group on Windows (PowerShell) and macOS
+          # Intel (about 200 s); its own job keeps it off the path to the
+          # measured transfers. That is the fifth concurrent macOS job.
+          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel, install: separate}
           - {platform: darwin/arm64, name: darwin-arm64, runner: macos-latest, install: here}
-          # Installation is the longest group on Windows (PowerShell); its own
-          # job keeps it off the path to the measured transfers.
           - {platform: windows/amd64, name: windows-amd64, runner: windows-latest, install: separate}
           - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm, install: separate}
     runs-on: ${{ matrix.runner }}
@@ -549,6 +557,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - {platform: darwin/amd64, name: darwin-amd64, runner: macos-15-intel}
           - {platform: windows/amd64, name: windows-amd64, runner: windows-latest}
           - {platform: windows/arm64, name: windows-arm64, runner: windows-11-arm}
     runs-on: ${{ matrix.runner }}
@@ -595,7 +604,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
   emulated:
-    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64
+    # QEMU runs only nightly and in manual full runs: an apt mirror alone
+    # once took six minutes, and pushes and releases must not wait for it.
+    if: needs.package.outputs.reuse_tests != 'true' && needs.test-programs.outputs.reuse_tests != 'true' && !inputs.freebsd_arm64 && (github.event_name == 'schedule' || inputs.full_suite)
     name: Linux ${{ matrix.arch }}
     needs: [package, test-programs]
     strategy:
@@ -650,12 +661,8 @@ jobs:
         env:
           QA_ARCH: ${{ matrix.arch }}
         run: |
-          # Pushes run core transfers here; bandwidth, recovery and node-change
-          # scenarios run on the six native platforms and here nightly.
-          transfer=core
-          if [[ "$QA_SCOPE" == full ]]; then transfer=full; fi
           python .github/acceptance/run-platform.py --platform "linux/$QA_ARCH" --test-binaries output/test-binaries \
-            --unit "$QA_SCOPE" --transfer "$transfer"
+            --unit full --transfer full
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

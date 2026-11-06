@@ -168,6 +168,17 @@ class RunnerTests(unittest.TestCase):
         for row in evidence["commands"]:
             self.assertTrue((self.root / "out" / row["log"]).is_file())
 
+    def test_package_parallelism_defaults_to_two_and_is_configurable(self):
+        for extra, expected in (((), "2"), (("--parallel", "3"), "3")):
+            with self.subTest(parallel=expected):
+                for path in (self.state / "calls.jsonl", self.state / "ran.jsonl"):
+                    path.unlink(missing_ok=True)
+                shutil.rmtree(self.root / "out", ignore_errors=True)
+                completed, evidence = self.run_unit(*extra)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                others = next(row["command"] for row in evidence["commands"] if row["name"] == "others")
+                self.assertEqual(others[others.index("-p") + 1], expected)
+
     def test_cli_module_runs_beside_the_main_module_with_the_same_flags(self):
         (self.root / "cli").mkdir()
         (self.root / "cli/go.mod").write_text("module oss-transfer-cli\n")

@@ -45,7 +45,7 @@ If CI failed for a reason unrelated to the code, rerun the failed CI jobs instea
 
 For a change to `VERSION` alone, CI reuses passing tests from a code-identical ancestor on `main`. It still rebuilds all archives and the image, checks the packaged program versions, and verifies checksums and image identity. Changes to code, dependencies, installers or workflows run the default suite. If no passing baseline can be verified, CI runs the default suite.
 
-Default CI tests ten platforms. Every Go test runs on Linux amd64; the other platforms run the platform-sensitive part, and the QEMU and FreeBSD platforms run the core transfers instead of every transfer scenario. A nightly run, which does not gate publication, covers everything on every platform (see [Test scope](acceptance/README.md#test-scope)). FreeBSD arm64 archives are built and checked, but their runtime tests are optional. Run the complete FreeBSD arm64 suite separately with:
+Default CI tests seven platforms: the six native ones and FreeBSD amd64. Every Go test runs on Linux amd64; the other platforms run the platform-sensitive part, and FreeBSD runs the core transfers instead of every transfer scenario. The three QEMU platforms (Linux ARMv7, riscv64 and loong64) run only in the nightly and manual full runs, so a release never waits for them; those runs cover everything on every platform and do not gate publication (see [Test scope](acceptance/README.md#test-scope)). FreeBSD arm64 archives are built and checked, but their runtime tests are optional. Run the complete FreeBSD arm64 suite separately with:
 
 ```sh
 gh workflow run ci.yml --ref main -f freebsd_arm64=true

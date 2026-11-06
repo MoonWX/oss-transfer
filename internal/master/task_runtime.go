@@ -704,7 +704,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		// Work placed on a node whose share was released raises it now,
 		// not one step later.
 		if current, err := t.repo.Get(p.ID); err == nil && t.releasedNowBusy(current) {
-			t.reallocateShares(ctx, current, available)
+			t.reallocateWoken(ctx, current, available)
 		}
 	}
 	finished, err := t.repo.FinishIfReady(p.ID, p.Generation)

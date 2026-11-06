@@ -81,10 +81,12 @@ func (t *taskRuntime) shareAckedNodes(p task.Parent) []string {
 	return acked
 }
 
-// idleAfterPass counts one more step for every active node and returns the
-// nodes idle for shareIdlePasses steps in a row. The counts are in memory: a
-// restarted Master counts again, which keeps shares longer, never shorter.
-func (t *taskRuntime) idleAfterPass(p task.Parent) map[string]bool {
+// idleAfterPass returns the nodes idle for shareIdlePasses steps in a row;
+// a busy node's count restarts at once. A step counts one more idle step
+// (count); an extra pass within the same step does not. The counts are in
+// memory: a restarted Master counts again, which keeps shares longer, never
+// shorter.
+func (t *taskRuntime) idleAfterPass(p task.Parent, count bool) map[string]bool {
 	busy := task.ShareBusy(p)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -96,7 +98,10 @@ func (t *taskRuntime) idleAfterPass(p task.Parent) map[string]bool {
 	idle := map[string]bool{}
 	for _, node := range p.ActiveNodes() {
 		if !busy[node.ID] {
-			counts[node.ID] = min(s.idle[p.ID][node.ID]+1, shareIdlePasses)
+			counts[node.ID] = s.idle[p.ID][node.ID]
+			if count {
+				counts[node.ID] = min(counts[node.ID]+1, shareIdlePasses)
+			}
 		}
 		idle[node.ID] = counts[node.ID] >= shareIdlePasses
 	}
@@ -179,10 +184,20 @@ func (t *taskRuntime) redeliverStale(ctx context.Context, p task.Parent, node ta
 // delivery leaves a node on its older value, which its reserve still covers;
 // the next step's preparation retries it.
 func (t *taskRuntime) reallocateShares(ctx context.Context, p task.Parent, available map[string]bool) task.Parent {
+	return t.reallocate(ctx, p, available, true)
+}
+
+// reallocateWoken is an extra pass within a step, after work was placed on a
+// node whose share had been released. It does not count as an idle step.
+func (t *taskRuntime) reallocateWoken(ctx context.Context, p task.Parent, available map[string]bool) task.Parent {
+	return t.reallocate(ctx, p, available, false)
+}
+
+func (t *taskRuntime) reallocate(ctx context.Context, p task.Parent, available map[string]bool, step bool) task.Parent {
 	if p.Status != "RUNNING" || p.ResumeAfter != nil {
 		return p
 	}
-	idle := t.idleAfterPass(p)
+	idle := t.idleAfterPass(p, step)
 	for range shareRoundsPerStep {
 		if ctx.Err() != nil {
 			return p

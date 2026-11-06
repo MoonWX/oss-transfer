@@ -382,3 +382,36 @@ func TestTaskShowRendersExecutionMembershipWhenPresent(t *testing.T) {
 		t.Fatalf("task show JSON must keep executionMembership: %s", out)
 	}
 }
+
+// The node table shows each node's demand: busy nodes share the task limits,
+// idle ones keep a small floor, and a node still confirming its reduction is
+// adjusting. An older Master reports no demand.
+func TestTaskNodesShowsDemandColumn(t *testing.T) {
+	view := taskNodesTestView(false)
+	nodes := view["nodes"].([]interface{})
+	busy, idle := nodes[0].(map[string]interface{}), nodes[1].(map[string]interface{})
+	busy["demand"], busy["adjusting"] = "busy", false
+	idle["demand"], idle["adjusting"] = "idle", true
+	master := &taskNodesFakeMaster{view: view}
+	client := adminTestClient(t, master.handler(t))
+	result, err := runTaskCommand(client, []string{"nodes", "12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for locale, wants := range map[cliLocale][]string{
+		localeZH: {"需求", "按需（忙）", "空闲（已释放），调整中：等待节点确认降额"},
+		localeEN: {"Demand", "On demand (busy)", "Idle (released), adjusting: waiting for the node to confirm its reduction"},
+		localeJA: {"需要", "需要に応じて（ビジー）", "アイドル（解放済み）"},
+	} {
+		text := renderTaskNodesForTest(result, locale)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%v output missing %q:\n%s", locale, want, text)
+			}
+		}
+	}
+	delete(busy, "demand")
+	if got := taskNodeDemand(io.Discard, busy); got != "—" {
+		t.Fatal("an older Master's equal split has no demand", got)
+	}
+}

@@ -402,7 +402,7 @@ func renderTaskNodeRows(out io.Writer, nodes []map[string]interface{}, local boo
 		return
 	}
 	w := newCLITable(out)
-	header := cliText(out, "节点\t节点标识\t状态\t扫描\t待完成子任务\t带宽份额\tLIST/HEAD/PUT QPS 份额")
+	header := cliText(out, "节点\t节点标识\t状态\t扫描\t待完成子任务\t需求\t带宽份额\tLIST/HEAD/PUT QPS 份额")
 	if local {
 		header += "\t" + cliText(out, "本地路径")
 	}
@@ -433,13 +433,33 @@ func renderTaskNodeRows(out io.Writer, nodes []map[string]interface{}, local boo
 			}
 			qps = strings.Join(parts, " / ")
 		}
-		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s", safeCLIText(cliNodeLabel(node, identity, localeOf(out))), safeCLIText(identity), taskNodeState(out, node), scanner, pending, bandwidth, qps)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s", safeCLIText(cliNodeLabel(node, identity, localeOf(out))), safeCLIText(identity), taskNodeState(out, node), scanner, pending, taskNodeDemand(out, node), bandwidth, qps)
 		if local {
 			row += "\t" + safeCLIText(dashIfEmpty(getString(node, "localPath")))
 		}
 		fmt.Fprintln(w, row)
 	}
 	w.Flush()
+}
+
+// taskNodeDemand describes how the task limits are divided for a node: a busy
+// node shares the limits, an idle one keeps only a small floor, and a node
+// that still has to confirm a reduction holds its previous share meanwhile.
+// Older Masters, which divide equally, report no demand.
+func taskNodeDemand(out io.Writer, node map[string]interface{}) string {
+	label := ""
+	switch getString(node, "demand") {
+	case "busy":
+		label = cliText(out, "按需（忙）")
+	case "idle":
+		label = cliText(out, "空闲（已释放）")
+	default:
+		return "—"
+	}
+	if node["adjusting"] == true {
+		label += cliText(out, "，调整中：等待节点确认降额")
+	}
+	return label
 }
 
 func taskNodeState(out io.Writer, node map[string]interface{}) string {

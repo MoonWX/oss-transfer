@@ -16,7 +16,9 @@ git tag -a "v$version" -m "OSS Transfer v$version"
 git push --atomic origin main "v$version"
 ```
 
-`--atomic` 保证两个引用要么都更新，要么都不更新。不需要先等 CI：发布工作流最多等待 65 分钟，等到该提交在 `main` 上的 CI 通过后立即开始发布。如果这次 CI 失败，发布工作流也会失败，不会发布任何内容。
+`--atomic` 保证两个引用要么都更新，要么都不更新。不需要先等 CI：发布工作流最多等待 65 分钟，每 5 秒检查一次该提交在 `main` 上的 CI，通过后立即开始发布。如果这次 CI 失败，发布工作流也会失败，不会发布任何内容。默认的 push CI 需要 7 分钟多一点，发布本身再用约 1 分钟，因此推送后大约 8.5 分钟版本即可公开。
+
+这次 CI 结束之前，不要再向 `main` 推送：新的推送会取消正在运行的这次 CI，除非被取消的运行符合下文所述的条件，否则发布工作流会失败。遇到这种情况，请等新推送的 CI 结束后，再重新运行被取消的 CI（重新运行属于同一并发组，会取消仍在运行的 CI），然后重试发布。
 
 标签必须与 `VERSION` 一致，并指向要发布的提交。已发布的版本需要修改时，请使用新的版本号。
 
@@ -45,7 +47,7 @@ git push --atomic origin main "+refs/tags/v$version"
 
 只修改 `VERSION` 时，CI 会复用 `main` 上代码相同的祖先提交已通过的测试。它仍会重新构建全部安装包和镜像，检查打包后的程序版本，并校验校验和与镜像身份。修改代码、依赖、安装脚本或工作流时运行默认测试集；无法确认可用的通过基线时，也运行默认测试集。
 
-默认 CI 测试七个平台：六个原生平台和 FreeBSD amd64。全部 Go 测试在 Linux amd64 上运行；其他平台运行与平台相关的部分，FreeBSD 只运行核心传输，而不是全部传输场景。三个 QEMU 平台（Linux ARMv7、riscv64 和 loong64）只在每晚运行和手动完整运行中运行，因此发布永远不会等待它们；这些运行覆盖所有平台的全部测试，不影响发布（见[测试范围](acceptance/README.zh-CN.md#测试范围)）。FreeBSD arm64 的安装包会构建并检查，但运行时测试是可选的。需要单独运行完整的 FreeBSD arm64 测试时：
+默认 CI 测试七个平台：六个原生平台和 FreeBSD amd64。全部 Go 测试在 Linux amd64 上运行；其他平台运行与平台相关的部分，FreeBSD 只运行核心传输，而不是全部传输场景。三个 QEMU 平台（Linux ARMv7、riscv64 和 loong64）只在每晚运行和手动完整运行中运行，因此发布永远不会等待它们；这些运行会在全部十个受测平台上执行所有测试，不影响发布（见[测试范围](acceptance/README.zh-CN.md#测试范围)）。FreeBSD arm64 的安装包会构建并检查，但运行时测试是可选的。需要单独运行完整的 FreeBSD arm64 测试时：
 
 ```sh
 gh workflow run ci.yml --ref main -f freebsd_arm64=true
@@ -53,7 +55,7 @@ gh workflow run ci.yml --ref main -f freebsd_arm64=true
 
 它只运行一个 FreeBSD arm64 验收作业，不会重复其他平台，也不影响发布；发布使用默认的 `main` CI 运行结果。
 
-发布工作流按提交和 CI 运行 ID 选取构建产物，排除 Pull Request 和手动触发的 CI。被取消的仅版本号变更的运行，只有在两个构建作业都通过、没有测试失败、且代码相同的祖先提交 CI 通过时，才能提供产物。产物七天后过期；过期后请重新运行对应的 CI。
+发布工作流按提交和 CI 运行 ID 选取构建产物，只接受 `main` 上由 push 触发的运行，排除 Pull Request、每晚运行和手动触发的 CI。被取消的仅版本号变更的运行，只有在两个构建作业都通过、没有测试失败、且代码相同的祖先提交 CI 通过时，才能提供产物。产物七天后过期；过期后请重新运行对应的 CI。
 
 使用当前发布工作流重试已有标签的发布：
 
@@ -84,18 +86,18 @@ beta 版本不会影响：默认的安装命令、页面上的**检测新版本*
 
 ## 发布的文件
 
-GitHub Release 包含 [platforms.json](../deploy/native/platforms.json) 列出的十一个平台安装包。每个安装包包括 Master、Agent、CLI、文档和校验和。安装脚本位于仓库中。
+GitHub Release 附带 [platforms.json](../deploy/native/platforms.json) 列出的十一个平台安装包，以及 `manifest.tsv`、`SHA256SUMS` 和三个安装脚本（`install.sh`、`native-install.sh` 和 `Install.ps1`），因此从这里下载的文件就是一套完整的离线安装包。每个安装包包括 Master、Agent、CLI、文档和校验和。
 
-OSS 保存同样的安装包、三个安装脚本、`manifest.tsv`、`release.json` 和 `SHA256SUMS`。安装器下载一个平台安装包，解压出服务和 CLI，例如 Linux amd64 使用 `oss-transfer-linux-amd64.tar.gz`。Docker 镜像使用经过测试的 Linux 程序。
+OSS 的每个版本目录保存同样的文件，外加 `release.json`。安装器下载一个平台安装包，解压出服务和 CLI，例如 Linux amd64 使用 `oss-transfer-linux-amd64.tar.gz`。Docker 镜像使用经过测试的 Linux 程序。
 
-安装器在中国大陆公网 IP 下选择 OSS，其他地区选择 GitHub。GitHub 下载使用 Release API 提供的安装包摘要，以及该安装包记录的提交中的安装脚本；OSS 使用版本目录中的清单。显式指定下载源或本地安装包时，不再检测位置。
+安装器在中国大陆公网 IP 下选择 OSS，其他地区选择 GitHub。GitHub 下载使用 Release API 提供的安装包摘要，以及该安装包记录的提交中的安装脚本；OSS 使用版本目录中的清单。显式指定下载源或本地安装包时，不再检测位置。从文件运行（而不是通过管道运行）的安装器，如果在脚本所在目录或当前目录中找到发布文件，会直接使用这些文件，不会联网，除非用 `--source github|jdoss` 或 `--release-url`（PowerShell 为 `-Source`、`-ReleaseUrl`）要求下载；见[离线安装](../docs/offline-install.zh-CN.md)。
 
 | 版本 | OSS 位置 | GitHub | Docker Hub 标签 |
 | --- | --- | --- | --- |
 | `vX.Y.Z` | `oss-transfer/vX.Y.Z/` | Release | `X.Y.Z`、`X.Y`、`latest` |
 | `vX.Y.Z-rc.N`、`vX.Y.Z-beta.N` | `oss-transfer/vX.Y.Z-rc.N/` | 预发布版本 | `X.Y.Z-rc.N` |
 
-正式版会更新 `oss-transfer/latest/` 下的四个文件：`install.sh`、`Install.ps1`、`manifest.tsv` 和 `release.json`。安装器先把这些元数据解析为固定版本，再下载安装包。预发布版本不修改 `latest`。Compose 对正式版使用 `latest`，对预发布版本使用精确的镜像标签。
+正式版还会把版本目录中的全部文件上传到 `oss-transfer/latest/`，所以这个固定地址下始终有最新正式版的全部文件。在线安装器读取 `latest/manifest.tsv` 只是为了锁定该版本，通过 OSS 检测更新的 Master 读取 `latest/release.json`；两者随后都从对应的版本目录下载。预发布版本不修改 `latest`。Compose 对正式版使用 `latest`，对预发布版本使用精确的镜像标签。
 
 旧的 `osstransfer/` 目录继续保留，供 v4.1.8 之前发布的客户端使用。新版本使用 `oss-transfer/`。
 
@@ -108,4 +110,4 @@ OSS 保存同样的安装包、三个安装脚本、`manifest.tsv`、`release.js
 | 京东云 OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/` | `JDOSS_AK`、`JDOSS_SK` |
 | Docker Hub | `moonwx/osstransfer` | `DOCKER_USERNAME`、`DOCKER_PAT` |
 
-发布使用 GitHub 托管的 `ubuntu-latest` 运行器。上传顺序和超时见 [release.yml](workflows/release.yml)。OSS 并行上传版本目录，全部版本文件上传完成后才更新 `latest/`，最后写入 `release.json`。
+发布使用 GitHub 托管的 `ubuntu-latest` 运行器。作业顺序和超时见 [release.yml](workflows/release.yml)，OSS 上传顺序见 [publish-oss.py](../deploy/native/publish-oss.py)。OSS 以八路并发上传版本目录，全部完成后先核对该目录的文件列表、大小和 MD5 ETag，然后才处理 `latest/`。正式版接着把安装包、安装脚本和 `SHA256SUMS` 上传到 `latest/`，之后才依次写入 `manifest.tsv` 和 `release.json`，确保客户端读到的元数据不会指向缺失的文件。随后从 `latest/` 删除已停用的文件和不再发布的平台安装包，并以同样方式核对该目录。即使标签不同，同一时间也只运行一个 OSS 发布。

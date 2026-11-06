@@ -11,10 +11,10 @@ OSS Transfer 是一个分布式数据迁移工具，用于在 S3 兼容对象存
 ## 功能
 
 - **三种迁移方向**：对象存储 → 对象存储、本地 → 对象存储、对象存储 → 本地。支持按前缀、单个对象或文件清单迁移，可以保留、添加或替换路径前缀。
-- **多节点并行**：一个任务可以分给多个 Agent 执行，默认按剩余数据量均衡分发。每个对象只由一个节点传输；128 MiB 以上的大对象会在该节点内拆分为多个区间并行传输：上传时分片上传，下载到本地时并发拉取、按顺序写入同一个文件，下载任务也可以停用该功能。节点空闲时会借用更多并发。
-- **运行中调整节点**：可以给运行中的任务添加 Agent，或以排空、立即转移两种方式移出 Agent。带宽和 QPS 份额随之调整，不会超过任务上限。详见[调整任务的执行节点](docs/operations.zh-CN.md#调整任务的执行节点)。
+- **多节点并行**：一个任务可以分给多个 Agent 执行，默认按剩余数据量均衡分发。每个对象只由一个节点传输；128 MiB 及以上的大对象会在该节点内拆分为多个区间并行传输：写入对象存储时（上传或对象存储之间迁移）分片上传，下载到本地时以 8 MiB 为一段并发拉取、严格按顺序写入同一个文件。节点空闲时会借用更多并发。受带宽或 LIST / GET 限速约束时，每个下载中的对象占用的区间不超过约一秒的允许速率；设置了任务级带宽、LIST / GET 或 PUT 上限的任务，写入对象存储时按单一数据流传输每个对象。下载任务也可以停用分段下载（见[大对象](docs/operations.zh-CN.md#大对象)）。
+- **运行中调整节点**：可以在任务详情中或用 `oss-transfer-cli task nodes` 给运行中的任务添加 Agent，或以排空、立即转移两种方式移出 Agent。带宽和 QPS 份额随之调整，不会超过任务上限。节点窗口会实时显示调整进度，计划内的调整不会作为任务错误报告。详见[调整任务的执行节点](docs/operations.zh-CN.md#调整任务的执行节点)。
 - **实时进度**：按实际传输字节显示进度和速度。任务详情中同时显示 LIST、GET、HEAD、PUT 的实时请求速率和生效上限。
-- **流量控制**：任务和节点都可以限制带宽及各类请求的 QPS。任务限速按需求实时分给各节点：空闲节点只保留很小的下限，其余由忙节点分享，始终不超过上限（[详情](docs/operations.zh-CN.md#任务限速在节点间的分配)）。运行中修改立即生效，节点并发也可以随时调整。
+- **流量控制**：任务和节点都可以限制带宽及各类请求的 QPS。任务限速按需求实时分给各节点：空闲节点只保留很小的下限，其余由忙节点分享，始终不超过上限（[详情](docs/operations.zh-CN.md#任务限速在节点间的分配)）。运行中修改立即生效。节点并发也可以在任务运行时调整：默认 32 个子任务、每个子任务 4 个对象，最多 256 个子任务、每个子任务 64 个对象，合计不超过 1024 个对象。
 - **故障恢复**：Agent 失联后，未完成的子任务会转给其他健康节点。扫描支持断点续扫，失败文件可以单独重试，任务结束后可以导出报告。
 - **对象比对**：比对单个对象，或整个存储桶、前缀下的对象。可以只比较元数据，也可以流式计算 SHA-256 来比较内容。
 - **运维**：在线升级 Master 并逐台升级 Agent，升级失败时自动回滚。存储凭证加密保存。界面和 CLI 支持中文、英文和日文。
@@ -28,7 +28,7 @@ OSS Transfer 是一个分布式数据迁移工具，用于在 S3 兼容对象存
    ┌───────────────┐      长轮询 / 心跳      ┌───────────────┐
    │    Master     │ ◄────────────────────── │    Agent A    │ ──► 源端 / 目标端
    │ 页面 · API    │ ◄────────────────────── │    Agent B    │ ──► 对象存储或本地目录
-   │ 调度 · 进度   │                         │      ...      │
+   │ 调度          │                         │      ...      │
    └───────────────┘                         └───────────────┘
 ```
 
@@ -52,7 +52,7 @@ curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/inst
 
 按提示选择 Master 和原生服务，并决定是否同时安装本机 Agent。本机 Agent 安装后会自动加入集群。程序、配置和数据默认放在 `/opt/oss-transfer/`。
 
-macOS、Windows、FreeBSD 和自定义目录的安装方法见[安装选项](docs/install.zh-CN.md)，无法联网的环境见[离线安装](docs/offline-install.zh-CN.md)。
+macOS、Windows、FreeBSD 和自定义目录的安装方法见[安装选项](docs/install.zh-CN.md)，无法联网的环境见[离线安装](docs/offline-install.zh-CN.md)。在拷贝来的安装文件所在目录中运行 `install.sh`，或把它放在这些文件旁边，安装器就会直接使用这些文件，不会联网。
 
 ### 2. 登录
 
@@ -83,7 +83,7 @@ macOS、Windows、FreeBSD 和自定义目录的安装方法见[安装选项](doc
 
 1. **迁移方向**：对象存储 → 对象存储、对象存储 → 本地，或本地 → 对象存储。
 2. **迁移源和迁移目标**：选择存储连接和存储桶，可以只迁移某个前缀或单个对象，也可以修改目标端的对象名称。涉及本地文件时，这里填写 Agent 主机上的路径，并需要通过目录预检。
-3. **迁移选项**：选择执行节点、目标端已有同名对象时的处理方式，以及节点分发方式（默认均衡分发；本地上传时由绑定的节点数决定）。下方还可以设置时间范围和任务限速。
+3. **迁移选项**：选择执行节点、目标端已有同名对象时的处理方式，以及节点分发方式（默认均衡分发；本地上传时由绑定的节点数决定）。下方还可以设置时间范围、**分段下载**（仅下载任务；默认自动）和任务限速。
 4. 点击 **创建迁移任务**。任务会先扫描，再开始传输。
 
 ![创建迁移页面，红框按顺序标出迁移方向、源和目标、迁移选项、创建按钮](docs/images/create.zh-CN.png)
@@ -139,7 +139,7 @@ docker compose logs master
 
 检测更新只提供正式版。预发布（beta）版本只有在指定精确版本时才会安装，见[试用预发布版本](docs/operations.zh-CN.md#试用预发布版本)。
 
-需要重装时，保留各角色的 `config` 目录和完整的 `data` 目录，包括 `.db.key` 密钥文件，安装器会继续使用原来的账号、任务和节点身份。计划降级时，应在升级前另外备份。详见[运维说明](docs/operations.zh-CN.md)。
+需要重装时，保留各角色的 `config` 目录和完整的 `data` 目录，包括密钥文件（`master.db.key` 或 `agent.db.key`），安装器会继续使用原来的账号、任务和节点身份。计划降级时，应在升级前另外备份。把 Master 降级到 4.1.33 之前的版本前，请先停止运行中的任务：旧版 Master 把任务限速平均分给各节点，运行中的任务可能短暂超过上限。详见[运维说明](docs/operations.zh-CN.md)。
 
 ## 注意事项
 
@@ -156,19 +156,19 @@ docker compose logs master
 | Windows | amd64、arm64 |
 | FreeBSD | amd64、arm64 |
 
-Linux 原生服务需要 systemd 219 及以上版本，最早支持 CentOS 7 / RHEL 7。在低于 236 的 systemd 上（例如 CentOS 7），在线更新失败后，其辅助单元 `oss-transfer-update-*` 会一直显示为失败状态，执行 `systemctl reset-failed` 即可清除。
+Linux 原生服务需要 systemd 219 及以上版本，最早支持 CentOS 7 / RHEL 7（systemd 219、Bash 4.2、curl 7.29）。在较旧的 systemd 上，在线更新有两点限制。低于 236 时（例如 CentOS 7），在线更新失败后，其辅助单元 `oss-transfer-update-*` 会一直显示为失败状态，执行 `systemctl reset-failed` 即可清除。低于 240 时，更新辅助进程无法启动不会立即报告，要等更新超时后才会标记为失败。
 
-每个版本都会发布到 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases)、Docker Hub `moonwx/osstransfer` 和国内 OSS 镜像。
+每个版本都会发布到 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases)、Docker Hub `moonwx/osstransfer` 和国内 OSS 镜像。GitHub Releases 和镜像都包含离线安装所需的全部文件（各平台安装包、`manifest.tsv` 和三个安装脚本 `install.sh`、`native-install.sh`、`Install.ps1`），另附 `SHA256SUMS`。镜像的 `latest/` 目录始终是最新正式版。
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [安装选项](docs/install.zh-CN.md) | 各系统的安装方法、目录、端口、重装和反向代理 |
+| [安装选项](docs/install.zh-CN.md) | 各系统的安装方法、指定版本或预发布版本、目录、端口、重装和反向代理 |
 | [离线安装](docs/offline-install.zh-CN.md) | 在无法联网的环境中安装 |
 | [Docker Compose](docs/docker-compose.zh-CN.md) | 容器部署、目录挂载和升级 |
 | [CLI](docs/cli.zh-CN.md) | 命令行的全部用法 |
-| [运维说明](docs/operations.zh-CN.md) | 并发、对象比对、升级、预发布版本、故障转移、调整执行节点、断点续扫、重置密码 |
+| [运维说明](docs/operations.zh-CN.md) | 并发、大对象、对象比对、升级、预发布版本、故障转移、调整执行节点、任务限速分配、断点续扫、重置密码 |
 | [数据库维护](docs/database-maintenance.zh-CN.md) | 回收数据库文件空间 |
 | [从 V4.0.x 升级](docs/migration.zh-CN.md) | 旧版本数据的离线转换 |
 
@@ -182,7 +182,7 @@ Linux 原生服务需要 systemd 219 及以上版本，最早支持 CentOS 7 / R
 ./build.sh --test   # 先运行测试再打包
 ```
 
-安装包和校验文件输出到 `output/packages/`。代码结构如下：
+安装包和校验文件输出到 `output/packages/`。CI 测试和发布流程见[验收测试](.github/acceptance/README.zh-CN.md)和[发布流程](.github/RELEASING.zh-CN.md)。代码结构如下：
 
 | 目录 | 内容 |
 | --- | --- |

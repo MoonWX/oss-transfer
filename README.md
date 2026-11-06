@@ -11,10 +11,10 @@ One Master serves the web console and API and schedules tasks. Agents run on hos
 ## Features
 
 - **Three directions:** object storage to object storage, local to object storage, and object storage to local. Transfer by prefix, single object or file list, and keep, add or replace key prefixes.
-- **Multi-node execution:** a task can run on several Agents. By default work is balanced by remaining bytes. Each object is transferred by one Agent. Within that Agent, objects of 128 MiB or more are split into byte ranges transferred in parallel: uploaded as multipart parts, or downloaded concurrently and written to the local file in order. Download tasks can turn this off. Idle concurrency on the node is borrowed when available.
-- **Change nodes mid-run:** add Agents to a running task or remove them, either draining their work or moving it immediately. Bandwidth and QPS shares follow the change without exceeding the task limit. See [execution node changes](docs/operations.md#change-a-tasks-execution-nodes).
+- **Multi-node execution:** a task can run on several Agents. By default work is balanced by remaining bytes. Each object is transferred by one Agent. Within that Agent, objects of 128 MiB or more are split into byte ranges transferred in parallel: sent to object storage as multipart parts (uploads and copies between object stores), or downloaded in 8 MiB ranges and written to the local file strictly in order. Idle concurrency on the node is borrowed when available. Under a bandwidth or LIST / GET limit, each downloading object holds at most about one second of the allowed rate in ranges, and a task with its own bandwidth, LIST / GET or PUT limit writes each object to object storage as one stream. Download tasks can turn ranges off ([large objects](docs/operations.md#large-objects)).
+- **Change nodes mid-run:** from the task details or with `oss-transfer-cli task nodes`, add Agents to a running task or remove them, either draining their work or moving it immediately. Bandwidth and QPS shares follow the change without exceeding the task limit. The node dialog shows a change's progress live, and planned changes are not reported as task errors. See [execution node changes](docs/operations.md#change-a-tasks-execution-nodes).
 - **Live progress:** progress and speed are based on bytes actually transferred. Task details also show the live LIST, GET, HEAD and PUT request rates and their effective limits.
-- **Rate control:** limit bandwidth and per-request-type QPS for each task and node. A task limit is divided among its nodes by demand in real time: idle nodes keep a small floor and busy nodes share the rest, never exceeding the limit ([details](docs/operations.md#task-limits-across-nodes)). Changes to a running task take effect immediately, and node concurrency can be adjusted at any time.
+- **Rate control:** limit bandwidth and per-request-type QPS for each task and node. A task limit is divided among its nodes by demand in real time: idle nodes keep a small floor and busy nodes share the rest, never exceeding the limit ([details](docs/operations.md#task-limits-across-nodes)). Changes to a running task take effect immediately. Node concurrency can also be changed while tasks run: by default 32 child tasks with 4 objects each, and at most 256 child tasks, 64 objects per child and 1024 objects in total.
 - **Fault recovery:** when an Agent loses contact, its unfinished child tasks move to healthy nodes. Scans resume from checkpoints, failed files can be retried individually, and a report can be exported when a task ends.
 - **Object comparison:** compare one object, or every object in a bucket or under a prefix, by metadata or by streaming SHA-256 of the contents.
 - **Operations:** update the Master online, then the Agents one at a time, with automatic rollback on failure. Storage credentials are encrypted at rest. The console and CLI are available in Chinese, English and Japanese.
@@ -52,7 +52,7 @@ curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/inst
 
 Choose Master and native deployment, and whether to install an Agent on the same host. That Agent joins the Master automatically. Programs, configuration and data go under `/opt/oss-transfer/` by default.
 
-See [installation options](docs/install.md) for macOS, Windows, FreeBSD and custom directories, or [offline installation](docs/offline-install.md) for hosts without internet access.
+See [installation options](docs/install.md) for macOS, Windows, FreeBSD and custom directories, or [offline installation](docs/offline-install.md) for hosts without internet access. Run `install.sh` from the folder of copied release files, or keep it beside them, and it installs from those files without going online.
 
 ### 2. Sign in
 
@@ -81,9 +81,9 @@ First add the source and destination object stores: on the **Storage connections
 
 Then choose **Create transfer** in the top left and fill in the numbered areas:
 
-1. **Direction:** object storage to object storage, object storage to local, or local to object storage.
+1. **Transfer direction:** object storage to object storage, object storage to local, or local to object storage.
 2. **Source and destination:** select the storage connections and buckets. You can limit the transfer to a prefix or a single object and change the destination key names. For local files, enter paths on the Agent hosts and pass the directory preflight check.
-3. **Transfer options:** select the Agents, what to do when the destination already exists, and the distribution mode (balanced by default; for uploads it follows the number of bound Agents). Date filters and task limits are below.
+3. **Transfer options:** select the Agents, what to do when the destination already exists, and the distribution mode (balanced by default; for uploads it follows the number of bound Agents). Below are date filters, **Ranged download** (downloads only; Auto by default) and task limits.
 4. Choose **Create a transfer task**. The task scans first, then starts transferring.
 
 ![Create transfer page with the direction, source and destination, transfer options and create button outlined in order](docs/images/create.en.png)
@@ -92,7 +92,7 @@ For uploads, the Agent service account needs read access to the source directory
 
 ### 5. Follow progress
 
-On the **Transfer tasks** page, choose a task to open its details:
+On the **Transfer tasks** page, choose a task to open its details on the right:
 
 1. Stop or resume the task. **Adjust** (shown as **Set limit** when no bandwidth limit is set) changes the bandwidth and request limits while it runs.
 2. **Transfer statistics:** scanned, transferred, skipped and failed objects with their sizes, updated live from bytes actually transferred.
@@ -139,7 +139,7 @@ Each update takes a backup first and deletes it after the new version passes its
 
 Update checks only offer stable releases. Prereleases (betas) are installed only when you choose an exact version; see [trying a prerelease](docs/operations.md#try-a-prerelease).
 
-To reinstall, keep each role's `config` directory and its entire `data` directory, including the `.db.key` file. The installer then reuses the existing accounts, tasks and node identities. Before a planned downgrade, make a separate backup before updating. See [operations](docs/operations.md) for details.
+To reinstall, keep each role's `config` directory and its entire `data` directory, including its key file (`master.db.key` or `agent.db.key`). The installer then reuses the existing accounts, tasks and node identities. Before a planned downgrade, make a separate backup before updating. Stop running tasks before downgrading the Master below 4.1.33: older Masters divide task limits equally, so running tasks could briefly exceed them. See [operations](docs/operations.md) for details.
 
 ## Things to know
 
@@ -156,19 +156,19 @@ To reinstall, keep each role's `config` directory and its entire `data` director
 | Windows | amd64, arm64 |
 | FreeBSD | amd64, arm64 |
 
-Native Linux services need systemd 219 or later; CentOS 7 / RHEL 7 is the oldest supported release. On systemd older than 236, such as CentOS 7, a failed online update leaves its `oss-transfer-update-*` helper unit listed as failed until you run `systemctl reset-failed`.
+Native Linux services need systemd 219 or later; CentOS 7 / RHEL 7 (systemd 219, Bash 4.2, curl 7.29) is the oldest supported release. Online updates have two limits on older systemd. Below 236, such as on CentOS 7, a failed update leaves its `oss-transfer-update-*` helper unit listed as failed until you run `systemctl reset-failed`. Below 240, an update helper that cannot start is not reported at once; the update is marked failed only when it times out.
 
-Each release is published to [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases), Docker Hub as `moonwx/osstransfer`, and an OSS mirror in mainland China.
+Each release is published to [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases), Docker Hub as `moonwx/osstransfer`, and an OSS mirror in mainland China. GitHub Releases and the mirror both hold every file an offline installation needs (the archives, `manifest.tsv` and the three installers `install.sh`, `native-install.sh` and `Install.ps1`), plus `SHA256SUMS`. The mirror's `latest/` directory always holds the newest stable release.
 
 ## Documentation
 
 | Document | Covers |
 | --- | --- |
-| [Installation options](docs/install.md) | Other systems, paths, ports, reinstallation and reverse proxies |
+| [Installation options](docs/install.md) | Other systems, specific or prerelease versions, paths, ports, reinstallation and reverse proxies |
 | [Offline installation](docs/offline-install.md) | Installing without internet access |
 | [Docker Compose](docs/docker-compose.md) | Container deployment, mounts and upgrades |
 | [CLI](docs/cli.md) | All command-line usage |
-| [Operations](docs/operations.md) | Concurrency, comparison, updates, failover, execution node changes, scan resume and password reset |
+| [Operations](docs/operations.md) | Concurrency, large objects, comparison, updates, prereleases, failover, execution node changes, task limits across nodes, scan resume and password reset |
 | [Database maintenance](docs/database-maintenance.md) | Reclaiming database file space |
 | [Upgrading from V4.0.x](docs/migration.md) | Offline conversion of older data |
 
@@ -182,7 +182,7 @@ Requires Go 1.26, Node.js 22.12 or later, and Python 3.
 ./build.sh --test   # run the tests before packaging
 ```
 
-Archives and checksums are written to `output/packages/`. The source is organized as follows:
+Archives and checksums are written to `output/packages/`. For the CI tests and the release process, see [Acceptance tests](.github/acceptance/README.md) and [Releases](.github/RELEASING.md). The source is organized as follows:
 
 | Directory | Contents |
 | --- | --- |

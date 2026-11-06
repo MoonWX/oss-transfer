@@ -36,7 +36,7 @@ Add an archive for each other platform you use. Download each platform once.
 
 Apple Silicon uses `arm64`. Linux also has `armv7`, `riscv64` and `loong64` packages with the same naming pattern.
 
-If you only have this host's archive and the installer, for example from an older GitHub Release, the installer still works offline: it verifies the archive with the checksums inside it and builds `manifest.tsv` locally. The complete set is still preferred, because `manifest.tsv` also verifies the archive file itself and lets the Master serve Agents on other platforms.
+If you only have this host's archive and the installer, for example from an older GitHub Release, the installer still works offline: it verifies the archive with the checksums inside it and builds `manifest.tsv` locally (`install.sh` carries its own copy of `native-install.sh` for this case). The complete set is still preferred, because `manifest.tsv` also verifies the archive file itself and lets the Master serve Agents on other platforms. From an archive alone, the Master can serve Agent packages only for its own platform; copy `install.sh`, `native-install.sh` and `Install.ps1` along with the archive so that it can.
 
 ## 2. Copy and install the Master
 
@@ -46,7 +46,7 @@ Copy the whole folder to the offline host. Keep the archives compressed. On Linu
 sudo bash install.sh --role master
 ```
 
-The installer uses the release files in its own folder (or the current folder), prints `Using local release files (offline): <folder>` and does not access the network. Use `--package-dir DIR` to choose another folder, or `--source github|jdoss` to download instead.
+The installer uses the release files in its own folder (or the current folder), prints `Using local release files (offline): <folder>` and does not access the network. If you pass `--version`, it must match the version of these files. Use `--package-dir DIR` to choose another folder, or `--source github|jdoss` to download instead.
 
 Choose whether to install an Agent on the Master host; it joins automatically. Open `http://<master-ip>:1685`, sign in as `admin` with the password printed by the installer, and choose a new password.
 
@@ -58,7 +58,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role mast
 
 ## 3. Add Agents
 
-Open **Execution nodes → Add node**, name the node and enter a Master address it can reach. Generate the invitation, then copy the command for its operating system and run it on the Agent host.
+Open **Execution nodes → Add node**, name the node and enter a Master address it can reach. Choose **Generate join commands**, then copy the command for its operating system and run it on the Agent host.
 
 The command downloads the installer and package from the Master, starts the Agent and joins the cluster. Once the node appears online, you can select it for a transfer.
 
@@ -66,7 +66,7 @@ An online Master can fetch packages for other platforms as needed. Choose **Down
 
 ## Upgrade and reinstall
 
-Prepare a new version folder using step 1 and copy it to each host being upgraded. Stop active tasks, update the Master, then update Agents one at a time. Run the command for the host's role from the new folder:
+Online updates under **Software updates** download from GitHub or the OSS mirror, so upgrade offline hosts with the installer. Prepare a new version folder using step 1 and copy it to each host being upgraded. Stop active tasks, update the Master, then update Agents one at a time. Run the command for the host's role from the new folder:
 
 ```bash
 sudo bash native-install.sh --role master --upgrade --yes
@@ -80,7 +80,7 @@ To reinstall after removing the programs, keep the original configuration and en
 
 ## Things to check
 
-- Prepare Bash, curl, tar and a SHA-256 tool on Unix hosts; Linux uses systemd 219 or later (CentOS 7 / RHEL 7 and newer). On FreeBSD, run `pkg install -y bash curl` before disconnecting. Run installation commands as root if `sudo` is unavailable.
+- Prepare Bash, curl, tar and a SHA-256 tool on Unix hosts. Linux needs systemd 219 or later; CentOS 7 / RHEL 7 work with the systemd 219, Bash 4.2 and curl 7.29 they ship. On FreeBSD, run `pkg install -y bash curl` before disconnecting. Run installation commands as root if `sudo` is unavailable.
 - Keep all packages from the same release. If an offline Master is missing an Agent platform, add that package to the original installation folder and run the Master upgrade command above to import it. This restarts the Master.
 - Invitations expire and work once. Generate a new one if needed.
 - Successful upgrades delete their temporary backup. Failed upgrades attempt recovery and retain the backup. Make a separate backup before a planned downgrade; see [backup and recovery](operations.md#update-installed-services).

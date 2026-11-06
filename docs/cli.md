@@ -68,9 +68,9 @@ oss-transfer-cli help task import
 oss-transfer-cli help storage
 ```
 
-Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task.
+Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task. `--bandwidth-mbps` (0.1–1,000,000 Mbps) and `--list-qps`, `--head-qps` and `--put-qps` set the task's limits when it is created; like the limits below, they are totals for all of the task's nodes.
 
-Downloads to a local directory (`oss-to-local`) accept `--ranged-download auto|off`. The default, `auto`, has each Agent download objects of 128 MiB or more as concurrent byte ranges and write them to the file in order, using idle node capacity. This is right for almost every task. `off` downloads each object as one sequential stream; choose it only when the target storage or network handles parallel range downloads badly (memory-constrained Agents, storage that throttles many concurrent GETs), or when support asks. The setting is fixed for the task's lifetime and is kept on resume, retry and node changes. `task show` displays it for local-destination tasks. Other directions reject the flag. In `task import local` JSON, the matching field is `"rangedDownload": "auto"` or `"off"`.
+Downloads to a local directory (`oss-to-local`) accept `--ranged-download auto|off`. The default, `auto`, has each Agent download objects of 128 MiB or more as concurrent 8 MiB byte ranges, four per object and up to 16 while the node has idle capacity, and write them to the file strictly in order. This is right for almost every task. Limits keep the ranges bounded: each object holds at most about one second's worth of the task's bandwidth share on that node (or of the node bandwidth limit, if that is lower) and, with a LIST limit, of the task's GETs per second there, since every range is a GET. An object is downloaded as one stream when one second covers fewer than two ranges ([large objects](operations.md#large-objects)). `off` downloads each object as one sequential stream; choose it only when the target storage or network handles parallel range downloads badly (memory-constrained Agents, storage that throttles many concurrent GETs), or when support asks. The setting is fixed for the task's lifetime and is kept on resume, retry and node changes. `task show` displays it for local-destination tasks. Other directions reject the flag. In `task import local` JSON, the matching field is `"rangedDownload": "auto"` or `"off"`; omitting it means `auto`. Agents from before this option download every object as one stream, whatever the setting ([ranged download option](operations.md#ranged-download-option)).
 
 ```sh
 oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --ranged-download off
@@ -83,11 +83,11 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-Unspecified fields keep their values. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are totals: the Master divides them among the active Agents by demand, so a node that has work gets most of the limit while idle nodes keep a small floor ([task limits across nodes](operations.md#task-limits-across-nodes)). Node limits still apply.
+Unspecified fields keep their values. `unlimited` removes a limit; `task limits ID` without options shows the current ones. `task bandwidth ID MBPS` changes only the bandwidth limit. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are totals: the Master divides them among the active Agents by demand, so the nodes that have work share almost all of the limit evenly while idle nodes keep a small floor ([task limits across nodes](operations.md#task-limits-across-nodes)). Node limits, set with `limit set` (see `help limit`), still apply.
 
 ## Change a task's execution nodes
 
-Show which Agents run a task, their state, the scanner, pending child tasks, each node's demand and current share of the task limits, removed nodes and the Agents that can be added. The demand column reads *On demand (busy)* or *Idle (released)*, with *adjusting* while a node still has to confirm a reduction; an older Master, which divides limits equally, shows `—`. Only a node that is scanning (or taking over the scan) is marked as the scanner; once the scan has finished, a note says so instead. An offline node that is being removed is shown as leaving when its execution lease expires, or, for a task without lease fencing, after it reconnects:
+Show which Agents run a task, their state, the scanner, pending child tasks, each node's demand and current share of the task limits, removed nodes and the Agents that can be added. The demand column reads *On demand (busy)* or *Idle (released)*, with *adjusting* while a node still has to confirm a reduction. A node that does not hold a share yet, or no longer holds one (joining or disconnected), shows `—` in the demand and share columns. With an older Master, which divides limits equally, the demand column shows `—` for every node. Only a node that is scanning, or taking the scan over, is marked as the scanner. A note under the table says when the scan has finished, when it is moving to a new scanning node, or when the scanning node has left and another node will take over; a moved scan continues from the checkpoint saved on the Master. An offline node that is being removed is shown as leaving when its execution lease expires, or, for a task without lease fencing, after it reconnects:
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK"
@@ -103,7 +103,9 @@ oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --now --yes
 
 - By default a removed node drains: it receives no new work, its queued work moves to the other nodes, and it leaves once its running work finishes.
 - `--now` revokes the node's running work, which continues on the remaining nodes. Some tasks do not support it; `task nodes` then shows the reason.
-- A node being added shows `Joining` until it passes the handshake and shared-directory check. Only then does it receive work.
+- A node being added shows `Joining` until it passes the handshake and shared-directory check; with task limits, it also waits until the other nodes have confirmed their reduced shares. Only then does it receive work.
+
+An accepted change prints the resulting members. While nodes are still joining or draining, the change completes in the background; follow it with `task nodes "$TRANSFER_TASK" --watch 5`. The stages of a change, such as a leaving node waiting for its lease or the scan moving to another node, appear in this view rather than as task errors.
 
 Uploads and downloads need one shared directory per added node. The CLI runs the Master's shared-directory preflight before it submits, and stops if any binding fails:
 
@@ -115,7 +117,7 @@ Only one change can be in progress. While nodes are joining or draining, the Mas
 
 When a connection fails before the result is known, the CLI prints a request ID and membership revision. Check `task nodes` first. To retry, keep the same arguments and add the printed `--request-id` and `--expected-revision`; the Master returns the original result instead of applying the change twice. A retry with `--request-id` skips the local preflight, because the Master already checked the original request.
 
-`task show` lists the node membership too. It marks joining and draining nodes and shows each node's effective share. [Execution node changes](operations.md#change-a-tasks-execution-nodes) describe fencing, bandwidth redistribution and limits.
+`task show` lists the node membership too. It marks joining and draining nodes, shows each node's demand and effective share, and adds the same scan notes. [Execution node changes](operations.md#change-a-tasks-execution-nodes) describe fencing, bandwidth redistribution and limits.
 
 ## Manage nodes and exceptions
 
@@ -124,7 +126,7 @@ oss-transfer-cli node list
 oss-transfer-cli agent invite --label storage-01
 ```
 
-Run the printed join command on the new node. The invitation includes an ID for `agent invite-status`. If Agents need a private Master address, set `--master-url` when creating the invitation. `node update` supports live changes to `--child-concurrency` and `--object-concurrency`.
+Run the printed join command on the new node. The invitation includes an ID for `agent invite-status`. If Agents need a private Master address, set `--master-url` when creating the invitation. `node update` supports live changes to `--child-concurrency` (1–256, default 32) and `--object-concurrency` (objects per child task, 1–64, default 4); their product may not exceed 1024. See [node concurrency](operations.md#node-concurrency).
 
 ```sh
 oss-transfer-cli exceptions list failed --task-id "$TRANSFER_TASK"

@@ -29,9 +29,9 @@ Linux ARMv7、riscv64 和 loong64 在 QEMU 中执行目标程序，SeaweedFS 测
 | FreeBSD amd64 | 平台相关的 Go 测试、CLI 检查、安装、三种传输方向和分片上传崩溃恢复 | 全部 Go 测试和传输场景 |
 | QEMU 平台（ARMv7、riscv64、loong64） | 不运行 | 全部 Go 测试、CLI 检查、安装和传输场景 |
 
-平台相关范围定义在 [master-shards.json](master-shards.json) 的 `platformScope` 中：除 `internal/task` 外的所有包（它是基于数据库的任务和分发记账，没有平台相关代码），以及 `internal/master` 中仅在 `agent_packages_test.go`、`backups_test.go` 和 `install_commands_test.go` 里声明的测试，这些测试的结果取决于操作系统。文件系统、服务、安装器、路径、数据库和传输相关的包、命令程序以及 CLI 模块在所有平台上运行。如果列出的文件不存在、没有声明测试，或声明了 `go test -list` 没有报告的测试，或者被跳过的包已不存在，运行就会失败。被跳过的测试在每次 push 时仍会在 Linux amd64 上运行，并每晚在所有平台上运行。每晚运行失败不影响发布；GitHub 会通知最后一个修改定时配置的人。
+平台相关范围定义在 [master-shards.json](master-shards.json) 的 `platformScope` 中：除 `internal/task` 外的所有包（它是基于数据库的任务和分发记账，没有平台相关代码），以及 `internal/master` 中仅在 `agent_packages_test.go`、`backups_test.go` 和 `install_commands_test.go` 里声明的测试，这些测试的结果取决于操作系统。文件系统、服务、安装器、路径、数据库和传输相关的包、命令程序以及 CLI 模块在所有平台上运行。如果列出的文件不存在、没有声明测试，或声明了 `go test -list` 没有报告的测试，或者被跳过的包已不存在，运行就会失败。`test-binaries.py run` 在 32 位 Linux ARMv7 上按平台相关范围运行时，被跳过的包中列入 `wordSizeTests` 的测试（目前是 `internal/task` 的一个测试）仍会运行，因为 Linux amd64 只会走 64 位分支；如果 `go test -list` 不再报告其中某个测试，运行就会失败。CI 的 ARMv7 job 运行完整范围，本来就包含这些测试。被跳过的测试在每次 push 时仍会在 Linux amd64 上运行，并每晚在除可选的 FreeBSD ARM64 之外的所有平台上运行。每晚运行失败不影响发布；GitHub 会通知最后一个修改定时配置的人。
 
-每晚运行在 UTC 18:40 开始。按需运行完整范围：
+每晚运行在 UTC 18:40（北京时间 02:40）开始。按需运行完整范围：
 
 ```sh
 gh workflow run ci.yml --ref main -f full_suite=true
@@ -51,27 +51,27 @@ Linux QEMU job 在 Ubuntu runner 上安装真实的 systemd 服务。只有安�
 
 ## 调度
 
-打包 job 构建全部十一个发布压缩包，最多同时构建四个平台，Python 打包检查和消息测试与构建并行运行；任何一项失败都会在上传之前终止该 job。另一个测试程序 job 与其并行：它交叉编译已启用的附加平台测试程序（每个模块和目标执行一次 `go test -c`，不包含 DWARF 和符号表），并为六个原生平台各只编译 `internal/agentservice` 测试程序和两个安装失败测试程序，所有目标同时编译。push 编译 FreeBSD amd64 测试包和六个测试程序包；完整运行再加上三个 QEMU 测试包；选择 FreeBSD ARM64 时只编译它自己的测试包。
+打包 job 构建全部十一个发布压缩包，最多同时构建四个平台；Python 打包检查、消息测试和 `scripts/sync-installer-source.py --check` 与构建并行运行。最后这项确认两个 Unix 安装脚本内嵌的下载代码是最新的，并且 `install.sh` 内嵌的原生安装器也是最新的；离线安装包缺少 `native-install.sh` 时，`install.sh` 会使用这份内嵌副本。任何一项失败都会在上传之前终止该 job。另一个测试程序 job 与其并行：它交叉编译已启用的附加平台测试程序（每个模块和目标执行一次 `go test -c`，不包含 DWARF 和符号表），并为六个原生平台各只编译 `internal/agentservice` 测试程序和两个安装失败测试程序，所有目标同时编译。push 编译 FreeBSD amd64 测试包和六个测试程序包；完整运行再加上三个 QEMU 测试包；选择 FreeBSD ARM64 时只编译它自己的测试包。
 
-Go 构建缓存和模块缓存按 runner 操作系统、架构、Go 版本和用途（`cross` 用于压缩包，`tests` 用于测试程序，`race` 用于原生 Go 测试 job）分别保存。main 分支和手动运行按提交保存缓存；pull request 只恢复缓存。恢复的条目会相对于上次保存进行裁剪，所以一周没有提交也不会导致 Go 丢弃缓存。
+Go 构建缓存和模块缓存按 runner 操作系统、架构、Go 版本和用途（`cross` 用于压缩包，`tests` 用于测试程序，`race` 用于原生 Go 测试 job）分别保存。main 分支的 push、每晚运行和手动运行按提交保存缓存；pull request 只恢复缓存。恢复的条目会相对于上次保存进行裁剪，所以一周没有提交也不会导致 Go 丢弃缓存。
 
 测试产物记录提交、目标架构和 SHA-256 哈希，不会随版本发布。运行任何程序之前，`test-binaries.py verify` 会检查提交、可执行文件格式和架构、每个校验和，以及测试源码和测试程序源码是否与当前检出一致（比较前统一换行符，因为 Windows 检出可能转换换行符）。分片上传崩溃测试使用目标平台的 `agentservice` 测试程序，包括它自行启动的崩溃辅助进程。
 
-六个 Go 测试 job 不需要安装包，所以与打包 job 和测试程序 job 同时开始。[go-unit.py](go-unit.py) 把最慢的 `internal/master` 包拆成并发分片，与其余包同时运行；其余包按耗时从长到短运行，最多同时运行两个（CI job 独占 runner，同时运行三个），CLI 模块在旁边同时运行。分片根据 [master-shards.json](master-shards.json) 均衡分配；列表中没有的测试分到负载最轻的分片，如果分片覆盖的测试与 `go test -list` 报告的选中测试不完全一致，运行就会失败。失败的顶层测试会重跑一次；真正的回归会再次失败。
+六个 Go 测试 job 不需要安装包，所以与打包 job 和测试程序 job 同时开始。[go-unit.py](go-unit.py) 把最慢的 `internal/master` 包拆成并发分片（三个，平台相关范围下为两个），与其余包同时运行；其余包按耗时从长到短运行，最多同时运行两个（CI job 独占 runner，同时运行三个），CLI 模块在旁边同时运行。分片根据 [master-shards.json](master-shards.json) 均衡分配；列表中没有的测试分到负载最轻的分片，如果分片覆盖的测试与 `go test -list` 报告的选中测试不完全一致，运行就会失败。在 QEMU 和 FreeBSD 平台上，`test-binaries.py run` 对预编译的测试程序使用相同的范围和分片，最多同时运行四个（运行测试的机器 CPU 不超过两个时为两个，例如只有两个 CPU 的 FreeBSD ARM64 虚拟机）。两个脚本都会把失败的顶层测试重跑一次；真正的回归会再次失败。
 
 只有两个 Linux 验收 job 需要等待镜像；macOS 和 Windows 在安装包和测试程序就绪后立即开始。QEMU 和 FreeBSD job 等待安装包和测试程序。选择 FreeBSD ARM64 时，运行打包 job、测试程序 job 和一个 FreeBSD ARM64 job。[run-platform.py](run-platform.py) 同时启动一个 job 的所有组：CLI 和清单检查（含安装器源码检查）、安装（Windows 和 macOS amd64 的安装 job 使用 `--install only`，它们的验收 job 使用 `--install separate`）、传输；在 QEMU 和 FreeBSD 平台上还有 Go 测试。原生安装和 Compose 安装依次运行，因为两者都会发现已安装的服务。
 
-在完整传输范围下，三个集群并行运行，每个都有自己的 SeaweedFS、Master 和两个 Agent：`transfer`（初始化、分片上传崩溃恢复和三种传输方向，然后是带宽和按需分配）、`recovery`（停止/重启和崩溃恢复）和 `nodes`（执行节点变更）。每个集群先在其他组运行期间上传自己的测试数据。在测量带宽或注入停止、崩溃之前，每个集群都会等待同一 runner 上的其他所有组通过、退出并完成清理；之后这些测量场景只彼此共享 runner。任何一组失败都不会进入这一独占阶段，并使 job 失败；每次运行都有独立的门控标识。核心传输范围只运行第一个集群的初始化、分片上传和传输方向检查，不做任何测量，所以不需要等待。
+在完整传输范围下，三个集群并行运行，每个都有自己的 Master、两个 Agent 和 SeaweedFS（FreeBSD 上则是共享宿主机测试服务中各自的存储桶）：`transfer`（初始化、分片上传崩溃恢复和三种传输方向，然后是带宽和按需分配）、`recovery`（停止/重启和崩溃恢复）和 `nodes`（执行节点变更）。每个集群先在其他组运行期间上传自己的测试数据。在测量带宽或注入停止、崩溃之前，每个集群都会等待同一 runner 上的其他所有组通过、退出并完成清理；之后这些测量场景只彼此共享 runner。任何一组失败都不会进入这一独占阶段，并使 job 失败；每次运行都有独立的门控标识。自行启动 SeaweedFS 的集群会在同一时刻预留端口，因此 SeaweedFS 如果因端口冲突启动失败，会换用新的端口和数据目录重试，最多尝试三次。核心传输范围只运行第一个集群的初始化、分片上传和传输方向检查，不做任何测量，所以不需要等待。
 
 某个组失败时，job 日志末尾会附上失败阶段日志的最后 150 行；完整日志在上传的证据中。
 
 FreeBSD 缓存其 Python 环境和依赖；修改 requirements 文件会使缓存失效。它只接收自己平台的压缩包，只返回日志和证据。宿主机上的 S3 测试服务使用固定版本的 SeaweedFS 压缩包、临时凭证，以及通过 QEMU 私有网络访问的回环监听地址。上传的产物中不包含测试服务凭证。安装测试数据使用快速 gzip/ZIP 压缩；发布的压缩包和压缩包校验不受影响。
 
-`output/platform/evidence.json` 记录每个阶段的耗时和结果，详细输出在同目录的日志中。集群证据位于 `cluster/`、`cluster-recovery/` 和 `cluster-nodes/`，每个都记录哪些组在其独占传输阶段开始前已经完成。Go 测试 job 上传 `unit-evidence-*`，其中包含测试范围、选中和跳过的测试，以及每条命令的日志；安装 job 上传 `install-evidence-*`。
+`output/platform/evidence.json` 记录每个阶段的耗时和结果，详细输出在同目录的日志中。集群证据位于 `cluster/`、`cluster-recovery/` 和 `cluster-nodes/`，每个都记录哪些组在其独占传输阶段开始前已经完成。Go 测试 job 上传 `unit-evidence-*`，其中包含测试范围、跳过的包、选中的测试和分片计划、重跑过的测试，以及每条命令的日志（含重跑日志）；安装 job 上传 `install-evidence-*`。
 
 FreeBSD arm64 在 `ubuntu-26.04-arm` 上使用 QEMU 软件模拟，配置两个虚拟 CPU 和 `GOMAXPROCS=2`。能力检查显示这台 ARM 宿主机没有提供 `/dev/kvm`；客户机仍使用 TCG，而不是硬件虚拟化。宿主机和客户机的诊断信息记录 CPU 数量、QEMU 版本和 KVM 虚拟机创建探测结果。下关于速度的结论之前，先比较各阶段耗时。FreeBSD amd64 在 `ubuntu-latest` 上使用默认的虚拟机 CPU 设置。
 
-发布流程等待对应提交上默认的 push CI，它在最慢的 push job 结束时完成。每晚运行和可选的手动运行（包括 QEMU 平台和 FreeBSD ARM64 验收）是独立的，不阻塞发布。默认 CI 成功并不代表 FreeBSD ARM64 运行时验收通过。只修改 VERSION 的提交可以复用代码完全相同的一次成功 push 运行中的默认测试套件结果；手动运行不能作为复用基准。构建和发布始终保留[平台列表](../../deploy/native/platforms.json)中的全部十一项。
+发布流程等待对应提交上默认的 push CI，它在最慢的 push job 结束时完成；目前一次 push 运行约需 7 分钟。每晚运行和可选的手动运行（包括 QEMU 平台和 FreeBSD ARM64 验收）是独立的，不阻塞发布。默认 CI 成功并不代表 FreeBSD ARM64 运行时验收通过。只修改 VERSION 的提交可以复用代码完全相同的一次成功 push 运行中的默认测试套件结果；每晚运行和手动运行都不能作为复用基准。构建和发布始终保留[平台列表](../../deploy/native/platforms.json)中的全部十一项。
 
 ## 覆盖范围
 
@@ -81,8 +81,8 @@ FreeBSD arm64 在 `ubuntu-26.04-arm` 上使用 QEMU 软件模拟，配置两个�
 | 状态和请求处理 | 重复请求只保留一个任务；停止后过期的工作不能继续执行；账本记录与计数器一致。还会检查取消、源端变化、路径逃逸和清理归属。 |
 | 初始化和 CLI | 初始化会保护管理权限，凭证校验生效，生成的 Agent 地址与发布版本一致，账号、节点和限制在重启后保留。 |
 | 传输 | 三种迁移方向都产生预期的键名和哈希。两个选中的 Agent 都会分到工作。命名规则、SKIP、OVERWRITE 和子任务总数与测试数据一致。 |
-| 任务带宽 | 两个并发的 2 Mbps 任务各自在两个 Agent 之间共享自己的限额。测试在传输过程中采样目标端增长，并校验完成的文件和报告。 |
-| 按需分配份额 | 一个由两个 Agent 执行的下载任务，第一个分发批次中有一个 24 MiB 对象，第二个批次中有一个 256 KiB 对象。拿到小对象的 Agent 空闲后，节点视图必须显示它为空闲，忙的 Agent 至少持有 限额 × (1 − 1/64) − 1 B/s；节点视图的每次采样中份额之和都不超过限额，目标端增长也不超过限额。只记录吞吐量，不对吞吐量做断言。使用恢复测试的任务限速。`--scenario dynamic_share` 只运行这项检查。 |
+| 任务带宽 | 两个并发的 2 Mbps 任务各自在两个 Agent 之间共享自己的限额。测试在传输过程中采样目标端增长：任意 5 秒窗口内，任务最多只能超出限额 100 ms 的量再加 256 KiB，这部分余量用于容纳限速器保留的额度、正在进行的读取和采样误差。测试还会校验完成的文件和报告。 |
+| 按需分配份额 | 一个由两个 Agent 执行的下载任务，第一个分发批次中有一个 24 MiB 对象，第二个批次中有一个 256 KiB 对象。拿到小对象的 Agent 空闲后，节点视图必须显示它为空闲，忙的 Agent 至少持有 限额 × (1 − 1/64) − 1 B/s；节点视图的每次采样中份额之和都不超过限额，目标端增长也不超过与任务带宽测试相同的上限。只记录吞吐量，不对吞吐量做断言。使用恢复测试的任务限速。`--scenario dynamic_share` 只运行这项检查。 |
 | 停止和重启 | 确认停止后不再写入；停止意图在重启后保留。终止 Agent 后，已完成的进度和已有目标对象保留。恢复后完成剩余文件，并删除临时文件。 |
 | 分片上传恢复 | 重启会清理中断的上传及其暂存文件，同时保留无关的上传和之前已完成的对象。中断的对象从头重试。 |
 | 执行节点调整 | 向限速的 OSS→OSS 任务中途添加 Agent 后，它加入任务，限额由两个 Agent 分担，两者都传输对象，每个对象的 SHA-256 和任务计数都一致。中途排空两个 Agent 中的一个时，它在任务结束前离开；剩余 Agent 获得全部限额，任务以精确的计数完成。立即移出扫描 Agent 时，它的工作以及仍需要的扫描转给另一个 Agent；节点视图随后标记新的扫描节点或显示扫描已完成，不会标记已移出的节点。三种调整的全过程中任务都不报告错误。`--scenario nodes` 只运行这项检查。 |
@@ -91,7 +91,7 @@ FreeBSD arm64 在 `ubuntu-26.04-arm` 上使用 QEMU 软件模拟，配置两个�
 | 原生安装 | 服务 PID 和版本正确。升级保留密码和节点注册。校验和错误时在停止服务之前就拒绝。覆盖回滚和接管已有数据的流程。 |
 | Docker 和 Compose | 初始化、节点注册和绑定挂载目录的传输在容器内无需 root 即可工作。重建容器后状态保留。 |
 
-主测试数据包含 260 个对象，超过 128 个对象的分发批次边界。其中包括一个空对象、一个包含 Unicode 和空格的名称，以及两个用于分片上传的 17 MiB 对象。带宽测试数据有 129 个对象：两个 4 MiB 文件（每个分发批次各一个）和 127 个空文件。在 2 Mbps 下，8 MiB 的数据每个任务大约需要 34 秒。恢复测试使用独立的 256 个文件的测试数据，任务限速 16 Mbps，按平台在 [run-platform.py](run-platform.py) 的 `RECOVERY_BANDWIDTH_MBPS` 中设置。如果恢复测试的传输在注入停止或崩溃之前就已完成，检查会失败并指出这个设置，而不是在没有触发恢复的情况下通过。
+主测试数据包含 260 个对象，超过 128 个对象的分发批次边界。其中包括一个空对象、一个包含 Unicode 和空格的名称，以及两个用于分片上传的 17 MiB 对象。带宽测试数据有 129 个对象：两个 4 MiB 文件（每个分发批次各一个）和 127 个空文件。在 2 Mbps 下，8 MiB 的数据每个任务大约需要 34 秒。恢复测试使用独立的 256 个文件的测试数据，任务限速 16 Mbps，按平台在 [run-platform.py](run-platform.py) 的 `RECOVERY_BANDWIDTH_MBPS` 中设置。如果恢复测试的传输在注入停止或崩溃之前就已完成，检查会失败并指出这个设置，而不是在没有触发恢复的情况下通过。执行节点调整和按需分配份额的检查使用同一限速，如果传输在节点调整或份额转移发生之前就已完成，也会以同样的方式失败。节点调整检查使用 1,024 个 32 KiB 的对象，并把每个 Agent 限制为同时只执行一个子任务，使排队中的子任务留待转交；结束后恢复为默认的 32。
 
 S3 服务由 SeaweedFS 提供，测试不会连接京东云 OSS。服务商特有的签名、权限和限流需要针对该服务商实际运行测试。单元测试使用 HTTP 模拟器复现协议错误。
 
@@ -111,9 +111,9 @@ python3 -m venv /tmp/oss-transfer-qa-venv
   --output output/cluster-local --scenario all --multipart-recovery
 ```
 
-请使用新的输出目录。在 Windows 上，使用 `.exe` 文件名和你环境中的 Python 可执行文件。默认情况下，`--multipart-recovery` 会编译一个 Agent 测试程序，需要安装 Go。也可以传入 `--multipart-test-binary`，改用经过 `test-binaries.py` 校验的可执行文件。主要场景在可执行文件 PATH 为空的情况下运行打包后的程序。`--scenario all` 在一个集群中依次运行全部场景；CI 则把 `transfer`、`recovery` 和 `nodes` 作为三个并发集群运行，push 时在 QEMU 和 FreeBSD 平台上运行 `core`。
+请使用新的输出目录。在 Windows 上，使用 `.exe` 文件名和你环境中的 Python 可执行文件。默认情况下，`--multipart-recovery` 会编译一个 Agent 测试程序，需要安装 Go。也可以传入 `--multipart-test-binary`，改用经过 `test-binaries.py` 校验的可执行文件。主要场景在可执行文件 PATH 为空的情况下运行打包后的程序。`--scenario all` 在一个集群中依次运行全部场景；CI 则把 `transfer`、`recovery` 和 `nodes` 作为三个并发集群运行，push 和 pull request 时在 FreeBSD amd64 上运行 `core`。
 
-要像 CI 一样运行 Go 测试，使用 `python3 .github/acceptance/go-unit.py --output output/unit --race`；加上 `--scope platform` 即为平台相关范围。`run-platform.py` 运行一个平台的所有组；`--unit none` 不运行 Go 测试，`--transfer core` 只运行核心集群。
+要像 CI 一样运行 Go 测试，使用 `python3 .github/acceptance/go-unit.py --output output/unit --race`；加上 `--scope platform` 即为平台相关范围，加上 `--parallel 3` 则像 CI job 一样同时测试三个包。`run-platform.py` 运行一个平台的所有组；`--unit none` 不运行 Go 测试，`--transfer core` 只运行核心集群。
 
 在构建主机上准备附加平台的测试程序：
 
@@ -121,7 +121,7 @@ python3 -m venv /tmp/oss-transfer-qa-venv
 python3 .github/acceptance/test-binaries.py build --platform linux/armv7 --output /tmp/oss-transfer-tests
 ```
 
-将该目录复制到目标环境，然后带上 `--platform`、`--directory` 和 `--repo` 执行 `verify` 或 `run`。校验会在运行任何程序之前检查可执行文件架构、校验和以及代码检出。`run` 还需要一个新的 `--output` 目录，用于保存日志和结果；加上 `--scope platform` 即为平台相关范围。Linux 模拟需要为初始进程和恢复测试创建的子进程都注册 binfmt。`build-native --platform darwin/arm64 --output DIR` 只构建原生验收所需的测试程序；对该目录执行 `verify` 会把它们的路径写入 `QA_MULTIPART_TEST_BINARY`、`QA_FAILURE_MASTER` 和 `QA_ROLLBACK_CLI`，`run-platform.py` 再把它们传给安装和传输检查。
+将该目录复制到目标环境，然后带上 `--platform`、`--directory` 和 `--repo` 执行 `verify` 或 `run`。校验会在运行任何程序之前检查可执行文件架构、校验和以及代码检出。`run` 还需要一个新的 `--output` 目录，用于保存日志和结果；加上 `--scope platform` 即为平台相关范围。Linux 模拟需要为初始进程和恢复测试创建的子进程都注册 binfmt。`build-native --platform darwin/arm64 --output DIR` 只构建原生验收所需的测试程序；对该目录执行 `verify` 会把它们的路径写入 `QA_MULTIPART_TEST_BINARY`、`QA_FAILURE_MASTER` 和 `QA_ROLLBACK_CLI`（CI 中写入 `$GITHUB_ENV`，也可以用 `--env-file` 写入一个 shell 文件），`run-platform.py` 再把它们传给安装和传输检查。
 
 服务安装测试使用 `--master`、`--agent`、`--cli`、`--repo` 和 `--output` 运行 `install.py`。Linux 需要 root 和 systemd；Windows 需要管理员权限。macOS 使用用户级 LaunchAgent，加上 `--system` 则使用系统级 LaunchDaemon。测试使用独立的服务名称和目录，结束后会删除注册的服务。只有一次性的 CI 机器才使用 `--all-installed`，它会测试所有已安装角色的发现和升级。
 

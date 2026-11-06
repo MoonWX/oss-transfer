@@ -14,7 +14,7 @@ For a fresh installation, follow the [installation instructions](../README.md). 
 4. Prepare and finalize the conversion in a new directory.
 5. Install the native services with the generated `service.json` files. Confirm the Agents are online, then resume the tasks you want to continue.
 
-The [conversion guide](development/legacy-migration.md) contains the commands and plan format. Preparation runs on Linux or macOS. Keep the original installation and backups until the new services and task results have been checked.
+The [conversion guide](development/legacy-migration.md) contains the commands and plan format. Preparation and finalization run on Linux or macOS, including early CentOS / RHEL 7 kernels without `renameat2`. Keep the original installation and backups until the new services and task results have been checked.
 
 V4.1.x separates scheduling from execution. Install a Master and an Agent on a single-host system; they use separate data directories. In a cluster, place each finalized Agent directory on its execution host at the absolute path recorded in its configuration.
 

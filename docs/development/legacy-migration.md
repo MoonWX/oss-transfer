@@ -145,10 +145,11 @@ Retry, concurrency and multipart settings use the Go execution profile after con
 | Setting | Value |
 | --- | --- |
 | Request retries | AWS SDK standard policy, at most 3 attempts including the original request |
-| Object execution | Up to 4 active child tasks per Agent and 4 object workers per child |
+| Object execution | Up to 32 active child tasks per Agent and 4 object workers per child by default; each node accepts 1–256 children and 1–64 objects per child, with children × objects at most 1,024 ([node concurrency](../operations.md#node-concurrency)) |
 | Discovery | Up to 2 scans per Agent; batches of at most 128 objects or 256 MiB of described content; oversized objects use a separate batch |
 | Admission | At most 1,024 unfinished child jobs per Agent; new work waits when the budget is full |
-| Multipart upload | 8 MiB parts, up to 4 concurrent part requests and 32 MiB of payload buffers per write; large request bodies may use spool files |
+| Multipart upload | 8 MiB parts, up to 4 concurrent part requests and 32 MiB of payload buffers per streamed write; large request bodies may use spool files |
+| Large objects | Objects of 128 MiB or more move as parallel byte ranges within one Agent: 4 ranges per object, and up to 16 per object while the node has idle object slots, all within the Agent's 256 MiB transfer memory budget. Transfers to object storage send the ranges as multipart parts (16 MiB parts for objects of 1 GiB or more), but stream each object when the task has its own bandwidth, LIST / GET or PUT limit. Downloads to a local directory fetch 8 MiB ranges and write them in order; under a bandwidth or LIST / GET limit an object holds at most about one second of its reads in ranges and is streamed below two ranges per second ([large objects](../operations.md#large-objects)) |
 | Result persistence | Batches of 128 results or every 1 second; final results and child completion commit together immediately |
 
 A crash between a destination write and its result commit can cause the object to be handled again under the saved conflict policy. The mapped node-control properties and persisted manual overrides remain effective. Old task QPS and bandwidth fields retain their per-node scope; a logical task bandwidth policy retains its cluster scope. Both apply when present.
@@ -193,7 +194,7 @@ Inspection validates the complete file, including ordering, duplicate fields and
 
 `legacyimport.Prepare` copies exports into a private sibling staging directory before mapping them. `Prepared.Master`, `Prepared.Agents` and `Prepared.Iterate` provide access to the staged databases and raw records. Reopening staging rechecks checksums, permissions and migration identity.
 
-Staged databases carry `migration/state.pending=true`, which blocks service startup. Finalization records the final absolute database paths and publishes the directory with an atomic rename that refuses an existing destination. An interrupted finalization can be retried from staging. Service startup checks both role and final path.
+Staged databases carry `migration/state.pending=true`, which blocks service startup. Finalization records the final absolute database paths and publishes the directory with an atomic rename that refuses an existing destination: `renameat2` with `RENAME_NOREPLACE` on Linux, `renamex_np` with `RENAME_EXCL` on macOS. On Linux kernels without `renameat2`, such as early CentOS / RHEL 7 kernels, or on file systems that reject the flag, finalization creates the empty destination exclusively and renames onto it; `rename(2)` replaces only an empty directory, so existing data is still never replaced. An interrupted finalization can be retried from staging. Service startup checks both role and final path.
 
 `MapEffectiveNodeControl` requires all nine resolved settings in the plan and rejects placeholders and unknown properties. `WriteRuntimeConfig` writes one `service.json` per role with the final paths. Divergent node connections, missing identities or incomplete inventories must be resolved before finalization.
 
@@ -207,7 +208,7 @@ python3 tools/legacy/test-export.py \
   --output output/packages/qa/legacy-export
 ```
 
-The exporter test uses the actual V4.0.6 RocksDB JNI library. It compares every exported key/value byte and checks source files, output permissions, existing-output rejection and locking against an active writer. Go tests cover damaged exports, missing node snapshots, identity conflicts, content changes during recovery and interrupted finalization.
+The exporter test uses the actual V4.0.6 RocksDB JNI library. It compares every exported key/value byte and checks source files, output permissions, existing-output rejection and locking against an active writer. Go tests cover damaged exports, missing node snapshots, identity conflicts, content changes during recovery, interrupted finalization, and publication without `renameat2` or `RENAME_NOREPLACE`.
 
 The recorded fixture at `output/packages/qa/legacy-real-tasks-2` was captured by `tools/legacy/capture-tasks.py` using V4.0.6 and SeaweedFS. It contains six logical tasks: four completed, including one recycled task, and two interrupted tasks. The test archive is pinned to SHA-256 `64a0e80a28d61322fad20be17c8d47c31f77565a76daf5b1f4718590f9c992d4`.
 

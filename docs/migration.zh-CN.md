@@ -14,7 +14,7 @@ V4.0.x 的数据需要先离线转换，才能在 V4.1.x 中使用。转换工�
 4. 在新目录中准备并完成转换。
 5. 使用生成的 `service.json` 文件安装原生服务。确认 Agent 在线后，再恢复需要继续执行的任务。
 
-具体命令和计划格式见[转换指南](development/legacy-migration.zh-CN.md)。准备步骤可在 Linux 或 macOS 上运行。在新服务和任务结果检查无误之前，请保留原安装和备份。
+具体命令和计划格式见[转换指南](development/legacy-migration.zh-CN.md)。准备和最终发布步骤可在 Linux 或 macOS 上运行，包括缺少 `renameat2` 的早期 CentOS / RHEL 7 内核。在新服务和任务结果检查无误之前，请保留原安装和备份。
 
 V4.1.x 将调度与执行分离。单机部署时需同时安装 Master 和 Agent，两者使用各自的数据目录。集群部署时，把每个转换完成的 Agent 目录放到对应的执行主机上，路径与其配置中记录的绝对路径一致。
 

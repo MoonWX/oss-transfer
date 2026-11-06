@@ -68,9 +68,9 @@ oss-transfer-cli help task import
 oss-transfer-cli help storage
 ```
 
-本地传输执行与控制台相同的预检。`--validate-only` 只检查配置，不创建任务。
+本地传输执行与控制台相同的预检。`--validate-only` 只检查配置，不创建任务。`--bandwidth-mbps`（0.1–1,000,000 Mbps）以及 `--list-qps`、`--head-qps`、`--put-qps` 在创建任务时设置限速；与下文的限速一样，它们是任务所有节点的合计值。
 
-下载到本地目录（`oss-to-local`）时可使用 `--ranged-download auto|off`。默认值 `auto` 让每个 Agent 把 128 MiB 及以上的对象按字节范围并发下载、按顺序写入文件，利用节点的空闲能力，几乎所有任务都应保持默认。`off` 对每个对象使用单个顺序流下载；仅在目标存储或网络不适合并发分段下载（Agent 内存紧张、存储会限制大量并发 GET）或技术支持要求时使用。该设置在任务整个生命周期内固定，续传、重试和调整节点时保持不变。`task show` 会为目标为本地的任务显示该设置。其他方向不接受此参数。`task import local` 的 JSON 中对应字段为 `"rangedDownload": "auto"` 或 `"off"`。
+下载到本地目录（`oss-to-local`）时可使用 `--ranged-download auto|off`。默认值 `auto` 让每个 Agent 把 128 MiB 及以上的对象按 8 MiB 字节范围并发下载（每个对象 4 个，节点有空闲能力时最多 16 个），并严格按顺序写入文件，几乎所有任务都应保持默认。限速会约束分段：每个对象同时持有的分段最多相当于该任务在此节点上约一秒的带宽份额（节点带宽上限更低时按节点上限计算）；设有 LIST 限制时，还不超过该任务在此节点上约一秒的 GET 份额，因为每个分段都是一次 GET。一秒的份额不足两个分段时，改为单流下载（见[大对象](operations.zh-CN.md#大对象)）。`off` 对每个对象使用单个顺序流下载；仅在目标存储或网络不适合并发分段下载（Agent 内存紧张、存储会限制大量并发 GET）或技术支持要求时使用。该设置在任务整个生命周期内固定，续传、重试和调整节点时保持不变。`task show` 会为目标为本地的任务显示该设置。其他方向不接受此参数。`task import local` 的 JSON 中对应字段为 `"rangedDownload": "auto"` 或 `"off"`，省略即为 `auto`。早于此选项的 Agent 无论如何设置，都按单个流下载每个对象（见[分段下载选项](operations.zh-CN.md#分段下载选项)）。
 
 ```sh
 oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --ranged-download off
@@ -83,11 +83,11 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-未指定的字段保持原值。LIST 限制同时适用于 GET 读取；PUT 包括分片上传请求。任务限速是总量：Master 按需求把它分给活动的 Agent，有工作的节点分得大部分限速，空闲节点只保留很小的下限（见[任务限速在节点间的分配](operations.zh-CN.md#任务限速在节点间的分配)）。节点限速仍然生效。
+未指定的字段保持原值。`unlimited` 解除对应的限制；不带选项运行 `task limits ID` 会显示当前限速。`task bandwidth ID MBPS` 只修改带宽限制。LIST 限制同时适用于 GET 读取；PUT 包括分片上传请求。任务限速是总量：Master 按需求把它分给活动的 Agent，有工作的节点平分绝大部分限速，空闲节点只保留很小的下限（见[任务限速在节点间的分配](operations.zh-CN.md#任务限速在节点间的分配)）。节点限速（用 `limit set` 设置，见 `help limit`）仍然生效。
 
 ## 调整任务的执行节点
 
-查看执行任务的 Agent 及其状态、扫描节点、待完成的子任务、各节点的需求和当前分得的任务限速份额、已移除的节点以及可以添加的 Agent。需求列显示 *按需（忙）* 或 *空闲（已释放）*；节点尚未确认降额时附加 *调整中*。旧版 Master 按平分计算，显示 `—`。只有正在扫描（或正在接管扫描）的节点标记为扫描节点；扫描结束后改为提示扫描已完成。正在移出的离线节点会注明在执行租约到期后离开；没有租约隔离的任务则注明在重新连接后离开：
+查看执行任务的 Agent 及其状态、扫描节点、待完成的子任务、各节点的需求和当前分得的任务限速份额、已移除的节点以及可以添加的 Agent。需求列显示 *按需（忙）* 或 *空闲（已释放）*；节点尚未确认降额时附加 *调整中*。尚未分得份额或已不再持有份额的节点（加入中或已断开）在需求列和份额列显示 `—`。旧版 Master 按平分计算，所有节点的需求列都显示 `—`。只有正在扫描（或正在接管扫描）的节点标记为扫描节点。表格下方会提示扫描已完成、扫描正在移交给新的扫描节点，或原扫描节点已退出、将由其他节点接管；移交后的扫描从 Master 保存的断点继续。正在移出的离线节点会注明在执行租约到期后离开；没有租约隔离的任务则注明在重新连接后离开：
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK"
@@ -103,7 +103,9 @@ oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --now --yes
 
 - 默认以排空方式移除：节点不再接收新工作，其排队的工作转给其他节点，正在运行的工作完成后离开。
 - `--now` 撤销该节点正在运行的工作，由其余节点继续执行。部分任务不支持此方式，`task nodes` 会显示原因。
-- 正在添加的节点显示为“加入中”，通过握手和共享目录检查后才会接收工作。
+- 正在添加的节点显示为“加入中”，直到通过握手和共享目录检查；任务设有限速时，还要等其他节点确认降低后的份额。之后它才会接收工作。
+
+变更受理后，CLI 会打印调整后的成员。仍有节点在加入或排空时，变更在后台继续完成，可用 `task nodes "$TRANSFER_TASK" --watch 5` 跟踪。变更过程中的各个阶段（例如离开的节点等待租约到期、扫描移交给其他节点）显示在这个视图中，不作为任务错误报告。
 
 上传和下载任务需要为每个新增节点指定一个共享目录。CLI 提交前会运行 Master 的共享目录预检，任一绑定失败都会停止：
 
@@ -115,7 +117,7 @@ oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --binding 10.0.0.3=/
 
 连接在结果返回前中断时，CLI 会打印请求 ID 和成员版本。请先用 `task nodes` 核对。需要重试时，保持原有参数并加上打印出的 `--request-id` 和 `--expected-revision`；Master 会返回原来的结果，不会重复执行调整。带 `--request-id` 重试时会跳过本地预检，因为 Master 已检查过原请求。
 
-`task show` 也会列出节点成员，标出加入中和排空中的节点，并显示每个节点实际分得的份额。隔离、带宽重新分配和限制条件见[调整任务的执行节点](operations.zh-CN.md#调整任务的执行节点)。
+`task show` 也会列出节点成员，标出加入中和排空中的节点，显示每个节点的需求和实际分得的份额，并给出同样的扫描提示。隔离、带宽重新分配和限制条件见[调整任务的执行节点](operations.zh-CN.md#调整任务的执行节点)。
 
 ## 管理节点和异常
 
@@ -124,7 +126,7 @@ oss-transfer-cli node list
 oss-transfer-cli agent invite --label storage-01
 ```
 
-在新节点上运行打印出的加入命令。邀请包含一个 ID，可用于 `agent invite-status`。如果 Agent 需要通过私有地址访问 Master，创建邀请时设置 `--master-url`。`node update` 支持在线修改 `--child-concurrency` 和 `--object-concurrency`。
+在新节点上运行打印出的加入命令。邀请包含一个 ID，可用于 `agent invite-status`。如果 Agent 需要通过私有地址访问 Master，创建邀请时设置 `--master-url`。`node update` 支持在线修改 `--child-concurrency`（1–256，默认 32）和 `--object-concurrency`（每个子任务的对象并发，1–64，默认 4），两者乘积不能超过 1024，见[节点并发](operations.zh-CN.md#节点并发)。
 
 ```sh
 oss-transfer-cli exceptions list failed --task-id "$TRANSFER_TASK"

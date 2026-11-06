@@ -28,7 +28,7 @@ TRANSFER_PORT=1685
 
 ## 添加 Agent
 
-在 **执行节点 → 添加节点** 中填写节点名称，选择 **Docker**，将生成的单行命令复制到 Agent 主机上执行。安装器会创建 Agent 的 Compose 服务并加入集群。如果 Agent 通过内网连接，请在生成命令前修改 Master 地址。
+在 **执行节点 → 添加节点** 中填写节点名称；如果 Agent 通过内网连接，同时填写它能访问的 Master 地址。点击 **生成加入指令**，选择 **Docker** 标签页，将单行命令复制到 Agent 主机上执行。安装器会创建 Agent 的 Compose 服务并加入集群。
 
 Agent 的 Compose 文件保存在 `/opt/oss-transfer-compose/agent/docker-compose.yml`。要让 Agent 访问主机目录，在 Agent 的 `volumes` 下添加绑定挂载，然后重建容器。容器内外使用相同的绝对路径，例如 `/mnt/storage:/mnt/storage`。容器以 UID/GID `65532` 运行，需要对要传输的文件有访问权限。
 
@@ -48,7 +48,7 @@ docker run --rm --volumes-from "$(docker compose ps -aq master)" \
 
 Master 的 `docker-compose.yml` 和 `.env` 也要与备份一起保存。已传输的文件需要另外备份。归档命令会覆盖之前同名的归档文件。
 
-重试文件清单任务时，如果找到了之前缺失的源对象，数据库会以 V4.1.8 及更早版本无法读取的格式记录该对象的标识。此后降级时，除了换回旧镜像，还需要恢复对应的升级前 Master 和 Agent 数据备份。
+新版本可能会升级数据库 schema，此后旧镜像无法再打开这些数据（见[数据库空间](database-maintenance.zh-CN.md)）。因此降级时，除了换回旧镜像，还需要恢复对应的升级前 Master 和 Agent 数据备份。
 
 拉取新镜像并启动 Master：
 

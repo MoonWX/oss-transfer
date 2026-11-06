@@ -16,7 +16,9 @@ git tag -a "v$version" -m "OSS Transfer v$version"
 git push --atomic origin main "v$version"
 ```
 
-`--atomic` updates both refs or neither. You do not need to wait for CI first: the release run waits up to 65 minutes for the `main` CI run on that commit and starts publishing as soon as it passes. If that CI run fails, the release run fails without publishing anything.
+`--atomic` updates both refs or neither. You do not need to wait for CI first: the release run waits up to 65 minutes for the `main` CI run on that commit, checks it every 5 seconds and starts publishing as soon as it passes. If that CI run fails, the release run fails without publishing anything. A default push run takes a little over 7 minutes and publishing about one more, so a release is usually public about 8.5 minutes after the push.
+
+Do not push to `main` again until that CI run finishes: a newer push cancels it, and the release run then fails unless the cancelled run qualifies as described below. In that case, wait for the newer push's CI run to finish, then rerun the cancelled CI run (a rerun joins the same concurrency group and would cancel a run still in progress) and retry publication.
 
 The tag must match `VERSION` and point to the commit you intend to publish. Use a new version number when changing a published release.
 
@@ -45,7 +47,7 @@ If CI failed for a reason unrelated to the code, rerun the failed CI jobs instea
 
 For a change to `VERSION` alone, CI reuses passing tests from a code-identical ancestor on `main`. It still rebuilds all archives and the image, checks the packaged program versions, and verifies checksums and image identity. Changes to code, dependencies, installers or workflows run the default suite. If no passing baseline can be verified, CI runs the default suite.
 
-Default CI tests seven platforms: the six native ones and FreeBSD amd64. Every Go test runs on Linux amd64; the other platforms run the platform-sensitive part, and FreeBSD runs the core transfers instead of every transfer scenario. The three QEMU platforms (Linux ARMv7, riscv64 and loong64) run only in the nightly and manual full runs, so a release never waits for them; those runs cover everything on every platform and do not gate publication (see [Test scope](acceptance/README.md#test-scope)). FreeBSD arm64 archives are built and checked, but their runtime tests are optional. Run the complete FreeBSD arm64 suite separately with:
+Default CI tests seven platforms: the six native ones and FreeBSD amd64. Every Go test runs on Linux amd64; the other platforms run the platform-sensitive part, and FreeBSD runs the core transfers instead of every transfer scenario. The three QEMU platforms (Linux ARMv7, riscv64 and loong64) run only in the nightly and manual full runs, so a release never waits for them; those runs cover every test on all ten tested platforms and do not gate publication (see [Test scope](acceptance/README.md#test-scope)). FreeBSD arm64 archives are built and checked, but their runtime tests are optional. Run the complete FreeBSD arm64 suite separately with:
 
 ```sh
 gh workflow run ci.yml --ref main -f freebsd_arm64=true
@@ -53,7 +55,7 @@ gh workflow run ci.yml --ref main -f freebsd_arm64=true
 
 This runs one FreeBSD arm64 acceptance job without repeating the other platforms. It does not gate publication; releases use the default `main` CI run.
 
-The release workflow selects artifacts by commit and CI run ID. Pull-request and manual CI runs are excluded. A cancelled version-only run can supply artifacts only when both build jobs passed, no test failed, and a code-identical ancestor has passing CI. Artifacts expire after seven days. If they have expired, rerun the matching CI run.
+The release workflow selects artifacts by commit and CI run ID. Only push runs on `main` qualify; pull-request, nightly and manual runs are excluded. A cancelled version-only run can supply artifacts only when both build jobs passed, no test failed, and a code-identical ancestor has passing CI. Artifacts expire after seven days. If they have expired, rerun the matching CI run.
 
 To retry publication for an existing tag using the current release workflow, run:
 
@@ -84,18 +86,18 @@ When the stable `4.1.29` is published, installations running any `4.1.29-*` prer
 
 ## Published files
 
-GitHub Release contains the eleven platform archives listed in [platforms.json](../deploy/native/platforms.json). Each archive includes Master, Agent, CLI, documentation and checksums. Installation scripts live in the repository.
+GitHub Release attaches the eleven platform archives listed in [platforms.json](../deploy/native/platforms.json), `manifest.tsv`, `SHA256SUMS` and the three installation scripts (`install.sh`, `native-install.sh` and `Install.ps1`), so its assets form a complete offline bundle. Each archive includes Master, Agent, CLI, documentation and checksums.
 
-OSS stores the same archives, three installation scripts, `manifest.tsv`, `release.json` and `SHA256SUMS`. The installer downloads one platform archive and extracts the service and CLI. For example, Linux amd64 uses `oss-transfer-linux-amd64.tar.gz`. The Docker image uses the tested Linux binaries.
+Each OSS version directory stores the same files plus `release.json`. The installer downloads one platform archive and extracts the service and CLI. For example, Linux amd64 uses `oss-transfer-linux-amd64.tar.gz`. The Docker image uses the tested Linux binaries.
 
-Installers choose OSS for a mainland Chinese public IP and GitHub elsewhere. GitHub downloads use the release API's archive digest and the installer from the commit recorded in that archive; OSS uses its versioned manifest. Explicit source and local package options skip location detection.
+Installers choose OSS for a mainland Chinese public IP and GitHub elsewhere. GitHub downloads use the release API's archive digest and the installer from the commit recorded in that archive; OSS uses its versioned manifest. Explicit source and local package options skip location detection. An installer run from a file (not piped) that finds release files beside itself or in the current directory installs from them and never goes online, unless `--source github|jdoss` or `--release-url` (PowerShell `-Source`, `-ReleaseUrl`) asks for a download; see [Offline installation](../docs/offline-install.md).
 
 | Version | OSS location | GitHub | Docker Hub tags |
 | --- | --- | --- | --- |
 | `vX.Y.Z` | `oss-transfer/vX.Y.Z/` | Release | `X.Y.Z`, `X.Y`, `latest` |
 | `vX.Y.Z-rc.N`, `vX.Y.Z-beta.N` | `oss-transfer/vX.Y.Z-rc.N/` | Prerelease | `X.Y.Z-rc.N` |
 
-Stable releases update four files under `oss-transfer/latest/`: `install.sh`, `Install.ps1`, `manifest.tsv` and `release.json`. Installers resolve this metadata to a fixed version before downloading an archive. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
+A stable release also uploads every file of its version directory to `oss-transfer/latest/`, so that fixed URL always holds the complete latest stable release. Online installers read `latest/manifest.tsv` only to pin that version, and Masters checking for updates through OSS read `latest/release.json`; both then download from the versioned directory. Prereleases leave `latest` unchanged. Compose uses `latest` for stable releases and the exact image tag for a prerelease.
 
 The old `osstransfer/` tree remains available for clients released before v4.1.8. New releases use `oss-transfer/`.
 
@@ -108,4 +110,4 @@ Set these repository secrets before releasing:
 | JD Cloud OSS | `moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/` | `JDOSS_AK`, `JDOSS_SK` |
 | Docker Hub | `moonwx/osstransfer` | `DOCKER_USERNAME`, `DOCKER_PAT` |
 
-Publishing uses GitHub-hosted `ubuntu-latest` runners. See [release.yml](workflows/release.yml) for the upload order and timeouts. OSS uploads the version directory in parallel and updates `latest/` only after every versioned file has been uploaded, with `release.json` last.
+Publishing uses GitHub-hosted `ubuntu-latest` runners. See [release.yml](workflows/release.yml) for the job order and timeouts and [publish-oss.py](../deploy/native/publish-oss.py) for the OSS upload order. OSS uploads the version directory eight files at a time, then checks its file list, sizes and MD5 ETags before it touches `latest/`. For a stable release it next uploads the archives, installation scripts and `SHA256SUMS` to `latest/`, and only then writes `manifest.tsv` followed by `release.json`, so a client never reads metadata that names a missing file. It then deletes retired files and archives of platforms no longer released from `latest/` and checks that directory the same way. Only one OSS publication runs at a time, even for different tags.

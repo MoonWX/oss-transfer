@@ -28,7 +28,7 @@ TRANSFER_PORT=1685
 
 ## Add an Agent
 
-In **Execution nodes → Add node**, enter a node name, select **Docker**, and copy the one-line command to the Agent host. The installer creates its Compose service and joins the cluster. If the Agent connects over a private network, change the Master address before generating the command.
+In **Execution nodes → Add node**, enter a node name and, if the Agent connects over a private network, a Master address it can reach. Choose **Generate join commands**, select the **Docker** tab, then copy the one-line command and run it on the Agent host. The installer creates its Compose service and joins the cluster.
 
 The Agent's Compose file is saved at `/opt/oss-transfer-compose/agent/docker-compose.yml`. To expose a host directory, add a bind mount under the Agent's `volumes` and recreate the container. Use the same absolute path on both sides, such as `/mnt/storage:/mnt/storage`. The container runs as UID/GID `65532`, which needs access to the files being transferred.
 
@@ -48,7 +48,7 @@ On each Agent host, stop its Compose service and copy `/var/lib/oss-transfer-com
 
 Keep the Master's `docker-compose.yml` and `.env` with its backup too. Back up transferred files separately. The archive command overwrites an earlier archive with the same name.
 
-When retrying a file-list task resolves a previously missing source object, the database records its identity in a format that V4.1.8 and earlier cannot read. Downgrading then requires restoring the matching pre-upgrade Master and Agent data backups as well as the old image.
+A new release can raise the database schema, after which older images cannot open the data (see [database space](database-maintenance.md)). Downgrading therefore requires restoring the matching pre-upgrade Master and Agent data backups as well as the old image.
 
 Pull the new image and start the Master:
 

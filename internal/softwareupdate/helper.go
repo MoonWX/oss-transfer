@@ -16,6 +16,7 @@ import (
 )
 
 func RunHelper(requestPath string) error {
+	privateHelperProcess()
 	return runHelper(requestPath, newClient(), runInstaller, checkHost)
 }
 

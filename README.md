@@ -38,7 +38,7 @@ Agents connect to the Master, so the Master never needs to reach them. Data flow
 
 ### 1. Install the Master
 
-On Linux with systemd:
+On Linux with systemd (CentOS 7 / RHEL 7 or later):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash
@@ -155,6 +155,8 @@ To reinstall, keep each role's `config` directory and its entire `data` director
 | macOS | amd64, arm64 |
 | Windows | amd64, arm64 |
 | FreeBSD | amd64, arm64 |
+
+Native Linux services need systemd 219 or later; CentOS 7 / RHEL 7 is the oldest supported release. On systemd older than 236, such as CentOS 7, a failed online update leaves its `oss-transfer-update-*` helper unit listed as failed until you run `systemctl reset-failed`.
 
 Each release is published to [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases), Docker Hub as `moonwx/osstransfer`, and an OSS mirror in mainland China.
 

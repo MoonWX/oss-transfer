@@ -15,9 +15,9 @@ CI 只构建一次发布压缩包，然后用其中的 Master、Agent 和 CLI �
 | Windows amd64 | `windows-latest` |
 | Windows arm64 | `windows-11-arm` |
 
-这六个平台各有一个 Go 测试 job 和一个验收 job；Windows 上 PowerShell 使安装成为耗时最长的检查，因此由第三个 job 运行原生安装器场景。它们合起来在每个平台上运行相同的应用场景和原生安装器场景，两个 Linux job 还会测试各自的 Docker 镜像和 Compose 安装器。验收 job 和安装 job 不需要 Go 工具链：测试程序 job 为每个平台交叉编译分片上传崩溃测试程序和两个安装失败测试程序。Go 测试启用竞态检测器，只有 Windows arm64 除外，因为该平台不支持。这个 runner 使用原生 arm64 应用程序，SeaweedFS 测试服务则以 x64 模拟方式运行。
+这六个平台各有一个 Go 测试 job 和一个验收 job；在 Windows 和 macOS amd64 上，安装是耗时最长的检查（Windows 上因为 PowerShell，Intel Mac runner 上约 200 秒），因此由第三个 job 运行原生安装器场景。它们合起来在每个平台上运行相同的应用场景和原生安装器场景，两个 Linux job 还会测试各自的 Docker 镜像和 Compose 安装器。验收 job 和安装 job 不需要 Go 工具链：测试程序 job 为每个平台交叉编译分片上传崩溃测试程序和两个安装失败测试程序。Go 测试启用竞态检测器，只有 Windows arm64 除外，因为该平台不支持。这个 runner 使用原生 arm64 应用程序，SeaweedFS 测试服务则以 x64 模拟方式运行。
 
-Linux ARMv7、riscv64 和 loong64 在 QEMU 中执行目标程序，SeaweedFS 测试服务使用 amd64 版本。FreeBSD amd64 和 arm64 各在一台 FreeBSD 14.4 虚拟机中运行，SeaweedFS 测试服务直接运行在 Linux 宿主机上。Master、Agent、CLI 和崩溃恢复测试程序仍在 FreeBSD 内运行，使用其文件系统和服务管理器。这些平台各用一个 job 运行 Go 测试、CLI 检查、安装和传输。在完整范围下，它们运行的 Go/CLI 测试和应用场景与上面六个平台相同，包括共享带宽、停止/重启、分片上传清理、清单恢复和安装回滚。它们的测试程序用 `CGO_ENABLED=0` 交叉编译，不运行竞态检测器。
+Linux ARMv7、riscv64 和 loong64 在 QEMU 中执行目标程序，SeaweedFS 测试服务使用 amd64 版本。FreeBSD amd64 和 arm64 各在一台 FreeBSD 14.4 虚拟机中运行，SeaweedFS 测试服务直接运行在 Linux 宿主机上。Master、Agent、CLI 和崩溃恢复测试程序仍在 FreeBSD 内运行，使用其文件系统和服务管理器。这些平台各用一个 job 运行 Go 测试、CLI 检查、安装和传输。QEMU 平台只在完整范围（每晚运行和手动完整运行）中运行，因此 push 和发布永远不必等待模拟器或它的软件包镜像；FreeBSD amd64 在每次 push 时也会运行。在完整范围下，它们运行的 Go/CLI 测试和应用场景与上面六个平台相同，包括共享带宽、停止/重启、分片上传清理、清单恢复和安装回滚。它们的测试程序用 `CGO_ENABLED=0` 交叉编译，不运行竞态检测器。
 
 ### 测试范围
 
@@ -26,7 +26,8 @@ Linux ARMv7、riscv64 和 loong64 在 QEMU 中执行目标程序，SeaweedFS 测
 | Go 测试，Linux amd64 | 两个模块的全部测试，启用竞态检测器 | 相同 |
 | Go 测试，其他平台 | 平台相关范围 | 全部测试 |
 | 原生验收 | CLI 检查、安装、全部传输场景 | 相同 |
-| 模拟平台和 FreeBSD 验收 | CLI 检查、安装、三种传输方向和分片上传崩溃恢复 | 另加全部传输场景 |
+| FreeBSD amd64 | 平台相关的 Go 测试、CLI 检查、安装、三种传输方向和分片上传崩溃恢复 | 全部 Go 测试和传输场景 |
+| QEMU 平台（ARMv7、riscv64、loong64） | 不运行 | 全部 Go 测试、CLI 检查、安装和传输场景 |
 
 平台相关范围定义在 [master-shards.json](master-shards.json) 的 `platformScope` 中：除 `internal/task` 外的所有包（它是基于数据库的任务和分发记账，没有平台相关代码），以及 `internal/master` 中仅在 `agent_packages_test.go`、`backups_test.go` 和 `install_commands_test.go` 里声明的测试，这些测试的结果取决于操作系统。文件系统、服务、安装器、路径、数据库和传输相关的包、命令程序以及 CLI 模块在所有平台上运行。如果列出的文件不存在、没有声明测试，或声明了 `go test -list` 没有报告的测试，或者被跳过的包已不存在，运行就会失败。被跳过的测试在每次 push 时仍会在 Linux amd64 上运行，并每晚在所有平台上运行。每晚运行失败不影响发布；GitHub 会通知最后一个修改定时配置的人。
 
@@ -36,13 +37,13 @@ Linux ARMv7、riscv64 和 loong64 在 QEMU 中执行目标程序，SeaweedFS 测
 gh workflow run ci.yml --ref main -f full_suite=true
 ```
 
-push 和 pull request 运行十个平台。FreeBSD ARM64 是可选的，因为它的软件模拟测试套件大约需要十六分钟。它的压缩包仍会和另外十个发布压缩包一起构建和检查。要运行它的完整运行时测试套件，在 CI 中选择 **Run workflow** 并启用 `freebsd_arm64`，或执行：
+push 和 pull request 运行七个平台：六个原生平台和 FreeBSD amd64。每晚运行和手动完整运行再加上三个 QEMU 平台。FreeBSD ARM64 是可选的，因为它的软件模拟测试套件大约需要十六分钟。它的压缩包仍会和另外十个发布压缩包一起构建和检查。要运行它的完整运行时测试套件，在 CI 中选择 **Run workflow** 并启用 `freebsd_arm64`，或执行：
 
 ```sh
 gh workflow run ci.yml --ref main -f freebsd_arm64=true
 ```
 
-这会构建压缩包，然后只运行完整的 FreeBSD ARM64 测试套件，不会重复其他十个平台，也不会构建容器镜像。手动运行不会取消 push 触发的运行，也不提供发布产物。
+这会构建压缩包，然后只运行完整的 FreeBSD ARM64 测试套件，不会重复其他平台，也不会构建容器镜像。手动运行不会取消 push 触发的运行，也不提供发布产物。
 
 旧版 Java 数据库转换器支持 Linux 和 macOS。其他平台测试在修改迁移状态之前就拒绝发布；FreeBSD 还会检查暂存数据和启动保护标记保持完好。
 
@@ -50,15 +51,15 @@ Linux QEMU job 在 Ubuntu runner 上安装真实的 systemd 服务。只有安�
 
 ## 调度
 
-打包 job 构建全部十一个发布压缩包，最多同时构建四个平台，Python 打包检查和消息测试与构建并行运行；任何一项失败都会在上传之前终止该 job。另一个测试程序 job 与其并行：它交叉编译已启用的附加平台测试程序（每个模块和目标执行一次 `go test -c`，不包含 DWARF 和符号表），并为六个原生平台各只编译 `internal/agentservice` 测试程序和两个安装失败测试程序，所有目标同时编译。默认 CI 编译四个测试包和六个测试程序包；选择 FreeBSD ARM64 时只编译它自己的测试包。
+打包 job 构建全部十一个发布压缩包，最多同时构建四个平台，Python 打包检查和消息测试与构建并行运行；任何一项失败都会在上传之前终止该 job。另一个测试程序 job 与其并行：它交叉编译已启用的附加平台测试程序（每个模块和目标执行一次 `go test -c`，不包含 DWARF 和符号表），并为六个原生平台各只编译 `internal/agentservice` 测试程序和两个安装失败测试程序，所有目标同时编译。push 编译 FreeBSD amd64 测试包和六个测试程序包；完整运行再加上三个 QEMU 测试包；选择 FreeBSD ARM64 时只编译它自己的测试包。
 
 Go 构建缓存和模块缓存按 runner 操作系统、架构、Go 版本和用途（`cross` 用于压缩包，`tests` 用于测试程序，`race` 用于原生 Go 测试 job）分别保存。main 分支和手动运行按提交保存缓存；pull request 只恢复缓存。恢复的条目会相对于上次保存进行裁剪，所以一周没有提交也不会导致 Go 丢弃缓存。
 
 测试产物记录提交、目标架构和 SHA-256 哈希，不会随版本发布。运行任何程序之前，`test-binaries.py verify` 会检查提交、可执行文件格式和架构、每个校验和，以及测试源码和测试程序源码是否与当前检出一致（比较前统一换行符，因为 Windows 检出可能转换换行符）。分片上传崩溃测试使用目标平台的 `agentservice` 测试程序，包括它自行启动的崩溃辅助进程。
 
-六个 Go 测试 job 不需要安装包，所以与打包 job 和测试程序 job 同时开始。[go-unit.py](go-unit.py) 把最慢的 `internal/master` 包拆成并发分片，与其余包同时运行；其余包按耗时从长到短运行，最多同时运行两个，CLI 模块在旁边同时运行。分片根据 [master-shards.json](master-shards.json) 均衡分配；列表中没有的测试分到负载最轻的分片，如果分片覆盖的测试与 `go test -list` 报告的选中测试不完全一致，运行就会失败。失败的顶层测试会重跑一次；真正的回归会再次失败。
+六个 Go 测试 job 不需要安装包，所以与打包 job 和测试程序 job 同时开始。[go-unit.py](go-unit.py) 把最慢的 `internal/master` 包拆成并发分片，与其余包同时运行；其余包按耗时从长到短运行，最多同时运行两个（CI job 独占 runner，同时运行三个），CLI 模块在旁边同时运行。分片根据 [master-shards.json](master-shards.json) 均衡分配；列表中没有的测试分到负载最轻的分片，如果分片覆盖的测试与 `go test -list` 报告的选中测试不完全一致，运行就会失败。失败的顶层测试会重跑一次；真正的回归会再次失败。
 
-只有两个 Linux 验收 job 需要等待镜像；macOS 和 Windows 在安装包和测试程序就绪后立即开始。QEMU 和 FreeBSD job 等待安装包和测试程序。选择 FreeBSD ARM64 时，运行打包 job、测试程序 job 和一个 FreeBSD ARM64 job。[run-platform.py](run-platform.py) 同时启动一个 job 的所有组：CLI 和清单检查（含安装器源码检查）、安装（Windows 安装 job 使用 `--install only`，Windows 验收 job 使用 `--install separate`）、传输；在 QEMU 和 FreeBSD 平台上还有 Go 测试。原生安装和 Compose 安装依次运行，因为两者都会发现已安装的服务。
+只有两个 Linux 验收 job 需要等待镜像；macOS 和 Windows 在安装包和测试程序就绪后立即开始。QEMU 和 FreeBSD job 等待安装包和测试程序。选择 FreeBSD ARM64 时，运行打包 job、测试程序 job 和一个 FreeBSD ARM64 job。[run-platform.py](run-platform.py) 同时启动一个 job 的所有组：CLI 和清单检查（含安装器源码检查）、安装（Windows 和 macOS amd64 的安装 job 使用 `--install only`，它们的验收 job 使用 `--install separate`）、传输；在 QEMU 和 FreeBSD 平台上还有 Go 测试。原生安装和 Compose 安装依次运行，因为两者都会发现已安装的服务。
 
 在完整传输范围下，三个集群并行运行，每个都有自己的 SeaweedFS、Master 和两个 Agent：`transfer`（初始化、分片上传崩溃恢复和三种传输方向，然后是带宽和按需分配）、`recovery`（停止/重启和崩溃恢复）和 `nodes`（执行节点变更）。每个集群先在其他组运行期间上传自己的测试数据。在测量带宽或注入停止、崩溃之前，每个集群都会等待同一 runner 上的其他所有组通过、退出并完成清理；之后这些测量场景只彼此共享 runner。任何一组失败都不会进入这一独占阶段，并使 job 失败；每次运行都有独立的门控标识。核心传输范围只运行第一个集群的初始化、分片上传和传输方向检查，不做任何测量，所以不需要等待。
 
@@ -66,11 +67,11 @@ Go 构建缓存和模块缓存按 runner 操作系统、架构、Go 版本和用
 
 FreeBSD 缓存其 Python 环境和依赖；修改 requirements 文件会使缓存失效。它只接收自己平台的压缩包，只返回日志和证据。宿主机上的 S3 测试服务使用固定版本的 SeaweedFS 压缩包、临时凭证，以及通过 QEMU 私有网络访问的回环监听地址。上传的产物中不包含测试服务凭证。安装测试数据使用快速 gzip/ZIP 压缩；发布的压缩包和压缩包校验不受影响。
 
-`output/platform/evidence.json` 记录每个阶段的耗时和结果，详细输出在同目录的日志中。集群证据位于 `cluster/`、`cluster-recovery/` 和 `cluster-nodes/`，每个都记录哪些组在其独占传输阶段开始前已经完成。Go 测试 job 上传 `unit-evidence-*`，其中包含测试范围、选中和跳过的测试，以及每条命令的日志；Windows 安装 job 上传 `install-evidence-*`。
+`output/platform/evidence.json` 记录每个阶段的耗时和结果，详细输出在同目录的日志中。集群证据位于 `cluster/`、`cluster-recovery/` 和 `cluster-nodes/`，每个都记录哪些组在其独占传输阶段开始前已经完成。Go 测试 job 上传 `unit-evidence-*`，其中包含测试范围、选中和跳过的测试，以及每条命令的日志；安装 job 上传 `install-evidence-*`。
 
 FreeBSD arm64 在 `ubuntu-26.04-arm` 上使用 QEMU 软件模拟，配置两个虚拟 CPU 和 `GOMAXPROCS=2`。能力检查显示这台 ARM 宿主机没有提供 `/dev/kvm`；客户机仍使用 TCG，而不是硬件虚拟化。宿主机和客户机的诊断信息记录 CPU 数量、QEMU 版本和 KVM 虚拟机创建探测结果。下关于速度的结论之前，先比较各阶段耗时。FreeBSD amd64 在 `ubuntu-latest` 上使用默认的虚拟机 CPU 设置。
 
-发布流程等待对应提交上默认的 push CI。每晚运行和可选的手动运行（包括 FreeBSD ARM64 验收）是独立的，不阻塞发布。默认 CI 成功并不代表 FreeBSD ARM64 运行时验收通过。只修改 VERSION 的提交可以复用代码完全相同的一次成功 push 运行中的默认测试套件结果；手动运行不能作为复用基准。构建和发布始终保留[平台列表](../../deploy/native/platforms.json)中的全部十一项。
+发布流程等待对应提交上默认的 push CI，它在最慢的 push job 结束时完成。每晚运行和可选的手动运行（包括 QEMU 平台和 FreeBSD ARM64 验收）是独立的，不阻塞发布。默认 CI 成功并不代表 FreeBSD ARM64 运行时验收通过。只修改 VERSION 的提交可以复用代码完全相同的一次成功 push 运行中的默认测试套件结果；手动运行不能作为复用基准。构建和发布始终保留[平台列表](../../deploy/native/platforms.json)中的全部十一项。
 
 ## 覆盖范围
 

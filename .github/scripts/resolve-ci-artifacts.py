@@ -19,7 +19,8 @@ ARTIFACT_NAMES = {
     "release-image": "image_artifact_id",
 }
 WAIT_SECONDS = 65 * 60
-POLL_SECONDS = 15
+# Publication starts within this many seconds of CI finishing.
+POLL_SECONDS = 5
 BUILD_JOBS = {"Build packages", "Build container image"}
 
 

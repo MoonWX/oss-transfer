@@ -164,6 +164,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--race", action="store_true")
     parser.add_argument("--scope", choices=("full", "platform"), default="full")
+    parser.add_argument("--parallel", type=int, choices=(1, 2, 3, 4), default=2,
+                        help="packages besides internal/master tested at once (go test -p)")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -183,7 +185,8 @@ def main():
     started = time.monotonic()
     # The rest of the module and the CLI module need no listing; start them
     # while the master test binary compiles for -list.
-    background = [("others", ["go", "test", "-count=1", TIMEOUT, "-p", "2", *race, *ordered_packages(others, order)])]
+    background = [("others", ["go", "test", "-count=1", TIMEOUT, "-p", str(args.parallel), *race,
+                              *ordered_packages(others, order)])]
     if (repo / "cli/go.mod").is_file():
         background.append(("cli", ["go", "test", "-count=1", TIMEOUT, "-p", "2", *race, "./..."], repo / "cli"))
     pool = ThreadPoolExecutor(max_workers=1)

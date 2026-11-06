@@ -120,7 +120,8 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 		for _, direction := range []string{"OSS_TO_OSS", "OSS_TO_LOCAL", "LOCAL_TO_OSS"} {
 			for _, state := range []string{"STOPPED", "FAILED", "PARTIAL_FAILED", "RUNNING", "PENDING", "COMPLETED", "STOPPING"} {
 				t.Run(action+direction+state, func(t *testing.T) {
-					allowed := state == "STOPPED" || state == "FAILED" || state == "PARTIAL_FAILED"
+					// retry on a RUNNING task retries its failed objects in place.
+					allowed := state == "STOPPED" || state == "FAILED" || state == "PARTIAL_FAILED" || action == "retry" && state == "RUNNING"
 					writes := 0
 					client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 						if r.Method == "GET" {

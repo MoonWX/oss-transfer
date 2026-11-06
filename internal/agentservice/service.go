@@ -279,7 +279,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete":
 		return true
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "child_retry_failed", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true
 	}
 	return false
@@ -434,6 +434,16 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(err)
 		}
 		value, err := s.recoverChild(ctx, request)
+		return response(value, err)
+	case "child_retry_failed":
+		var request ChildRetryFailedRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		value, err := s.retryFailedChildren(ctx, request)
+		if errors.Is(err, errInvalidRetry) {
+			return badRequest(err)
+		}
 		return response(value, err)
 	case "preflight_probe":
 		var request PreflightProbeRequest

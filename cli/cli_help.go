@@ -104,6 +104,7 @@ const cliTaskHelp = `任务管理
   stop <ID...>                    停止传输并保留进度
   resume <ID...>                  继续已停止或失败的任务
   retry <ID...>                   重试未完成对象，保留已完成进度
+                                  运行中的任务只重试已结束子任务的失败对象，不中断传输
   retry --all --yes               重试所有失败或部分失败任务
   start <ID...>                   启动尚未自动执行的待执行任务
   delete <ID...>                  将任务记录移入回收站
@@ -141,7 +142,7 @@ const cliTaskHelp = `任务管理
   oss-transfer-cli task trash --direction oss-to-local --worker 10.0.0.2
 
 状态：RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
-操作按指定主任务逐项检查，批量请求分批提交；不会重试已在执行中的任务。
+操作按指定主任务逐项检查，批量请求分批提交；运行中的任务只重试已结束子任务的失败对象。
 子任务默认按状态优先级读取 25 项；--active 只看进行中，--cursor 继续读取。
 按编号查看可用 --order id 或 --offset；--limit 为 1–200，不改变子任务编号。
 list/trash 的 --limit 为 1–10000；--before-id 读取更早任务，list --all 自动读取全部分页。

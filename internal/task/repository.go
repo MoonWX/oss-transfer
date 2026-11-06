@@ -725,12 +725,21 @@ func observeChild(tx *state.Tx, p *Parent, number int, record execution.Record) 
 	if err := tx.Put("master-task-children", childKey(p.ID, number), child); err != nil {
 		return false, err
 	}
-	if record.Status == execution.Completed || record.Status == execution.Failed || record.Status == execution.PartialFailed {
+	if childEnded(record.Status) {
 		if err := tx.Delete("master-task-outstanding", childKey(p.ID, number)); err != nil {
+			return false, err
+		}
+	} else if previous.Record != nil && childEnded(previous.Record.Status) {
+		// Only an in-place retry reopens an ended child within a generation
+		// (see BeginRetry); it must be polled again until it ends.
+		if err := tx.Put("master-task-outstanding", childKey(p.ID, number), number); err != nil {
 			return false, err
 		}
 	}
 	return true, nil
+}
+func childEnded(status execution.Status) bool {
+	return status == execution.Completed || status == execution.Failed || status == execution.PartialFailed
 }
 func countChild(p *Parent, status execution.Status, delta int) {
 	switch status {

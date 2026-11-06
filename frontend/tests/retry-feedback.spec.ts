@@ -464,6 +464,8 @@ test("a delayed 401 from recovery polling cannot clear a newer login", async ({
   }
 });
 
+// A RUNNING task with failed objects instead offers the in-place retry of
+// those objects (running-retry.spec.ts); it never resumes older failures.
 for (const status of ["COMPLETED", "RUNNING"] as const) {
   test(`a fresh exception page disables historical failures for a ${status} task`, async ({
     page,
@@ -477,7 +479,12 @@ for (const status of ["COMPLETED", "RUNNING"] as const) {
       await route.fulfill({
         json: {
           success: true,
-          data: { ...failedTask(), status, generation: 2 },
+          data: {
+            ...failedTask(),
+            status,
+            generation: 2,
+            failedObjectCount: 0,
+          },
         },
       });
     });

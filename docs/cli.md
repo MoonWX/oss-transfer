@@ -50,6 +50,8 @@ oss-transfer-cli task resume "$TRANSFER_TASK"
 
 Resume continues unfinished work and keeps completed progress. To retry failed tasks, pass their IDs to `task retry`, or use `task retry --all --yes` for every failed or partially failed task. If a request times out, the CLI reports the IDs whose result is unknown and stops sending further batches. Check those tasks before retrying.
 
+On a running task, `task retry <ID>` retries only the failed objects of its finished subtasks, without stopping the task. Those subtasks run again on their nodes within the node's concurrency limit, and succeeded or skipped objects are not transferred again. The output shows the retried subtasks and objects. Subtasks that are still running keep their failed objects until they finish, and `task retry --all --yes` still selects only failed or partially failed tasks. The nodes' Agents must be upgraded to this release; an older Agent or Master is reported, and nothing is retried on it. See [Retry failed objects of a running task](operations.md#retry-failed-objects-of-a-running-task).
+
 Export a stopped or finished task's report:
 
 ```sh

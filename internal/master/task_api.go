@@ -96,6 +96,7 @@ func installTaskRoutes(s *Server) error {
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children", s.adminOnly(s.taskChildrenHTTP))
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/children/{number}", s.adminOnly(s.taskChildrenHTTP))
 	s.mux.HandleFunc("POST /api/master/tasks/{id}/children/{number}/recover", s.adminOnly(s.recoverChildHTTP))
+	s.mux.HandleFunc("POST /api/master/tasks/{id}/retry-failed", s.adminOnly(s.retryFailedHTTP))
 	s.mux.HandleFunc("GET /api/master/deleted-tasks", s.adminOnly(s.deletedTasksHTTP))
 	s.mux.HandleFunc("POST /api/master/cleanup-status", s.adminOnly(s.cleanupStatusHTTP))
 	for route, action := range map[string]string{"start": "resume", "stop": "stop", "resume": "resume", "retry": "retry", "retry-task": "retry", "clear": "clear", "restore": "restore", "permanent-delete": "permanent-delete", "local-transfers/stop": "stop", "local-transfers/resume": "resume", "local-transfers/retry-failures": "retry"} {
@@ -1296,6 +1297,10 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			}
 		}
 		displays := s.nodeDisplaySnapshot()
+		// Retrying a running task retries its failed objects in place; the
+		// results are kept by task ID for the detail rows.
+		var inPlaceMu sync.Mutex
+		inPlace := map[int64]retryFailedResult{}
 		outcomes := s.runTaskControls(r.Context(), request.TaskIDs, func(ctx context.Context, id int64) (task.Parent, bool, error) {
 			if action == "permanent-delete" {
 				return s.requestTaskPurge(ctx, id)
@@ -1309,6 +1314,15 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 					value := request.ExpectedGenerations[id]
 					expected = &value
 				}
+				if action == "retry" {
+					p, result, handled, admitted, err := s.retryTaskControl(ctx, id, expected)
+					if handled {
+						inPlaceMu.Lock()
+						inPlace[id] = result
+						inPlaceMu.Unlock()
+						return p, admitted, err
+					}
+				}
 				return s.requestTaskResume(ctx, id, expected)
 			}
 			p, err := s.controlTask(ctx, id, action)
@@ -1320,6 +1334,13 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			outcome := outcomes[index]
 			p, admitted, err := outcome.parent, outcome.admitted, outcome.err
 			item := map[string]any{"taskId": id, "status": p.Status, "generation": p.Generation, "success": err == nil, "accepted": err == nil && admitted, "ignored": err == nil && !admitted}
+			if result, ok := inPlace[id]; ok {
+				item["mode"] = "FAILED_OBJECTS"
+				item["retriedChildren"], item["retriedObjects"] = result.Accepted, result.RetriedObjects
+				if result.Message != "" {
+					item["message"] = result.Message
+				}
+			}
 			if action == "permanent-delete" && err == nil {
 				item["purged"] = p.Purged
 				if p.Cleanup != nil {

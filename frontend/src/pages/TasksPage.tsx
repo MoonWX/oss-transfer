@@ -97,6 +97,9 @@ import TaskNodesDialog, {
   TaskMembershipNodes,
 } from "../components/TaskNodesDialog";
 import SubtaskDetails from "../components/SubtaskDetails";
+import RunningFailureRetry, {
+  canRetryRunningFailures,
+} from "../components/RunningFailureRetry";
 import TransferStatistics from "../components/TransferStatistics";
 import TaskRequestRates from "../components/TaskRequestRates";
 import {
@@ -915,6 +918,13 @@ function TaskDetail({
                 >
                   {tr("停止任务")}
                 </Button>
+              )}
+              {canRetryRunningFailures(current) && !recoveryState && (
+                <RunningFailureRetry
+                  task={current}
+                  disabled={busy}
+                  onSubmitted={onRefresh}
+                />
               )}
               {canResumeTask(current) && (
                 <Button

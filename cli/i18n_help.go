@@ -314,6 +314,8 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
 
   stop <ID...>                     Stop and retain progress
   resume|retry <ID...>             Resume stopped/failed tasks, retaining completed work
+  retry <ID...>                    On a running task, retry only failed objects of finished
+                                   subtasks, without interrupting the transfer
   start <ID...>                    Start pending tasks not started automatically
   delete <ID...>                   Move records to trash
   restore <ID...>                  Restore selected tasks from the trash
@@ -336,7 +338,7 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   See help task create and help task import.
 
 States: RUNNING, STOPPING, RESUMING, COMPLETED, PARTIAL_FAILED, FAILED, STOPPED.
-Actions read selected parent IDs and submit in bounded batches; running tasks are not retried.
+Actions read selected parent IDs and submit in bounded batches; retry on a running task retries only failed objects of finished subtasks.
 Child pages default to 25 results in status priority order. --active selects ongoing work; --cursor continues.
 Use --order id or --offset for numbering order; --limit is 1–200.
 list/trash accept --limit 1–10000; --before-id loads older records. list --all follows every page.
@@ -361,6 +363,8 @@ Deleting records does not delete source or target objects.
 
   stop <ID...>                     進捗を保持して停止
   resume|retry <ID...>             完了済みの処理を保持して停止・失敗タスクを再開
+  retry <ID...>                    実行中のタスクでは、終了した子タスクの失敗オブジェクトのみを
+                                   転送を中断せずに再試行
   start <ID...>                    自動開始していない待機タスクを開始
   delete <ID...>                   記録をごみ箱に移動
   restore <ID...>                  指定したタスクをごみ箱から復元
@@ -383,7 +387,7 @@ Deleting records does not delete source or target objects.
   詳細は help task create と help task import を参照してください。
 
 状態: RUNNING、STOPPING、RESUMING、COMPLETED、PARTIAL_FAILED、FAILED、STOPPED。
-指定した親タスクを個別に確認し、分割して送信します。実行中のタスクは再試行しません。
+指定した親タスクを個別に確認し、分割して送信します。実行中のタスクの retry は、終了した子タスクの失敗オブジェクトのみを再試行します。
 子タスクは状態の優先順で 25 件ずつ取得します。--active は進行中のみ、--cursor は続きの取得です。
 --order id または --offset で番号順に表示します。--limit は 1～200 です。
 list/trash の --limit は 1～10000、--before-id は古い記録、list --all は全ページを取得します。

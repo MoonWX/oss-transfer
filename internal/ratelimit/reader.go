@@ -71,11 +71,11 @@ func (r *reader) Read(p []byte) (int, error) {
 	} // bounded EOF check; extra source data remains detectable
 	// A range of an ordered write waits for tokens only in its turn (see
 	// readorder), and reads its source after passing the turn on.
-	if err := r.turn.Wait(r.ctx); err != nil {
-		return 0, err
-	}
-	ticket, err := r.limiter.reserve(r.ctx, r.parentID, r.generation, wanted)
-	r.turn.Done()
+	var ticket reservation
+	err := r.turn.Serve(r.ctx, func(yield <-chan struct{}) (err error) {
+		ticket, err = r.limiter.reserve(r.ctx, r.parentID, r.generation, wanted, yield)
+		return err
+	})
 	if err != nil {
 		return 0, err
 	}

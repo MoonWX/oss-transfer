@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/ratelimit"
+	"github.com/MoonWX/oss-transfer/internal/readorder"
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
@@ -128,8 +131,8 @@ func throttledDownload(tb testing.TB, target *transferstore.Local, db *state.Sto
 		source := &pacedRange{remaining: length, rate: connection, window: max(64<<10, connection/16), last: time.Now()}
 		return limits.Wrap(ctx, 1, generation, io.NopCloser(source), length)
 	}
-	budget := &transferstore.RangeBudget{BytesPerSecond: share}
-	if mode == "ranged" && !target.RangedWriteWithin(size, *budget) {
+	budget := func() transferstore.RangeBudget { return transferstore.RangeBudget{BytesPerSecond: share} }
+	if mode == "ranged" && !target.RangedWriteWithin(size, budget()) {
 		tb.Fatal("the share does not range")
 	}
 	started := time.Now()
@@ -185,6 +188,88 @@ func TestThrottledRangedDownloadReachesItsShare(t *testing.T) {
 			})
 		})
 	}
+}
+
+// serverRange is one range response from a server that closes a response it
+// could not send for sendTimeout, as nginx's send_timeout and Ceph RGW's
+// request timeout do: the next read then fails as a truncated body. Each read
+// reports how long the response went unread before it, counted from the GET.
+type serverRange struct {
+	remaining   int64
+	sendTimeout time.Duration
+	last        time.Time
+	unread      func(time.Duration)
+	closed      bool
+}
+
+func (r *serverRange) Read(p []byte) (int, error) {
+	now := time.Now()
+	r.unread(now.Sub(r.last))
+	if r.closed = r.closed || now.Sub(r.last) >= r.sendTimeout; r.closed {
+		return 0, io.ErrUnexpectedEOF
+	}
+	r.last = now
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := min(int64(len(p)), r.remaining)
+	r.remaining -= n
+	return int(n), nil
+}
+
+// A node limit far below what the window drains: 16 chunks open under a
+// 10 Mbps node limit, scaled down eightfold here (1 MiB chunks, 1.25 Mbps), as
+// for a window sized before the limit dropped. Served strictly lowest first,
+// every range above the lowest would wait 15 chunks' time, 100 s, for a read,
+// and a server that closes a response it cannot send for a minute would cut
+// each, costing it a second GET. A range passed over for
+// readorder.MaxPassedOver is read next, so every open response is read well
+// within that minute and no range is fetched twice.
+func TestPassedOverRangesAreReadBeforeServersTimeOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const chunk = 1 << 20
+		const node = 10_000_000 / 8 / 8
+		const size = 24 * chunk
+		ctx := context.Background()
+		target, db := newThrottledTarget(t, chunk)
+		limits, err := ratelimit.New(db, ratelimit.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer limits.Close()
+		if err := limits.ApplyNode(ctx, ratelimit.NodeLimit{Revision: 1, BandwidthBytesPerSecond: node}); err != nil {
+			t.Fatal(err)
+		}
+		if err := limits.ApplyParent(ctx, ratelimit.ParentLimit{ParentID: 1, Generation: 1, Revision: 1}); err != nil {
+			t.Fatal(err)
+		}
+		var gets atomic.Int64
+		var mu sync.Mutex
+		var longest time.Duration
+		open := func(ctx context.Context, offset, length int64) (io.ReadCloser, error) {
+			gets.Add(1)
+			source := &serverRange{remaining: length, sendTimeout: time.Minute, last: time.Now(), unread: func(gap time.Duration) {
+				mu.Lock()
+				longest = max(longest, gap)
+				mu.Unlock()
+			}}
+			return limits.Wrap(ctx, 1, 1, io.NopCloser(source), length)
+		}
+		sink := &pacedSink{rate: 50 << 20, stallEvery: 2 << 20, stall: 20 * time.Millisecond}
+		// No budget: the window is 16 chunks whatever the node limit.
+		if err := target.WriteRangesForTest(ctx, sink, open, size, nil); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("%d GETs for %d chunks, longest unread %v", gets.Load(), size/chunk, longest)
+		if longest > readorder.MaxPassedOver+5*time.Second {
+			t.Fatalf("an open range went unread for %v", longest)
+		}
+		if gets.Load() != size/chunk {
+			t.Fatalf("%d GETs for %d chunks", gets.Load(), size/chunk)
+		}
+	})
 }
 
 // BenchmarkThrottledLocalDownload measures one 256 MiB object downloaded under

@@ -641,20 +641,23 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 // openSource registers everything it opens in closers, which the caller closes
 // in reverse order after the write. A ranged source is used only when the
 // target would fetch this object in ranges and, for a LOCAL destination, the
-// job allows it; otherwise one stream is opened. A throttled object ranges
-// only within its task share (see Options.TaskLimits), and the returned
-// budget tells the target to bound its window to it.
-func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected transferstore.Object, source, target transferstore.Store, object *objectProgress, closers *[]io.Closer) (io.Reader, transferstore.RangeFunc, *transferstore.RangeBudget, transferstore.Object, string, error) {
-	var budget *transferstore.RangeBudget
+// job allows it; otherwise one stream is opened. The returned budget reports
+// what the object's range fetches may take as it changes (see
+// Options.TaskLimits), so the target can bound its window to it.
+func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected transferstore.Object, source, target transferstore.Store, object *objectProgress, closers *[]io.Closer) (io.Reader, transferstore.RangeFunc, func() transferstore.RangeBudget, transferstore.Object, string, error) {
+	var budget func() transferstore.RangeBudget
+	throttled := false
 	if e.opts.TaskLimits != nil {
-		if share, throttled := e.opts.TaskLimits(job); throttled {
-			budget = &share
+		_, throttled = e.opts.TaskLimits(job)
+		budget = func() transferstore.RangeBudget {
+			current, _ := e.opts.TaskLimits(job)
+			return current
 		}
 	}
 	// A LOCAL destination ranges only on the Master's explicit "auto": a job
 	// accepted without the field (an older Master or Agent) keeps streaming.
 	allowed := job.Destination.Kind != "LOCAL" || job.RangedDownload == RangedDownloadAuto
-	if opener, ok := source.(transferstore.RangeOpener); ok && allowed && e.rangedWrite(target, item.Source.Size, budget) {
+	if opener, ok := source.(transferstore.RangeOpener); ok && allowed && e.rangedWrite(target, item.Source.Size, budget, throttled) {
 		ranged, metadata, err := opener.OpenRanges(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
 		if err == nil {
 			*closers = append(*closers, ranged)
@@ -696,12 +699,15 @@ func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected tr
 }
 
 // rangedWrite reports whether target fetches an object of this size in
-// ranges. With a budget (a throttled task) only a target that bounds its
-// window to that budget qualifies.
-func (e *Engine) rangedWrite(target transferstore.Store, size int64, budget *transferstore.RangeBudget) bool {
-	if budget != nil {
-		writer, ok := target.(transferstore.BudgetedRangeWriter)
-		return ok && writer.RangedWriteWithin(size, *budget)
+// ranges. A target that bounds its window to the budget decides within the
+// budget. Any other target streams a throttled task's objects, whose ranges
+// would hold shared memory while they wait on the task limit.
+func (e *Engine) rangedWrite(target transferstore.Store, size int64, budget func() transferstore.RangeBudget, throttled bool) bool {
+	if writer, ok := target.(transferstore.BudgetedRangeWriter); ok && budget != nil {
+		return writer.RangedWriteWithin(size, budget())
+	}
+	if throttled {
+		return false
 	}
 	writer, ok := target.(transferstore.RangeWriter)
 	return ok && writer.RangedWrite(size)

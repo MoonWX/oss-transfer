@@ -713,11 +713,17 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 	}
 }
 
-// taskLimits gives the engine a throttled task's share on this node. Object
-// GETs, including every range, are admitted against the task LIST rate.
+// taskLimits gives the engine what a task's source reads may take on this
+// node: the lower of its share and the node bandwidth limit, and its object
+// GET rate (object GETs, including every range, are admitted against the
+// task LIST rate), and whether the task itself is throttled.
 func taskLimits(limits *ratelimit.Limiter) func(execution.Job) (transferstore.RangeBudget, bool) {
 	return func(job execution.Job) (transferstore.RangeBudget, bool) {
 		limit, throttled := limits.Throttle(job.ParentID, job.Generation)
-		return transferstore.RangeBudget{BytesPerSecond: limit.BandwidthBytesPerSecond, RequestsPerSecond: limit.ListQPS}, throttled
+		budget := transferstore.RangeBudget{BytesPerSecond: limit.BandwidthBytesPerSecond, RequestsPerSecond: limit.ListQPS}
+		if node := limits.Node().BandwidthBytesPerSecond; node > 0 && (budget.BytesPerSecond == 0 || node < budget.BytesPerSecond) {
+			budget.BytesPerSecond = node
+		}
+		return budget, throttled
 	}
 }

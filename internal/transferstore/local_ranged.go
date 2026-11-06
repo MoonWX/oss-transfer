@@ -66,22 +66,26 @@ func (s *Local) RangedWrite(size int64) bool {
 	return r.MinSize >= 0 && r.Memory != nil && r.ChunkSize > 0 && size >= r.MinSize && size > r.ChunkSize && r.ChunkSize <= r.Memory.capacity
 }
 
-// RangedWriteWithin reports whether a throttled write of this size still
+// RangedWriteWithin reports whether a write of this size under budget still
 // fetches ranges: about one second of the budget must cover at least two
 // chunks, so a ranged window beats one stream without pinning more memory
-// than the task drains in that second.
+// than the object drains in that second.
 func (s *Local) RangedWriteWithin(size int64, budget RangeBudget) bool {
-	return s.RangedWrite(size) && s.windowSlots(&budget) >= 2
+	return s.RangedWrite(size) && s.slotsWithin(budget) >= 2
 }
 
-// windowSlots is the most chunks one object may hold at once: maxPartSlots
-// without a budget, otherwise the chunks of about one second of the budget.
-func (s *Local) windowSlots(budget *RangeBudget) int {
-	if budget == nil || s.ranged.ChunkSize <= 0 {
+// windowSlots is the most chunks one object may hold now: maxPartSlots
+// without a budget, otherwise the chunks of about one second of it.
+func (s *Local) windowSlots(budget func() RangeBudget) int {
+	if budget == nil {
 		return maxPartSlots
 	}
+	return s.slotsWithin(budget())
+}
+
+func (s *Local) slotsWithin(budget RangeBudget) int {
 	window := budget.Window(s.ranged.ChunkSize)
-	if window == 0 {
+	if window == 0 || s.ranged.ChunkSize <= 0 {
 		return maxPartSlots
 	}
 	return int(min(int64(maxPartSlots), window/s.ranged.ChunkSize))
@@ -102,24 +106,30 @@ func (s *Local) windowSlots(budget *RangeBudget) int {
 // only after all of its goroutines have stopped and every reservation has
 // been released, so nothing touches w after it returns.
 //
-// window caps base plus borrowed slots (at least one). A throttled object's
-// fetches wait on the task limiter while holding their chunk's memory, so its
-// window is about one second of the task share (windowSlots): it never pins
-// more of the shared budget than the task drains in that time.
+// Fetches wait on the limiter while holding their chunk's memory, so under a
+// budget the window, base plus borrowed slots, is about one second of it
+// (windowSlots, at least one slot). It is checked again whenever the next
+// chunk waits for a slot: a share or node limit that drops shrinks the window
+// at once rather than at the next object, so an object never pins more of the
+// shared memory, or holds more open GETs, than it drains in about a second.
 //
 // Fetches wait for bandwidth in chunk order (readorder): under a limit, an
 // even share would finish the whole window together and leave the network
 // idle while the writer drains it, at the end of every object above all.
 // Served lowest chunk first, chunks complete one after another as the writer
-// needs them.
-func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFunc, size int64, window int) error {
+// needs them, and a chunk passed over for readorder.MaxPassedOver is still
+// read before its open request times out.
+func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFunc, size int64, budget func() RangeBudget) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	chunkSize := s.ranged.ChunkSize
 	count := (size + chunkSize - 1) / chunkSize
-	window = max(1, min(window, maxPartSlots))
+	window := max(1, s.windowSlots(budget))
 	slots := newRangedSlots(s.ranged.PartLender, min(s.ranged.PartConcurrency, window), int(min(count, int64(window))), s.ranged.Memory)
 	slots.limit = window
+	if budget != nil {
+		slots.window = func() int { return max(1, s.windowSlots(budget)) }
+	}
 	var failure sync.Once
 	var firstError error
 	fail := func(err error) {

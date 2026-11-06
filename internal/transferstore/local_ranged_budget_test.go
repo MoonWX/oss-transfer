@@ -48,7 +48,7 @@ func TestLocalRangedWriteWithinNeedsTwoChunksPerSecond(t *testing.T) {
 		if got := s.RangedWriteWithin(size, tc.budget); got != tc.ranged {
 			t.Errorf("%+v: ranged %v, want %v", tc.budget, got, tc.ranged)
 		}
-		if got := s.windowSlots(&tc.budget); got != tc.slots {
+		if got := s.slotsWithin(tc.budget); got != tc.slots {
 			t.Errorf("%+v: %d slots, want %d", tc.budget, got, tc.slots)
 		}
 	}
@@ -67,8 +67,7 @@ func TestThrottledLocalRangedWritePinsAtMostItsWindow(t *testing.T) {
 	lender.SetIdle(func() int { return 100 })
 	s, _, _ := rangedLocal(t, LocalRangedOptions{PartConcurrency: 4, PartLender: lender, Memory: budget})
 	share := RangeBudget{BytesPerSecond: window*testRangePart + testRangePart/2}
-	slots := s.windowSlots(&share)
-	if slots != window {
+	if slots := s.slotsWithin(share); slots != window {
 		t.Fatalf("window %d slots, want %d", slots, window)
 	}
 	size := int64(12 * testRangePart)
@@ -85,7 +84,9 @@ func TestThrottledLocalRangedWritePinsAtMostItsWindow(t *testing.T) {
 	}
 	writer := &recordingWriter{entered: make(chan struct{}), block: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- s.writeRanges(context.Background(), writer, harness.ranges, size, slots) }()
+	go func() {
+		done <- s.writeRanges(context.Background(), writer, harness.ranges, size, func() RangeBudget { return share })
+	}()
 	<-writer.entered
 	fetched.Wait()
 	for range 3 {
@@ -122,7 +123,7 @@ func TestThrottledLocalWriteWithTinyShareStreams(t *testing.T) {
 	data := randomPayload(47, size)
 	harness := newRangeHarness(t, data, 47)
 	share := RangeBudget{BytesPerSecond: testRangePart}
-	if _, err := s.Write(context.Background(), "small-share.bin", bytes.NewReader(data), WriteOptions{Size: size, Ranges: harness.ranges, RangeBudget: &share}); err != nil {
+	if _, err := s.Write(context.Background(), "small-share.bin", bytes.NewReader(data), WriteOptions{Size: size, Ranges: harness.ranges, RangeBudget: func() RangeBudget { return share }}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(root, "small-share.bin")); !bytes.Equal(got, data) {
@@ -130,5 +131,59 @@ func TestThrottledLocalWriteWithTinyShareStreams(t *testing.T) {
 	}
 	if open, _, _ := harness.state(); open != 0 {
 		t.Fatal("tiny share opened ranges", open)
+	}
+}
+
+// A ranged write checks its budget again whenever the next chunk waits for a
+// slot. When the share or node limit drops mid-object, it dispatches nothing
+// more until the chunks it holds fit the new window, and then keeps to it.
+func TestRangedWindowShrinksWhenTheBudgetDrops(t *testing.T) {
+	memory, _ := NewUploadMemoryBudget(64 << 20)
+	lender := NewPartLender()
+	lender.SetIdle(func() int { return 100 })
+	s, _, _ := rangedLocal(t, LocalRangedOptions{PartConcurrency: 4, PartLender: lender, Memory: memory})
+	var rate atomic.Int64
+	rate.Store(4*testRangePart + testRangePart/2)
+	budget := func() RangeBudget { return RangeBudget{BytesPerSecond: rate.Load()} }
+	size := int64(12 * testRangePart)
+	data := randomPayload(53, size)
+	harness := newRangeHarness(t, data, 53)
+	var mu sync.Mutex
+	var heldAtOpen []int64
+	harness.hook = func(_ context.Context, _, _ int64, _ int, reader io.ReadCloser) (io.ReadCloser, error) {
+		used, _ := memoryState(memory)
+		mu.Lock()
+		heldAtOpen = append(heldAtOpen, used/testRangePart)
+		mu.Unlock()
+		return reader, nil
+	}
+	writer := &recordingWriter{entered: make(chan struct{}), block: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- s.writeRanges(context.Background(), writer, harness.ranges, size, budget) }()
+	<-writer.entered
+	// The writer holds chunk 0, so no slot frees until it returns.
+	for {
+		if open, _, _ := harness.state(); open == 4 {
+			break
+		}
+		runtime.Gosched()
+	}
+	rate.Store(testRangePart) // one chunk a second
+	close(writer.block)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(writer.data.Bytes(), data) {
+		t.Fatal("content differs")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heldAtOpen) != 12 {
+		t.Fatalf("%d ranges opened, want 12", len(heldAtOpen))
+	}
+	for i, held := range heldAtOpen[4:] {
+		if held != 1 {
+			t.Fatalf("chunk %d opened with %d chunks held, window 1: %v", i+4, held, heldAtOpen)
+		}
 	}
 }

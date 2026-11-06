@@ -70,16 +70,33 @@ type rangedSlots struct {
 	finished  chan struct{}
 	mu        sync.Mutex
 	borrowed  int
-	// limit caps base plus borrowed slots; it is maxPartSlots unless a
-	// throttled write bounds its window (see RangeBudget).
-	limit int
+	// limit caps base plus borrowed slots in use: maxPartSlots, or what
+	// window, when set, reports each time acquire looks for room (a budget
+	// that changes during the write, see RangeBudget). Slots already held
+	// are kept when it drops.
+	limit  int
+	window func() int
+}
+
+// room reports whether the window admits another slot now.
+func (r *rangedSlots) room() bool {
+	limit := 0
+	if r.window != nil {
+		limit = r.window()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.window != nil {
+		r.limit = limit
+	}
+	return len(r.base)+r.borrowed < r.limit
 }
 
 func newRangedSlots(lender *PartLender, perObject, count int, memory *UploadMemoryBudget) *rangedSlots {
 	return &rangedSlots{lender: lender, perObject: perObject, memory: memory, base: make(chan struct{}, max(1, min(perObject, count))), finished: make(chan struct{}, 1), limit: maxPartSlots}
 }
 
-// done wakes a dispatcher waiting for a slot to retry borrowing.
+// done wakes a dispatcher waiting for a slot. Call it after every release.
 func (r *rangedSlots) done() {
 	select {
 	case r.finished <- struct{}{}:
@@ -87,19 +104,22 @@ func (r *rangedSlots) done() {
 	}
 }
 
+// acquire is called by one dispatcher at a time. Every released slot signals
+// finished (done), so it waits for that and looks for room again, under the
+// window as it is then.
 func (r *rangedSlots) acquire(ctx context.Context, length int64) (func(), error) {
 	for {
-		select {
-		case r.base <- struct{}{}:
-			return r.baseMemory(ctx, length)
-		default:
+		if r.room() {
+			select {
+			case r.base <- struct{}{}:
+				return r.baseMemory(ctx, length)
+			default:
+			}
+			if release, ok := r.borrow(length); ok {
+				return release, nil
+			}
 		}
-		if release, ok := r.borrow(length); ok {
-			return release, nil
-		}
 		select {
-		case r.base <- struct{}{}:
-			return r.baseMemory(ctx, length)
 		case <-r.finished:
 		case <-ctx.Done():
 			return nil, ctx.Err()

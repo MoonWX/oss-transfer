@@ -175,15 +175,15 @@ type Options struct {
 	CommitBatchSize   int
 	CommitInterval    time.Duration
 	DecorateReader    ReaderDecorator
-	// TaskLimits reports whether a task-level bandwidth or request limit
-	// applies and, if so, the task's current share on this node. Ranged
-	// fetches of a throttled object wait on that limit while holding shared
-	// upload memory, so such an object is fetched in ranges only by a target
-	// that bounds its window to about one second of the share
-	// (transferstore.BudgetedRangeWriter, i.e. a LOCAL destination) and only
-	// when that second covers at least two chunks; otherwise it streams, and
-	// the share still bounds its speed. Consulted per object, so a changed
-	// limit or share applies to the next object.
+	// TaskLimits reports what a task's source reads may take on this node
+	// now, the lower of its share and the node bandwidth limit and its object
+	// GETs per second, and whether a task-level bandwidth or request limit
+	// applies. Ranged fetches wait on these limits while holding shared
+	// upload memory. A target that bounds its window to about one second of
+	// them (transferstore.BudgetedRangeWriter, i.e. a LOCAL destination)
+	// ranges only when that second covers at least two chunks, and checks
+	// again before each further range; any other target streams a throttled
+	// task's objects, and the share still bounds their speed.
 	TaskLimits func(Job) (transferstore.RangeBudget, bool)
 }
 

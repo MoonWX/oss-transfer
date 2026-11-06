@@ -90,15 +90,18 @@ type WriteOptions struct {
 	// a failed read may be repeated with a new reader. Input is still required
 	// and is used by any path that streams.
 	Ranges RangeFunc
-	// RangeBudget, when set, is the task limit every range fetch waits on. A
-	// ranged write then holds at most about one second of that budget in
-	// fetched chunks, and streams Input when that is under two chunks. Nil
-	// means the fetches wait on no task limit.
-	RangeBudget *RangeBudget
+	// RangeBudget, when set, reports the limits every range fetch waits on
+	// as they are now. A ranged write holds at most about one second of that
+	// budget in fetched chunks and checks it again before each further range,
+	// so a lower limit shrinks the window at once; it streams Input when that
+	// second covers fewer than two chunks as the write starts. Nil means the
+	// fetches wait on no limit.
+	RangeBudget func() RangeBudget
 }
 
-// RangeBudget is a throttled task's current share on this node: the bytes and
-// object GETs per second its source reads may take. Zero means unlimited.
+// RangeBudget is what the source reads of one object may take on this node:
+// bytes per second, the lower of the task's share and the node bandwidth
+// limit, and the task's object GETs per second. Zero means unlimited.
 type RangeBudget struct {
 	BytesPerSecond    int64
 	RequestsPerSecond float64
@@ -146,8 +149,8 @@ type RangeWriter interface {
 }
 
 // BudgetedRangeWriter reports whether Write would still fetch an object of
-// this size in ranges with WriteOptions.RangeBudget set to budget. A target
-// without it streams every throttled object.
+// this size in ranges with WriteOptions.RangeBudget reporting budget. A
+// target without it ignores the budget and streams every throttled object.
 type BudgetedRangeWriter interface {
 	RangedWriteWithin(size int64, budget RangeBudget) bool
 }

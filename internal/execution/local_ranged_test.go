@@ -148,19 +148,20 @@ func TestS3ToLocalDownloadsRangesWithLimiterProgressAndRequests(t *testing.T) {
 	}
 }
 
-// A throttled download whose share fetches under two chunks a second streams
-// in one request: a ranged window would pin memory for more than a second.
+// A download whose limits fetch under two chunks a second streams in one
+// request, whether the task share or the node bandwidth limit binds: a ranged
+// window would pin memory for more than a second.
 func TestThrottledLocalDownloadWithTinyShareStreams(t *testing.T) {
 	payload := downloadPayload(8*localTestPart + 5)
 	lender := idlePartLender(100)
 	source, counter, target, root, stat := downloadFixture(t, payload, 4, lender)
 	var throttled atomic.Bool
+	var limited atomic.Int64
 	var mu sync.Mutex
 	var sizes []int64
 	engine := &Engine{opts: Options{
-		// 1.5 chunks/s by bandwidth; the GET rate alone would allow more.
 		TaskLimits: func(Job) (transferstore.RangeBudget, bool) {
-			return transferstore.RangeBudget{BytesPerSecond: localTestPart * 3 / 2, RequestsPerSecond: 100}, throttled.Load()
+			return transferstore.RangeBudget{BytesPerSecond: limited.Load(), RequestsPerSecond: 100}, throttled.Load()
 		},
 		DecorateReader: func(_ context.Context, _ Job, part Item, input io.ReadCloser) (io.ReadCloser, error) {
 			mu.Lock()
@@ -184,6 +185,8 @@ func TestThrottledLocalDownloadWithTinyShareStreams(t *testing.T) {
 		}
 		return counter.gets.Load(), counter.ranged.Load()
 	}
+	// 1.5 chunks/s by bandwidth; the GET rate alone would allow more.
+	limited.Store(localTestPart * 3 / 2)
 	throttled.Store(true)
 	if gets, ranged := copyOnce("throttled.bin"); gets != 1 || ranged != 0 || len(sizes) != 1 || sizes[0] != stat.Size {
 		t.Fatalf("throttled download: gets=%d ranged=%d decorations=%v", gets, ranged, sizes)
@@ -191,7 +194,12 @@ func TestThrottledLocalDownloadWithTinyShareStreams(t *testing.T) {
 	if lender.Lent() != 0 {
 		t.Fatal("throttled download borrowed slots")
 	}
+	// The same rate from a node limit, for a task without limits of its own.
 	throttled.Store(false)
+	if gets, ranged := copyOnce("node-limited.bin"); gets != 1 || ranged != 0 || len(sizes) != 1 {
+		t.Fatalf("node-limited download: gets=%d ranged=%d decorations=%v", gets, ranged, sizes)
+	}
+	limited.Store(0)
 	if gets, ranged := copyOnce("open.bin"); gets != 10 || ranged != 10 || len(sizes) != 9 {
 		t.Fatalf("unthrottled download: gets=%d ranged=%d decorations=%v", gets, ranged, sizes)
 	}

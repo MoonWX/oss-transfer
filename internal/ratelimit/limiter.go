@@ -284,13 +284,20 @@ func (l *Limiter) Parent(id int64) (ParentLimit, error) {
 // part can wait on. HEAD is never charged per part. A missing, stale or
 // unlimited parent is not throttled.
 func (l *Limiter) Throttled(id int64, generation uint64) bool {
+	_, throttled := l.Throttle(id, generation)
+	return throttled
+}
+
+// Throttle is Throttled plus the parent's current share, read under one lock
+// so the two agree.
+func (l *Limiter) Throttle(id int64, generation uint64) (ParentLimit, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	p := l.parents[id]
 	if p == nil || p.limit.Generation != generation {
-		return false
+		return ParentLimit{}, false
 	}
-	return p.limit.BandwidthBytesPerSecond > 0 || p.limit.ListQPS > 0 || p.limit.PutQPS > 0
+	return p.limit, p.limit.BandwidthBytesPerSecond > 0 || p.limit.ListQPS > 0 || p.limit.PutQPS > 0
 }
 func (l *Limiter) Close() {
 	l.mu.Lock()

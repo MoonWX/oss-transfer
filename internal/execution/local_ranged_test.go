@@ -148,7 +148,9 @@ func TestS3ToLocalDownloadsRangesWithLimiterProgressAndRequests(t *testing.T) {
 	}
 }
 
-func TestThrottledLocalDownloadStreamsOneRequest(t *testing.T) {
+// A throttled download whose share fetches under two chunks a second streams
+// in one request: a ranged window would pin memory for more than a second.
+func TestThrottledLocalDownloadWithTinyShareStreams(t *testing.T) {
 	payload := downloadPayload(8*localTestPart + 5)
 	lender := idlePartLender(100)
 	source, counter, target, root, stat := downloadFixture(t, payload, 4, lender)
@@ -156,7 +158,10 @@ func TestThrottledLocalDownloadStreamsOneRequest(t *testing.T) {
 	var mu sync.Mutex
 	var sizes []int64
 	engine := &Engine{opts: Options{
-		TaskThrottled: func(Job) bool { return throttled.Load() },
+		// 1.5 chunks/s by bandwidth; the GET rate alone would allow more.
+		TaskLimits: func(Job) (transferstore.RangeBudget, bool) {
+			return transferstore.RangeBudget{BytesPerSecond: localTestPart * 3 / 2, RequestsPerSecond: 100}, throttled.Load()
+		},
 		DecorateReader: func(_ context.Context, _ Job, part Item, input io.ReadCloser) (io.ReadCloser, error) {
 			mu.Lock()
 			sizes = append(sizes, part.Source.Size)

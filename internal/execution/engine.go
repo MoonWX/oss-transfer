@@ -617,11 +617,11 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 			_ = closers[i].Close()
 		}
 	}()
-	reader, ranges, metadata, stage, err := e.openSource(ctx, job, item, expected, source, target, object, &closers)
+	reader, ranges, budget, metadata, stage, err := e.openSource(ctx, job, item, expected, source, target, object, &closers)
 	if err != nil {
 		return fail(stage, err)
 	}
-	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges})
+	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, RangeBudget: budget})
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {
@@ -640,33 +640,38 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 
 // openSource registers everything it opens in closers, which the caller closes
 // in reverse order after the write. A ranged source is used only when the
-// target would fetch this object in ranges, the task is not throttled and, for
-// a LOCAL destination, the job allows it; otherwise one stream is opened.
-func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected transferstore.Object, source, target transferstore.Store, object *objectProgress, closers *[]io.Closer) (io.Reader, transferstore.RangeFunc, transferstore.Object, string, error) {
-	throttled := e.opts.TaskThrottled != nil && e.opts.TaskThrottled(job)
+// target would fetch this object in ranges and, for a LOCAL destination, the
+// job allows it; otherwise one stream is opened. A throttled object ranges
+// only within its task share (see Options.TaskLimits), and the returned
+// budget tells the target to bound its window to it.
+func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected transferstore.Object, source, target transferstore.Store, object *objectProgress, closers *[]io.Closer) (io.Reader, transferstore.RangeFunc, *transferstore.RangeBudget, transferstore.Object, string, error) {
+	var budget *transferstore.RangeBudget
+	if e.opts.TaskLimits != nil {
+		if share, throttled := e.opts.TaskLimits(job); throttled {
+			budget = &share
+		}
+	}
 	// A LOCAL destination ranges only on the Master's explicit "auto": a job
 	// accepted without the field (an older Master or Agent) keeps streaming.
 	allowed := job.Destination.Kind != "LOCAL" || job.RangedDownload == RangedDownloadAuto
-	if opener, ok := source.(transferstore.RangeOpener); ok && !throttled && allowed {
-		if writer, ok := target.(transferstore.RangeWriter); ok && writer.RangedWrite(item.Source.Size) {
-			ranged, metadata, err := opener.OpenRanges(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
-			if err == nil {
-				*closers = append(*closers, ranged)
-				ranges := e.rangeReader(job, item, ranged, object)
-				// The whole object as one range only serves a target that streams
-				// after all; a ranged write never opens it.
-				input := &lazyReader{open: func() (io.ReadCloser, error) { return ranges(ctx, 0, item.Source.Size) }}
-				*closers = append(*closers, input)
-				return input, ranges, metadata, "", nil
-			}
-			if !errors.Is(err, transferstore.ErrUnsupported) {
-				return nil, nil, transferstore.Object{}, "open source", err
-			}
+	if opener, ok := source.(transferstore.RangeOpener); ok && allowed && e.rangedWrite(target, item.Source.Size, budget) {
+		ranged, metadata, err := opener.OpenRanges(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
+		if err == nil {
+			*closers = append(*closers, ranged)
+			ranges := e.rangeReader(job, item, ranged, object)
+			// The whole object as one range only serves a target that streams
+			// after all; a ranged write never opens it.
+			input := &lazyReader{open: func() (io.ReadCloser, error) { return ranges(ctx, 0, item.Source.Size) }}
+			*closers = append(*closers, input)
+			return input, ranges, budget, metadata, "", nil
+		}
+		if !errors.Is(err, transferstore.ErrUnsupported) {
+			return nil, nil, nil, transferstore.Object{}, "open source", err
 		}
 	}
 	input, metadata, err := source.Open(ctx, item.Source.Key, transferstore.OpenOptions{Expected: &expected})
 	if err != nil {
-		return nil, nil, transferstore.Object{}, "open source", err
+		return nil, nil, nil, transferstore.Object{}, "open source", err
 	}
 	*closers = append(*closers, input)
 	// Keep a direct cancellation path to the original input even when a limiter
@@ -677,15 +682,27 @@ func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected tr
 	if e.opts.DecorateReader != nil {
 		reader, err = e.opts.DecorateReader(ctx, job, item, input)
 		if err != nil {
-			return nil, nil, transferstore.Object{}, "prepare reader", err
+			return nil, nil, nil, transferstore.Object{}, "prepare reader", err
 		}
 		if reader == nil {
-			return nil, nil, transferstore.Object{}, "prepare reader", errors.New("nil decorated reader")
+			return nil, nil, nil, transferstore.Object{}, "prepare reader", errors.New("nil decorated reader")
 		}
 		*closers = append(*closers, reader)
 	}
 	if object != nil {
 		reader = &progressReader{ReadCloser: reader, progress: object}
 	}
-	return reader, nil, metadata, "", nil
+	return reader, nil, nil, metadata, "", nil
+}
+
+// rangedWrite reports whether target fetches an object of this size in
+// ranges. With a budget (a throttled task) only a target that bounds its
+// window to that budget qualifies.
+func (e *Engine) rangedWrite(target transferstore.Store, size int64, budget *transferstore.RangeBudget) bool {
+	if budget != nil {
+		writer, ok := target.(transferstore.BudgetedRangeWriter)
+		return ok && writer.RangedWriteWithin(size, *budget)
+	}
+	writer, ok := target.(transferstore.RangeWriter)
+	return ok && writer.RangedWrite(size)
 }

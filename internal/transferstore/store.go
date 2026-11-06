@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"time"
 )
@@ -89,6 +90,36 @@ type WriteOptions struct {
 	// a failed read may be repeated with a new reader. Input is still required
 	// and is used by any path that streams.
 	Ranges RangeFunc
+	// RangeBudget, when set, is the task limit every range fetch waits on. A
+	// ranged write then holds at most about one second of that budget in
+	// fetched chunks, and streams Input when that is under two chunks. Nil
+	// means the fetches wait on no task limit.
+	RangeBudget *RangeBudget
+}
+
+// RangeBudget is a throttled task's current share on this node: the bytes and
+// object GETs per second its source reads may take. Zero means unlimited.
+type RangeBudget struct {
+	BytesPerSecond    int64
+	RequestsPerSecond float64
+}
+
+// Window is the most bytes of chunk-sized ranges that this budget fetches in
+// about one second, or 0 when neither limit bounds the fetches. A chunk held
+// while its fetch waits on the limiter therefore pins at most about one
+// second of the task's share, however slowly that share drains.
+func (b RangeBudget) Window(chunk int64) int64 {
+	window := int64(0)
+	if b.BytesPerSecond > 0 {
+		window = b.BytesPerSecond
+	}
+	if b.RequestsPerSecond > 0 && chunk > 0 {
+		requests := int64(math.Min(b.RequestsPerSecond*float64(chunk), math.MaxInt64/2))
+		if window == 0 || requests < window {
+			window = max(1, requests)
+		}
+	}
+	return window
 }
 
 type RangeFunc func(ctx context.Context, offset, length int64) (io.ReadCloser, error)
@@ -112,6 +143,13 @@ type RangeOpener interface {
 // object of this size. Callers skip the extra range setup when it would not.
 type RangeWriter interface {
 	RangedWrite(size int64) bool
+}
+
+// BudgetedRangeWriter reports whether Write would still fetch an object of
+// this size in ranges with WriteOptions.RangeBudget set to budget. A target
+// without it streams every throttled object.
+type BudgetedRangeWriter interface {
+	RangedWriteWithin(size int64, budget RangeBudget) bool
 }
 
 type WriteResult struct {

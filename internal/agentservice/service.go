@@ -87,7 +87,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 	configureNodeFactory(factory, nodes)
 	rates := NewTaskRates()
 	options.Execution.DecorateReader = rates.Decorator(nodes.Decorator(limits.Decorator))
-	options.Execution.TaskThrottled = func(job execution.Job) bool { return limits.Throttled(job.ParentID, job.Generation) }
+	options.Execution.TaskLimits = taskLimits(limits)
 	jobs, err := execution.NewRepository(store, execution.RepositoryOptions{})
 	if err != nil {
 		nodes.Close()
@@ -710,5 +710,14 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		return response(map[string]any{"parentId": request.ParentID, "generation": request.Generation}, err)
 	default:
 		return agenttransport.Response{Status: 404, Payload: json.RawMessage(`{"code":"unknown_operation"}`)}, nil
+	}
+}
+
+// taskLimits gives the engine a throttled task's share on this node. Object
+// GETs, including every range, are admitted against the task LIST rate.
+func taskLimits(limits *ratelimit.Limiter) func(execution.Job) (transferstore.RangeBudget, bool) {
+	return func(job execution.Job) (transferstore.RangeBudget, bool) {
+		limit, throttled := limits.Throttle(job.ParentID, job.Generation)
+		return transferstore.RangeBudget{BytesPerSecond: limit.BandwidthBytesPerSecond, RequestsPerSecond: limit.ListQPS}, throttled
 	}
 }

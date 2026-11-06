@@ -175,11 +175,16 @@ type Options struct {
 	CommitBatchSize   int
 	CommitInterval    time.Duration
 	DecorateReader    ReaderDecorator
-	// TaskThrottled reports a task-level bandwidth or request limit. Such
-	// objects stream: the task cap already bounds their speed, and parallel
-	// ranges would hold shared upload memory while waiting on that cap.
-	// Consulted per object, so a changed limit applies to the next object.
-	TaskThrottled func(Job) bool
+	// TaskLimits reports whether a task-level bandwidth or request limit
+	// applies and, if so, the task's current share on this node. Ranged
+	// fetches of a throttled object wait on that limit while holding shared
+	// upload memory, so such an object is fetched in ranges only by a target
+	// that bounds its window to about one second of the share
+	// (transferstore.BudgetedRangeWriter, i.e. a LOCAL destination) and only
+	// when that second covers at least two chunks; otherwise it streams, and
+	// the share still bounds its speed. Consulted per object, so a changed
+	// limit or share applies to the next object.
+	TaskLimits func(Job) (transferstore.RangeBudget, bool)
 }
 
 func terminal(s Status) bool {

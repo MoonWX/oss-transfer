@@ -2,7 +2,7 @@
 
 [English](install.md)
 
-使用 systemd 的 Linux 请使用[安装命令](../README.zh-CN.md#1-安装-master)。以下步骤适用于其他系统和自定义路径。无法联网的主机请使用[离线安装](offline-install.zh-CN.md)。
+使用 systemd 219 及以上版本的 Linux（CentOS 7 / RHEL 7 及更新版本）请使用[安装命令](../README.zh-CN.md#1-安装-master)。以下步骤适用于其他系统和自定义路径。无法联网的主机请使用[离线安装](offline-install.zh-CN.md)。
 
 ## macOS
 

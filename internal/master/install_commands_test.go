@@ -16,6 +16,19 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/cluster"
 )
 
+func TestBootstrapCommandDisablesURLGlobbingForIPv6Masters(t *testing.T) {
+	// curl 7.29 (CentOS 7) would read the brackets as a glob range.
+	for link, want := range map[string]string{
+		"http://[fd00::43]:1685/api/agents/bootstrap/token": "curl -fsSL --globoff 'http://[fd00::43]:1685/api/agents/bootstrap/token' | bash",
+		"http://10.1.0.43:1685/api/agents/bootstrap/token":  "curl -fsSL 'http://10.1.0.43:1685/api/agents/bootstrap/token' | bash",
+		"https://master.example/api/agents/bootstrap/token": "curl -fsSL 'https://master.example/api/agents/bootstrap/token' | bash",
+	} {
+		if got := bootstrapCommand(link); got != want {
+			t.Errorf("bootstrapCommand(%q) = %q, want %q", link, got, want)
+		}
+	}
+}
+
 func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	f.master.options.AgentArtifactBase = "https://downloads.example/osstransfer"

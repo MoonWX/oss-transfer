@@ -2,7 +2,7 @@
 
 [中文](install.zh-CN.md)
 
-For Linux with systemd, use the [installation command](../README.md#1-install-the-master). The steps below cover other systems and custom paths. For hosts without internet access, use [offline installation](offline-install.md).
+For Linux with systemd 219 or later (CentOS 7 / RHEL 7 and newer), use the [installation command](../README.md#1-install-the-master). The steps below cover other systems and custom paths. For hosts without internet access, use [offline installation](offline-install.md).
 
 ## macOS
 

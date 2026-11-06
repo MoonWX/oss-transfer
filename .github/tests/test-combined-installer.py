@@ -77,6 +77,9 @@ args = sys.argv[1:]
 config = sys.stdin.read() if '--config' in args else ''
 with open(os.environ['INSTALLER_EVENTS'], 'a') as stream:
     stream.write(json.dumps({'event': 'verify', 'args': args, 'config': config})+'\n')
+# Like curl 7.29 (CentOS 7), URL brackets are a glob range unless disabled.
+if any('://' in arg and '[' in arg for arg in args) and not {'-g', '--globoff'} & set(args):
+    sys.exit(3)
 origin = os.environ['MASTER_ORIGIN']
 expected = 'header = "Authorization: Bearer '+os.environ['ACCEPTED_AGENT_TOKEN']+'"\n'
 if origin+'/api/auth/current' not in args or config != expected:
@@ -222,6 +225,15 @@ class CombinedInstallerTests(unittest.TestCase):
         agent = self.assert_agent_origin(self.environment['MASTER_ORIGIN'])
         self.assertEqual(agent['args'][agent['args'].index('--install-dir')+1], str(install))
         self.assertEqual(agent['token'], '')
+
+    def test_existing_agent_with_ipv6_master_origin_is_verified(self):
+        # Local Masters usually publish http://[::1]:PORT for the CLI.
+        origin = 'http://[::1]:1688'
+        self.seed_agent(legacy=True)
+        result = self.run_installer('--role', 'master', '--with-agent', MASTER_ORIGIN=origin)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertEqual([event['event'] for event in self.events()], ['native', 'verify', 'native'])
+        self.assert_agent_origin(origin)
 
     def test_foreign_legacy_agent_is_rejected_before_agent_installation(self):
         install = self.seed_agent(legacy=True, token='otcli1.other-cluster-token')

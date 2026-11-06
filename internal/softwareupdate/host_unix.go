@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -38,6 +40,11 @@ func checkInstallationPrivileges(installed installation) error {
 	return nil
 }
 func protectDirectory(path string) error { return os.Chmod(path, 0700) }
+
+// The helper sets its own umask: systemd before 240 is not given UMask for the
+// transient unit, and launchd and rc.d helpers inherit the service's umask.
+func privateHelperProcess() { syscall.Umask(0077) }
+
 func launchHelper(helper, request, logPath string) error {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -48,7 +55,7 @@ func launchHelper(helper, request, logPath string) error {
 	if runtime.GOOS == "linux" {
 		// A transient service lives outside the Master's service cgroup. Merely
 		// calling setsid would still be killed by systemctl stop on the Master.
-		cmd = exec.Command("systemd-run", "--quiet", "--collect", "--unit=oss-transfer-update-"+filepath.Base(filepath.Dir(request)), "--property=Type=exec", "--property=UMask=0077", helper, "__apply-update", request)
+		cmd = exec.Command("systemd-run", systemdRunArguments(systemdVersion(), "oss-transfer-update-"+filepath.Base(filepath.Dir(request)), helper, request)...)
 		cmd.Stdout, cmd.Stderr = log, log
 		return cmd.Run()
 	}
@@ -59,5 +66,45 @@ func launchHelper(helper, request, logPath string) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+var systemdVersionLine = regexp.MustCompile(`^systemd ([0-9]+)\b`)
+
+// systemdVersion returns 0 when unknown, which selects only the options that
+// systemd 219 (CentOS 7 / RHEL 7) accepts.
+func systemdVersion() int {
+	output, err := exec.Command("systemd-run", "--version").Output()
+	if err != nil {
+		return 0
+	}
+	return parseSystemdVersion(string(output))
+}
+
+func parseSystemdVersion(output string) int {
+	first, _, _ := strings.Cut(output, "\n")
+	match := systemdVersionLine.FindStringSubmatch(strings.TrimSpace(first))
+	if match == nil {
+		return 0
+	}
+	version, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0
+	}
+	return version
+}
+
+// --collect (systemd 236) unloads a failed helper unit; every update uses a
+// new unit name, so older systems merely keep a failed unit listed. Type=exec
+// (240) reports a failed exec; older systems start the helper as Type=simple.
+func systemdRunArguments(version int, unit, helper, request string) []string {
+	args := []string{"--quiet"}
+	if version >= 236 {
+		args = append(args, "--collect")
+	}
+	args = append(args, "--unit="+unit)
+	if version >= 240 {
+		args = append(args, "--property=Type=exec", "--property=UMask=0077")
+	}
+	return append(args, helper, "__apply-update", request)
 }
 func terminateInstaller(cmd *exec.Cmd) error { return cmd.Process.Signal(syscall.SIGTERM) }

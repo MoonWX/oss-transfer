@@ -810,6 +810,13 @@ metadata_field() { awk -F '\t' -v key="$2" '$1==key {print $2}' "$1"; }
 config_field() {
   LC_ALL=C sed -nE 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$1"
 }
+# Print one unit property. systemd 219 (CentOS 7 / RHEL 7) has no
+# `systemctl show --value`; every version prints NAME=VALUE for -p NAME.
+systemd_property() {
+  local output
+  output=$(systemctl show "$1" -p "$2") || return 1
+  printf '%s\n' "$output" | awk -v key="$2=" 'index($0, key) == 1 && !found {found=1; print substr($0, length(key) + 1)}'
+}
 default_root() {
   if [[ "$platform" == linux ]]; then printf '/opt/oss-transfer\n'
   elif [[ "$platform" == freebsd ]]; then printf '/usr/local/lib/oss-transfer\n'
@@ -875,7 +882,8 @@ if [[ -z "$release_url" && -z "$package_dir" ]]; then
       source_stage=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-download.XXXXXX")
       trap 'rm -rf -- "$source_stage"' EXIT
       transfer_github_prepare "$requested_version" "$platform" "$arch" "$source_stage" || fail 'GitHub release verification failed'
-      bash "${BASH_SOURCE[0]}" "${original_args[@]}" --package-dir "$source_stage"
+      # Bash before 4.4 treats an empty "${array[@]}" as unset under set -u.
+      bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"} --package-dir "$source_stage"
       exit 0
     fi
     release_part=$requested_version; [[ "$requested_version" == latest ]] || release_part=v$requested_version
@@ -951,20 +959,20 @@ if ((upgrade)); then
       pin_work=$(mktemp -d "${TMPDIR:-/tmp}/oss-transfer-version.XXXXXX")
       trap 'rm -rf -- "$pin_work"' EXIT
       protocol=https; [[ "$release_url" != http://* ]] || protocol=http,https
-      curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/latest.tsv"
+      curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/latest.tsv"
       [[ $(wc -c < "$pin_work/latest.tsv") -lt 65536 && $(metadata_field "$pin_work/latest.tsv" format) == oss-transfer-go-v1 ]] || fail 'Invalid release manifest'
       pinned_version=$(metadata_field "$pin_work/latest.tsv" version)
       [[ "$pinned_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid latest release version'
       release_url="${release_url%/latest}/v$pinned_version"
-      curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/versioned.tsv"
+      curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/versioned.tsv"
       [[ $(sha256 "$pin_work/latest.tsv") == "$(sha256 "$pin_work/versioned.tsv")" ]] || fail 'Latest and versioned release manifests differ; retry after publication finishes'
     fi
     for directory in "${candidates[@]}"; do
       if [[ -n "$release_url" ]]; then
-        bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" --release-url "$release_url" --yes
+        bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"} --install-dir "$directory" --release-url "$release_url" --yes
       else
         # Pass the resolved local directory so each child stays offline.
-        bash "${BASH_SOURCE[0]}" "${original_args[@]}" --install-dir "$directory" ${package_dir:+--package-dir "$package_dir"} --yes
+        bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"} --install-dir "$directory" ${package_dir:+--package-dir "$package_dir"} --yes
       fi
     done
     exit 0
@@ -1158,8 +1166,10 @@ if ((existed)); then
 fi
 [[ ! -L "$unit" ]] || fail 'Service definition is a symlink'
 if [[ "$platform" == linux ]]; then
-  if ((existed == 0)) && [[ $(systemctl show "$service_name" -p LoadState --value) != not-found ]]; then fail 'An unmanaged service already exists'; fi
-  if ((existed)) && [[ -n $(systemctl show "$service_name" -p DropInPaths --value) ]]; then fail 'Review and remove service overrides before upgrading'; fi
+  # A failed query must not be reported as an existing unmanaged service.
+  load_state=$(systemd_property "$service_name" LoadState) || fail "Cannot query systemd for $service_name; check that systemd is running"
+  if ((existed == 0)) && [[ "$load_state" != not-found ]]; then fail 'An unmanaged service already exists'; fi
+  if ((existed)) && [[ -n $(systemd_property "$service_name" DropInPaths) ]]; then fail 'Review and remove service overrides before upgrading'; fi
 elif [[ "$platform" == darwin ]]; then
   if ((existed == 0)) && launchctl print "$domain/$service_name" >/dev/null 2>&1; then fail 'An unmanaged launchd service already exists'; fi
 fi
@@ -1188,7 +1198,8 @@ fetch() {
     [[ -f "$package_dir/$name" && ! -L "$package_dir/$name" ]] || fail "Release file missing: $name"
     cp "$package_dir/$name" "$work/$name"
   else
-    curl --fail --silent --show-error --location --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/$name" -o "$work/$name"
+    # An invited Master may be an IPv6 literal; curl 7.29 would glob its brackets.
+    curl --fail --silent --show-error --location --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/$name" -o "$work/$name"
   fi
 }
 if [[ -n "$release_url" ]]; then
@@ -1409,7 +1420,7 @@ stop_service() {
   local old_pid load_state deadline=$((SECONDS+50))
   old_pid=$(service_pid || true)
   if [[ "$platform" == linux ]]; then
-    load_state=$(systemctl show "$service_name" -p LoadState --value) || return 1
+    load_state=$(systemd_property "$service_name" LoadState) || return 1
     # Failed first-time adoption removes the unit but preserves installation
     # metadata for a retry. An absent unit has nothing to stop; state backup
     # below still requires the database's exclusive lock.
@@ -1434,7 +1445,7 @@ start_service() {
   if [[ "$platform" == linux ]]; then systemctl daemon-reload; systemctl start "$service_name"; elif [[ "$platform" == freebsd ]]; then "$unit" onestart; else launchctl bootstrap "$domain" "$unit"; fi
 }
 service_pid() {
-  if [[ "$platform" == linux ]]; then systemctl show "$service_name" -p MainPID --value; elif [[ "$platform" == freebsd ]]; then if [[ -f "$child_pidfile" && ! -L "$child_pidfile" ]]; then cat "$child_pidfile"; fi; else launchctl print "$domain/$service_name" 2>/dev/null | awk '$1=="pid" && $2=="=" {print $3;exit}'; fi
+  if [[ "$platform" == linux ]]; then systemd_property "$service_name" MainPID; elif [[ "$platform" == freebsd ]]; then if [[ -f "$child_pidfile" && ! -L "$child_pidfile" ]]; then cat "$child_pidfile"; fi; else launchctl print "$domain/$service_name" 2>/dev/null | awk '$1=="pid" && $2=="=" {print $3;exit}'; fi
 }
 nonce() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
 # Keep this check before any installation files, backup or service are changed.
@@ -1479,8 +1490,10 @@ check_listener() {
   esac
   raw=$work/listeners.raw; rows=$work/listeners.tsv; errors=$work/listeners.error
   if [[ "$platform" == linux ]] && command -v ss >/dev/null 2>&1; then
-    ss -H -ltnpe "sport = :$port" > "$raw" 2> "$errors" || fail "Cannot inspect listening port $port with ss"
-    awk '{ address=$4; family="unknown"; v6only="unknown"; if (address ~ /^\[/ || /v6only:/) family=6; else if (address ~ /^[0-9]+\./) family=4; if (/v6only:1/) v6only=1; else if (/v6only:0/) v6only=0; owners=0; while (match($0,/pid=[0-9]+/)) { pid=substr($0,RSTART+4,RLENGTH-4); print address "\t" pid "\t" family "\t" v6only; $0=substr($0,RSTART+RLENGTH); owners++ } if (!owners) print address "\tunknown\t" family "\t" v6only }' "$raw" > "$rows"
+    # CentOS 7.0-7.4 ship iproute 3.10: its ss has no -H, and the oldest
+    # builds print users:(("name",PID,FD)) rather than pid=PID.
+    ss -ltnpe "sport = :$port" > "$raw" 2> "$errors" || fail "Cannot inspect listening port $port with ss"
+    awk '$1=="State" && $2=="Recv-Q" {next} { address=$4; family="unknown"; v6only="unknown"; if (address ~ /^\[/ || /v6only:/) family=6; else if (address ~ /^[0-9]+\./) family=4; if (/v6only:1/) v6only=1; else if (/v6only:0/) v6only=0; owners=0; rest=$0; while (match(rest,/pid=[0-9]+/)) { pid=substr(rest,RSTART+4,RLENGTH-4); print address "\t" pid "\t" family "\t" v6only; rest=substr(rest,RSTART+RLENGTH); owners++ } rest=owners ? "" : $0; while (match(rest,/",[0-9]+,[0-9]+\)/)) { split(substr(rest,RSTART+2,RLENGTH-3),old,","); print address "\t" old[1] "\t" family "\t" v6only; rest=substr(rest,RSTART+RLENGTH); owners++ } if (!owners) print address "\tunknown\t" family "\t" v6only }' "$raw" > "$rows"
   elif [[ "$platform" == freebsd ]]; then
     sockstat -l -P tcp -p "$port" > "$raw" 2> "$errors" || fail "Cannot inspect listening port $port with sockstat"
     awk 'NR>1 {family="unknown"; v6only="unknown"; if ($5=="tcp4") family=4; else if ($5=="tcp6") {family=6; v6only=1} else if ($5=="tcp46") {family=6; v6only=0}; print $6 "\t" $3 "\t" family "\t" v6only}' "$raw" > "$rows"
@@ -1523,7 +1536,7 @@ prepare_start() {
   startup_log_lines=0
   [[ ! -f "$log_file" ]] || startup_log_lines=$(wc -l < "$log_file" | tr -d ' ')
   startup_previous_attempt=
-  if [[ "$platform" == linux ]]; then startup_previous_attempt=$(systemctl show "$service_name" -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true); fi
+  if [[ "$platform" == linux ]]; then startup_previous_attempt=$(systemd_property "$service_name" ExecMainStartTimestampMonotonic 2>/dev/null || true); fi
   mkdir -p "$data_dir/runtime"; chmod 700 "$data_dir/runtime"
   printf '%s\n' "$launch_id" > "$ready_file.request"; chmod 600 "$ready_file.request"
 }
@@ -1945,7 +1958,8 @@ if ((user_service == 0)) && [[ $(id -u) != 0 ]]; then
   # A script read from a pipe cannot be started again; ask for sudo in the pipe.
   [[ -f "${BASH_SOURCE[0]:-}" ]] || fail 'Run as root: curl ... | sudo bash (macOS user service: curl ... | bash -s -- --user)'
   command -v sudo >/dev/null || fail 'Run as root or use --user on macOS'
-  exec sudo bash "${BASH_SOURCE[0]}" "${original_args[@]}"
+  # Bash before 4.4 treats an empty "${array[@]}" as unset under set -u.
+  exec sudo bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"}
 fi
 prompt() {
   # The reply must not be named "answer": callers read that global after return.
@@ -2169,8 +2183,9 @@ verify_local_agent_cluster() {
   [[ "$token" == otcli1.* && "$token" != *$'\n'* ]] || fail 'Existing Agent credential is invalid; its data has been kept'
   # A retained Agent must belong to this Master. This also accepts an existing
   # identity using a private IP instead of the local Master's loopback origin.
+  # The origin is often http://[::1]:PORT; curl 7.29 would glob its brackets.
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
-    curl --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 "$origin/api/auth/current" -o /dev/null ||
+    curl --config - --fail --silent --show-error --globoff --connect-timeout 5 --max-time 15 "$origin/api/auth/current" -o /dev/null ||
     fail 'Existing Agent belongs to another cluster or its identity is unavailable; its data has been kept'
 }
 install_local_agent() {
@@ -2278,7 +2293,8 @@ fetch() {
     cp "$package_dir/$name" "$stage/$name"
   else
     [[ "$release_url" != http://* ]] || protocol=http,https
-    curl -fsSL --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 15 --max-time 600 --retry 2 "$release_url/$name" -o "$stage/$name"
+    # An inviting Master may be an IPv6 literal; curl 7.29 would glob its brackets.
+    curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 15 --max-time 600 --retry 2 "$release_url/$name" -o "$stage/$name"
   fi
 }
 fetch manifest.tsv

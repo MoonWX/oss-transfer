@@ -213,6 +213,19 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
             self.check_port(f'LISTEN 0 128 [::]:1685 [::]:* v6only:{v6only}\n', success,
                             QA_LISTEN='127.0.0.1:1685')
 
+    def test_iproute_310_header_and_owner_format(self):
+        # CentOS 7.0-7.4: ss has no -H, and the oldest builds omit pid=.
+        self.shim("ss", 'case "$1" in -H*) exit 255;; esac; printf "%s" "$QA_SS"')
+        header = 'State      Recv-Q Send-Q Local Address:Port               Peer Address:Port\n'
+        self.check_port(header, True)
+        result = self.check_port(header + 'LISTEN 0 50 *:1685 *:* users:(("java",412,22)) ino:7001248 sk:2 <->\n', False)
+        self.assertIn('PID 412', result.stderr)
+        own = header + 'LISTEN 0 128 :::1685 :::* users:(("master",812,5)) ino:6994875 sk:1 <->\n'
+        self.check_port(own, True, QA_OWN_PID='812', QA_EXISTED='1')
+        self.check_port(own, False, QA_OWN_PID='812', QA_EXISTED='0')
+        self.check_port(own.replace('("master",812,5)', '("master",812,5),("foreign",813,7)'), False,
+                        QA_OWN_PID='812', QA_EXISTED='1')
+
     def test_inspection_failure_is_not_treated_as_free(self):
         result = self.check_port('', False, QA_SOCKET_STATUS='1')
         self.assertIn('Cannot inspect', result.stderr)
@@ -324,6 +337,63 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
                                QA_LOG=current + 'Initial password: modern_password\n')
         self.assertEqual(modern.returncode, 0, modern.stderr)
         self.assertEqual(modern.stdout, '\nInitial administrator: admin\nInitial password: modern_password\n')
+
+
+class SystemdCompatibilityTests(unittest.TestCase):
+    """CentOS 7 / RHEL 7 (systemd 219, bash 4.2) is the oldest supported Linux."""
+    UNIT_219 = {'Description', 'After', 'Wants', 'Type', 'ExecStart', 'WorkingDirectory', 'Restart',
+                'RestartSec', 'TimeoutStopSec', 'KillMode', 'UMask', 'WantedBy'}
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-systemd-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = INSTALLER.read_text()
+        self.helper = self.source[self.source.index('systemd_property() {'):self.source.index('\ndefault_root() {')]
+
+    def property(self, output, name, status=0):
+        # Like systemd 219, the stub rejects --value and prints NAME=VALUE.
+        stub = ('systemctl() { [[ " $* " != *" --value "* ]] || { echo "unrecognized option --value" >&2; return 1; }\n'
+                '  [[ "$1 $2 $3" == "show oss-test -p" ]] || return 9; printf "%b" "$QA_OUTPUT"; return "$QA_STATUS"; }\n')
+        return subprocess.run(['bash', '-c', 'set -euo pipefail\n' + stub + self.helper + '\nsystemd_property oss-test "$1"', 'test', name],
+                              env=dict(os.environ, QA_OUTPUT=output, QA_STATUS=str(status)),
+                              text=True, capture_output=True, timeout=5)
+
+    def test_property_parses_name_value_output(self):
+        for output, name, expected in (
+            ('LoadState=not-found\n', 'LoadState', 'not-found\n'),
+            ('MainPID=0\n', 'MainPID', '0\n'),
+            ('ExecMainPID=5\nMainPID=812\n', 'MainPID', '812\n'),
+            ('DropInPaths=\n', 'DropInPaths', '\n'),
+            ('DropInPaths=/etc/systemd/system/a.service.d/x=y.conf\n', 'DropInPaths', '/etc/systemd/system/a.service.d/x=y.conf\n'),
+            ('', 'DropInPaths', ''),
+        ):
+            with self.subTest(output=output):
+                result = self.property(output, name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+        self.assertEqual(self.property('LoadState=loaded\n', 'LoadState', status=1).returncode, 1)
+
+    def test_unix_installers_avoid_options_newer_than_systemd_219(self):
+        for path in (INSTALLER, PUBLIC_INSTALLER):
+            source = path.read_text()
+            with self.subTest(path=path.name):
+                self.assertNotIn('--value', source.replace('`systemctl show --value`', ''))
+                self.assertNotIn('enable --now', source)
+                self.assertNotIn('ss -H', source)
+                # Bash 4.2 treats an empty "${array[@]}" as unset under set -u.
+                self.assertNotIn('"${original_args[@]}"', source.replace('${original_args[@]+"${original_args[@]}"}', ''))
+                # A Master URL may be an IPv6 literal; curl 7.29 globs brackets.
+                for line in source.splitlines():
+                    if line.lstrip().startswith('curl ') and ('"$release_url/' in line or '"$origin/' in line):
+                        self.assertIn('--globoff', line)
+
+    def test_systemd_unit_uses_only_systemd_219_directives(self):
+        start = self.source.index('if [[ "$platform" == linux ]]; then\n  cat > "$unit" <<EOF\n')
+        unit = self.source[self.source.index('\n', self.source.index('<<EOF', start)) + 1:self.source.index('\nEOF\n', start)]
+        keys = {line.split('=', 1)[0] for line in unit.splitlines() if '=' in line}
+        self.assertEqual(keys - self.UNIT_219, set(), 'gate newer directives on the systemd version')
+        self.assertIn('ExecStart="$binary" --config "$config"', unit)
 
 
 class StartupCommitTests(unittest.TestCase):

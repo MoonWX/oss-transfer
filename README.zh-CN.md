@@ -38,7 +38,7 @@ Agent 主动连接 Master，所以 Master 不需要能访问 Agent。数据只�
 
 ### 1. 安装 Master
 
-在使用 systemd 的 Linux 上运行：
+在使用 systemd 的 Linux（CentOS 7 / RHEL 7 及更新版本）上运行：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash
@@ -155,6 +155,8 @@ docker compose logs master
 | macOS | amd64、arm64 |
 | Windows | amd64、arm64 |
 | FreeBSD | amd64、arm64 |
+
+Linux 原生服务需要 systemd 219 及以上版本，最早支持 CentOS 7 / RHEL 7。在低于 236 的 systemd 上（例如 CentOS 7），在线更新失败后，其辅助单元 `oss-transfer-update-*` 会一直显示为失败状态，执行 `systemctl reset-failed` 即可清除。
 
 每个版本都会发布到 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases)、Docker Hub `moonwx/osstransfer` 和国内 OSS 镜像。
 

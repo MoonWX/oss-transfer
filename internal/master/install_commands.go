@@ -86,6 +86,10 @@ func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
 func bootstrapCommand(link string) string {
+	// curl 7.29 (CentOS 7) reads the brackets of an IPv6 literal as a glob.
+	if u, err := url.Parse(link); err == nil && strings.HasPrefix(u.Host, "[") {
+		return "curl -fsSL --globoff " + shellQuote(link) + " | bash"
+	}
 	return "curl -fsSL " + shellQuote(link) + " | bash"
 }
 
@@ -222,8 +226,8 @@ trap 'rm -f "$installer"' EXIT
 release=%s
 case "$(uname -s)" in Linux) platform=linux;; Darwin) platform=darwin;; FreeBSD) platform=freebsd;; *) echo 'Unsupported Agent system.' >&2; exit 1;; esac
 case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; armv7l|armv7) arch=armv7;; riscv64) arch=riscv64;; loongarch64|loong64) arch=loong64;; *) echo 'Unsupported Agent architecture.' >&2; exit 1;; esac
-curl -fsSL "$release/manifest.tsv?target=$platform-$arch" -o /dev/null
-curl -fsSL "$release/install.sh" -o "$installer"
+curl -fsSL --globoff "$release/manifest.tsv?target=$platform-$arch" -o /dev/null
+curl -fsSL --globoff "$release/install.sh" -o "$installer"
 printf '%%s' %s | bash "$installer" --role agent --method native --release-url "$release" --master-url %s --token-stdin --yes "$@"
 `, shellQuote(releaseURL), shellQuote(token), shellQuote(masterURL))
 }

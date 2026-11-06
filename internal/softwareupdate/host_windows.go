@@ -21,6 +21,7 @@ func hostSupport() error {
 	return nil
 }
 func checkInstallationPrivileges(installation) error { return nil }
+func privateHelperProcess()                          {}
 func protectDirectory(path string) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {

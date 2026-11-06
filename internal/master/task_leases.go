@@ -161,6 +161,21 @@ func (l *taskLeases) renew(ctx context.Context, p task.Parent, node task.Node) e
 			if err != nil {
 				return err
 			}
+			if !task.SharesFit(folded) && folded.Generation == p.Generation {
+				// An offline peer may keep its old reserve; shrink the
+				// joiner, which has no lease yet, into the room left.
+				fitted, changed, fitErr := l.runtime.repo.FitJoinerShare(folded.ID, folded.Generation, task.WireRevision(folded), node.ID)
+				if fitErr != nil {
+					return fitErr
+				}
+				if changed {
+					p = fitted
+					_ = l.runtime.policies(ctx, p)
+					if folded, err = l.runtime.repo.FoldShares(p.ID, p.Generation, task.WireRevision(p), l.runtime.shareAckedNodes(p)); err != nil {
+						return err
+					}
+				}
+			}
 			if folded.Generation != p.Generation || task.WireRevision(folded) != task.WireRevision(p) || !l.runtime.shareAcked(folded, node.ID) || !task.SharesFit(folded) {
 				return errors.New("waiting for task nodes to apply their reduced bandwidth share")
 			}

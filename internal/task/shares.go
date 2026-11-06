@@ -859,6 +859,62 @@ func (r *Repository) FoldShares(id int64, generation, wire uint64, acked []strin
 	return
 }
 
+// FitJoinerShare lowers a joining node's share to the room its peers leave.
+// A joiner receives its target share at once, which assumes every peer's
+// reserve shrinks to its new share. An offline peer cannot acknowledge, so
+// it keeps its old reserve and the joiner's full target may not fit. Before
+// its first lease the joiner performs no I/O, so its reserve can be lowered
+// without an acknowledgement. Nothing changes when the room is not a valid
+// positive rate: the grant then waits as before.
+func (r *Repository) FitJoinerShare(id int64, generation, wire uint64, joiner string) (p Parent, changed bool, err error) {
+	err = unchangedOK(r.store.Update(func(tx *state.Tx) error {
+		p, err = get(tx, id)
+		if err != nil {
+			return err
+		}
+		if p.Generation != generation || p.Shares == nil || p.Shares.Revision != wire || Ended(p.Status) || p.Deleted {
+			return errUnchanged
+		}
+		entry, ok := p.Shares.Nodes[joiner]
+		if !ok {
+			return errUnchanged
+		}
+		l := limitsOf(p.Spec)
+		for d := range shareDimensions {
+			if l.total[d] == 0 {
+				continue
+			}
+			others := 0.0
+			for _, node := range p.ActiveNodes() {
+				if node.ID != joiner {
+					others += p.Shares.Nodes[node.ID].Reserved.value(d)
+				}
+			}
+			room := l.total[d] - others
+			if integerDimension(d) {
+				room = math.Floor(room)
+			}
+			if room <= 0 || integerDimension(d) && room < 1 {
+				return errUnchanged
+			}
+			if entry.Reserved.value(d) > room {
+				entry.Share.setValue(d, math.Min(entry.Share.value(d), room))
+				entry.Reserved.setValue(d, room)
+				changed = true
+			}
+		}
+		if !changed {
+			return errUnchanged
+		}
+		p.Shares.Nodes[joiner] = entry
+		if err := bumpBudget(&p); err != nil {
+			return err
+		}
+		return r.save(tx, p)
+	}))
+	return
+}
+
 // SkipShareRevisions recovers from an older Master that sent its own equal
 // split at BudgetRevision without saving the parent: the Agent then holds a
 // revision at or above the share revision and rejects it as stale. Every

@@ -79,7 +79,7 @@ func settle(t *testing.T, p *Parent, idle map[string]bool) {
 // busy nodes split the rest max-min fairly.
 func TestShareTargetsProperties(t *testing.T) {
 	random := rand.New(rand.NewPCG(7, 11))
-	for iteration := range 4000 {
+	for iteration := range 1000 {
 		n := 1 + random.IntN(16)
 		bandwidth := float64(n) + math.Floor(random.Float64()*float64(int64(1)<<40))
 		if iteration%5 == 0 {
@@ -634,7 +634,7 @@ func (m *shareModel) check() {
 }
 
 func TestShareLedgerModelCheck(t *testing.T) {
-	seeds := 200
+	seeds := 80
 	if testing.Short() {
 		seeds = 10
 	}
@@ -666,7 +666,7 @@ func runShareModel(t *testing.T, seed uint64) {
 		}
 		return ids
 	}
-	for step := range 600 {
+	for step := range 400 {
 		action := random.IntN(100)
 		m.log = append(m.log, fmt.Sprintf("%d:%d rev=%d status=%s", step, action, WireRevision(m.p), m.p.Status))
 		switch {

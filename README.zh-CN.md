@@ -4,20 +4,19 @@
 
 OSS Transfer 是一个分布式数据迁移工具，用于在 S3 兼容对象存储之间迁移数据，也可以把本地文件上传到对象存储，或把对象下载到本地。
 
-一个 Master 提供管理页面、API 和任务调度；多个 Agent 部署在靠近数据的主机上，负责扫描和传输。所有操作都可以在浏览器或命令行中完成。
+一个 Master 提供管理页面、API 和任务调度；多个执行节点（Agent）部署在靠近数据的主机上，负责扫描和传输。所有操作都可以在浏览器或命令行中完成。
 
 ![迁移任务页面：一个任务正在两个节点上执行，另外两个已完成](docs/images/overview.zh-CN.png)
 
 ## 功能
 
-- **三种迁移方向**：对象存储 → 对象存储、本地 → 对象存储、对象存储 → 本地。支持按前缀、单个对象或文件清单迁移，可以保留、添加或替换路径前缀。
-- **多节点并行**：一个任务可以分给多个 Agent 执行，默认按剩余数据量均衡分发。每个对象只由一个节点传输；128 MiB 及以上的大对象会在该节点内拆分为多个区间并行传输：写入对象存储时（上传或对象存储之间迁移）分片上传，下载到本地时以 8 MiB 为一段并发拉取、严格按顺序写入同一个文件。节点空闲时会借用更多并发。受带宽或 LIST / GET 限速约束时，每个下载中的对象占用的区间不超过约一秒的允许速率；设置了任务级带宽、LIST / GET 或 PUT 上限的任务，写入对象存储时按单一数据流传输每个对象。下载任务也可以停用分段下载（见[大对象](docs/operations.zh-CN.md#大对象)）。
-- **运行中调整节点**：可以在任务详情中或用 `oss-transfer-cli task nodes` 给运行中的任务添加 Agent，或以排空、立即转移两种方式移出 Agent。带宽和 QPS 份额随之调整，不会超过任务上限。节点窗口会实时显示调整进度，计划内的调整不会作为任务错误报告。详见[调整任务的执行节点](docs/operations.zh-CN.md#调整任务的执行节点)。
-- **实时进度**：按实际传输字节显示进度和速度。任务详情中同时显示 LIST、GET、HEAD、PUT 的实时请求速率和生效上限。
-- **流量控制**：任务和节点都可以限制带宽及各类请求的 QPS。任务限速按需求实时分给各节点：空闲节点只保留很小的下限，其余由忙节点分享，始终不超过上限（[详情](docs/operations.zh-CN.md#任务限速在节点间的分配)）。运行中修改立即生效。存储服务限流时，Agent 会重试请求，并暂时降低自身的请求上限，之后再逐步恢复（见[存储限流](docs/operations.zh-CN.md#存储限流)）。节点并发也可以在任务运行时调整：默认 32 个子任务、每个子任务 4 个对象，最多 256 个子任务、每个子任务 64 个对象，合计不超过 1024 个对象。
-- **故障恢复**：Agent 失联后，未完成的子任务会转给其他健康节点。扫描支持断点续扫，失败文件可以单独重试，任务结束后可以导出报告。
-- **对象比对**：比对单个对象，或整个存储桶、前缀下的对象。可以只比较元数据，也可以流式计算 SHA-256 来比较内容。在每个节点的存储预算内保存全部差异，可以筛选和导出，导出时附带用于重新迁移缺失和不一致对象的 Key 清单。中断的比对可以从停止的位置继续（[详情](docs/operations.zh-CN.md#对象比对)）。
-- **运维**：在线升级 Master 并逐台升级 Agent，升级失败时自动回滚。存储凭证加密保存。界面和 CLI 支持中文、英文和日文。
+- **三种迁移方向**：对象存储 → 对象存储、本地 → 对象存储、对象存储 → 本地，可以按存储桶、前缀、单个对象或 Key 清单迁移，并保留、添加或替换前缀。
+- **一个任务多个执行节点**：工作在多个执行节点间均衡分配，大对象拆成多个分片并行传输（见[大对象](docs/operations.zh-CN.md#大对象)）。任务运行中也可以添加或移出执行节点（见[调整任务的执行节点](docs/operations.zh-CN.md#调整任务的执行节点)）。
+- **流量控制**：按任务和节点限制带宽以及 LIST、GET、HEAD、PUT 请求速率，运行中也能修改。存储服务限流时，执行节点会自动降速（见[任务限速](docs/operations.zh-CN.md#任务限速在节点间的分配)、[存储限流](docs/operations.zh-CN.md#存储限流)）。
+- **冲突策略**：跳过同名对象、覆盖同名对象，或只覆盖有变化的对象，用于切换前的增量轮次（见[规划迁移](docs/planning.zh-CN.md#增量迁移与切换)）。
+- **故障恢复**：执行节点失联后，未完成的工作会转给健康的执行节点；扫描可以断点续扫，失败的对象可以重试。每个迁移任务都可以下载报告。
+- **对象比对**：按元数据或内容 SHA-256 比对存储桶或前缀，并导出差异和用于重新迁移的 Key 清单（见[对象比对](docs/operations.zh-CN.md#对象比对)）。
+- **运维**：在线更新并在失败时自动回滚，存储凭证加密保存，管理页面和 CLI 支持中文、英文和日文。
 
 ## 架构
 
@@ -32,13 +31,20 @@ OSS Transfer 是一个分布式数据迁移工具，用于在 S3 兼容对象存
    └───────────────┘                         └───────────────┘
 ```
 
-Agent 主动连接 Master，所以 Master 不需要能访问 Agent。数据只在 Agent 和存储之间传输，不经过 Master。
+执行节点主动连接 Master，所以 Master 不需要能访问执行节点。数据只在执行节点和存储之间传输，不经过 Master。
+
+## 开始之前
+
+正式迁移前请阅读[规划迁移](docs/planning.zh-CN.md)：执行节点部署在哪里、要开放哪些端口、密钥需要哪些存储权限，以及如何规划验收和切换。HTTPS、凭证和密码见[安全说明](docs/security.zh-CN.md)。
 
 ## 快速开始
 
-### 1. 安装 Master
+有两种安装方式：
 
-在使用 systemd 的 Linux（CentOS 7 / RHEL 7 及更新版本）上运行：
+- **原生服务**：在使用 systemd 的 Linux（CentOS 7 / RHEL 7 及更新版本）上运行下面的一行安装命令。macOS、Windows、FreeBSD 和自定义目录见[安装选项](docs/install.zh-CN.md)，无法联网的主机见[离线安装](docs/offline-install.zh-CN.md)。
+- **Docker**：用 Docker Compose 运行 Master，用容器运行执行节点，适用于 Linux 以及 macOS、Windows 上的 Docker Desktop。第 1 到 3 步按 [Docker Compose](docs/docker-compose.zh-CN.md) 操作，然后从第 4 步继续。
+
+### 1. 安装 Master
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash
@@ -50,61 +56,123 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh | sudo bash
 ```
 
-按提示选择 Master 和原生服务，并决定是否同时安装本机 Agent。本机 Agent 安装后会自动加入集群。程序、配置和数据默认放在 `/opt/oss-transfer/`。
+按提示选择 Master 和原生服务，并决定是否同时安装本机执行节点。程序、配置和数据默认放在 `/opt/oss-transfer/`。要通过管道传递参数，请加 `-s --`，例如不提问、安装指定版本：
 
-macOS、Windows、FreeBSD 和自定义目录的安装方法见[安装选项](docs/install.zh-CN.md)，无法联网的环境见[离线安装](docs/offline-install.zh-CN.md)。在拷贝来的安装文件所在目录中运行 `install.sh`，或把它放在这些文件旁边，安装器就会直接使用这些文件，不会联网。
+```sh
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --role master --with-agent --version 4.2.0 --yes
+```
+
+**成功时**，输出的最后几行类似：
+
+```text
+=== Master 和本机 Agent 安装成功 ===
+本机 Agent 已加入集群。
+访问地址: http://10.0.0.5:1685
+初始管理员: admin
+初始密码: <随机密码>
+```
+
+不安装本机执行节点时，第一行是 `=== master 4.2.0 · 安装成功 ===`。
+
+**失败时**，安装器会输出原因和日志路径。运行 `sudo systemctl status oss-transfer-master` 查看服务状态，解决问题后重新运行同一条命令：它会修复未完成的安装。
 
 ### 2. 登录
 
-打开 `http://<master-ip>:1685`，用户名是 `admin`，密码是安装器输出的随机初始密码。首次登录后必须修改密码。
+打开 **访问地址**，用 `admin` 和初始密码登录，然后设置新密码：至少 8 个字符，不能与用户名或初始密码相同。
 
-### 3. 添加 Agent
+**成功时**，会进入管理页面。**操作说明**（以及空的概览页）会显示一份清单：添加执行节点、添加存储连接、创建迁移任务、执行与查看结果。
 
-打开 **执行节点** 页面，点击右上角的 **添加节点**。
+如果页面打不开，请在主机防火墙中开放 1685 端口（见[网络](docs/planning.zh-CN.md#网络与防火墙)）。忘记密码时，见[重置管理员密码](docs/operations.zh-CN.md#重置管理员密码)。
+
+### 3. 添加执行节点
+
+如果已安装本机执行节点并且够用，可以跳过这一步。否则打开 **执行节点** 页面，点击右上角的 **添加节点**。
 
 ![执行节点页面，红框标出“添加节点”按钮](docs/images/add-node.zh-CN.png)
 
-填写节点名称，以及 Agent 能访问到的 Master 地址，然后点击 **生成加入指令**。窗口中会显示 Linux / macOS / FreeBSD、Windows 和 Docker 三种命令：
+填写节点名称和 **Master 地址（Agent 需能访问）**：同一网络内可以填写内网地址，浏览器仍可使用公网地址或反向代理。点击 **生成加入指令**，窗口中会显示 Linux / macOS / FreeBSD、Windows 和 Docker 三种命令：
 
-1. 当前所选系统的加入命令。Agent 主机是 Windows 或要用 Docker 运行时，先切换到对应标签。
-2. 点击 **复制指令**，在 Agent 主机上运行。
+1. 当前所选系统的加入命令。执行节点主机是 Windows 或要用 Docker 运行时，先切换到对应标签。
+2. 点击 **复制指令**，在执行节点主机上运行。
 
 <p align="center"><img src="docs/images/join-command.zh-CN.png" width="720" alt="添加节点窗口，红框标出加入命令和“复制指令”按钮"></p>
 
-原生安装默认从 Master 下载安装器和程序包，点击 **改用公网下载** 可以改为从公网下载；Docker 命令会直接拉取 Agent 镜像。加入凭证只能使用一次，并有有效期。如果 Agent 和 Master 在同一内网，填写 Master 的内网地址即可，浏览器可以继续使用公网地址或反向代理。
+原生命令的形式是 `curl … | sudo bash`；Windows 命令请在管理员 PowerShell 中运行。窗口会显示执行节点从哪里下载安装包：默认从 Master 本身下载，点击 **改用公网下载** 后改为从公网下载。指令只能使用一次，30 分钟后过期。
 
-### 4. 创建迁移任务
+**成功时**，安装器输出 `=== agent 4.2.0 · 安装成功 ===`，**执行节点** 页面中该节点显示为 **在线**（也可以运行 `oss-transfer-cli node list` 查看）。
 
-先在 **存储连接** 页面点击 **添加连接**，添加源端和目标端的对象存储。默认会在保存时检查连接是否可用。
+**失败时**：确认执行节点主机能访问 Master 地址（例如 `curl http://10.0.0.5:1685/`）。指令已过期或已被使用时，重新生成。
+
+### 4. 添加存储连接
+
+在 **存储连接** 页面点击 **添加连接**，分别添加源端和目标端。请先添加执行节点：连接检查在执行节点上运行。
 
 ![存储连接页面，红框标出“添加连接”按钮](docs/images/storage.zh-CN.png)
 
-然后点击左上角的 **创建迁移**，按图中编号填写：
+| 字段 | 填写内容 |
+| --- | --- |
+| 连接名称 | 简短的名称，例如 `source`；CLI 中把存储桶写成 `source/存储桶` |
+| Endpoint | `http://` 或 `https://` 加主机和可选端口，不带路径：`https://s3.example.com` 或 `http://10.0.0.5:9000` |
+| Access Key、Secret Key | 具备本次迁移所需[权限](docs/planning.zh-CN.md#存储权限)的密钥 |
+| 寻址方式 | **自动（推荐）** |
+| 签名版本 | **默认（Signature V4）**；只有存储要求时才选 V2 |
+| 保存时验证访问权限 | 保持开启 |
+
+**自动寻址**在以下情况使用 Path-style（`http://endpoint/bucket/key`）：Endpoint 带端口，或主机是 IP 地址、`localhost`、不含点的名称，或以 `.internal`、`.local`、`.lan` 结尾，大多数自建 S3（MinIO、Ceph、SeaweedFS）都属于这种情况；其他情况使用 Virtual-hosted（`https://bucket.endpoint/key`），例如 AWS 和其他云服务的域名。表单会显示当前 Endpoint 实际使用哪一种。管理页面没有区域字段；如果存储需要指定签名区域，请运行 `oss-transfer-cli storage update <连接名> --region <区域>`。
+
+**成功时**，连接保存后没有警告，卡片上显示寻址方式，例如 **自动 · Path-style**。**测试连接** 会说明已列举某个存储桶中的对象。
+
+**失败时**，表单会显示原因和处理建议，原始错误可以通过 **显示原始错误** 查看。存储桶域名无法解析时，点击 **改用 Path-style**。只授权到单个存储桶的密钥保存后会显示警告，请在 **测试连接 → 检查指定存储桶** 中检查该存储桶（见[只授权到单个存储桶的密钥](docs/planning.zh-CN.md#只授权到单个存储桶的密钥与连接检查)）。
+
+### 5. 创建迁移任务
+
+点击左上角的 **创建迁移**，按图中编号填写：
 
 1. **迁移方向**：对象存储 → 对象存储、对象存储 → 本地，或本地 → 对象存储。
-2. **迁移源和迁移目标**：选择存储连接和存储桶，可以只迁移某个前缀或单个对象，也可以修改目标端的对象名称。涉及本地文件时，这里填写 Agent 主机上的路径，并需要通过目录预检。
-3. **迁移选项**：选择执行节点、目标端已有同名对象时的处理方式，以及节点分发方式（默认均衡分发；本地上传时由绑定的节点数决定）。下方还可以设置时间范围、**分段下载**（仅下载任务；默认自动）和任务限速。
+2. **迁移源和迁移目标**：选择存储连接和存储桶，可以只迁移某个前缀或单个对象，也可以修改目标端的对象名称。涉及本地文件时，这里填写执行节点主机上的路径，并需要通过目录预检。
+3. **迁移选项**：选择执行节点、冲突策略（**目标已存在时**：**跳过同名对象或文件**、**覆盖有变化的对象** 或 **覆盖同名对象或文件**）和节点分发方式。下方还可以设置时间范围（按服务端时区解释）、**分段下载**（仅下载任务）和任务限速。
 4. 点击 **创建迁移任务**。任务会先扫描，再开始传输。
 
 ![创建迁移页面，红框按顺序标出迁移方向、源和目标、迁移选项、创建按钮](docs/images/create.zh-CN.png)
 
-上传本地文件时，Agent 服务账号需要源目录的读权限；下载到本地时，需要目标目录的写权限。
+上传本地文件时，执行节点需要源目录的读权限；下载到本地时，需要目标目录的写权限。目标目录不可写时，预检会报告。
 
-### 5. 查看进度
+### 6. 查看进度
 
 在 **迁移任务** 页面点击任务，右侧会打开任务详情：
 
 1. 停止或继续任务；点击 **调整**（未设置带宽上限时显示为 **限速**）可以在运行中修改带宽和请求上限。
-2. **传输统计**：已扫描、已迁移、已跳过和失败的对象数及数据量，按实际传输的字节实时更新。
+2. **传输统计**：已扫描、已迁移、已跳过和失败的对象数及数据量，实时更新。
 3. **请求速率**：LIST、GET、HEAD、PUT 每秒的实际请求数，以及任务上限和最终生效的上限。
 
 <p align="center"><img src="docs/images/task-detail.zh-CN.png" width="440" alt="任务详情，红框标出停止和调整限速、传输统计、请求速率"></p>
 
-在 **异常记录** 页面可以重试任务中失败的对象，已停止的任务可以继续传输，已完成的对象不会重复传输。任务停止或结束后，可以导出任务报告。
+**成功时**，任务以 **已完成** 结束且没有失败对象。有对象失败时，任务详情会显示主要原因，请在 **异常记录** 页面重试；已完成的对象不会重复传输。**导出任务报告** 会下载一个包含每个对象结果的 ZIP。
+
+### 7. 验证结果
+
+在任务详情中点击 **比对源和目标**（对象存储 → 对象存储任务），会打开 **运维工具 → 对象比对** 并填好该任务的存储桶和前缀。点击 **开始比对**。
+
+**成功时**，比对完成并显示 **未发现差异。** 否则请导出差异：ZIP 中附带用于重新迁移缺失和不一致对象的 Key 清单（见[对象比对](docs/operations.zh-CN.md#对象比对)、[验收大规模迁移](docs/planning.zh-CN.md#验收大规模迁移)）。
+
+## Docker Compose
+
+Master 通过 `docker-compose.yml` 运行，管理页面的 **Docker** 加入指令会以容器方式启动执行节点，不需要 root，macOS 和 Windows 上的 Docker Desktop 也适用：
+
+```sh
+mkdir oss-transfer && cd oss-transfer
+curl -fSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/docker-compose.yml -o docker-compose.yml
+curl -fSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/.env.example -o .env
+docker compose pull master
+docker compose up -d master
+docker compose logs master
+```
+
+日志中有 `admin` 的初始密码。Docker Desktop、容器中的执行节点如何访问 Master（`host.docker.internal`）、目录挂载、日志、在容器中使用 CLI、更新和删除，见 [Docker Compose](docs/docker-compose.zh-CN.md)。
 
 ## 命令行
 
-在已安装的 Master 或 Agent 主机上，用服务所属账号或管理员身份运行 CLI，会直接连接本机所属的集群，不需要登录：
+在已安装的 Master 或执行节点主机上，以 root（或服务所属账号）运行 CLI，会直接连接本机所属的集群，不需要登录：
 
 ```sh
 oss-transfer-cli task list
@@ -113,39 +181,25 @@ oss-transfer-cli task limits <任务ID> --put-qps 200 --bandwidth-mbps 100
 oss-transfer-cli node list
 ```
 
-CLI 可以完成页面上的全部操作，并支持 `--json` 输出，方便写脚本。远程登录、创建任务等用法见 [CLI 文档](docs/cli.zh-CN.md)。
-
-## Docker Compose
-
-已安装 Docker Engine 和 Compose 插件时运行：
-
-```sh
-mkdir oss-transfer && cd oss-transfer
-curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/docker-compose.yml -o docker-compose.yml
-docker compose up -d master
-docker compose logs master
-```
-
-在日志中找到 `admin` 的初始密码，然后登录。添加 Agent 时，在 **执行节点 → 添加节点** 中选择 **Docker**。镜像地址是 `moonwx/osstransfer`，目录挂载和升级方法见 [Docker Compose](docs/docker-compose.zh-CN.md)。
+Docker 部署时，在 Master 容器中运行：`docker compose exec master oss-transfer-cli task list`。CLI 可以完成页面上的全部操作，并支持 `--json` 输出，方便写脚本。远程登录、创建任务和退出状态码见 [CLI 文档](docs/cli.zh-CN.md)。
 
 ## 升级
 
 建议在没有运行中的任务时升级。
 
-1. 在 **运维工具 → 版本更新** 中更新 Master。
-2. 在 **执行节点 → 版本更新** 中点击 **更新全部节点**，Agent 会逐台更新。
+1. 在 **运维工具 → 版本更新** 中更新 Master，或运行 `oss-transfer-cli update master --yes`。
+2. 在 **执行节点 → 版本更新** 中点击 **更新全部节点**，执行节点会逐台更新。Docker 执行节点需要重建容器来更新，点击它的 **更新命令** 按钮即可看到命令（见 [Docker Compose](docs/docker-compose.zh-CN.md#容器中的执行节点)）。
 
-升级前会自动备份，新版本通过健康检查后删除备份；启动失败时会自动回滚。也可以重新运行安装命令来升级。
+升级前会自动备份，新版本通过健康检查后删除备份；启动失败时会自动回滚。也可以重新运行安装命令来升级。检测更新只提供正式版，试用 beta 版本见[试用预发布版本](docs/operations.zh-CN.md#试用预发布版本)。
 
-检测更新只提供正式版。预发布（beta）版本只有在指定精确版本时才会安装，见[试用预发布版本](docs/operations.zh-CN.md#试用预发布版本)。
-
-需要重装时，保留各角色的 `config` 目录和完整的 `data` 目录，包括密钥文件（`master.db.key` 或 `agent.db.key`），安装器会继续使用原来的账号、任务和节点身份。计划降级时，应在升级前另外备份。把 Master 降级到 4.1.33 之前的版本前，请先停止运行中的任务：旧版 Master 把任务限速平均分给各节点，运行中的任务可能短暂超过上限。详见[运维说明](docs/operations.zh-CN.md)。
+需要重装时，保留各角色的 `config` 目录和完整的 `data` 目录，包括密钥文件（`master.db.key` 或 `agent.db.key`）。要卸载原生安装，用 `--uninstall` 运行安装器（见[安装选项](docs/install.zh-CN.md)）；Docker 部署见[删除安装](docs/docker-compose.zh-CN.md#删除安装)。详见[运维说明](docs/operations.zh-CN.md)。
 
 ## 注意事项
 
-- **`SKIP` 不比较内容**：目标端已有同名对象或文件时直接跳过。需要确认内容一致时，使用[对象比对](docs/operations.zh-CN.md#对象比对)。
-- **本地路径是 Agent 主机上的路径**：多个节点处理同一个本地目录时，这个目录必须是共享目录。各节点的挂载路径可以不同，预检会写入一个小文件，确认它们指向同一个目录。
-- **续扫不是持续同步**：断点续扫只是继续同一轮扫描，不保证发现断点之前的数据变化。需要迁移固定数据集时，应保持源端不变或使用快照。
+- **跳过同名对象或文件只比较名称**：目标端已有同名对象或文件时直接跳过。后续轮次请使用 **覆盖有变化的对象**，并用[对象比对](docs/operations.zh-CN.md#对象比对)验收。
+- **不会同步删除**：在源端删除的对象会留在目标端，比对时显示为 **目标多余**（见[源端删除的对象](docs/planning.zh-CN.md#源端删除的对象)）。
+- **本地路径是执行节点主机上的路径**：多个节点处理同一个本地目录时，这个目录必须是共享目录。各节点的挂载路径可以不同，预检会写入一个小文件，确认它们指向同一个目录。
+- **一个任务只复制变化中数据的一个时刻**：扫描看不到已扫描部分之后发生的变化。数据持续变化时，请分轮复制，并在最后一轮前停写（见[切换](docs/planning.zh-CN.md#增量迁移与切换)）。
 
 ## 支持的平台
 
@@ -164,9 +218,11 @@ Linux 原生服务需要 systemd 219 及以上版本，最早支持 CentOS 7 / R
 
 | 文档 | 内容 |
 | --- | --- |
+| [规划迁移](docs/planning.zh-CN.md) | 部署拓扑、端口和防火墙、存储权限、速度与容量、验收、增量迁移与切换 |
+| [安全说明](docs/security.zh-CN.md) | 网络暴露面、HTTPS、存储凭证、密码、会话、加入指令和服务运行身份 |
 | [安装选项](docs/install.zh-CN.md) | 各系统的安装方法、指定版本或预发布版本、目录、端口、重装和反向代理 |
 | [离线安装](docs/offline-install.zh-CN.md) | 在无法联网的环境中安装 |
-| [Docker Compose](docs/docker-compose.zh-CN.md) | 容器部署、目录挂载和升级 |
+| [Docker Compose](docs/docker-compose.zh-CN.md) | 在 Linux 和 Docker Desktop 上用容器部署、容器中的执行节点、目录挂载、日志、CLI、更新和删除 |
 | [CLI](docs/cli.zh-CN.md) | 命令行的全部用法 |
 | [运维说明](docs/operations.zh-CN.md) | 并发、节点限速、任务限速分配、存储限流、大对象、对象比对、升级、预发布版本、故障转移、调整执行节点、断点续扫、重置密码 |
 | [数据库维护](docs/database-maintenance.zh-CN.md) | 回收数据库文件空间 |

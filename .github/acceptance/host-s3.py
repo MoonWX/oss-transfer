@@ -8,11 +8,9 @@ import os
 from pathlib import Path
 import platform
 import secrets
-import shutil
 import signal
 import subprocess
 import time
-from urllib.request import urlopen
 
 import boto3
 from botocore.config import Config
@@ -119,9 +117,7 @@ def start(args):
         raise FixtureError("Host S3 fixture requires Linux or macOS amd64/arm64")
     archive = args.archive.resolve() if args.archive else directory / asset
     if not args.archive:
-        with urlopen("https://github.com/seaweedfs/seaweedfs/releases/download/4.48/" + asset,
-                     timeout=120) as source, archive.open("wb") as target:
-            shutil.copyfileobj(source, target)
+        PREPARE.download(PREPARE.WEED_RELEASE + asset, archive)
     if PREPARE.digest(archive) != PREPARE.WEED[asset]:
         raise FixtureError("Host SeaweedFS fixture archive checksum mismatch")
     weed = directory / "weed"

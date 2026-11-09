@@ -2,12 +2,15 @@
 """Verify packaged binaries and install the pinned S3 fixture for native acceptance."""
 import argparse
 import hashlib
+import http.client
 import importlib.util
 import os
 from pathlib import Path
 import shutil
 import struct
 import tarfile
+import time
+from urllib.error import HTTPError
 from urllib.request import urlopen
 import zipfile
 
@@ -24,6 +27,27 @@ WEED = {
     "linux_arm64.tar.gz": "557e92c38c5c7d180748eb8e2b2b45e426f8e5282a4caca8e098a90d09f03a07",
     "windows_amd64.zip": "fe90c04c0620ad1a1c756f86cd5e1443773f56a446688077a4bb5ec04c3cc874",
 }
+
+
+WEED_RELEASE = "https://github.com/seaweedfs/seaweedfs/releases/download/4.48/"
+
+
+def download(url, target, attempts=5):
+    """Download url to target. GitHub release downloads now and then fail
+    with a 5xx status, a reset connection or a timeout; retry those with
+    backoff instead of failing the job. The caller still checks the digest."""
+    for attempt in range(1, attempts + 1):
+        try:
+            with urlopen(url, timeout=120) as source, target.open("wb") as stream:
+                shutil.copyfileobj(source, stream)
+            return
+        except (OSError, http.client.HTTPException) as error:
+            permanent = isinstance(error, HTTPError) and error.code < 500 and error.code != 429
+            if permanent or attempt == attempts:
+                raise
+            delay = 5 * 2 ** (attempt - 1)
+            print(f"Downloading {url} failed ({error}); retrying in {delay} s", flush=True)
+            time.sleep(delay)
 
 
 def digest(path):
@@ -124,8 +148,7 @@ def main():
     fixture_os, fixture_arch = (args.fixture_platform or args.platform).split("/")
     weed_asset = "windows_amd64.zip" if fixture_os == "windows" else f"{fixture_os}_{fixture_arch}.tar.gz"
     weed_archive = directory / weed_asset
-    with urlopen("https://github.com/seaweedfs/seaweedfs/releases/download/4.48/" + weed_asset, timeout=120) as source, weed_archive.open("wb") as target:
-        shutil.copyfileobj(source, target)
+    download(WEED_RELEASE + weed_asset, weed_archive)
     if digest(weed_archive) != WEED[weed_asset]:
         raise ValueError("SeaweedFS fixture checksum mismatch")
     weed = directory / ("weed" + extension)

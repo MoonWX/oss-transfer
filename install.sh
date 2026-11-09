@@ -2275,6 +2275,9 @@ while (($#)); do
   esac
 done
 [[ -z "$lang" || "$lang" == en || "$lang" == zh ]] || fail '--lang must be en or zh'
+# Bootstrap scripts from the console pass its language this way; older
+# installers that predate --lang ignore it.
+if [[ -z "$lang" ]]; then case "${OSS_TRANSFER_INSTALL_LANG:-}" in en|zh) lang=$OSS_TRANSFER_INSTALL_LANG;; esac; fi
 [[ "$source" == auto || "$source" == github || "$source" == jdoss ]] || fail '--source must be auto, github or jdoss'
 version=${version#v}
 version_requested=$version
@@ -2282,12 +2285,15 @@ version_requested=$version
 os=$(uname -s)
 [[ "$os" == Linux || "$os" == Darwin || "$os" == FreeBSD ]] || fail 'Use Install.ps1 on Windows'
 [[ "$os" == Darwin || "$user_service" == 0 ]] || fail '--user is macOS only'
+# Check before asking for sudo: Docker Desktop cannot use the Compose layout.
+[[ "$method" != compose || "$os" == Linux ]] || fail "$(say 'Docker Compose installation needs Linux. With Docker Desktop on macOS or Windows, copy the Docker command from Nodes > Add node > Docker instead; it needs no root.' 'Docker Compose 安装仅支持 Linux。在 macOS 或 Windows 的 Docker Desktop 上，请改用“执行节点 → 添加节点 → Docker”中的 Docker 指令，无需 root。')"
 if ((user_service == 0)) && [[ $(id -u) != 0 ]]; then
   # A script read from a pipe cannot be started again; ask for sudo in the pipe.
   [[ -f "${BASH_SOURCE[0]:-}" ]] || fail 'Run as root: curl ... | sudo bash (macOS user service: curl ... | bash -s -- --user)'
   command -v sudo >/dev/null || fail 'Run as root or use --user on macOS'
-  # Bash before 4.4 treats an empty "${array[@]}" as unset under set -u.
-  exec sudo bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"}
+  # Bash before 4.4 treats an empty "${array[@]}" as unset under set -u. sudo
+  # resets the environment, so an inherited language is passed explicitly.
+  exec sudo bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"} ${lang:+--lang "$lang"}
 fi
 prompt() {
   # The reply must not be named "answer": callers read that global after return.
@@ -2541,8 +2547,29 @@ cleanup() {
     # A failed Agent install must not hide credentials for the ready Master.
     print_master_access || true
   fi
+  if ((status != 0 && compose_rollback)); then rollback_compose || true; fi
   rm -rf -- "$stage"
   unset TRANSFER_JOIN_TOKEN OSS_TRANSFER_JOIN_TOKEN join_url
+}
+compose_rollback=0 created_install_dir=0 created_data_dir=0 compose=()
+# A failed Compose installation removes what this run created (containers,
+# network, Compose file and data directory), so the same command can be rerun.
+rollback_compose() {
+  local path
+  compose_rollback=0
+  if ((${#compose[@]})) && [[ -f "$install_dir/docker-compose.yml" ]]; then
+    "${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
+  fi
+  for path in "$data_dir" "$install_dir"; do
+    [[ -n "$path" && "$path" == /* && "$path" != / && -d "$path" ]] || continue
+    if { [[ "$path" == "$data_dir" ]] && ((created_data_dir)); } || { [[ "$path" == "$install_dir" ]] && ((created_install_dir)); }; then
+      rm -rf -- "$path"
+    else
+      # The directory existed and was empty before this run.
+      find "$path" -mindepth 1 -delete 2>/dev/null || true
+    fi
+  done
+  say 'Removed the containers, network and files created by this attempt. Fix the problem above and run the same command again.' '已清理本次创建的容器、网络和文件。请解决上述问题后重新运行同一条命令。' >&2
 }
 trap cleanup EXIT
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; elif [[ -x /sbin/sha256 ]]; then /sbin/sha256 -q "$1"; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
@@ -2797,7 +2824,17 @@ if [[ -n "$files_dir" ]]; then
     [[ "$files_dir" != "$path" && "$files_dir" != "$path/"* && "$path" != "$files_dir/"* ]] || fail 'Local-files mount must be separate from service data and configuration'
   done
 fi
-for path in "$install_dir" "$data_dir"; do [[ ! -e "$path" || -d "$path" && -z $(ls -A "$path") ]] || fail "Existing files in $path; keep the current Compose file when upgrading"; done
+for path in "$install_dir" "$data_dir"; do
+  [[ ! -e "$path" || -d "$path" && -z $(ls -A "$path") ]] && continue
+  existing_project=''
+  if command -v docker >/dev/null 2>&1; then existing_project=$(docker ps -aq --filter "label=com.docker.compose.project=$service_name" 2>/dev/null || true); fi
+  if [[ -f "$install_dir/docker-compose.yml" && -n "$existing_project" ]]; then
+    fail "$(say "An installation already exists in $install_dir. To upgrade it, run in that directory: docker compose pull && docker compose up -d" "$install_dir 中已有安装。如需升级，请在该目录运行：docker compose pull && docker compose up -d")"
+  fi
+  # Earlier releases left these behind when enrollment failed.
+  fail "$(say "$path contains files from an earlier attempt that did not finish. Remove them, then run the same command again:" "$path 中有上次未完成安装留下的文件。请先删除，再重新运行同一条命令：")
+  docker compose -p $service_name -f $install_dir/docker-compose.yml down; rm -rf $install_dir $data_dir"
+done
 enrollment_input
 if [[ "$role" == agent ]]; then
   valid_master_origin "$master_url" || fail 'Copy an Agent join command from Nodes > Add node'
@@ -2835,6 +2872,9 @@ if [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.open
   docker pull "$image"
 fi
 [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}') == "$commit" ]] || fail 'Image commit differs from the selected release'
+[[ -e "$install_dir" ]] || created_install_dir=1
+[[ -e "$data_dir" ]] || created_data_dir=1
+compose_rollback=1
 mkdir -p "$install_dir" "$data_dir"
 chmod 700 "$install_dir" "$data_dir"
 chown 65532:65532 "$data_dir"
@@ -2859,10 +2899,30 @@ compose=(docker compose --project-name "$service_name" --file "$compose_file")
 "${compose[@]}" config --quiet
 if [[ "$role" == agent ]]; then
   OSS_TRANSFER_JOIN_TOKEN=$TRANSFER_JOIN_TOKEN; export OSS_TRANSFER_JOIN_TOKEN
-  "${compose[@]}" run --rm -e OSS_TRANSFER_JOIN_TOKEN agent oss-transfer-agent --data-dir /data --master-url "$master_url" --enroll-only
+  if ! "${compose[@]}" run --rm -e OSS_TRANSFER_JOIN_TOKEN agent oss-transfer-agent --data-dir /data --master-url "$master_url" --enroll-only 2> "$stage/enroll.log"; then
+    unset OSS_TRANSFER_JOIN_TOKEN TRANSFER_JOIN_TOKEN
+    cat "$stage/enroll.log" >&2
+    if grep -qi 'permission denied' "$stage/enroll.log"; then
+      say "The container user (UID 65532) cannot write $data_dir. Run this installer directly on the Docker host, not inside another container, so the directory it prepares is the one Docker mounts." "容器用户（UID 65532）无法写入 ${data_dir}。请直接在 Docker 主机上运行安装脚本，不要在其他容器内运行，确保脚本准备的目录就是 Docker 挂载的目录。" >&2
+    elif grep -q 'HTTP 403' "$stage/enroll.log"; then
+      say 'The invitation is invalid, expired or already used. Generate a new one in Nodes > Add node.' '加入凭证无效、已过期或已被使用。请在“执行节点 → 添加节点”中重新生成。' >&2
+    elif grep -qiE 'connection refused|no such host|timeout|deadline exceeded|network is unreachable' "$stage/enroll.log"; then
+      say "The Agent container cannot reach the Master at $master_url. Inside a container, localhost is the container itself; use an address of the Master that this host can reach." "Agent 容器无法连接 Master（${master_url}）。容器内的 localhost 指容器自身，请使用本机可以访问的 Master 地址。" >&2
+    fi
+    fail "$(say 'Agent enrollment failed' 'Agent 加入失败')"
+  fi
   unset OSS_TRANSFER_JOIN_TOKEN TRANSFER_JOIN_TOKEN
+  cat "$stage/enroll.log" >&2
+  # The invitation is used now; keep the enrolled identity if starting fails.
+  compose_rollback=0
 fi
-"${compose[@]}" up -d
+if ! "${compose[@]}" up -d; then
+  if [[ "$role" == agent ]]; then
+    fail "$(say "The Agent is enrolled, but its container did not start. Its identity is kept in $data_dir; after fixing the problem run: docker compose -p $service_name -f $compose_file up -d" "Agent 已加入，但容器未能启动。身份信息保留在 ${data_dir}；解决问题后运行：docker compose -p $service_name -f $compose_file up -d")"
+  fi
+  fail "$(say 'The Master container did not start' 'Master 容器未能启动')"
+fi
+compose_rollback=0
 container=$("${compose[@]}" ps -q "$role")
 [[ -n "$container" ]] || fail 'Container was not created'
 if [[ "$role" == master ]]; then

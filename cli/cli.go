@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/signal"
@@ -528,6 +529,80 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 	renderFields(out, clean, "")
 }
 
+// invitationExpiry shows when a join credential expires in the local time zone.
+func invitationExpiry(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	local := parsed.Local()
+	return local.Format("2006-01-02 15:04:05") + " (UTC" + local.Format("-07:00") + ")"
+}
+
+// invitationSource names where a native installer downloads its packages.
+func invitationSource(out io.Writer, raw interface{}) string {
+	source, _ := raw.(map[string]interface{})
+	switch getString(source, "kind") {
+	case "master":
+		return cliText(out, "下载来源：本 Master")
+	case "auto":
+		return cliText(out, "下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）")
+	case "release":
+		return cliTextf(out, "下载来源：%s", safeCLIText(getString(source, "url")))
+	}
+	return ""
+}
+
+func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
+	if id := getString(data, "id"); id != "" {
+		fmt.Fprintf(out, cliText(out, "邀请 ID: %s\n"), safeCLIText(id))
+	}
+	if expiry := getString(data, "expiresAt"); expiry != "" {
+		fmt.Fprintf(out, cliText(out, "加入凭证仅可使用一次，有效至 %s\n"), safeCLIText(invitationExpiry(expiry)))
+	}
+	if command := getString(data, "traditionalCommand"); command != "" {
+		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，需要 sudo）"))
+		fmt.Fprintln(out, safeCLIText(command))
+	} else if command := getString(data, "nativeCommand"); command != "" {
+		fmt.Fprintln(out, cliText(out, "\n原生运行（Linux / macOS / FreeBSD）"))
+		fmt.Fprintln(out, safeCLIText(command))
+	}
+	if command := getString(data, "windowsCommand"); command != "" {
+		fmt.Fprintln(out, cliText(out, "\n原生部署（Windows PowerShell）"))
+		fmt.Fprintln(out, safeCLIText(command))
+	}
+	if source := invitationSource(out, data["downloadSource"]); source != "" && getString(data, "traditionalCommand") != "" {
+		fmt.Fprintln(out, source)
+	}
+	if getString(data, "dockerWindowsCommand") == "" {
+		// Masters before v4.2 return the Linux Compose installer here.
+		if command := getString(data, "dockerCommand"); command != "" {
+			fmt.Fprintln(out, cliText(out, "\nDocker（可选）"))
+			fmt.Fprintln(out, safeCLIText(command))
+		}
+		return
+	}
+	fmt.Fprintln(out, cliText(out, "\nDocker（macOS / Linux，无需 root）"))
+	fmt.Fprintln(out, safeCLIText(getString(data, "dockerCommand")))
+	fmt.Fprintln(out, cliText(out, "\nDocker（Windows PowerShell）"))
+	fmt.Fprintln(out, safeCLIText(getString(data, "dockerWindowsCommand")))
+	if master, err := url.Parse(getString(data, "joinUrl")); err == nil && loopbackHost(master.Hostname()) {
+		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。"))
+	}
+	if command := getString(data, "composeCommand"); command != "" {
+		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，需要 sudo）"))
+		fmt.Fprintln(out, safeCLIText(command))
+	}
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 	if buckets, ok := data["buckets"].([]interface{}); ok {
 		renderStorageCheck(out, result, data, buckets)
@@ -549,27 +624,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		return true
 	}
 	if getString(data, "joinUrl") != "" && (getString(data, "traditionalCommand") != "" || getString(data, "nativeCommand") != "" || getString(data, "windowsCommand") != "" || getString(data, "dockerCommand") != "") {
-		if id := getString(data, "id"); id != "" {
-			fmt.Fprintf(out, cliText(out, "邀请 ID: %s\n"), safeCLIText(id))
-		}
-		if expiry := getString(data, "expiresAt"); expiry != "" {
-			fmt.Fprintf(out, cliText(out, "有效至 %s\n"), safeCLIText(expiry))
-		}
-		if command := getString(data, "traditionalCommand"); command != "" {
-			fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD）"))
-			fmt.Fprintln(out, safeCLIText(command))
-		} else if command := getString(data, "nativeCommand"); command != "" {
-			fmt.Fprintln(out, cliText(out, "\n原生运行（Linux / macOS / FreeBSD）"))
-			fmt.Fprintln(out, safeCLIText(command))
-		}
-		if command := getString(data, "windowsCommand"); command != "" {
-			fmt.Fprintln(out, cliText(out, "\n原生部署（Windows PowerShell）"))
-			fmt.Fprintln(out, safeCLIText(command))
-		}
-		if command := getString(data, "dockerCommand"); command != "" {
-			fmt.Fprintln(out, cliText(out, "\nDocker（可选）"))
-			fmt.Fprintln(out, safeCLIText(command))
-		}
+		renderAgentInvitation(out, data)
 		return true
 	}
 	if raw, ok := data["configs"]; ok {

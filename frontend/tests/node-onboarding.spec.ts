@@ -100,10 +100,12 @@ test("node invitation uses the current origin by default and accepts a private e
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
   await dialog.getByLabel("节点名称").fill("storage-02");
-  await expect(dialog.getByLabel("Agent 连接地址")).toHaveValue(
+  await expect(dialog.getByLabel("Master 地址（Agent 需能访问）")).toHaveValue(
     new URL(page.url()).origin,
   );
-  await dialog.getByLabel("Agent 连接地址").fill("http://10.1.0.43:1685/path");
+  await dialog
+    .getByLabel("Master 地址（Agent 需能访问）")
+    .fill("http://10.1.0.43:1685/path");
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
@@ -111,7 +113,9 @@ test("node invitation uses the current origin by default and accepts a private e
     dialog.getByText("请输入完整的 HTTP 或 HTTPS 地址，不含路径。"),
   ).toBeVisible();
   expect(invitations).toHaveLength(0);
-  await dialog.getByLabel("Agent 连接地址").fill("http://10.1.0.43:1685/");
+  await dialog
+    .getByLabel("Master 地址（Agent 需能访问）")
+    .fill("http://10.1.0.43:1685/");
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
@@ -123,11 +127,11 @@ test("node invitation uses the current origin by default and accepts a private e
   ]);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("button", { name: "添加节点", exact: true }).click();
-  await expect(dialog.getByLabel("Agent 连接地址")).toHaveValue(
+  await expect(dialog.getByLabel("Master 地址（Agent 需能访问）")).toHaveValue(
     new URL(page.url()).origin,
   );
   await dialog.getByLabel("节点名称").fill("storage-03");
-  await dialog.getByLabel("Agent 连接地址").fill("");
+  await dialog.getByLabel("Master 地址（Agent 需能访问）").fill("");
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();

@@ -1,6 +1,7 @@
 package master
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,11 +18,12 @@ import (
 )
 
 func TestBootstrapCommandDisablesURLGlobbingForIPv6Masters(t *testing.T) {
-	// curl 7.29 (CentOS 7) would read the brackets as a glob range.
+	// curl 7.29 (CentOS 7) would read the brackets as a glob range. The native
+	// installer needs root, so the copied command runs it with sudo.
 	for link, want := range map[string]string{
-		"http://[fd00::43]:1685/api/agents/bootstrap/token": "curl -fsSL --globoff 'http://[fd00::43]:1685/api/agents/bootstrap/token' | bash",
-		"http://10.1.0.43:1685/api/agents/bootstrap/token":  "curl -fsSL 'http://10.1.0.43:1685/api/agents/bootstrap/token' | bash",
-		"https://master.example/api/agents/bootstrap/token": "curl -fsSL 'https://master.example/api/agents/bootstrap/token' | bash",
+		"http://[fd00::43]:1685/api/agents/bootstrap/token": "curl -fsSL --globoff 'http://[fd00::43]:1685/api/agents/bootstrap/token' | sudo bash",
+		"http://10.1.0.43:1685/api/agents/bootstrap/token":  "curl -fsSL 'http://10.1.0.43:1685/api/agents/bootstrap/token' | sudo bash",
+		"https://master.example/api/agents/bootstrap/token": "curl -fsSL 'https://master.example/api/agents/bootstrap/token' | sudo bash",
 	} {
 		if got := bootstrapCommand(link); got != want {
 			t.Errorf("bootstrapCommand(%q) = %q, want %q", link, got, want)
@@ -38,17 +40,16 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := f.master.agentInvitationData("https://master.example:1685", invite)
-	if data["traditionalCommand"] != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"' | bash" || !strings.Contains(data["windowsCommand"].(string), "platform=windows") {
+	data := f.master.agentInvitationData("https://master.example:1685", invite, "")
+	if data["traditionalCommand"] != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"' | sudo bash" || !strings.Contains(data["windowsCommand"].(string), "platform=windows") {
 		t.Fatal("bootstrap commands missing")
 	}
 	windows := data["windowsCommand"].(string)
 	if windows != "irm 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?platform=windows' | iex" {
 		t.Fatal("Windows invitation must directly run the downloaded script")
 	}
-	docker := data["dockerCommand"].(string)
-	if docker != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?method=compose' | bash" {
-		t.Fatal("Docker enrollment must use the unified installer")
+	if compose := data["composeCommand"].(string); compose != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?method=compose' | sudo bash" {
+		t.Fatal("Linux Compose enrollment must use the unified installer as root", compose)
 	}
 	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
 	link := f.http.URL + "/api/agents/bootstrap/" + invite.Token
@@ -188,15 +189,15 @@ case "$url" in
 esac
 `
 			installer := "#!/usr/bin/env bash\nset -eu\nprintf '%s\\n' \"$@\" > \"$BOOTSTRAP_ARGS\"\ncat > \"$BOOTSTRAP_TOKEN\"\n"
-			for name, contents := range map[string]string{"curl": stub, "sudo": "#!/usr/bin/env bash\nprintf 'sudo must not be needed by the bootstrap\\n' >&2\nexit 91\n", "installer.sh": installer, "join.sh": string(body)} {
+			for name, contents := range map[string]string{"curl": stub, "sudo": "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$SUDO_CALLS\"\nexec \"$@\"\n", "installer.sh": installer, "join.sh": string(body)} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			invitation := f.master.agentInvitationData(f.http.URL, invite)
+			invitation := f.master.agentInvitationData(f.http.URL, invite, "")
 			commandText := invitation["traditionalCommand"].(string)
 			if tc.method != "" {
-				commandText = invitation["dockerCommand"].(string)
+				commandText = invitation["composeCommand"].(string)
 			}
 			command := exec.Command("bash", "-c", commandText)
 			command.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -205,10 +206,14 @@ esac
 				"BOOTSTRAP_URL="+bootstrapURL, "BOOTSTRAP_SCRIPT="+filepath.Join(dir, "join.sh"),
 				"MOCK_FAIL_SOURCE="+tc.failSource, "BOOTSTRAP_LOG="+filepath.Join(dir, "requests"),
 				"BOOTSTRAP_STUB="+filepath.Join(dir, "installer.sh"), "BOOTSTRAP_ARGS="+filepath.Join(dir, "args"),
-				"BOOTSTRAP_TOKEN="+filepath.Join(dir, "token"))
+				"BOOTSTRAP_TOKEN="+filepath.Join(dir, "token"), "SUDO_CALLS="+filepath.Join(dir, "sudo-calls"))
 			output, err := command.CombinedOutput()
 			if (err != nil) != tc.wantError {
 				t.Fatalf("bootstrap execution: %v\n%s", err, output)
+			}
+			// Only the copied command elevates; the bootstrap itself never calls sudo.
+			if sudo, _ := os.ReadFile(filepath.Join(dir, "sudo-calls")); !tc.failBootstrap && string(sudo) != "bash\n" {
+				t.Fatalf("copied command must pipe the bootstrap to sudo bash exactly once: %q", sudo)
 			}
 			requests, _ := os.ReadFile(filepath.Join(dir, "requests"))
 			if strings.Contains(string(requests), invite.Token) || strings.Contains(string(requests), "/latest/") || strings.Contains(string(requests), "/main/") {
@@ -331,7 +336,7 @@ func TestImageOnlyAgentBootstrapEnrollsBeforeStartingContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := f.master.agentInvitationData(f.http.URL, invite)
+	data := f.master.agentInvitationData(f.http.URL, invite, "")
 	for _, failedEnrollment := range []bool{false, true} {
 		t.Run(strconv.FormatBool(failedEnrollment), func(t *testing.T) {
 			dir := t.TempDir()
@@ -349,7 +354,10 @@ esac
 			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0700); err != nil {
 				t.Fatal(err)
 			}
-			command := exec.Command("bash", "-c", data["dockerCommand"].(string))
+			if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte("#!/usr/bin/env bash\nexec \"$@\"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("bash", "-c", data["composeCommand"].(string))
 			command.Env = append(os.Environ(),
 				"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"OSS_TRANSFER_JOIN_TOKEN=", "EXPECTED_TOKEN="+invite.Token,
@@ -415,7 +423,7 @@ func TestWindowsAgentCommandRunsDownloadedInstaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := f.master.agentInvitationData(f.http.URL, invite)
+	data := f.master.agentInvitationData(f.http.URL, invite, "")
 	result := filepath.Join(dir, "result")
 	shellArgs := []string{"-NoProfile", "-NonInteractive"}
 	if runtime.GOOS == "windows" {
@@ -432,5 +440,184 @@ func TestWindowsAgentCommandRunsDownloadedInstaller(t *testing.T) {
 	want := "agent|" + mirror.URL + "/v4.1.11|https://master.example:1685|" + invite.Token
 	if err != nil || string(got) != want {
 		t.Fatal("Windows installer did not receive enrollment settings", err)
+	}
+}
+
+func TestAgentDockerCommandsNeedOnlyDockerAndStartAfterEnrollment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX Docker command requires a POSIX shell")
+	}
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentDockerImage = "moonwx/osstransfer:4.1.41"
+	invite, err := f.master.agents.registry.InviteForMaster("docker-desktop", "", "http://host.docker.internal:1685")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.master.agents.registry.InviteForMaster("docker-second", "", "http://10.1.0.43:1685")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := f.master.agentInvitationData(f.http.URL, invite, "")
+	second := f.master.agentInvitationData(f.http.URL, other, "")
+	name := "oss-transfer-agent-" + data["id"].(string)[:6]
+	link := "http://host.docker.internal:1685/api/agents/bootstrap/" + invite.Token
+	for _, key := range []string{"dockerCommand", "dockerWindowsCommand"} {
+		command := data[key].(string)
+		// Docker Desktop on macOS and Windows: no root, no installer, no host paths.
+		for _, forbidden := range []string{"sudo", "curl", "/opt", "/var/lib", "bash", "compose"} {
+			if strings.Contains(command, forbidden) {
+				t.Fatalf("%s contains %q: %s", key, forbidden, command)
+			}
+		}
+		if strings.Count(command, "--add-host host.docker.internal:host-gateway") != 2 || strings.Count(command, " -v "+name+"-data:/data ") != 2 {
+			t.Fatalf("%s must reach the host Master and share one named volume: %s", key, command)
+		}
+		if strings.Contains(second[key].(string), name) || strings.Contains(second[key].(string), "--add-host") {
+			t.Fatalf("a second invitation must use its own names and no host alias: %s", second[key])
+		}
+	}
+	if !strings.Contains(data["dockerWindowsCommand"].(string), "--join-url '"+link+"' --data-dir /data --enroll-only; if ($LASTEXITCODE -eq 0) { docker run -d --name "+name+" ") {
+		t.Fatal("PowerShell command must start the Agent only after enrollment succeeds", data["dockerWindowsCommand"])
+	}
+	for _, failedEnrollment := range []bool{false, true} {
+		t.Run("enrollment-failed="+strconv.FormatBool(failedEnrollment), func(t *testing.T) {
+			dir := t.TempDir()
+			stub := `#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$DOCKER_CALLS"
+case "$*" in *--enroll-only) [[ "$FAIL_ENROLLMENT" != true ]] || exit 17 ;; esac
+`
+			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0700); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("bash", "-c", data["dockerCommand"].(string))
+			command.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"FAIL_ENROLLMENT="+strconv.FormatBool(failedEnrollment), "DOCKER_CALLS="+filepath.Join(dir, "calls"))
+			output, err := command.CombinedOutput()
+			if (err != nil) != failedEnrollment {
+				t.Fatalf("docker command: %v\n%s", err, output)
+			}
+			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "run --rm --add-host host.docker.internal:host-gateway -v " + name + "-data:/data moonwx/osstransfer:4.1.41 oss-transfer-agent --join-url " + link + " --data-dir /data --enroll-only\n"
+			if !failedEnrollment {
+				want += "run -d --name " + name + " --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v " + name + "-data:/data moonwx/osstransfer:4.1.41 oss-transfer-agent --data-dir /data\n"
+			}
+			if string(calls) != want {
+				t.Fatalf("docker calls:\n%s\nwant:\n%s", calls, want)
+			}
+		})
+	}
+	if shell, err := exec.LookPath("pwsh"); err == nil {
+		dir := t.TempDir()
+		stub := "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$DOCKER_CALLS\"\ncase \"$*\" in *--enroll-only) exit 17 ;; esac\n"
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0700); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(shell, "-NoProfile", "-NonInteractive", "-Command", data["dockerWindowsCommand"].(string))
+		command.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "DOCKER_CALLS="+filepath.Join(dir, "calls"))
+		_ = command.Run()
+		calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+		if strings.Contains(string(calls), "run -d") || !strings.Contains(string(calls), "--enroll-only") {
+			t.Fatal("PowerShell command started the Agent after a failed enrollment", string(calls))
+		}
+	}
+}
+
+func TestAgentInvitationPassesConsoleLanguageToInstaller(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentArtifactBase = officialAgentArtifactBase
+	f.master.options.AgentArtifactVersion = "v4.1.41"
+	f.master.options.AgentDockerImage = "moonwx/osstransfer:4.1.41"
+	create := func(language string) map[string]any {
+		t.Helper()
+		body := strings.NewReader(`{"label":"language-check","masterUrl":"http://10.1.0.43:1685"}`)
+		request, err := http.NewRequest("POST", f.http.URL+"/api/master/agents/invitations", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+f.admin)
+		request.Header.Set("Content-Type", "application/json")
+		if language != "" {
+			request.Header.Set("Accept-Language", language)
+		}
+		response, err := f.http.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var result map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil || response.StatusCode != 200 {
+			t.Fatal(response.StatusCode, err)
+		}
+		return result["data"].(map[string]any)
+	}
+	for language, want := range map[string]string{"zh-CN": "lang=zh", "en-US,en;q=0.9": "lang=en", "ja-JP": "", "": ""} {
+		data := create(language)
+		for _, key := range []string{"traditionalCommand", "windowsCommand", "upstreamTraditionalCommand", "upstreamWindowsCommand", "composeCommand"} {
+			command := data[key].(string)
+			if want == "" && strings.Contains(command, "lang=") || want != "" && !strings.Contains(command, want) {
+				t.Fatalf("%s for %q: %s", key, language, command)
+			}
+		}
+		if strings.Contains(data["dockerCommand"].(string), "lang=") {
+			t.Fatal("plain Docker commands have no installer to translate", data["dockerCommand"])
+		}
+	}
+	link := create("zh-CN")["joinUrl"].(string)
+	link = f.http.URL + link[strings.Index(link, "/api/"):]
+	for suffix, want := range map[string]string{
+		"?lang=zh":                  "\nexport OSS_TRANSFER_INSTALL_LANG=zh\n",
+		"?method=compose&lang=zh":   "\nexport OSS_TRANSFER_INSTALL_LANG=zh\n",
+		"?platform=windows&lang=zh": "\n$env:OSS_TRANSFER_INSTALL_LANG = 'zh'\n",
+		"?source=upstream&lang=en":  "\nexport OSS_TRANSFER_INSTALL_LANG=en\n",
+		"?platform=windows":         "",
+		"":                          "",
+	} {
+		response, err := http.Get(link + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != 200 || want != "" && !strings.Contains(string(script), want) || want == "" && strings.Contains(string(script), "OSS_TRANSFER_INSTALL_LANG") {
+			t.Fatalf("bootstrap %q: HTTP %d\n%s", suffix, response.StatusCode, script)
+		}
+	}
+	response, err := http.Get(link + "?lang=fr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatal("unsupported installer language accepted", response.StatusCode)
+	}
+}
+
+func TestAgentInvitationNamesItsDownloadSource(t *testing.T) {
+	for _, tc := range []struct {
+		base, version string
+		want          map[string]any
+	}{
+		{officialAgentArtifactBase, "v4.1.41", map[string]any{"kind": "auto"}},
+		{"https://downloads.example/osstransfer", "v4.1.41", map[string]any{"kind": "release", "url": "https://downloads.example/osstransfer/v4.1.41"}},
+		// Older official installers cannot choose a regional source.
+		{officialAgentArtifactBase, "v4.1.5", map[string]any{"kind": "release", "url": officialAgentArtifactBase + "/v4.1.5"}},
+	} {
+		s := &Server{options: Options{AgentArtifactBase: tc.base, AgentArtifactVersion: tc.version, DataDirectory: t.TempDir()}}
+		data := s.agentInvitationData("http://10.1.0.43:1685", cluster.Invitation{Token: "token-for-source-check"}, "")
+		for _, key := range []string{"downloadSource", "upstreamDownloadSource"} {
+			got, _ := data[key].(map[string]any)
+			if len(got) != len(tc.want) || got["kind"] != tc.want["kind"] || got["url"] != tc.want["url"] {
+				t.Fatalf("%s %s %s = %#v, want %#v", tc.base, tc.version, key, data[key], tc.want)
+			}
+		}
+	}
+	s := &Server{options: Options{DataDirectory: t.TempDir()}}
+	data := s.agentInvitationData("http://10.1.0.43:1685", cluster.Invitation{Token: "token-for-source-check"}, "")
+	if _, ok := data["downloadSource"]; ok {
+		t.Fatal("download source shown without native packages", data)
 	}
 }

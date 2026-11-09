@@ -85,12 +85,82 @@ func validateAgentArtifacts(options Options) error {
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
+// bootstrapCommand runs the native installer as root. sudo asks for the
+// password on the terminal before the piped script is read.
 func bootstrapCommand(link string) string {
 	// curl 7.29 (CentOS 7) reads the brackets of an IPv6 literal as a glob.
 	if u, err := url.Parse(link); err == nil && strings.HasPrefix(u.Host, "[") {
-		return "curl -fsSL --globoff " + shellQuote(link) + " | bash"
+		return "curl -fsSL --globoff " + shellQuote(link) + " | sudo bash"
 	}
-	return "curl -fsSL " + shellQuote(link) + " | bash"
+	return "curl -fsSL " + shellQuote(link) + " | sudo bash"
+}
+
+// withQuery appends the non-empty name=value pairs to a bootstrap link.
+func withQuery(link string, pairs ...string) string {
+	query := []string{}
+	for _, pair := range pairs {
+		if pair != "" && !strings.HasSuffix(pair, "=") {
+			query = append(query, pair)
+		}
+	}
+	if len(query) == 0 {
+		return link
+	}
+	return link + "?" + strings.Join(query, "&")
+}
+
+// installerLanguage maps the console or CLI language to the installers'
+// --lang values. Japanese has no installer translation; the installer then
+// follows the system locale.
+func installerLanguage(locale string) string {
+	switch locale {
+	case "zh-CN":
+		return "zh"
+	case "en-US":
+		return "en"
+	}
+	return ""
+}
+
+// languageEnv sets the installer language inside a bootstrap script. Older
+// installers that predate --lang still read this environment variable.
+func languageEnv(lang string, windows bool) string {
+	if lang == "" {
+		return ""
+	}
+	if windows {
+		return "$env:OSS_TRANSFER_INSTALL_LANG = " + psQuote(lang) + "\n"
+	}
+	return "export OSS_TRANSFER_INSTALL_LANG=" + lang + "\n"
+}
+
+func requestInstallerLanguage(r *http.Request) string {
+	locale, _ := r.Context().Value(responseLocaleKey{}).(string)
+	return installerLanguage(locale)
+}
+
+// agentDockerCommands enrolls the Agent into a named volume, then starts the
+// long-running container from the saved identity. Only docker itself is needed:
+// no root, no host paths, and the same steps run on Docker Desktop and Linux.
+// The names carry the invitation ID prefix so a second Agent on one host never
+// reuses another Agent's volume, and re-running the same command after a failed
+// enrollment retries with the same pending identity.
+func agentDockerCommands(image, link, invitationID string) (posix, powershell string) {
+	name := "oss-transfer-agent-" + invitationID[:6]
+	volume := name + "-data"
+	hostAlias := ""
+	if u, err := url.Parse(link); err == nil && strings.EqualFold(u.Hostname(), "host.docker.internal") {
+		// Docker Engine on Linux defines this name only when asked to.
+		hostAlias = " --add-host host.docker.internal:host-gateway"
+	}
+	enroll := func(quoted string) string {
+		return "docker run --rm" + hostAlias + " -v " + volume + ":/data " + image + " oss-transfer-agent --join-url " + quoted + " --data-dir /data --enroll-only"
+	}
+	run := "docker run -d --name " + name + " --restart unless-stopped" + hostAlias + " --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v " + volume + ":/data " + image + " oss-transfer-agent --data-dir /data"
+	posix = enroll(shellQuote(link)) + " && " + run
+	// Windows PowerShell 5.1 has no &&; $LASTEXITCODE keeps the same order.
+	powershell = enroll(psQuote(link)) + "; if ($LASTEXITCODE -eq 0) { " + run + " }"
+	return posix, powershell
 }
 
 func (s *Server) agentReleaseURL() string {
@@ -99,31 +169,60 @@ func (s *Server) agentReleaseURL() string {
 	}
 	return s.agentArtifactBase() + "/" + s.options.AgentArtifactVersion
 }
-func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation) map[string]any {
+
+// agentDownloadSource tells the console where a native installer downloads
+// its packages: from this Master, from GitHub or JD Cloud OSS chosen by the
+// installing host's public IP location, or from a configured release URL.
+func (s *Server) agentDownloadSource(upstream bool) map[string]any {
+	if !upstream && s.cachedAgentPackages() {
+		return map[string]any{"kind": "master"}
+	}
+	if s.agentReleaseURL() == "" {
+		return nil
+	}
+	if s.regionalAgentArtifacts() {
+		return map[string]any{"kind": "auto"}
+	}
+	return map[string]any{"kind": "release", "url": s.agentReleaseURL()}
+}
+
+func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation, lang string) map[string]any {
 	if invite.MasterURL != "" {
 		masterURL = invite.MasterURL
 	}
 	link := masterURL + "/api/agents/bootstrap/" + invite.Token
-	data := map[string]any{"id": tokenKey(invite.Token), "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": link, "nativeAgent": map[string]any{"available": false}, "nativeCommand": "./oss-transfer-agent --join-url " + shellQuote(link)}
+	id := tokenKey(invite.Token)
+	language := "lang=" + lang
+	data := map[string]any{"id": id, "expiresAt": invite.ExpiresAt, "inviteToken": invite.Token, "joinUrl": link, "nativeAgent": map[string]any{"available": false}, "nativeCommand": "./oss-transfer-agent --join-url " + shellQuote(link)}
 	if s.agentReleaseURL() != "" || s.cachedAgentPackages() {
 		data["nativeAgent"] = map[string]any{"available": true}
-		data["traditionalCommand"] = bootstrapCommand(link)
-		data["windowsCommand"] = "irm " + psQuote(link+"?platform=windows") + " | iex"
+		data["traditionalCommand"] = bootstrapCommand(withQuery(link, language))
+		data["windowsCommand"] = "irm " + psQuote(withQuery(link, "platform=windows", language)) + " | iex"
+		if source := s.agentDownloadSource(false); source != nil {
+			data["downloadSource"] = source
+		}
 	}
 	if s.agentReleaseURL() != "" {
-		data["upstreamTraditionalCommand"] = bootstrapCommand(link + "?source=upstream")
-		data["upstreamWindowsCommand"] = "irm " + psQuote(link+"?platform=windows&source=upstream") + " | iex"
+		data["upstreamTraditionalCommand"] = bootstrapCommand(withQuery(link, "source=upstream", language))
+		data["upstreamWindowsCommand"] = "irm " + psQuote(withQuery(link, "platform=windows", "source=upstream", language)) + " | iex"
+		if source := s.agentDownloadSource(true); source != nil {
+			data["upstreamDownloadSource"] = source
+		}
 	}
 	if s.options.AgentDockerImage != "" {
-		data["dockerCommand"] = bootstrapCommand(link + "?method=compose")
+		data["dockerCommand"], data["dockerWindowsCommand"] = agentDockerCommands(s.options.AgentDockerImage, link, id)
+		data["dockerImage"] = s.options.AgentDockerImage
+		// The Compose installer manages /opt and /var/lib paths and needs root on Linux.
+		data["composeCommand"] = bootstrapCommand(withQuery(link, "method=compose", language))
 	}
 	return data
 }
 func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	method := r.URL.Query().Get("method")
 	source := r.URL.Query().Get("source")
+	lang := r.URL.Query().Get("lang")
 	windows := r.URL.Query().Get("platform") == "windows"
-	if method != "" && method != "native" && method != "compose" || windows && method == "compose" || source != "" && source != "upstream" {
+	if method != "" && method != "native" && method != "compose" || windows && method == "compose" || source != "" && source != "upstream" || lang != "" && lang != "en" && lang != "zh" {
 		fail(w, http.StatusBadRequest, "Unsupported Agent installation method")
 		return
 	}
@@ -163,7 +262,7 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		root, _, cacheErr := s.openAgentPackages()
 		if cacheErr == nil {
 			root.Close()
-			s.masterAgentBootstrap(w, windows, token, masterURL)
+			s.masterAgentBootstrap(w, windows, token, masterURL, lang)
 			return
 		}
 		if !errors.Is(cacheErr, os.ErrNotExist) {
@@ -186,23 +285,23 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		installerOptions = "--method compose --image " + shellQuote(s.options.AgentDockerImage)
 	}
 	if s.regionalAgentArtifacts() {
-		s.officialAgentBootstrap(w, windows, token, masterURL, installerOptions)
+		s.officialAgentBootstrap(w, windows, token, masterURL, installerOptions, lang)
 		return
 	}
 	if windows {
-		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -UseBasicParsing -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(masterURL))
+		fmt.Fprintf(w, "$ErrorActionPreference = 'Stop'\n%s$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')\ntry {\n  Invoke-WebRequest -UseBasicParsing -Uri %s -OutFile $installer\n  $env:TRANSFER_JOIN_TOKEN = %s\n  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -ReleaseUrl %s -MasterUrl %s -Yes\n} finally {\n  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue\n  Remove-Item $installer -ErrorAction SilentlyContinue\n}\n", languageEnv(lang, true), psQuote(s.agentReleaseURL()+"/Install.ps1"), psQuote(token), psQuote(s.agentReleaseURL()), psQuote(masterURL))
 		return
 	}
-	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\ninstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent %s --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), installerOptions, shellQuote(s.agentReleaseURL()), shellQuote(masterURL))
+	fmt.Fprintf(w, "#!/usr/bin/env bash\nset -euo pipefail\n%sinstaller=$(mktemp)\ntrap 'rm -f \"$installer\"' EXIT\ncurl -fSL %s -o \"$installer\"\nprintf '%%s' %s | bash \"$installer\" --role agent %s --release-url %s --master-url %s --token-stdin --yes \"$@\"\n", languageEnv(lang, false), shellQuote(s.agentReleaseURL()+"/install.sh"), shellQuote(token), installerOptions, shellQuote(s.agentReleaseURL()), shellQuote(masterURL))
 }
 
 // All installer resources come from the same Master endpoint as enrollment.
 // The invitation is consumed only after downloads and local checks complete.
-func (s *Server) masterAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL string) {
+func (s *Server) masterAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, lang string) {
 	releaseURL := masterURL + "/api/agents/bootstrap/" + token + "/files"
 	if windows {
 		fmt.Fprintf(w, `$ErrorActionPreference = 'Stop'
-$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
+%s$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
 $release = %s
 $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($architecture -notin @('amd64','arm64','x64')) { throw 'Unsupported Agent architecture.' }
@@ -216,12 +315,12 @@ try {
   Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
   Remove-Item $installer -ErrorAction SilentlyContinue
 }
-`, psQuote(releaseURL), psQuote(token), psQuote(masterURL))
+`, languageEnv(lang, true), psQuote(releaseURL), psQuote(token), psQuote(masterURL))
 		return
 	}
 	fmt.Fprintf(w, `#!/usr/bin/env bash
 set -euo pipefail
-installer=$(mktemp)
+%sinstaller=$(mktemp)
 trap 'rm -f "$installer"' EXIT
 release=%s
 case "$(uname -s)" in Linux) platform=linux;; Darwin) platform=darwin;; FreeBSD) platform=freebsd;; *) echo 'Unsupported Agent system.' >&2; exit 1;; esac
@@ -229,7 +328,7 @@ case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; arm
 curl -fsSL --globoff "$release/manifest.tsv?target=$platform-$arch" -o /dev/null
 curl -fsSL --globoff "$release/install.sh" -o "$installer"
 printf '%%s' %s | bash "$installer" --role agent --method native --release-url "$release" --master-url %s --token-stdin --yes "$@"
-`, shellQuote(releaseURL), shellQuote(token), shellQuote(masterURL))
+`, languageEnv(lang, false), shellQuote(releaseURL), shellQuote(token), shellQuote(masterURL))
 }
 
 func (s *Server) containerAgentBootstrap(w http.ResponseWriter, token, masterURL string) {
@@ -248,13 +347,13 @@ docker run -d --name oss-transfer-agent --restart unless-stopped -v oss-transfer
 `, shellQuote(token), image, shellQuote(masterURL), image)
 }
 
-func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions string) {
+func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions, lang string) {
 	version := "v" + strings.TrimPrefix(s.options.AgentArtifactVersion, "v")
 	github := "https://raw.githubusercontent.com/MoonWX/oss-transfer/" + version
 	jdoss := officialAgentArtifactBase + "/" + version
 	if windows {
 		fmt.Fprintf(w, `$ErrorActionPreference = 'Stop'
-$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
+%s$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
 $source = 'github'
 $country = ''
 try {
@@ -288,12 +387,12 @@ try {
   Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
   Remove-Item $installer -ErrorAction SilentlyContinue
 }
-`, psQuote(github+"/deploy/native/Install.ps1"), psQuote(github+"/deploy/go/Install.ps1"), psQuote(jdoss+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
+`, languageEnv(lang, true), psQuote(github+"/deploy/native/Install.ps1"), psQuote(github+"/deploy/go/Install.ps1"), psQuote(jdoss+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
 		return
 	}
 	fmt.Fprintf(w, `#!/usr/bin/env bash
 set -euo pipefail
-installer=$(mktemp)
+%sinstaller=$(mktemp)
 trap 'rm -f "$installer"' EXIT
 source=github
 country=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | awk -F= '$1 == "loc" {sub(/\r$/, "", $2); print $2; exit}') || country=
@@ -309,5 +408,5 @@ if ! curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max
   curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 "$url" -o "$installer"
 fi
 printf '%%s' %s | bash "$installer" --role agent %s --source auto --version %s --master-url %s --token-stdin --yes "$@"
-`, shellQuote(github+"/install.sh"), shellQuote(jdoss+"/install.sh"), shellQuote(token), installerOptions, shellQuote(version), shellQuote(masterURL))
+`, languageEnv(lang, false), shellQuote(github+"/install.sh"), shellQuote(jdoss+"/install.sh"), shellQuote(token), installerOptions, shellQuote(version), shellQuote(masterURL))
 }

@@ -1,8 +1,11 @@
 package master
 
 import (
+	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -47,13 +50,104 @@ func networkData(config Configuration) map[string]string {
 	return map[string]string{"publicUrl": config.PublicURL, "agentUrl": config.AgentURL, "effectiveAgentUrl": config.agentURL()}
 }
 
+type lanInterface struct {
+	name     string
+	up       bool
+	loopback bool
+	addrs    []net.Addr
+}
+
+// Replaced in tests.
+var hostInterfaces = func() ([]lanInterface, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]lanInterface, 0, len(interfaces))
+	for _, item := range interfaces {
+		addrs, err := item.Addrs()
+		if err != nil {
+			continue
+		}
+		result = append(result, lanInterface{name: item.Name, up: item.Flags&net.FlagUp != 0, loopback: item.Flags&net.FlagLoopback != 0, addrs: addrs})
+	}
+	return result, nil
+}
+
+var runningInContainer = func() bool {
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(marker); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// virtualInterfacePrefixes name container and VM bridges whose addresses other
+// machines cannot reach.
+var virtualInterfacePrefixes = []string{"docker", "br-", "veth", "cni", "flannel", "cali", "virbr", "vmnet", "vboxnet", "utun", "podman", "lxc", "lxd"}
+
+// selectLANAddresses returns private IPv4 addresses that another machine on the
+// same network can usually reach. The console offers them in place of a
+// loopback Master address.
+func selectLANAddresses(interfaces []lanInterface) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, item := range interfaces {
+		if !item.up || item.loopback {
+			continue
+		}
+		virtual := false
+		for _, prefix := range virtualInterfacePrefixes {
+			virtual = virtual || strings.HasPrefix(strings.ToLower(item.name), prefix)
+		}
+		if virtual {
+			continue
+		}
+		for _, addr := range item.addrs {
+			prefix, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := prefix.IP.To4()
+			if ip == nil || !ip.IsPrivate() || seen[ip.String()] {
+				continue
+			}
+			seen[ip.String()] = true
+			result = append(result, ip.String())
+		}
+	}
+	sort.Strings(result)
+	if len(result) > 4 {
+		result = result[:4]
+	}
+	return result
+}
+
+// lanAddresses is empty inside a container: its interfaces belong to the
+// container network, not to the host that other machines reach.
+func lanAddresses() []string {
+	if runningInContainer() {
+		return []string{}
+	}
+	interfaces, err := hostInterfaces()
+	if err != nil {
+		return []string{}
+	}
+	return selectLANAddresses(interfaces)
+}
+
 func (s *Server) networkSettings(w http.ResponseWriter, r *http.Request) {
 	config, err := s.configuration()
 	if err != nil {
 		fail(w, 500, "Cannot read Master configuration")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": networkData(config)})
+	data := map[string]any{"lanAddresses": lanAddresses()}
+	for key, value := range networkData(config) {
+		data[key] = value
+	}
+	writeJSON(w, 200, map[string]any{"success": true, "data": data})
 }
 
 func (s *Server) updateNetworkSettings(w http.ResponseWriter, r *http.Request) {

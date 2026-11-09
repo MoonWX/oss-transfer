@@ -208,18 +208,35 @@ export type NodeChange = {
   maxConcurrentChildren?: number;
   objectsPerChild?: number;
 };
+export type AgentDownloadSource =
+  { kind: "master" } | { kind: "auto" } | { kind: "release"; url: string };
 export type AgentInvitation = {
   id: string;
   expiresAt: string;
   joinUrl: string;
   dockerCommand?: string;
+  dockerWindowsCommand?: string;
+  composeCommand?: string;
   traditionalCommand?: string;
   windowsCommand?: string;
   upstreamTraditionalCommand?: string;
   upstreamWindowsCommand?: string;
   nativeCommand?: string;
   nativeAgent?: { available: boolean };
+  downloadSource?: AgentDownloadSource;
+  upstreamDownloadSource?: AgentDownloadSource;
 };
+/** Private IPv4 addresses of the Master host; empty when it runs in a container. */
+export async function getMasterLanAddresses(signal: AbortSignal) {
+  const response = await api<{ data?: { lanAddresses?: unknown } }>(
+    "/api/master/network",
+    { signal, timeoutMs: 10000 },
+  );
+  const addresses = response.data?.lanAddresses;
+  return Array.isArray(addresses)
+    ? addresses.filter((item): item is string => typeof item === "string")
+    : [];
+}
 export async function createAgentInvitation(
   change: Partial<NodeChange> & { masterUrl?: string },
   signal?: AbortSignal,

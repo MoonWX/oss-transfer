@@ -2,9 +2,11 @@ package master
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -236,5 +238,47 @@ func TestInvitationEndpointValidationAndLegacyFallback(t *testing.T) {
 	bytes, _ := io.ReadAll(response.Body)
 	if response.StatusCode != 200 || strings.Contains(string(bytes), "untrusted.example") || !strings.Contains(string(bytes), f.http.URL) {
 		t.Fatal("forwarded headers changed enrollment endpoint", response.StatusCode, string(bytes))
+	}
+}
+
+func TestNetworkSettingsOfferReachableLANAddresses(t *testing.T) {
+	cidr := func(value string) net.Addr {
+		ip, prefix, err := net.ParseCIDR(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix.IP = ip
+		return prefix
+	}
+	interfaces := []lanInterface{
+		{name: "lo0", up: true, loopback: true, addrs: []net.Addr{cidr("127.0.0.1/8")}},
+		{name: "en0", up: true, addrs: []net.Addr{cidr("192.168.1.20/24"), cidr("fe80::1/64"), cidr("192.168.1.20/24")}},
+		{name: "eth1", up: true, addrs: []net.Addr{cidr("10.1.0.43/16"), cidr("203.0.113.9/24")}},
+		{name: "docker0", up: true, addrs: []net.Addr{cidr("172.17.0.1/16")}},
+		{name: "br-1a2b", up: true, addrs: []net.Addr{cidr("172.18.0.1/16")}},
+		{name: "en5", up: false, addrs: []net.Addr{cidr("192.168.9.9/24")}},
+	}
+	if got := selectLANAddresses(interfaces); !reflect.DeepEqual(got, []string{"10.1.0.43", "192.168.1.20"}) {
+		t.Fatal("LAN addresses", got)
+	}
+	previousInterfaces, previousContainer := hostInterfaces, runningInContainer
+	t.Cleanup(func() { hostInterfaces, runningInContainer = previousInterfaces, previousContainer })
+	hostInterfaces = func() ([]lanInterface, error) { return interfaces, nil }
+	f := newAgentHTTPFixture(t)
+	for _, container := range []bool{false, true} {
+		runningInContainer = func() bool { return container }
+		status, body := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/network", f.admin, nil)
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		data := body["data"].(map[string]any)
+		got, _ := data["lanAddresses"].([]any)
+		// A containerized Master only sees its container network.
+		if container && len(got) != 0 || !container && !reflect.DeepEqual(got, []any{"10.1.0.43", "192.168.1.20"}) {
+			t.Fatal("container", container, data["lanAddresses"])
+		}
+		if data["publicUrl"] != "https://master.example:1685" {
+			t.Fatal("existing network fields changed", data)
+		}
 	}
 }

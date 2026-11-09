@@ -173,7 +173,13 @@ def main():
                 checks.append("packaged Master generates Linux/macOS and Windows Agent commands pinned to its release")
             if number == 1 and args.expect_agent_image:
                 compose_bootstrap = bootstrap + "?method=compose"
-                assert invitation.get("dockerCommand") == "curl -fsSL '" + compose_bootstrap + "' | bash", "Agent Docker command must directly run this Master's Compose bootstrap"
+                assert invitation.get("composeCommand") == "curl -fsSL '" + compose_bootstrap + "' | sudo bash", "Agent Compose command must run this Master's Compose bootstrap as root"
+                docker_enroll, _, docker_run = invitation.get("dockerCommand", "").partition(" && ")
+                assert docker_enroll.startswith("docker run --rm ") and docker_enroll.endswith("--enroll-only") and bootstrap in docker_enroll \
+                    and " " + args.expect_agent_image + " " in docker_enroll, "Docker command must enroll with this Master's invitation and matching image"
+                assert docker_run.startswith("docker run -d ") and invitation["inviteToken"] not in docker_run \
+                    and " " + args.expect_agent_image + " " in docker_run, "Long-running Docker Agent must start after enrollment without the invitation"
+                assert "; if ($LASTEXITCODE -eq 0) { docker run -d " in invitation.get("dockerWindowsCommand", ""), "PowerShell Docker command is missing"
                 with urlopen(compose_bootstrap, timeout=10) as response:
                     script = response.read().decode()
                     assert "'" + args.expect_agent_image + "'" in script, "Agent Compose bootstrap does not use the matching image"

@@ -80,7 +80,7 @@ func TestPasswordPolicyOnFirstLoginAndLaterChanges(t *testing.T) {
 	}
 }
 
-func TestPasswordPolicyRejectsUserName(t *testing.T) {
+func TestPasswordPolicyRejectsUserNameAndTrivialPasswords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master.db")
 	db, err := state.Open(path)
 	if err != nil {
@@ -112,9 +112,16 @@ func TestPasswordPolicyRejectsUserName(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatal(status, body)
 	}
-	status, body = requestWithLanguage(t, server.Client(), server.URL+"/api/auth/change-password", body["token"].(string), "zh-CN", map[string]string{"oldPassword": initial, "newPassword": "Operator"})
+	token := body["token"].(string)
+	status, body = requestWithLanguage(t, server.Client(), server.URL+"/api/auth/change-password", token, "zh-CN", map[string]string{"oldPassword": initial, "newPassword": "Operator"})
 	if status != http.StatusBadRequest || body["message"] != "密码不能与用户名相同" {
 		t.Fatal("password equal to the user name accepted", status, body)
+	}
+	for _, weak := range []string{"12345678", "password", "aaaaaaaa"} {
+		status, body = requestWithLanguage(t, server.Client(), server.URL+"/api/auth/change-password", token, "zh-CN", map[string]string{"oldPassword": initial, "newPassword": weak})
+		if status != http.StatusBadRequest || body["message"] != "密码过于常见或容易猜到，请换一个" {
+			t.Fatal("trivial password accepted", weak, status, body)
+		}
 	}
 }
 

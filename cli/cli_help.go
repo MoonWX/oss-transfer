@@ -268,6 +268,7 @@ const cliNodeHelp = `执行节点
 Agent 地址注册后不能直接修改，替换节点需重新加入。
 node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址，可用 --master-url 指定 Agent 可访问的地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
+移除节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取；需要保留时请先用 task report 和 object export 导出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `
 
@@ -294,6 +295,7 @@ const cliAgentHelp = `Agent 管理
 --master-url 指定 Agent 可访问的 Master 地址；省略时使用 CLI 当前连接地址。
 邀请有效期为 30 分钟，仅可加入一次。在要加入的主机上运行其中一条命令：Linux / macOS / FreeBSD 原生安装命令、Windows PowerShell 命令，或 Docker 命令（也适用于 Docker Desktop）。
 --local-root 使用 Agent 所在系统的绝对路径；配置会替换该节点已有的根目录列表。
+移除节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取；需要保留时请先用 task report 和 object export 导出。
 `
 
 const cliSetupHelp = `首次登录
@@ -474,7 +476,7 @@ const cliAuthHelp = `登录与账户
 本机服务运行用户或系统管理员可直接管理所属集群，无需 login。其他用户或集群使用账号登录。
 logout 仅注销账号会话，不移除本机服务访问权限；修改账号密码需先 login。
 默认用户名为 admin；其他账号使用 --username。终端中会隐藏密码输入，首次登录后需修改初始密码。
-新密码至少 8 个字符，且不能与用户名或当前密码相同。
+新密码至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。
 脚本可选择环境变量、文件或 stdin 输入密码。
 --password-stdin 从标准输入读取；文件读取使用 --password-file。
 修改密码的来源也可使用 --old-password-file / --new-password-file。

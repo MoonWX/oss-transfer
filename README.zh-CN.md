@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 ### 2. 登录
 
-打开 **访问地址**，用 `admin` 和初始密码登录，然后设置新密码：至少 8 个字符，不能与用户名或初始密码相同。
+打开 **访问地址**，用 `admin` 和初始密码登录，然后设置新密码：至少 8 个字符，不能是常见或容易猜到的密码，也不能与用户名或初始密码相同。
 
 **成功时**，会进入管理页面。**操作说明**（以及空的概览页）会显示一份清单：添加执行节点、添加存储连接、创建迁移任务、执行与查看结果。
 
@@ -97,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 <p align="center"><img src="docs/images/join-command.zh-CN.png" width="720" alt="添加节点窗口，红框标出加入命令和“复制指令”按钮"></p>
 
-原生命令的形式是 `curl … | sudo bash`；Windows 命令请在管理员 PowerShell 中运行。窗口会显示执行节点从哪里下载安装包：默认从 Master 本身下载，点击 **改用公网下载** 后改为从公网下载。指令只能使用一次，30 分钟后过期。
+原生命令的形式是 `curl -fsSL '…' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，以 root 运行或通过 `sudo` 运行均可；Windows 命令请在管理员 PowerShell 中运行。窗口会显示执行节点从哪里下载安装包：默认从 Master 本身下载，点击 **改用公网下载** 后改为从公网下载。指令只能使用一次，30 分钟后过期。
 
 **成功时**，安装器输出 `=== agent 4.2.0 · 安装成功 ===`，**执行节点** 页面中该节点显示为 **在线**（也可以运行 `oss-transfer-cli node list` 查看）。
 
@@ -188,7 +188,7 @@ Docker 部署时，在 Master 容器中运行：`docker compose exec master oss-
 建议在没有运行中的任务时升级。
 
 1. 在 **运维工具 → 版本更新** 中更新 Master，或运行 `oss-transfer-cli update master --yes`。
-2. 在 **执行节点 → 版本更新** 中点击 **更新全部节点**，执行节点会逐台更新。Docker 执行节点需要重建容器来更新，点击它的 **更新命令** 按钮即可看到命令（见 [Docker Compose](docs/docker-compose.zh-CN.md#容器中的执行节点)）。
+2. 在 **执行节点 → 版本更新** 中点击 **更新全部节点**，执行节点会逐台更新。Docker 执行节点需要重建容器来更新，点击它的 **更新命令** 按钮即可看到命令（见 [Docker Compose](docs/docker-compose.zh-CN.md#容器中的执行节点)）。版本已与 Master 一致时，按钮为 **重建命令**，可用于添加目录挂载等。
 
 升级前会自动备份，新版本通过健康检查后删除备份；启动失败时会自动回滚。也可以重新运行安装命令来升级。检测更新只提供正式版，试用 beta 版本见[试用预发布版本](docs/operations.zh-CN.md#试用预发布版本)。
 

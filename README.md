@@ -78,7 +78,7 @@ Without the local Agent, the first line is `=== master 4.2.0 · Installed succes
 
 ### 2. Sign in
 
-Open the **Web UI** address and sign in as `admin` with the initial password. Choose a new password: at least 8 characters, different from the user name and from the initial password.
+Open the **Web UI** address and sign in as `admin` with the initial password. Choose a new password: at least 8 characters, not a common or easily guessed password, different from the user name and from the initial password.
 
 **When it worked,** the console opens. **Instructions** (and the empty overview) show a checklist: add execution nodes, add storage connections, create a transfer task, run it and view the results.
 
@@ -97,7 +97,7 @@ Enter a node name and the **Master address (reachable from the Agent)**: a priva
 
 <p align="center"><img src="docs/images/join-command.en.png" width="720" alt="Add node dialog with the join command and the Copy command button outlined in red"></p>
 
-The native command runs `curl … | sudo bash`; on Windows, run its command in Administrator PowerShell. The dialog shows where the Agent downloads its package from: by default the Master itself, or the public sources after **Download from public sources**. The command works once and expires after 30 minutes.
+The native command has the form `curl -fsSL '…' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'` and runs as root or with `sudo`; on Windows, run its command in Administrator PowerShell. The dialog shows where the Agent downloads its package from: by default the Master itself, or the public sources after **Download from public sources**. The command works once and expires after 30 minutes.
 
 **When it worked,** the installer prints `=== agent 4.2.0 · Installed successfully ===`, and the node appears as **Online** on the **Execution nodes** page (or in `oss-transfer-cli node list`).
 
@@ -188,7 +188,7 @@ In a Docker installation, run it in the Master container: `docker compose exec m
 Update when no tasks are running, if possible.
 
 1. Update the Master under **Tools → Software updates**, or with `oss-transfer-cli update master --yes`.
-2. Under **Execution nodes → Software updates**, choose **Update all nodes**. The Agents update one at a time. Docker Agents are updated by recreating their containers; their **Update commands** button shows how ([Docker Compose](docs/docker-compose.md#container-agents)).
+2. Under **Execution nodes → Software updates**, choose **Update all nodes**. The Agents update one at a time. Docker Agents are updated by recreating their containers; their **Update commands** button shows how ([Docker Compose](docs/docker-compose.md#container-agents)). At the Master's version the button is **Recreate commands**, for example to add a directory mount.
 
 Each update takes a backup first and deletes it after the new version passes its health check. If startup fails, the previous version is restored. You can also update by rerunning the install command. Update checks only offer stable releases; see [trying a prerelease](docs/operations.md#try-a-prerelease) for betas.
 

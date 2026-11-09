@@ -121,6 +121,22 @@ func TestAdminDestructiveCommandsRequireTargetsAndConfirmation(t *testing.T) {
 	}
 }
 
+func TestNodeRemoveWithoutConfirmationWarnsAboutResultsOnTheNode(t *testing.T) {
+	for _, group := range []string{"node", "agent"} {
+		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) { t.Fatalf("removed without --yes: %s", r.URL) })
+		_, err := runAdminCommand(client, group, []string{"remove", "agent2"})
+		if err == nil {
+			t.Fatal("removed without --yes")
+		}
+		message := localizedCLIError(localeEN, err)
+		for _, want := range []string{"task reports", "comparison results", "task report and object export", "--yes"} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("%s remove: %q lacks %q", group, message, want)
+			}
+		}
+	}
+}
+
 func TestAdminNodeUpdatePreservesLabel(t *testing.T) {
 	calls := 0
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {

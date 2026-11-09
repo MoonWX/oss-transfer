@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"os"
@@ -122,6 +123,8 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 				t.Run(action+direction+state, func(t *testing.T) {
 					// retry on a RUNNING task retries its failed objects in place.
 					allowed := state == "STOPPED" || state == "FAILED" || state == "PARTIAL_FAILED" || action == "retry" && state == "RUNNING"
+					// Resuming a running task needs no action and succeeds without a request.
+					noAction := action == "resume" && state == "RUNNING"
 					writes := 0
 					client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 						if r.Method == "GET" {
@@ -147,7 +150,7 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 						adminTestJSON(t, w, map[string]interface{}{"success": true, "accepted": 1, "failed": 0})
 					})
 					_, err := runTaskCommand(client, []string{action, "224"})
-					if (err == nil) != allowed || (writes == 1) != allowed {
+					if (err == nil) != (allowed || noAction) || (writes == 1) != allowed {
 						t.Fatalf("allowed=%v writes=%d err=%v", allowed, writes, err)
 					}
 				})
@@ -164,6 +167,63 @@ func TestTaskResumeAndRetryStatusAndDirectionContracts(t *testing.T) {
 	})
 	if _, err := runTaskCommand(client, []string{"resume", "224"}); err == nil {
 		t.Fatal("active exploration resumed")
+	}
+}
+
+func TestTaskStopAndResumeRepeatedNeedNoAction(t *testing.T) {
+	for _, tc := range []struct{ action, status, want string }{
+		{"stop", "STOPPING", "#4  No action needed (current state: "},
+		{"stop", "STOPPED", "#4  No action needed (current state: "},
+		{"resume", "RESUMING", "#4  No action needed (current state: "},
+		{"resume", "RUNNING", "#4  No action needed (current state: "},
+	} {
+		t.Run(tc.action+tc.status, func(t *testing.T) {
+			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					t.Errorf("sent %s for a task already in that state", r.URL.Path)
+					w.WriteHeader(500)
+					return
+				}
+				adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(4, "OSS_TO_OSS", tc.status)})
+			})
+			client.locale = localeEN
+			result, err := runTaskCommand(client, []string{tc.action, "4"})
+			if err != nil || result["success"] != true {
+				t.Fatalf("repeated %s failed: %#v %v", tc.action, result, err)
+			}
+			if summary := fmt.Sprint(result[cliSummaryKey]); !strings.Contains(summary, tc.want) {
+				t.Fatalf("summary = %q", summary)
+			}
+		})
+	}
+	// A stop still mixed with a running task stops only the running one.
+	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/master/tasks/"))
+			status := "RUNNING"
+			if id == 5 {
+				status = "STOPPED"
+			}
+			adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(id, "OSS_TO_OSS", status)})
+			return
+		}
+		if ids := adminTestBody(t, r)["taskIds"]; !reflect.DeepEqual(ids, []interface{}{float64(4)}) {
+			t.Errorf("stop targets = %#v", ids)
+		}
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "accepted": 1, "failed": 0})
+	})
+	client.locale = localeEN
+	result, err := runTaskCommand(client, []string{"stop", "4", "5"})
+	if err != nil || getInt(result, "accepted") != 1 || getInt(result, "ignored") != 1 {
+		t.Fatalf("mixed stop: %#v %v", result, err)
+	}
+	// Other disallowed states still fail, with the operation name translated.
+	client = adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(4, "OSS_TO_OSS", "COMPLETED")})
+	})
+	client.locale = localeZH
+	if _, err := runTaskCommand(client, []string{"stop", "4"}); err == nil || !strings.Contains(err.Error(), "不允许停止") {
+		t.Fatalf("completed stop error = %v", err)
 	}
 }
 

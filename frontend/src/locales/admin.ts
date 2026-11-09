@@ -1185,14 +1185,21 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Remove node {node}",
     ja: "ノード {node} を削除",
   },
-  "移除此执行节点，不删除节点上的文件、对象或数据库。": {
-    en: "Remove this worker from the cluster. Its files, objects and database are kept.",
-    ja: "この実行ノードをクラスターから削除します。ノード上のファイル、オブジェクト、データベースは残ります。",
-  },
-  "节点不可达、仍有任务记录或集群正在执行任务时，无法移除。": {
-    en: "Removal is blocked if the node is unreachable, holds task records, or the cluster has running tasks.",
-    ja: "ノードに接続できない場合、タスクレコードが残る場合、またはクラスターに実行中のタスクがある場合は削除できません。",
-  },
+  "移除后，该节点不能再连接集群，节点上的 Agent 服务会自行停止。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。":
+    {
+      en: "After removal the node can no longer connect to the cluster, and its Agent service stops by itself. Files, objects and the database on the node are not deleted; uninstall it, or delete its container and volume, on its host if needed.",
+      ja: "削除後、このノードはクラスターに接続できなくなり、ノード上の Agent サービスは自動的に停止します。ノード上のファイル、オブジェクト、データベースは削除されません。必要に応じて、そのホストでアンインストールするか、コンテナーとデータボリュームを削除してください。",
+    },
+  "任务报告中逐个对象的结果和对象比对结果保存在执行节点上。移除后，此节点上的这些结果将无法再获取：任务报告会不完整，比对记录会消失。需要保留时，请先导出任务报告和比对结果。":
+    {
+      en: "The per-object results of task reports and the object comparison results are stored on execution nodes. After removal, those stored on this node are no longer available: task reports become incomplete and its comparisons disappear. To keep them, export the task reports and comparison results first.",
+      ja: "タスクレポートのオブジェクトごとの結果とオブジェクト比較の結果は実行ノードに保存されています。削除後、このノードに保存された結果は取得できなくなります。タスクレポートは不完全になり、比較の記録は表示されなくなります。残す場合は、先にタスクレポートと比較結果をエクスポートしてください。",
+    },
+  "有未结束的任务使用此节点时无法移除：请先停止这些任务，或在任务的执行节点中移除它。":
+    {
+      en: "A node used by an unfinished task cannot be removed: stop those tasks first, or remove the node from their execution nodes.",
+      ja: "未終了のタスクが使用しているノードは削除できません。先にそれらのタスクを停止するか、タスクの実行ノードからこのノードを外してください。",
+    },
   "正在检查…": {
     en: "Checking…",
     ja: "確認中…",

@@ -433,9 +433,19 @@ test("node removal requires confirmation and retains inaccessible or referenced 
     name: "移除节点 数据节点 (10.0.1.13)",
     exact: true,
   });
+  await expect(dialog.getByText(/文件、对象和数据库不会被删除/)).toBeVisible();
+  // Results stored on the node are lost with it: say so and suggest exporting.
   await expect(
-    dialog.getByText(/不删除节点上的文件、对象或数据库/),
+    dialog
+      .getByRole("alert")
+      .filter({ hasText: "任务报告会不完整，比对记录会消失" })
+      .filter({ hasText: "请先导出任务报告和比对结果" }),
   ).toBeVisible();
+  // The precondition the Master really checks.
+  await expect(
+    dialog.getByText(/有未结束的任务使用此节点时无法移除/),
+  ).toBeVisible();
+  await expect(dialog.getByText(/节点不可达|仍有任务记录/)).toHaveCount(0);
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   expect(state.writes).toHaveLength(0);
   state.reject("节点仍被回收站父任务引用，请先处理任务记录");

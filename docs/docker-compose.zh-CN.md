@@ -46,7 +46,7 @@ Initial administrator: admin
 Initial password: <随机密码>
 ```
 
-在浏览器中打开这台主机的 `1685` 端口（同一台电脑上为 `http://localhost:1685`），用 `admin` 和初始密码登录，然后设置自己的密码（至少 8 个字符，不能与用户名相同）。修改后，日志中会记录初始密码已失效。
+在浏览器中打开这台主机的 `1685` 端口（同一台电脑上为 `http://localhost:1685`），用 `admin` 和初始密码登录，然后设置自己的密码（至少 8 个字符，不能是常见或容易猜到的密码，不能与用户名相同）。修改后，日志中会记录初始密码已失效。
 
 如果页面打不开，运行 `docker compose ps` 确认 `master` 服务正在运行，并查看 `docker compose logs master`。也可能是 1685 端口已被其他程序占用，请在 `.env` 中换一个端口。
 
@@ -71,7 +71,7 @@ TRANSFER_PORT=1685
    | --- | --- | --- |
    | **macOS / Linux** | macOS 上的 Docker Desktop、Linux 上的 Docker Engine | 普通的 `docker run` 命令，不需要 root（Linux 上当前用户需能运行 `docker`） |
    | **Windows PowerShell** | Windows 上的 Docker Desktop | 同样的命令，PowerShell 写法 |
-   | **Linux Docker Compose** | 有 root 权限的 Linux | Compose 安装器（`curl … \| sudo bash`），见[下文](#linux-compose-安装器) |
+   | **Linux Docker Compose** | 有 root 权限的 Linux | Compose 安装器（`curl … \| sh -c '…'`，以 root 或通过 `sudo` 运行），见[下文](#linux-compose-安装器) |
 
 4. 点击 **复制指令**，在 30 分钟内到执行节点主机上运行。指令只能使用一次。
 
@@ -93,13 +93,13 @@ TRANSFER_PORT=1685
 
 ### Linux Compose 安装器
 
-**Linux Docker Compose** 方式以 root 运行安装器（`curl … | sudo bash`）。它把 Compose 项目写到 `/opt/oss-transfer-compose/agent/docker-compose.yml`，数据放在 `/var/lib/oss-transfer-compose/agent`；在 Debian 和 Ubuntu 上，如果没有安装 Docker Engine，还会询问是否安装。安装失败时会清理本次创建的内容，解决问题后重新运行同一条命令即可。它只能在 Linux 上运行：在 macOS 上会停止，并提示改用 Docker 指令。
+**Linux Docker Compose** 方式以 root 运行安装器（`curl … | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，root 直接运行，其他用户通过 `sudo` 运行）。它把 Compose 项目写到 `/opt/oss-transfer-compose/agent/docker-compose.yml`，数据放在 `/var/lib/oss-transfer-compose/agent`；在 Debian 和 Ubuntu 上，如果没有安装 Docker Engine，还会询问是否安装。安装失败时会清理本次创建的内容，解决问题后重新运行同一条命令即可。它只能在 Linux 上运行：在 macOS 上会停止，并提示改用 Docker 指令。
 
 ## 为本地迁移挂载主机目录
 
 容器中的执行节点只能读写挂载进容器的主机目录。在任务中填写容器内看到的路径。请在两侧使用相同的绝对路径，例如 `/mnt/storage:/mnt/storage`，这样主机上和管理页面中的路径一致。
 
-- **`docker run` 方式：** 运行复制的指令之前，在第二条 `docker run` 的镜像名前加上 `-v /mnt/storage:/mnt/storage`。已有的执行节点需要带上这个参数重建容器（方法同[更新容器中的执行节点](#容器中的执行节点)），身份保存在数据卷中，不受影响。
+- **`docker run` 方式：** 运行复制的指令之前，在第二条 `docker run` 的镜像名前加上 `-v /mnt/storage:/mnt/storage`。已有的执行节点需要带上这个参数重建容器：在 **执行节点 → 版本更新** 中点击它所在行的 **重建命令**（有可用更新时为 **更新命令**），方法同[更新容器中的执行节点](#容器中的执行节点)；身份保存在数据卷中，不受影响。
 - **Windows 上的 Docker Desktop：** 把 Windows 文件夹挂载到 Linux 路径，例如 `-v C:\transfer:/mnt/transfer`，在任务中填写 `/mnt/transfer`。
 - **Linux Compose 安装器：** 加上 `--files-dir`，例如 `curl -fsSL '<加入链接>' | sudo bash -s -- --files-dir /mnt/storage`。该目录必须已经存在。
 
@@ -206,7 +206,7 @@ docker compose up -d master
 
 容器中的执行节点不能在线更新，需要用新镜像重建容器；身份和设置保存在数据卷中，会保留。正在执行的子任务会中断，执行节点重新连接后自动恢复。
 
-1. 打开 **执行节点 → 版本更新**。Docker 执行节点所在的行有一个 **更新命令** 按钮。
+1. 打开 **执行节点 → 版本更新**。Docker 执行节点所在的行有一个 **更新命令** 按钮。执行节点已与 Master 版本一致时，按钮显示为 **重建命令**，给出同样的命令，可用于添加目录挂载等。
 2. 窗口中会显示该执行节点的命令，使用 Master 对应的镜像：
    - **用 docker run 加入的节点：** `docker pull <镜像>`、`docker rm -f <容器>`，以及重新启动它的 `docker run` 命令。
    - **用安装脚本以 Docker Compose 部署的节点：** 先把 `/opt/oss-transfer-compose/agent/docker-compose.yml` 中的 `image` 改为新镜像，再运行：
@@ -223,8 +223,9 @@ docker compose up -d master
 
 **用 `docker run` 添加的执行节点：**
 
-1. 在 **执行节点** 页面移除该节点，或运行 `oss-transfer-cli agent remove <节点> --yes`。执行节点随即停止工作并保持空闲。
-2. 在它的主机上删除容器和数据卷。数据卷中保存着执行节点的身份和对象比对结果。
+1. 导出需要保留的任务报告和比对结果。任务报告中逐个对象的结果和对象比对结果保存在执行节点的数据卷中；移除节点后将无法再获取，任务报告会不完整，比对记录也会消失（见[移除执行节点](operations.zh-CN.md#移除执行节点)）。
+2. 在 **执行节点** 页面移除该节点，或运行 `oss-transfer-cli agent remove <节点> --yes`。执行节点随即停止工作并保持空闲。
+3. 在它的主机上删除容器和数据卷。数据卷中保存着执行节点的身份、逐个对象的任务结果和对象比对结果。
 
    ```sh
    docker rm -f oss-transfer-agent-<id>

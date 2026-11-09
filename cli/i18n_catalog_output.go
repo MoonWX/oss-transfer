@@ -24,6 +24,11 @@ var cliOutputMessages = map[string][2]string{
 	"存储连接已存在":     {"The storage connection already exists", "ストレージ接続はすでに存在します"},
 
 	// Task control.
+	"停止":                 {"stop", "停止"},
+	"继续":                 {"resume", "再開"},
+	"重试":                 {"retry", "再試行"},
+	"启动":                 {"start", "開始"},
+	"删除":                 {"delete", "削除"},
 	"已请求停止":              {"Stop requested", "停止を要求しました"},
 	"已恢复执行":              {"Resumed", "再開しました"},
 	"已开始重试":              {"Retry started", "再試行を開始しました"},
@@ -32,10 +37,10 @@ var cliOutputMessages = map[string][2]string{
 	"已从回收站恢复":            {"Restored from trash", "ごみ箱から復元しました"},
 	"%s %d 个任务，%d 个无需处理": {"%s %d tasks; %d needed no action", "%s: %d 件、対応不要: %d 件"},
 	"未提交：%s":             {"Not submitted: %s", "未送信: %s"},
-	"结果未确认，请查看任务状态":      {"Outcome unknown; check the task status", "結果は未確認です。タスクの状態を確認してください"},
-	"失败：%s":              {"Failed: %s", "失敗: %s"},
-	"无需处理":               {"No action needed", "対応不要"},
-	"无需处理（当前状态：%s）":      {"No action needed (current state: %s)", "対応不要（現在の状態: %s）"},
+	"结果未确认，请查看任务状态": {"Outcome unknown; check the task status", "結果は未確認です。タスクの状態を確認してください"},
+	"失败：%s":         {"Failed: %s", "失敗: %s"},
+	"无需处理":          {"No action needed", "対応不要"},
+	"无需处理（当前状态：%s）": {"No action needed (current state: %s)", "対応不要（現在の状態: %s）"},
 	"已重试 %d 个失败对象，任务继续运行":                  {"Retried %d failed objects; the task keeps running", "失敗した %d 件のオブジェクトを再試行しました。タスクは実行を続けます"},
 	"任务 #%d 的报告已保存到 %s":                    {"Report of task #%d saved to %s", "タスク #%d のレポートを %s に保存しました"},
 	"任务报告已写到标准输出，但报告不完整：%s":                {"The task report was written to standard output, but it is incomplete: %s", "タスクレポートを標準出力に書き込みましたが、レポートは不完全です: %s"},
@@ -73,9 +78,10 @@ var cliOutputMessages = map[string][2]string{
 	"连接意外中断，可重试失败对象":       {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
 
 	// Hints after an error.
-	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。":                                       {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},
-	"提示: 请运行 oss-transfer-cli login 登录。":                                                      {"Hint: run oss-transfer-cli login to sign in.", "ヒント: oss-transfer-cli login でサインインしてください。"},
-	"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。": {"Hint: no installation was found on this computer and no Master is configured; run oss-transfer-cli config set master URL, or name the Master with --host.", "ヒント: このコンピューターにインストールが見つからず、Master も設定されていません。oss-transfer-cli config set master URL を実行するか、--host で Master を指定してください。"},
+	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。": {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},
+	"提示: 请运行 oss-transfer-cli login 登录。":                {"Hint: run oss-transfer-cli login to sign in.", "ヒント: oss-transfer-cli login でサインインしてください。"},
+	"提示: 无法连接 Master（%s）。请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。": {"Hint: could not connect to the Master (%s). Check that the address and port are correct and that the Master service is running; name the address with --host, or save it with oss-transfer-cli config set master URL.", "ヒント: Master（%s）に接続できません。アドレスとポートが正しいこと、Master サービスが動作していることを確認してください。--host でアドレスを指定するか、oss-transfer-cli config set master URL で保存できます。"},
+	"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。":                         {"Hint: no installation was found on this computer and no Master is configured; run oss-transfer-cli config set master URL, or name the Master with --host.", "ヒント: このコンピューターにインストールが見つからず、Master も設定されていません。oss-transfer-cli config set master URL を実行するか、--host で Master を指定してください。"},
 
 	// Accounts.
 	"已登录 %s（用户 %s）": {"Signed in to %s as %s", "%s にサインインしました（ユーザー %s）"},

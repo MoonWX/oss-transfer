@@ -588,6 +588,7 @@ Use the Node ID column from node list to select a node in commands. Add nodes wi
 Agent addresses cannot be edited after registration; join again when replacing a node.
 node network retains legacy address settings. New invitations use the current CLI connection address; --master-url sets an address the Agent can reach.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
+Removing a node makes the task reports (per-object results) and object comparison results stored on it unavailable; export them first with task report and object export if you need them.
 Use --json for queue/raw rate data; use limit list for limits.
 `, `実行ノード
 使い方: oss-transfer-cli node <サブコマンド> [引数]
@@ -610,6 +611,7 @@ Use --json for queue/raw rate data; use limit list for limits.
 登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
 node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。Agent が接続できるアドレスは --master-url で指定できます。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。
+ノードを削除すると、そのノードに保存されているタスクレポート（オブジェクトごとの結果）とオブジェクト比較の結果は取得できなくなります。必要な場合は先に task report と object export でエクスポートしてください。
 キューや速度の生データは --json、上限は limit list で確認できます。
 `},
 	cliAgentHelp: {`Agent management
@@ -633,6 +635,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
 --master-url sets the address Agents use to reach Master; it defaults to the current CLI connection address.
 Invitations expire after 30 minutes and can be used once. On the host to add, run one of the commands: the native installer for Linux, macOS or FreeBSD, the Windows PowerShell command, or the Docker command (also for Docker Desktop).
 --local-root uses absolute paths on the Agent OS and replaces the existing root list.
+Removing a node makes the task reports (per-object results) and object comparison results stored on it unavailable; export them first with task report and object export if you need them.
 `, `Agent 管理
 使い方: oss-transfer-cli agent <サブコマンド> [引数]
 
@@ -654,6 +657,7 @@ Invitations expire after 30 minutes and can be used once. On the host to add, ru
 --master-url は Agent が接続する Master の URL です。省略時は CLI の接続先を使用します。
 招待の有効期限は 30 分で、1 回のみ使用できます。追加するホストで、Linux / macOS / FreeBSD のネイティブインストールコマンド、Windows PowerShell コマンド、Docker コマンド（Docker Desktop でも可）のいずれかを実行してください。
 --local-root は Agent の OS 上の絶対パスです。既存のルート一覧を置き換えます。
+ノードを削除すると、そのノードに保存されているタスクレポート（オブジェクトごとの結果）とオブジェクト比較の結果は取得できなくなります。必要な場合は先に task report と object export でエクスポートしてください。
 `},
 	cliSetupHelp: {`First login
   oss-transfer-cli login
@@ -953,7 +957,7 @@ The service owner or system administrator can use the installed cluster without 
 logout ends only an account session, not local service access. Log in before changing an account password.
 The username defaults to admin; use --username for another account. Terminal password input is hidden.
 After the first login, run change-password. Scripts can select an environment variable, file, or stdin.
-A new password needs at least 8 characters and must differ from the user name and the current password.
+A new password needs at least 8 characters, must not be a common password, one repeated character or a run of consecutive digits or letters (such as 12345678 or abcdefgh), and must differ from the user name and the current password.
 --password-stdin reads standard input; --password-file reads a file.
 Changes also accept --old-password-file / --new-password-file.
 Sessions are saved per --host. OSS_TRANSFER_AUTH_TOKEN supplies a user login token.
@@ -972,7 +976,7 @@ OSS_TRANSFER_INTERNAL_TOKEN is not accepted by the CLI.
 logout はアカウントのセッションのみを終了します。パスワード変更には login が必要です。
 ユーザー名の既定値は admin です。他のアカウントは --username で指定します。入力したパスワードは表示されません。
 初回ログイン後は change-password を実行してください。スクリプトでは環境変数、ファイル、標準入力を選択できます。
-新しいパスワードは 8 文字以上で、ユーザー名や現在のパスワードと異なる必要があります。
+新しいパスワードは 8 文字以上で、よく使われるパスワード、同じ文字の繰り返し、連続した数字や英字（12345678、abcdefgh など）は使えません。ユーザー名や現在のパスワードとも異なる必要があります。
 --password-stdin は標準入力、--password-file はファイルから読み取ります。
 変更には --old-password-file / --new-password-file も使用できます。
 セッションは --host ごとに保存します。OSS_TRANSFER_AUTH_TOKEN でログイントークンを指定できます。

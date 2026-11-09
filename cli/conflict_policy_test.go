@@ -85,7 +85,10 @@ func TestTaskDetailTranslatesConflictPolicyAndExplainsSkips(t *testing.T) {
 		localeEN: {"Skip existing objects or files", "Overwrite existing objects or files", "Overwrite changed objects"},
 		localeJA: {"既存のオブジェクトまたはファイルをスキップ", "既存のオブジェクトまたはファイルを上書き", "変更されたオブジェクトを上書き"},
 	}
+	// The note covers both causes of a skip: a name match at the destination
+	// and an object deleted at the source after the scan.
 	notes := map[cliLocale]string{localeZH: "未比较内容", localeEN: "content was not compared", localeJA: "内容は比較していません"}
+	deleted := map[cliLocale]string{localeZH: "源端被删除的对象也计为跳过", localeEN: "deleted at the source after the scan are also counted as skipped", localeJA: "スキャン後に転送元で削除されたオブジェクトもスキップ"}
 	for locale, want := range labels {
 		for i, policy := range []string{"SKIP", "OVERWRITE", "OVERWRITE_CHANGED"} {
 			for _, skipped := range []int{0, 3} {
@@ -95,7 +98,7 @@ func TestTaskDetailTranslatesConflictPolicyAndExplainsSkips(t *testing.T) {
 				if !strings.Contains(text, want[i]) || strings.Contains(text, " "+policy+"\n") {
 					t.Fatalf("%s %s: policy not translated: %s", locale, policy, text)
 				}
-				if noted := strings.Contains(text, notes[locale]); noted != (policy == "SKIP" && skipped > 0) {
+				if noted := strings.Contains(text, notes[locale]) && strings.Contains(text, deleted[locale]) && strings.Contains(text, "SOURCE_DELETED"); noted != (policy == "SKIP" && skipped > 0) {
 					t.Fatalf("%s %s skipped=%d: note shown=%v: %s", locale, policy, skipped, noted, text)
 				}
 			}

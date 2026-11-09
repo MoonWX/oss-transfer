@@ -364,9 +364,11 @@ export default function SoftwareUpdates({
       return t("已有更新正在进行，请稍候。");
     if (node.unavailable) return t("节点离线，重新连接后可更新。");
     if (isContainer(node.info))
-      return t(
-        "Docker 部署的节点不能在线更新，请在其主机上用新镜像重新创建容器（见“更新命令”）。",
-      );
+      return newerVersion(version, node.info?.version ?? "")
+        ? t(
+            "Docker 部署的节点不能在线更新，请在其主机上用新镜像重新创建容器（见“更新命令”）。",
+          )
+        : t("已与 Master 版本一致，无需更新。");
     if (node.upgradeReason === "LEGACY")
       return t("此版本需先用安装脚本升级一次，之后可在这里更新。");
     if (!node.info?.supported) return reason(node.info);
@@ -376,6 +378,10 @@ export default function SoftwareUpdates({
       return t("此节点不支持在线安装预发布版本，请使用安装脚本升级。");
     return "";
   };
+  // At the Master's version the commands recreate the container unchanged.
+  const containerRecreate =
+    !!containerNode &&
+    !newerVersion(version, containerNode.info?.version ?? "");
   const containerCommands =
     containerNode && snapshot?.agentImage
       ? containerAgentCommands(snapshot.agentImage, containerNode.hostname)
@@ -619,15 +625,18 @@ export default function SoftwareUpdates({
                         alignItems="center"
                         gap={0.5}
                       >
+                        {/* Also offered at the same version: recreating the
+                            container is how a directory mount is added. */}
                         {isContainer(node.info) &&
                           !node.unavailable &&
-                          !!snapshot.agentImage &&
-                          newerVersion(version, node.info?.version ?? "") && (
+                          !!snapshot.agentImage && (
                             <Button
                               size="small"
                               onClick={() => setContainerNode(node)}
                             >
-                              {t("更新命令")}
+                              {newerVersion(version, node.info?.version ?? "")
+                                ? t("更新命令")
+                                : t("重建命令")}
                             </Button>
                           )}
                         <Tooltip title={blockedReason(node)}>
@@ -741,15 +750,27 @@ export default function SoftwareUpdates({
         maxWidth="md"
       >
         <DialogTitle>
-          {t("更新 Docker 执行节点 {name}", {
-            name: containerNode
-              ? displayNode(containerNode.address, containerNode)
-              : "",
-          })}
+          {t(
+            containerRecreate
+              ? "重建 Docker 执行节点 {name}"
+              : "更新 Docker 执行节点 {name}",
+            {
+              name: containerNode
+                ? displayNode(containerNode.address, containerNode)
+                : "",
+            },
+          )}
         </DialogTitle>
         <DialogContent>
           {containerCommands && (
             <Stack gap={2.5}>
+              {containerRecreate && (
+                <Alert severity="info">
+                  {t(
+                    "该节点已与 Master 版本一致，无需更新。需要修改容器参数（例如添加本地目录挂载）时，可以用下面的命令重新创建容器，并在 docker run 中加入新的参数。",
+                  )}
+                </Alert>
+              )}
               <Typography>
                 {t(
                   "在该节点所在的主机上运行下面的命令，用镜像 {image} 重新创建容器。节点身份和配置保存在数据卷中，会保留；正在执行的子任务会中断，节点重新连接后自动恢复。",

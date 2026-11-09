@@ -101,9 +101,9 @@ func TestCLIDefaultMasterConnectionRefusedExplainsConfiguration(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "config set master") || !strings.Contains(stderr, "--host") {
 		t.Fatalf("%d %s", code, stderr)
 	}
-	// An explicit address is the user's choice: only the error is shown.
+	// An explicit address gets the general hint naming that address.
 	code, stderr = run("--host", "http://10.0.0.10:1685", "task", "list")
-	if code != 1 || strings.Contains(stderr, "config set master") {
+	if code != 1 || strings.Contains(stderr, "未找到本机安装") || !strings.Contains(stderr, "无法连接 Master（http://10.0.0.10:1685）") {
 		t.Fatalf("%d %s", code, stderr)
 	}
 	// config get master names the fallback as such.
@@ -398,5 +398,32 @@ func TestCLIVersionShowsVPrefix(t *testing.T) {
 	out.Reset()
 	if code := runCLI([]string{"--version", "--json"}, strings.NewReader(""), &out, io.Discard); code != 0 || !strings.Contains(out.String(), `"version":"4.2.0"`) {
 		t.Fatalf("JSON version changed: %s", out.String())
+	}
+}
+
+func TestCLIHintsWhenTheMasterCannotBeReached(t *testing.T) {
+	clearLocaleEnvironment(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := "http://" + listener.Addr().String()
+	listener.Close()
+	for _, test := range []struct{ lang, want string }{
+		{"zh", "提示: 无法连接 Master（" + host + "）。请检查地址和端口"},
+		{"en", "Hint: could not connect to the Master (" + host + "). Check that the address and port"},
+		{"ja", "ヒント: Master（" + host + "）に接続できません。"},
+	} {
+		var out, stderr bytes.Buffer
+		if code := runCLI([]string{"--host", host, "--lang", test.lang, "task", "list"}, strings.NewReader(""), &out, &stderr); code != 1 {
+			t.Fatalf("%s: exit %d: %s", test.lang, code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), test.want) || !strings.Contains(stderr.String(), "config set master") {
+			t.Fatalf("%s: %s", test.lang, stderr.String())
+		}
+	}
+	// An HTTP error from a reachable Master gets no connection hint.
+	if hints := cliErrorHints(&apiHTTPError{Status: 500, Message: "boom"}, false); len(hints) != 0 {
+		t.Fatal(hints)
 	}
 }

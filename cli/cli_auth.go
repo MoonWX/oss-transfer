@@ -18,6 +18,42 @@ import (
 // minPasswordLength mirrors the Master's rule (internal/auth.MinPasswordLength).
 const minPasswordLength = 8
 
+// commonPasswords and passwordTooCommon mirror the Master's rule
+// (internal/auth.PasswordTooCommon); keep them in sync.
+var commonPasswords = map[string]bool{
+	"password": true, "password1": true, "password12": true, "password123": true, "passw0rd": true, "p@ssw0rd": true, "p@ssword": true,
+	"qwertyui": true, "qwertyuiop": true, "qwerty12": true, "qwerty123": true, "qwer1234": true, "1234qwer": true, "asdfghjk": true, "asdf1234": true,
+	"1q2w3e4r": true, "1q2w3e4r5t": true, "1qaz2wsx": true, "zaq12wsx": true, "abc12345": true, "abcd1234": true, "a1234567": true, "aa123456": true,
+	"12341234": true, "12121212": true, "11223344": true, "123123123": true, "iloveyou": true, "sunshine": true, "princess": true, "football": true,
+	"baseball": true, "superman": true, "trustno1": true, "letmein1": true, "welcome1": true, "welcome123": true, "changeme": true, "admin123": true,
+	"admin1234": true, "administrator": true, "root1234": true,
+}
+
+// passwordTooCommon reports a common password, one character repeated, or a
+// run of consecutive digits or letters in either direction, ignoring case and
+// surrounding spaces.
+func passwordTooCommon(password string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(password))
+	if commonPasswords[normalized] {
+		return true
+	}
+	runes := []rune(normalized)
+	if len(runes) < 2 {
+		return false
+	}
+	digit := func(r rune) bool { return r >= '0' && r <= '9' }
+	letter := func(r rune) bool { return r >= 'a' && r <= 'z' }
+	repeated, ascending, descending := true, true, true
+	sameClass := digit(runes[0]) || letter(runes[0])
+	for i := 1; i < len(runes); i++ {
+		repeated = repeated && runes[i] == runes[0]
+		ascending = ascending && runes[i] == runes[i-1]+1
+		descending = descending && runes[i] == runes[i-1]-1
+		sameClass = sameClass && digit(runes[i]) == digit(runes[0]) && letter(runes[i]) == letter(runes[0])
+	}
+	return repeated || sameClass && (ascending || descending)
+}
+
 type cliSession struct {
 	Host  string `json:"host"`
 	Token string `json:"token"`
@@ -279,7 +315,7 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		if err != nil {
 			return nil, err
 		}
-		next, err := client.passwordValue(opts, "new-password", "新密码（至少 8 个字符，不能与用户名或当前密码相同）：", input, false)
+		next, err := client.passwordValue(opts, "new-password", "新密码（至少 8 个字符，不能是常见或容易猜到的密码，也不能与用户名或当前密码相同）：", input, false)
 		if err != nil {
 			return nil, err
 		}
@@ -287,6 +323,9 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		// the parts known here avoids typing a rejected password twice.
 		if utf8.RuneCountInString(next) < minPasswordLength {
 			return nil, cliErrorf("密码至少需要 8 个字符")
+		}
+		if passwordTooCommon(next) {
+			return nil, cliErrorf("密码过于常见或容易猜到，请换一个")
 		}
 		if next == old {
 			return nil, cliErrorf("新密码不能与当前密码相同")

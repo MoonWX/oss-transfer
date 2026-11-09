@@ -233,9 +233,14 @@ export const coreMessages: Record<string, { en: string; ja: string }> =
       ],
       ["尚未添加连接", "No connections yet", "接続はまだありません"],
       [
-        "至少 8 个字符，不能与用户名或当前密码相同。",
-        "At least 8 characters, different from the user name and the current password.",
-        "8 文字以上で、ユーザー名や現在のパスワードとは異なるものにしてください。",
+        "至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。",
+        "At least 8 characters; not a common password, one repeated character or a run of consecutive digits or letters (such as 12345678 or abcdefgh); different from the user name and the current password.",
+        "8 文字以上で、よく使われるパスワード、同じ文字の繰り返し、連続した数字や英字（12345678、abcdefgh など）は使えません。ユーザー名や現在のパスワードとも異なるものにしてください。",
+      ],
+      [
+        "密码过于常见或容易猜到，请换一个",
+        "The password is too common or too easy to guess",
+        "パスワードがよく使われるものか推測しやすいため、別のパスワードにしてください",
       ],
       [
         "密码至少需要 8 个字符",

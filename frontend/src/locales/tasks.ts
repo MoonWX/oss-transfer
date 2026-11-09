@@ -764,10 +764,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Overwrite changed objects",
     ja: "変更されたオブジェクトを上書き",
   },
-  "跳过的对象只按名称判断，未比较大小或内容；源端修改过的对象在目标端可能仍是旧版本。可用对象比对核对，或使用“覆盖有变化的对象”重新创建任务。":
+  "跳过的对象有两种：目标端已存在的对象只按名称判断，未比较大小或内容，源端修改过的对象在目标端可能仍是旧版本，可用对象比对核对，或使用“覆盖有变化的对象”重新创建任务；扫描后在源端被删除的对象也计为跳过，它们在任务报告中的原因为 SOURCE_DELETED。":
     {
-      en: "Skipped objects were matched by name only; their size and content were not compared, so objects changed at the source may still be old at the destination. Check them with object comparison, or create the task again with “Overwrite changed objects”.",
-      ja: "スキップしたオブジェクトは名前だけで判断しており、サイズや内容は比較していません。転送元で変更されたオブジェクトは、転送先で古いままの可能性があります。オブジェクト比較で確認するか、「変更されたオブジェクトを上書き」でタスクを作り直してください。",
+      en: "Skipped objects are of two kinds. Objects that already existed at the destination were matched by name only; their size and content were not compared, so objects changed at the source may still be old at the destination. Check them with object comparison, or create the task again with “Overwrite changed objects”. Objects deleted at the source after the scan are also counted as skipped; the task report lists them with reason SOURCE_DELETED.",
+      ja: "スキップしたオブジェクトには 2 種類あります。転送先に既に存在したオブジェクトは名前だけで判断しており、サイズや内容は比較していません。転送元で変更されたオブジェクトは、転送先で古いままの可能性があります。オブジェクト比較で確認するか、「変更されたオブジェクトを上書き」でタスクを作り直してください。スキャン後に転送元で削除されたオブジェクトもスキップとして数えられ、タスクレポートでは理由 SOURCE_DELETED として記録されます。",
     },
   跳过同名对象或文件: {
     en: "Skip existing objects or files",

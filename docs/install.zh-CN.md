@@ -55,7 +55,7 @@ Tasks: /usr/local/bin/oss-transfer-cli task list
 然后确认：
 
 1. `sudo systemctl status oss-transfer-master` 显示 `active (running)`。执行节点的服务名为 `oss-transfer-agent`。
-2. 用浏览器打开 **访问地址**，以 `admin` 和初始密码登录。首次登录必须设置新密码：至少 8 个字符，不能与用户名或初始密码相同。
+2. 用浏览器打开 **访问地址**，以 `admin` 和初始密码登录。首次登录必须设置新密码：至少 8 个字符，不能是常见或容易猜到的密码，也不能与用户名或初始密码相同。
 3. 如果同时安装了本机执行节点，在 Master 主机上运行 `sudo oss-transfer-cli node list`，它应显示为在线。
 
 初始密码只显示一次。如果遗失，请[重置管理员密码](operations.zh-CN.md#重置管理员密码)。
@@ -72,7 +72,7 @@ Tasks: /usr/local/bin/oss-transfer-cli task list
 
 ### 添加执行节点
 
-在控制台打开 **执行节点 → 添加节点**，填写节点名称和新节点能访问的 Master 地址，点击 **生成加入指令**。复制与该节点系统对应的命令，在该主机上运行。Linux、macOS 和 FreeBSD 的原生命令形如 `curl -fsSL '<链接>' | sudo bash`。几秒钟后，该节点会在 **执行节点** 页面显示为在线。使用 CLI 时，`oss-transfer-cli agent invite` 会打印同样的命令（见 [CLI](cli.zh-CN.md#添加和移除执行节点)）。Docker 指令见 [Docker Compose](docker-compose.zh-CN.md)。
+在控制台打开 **执行节点 → 添加节点**，填写节点名称和新节点能访问的 Master 地址，点击 **生成加入指令**。复制与该节点系统对应的命令，在该主机上运行。Linux、macOS 和 FreeBSD 的原生命令形如 `curl -fsSL '<链接>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，以 root 运行或由可以使用 `sudo` 的用户运行均可。几秒钟后，该节点会在 **执行节点** 页面显示为在线。使用 CLI 时，`oss-transfer-cli agent invite` 会打印同样的命令（见 [CLI](cli.zh-CN.md#添加和移除执行节点)）。Docker 指令见 [Docker Compose](docker-compose.zh-CN.md)。
 
 ## 其他系统
 

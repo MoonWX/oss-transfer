@@ -46,7 +46,7 @@ Initial administrator: admin
 Initial password: <random password>
 ```
 
-Open port `1685` of this host in a browser (`http://localhost:1685` on the same computer), sign in as `admin` with the initial password and choose your own password (at least 8 characters, not the user name). After the change, the log says that the initial password is no longer valid.
+Open port `1685` of this host in a browser (`http://localhost:1685` on the same computer), sign in as `admin` with the initial password and choose your own password (at least 8 characters, not a common or easily guessed password, not the user name). After the change, the log says that the initial password is no longer valid.
 
 If the page does not open, check `docker compose ps` (the `master` service should be running) and `docker compose logs master`. Another program may already use port 1685: set another port in `.env`.
 
@@ -71,7 +71,7 @@ TRANSFER_PORT=1685
    | --- | --- | --- |
    | **macOS / Linux** | Docker Desktop on macOS, Docker Engine on Linux | Plain `docker run` commands; no root (on Linux, your user must be allowed to run `docker`) |
    | **Windows PowerShell** | Docker Desktop on Windows | The same commands for PowerShell |
-   | **Linux Docker Compose** | Linux with root | The Compose installer (`curl … \| sudo bash`); see [below](#the-linux-compose-installer) |
+   | **Linux Docker Compose** | Linux with root | The Compose installer (`curl … \| sh -c '…'`, as root or with `sudo`); see [below](#the-linux-compose-installer) |
 
 4. Choose **Copy command** and run it on the Agent host within 30 minutes. The command works once.
 
@@ -93,13 +93,13 @@ The `docker run` variant runs two commands. The first joins the cluster in a tem
 
 ### The Linux Compose installer
 
-The **Linux Docker Compose** variant runs the installer as root (`curl … | sudo bash`). It writes a Compose project to `/opt/oss-transfer-compose/agent/docker-compose.yml` with its data in `/var/lib/oss-transfer-compose/agent`, and on Debian and Ubuntu offers to install Docker Engine if it is missing. If the installation fails, it removes what it created; fix the cause and run the same command again. It runs on Linux only: on macOS it stops and points you to the Docker command.
+The **Linux Docker Compose** variant runs the installer as root (`curl … | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`, directly as root or through `sudo`). It writes a Compose project to `/opt/oss-transfer-compose/agent/docker-compose.yml` with its data in `/var/lib/oss-transfer-compose/agent`, and on Debian and Ubuntu offers to install Docker Engine if it is missing. If the installation fails, it removes what it created; fix the cause and run the same command again. It runs on Linux only: on macOS it stops and points you to the Docker command.
 
 ## Mount a host directory for local transfers
 
 A container Agent can only read or write the host directories mounted into it. In a task, enter the path as the container sees it. Use the same absolute path on both sides, such as `/mnt/storage:/mnt/storage`, so paths look the same on the host and in the console.
 
-- **`docker run` Agents:** before running the copied command, add `-v /mnt/storage:/mnt/storage` to the second `docker run`, before the image name. For an existing Agent, recreate its container with the extra option (as in [updating container Agents](#container-agents)); the identity stays in the volume.
+- **`docker run` Agents:** before running the copied command, add `-v /mnt/storage:/mnt/storage` to the second `docker run`, before the image name. For an existing Agent, recreate its container with the extra option: its row in **Execution nodes → Software updates** has **Recreate commands** (or **Update commands** when an update is available), as in [updating container Agents](#container-agents); the identity stays in the volume.
 - **Docker Desktop on Windows:** mount a Windows folder on a Linux path, for example `-v C:\transfer:/mnt/transfer`, and use `/mnt/transfer` in tasks.
 - **Linux Compose installer:** add `--files-dir`, for example `curl -fsSL '<join link>' | sudo bash -s -- --files-dir /mnt/storage`. The directory must exist.
 
@@ -206,7 +206,7 @@ Keep the existing volumes. `docker compose down -v` deletes them.
 
 Container Agents cannot update online. Recreate each container from the new image; the identity and settings stay in its volume. Running child tasks are interrupted and resume when the Agent reconnects.
 
-1. Open **Execution nodes → Software updates**. A Docker Agent's row has an **Update commands** button.
+1. Open **Execution nodes → Software updates**. A Docker Agent's row has an **Update commands** button. When the Agent already runs the Master's version, the button is labelled **Recreate commands** and shows the same commands, for example to add a directory mount.
 2. The dialog shows the commands for that Agent, using the Master's image:
    - **Nodes joined with docker run:** `docker pull <image>`, `docker rm -f <container>` and the `docker run` command that starts it again.
    - **Nodes installed with the installer's Docker Compose method:** change `image` in `/opt/oss-transfer-compose/agent/docker-compose.yml`, then run:
@@ -223,8 +223,9 @@ Container Agents cannot update online. Recreate each container from the new imag
 
 **An Agent added with `docker run`:**
 
-1. Remove the node on the **Execution nodes** page, or with `oss-transfer-cli agent remove <node> --yes`. The Agent stops working and stays idle.
-2. On its host, remove the container and its volume. The volume holds the Agent's identity and comparison results.
+1. Export the task reports and comparison results you want to keep. The per-object results of task reports and the object comparison results are stored on the Agent, in its volume; after the node is removed they are no longer available, task reports become incomplete and its comparisons disappear ([remove a node](operations.md#remove-a-node)).
+2. Remove the node on the **Execution nodes** page, or with `oss-transfer-cli agent remove <node> --yes`. The Agent stops working and stays idle.
+3. On its host, remove the container and its volume. The volume holds the Agent's identity, its per-object task results and its comparison results.
 
    ```sh
    docker rm -f oss-transfer-agent-<id>

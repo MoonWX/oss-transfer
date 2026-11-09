@@ -110,7 +110,7 @@ If an outage lasted longer, the affected objects fail with a connection or serve
 
 A task lists the source first and transfers later. Objects can change in between:
 
-- **Deleted at the source** (object storage sources): the object is counted as skipped, not failed. The exception record says *The source object was deleted at the source and was skipped*, and the report row has the reason `SOURCE_DELETED`. A file missing from a local source still fails.
+- **Deleted at the source** (object storage sources): an object deleted at the source after the scan, before its transfer, is not a failure: it is counted as skipped and does not appear among the failed objects in the exception records. The [task report](#task-reports) lists it in `file-results.csv` with the result `SKIPPED` and the reason `SOURCE_DELETED`. The skip note in `task show` and in the task details mentions both causes of a skip. A file missing from a local source still fails.
 - **Changed at the source**: the object fails with the reason code `SOURCE_CHANGED` (*The source object changed after the scan; a retry copies its current version*). **Retry failed items** copies the version that exists at retry time, and the task's total size uses its new size. The report marks the object `SOURCE_REFRESHED`.
 
 Changes that happen after an object was copied are not seen by that task. Keep the source stable, or use incremental rounds and a final comparison ([planning](planning.md)).
@@ -476,7 +476,7 @@ oss-transfer-cli update status --watch 5
 
 A host fixed in place (for example its service account) is checked again within a minute; no restart is needed.
 
-**Docker Agents.** A container Agent cannot replace itself. Its row has **Update commands**, which opens *Update Docker node NAME* with commands to copy and run on its host:
+**Docker Agents.** A container Agent cannot replace itself. Its row has **Update commands**, which opens *Update Docker node NAME* with commands to copy and run on its host. When the Agent already runs the Master's version, the button is **Recreate commands** (*Recreate Docker node NAME*), with the same commands, for example to add a directory mount:
 
 - for an Agent started with `docker run`: `docker pull IMAGE`, `docker rm -f NAME`, then the `docker run -d …` command that starts it again from its data volume `NAME-data`. Keep any extra options you used, such as directory mounts;
 - for an Agent installed with the installer's Docker Compose method: set `image` in `/opt/oss-transfer-compose/agent/docker-compose.yml` to the new image, then run `docker compose -p oss-transfer-agent -f /opt/oss-transfer-compose/agent/docker-compose.yml pull` and `… up -d`.
@@ -504,7 +504,7 @@ Online updates install only the latest stable release. To install another versio
 - **Removed Agents stop.** An Agent removed on the Master now stops instead of restarting every 5 seconds. Existing systemd units get `RestartPreventExitStatus=78` on their next upgrade.
 - **Reports** of tasks that were stopped and resumed, or whose failed objects were retried, are complete again. This is fixed on the Master and works with older Agents.
 - **CLI exit codes.** Command-line mistakes found before contacting the Master now exit with 2 (previously 1 for some), and a 401 or 403 always exits with 1. Check scripts that test exit codes ([CLI](cli.md#output-languages-and-exit-codes)).
-- **Passwords** must have at least 8 characters and differ from the user name and the current password.
+- **Passwords** must have at least 8 characters, must not be a common or easily guessed password (see [Security](security.md)) and must differ from the user name and the current password.
 
 ### Try a prerelease
 
@@ -536,9 +536,10 @@ Restore the saved program, configuration, installation metadata, service definit
 
 Remove an Agent that you no longer need, or one that is being replaced:
 
-1. Stop or finish the tasks that use it, or move them to other nodes first ([change a task's execution nodes](#change-a-tasks-execution-nodes)). The Master refuses to remove an Agent with active tasks.
-2. On **Execution nodes**, choose **Remove node**, or run `oss-transfer-cli agent remove NODE --yes`. The CLI confirms: *Removed node NODE. Its Agent service stops by itself and does not restart; to delete its program and data, run the installer on that host with --uninstall --role agent*.
-3. On the Agent host, [uninstall](install.md#uninstall) it, or leave it stopped.
+1. Stop or finish the tasks that use it, or move them to other nodes first ([change a task's execution nodes](#change-a-tasks-execution-nodes)). The Master refuses to remove an Agent that an unfinished task uses; finished and stopped tasks do not block it.
+2. Export what you want to keep. The per-object results of [task reports](#task-reports) and the [object comparison](#export-results) results are stored on the Agents. After the Agent is removed, those stored on it are no longer available: a task report exported later is incomplete (its objects on that node are `UNKNOWN`) and the Agent's comparisons disappear from the comparison history. Save the reports (`oss-transfer-cli task report ID`) and the comparison results (`oss-transfer-cli object export ID`) first. The removal dialog and `agent remove` without `--yes` repeat this warning.
+3. On **Execution nodes**, choose **Remove node**, or run `oss-transfer-cli agent remove NODE --yes`. The CLI confirms: *Removed node NODE. Its Agent service stops by itself and does not restart; to delete its program and data, run the installer on that host with --uninstall --role agent*.
+4. On the Agent host, [uninstall](install.md#uninstall) it, or leave it stopped.
 
 The removed Agent's service writes to its log *Service failed: agent enrollment was revoked by the Master. This Agent was removed from the cluster or its enrollment was revoked on the Master, so the service has stopped and will not restart automatically …* and exits:
 

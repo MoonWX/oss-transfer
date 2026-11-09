@@ -110,7 +110,7 @@
 
 任务先列举源端，之后才传输，两者之间对象可能发生变化：
 
-- **在源端被删除**（源为对象存储时）：该对象计为跳过，而不是失败。异常记录显示 *源对象已在源端删除，已跳过*，报告中的原因代码为 `SOURCE_DELETED`。本地源目录中缺失的文件仍记为失败。
+- **在源端被删除**（源为对象存储时）：扫描后、迁移前在源端被删除的对象不算失败，计为跳过，也不会出现在异常记录的失败对象中。[任务报告](#任务报告)的 `file-results.csv` 中列出该对象，结果为 `SKIPPED`，原因代码为 `SOURCE_DELETED`。`task show` 和任务详情中关于跳过的提示会同时说明这两种跳过原因。本地源目录中缺失的文件仍记为失败。
 - **在源端被修改**：该对象失败，原因代码为 `SOURCE_CHANGED`（*源对象在扫描后已变化，重试会读取其当前版本*）。**重试失败项** 会复制重试时的当前版本，任务的总大小也按新大小计算。报告把该对象标记为 `SOURCE_REFRESHED`。
 
 对象复制完成之后才发生的修改，本次任务不会发现。请保持源端稳定，或使用多轮增量迁移并在最后做一次比对（见[规划](planning.zh-CN.md)）。
@@ -476,7 +476,7 @@ oss-transfer-cli update status --watch 5
 
 主机上的问题（例如服务账号）修正后，一分钟内会重新检查，无需重启服务。
 
-**Docker 执行节点。** 容器中的执行节点无法替换自己。它所在的行有 **更新命令** 按钮，点击后打开 *更新 Docker 执行节点 名称*，列出需要在其主机上复制运行的命令：
+**Docker 执行节点。** 容器中的执行节点无法替换自己。它所在的行有 **更新命令** 按钮，点击后打开 *更新 Docker 执行节点 名称*，列出需要在其主机上复制运行的命令。执行节点已与 Master 版本一致时，按钮为 **重建命令**（打开 *重建 Docker 执行节点 名称*），命令相同，可用于添加目录挂载等：
 
 - 用 `docker run` 启动的执行节点：`docker pull 镜像`、`docker rm -f 名称`，然后用 `docker run -d …` 从数据卷 `名称-data` 重新启动它。创建容器时加过的其他参数（例如目录挂载）请一并保留；
 - 用安装脚本的 Docker Compose 方式安装的执行节点：先把 `/opt/oss-transfer-compose/agent/docker-compose.yml` 中的 `image` 改为新镜像，再运行 `docker compose -p oss-transfer-agent -f /opt/oss-transfer-compose/agent/docker-compose.yml pull` 和 `… up -d`。
@@ -504,7 +504,7 @@ Master 和每个执行节点上的更新程序各自从 GitHub 或京东云 OSS 
 - **被移除的执行节点会停止。** 在 Master 上移除的执行节点现在会停止，而不是每 5 秒重启一次。现有的 systemd 单元会在下次升级时加入 `RestartPreventExitStatus=78`。
 - **任务报告。** 停止后继续过、或重试过失败对象的任务，其报告重新变得完整。该修复在 Master 上，旧版执行节点同样适用。
 - **CLI 退出码。** 在连接 Master 之前发现的命令行错误现在统一以 2 退出（以前部分为 1），401 和 403 总是以 1 退出。请检查依赖退出码的脚本（见 [CLI](cli.zh-CN.md#输出语言和退出码)）。
-- **密码** 至少需要 8 个字符，且不能与用户名或当前密码相同。
+- **密码** 至少需要 8 个字符，不能是常见或容易猜到的密码（见[安全](security.zh-CN.md)），且不能与用户名或当前密码相同。
 
 ### 试用预发布版本
 
@@ -536,9 +536,10 @@ Docker Compose 部署通过 `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.29-beta.1
 
 不再需要或要替换某个执行节点时：
 
-1. 先停止或完成使用它的任务，或把任务移到其他节点（见[调整任务的执行节点](#调整任务的执行节点)）。执行节点上还有活动任务时，Master 会拒绝移除。
-2. 在 **执行节点** 页面点击 **移除节点**，或运行 `oss-transfer-cli agent remove 节点 --yes`。CLI 会确认：*已移除执行节点 节点。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent*。
-3. 在该主机上[卸载](install.zh-CN.md#卸载)它，或让它保持停止状态。
+1. 先停止或完成使用它的任务，或把任务移到其他节点（见[调整任务的执行节点](#调整任务的执行节点)）。有未结束的任务使用该执行节点时，Master 会拒绝移除；已完成和已停止的任务不影响移除。
+2. 导出需要保留的内容。[任务报告](#任务报告)中逐个对象的结果和[对象比对](#导出结果)结果保存在执行节点上。执行节点移除后，保存在它上面的这些结果将无法再获取：之后导出的任务报告不完整（该节点上的对象结果为 `UNKNOWN`），它的比对记录也会从比对历史中消失。请先保存任务报告（`oss-transfer-cli task report ID`）和比对结果（`oss-transfer-cli object export ID`）。移除对话框和不带 `--yes` 的 `agent remove` 也会给出这条提醒。
+3. 在 **执行节点** 页面点击 **移除节点**，或运行 `oss-transfer-cli agent remove 节点 --yes`。CLI 会确认：*已移除执行节点 节点。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent*。
+4. 在该主机上[卸载](install.zh-CN.md#卸载)它，或让它保持停止状态。
 
 被移除的执行节点会在服务日志中写入 *Service failed: agent enrollment was revoked by the Master. This Agent was removed from the cluster or its enrollment was revoked on the Master, so the service has stopped and will not restart automatically …*，然后退出：
 

@@ -9,7 +9,7 @@ import {
 } from "./object-comparison-fixtures";
 import { buildLabel } from "../src/lib/buildAge";
 import { containerAgentCommands } from "../src/lib/containerAgent";
-import { passwordRuleError } from "../src/lib/passwordRule";
+import { passwordRuleError, passwordRuleText } from "../src/lib/passwordRule";
 import { displayVersion } from "../src/lib/semver";
 import { t, translate } from "../src/lib/i18n";
 import "./catalogs";
@@ -38,10 +38,30 @@ test("the console checks the same password rule as the Master", () => {
     t("新密码不能与当前密码相同"),
   );
   expect(passwordRuleError("long enough", "initial", "admin")).toBe("");
-  for (const locale of ["en-US", "ja-JP"] as const)
-    expect(
-      translate(locale, "至少 8 个字符，不能与用户名或当前密码相同。"),
-    ).not.toBe("至少 8 个字符，不能与用户名或当前密码相同。");
+  // Trivial passwords are rejected like the Master does.
+  for (const weak of [
+    "12345678",
+    "Password",
+    " QWERTY123 ",
+    "aaaaaaaa",
+    "98765432",
+    "abcdefgh",
+    "HGFEDCBA",
+  ])
+    expect(passwordRuleError(weak, "initial", "admin")).toBe(
+      t("密码过于常见或容易猜到，请换一个"),
+    );
+  for (const fine of ["12345679", "6789:;<=", "aaaaaaab"])
+    expect(passwordRuleError(fine, "initial", "admin")).toBe("");
+  const rule =
+    "至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。";
+  expect(passwordRuleText()).toBe(t(rule));
+  for (const locale of ["en-US", "ja-JP"] as const) {
+    expect(translate(locale, rule)).not.toBe(rule);
+    expect(translate(locale, "密码过于常见或容易猜到，请换一个")).not.toBe(
+      "密码过于常见或容易猜到，请换一个",
+    );
+  }
 });
 
 test("the change-password dialog states the rule and rejects the current password locally", async ({
@@ -53,7 +73,9 @@ test("the change-password dialog states the rule and rejects the current passwor
   await page.getByRole("menuitem", { name: "修改密码" }).click();
   const dialog = page.getByRole("dialog");
   await expect(
-    dialog.getByText("至少 8 个字符，不能与用户名或当前密码相同。"),
+    dialog.getByText(
+      "至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。",
+    ),
   ).toBeVisible();
   await dialog.getByLabel(/^当前密码/).fill("current-password");
   await dialog.getByLabel(/^新密码/).fill("current-password");
@@ -410,6 +432,18 @@ test("container Agents get update commands and disabled updates explain why", as
               },
               update: { phase: "IDLE" },
             },
+            {
+              address: "agent-docker-3",
+              displayName: "agent-docker-3",
+              hostname: "oss-transfer-agent-4d5e6f",
+              info: {
+                role: "agent",
+                version: "4.2.0",
+                supported: false,
+                reason: "CONTAINER",
+              },
+              update: { phase: "IDLE" },
+            },
           ],
           latest: { version: "4.2.0" },
           available: false,
@@ -419,7 +453,7 @@ test("container Agents get update commands and disabled updates explain why", as
     }),
   );
   await page.goto("/tools?tab=updates");
-  await expect(page.getByText("v4.2.0", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v4.2.0" })).toBeVisible();
   const row = page.getByRole("row").filter({ hasText: "agent-docker-1" });
   await expect(row.getByRole("cell", { name: "v4.1.41" })).toBeVisible();
   await expect(
@@ -465,5 +499,31 @@ test("container Agents get update commands and disabled updates explain why", as
   // Same options, in the same order, as the join command's docker run.
   expect(named.run.split("\n")[2]).toBe(
     `docker run -d --name oss-transfer-agent-1a2b3c --hostname oss-transfer-agent-1a2b3c --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
+  );
+  // At the Master's version the container can still be recreated, for
+  // example to add a directory mount.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  const current = page.getByRole("row").filter({ hasText: "agent-docker-3" });
+  await expect(current.getByRole("button", { name: "更新命令" })).toHaveCount(
+    0,
+  );
+  await current
+    .getByRole("button", { name: "更新", exact: true })
+    .locator("..")
+    .hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "已与 Master 版本一致，无需更新。",
+  );
+  await current.getByRole("button", { name: "重建命令" }).click();
+  const recreate = page.getByRole("dialog");
+  await expect(
+    recreate.getByRole("heading", {
+      name: "重建 Docker 执行节点 agent-docker-3",
+    }),
+  ).toBeVisible();
+  await expect(recreate).toContainText("添加本地目录挂载");
+  await expect(recreate.locator("pre").nth(0)).toHaveText(
+    containerAgentCommands(image, "oss-transfer-agent-4d5e6f").run,
   );
 });

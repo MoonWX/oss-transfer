@@ -156,17 +156,20 @@ test("the restricted user can sign out without entering the console", async ({
   ).toBe(false);
 });
 
-test("the password rule is shown and short or unchanged passwords are rejected before sending", async ({
+test("the password rule is shown and short, trivial or unchanged passwords are rejected before sending", async ({
   page,
 }) => {
   const state = await mockInitialLogin(page);
   await page.goto("/");
   await login(page);
   await expect(
-    page.getByText("至少 8 个字符，不能与用户名或当前密码相同。"),
+    page.getByText(
+      "至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。",
+    ),
   ).toBeVisible();
   for (const [value, message] of [
     ["abc", "密码至少需要 8 个字符"],
+    ["12345678", "密码过于常见或容易猜到，请换一个"],
     [initialPassword, "新密码不能与当前密码相同"],
   ]) {
     await page.getByLabel(/^新密码(?:\s*\*)?$/).fill(value);

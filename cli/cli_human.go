@@ -424,11 +424,20 @@ func cliErrorHints(err error, fallbackHost bool) []string {
 		return nil
 	}
 	var dial *net.OpError
-	if fallbackHost && errors.As(err, &dial) && dial.Op == "dial" {
+	var dns *net.DNSError
+	if !(errors.As(err, &dial) && dial.Op == "dial") && !errors.As(err, &dns) {
+		return nil
+	}
+	if fallbackHost {
 		return []string{"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。"}
 	}
-	return nil
+	// The connection itself failed (refused, timed out or the name did not
+	// resolve): no request reached the Master.
+	return []string{cliMasterUnreachableHint}
 }
+
+// cliMasterUnreachableHint is followed by the Master address the CLI used.
+const cliMasterUnreachableHint = "提示: 无法连接 Master（%s）。请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。"
 
 // cliAuthFailure reports a rejected session or permission: a failure, never
 // an incomplete result.

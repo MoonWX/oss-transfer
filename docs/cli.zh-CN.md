@@ -166,7 +166,35 @@ V4 的命令 `rate-limit`、`list-rate-limit`、`rate-limit-history [N]` 和 `se
 
 ## 比对存储的对象
 
-`object compare` 用 `--scope object` 检查单个对象，用 `--scope prefix` 检查存储桶或前缀。`--mode metadata` 比较元数据；`--mode content` 以流式方式对两端对象计算 SHA-256，不在磁盘上暂存。使用返回的比对 ID 执行 `object status`、`object cancel` 和 `object delete`。检查方式见[对象比对说明](operations.zh-CN.md#对象比对)，参数见 `help object`。
+`object compare` 启动一次比对：用 `--scope object` 比对单个对象，用 `--scope prefix` 比对存储桶或前缀；比对由 Master 安排在某个 Agent 上执行。`--mode metadata` 通过 HEAD 请求比较大小和元数据；`--mode content` 以流式方式对两端对象计算 SHA-256，不在磁盘上暂存。检查方式和结果见[对象比对说明](operations.zh-CN.md#对象比对)，参数见 `help object`。
+
+```sh
+oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix 2026/ --dest-prefix 2026/ --mode metadata
+oss-transfer-cli object list
+```
+
+`--source-bucket` 和 `--dest-bucket` 使用 `连接名称/存储桶` 格式。前缀比对使用 `--source-prefix` 和 `--dest-prefix`（为空表示整个存储桶）；单对象比对使用 `--source-key` 和 `--dest-key`，指定了 Key 时默认按单对象比对。默认方式为 `metadata`。`object compare` 打印新比对的 ID 和跟踪它的命令；加 `--json` 时输出比对记录。`object list` 按开始时间倒序列出所有节点上的比对：ID、状态、方式、范围、源、目标、已检查的对象数、差异数、开始时间和节点。有节点未响应时，输出会列出这些节点，命令以退出码 3 结束。
+
+从列表中选择一个 ID：
+
+```bash
+read -r -p 'Comparison ID: ' TRANSFER_COMPARISON
+oss-transfer-cli object status "$TRANSFER_COMPARISON"
+oss-transfer-cli object status "$TRANSFER_COMPARISON" --status MISSING_TARGET,DIFFERENT --limit 1000
+oss-transfer-cli object export "$TRANSFER_COMPARISON" --output "comparison-$TRANSFER_COMPARISON.zip"
+```
+
+`object status` 显示比对的状态、方式、范围、源和目标、各项计数、已保存的差异、已用时间和速率、已读取的字节数（内容模式）、检查点、是否可继续、停止保存差异的原因和最后保存的 Key，以及错误和错误详情。之后列出一页已保存的结果行：编号、结果、源 Key、目标 Key、两端大小和说明（不同的属性，或错误及其详情）。`--status` 只保留指定的结果，多个值用逗号分隔：`DIFFERENT`、`ETAG_MISMATCH`、`MISSING_TARGET`、`EXTRA_TARGET`、`CHANGED_DURING_COMPARE`、`ERROR` 和 `BOTH_MISSING`。`--limit` 设置每页行数，范围 1–1,000（默认 50），`--after N` 从第 N 行之后开始；后面还有结果行时，命令会打印下一页使用的 `--after` 值。比对已停止保存差异时，命令以退出码 3 结束。
+
+`object export ID --output 文件` 保存一个 ZIP，包含 `differences.csv`、`retry-source-keys.incr` 和 `summary.json`（见[导出结果](operations.zh-CN.md#导出结果)）；加 `--format jsonl` 时改为每行保存一条结果。`--status` 与上文相同，用于限制导出的结果行；重传 Key 清单始终包含所有 `MISSING_TARGET`、`DIFFERENT` 和 `ETAG_MISMATCH` 行。输出文件不能已存在：CLI 先下载到同一目录下的临时文件，下载完整并通过校验后才以指定的文件名发布。导出 ZIP 后，命令打印各项计数、导出是否完整以及重传 Key 的数量；导出不完整时以退出码 3 结束。
+
+```sh
+oss-transfer-cli object resume "$TRANSFER_COMPARISON"
+oss-transfer-cli object cancel "$TRANSFER_COMPARISON"
+oss-transfer-cli object delete "$TRANSFER_COMPARISON"
+```
+
+`object resume` 从检查点继续已中断、失败或已取消的前缀比对（见[继续比对](operations.zh-CN.md#继续比对)）。`object cancel` 停止正在运行的比对，已取消的前缀比对之后仍可继续。`object delete` 删除未在运行的比对的结果。4.1.40 及更早版本的 Master 不支持 `object list`、`object export`、`object resume` 和 `--status`，此时 CLI 会提示先升级 Master。
 
 ## 更新集群
 

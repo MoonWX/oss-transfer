@@ -85,7 +85,7 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-未指定的字段保持原值；`unlimited` 解除对应的限制（QPS 选项也可以写 0）；不带选项运行 `task limits ID` 会显示当前限速。`task bandwidth ID MBPS|unlimited` 只修改带宽限制。QPS 是平均速率，可以是小数，范围为 0.000001–1,000,000,000：`--list-qps 0.5` 表示整个任务每 2 秒发出一个列举或 GET 请求。LIST 限制同时适用于 GET 读取（含区间读取）；PUT 包括分片上传请求。已停止或已结束的任务不能修改限速。
+未指定的字段保持原值；`unlimited` 解除对应的限制（QPS 选项也可以写 0）；不带新值运行 `task limits ID` 或 `task bandwidth ID` 会显示任务当前的限速：带宽上限、请求限速范围、LIST / GET、HEAD 和 PUT 上限、是否所有节点都已生效，以及未生效节点的原因。`task bandwidth ID MBPS|unlimited` 只修改带宽限制。QPS 是平均速率，可以是小数，范围为 0.000001–1,000,000,000：`--list-qps 0.5` 表示整个任务每 2 秒发出一个列举或 GET 请求。LIST 限制同时适用于 GET 读取（含区间读取）；PUT 包括分片上传请求。已停止或已结束的任务不能修改限速。
 
 `task show ID` 显示当前限速及其适用范围，并把实时请求速率与任务上限、生效上限对照列出。*请求速率*、*任务请求上限* 和 *生效请求上限* 各行保留一位小数，低于 0.05 的上限显示为 0；*LIST / GET QPS*、*HEAD QPS*、*PUT QPS* 各行显示精确值。`task nodes ID` 显示每个节点的份额。任务限速是总量：Master 按需求把它分给活动的 Agent，有工作的节点平分绝大部分限速，空闲节点只保留很小的下限（见[任务限速在节点间的分配](operations.zh-CN.md#任务限速在节点间的分配)）。节点限速（见[设置节点限速](#设置节点限速)）仍然生效，请求必须同时满足两者。
 

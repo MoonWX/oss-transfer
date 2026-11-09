@@ -25,16 +25,16 @@ Object GETs, including the range reads of large objects, have no node request li
 
 **Change node limits.** Open **Execution nodes**. On **Live status**, each node card has a **Requests and bandwidth** section with a row per limit. Choose **Adjust** on a row to change that limit on that node, or **Adjust limits** at the top of the page to apply one value to every node (**Apply to: All workers**); each node then gets that value, not a share of it. Request limits are entered in requests per second and bandwidth in Mbps; 0 means unlimited. The Master accepts 0.01–1,000,000 requests/s and up to 1,000,000 Mbps. From the CLI, use `limit set` ([CLI](cli.md#set-node-limits)).
 
-The saved value becomes the node's target. It applies at once, ends any automatic reduction of that limit and is kept across Agent restarts. If some Agents do not confirm the change, the dialog stays open and shows *Some Agents did not confirm the rate update*.
+The saved value becomes the node's target. It applies at once, ends any automatic reduction of that limit and is kept across Agent restarts. If some Agents do not confirm the change, the dialog stays open, says how many nodes did not confirm and lists each of them with its reason: common reasons such as a timeout are translated, others are shown as the Agent reported them.
 
 **What a row shows.** **Active limit** is the limit the node enforces now; it is below the target only during an automatic reduction. The target is labeled **Configured target** when it equals the configured value (from `nodeControl`, or the built-in default), or **Saved target** when another value was saved from the console or CLI. **Measured rate** is the requests sent per second, retries included, averaged over the last 5 seconds; for bandwidth, the data read from the source. The chip beside the limit's name shows its [status](#limit-status).
 
-**Configuration file.** The defaults above are built into the Agent. To change them, add a `nodeControl` object to the Agent's `service.json` (`/opt/oss-transfer/agent/config/service.json` on Linux; see [paths](install.md#paths-and-ports)) with any of `listQps`, `putQps`, `headQps` and `bandwidthBitsPerSecond` (bit/s). A value of 0 means unlimited, and keys you leave out keep their defaults. A newly installed Agent has no `nodeControl` object; an Agent converted from V4 has one with all four limits. Edits take effect when the Agent restarts, with these exceptions:
+**Configuration file.** The defaults above are built into the Agent. To change them, add a `nodeControl` object to the Agent's `service.json` (`/opt/oss-transfer/agent/config/service.json` on Linux; see [paths](install.md#paths-and-ports)) with any of `listQps`, `putQps`, `headQps` and `bandwidthBitsPerSecond` (bit/s). A value of 0 means unlimited, and keys you leave out keep their defaults. A newly installed Agent has no `nodeControl` object; an Agent converted from V4 has one with all four limits. Edits take effect when the Agent restarts:
 
 - A limit saved from the console or CLI keeps its saved value. There is no reset: saving the configured value shows **Configured target** again, but the value stays saved. The exception is a limit that has never been saved and runs at its configured value: saving that same value stores nothing, so later `service.json` edits still apply to it.
-- `bandwidthBitsPerSecond` applies only on the Agent's first start. A later edit is ignored, and the bandwidth row then shows the unchanged value as **Saved target**, although nothing was saved. Change node bandwidth from the console or CLI.
+- A request limit that is turned on (from 0), lowered or turned off (set to 0) applies at once. If the limit is being reduced automatically and its new target is at or below the active limit, the reduction ends.
 - A raised request limit takes effect gradually: after the restart the row shows *Automatically reduced* and then *Recovering gradually* while the active limit climbs by 20% every 10 seconds until it reaches the new value.
-- A limit that was 0 (unlimited) cannot be raised in the file. If `listQps`, `putQps`, `headQps` or `bandwidthBitsPerSecond` was 0 when the Agent last ran, and no value was saved for that limit from the console or CLI, changing it to a positive number stops the Agent from starting with `invalid saved effective rate`. Set such a limit from the console or CLI instead. If the Agent no longer starts, set the value back to 0 and restart.
+- A changed `bandwidthBitsPerSecond` applies at once, since bandwidth is never lowered automatically. Bandwidth is enforced in whole bytes per second, so a value that is not a multiple of 8 is rounded down (500000004 becomes 500000000 bit/s).
 
 Changes from the console or CLI need no restart. Agents installed with Docker have no `service.json` and start with the defaults.
 
@@ -91,7 +91,7 @@ Each Agent counts throttled responses separately for its LIST, PUT and HEAD limi
 
 The limit drops to 90% of the lower of the active limit and the most requests of that type sent in one of the last 5 seconds, so a limit far above the actual traffic drops at once: a limit of 1,000/s with traffic peaking at 300/s becomes 270. It never drops below 200 requests/s, or below the target if that is lower. Limits already at that floor are not lowered, nor are unlimited ones; with the defaults this includes the LIST limit of 100 requests/s. After a reduction, the same limit is not lowered again for 5 seconds and needs new throttled responses, so one burst lowers it once.
 
-Only the active limit changes: the target, task limits and bandwidth limits are never adjusted automatically. Throttled object GETs, multipart listings and aborts are retried but lower no limit; a task LIST / GET limit caps GETs. Each Agent detects throttling and adjusts its limits on its own, and an active reduction is kept when the Agent restarts.
+Only the active limit changes: the target, task limits and bandwidth limits are never adjusted automatically. Throttled object GETs, multipart listings and aborts are retried but lower no limit; a task LIST / GET limit caps GETs. Each Agent detects throttling and adjusts its limits on its own, and an active reduction is kept when the Agent restarts, unless the limit's new target in `service.json` is at or below the active limit, or 0.
 
 If throttling keeps coming back, set the limit below the rate at which it starts on every Agent that uses the bucket, or limit the task. **Measured rate before reduction** on the adjustment details shows that rate.
 
@@ -125,7 +125,7 @@ Bandwidth is never adjusted, so its row shows only *At target limit* or *Unlimit
 
 The **Limit history** tab on **Execution nodes** lists the 50 most recent adjustments across all nodes, newest first: the change of the active limit, the stage (*Manual change*, *Automatically reduced*, *Recovering gradually* or *Target restored*), the reason and the target at the time. A reduction's reason gives the throttled responses in the window and their share, for example *Storage throttling (HTTP 503, 429, SlowDown or similar): 12 responses in 5 s, 2.4% of these requests.*
 
-**View details** opens **Adjustment details**: the request that triggered the reduction (action, task, bucket, key, HTTP status code, error code, and the request ID to give the storage provider), the trigger conditions and every step of that round. **Increase per step** shows the step used 10 minutes after a reduction (20% by default); before that, the steps are the smaller probes described above. Some texts on this page mention only HTTP 503; the trigger request shows the actual status and error code.
+**View details** opens **Adjustment details**: the request that triggered the reduction (action, task, bucket, key, HTTP status code, error code, and the request ID to give the storage provider), the trigger conditions and every step of that round. **Increase per step** shows the step used 10 minutes after a reduction (20% by default); before that, the steps are the smaller probes described above. Records from older versions show only HTTP 503 counts.
 
 Each Agent keeps every adjustment in its database. From the CLI, `limit history --limit 200` lists up to 200 and `limit adjustment` shows one round ([CLI](cli.md#set-node-limits)).
 
@@ -157,8 +157,6 @@ A `minQps` at or above every target keeps all limits from being lowered; throttl
 sudo /opt/oss-transfer/agent/bin/oss-transfer-agent --config /opt/oss-transfer/agent/config/service.json --check-config
 sudo systemctl restart oss-transfer-agent
 ```
-
-`--check-config` checks only the file. It does not detect a limit raised from 0, which keeps the Agent from starting ([node limits](#node-limits)).
 
 ## Large objects
 

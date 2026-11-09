@@ -78,9 +78,10 @@ var cliOutputMessages = map[string][2]string{
 	"连接意外中断，可重试失败对象":       {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
 
 	// Hints after an error.
-	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。":                                       {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},
-	"提示: 请运行 oss-transfer-cli login 登录。":                                                      {"Hint: run oss-transfer-cli login to sign in.", "ヒント: oss-transfer-cli login でサインインしてください。"},
-	"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。": {"Hint: no installation was found on this computer and no Master is configured; run oss-transfer-cli config set master URL, or name the Master with --host.", "ヒント: このコンピューターにインストールが見つからず、Master も設定されていません。oss-transfer-cli config set master URL を実行するか、--host で Master を指定してください。"},
+	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。": {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},
+	"提示: 请运行 oss-transfer-cli login 登录。":                {"Hint: run oss-transfer-cli login to sign in.", "ヒント: oss-transfer-cli login でサインインしてください。"},
+	"提示: 无法连接 Master（%s）。请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。": {"Hint: could not connect to the Master (%s). Check that the address and port are correct and that the Master service is running; name the address with --host, or save it with oss-transfer-cli config set master URL.", "ヒント: Master（%s）に接続できません。アドレスとポートが正しいこと、Master サービスが動作していることを確認してください。--host でアドレスを指定するか、oss-transfer-cli config set master URL で保存できます。"},
+	"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。":                         {"Hint: no installation was found on this computer and no Master is configured; run oss-transfer-cli config set master URL, or name the Master with --host.", "ヒント: このコンピューターにインストールが見つからず、Master も設定されていません。oss-transfer-cli config set master URL を実行するか、--host で Master を指定してください。"},
 
 	// Accounts.
 	"已登录 %s（用户 %s）": {"Signed in to %s as %s", "%s にサインインしました（ユーザー %s）"},

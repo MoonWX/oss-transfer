@@ -244,6 +244,10 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		if callErr != nil {
 			fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
 			for _, hint := range cliErrorHints(callErr, options.fallbackHost) {
+				if hint == cliMasterUnreachableHint {
+					fmt.Fprintf(errors, cliText(errors, hint)+"\n", safeCLIText(options.host))
+					continue
+				}
 				fmt.Fprintln(errors, cliText(errors, hint))
 			}
 			// The raw detail, or where to find it, follows the error.

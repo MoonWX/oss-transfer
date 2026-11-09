@@ -737,7 +737,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
 		bandwidth = fmt.Sprint(value, " Mbps")
 	}
-	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), cliConflictPolicy(out, policy)}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
 	if taskDirection(task) == "OSS_TO_LOCAL" {
 		// Parent rows always carry the setting (older tasks report auto); a child
 		// row without it inherits the parent's, so do not guess a value there.
@@ -768,6 +768,9 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		}
 	}
 	w.Flush()
+	if policy == "SKIP" && getInt(task, "skippedObjectCount") > 0 {
+		fmt.Fprintln(out, cliText(out, "提示：跳过的对象只按名称判断，未比较内容。可用 object compare 核对，或用 --conflict changed 重新创建任务以覆盖有变化的对象。"))
+	}
 	renderTaskMembership(out, task)
 }
 

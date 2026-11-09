@@ -402,7 +402,12 @@ list/trash の --limit は 1～10000、--before-id は古い記録、list --all 
   oss-transfer-cli task create oss-to-local <source-alias/bucket> --binding node=/target/path [options]
   oss-transfer-cli task create local-to-oss <target-alias/bucket> --binding node=/source/path [options]
 
-  --conflict skip|overwrite         Existing-object policy; default skip
+  --conflict skip|overwrite|changed  If the destination exists; default skip
+      skip: skip existing objects or files without comparing content
+      overwrite: overwrite existing objects or files
+      changed: overwrite changed objects: when the size or MD5 ETag differs or the
+               source was modified later; skip the rest. Content is never read and
+               multipart ETags are not compared
   --overwrite                       Same as --conflict overwrite
   --distribution affinity|balanced  Default balanced
   --balanced                        Same as --distribution balanced
@@ -448,7 +453,12 @@ check its task list before retrying. Creation is never retried automatically.
   oss-transfer-cli task create oss-to-local <転送元接続名/バケット> --binding ノード=/転送先パス [オプション]
   oss-transfer-cli task create local-to-oss <転送先接続名/バケット> --binding ノード=/転送元パス [オプション]
 
-  --conflict skip|overwrite         既存オブジェクトの処理。既定: skip
+  --conflict skip|overwrite|changed  転送先が存在する場合の処理。既定: skip
+      skip: 既存のオブジェクトまたはファイルをスキップ（内容は比較しません）
+      overwrite: 既存のオブジェクトまたはファイルを上書き
+      changed: 変更されたオブジェクトを上書き。サイズまたは MD5 ETag が異なる場合、
+               または転送元の更新日時が新しい場合に上書きし、それ以外はスキップ。
+               内容は読み取らず、マルチパートの ETag は比較しません
   --overwrite                       --conflict overwrite と同じ
   --distribution affinity|balanced  既定: balanced
   --balanced                        --distribution balanced と同じ

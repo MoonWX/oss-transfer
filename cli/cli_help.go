@@ -159,7 +159,11 @@ const cliTaskCreateHelp = `创建迁移任务
   oss-transfer-cli task create local-to-oss <目标连接/桶> --binding 节点=/源路径 [选项]
 
 通用选项
-  --conflict skip|overwrite       已存在对象的处理方式，默认 skip
+  --conflict skip|overwrite|changed  目标已存在时的处理方式，默认 skip
+      skip：跳过同名对象或文件，不比较内容
+      overwrite：覆盖同名对象或文件
+      changed：覆盖有变化的对象：大小不同、MD5 ETag 不同或源端修改时间较新时覆盖，
+               其余跳过；不读取对象内容，分片上传的 ETag 不参与比较
   --overwrite                     等同 --conflict overwrite
   --distribution affinity|balanced  任务分发方式，默认 balanced
   --balanced                      等同 --distribution balanced

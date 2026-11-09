@@ -63,16 +63,16 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	}
 	conflict := "SKIP"
 	if opts.Has("conflict") {
-		conflict = strings.ToUpper(opts.Value("conflict"))
+		var ok bool
+		if conflict, ok = cliConflictPolicyOption(opts.Value("conflict")); !ok {
+			return nil, cliErrorf("--conflict 须为 skip、overwrite 或 changed")
+		}
 	}
 	if opts.Has("overwrite") {
 		if opts.Has("conflict") && conflict != "OVERWRITE" {
-			return nil, cliErrorf("--overwrite 与 --conflict skip 冲突")
+			return nil, cliErrorf("--overwrite 只能与 --conflict overwrite 同时使用")
 		}
 		conflict = "OVERWRITE"
-	}
-	if conflict != "SKIP" && conflict != "OVERWRITE" {
-		return nil, cliErrorf("--conflict 须为 skip 或 overwrite")
 	}
 	if opts.Has("prefix") && opts.Has("object-key") {
 		return nil, cliErrorf("--prefix 与 --object-key 不能同时填写")
@@ -117,6 +117,10 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		row["sourceS3Alias"], row["sourceBucket"] = alias, bucket
 		row["destS3Alias"], row["destBucket"] = destAlias, destBucket
 		row["overwrite"] = conflict == "OVERWRITE"
+		if conflict == "OVERWRITE_CHANGED" {
+			// SKIP and OVERWRITE keep the payload the console has always sent.
+			row["conflictPolicy"] = conflict
+		}
 		createCopyOption(row, opts, "prefix", "prefix")
 		createCopyOption(row, opts, "object-key", "objectKey")
 		mode := "PRESERVE"
@@ -678,8 +682,8 @@ func createValidateLocalRow(row map[string]interface{}) error {
 	if key != "" && prefix != "" {
 		return cliErrorf("OSS 端点 objectKey 与 prefix 不能同时填写")
 	}
-	if policy := row["conflictPolicy"]; policy != nil && policy != "SKIP" && policy != "OVERWRITE" {
-		return cliErrorf("conflictPolicy 须为 SKIP 或 OVERWRITE")
+	if policy := row["conflictPolicy"]; policy != nil && policy != "SKIP" && policy != "OVERWRITE" && policy != "OVERWRITE_CHANGED" {
+		return cliErrorf("conflictPolicy 须为 SKIP、OVERWRITE 或 OVERWRITE_CHANGED")
 	}
 	bindings, ok := local["nodeBindings"].([]interface{})
 	if !ok || len(bindings) == 0 {

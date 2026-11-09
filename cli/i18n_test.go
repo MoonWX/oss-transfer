@@ -247,11 +247,11 @@ func TestCLITaskDetailsTranslateLabelsAndPreserveObjectKeys(t *testing.T) {
 	for _, test := range []struct {
 		locale cliLocale
 		want   []string
-	}{{localeEN, []string{"Conflict policy", "Source object key", "Target object key", "Failure reason", "Node limits only"}}, {localeJA, []string{"競合ポリシー", "転送元オブジェクト Key", "転送先オブジェクト Key", "失敗の理由", "ノードの上限に従う"}}} {
+	}{{localeEN, []string{"Conflict policy", "Source object key", "Target object key", "Failure reason", "Node limits only", "Overwrite existing objects or files"}}, {localeJA, []string{"競合ポリシー", "転送元オブジェクト Key", "転送先オブジェクト Key", "失敗の理由", "ノードの上限に従う", "既存のオブジェクトまたはファイルを上書き"}}} {
 		var buffer bytes.Buffer
 		renderTaskDetail(&cliLocaleWriter{Writer: &buffer, locale: test.locale}, task)
 		text := buffer.String()
-		for _, want := range append(test.want, "正常/源对象 Key.txt", "配置目标/目标对象 Key.txt", "失败原因/正常", "COMPLETED", "OVERWRITE", "EXACT_KEY") {
+		for _, want := range append(test.want, "正常/源对象 Key.txt", "配置目标/目标对象 Key.txt", "失败原因/正常", "COMPLETED", "EXACT_KEY") {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing %q: %s", test.locale, want, text)
 			}

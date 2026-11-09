@@ -249,7 +249,7 @@ To find objects that exist only on the target, run an object comparison of the s
 
 ## Mixed versions
 
-Update all Agents to the Master's version before a large migration ([updating](operations.md#update-installed-services)). Older Agents keep working, but:
+Update all Agents to the Master's version before a large migration ([software updates](operations.md#software-updates)). Older Agents keep working, but:
 
 - connections without an explicit addressing choice stay virtual-hosted on Agents before v4.2.0, and their connection checks only list buckets;
 - the Master refuses **Overwrite changed objects** on Agents before v4.2.0.

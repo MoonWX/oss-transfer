@@ -24,7 +24,7 @@ _oss_transfer_cli_completion() {
         if ((skip)); then skip=0; continue; fi
         case "$word" in
             --*=*) continue ;;
-            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--order|--generation|--child-concurrency|--object-concurrency|--scope|--after|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive|--add|--remove|--expected-revision)
+            --lang|--host|--master-url|--watch|--node|--binding|--prefix|--object-key|--mapping|--target-prefix|--target-key|--target-relative-path|--conflict|--distribution|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--file|--format|--output|--status|--source|--dest|--worker|--direction|--search|--child|--label|--address|--endpoint|--region|--session-token-env|--session-token-file|--access-key-env|--access-key-file|--secret-key-env|--secret-key-file|--validate|--v2-signer|--path-style|--unit|--limit|--event-id|--before-id|--cursor|--order|--generation|--child-concurrency|--object-concurrency|--scope|--after|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--source-prefix|--dest-prefix|--username|--public-url|--agent-url|--setup-token-env|--setup-token-file|--local-root|--password-env|--password-file|--old-password-env|--new-password-env|--old-password-file|--new-password-file|--dateAfter|--dateBefore|--taskIndex|--mode|--false-positive|--add|--remove|--expected-revision)
                 skip=1; continue ;;
             --version)
                 if [[ ${positional[0]} == update ]]; then skip=1; fi; continue ;;
@@ -45,18 +45,20 @@ _oss_transfer_cli_completion() {
         --distribution) choices="affinity balanced" ;;
         --conflict) choices="skip overwrite" ;;
         --mapping) choices="preserve add-prefix replace-prefix exact-key" ;;
-        --format) choices="json csv" ;;
+        --format) if [[ $command == object ]]; then choices="zip jsonl"; else choices="json csv"; fi ;;
         --mode) if [[ $command == object ]]; then choices="metadata content"; else choices="sort-merge bloom"; fi ;;
         --scope) choices="object prefix" ;;
         --order) choices="priority id" ;;
         --unit) choices="bps Kbps Mbps Gbps" ;;
         --validate) choices="true false" ;;
         --v2-signer|--path-style) choices="true false inherit" ;;
-        --status) choices="PENDING RUNNING LIST_DONE RECOVERABLE RESUMING STOPPING STOPPED COMPLETED PARTIAL_FAILED FAILED" ;;
+        --status)
+            if [[ $command == object ]]; then choices="DIFFERENT ETAG_MISMATCH MISSING_TARGET EXTRA_TARGET CHANGED_DURING_COMPARE ERROR BOTH_MISSING";
+            else choices="PENDING RUNNING LIST_DONE RECOVERABLE RESUMING STOPPING STOPPED COMPLETED PARTIAL_FAILED FAILED"; fi ;;
         --direction)
             if [[ $command == exceptions ]]; then choices="OSS_TO_LOCAL LOCAL_TO_OSS";
             else choices="oss-to-oss oss-to-local local-to-oss"; fi ;;
-        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--order|--generation|--child-concurrency|--object-concurrency|--scope|--after|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--username|--false-positive|--add|--remove|--expected-revision)
+        --host|--master-url|--node|--binding|--prefix|--object-key|--target-prefix|--target-key|--target-relative-path|--date-after|--date-before|--bandwidth-mbps|--list-qps|--head-qps|--put-qps|--request-id|--source|--dest|--worker|--search|--child|--label|--address|--endpoint|--region|--limit|--event-id|--before-id|--cursor|--order|--generation|--child-concurrency|--object-concurrency|--scope|--after|--task-id|--source-bucket|--dest-bucket|--offset|--storage-id|--source-key|--dest-key|--source-prefix|--dest-prefix|--username|--false-positive|--add|--remove|--expected-revision)
             return ;;
     esac
     if [[ -n $choices ]]; then
@@ -147,9 +149,12 @@ _oss_transfer_cli_completion() {
             if [[ -z $action ]]; then choices="list prune";
             elif [[ $action == prune ]]; then choices="master agent"; flags="--worker --yes"; fi ;;
         object)
-            if [[ -z $action ]]; then choices="compare status cancel delete";
-            elif [[ $action == status ]]; then flags="--after --limit";
-            elif [[ $action == compare ]]; then flags="--source-bucket --source-key --dest-bucket --dest-key --source-prefix --dest-prefix --scope --mode"; fi ;;
+            case "$action" in
+                "") choices="compare list status export resume cancel delete" ;;
+                status) flags="--after --limit --status" ;;
+                export) flags="--output --format --status" ;;
+                compare) flags="--source-bucket --source-key --dest-bucket --dest-key --source-prefix --dest-prefix --scope --mode" ;;
+            esac ;;
         login) flags="--username --password-stdin --password-env --password-file" ;;
         change-password) flags="--old-password-env --old-password-file --new-password-env --new-password-file" ;;
         add-task) flags="$create_flags --dateAfter --dateBefore" ;;

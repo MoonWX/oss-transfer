@@ -134,6 +134,16 @@ func incompleteResult(result map[string]interface{}) bool {
 	if result == nil {
 		return false
 	}
+	if comparisonRowsTruncated(responseData(result)) {
+		return true
+	}
+	return incompleteCollection(result)
+}
+
+func incompleteCollection(result map[string]interface{}) bool {
+	if result == nil {
+		return false
+	}
 	if result["partial"] == true || result["complete"] == false || result["snapshotComplete"] == false || result["historyComplete"] == false {
 		return true
 	}
@@ -143,13 +153,13 @@ func incompleteResult(result map[string]interface{}) bool {
 		}
 	}
 	for _, key := range []string{"data", "task", "child", "localDetails", "subtaskPage"} {
-		if nested, ok := result[key].(map[string]interface{}); ok && incompleteResult(nested) {
+		if nested, ok := result[key].(map[string]interface{}); ok && incompleteCollection(nested) {
 			return true
 		}
 	}
 	for _, key := range []string{"tasks", "children", "shards", "items", "recycledTasks"} {
 		for _, task := range objectList(result[key]) {
-			if incompleteResult(task) {
+			if incompleteCollection(task) {
 				return true
 			}
 		}
@@ -157,7 +167,7 @@ func incompleteResult(result map[string]interface{}) bool {
 	if groups, ok := result["deletedTasks"].(map[string]interface{}); ok {
 		for _, rows := range groups {
 			for _, task := range objectList(rows) {
-				if incompleteResult(task) {
+				if incompleteCollection(task) {
 					return true
 				}
 			}

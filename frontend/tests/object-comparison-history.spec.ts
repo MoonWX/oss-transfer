@@ -519,3 +519,239 @@ test("a state change seen by the history poll reloads the selected comparison", 
   expect(pageQueries(calls).length).toBeGreaterThan(reads);
   await expect(page.getByRole("button", { name: "取消比对" })).toBeVisible();
 });
+
+/** Waits until the page has received every reply it asked for so far. */
+async function settle(page: Page, calls: Call[]) {
+  await Promise.all(live(calls).map((call) => call.request.response()));
+  await page.evaluate(() => undefined);
+}
+
+const unavailableItem = (extra: Record<string, unknown> = {}) => ({
+  id: "comparison-1",
+  status: "UNAVAILABLE",
+  mode: "metadata",
+  scope: "prefix",
+  source: progress.source,
+  destination: progress.destination,
+  sourcePrefix: progress.sourcePrefix,
+  destinationPrefix: progress.destinationPrefix,
+  compared: 0,
+  matched: 0,
+  startedAt: progress.startedAt,
+  nodeId: "node-a",
+  nodeName: "agent-a",
+  ...extra,
+});
+const unreachableList = (extra: Record<string, unknown> = {}) => ({
+  items: [unavailableItem(extra)],
+  complete: false,
+  unavailableNodes: [{ nodeId: "node-a", nodeName: "agent-a", count: 1 }],
+});
+const unreachableBanner =
+  "1 个节点暂时无法连接，这些节点上的比对未列出最新状态。";
+const nodeDownText = "执行节点暂时无法连接，节点恢复后将自动加载比对结果。";
+
+test("an unavailable node shows a localized state and is retried with growing delays", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await installPausedClock(page);
+  let back = false;
+  const calls = await routeComparisons(page, {
+    list: () =>
+      back ? { items: [historyItem()], complete: true } : unreachableList(),
+    page: (_, query) =>
+      back
+        ? pageOf(progress, rows, query)
+        : { status: 503, json: { success: false, message: "节点离线" } },
+  });
+  await page.goto("/tools");
+  await advanceUntilVisible(page, page.getByText(unreachableBanner));
+  await page
+    .getByRole("button", {
+      name: "source/photos/2026/ → target/archive/backup/",
+    })
+    .click();
+  const result = page.getByRole("region", { name: "比对结果" });
+  await expect(result.getByText(nodeDownText, { exact: true })).toBeVisible();
+  await expect(result.getByText("节点离线")).toHaveCount(0);
+  await expect.poll(() => pageQueries(calls).length).toBe(1);
+  await settle(page, calls);
+  // Retries after 5, 10, 20, 40 and then every 60 seconds.
+  for (const [wait, reads] of [
+    [5000, 2],
+    [10000, 3],
+    [20000, 4],
+    [40000, 5],
+    [60000, 6],
+    [60000, 7],
+  ] as const) {
+    await page.clock.runFor(wait - 1);
+    expect(pageQueries(calls)).toHaveLength(reads - 1);
+    await page.clock.runFor(1);
+    await expect.poll(() => pageQueries(calls).length).toBe(reads);
+    await settle(page, calls);
+  }
+  await expect(result.getByText(nodeDownText, { exact: true })).toBeVisible();
+  // The node is back: the next slow history refresh reloads the panel.
+  back = true;
+  await page.clock.runFor(15000);
+  await expect(result.getByRole("heading", { name: "比对完成" })).toBeVisible();
+  await expect(result.getByText(nodeDownText, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(unreachableBanner)).toHaveCount(0);
+});
+
+test("raw load errors in the result panel are translated", async ({ page }) => {
+  await mockApi(page);
+  await routeComparisons(page, {
+    list: () => ({ items: [historyItem()], complete: true }),
+    page: () => ({
+      status: 502,
+      json: { success: false, message: "context deadline exceeded" },
+    }),
+  });
+  await page.goto("/tools?comparison=comparison-1");
+  const result = page.getByRole("region", { name: "比对结果" });
+  await expect(result.getByText("请求超时", { exact: true })).toBeVisible();
+  await expect(result.getByText("context deadline exceeded")).toHaveCount(0);
+});
+
+test("a first load that differs from the history refreshes the history once", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await installPausedClock(page);
+  let back = false;
+  const calls = await routeComparisons(page, {
+    list: () =>
+      back ? { items: [historyItem()], complete: true } : unreachableList(),
+    page: (_, query) => pageOf(progress, rows, query),
+  });
+  await page.goto("/tools");
+  await advanceUntilVisible(page, page.getByText(unreachableBanner));
+  const lists = () => live(calls, "list").length;
+  const first = lists();
+  const started = await page.evaluate(() => Date.now());
+  back = true;
+  await page
+    .getByRole("button", {
+      name: "source/photos/2026/ → target/archive/backup/",
+    })
+    .click();
+  const result = page.getByRole("region", { name: "比对结果" });
+  await expect(result.getByRole("heading", { name: "比对完成" })).toBeVisible();
+  await expect.poll(lists).toBe(first + 1);
+  const history = page.getByRole("table", { name: "比对历史" });
+  await expect(history.getByRole("cell").nth(0)).toHaveText("比对完成");
+  await expect(page.getByText(unreachableBanner)).toHaveCount(0);
+  // The refresh came from the panel, not from the slow history poll.
+  expect(await page.evaluate(() => Date.now())).toBeLessThan(started + 15000);
+  // Once both agree, nothing else is requested.
+  await page.clock.runFor(30000);
+  expect(lists()).toBe(first + 1);
+});
+
+test("history refreshes every 15 seconds while a node is unreachable", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await installPausedClock(page);
+  let back = false;
+  const calls = await routeComparisons(page, {
+    list: () =>
+      back
+        ? { items: [historyItem({ status: "COMPLETED" })], complete: true }
+        : unreachableList(),
+  });
+  await page.goto("/tools");
+  await advanceUntilVisible(page, page.getByText(unreachableBanner));
+  const lists = () => live(calls, "list").length;
+  const first = lists();
+  // The next refresh was scheduled less than 15 seconds ago.
+  await page.clock.runFor(15000);
+  await expect.poll(lists).toBe(first + 1);
+  const row = page
+    .getByRole("table", { name: "比对历史" })
+    .getByRole("row")
+    .filter({ hasText: "source/photos/2026/" });
+  await expect(row.getByRole("cell").nth(0)).toHaveText("节点不可用");
+  back = true;
+  await page.clock.runFor(15000);
+  await expect.poll(lists).toBe(first + 2);
+  await expect(row.getByRole("cell").nth(0)).toHaveText("比对完成");
+  await expect(page.getByText(unreachableBanner)).toHaveCount(0);
+  // Every node answered and nothing runs: polling stops.
+  await page.clock.runFor(60000);
+  expect(lists()).toBe(first + 2);
+});
+
+test("a stalled filtered scan keeps refreshing the progress of a running comparison", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await installPausedClock(page);
+  let status = "RUNNING";
+  let compared = 1000;
+  // Every page read advances the comparison by 100 objects at 100 per second.
+  const current = () => ({
+    ...large,
+    status,
+    bothMissing: 1,
+    compared,
+    elapsedMillis: compared * 10,
+  });
+  const calls = await routeComparisons(page, {
+    list: () => ({ items: [historyItem(current())], complete: true }),
+    page: (_, query) => {
+      if (status === "RUNNING") compared += 100;
+      if (query.get("status") === "BOTH_MISSING") {
+        const after = Number(query.get("after"));
+        return { ...current(), items: [], nextAfter: after + 1000 };
+      }
+      return pageOf(current(), many, query);
+    },
+  });
+  await page.goto("/tools?comparison=comparison-1");
+  await advanceUntilVisible(page, keyCell(page, 1));
+  await page.getByRole("button", { name: "两端均不存在 1" }).click();
+  const keepSearching = page.getByRole("button", { name: "继续查找" });
+  await expect(keepSearching).toBeVisible();
+  const stalledText = page.getByText(
+    "已查找到第 6,000 条，暂未找到符合条件的差异。",
+    { exact: true },
+  );
+  await expect(stalledText).toBeVisible();
+  const filtered = () =>
+    pageQueries(calls).filter((query) => query.includes("status=")).length;
+  const progressReads = () =>
+    pageQueries(calls).filter((query) => query === "after=0&limit=1").length;
+  const scanned = filtered();
+  expect(scanned).toBe(6);
+  await settle(page, calls);
+  const stats = (value: number) =>
+    page.getByText(
+      `已检查 ${value.toLocaleString("en-US")}，100 个/秒，已用 ${value / 100} 秒`,
+      { exact: true },
+    );
+  for (const reads of [1, 2]) {
+    await page.clock.runFor(1500);
+    await expect.poll(progressReads).toBe(reads);
+    await expect(stats(compared)).toBeVisible();
+    await settle(page, calls);
+  }
+  expect(filtered()).toBe(scanned);
+  await expect(stalledText).toBeVisible();
+  await expect(keepSearching).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "两端均不存在 1" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  // Once the comparison ends, the progress refresh stops.
+  status = "COMPLETED";
+  await page.clock.runFor(1500);
+  await expect.poll(progressReads).toBe(3);
+  await expect(page.getByRole("heading", { name: "比对完成" })).toBeVisible();
+  await page.clock.runFor(15000);
+  expect(progressReads()).toBe(3);
+  expect(filtered()).toBe(scanned);
+  await expect(stalledText).toBeVisible();
+});

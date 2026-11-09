@@ -1512,7 +1512,7 @@ fi
 # nothing. Anything missing or stale, an enrollment, adoption or CLI change
 # still runs the installation, which repairs it.
 installation_current() {
-  local installed_cli_version
+  local installed_cli_version job
   ((existed && force == 0 && replace_cli == 0 && cli_migrated == 0 && token_stdin == 0)) || return 1
   [[ -z "$adopt_config" && -z "${TRANSFER_JOIN_TOKEN:-}" ]] || return 1
   [[ -f "$metadata" && ! -L "$metadata" && -f "$binary" && ! -L "$binary" && -f "$unit" && ! -L "$unit" && -f "$cli_path" && ! -L "$cli_path" ]] || return 1
@@ -1522,7 +1522,12 @@ installation_current() {
   [[ "$installed_cli_version" == "$version" ]] || return 1
   if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name" || return 1
   elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1 || return 1
-  else launchctl print "$domain/$service_name" >/dev/null 2>&1 || return 1; fi
+  else
+    # A loaded job is not necessarily running: a revoked Agent or a cleanly
+    # stopped Master stays loaded. Only the job's own (top-level) state counts.
+    job=$(launchctl print "$domain/$service_name" 2>/dev/null) || return 1
+    grep -qx $'\tstate = running' <<< "$job" || return 1
+  fi
   # A Master also keeps the release's Agent packages.
   if [[ "$role" == master ]] && [[ $(awk -F '\t' '$1=="asset" && ($2=="install.sh" || $2=="native-install.sh" || $2=="Install.ps1") {print $2}' "$work/manifest.tsv" | LC_ALL=C sort -u | wc -l | tr -d ' ') == 3 ]]; then
     [[ -f "$data_dir/packages/manifest.tsv" && ! -L "$data_dir/packages/manifest.tsv" && $(metadata_field "$data_dir/packages/manifest.tsv" version) == "$version" ]] || return 1

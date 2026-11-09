@@ -379,6 +379,12 @@ class SameVersionTests(unittest.TestCase):
         shim = self.shims / 'systemctl'
         shim.write_text('#!/bin/sh\n[ "$SERVICE_ACTIVE" = 1 ]\n')
         shim.chmod(0o755)
+        # launchctl print succeeds for any loaded job; only its state says whether it runs.
+        launchctl = self.shims / 'launchctl'
+        launchctl.write_text('#!/bin/sh\n[ -n "$LAUNCHD_STATE" ] || exit 113\n'
+                             'printf \'system/oss-transfer-master = {\\n\\tactive count = 0\\n\\tstate = %s\\n\\n'
+                             '\\tendpoints = {\\n\\t\\tstate = running\\n\\t}\\n}\\n\' "$LAUNCHD_STATE"\n')
+        launchctl.chmod(0o755)
         for name, output in {'binary': 'oss-transfer-master 4.2.0 (abc, built now)', 'cli': '{"version":"4.2.0"}'}.items():
             path = self.base / name
             path.write_text('#!/bin/sh\nprintf \'%s\\n\' \'' + output + '\'\n')
@@ -392,12 +398,12 @@ class SameVersionTests(unittest.TestCase):
 
     def current(self, **overrides):
         values = dict(existed='1', force='0', replace_cli='0', cli_migrated='0', token_stdin='0', adopt_config='',
-                      version='4.2.0', SERVICE_ACTIVE='1', TRANSFER_JOIN_TOKEN='')
+                      version='4.2.0', SERVICE_ACTIVE='1', TRANSFER_JOIN_TOKEN='', PLATFORM='linux', LAUNCHD_STATE='')
         values.update(overrides)
         script = r'''
 set -euo pipefail
 source "$1"
-role=master; platform=linux; service_name=oss-transfer-master; work=$BASE; data_dir=$BASE/data
+role=master; platform=$PLATFORM; domain=system; service_name=oss-transfer-master; work=$BASE; data_dir=$BASE/data
 metadata=$BASE/install.tsv; binary=$BASE/binary; cli_path=$BASE/cli; unit=$BASE/unit
 existed=$existed; force=$force; replace_cli=$replace_cli; cli_migrated=$cli_migrated; token_stdin=$token_stdin
 adopt_config=$adopt_config; version=$version
@@ -409,6 +415,11 @@ installation_current
 
     def test_complete_running_installation_is_current(self):
         self.assertTrue(self.current())
+
+    def test_macos_requires_the_launchd_job_to_be_running(self):
+        self.assertTrue(self.current(PLATFORM='darwin', LAUNCHD_STATE='running'))
+        self.assertFalse(self.current(PLATFORM='darwin', LAUNCHD_STATE='not running'), 'a loaded but stopped job was treated as running')
+        self.assertFalse(self.current(PLATFORM='darwin'), 'an unloaded job was treated as running')
 
     def test_anything_requested_or_stale_runs_the_installation(self):
         for overrides in ({'force': '1'}, {'version': '4.2.1'}, {'SERVICE_ACTIVE': '0'}, {'existed': '0'},

@@ -12,13 +12,16 @@ import {
 } from "@mui/material";
 import { api, setToken } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
+import { passwordRuleError, passwordRuleText } from "../lib/passwordRule";
 
 export default function InitialPasswordPage({
   initialPassword,
+  username,
   onComplete,
   onLogout,
 }: {
   initialPassword?: string;
+  username?: string;
   onComplete: (user: any) => void;
   onLogout: () => void;
 }) {
@@ -33,6 +36,12 @@ export default function InitialPasswordPage({
     event.preventDefault();
     if (busy) return;
     setError("");
+    const current = initialPassword ?? currentPassword;
+    const ruleError = passwordRuleError(password, current, username);
+    if (ruleError) {
+      setError(ruleError);
+      return;
+    }
     if (password !== confirm) {
       setError(t("两次输入的新密码不一致"));
       return;
@@ -116,6 +125,7 @@ export default function InitialPasswordPage({
             autoFocus={initialPassword !== undefined}
             disabled={busy}
             value={password}
+            helperText={passwordRuleText()}
             onChange={(event) => setPassword(event.target.value)}
           />
           <TextField

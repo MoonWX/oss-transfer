@@ -302,4 +302,30 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
     en: "Comparison results are unavailable on this node",
     ja: "このノードでは比較結果を利用できません",
   },
+  "已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）": {
+    en: "Elapsed {elapsed}, read {bytes} ({byteRate}/s)",
+    ja: "経過 {elapsed}、読み取り {bytes}（{byteRate}/秒）",
+  },
+  "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）":
+    {
+      en: "Checked {count}, {rate} objects/s, elapsed {elapsed}, read {bytes} ({byteRate}/s)",
+      ja: "確認済み {count}、{rate} 件/秒、経過 {elapsed}、読み取り {bytes}（{byteRate}/秒）",
+    },
+  "存储桶填写为“连接名称/存储桶”，如 production/photos。前缀留空比对整个存储桶，两端按去掉前缀后的 Key 对应。":
+    {
+      en: "Enter each bucket as connection-name/bucket, such as production/photos. Empty prefixes compare the entire bucket; keys are matched after removing each prefix.",
+      ja: "バケットは「接続名/バケット」の形式で入力します（例：production/photos）。プレフィックスが空の場合はバケット全体を比較し、それぞれのプレフィックスを除いた Key で対応付けます。",
+    },
+  "已从检查点继续 {count} 次（如节点重启后）": {
+    en: "Continued from its checkpoint {count} times (for example after a node restart)",
+    ja: "チェックポイントから {count} 回再開（ノードの再起動後など）",
+  },
+  "导出全部差异（ZIP）": {
+    en: "Export all differences (ZIP)",
+    ja: "すべての差分をエクスポート（ZIP）",
+  },
+  "导出包含全部已保存的差异，不受当前筛选影响。": {
+    en: "The export contains every stored difference, regardless of the current filter.",
+    ja: "エクスポートには、現在の絞り込みに関係なく、保存済みのすべての差分が含まれます。",
+  },
 };

@@ -163,7 +163,7 @@ test("prerelease channel installs an exact version only after a warning confirma
   await expect(install).toBeEnabled();
   await install.click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("安装实验版本 4.1.29-beta.1？");
+  await expect(dialog).toContainText("安装实验版本 v4.1.29-beta.1？");
   await expect(dialog).toContainText("不会出现在正常更新中");
   // Cancelling sends nothing.
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
@@ -193,7 +193,7 @@ test("prerelease channel entry is translated", async ({ page }) => {
     .getByRole("button", { name: "Install this version", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toContainText(
-    "Install experimental build 4.1.29-rc.1?",
+    "Install experimental build v4.1.29-rc.1?",
   );
   await expect(page.getByRole("dialog")).toContainText(
     "never offered by normal updates",

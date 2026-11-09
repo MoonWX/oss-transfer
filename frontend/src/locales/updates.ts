@@ -165,4 +165,72 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "Install experimental build",
     ja: "実験版をインストール",
   },
+  "复制{label}": {
+    en: "Copy {label}",
+    ja: "{label}をコピー",
+  },
+  已复制: {
+    en: "Copied",
+    ja: "コピーしました",
+  },
+  复制: {
+    en: "Copy",
+    ja: "コピー",
+  },
+  "无法读取版本信息，请刷新后重试。": {
+    en: "Cannot read version information. Refresh and try again.",
+    ja: "バージョン情報を読み込めません。再読み込みしてから再試行してください。",
+  },
+  "Master 正在更新，完成后可更新执行节点。": {
+    en: "The Master is updating. Update execution nodes after it finishes.",
+    ja: "Master を更新中です。完了後に実行ノードを更新できます。",
+  },
+  "已有更新正在进行，请稍候。": {
+    en: "An update is already in progress. Please wait.",
+    ja: "別の更新が実行中です。しばらくお待ちください。",
+  },
+  "Docker 部署的节点不能在线更新，请在其主机上用新镜像重新创建容器（见“更新命令”）。":
+    {
+      en: "Docker nodes cannot update online. Recreate the container from the new image on its host (see Update commands).",
+      ja: "Docker で動作するノードはオンライン更新できません。そのホストで新しいイメージからコンテナーを作り直してください（「更新コマンド」を参照）。",
+    },
+  "已与 Master 版本一致，无需更新。": {
+    en: "Already at the Master version; no update needed.",
+    ja: "Master と同じバージョンです。更新は不要です。",
+  },
+  "此节点不支持在线安装预发布版本，请使用安装脚本升级。": {
+    en: "This node cannot install prerelease builds online. Update it with the installer.",
+    ja: "このノードはプレリリース版をオンラインでインストールできません。インストーラーで更新してください。",
+  },
+  更新命令: {
+    en: "Update commands",
+    ja: "更新コマンド",
+  },
+  "更新 Docker 执行节点 {name}": {
+    en: "Update Docker node {name}",
+    ja: "Docker 実行ノード {name} を更新",
+  },
+  "在该节点所在的主机上运行下面的命令，用镜像 {image} 重新创建容器。节点身份和配置保存在数据卷中，会保留；正在执行的子任务会中断，节点重新连接后自动恢复。":
+    {
+      en: "On the node's host, run the commands below to recreate the container from {image}. The node identity and settings stay in the data volume. Running subtasks are interrupted and resume when the node reconnects.",
+      ja: "ノードのホストで次のコマンドを実行し、{image} からコンテナーを作り直してください。ノードの識別情報と設定はデータボリュームに残ります。実行中の子タスクは中断され、ノードの再接続後に自動で再開します。",
+    },
+  "用 docker run 加入的节点": {
+    en: "Nodes joined with docker run",
+    ja: "docker run で参加したノード",
+  },
+  "创建容器时如果加了其他参数（如本地目录挂载），请在 docker run 中一并保留。":
+    {
+      en: "If the container was created with other options, such as local directory mounts, keep them in docker run.",
+      ja: "コンテナー作成時に他のオプション（ローカルディレクトリのマウントなど）を指定した場合は、docker run にも指定してください。",
+    },
+  "用安装脚本以 Docker Compose 部署的节点": {
+    en: "Nodes installed with the installer's Docker Compose method",
+    ja: "インストーラーの Docker Compose 方式で導入したノード",
+  },
+  "先把 compose 文件中的 image 改为 {image}，再运行上面的命令。安装时指定了其他目录时，请替换 compose 文件路径。":
+    {
+      en: "First change image in the compose file to {image}, then run the commands above. If you installed to another directory, replace the compose file path.",
+      ja: "先に compose ファイルの image を {image} に変更してから、上のコマンドを実行してください。別のディレクトリにインストールした場合は、compose ファイルのパスを置き換えてください。",
+    },
 };

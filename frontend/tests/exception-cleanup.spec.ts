@@ -62,10 +62,10 @@ test("cleanup uses applied task, bucket and node filters, includes resolved reco
   });
   await page.goto("/exceptions?taskId=41");
   await page
-    .getByRole("textbox", { name: "源 Bucket", exact: true })
+    .getByRole("textbox", { name: "源存储桶", exact: true })
     .fill("source");
   await page
-    .getByRole("textbox", { name: "目标 Bucket", exact: true })
+    .getByRole("textbox", { name: "目标存储桶", exact: true })
     .fill("target");
   await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
   await page
@@ -77,7 +77,7 @@ test("cleanup uses applied task, bucket and node filters, includes resolved reco
   ).toBeEnabled();
   // Editing a field without applying it must not broaden or change cleanup.
   await page
-    .getByRole("textbox", { name: "源 Bucket", exact: true })
+    .getByRole("textbox", { name: "源存储桶", exact: true })
     .fill("unsaved-draft");
   await page
     .getByRole("button", { name: "清理已处理记录", exact: true })

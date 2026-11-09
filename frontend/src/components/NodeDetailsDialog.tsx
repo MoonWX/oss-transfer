@@ -18,6 +18,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useApi } from "../lib/api";
+import { displayVersion } from "../lib/semver";
 import { formatDate, t, useI18n } from "../lib/i18n";
 import { nodeName, type RegisteredNode } from "../lib/nodeRegistry";
 
@@ -50,7 +51,7 @@ export default function NodeDetailsDialog({
   );
   const details = result.data?.data;
   const fields = [
-    [t("当前版本"), details?.software?.version],
+    [t("当前版本"), displayVersion(details?.software?.version)],
     [t("主机名"), details?.hostname],
     [
       t("系统 / 架构"),

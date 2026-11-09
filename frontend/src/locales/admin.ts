@@ -160,7 +160,7 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Source object",
     ja: "転送元オブジェクト",
   },
-  "源 Bucket": {
+  源存储桶: {
     en: "Source bucket",
     ja: "転送元バケット",
   },
@@ -180,7 +180,7 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Destination object",
     ja: "転送先オブジェクト",
   },
-  "目标 Bucket": {
+  目标存储桶: {
     en: "Destination bucket",
     ja: "転送先バケット",
   },

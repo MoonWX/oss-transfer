@@ -513,10 +513,8 @@ test("storage CRUD never reloads saved credentials and reports partial worker sy
   await dialog.getByLabel("Endpoint").fill("https://archive.example.test");
   await dialog.getByLabel("Access Key").fill("NEW_ACCESS_KEY");
   await dialog.getByLabel("Secret Key").fill("NEW_SECRET_KEY");
-  await expect(dialog.getByLabel("Access Key")).toHaveAttribute(
-    "type",
-    "password",
-  );
+  // The access key ID is shown to avoid typos; only the secret is masked.
+  await expect(dialog.getByLabel("Access Key")).toHaveAttribute("type", "text");
   await expect(dialog.getByLabel("Secret Key")).toHaveAttribute(
     "type",
     "password",
@@ -552,6 +550,8 @@ test("storage CRUD never reloads saved credentials and reports partial worker sy
   );
   await expect(dialog.getByLabel("Access Key")).toHaveValue("");
   await expect(dialog.getByLabel("Secret Key")).toHaveValue("");
+  // Editing says that empty credentials keep the saved ones.
+  await expect(dialog.getByText("留空保留现有凭据")).toHaveCount(2);
   await dialog.getByLabel("Endpoint").fill("https://updated.example.test");
   await dialog.getByRole("button", { name: "保存连接" }).click();
   await expect(

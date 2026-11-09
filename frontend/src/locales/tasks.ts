@@ -1611,11 +1611,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Endpoint / Path",
     ja: "エンドポイント / パス",
   },
-  "源 Bucket": {
+  源存储桶: {
     en: "Source bucket",
     ja: "転送元バケット",
   },
-  "目标 Bucket": {
+  目标存储桶: {
     en: "Destination bucket",
     ja: "転送先バケット",
   },
@@ -2608,5 +2608,49 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   请求已取消: {
     en: "The request was cancelled",
     ja: "リクエストはキャンセルされました",
+  },
+  "时间按服务端时区（{zone}）解释。": {
+    en: "Times use the server time zone ({zone}).",
+    ja: "時刻はサーバーのタイムゾーン（{zone}）で解釈します。",
+  },
+  "对象存储之间迁移失败的对象。": {
+    en: "Objects that failed to transfer between object storages.",
+    ja: "オブジェクトストレージ間で転送に失敗したオブジェクト。",
+  },
+  "旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。": {
+    en: "Objects the legacy transfer engine moved with its fallback method. This version no longer creates such records.",
+    ja: "旧版の転送エンジンが代替方式で転送したオブジェクト。現在のバージョンではこの記録は作成されません。",
+  },
+  "与执行节点本地目录之间迁移失败的文件。": {
+    en: "Files that failed to transfer to or from an execution node's local directory.",
+    ja: "実行ノードのローカルディレクトリとの間で転送に失敗したファイル。",
+  },
+  处理状态: {
+    en: "Resolution",
+    ja: "対応状況",
+  },
+  未解决: {
+    en: "Unresolved",
+    ja: "未解決",
+  },
+  "已解决（已恢复或已跳过）": {
+    en: "Resolved (recovered or skipped)",
+    ja: "解決済み（回復またはスキップ）",
+  },
+  "另 {count} 个节点": {
+    en: "{count} more nodes",
+    ja: "ほか {count} 台のノード",
+  },
+  比对源和目标: {
+    en: "Compare source and target",
+    ja: "転送元と転送先を比較",
+  },
+  "先添加执行节点和存储连接，再创建迁移任务。": {
+    en: "Add an execution node and storage connections, then create a migration task.",
+    ja: "実行ノードとストレージ接続を追加してから、移行タスクを作成してください。",
+  },
+  开始使用: {
+    en: "Getting started",
+    ja: "はじめに",
   },
 };

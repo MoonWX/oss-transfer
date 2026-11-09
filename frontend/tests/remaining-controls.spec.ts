@@ -142,10 +142,10 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
     .getByRole("combobox", { name: "所属任务", exact: true })
     .fill("700");
   await page
-    .getByRole("textbox", { name: "源 Bucket", exact: true })
+    .getByRole("textbox", { name: "源存储桶", exact: true })
     .fill(" source ");
   await page
-    .getByRole("textbox", { name: "目标 Bucket", exact: true })
+    .getByRole("textbox", { name: "目标存储桶", exact: true })
     .fill(" target ");
   await select(page, "执行节点", "agent (10.0.1.13)");
   await select(page, "每节点读取上限", "5,000 条");
@@ -158,11 +158,13 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
     executionNodeIp: "10.0.1.13",
     sourceBucket: "source",
     destBucket: "target",
+    resolution: "unresolved",
     limit: 5000,
   });
   await page.getByRole("button", { name: "重置", exact: true }).click();
   await expect(page.getByText("node-a.bin", { exact: true })).toBeVisible();
-  expect(queries.at(-1)).toEqual({ limit: 1000 });
+  // Unresolved records are the default view.
+  expect(queries.at(-1)).toEqual({ resolution: "unresolved", limit: 1000 });
   await expect(
     page.getByRole("combobox", { name: "所属任务", exact: true }),
   ).toHaveValue("");
@@ -222,6 +224,7 @@ test("local exception filters bind task node direction and encoded endpoint only
     executionNodeIp: "10.0.1.13",
     direction: "LOCAL_TO_OSS",
     endpoint: "/mnt/数据 a&b",
+    resolution: "unresolved",
   });
   await expect(
     page.getByRole("button", { name: "应用筛选", exact: true }),
@@ -231,6 +234,7 @@ test("local exception filters bind task node direction and encoded endpoint only
   expect(Object.fromEntries(queries.at(-1)!.searchParams)).toEqual({
     offset: "0",
     limit: "25",
+    resolution: "unresolved",
   });
 });
 

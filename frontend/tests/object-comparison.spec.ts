@@ -39,9 +39,9 @@ test("metadata comparison submits exact prefixes, explains the ETag limit and re
   await expect(page.getByRole("combobox", { name: "比对方式" })).toHaveText(
     "元数据（不读取内容）",
   );
-  await page.getByRole("textbox", { name: "源 Bucket" }).fill("source/photos");
+  await page.getByRole("textbox", { name: "源存储桶" }).fill("source/photos");
   await page
-    .getByRole("textbox", { name: "目标 Bucket" })
+    .getByRole("textbox", { name: "目标存储桶" })
     .fill("target/archive");
   await page.getByRole("textbox", { name: "源前缀" }).fill("2026/ + ");
   await page.getByRole("textbox", { name: "目标前缀" }).fill("backup/");
@@ -140,9 +140,8 @@ test("content mode starts a streaming SHA-256 comparison and cancellation keeps 
     page.getByRole("progressbar", { name: "比对进度" }),
   ).toBeVisible();
   await expect(
-    page.getByText("已检查 1，0.015 个/秒，已用 1 分 5 秒，已读取 3 MiB", {
-      exact: true,
-    }),
+    // One object: the read rate, not objects per second.
+    page.getByText(/^已用 1 分 5 秒，已读取 3 MiB（.+\/秒）$/),
   ).toBeVisible();
   await expect(page.getByText("a".repeat(64), { exact: true })).toBeVisible();
   await expect(page.getByText("不同：SHA-256", { exact: true })).toBeVisible();
@@ -175,9 +174,9 @@ test("an uncertain start reply selects the comparison the Master recorded", asyn
     page: (_, query) => pageOf(progress, rows, query),
   });
   await page.goto("/tools");
-  await page.getByRole("textbox", { name: "源 Bucket" }).fill("source/photos");
+  await page.getByRole("textbox", { name: "源存储桶" }).fill("source/photos");
   await page
-    .getByRole("textbox", { name: "目标 Bucket" })
+    .getByRole("textbox", { name: "目标存储桶" })
     .fill("target/archive");
   await page.getByRole("button", { name: "开始比对" }).click();
   await expect(
@@ -416,7 +415,7 @@ test("export downloads the ZIP with an authenticated ticket and a native POST", 
   });
   await page.goto("/tools?comparison=comparison-1");
   const pending = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出 ZIP" }).click();
+  await page.getByRole("button", { name: "导出全部差异（ZIP）" }).click();
   const download = await pending;
   expect(download.suggestedFilename()).toBe("comparison-comparison-1.zip");
   const saved = testInfo.outputPath("comparison.zip");
@@ -466,13 +465,13 @@ test("export failures are reported and leave the page in place", async ({
       }),
   });
   await page.goto("/tools?comparison=comparison-1");
-  await page.getByRole("button", { name: "导出 ZIP" }).click();
+  await page.getByRole("button", { name: "导出全部差异（ZIP）" }).click();
   await expect(
     page.getByText("比对结果导出失败：节点暂不可达", { exact: true }),
   ).toBeVisible();
   await expect(page.locator("iframe[data-comparison-export]")).toHaveCount(0);
   ticketStatus = 200;
-  await page.getByRole("button", { name: "导出 ZIP" }).click();
+  await page.getByRole("button", { name: "导出全部差异（ZIP）" }).click();
   await expect(
     page.getByText("比对结果导出失败：下载授权已失效，请重新导出", {
       exact: true,
@@ -579,7 +578,9 @@ test("the English console translates comparison labels, reasons and counts", asy
   await expect(
     page.getByText("Checked 10, 2.5 objects/s, elapsed 4 s", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Export ZIP" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Export all differences (ZIP)" }),
+  ).toBeVisible();
   // Longer English labels never make a table scroll sideways.
   expect(
     await page

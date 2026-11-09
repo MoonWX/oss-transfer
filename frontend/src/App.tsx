@@ -74,6 +74,9 @@ import { makeTheme, radii } from "./theme";
 import { LoadingState } from "./components/Common";
 import LanguageSelector from "./components/LanguageSelector";
 import { BuildInfo } from "./components/BuildInfo";
+import GettingStarted from "./components/GettingStarted";
+import { ServerInfoContext } from "./lib/serverInfo";
+import { passwordRuleError, passwordRuleText } from "./lib/passwordRule";
 import { ServiceUpdateBanner } from "./components/ServiceUpdateBanner";
 import {
   SIDEBAR_COLLAPSED_WIDTH,
@@ -449,6 +452,15 @@ function Workspace({
   }
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
+    const ruleError = passwordRuleError(
+      newPassword,
+      oldPassword,
+      user.username,
+    );
+    if (ruleError) {
+      notify(ruleError, "error");
+      return;
+    }
     if (newPassword !== confirmPassword) {
       notify(t("两次输入的新密码不一致"), "error");
       return;
@@ -632,7 +644,6 @@ function Workspace({
           opacity: iconOnly ? 0 : 1,
           transition: "opacity 120ms ease",
           overflow: "hidden",
-          "& footer": { flexWrap: "nowrap" },
         }}
       >
         <BuildInfo />
@@ -950,7 +961,7 @@ function Workspace({
                 </Button>
               </Paper>
             ) : (
-              <>
+              <ServerInfoContext.Provider value={node}>
                 <RateAdjustmentBanner />
                 <PageErrorBoundary resetKey={pathname}>
                   <Suspense fallback={<LoadingState />}>
@@ -988,7 +999,7 @@ function Workspace({
                     </Routes>
                   </Suspense>
                 </PageErrorBoundary>
-              </>
+              </ServerInfoContext.Provider>
             )}
           </WorkerStatusProvider>
         </Box>
@@ -1044,6 +1055,7 @@ function Workspace({
                 required
                 autoComplete="new-password"
                 value={newPassword}
+                helperText={passwordRuleText()}
                 onChange={(e) => setNewPassword(e.target.value)}
               />
               <TextField
@@ -1074,37 +1086,7 @@ function Workspace({
       >
         <DialogTitle>{t("操作说明")}</DialogTitle>
         <DialogContent>
-          <Stack gap={3}>
-            {[
-              ["1", t("添加存储连接"), t("配置 S3 兼容存储的访问地址和凭证。")],
-              [
-                "2",
-                t("创建迁移任务"),
-                t(
-                  "配置传输方向、来源和目标。本地传输需绑定执行节点并通过路径预检。",
-                ),
-              ],
-              [
-                "3",
-                t("执行与查看结果"),
-                t("任务创建后自动执行。结果见任务详情和异常记录。"),
-              ],
-            ].map(([n, title, description]) => (
-              <Stack key={n} direction="row" gap={2}>
-                <Avatar
-                  sx={{ bgcolor: "action.selected", color: "primary.main" }}
-                >
-                  {n}
-                </Avatar>
-                <Box>
-                  <Typography fontWeight={500}>{title}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {description}
-                  </Typography>
-                </Box>
-              </Stack>
-            ))}
-          </Stack>
+          <GettingStarted onNavigate={() => setHelpOpen(false)} />
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
           <Button onClick={() => setHelpOpen(false)}>{t("关闭")}</Button>
@@ -1204,6 +1186,7 @@ export default function App() {
             <Suspense fallback={<LoadingState />}>
               <InitialPasswordPage
                 initialPassword={initialPassword}
+                username={user.username}
                 onComplete={(nextUser) => {
                   setInitialPassword(undefined);
                   setUser(nextUser);

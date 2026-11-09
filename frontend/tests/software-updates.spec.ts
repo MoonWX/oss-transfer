@@ -91,7 +91,7 @@ test("master update confirms its version, prevents repeats and keeps status duri
 }) => {
   const f = await fixture(page);
   await page.goto("/tools?tab=updates");
-  await expect(page.getByText("新版本 4.1.15", { exact: true })).toBeVisible();
+  await expect(page.getByText("新版本 v4.1.15", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "更新 Master", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("4.1.15");
@@ -110,7 +110,7 @@ test("master update confirms its version, prevents repeats and keeps status duri
   await expect(
     page.getByText("正在重新连接主节点…", { exact: true }),
   ).toBeVisible({ timeout: 10000 });
-  await expect(page.getByText("4.1.14", { exact: true })).toBeVisible();
+  await expect(page.getByText("v4.1.14", { exact: true })).toBeVisible();
   await expect(page.getByText("更新已排队", { exact: true })).toBeVisible();
 });
 

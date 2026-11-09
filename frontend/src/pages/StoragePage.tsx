@@ -552,8 +552,12 @@ export default function StoragePage() {
             <TextField
               required={!editing || Boolean(form.secretKey)}
               label="Access Key"
-              type="password"
+              // An access key ID is not secret; showing it avoids typos.
               placeholder={editing ? t("留空保留现有凭据") : undefined}
+              helperText={editing ? t("留空保留现有凭据") : undefined}
+              slotProps={{
+                htmlInput: { spellCheck: false, autoCapitalize: "off" },
+              }}
               autoComplete="off"
               value={form.accessKey}
               disabled={busy}
@@ -564,6 +568,7 @@ export default function StoragePage() {
               label="Secret Key"
               type="password"
               placeholder={editing ? t("留空保留现有凭据") : undefined}
+              helperText={editing ? t("留空保留现有凭据") : undefined}
               autoComplete="new-password"
               value={form.secretKey}
               disabled={busy}

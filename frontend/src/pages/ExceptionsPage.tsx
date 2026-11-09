@@ -47,6 +47,7 @@ import {
   Tabs,
   TextField,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
 import {
   CheckCircleOutlineRounded,
@@ -117,6 +118,8 @@ type Filters = {
   direction: string;
   endpoint: string;
   limit: string;
+  // "unresolved" (default), "resolved" or "" for all records.
+  resolution: string;
 };
 type Result = {
   items: Failure[];
@@ -139,6 +142,7 @@ const initialFilters: Filters = {
   direction: "",
   endpoint: "",
   limit: "1000",
+  resolution: "unresolved",
 };
 const modes = ["failed", "fallback", "local"] as const;
 type Mode = (typeof modes)[number];
@@ -179,6 +183,17 @@ const normalizeTaskFilter = (value: string) => {
     : null;
 };
 
+const retryChipColor = (status?: string) =>
+  status === "INTERRUPTED"
+    ? "warning"
+    : status === "RECOVERED"
+      ? "success"
+      : status === "FAILED"
+        ? "error"
+        : status === "PENDING"
+          ? "info"
+          : "default";
+
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 const sameFailure = (a: Failure, b: Failure) =>
@@ -204,6 +219,11 @@ function exportRows(rows: Failure[], name: string, resolve: NodeLabels) {
 
 export default function ExceptionsPage() {
   const labels = [tr("失败对象"), tr("降级迁移记录"), tr("本地迁移失败")];
+  const tabDescriptions = [
+    tr("对象存储之间迁移失败的对象。"),
+    tr("旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。"),
+    tr("与执行节点本地目录之间迁移失败的文件。"),
+  ];
 
   useI18n();
   const notify = useNotify();
@@ -270,6 +290,9 @@ export default function ExceptionsPage() {
     setSelected(null);
   }, [params]);
   const mode = modes[tab];
+  // Phones show one column per record: the object with its reason, retry
+  // result and task, and the actions.
+  const narrow = useMediaQuery((theme) => theme.breakpoints.down("md"));
   const catalogKey = JSON.stringify([mode, draft.task.trim(), catalogRevision]);
   const taskOptions = catalog?.key === catalogKey ? catalog.items : [];
   const taskSearch = draft.task.trim().replace(/^#/, "");
@@ -375,6 +398,8 @@ export default function ExceptionsPage() {
             if (filters.direction) params.set("direction", filters.direction);
             if (filters.endpoint.trim())
               params.set("endpoint", filters.endpoint.trim());
+            if (filters.resolution)
+              params.set("resolution", filters.resolution);
             next = (
               await api<{ data: Result }>(
                 `/api/master/local-transfers/failures?${params}`,
@@ -384,6 +409,9 @@ export default function ExceptionsPage() {
           } else {
             const body = {
               ...exceptionFilters(filters),
+              ...(mode === "failed" && filters.resolution
+                ? { resolution: filters.resolution }
+                : {}),
               limit: Number(filters.limit) || 1000,
             };
             const raw = await api<Record<string, unknown>>(
@@ -905,8 +933,13 @@ export default function ExceptionsPage() {
         aria-label={tr("异常记录类型")}
         sx={{ borderBottom: 1, borderColor: "divider" }}
       >
-        {labels.map((label) => (
-          <Tab key={label} label={label} disabled={busy} />
+        {labels.map((label, index) => (
+          <Tab
+            key={label}
+            label={label}
+            disabled={busy}
+            title={tabDescriptions[index]}
+          />
         ))}
       </Tabs>
       <Paper
@@ -1011,6 +1044,22 @@ export default function ExceptionsPage() {
                 </MenuItem>
               ))}
             </SelectField>
+            {mode !== "fallback" && (
+              <SelectField
+                label={tr("处理状态")}
+                size="small"
+                value={draft.resolution}
+                onChange={(event) =>
+                  updateDraft("resolution", event.target.value)
+                }
+              >
+                <MenuItem value="unresolved">{tr("未解决")}</MenuItem>
+                <MenuItem value="resolved">
+                  {tr("已解决（已恢复或已跳过）")}
+                </MenuItem>
+                <MenuItem value="">{tr("全部")}</MenuItem>
+              </SelectField>
+            )}
             {isLocal ? (
               <>
                 <SelectField
@@ -1038,7 +1087,7 @@ export default function ExceptionsPage() {
             ) : (
               <>
                 <TextField
-                  label={tr("源 Bucket")}
+                  label={tr("源存储桶")}
                   size="small"
                   value={draft.source}
                   onChange={(event) =>
@@ -1046,7 +1095,7 @@ export default function ExceptionsPage() {
                   }
                 />
                 <TextField
-                  label={tr("目标 Bucket")}
+                  label={tr("目标存储桶")}
                   size="small"
                   value={draft.destination}
                   onChange={(event) =>
@@ -1290,22 +1339,26 @@ export default function ExceptionsPage() {
                 size="small"
                 sx={{
                   tableLayout: "fixed",
-                  minWidth: mode === "fallback" ? 860 : 1060,
+                  minWidth: narrow ? 0 : mode === "fallback" ? 860 : 1060,
                 }}
               >
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ width: "26%" }}>
+                    <TableCell sx={{ width: narrow ? undefined : "26%" }}>
                       {tr("对象 / 路径")}
                     </TableCell>
-                    <TableCell sx={{ width: "17%" }}>
-                      {tr("任务与节点")}
-                    </TableCell>
-                    <TableCell>{tr("原因")}</TableCell>
-                    {mode !== "fallback" && (
-                      <TableCell sx={{ width: "20%" }}>
-                        {tr("重试结果")}
-                      </TableCell>
+                    {!narrow && (
+                      <>
+                        <TableCell sx={{ width: "17%" }}>
+                          {tr("任务与节点")}
+                        </TableCell>
+                        <TableCell>{tr("原因")}</TableCell>
+                        {mode !== "fallback" && (
+                          <TableCell sx={{ width: "20%" }}>
+                            {tr("重试结果")}
+                          </TableCell>
+                        )}
+                      </>
                     )}
                     <TableCell
                       align="right"
@@ -1385,143 +1438,96 @@ export default function ExceptionsPage() {
                             {formatBytes(item.objectSize)}
                           </Typography>
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2">
-                          #{item.parentTaskId ?? item.taskIndex ?? "—"}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          title={
-                            item.workerNode || item.executionNodeIp
-                              ? taskNodeLabels(item, recordNodeLabel)
-                              : tr("调度阶段")
-                          }
-                          sx={{
-                            fontFamily: "var(--font-mono)",
-                            overflowWrap: "anywhere",
-                            display: "-webkit-box",
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {item.workerNode || item.executionNodeIp
-                            ? taskNodeLabels(item, recordNodeLabel)
-                            : tr("调度阶段")}
-                        </Typography>
-                        {item.stage && (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={item.stage}
-                            sx={{
-                              display: "flex",
-                              width: "fit-content",
-                              mt: 0.5,
-                            }}
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell sx={{ maxWidth: 300 }}>
-                        <Typography
-                          variant="body2"
-                          color="error.main"
-                          title={
-                            item.errorMessage ||
-                            item.errorCode ||
-                            tr("未提供原因")
-                          }
-                          sx={{
-                            overflowWrap: "anywhere",
-                            display: "-webkit-box",
-                            WebkitLineClamp: 3,
-                            WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {item.errorMessage ||
-                            item.errorCode ||
-                            tr("未提供原因")}
-                        </Typography>
-                        {item.errorCode && (
-                          <Typography variant="caption" color="text.secondary">
-                            {item.errorCode}
-                          </Typography>
-                        )}
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          display="block"
-                          sx={{ mt: 0.5 }}
-                        >
-                          {failureTime(item)}
-                        </Typography>
-                      </TableCell>
-                      {mode !== "fallback" && (
-                        <TableCell sx={{ minWidth: 140, maxWidth: 280 }}>
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            color={
-                              item.retryStatus === "INTERRUPTED"
-                                ? "warning"
-                                : item.retryStatus === "RECOVERED"
-                                  ? "success"
-                                  : item.retryStatus === "FAILED"
-                                    ? "error"
-                                    : item.retryStatus === "PENDING"
-                                      ? "info"
-                                      : "default"
-                            }
-                            label={tr(retryResultLabel(item.retryStatus))}
-                          />
-                          {!!item.retryCount && (
+                        {narrow && (
+                          <Box data-testid="exception-summary" sx={{ mt: 1 }}>
                             <Typography
-                              variant="caption"
-                              color="text.secondary"
-                              display="block"
-                              sx={{ mt: 0.5 }}
-                            >
-                              {tr("重试 {count} 次", {
-                                count: formatNumber(item.retryCount),
-                              })}
-                            </Typography>
-                          )}
-                          {item.retryExecutionNodeIp &&
-                            item.retryExecutionNodeIp !==
-                              (item.executionNodeIp || item.workerNode) && (
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                display="block"
-                                sx={{ overflowWrap: "anywhere" }}
-                              >
-                                {tr("重试节点")}：
-                                {recordNodeLabel(
-                                  item.retryExecutionNodeIp,
-                                  item.retryExecutionNodeDisplay,
-                                )}
-                              </Typography>
-                            )}
-                          {!!item.retryUpdatedAt && (
-                            <Typography
-                              variant="caption"
-                              color="text.secondary"
-                              display="block"
-                            >
-                              {new Date(item.retryUpdatedAt).toLocaleString(
-                                getLocale(),
-                              )}
-                            </Typography>
-                          )}
-                          {item.retryStatus === "FAILED" && item.retryError && (
-                            <Typography
-                              variant="caption"
+                              variant="body2"
                               color="error.main"
+                              sx={{
+                                overflowWrap: "anywhere",
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {item.errorMessage ||
+                                item.errorCode ||
+                                tr("未提供原因")}
+                            </Typography>
+                            {mode !== "fallback" && (
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color={retryChipColor(item.retryStatus)}
+                                label={tr(retryResultLabel(item.retryStatus))}
+                                sx={{ mt: 0.5 }}
+                              />
+                            )}
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
                               display="block"
-                              title={item.retryError}
+                              sx={{ mt: 0.5, overflowWrap: "anywhere" }}
+                            >
+                              #{item.parentTaskId ?? item.taskIndex ?? "—"} ·{" "}
+                              {item.workerNode || item.executionNodeIp
+                                ? taskNodeLabels(item, recordNodeLabel)
+                                : tr("调度阶段")}{" "}
+                              · {failureTime(item)}
+                            </Typography>
+                          </Box>
+                        )}
+                      </TableCell>
+                      {!narrow && (
+                        <>
+                          <TableCell>
+                            <Typography variant="body2">
+                              #{item.parentTaskId ?? item.taskIndex ?? "—"}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              title={
+                                item.workerNode || item.executionNodeIp
+                                  ? taskNodeLabels(item, recordNodeLabel)
+                                  : tr("调度阶段")
+                              }
+                              sx={{
+                                fontFamily: "var(--font-mono)",
+                                overflowWrap: "anywhere",
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {item.workerNode || item.executionNodeIp
+                                ? taskNodeLabels(item, recordNodeLabel)
+                                : tr("调度阶段")}
+                            </Typography>
+                            {item.stage && (
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                label={item.stage}
+                                sx={{
+                                  display: "flex",
+                                  width: "fit-content",
+                                  mt: 0.5,
+                                }}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell sx={{ maxWidth: 300 }}>
+                            <Typography
+                              variant="body2"
+                              color="error.main"
+                              title={
+                                item.errorMessage ||
+                                item.errorCode ||
+                                tr("未提供原因")
+                              }
                               sx={{
                                 overflowWrap: "anywhere",
                                 display: "-webkit-box",
@@ -1530,10 +1536,95 @@ export default function ExceptionsPage() {
                                 overflow: "hidden",
                               }}
                             >
-                              {item.retryError}
+                              {item.errorMessage ||
+                                item.errorCode ||
+                                tr("未提供原因")}
                             </Typography>
+                            {item.errorCode && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
+                                {item.errorCode}
+                              </Typography>
+                            )}
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                              sx={{ mt: 0.5 }}
+                            >
+                              {failureTime(item)}
+                            </Typography>
+                          </TableCell>
+                          {mode !== "fallback" && (
+                            <TableCell sx={{ minWidth: 140, maxWidth: 280 }}>
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color={retryChipColor(item.retryStatus)}
+                                label={tr(retryResultLabel(item.retryStatus))}
+                              />
+                              {!!item.retryCount && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  display="block"
+                                  sx={{ mt: 0.5 }}
+                                >
+                                  {tr("重试 {count} 次", {
+                                    count: formatNumber(item.retryCount),
+                                  })}
+                                </Typography>
+                              )}
+                              {item.retryExecutionNodeIp &&
+                                item.retryExecutionNodeIp !==
+                                  (item.executionNodeIp || item.workerNode) && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    display="block"
+                                    sx={{ overflowWrap: "anywhere" }}
+                                  >
+                                    {tr("重试节点")}：
+                                    {recordNodeLabel(
+                                      item.retryExecutionNodeIp,
+                                      item.retryExecutionNodeDisplay,
+                                    )}
+                                  </Typography>
+                                )}
+                              {!!item.retryUpdatedAt && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  display="block"
+                                >
+                                  {new Date(item.retryUpdatedAt).toLocaleString(
+                                    getLocale(),
+                                  )}
+                                </Typography>
+                              )}
+                              {item.retryStatus === "FAILED" &&
+                                item.retryError && (
+                                  <Typography
+                                    variant="caption"
+                                    color="error.main"
+                                    display="block"
+                                    title={item.retryError}
+                                    sx={{
+                                      overflowWrap: "anywhere",
+                                      display: "-webkit-box",
+                                      WebkitLineClamp: 3,
+                                      WebkitBoxOrient: "vertical",
+                                      overflow: "hidden",
+                                    }}
+                                  >
+                                    {item.retryError}
+                                  </Typography>
+                                )}
+                            </TableCell>
                           )}
-                        </TableCell>
+                        </>
                       )}
                       <TableCell
                         align="right"

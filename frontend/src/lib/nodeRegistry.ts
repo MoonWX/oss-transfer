@@ -133,6 +133,14 @@ export function taskNodeLabels(
   task: Record<string, any>,
   resolve: NodeLabels = displayNode,
 ): string {
+  return taskNodeLabelList(task, resolve).join(", ") || t("等待分配");
+}
+
+/** One label per execution node of a task; empty while none is assigned. */
+export function taskNodeLabelList(
+  task: Record<string, any>,
+  resolve: NodeLabels = displayNode,
+): string[] {
   const assignedNode = task.executionNodeIp || task.workerNode;
   const isChild =
     task.childTaskId ||
@@ -143,43 +151,40 @@ export function taskNodeLabels(
       (node: { address?: string; id?: string }) =>
         node.address === assignedNode || node.id === assignedNode,
     );
-    return resolve(
-      assignedNode,
-      metadata ?? {
-        displayName: task.executionNodeName,
-        displayAddress: task.executionNodeAddress,
-        displayLabel: task.executionNodeLabel,
-        identityOnly: task.executionNodeIdentityOnly,
-      },
-    );
+    return [
+      resolve(
+        assignedNode,
+        metadata ?? {
+          displayName: task.executionNodeName,
+          displayAddress: task.executionNodeAddress,
+          displayLabel: task.executionNodeLabel,
+          identityOnly: task.executionNodeIdentityOnly,
+        },
+      ),
+    ];
   }
   if (Array.isArray(task.executionNodes) && task.executionNodes.length)
-    return task.executionNodes
-      .map((node: NodeDisplay & { address?: string; id?: string }) =>
+    return task.executionNodes.map(
+      (node: NodeDisplay & { address?: string; id?: string }) =>
         resolve(node.address || node.id, node),
-      )
-      .join(", ");
+    );
   const identities = task.participatingWorkerNodes?.length
     ? task.participatingWorkerNodes
     : task.eligibleWorkerNodes?.length
       ? task.eligibleWorkerNodes
       : [assignedNode].filter(Boolean);
-  return (
-    identities
-      .map((identity: string) =>
-        resolve(
-          identity,
-          identities.length === 1
-            ? {
-                displayName: task.executionNodeName,
-                displayAddress: task.executionNodeAddress,
-                displayLabel: task.executionNodeLabel,
-                identityOnly: task.executionNodeIdentityOnly,
-              }
-            : undefined,
-        ),
-      )
-      .join(", ") || t("等待分配")
+  return identities.map((identity: string) =>
+    resolve(
+      identity,
+      identities.length === 1
+        ? {
+            displayName: task.executionNodeName,
+            displayAddress: task.executionNodeAddress,
+            displayLabel: task.executionNodeLabel,
+            identityOnly: task.executionNodeIdentityOnly,
+          }
+        : undefined,
+    ),
   );
 }
 

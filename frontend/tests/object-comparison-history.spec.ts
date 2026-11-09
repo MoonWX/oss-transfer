@@ -312,7 +312,9 @@ test("a comparison that disappears while polling stops polling and says so", asy
   await expect(page.getByRole("progressbar", { name: "比对进度" })).toHaveCount(
     0,
   );
-  await expect(page.getByRole("button", { name: "导出 ZIP" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "导出全部差异（ZIP）" }),
+  ).toHaveCount(0);
   const reads = pageQueries(calls).length;
   await page.clock.runFor(20000);
   expect(pageQueries(calls)).toHaveLength(reads);
@@ -362,7 +364,9 @@ for (const theme of ["light", "dark"] as const)
     });
     await page.goto("/tools?comparison=comparison-1");
     await expect(
-      page.getByText(/^已检查 10，.* 个\/秒，已用 1 小时 2 分，已读取 5 GiB$/),
+      page.getByText(
+        /^已检查 10，.* 个\/秒，已用 1 小时 2 分，已读取 5 GiB（.+\/秒）$/,
+      ),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: /source\/photos\/2026\// }).first(),

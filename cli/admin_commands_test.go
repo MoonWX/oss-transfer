@@ -548,21 +548,24 @@ func TestExceptionClearPreservesFilterAndRequiresSafeMaster(t *testing.T) {
 
 // Removing a node confirms the removal and how to clean up its host, on
 // stderr so the JSON result keeps its shape.
-func TestAgentRemoveConfirmsOnStderr(t *testing.T) {
+func TestAgentRemoveConfirmsWithoutChangingJSON(t *testing.T) {
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "DELETE" || r.URL.Path != "/api/master/nodes/agent2" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL)
 		}
 		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"nodes": []interface{}{}}})
 	})
-	var stderr bytes.Buffer
-	client.errors = &stderr
 	client.locale = localeEN
 	result, err := runAdminCommand(client, "agent", []string{"remove", "agent2", "--yes"})
 	if err != nil || result["message"] != nil {
 		t.Fatal(result, err)
 	}
-	if !strings.Contains(stderr.String(), "Removed node agent2") || !strings.Contains(stderr.String(), "--uninstall --role agent") {
-		t.Fatal(stderr.String())
+	// The confirmation is human output only: --json keeps the reply's shape.
+	var out bytes.Buffer
+	if !renderCLISummary(&out, result) || !strings.Contains(out.String(), "Removed node agent2") || !strings.Contains(out.String(), "--uninstall --role agent") {
+		t.Fatal(out.String())
+	}
+	if _, ok := withoutHumanFields(result)[cliSummaryKey]; ok {
+		t.Fatal("summary leaks into --json output")
 	}
 }

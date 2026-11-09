@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -693,6 +696,9 @@ func taskReport(client *ApiClient, args []string) (map[string]interface{}, error
 	if output == "" {
 		output = fmt.Sprintf("task-%d-report.zip", id)
 	}
+	if output == "-" {
+		return taskReportToStdout(client, id)
+	}
 	if err := client.Download("GET", fmt.Sprintf("/task-reports/%d", id), nil, output); err != nil {
 		return nil, err
 	}
@@ -700,5 +706,58 @@ func taskReport(client *ApiClient, args []string) (map[string]interface{}, error
 	if err := taskReportCompleteness(output, result); err != nil {
 		return result, err
 	}
+	if getString(result, "reportKind") == "" {
+		// An older Master: no completeness information to show.
+		setCLISummary(result, client.locale.format("任务 #%d 的报告已保存到 %s", id, output))
+	}
 	return result, nil
+}
+
+// taskReportToStdout writes the verified report to standard output. The
+// report is downloaded and checked completely first, so a failed download
+// never leaves part of a ZIP on standard output.
+//
+// An incomplete report is still written, then reported on standard error
+// with exit status 3, as for a report saved to a file.
+func taskReportToStdout(client *ApiClient, id int) (map[string]interface{}, error) {
+	if client.machineOutput {
+		return nil, cliUsageErrorf("--output - 把报告写到标准输出，不能与 --json 同时使用")
+	}
+	directory, err := os.MkdirTemp("", "oss-transfer-report-")
+	if err != nil {
+		return nil, cliErrorf("创建报告临时文件失败: %w", err)
+	}
+	defer os.RemoveAll(directory)
+	path := filepath.Join(directory, "report.zip")
+	if err := client.Download("GET", fmt.Sprintf("/task-reports/%d", id), nil, path); err != nil {
+		return nil, err
+	}
+	result := map[string]interface{}{"success": true, "taskId": id, "output": "-"}
+	if err := taskReportCompleteness(path, result); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, cliErrorf("保存报告失败: %w", err)
+	}
+	defer file.Close()
+	output := client.output
+	if output == nil {
+		output = os.Stdout
+	}
+	if _, err := io.Copy(output, file); err != nil {
+		return nil, cliErrorf("写入标准输出失败: %w", err)
+	}
+	if result["complete"] != false {
+		return nil, nil
+	}
+	// Standard output holds the ZIP: print nothing else there.
+	quietCLIResult(result)
+	reasons := cliStringList(result["incompleteReasons"])
+	labels := make([]string, len(reasons))
+	writer := &cliLocaleWriter{locale: client.locale}
+	for i, reason := range reasons {
+		labels[i] = taskReportReason(writer, reason, cliStringList(result["unreachableNodes"]))
+	}
+	return result, cliErrorf("任务报告已写到标准输出，但报告不完整：%s", strings.Join(labels, "; "))
 }

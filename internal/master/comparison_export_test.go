@@ -674,3 +674,46 @@ func TestComparisonExportChecksFilteredRowsAgainstCounts(t *testing.T) {
 		}
 	}
 }
+
+func TestComparisonExportDatesEntriesAndLeavesMissingSizesEmpty(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	agent := newFakeComparisonAgent(true)
+	node := comparisonTestNode(t, f, "export-dates", agent)
+	rows := []comparison.Row{
+		{Key: "missing", SourceKey: "src/missing", DestinationKey: "dst/missing", Status: comparison.StatusMissingTarget, SourceSize: 7},
+		{Key: "extra", SourceKey: "src/extra", DestinationKey: "dst/extra", Status: comparison.StatusExtraTarget, DestinationSize: 9},
+		{Key: "gone", SourceKey: "src/gone", DestinationKey: "dst/gone", Status: comparison.StatusBothMissing},
+		// An empty object on both sides keeps its real size, 0.
+		{Key: "empty", SourceKey: "src/empty", DestinationKey: "dst/empty", Status: comparison.StatusDifferent, Reasons: []string{comparison.ReasonContentType}},
+	}
+	agent.put(completedComparison("cmp-dates", rows), rows)
+	putComparisonAssignment(t, f, node, comparisonTestRequest("cmp-dates"), time.Now())
+	// Handlers of a private instance run on the test goroutine with its clock.
+	api := newComparisonAPI(f.master)
+	generated := time.Date(2026, 11, 10, 8, 30, 0, 0, time.UTC)
+	api.now = func() time.Time { return generated }
+	req := httptest.NewRequest("GET", "/api/master/comparisons/cmp-dates/export", nil)
+	req.SetPathValue("id", "cmp-dates")
+	recorder := httptest.NewRecorder()
+	api.export(recorder, req)
+	download := comparisonDownload{recorder.Code, recorder.Header(), recorder.Body.Bytes()}
+	_, files := comparisonArchive(t, download)
+	archive, err := zip.NewReader(bytes.NewReader(download.body), int64(len(download.body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range archive.File {
+		if !entry.Modified.Equal(generated) {
+			t.Errorf("%s dated %s, want the export time %s", entry.Name, entry.Modified, generated)
+		}
+	}
+	want := map[string][2]string{"missing": {"7", ""}, "extra": {"", "9"}, "gone": {"", ""}, "empty": {"0", "0"}}
+	for _, row := range differenceRows(t, files["differences.csv"]) {
+		if sizes := want[row["key"]]; row["sourceSize"] != sizes[0] || row["destinationSize"] != sizes[1] {
+			t.Errorf("%s sizes %q/%q, want %q/%q", row["key"], row["sourceSize"], row["destinationSize"], sizes[0], sizes[1])
+		}
+	}
+	if summary := exportSummary(t, files["summary.json"]); !summary.GeneratedAt.Equal(generated) || !summary.Complete {
+		t.Fatalf("summary %+v", summary)
+	}
+}

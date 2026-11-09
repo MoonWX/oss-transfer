@@ -823,11 +823,92 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 	unknown, _ := data["unknownCount"].(float64)
 	rejected, _ := data["rejectedCount"].(float64)
 	result["requestedCount"] = len(rows)
+	problems := createValidationErrors(client.locale, data["validationErrors"], len(rows))
+	ids := cliIntList(data["taskIds"])
+	if kind == "local" {
+		ids = cliIntList(data["parentTaskIds"])
+	}
+	// Every row was checked and refused: nothing was created. This is a
+	// definite failure, not an uncertain or partial submission.
+	if confirmed && count == 0 && unknown == 0 && rejected == float64(len(rows)) && len(problems) > 0 {
+		result["submissionStatus"] = "rejected"
+		result["partial"] = false
+		data["partial"] = false
+		quietCLIResult(result)
+		return result, cliErrorf("未创建任务：%s", strings.Join(problems, "；"))
+	}
+	// Some rows were refused and the others created.
+	if confirmed && unknown == 0 && count > 0 && count+rejected == float64(len(rows)) && rejected > 0 && data["unconfirmedTaskIds"] == nil {
+		result["submissionStatus"] = "partial"
+		setCLISummary(result, createdTasksSummary(client, ids)...)
+		return result, cliErrorf("%d 个任务未创建：%s", int(rejected), strings.Join(problems, "；"))
+	}
 	if data["partial"] == true || unknown > 0 || rejected > 0 || !confirmed || count != float64(len(rows)) {
 		result["submissionStatus"] = "partial"
+		if len(ids) > 0 {
+			setCLISummary(result, client.locale.format("已确认创建的任务：%s", cliTaskIDList(ids)))
+		} else {
+			quietCLIResult(result)
+		}
 		return result, creationSubmissionError(cliErrorf("提交结果未完全确认；部分任务可能已受理，请核对返回的任务编号"), requestID)
 	}
 	result["submissionStatus"] = "accepted"
 	result["submissionNote"] = client.text("任务已受理并自动执行；受理不代表迁移完成，请查看任务状态")
+	setCLISummary(result, createdTasksSummary(client, ids)...)
 	return result, nil
+}
+
+// createValidationErrors returns the server's reasons for refused rows. With
+// one row its "1: " prefix says nothing; otherwise rows are named.
+func createValidationErrors(locale cliLocale, value interface{}, rows int) []string {
+	problems := []string{}
+	for _, problem := range cliStringList(value) {
+		number, message, numbered := strings.Cut(problem, ": ")
+		if _, err := strconv.Atoi(number); !numbered || err != nil {
+			problems = append(problems, translateServerMessage(locale, problem))
+			continue
+		}
+		message = translateServerMessage(locale, message)
+		if rows > 1 {
+			message = locale.format("第 %s 项：%s", number, message)
+		}
+		problems = append(problems, message)
+	}
+	return problems
+}
+
+// createdTasksSummary names the created tasks and how to follow them.
+func createdTasksSummary(client *ApiClient, ids []int) []string {
+	if len(ids) == 0 {
+		return []string{client.text("任务已受理并自动执行；受理不代表迁移完成，请查看任务状态")}
+	}
+	lines := []string{client.locale.format("已创建 %d 个任务：%s", len(ids), cliTaskIDList(ids))}
+	lines = append(lines, client.text("任务已受理并自动执行；受理不代表迁移完成，请查看任务状态"))
+	lines = append(lines, client.locale.format("查看进度：oss-transfer-cli task show %d --watch 5", ids[0]))
+	return lines
+}
+
+// cliIntList reads a list of positive integer IDs.
+func cliIntList(value interface{}) []int {
+	ids := []int{}
+	switch list := value.(type) {
+	case []int:
+		return list
+	case []interface{}:
+		for _, item := range list {
+			if number, ok := cliNumeric(item); ok && number > 0 && number == float64(int(number)) {
+				ids = append(ids, int(number))
+			}
+		}
+	}
+	return ids
+}
+
+// cliTaskIDList formats task IDs as #1, #2.
+func cliTaskIDList(ids []int) string {
+	items := make([]string, len(ids))
+	for i, id := range ids {
+		items[i] = "#" + strconv.Itoa(id)
+	}
+	return strings.Join(items, ", ")
 }

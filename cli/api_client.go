@@ -29,12 +29,19 @@ type ApiClient struct {
 	verbose            bool
 	configurationError error
 	authToken          string
+	// machineOutput is set by --json: standard output carries JSON only.
+	machineOutput bool
+	// sent counts requests handed to the HTTP client; copies of the client
+	// share it. An error before the first request is a command-line mistake
+	// (exit status 2).
+	sent *atomic.Int64
 }
 
 func NewApiClient(host string) *ApiClient {
 	client := &ApiClient{
 		baseUrl: strings.TrimRight(host, "/") + "/api/master",
 		client:  &http.Client{Timeout: 60 * time.Second},
+		sent:    &atomic.Int64{},
 	}
 	if strings.TrimSpace(os.Getenv("OSS_TRANSFER_INTERNAL_TOKEN")) != "" {
 		client.configurationError = cliErrorf("OSS_TRANSFER_INTERNAL_TOKEN 已停用；请取消该环境变量后运行 login，CLI 使用用户登录会话")
@@ -44,6 +51,14 @@ func NewApiClient(host string) *ApiClient {
 }
 
 func (c *ApiClient) SetVerbose(verbose bool) { c.verbose = verbose }
+
+// requestsSent reports how many requests this client has sent.
+func (c *ApiClient) requestsSent() int64 {
+	if c.sent == nil {
+		return 0
+	}
+	return c.sent.Load()
+}
 
 // Tokens come from an explicit user session or the CLI login store.
 func (c *ApiClient) SetAuthToken(token string) {
@@ -191,6 +206,9 @@ func (c *ApiClient) do(req *http.Request, timeout time.Duration) (*http.Response
 	}
 	if c.verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] %s %s\n", req.Method, req.URL.EscapedPath())
+	}
+	if c.sent != nil {
+		c.sent.Add(1)
 	}
 	resp, err := client.Do(req)
 	if c.verbose && resp != nil {

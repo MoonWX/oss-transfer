@@ -140,7 +140,7 @@ class Workflows(cluster.Harness):
             require(shown["node"]["label"] == f"Worker {index + 1}", "Node label edit lost")
             require(shown["status"]["executionStatus"].get("maxConcurrentChildren") == 8 and shown["status"]["executionStatus"].get("objectsPerChild") == 4, "Node concurrency edit lost")
             self.cli("node", "details", node)
-        self.cli("agent", "remove", self.nodes[0], expected=1)
+        self.cli("agent", "remove", self.nodes[0], expected=2)
         self.cli("limit", "set", "bandwidth", "12", "--unit", "Mbps", "--worker", self.nodes[0])
         self.cli("limit", "set", "put", "33", "--worker", self.nodes[0])
         self.cli("limit", "set", "list", "22", "--worker", self.nodes[0])
@@ -167,7 +167,7 @@ class Workflows(cluster.Harness):
         self.cli("storage", "test", "fixture")
         buckets = self.cli("storage", "buckets", "fixture")
         require(all(bucket in json.dumps(buckets) for bucket in self.buckets.values()), "CLI buckets omitted fixture buckets")
-        self.cli("storage", "remove", "temporary", expected=1)
+        self.cli("storage", "remove", "temporary", expected=2)
         self.cli("storage", "remove", "temporary", "--yes")
         saved = self.cli("storage", "list")
         require('"temporary"' not in json.dumps(saved) and '"fixture"' in json.dumps(saved), "Storage delete/list differs")
@@ -296,7 +296,7 @@ class Workflows(cluster.Harness):
         # A malformed later row must not submit the valid first row.
         before = {row["taskIndex"] for row in self.tasks()}
         invalid = fixture("invalid-import.json", [rows[0], dict(rows[1], destBucket="")])
-        self.cli("task", "import", "buckets", invalid, expected=1)
+        self.cli("task", "import", "buckets", invalid, expected=2)
         require({row["taskIndex"] for row in self.tasks()} == before, "Invalid import partially created tasks")
 
         csv_source, csv_destination = "cli-import-source", "cli-import-destination"
@@ -578,7 +578,7 @@ class Workflows(cluster.Harness):
         self.wait(lambda: task_id in {row["taskIndex"] for row in self.tasks()}, "restored task in active list")
         self.cli("task", "delete", task_id)
         self.wait(in_trash, "task in recycle bin before purge")
-        self.cli("task", "purge", task_id, expected=1)
+        self.cli("task", "purge", task_id, expected=2)
         self.cli("task", "purge", task_id, "--yes")
         def purged():
             rows = data(self.cli("task", "cleanup-status", task_id))["tasks"]
@@ -678,8 +678,8 @@ class Workflows(cluster.Harness):
             self.evidence["versionCheck"] = {"status": "SUCCESS", "version": check["version"]}
         rejected = self.cli("update", "master", "--version", "4.1.22", "--yes", expected=1)
         require(rejected.get("success") is not True and "version" not in rejected, "Update --version was swallowed by global version flag")
-        self.cli("update", "master", "--version", "4.1.22", expected=1)
-        self.cli("update", "agents", "--yes", expected=1)
+        self.cli("update", "master", "--version", "4.1.22", expected=2)
+        self.cli("update", "agents", "--yes", expected=2)
         backups = data(self.cli("backup", "list"))
         require(backups["master"]["supported"] is False, "Raw Master falsely supports service backups")
         self.cli("backup", "prune", "master", "--yes", expected=1)

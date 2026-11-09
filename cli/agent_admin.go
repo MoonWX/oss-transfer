@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -95,7 +96,40 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 			return nil, cliErrorf("子任务并发与对象并发的乘积不能超过 1024")
 		}
 	}
-	return client.Put("/nodes/"+url.PathEscape(o.Positionals[0]), body)
+	result, err := client.Put("/nodes/"+url.PathEscape(o.Positionals[0]), body)
+	if err == nil {
+		setCLISummary(result, nodeUpdatedSummary(client, o.Positionals[0], body))
+	}
+	return result, err
+}
+
+// nodeUpdatedSummary confirms the fields a node update changed.
+func nodeUpdatedSummary(client *ApiClient, node string, body map[string]interface{}) string {
+	changes := []string{}
+	for _, field := range []struct{ key, label string }{{"address", "节点标识"}, {"label", "名称"}, {"maxConcurrentChildren", "子任务并发"}, {"objectsPerChild", "每个子任务的对象并发"}, {"advertisedLocalRoots", "登记目录"}} {
+		value, ok := body[field.key]
+		if !ok || field.key == "address" && value == node {
+			continue
+		}
+		text := fmt.Sprint(value)
+		switch v := value.(type) {
+		case []string:
+			text = strings.Join(v, ", ")
+			if len(v) == 0 {
+				text = client.text("无")
+			}
+		case string:
+			if v == "" {
+				text = client.text("无")
+			}
+		}
+		changes = append(changes, client.locale.format("%s：%s", client.text(field.label), text))
+	}
+	separator := map[cliLocale]string{localeEN: "; ", localeJA: "、"}[client.locale]
+	if separator == "" {
+		separator = "；"
+	}
+	return client.locale.format("节点 %s 已更新：%s", node, strings.Join(changes, separator))
 }
 
 // Paths belong to the Agent OS, which may differ from the CLI's OS.

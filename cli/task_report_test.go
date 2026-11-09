@@ -143,7 +143,23 @@ func TestLocalTransferReportReportsIncompleteTasks(t *testing.T) {
 func TestTaskReportWithoutMetadataStillSucceeds(t *testing.T) {
 	server := taskReportServer(t, "/api/master/task-reports/4", taskReportArchive(t, nil))
 	code, out, stderr := runComparisonCLI(t, server, "task", "report", "4", "--output", filepath.Join(t.TempDir(), "r.zip"))
-	if code != 0 || stderr != "" || !strings.Contains(out, "任务报告已保存") {
+	if code != 0 || stderr != "" || !strings.Contains(out, "的报告已保存到") {
 		t.Fatalf("exit %d: %s %s", code, out, stderr)
+	}
+}
+
+// An incomplete report written to standard output is still written whole;
+// the reason goes to standard error and the exit status is 3.
+func TestIncompleteTaskReportToStandardOutputExitsThree(t *testing.T) {
+	archive := taskReportArchive(t, map[string]interface{}{"complete": false, "unreachableNodes": []interface{}{"10.0.0.9"}, "tasks": []interface{}{
+		map[string]interface{}{"parentTaskId": 4, "complete": false, "partialReasons": []interface{}{"NODE_REPORT_INCOMPLETE"}},
+	}})
+	server := taskReportServer(t, "/api/master/task-reports/4", archive)
+	code, out, stderr := runComparisonCLI(t, server, "task", "report", "4", "--output", "-")
+	if code != 3 || out != string(archive) {
+		t.Fatalf("exit %d, %d of %d bytes on stdout: %s", code, len(out), len(archive), stderr)
+	}
+	if !strings.Contains(stderr, "报告不完整") || !strings.Contains(stderr, "10.0.0.9") {
+		t.Fatalf("reason missing: %s", stderr)
 	}
 }

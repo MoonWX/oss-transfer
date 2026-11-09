@@ -209,14 +209,14 @@ func TestCLICatalogCoversControlledMessagesAndFormats(t *testing.T) {
 			}
 			idx := -1
 			if id, ok := c.Fun.(*ast.Ident); ok {
-				if id.Name == "cliText" {
+				switch id.Name {
+				case "cliText", "cliTextf":
 					idx = 1
-				}
-				if id.Name == "cliErrorf" {
+				case "cliErrorf", "cliUsageErrorf":
 					idx = 0
 				}
 			}
-			if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "text" {
+			if sel, ok := c.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "text" || sel.Sel.Name == "format") {
 				idx = 0
 			}
 			if idx < 0 || idx >= len(c.Args) {
@@ -247,11 +247,11 @@ func TestCLITaskDetailsTranslateLabelsAndPreserveObjectKeys(t *testing.T) {
 	for _, test := range []struct {
 		locale cliLocale
 		want   []string
-	}{{localeEN, []string{"Conflict policy", "Source object key", "Target object key", "Failure reason", "Node limits only", "Overwrite existing objects or files"}}, {localeJA, []string{"競合ポリシー", "転送元オブジェクト Key", "転送先オブジェクト Key", "失敗の理由", "ノードの上限に従う", "既存のオブジェクトまたはファイルを上書き"}}} {
+	}{{localeEN, []string{"Conflict policy", "Source object key", "Target object key", "Failure reason", "Node limits only", "Completed", "Overwrite existing objects", "Set destination key"}}, {localeJA, []string{"競合ポリシー", "転送元オブジェクト Key", "転送先オブジェクト Key", "失敗の理由", "ノードの上限に従う", "完了", "既存のオブジェクトまたはファイルを上書き", "転送先キーを指定"}}} {
 		var buffer bytes.Buffer
 		renderTaskDetail(&cliLocaleWriter{Writer: &buffer, locale: test.locale}, task)
 		text := buffer.String()
-		for _, want := range append(test.want, "正常/源对象 Key.txt", "配置目标/目标对象 Key.txt", "失败原因/正常", "COMPLETED", "EXACT_KEY") {
+		for _, want := range append(test.want, "正常/源对象 Key.txt", "配置目标/目标对象 Key.txt", "失败原因/正常") {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing %q: %s", test.locale, want, text)
 			}

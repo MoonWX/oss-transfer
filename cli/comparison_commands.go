@@ -77,8 +77,16 @@ func runObjectAdmin(client *ApiClient, action string, args []string) (map[string
 		case "delete":
 			return client.Delete(path)
 		}
+		// Resuming a running comparison changes nothing and replies with
+		// its progress; read the state first to tell the two apart.
+		before, beforeErr := client.Get(path + "?limit=1")
+		running := beforeErr == nil && getString(responseData(before), "status") == "RUNNING"
 		result, err := client.Post(path+"/resume", nil)
-		return comparisonRoute(client, id, result, err, cliErrorf("当前 Master 不支持继续比对，请先升级 Master"))
+		result, err = comparisonRoute(client, id, result, err, cliErrorf("当前 Master 不支持继续比对，请先升级 Master"))
+		if err == nil && running && getString(responseData(result), "status") == "RUNNING" {
+			setCLISummary(result, client.locale.format("比对 %s 已在运行，无需继续", id), client.locale.format("查看进度：%s", comparisonCommand("status", id, "--watch", "5")))
+		}
+		return result, err
 	}
 	return nil, asUsageError(cliErrorf("未知 object 子命令: %s", action))
 }

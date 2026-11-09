@@ -101,10 +101,11 @@ func TestNodeDetailsAliasesPreserveIncompleteResultsAndTranslateLabels(t *testin
 			for _, tc := range []struct {
 				locale cliLocale
 				label  string
-			}{{localeZH, "挂载目录"}, {localeEN, "Mounted directories"}, {localeJA, "マウントディレクトリ"}} {
+				no     string
+			}{{localeZH, "挂载目录", "否"}, {localeEN, "Mounted directories", "No"}, {localeJA, "マウントディレクトリ", "いいえ"}} {
 				var out bytes.Buffer
 				renderCLIResult(&cliLocaleWriter{Writer: &out, locale: tc.locale}, result)
-				for _, text := range []string{tc.label, "/mnt/data", "10.0.0.2", "false", "nfs4"} {
+				for _, text := range []string{tc.label, "/mnt/data", "10.0.0.2", tc.no, "nfs4"} {
 					if !strings.Contains(out.String(), text) {
 						t.Fatalf("missing %q: %s", text, out.String())
 					}

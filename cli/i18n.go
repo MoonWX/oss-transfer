@@ -210,7 +210,11 @@ func localizedCLIError(locale cliLocale, err error) string {
 		}
 		return fmt.Errorf(template, args...).Error()
 	}
-	return err.Error()
+	// The server's sentence comes first; the HTTP status is secondary detail.
+	if problem, ok := err.(*apiHTTPError); ok {
+		return locale.format("%s（HTTP %d）", translateServerMessage(locale, problem.Message), problem.Status)
+	}
+	return translateServerMessage(locale, err.Error())
 }
 
 func offlineCLIOutput(outputs []io.Writer) io.Writer {

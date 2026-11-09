@@ -38,7 +38,7 @@ func TestTaskRetryOnRunningTaskRetriesFailedObjectsInPlace(t *testing.T) {
 		if code != 0 || posts != 1 {
 			t.Fatal(upgraded, code, posts, out, errout)
 		}
-		if upgraded && (!strings.Contains(out, "Retried objects: 1") || !strings.Contains(out, "Retried subtasks: 1") || !strings.Contains(out, "Accepted: 1")) {
+		if upgraded && (!strings.Contains(out, "#107") || !strings.Contains(out, "Retried 1 failed object; the task keeps running")) {
 			t.Fatalf("in-place retry result not shown:\n%s", out)
 		}
 		if !upgraded && !strings.Contains(out, "upgrade the Master to retry its failed objects") {

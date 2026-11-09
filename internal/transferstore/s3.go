@@ -410,7 +410,7 @@ func (b *resumingBody) Read(p []byte) (int, error) {
 	b.body = next
 	b.mu.Unlock()
 	_ = body.Close()
-	logRetry(fmt.Sprintf("storage object %s on bucket %s: resumed reading at byte %d of %d after: %s", b.ranges.key, b.ranges.s.bucket, b.read, b.size, LogText(err.Error())))
+	logRetry(fmt.Sprintf("storage object %q on bucket %s: resumed reading at byte %d of %d after: %s", b.ranges.key, b.ranges.s.bucket, b.read, b.size, LogText(err.Error())))
 	if n > 0 {
 		return n, nil
 	}

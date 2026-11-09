@@ -125,6 +125,29 @@ test("the help dialog lists the node step first with the current counts", async 
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
+test("the help dialog's add-node link opens the add dialog on the nodes page too", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/nodes");
+  await expect(page.getByRole("heading", { name: "执行节点" })).toBeVisible();
+  for (let round = 0; round < 2; round++) {
+    await page.getByRole("button", { name: "使用帮助" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("listitem")
+      .nth(0)
+      .getByRole("link", { name: "添加节点" })
+      .click();
+    await expect(page).toHaveURL(/\/nodes\?add=1$/);
+    const dialog = page.getByRole("dialog", { name: "添加节点" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page).toHaveURL(/\/nodes$/);
+  }
+});
+
 const multiNode = {
   ...tasks[3],
   taskIndex: 1050,
@@ -417,6 +440,11 @@ test("container Agents get update commands and disabled updates explain why", as
   expect(commands.run).toContain(
     `-v oss-transfer-agent-data:/data ${image} oss-transfer-agent --data-dir /data`,
   );
+  // The recreated container keeps the host.docker.internal mapping the join
+  // command may have added, or the Agent cannot reach the Master on Linux.
+  expect(commands.run).toContain(
+    "--restart unless-stopped --add-host host.docker.internal:host-gateway -v ",
+  );
   // An Agent added with the v4.2.0 Docker command keeps its own container
   // and volume names, read from the hostname it reports.
   await page.keyboard.press("Escape");
@@ -433,5 +461,9 @@ test("container Agents get update commands and disabled updates explain why", as
   );
   expect(named.run).toContain(
     `-v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
+  );
+  // Same options, in the same order, as the join command's docker run.
+  expect(named.run.split("\n")[2]).toBe(
+    `docker run -d --name oss-transfer-agent-1a2b3c --hostname oss-transfer-agent-1a2b3c --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
   );
 });

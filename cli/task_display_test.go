@@ -123,3 +123,13 @@ func TestSubtaskNumberPagePreservesExplicitOrderAndActiveView(t *testing.T) {
 		t.Fatal("explicit numeric page changed behavior", text)
 	}
 }
+
+func TestTaskDetailBandwidthNeverUsesScientificNotation(t *testing.T) {
+	for value, want := range map[float64]string{1000000: "1000000 Mbps", 1234567: "1234567 Mbps", 0.1: "0.1 Mbps", 25.5: "25.5 Mbps"} {
+		var output bytes.Buffer
+		renderTaskDetail(&output, map[string]interface{}{"taskId": "task-1", "taskBandwidthLimitMbps": value})
+		if text := output.String(); !strings.Contains(text, want) || strings.Contains(text, "e+") {
+			t.Errorf("bandwidth %v: want %q in %s", value, want, text)
+		}
+	}
+}

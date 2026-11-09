@@ -128,7 +128,10 @@ export default function NodesPage() {
   const [nodeError, setNodeError] = useState<string | null>(null);
   // The first-run checklist links here with ?add=1 to open the add dialog.
   const [params, setParams] = useSearchParams();
-  const [inviteOpen, setInviteOpen] = useState(() => params.get("add") === "1");
+  // It is read on every render, not only on mount: the link also opens the
+  // dialog when the page is already showing (the help dialog has it too).
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const addRequested = params.get("add") === "1";
   const [detailNode, setDetailNode] = useState<RegisteredNode | null>(null);
   const knownWorkers = workers.data
     ? [
@@ -812,7 +815,7 @@ export default function NodesPage() {
           )}
         </Stack>
       )}
-      {inviteOpen && (
+      {(inviteOpen || addRequested) && (
         <AgentInvitationDialog
           open
           onClose={() => {

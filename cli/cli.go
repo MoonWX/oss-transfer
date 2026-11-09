@@ -581,6 +581,11 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 	if expiry := getString(data, "expiresAt"); expiry != "" {
 		fmt.Fprintf(out, cliText(out, "加入凭证仅可使用一次，有效至 %s\n"), safeCLIText(invitationExpiry(expiry)))
 	}
+	// Every command below, native or Docker, carries this address; only a
+	// native Agent on the Master's own host can reach a loopback address.
+	if master, err := url.Parse(getString(data, "joinUrl")); err == nil && loopbackHost(master.Hostname()) {
+		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，只有在 Master 主机上原生运行的 Agent 能访问。其他主机上的 Agent 请用 --master-url 指定局域网地址；Master 主机上的 Docker 容器请指定 host.docker.internal。"))
+	}
 	if command := getString(data, "traditionalCommand"); command != "" {
 		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
@@ -607,9 +612,6 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 	fmt.Fprintln(out, safeCLIText(getString(data, "dockerCommand")))
 	fmt.Fprintln(out, cliText(out, "\nDocker（Windows PowerShell）"))
 	fmt.Fprintln(out, safeCLIText(getString(data, "dockerWindowsCommand")))
-	if master, err := url.Parse(getString(data, "joinUrl")); err == nil && loopbackHost(master.Hostname()) {
-		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。"))
-	}
 	if command := getString(data, "composeCommand"); command != "" {
 		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，需要 root 或 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
@@ -898,8 +900,10 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		distribution = label
 	}
 	bandwidth := cliText(out, "仅受节点上限约束")
-	if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
-		bandwidth = fmt.Sprint(value, " Mbps")
+	if number, ok := cliNumeric(task["taskBandwidthLimitMbps"]); ok {
+		bandwidth = cliNumberText(number) + " Mbps"
+	} else if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
+		bandwidth = safeCLIText(fmt.Sprint(value)) + " Mbps"
 	}
 	fields := [][2]string{{cliText(out, "方向"), cliDirectionLabel(out, taskDirection(task))}, {cliText(out, "状态"), cliTaskStatusLabel(out, getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), distribution}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
 	if taskDirection(task) == "OSS_TO_LOCAL" {

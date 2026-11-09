@@ -40,6 +40,15 @@ func TestAutoPathStyle(t *testing.T) {
 		"https://bucket-local.example.com":      false,
 		"https://s3.example.local.example.com":  false,
 		"https://s3.example.com/":               false,
+		// The host as written: these are not IP addresses for net.ParseIP.
+		"http://10.1":        false,
+		"http://192.168.1":   false,
+		"http://1.2.3.04":    false,
+		"http://0x7f.0.0.1":  false,
+		"http://10.0.0.5.":   true,
+		"http://2130706433":  true,
+		"http://user@minio":  true,
+		"http://s3.example:": false,
 	} {
 		if got := AutoPathStyle(endpoint); got != want {
 			t.Errorf("AutoPathStyle(%q) = %v, want %v", endpoint, got, want)

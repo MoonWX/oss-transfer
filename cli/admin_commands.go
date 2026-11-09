@@ -144,6 +144,9 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 		if action != "remove" {
 			values = append(values, "label")
 		}
+		if action == "add" {
+			values = append(values, "master-url")
+		}
 		if action == "update" {
 			values = append(values, "address")
 		}
@@ -203,7 +206,9 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 		}
 		body := map[string]interface{}{"address": address, "label": strings.TrimSpace(label)}
 		if action == "add" {
-			body["masterUrl"] = strings.TrimSuffix(client.baseUrl, "/api/master")
+			if body["masterUrl"], err = invitationMasterURL(client, o); err != nil {
+				return nil, err
+			}
 			return client.Post("/agents/invitations", body)
 		}
 		result, err := client.Put("/nodes/"+url.PathEscape(original), body)
@@ -241,14 +246,20 @@ func runAgentAdmin(client *ApiClient, action string, args []string) (map[string]
 	if len([]rune(label)) > 80 || strings.ContainsAny(label, "\r\n") {
 		return nil, cliErrorf("节点名称不能超过 80 个字符或包含换行")
 	}
-	masterURL := strings.TrimSuffix(client.baseUrl, "/api/master")
-	if o.Has("master-url") {
-		masterURL, err = masterOrigin(o.Value("master-url"), "master-url")
-		if err != nil {
-			return nil, err
-		}
+	masterURL, err := invitationMasterURL(client, o)
+	if err != nil {
+		return nil, err
 	}
 	return client.Post("/agents/invitations", map[string]interface{}{"address": address, "label": label, "masterUrl": masterURL})
+}
+
+// invitationMasterURL is the Master address an invitation gives the Agent:
+// --master-url when given, otherwise the address the CLI is connected to.
+func invitationMasterURL(client *ApiClient, o commandOptions) (string, error) {
+	if o.Has("master-url") {
+		return masterOrigin(o.Value("master-url"), "master-url")
+	}
+	return strings.TrimSuffix(client.baseUrl, "/api/master"), nil
 }
 
 func runStorageAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
@@ -306,15 +317,21 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			return result, storagePathStyleAdvice(result, err, alias)
 		}
 		if action == "test" {
+			_, checkSupported := result["pathStyle"]
 			switch {
 			case getString(result, "checkedBucket") != "":
 				result["message"] = client.text("连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶")
 			case getString(result, "bucketCheckFailed") != "":
 				result["message"] = client.text("已读取存储桶列表；第一个存储桶的存储桶级检查未通过，见警告；可用 --bucket 检查要迁移的存储桶")
+			case !checkSupported:
+				// Masters before v4.2 only list buckets and ignore ?bucket=.
+				result["message"] = client.text("已读取存储桶列表；Master 版本较旧，未检查存储桶级访问")
 			case result["bucketCheckSupported"] == false:
 				result["message"] = client.text("已读取存储桶列表；执行节点版本较旧，未检查存储桶级访问")
-			default:
+			case len(adminArray(result["buckets"])) == 0 && !o.Has("bucket"):
 				result["message"] = client.text("已读取存储桶列表；没有可检查的存储桶，可用 --bucket 指定一个")
+			default:
+				result["message"] = client.text("已读取存储桶列表；未检查存储桶级访问")
 			}
 		}
 		return result, nil

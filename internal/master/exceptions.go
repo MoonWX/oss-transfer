@@ -35,33 +35,53 @@ type exceptionRequest struct {
 	DestBucket      string `json:"destBucket"`
 	Endpoint        string `json:"endpoint"`
 	Limit           int    `json:"limit"`
+	// Resolution keeps only "unresolved" or "resolved" (recovered or skipped)
+	// records; empty keeps both.
+	Resolution string `json:"resolution"`
 }
 
-func exceptionBody(w http.ResponseWriter, r *http.Request) (task.ExceptionFilter, int, bool) {
+func validExceptionResolution(value string) bool {
+	return value == "" || value == "unresolved" || value == "resolved"
+}
+
+// exceptionResolutionMatches applies a Resolution filter to one record.
+func exceptionResolutionMatches(resolution string, e task.Exception) bool {
+	switch resolution {
+	case "unresolved":
+		return !e.Resolved()
+	case "resolved":
+		return e.Resolved()
+	}
+	return true
+}
+
+// exceptionBody parses a failure query: the ledger filter, the per-node row
+// limit and the resolution filter.
+func exceptionBody(w http.ResponseWriter, r *http.Request) (task.ExceptionFilter, int, string, bool) {
 	request := exceptionRequest{Limit: 1000}
 	if r.Body != nil && r.ContentLength != 0 {
 		if !readJSON(w, r, &request) {
-			return task.ExceptionFilter{}, 0, false
+			return task.ExceptionFilter{}, 0, "", false
 		}
 	}
-	if request.TaskIndex < 0 || request.TaskID < 0 || request.TaskID > 0 && request.TaskIndex > 0 && request.TaskID != request.TaskIndex || request.Limit < 1 || request.Limit > 10000 {
+	if request.TaskIndex < 0 || request.TaskID < 0 || request.TaskID > 0 && request.TaskIndex > 0 && request.TaskID != request.TaskIndex || request.Limit < 1 || request.Limit > 10000 || !validExceptionResolution(request.Resolution) {
 		fail(w, 400, "Invalid exception query")
-		return task.ExceptionFilter{}, 0, false
+		return task.ExceptionFilter{}, 0, "", false
 	}
 	if request.Type != "" && request.Type != "failed" && request.Type != "local" {
 		fail(w, 400, "Invalid exception query")
-		return task.ExceptionFilter{}, 0, false
+		return task.ExceptionFilter{}, 0, "", false
 	}
 	node, err := mergeTaskString(request.WorkerNode, request.ExecutionNodeIP, "execution node")
 	if err != nil {
 		fail(w, 400, err.Error())
-		return task.ExceptionFilter{}, 0, false
+		return task.ExceptionFilter{}, 0, "", false
 	}
 	if request.Direction != "" && request.Direction != "OSS_TO_OSS" && request.Direction != "LOCAL_TO_OSS" && request.Direction != "OSS_TO_LOCAL" {
 		fail(w, 400, "Invalid transfer direction")
-		return task.ExceptionFilter{}, 0, false
+		return task.ExceptionFilter{}, 0, "", false
 	}
-	return task.ExceptionFilter{ParentID: max(request.TaskIndex, request.TaskID), Node: node, Direction: request.Direction, SourceBucket: request.SourceBucket, DestinationBucket: request.DestBucket, Endpoint: request.Endpoint, LocalOnly: request.Type == "local"}, request.Limit, true
+	return task.ExceptionFilter{ParentID: max(request.TaskIndex, request.TaskID), Node: node, Direction: request.Direction, SourceBucket: request.SourceBucket, DestinationBucket: request.DestBucket, Endpoint: request.Endpoint, LocalOnly: request.Type == "local"}, request.Limit, request.Resolution, true
 }
 func exceptionDTO(e task.Exception) map[string]any {
 	local := ""
@@ -147,7 +167,7 @@ func exceptionNodeLists(nodes map[string]bool) (queried, failed []string) {
 
 func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		filter, limit, ok := exceptionBody(w, r)
+		filter, limit, resolution, ok := exceptionBody(w, r)
 		if !ok {
 			return
 		}
@@ -165,8 +185,12 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 		}
 		if !fallback {
 			err = s.tasks.repo.VisitExceptions(r.Context(), filter, func(e task.Exception) error {
+				// clearableCount covers the whole scope the clear action uses.
 				if e.Resolved() {
 					clearable++
+				}
+				if !exceptionResolutionMatches(resolution, e) {
+					return nil
 				}
 				rows, found := groups[e.Node].([]map[string]any)
 				if !found {
@@ -213,7 +237,7 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 }
 func (s *Server) clearExceptions(fallback bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		filter, _, ok := exceptionBody(w, r)
+		filter, _, _, ok := exceptionBody(w, r)
 		if !ok {
 			return
 		}
@@ -244,6 +268,11 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 	}
 	if filter.Direction != "" && filter.Direction != "LOCAL_TO_OSS" && filter.Direction != "OSS_TO_LOCAL" {
 		fail(w, 400, "Invalid local direction")
+		return
+	}
+	resolution := q.Get("resolution")
+	if !validExceptionResolution(resolution) {
+		fail(w, 400, "Invalid exception query")
 		return
 	}
 	if q.Get("storageId") != "" {
@@ -277,6 +306,9 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 	err = s.tasks.repo.VisitExceptions(r.Context(), filter, func(e task.Exception) error {
 		if e.Resolved() {
 			clearable++
+		}
+		if !exceptionResolutionMatches(resolution, e) {
+			return nil
 		}
 		if _, found := nodes[e.Node]; !found {
 			nodes[e.Node] = false

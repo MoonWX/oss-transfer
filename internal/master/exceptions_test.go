@@ -2,6 +2,8 @@ package master
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +159,33 @@ func TestResolvedExceptionCleanupIsFilteredAndCountsBeyondPage(t *testing.T) {
 	data := body["data"].(map[string]any)
 	if code != 200 || data["total"] != float64(3) || data["clearableCount"] != float64(2) || len(data["items"].([]any)) != 1 {
 		t.Fatal("local cleanup count was limited to current page", code, body)
+	}
+	// The console shows unresolved records by default; the clearable count
+	// still covers the resolved records of the whole filter scope.
+	for resolution, keys := range map[string][]string{"unresolved": {"third"}, "resolved": {"first", "second"}, "": {"first", "second", "third"}} {
+		code, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/failed", f.admin, map[string]any{"taskIndex": ids[1], "resolution": resolution})
+		if code != 200 || body["totalCount"] != float64(len(keys)) || body["clearableCount"] != float64(2) {
+			t.Fatal("resolution filter", resolution, code, body)
+		}
+		got := []string{}
+		for _, row := range body["failedKeys"].(map[string]any)["node-1.example"].([]any) {
+			got = append(got, row.(map[string]any)["key"].(string))
+		}
+		sort.Strings(got)
+		if !slices.Equal(got, keys) {
+			t.Fatal("resolution filter rows", resolution, got)
+		}
+		code, body = request(t, f.http.Client(), "GET", fmt.Sprintf("%s/api/master/local-transfers/failures?taskId=%d&resolution=%s", f.http.URL, ids[1], resolution), f.admin, nil)
+		data := body["data"].(map[string]any)
+		if code != 200 || data["total"] != float64(len(keys)) || len(data["items"].([]any)) != len(keys) || data["clearableCount"] != float64(2) {
+			t.Fatal("local resolution filter", resolution, code, body)
+		}
+	}
+	if code, _ := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/failed", f.admin, map[string]any{"resolution": "fixed"}); code != 400 {
+		t.Fatal("unknown resolution accepted", code)
+	}
+	if code, _ := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/local-transfers/failures?resolution=fixed", f.admin, nil); code != 400 {
+		t.Fatal("unknown local resolution accepted", code)
 	}
 	code, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/failed/clear", f.admin, map[string]any{"type": "local", "taskIndex": ids[0]})
 	if code != 200 || body["clearedCount"] != float64(0) {

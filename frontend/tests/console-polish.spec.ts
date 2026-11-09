@@ -417,6 +417,11 @@ test("container Agents get update commands and disabled updates explain why", as
   expect(commands.run).toContain(
     `-v oss-transfer-agent-data:/data ${image} oss-transfer-agent --data-dir /data`,
   );
+  // The recreated container keeps the host.docker.internal mapping the join
+  // command may have added, or the Agent cannot reach the Master on Linux.
+  expect(commands.run).toContain(
+    "--restart unless-stopped --add-host host.docker.internal:host-gateway -v ",
+  );
   // An Agent added with the v4.2.0 Docker command keeps its own container
   // and volume names, read from the hostname it reports.
   await page.keyboard.press("Escape");
@@ -433,5 +438,9 @@ test("container Agents get update commands and disabled updates explain why", as
   );
   expect(named.run).toContain(
     `-v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
+  );
+  // Same options, in the same order, as the join command's docker run.
+  expect(named.run.split("\n")[2]).toBe(
+    `docker run -d --name oss-transfer-agent-1a2b3c --hostname oss-transfer-agent-1a2b3c --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
   );
 });

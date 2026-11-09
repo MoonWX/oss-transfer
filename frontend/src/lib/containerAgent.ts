@@ -8,6 +8,12 @@
 const legacyContainer = "oss-transfer-agent";
 const joinedContainer = /^oss-transfer-agent-[0-9a-f]{6}$/;
 const agentCompose = "/opt/oss-transfer-compose/agent/docker-compose.yml";
+// The join command maps host.docker.internal to the host when the Master
+// address uses that name, because Docker Engine on Linux defines it only when
+// asked. The Agent keeps that address in its volume, so the recreated
+// container needs the same mapping; it is harmless on Docker Desktop and when
+// the Master address is a LAN address.
+const hostAlias = " --add-host host.docker.internal:host-gateway";
 const hardening =
   " --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45";
 
@@ -22,8 +28,8 @@ export function containerAgentCommands(image: string, hostname?: string) {
       `docker pull ${image}`,
       `docker rm -f ${container}`,
       joined
-        ? `docker run -d --name ${container} --hostname ${container} --restart unless-stopped${hardening} -v ${volume}:/data ${image} oss-transfer-agent --data-dir /data`
-        : `docker run -d --name ${container} --restart unless-stopped -v ${volume}:/data ${image} oss-transfer-agent --data-dir /data`,
+        ? `docker run -d --name ${container} --hostname ${container} --restart unless-stopped${hostAlias}${hardening} -v ${volume}:/data ${image} oss-transfer-agent --data-dir /data`
+        : `docker run -d --name ${container} --restart unless-stopped${hostAlias} -v ${volume}:/data ${image} oss-transfer-agent --data-dir /data`,
     ].join("\n"),
     compose: [`${compose} pull`, `${compose} up -d`].join("\n"),
   };

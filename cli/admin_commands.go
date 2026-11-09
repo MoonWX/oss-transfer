@@ -162,8 +162,9 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			return nil, err
 		}
 		if action == "remove" {
-			if err := adminConfirmed(o); err != nil {
-				return nil, err
+			if !o.Has("yes") {
+				// Per-object task results and comparison results live on the node.
+				return nil, cliErrorf("移除执行节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取：任务报告会不完整，比对记录会消失。需要保留时，请先用 task report 和 object export 导出。确认移除请添加 --yes")
 			}
 			result, err := client.Delete("/nodes/" + url.PathEscape(original))
 			if err == nil {

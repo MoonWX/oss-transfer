@@ -959,10 +959,19 @@ export default function NodesPage() {
           <Stack spacing={2}>
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
             <Typography>
-              {t("移除此执行节点，不删除节点上的文件、对象或数据库。")}
+              {t(
+                "移除后，该节点不能再连接集群，节点上的 Agent 服务会自行停止。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。",
+              )}
             </Typography>
+            <Alert severity="warning">
+              {t(
+                "任务报告中逐个对象的结果和对象比对结果保存在执行节点上。移除后，此节点上的这些结果将无法再获取：任务报告会不完整，比对记录会消失。需要保留时，请先导出任务报告和比对结果。",
+              )}
+            </Alert>
             <Alert severity="info">
-              {t("节点不可达、仍有任务记录或集群正在执行任务时，无法移除。")}
+              {t(
+                "有未结束的任务使用此节点时无法移除：请先停止这些任务，或在任务的执行节点中移除它。",
+              )}
             </Alert>
           </Stack>
         </DialogContent>

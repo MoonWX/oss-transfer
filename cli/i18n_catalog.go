@@ -296,6 +296,7 @@ var cliMessages = map[string][2]string{
 	"仅受节点上限约束": {"Node limits only", "ノードの上限に従う"},
 	"任务 #%d":   {"Task #%d", "タスク #%d"},
 	"任务 #%d\n": {"Task #%d\n", "タスク #%d\n"},
+	"移除执行节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取：任务报告会不完整，比对记录会消失。需要保留时，请先用 task report 和 object export 导出。确认移除请添加 --yes": {"After a node is removed, the task reports (per-object results) and object comparison results stored on it are no longer available: task reports become incomplete and its comparisons disappear. To keep them, export them first with task report and object export. Add --yes to confirm the removal", "実行ノードを削除すると、そのノードに保存されているタスクレポート（オブジェクトごとの結果）とオブジェクト比較の結果は取得できなくなります。タスクレポートは不完全になり、比較の記録は表示されなくなります。残す場合は、先に task report と object export でエクスポートしてください。削除を確定するには --yes を指定してください"},
 	"任务 #%d 当前状态 %s 不允许%s；本次未执行操作":                     {"Task #%d with status %s does not allow %s; no action was taken", "タスク #%d の状態 %s では%sを実行できません。操作は行われていません"},
 	"--%s 需为 0 或 0.000001–1000000000；取消限制可用 unlimited": {"--%s must be 0 or 0.000001–1000000000; use unlimited to remove a limit", "--%s は 0 または 0.000001～1000000000 を指定します。unlimited で制限を解除できます"},
 	"请求上限范围":   {"Request limit scope", "リクエスト上限の適用範囲"},

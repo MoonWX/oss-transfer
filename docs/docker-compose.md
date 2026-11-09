@@ -223,8 +223,9 @@ Container Agents cannot update online. Recreate each container from the new imag
 
 **An Agent added with `docker run`:**
 
-1. Remove the node on the **Execution nodes** page, or with `oss-transfer-cli agent remove <node> --yes`. The Agent stops working and stays idle.
-2. On its host, remove the container and its volume. The volume holds the Agent's identity and comparison results.
+1. Export the task reports and comparison results you want to keep. The per-object results of task reports and the object comparison results are stored on the Agent, in its volume; after the node is removed they are no longer available, task reports become incomplete and its comparisons disappear ([remove a node](operations.md#remove-a-node)).
+2. Remove the node on the **Execution nodes** page, or with `oss-transfer-cli agent remove <node> --yes`. The Agent stops working and stays idle.
+3. On its host, remove the container and its volume. The volume holds the Agent's identity, its per-object task results and its comparison results.
 
    ```sh
    docker rm -f oss-transfer-agent-<id>

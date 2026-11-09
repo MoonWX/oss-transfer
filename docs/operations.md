@@ -534,9 +534,10 @@ Restore the saved program, configuration, installation metadata, service definit
 
 Remove an Agent that you no longer need, or one that is being replaced:
 
-1. Stop or finish the tasks that use it, or move them to other nodes first ([change a task's execution nodes](#change-a-tasks-execution-nodes)). The Master refuses to remove an Agent with active tasks.
-2. On **Execution nodes**, choose **Remove node**, or run `oss-transfer-cli agent remove NODE --yes`. The CLI confirms: *Removed node NODE. Its Agent service stops by itself and does not restart; to delete its program and data, run the installer on that host with --uninstall --role agent*.
-3. On the Agent host, [uninstall](install.md#uninstall) it, or leave it stopped.
+1. Stop or finish the tasks that use it, or move them to other nodes first ([change a task's execution nodes](#change-a-tasks-execution-nodes)). The Master refuses to remove an Agent that an unfinished task uses; finished and stopped tasks do not block it.
+2. Export what you want to keep. The per-object results of [task reports](#task-reports) and the [object comparison](#export-results) results are stored on the Agents. After the Agent is removed, those stored on it are no longer available: a task report exported later is incomplete (its objects on that node are `UNKNOWN`) and the Agent's comparisons disappear from the comparison history. Save the reports (`oss-transfer-cli task report ID`) and the comparison results (`oss-transfer-cli object export ID`) first. The removal dialog and `agent remove` without `--yes` repeat this warning.
+3. On **Execution nodes**, choose **Remove node**, or run `oss-transfer-cli agent remove NODE --yes`. The CLI confirms: *Removed node NODE. Its Agent service stops by itself and does not restart; to delete its program and data, run the installer on that host with --uninstall --role agent*.
+4. On the Agent host, [uninstall](install.md#uninstall) it, or leave it stopped.
 
 The removed Agent's service writes to its log *Service failed: agent enrollment was revoked by the Master. This Agent was removed from the cluster or its enrollment was revoked on the Master, so the service has stopped and will not restart automatically …* and exits:
 

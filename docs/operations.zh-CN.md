@@ -534,9 +534,10 @@ Docker Compose 部署通过 `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.29-beta.1
 
 不再需要或要替换某个执行节点时：
 
-1. 先停止或完成使用它的任务，或把任务移到其他节点（见[调整任务的执行节点](#调整任务的执行节点)）。执行节点上还有活动任务时，Master 会拒绝移除。
-2. 在 **执行节点** 页面点击 **移除节点**，或运行 `oss-transfer-cli agent remove 节点 --yes`。CLI 会确认：*已移除执行节点 节点。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent*。
-3. 在该主机上[卸载](install.zh-CN.md#卸载)它，或让它保持停止状态。
+1. 先停止或完成使用它的任务，或把任务移到其他节点（见[调整任务的执行节点](#调整任务的执行节点)）。有未结束的任务使用该执行节点时，Master 会拒绝移除；已完成和已停止的任务不影响移除。
+2. 导出需要保留的内容。[任务报告](#任务报告)中逐个对象的结果和[对象比对](#导出结果)结果保存在执行节点上。执行节点移除后，保存在它上面的这些结果将无法再获取：之后导出的任务报告不完整（该节点上的对象结果为 `UNKNOWN`），它的比对记录也会从比对历史中消失。请先保存任务报告（`oss-transfer-cli task report ID`）和比对结果（`oss-transfer-cli object export ID`）。移除对话框和不带 `--yes` 的 `agent remove` 也会给出这条提醒。
+3. 在 **执行节点** 页面点击 **移除节点**，或运行 `oss-transfer-cli agent remove 节点 --yes`。CLI 会确认：*已移除执行节点 节点。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent*。
+4. 在该主机上[卸载](install.zh-CN.md#卸载)它，或让它保持停止状态。
 
 被移除的执行节点会在服务日志中写入 *Service failed: agent enrollment was revoked by the Master. This Agent was removed from the cluster or its enrollment was revoked on the Master, so the service has stopped and will not restart automatically …*，然后退出：
 

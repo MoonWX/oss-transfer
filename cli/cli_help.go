@@ -268,6 +268,7 @@ const cliNodeHelp = `执行节点
 Agent 地址注册后不能直接修改，替换节点需重新加入。
 node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址，可用 --master-url 指定 Agent 可访问的地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
+移除节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取；需要保留时请先用 task report 和 object export 导出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `
 
@@ -294,6 +295,7 @@ const cliAgentHelp = `Agent 管理
 --master-url 指定 Agent 可访问的 Master 地址；省略时使用 CLI 当前连接地址。
 邀请有效期为 30 分钟，仅可加入一次。在要加入的主机上运行其中一条命令：Linux / macOS / FreeBSD 原生安装命令、Windows PowerShell 命令，或 Docker 命令（也适用于 Docker Desktop）。
 --local-root 使用 Agent 所在系统的绝对路径；配置会替换该节点已有的根目录列表。
+移除节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取；需要保留时请先用 task report 和 object export 导出。
 `
 
 const cliSetupHelp = `首次登录

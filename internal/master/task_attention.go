@@ -34,6 +34,11 @@ var failureCauses = []struct {
 
 const failureSummaryScan = 1000
 
+// failureSummaryVisits bounds the exception records one summary reads,
+// counting those it skips (resolved, or pending a retry): after a retry of
+// many failures most records are pending, and the detail view is polled.
+const failureSummaryVisits = 10 * failureSummaryScan
+
 func failureCause(e task.Exception) (string, string, string) {
 	text := e.Error
 	if e.RetryStatus == task.ExceptionRetryFailed && e.RetryError != "" {
@@ -108,39 +113,54 @@ func (s *Server) offlineTaskNodes(p task.Parent) []map[string]any {
 
 var errSummaryFull = errors.New("summary scan limit")
 
+type failureGroup struct {
+	code, message, sample string
+	count                 int
+}
+
+// failureTally groups unresolved failures by cause. It stops (errSummaryFull)
+// after failureSummaryScan of them, or after failureSummaryVisits records of
+// any kind, so a summary is a sample when the index is large.
+type failureTally struct {
+	groups           map[string]*failureGroup
+	visited, scanned int
+}
+
+func (t *failureTally) add(e task.Exception) error {
+	if t.visited >= failureSummaryVisits {
+		return errSummaryFull
+	}
+	t.visited++
+	if e.Resolved() || e.RetryStatus == task.ExceptionPending {
+		return nil
+	}
+	if t.scanned >= failureSummaryScan {
+		return errSummaryFull
+	}
+	t.scanned++
+	code, message, text := failureCause(e)
+	g := t.groups[code]
+	if g == nil {
+		g = &failureGroup{code: code, message: message, sample: text}
+		t.groups[code] = g
+	}
+	g.count++
+	return nil
+}
+
 // failureSummary groups the task's unresolved failures by cause. It reads at
 // most failureSummaryScan exceptions, which is enough to name the main causes.
 func (s *Server) failureSummary(ctx context.Context, p task.Parent) map[string]any {
 	if p.Counters.Failed == 0 {
 		return nil
 	}
-	type group struct {
-		code, message, sample string
-		count                 int
-	}
-	groups := map[string]*group{}
-	scanned := 0
-	err := s.tasks.repo.VisitExceptions(ctx, task.ExceptionFilter{ParentID: p.ID}, func(e task.Exception) error {
-		if e.Resolved() || e.RetryStatus == task.ExceptionPending {
-			return nil
-		}
-		if scanned >= failureSummaryScan {
-			return errSummaryFull
-		}
-		scanned++
-		code, message, text := failureCause(e)
-		g := groups[code]
-		if g == nil {
-			g = &group{code: code, message: message, sample: text}
-			groups[code] = g
-		}
-		g.count++
-		return nil
-	})
+	tally := failureTally{groups: map[string]*failureGroup{}}
+	err := s.tasks.repo.VisitExceptions(ctx, task.ExceptionFilter{ParentID: p.ID}, tally.add)
+	groups, scanned := tally.groups, tally.scanned
 	if err != nil && !errors.Is(err, errSummaryFull) || len(groups) == 0 {
 		return nil
 	}
-	ordered := make([]*group, 0, len(groups))
+	ordered := make([]*failureGroup, 0, len(groups))
 	for _, g := range groups {
 		ordered = append(ordered, g)
 	}

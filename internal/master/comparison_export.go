@@ -390,7 +390,12 @@ func comparisonStatusCount(p comparison.Progress, statuses []string) int64 {
 func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer, source *comparisonRowSource, first *comparison.Page, member cluster.Member, statuses []string) error {
 	buffered := bufio.NewWriterSize(output, 64<<10)
 	zipper := zip.NewWriter(buffered)
-	entry, err := zipper.Create("differences.csv")
+	// Entries carry the export time; without it they show 1979/1980 dates.
+	generated := c.now()
+	create := func(name string) (io.Writer, error) {
+		return zipper.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate, Modified: generated})
+	}
+	entry, err := create("differences.csv")
 	if err != nil {
 		return err
 	}
@@ -403,14 +408,15 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 	var exported int64
 	if err := source.walk(ctx, statuses, first, func(row comparison.Row) error {
 		exported++
-		return reportCSV(differences, row.Number, row.Key, row.Status, row.SourceKey, row.DestinationKey, row.SourceSize, row.DestinationSize, row.SourceSHA256, row.DestinationSHA256, strings.Join(row.Reasons, ";"), row.Error, row.ErrorDetail)
+		sourceSize, destinationSize := comparisonExportSizes(row)
+		return reportCSV(differences, row.Number, row.Key, row.Status, row.SourceKey, row.DestinationKey, sourceSize, destinationSize, row.SourceSHA256, row.DestinationSHA256, strings.Join(row.Reasons, ";"), row.Error, row.ErrorDetail)
 	}); err != nil {
 		return err
 	}
 	if err := flushReport(differences); err != nil {
 		return err
 	}
-	entry, err = zipper.Create("retry-source-keys.incr")
+	entry, err = create("retry-source-keys.incr")
 	if err != nil {
 		return err
 	}
@@ -457,7 +463,7 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		RetryPrefixesMatch: p.SourcePrefix == p.DestinationPrefix,
 		CSVEscaping:        comparisonCSVEscaping,
 		StartedAt:          p.StartedAt.UTC(),
-		GeneratedAt:        c.now().UTC(),
+		GeneratedAt:        generated.UTC(),
 	}
 	if !p.EndedAt.IsZero() {
 		ended := p.EndedAt.UTC()
@@ -482,7 +488,7 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		summary.IncompleteReasons = append(summary.IncompleteReasons, "RETRY_KEYS_MISMATCH")
 	}
 	summary.Complete = len(summary.IncompleteReasons) == 0
-	entry, err = zipper.Create("summary.json")
+	entry, err = create("summary.json")
 	if err != nil {
 		return err
 	}
@@ -498,4 +504,19 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		return err
 	}
 	return buffered.Flush()
+}
+
+// comparisonExportSizes leaves the size of a missing side empty, so that it
+// differs from an empty (0-byte) object.
+func comparisonExportSizes(row comparison.Row) (source, destination any) {
+	source, destination = row.SourceSize, row.DestinationSize
+	switch row.Status {
+	case comparison.StatusMissingTarget:
+		destination = ""
+	case comparison.StatusExtraTarget:
+		source = ""
+	case comparison.StatusBothMissing:
+		source, destination = "", ""
+	}
+	return source, destination
 }

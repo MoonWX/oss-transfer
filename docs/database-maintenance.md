@@ -2,9 +2,9 @@
 
 [中文](database-maintenance.zh-CN.md)
 
-The database stores object names, scan checkpoints, assignments and transfer results. Object contents are streamed between endpoints. With millions of small files, the number of objects matters more to database size than their total size. Object comparison results are kept outside the database ([comparison results](#comparison-results)).
+The database stores object names, scan checkpoints, assignments and transfer results. Object contents are streamed between endpoints. With millions of small files, the number of objects matters more to database size than their total size. Object comparison results are kept outside the database ([comparison results](#comparison-results)). [Planning](planning.md) explains how to estimate the space a database needs.
 
-An unfinished scan keeps an index for deduplication and source-change detection during recovery. After scanning completes, the Agent removes this index in small background transactions. Once the Master has durably saved a batch as child tasks, acknowledged it and authorized its release, the Agent removes that scan batch in the background, even while scanning continues. Unacknowledged batches remain available for delivery; execution records used by retries and reports are retained. Permanently deleting a task removes its scan and execution records; stopping a task or moving it to the recycle bin retains them.
+An unfinished scan keeps an index for deduplication and source-change detection during recovery. After scanning completes, the Agent (execution node) removes this index in small background transactions. Once the Master has durably saved a batch as child tasks, acknowledged it and authorized its release, the Agent removes that scan batch in the background, even while scanning continues. Unacknowledged batches remain available for delivery; execution records used by retries and reports are retained. Permanently deleting a task removes its scan and execution records; stopping a task or moving it to the recycle bin retains them.
 
 New writes use compact object records and compress larger values when compression saves space. Existing plain records remain readable. Cleanup makes pages reusable, but does not reduce the database file's size on disk.
 
@@ -18,7 +18,7 @@ Managed installations authorize release only after the installer commits a succe
 
 ## Reclaim disk space
 
-Stop the service before compacting its database. Compaction writes a separate file, packs its pages, converts old Agent scan-index records and compresses eligible values. It verifies every record before publishing the new file. The original is unchanged, and an existing output file is never overwritten. Progress is printed every 10 seconds.
+Stop the service before compacting its database, and take a backup first ([backup and restore](operations.md#backup-and-restore)). Compaction writes a separate file, packs its pages, converts old Agent scan-index records and compresses eligible values. It verifies every record before publishing the new file. The original is unchanged, and an existing output file is never overwritten. Progress is printed every 10 seconds.
 
 For an Agent installed at the default Linux paths:
 
@@ -45,7 +45,7 @@ For an encrypted database, compaction also writes `agent.compact.db.key` using t
 
 The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
 
-Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion requires schema 7; rejoining a task node after failover requires schema 8. Credential encryption requires schema 9, queue handoff requires schema 10, and changing a task's execution nodes raises the Master database to schema 11. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
+Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion requires schema 7; rejoining a task node after failover requires schema 8. Credential encryption requires schema 9, queue handoff requires schema 10, and changing a task's execution nodes raises the Master database to schema 11. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary. v4.2.0 introduces no new schema.
 
 ## Comparison results
 

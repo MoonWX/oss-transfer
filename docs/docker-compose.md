@@ -71,7 +71,7 @@ TRANSFER_PORT=1685
    | --- | --- | --- |
    | **macOS / Linux** | Docker Desktop on macOS, Docker Engine on Linux | Plain `docker run` commands; no root (on Linux, your user must be allowed to run `docker`) |
    | **Windows PowerShell** | Docker Desktop on Windows | The same commands for PowerShell |
-   | **Linux Docker Compose** | Linux with root | The Compose installer (`curl … \| sudo bash`); see [below](#the-linux-compose-installer) |
+   | **Linux Docker Compose** | Linux with root | The Compose installer (`curl … \| sh -c '…'`, as root or with `sudo`); see [below](#the-linux-compose-installer) |
 
 4. Choose **Copy command** and run it on the Agent host within 30 minutes. The command works once.
 
@@ -93,7 +93,7 @@ The `docker run` variant runs two commands. The first joins the cluster in a tem
 
 ### The Linux Compose installer
 
-The **Linux Docker Compose** variant runs the installer as root (`curl … | sudo bash`). It writes a Compose project to `/opt/oss-transfer-compose/agent/docker-compose.yml` with its data in `/var/lib/oss-transfer-compose/agent`, and on Debian and Ubuntu offers to install Docker Engine if it is missing. If the installation fails, it removes what it created; fix the cause and run the same command again. It runs on Linux only: on macOS it stops and points you to the Docker command.
+The **Linux Docker Compose** variant runs the installer as root (`curl … | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`, directly as root or through `sudo`). It writes a Compose project to `/opt/oss-transfer-compose/agent/docker-compose.yml` with its data in `/var/lib/oss-transfer-compose/agent`, and on Debian and Ubuntu offers to install Docker Engine if it is missing. If the installation fails, it removes what it created; fix the cause and run the same command again. It runs on Linux only: on macOS it stops and points you to the Docker command.
 
 ## Mount a host directory for local transfers
 

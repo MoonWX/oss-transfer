@@ -97,7 +97,7 @@ Enter a node name and the **Master address (reachable from the Agent)**: a priva
 
 <p align="center"><img src="docs/images/join-command.en.png" width="720" alt="Add node dialog with the join command and the Copy command button outlined in red"></p>
 
-The native command runs `curl … | sudo bash`; on Windows, run its command in Administrator PowerShell. The dialog shows where the Agent downloads its package from: by default the Master itself, or the public sources after **Download from public sources**. The command works once and expires after 30 minutes.
+The native command has the form `curl -fsSL '…' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'` and runs as root or with `sudo`; on Windows, run its command in Administrator PowerShell. The dialog shows where the Agent downloads its package from: by default the Master itself, or the public sources after **Download from public sources**. The command works once and expires after 30 minutes.
 
 **When it worked,** the installer prints `=== agent 4.2.0 · Installed successfully ===`, and the node appears as **Online** on the **Execution nodes** page (or in `oss-transfer-cli node list`).
 

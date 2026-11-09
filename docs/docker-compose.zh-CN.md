@@ -71,7 +71,7 @@ TRANSFER_PORT=1685
    | --- | --- | --- |
    | **macOS / Linux** | macOS 上的 Docker Desktop、Linux 上的 Docker Engine | 普通的 `docker run` 命令，不需要 root（Linux 上当前用户需能运行 `docker`） |
    | **Windows PowerShell** | Windows 上的 Docker Desktop | 同样的命令，PowerShell 写法 |
-   | **Linux Docker Compose** | 有 root 权限的 Linux | Compose 安装器（`curl … \| sudo bash`），见[下文](#linux-compose-安装器) |
+   | **Linux Docker Compose** | 有 root 权限的 Linux | Compose 安装器（`curl … \| sh -c '…'`，以 root 或通过 `sudo` 运行），见[下文](#linux-compose-安装器) |
 
 4. 点击 **复制指令**，在 30 分钟内到执行节点主机上运行。指令只能使用一次。
 
@@ -93,7 +93,7 @@ TRANSFER_PORT=1685
 
 ### Linux Compose 安装器
 
-**Linux Docker Compose** 方式以 root 运行安装器（`curl … | sudo bash`）。它把 Compose 项目写到 `/opt/oss-transfer-compose/agent/docker-compose.yml`，数据放在 `/var/lib/oss-transfer-compose/agent`；在 Debian 和 Ubuntu 上，如果没有安装 Docker Engine，还会询问是否安装。安装失败时会清理本次创建的内容，解决问题后重新运行同一条命令即可。它只能在 Linux 上运行：在 macOS 上会停止，并提示改用 Docker 指令。
+**Linux Docker Compose** 方式以 root 运行安装器（`curl … | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，root 直接运行，其他用户通过 `sudo` 运行）。它把 Compose 项目写到 `/opt/oss-transfer-compose/agent/docker-compose.yml`，数据放在 `/var/lib/oss-transfer-compose/agent`；在 Debian 和 Ubuntu 上，如果没有安装 Docker Engine，还会询问是否安装。安装失败时会清理本次创建的内容，解决问题后重新运行同一条命令即可。它只能在 Linux 上运行：在 macOS 上会停止，并提示改用 Docker 指令。
 
 ## 为本地迁移挂载主机目录
 

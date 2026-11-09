@@ -276,10 +276,10 @@ oss-transfer-cli agent invite-status INVITATION_ID
 
 `agent invite` prints the join commands, with the expiry in local time (*The join credential works once and expires at …*; invitations last 30 minutes) and the download source:
 
-- *Native installation (Linux / macOS / FreeBSD, needs sudo)*: `curl -fsSL '<link>' | sudo bash`;
+- *Native installation (Linux / macOS / FreeBSD, as root or with sudo)*: `curl -fsSL '<link>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`, which runs the installer directly as root and through `sudo` otherwise (an IPv6 Master address adds `--globoff`);
 - *Native installation (Windows PowerShell)*;
 - *Docker (macOS / Linux, no root needed)* and *Docker (Windows PowerShell)*: plain `docker run` commands that create the container `oss-transfer-agent-<6 characters>` and its volume;
-- *Docker Compose (Linux, needs sudo)*: the installer's Compose method.
+- *Docker Compose (Linux, as root or with sudo)*: the installer's Compose method, in the same form.
 
 Run the command for the new host there. Agents connect to the Master address in the command, which defaults to the address the CLI uses. If that is `localhost` or another loopback address, the CLI warns you: add `--master-url` with an address the Agent can reach, such as a LAN address, or `http://host.docker.internal:1685` for a Docker Agent on the Master's own host. `agent invite-status` shows whether the Agent has joined.
 

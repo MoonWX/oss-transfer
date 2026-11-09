@@ -276,10 +276,10 @@ oss-transfer-cli agent invite-status 邀请ID
 
 `agent invite` 打印加入命令，以本地时间显示有效期（*加入凭证仅可使用一次，有效至 …*；邀请有效 30 分钟），并显示下载来源：
 
-- *原生部署（Linux / macOS / FreeBSD，需要 sudo）*：`curl -fsSL '<链接>' | sudo bash`；
+- *原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）*：`curl -fsSL '<链接>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，以 root 运行时直接执行安装脚本，否则通过 `sudo` 执行（Master 地址为 IPv6 时会加上 `--globoff`）；
 - *原生部署（Windows PowerShell）*；
 - *Docker（macOS / Linux，无需 root）* 和 *Docker（Windows PowerShell）*：普通的 `docker run` 命令，创建容器 `oss-transfer-agent-<6 个字符>` 及其数据卷；
-- *Docker Compose（Linux，需要 sudo）*：安装脚本的 Compose 方式。
+- *Docker Compose（Linux，需要 root 或 sudo）*：安装脚本的 Compose 方式，命令形式相同。
 
 在新主机上运行与其对应的命令。执行节点通过命令中的 Master 地址连接 Master，默认使用 CLI 当前连接的地址。如果该地址是 `localhost` 或其他回环地址，CLI 会给出警告：请用 `--master-url` 指定执行节点能访问的地址，例如局域网地址；与 Master 在同一台主机上的 Docker 执行节点可用 `http://host.docker.internal:1685`。`agent invite-status` 显示执行节点是否已加入。
 

@@ -133,6 +133,7 @@ func (s *Server) listStorage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]any{"success": true, "configs": connections, "revision": snapshot.Revision})
 }
+
 // Some storage providers include an invalid access key in their error message.
 // Preserve typed status checks while keeping those responses out of the UI.
 type redactedStorageError struct {

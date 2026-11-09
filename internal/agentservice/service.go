@@ -349,6 +349,7 @@ type ChildrenRequest struct {
 	After    string `json:"after"`
 	Limit    int    `json:"limit"`
 }
+
 // StorageCheckRequest asks for a connection check: ListBuckets, then one
 // bucket-level request on Bucket, or on the first listed bucket when empty.
 type StorageCheckRequest struct {

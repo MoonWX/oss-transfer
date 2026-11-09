@@ -36,7 +36,7 @@ The saved value becomes the node's target. It applies at once, ends any automati
 - A raised request limit takes effect gradually: after the restart the row shows *Automatically reduced* and then *Recovering gradually* while the active limit climbs by 20% every 10 seconds until it reaches the new value.
 - A changed `bandwidthBitsPerSecond` applies at once, since bandwidth is never lowered automatically. Bandwidth is enforced in whole bytes per second, so a value that is not a multiple of 8 is rounded down (500000004 becomes 500000000 bit/s).
 
-Changes from the console or CLI need no restart. Agents installed with Docker have no `service.json` and start with the defaults.
+Changes from the console or CLI need no restart. Agents installed with Docker have no `service.json` and start with the defaults. The `comparison` object in the same file limits the comparison results an Agent keeps ([result storage and retention](#result-storage-and-retention)).
 
 **Request limits are average rates.** Node and task request limits space requests evenly, one every 1/rate seconds, with no bursts, so fractions are valid: 0.5 means one request every 2 seconds. Node limits go down to 0.01 requests/s and task limits down to 0.000001. A task limit is divided among the task's nodes, and each node spaces requests by its own share: at 0.5/s on two busy nodes, each node sends one request every 4 seconds. Under a task limit, a node's first request of each type also waits one interval. Measured rates are averaged over 5 seconds and so change in steps of 0.2 requests/s per node: a node sending 0.5 requests/s shows 0.4 or 0.6.
 
@@ -241,11 +241,125 @@ Agents release scan batches after the Master durably saves, acknowledges and aut
 
 Under **Tools → Compare objects**, choose a single object or a bucket/prefix on each side. For prefix comparison, the source prefix is replaced with the target prefix: `images/a.jpg` under `images/` matches `backup/a.jpg` under `backup/`. An empty prefix covers the whole bucket. Results include objects missing from either side.
 
-**Metadata (quick)** compares size and transferable metadata through HEAD requests. It does not read object contents or prove byte equality. An ETag is not treated as a portable content hash: multipart uploads and different storage providers can produce different ETags for identical content.
+Each Agent runs one comparison at a time. The Master starts a comparison on an online Agent that is not running one, trying Agents of this version first, and the results stay on that Agent. From the CLI, use `object compare` ([CLI](cli.md#compare-stored-objects)).
 
-**Content SHA-256 (streaming)** reads both objects through streams and computes SHA-256. It does not create local object files, but it does transfer the full contents across the network and may incur storage read charges. Objects that change while being read are reported separately. A bucket-wide comparison is not an atomic snapshot; pause writes if you need a fixed dataset verified.
+**Metadata (does not read content)** sends a HEAD request for each object on both sides and compares the size, `Content-Type`, `Content-Encoding`, `Content-Disposition`, `Cache-Control` and custom metadata: the properties that transfers preserve. It does not read object contents, so matching metadata does not prove matching contents. Modification times and storage classes are not compared, and an ETag is not treated as a portable content hash: multipart uploads and different storage providers can produce different ETags for identical content. ETags serve only as a warning. When everything else matches and both ETags are plain MD5 ETags (32 hexadecimal digits, without the `-N` part count of a multipart upload) that differ, the result is *ETag differs* (`ETAG_MISMATCH`) instead of *Match*. The contents then probably differ, but not certainly: some services return MD5-like ETags that are not the MD5 of the contents, for example Amazon S3 for objects encrypted with SSE-KMS or SSE-C. Confirm such objects with a content comparison. When either ETag comes from a multipart upload, ETags are not compared.
 
-One comparison runs per Agent. Results are saved in batches; only differences and errors are retained. Each node keeps the latest 10 comparisons and the first 10,000 differences per comparison. Counts continue after that limit, and the page marks truncated results. Narrow the prefix to inspect remaining differences, or delete completed comparison results.
+**Content SHA-256 (streaming)** reads both objects completely, both sides at once, and compares their size and SHA-256; it does not compare metadata. Objects of different sizes are reported as different without being read. It does not create local object files, but it does transfer the full contents across the network and may incur storage read charges. Objects are read in 8 MiB ranges. A range that fails is read again up to three more times, after 1, 2 and 4 seconds, and a read that receives no data for 60 seconds counts as failed. Storage that does not serve byte ranges is read as one stream, up to three times per object. After reading, both objects are checked again with HEAD requests; an object that changed in the meantime is reported as *Changed during comparison*. Progress includes the bytes read on both sides, so a large object shows progress while it is being read.
+
+Each compared object gets one of these results:
+
+| Result | Console | Meaning |
+| --- | --- | --- |
+| `MATCH` | *Match* | Counted, not listed |
+| `DIFFERENT` | *Different* | Both objects exist and differ. The row names what differs: `size`, `contentType`, `contentEncoding`, `contentDisposition`, `cacheControl` or `metadata` in metadata mode; `size` or `sha256` in content mode |
+| `ETAG_MISMATCH` | *ETag differs* | Metadata mode only: everything compared matches, but the two plain MD5 ETags differ |
+| `MISSING_TARGET` | *Missing from target* | Only on the source; a HEAD request confirmed that the target object is missing |
+| `EXTRA_TARGET` | *Only on target* | Only on the target; a HEAD request confirmed that the source object is missing |
+| `CHANGED_DURING_COMPARE` | *Changed during comparison* | The object changed, appeared or disappeared on either side while it was compared; compare it again later |
+| `ERROR` | *Read failed* | One side could not be read; the row gives the cause ([errors and logs](#errors-and-logs)) |
+| `BOTH_MISSING` | *Missing on both sides* | Single-object comparison: neither key exists |
+
+Every result except `MATCH` is stored as a difference row. The counts cover every compared object; *differences* in the lists means every result except *Match*.
+
+**Speed.** An Agent compares up to 32 objects at once in metadata mode and up to 8 in content mode, and lists each side in pages of 1,000 keys. Comparisons have no task limits, but they share the node's request and bandwidth limits with the transfers on that node ([node limits](#node-limits)), so a large comparison and busy transfers slow each other down. In metadata mode each object costs a HEAD request on each side, so the default HEAD limit of 2,800 requests/s allows up to about 1,400 objects per second; the latency of the storage service often sets a lower rate. In content mode the reads of both sides count against the node bandwidth limit, so each byte counts twice: at the default 2,000 Mbps, a comparison covers up to about 125 MB of objects per second.
+
+### View results
+
+The page lists the comparisons of all nodes, newest first, with their status, source and target, mode, objects checked, differences, start time and node. Choose one to show it; its ID stays in the page address (`?comparison=ID`). The list refreshes every 5 seconds while a comparison runs. A comparison on a node that cannot be reached shows *Node unavailable*, without counts, and a note says how many nodes could not be reached; the comparison shows its status again once the node is back. Comparisons that their node has deleted, and comparisons on nodes removed from the cluster, are no longer listed.
+
+While a comparison runs, the page shows the objects checked, the rate in objects per second and the elapsed time, and in content mode the bytes read. The elapsed time counts only the time the comparison actually ran. The counts double as filters: *All differences* or a single result lists only those rows, while *Checked* and *Match* are plain counts. Each row shows the source and target keys, the result with the differing properties or the error and its detail, both sizes and, in content mode, both SHA-256 values. Rows are listed 100 per page with **Previous page** and **Next page**; while the comparison runs, the current page refreshes every 1.5 seconds without moving. When the selected result is rare in a long list, the page reads ahead several pages on its own; if it has still found nothing, **Keep searching** reads further.
+
+**Cancel comparison** stops a running comparison; a canceled prefix comparison can be resumed later ([resume a comparison](#resume-a-comparison)). **Delete comparison results** deletes a comparison that is not running; cancel a running one first. If a comparison has been deleted, for example by the retention rules, its page says so and stops refreshing.
+
+The API: `GET /api/master/comparisons` lists the comparisons; when some nodes do not answer, `complete` is `false` and `unavailableNodes` names them. `GET /api/master/comparisons/{id}?after=0&limit=1000&status=DIFFERENT,MISSING_TARGET` returns the comparison and a page of rows: `limit` is 1–1,000 (default 50), and `status` is optional. Continue with `after` set to the returned `nextAfter`, which is absent on the last page. A filtered page may hold fewer rows than `limit`, or none, and still have a `nextAfter`.
+
+### Export results
+
+**Export ZIP** in the console, or `object export` in the CLI ([CLI](cli.md#compare-stored-objects)), downloads a ZIP file (`comparison-ID.zip` from the console) with three files:
+
+| File | Contents |
+| --- | --- |
+| `differences.csv` | The stored rows in key order, with the columns `number`, `key`, `status`, `sourceKey`, `destinationKey`, `sourceSize`, `destinationSize`, `sourceSha256`, `destinationSha256`, `reasons` (separated by `;`), `error` and `errorDetail`. A status filter (`--status` in the CLI, `status` in the API) keeps only those results |
+| `retry-source-keys.incr` | The source key of every `MISSING_TARGET`, `DIFFERENT` and `ETAG_MISMATCH` row, one per line, whatever the status filter |
+| `summary.json` | The comparison (ID, node, status, mode, scope, source and target), its counts, `storedRows`, `exportedRows`, `statusFilter`, `complete` and `incompleteReasons`, `truncatedReason` and `lastStoredKey`, `retryStatuses`, `retryKeys`, `retryKeysOmitted`, `retryPrefixesMatch`, `csvEscaping`, and the start, end and export times |
+
+`complete` is `true` only when the comparison has completed, stored every difference and, without a status filter, the file holds all stored rows. Otherwise `incompleteReasons` names each reason: `NOT_COMPLETED:<status>`, `ROWS_TRUNCATED:<reason>` or `ROW_COUNT_MISMATCH`. A running comparison can be exported too: the file then holds the rows stored so far and is marked incomplete. The rows are read from the node page by page while the file downloads; if the node stops answering, the download fails instead of ending in a shortened file. The CLI also exports JSON Lines (`--format jsonl`): one stored row per line, as in the API, filtered like the CSV file and without a summary.
+
+**CSV escaping.** The CSV file is UTF-8 with standard quoting. So that spreadsheet programs do not run a key as a formula, every value that begins with `=`, `+`, `-`, `@`, `'`, a tab, CR or LF gets a leading apostrophe (`'`). To recover the exact value, remove one leading apostrophe from each value that begins with one. `retry-source-keys.incr` and JSON Lines hold the keys unchanged.
+
+**Transfer the listed objects again.** `retry-source-keys.incr` is a key list for `import-inventory` (see `oss-transfer-cli help tools`), which creates a task that copies each listed key from the source bucket to the same key in the target bucket. It therefore fits only when the comparison's source and target prefixes are equal (`retryPrefixesMatch` is `true`); otherwise the objects would be written under their source keys, so use a transfer task that replaces the prefix instead. Put the file in a directory of its own and add `--overwrite`: without it, the task skips objects that already exist on the target, which includes every `DIFFERENT` and `ETAG_MISMATCH` key. Remove the `ETAG_MISMATCH` keys first if a content comparison found those objects equal.
+
+```sh
+mkdir retry && unzip comparison-ID.zip retry-source-keys.incr -d retry
+oss-transfer-cli import-inventory source/photos target/archive retry --overwrite
+```
+
+The file leaves out keys that `import-inventory` cannot read: longer than 1,024 bytes, not valid UTF-8, containing NUL, CR or LF, or consisting only of whitespace. `retryKeysOmitted` counts them; find them in `differences.csv`. `import-inventory` accepts up to 10 million keys, or 1 GiB of keys, per file; split a longer list into several `.incr` files in the same directory, each of which becomes a task.
+
+The API: `GET /api/master/comparisons/{id}/export?format=zip&status=DIFFERENT` with a bearer token; `format` is `zip` (default) or `jsonl`.
+
+### Resume a comparison
+
+A prefix comparison records a checkpoint about once a second: the key up to which every object has been compared and counted. When the Agent restarts or is updated during a comparison, the comparison continues from its checkpoint once the Agent is running again, provided the node's storage connections have not changed since the comparison started. Otherwise it stays *Comparison interrupted* with the detail `storage connections changed; resume manually`.
+
+**Resume comparison** in the console, or `object resume ID` in the CLI, continues an interrupted, failed or canceled prefix comparison, for example once storage access has been fixed; canceling therefore also works as a pause. The comparison runs again on the node that holds its results, which must be online and not running another comparison, with the storage connections as they are now: make sure they still point to the same buckets. Both sides are listed again after the checkpoint key. Counts and stored differences continue, so no object is counted twice or skipped, and the elapsed time adds up. Objects that were in progress at the interruption, such as a large object being read in content mode, are compared again from the start. The API equivalent is `POST /api/master/comparisons/{id}/resume`.
+
+A resumed comparison is no more a snapshot than the original: changes made behind the checkpoint while it was stopped are not seen. Single-object comparisons, comparisons that could not save their results, and comparisons on Agents of 4.1.40 or earlier cannot be resumed; start them again.
+
+### Errors and logs
+
+A row that could not be read shows *Read failed* with a fixed message and a detail that names the side, the request, the HTTP status, the storage error code and the request ID to give the storage provider, for example `target HEAD: HTTP 403 AccessDenied (request ID 1A2B3C)`. Details never contain credentials, signatures, URLs or host names.
+
+A LIST request that fails with HTTP 5xx or 429, a throttling code such as `SlowDown`, a network error or a timeout (3 minutes per attempt) is retried up to 5 times, after 1, 2, 4, 8 and 16 seconds. Errors such as `AccessDenied` (HTTP 403), `NoSuchBucket` (HTTP 404) or `InvalidAccessKeyId` fail at once. Each HEAD request, retries included, is limited to 2 minutes.
+
+When a listing still fails, or the storage lists keys out of order, the comparison fails. The page shows *Comparison could not finish; check storage access and retry.* with a detail such as `source LIST: HTTP 403 AccessDenied (request ID 1A2B3C)` or `source listing is not in ascending byte order after key "…"`, and the Agent writes `comparison <ID> failed: <detail>` to its service log (`/opt/oss-transfer/agent/data/logs/service.log` on Linux). Fix the cause, then resume the comparison: it continues after the last key it had compared. A comparison whose results the Agent could not write fails with *Cannot save comparison results* and cannot be resumed; start it again.
+
+### Result storage and retention
+
+Results stay on the Agent that ran the comparison, in files under `comparisons` in its data directory (`dataDirectory` in `service.json`; `/opt/oss-transfer/agent/data/comparisons` on Linux), one subdirectory per comparison. They are not stored in `agent.db`, so they do not grow the database, and database backups and compaction leave them out ([database maintenance](database-maintenance.md#comparison-results)). With keys of about 40 bytes, a stored difference takes about 260 bytes, so 2 GiB holds about 8 million differences; longer keys, and the SHA-256 values of content mode, take more.
+
+Results are deleted automatically, but never those of the running comparison:
+
+- 30 days after a comparison ended;
+- while the comparisons on the node take more than 2 GiB together, the oldest finished comparison first;
+- while the node holds more than 500 comparisons, the oldest finished comparison first.
+
+These rules are applied when the Agent starts, whenever a comparison ends and every hour, so while a comparison runs, the total can exceed the budget until the next check deletes older results. **Delete comparison results** or `object delete` removes a comparison at once; its files are deleted in the background, also across restarts.
+
+A comparison stops storing differences, but goes on comparing and counting, when its own differences would take more than the whole budget (`STORAGE_BUDGET`), or when writing them would leave less than 1 GiB free on the disk that holds the data directory (`LOW_DISK_SPACE`). Its page then shows the reason and the last stored key: the rows are complete up to that key, and later differences are only counted. Raise the budget or free disk space, then compare again, or compare the remaining keys under narrower prefixes. A third reason, `LEGACY_LIMIT`, marks results of [older Agents](#older-agents), which store at most 10,000 differences.
+
+**Configuration file.** To change these limits, add a `comparison` object to the Agent's `service.json` and restart the Agent. Keys that are left out, or set to 0, keep their defaults:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `budgetBytes` | 2147483648 (2 GiB) | Total size of the stored differences on the node, and the most that one comparison stores; at least 67108864 (64 MiB) |
+| `retentionDays` | 30 | Days a comparison is kept after it ended; at most 3,650 |
+| `minimumFreeBytes` | 1073741824 (1 GiB) | Free space that storing differences leaves on the disk of the data directory |
+
+For example, to keep up to 10 GiB of differences for 90 days, add the object to the existing JSON object and keep the other keys:
+
+```json
+"comparison": {
+  "budgetBytes": 10737418240,
+  "retentionDays": 90
+}
+```
+
+A lower budget or retention deletes older results when the Agent starts. An unknown key or a value out of range keeps the Agent from starting, and the Master rejects a `comparison` object in its own `service.json`. Check the file with `--check-config` before restarting, as for [automatic reduction](#tune-automatic-reduction). The limit of 500 comparisons is fixed. Agents installed with Docker have no `service.json` and use the defaults.
+
+### Older Agents
+
+Agents of 4.1.40 or earlier keep their previous behavior until they are updated. They compare one object at a time, store only the first 10,000 differences of a comparison (the page then says that the node's version stores at most that many) and keep only their 10 most recent comparisons, deleting the oldest when another starts. They lack the ETag warning and error details, and on storage that reports listing times with milliseconds they mark almost every object *Changed during comparison*. A restart or update ends their running comparison for good. The Master lists, filters and exports the rows they stored, but an export cannot go beyond those 10,000 rows, and resuming is refused with *Update this node to resume comparisons*. New comparisons go to updated Agents first.
+
+Update the Agents ([update installed services](#update-installed-services)). The comparisons that an Agent kept from before its update stay readable, count as 512 bytes per difference toward the budget and are deleted under the same rules.
+
+### Limitations
+
+- A comparison is not a point-in-time snapshot: each object is compared when its turn comes. Pause writes if you need a fixed dataset verified.
+- Only S3-compatible object storage can be compared; local directories cannot.
+- Listings must return keys in ascending byte order, as S3 requires. Storage that lists in another order fails the comparison with a detail that names the key after which the order broke.
+- Keys are matched byte for byte after removing each prefix, without case folding, Unicode normalization or slash cleanup.
 
 ## Update installed services
 
@@ -253,7 +367,7 @@ Open **Tools → Software updates** to update the Master. Then open **Execution 
 
 Wait for active tasks to finish when possible. If you upgrade with tasks running, update the Master first, then one Agent at a time. The native installer asks the Master to reserve that Agent’s assignments during the upgrade before stopping it. The reservation ends after verified startup or a successful rollback and expires after 30 minutes if the installer cannot finish. An older Master must be upgraded before the Agent installer can use this protection.
 
-Online replacement supports managed native installations. The updater on the Master and on each Agent downloads the release itself, from GitHub or the JD Cloud OSS mirror, and verifies the archive before stopping the service; hosts without internet access upgrade with the [offline installation](offline-install.md#upgrade-and-reinstall) steps instead. The updater then runs the native installer in a separate process. The installer takes a temporary backup of the programs, configuration, service definition and stopped database. It deletes that backup after the new service passes its health check and confirms the installation. If startup fails, it attempts to restore the previous installation and keeps the recovery files. Agent transfers interrupted by the restart resume after it reconnects.
+Online replacement supports managed native installations. The updater on the Master and on each Agent downloads the release itself, from GitHub or the JD Cloud OSS mirror, and verifies the archive before stopping the service; hosts without internet access upgrade with the [offline installation](offline-install.md#upgrade-and-reinstall) steps instead. The updater then runs the native installer in a separate process. The installer takes a temporary backup of the programs, configuration, service definition and stopped database. It deletes that backup after the new service passes its health check and confirms the installation. If startup fails, it attempts to restore the previous installation and keeps the recovery files. Agent transfers interrupted by the restart resume after it reconnects; for a comparison that was running, see [resume a comparison](#resume-a-comparison).
 
 On Linux the update runs in a transient systemd unit named `oss-transfer-update-…`, which also works with systemd 219 (CentOS 7 / RHEL 7). Before systemd 236, a failed update leaves that unit listed as failed until you run `systemctl reset-failed`. Before systemd 240, systemd cannot report an update helper that fails to start; such an update is shown as failed after an hour without progress.
 

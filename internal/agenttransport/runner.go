@@ -66,7 +66,8 @@ func (r *Runner) Run(ctx context.Context) error {
 				return ctx.Err()
 			}
 			if errors.Is(err, ErrSession) {
-				return ErrSession
+				// Preserve ErrRevoked so the service can stop instead of restarting.
+				return err
 			}
 			if errors.Is(err, ErrNoCommand) {
 				continue

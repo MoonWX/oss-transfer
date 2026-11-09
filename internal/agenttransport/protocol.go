@@ -20,7 +20,20 @@ var (
 	ErrInvalidRequest      = errors.New("invalid agent command")
 	ErrIdempotencyConflict = errors.New("idempotency key was used with a different command")
 	ErrJournalFull         = errors.New("idempotency journal is full")
+	// ErrCredentialRejected is returned by an Authenticate function when the
+	// Master definitively does not accept a credential: the Agent was removed,
+	// its enrollment was revoked, or the credential is unknown. Transient
+	// registry failures must not use it.
+	ErrCredentialRejected = errors.New("agent credential was rejected")
+	// ErrRevoked reports that the Master definitively rejected this Agent. It
+	// also matches ErrSession for callers handling any inactive enrollment.
+	ErrRevoked error = revokedError{}
 )
+
+type revokedError struct{}
+
+func (revokedError) Error() string        { return "agent enrollment was revoked by the Master" }
+func (revokedError) Is(target error) bool { return target == ErrSession }
 
 // Session must come from the authenticated enrollment registry, never from a
 // caller-supplied node address. EnrollmentID changes whenever a node rejoins.

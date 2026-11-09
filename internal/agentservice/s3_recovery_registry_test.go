@@ -35,7 +35,7 @@ func uploadRecords(t *testing.T, db *state.Store) []transferstore.S3UploadRecord
 	return records
 }
 
-func TestS3RecoveryUsesExactSavedConnectionAndRetainsChangedConfigurations(t *testing.T) {
+func TestS3RecoveryUsesSavedConnectionAndRetainsChangedConfigurations(t *testing.T) {
 	for _, change := range []string{"unchanged", "missing", "endpoint", "region", "signature", "pathStyle", "accessKey", "secretKey", "token", "owner", "no-such-upload", "denied"} {
 		t.Run(change, func(t *testing.T) {
 			var requests atomic.Int32
@@ -99,8 +99,14 @@ func TestS3RecoveryUsesExactSavedConnectionAndRetainsChangedConfigurations(t *te
 				truth := true
 				current.UseV2SignerType = &truth
 			case "pathStyle":
-				falsity := false
-				current.PathStyleEnable = &falsity
+				// v4.1.41 recorded an unset choice as virtual-hosted; the
+				// upgrade resolves it to path-style for this IP endpoint.
+				// Addressing does not change who owns the upload.
+				record.Connection.PathStyle = false
+				if err := db.Update(func(tx *state.Tx) error { return tx.Put(s3UploadBucket, record.ID, record) }); err != nil {
+					t.Fatal(err)
+				}
+				current.PathStyleEnable = nil
 			case "accessKey":
 				current.AccessKey += "-new"
 			case "secretKey":
@@ -128,7 +134,7 @@ func TestS3RecoveryUsesExactSavedConnectionAndRetainsChangedConfigurations(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			if change == "unchanged" || change == "no-such-upload" {
+			if change == "unchanged" || change == "no-such-upload" || change == "pathStyle" {
 				if report.Removed != 1 || len(report.Retained) != 0 || len(uploadRecords(t, db)) != 0 || requests.Load() == 0 {
 					t.Fatalf("cleanup not confirmed: %+v requests=%d", report, requests.Load())
 				}

@@ -18,6 +18,7 @@ import {
 } from "@mui/icons-material";
 import { formatBytes, LoadingState, StatusChip } from "./Common";
 import { keyMappingLabels, type OssKeyMappingMode } from "../lib/ossKeyMapping";
+import { conflictPolicyLabel, taskConflictPolicy } from "../lib/conflictPolicy";
 import ChildRecovery from "./ChildRecovery";
 import LiveFileProgress from "./LiveFileProgress";
 import TransferStatistics from "./TransferStatistics";
@@ -102,15 +103,7 @@ export default function SubtaskDetails({
         [t("目标对象 Key"), task.keyMapping?.targetKey],
         [t("修改时间晚于"), timestamp(task.dateAfter)],
         [t("修改时间早于"), timestamp(task.dateBefore)],
-        [
-          t("冲突策略"),
-          task.conflictPolicy ||
-            (task.overwrite == null
-              ? null
-              : task.overwrite
-                ? "OVERWRITE"
-                : "SKIP"),
-        ],
+        [t("冲突策略"), conflictLabel(task)],
       ].filter(([, value]) => value != null && value !== "")
     : [];
   return (
@@ -261,4 +254,9 @@ export default function SubtaskDetails({
       )}
     </Box>
   );
+}
+
+function conflictLabel(task: Record<string, any>) {
+  const policy = taskConflictPolicy(task);
+  return policy == null ? null : conflictPolicyLabel(policy);
 }

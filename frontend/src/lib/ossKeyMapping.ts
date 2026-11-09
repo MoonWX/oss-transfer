@@ -83,10 +83,10 @@ export function mappingExample(
 ) {
   const sourceKey =
     sourceMode === "object"
-      ? sourceSelection || "backups/example.txt"
+      ? sourceSelection || "example.txt"
       : sourceMode === "prefix"
-        ? `${sourceSelection || "backups/"}example.txt`
-        : "backups/example.txt";
+        ? `${sourceSelection}example.txt`
+        : "example.txt";
   return `${JSON.stringify(sourceKey)} → ${JSON.stringify(mapDestinationKey(sourceKey, mapping))}`;
 }
 

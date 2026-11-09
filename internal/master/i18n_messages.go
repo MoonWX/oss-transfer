@@ -14,6 +14,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Agent update did not finish; inspect its service before retrying":    {"Agent update did not finish; inspect its service before retrying", "节点更新未完成，请检查节点服务后重试", "Agent の更新が完了していません。サービスを確認してから再試行してください"},
 	"Upgrade this Agent once with the installer to enable online updates": {"Upgrade this Agent once with the installer to enable online updates", "此节点需先用安装脚本升级一次，之后即可在线更新", "この Agent はインストーラーで一度更新すると、オンライン更新を利用できます"},
 	"Agent is offline": {"Agent is offline", "节点离线", "Agent がオフラインです"},
+
 	"Only older stable Agent releases can be updated":                                         {"Only older stable Agent releases can be updated", "仅支持将较旧的稳定版节点更新到 Master 版本", "Master より古い安定版の Agent のみ更新できます"},
 	"Version checking is unavailable":                                                         {"Version checking is unavailable", "当前不支持版本检测", "バージョンの確認は利用できません"},
 	"A version check is already running":                                                      {"A version check is already running", "正在检测版本，请稍候", "バージョンを確認中です"},
@@ -180,6 +181,9 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Invalid Agent credential":                                                          {"Invalid Agent credential", "节点凭据无效", "ノードの認証情報が無効です"},
 	"Change the initial password before continuing":                                     {"Change the initial password before continuing", "请先修改初始密码", "初期パスワードを変更してください"},
 	"Choose a password different from the initial password":                             {"Choose a password different from the initial password", "新密码不能与初始密码相同", "初期パスワードとは異なるパスワードを設定してください"},
+	"The password must be at least 8 characters":                                        {"The password must be at least 8 characters", "密码至少需要 8 个字符", "パスワードは 8 文字以上にしてください"},
+	"The password must not be the same as the user name":                                {"The password must not be the same as the user name", "密码不能与用户名相同", "パスワードをユーザー名と同じにすることはできません"},
+	"The new password must be different from the current password":                      {"The new password must be different from the current password", "新密码不能与当前密码相同", "新しいパスワードは現在のパスワードと異なるものにしてください"},
 	"Specify a storage connection and bucket as alias/bucket":                           {"Specify a storage connection and bucket as alias/bucket", "请按 alias/bucket 格式填写存储连接和存储桶", "ストレージ接続とバケットを alias/bucket の形式で指定してください"},
 	"Stop active tasks before removing this Agent":                                      {"Stop active tasks before removing this Agent", "请先停止执行中的任务，再移除此 Agent", "実行中のタスクを停止してから、この Agent を削除してください"},
 	"Stop or finish all local transfers before exporting":                               {"Stop or finish all local transfers before exporting", "请在所有本地迁移停止或完成后导出", "すべてのローカル転送を停止または完了してからエクスポートしてください"},

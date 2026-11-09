@@ -10,9 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
+
+// minPasswordLength mirrors the Master's rule (internal/auth.MinPasswordLength).
+const minPasswordLength = 8
 
 type cliSession struct {
 	Host  string `json:"host"`
@@ -260,9 +264,17 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		if err != nil {
 			return nil, err
 		}
-		next, err := client.passwordValue(opts, "new-password", "新密码：", input, false)
+		next, err := client.passwordValue(opts, "new-password", "新密码（至少 8 个字符，不能与用户名或当前密码相同）：", input, false)
 		if err != nil {
 			return nil, err
+		}
+		// The Master enforces the full rule (including the user name); checking
+		// the parts known here avoids typing a rejected password twice.
+		if utf8.RuneCountInString(next) < minPasswordLength {
+			return nil, cliErrorf("密码至少需要 8 个字符")
+		}
+		if next == old {
+			return nil, cliErrorf("新密码不能与当前密码相同")
 		}
 		if !hasPasswordSource(opts, "new-password") {
 			confirmation, err := client.promptPassword(input, "确认新密码：")

@@ -113,6 +113,11 @@ var cliMessages = map[string][2]string{
 	"最后连接":                                                      {"Last connected", "最終接続"},
 	"--clear-session-token 不能与 --session-token-env 或 --session-token-file 同时使用": {"--clear-session-token cannot be combined with --session-token-env or --session-token-file", "--clear-session-token は --session-token-env または --session-token-file と併用できません"},
 
+	// The password rule; the Master enforces the same one.
+	"新密码（至少 8 个字符，不能与用户名或当前密码相同）：": {"New password (at least 8 characters, different from the user name and the current password): ", "新しいパスワード（8 文字以上、ユーザー名や現在のパスワードとは異なるもの）: "},
+	"密码至少需要 8 个字符":                 {"The password must be at least 8 characters", "パスワードは 8 文字以上にしてください"},
+	"新密码不能与当前密码相同":                 {"The new password must be different from the current password", "新しいパスワードは現在のパスワードと異なるものにしてください"},
+
 	"不支持的语言 %q；请使用 auto、zh、en 或 ja":                               {"Unsupported language %q; use auto, zh, en or ja", "未対応の言語 %q。auto、zh、en または ja を指定してください"},
 	"CLI 配置文件无效: %s":                                              {"Invalid CLI configuration file: %s", "CLI 設定ファイルが無効です: %s"},
 	"CLI 配置目录无效: %s":                                              {"Invalid CLI configuration directory: %s", "CLI 設定ディレクトリが無効です: %s"},

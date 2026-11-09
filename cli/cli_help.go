@@ -457,6 +457,7 @@ const cliAuthHelp = `登录与账户
 本机服务运行用户或系统管理员可直接管理所属集群，无需 login。其他用户或集群使用账号登录。
 logout 仅注销账号会话，不移除本机服务访问权限；修改账号密码需先 login。
 默认用户名为 admin；其他账号使用 --username。终端中会隐藏密码输入，首次登录后需修改初始密码。
+新密码至少 8 个字符，且不能与用户名或当前密码相同。
 脚本可选择环境变量、文件或 stdin 输入密码。
 --password-stdin 从标准输入读取；文件读取使用 --password-file。
 修改密码的来源也可使用 --old-password-file / --new-password-file。

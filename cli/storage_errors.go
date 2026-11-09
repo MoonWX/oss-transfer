@@ -25,6 +25,9 @@ var (
 		{regexp.MustCompile(`(?i)x509:|tls: failed to verify certificate|certificate signed by unknown authority|certificate is not valid|certificate has expired`), "tls"},
 		{regexp.MustCompile(`(?:^|: )EOF\s*$|: EOF\b|unexpected EOF`), "eof"},
 	}
+	// The SDK reports an error it models (NoSuchBucket) as "<code>: <message>"
+	// after the response's request IDs, without the "api error" prefix.
+	storageModeledCode = regexp.MustCompile(`HostID: [^,]*, (\w+): `)
 	// Transport words alone are too general; classify only storage requests.
 	storageErrorContext = regexp.MustCompile(`operation error S3|api error |dial tcp|lookup \S|https?://|request send failed`)
 	storageLookupHost   = regexp.MustCompile(`lookup (\S+?)(?: on |: |$)`)
@@ -33,8 +36,12 @@ var (
 )
 
 func storageErrorKind(text string) string {
+	modeled := ""
+	if match := storageModeledCode.FindStringSubmatch(text); match != nil {
+		modeled = match[1]
+	}
 	for _, entry := range storageErrorCodes {
-		if strings.Contains(text, "api error "+entry.code) || strings.Contains(text, "<Code>"+entry.code+"</Code>") {
+		if strings.Contains(text, "api error "+entry.code) || strings.Contains(text, "<Code>"+entry.code+"</Code>") || modeled == entry.code {
 			return entry.kind
 		}
 	}

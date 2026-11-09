@@ -156,6 +156,9 @@ func TestTaskShowExplainsStorageFailureReasons(t *testing.T) {
 			"src-bucket.ot-eval-native-s3:8333 关闭了连接（EOF）"},
 		{`operation error S3: ListBuckets, https response error StatusCode: 403, api error SignatureDoesNotMatch: signature`, "签名不匹配"},
 		{`dial tcp 10.0.0.5:9000: connect: connection refused`, "10.0.0.5:9000 拒绝了连接"},
+		// The SDK reports NoSuchBucket, an error it models, without "api error".
+		{`operation error S3: ListObjectsV2, https response error StatusCode: 404, RequestID: 18E67EBE0619C75DC8DA4BE2, HostID: , NoSuchBucket: The specified bucket does not exist [storage response: http=404, content-type=application/xml, request-id=18E67EBE0619C75DC8DA4BE2, protocol=HTTP/1.1, connection=reused, idle-ms=11455, request-length=0, body=xml]`,
+			"存储桶不存在"},
 	} {
 		var out strings.Builder
 		renderTaskDetail(&out, map[string]interface{}{"taskIndex": 1, "status": "FAILED", "errorMessage": test.raw})

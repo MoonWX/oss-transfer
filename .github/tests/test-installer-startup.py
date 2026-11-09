@@ -499,7 +499,7 @@ rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
         return result
 
     def test_failed_maintenance_never_stops_agent_or_backs_up_database(self):
-        start = self.source.index('  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then\n    printf \'Protecting Agent tasks')
+        start = self.source.index('  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then\n    say \'Protecting Agent tasks')
         end = self.source.index('\nelif [[ -n "$adopt_config" ]]; then', start)
         section = self.source[start:end]
         failed = self.invoke(section, status=7)
@@ -511,7 +511,7 @@ rollback() { printf 'rollback\\n' >> "$TEST_ROOT/events"; exit 9; }
         self.assertEqual((self.root/'events').read_text().splitlines(), ['begin','stop','backup'])
 
     def test_explicit_rejoin_backs_up_without_authenticating_with_revoked_identity(self):
-        start = self.source.index('  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then\n    printf \'Protecting Agent tasks')
+        start = self.source.index('  if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then\n    say \'Protecting Agent tasks')
         end = self.source.index('\nelif [[ -n "$adopt_config" ]]; then', start)
         result = self.invoke('enrollment_requested=1\n' + self.source[start:end], status=7)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -553,7 +553,8 @@ class BackupRetentionTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         source = INSTALLER.read_text()
-        self.functions = source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
+        # The messages use the installer's say() for their language.
+        self.functions = installer_say(source) + source[source.index('maintain_backups() {'):source.index('\ncheck_backup_space() {')]
         candidate = self.root/'candidate'
         candidate.write_text('''#!/bin/sh
 printf '%s\\n' "$@" >> "$TEST_ROOT/arguments"
@@ -566,7 +567,12 @@ esac
         candidate.chmod(0o755)
 
     def invoke(self, action, fail=False):
-        body = '''set -eEuo pipefail
+        return subprocess.run(['bash','-c',self.invoke_body(),'test',action],
+                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL='1' if fail else '0'),
+                              text=True,capture_output=True,timeout=5)
+
+    def invoke_body(self):
+        return '''set -eEuo pipefail
 trap 'printf rollback >> "$TEST_ROOT/rollback"' ERR
 ''' + self.functions + '''
 work=$TEST_ROOT; filename=candidate
@@ -575,9 +581,6 @@ backup_dir="$TEST_ROOT/backup directory"; backup="$backup_dir/upgrade-1"
 maintain_backups "$1" || true
 printf 'installation continues\\n'
 '''
-        return subprocess.run(['bash','-c',body,'test',action],
-                              env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL='1' if fail else '0'),
-                              text=True,capture_output=True,timeout=5)
 
     def test_candidate_completes_only_the_named_backup(self):
         result = self.invoke('complete')
@@ -591,6 +594,10 @@ printf 'installation continues\\n'
         result = self.invoke('prune')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Removed 1 completed upgrade backup(s).', result.stdout)
+        chinese = subprocess.run(['bash','-c','lang=zh\n' + self.invoke_body(),'test','prune'],
+                                 env=dict(os.environ, TEST_ROOT=str(self.root), TEST_FAIL='0'),
+                                 text=True,capture_output=True,timeout=5)
+        self.assertIn('已清理 1 个已完成升级的旧备份。', chinese.stdout)
         self.assertNotIn('freedBytes', result.stdout)
         self.assertNotIn('--backup-entry', (self.root/'arguments').read_text())
 

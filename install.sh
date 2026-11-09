@@ -1677,7 +1677,7 @@ maintain_backups() {
   if [[ "$action" == prune ]]; then
     count=$(printf '%s\n' "$result" | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
     if [[ "$count" =~ ^[0-9]+$ ]] && ((count > 0)); then
-      printf 'Removed %s completed upgrade backup(s).\n' "$count"
+      printf "$(say 'Removed %s completed upgrade backup(s).' '已清理 %s 个已完成升级的旧备份。')\n" "$count"
     fi
   fi
 }
@@ -2055,7 +2055,7 @@ chmod 700 "$install_dir" "$config_dir" "$data_dir" "$backup_dir"
 if ((existed)); then
   backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
   owned_backup=$backup
-  printf 'Backup: %s\n' "$backup"
+  printf '%s: %s\n' "$(say 'Backup' '备份')" "$backup"
   if [[ -f "$binary" ]]; then cp -p "$binary" "$backup/binary"; fi
   cp -p "$config" "$backup/service.json"
   if [[ -f "$metadata" ]]; then cp -p "$metadata" "$backup/install.tsv"; fi
@@ -2063,7 +2063,7 @@ if ((existed)); then
   if active; then was_active=1; fi
   if [[ "$platform" == linux ]] && systemctl is-enabled --quiet "$service_name"; then was_enabled=1; fi
   if [[ "$role" == agent && "$enrollment_requested" == 0 ]]; then
-    printf 'Protecting Agent tasks during the upgrade...\n'
+    say 'Protecting Agent tasks during the upgrade...' '正在保护升级期间的 Agent 任务…'
     "$work/$filename" --config "$config" --upgrade-maintenance begin --upgrade-maintenance-file "$work/agent-maintenance.json"
     agent_maintenance_started=1
   fi
@@ -2076,7 +2076,7 @@ if ((existed)); then
 elif [[ -n "$adopt_config" ]]; then
   backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
   owned_backup=$backup
-  printf 'Backup: %s\n' "$backup"
+  printf '%s: %s\n' "$(say 'Backup' '备份')" "$backup"
   cp -p "$work/service.json" "$backup/service.json"
   "$work/$filename" --config "$backup/service.json" --backup-state "$backup/database"
 fi
@@ -2084,7 +2084,7 @@ if ((had_cli || had_cli_sidecars || had_data_cli_connections)); then
   if [[ -z "$backup" ]]; then
     backup=$(mktemp -d "$backup_dir/$service_name-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
     owned_backup=$backup
-    printf 'Backup: %s\n' "$backup"
+    printf '%s: %s\n' "$(say 'Backup' '备份')" "$backup"
   fi
   if ((had_cli)); then cp -p "$cli_path" "$backup/cli"; fi
   backup_cli_sidecars

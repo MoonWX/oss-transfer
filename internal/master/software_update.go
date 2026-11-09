@@ -44,6 +44,9 @@ func (s *Server) localSoftware() (softwareupdate.Info, softwareupdate.Status) {
 
 func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 	info, status := s.localSoftware()
+	// Capability details explain why online updates are unavailable and what
+	// to do instead; show them in the requested language.
+	info.Detail = localize(w, info.Detail)
 	replies, err := s.nodeReplies(r.Context(), "software_info")
 	if err != nil {
 		fail(w, 500, "Cannot read registered Agents")
@@ -79,6 +82,9 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			row["info"], row["update"] = reply.Value["info"], reply.Value["update"]
 			if agent, ok := reply.Value["info"].(map[string]any); ok {
+				if detail, ok := agent["detail"].(string); ok {
+					agent["detail"] = localize(w, detail)
+				}
 				version, _ := agent["version"].(string)
 				row["updateAvailable"] = newerSoftware(info.Version, version)
 				row["upgradeReason"] = agent["reason"]

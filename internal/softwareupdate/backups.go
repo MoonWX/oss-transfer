@@ -33,7 +33,7 @@ type BackupCleanup struct {
 }
 
 func (m *Manager) backupManager() (*backupretention.Manager, error) {
-	if !m.info.Supported {
+	if !m.Info().Supported {
 		return nil, errors.New("Backup maintenance requires a managed native installation")
 	}
 	installed, err := inspectInstallation(m.options, m.executable)
@@ -50,7 +50,7 @@ func (m *Manager) BackupStats(ctx context.Context) (BackupSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return BackupSummary{}, err
 	}
-	if !m.info.Supported {
+	if !m.Info().Supported {
 		return BackupSummary{Reason: "UNMANAGED"}, nil
 	}
 	manager, err := m.backupManager()

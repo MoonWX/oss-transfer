@@ -71,19 +71,42 @@ type Manager struct {
 	executable string
 	client     *client
 	launch     func(string, string, string) error
-	info       Info
 	lastCheck  time.Time
 	release    Release
+
+	infoMu sync.Mutex
+	info   Info
+	// probe re-evaluates update support; nil keeps info fixed. probedAt and
+	// now bound how often Info, which is read on every API request, re-reads
+	// the installation.
+	probe    func() Info
+	probedAt time.Time
+	now      func() time.Time
 }
+
+// infoRefresh bounds how long a changed host (for example a removed container
+// marker or a repaired installation) takes to be reflected without a restart.
+const infoRefresh = time.Minute
 
 func New(options Options) *Manager {
 	executable, _ := os.Executable()
-	m := &Manager{options: options, executable: executable, client: newClient(), launch: launchHelper}
-	m.info = Info{Role: options.Role, Version: options.Version, Commit: options.Commit, Platform: platform(), PrereleaseUpdates: true}
-	err := checkContainer()
-	var installed installation
-	if err == nil {
-		installed, err = inspectInstallation(options, executable)
+	m := &Manager{options: options, executable: executable, client: newClient(), launch: launchHelper, now: time.Now}
+	m.probe = func() Info { return evaluate(options, executable) }
+	m.info, m.probedAt = m.probe(), m.now()
+	return m
+}
+
+// evaluate reports whether this process can update itself. Installer metadata
+// beside the running binary identifies a native installation, even on a host
+// that looks like a container (for example a systemd container with
+// /.dockerenv); container markers decide only when no such metadata exists.
+func evaluate(options Options, executable string) Info {
+	info := Info{Role: options.Role, Version: options.Version, Commit: options.Commit, Platform: platform(), PrereleaseUpdates: true}
+	installed, err := inspectInstallation(options, executable)
+	if err != nil {
+		if container := checkContainer(); container != nil {
+			err = container
+		}
 	}
 	if err == nil {
 		err = hostSupport()
@@ -92,18 +115,27 @@ func New(options Options) *Manager {
 		err = checkInstallationPrivileges(installed)
 	}
 	if err != nil {
-		m.info.Reason, m.info.Detail = "UNMANAGED", err.Error()
+		info.Reason, info.Detail = "UNMANAGED", err.Error()
 		var unsupported *capabilityError
 		if errors.As(err, &unsupported) {
-			m.info.Reason = unsupported.code
+			info.Reason = unsupported.code
 		}
 	} else {
-		m.info.Supported = true
+		info.Supported = true
 	}
-	return m
+	return info
 }
 
-func (m *Manager) Info() Info { return m.info }
+func (m *Manager) Info() Info { return m.currentInfo(false) }
+
+func (m *Manager) currentInfo(force bool) Info {
+	m.infoMu.Lock()
+	defer m.infoMu.Unlock()
+	if m.probe != nil && m.now != nil && (force || m.now().Sub(m.probedAt) >= infoRefresh) {
+		m.info, m.probedAt = m.probe(), m.now()
+	}
+	return m.info
+}
 
 func (m *Manager) Check(ctx context.Context) (Release, error) {
 	m.mu.Lock()
@@ -175,10 +207,10 @@ func (m *Manager) Start(ctx context.Context, version string, allowPrerelease boo
 	if err := ctx.Err(); err != nil {
 		return Status{}, err
 	}
-	if !m.info.Supported {
-		message := m.info.Detail
+	if info := m.currentInfo(true); !info.Supported {
+		message := info.Detail
 		if message == "" {
-			message = m.info.Reason
+			message = info.Reason
 		}
 		return Status{}, errors.New(message)
 	}
@@ -297,16 +329,21 @@ func inspectInstallation(options Options, executable string) (installation, erro
 	return installed, nil
 }
 
-func checkHost() error {
-	if err := checkContainer(); err != nil {
-		return err
-	}
-	return hostSupport()
-}
+// checkHost runs in the update helper after inspectInstallation has confirmed
+// installer metadata, so container markers are not consulted again.
+func checkHost() error { return hostSupport() }
+
+// containerMarkers identify the published image and, without installer
+// metadata, any other container.
+var containerMarkers = []string{"/usr/local/share/oss-transfer/provenance.json", "/.dockerenv"}
+
+// ContainerUpdateMessage is localized by the Master; keep it in sync there.
+const ContainerUpdateMessage = "This node runs in a container; update it by pulling the new image and recreating the container (for example docker compose pull, then docker compose up -d)"
+
 func checkContainer() error {
-	for _, path := range []string{"/.dockerenv", "/usr/local/share/oss-transfer/provenance.json"} {
+	for _, path := range containerMarkers {
 		if _, err := os.Stat(path); err == nil {
-			return &capabilityError{"CONTAINER", "Container installations must be updated with Docker Compose"}
+			return &capabilityError{"CONTAINER", ContainerUpdateMessage}
 		}
 	}
 	return nil

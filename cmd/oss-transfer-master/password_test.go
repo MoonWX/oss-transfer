@@ -55,3 +55,15 @@ func TestResetAdministratorRequiresStoppedExistingDatabase(t *testing.T) {
 		t.Fatal("recovery did not print login credentials")
 	}
 }
+
+func TestInitialPasswordChangedNoticeDoesNotRepeatThePassword(t *testing.T) {
+	var log strings.Builder
+	initialPasswordChangedNotice(&log)("admin")
+	got := log.String()
+	if got != "Initial password for admin has been changed; the initial password printed earlier is no longer valid.\n" {
+		t.Fatalf("unexpected notice %q", got)
+	}
+	if strings.Contains(got, "Initial password:") {
+		t.Fatal("notice looks like a credential line")
+	}
+}

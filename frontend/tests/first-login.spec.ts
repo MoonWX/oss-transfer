@@ -155,3 +155,30 @@ test("the restricted user can sign out without entering the console", async ({
     state.requests.some((request) => request.path.startsWith("/api/master/")),
   ).toBe(false);
 });
+
+test("the password rule is shown and short or unchanged passwords are rejected before sending", async ({
+  page,
+}) => {
+  const state = await mockInitialLogin(page);
+  await page.goto("/");
+  await login(page);
+  await expect(
+    page.getByText("至少 8 个字符，不能与用户名或当前密码相同。"),
+  ).toBeVisible();
+  for (const [value, message] of [
+    ["abc", "密码至少需要 8 个字符"],
+    [initialPassword, "新密码不能与当前密码相同"],
+  ]) {
+    await page.getByLabel(/^新密码(?:\s*\*)?$/).fill(value);
+    await page.getByLabel(/^确认新密码(?:\s*\*)?$/).fill(value);
+    await page.getByRole("button", { name: "保存并继续", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(message);
+  }
+  expect(state.changes).toHaveLength(0);
+  await fillNewPassword(page);
+  await page.getByRole("button", { name: "保存并继续", exact: true }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+  expect(state.changes).toEqual([
+    { oldPassword: initialPassword, newPassword },
+  ]);
+});

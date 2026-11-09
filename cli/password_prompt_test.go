@@ -60,3 +60,30 @@ func TestNonInteractiveLoginDoesNotReadOrSendImplicitPassword(t *testing.T) {
 		t.Fatal("noninteractive input must be explicit")
 	}
 }
+
+func TestPasswordChangeShowsRuleAndRejectsKnownViolationsBeforeRequest(t *testing.T) {
+	for _, c := range []struct{ next, message string }{
+		{"short", "The password must be at least 8 characters"},
+		{"old password", "The new password must be different from the current password"},
+	} {
+		client := adminTestClient(t, func(http.ResponseWriter, *http.Request) {
+			t.Fatal("password breaking the rule was sent")
+		})
+		client.locale = "en"
+		var labels []string
+		values := []string{"old password", c.next, c.next}
+		client.passwordPrompt = func(_ io.Reader, label string) (string, error) {
+			labels = append(labels, label)
+			value := values[0]
+			values = values[1:]
+			return value, nil
+		}
+		_, err := runAuthCommand(client, "change-password", nil, strings.NewReader(""), "")
+		if err == nil || localizedCLIError("en", err) != c.message {
+			t.Fatalf("new password %q: %v", c.next, err)
+		}
+		if len(labels) != 2 || client.text(labels[1]) != "New password (at least 8 characters, different from the user name and the current password): " {
+			t.Fatalf("prompt does not state the password rule: %q", labels)
+		}
+	}
+}

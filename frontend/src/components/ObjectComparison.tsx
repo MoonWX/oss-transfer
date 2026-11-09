@@ -103,6 +103,9 @@ type Progress = {
   lastStoredKey?: string;
   bytesRead?: number;
   elapsedMillis?: number;
+  // How often the comparison continued from its checkpoint, e.g. after the
+  // node restarted.
+  resumes?: number;
   resumable?: boolean;
   startedAt?: string;
   endedAt?: string;
@@ -359,7 +362,8 @@ function statsText(progress: Progress) {
   const elapsedMillis = progress.elapsedMillis ?? 0;
   // Agents before results protocol 2 do not report the running time.
   if (elapsedMillis <= 0) return `${t("已检查")} ${count}`;
-  const perSecond = (progress.compared ?? 0) / (elapsedMillis / 1000);
+  const seconds = elapsedMillis / 1000;
+  const perSecond = (progress.compared ?? 0) / seconds;
   const values = {
     count,
     // Content mode can take longer than a second per object.
@@ -371,12 +375,21 @@ function statsText(progress: Progress) {
     ),
     elapsed: formatElapsed(elapsedMillis),
   };
-  return progress.mode === "content"
-    ? t("已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}", {
-        ...values,
-        bytes: formatBytes(progress.bytesRead),
-      })
-    : t("已检查 {count}，{rate} 个/秒，已用 {elapsed}", values);
+  if (progress.mode !== "content")
+    return t("已检查 {count}，{rate} 个/秒，已用 {elapsed}", values);
+  // Content mode reads whole objects: the read rate shows progress while a
+  // large object is still being checked, and is the only rate of one object.
+  const read = {
+    ...values,
+    bytes: formatBytes(progress.bytesRead),
+    byteRate: formatBytes((progress.bytesRead ?? 0) / seconds),
+  };
+  return progress.scope === "object"
+    ? t("已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）", read)
+    : t(
+        "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）",
+        read,
+      );
 }
 
 function truncationText(progress: Progress) {
@@ -662,7 +675,7 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
           }}
         >
           <Stack spacing={2}>
-            {field("sourceBucket", t("源 Bucket"), true)}
+            {field("sourceBucket", t("源存储桶"), true)}
             {field(
               "sourcePrefix",
               form.scope === "object" ? t("源对象 Key") : t("源前缀"),
@@ -670,7 +683,7 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
             )}
           </Stack>
           <Stack spacing={2}>
-            {field("destBucket", t("目标 Bucket"), true)}
+            {field("destBucket", t("目标存储桶"), true)}
             {field(
               "destPrefix",
               form.scope === "object" ? t("目标对象 Key") : t("目标前缀"),
@@ -680,7 +693,7 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
         </Box>
         <Typography variant="body2" color="text.secondary">
           {t(
-            "Bucket 填写连接名称/bucket。前缀留空比对整个存储桶，两端按去掉前缀后的 Key 对应。",
+            "存储桶填写为“连接名称/存储桶”，如 production/photos。前缀留空比对整个存储桶，两端按去掉前缀后的 Key 对应。",
           )}
         </Typography>
         <Alert severity="info">
@@ -1371,6 +1384,13 @@ function ComparisonResult({
               <Typography variant="body2">
                 {`${t("一致")} ${formatNumber(progress.matched)}`}
               </Typography>
+              {!!progress.resumes && (
+                <Typography variant="body2" color="text.secondary">
+                  {t("已从检查点继续 {count} 次（如节点重启后）", {
+                    count: formatNumber(progress.resumes),
+                  })}
+                </Typography>
+              )}
             </Box>
             <Box
               role="group"
@@ -1455,7 +1475,7 @@ function ComparisonResult({
                   disabled={exporting}
                   onClick={() => void exportResults()}
                 >
-                  {exporting ? t("正在准备下载") : t("导出 ZIP")}
+                  {exporting ? t("正在准备下载") : t("导出全部差异（ZIP）")}
                 </Button>
                 {!active && (
                   <Button
@@ -1476,6 +1496,16 @@ function ComparisonResult({
                   sx={{ mt: 1 }}
                 >
                   {t("从已比对到的位置继续，已统计的结果保留。")}
+                </Typography>
+              )}
+              {filter && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  component="p"
+                  sx={{ mt: 1 }}
+                >
+                  {t("导出包含全部已保存的差异，不受当前筛选影响。")}
                 </Typography>
               )}
             </Box>

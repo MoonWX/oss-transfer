@@ -77,9 +77,12 @@ test("one OSS migration with 128 execution shards occupies one row and opens agg
   await expect(page.getByText("共 1 个任务", { exact: false })).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(1);
   await expect(page.locator("tbody tr")).toContainText("16,384 / 16,384");
-  await expect(page.locator("tbody tr")).toContainText(
-    "master (10.0.1.12), agent (10.0.1.13)",
-  );
+  // Each node has its own line; the cell names them all.
+  await expect(
+    page
+      .locator("tbody tr")
+      .getByLabel("master (10.0.1.12), agent (10.0.1.13)", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "#8000", exact: true }).click();
   await revealChildren(page);
   await expect(

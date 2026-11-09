@@ -1138,3 +1138,46 @@ func TestComparisonCommandsAcceptIDsThatStartWithADash(t *testing.T) {
 		}
 	}
 }
+
+// A finished comparison without differences says so, and the checkpoint is
+// shown only where it can still be used: a listing that may be resumed.
+func TestComparisonStatusOmitsUnusableCheckpointAndSaysNoDifferences(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		overrides    map[string]interface{}
+		args         []string
+		wants, avoid []string
+	}{
+		{"completed", map[string]interface{}{"checkpoint": "2026/z.jpg", "compared": 5, "matched": 5, "rows": 0}, nil,
+			[]string{"未发现差异"}, []string{"检查点", "2026/z.jpg", "本页没有差异记录"}},
+		{"single object", map[string]interface{}{"scope": "object", "status": "INTERRUPTED", "resumable": true, "checkpoint": "a.bin", "compared": 0, "matched": 0, "rows": 0}, nil,
+			[]string{"本页没有差异记录"}, []string{"a.bin", "未发现差异"}},
+		{"interrupted listing", map[string]interface{}{"status": "INTERRUPTED", "resumable": true, "checkpoint": "2026/k.jpg", "compared": 5, "matched": 5, "rows": 0}, nil,
+			[]string{"检查点", "2026/k.jpg", "本页没有差异记录"}, []string{"未发现差异"}},
+		{"filtered", map[string]interface{}{"compared": 5, "matched": 5, "rows": 0}, []string{"--status", "DIFFERENT"},
+			[]string{"本页没有差异记录"}, []string{"未发现差异"}},
+	} {
+		page := comparisonTestPage(test.overrides)
+		args := append([]string{"--lang", "zh", "object", "status", "job-1"}, test.args...)
+		code, out, stderr := runMockCLI(t, args, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, page) })
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s: exit %d: %s %s", test.name, code, out, stderr)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s output lacks %q:\n%s", test.name, want, out)
+			}
+		}
+		for _, avoid := range test.avoid {
+			if strings.Contains(out, avoid) {
+				t.Errorf("%s output contains %q:\n%s", test.name, avoid, out)
+			}
+		}
+	}
+	code, out, _ := runMockCLI(t, []string{"--lang", "en", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) {
+		adminTestJSON(t, w, comparisonTestPage(map[string]interface{}{"compared": 5, "matched": 5, "rows": 0}))
+	})
+	if code != 0 || !strings.Contains(out, "No differences found") {
+		t.Fatalf("%d %s", code, out)
+	}
+}

@@ -1,7 +1,11 @@
 import { groupedCardRadius, radii } from "../theme";
 import { t as tr, useI18n, formatDate } from "../lib/i18n";
 import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
-import { taskNodeLabels, type NodeLabels } from "../lib/nodeRegistry";
+import {
+  taskNodeLabelList,
+  taskNodeLabels,
+  type NodeLabels,
+} from "../lib/nodeRegistry";
 import type { NodeRegistry } from "../lib/nodeRegistry";
 import { parentTaskFilterStates, taskStatusGroup } from "../lib/taskStatus";
 import {
@@ -54,6 +58,7 @@ import {
   CheckCircleOutlineRounded,
   CloseRounded,
   CloudSyncRounded,
+  CompareArrowsRounded,
   DeleteOutlineRounded,
   DownloadRounded,
   EastRounded,
@@ -80,6 +85,7 @@ import { downloadTaskReport } from "../lib/taskReport";
 import { byteProgress, shownProgress, taskPercent } from "../lib/taskProgress";
 import {
   keyMappingLabels,
+  mapDestinationKey,
   mappingExample,
   type OssKeyMappingMode,
 } from "../lib/ossKeyMapping";
@@ -111,6 +117,7 @@ import { runtimeMessageLines } from "../lib/runtimeMessages";
 import RuntimeMessageLine from "../components/RuntimeMessageLine";
 import { useStableMessages } from "../lib/stableMessages";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
+import GettingStarted from "../components/GettingStarted";
 import {
   EmptyState,
   ErrorAlert,
@@ -178,6 +185,48 @@ const taskWorkers = (task: Task): string[] =>
   ).filter(Boolean);
 const workers = (task: Task, resolve?: NodeLabels) =>
   taskNodeLabels(task, resolve);
+// The task list shows at most this many nodes; the rest are counted.
+const LISTED_NODES = 2;
+/** One node per line, so labels never wrap mid-name or around commas. */
+function TaskNodesCell({ task, resolve }: { task: Task; resolve: NodeLabels }) {
+  const labels = taskNodeLabelList(task, resolve);
+  if (!labels.length)
+    return <Typography variant="caption">{tr("等待分配")}</Typography>;
+  const rest = labels.length - LISTED_NODES;
+  return (
+    <Tooltip
+      title={
+        <Box component="ul" sx={{ m: 0, pl: 2 }}>
+          {labels.map((label, index) => (
+            <li key={index}>{label}</li>
+          ))}
+        </Box>
+      }
+    >
+      <Box
+        aria-label={labels.join(", ")}
+        sx={{ minWidth: 0, fontFamily: "var(--font-mono)" }}
+      >
+        {labels.slice(0, LISTED_NODES).map((label, index) => (
+          <Typography
+            key={index}
+            variant="caption"
+            component="div"
+            noWrap
+            sx={{ fontFamily: "inherit" }}
+          >
+            {label}
+          </Typography>
+        ))}
+        {rest > 0 && (
+          <Typography variant="caption" component="div" color="text.secondary">
+            {tr("另 {count} 个节点", { count: rest })}
+          </Typography>
+        )}
+      </Box>
+    </Tooltip>
+  );
+}
 function endpoint(task: Task, source: boolean) {
   const value = source ? task.sourceEndpoint : task.destinationEndpoint;
   if (
@@ -702,6 +751,33 @@ function TaskDetail({
       : current?.keyMapping?.mode === "REPLACE_PREFIX"
         ? current.keyMapping.sourcePrefix
         : undefined);
+  // Opens object comparison for this task's source and target, paired the
+  // way the task names target keys.
+  const comparisonLink = (() => {
+    if (!current || local || !current.sourceBucket || !current.destBucket)
+      return "";
+    const query = new URLSearchParams({
+      sourceBucket: [current.sourceS3Alias, current.sourceBucket]
+        .filter(Boolean)
+        .join("/"),
+      destBucket: [current.destS3Alias, current.destBucket]
+        .filter(Boolean)
+        .join("/"),
+    });
+    if (sourceObjectKey) {
+      query.set("sourceKey", sourceObjectKey);
+      query.set(
+        "destKey",
+        mapDestinationKey(sourceObjectKey, current.keyMapping),
+      );
+    } else {
+      const prefix = sourcePrefix || "";
+      const target = mapDestinationKey(prefix, current.keyMapping);
+      if (prefix) query.set("sourcePrefix", prefix);
+      if (target) query.set("destPrefix", target);
+    }
+    return `/tools?${query}`;
+  })();
   const shards = numberSubtasks(
     (view?.shards || []).filter(
       (shard) =>
@@ -1141,20 +1217,33 @@ function TaskDetail({
               />
             )}
           <Box sx={{ mb: 3 }}>
-            <Button
-              variant="outlined"
-              startIcon={
-                exporting ? (
-                  <CircularProgress size={16} color="inherit" />
-                ) : (
-                  <DownloadRounded />
-                )
-              }
-              disabled={exporting || !reportAvailable(current)}
-              onClick={() => void exportReport()}
-            >
-              {exporting ? tr("正在准备下载") : tr("导出任务报告")}
-            </Button>
+            <Stack direction="row" gap={1.5} flexWrap="wrap">
+              <Button
+                variant="outlined"
+                startIcon={
+                  exporting ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : (
+                    <DownloadRounded />
+                  )
+                }
+                disabled={exporting || !reportAvailable(current)}
+                onClick={() => void exportReport()}
+              >
+                {exporting ? tr("正在准备下载") : tr("导出任务报告")}
+              </Button>
+              {comparisonLink && (
+                <Button
+                  variant="outlined"
+                  startIcon={<CompareArrowsRounded />}
+                  component={RouterLink}
+                  to={comparisonLink}
+                  onClick={onClose}
+                >
+                  {tr("比对源和目标")}
+                </Button>
+              )}
+            </Stack>
             {!reportAvailable(current) && (
               <Typography
                 variant="caption"
@@ -2504,34 +2593,45 @@ export default function TasksPage({
         {loading && !data ? (
           <LoadingState />
         ) : !shown.length ? (
-          <EmptyState
-            title={
-              query || status || direction || worker
-                ? tr("没有匹配的任务")
-                : error
-                  ? tr("任务加载失败")
-                  : tr("暂无迁移任务")
-            }
-            description={
-              query || status || direction || worker
-                ? tr("请调整筛选条件或搜索关键词。")
-                : error
-                  ? tr("请检查连接后重试。")
-                  : tr("配置存储连接后创建迁移任务。")
-            }
-            action={
-              !query && !status && !direction && !worker && !error ? (
-                <Button
-                  component={RouterLink}
-                  to="/create"
-                  variant="contained"
-                  startIcon={<AddRounded />}
-                >
-                  {tr("创建迁移任务")}
-                </Button>
-              ) : undefined
-            }
-          />
+          <>
+            <EmptyState
+              title={
+                query || status || direction || worker
+                  ? tr("没有匹配的任务")
+                  : error
+                    ? tr("任务加载失败")
+                    : tr("暂无迁移任务")
+              }
+              description={
+                query || status || direction || worker
+                  ? tr("请调整筛选条件或搜索关键词。")
+                  : error
+                    ? tr("请检查连接后重试。")
+                    : tr("先添加执行节点和存储连接，再创建迁移任务。")
+              }
+              action={
+                !query && !status && !direction && !worker && !error ? (
+                  <Button
+                    component={RouterLink}
+                    to="/create"
+                    variant="contained"
+                    startIcon={<AddRounded />}
+                  >
+                    {tr("创建迁移任务")}
+                  </Button>
+                ) : undefined
+              }
+            />
+            {overview && !error && !data?.totalTasks && (
+              <Box
+                role="region"
+                aria-label={tr("开始使用")}
+                sx={{ maxWidth: 560, mx: "auto", px: 3, pb: 5 }}
+              >
+                <GettingStarted />
+              </Box>
+            )}
+          </>
         ) : (
           <>
             <TableContainer sx={{ display: { xs: "none", md: "block" } }}>
@@ -2584,7 +2684,7 @@ export default function TasksPage({
                       {tr("已迁移 / 已扫描")}
                     </TableCell>
                     <TableCell sx={{ width: 112 }}>{tr("状态")}</TableCell>
-                    <TableCell sx={{ width: 128 }}>{tr("执行节点")}</TableCell>
+                    <TableCell sx={{ width: 150 }}>{tr("执行节点")}</TableCell>
                     <TableCell align="right" sx={{ width: 75 }}>
                       {tr("失败")}
                     </TableCell>
@@ -2597,6 +2697,20 @@ export default function TasksPage({
                       key={task.taskIndex}
                       hover
                       selected={selectedSet.has(task.taskIndex)}
+                      // The whole row opens the details; its own controls
+                      // (selection, links and buttons) keep their action.
+                      onClick={(event) => {
+                        if (
+                          (event.target as HTMLElement).closest(
+                            "button, a, input, label",
+                          ) ||
+                          // Selecting text to copy does not open the details.
+                          !!window.getSelection()?.toString()
+                        )
+                          return;
+                        setDetailId(task.taskIndex);
+                      }}
+                      sx={{ cursor: "pointer" }}
                     >
                       {!overview && (
                         <TableCell padding="checkbox">
@@ -2638,15 +2752,7 @@ export default function TasksPage({
                         <TaskStatus task={task} />
                       </TableCell>
                       <TableCell>
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            overflowWrap: "anywhere",
-                            fontFamily: "var(--font-mono)",
-                          }}
-                        >
-                          {workers(task, nodeLabel)}
-                        </Typography>
+                        <TaskNodesCell task={task} resolve={nodeLabel} />
                         <Typography
                           variant="caption"
                           display="block"

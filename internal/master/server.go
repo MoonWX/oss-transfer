@@ -54,6 +54,9 @@ type Options struct {
 	AgentDockerImage     string
 	Assets               http.Handler
 	Now                  func() time.Time
+	// InitialPasswordChanged is called after an account replaces its initial
+	// (or reset) password, so the service log can say the printed one is void.
+	InitialPasswordChanged func(username string)
 }
 type Server struct {
 	localCLIKey      []byte
@@ -364,8 +367,12 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Incorrect current password")
 		return
 	}
-	if user.MustChangePassword && request.NewPassword == request.OldPassword {
-		fail(w, 400, "Choose a password different from the initial password")
+	if err := auth.CheckNewPassword(user.Username, request.OldPassword, request.NewPassword); err != nil {
+		if errors.Is(err, auth.ErrPasswordUnchanged) && user.MustChangePassword {
+			fail(w, 400, "Choose a password different from the initial password")
+			return
+		}
+		fail(w, 400, err.Error())
 		return
 	}
 	hash, err := auth.HashPassword(request.NewPassword)
@@ -398,6 +405,9 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 500, "Cannot save password")
 		return
+	}
+	if user.MustChangePassword && s.options.InitialPasswordChanged != nil {
+		s.options.InitialPasswordChanged(user.Username)
 	}
 	user.PasswordHash = ""
 	user.Revision++

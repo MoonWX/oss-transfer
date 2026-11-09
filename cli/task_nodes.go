@@ -323,7 +323,7 @@ func dashIfEmpty(value string) string {
 
 func renderTaskNodesView(out io.Writer, view map[string]interface{}) {
 	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
-	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true)
+	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true, getString(view, "status"))
 	renderTaskNodeNotes(out, view)
 	if view["editable"] == false {
 		fmt.Fprintf(out, cliText(out, "当前不能调整执行节点: %s\n"), safeCLIText(getString(view, "reason")))
@@ -371,7 +371,7 @@ func renderTaskNodesAccepted(out io.Writer, result, view map[string]interface{})
 		fmt.Fprintf(out, cliText(out, "移出: %s（%s）\n"), safeCLIText(strings.Join(removed, ", ")), mode)
 	}
 	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
-	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true)
+	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true, getString(view, "status"))
 	if view["pending"] == true {
 		fmt.Fprintf(out, cliText(out, "变更会在后台完成；查看进度: oss-transfer-cli task nodes %d --watch 5\n"), getInt(view, "taskId"))
 	}
@@ -396,7 +396,20 @@ func renderTaskNodeNotes(out io.Writer, membership map[string]interface{}) {
 	}
 }
 
-func renderTaskNodeRows(out io.Writer, nodes []map[string]interface{}, local bool) {
+// inactiveTaskNodeState names the state of every member of a task that is not
+// running: its nodes neither execute nor hold a share of the task limits.
+func inactiveTaskNodeState(out io.Writer, taskStatus string) string {
+	switch taskStatus {
+	case "STOPPED":
+		return cliText(out, "已停止")
+	case "COMPLETED", "FAILED", "PARTIAL_FAILED", "CANCELLED":
+		return cliText(out, "已结束")
+	}
+	return ""
+}
+
+func renderTaskNodeRows(out io.Writer, nodes []map[string]interface{}, local bool, taskStatus string) {
+	inactive := inactiveTaskNodeState(out, taskStatus)
 	if len(nodes) == 0 {
 		fmt.Fprintln(out, cliText(out, "暂无记录"))
 		return
@@ -433,7 +446,12 @@ func renderTaskNodeRows(out io.Writer, nodes []map[string]interface{}, local boo
 			}
 			qps = strings.Join(parts, " / ")
 		}
-		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s", safeCLIText(cliNodeLabel(node, identity, localeOf(out))), safeCLIText(identity), taskNodeState(out, node), scanner, pending, taskNodeDemand(out, node), bandwidth, qps)
+		state, demand := taskNodeState(out, node), taskNodeDemand(out, node)
+		if inactive != "" {
+			// The last runtime state and shares are stale once the task stops.
+			state, demand, bandwidth, qps = inactive, "—", "—", "—"
+		}
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s", safeCLIText(cliNodeLabel(node, identity, localeOf(out))), safeCLIText(identity), state, scanner, pending, demand, bandwidth, qps)
 		if local {
 			row += "\t" + safeCLIText(dashIfEmpty(getString(node, "localPath")))
 		}
@@ -493,6 +511,6 @@ func renderTaskMembership(out io.Writer, task map[string]interface{}) {
 		return
 	}
 	fmt.Fprintf(out, cliText(out, "执行节点成员（成员版本 %d）\n"), getInt(membership, "nodeRevision"))
-	renderTaskNodeRows(out, objectList(membership["nodes"]), false)
+	renderTaskNodeRows(out, objectList(membership["nodes"]), false, getString(task, "status"))
 	renderTaskNodeNotes(out, membership)
 }

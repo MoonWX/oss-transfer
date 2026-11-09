@@ -345,7 +345,23 @@ func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error)
 		fail(w, 404, "Comparison not found")
 		return
 	}
+	if comparisonNodeSilent(err) {
+		// Not a gateway failure the operator can act on: the node went away
+		// after its last poll. Its results stay there until it reconnects.
+		fail(w, 503, "The node holding this comparison did not respond; its results stay on that node and load again when it reconnects")
+		return
+	}
 	fail(w, 502, err.Error())
+}
+
+// comparisonNodeSilent reports an Agent call that got no answer: the node
+// stopped polling, lost its enrollment session, or never took the command.
+func comparisonNodeSilent(err error) bool {
+	var problem *AgentError
+	if errors.As(err, &problem) {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, agenttransport.ErrSession) || errors.Is(err, agenttransport.ErrNotDelivered)
 }
 
 // comparisonProgressReply prepares an Agent's Progress for a client: the

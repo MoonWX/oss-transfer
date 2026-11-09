@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { Box, Typography } from "@mui/material";
 import { getLocale, t, useI18n } from "../lib/i18n";
-import { buildAge } from "../lib/buildAge";
+import { buildAge, buildLabel } from "../lib/buildAge";
 
-declare const __BUILD_INFO__: { commit: string; builtAt: string };
+declare const __BUILD_INFO__: {
+  version?: string;
+  commit: string;
+  builtAt: string;
+};
 
-const { commit, builtAt } = __BUILD_INFO__;
+const { version, commit, builtAt } = __BUILD_INFO__;
 const builtTime = new Date(builtAt);
 
 export function BuildInfo() {
@@ -24,13 +28,16 @@ export function BuildInfo() {
       sx={{
         display: "flex",
         flexWrap: "wrap",
-        gap: 1,
+        columnGap: 1,
+        // The version and the build age share two lines of the sidebar foot.
         px: 2,
-        pt: 3,
+        pt: 1.5,
         fontSize: 11,
       }}
     >
-      <Box component="code">{commit}</Box>
+      <Box component="code" sx={{ whiteSpace: "nowrap" }}>
+        {buildLabel(version, commit)}
+      </Box>
       <Box
         component="time"
         dateTime={builtAt}

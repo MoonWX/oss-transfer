@@ -214,5 +214,43 @@ export const coreMessages: Record<string, { en: string; ja: string }> =
       ],
       ["构建于 {age}", "built {age}", "{age}にビルド"],
       ["不到 1 分钟前", "<1 min. ago", "1 分未満前"],
+      ["添加执行节点", "Add an execution node", "実行ノードを追加"],
+      [
+        "迁移由执行节点（Agent）完成。在执行节点页生成加入命令，并在要运行 Agent 的主机上执行。",
+        "Execution nodes (Agents) do the transfers. Create a join command on the Nodes page and run it on each host that should run an Agent.",
+        "転送は実行ノード（Agent）が行います。実行ノードのページで参加コマンドを作成し、Agent を動かすホストで実行してください。",
+      ],
+      [
+        "已添加 {count} 个节点",
+        "{count} nodes added",
+        "{count} 台のノードを追加済み",
+      ],
+      ["尚未添加节点", "No nodes yet", "ノードはまだありません"],
+      [
+        "已添加 {count} 个连接",
+        "{count} connections added",
+        "{count} 件の接続を追加済み",
+      ],
+      ["尚未添加连接", "No connections yet", "接続はまだありません"],
+      [
+        "至少 8 个字符，不能与用户名或当前密码相同。",
+        "At least 8 characters, different from the user name and the current password.",
+        "8 文字以上で、ユーザー名や現在のパスワードとは異なるものにしてください。",
+      ],
+      [
+        "密码至少需要 8 个字符",
+        "The password must be at least 8 characters",
+        "パスワードは 8 文字以上にしてください",
+      ],
+      [
+        "密码不能与用户名相同",
+        "The password must not be the same as the user name",
+        "パスワードをユーザー名と同じにすることはできません",
+      ],
+      [
+        "新密码不能与当前密码相同",
+        "The new password must be different from the current password",
+        "新しいパスワードは現在のパスワードと異なるものにしてください",
+      ],
     ].map(([source, en, ja]) => [source, { en, ja }]),
   );

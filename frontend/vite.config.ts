@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { buildCatalog } from "./src/locales/index.ts";
 
 let commit = process.env.VITE_BUILD_COMMIT || "unknown";
@@ -13,6 +14,17 @@ try {
     }).trim();
 } catch {
   // Source archives can be built without a Git checkout.
+}
+
+// The release version shown in the console, "v4.2.0"; the commit is secondary.
+let version = process.env.VITE_BUILD_VERSION || "";
+try {
+  version ||= readFileSync(
+    new URL("../VERSION", import.meta.url),
+    "utf8",
+  ).trim();
+} catch {
+  // A frontend built outside the repository shows only the commit.
 }
 
 // Serves each language's translations as its own module, so the application
@@ -38,6 +50,7 @@ function localeCatalogs(): Plugin {
 export default defineConfig({
   define: {
     __BUILD_INFO__: JSON.stringify({
+      version,
       commit,
       builtAt: process.env.VITE_BUILD_TIME || new Date().toISOString(),
     }),

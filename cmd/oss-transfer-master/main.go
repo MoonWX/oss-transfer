@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -167,7 +168,7 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 		return err
 	}
 	defer db.Close()
-	handler, initialPassword, err := master.New(db, master.Options{LocalCLIEnabled: true, DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater, ScanReleaseAllowed: servicehost.ScanReleasePermission(config.ReadyFile)})
+	handler, initialPassword, err := master.New(db, master.Options{LocalCLIEnabled: true, DataDirectory: config.DataDirectory, Assets: webui.Handler(assets), AgentArtifactBase: config.AgentArtifactBase, AgentArtifactVersion: config.AgentArtifactVersion, AgentDockerImage: config.AgentDockerImage, Updater: updater, ScanReleaseAllowed: servicehost.ScanReleasePermission(config.ReadyFile), InitialPasswordChanged: initialPasswordChangedNotice(os.Stdout)})
 	if err != nil {
 		return err
 	}
@@ -207,6 +208,15 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 			return err
 		}
 		return nil
+	}
+}
+
+// initialPasswordChangedNotice marks the earlier "Initial password" log line
+// as void, so a reader of old service or container logs does not mistake it
+// for a working credential. The password itself is never printed again.
+func initialPasswordChangedNotice(out io.Writer) func(string) {
+	return func(username string) {
+		fmt.Fprintf(out, "Initial password for %s has been changed; the initial password printed earlier is no longer valid.\n", username)
 	}
 }
 

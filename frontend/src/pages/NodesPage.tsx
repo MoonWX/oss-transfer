@@ -1,7 +1,7 @@
 import { radii } from "../theme";
 import { t, useI18n, formatDate } from "../lib/i18n";
 import { useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -126,7 +126,9 @@ export default function NodesPage() {
   const [nodeDelete, setNodeDelete] = useState<RegisteredNode | null>(null);
   const [nodeSaving, setNodeSaving] = useState(false);
   const [nodeError, setNodeError] = useState<string | null>(null);
-  const [inviteOpen, setInviteOpen] = useState(false);
+  // The first-run checklist links here with ?add=1 to open the add dialog.
+  const [params, setParams] = useSearchParams();
+  const [inviteOpen, setInviteOpen] = useState(() => params.get("add") === "1");
   const [detailNode, setDetailNode] = useState<RegisteredNode | null>(null);
   const knownWorkers = workers.data
     ? [
@@ -813,7 +815,18 @@ export default function NodesPage() {
       {inviteOpen && (
         <AgentInvitationDialog
           open
-          onClose={() => setInviteOpen(false)}
+          onClose={() => {
+            setInviteOpen(false);
+            if (params.has("add"))
+              setParams(
+                (previous) => {
+                  const next = new URLSearchParams(previous);
+                  next.delete("add");
+                  return next;
+                },
+                { replace: true },
+              );
+          }}
           onJoined={() => void refresh()}
         />
       )}

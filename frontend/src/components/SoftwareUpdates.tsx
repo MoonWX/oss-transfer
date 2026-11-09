@@ -18,14 +18,26 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { RefreshRounded, SystemUpdateAltRounded } from "@mui/icons-material";
+import {
+  ContentCopyRounded,
+  RefreshRounded,
+  SystemUpdateAltRounded,
+} from "@mui/icons-material";
 import { useSearchParams } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, useNotify } from "../lib/api";
+import { copyText } from "../lib/clipboard";
+import { containerAgentCommands } from "../lib/containerAgent";
 import { t, useI18n } from "../lib/i18n";
 import { displayNode, type NodeDisplay } from "../lib/nodeRegistry";
-import { isPrerelease, newerVersion, validVersion } from "../lib/semver";
+import {
+  displayVersion,
+  isPrerelease,
+  newerVersion,
+  validVersion,
+} from "../lib/semver";
 import BackupManagement from "./BackupManagement";
 
 type SoftwareInfo = {
@@ -72,6 +84,8 @@ type Snapshot = {
   checkedAt?: string;
   checking?: boolean;
   checkError?: string;
+  // The image container Agents are recreated from (Master 4.2 and later).
+  agentImage?: string;
 };
 type Target = {
   address?: string;
@@ -117,6 +131,55 @@ function reason(info?: SoftwareInfo | null) {
   return "";
 }
 
+const isContainer = (info?: SoftwareInfo | null) =>
+  info?.reason === "CONTAINER" || info?.reason === "container";
+
+function CommandBlock({ label, value }: { label: string; value: string }) {
+  const notify = useNotify();
+  return (
+    <Box>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={1}
+      >
+        <Typography variant="subtitle2">{label}</Typography>
+        <Button
+          size="small"
+          startIcon={<ContentCopyRounded />}
+          aria-label={t("复制{label}", { label })}
+          onClick={() =>
+            copyText(value).then(
+              () => notify(t("已复制")),
+              (e) =>
+                notify(e instanceof Error ? e.message : String(e), "error"),
+            )
+          }
+        >
+          {t("复制")}
+        </Button>
+      </Stack>
+      <Box
+        component="pre"
+        sx={{
+          m: 0,
+          mt: 0.5,
+          p: 1.5,
+          borderRadius: 1,
+          bgcolor: "action.hover",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12.5,
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {value}
+      </Box>
+    </Box>
+  );
+}
+
 export default function SoftwareUpdates({
   agentsOnly = false,
 }: {
@@ -135,6 +198,7 @@ export default function SoftwareUpdates({
     !agentsOnly &&
     params.get(prereleaseChannelParam) === prereleaseChannelValue;
   const [requestedVersion, setRequestedVersion] = useState("");
+  const [containerNode, setContainerNode] = useState<AgentSoftware>();
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const firstCheck = useRef(false);
@@ -288,6 +352,30 @@ export default function SoftwareUpdates({
       ? t("版本一致")
       : phaseText(node.update) || t("版本不一致");
   };
+  // Why a node's update button is disabled; empty when it can be updated.
+  const blockedReason = (node: AgentSoftware) => {
+    if (error) return t("无法读取版本信息，请刷新后重试。");
+    if (masterBusy) return t("Master 正在更新，完成后可更新执行节点。");
+    if (queueBusy || busyUpdate(node.update))
+      return t("已有更新正在进行，请稍候。");
+    if (node.unavailable) return t("节点离线，重新连接后可更新。");
+    if (isContainer(node.info))
+      return t(
+        "Docker 部署的节点不能在线更新，请在其主机上用新镜像重新创建容器（见“更新命令”）。",
+      );
+    if (node.upgradeReason === "LEGACY")
+      return t("此版本需先用安装脚本升级一次，之后可在这里更新。");
+    if (!node.info?.supported) return reason(node.info);
+    if (!newerVersion(version, node.info.version ?? ""))
+      return t("已与 Master 版本一致，无需更新。");
+    if (isPrerelease(version) && !node.info.prereleaseUpdates)
+      return t("此节点不支持在线安装预发布版本，请使用安装脚本升级。");
+    return "";
+  };
+  const containerCommands =
+    containerNode && snapshot?.agentImage
+      ? containerAgentCommands(snapshot.agentImage)
+      : undefined;
   return (
     <Stack gap={3}>
       {!agentsOnly && (
@@ -330,7 +418,9 @@ export default function SoftwareUpdates({
           >
             <Box>
               <Typography variant="subtitle1">Master</Typography>
-              <Typography variant="h5">{version || t("版本未知")}</Typography>
+              <Typography variant="h5">
+                {displayVersion(version) || t("版本未知")}
+              </Typography>
               <Typography color="text.secondary" variant="body2">
                 {master.info?.platform}
               </Typography>
@@ -338,7 +428,9 @@ export default function SoftwareUpdates({
             {snapshot?.available && snapshot.latest ? (
               <Stack gap={1} alignItems={{ sm: "flex-end" }}>
                 <Typography>
-                  {t("新版本 {version}", { version: snapshot.latest.version })}
+                  {t("新版本 {version}", {
+                    version: displayVersion(snapshot.latest.version),
+                  })}
                 </Typography>
                 <Button
                   variant="contained"
@@ -456,7 +548,7 @@ export default function SoftwareUpdates({
               <Typography variant="h6">{t("执行节点更新")}</Typography>
               <Typography variant="body2" color="text.secondary">
                 {t("更新至 Master {version}，逐台重启并恢复任务。", {
-                  version,
+                  version: displayVersion(version),
                 })}
               </Typography>
             </Box>
@@ -496,7 +588,9 @@ export default function SoftwareUpdates({
                 {snapshot.agents.map((node) => (
                   <TableRow key={node.address}>
                     <TableCell>{displayNode(node.address, node)}</TableCell>
-                    <TableCell>{node.info?.version || t("版本未知")}</TableCell>
+                    <TableCell>
+                      {displayVersion(node.info?.version) || t("版本未知")}
+                    </TableCell>
                     <TableCell>
                       <Stack gap={1}>
                         <Typography
@@ -515,21 +609,42 @@ export default function SoftwareUpdates({
                       </Stack>
                     </TableCell>
                     <TableCell align="right">
-                      <Button
-                        disabled={
-                          !eligible(node) || queueBusy || masterBusy || !!error
-                        }
-                        onClick={() => {
-                          setStartError("");
-                          setTarget({
-                            address: node.address,
-                            name: displayNode(node.address, node),
-                            version,
-                          });
-                        }}
+                      <Stack
+                        direction="row"
+                        justifyContent="flex-end"
+                        alignItems="center"
+                        gap={0.5}
                       >
-                        {t("更新")}
-                      </Button>
+                        {isContainer(node.info) &&
+                          !node.unavailable &&
+                          !!snapshot.agentImage &&
+                          newerVersion(version, node.info?.version ?? "") && (
+                            <Button
+                              size="small"
+                              onClick={() => setContainerNode(node)}
+                            >
+                              {t("更新命令")}
+                            </Button>
+                          )}
+                        <Tooltip title={blockedReason(node)}>
+                          {/* A disabled button gets no pointer events. */}
+                          <span>
+                            <Button
+                              disabled={!!blockedReason(node)}
+                              onClick={() => {
+                                setStartError("");
+                                setTarget({
+                                  address: node.address,
+                                  name: displayNode(node.address, node),
+                                  version,
+                                });
+                              }}
+                            >
+                              {t("更新")}
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -555,7 +670,9 @@ export default function SoftwareUpdates({
       >
         <DialogTitle>
           {target?.explicit
-            ? t("安装实验版本 {version}？", { version: target.version })
+            ? t("安装实验版本 {version}？", {
+                version: displayVersion(target.version),
+              })
             : t("更新 {name}", { name: target?.name ?? "" })}
         </DialogTitle>
         <DialogContent>
@@ -569,7 +686,7 @@ export default function SoftwareUpdates({
           <Typography>
             {t(
               "将安装 {version}，服务会重启。安装器会备份当前版本，启动失败时回退。",
-              { version: target?.version ?? "" },
+              { version: displayVersion(target?.version) },
             )}
           </Typography>
           {(target?.address || target?.allAgents) && (
@@ -610,6 +727,56 @@ export default function SoftwareUpdates({
               : target?.explicit
                 ? t("确认安装实验版本")
                 : t("确认更新")}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={!!containerNode}
+        onClose={() => setContainerNode(undefined)}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>
+          {t("更新 Docker 执行节点 {name}", {
+            name: containerNode
+              ? displayNode(containerNode.address, containerNode)
+              : "",
+          })}
+        </DialogTitle>
+        <DialogContent>
+          {containerCommands && (
+            <Stack gap={2.5}>
+              <Typography>
+                {t(
+                  "在该节点所在的主机上运行下面的命令，用镜像 {image} 重新创建容器。节点身份和配置保存在数据卷中，会保留；正在执行的子任务会中断，节点重新连接后自动恢复。",
+                  { image: snapshot?.agentImage ?? "" },
+                )}
+              </Typography>
+              <CommandBlock
+                label={t("用 docker run 加入的节点")}
+                value={containerCommands.run}
+              />
+              <Typography variant="body2" color="text.secondary">
+                {t(
+                  "创建容器时如果加了其他参数（如本地目录挂载），请在 docker run 中一并保留。",
+                )}
+              </Typography>
+              <CommandBlock
+                label={t("用安装脚本以 Docker Compose 部署的节点")}
+                value={containerCommands.compose}
+              />
+              <Typography variant="body2" color="text.secondary">
+                {t(
+                  "先把 compose 文件中的 image 改为 {image}，再运行上面的命令。安装时指定了其他目录时，请替换 compose 文件路径。",
+                  { image: snapshot?.agentImage ?? "" },
+                )}
+              </Typography>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setContainerNode(undefined)}>
+            {t("关闭")}
           </Button>
         </DialogActions>
       </Dialog>

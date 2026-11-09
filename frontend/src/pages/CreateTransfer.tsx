@@ -43,6 +43,7 @@ import {
   TuneRounded,
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
+import { useServerInfo } from "../lib/serverInfo";
 import type { NodeDisplay } from "../lib/nodeRegistry";
 import { useNodeLabels } from "../lib/workerStatus";
 import { PageHeader } from "../components/Common";
@@ -501,6 +502,8 @@ export default function CreateTransfer() {
   ];
 
   useI18n();
+  // Names the zone in which the Master reads the time filters.
+  const serverZone = useServerInfo().timeZone;
   const connections = useApi<{ configs: Connection[] }>(
     "/api/master/s3-config",
   );
@@ -1907,7 +1910,13 @@ export default function CreateTransfer() {
                         value={form.dateAfter}
                         onChange={(e) => update({ dateAfter: e.target.value })}
                         slotProps={{ inputLabel: { shrink: true } }}
-                        helperText={tr("时间按服务端时区解释。")}
+                        helperText={
+                          serverZone
+                            ? tr("时间按服务端时区（{zone}）解释。", {
+                                zone: serverZone,
+                              })
+                            : tr("时间按服务端时区解释。")
+                        }
                       />
                       <TextField
                         label={tr("修改时间早于（可选）")}

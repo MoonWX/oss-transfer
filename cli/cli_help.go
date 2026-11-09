@@ -169,6 +169,7 @@ const cliTaskCreateHelp = `创建迁移任务
   --distribution affinity|balanced  任务分发方式，默认 balanced
   --date-after YYYY-MM-DDTHH:mm:ss  对象更新时间起点
   --date-before YYYY-MM-DDTHH:mm:ss 对象更新时间终点，须晚于起点
+      不带时区的时间按 Master 所在时区解释；也可用带时区的 RFC 3339，如 2026-11-01T00:00:00+08:00
   --bandwidth-mbps <值>            任务带宽上限，0.1–1000000 Mbps
   --list-qps/--head-qps/--put-qps <值>  所有执行节点合计的任务请求上限
       --list-qps 同时限制 LIST 列举与 GET 对象读取
@@ -291,7 +292,7 @@ const cliAgentHelp = `Agent 管理
   oss-transfer-cli agent remove storage-node --yes
 
 --master-url 指定 Agent 可访问的 Master 地址；省略时使用 CLI 当前连接地址。
-邀请有效期为 30 分钟，仅可加入一次。在执行节点运行对应系统的原生部署指令；Docker 为可选方式。
+邀请有效期为 30 分钟，仅可加入一次。在要加入的主机上运行其中一条命令：Linux / macOS / FreeBSD 原生安装命令、Windows PowerShell 命令，或 Docker 命令（也适用于 Docker Desktop）。
 --local-root 使用 Agent 所在系统的绝对路径；配置会替换该节点已有的根目录列表。
 `
 
@@ -376,7 +377,7 @@ const cliExceptionsHelp = `异常记录
 
 类型
   failed     迁移失败对象
-  fallback   旧版 SDK 降级记录；Go 执行器返回不支持标记
+  fallback   旧版传输引擎的降级迁移记录；当前版本不再产生
   local      本地迁移失败
 
 查询

@@ -420,6 +420,7 @@ report は ZIP を保存し、結果ごとのオブジェクト数を表示し�
   --distribution affinity|balanced  Default balanced
   --date-after YYYY-MM-DDTHH:mm:ss   Modified after this time
   --date-before YYYY-MM-DDTHH:mm:ss  Modified before this time; later than the start
+      Times without a zone use the Master's time zone; RFC 3339 with an offset also works, e.g. 2026-11-01T00:00:00+08:00
   --bandwidth-mbps <value>           Additional task limit, 0.1–1000000 Mbps
   --list-qps/--head-qps/--put-qps <value>  Task request limits across all selected nodes
       --list-qps covers both LIST operations and GET object reads.
@@ -470,6 +471,7 @@ check the task list before retrying there. Creation is never retried automatical
   --distribution affinity|balanced  既定: balanced
   --date-after YYYY-MM-DDTHH:mm:ss   更新日時の開始条件
   --date-before YYYY-MM-DDTHH:mm:ss  更新日時の終了条件。開始より後を指定
+      タイムゾーンのない時刻は Master のタイムゾーンで解釈されます。オフセット付きの RFC 3339（例: 2026-11-01T00:00:00+08:00）も使えます
   --bandwidth-mbps <値>              タスクの追加上限。0.1～1000000 Mbps
   --list-qps/--head-qps/--put-qps <値>  選択した全ノード合計のタスクリクエスト上限
       --list-qps は LIST 列挙と GET オブジェクト読み取りの両方に適用。
@@ -629,7 +631,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   oss-transfer-cli agent remove storage-node --yes
 
 --master-url sets the address Agents use to reach Master; it defaults to the current CLI connection address.
-Invitations expire after 30 minutes and can be used once. Run the native installation command for the Agent OS; Docker is optional.
+Invitations expire after 30 minutes and can be used once. On the host to add, run one of the commands: the native installer for Linux, macOS or FreeBSD, the Windows PowerShell command, or the Docker command (also for Docker Desktop).
 --local-root uses absolute paths on the Agent OS and replaces the existing root list.
 `, `Agent 管理
 使い方: oss-transfer-cli agent <サブコマンド> [引数]
@@ -650,7 +652,7 @@ Invitations expire after 30 minutes and can be used once. Run the native install
   oss-transfer-cli agent remove storage-node --yes
 
 --master-url は Agent が接続する Master の URL です。省略時は CLI の接続先を使用します。
-招待の有効期限は 30 分で、1 回のみ使用できます。Agent の OS に対応するネイティブインストールコマンドを実行してください。Docker は任意です。
+招待の有効期限は 30 分で、1 回のみ使用できます。追加するホストで、Linux / macOS / FreeBSD のネイティブインストールコマンド、Windows PowerShell コマンド、Docker コマンド（Docker Desktop でも可）のいずれかを実行してください。
 --local-root は Agent の OS 上の絶対パスです。既存のルート一覧を置き換えます。
 `},
 	cliSetupHelp: {`First login
@@ -791,7 +793,7 @@ bandwidth の既定単位は Mbps、他の制限は回/秒で、--unit は使え
 	cliExceptionsHelp: {`Exception records
 Usage: oss-transfer-cli exceptions list|export|clear <type> [options]
 
-Types: failed (failed objects), fallback (legacy SDK records; unsupported by Go), local (local failures).
+Types: failed (failed objects), fallback (fallback transfers of the legacy engine; the current version no longer creates them), local (local failures).
   list failed|fallback [--task-id ID] [--source-bucket BUCKET] [--dest-bucket BUCKET]
                        [--worker NODE] [--limit 1000]
   list local [--task-id ID] [--worker NODE] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]
@@ -814,7 +816,7 @@ truncatedWorkers; use ZIP reports for more records. A downloaded report does not
 `, `例外記録
 使い方: oss-transfer-cli exceptions list|export|clear <種別> [オプション]
 
-種別: failed（失敗オブジェクト）、fallback（旧 SDK 記録。Go は未対応）、local（ローカル転送の失敗）。
+種別: failed（失敗オブジェクト）、fallback（旧転送エンジンの代替転送の記録。現在のバージョンでは作成されません）、local（ローカル転送の失敗）。
   list failed|fallback [--task-id ID] [--source-bucket バケット] [--dest-bucket バケット]
                        [--worker ノード] [--limit 1000]
   list local [--task-id ID] [--worker ノード] [--direction OSS_TO_LOCAL|LOCAL_TO_OSS]

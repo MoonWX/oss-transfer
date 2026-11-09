@@ -157,6 +157,31 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   重试结果: { en: "Retry result", ja: "再試行の結果" },
   重试结果时间: { en: "Retry result time", ja: "再試行の結果日時" },
   重试错误: { en: "Retry error", ja: "再試行のエラー" },
+  重试原因: { en: "Retry reason", ja: "再試行の理由" },
+  "源对象在扫描后已变化，重试会读取其当前版本": {
+    en: "The source object changed after the scan; a retry copies its current version",
+    ja: "スキャン後にソースオブジェクトが変更されました。再試行すると現在のバージョンをコピーします",
+  },
+  "源对象已在源端删除，已跳过": {
+    en: "The source object was deleted at the source and was skipped",
+    ja: "ソースオブジェクトはソース側で削除されたため、スキップしました",
+  },
+  "{node} 最后连接于 {time}": {
+    en: "{node} last connected at {time}",
+    ja: "{node} の最終接続: {time}",
+  },
+  "{node} 尚未连接": {
+    en: "{node} has not connected yet",
+    ja: "{node} はまだ接続していません",
+  },
+  "另有 {count} 个：{message}": {
+    en: "{count} more: {message}",
+    ja: "ほかに {count} 件: {message}",
+  },
+  "可在“异常记录”中查看失败对象并重试。": {
+    en: "Open Exceptions to see the failed objects and retry them.",
+    ja: "「エラー記録」で失敗したオブジェクトを確認して再試行できます。",
+  },
   未重试: { en: "Not retried", ja: "未再試行" },
   重试中: { en: "Retrying", ja: "再試行中" },
   已恢复: { en: "Recovered", ja: "復旧済み" },

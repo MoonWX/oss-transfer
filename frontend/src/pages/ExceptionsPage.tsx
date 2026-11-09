@@ -10,6 +10,7 @@ import {
   exceptionCsv,
   exceptionDetails,
   retryResultLabel,
+  exceptionReasonLabel,
   missingExceptionNodes,
 } from "../lib/exceptionRecords";
 import {
@@ -100,6 +101,8 @@ type Failure = {
   retryStatus?: string;
   retryUpdatedAt?: number;
   retryError?: string;
+  reasonCode?: string;
+  retryReasonCode?: string;
   retryGeneration?: number;
   retryExecutionNodeIp?: string;
   retryExecutionNodeDisplay?: NodeDisplay;
@@ -1450,6 +1453,16 @@ export default function ExceptionsPage() {
                             {item.errorCode}
                           </Typography>
                         )}
+                        {exceptionReasonLabel(item.reasonCode) && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                            data-testid="exception-reason"
+                          >
+                            {tr(exceptionReasonLabel(item.reasonCode)!)}
+                          </Typography>
+                        )}
                         <Typography
                           variant="caption"
                           color="text.secondary"
@@ -1514,6 +1527,16 @@ export default function ExceptionsPage() {
                               {new Date(item.retryUpdatedAt).toLocaleString(
                                 getLocale(),
                               )}
+                            </Typography>
+                          )}
+                          {exceptionReasonLabel(item.retryReasonCode) && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                              data-testid="exception-retry-reason"
+                            >
+                              {tr(exceptionReasonLabel(item.retryReasonCode)!)}
                             </Typography>
                           )}
                           {item.retryStatus === "FAILED" && item.retryError && (
@@ -1663,13 +1686,16 @@ export default function ExceptionsPage() {
                     >
                       {key === "retryStatus"
                         ? tr(retryResultLabel(String(value)))
-                        : typeof value === "boolean"
-                          ? tr(value ? "是" : "否")
-                          : date
-                            ? new Date(String(value)).toLocaleString(
-                                getLocale(),
-                              )
-                            : String(value)}
+                        : (key === "reasonCode" || key === "retryReasonCode") &&
+                            exceptionReasonLabel(value)
+                          ? `${tr(exceptionReasonLabel(value)!)} (${String(value)})`
+                          : typeof value === "boolean"
+                            ? tr(value ? "是" : "否")
+                            : date
+                              ? new Date(String(value)).toLocaleString(
+                                  getLocale(),
+                                )
+                              : String(value)}
                     </Typography>
                     <Divider sx={{ mt: 1.5 }} />
                   </Box>

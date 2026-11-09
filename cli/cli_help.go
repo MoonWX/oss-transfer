@@ -336,7 +336,7 @@ const cliLimitHelp = `节点限速
   list                            查看目标上限、运行上限和自动调节状态
   set <list|put|head|bandwidth> <数值|unlimited> (--worker 节点|--all)
        [--unit bps|Kbps|Mbps|Gbps]
-  history [--limit 50]             查看各节点最近的调节记录，最多 1000 条/节点
+  history [--limit 50]             查看所有节点最近的调节记录，按时间倒序；--limit 为合计 1–200 条
   adjustment --worker 节点 --event-id ID [--cursor 游标]
 
 示例

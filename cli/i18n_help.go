@@ -710,7 +710,7 @@ Usage: oss-transfer-cli limit <subcommand> [arguments]
   list                            Target/running limits and automatic adjustment status
   set <list|put|head|bandwidth> <value|unlimited> (--worker NODE|--all)
        [--unit bps|Kbps|Mbps|Gbps]
-  history [--limit 50]             Recent changes; maximum 1000 per node
+  history [--limit 50]             Recent changes across all nodes, newest first; --limit is 1–200 in total
   adjustment --worker NODE --event-id ID [--cursor CURSOR]
 
   oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
@@ -730,7 +730,7 @@ Adjustment details retain nextCursor, done, historyComplete and process restart 
   list                            目標上限、動作上限、自動調整の状態を表示
   set <list|put|head|bandwidth> <値|unlimited> (--worker ノード|--all)
        [--unit bps|Kbps|Mbps|Gbps]
-  history [--limit 50]             最近の調整。ノードごとに最大 1000 件
+  history [--limit 50]             全ノードの最近の調整（新しい順）。--limit は合計 1～200 件
   adjustment --worker ノード --event-id ID [--cursor カーソル]
 
   oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2

@@ -90,7 +90,7 @@ func TestAdminRateConversionAndExplicitScope(t *testing.T) {
 		{"set", "put", "100", "--all", "--worker", "10.0.0.2"},
 		{"set", "put", "100", "--all", "--unit", "Mbps"},
 		{"set", "bandwidth", "100", "--all", "--unit", "MBps"},
-		{"history", "--limit", "-1"}, {"history", "--limit", "1001"},
+		{"history", "--limit", "-1"}, {"history", "--limit", "0"}, {"history", "--limit", "201"},
 	}
 	for _, args := range invalid {
 		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -446,10 +446,11 @@ func TestAdminObjectComparePreservesExactKeysAndPartialResponse(t *testing.T) {
 }
 
 func TestAdminHistoryAndAdjustmentKeepPagination(t *testing.T) {
+	wantLimit := "50"
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/master/rate-limit/history" {
-			if r.URL.Query().Get("limit") != "50" {
-				t.Fatalf("default limit changed: %s", r.URL)
+			if r.URL.Query().Get("limit") != wantLimit {
+				t.Fatalf("history limit = %s, want %s", r.URL, wantLimit)
 			}
 			adminTestJSON(t, w, map[string]interface{}{"success": true, "partial": true, "failedWorkers": []string{"10.0.0.3"}})
 			return
@@ -462,9 +463,28 @@ func TestAdminHistoryAndAdjustmentKeepPagination(t *testing.T) {
 	if result, err := runAdminCommand(client, "limit", []string{"history"}); err != nil || result["partial"] != true {
 		t.Fatalf("history: %#v, %v", result, err)
 	}
+	// The Master accepts at most 200 records in total across all nodes.
+	wantLimit = "200"
+	if _, err := runAdminCommand(client, "limit", []string{"history", "--limit", "200"}); err != nil {
+		t.Fatalf("history --limit 200: %v", err)
+	}
 	result, err := runAdminCommand(client, "limit", []string{"adjustment", "--worker", "10.0.0.2", "--event-id", "event/&+", "--cursor", "next+page"})
 	if err != nil || result["historyComplete"] != false || result["nextCursor"] != "later" {
 		t.Fatalf("adjustment: %#v, %v", result, err)
+	}
+}
+
+func TestLimitHistoryHelpStatesTotalLimitInEveryLanguage(t *testing.T) {
+	for locale, want := range map[cliLocale]string{localeZH: "--limit 为合计 1–200 条", localeEN: "--limit is 1–200 in total", localeJA: "--limit は合計 1～200 件"} {
+		line := ""
+		for _, candidate := range strings.Split(helpForLocale([]string{"limit"}, locale), "\n") {
+			if strings.Contains(candidate, "history [--limit 50]") {
+				line = candidate
+			}
+		}
+		if !strings.Contains(line, want) || strings.Contains(line, "1000") {
+			t.Errorf("%s limit history help = %q, want %q", locale, line, want)
+		}
 	}
 }
 

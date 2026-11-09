@@ -226,6 +226,13 @@ var cliMessages = map[string][2]string{
 	"请求上限":     {"Request limits", "リクエスト上限"},
 	"所有执行节点合计": {"All execution nodes combined", "全実行ノードの合計"},
 	"每个执行节点":   {"Per execution node", "実行ノードごと"},
+	// task limits/bandwidth: legacy limit and whether the execution nodes applied them.
+	"旧版带宽上限":    {"Legacy bandwidth limit", "旧版の帯域幅上限"},
+	"生效状态":      {"Application status", "適用状況"},
+	"所有执行节点已生效": {"Applied on all execution nodes", "すべての実行ノードに適用済み"},
+	"正在同步到执行节点": {"Syncing to execution nodes", "実行ノードに同期中"},
+	"部分节点未生效":   {"Not applied on all nodes", "一部のノードで未適用"},
+	"未生效":       {"Not applied", "未適用"},
 
 	"任务带宽": {"Task bandwidth", "タスク帯域幅"},
 	"任务带宽为 0.1–1000000 Mbps；取消额外限制使用 unlimited": {"Task bandwidth must be 0.1–1000000 Mbps; use unlimited to remove the extra limit", "タスク帯域幅は 0.1～1000000 Mbps で指定してください。追加の制限を解除するには unlimited を使用してください"},

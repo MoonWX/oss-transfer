@@ -440,7 +440,8 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 			return
 		}
 	}
-	if renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) || renderTaskNodesResult(out, result) {
+	// Task limits list their execution nodes too: match them before the node table.
+	if renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) || renderTaskNodesResult(out, result) || renderTaskLimitsResult(out, result) {
 		return
 	}
 	if renderAdminTable(out, result, data) {
@@ -744,18 +745,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	}
 	fields = append(fields, cliTaskRequestRates(out, task)...)
 	if limits, ok := task["requestLimits"].(map[string]interface{}); ok {
-		scope := cliText(out, "所有执行节点合计")
-		if getString(limits, "scope") == "PER_NODE" {
-			scope = cliText(out, "每个执行节点")
-		}
-		fields = append(fields, [2]string{cliText(out, "请求上限范围"), scope})
-		for _, request := range []struct{ field, label string }{{"listQps", "LIST / GET QPS"}, {"headQps", "HEAD QPS"}, {"putQps", "PUT QPS"}} {
-			value := cliText(out, "仅受节点上限约束")
-			if qps := getFloat(limits, request.field); qps > 0 {
-				value = strconv.FormatFloat(qps, 'f', -1, 64)
-			}
-			fields = append(fields, [2]string{request.label, value})
-		}
+		fields = append(fields, cliTaskRequestLimitFields(out, limits)...)
 	}
 	fields = append(fields, cliTaskScopeFields(task)...)
 	for _, key := range []string{"errorCode", "errorMessage"} {

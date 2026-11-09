@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
+	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
@@ -21,8 +22,9 @@ import (
 //     and, if needed, the scan. Only then are the other shares raised.
 
 type memberCapabilities struct {
-	LeaseProtocol         int `json:"leaseProtocol"`
-	QueuedHandoffProtocol int `json:"queuedHandoffProtocol"`
+	LeaseProtocol          int `json:"leaseProtocol"`
+	QueuedHandoffProtocol  int `json:"queuedHandoffProtocol"`
+	ConflictPolicyProtocol int `json:"conflictPolicyProtocol"`
 }
 
 func (t *taskRuntime) capabilities(ctx context.Context, node task.Node) (memberCapabilities, error) {
@@ -37,6 +39,12 @@ func (t *taskRuntime) capabilities(ctx context.Context, node task.Node) (memberC
 // handoff, the same capabilities required to restore a returning node.
 func joinCapable(caps memberCapabilities) bool {
 	return caps.LeaseProtocol >= 2 && caps.QueuedHandoffProtocol >= 1
+}
+
+// conflictPolicyCapable reports whether an Agent accepts jobs with this
+// conflict policy. SKIP and OVERWRITE are understood by every Agent.
+func conflictPolicyCapable(policy string, caps memberCapabilities) bool {
+	return policy != execution.ConflictOverwriteChanged || caps.ConflictPolicyProtocol >= agentservice.ConflictPolicyProtocol
 }
 
 // revoke fences a reachable member immediately. The Agent acknowledges only
@@ -334,7 +342,7 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 			addNodeDisplay(row, displays.lookup(node.ID, node.Address))
 			if s.softwareUpdateBlocksNode(node.ID) {
 				row["eligible"], row["reason"] = false, localizeContext(ctx, "Agent update is in progress")
-			} else if caps, err := s.tasks.capabilities(callCtx, node); err != nil || !joinCapable(caps) {
+			} else if caps, err := s.tasks.capabilities(callCtx, node); err != nil || !joinCapable(caps) || !conflictPolicyCapable(p.Spec.ConflictPolicy, caps) {
 				row["eligible"], row["reason"] = false, localizeContext(ctx, "Upgrade this Agent to join running tasks")
 			}
 			results <- result{index, row}

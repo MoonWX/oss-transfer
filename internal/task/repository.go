@@ -91,8 +91,8 @@ func validate(spec Spec) error {
 		}
 		seen[node.ID] = true
 	}
-	if spec.ConflictPolicy != "SKIP" && spec.ConflictPolicy != "OVERWRITE" {
-		return errors.New("conflict policy must be SKIP or OVERWRITE")
+	if !execution.ValidConflictPolicy(spec.ConflictPolicy) {
+		return errors.New("conflict policy must be SKIP, OVERWRITE or OVERWRITE_CHANGED")
 	}
 	if spec.RangedDownload != "" && (spec.RangedDownload != execution.RangedDownloadOff || spec.Destination.Kind != "LOCAL") {
 		return errors.New("ranged download can only be turned off for a LOCAL destination")

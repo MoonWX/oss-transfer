@@ -420,11 +420,16 @@ func (m *Leases) Close() {
 // stream every object anyway; a job without it always streams.
 const RangedDownloadProtocol = 1
 
+// ConflictPolicyProtocol is advertised by Agents that accept the
+// OVERWRITE_CHANGED conflict policy. The Master assigns such tasks only to
+// Agents that advertise it; an older Agent rejects the job.
+const ConflictPolicyProtocol = 1
+
 func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol}
+	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol}
 	if s.Comparisons != nil {
 		capabilities["comparisonProtocol"] = comparison.Protocol
 	}

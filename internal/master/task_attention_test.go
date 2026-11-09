@@ -1,6 +1,7 @@
 package master
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -88,5 +89,29 @@ func TestFailureCausesPreferTheRetryOutcome(t *testing.T) {
 		if code, _, _ := failureCause(test.exception); code != test.code {
 			t.Fatalf("%+v: %s, want %s", test.exception, code, test.code)
 		}
+	}
+}
+
+// The summary reads a bounded number of records, also when most of them are
+// skipped: after a retry of many failures they are pending, and the detail
+// view is polled. Past the bound the summary is a sample.
+func TestFailureSummaryBoundsTheRecordsItVisits(t *testing.T) {
+	tally := failureTally{groups: map[string]*failureGroup{}}
+	for i := 0; i < failureSummaryVisits; i++ {
+		if err := tally.add(task.Exception{Error: "connection refused", RetryStatus: task.ExceptionPending}); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	if err := tally.add(task.Exception{Error: "connection refused"}); !errors.Is(err, errSummaryFull) || len(tally.groups) != 0 {
+		t.Fatalf("the visit bound was not applied: %v %+v", err, tally.groups)
+	}
+	tally = failureTally{groups: map[string]*failureGroup{}}
+	for i := 0; i < failureSummaryScan; i++ {
+		if err := tally.add(task.Exception{Error: "connection refused"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tally.add(task.Exception{Error: "connection refused"}); !errors.Is(err, errSummaryFull) || tally.groups["CONNECTION_REFUSED"].count != failureSummaryScan {
+		t.Fatalf("the sample bound was not applied: %v %+v", err, tally.groups)
 	}
 }

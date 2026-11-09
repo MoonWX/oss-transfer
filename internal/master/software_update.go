@@ -87,7 +87,12 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			row["info"], row["update"] = reply.Value["info"], reply.Value["update"]
 			if agent, ok := reply.Value["info"].(map[string]any); ok {
-				if detail, ok := agent["detail"].(string); ok {
+				if reason, _ := agent["reason"].(string); reason == "CONTAINER" {
+					// Older Agents word this differently ("Container
+					// installations must be updated with Docker Compose");
+					// every container is updated the same way.
+					agent["detail"] = localize(w, softwareupdate.ContainerUpdateMessage)
+				} else if detail, ok := agent["detail"].(string); ok {
 					agent["detail"] = localize(w, detail)
 				}
 				version, _ := agent["version"].(string)

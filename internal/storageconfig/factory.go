@@ -26,6 +26,9 @@ type Factory struct {
 	RetryMaxAttempts      int
 	HTTPClient            *http.Client
 	HTTPClientForEndpoint func(context.Context, execution.Endpoint, Config) *http.Client
+	// interactive limits every kind of retry to
+	// transferstore.InteractiveRetryAttempts (see OpenInteractive).
+	interactive bool
 }
 
 var _ execution.StoreFactory = (*Factory)(nil)
@@ -97,6 +100,15 @@ func (f *Factory) OpenEndpoint(ctx context.Context, endpoint execution.Endpoint)
 	return f.open(ctx, current, endpoint)
 }
 
+// OpenInteractive is OpenEndpoint for a request that a person waits for,
+// such as an object lookup: it retries briefly, so the person sees the real
+// cause of a failure rather than a timeout.
+func (f *Factory) OpenInteractive(ctx context.Context, endpoint execution.Endpoint) (transferstore.Store, error) {
+	interactive := *f
+	interactive.interactive = true
+	return interactive.OpenEndpoint(ctx, endpoint)
+}
+
 func (f *Factory) forEndpoints(endpoints ...execution.Endpoint) (Snapshot, error) {
 	for _, endpoint := range endpoints {
 		if endpoint.Kind == "S3" {
@@ -148,6 +160,10 @@ func (f *Factory) open(ctx context.Context, snapshot Snapshot, endpoint executio
 			settings.PartSize, settings.PartConcurrency = f.PartSize, f.PartConcurrency
 			settings.UploadMemory, settings.PartLender = f.UploadMemory, f.PartLender
 			settings.SpoolDirectory, settings.RetryMaxAttempts = f.SpoolDirectory, f.RetryMaxAttempts
+			if f.interactive {
+				settings.RetryMaxAttempts = transferstore.InteractiveRetryAttempts
+				settings.ThrottleRetryMaxAttempts = transferstore.InteractiveRetryAttempts
+			}
 			settings.HTTPClient = f.HTTPClient
 			if f.HTTPClientForEndpoint != nil {
 				settings.HTTPClient = f.HTTPClientForEndpoint(ctx, endpoint, config)

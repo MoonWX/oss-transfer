@@ -619,6 +619,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Listed objects in bucket {bucket} with this addressing.",
     ja: "このアドレス指定でバケット {bucket} のオブジェクトを一覧しました。",
   },
+  "存储桶 {bucket} 的存储桶级检查未通过，原因见上方提示。": {
+    en: "The bucket-level check of bucket {bucket} did not pass; see the warning above.",
+    ja: "バケット {bucket} のバケットレベルの確認に失敗しました。理由は上の警告を参照してください。",
+  },
   "执行节点版本较旧，未检查存储桶级访问。": {
     en: "The execution node is too old to check bucket-level access.",
     ja: "実行ノードが古いため、バケット単位のアクセスは確認していません。",

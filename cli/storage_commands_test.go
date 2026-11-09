@@ -67,6 +67,21 @@ func TestStorageTestReportsTheBucketLevelCheck(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "警告: 该凭据无权列举存储桶") || !strings.Contains(out, "可用 --bucket 指定一个") || strings.Contains(out+stderr, "api error") {
 		t.Fatalf("warning: %d %s %s", code, out, stderr)
 	}
+	// The first listed bucket failed its check: the list stays, the check
+	// is reported as not passed, never as passed.
+	firstFailed := func(w http.ResponseWriter, r *http.Request) {
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "buckets": []interface{}{"eu-bucket", "us-bucket"}, "pathStyle": false, "pathStyleAuto": false,
+			"bucketCheckFailed": "eu-bucket", "warning": "连接可用，但对第一个列出的存储桶 eu-bucket 的检查失败：PermanentRedirect"})
+	}
+	code, out, stderr = runMockCLI(t, []string{"storage", "test", "scoped"}, firstFailed)
+	if code != 0 || !strings.Contains(out, "  us-bucket") || !strings.Contains(out, "存储桶级检查: 存储桶 eu-bucket 未通过") || !strings.Contains(out, "警告: 连接可用") ||
+		!strings.Contains(out, "第一个存储桶的存储桶级检查未通过") || strings.Contains(out, "连接测试通过") {
+		t.Fatalf("first bucket failed: %d %s %s", code, out, stderr)
+	}
+	code, out, stderr = runMockCLI(t, []string{"--lang", "ja", "storage", "test", "scoped"}, firstFailed)
+	if code != 0 || !strings.Contains(out, "バケット eu-bucket で失敗しました") {
+		t.Fatalf("first bucket failed (ja): %d %s %s", code, out, stderr)
+	}
 	code, out, stderr = runMockCLI(t, []string{"--verbose", "storage", "test", "scoped"}, warned)
 	if code != 0 || !strings.Contains(stderr, "详情: api error AccessDenied: raw") {
 		t.Fatalf("verbose warning: %d %s %s", code, out, stderr)

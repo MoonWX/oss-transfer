@@ -183,6 +183,7 @@ export default function StoragePage() {
     pathStyle?: boolean;
     pathStyleAuto?: boolean;
     checkedBucket?: string;
+    bucketCheckFailed?: string;
     bucketCheckSupported?: boolean;
     warning?: string;
   } | null>(null);
@@ -315,6 +316,7 @@ export default function StoragePage() {
         pathStyle?: boolean;
         pathStyleAuto?: boolean;
         checkedBucket?: string;
+        bucketCheckFailed?: string;
         bucketCheckSupported?: boolean;
         warning?: string;
       }>(
@@ -329,6 +331,7 @@ export default function StoragePage() {
           pathStyle: response.pathStyle,
           pathStyleAuto: response.pathStyleAuto,
           checkedBucket: response.checkedBucket,
+          bucketCheckFailed: response.bucketCheckFailed,
           bucketCheckSupported: response.bucketCheckSupported,
           warning: response.warning,
         });
@@ -872,9 +875,16 @@ export default function StoragePage() {
                   ? t("已用此寻址方式列举存储桶 {bucket} 中的对象。", {
                       bucket: bucketState.checkedBucket,
                     })
-                  : bucketState.bucketCheckSupported === false
-                    ? t("执行节点版本较旧，未检查存储桶级访问。")
-                    : t("没有可检查的存储桶；可在下方指定一个存储桶。")}{" "}
+                  : bucketState.bucketCheckFailed
+                    ? t(
+                        "存储桶 {bucket} 的存储桶级检查未通过，原因见上方提示。",
+                        {
+                          bucket: bucketState.bucketCheckFailed,
+                        },
+                      )
+                    : bucketState.bucketCheckSupported === false
+                      ? t("执行节点版本较旧，未检查存储桶级访问。")
+                      : t("没有可检查的存储桶；可在下方指定一个存储桶。")}{" "}
                 {t("存储桶读写权限在迁移时验证。")}
               </Typography>
               <Box sx={{ maxHeight: 360, overflowY: "auto" }}>

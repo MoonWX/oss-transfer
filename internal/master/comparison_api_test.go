@@ -292,7 +292,10 @@ func TestComparisonProtocolCacheKeepsOnlyPositiveAnswers(t *testing.T) {
 
 func createComparisonStorage(t *testing.T, f *agentHTTPFixture) storageconfig.Snapshot {
 	t.Helper()
-	snapshot, err := storageconfig.NewMaster(f.db).Create(storageconfig.Config{Alias: "qa", Endpoint: "http://127.0.0.1:9", AccessKey: "fixture-ak", SecretKey: "fixture-sk"})
+	// Explicit addressing: these tests count the Agent operations, and an
+	// automatic one adds a capability query for Agents that predate it.
+	pathStyle := true
+	snapshot, err := storageconfig.NewMaster(f.db).Create(storageconfig.Config{Alias: "qa", Endpoint: "http://127.0.0.1:9", AccessKey: "fixture-ak", SecretKey: "fixture-sk", PathStyleEnable: &pathStyle})
 	if err != nil {
 		t.Fatal(err)
 	}

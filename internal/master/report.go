@@ -202,6 +202,11 @@ var reportReasonMeanings = map[string]string{
 	"NOT_COMPLETED":               "The object was not processed before the task ended or stopped.",
 	"TRANSFER_FAILED":             "The object could not be migrated; errorMessage has the cause.",
 	"DESTINATION_EXISTS":          "The object was skipped by the task's conflict policy.",
+	"SOURCE_DELETED":              "The source object was deleted after it was listed, so there was nothing to migrate and it was skipped.",
+	"SOURCE_CHANGED":              "The source object changed after it was listed; retrying the failed objects migrates its current version.",
+	"SOURCE_REFRESHED":            "The source object changed after it was listed; a retry migrated its current version, so its size can differ from the listed one.",
+	"SOURCE_MISSING":              "An object recorded by the imported V4.0.x task was not found at the source.",
+	"LEGACY_REPROCESSED":          "The imported V4.0.x task had not migrated the object, so it was migrated again.",
 }
 
 type reportCoverage struct {
@@ -434,7 +439,16 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				unreachable[node.Address] = coverage.NodeIssues[node.Address]
 			}
 		}
-		var resolvedBytes int64
+		// resolvedDelta is what source pins add to the dispatched sizes: the
+		// whole size of an inventory key resolved after discovery (dispatched
+		// with size 0), and the size difference of a source refreshed on a
+		// retry after it changed. It is counted from the rows themselves.
+		var resolvedDelta int64
+		addResolved := func(item execution.Item, result execution.ItemResult) {
+			if result.ResolvedSource != nil {
+				resolvedDelta += result.ResolvedSource.Size - item.Source.Size
+			}
+		}
 		err := s.walkReportChildren(ctx, p, func(child task.Child) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -444,7 +458,6 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				for _, result := range child.Record.Results {
 					if result.ResolvedSource != nil {
 						resolved[result.ID] = result.ResolvedSource
-						resolvedBytes += result.ResolvedSource.Size
 					}
 				}
 			}
@@ -468,6 +481,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 					coverage.FileRows++
 					coverage.ResultCounts["UNKNOWN"]++
 					coverage.ResultBytes["UNKNOWN"] += execution.EffectiveSource(item, execution.ItemResult{ResolvedSource: resolved[item.ID]}).Size
+					addResolved(item, execution.ItemResult{ResolvedSource: resolved[item.ID]})
 				}
 				return nil
 			}
@@ -492,6 +506,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				coverage.FileRows++
 				coverage.ResultCounts[result]++
 				coverage.ResultBytes[result] += execution.EffectiveSource(entry.Item, entry.Result).Size
+				addResolved(entry.Item, entry.Result)
 			}
 			return nil
 		})
@@ -508,7 +523,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		for _, bytes := range coverage.ResultBytes {
 			fileBytes += bytes
 		}
-		coverage.CountsReconciled = coverage.CountsReconciled && fileBytes == p.DispatchedBytes+resolvedBytes && (!p.ScanComplete || (coverage.FileRows == p.ScannedObjects && fileBytes == p.ScannedBytes+resolvedBytes))
+		coverage.CountsReconciled = coverage.CountsReconciled && fileBytes == p.DispatchedBytes+resolvedDelta && (!p.ScanComplete || (coverage.FileRows == p.ScannedObjects && fileBytes == p.ScannedBytes+resolvedDelta))
 		if !p.ScanComplete {
 			coverage.PartialReasons = append(coverage.PartialReasons, "SCAN_INCOMPLETE")
 		}

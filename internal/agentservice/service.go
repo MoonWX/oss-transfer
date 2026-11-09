@@ -365,6 +365,9 @@ type ChildAcceptRequest struct {
 	execution.Job
 	InventorySource bool              `json:"inventorySource,omitempty"`
 	Seed            *execution.Record `json:"seed,omitempty"`
+	// SourceRefresh says the Master accepts refreshed source pins. A Master
+	// sends it only to Agents that advertise SourceRefreshProtocol.
+	SourceRefresh bool `json:"sourceRefresh,omitempty"`
 }
 
 type ParentRequest struct {
@@ -663,7 +666,8 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if err := decode(c.Payload, &request); err != nil {
 			return badRequest(err)
 		}
-		store, err := s.Factory.OpenEndpoint(ctx, request.Endpoint)
+		// A person waits for the answer (the object comparison tool).
+		store, err := s.Factory.OpenInteractive(ctx, request.Endpoint)
 		if err != nil {
 			return response(nil, err)
 		}
@@ -725,7 +729,7 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if !s.Shared.Allows(job) {
 			return response(nil, ErrSharedVerificationRequired)
 		}
-		record, err := s.Engine.AcceptSeed(ctx, job, request.Seed, request.InventorySource)
+		record, err := s.Engine.AcceptDelivery(ctx, job, request.Seed, execution.Delivery{InventorySource: request.InventorySource, SourceRefresh: request.SourceRefresh})
 		if err == nil {
 			s.signal()
 		}

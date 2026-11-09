@@ -90,10 +90,12 @@ func (s *retryStorage) counts(key string) (reads, writes int) {
 }
 
 // retryAgentExecutor advertises the Agent's capabilities; an old Agent omits
-// retryFailedProtocol, as releases before child_retry_failed do.
+// retryFailedProtocol, as releases before child_retry_failed do. A previous
+// Agent (v4.1.x) omits sourceRefreshProtocol and, like its strict decoder,
+// rejects a request that carries sourceRefresh.
 type retryAgentExecutor struct {
 	*agentservice.Service
-	old bool
+	old, previous bool
 }
 
 func (a retryAgentExecutor) Execute(ctx context.Context, c agenttransport.Command) (agenttransport.Response, error) {
@@ -102,11 +104,17 @@ func (a retryAgentExecutor) Execute(ctx context.Context, c agenttransport.Comman
 		if a.old {
 			delete(caps, "retryFailedProtocol")
 		}
+		if a.old || a.previous {
+			delete(caps, "sourceRefreshProtocol")
+		}
 		raw, _ := json.Marshal(caps)
 		return agenttransport.Response{Status: 200, Payload: raw}, nil
 	}
 	if a.old && c.Operation == "child_retry_failed" {
 		return agenttransport.Response{Status: 404, Payload: json.RawMessage(`{"code":"unknown_operation"}`)}, nil
+	}
+	if (a.old || a.previous) && bytes.Contains(c.Payload, []byte(`"sourceRefresh"`)) {
+		return agenttransport.Response{Status: 400, Payload: json.RawMessage(`{"code":"invalid_request","message":"json: unknown field \"sourceRefresh\""}`)}, nil
 	}
 	return a.Service.Execute(ctx, c)
 }
@@ -123,7 +131,7 @@ type retryFixture struct {
 // newRetryFixture runs a single-node OSS-to-OSS task over the authenticated
 // Agent channel until its first child (128 objects) ends PARTIAL_FAILED with
 // one failed object while the parent keeps RUNNING.
-func newRetryFixture(t *testing.T, old bool) *retryFixture {
+func newRetryFixture(t *testing.T, old bool, previous ...bool) *retryFixture {
 	t.Helper()
 	f := newAgentHTTPFixture(t)
 	storage := newRetryStorage(130)
@@ -151,7 +159,7 @@ func newRetryFixture(t *testing.T, old bool) *retryFixture {
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	runner := agenttransport.NewRunner(agentClient(t, f, credential), retryAgentExecutor{service, old}, nil, agenttransport.RunnerOptions{ReconnectDelay: time.Millisecond})
+	runner := agenttransport.NewRunner(agentClient(t, f, credential), retryAgentExecutor{service, old, len(previous) > 0 && previous[0]}, nil, agenttransport.RunnerOptions{ReconnectDelay: time.Millisecond})
 	go func() { done <- runner.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done; service.Close(context.Background()); db.Close() })
 	code, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/s3-config", f.admin, map[string]any{
@@ -235,9 +243,17 @@ func TestRunningTaskRetriesOnlyFailedObjectsInPlace(t *testing.T) {
 		t.Fatal("failure was recorded as retried before any retry")
 	}
 	r.storage.failing.Store(false)
+	// The retry, not only the first delivery, says that this Master accepts
+	// refreshed source pins.
+	if err := r.agent.Engine.SetSourceRefresh(context.Background(), r.parent.ID, r.parent.Generation, false); err != nil {
+		t.Fatal(err)
+	}
 	result := r.retry(t)
 	if result["accepted"] != float64(1) || result["retriedObjects"] != float64(1) || result["failed"] != float64(0) || result["status"] != "RUNNING" || result["generation"] != float64(r.parent.Generation) {
 		t.Fatal("running retry was not accepted", result)
+	}
+	if fence, err := r.agent.Jobs.Parent(context.Background(), r.parent.ID); err != nil || !fence.SourceRefresh {
+		t.Fatal("the retry did not say that the Master accepts refreshed source pins", fence, err)
 	}
 	children := result["children"].([]any)
 	if len(children) != 1 || children[0].(map[string]any)["outcome"] != "QUEUED" || children[0].(map[string]any)["failedObjectCount"] != float64(1) {
@@ -333,6 +349,26 @@ func TestRunningTaskRetryIsFencedByStop(t *testing.T) {
 	url := fmt.Sprintf("%s/api/master/tasks/%d/retry-failed", r.f.http.URL, r.parent.ID)
 	if code, body := request(t, r.f.http.Client(), "POST", url, r.f.admin, nil); code != http.StatusConflict || !strings.Contains(fmt.Sprint(body["message"]), "Only a running task") {
 		t.Fatal("stopped task accepted an in-place retry", code, body)
+	}
+}
+
+// An Agent from before source refresh receives neither delivery nor retry
+// with sourceRefresh, which its strict decoder would reject.
+func TestRunningTaskRetryOmitsSourceRefreshForPreviousAgent(t *testing.T) {
+	r := newRetryFixture(t, false, true)
+	r.storage.failing.Store(false)
+	result := r.retry(t)
+	if result["accepted"] != float64(1) || result["failed"] != float64(0) {
+		t.Fatal("retry on a previous Agent was not accepted", result)
+	}
+	if fence, err := r.agent.Jobs.Parent(context.Background(), r.parent.ID); err != nil || fence.SourceRefresh {
+		t.Fatal("a previous Agent was told that the Master accepts refreshed source pins", fence, err)
+	}
+	_, child := r.drive(t, func(p task.Parent, child task.Child) bool {
+		return child.Record != nil && child.Record.Status == execution.Completed
+	})
+	if child.Record.Counters.Succeeded != 128 {
+		t.Fatal("retried child did not complete", child.Record.Counters)
 	}
 }
 

@@ -243,3 +243,48 @@ func TestStorageEndpointValidationIsLocalized(t *testing.T) {
 		t.Fatalf("endpoint without scheme: HTTP %d %v %v", code, body, err)
 	}
 }
+
+// A failed check of the first listed bucket, which nobody named, does not
+// block: that bucket can be in another region while the others work. The
+// buckets are listed and the failure is a warning. A bucket the user names
+// is still checked strictly, and an addressing failure, which holds for every
+// bucket, still blocks saving.
+func TestStorageCheckWarnsWhenTheFirstListedBucketFails(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	s3 := newStorageCheckS3(t)
+	comparisonTestNode(t, f, "storage-first-bucket", &storageCheckAgent{s3: s3})
+	url := f.http.URL + "/api/master/s3-config"
+	s3.set("", "PermanentRedirect")
+	code, _, body, err := localizedRequest(f.http.Client(), "POST", url, f.admin, "zh-CN", storageCheckConfig("http://storage.example.com:9000", nil))
+	if err != nil || code != 200 || !strings.HasPrefix(fmt.Sprint(body["warning"]), "连接可用，但对第一个列出的存储桶 src 的检查失败：") ||
+		!strings.Contains(fmt.Sprint(body["warningDetail"]), "PermanentRedirect") || strings.Contains(fmt.Sprint(body["warningDetail"]), "secret-fixture-key") {
+		t.Fatalf("save: HTTP %d %v %v", code, body, err)
+	}
+	code, body = request(t, f.http.Client(), "GET", url+"/selfhosted/buckets", f.admin, nil)
+	if code != 200 || fmt.Sprint(body["buckets"]) != "[src]" || body["checkedBucket"] != nil || body["bucketCheckFailed"] != "src" || body["warning"] == nil {
+		t.Fatalf("bucket list: HTTP %d %v", code, body)
+	}
+	code, body = request(t, f.http.Client(), "GET", url+"/selfhosted/buckets?bucket=src", f.admin, nil)
+	if code != 502 || body["reasonCode"] != "STORAGE_ERROR" {
+		t.Fatalf("named bucket: HTTP %d %v", code, body)
+	}
+
+	// Virtual-hosted on a self-hosted endpoint: saving is refused as before,
+	// but the bucket picker of a saved connection still gets the list.
+	s3.set("", "")
+	virtual := false
+	config := storageCheckConfig("http://storage.example.com", &virtual)
+	config["alias"] = "virtual"
+	if code, body := request(t, f.http.Client(), "POST", url, f.admin, config); code != 400 || body["pathStyleHint"] != true {
+		t.Fatalf("addressing save: HTTP %d %v", code, body)
+	}
+	config["validate"] = false
+	if code, body := request(t, f.http.Client(), "POST", url, f.admin, config); code != 200 {
+		t.Fatalf("unvalidated save: HTTP %d %v", code, body)
+	}
+	code, body = request(t, f.http.Client(), "GET", url+"/virtual/buckets", f.admin, nil)
+	if code != 200 || fmt.Sprint(body["buckets"]) != "[src]" || body["bucketCheckFailed"] != "src" || body["warningPathStyleHint"] != true ||
+		!strings.Contains(fmt.Sprint(body["warning"]), "Path-style") {
+		t.Fatalf("addressing bucket list: HTTP %d %v", code, body)
+	}
+}

@@ -201,3 +201,33 @@ func TestS3FailedAbortHandsTheUploadToTheRegistry(t *testing.T) {
 		})
 	}
 }
+
+// An upload recorded before automatic addressing (v4.1.41 recorded the
+// effective path-style, false for an unset choice) is still aborted after the
+// upgrade resolves that unset choice to path-style. A record of another
+// endpoint or account is still refused.
+func TestS3AbortOfRecordedUploadIgnoresAddressing(t *testing.T) {
+	p := newProtocolS3(t)
+	s := p.store(t)
+	record := S3UploadRecord{Owner: strings.Repeat("a", 64), ID: strings.Repeat("b", 32), Connection: s.ConnectionIdentity("configured"), Bucket: s.bucket, Key: "left-behind", UploadID: "upload-1"}
+	record.Connection.PathStyle = !s.connection.PathStyle
+	if err := s.AbortRecordedUpload(context.Background(), record); err != nil {
+		t.Fatalf("an upload recorded with the other addressing was not aborted: %v", err)
+	}
+	p.mu.Lock()
+	aborted := p.aborted
+	p.mu.Unlock()
+	if aborted != 1 {
+		t.Fatalf("abort requests: %d", aborted)
+	}
+	other := record
+	other.Connection.Endpoint = "https://other.example"
+	if err := s.AbortRecordedUpload(context.Background(), other); !errors.Is(err, ErrUploadIdentity) {
+		t.Fatalf("another endpoint: %v", err)
+	}
+	other = record
+	other.Connection.CredentialFingerprint = strings.Repeat("c", 64)
+	if err := s.AbortRecordedUpload(context.Background(), other); !errors.Is(err, ErrUploadIdentity) {
+		t.Fatalf("another account: %v", err)
+	}
+}

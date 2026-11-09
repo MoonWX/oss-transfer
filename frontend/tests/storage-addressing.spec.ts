@@ -183,3 +183,39 @@ test("cards and the connection test show the resolved addressing and the bucket-
   await expect(dialog.getByTestId("storage-check-warning")).toHaveCount(0);
   expect(queries).toEqual(["", "only-bucket"]);
 });
+
+test("a failed check of the first listed bucket keeps the bucket list and says the check did not pass", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.route("**/api/master/s3-config/production/buckets**", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        buckets: ["eu-bucket", "us-bucket"],
+        pathStyle: false,
+        pathStyleAuto: false,
+        bucketCheckFailed: "eu-bucket",
+        warning:
+          "连接可用，但对第一个列出的存储桶 eu-bucket 的检查失败：PermanentRedirect",
+      },
+    }),
+  );
+  await page.goto("/storage");
+  await page
+    .getByRole("button", { name: "测试连接", exact: true })
+    .first()
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("已获取 2 个存储桶。")).toBeVisible();
+  await expect(dialog.getByText("us-bucket")).toBeVisible();
+  await expect(dialog.getByTestId("storage-check-warning")).toContainText(
+    "eu-bucket 的检查失败",
+  );
+  await expect(dialog.getByTestId("storage-check-summary")).toContainText(
+    "存储桶 eu-bucket 的存储桶级检查未通过，原因见上方提示。",
+  );
+  await expect(dialog.getByTestId("storage-check-summary")).not.toContainText(
+    "已用此寻址方式列举存储桶",
+  );
+});

@@ -20,6 +20,8 @@ type storageProblem struct {
 	args          []any
 	detail        string
 	pathStyleHint bool
+	// cause, when set, is summarized as the message's last argument.
+	cause *storageProblem
 }
 
 // summary is the localized sentence, or the raw error when the failure is
@@ -28,7 +30,11 @@ func (p *storageProblem) summary(w http.ResponseWriter) string {
 	if p.message == "" {
 		return p.detail
 	}
-	return fmt.Sprintf(localize(w, p.message), p.args...)
+	args := p.args
+	if p.cause != nil {
+		args = append(append([]any(nil), args...), p.cause.summary(w))
+	}
+	return fmt.Sprintf(localize(w, p.message), args...)
 }
 
 func (p *storageProblem) reasonCode() string {
@@ -41,10 +47,14 @@ func (p *storageProblem) reasonCode() string {
 // storageCheckOutcome separates what blocks saving a connection (failure)
 // from what only deserves attention (warning).
 type storageCheckOutcome struct {
-	check     transferstore.ConnectionCheck
-	failure   *storageProblem
-	warning   *storageProblem
-	pathStyle bool
+	check   transferstore.ConnectionCheck
+	failure *storageProblem
+	warning *storageProblem
+	// saveFailure blocks saving the connection, not listing its buckets:
+	// an addressing failure found on the first listed bucket holds for
+	// every bucket of the connection. warning reports it too.
+	saveFailure *storageProblem
+	pathStyle   bool
 	// complete is false when the Agent predates bucket-level checks.
 	complete bool
 }
@@ -120,12 +130,15 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 	err = s.agentCall(ctx, members[0].Session(), "storage_check", false, request, &outcome.check)
 	var agentError *AgentError
 	if errors.As(err, &agentError) && agentError.Status == http.StatusNotFound && agentError.Message == "unknown_operation" {
-		// Agents before v4.2.0 only list buckets.
+		// Agents before v4.2.0 only list buckets. They read an unset
+		// addressing as virtual-hosted, so they are given the resolved one,
+		// as storage_apply gives it to them: the addressing reported is what
+		// that node uses.
 		outcome.complete = false
 		var listed struct {
 			Buckets []string `json:"buckets"`
 		}
-		err = s.agentCall(ctx, members[0].Session(), "storage_buckets", false, config, &listed)
+		err = s.agentCall(ctx, members[0].Session(), "storage_buckets", false, storageConfigForAgent(config), &listed)
 		outcome.check = transferstore.ConnectionCheck{Buckets: listed.Buckets, PathStyle: outcome.pathStyle}
 		if errors.As(err, &agentError) {
 			outcome.check.ListError, outcome.check.ListErrorKind = agentError.Message, transferstore.ClassifyStorageMessage(agentError.Message)
@@ -155,10 +168,19 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 	}
 	if check.BucketError != "" {
 		problem := newStorageProblem(check.BucketErrorKind, redact(check.BucketError), config, check.Bucket, outcome.pathStyle)
-		if check.BucketErrorKind == transferstore.StorageErrorAccessDenied {
+		switch {
+		case check.BucketErrorKind == transferstore.StorageErrorAccessDenied:
 			problem.message, problem.args = "The credentials cannot list the objects of bucket %s (AccessDenied). Check the bucket permissions before you migrate from this bucket.", []any{check.Bucket}
 			outcome.warning = problem
-		} else {
+		case bucket == "" && check.ListError == "":
+			// Nobody named this bucket: it is the first listed one, and
+			// other buckets can still work (one in another region, for
+			// example). The buckets were listed, so the connection works.
+			outcome.warning = &storageProblem{kind: problem.kind, message: "The connection works, but the check of bucket %s, the first listed bucket, failed: %s", args: []any{check.Bucket}, cause: problem, detail: problem.detail, pathStyleHint: problem.pathStyleHint}
+			if problem.pathStyleHint {
+				outcome.saveFailure = problem
+			}
+		default:
 			outcome.failure = problem
 		}
 	}
@@ -182,4 +204,7 @@ func storageWarningFields(w http.ResponseWriter, fields map[string]any, problem 
 	fields["warning"] = problem.summary(w)
 	fields["warningDetail"] = problem.detail
 	fields["warningCode"] = problem.reasonCode()
+	if problem.pathStyleHint {
+		fields["warningPathStyleHint"] = true
+	}
 }

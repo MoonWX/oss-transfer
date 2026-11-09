@@ -46,9 +46,16 @@ func validRefresh(item Item, source transferstore.Object) bool {
 // scope and previously observed pins. It also rejects removal of a durable pin.
 // A pin may replace an object's discovered identity, or change, only on a
 // result whose reason says the source was read again (see PendingResult).
+// A pin that the previous record already held may stay without that reason:
+// an Agent that predates source refresh keeps the pin of a seed it imports
+// but drops the reason when it returns the object to pending.
 func (r Record) ValidateResolvedSources(inventory bool, previous *Record) error {
 	old := map[string]*transferstore.Object{}
+	oldItems := map[string]Item{}
 	if previous != nil {
+		for _, item := range previous.Job.Items {
+			oldItems[item.ID] = item
+		}
 		for _, result := range previous.Results {
 			if result.ResolvedSource != nil {
 				old[result.ID] = result.ResolvedSource
@@ -67,7 +74,11 @@ func (r Record) ValidateResolvedSources(inventory bool, previous *Record) error 
 		if result.ResolvedSource != nil {
 			resolution := inventory && r.Job.Source.Kind == "S3" && validResolution(item, *result.ResolvedSource)
 			refresh := refreshed && validRefresh(item, *result.ResolvedSource)
-			if !ok || seen[result.ID] || !resolution && !refresh {
+			prior := old[result.ID]
+			oldItem, assigned := oldItems[result.ID]
+			kept := prior != nil && reflect.DeepEqual(prior, result.ResolvedSource) && assigned && reflect.DeepEqual(oldItem.Source, item.Source) &&
+				!SourceIdentityUnknown(item.Source) && validRefresh(item, *result.ResolvedSource)
+			if !ok || seen[result.ID] || !resolution && !refresh && !kept {
 				return errors.New("invalid resolved inventory source")
 			}
 		}
@@ -176,7 +187,9 @@ func (e *Engine) copyResolvedItem(ctx context.Context, record Record, item Item,
 			break
 		}
 	}
-	if refresh && item.Legacy == nil && (pinned != nil || !SourceIdentityUnknown(item.Source)) {
+	// Only a Master that accepts a refreshed pin may receive one; otherwise
+	// the retry reads the discovered version and fails again if it changed.
+	if refresh && item.Legacy == nil && (pinned != nil || !SourceIdentityUnknown(item.Source)) && e.repo.sourceRefreshAllowed(ctx, record.Job.ParentID) {
 		// A retry of an object whose source changed after discovery reads
 		// the source's current version, which is pinned durably first.
 		actual, err := source.Stat(ctx, item.Source.Key)

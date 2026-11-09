@@ -65,6 +65,13 @@ type ConnectionCheck struct {
 	BucketErrorKind StorageErrorKind `json:"bucketErrorKind,omitempty"`
 }
 
+// InteractiveRetryAttempts bounds the attempts of a storage request that a
+// person waits for (a connection check, an object lookup), for every kind of
+// error. The transfer budget, which rides out outages and throttling for
+// minutes, would let the caller's deadline replace the real cause (refused,
+// DNS) with a timeout.
+const InteractiveRetryAttempts = 2
+
 // CheckConnection lists the buckets and then lists at most one object of one
 // bucket with the connection's effective addressing. ListBuckets reaches the
 // endpoint itself, so only the bucket-level request shows whether the bucket
@@ -76,7 +83,7 @@ func CheckConnection(ctx context.Context, config S3Config, bucket string) (Conne
 	// A check answers a person waiting for it: do not spend the long
 	// throttling budget of transfers.
 	if config.RetryMaxAttempts == 0 {
-		config.RetryMaxAttempts = 2
+		config.RetryMaxAttempts = InteractiveRetryAttempts
 	}
 	if config.ThrottleRetryMaxAttempts == 0 {
 		config.ThrottleRetryMaxAttempts = config.RetryMaxAttempts

@@ -309,6 +309,8 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			switch {
 			case getString(result, "checkedBucket") != "":
 				result["message"] = client.text("连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶")
+			case getString(result, "bucketCheckFailed") != "":
+				result["message"] = client.text("已读取存储桶列表；第一个存储桶的存储桶级检查未通过，见警告；可用 --bucket 检查要迁移的存储桶")
 			case result["bucketCheckSupported"] == false:
 				result["message"] = client.text("已读取存储桶列表；执行节点版本较旧，未检查存储桶级访问")
 			default:

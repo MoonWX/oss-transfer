@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -132,5 +136,40 @@ func TestS3ConfigResolvesAutomaticAddressing(t *testing.T) {
 		if settings.PathStyle != test.want || config.EffectivePathStyle() != test.want {
 			t.Errorf("%s (explicit %v): path-style %v, want %v", test.endpoint, test.explicit, settings.PathStyle, test.want)
 		}
+	}
+}
+
+// An object lookup that a person waits for gives up after a short budget,
+// so the caller sees the storage's own error rather than its deadline. A
+// transfer handle keeps the long budget that rides out throttling.
+func TestInteractiveHandleRetriesBriefly(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>throttled</Message></Error>`)
+	}))
+	defer server.Close()
+	config := testConfig("qa")
+	config.Endpoint = server.URL
+	factory := &Factory{Source: &countingSnapshots{value: Snapshot{Revision: 1, Connections: []Config{config}}}, HTTPClient: server.Client()}
+	endpoint := execution.Endpoint{Kind: "S3", Ref: "qa", Bucket: "test-bucket"}
+	store, err := factory.OpenInteractive(context.Background(), endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// The deadline only guards a hang; the budget, not the deadline, must end the lookup.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if _, err := store.Stat(ctx, "object"); err == nil || ctx.Err() != nil {
+		t.Fatalf("lookup: %v (context %v)", err, ctx.Err())
+	}
+	if got := requests.Load(); got != transferstore.InteractiveRetryAttempts {
+		t.Fatalf("%d requests, want %d", got, transferstore.InteractiveRetryAttempts)
+	}
+	if factory.interactive {
+		t.Fatal("an interactive handle changed the shared factory")
 	}
 }

@@ -70,6 +70,8 @@ type Server struct {
 	mux              *http.ServeMux
 	passwordSlots    chan struct{}
 	taskControlSlots chan struct{}
+	// addressing remembers Agents that understand automatic addressing.
+	addressing addressingSupport
 }
 
 // New creates the first administrator in an empty database and returns its

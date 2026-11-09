@@ -46,3 +46,21 @@ func TestSoftwareUpdateCapabilityIsLocalized(t *testing.T) {
 		t.Fatal("update refusal was not localized", status, body)
 	}
 }
+
+// A v4.1 container Agent reports its own English sentence for the CONTAINER
+// reason. The console shows the current localized one instead.
+func TestOlderContainerAgentDetailIsLocalized(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	agent := &fakeSoftwareUpdater{info: softwareupdate.Info{Role: "agent", Version: "4.1.41", Reason: "CONTAINER", Detail: "Container installations must be updated with Docker Compose"}}
+	nodeTestAgentWithUpdater(t, f, "container-node", agent)
+	for locale, want := range map[string]string{"zh-CN": "此节点运行在容器中，请拉取新镜像并重建容器来更新（例如先运行 docker compose pull，再运行 docker compose up -d）", "en-US": softwareupdate.ContainerUpdateMessage} {
+		status, _, body, err := localizedRequest(f.http.Client(), "GET", f.http.URL+"/api/master/software-updates", f.admin, locale, nil)
+		if err != nil || status != 200 {
+			t.Fatal(status, body, err)
+		}
+		nodes := body["data"].(map[string]any)["agents"].([]any)
+		if detail := nodes[0].(map[string]any)["info"].(map[string]any)["detail"]; detail != want {
+			t.Fatalf("%s: container detail %q", locale, detail)
+		}
+	}
+}

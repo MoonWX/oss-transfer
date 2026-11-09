@@ -15,8 +15,8 @@ const cliHelp = `OSS Transfer CLI
   task stop|resume|start|retry <ID...>
   task delete <ID...>            将任务记录移入回收站
   task trash                     查看及筛选回收站任务
-  task restore <ID...>            从回收站恢复指定任务
-  task purge <ID...> --yes        永久删除回收站内指定记录
+  task restore <ID...>           从回收站恢复指定任务
+  task purge <ID...> --yes       永久删除回收站内指定记录
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps 值 --head-qps 值 --put-qps 值]
   task nodes <ID> [--add 节点] [--remove 节点 [--now]] [--yes]  查看或调整执行节点
@@ -162,7 +162,6 @@ const cliTaskCreateHelp = `创建迁移任务
   --conflict skip|overwrite       已存在对象的处理方式，默认 skip
   --overwrite                     等同 --conflict overwrite
   --distribution affinity|balanced  任务分发方式，默认 balanced
-  --balanced                      等同 --distribution balanced
   --date-after YYYY-MM-DDTHH:mm:ss  对象更新时间起点
   --date-before YYYY-MM-DDTHH:mm:ss 对象更新时间终点，须晚于起点
   --bandwidth-mbps <值>            任务带宽上限，0.1–1000000 Mbps
@@ -193,7 +192,7 @@ OSS 间迁移
   本地上传根据绑定节点数量选择分发方式；多个节点须绑定同一逻辑目录。
 
 示例
-  oss-transfer-cli task create oss-to-oss source/photos target/archive --node 10.0.0.2 --prefix 2026/ --balanced
+  oss-transfer-cli task create oss-to-oss source/photos target/archive --node 10.0.0.2 --prefix 2026/
   oss-transfer-cli task create oss-to-oss source/photos target/archive --object-key a.jpg --mapping exact-key --target-key backup/a.jpg
   oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/ --validate-only
   oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --prefix 2026/
@@ -201,8 +200,8 @@ OSS 间迁移
 
 连接名须先通过 storage 添加；本地路径属于执行节点，支持 /data、C:\data 和 UNC 共享目录。
 本地迁移提交前会自动预检；创建受理后自动执行，请继续查询任务状态。
-响应丢失时，Go 服务可用原参数加 --request-id <返回标识> 重试；改参数或新建任务应使用新标识。
-旧 V4 服务不支持此去重，重试前须核对任务列表。CLI 不自动重试创建请求。
+响应丢失时，可用原参数加 --request-id <返回标识> 重试，不会重复创建；改参数或新建任务应使用新标识。
+4.1 之前的服务不支持此去重，重试前须核对任务列表。CLI 不自动重试创建请求。
 `
 
 const cliTaskImportHelp = `批量导入
@@ -235,9 +234,9 @@ local 下载请求（OSS_TO_LOCAL）可设置 "rangedDownload":"auto" 或 "off"�
   oss-transfer-cli task import local ./local-requests.json --validate-only
 
 导入文件必须为非空任务数组；节点、密钥、路径等校验仍由服务端执行。
-部分受理或响应丢失时，Go 服务可用原文件及参数加 --request-id <返回标识> 重试整批。
+部分受理或响应丢失时，可用原文件及参数加 --request-id <返回标识> 重试整批。
 不要删行、改顺序或改参数后复用标识；新建另一批任务应使用新标识。预检不使用请求标识。
-旧 V4 服务不支持此去重，重试前须核对任务列表。CLI 不自动重试创建请求。
+4.1 之前的服务不支持此去重，重试前须核对任务列表。CLI 不自动重试创建请求。
 `
 
 const cliNodeHelp = `执行节点
@@ -475,7 +474,7 @@ diff-objects 默认排序归并；bloom 可节省内存，但存在误判率。
 目标清单必须按 Key 排序；输入与输出目录请使用不同路径。
 import-inventory 读取本机目录中的 .incr 文件，每行一个 UTF-8 Key，每个文件创建一个主任务。
 空行忽略，重复 Key 去重，其余 Key 保持原样；文件内容不会上传，仅提交 Key 清单。
---node 可重复填写；未指定时由 Master 选择执行节点。此命令需要 Go Master。
+--node 可重复填写；未指定时由 Master 选择执行节点。此命令需要 4.1 及以上版本的 Master。
 连接中断后，保留原文件和参数，用输出的 --request-id 重试，不会重复创建已受理的任务。
 `
 

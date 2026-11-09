@@ -70,7 +70,7 @@ func TestTaskRestoreExitStatusAndLocalizedHelp(t *testing.T) {
 				}
 			}
 			code, _, stderr := runMockCLI(t, []string{"--lang", language, "task", "creation", "obsolete-id"}, func(http.ResponseWriter, *http.Request) { t.Fatal("removed command reached server") })
-			if code != 1 || !strings.Contains(stderr, "creation") {
+			if code != 2 || !strings.Contains(stderr, "creation") {
 				t.Fatalf("removed command not rejected: %d %s", code, stderr)
 			}
 		})

@@ -220,12 +220,12 @@ func TestMaintenanceStatusShowsVersionSkewQueueAndOfflineHonestly(t *testing.T) 
 	if !renderMaintenanceResult(&out, result) {
 		t.Fatal("maintenance status not rendered")
 	}
-	for _, want := range []string{"storage (10.0.0.2)", "4.1.21", "4.1.22", "QUEUED", "MISMATCH", "MATCH", "UNKNOWN", "OFFLINE", "RUNNING", "Previous check failed"} {
+	for _, want := range []string{"storage (10.0.0.2)", "v4.1.21", "v4.1.22", "排队中", "不一致", "一致", "未知", "节点离线", "进行中", "Previous check failed"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "COMPLETED") {
+	if strings.Contains(out.String(), "已完成") {
 		t.Fatalf("queued update called complete: %s", out.String())
 	}
 }

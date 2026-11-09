@@ -15,7 +15,10 @@ import (
 )
 
 type globalOptions struct {
-	host                         string
+	host string
+	// fallbackHost marks the default address used when no Master was
+	// given, configured or found on this computer.
+	fallbackHost                 bool
 	json, verbose, help, version bool
 	watch                        time.Duration
 	args                         []string
@@ -100,7 +103,7 @@ func parseGlobals(args []string) (globalOptions, error) {
 	}
 	if o.host == "" {
 		var err error
-		o.host, err = discoveredMaster()
+		o.host, o.fallbackHost, err = discoverMaster()
 		if err != nil {
 			return o, err
 		}
@@ -129,7 +132,8 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		if options.json {
 			json.NewEncoder(output).Encode(map[string]string{"version": version, "branch": branch, "commit": commit, "buildTime": buildTime})
 		} else {
-			fmt.Fprintf(output, "OSS Transfer CLI\nVersion: %s\nBranch: %s\nCommit: %s\nBuildTime: %s\n", version, branch, commit, buildTime)
+			fmt.Fprintf(output, "OSS Transfer CLI %s\n", cliVersionText(version))
+			fmt.Fprint(output, cliTextf(output, "提交 %s · 分支 %s · 构建于 %s\n", commit, branch, buildTime))
 		}
 		return 0
 	}
@@ -158,6 +162,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 	client.output = output
 	client.errors = errors
 	client.SetVerbose(options.verbose)
+	client.machineOutput = options.json
 	ctx := context.Background()
 	stop := func() {}
 	if normalized[0] != "diff-objects" && normalized[0] != "count-lines" && normalized[0] != "login" {
@@ -213,7 +218,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			if options.watch == 0 {
 				encoder.SetIndent("", "  ")
 			}
-			if err := encoder.Encode(sanitizeOutput(result)); err != nil {
+			if err := encoder.Encode(sanitizeOutput(withoutHumanFields(result))); err != nil {
 				fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, err))
 				return 1
 			}
@@ -221,19 +226,26 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			if options.watch > 0 {
 				fmt.Fprintln(output, time.Now().Format("2006-01-02 15:04:05"))
 			}
-			if !renderComparisonResult(output, normalized, result, callErr) {
-				renderCLIResult(output, result)
+			if !renderComparisonResult(output, normalized, result, callErr) && !renderCLISummary(output, result) {
+				if shown := humanErrorResult(result, callErr, language); shown != nil {
+					renderCLIResult(output, shown)
+				}
 			}
 		}
 		if callErr != nil {
 			fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
+			for _, hint := range cliErrorHints(callErr, options.fallbackHost) {
+				fmt.Fprintln(errors, cliText(errors, hint))
+			}
 			if ctx.Err() != nil {
 				return 130
 			}
-			if isCLIUsageError(callErr) {
+			if commandLineError(client, normalized, callErr) {
 				return 2
 			}
-			if incompleteResult(result) {
+			// A rejected session or permission is a failure, not a partial
+			// answer.
+			if !cliAuthFailure(callErr) && incompleteResult(result) {
 				return 3
 			}
 			return 1
@@ -306,7 +318,7 @@ func dispatchCLI(client *ApiClient, args []string, input io.Reader, host string)
 	case "import-inventory":
 		return runInventoryImport(client, args[1:])
 	default:
-		return nil, cliErrorf("未知命令 %q；使用 --help 查看用法", args[0])
+		return nil, cliUsageErrorf("未知命令 %q；使用 --help 查看用法", args[0])
 	}
 }
 
@@ -709,11 +721,11 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 		if children {
 			id = "#" + getString(task, "childTaskId")
 		}
-		status := cliTaskStatus(getString(task, "status"))
+		status := cliTaskStatusLabel(out, getString(task, "status"))
 		if cleanup := taskCleanup(task); cleanup != nil {
 			status = taskCleanupLabel(out, cleanup)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\n", id, taskDirection(task), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskProgress(task), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkersDisplay(task, localeOf(out))))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\n", id, cliDirectionLabel(out, taskDirection(task)), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskProgress(task), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkersDisplay(task, localeOf(out))))
 	}
 	w.Flush()
 	for _, task := range tasks {
@@ -733,11 +745,18 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 			policy = "OVERWRITE"
 		}
 	}
+	if label := cliConflictLabel(out, policy); label != "" {
+		policy = label
+	}
+	distribution := getString(task, "distributionMode")
+	if label := cliDistributionLabel(out, distribution, taskDirection(task)); label != "" {
+		distribution = label
+	}
 	bandwidth := cliText(out, "仅受节点上限约束")
 	if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
 		bandwidth = fmt.Sprint(value, " Mbps")
 	}
-	fields := [][2]string{{cliText(out, "方向"), taskDirection(task)}, {cliText(out, "状态"), cliTaskStatus(getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), getString(task, "distributionMode")}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	fields := [][2]string{{cliText(out, "方向"), cliDirectionLabel(out, taskDirection(task))}, {cliText(out, "状态"), cliTaskStatusLabel(out, getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), distribution}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
 	if taskDirection(task) == "OSS_TO_LOCAL" {
 		// Parent rows always carry the setting (older tasks report auto); a child
 		// row without it inherits the parent's, so do not guess a value there.
@@ -751,7 +770,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	if limits, ok := task["requestLimits"].(map[string]interface{}); ok {
 		fields = append(fields, cliTaskRequestLimitFields(out, limits)...)
 	}
-	fields = append(fields, cliTaskScopeFields(task)...)
+	fields = append(fields, cliTaskScopeFields(out, task)...)
 	for _, key := range []string{"errorCode", "errorMessage"} {
 		if value := getString(task, key); value != "" {
 			label := cliText(out, "错误代码")
@@ -783,9 +802,13 @@ func renderFieldsWithNodes(out io.Writer, data map[string]interface{}, indent st
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	// Several fields can name the same thing (workerNode, executionNodeIp);
+	// print each label and value once.
+	shown := map[string]bool{}
 	for _, key := range keys {
 		value := data[key]
-		if value == nil || redundantCLINodeField(key, data) {
+		// "success" repeats the exit status and the error line.
+		if value == nil || key == "success" || key == cliSummaryKey || redundantCLINodeField(key, data) {
 			continue
 		}
 		label := cliText(out, fieldLabels[key])
@@ -821,11 +844,26 @@ func renderFieldsWithNodes(out io.Writer, data map[string]interface{}, indent st
 					fmt.Fprintf(out, "%s  -\n", indent)
 					renderFieldsWithNodes(out, m, indent+"    ", displays)
 				} else {
-					fmt.Fprintf(out, "%s  %s\n", indent, safeCLIText(item))
+					text, _ := cliScalarText(out, key, item)
+					fmt.Fprintf(out, "%s  %s\n", indent, safeCLIText(text))
 				}
 			}
+		case []string:
+			fmt.Fprintf(out, "%s%s: %s\n", indent, label, safeCLIText(strings.Join(v, ", ")))
+		case []int:
+			items := make([]string, len(v))
+			for i, id := range v {
+				items[i] = strconv.Itoa(id)
+			}
+			fmt.Fprintf(out, "%s%s: %s\n", indent, label, strings.Join(items, ", "))
 		default:
-			fmt.Fprintf(out, "%s%s: %s\n", indent, label, safeCLIText(v))
+			text, show := cliScalarText(out, key, v)
+			line := indent + label + ": " + safeCLIText(text)
+			if !show || shown[line] {
+				continue
+			}
+			shown[line] = true
+			fmt.Fprintln(out, line)
 		}
 	}
 }

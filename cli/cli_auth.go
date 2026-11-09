@@ -228,17 +228,24 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 			return result, cliErrorf("登录成功，但保存会话失败: %w", err)
 		}
 		result["message"] = client.text("已登录")
+		summary := []string{client.locale.format("已登录 %s（用户 %s）", host, username)}
 		if user, ok := result["user"].(map[string]interface{}); ok && user["mustChangePassword"] == true {
 			result["message"] = client.text("请先修改初始密码：oss-transfer-cli change-password")
+			summary = append(summary, client.text("请先修改初始密码：oss-transfer-cli change-password"))
 		}
 		result["host"] = host
+		setCLISummary(result, summary...)
 		return result, nil
 	case "logout", "whoami":
 		if len(args) != 0 {
 			return nil, cliErrorf("%s 不接受额外参数", command)
 		}
 		if command == "whoami" {
-			return client.Request("GET", "/api/auth/current", nil)
+			result, err := client.Request("GET", "/api/auth/current", nil)
+			if err == nil {
+				setCLISummary(result, whoamiSummary(client, host, result)...)
+			}
+			return result, err
 		}
 		result, err := client.Request("POST", "/api/auth/logout", nil)
 		if removeErr := removeSession(host); removeErr != nil {
@@ -246,6 +253,14 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 		}
 		if err != nil {
 			return map[string]interface{}{"message": client.text("本机会话已移除；服务端退出请求未成功")}, err
+		}
+		if result == nil {
+			result = map[string]interface{}{}
+		}
+		if result["authentication"] == "local" {
+			setCLISummary(result, client.text("本机服务访问无需注销；账号会话未改变"))
+		} else {
+			setCLISummary(result, client.locale.format("已注销 %s", host))
 		}
 		return result, nil
 	case "change-password":
@@ -273,7 +288,40 @@ func runAuthCommand(client *ApiClient, command string, args []string, input io.R
 				return nil, cliErrorf("两次输入的密码不一致")
 			}
 		}
-		return client.Request("POST", "/api/auth/change-password", map[string]string{"oldPassword": old, "newPassword": next})
+		result, err := client.Request("POST", "/api/auth/change-password", map[string]string{"oldPassword": old, "newPassword": next})
+		if err == nil {
+			setCLISummary(result, client.text("密码已修改"))
+		}
+		return result, err
 	}
 	return nil, cliErrorf("未知账户命令")
+}
+
+// whoamiSummary shows the signed-in account.
+func whoamiSummary(client *ApiClient, host string, result map[string]interface{}) []string {
+	user, _ := result["user"].(map[string]interface{})
+	var text strings.Builder
+	out := &cliLocaleWriter{Writer: &text, locale: client.locale}
+	table := newCLITable(out)
+	fmt.Fprintf(table, "%s\t%s\n", cliText(out, "Master"), safeCLIText(host))
+	if user["authentication"] == "local" {
+		fmt.Fprintf(table, "%s\t%s\n", cliText(out, "登录方式"), cliText(out, "本机服务访问"))
+	} else {
+		fmt.Fprintf(table, "%s\t%s\n", cliText(out, "用户名"), safeCLIText(getString(user, "username")))
+		if name := getString(user, "displayName"); name != "" && name != getString(user, "username") {
+			fmt.Fprintf(table, "%s\t%s\n", cliText(out, "显示名称"), safeCLIText(name))
+		}
+	}
+	if role := getString(user, "role"); role != "" {
+		label := cliEnumLabel(out, "role", role)
+		if label == "" {
+			label = role
+		}
+		fmt.Fprintf(table, "%s\t%s\n", cliText(out, "角色"), safeCLIText(label))
+	}
+	table.Flush()
+	if user["mustChangePassword"] == true {
+		fmt.Fprintln(out, cliText(out, "请先修改初始密码：oss-transfer-cli change-password"))
+	}
+	return cliTextLines(text.String())
 }

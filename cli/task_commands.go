@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -693,8 +696,44 @@ func taskReport(client *ApiClient, args []string) (map[string]interface{}, error
 	if output == "" {
 		output = fmt.Sprintf("task-%d-report.zip", id)
 	}
+	if output == "-" {
+		return nil, taskReportToStdout(client, id)
+	}
 	if err := client.Download("GET", fmt.Sprintf("/task-reports/%d", id), nil, output); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true, "taskId": id, "output": output, "message": client.text("任务报告已保存")}, nil
+	result := map[string]interface{}{"success": true, "taskId": id, "output": output, "message": client.text("任务报告已保存")}
+	setCLISummary(result, client.locale.format("任务 #%d 的报告已保存到 %s", id, output))
+	return result, nil
+}
+
+// taskReportToStdout writes the verified report to standard output. The
+// report is downloaded and checked completely first, so a failed download
+// never leaves part of a ZIP on standard output.
+func taskReportToStdout(client *ApiClient, id int) error {
+	if client.machineOutput {
+		return cliUsageErrorf("--output - 把报告写到标准输出，不能与 --json 同时使用")
+	}
+	directory, err := os.MkdirTemp("", "oss-transfer-report-")
+	if err != nil {
+		return cliErrorf("创建报告临时文件失败: %w", err)
+	}
+	defer os.RemoveAll(directory)
+	path := filepath.Join(directory, "report.zip")
+	if err := client.Download("GET", fmt.Sprintf("/task-reports/%d", id), nil, path); err != nil {
+		return err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return cliErrorf("保存报告失败: %w", err)
+	}
+	defer file.Close()
+	output := client.output
+	if output == nil {
+		output = os.Stdout
+	}
+	if _, err := io.Copy(output, file); err != nil {
+		return cliErrorf("写入标准输出失败: %w", err)
+	}
+	return nil
 }

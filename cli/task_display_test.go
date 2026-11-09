@@ -35,7 +35,7 @@ func TestTaskDetailsExposeMappingFiltersAndFailureReason(t *testing.T) {
 	}
 	var output bytes.Buffer
 	renderTaskDetail(&output, task)
-	for _, want := range []string{"源对象 Key", "source/a.txt", "目标命名", "EXACT_KEY", "目标对象 Key", "archive/a.txt", "修改时间晚于", "2026-09-01T00:00:00", "修改时间早于", "PATH_MAPPING", "失败原因", "目标路径冲突 不可迁移", "2 / 2 KiB", "2026-"} {
+	for _, want := range []string{"源对象 Key", "source/a.txt", "目标命名", "指定目标 Key", "目标对象 Key", "archive/a.txt", "修改时间晚于", "2026-09-01T00:00:00", "修改时间早于", "PATH_MAPPING", "失败原因", "目标路径冲突 不可迁移", "2 / 2 KiB", "2026-"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q: %s", want, output.String())
 		}
@@ -43,8 +43,8 @@ func TestTaskDetailsExposeMappingFiltersAndFailureReason(t *testing.T) {
 	if strings.Contains(output.String(), "1789444800000") {
 		t.Fatal("epoch timestamp left unformatted")
 	}
-	fields := cliTaskScopeFields(map[string]interface{}{"keyMapping": map[string]interface{}{"mode": "REPLACE_PREFIX", "sourcePrefix": "old/", "targetPrefix": ""}})
-	if len(fields) != 3 || fields[2][1] != `""` {
+	fields := cliTaskScopeFields(&output, map[string]interface{}{"keyMapping": map[string]interface{}{"mode": "REPLACE_PREFIX", "sourcePrefix": "old/", "targetPrefix": ""}})
+	if len(fields) != 3 || fields[2][1] != `""` || fields[0][1] != "替换源前缀" {
 		t.Fatalf("intentional empty replacement prefix lost: %#v", fields)
 	}
 }
@@ -58,7 +58,7 @@ func TestCLIBinaryUnitsMatchConsole(t *testing.T) {
 }
 
 func TestTaskDisplayGroupsLegacyStatesWithoutRewritingJSON(t *testing.T) {
-	for state, want := range map[string]string{"PENDING": "WAITING", "WAITING": "WAITING", "LIST_DONE": "RUNNING", "RUNNING": "RUNNING", "RECOVERABLE": "RECOVERABLE"} {
+	for state, want := range map[string]string{"PENDING": "排队中", "WAITING": "排队中", "LIST_DONE": "执行中", "RUNNING": "执行中", "RECOVERABLE": "等待恢复"} {
 		row := map[string]interface{}{"taskIndex": 1, "status": state}
 		var output bytes.Buffer
 		renderTaskRows(&output, []map[string]interface{}{row}, false)

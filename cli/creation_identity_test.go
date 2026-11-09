@@ -174,7 +174,7 @@ func TestCreationRequestIdentityV4NeverAutomaticallyReplays(t *testing.T) {
 	server := fixture.server(t)
 	client := &ApiClient{baseUrl: server.URL + "/api/master", client: server.Client()}
 	_, err := runTaskCreate(client, []string{"oss-to-oss", "source/src", "target/dst"})
-	if err == nil || !strings.Contains(err.Error(), "旧 V4") {
+	if err == nil || !strings.Contains(err.Error(), "--request-id") || !strings.Contains(err.Error(), "task list") {
 		t.Fatal(err)
 	}
 	fixture.mu.Lock()

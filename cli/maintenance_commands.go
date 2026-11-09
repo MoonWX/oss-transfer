@@ -112,7 +112,8 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 			return nil, cliUsageErrorf("%s 是预发布（实验）版本，正常更新不会提供；确认安装请同时指定 --allow-prerelease", version)
 		}
 		if action == "master" && prerelease && o.Has("allow-prerelease") {
-			return client.Post(path, map[string]interface{}{"version": version, "allowPrerelease": true})
+			result, err := client.Post(path, map[string]interface{}{"version": version, "allowPrerelease": true})
+			return updateStarted(client, action, version, result, err)
 		}
 	} else {
 		// Agents follow the running Master's version, never a newer release or
@@ -130,7 +131,43 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 			return nil, cliErrorf("无法确定 Master 的发布版本，请先查看 update status")
 		}
 	}
-	return client.Post(path, map[string]interface{}{"version": version})
+	result, err := client.Post(path, map[string]interface{}{"version": version})
+	return updateStarted(client, action, version, result, err)
+}
+
+// updateStarted summarizes an accepted update: the target version, each
+// queued Agent and how to follow the progress.
+func updateStarted(client *ApiClient, action, version string, result map[string]interface{}, err error) (map[string]interface{}, error) {
+	if err != nil || result == nil {
+		return result, err
+	}
+	var text strings.Builder
+	out := &cliLocaleWriter{Writer: &text, locale: client.locale}
+	data := responseData(result)
+	if action == "master" {
+		fmt.Fprint(out, cliTextf(out, "Master 正在更新到 %s；服务会短暂重启\n", cliVersionText(version)))
+	} else {
+		items := objectList(data["items"])
+		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s\n", len(items), cliVersionText(version)))
+		if len(items) > 0 {
+			table := newCLITable(out)
+			fmt.Fprintln(table, cliText(out, "节点\t状态\t说明"))
+			for _, item := range items {
+				detail := getString(item, "error")
+				if detail == "" {
+					detail = cliUpdateReasonLabel(out, getString(item, "reason"))
+				}
+				if detail == "" {
+					detail = "—"
+				}
+				fmt.Fprintf(table, "%s\t%s\t%s\n", safeCLIText(cliNodeLabel(item, getString(item, "address"), localeOf(out))), safeCLIText(cliUpdatePhaseLabel(out, getString(item, "phase"))), safeCLIText(detail))
+			}
+			table.Flush()
+		}
+	}
+	fmt.Fprintln(out, cliText(out, "查看进度：oss-transfer-cli update status --watch 5"))
+	setCLISummary(result, cliTextLines(text.String())...)
+	return result, nil
 }
 
 func runBackupMaintenance(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
@@ -209,7 +246,7 @@ func renderMaintenanceResult(out io.Writer, result map[string]interface{}) bool 
 			} else if state == "" {
 				state = "UNAVAILABLE"
 			}
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(name), safeCLIText(row["count"]), formatSize(getInt64(row, "bytes")), safeCLIText(row["reclaimableCount"]), formatSize(getInt64(row, "reclaimableBytes")), safeCLIText(state))
+			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(name), cliTaskCount(row, "count"), formatSize(getInt64(row, "bytes")), cliTaskCount(row, "reclaimableCount"), formatSize(getInt64(row, "reclaimableBytes")), safeCLIText(cliStateLabel(out, state)))
 		}
 		printSummary("Master", master)
 		for _, row := range objectList(data["agents"]) {
@@ -272,7 +309,7 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 				}
 			}
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(name), safeCLIText(version), safeCLIText(phase), match, safeCLIText(reason))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(name), safeCLIText(cliVersionText(version)), safeCLIText(cliUpdatePhaseLabel(out, phase)), cliStateLabel(out, match), safeCLIText(cliUpdateReasonLabel(out, reason)))
 	}
 	printNode("Master", master, true)
 	for _, row := range objectList(data["agents"]) {
@@ -280,7 +317,7 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 	}
 	table.Flush()
 	if latest, ok := data["latest"].(map[string]interface{}); ok {
-		fmt.Fprintf(out, cliText(out, "最新版本: %s\n"), safeCLIText(latest["version"]))
+		fmt.Fprintf(out, cliText(out, "最新版本: %s\n"), safeCLIText(cliVersionText(getString(latest, "version"))))
 	}
 	if data["checking"] == true {
 		fmt.Fprintln(out, cliText(out, "正在检查新版本"))
@@ -289,6 +326,6 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 		fmt.Fprintln(out, safeCLIText(checkError))
 	}
 	if phase := getString(queue, "phase"); phase != "" && phase != "IDLE" {
-		fmt.Fprintf(out, cliText(out, "Agent 更新队列: %s\n"), safeCLIText(phase))
+		fmt.Fprintf(out, cliText(out, "Agent 更新队列: %s\n"), safeCLIText(cliUpdatePhaseLabel(out, phase)))
 	}
 }

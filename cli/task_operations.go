@@ -29,10 +29,16 @@ func taskListPages(client *ApiClient, query url.Values, all bool) (map[string]in
 	displays := map[string]interface{}{}
 	for {
 		page, err := client.Get("/status?" + query.Encode())
-		if result == nil {
+		first := result == nil
+		if first {
 			result = page
 		}
 		if err != nil {
+			// A failed first page is a plain failure: nothing was listed,
+			// so there is no partial list to report.
+			if first {
+				return page, err
+			}
 			if result != nil {
 				responseData(result)["partial"] = true
 				responseData(result)["pageError"] = localizedCLIError(client.locale, err)
@@ -210,7 +216,7 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 			path = "/clear"
 		}
 		if !allowed || status == "" {
-			return nil, cliErrorf("任务 #%d 当前状态 %s 不允许 %s；本次未执行操作", id, status, action)
+			return nil, cliErrorf("任务 #%d 当前状态 %s 不允许 %s；本次未执行操作", id, cliTaskStatusLabel(&cliLocaleWriter{locale: client.locale}, status), action)
 		}
 		if action == "resume" || action == "retry" {
 			generationText := fmt.Sprint(row["generation"])
@@ -242,6 +248,7 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 				detail["message"] = client.text("主节点未执行运行中重试；请升级主节点后重试失败项")
 			}
 		}
+		setCLISummary(result, taskControlSummary(client, action, result)...)
 	}
 	return result, err
 }
@@ -340,10 +347,84 @@ func taskControlBatches(client *ApiClient, action string, groups []taskControlGr
 		}
 	}
 	result := map[string]interface{}{"success": len(issues) == 0, "operation": action, "taskIds": ids, "details": details, "batches": batches, "accepted": accepted, "ignored": ignored, "failed": len(failedIDs), "uncertain": len(uncertainIDs), "unsubmitted": len(unsubmittedIDs), "processed": processed, "failedIds": failedIDs, "uncertainIds": uncertainIDs, "unsubmittedIds": unsubmittedIDs, "partial": len(issues) > 0 && (accepted+ignored > 0 || len(uncertainIDs) > 0 || len(unsubmittedIDs) > 0 || reportedPartial), "message": client.text("操作请求已处理；以任务最新状态为准")}
+	setCLISummary(result, taskControlSummary(client, action, result)...)
 	if len(issues) > 0 {
 		return result, fmt.Errorf("%s", strings.Join(issues, "; "))
 	}
 	return result, nil
+}
+
+// Task control outcomes. Values are catalog keys.
+var taskControlDone = map[string]string{
+	"stop":    "已请求停止",
+	"resume":  "已恢复执行",
+	"retry":   "已开始重试",
+	"start":   "已启动",
+	"delete":  "已移入回收站",
+	"restore": "已从回收站恢复",
+	"purge":   "已永久删除",
+}
+
+// taskControlSummary says what happened to each selected task.
+func taskControlSummary(client *ApiClient, action string, result map[string]interface{}) []string {
+	ids, _ := result["taskIds"].([]int)
+	details, _ := result["details"].([]interface{})
+	accepted, ignored := getInt(result, "accepted"), getInt(result, "ignored")
+	unsubmitted, _ := result["unsubmittedIds"].([]int)
+	done := client.text(taskControlDone[action])
+	for _, raw := range details {
+		// Permanent deletion shows its background cleanup instead.
+		if row, ok := raw.(map[string]interface{}); ok && taskCleanup(row) != nil {
+			return nil
+		}
+	}
+	if len(details) == 0 {
+		lines := []string{}
+		if accepted > 0 && ignored == 0 && accepted == len(ids)-len(unsubmitted) {
+			lines = append(lines, client.locale.format("%s：%s", done, cliTaskIDList(ids[:accepted])))
+		} else if accepted+ignored > 0 {
+			lines = append(lines, client.locale.format("%s %d 个任务，%d 个无需处理", done, accepted, ignored))
+		}
+		if len(unsubmitted) > 0 {
+			lines = append(lines, client.locale.format("未提交：%s", cliTaskIDList(unsubmitted)))
+		}
+		return lines
+	}
+	var table strings.Builder
+	for _, raw := range details {
+		row, _ := raw.(map[string]interface{})
+		id := getInt(row, "taskId")
+		outcome := ""
+		switch {
+		case row["uncertain"] == true:
+			outcome = client.text("结果未确认，请查看任务状态")
+		case row["success"] == false || getString(row, "error") != "":
+			message := firstNodeString(row, "error", "message")
+			outcome = client.locale.format("失败：%s", translateServerMessage(client.locale, message))
+		case row["ignored"] == true:
+			outcome = client.text("无需处理")
+			if status := getString(row, "status"); status != "" {
+				outcome = client.locale.format("无需处理（当前状态：%s）", cliTaskStatusLabel(&cliLocaleWriter{locale: client.locale}, status))
+			}
+		case row["mode"] == "FAILED_OBJECTS":
+			outcome = client.locale.format("已重试 %d 个失败对象，任务继续运行", getInt(row, "retriedObjects"))
+		default:
+			outcome = done
+		}
+		if message := getString(row, "message"); message != "" && row["success"] != false && !strings.Contains(outcome, message) {
+			outcome += client.locale.format("（%s）", message)
+		}
+		fmt.Fprintf(&table, "#%d\t%s\n", id, outcome)
+	}
+	var out strings.Builder
+	formatted := newCLITable(&out)
+	formatted.WriteString(table.String())
+	formatted.Flush()
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(unsubmitted) > 0 {
+		lines = append(lines, client.locale.format("未提交：%s", cliTaskIDList(unsubmitted)))
+	}
+	return lines
 }
 
 func taskProgress(client *ApiClient, args []string) (map[string]interface{}, error) {

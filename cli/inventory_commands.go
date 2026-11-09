@@ -236,6 +236,9 @@ func runInventoryImport(client *ApiClient, args []string) (map[string]interface{
 	}
 	result["success"], result["submissionStatus"], result["taskCount"] = true, "accepted", len(taskIDs)
 	result["message"] = client.text("清单已提交；每个文件对应一个主任务")
+	summary := []string{client.locale.format("已提交 %d 个清单文件：%s", len(files), cliTaskIDList(cliIntList(result["taskIds"])))}
+	summary = append(summary, client.text("清单已提交；每个文件对应一个主任务"))
+	setCLISummary(result, summary...)
 	return result, nil
 }
 

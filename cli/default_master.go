@@ -163,7 +163,25 @@ func installationMaster(directory, matchingCLI string) (string, bool, error) {
 	return origin, true, err
 }
 
+// defaultMasterOrigin is used when no Master is configured or installed here.
+const defaultMasterOrigin = "http://localhost:1685"
+
 func discoveredMaster() (string, error) {
+	origin, _, err := discoverMaster()
+	return origin, err
+}
+
+// discoverMaster also reports whether it fell back to defaultMasterOrigin
+// because nothing was configured or found.
+func discoverMaster() (string, bool, error) {
+	origin, err := findMaster()
+	if err == nil && origin == "" {
+		return defaultMasterOrigin, true, nil
+	}
+	return origin, false, err
+}
+
+func findMaster() (string, error) {
 	if preference, err := loadCLIPreferences(); err == nil && preference.Master != "" {
 		return masterOrigin(preference.Master, "host")
 	} else if err != nil {
@@ -231,8 +249,5 @@ func discoveredMaster() (string, error) {
 	if unresolved != nil {
 		return "", unresolved
 	}
-	if origin, err := selectUnique(origins); origin != "" || err != nil {
-		return origin, err
-	}
-	return "http://localhost:1685", nil
+	return selectUnique(origins)
 }

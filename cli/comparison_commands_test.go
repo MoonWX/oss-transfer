@@ -159,11 +159,64 @@ func TestComparisonStatusRendersDedicatedSummaryAndRows(t *testing.T) {
 			}
 		}
 	}
-	// Content mode shows bytes read; an empty page says so.
+	// Content mode shows bytes read; a finished comparison without stored
+	// differences says that none were found.
 	content := comparisonTestPage(map[string]interface{}{"mode": "content", "bytesRead": 3 << 20, "rows": 0, "elapsedMillis": 0})
 	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, content) })
-	if code != 0 || !strings.Contains(out, "内容 SHA-256") || !strings.Contains(out, "已读取") || !strings.Contains(out, "3 MiB") || !strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "下一页") || strings.Contains(out, "个对象/秒") {
+	if code != 0 || !strings.Contains(out, "内容 SHA-256") || !strings.Contains(out, "已读取") || !strings.Contains(out, "3 MiB") || !strings.Contains(out, "未发现差异") || strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "下一页") || strings.Contains(out, "个对象/秒") {
 		t.Fatalf("%d %s", code, out)
+	}
+	// A filtered or later page, or an unfinished comparison, only says
+	// that this page is empty.
+	for _, test := range []struct {
+		args []string
+		page map[string]interface{}
+	}{
+		{[]string{"--status", "DIFFERENT"}, comparisonTestPage(map[string]interface{}{"rows": 0})},
+		{[]string{"--after", "10"}, comparisonTestPage(map[string]interface{}{"rows": 0})},
+		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "RUNNING"})},
+		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "CANCELED"})},
+	} {
+		code, out, _ := runMockCLI(t, append([]string{"object", "status", "job-1"}, test.args...), func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, test.page) })
+		if code != 0 || !strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "未发现差异") {
+			t.Fatalf("%v: %d %s", test.args, code, out)
+		}
+	}
+}
+
+func TestComparisonStatusOfOneObjectShowsReadRateWithoutCheckpoint(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		page         map[string]interface{}
+		wants, avoid []string
+	}{
+		// Content mode over one object: how fast it was read, not objects/s.
+		{"content", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "checkpoint": "a.jpg", "rows": 0}),
+			[]string{"读取速率", "2 MiB/s", "已读取", "4 MiB", "未发现差异"}, []string{"个对象/秒", "检查点", "a.jpg\n"}},
+		// Metadata mode over one object: no rate at all.
+		{"metadata", comparisonTestPage(map[string]interface{}{"scope": "object", "compared": 1, "elapsedMillis": 6, "checkpoint": "a.jpg", "rows": 0}),
+			[]string{"单个对象", "已用时间"}, []string{"速率", "个对象/秒", "检查点"}},
+		// A completed prefix comparison has nothing to continue from.
+		{"completed prefix", comparisonTestPage(map[string]interface{}{"checkpoint": "2026/k.jpg"}),
+			[]string{"速率", "20.0 个对象/秒"}, []string{"检查点", "2026/k.jpg"}},
+		// An interrupted prefix comparison keeps its checkpoint.
+		{"interrupted prefix", comparisonTestPage(map[string]interface{}{"checkpoint": "2026/k.jpg", "status": "INTERRUPTED", "resumable": true}),
+			[]string{"检查点", "2026/k.jpg", "20.0 个对象/秒"}, nil},
+	} {
+		code, out, stderr := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, test.page) })
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s: %d %s %s", test.name, code, out, stderr)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s lacks %q:\n%s", test.name, want, out)
+			}
+		}
+		for _, avoid := range test.avoid {
+			if strings.Contains(out, avoid) {
+				t.Errorf("%s contains %q:\n%s", test.name, avoid, out)
+			}
+		}
 	}
 }
 
@@ -294,30 +347,43 @@ func TestComparisonActionsPrintDedicatedMessages(t *testing.T) {
 		response      map[string]interface{}
 		code          int
 		wants, avoids []string
+		// before is the state object resume reads before resuming.
+		before string
 	}{
 		{[]string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive", "--source-prefix", "2026/", "--dest-prefix", "backup/"}, http.MethodPost, "/api/master/comparisons", http.StatusAccepted,
-			comparisonTestPage(map[string]interface{}{"id": "-Ab_9", "status": "RUNNING"}), 0, []string{"比对已开始，ID：-Ab_9\n", "查看进度：object status --watch 5 -- -Ab_9\n"}, []string{"重试方式", "请求上限范围"}},
+			comparisonTestPage(map[string]interface{}{"id": "-Ab_9", "status": "RUNNING"}), 0, []string{"比对已开始，ID：-Ab_9\n", "查看进度：object status --watch 5 -- -Ab_9\n"}, []string{"重试方式", "请求上限范围"}, ""},
 		{[]string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive", "--source-prefix", "2026/", "--dest-prefix", "backup/"}, http.MethodPost, "/api/master/comparisons", http.StatusBadGateway,
-			map[string]interface{}{"success": false, "id": "job-9", "message": "Agent did not answer"}, 1, []string{"启动结果未确认，比对 ID：job-9；稍后用 object status job-9 查看"}, nil},
+			map[string]interface{}{"success": false, "id": "job-9", "message": "Agent did not answer"}, 1, []string{"启动结果未确认，比对 ID：job-9；稍后用 object status job-9 查看"}, nil, ""},
 		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
-			comparisonTestPage(map[string]interface{}{"status": "RUNNING", "resumes": 1}), 0, []string{"已继续比对 job-1\n", "查看进度：object status job-1 --watch 5\n"}, nil},
+			comparisonTestPage(map[string]interface{}{"status": "RUNNING", "resumes": 1}), 0, []string{"已继续比对 job-1\n", "查看进度：object status job-1 --watch 5\n"}, nil, "INTERRUPTED"},
+		// Resuming a comparison that is already running changes nothing.
+		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
+			comparisonTestPage(map[string]interface{}{"status": "RUNNING"}), 0, []string{"比对 job-1 已在运行，无需继续\n", "查看进度：object status job-1 --watch 5\n"}, []string{"已继续比对"}, "RUNNING"},
 		// Only a RUNNING reply means the comparison was resumed.
 		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
-			comparisonTestPage(map[string]interface{}{"status": "CANCELING"}), 0, []string{"比对 job-1 当前状态：正在取消\n"}, []string{"已继续比对", "查看进度"}},
+			comparisonTestPage(map[string]interface{}{"status": "CANCELING"}), 0, []string{"比对 job-1 当前状态：正在取消\n"}, []string{"已继续比对", "查看进度"}, ""},
 		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
-			comparisonTestPage(nil), 0, []string{"比对 job-1 当前状态：已完成\n"}, []string{"已继续比对"}},
+			comparisonTestPage(nil), 0, []string{"比对 job-1 当前状态：已完成\n"}, []string{"已继续比对"}, ""},
 		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusConflict,
-			map[string]interface{}{"success": false, "message": "Another comparison is running on this node"}, 1, nil, nil},
+			map[string]interface{}{"success": false, "message": "Another comparison is running on this node"}, 1, nil, nil, ""},
 		{[]string{"object", "cancel", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/cancel", http.StatusOK,
-			comparisonTestPage(map[string]interface{}{"status": "CANCELING"}), 0, []string{"已请求取消比对 job-1\n"}, []string{"重试方式"}},
+			comparisonTestPage(map[string]interface{}{"status": "CANCELING"}), 0, []string{"已请求取消比对 job-1\n"}, []string{"重试方式"}, ""},
 		{[]string{"object", "cancel", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/cancel", http.StatusOK,
-			comparisonTestPage(nil), 0, []string{"比对 job-1 当前状态：已完成\n"}, nil},
+			comparisonTestPage(nil), 0, []string{"比对 job-1 当前状态：已完成\n"}, nil, ""},
 		{[]string{"object", "delete", "--", "-job"}, http.MethodDelete, "/api/master/comparisons/-job", http.StatusOK,
-			map[string]interface{}{"success": true}, 0, []string{"已删除比对 -job 的结果\n"}, []string{"成功"}},
+			map[string]interface{}{"success": true}, 0, []string{"已删除比对 -job 的结果\n"}, []string{"成功"}, ""},
 		{[]string{"object", "delete", "job-1"}, http.MethodDelete, "/api/master/comparisons/job-1", http.StatusConflict,
-			map[string]interface{}{"success": false, "message": "Comparison is running; cancel it before deleting"}, 1, nil, nil},
+			map[string]interface{}{"success": false, "message": "Comparison is running; cancel it before deleting"}, 1, nil, nil, ""},
 	} {
 		code, out, stderr := runMockCLI(t, test.args, func(w http.ResponseWriter, r *http.Request) {
+			if test.args[1] == "resume" && r.Method == http.MethodGet && r.URL.Path == "/api/master/comparisons/job-1" {
+				before := test.before
+				if before == "" {
+					before = "INTERRUPTED"
+				}
+				adminTestJSON(t, w, comparisonTestPage(map[string]interface{}{"status": before}))
+				return
+			}
 			if r.Method != test.method || r.URL.Path != test.path {
 				t.Errorf("%v: bad request %s %s", test.args, r.Method, r.URL)
 			}
@@ -606,7 +672,7 @@ func TestComparisonExportZIPVerifiesAndSummarizes(t *testing.T) {
 	}
 	// The same destination is never replaced.
 	code, _, stderr = runComparisonCLI(t, server, "object", "export", "job-1", "--output", output)
-	if code != 1 || !strings.Contains(stderr, "目标文件已存在") {
+	if code != 2 || !strings.Contains(stderr, "目标文件已存在") {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	jsonOutput := filepath.Join(directory, "json.zip")
@@ -1034,6 +1100,10 @@ func TestComparisonCommandsAcceptIDsThatStartWithADash(t *testing.T) {
 			requests = append(requests, r.Method+" "+r.URL.Path)
 			adminTestJSON(t, w, comparisonTestPage(map[string]interface{}{"id": id, "status": "RUNNING"}))
 		})
+		// Resume first reads the comparison's state.
+		if test.args[1] == "resume" && len(requests) == 2 && requests[0] == http.MethodGet+" /api/master/comparisons/"+id {
+			requests = requests[1:]
+		}
 		if code != 0 || stderr != "" || len(requests) != 1 || requests[0] != test.method+" "+test.path || !strings.Contains(out, id) {
 			t.Errorf("%v: exit %d, requests %v: %s %s", test.args, code, requests, out, stderr)
 		}

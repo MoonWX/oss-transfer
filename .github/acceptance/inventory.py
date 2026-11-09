@@ -176,7 +176,7 @@ class InventoryAcceptance:
                 "CLI task output discarded the sealed inventory scope")
         export_path = h.root / "exported-inventory.json"
         export_path.write_text(json.dumps(exported), encoding="utf-8")
-        rejected = self.cli_command(["task", "import", "tasks", str(export_path)], expected=1)
+        rejected = self.cli_command(["task", "import", "tasks", str(export_path)], expected=2)
         require("import-inventory" in rejected.get("error", "") and self.task_ids() == {task_id},
                 "Ordinary JSON import expanded an inventory task to a bucket scan")
         h.record("CLI task JSON preserves inventory scope and ordinary reimport explicitly rejects it")

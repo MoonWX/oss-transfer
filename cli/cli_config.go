@@ -158,13 +158,14 @@ func runCLIConfig(options globalOptions, output, errors io.Writer) int {
 		}
 	}
 	result := map[string]string{args[2]: value}
+	fallback := false
 	if args[2] == "master" && args[1] == "get" {
 		source := "automatic"
 		if options.host != "" {
 			value, err = masterOrigin(options.host, "host")
 			source = "override"
 		} else {
-			value, err = discoveredMaster()
+			value, fallback, err = discoverMaster()
 			if preference.Master != "" {
 				source = "saved"
 			}
@@ -182,7 +183,11 @@ func runCLIConfig(options globalOptions, output, errors io.Writer) int {
 	}
 	fmt.Fprintln(output, value)
 	if source := result["source"]; source != "" {
-		fmt.Fprintf(output, "source: %s\n", source)
+		label := map[string]string{"automatic": "自动识别本机安装", "saved": "已保存的设置", "override": "--host 或 OSS_TRANSFER_MASTER_SERVER"}[source]
+		if fallback {
+			label = "默认地址（未找到本机安装，也未保存 Master）"
+		}
+		fmt.Fprintf(output, cliText(output, "来源：%s\n"), cliText(output, label))
 	}
 	return 0
 }

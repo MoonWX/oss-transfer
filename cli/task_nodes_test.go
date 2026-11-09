@@ -92,13 +92,13 @@ func TestTaskNodesShowsMembershipTableAndJSON(t *testing.T) {
 		t.Fatal("membership query must be one GET", err, master.posts, master.gets)
 	}
 	text := renderTaskNodesForTest(result, localeZH)
-	for _, want := range []string{"任务 #12 执行节点（成员版本 3，RUNNING）", "alpha (10.0.0.1)", "执行中", "移出中（等待当前工作完成）", "加入中", "4 Mbps", "不限 / 25 / 不限", "有节点正在加入或移出", "已移出的节点", "zeta (10.0.0.9)", "可加入的 Agent", "delta (10.0.0.3)", "Agent 版本过旧"} {
+	for _, want := range []string{"任务 #12 执行节点（成员版本 3，执行中）", "alpha (10.0.0.1)", "执行中", "移出中（等待当前工作完成）", "加入中", "4 Mbps", "不限 / 25 / 不限", "有节点正在加入或移出", "已移出的节点", "zeta (10.0.0.9)", "可加入的 Agent", "delta (10.0.0.3)", "Agent 版本过旧"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("membership output missing %q:\n%s", want, text)
 		}
 	}
 	english := renderTaskNodesForTest(result, localeEN)
-	for _, want := range []string{"Task #12 execution nodes (membership revision 3, RUNNING)", "Draining", "Joining", "Agents available to add", "Agent 版本过旧"} {
+	for _, want := range []string{"Task #12 execution nodes (membership revision 3, Running)", "Draining", "Joining", "Agents available to add", "Agent 版本过旧"} {
 		if !strings.Contains(english, want) {
 			t.Errorf("English membership output missing %q:\n%s", want, english)
 		}

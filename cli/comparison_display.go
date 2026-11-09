@@ -89,6 +89,9 @@ func renderComparisonResult(out io.Writer, args []string, result map[string]inte
 		}
 		switch action {
 		case "resume":
+			if renderCLISummary(out, result) {
+				break
+			}
 			// Only a RUNNING comparison was resumed; otherwise show its state.
 			if status := getString(data, "status"); status != "RUNNING" {
 				fmt.Fprintf(out, cliText(out, "比对 %s 当前状态：%s\n"), safeCLIText(id), comparisonStatusLabel(out, status))
@@ -234,16 +237,23 @@ func comparisonRate(out io.Writer, data map[string]interface{}) string {
 	return cliTextf(out, "%s 个对象/秒", strconv.FormatFloat(compared*1000/millis, 'f', 1, 64))
 }
 
+// comparisonReadRate is the content read per second of comparison time.
+func comparisonReadRate(data map[string]interface{}) string {
+	read, readOK := cliNumeric(data["bytesRead"])
+	millis, millisOK := cliNumeric(data["elapsedMillis"])
+	if !readOK || !millisOK || read < 0 || !(millis > 0) || math.IsInf(millis, 0) || math.IsInf(read, 0) {
+		return "—"
+	}
+	return formatSize(int64(read*1000/millis)) + "/s"
+}
+
 func comparisonTime(value interface{}) string {
 	text, _ := value.(string)
 	parsed, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
 		return text
 	}
-	if parsed.IsZero() {
-		return ""
-	}
-	return parsed.Local().Format("2006-01-02 15:04:05")
+	return cliLocalTime(parsed)
 }
 
 var comparisonPlainID = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
@@ -322,12 +332,23 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 		{cliText(out, "两端均不存在"), cliTaskCount(data, "bothMissing")},
 		{cliText(out, "已保存差异"), cliTaskCount(data, "rows")},
 		{cliText(out, "已用时间"), comparisonElapsed(data)},
-		{cliText(out, "速率"), comparisonRate(out, data)},
 	}
-	if getString(data, "mode") == "content" {
+	single := getString(data, "scope") == "object"
+	content := getString(data, "mode") == "content"
+	// One object has no meaningful objects-per-second rate; content mode
+	// reports how fast it read the object instead.
+	switch {
+	case single && content:
+		fields = append(fields, [2]string{cliText(out, "读取速率"), comparisonReadRate(data)})
+	case !single:
+		fields = append(fields, [2]string{cliText(out, "速率"), comparisonRate(out, data)})
+	}
+	if content {
 		fields = append(fields, [2]string{cliText(out, "已读取"), cliTaskSize(data, "bytesRead")})
 	}
-	if checkpoint := getString(data, "checkpoint"); checkpoint != "" {
+	// A checkpoint is where a prefix comparison would continue: it means
+	// nothing for one object or a comparison that has finished.
+	if checkpoint := getString(data, "checkpoint"); checkpoint != "" && !single && getString(data, "status") != "COMPLETED" {
 		fields = append(fields, [2]string{cliText(out, "检查点"), checkpoint})
 	}
 	fields = append(fields, [2]string{cliText(out, "可继续"), comparisonYesNo(out, data["resumable"] == true)})
@@ -348,7 +369,12 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	}
 	table.Flush()
 	fmt.Fprintln(out)
-	renderComparisonRows(out, objectList(data["items"]))
+	rows := objectList(data["items"])
+	if len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && getString(data, "status") == "COMPLETED" && getInt64(data, "rows") == 0 {
+		fmt.Fprintln(out, cliText(out, "未发现差异"))
+	} else {
+		renderComparisonRows(out, rows)
+	}
 	if next := getInt64(data, "nextAfter"); next > 0 {
 		flags := []string{"--after", strconv.FormatInt(next, 10), "--limit", strconv.Itoa(options.limit)}
 		if len(options.statuses) > 0 {

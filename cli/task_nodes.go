@@ -322,7 +322,7 @@ func dashIfEmpty(value string) string {
 }
 
 func renderTaskNodesView(out io.Writer, view map[string]interface{}) {
-	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatus(getString(view, "status"))))
+	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
 	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true)
 	renderTaskNodeNotes(out, view)
 	if view["editable"] == false {
@@ -370,7 +370,7 @@ func renderTaskNodesAccepted(out io.Writer, result, view map[string]interface{})
 		}
 		fmt.Fprintf(out, cliText(out, "移出: %s（%s）\n"), safeCLIText(strings.Join(removed, ", ")), mode)
 	}
-	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatus(getString(view, "status"))))
+	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
 	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true)
 	if view["pending"] == true {
 		fmt.Fprintf(out, cliText(out, "变更会在后台完成；查看进度: oss-transfer-cli task nodes %d --watch 5\n"), getInt(view, "taskId"))

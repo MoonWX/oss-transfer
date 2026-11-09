@@ -162,7 +162,11 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			if err := adminConfirmed(o); err != nil {
 				return nil, err
 			}
-			return client.Delete("/nodes/" + url.PathEscape(original))
+			result, err := client.Delete("/nodes/" + url.PathEscape(original))
+			if err == nil {
+				setCLISummary(result, client.locale.format("节点 %s 已移除", original))
+			}
+			return result, err
 		}
 		address, label := original, o.Value("label")
 		if action == "update" {
@@ -202,7 +206,11 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			body["masterUrl"] = strings.TrimSuffix(client.baseUrl, "/api/master")
 			return client.Post("/agents/invitations", body)
 		}
-		return client.Put("/nodes/"+url.PathEscape(original), body)
+		result, err := client.Put("/nodes/"+url.PathEscape(original), body)
+		if err == nil {
+			setCLISummary(result, nodeUpdatedSummary(client, original, body))
+		}
+		return result, err
 	default:
 		return nil, cliErrorf("未知 node 子命令: %s", action)
 	}
@@ -279,7 +287,11 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			if err := adminConfirmed(o); err != nil {
 				return nil, err
 			}
-			return client.Delete("/s3-config/" + url.PathEscape(alias))
+			result, err := client.Delete("/s3-config/" + url.PathEscape(alias))
+			if err == nil {
+				setCLISummary(result, storageSavedSummary(client, client.locale.format("存储连接 %s 已删除", alias), result)...)
+			}
+			return result, err
 		}
 		result, err := client.Get("/s3-config/" + url.PathEscape(alias) + "/buckets")
 		if err == nil && action == "test" {
@@ -378,10 +390,16 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil {
 			return nil, cliErrorf("Endpoint 必须是 http:// 或 https:// 地址，且不得包含用户名或密码")
 		}
+		var result map[string]interface{}
 		if action == "add" {
-			return client.Post("/s3-config", body)
+			result, err = client.Post("/s3-config", body)
+		} else {
+			result, err = client.Put("/s3-config/"+url.PathEscape(alias), body)
 		}
-		return client.Put("/s3-config/"+url.PathEscape(alias), body)
+		if err == nil {
+			setCLISummary(result, storageSavedSummary(client, client.locale.format("存储连接 %s 已保存", alias), result)...)
+		}
+		return result, err
 	default:
 		return nil, cliErrorf("未知 storage 子命令: %s", action)
 	}
@@ -616,6 +634,16 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 			result["warning"] = client.text("降级记录清空请求已提交；此 API 不逐节点确认结果，请重新查询检查记录及节点完整性")
 			result["message"] = result["warning"]
 		}
+		if err == nil {
+			switch {
+			case result["supported"] == false:
+				setCLISummary(result, client.text("当前传输引擎不使用降级记录，无需清理"))
+			case result["complete"] == false:
+				// The generic output keeps the warning and node lists.
+			default:
+				setCLISummary(result, client.locale.format("已清理 %d 条已处理的记录", getInt(result, "clearedCount")))
+			}
+		}
 		return result, err
 	}
 	if action != "list" && action != "export" {
@@ -645,13 +673,18 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 		if err := client.Download("GET", "/api/master/local-transfers/report", nil, o.Value("output")); err != nil {
 			return nil, err
 		}
-		return map[string]interface{}{"success": true, "output": o.Value("output"), "message": client.text("本地迁移报告已保存"), "scope": "all-local-transfers"}, nil
+		result := map[string]interface{}{"success": true, "output": o.Value("output"), "message": client.text("本地迁移报告已保存"), "scope": "all-local-transfers"}
+		setCLISummary(result, client.locale.format("本地迁移报告已保存到 %s", o.Value("output")))
+		return result, nil
 	}
 	var result map[string]interface{}
 	if kind == "local" {
 		result, err = adminLocalExceptions(client, o)
 	} else {
 		result, err = adminOSSExceptions(client, kind, o)
+	}
+	if err == nil && action == "list" {
+		setCLISummary(result, exceptionsListSummary(client, kind, o, result)...)
 	}
 	if err != nil || action != "export" {
 		return result, err
@@ -663,6 +696,11 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	result["exported"] = len(adminArray(result["items"]))
 	result["message"] = client.text("已导出本次查询返回的异常记录；完整性及截断状态见 complete、partial 和 truncated")
 	delete(result, "items")
+	summary := []string{client.locale.format("已导出 %d 条记录到 %s", result["exported"], o.Value("output"))}
+	if result["truncated"] == true {
+		summary = append(summary, client.text("仅导出了部分记录；可调大 --limit 后重新导出"))
+	}
+	setCLISummary(result, summary...)
 	return result, nil
 }
 
@@ -956,4 +994,29 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 	}
 	writer.Flush()
 	return writer.Error()
+}
+
+// storageSavedSummary reports a saved or deleted connection and its
+// synchronization to the execution nodes.
+func storageSavedSummary(client *ApiClient, done string, result map[string]interface{}) []string {
+	lines := []string{done}
+	synced, failed := getInt(result, "successCount"), getInt(result, "failedCount")
+	if _, reported := result["successCount"]; reported {
+		if failed == 0 {
+			lines[0] += client.locale.format("，已同步到 %d 个节点", synced)
+		} else {
+			lines[0] += client.locale.format("，已同步到 %d 个节点，%d 个节点等待同步", synced, failed)
+		}
+	}
+	if failed > 0 {
+		for _, detail := range cliStringList(result["details"]) {
+			lines = append(lines, "  "+detail)
+		}
+	}
+	for _, key := range []string{"warning", "connectionWarning"} {
+		if warning := getString(result, key); warning != "" {
+			lines = append(lines, warning)
+		}
+	}
+	return lines
 }

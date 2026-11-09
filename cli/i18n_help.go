@@ -152,8 +152,8 @@ Tasks
   task stop|resume|start|retry <ID...>
   task delete <ID...>             Move records to trash
   task trash                      List deleted task records
-  task restore <ID...>             Restore selected tasks from the trash
-  task purge <ID...> --yes         Permanently remove selected trash records
+  task restore <ID...>            Restore selected tasks from the trash
+  task purge <ID...> --yes        Permanently remove selected trash records
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps N --head-qps N --put-qps N]
   task nodes <ID> [--add NODE] [--remove NODE [--now]] [--yes]  Show or change execution nodes
@@ -231,8 +231,8 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   task stop|resume|start|retry <ID...>
   task delete <ID...>             記録をごみ箱に移動
   task trash                      ごみ箱の記録を表示
-  task restore <ID...>             指定したタスクをごみ箱から復元
-  task purge <ID...> --yes         指定したごみ箱の記録を完全削除
+  task restore <ID...>            指定したタスクをごみ箱から復元
+  task purge <ID...> --yes        指定したごみ箱の記録を完全削除
   task bandwidth <ID> [Mbps|unlimited]
   task limits <ID> [--list-qps N --head-qps N --put-qps N]
   task nodes <ID> [--add ノード] [--remove ノード [--now]] [--yes]  実行ノードを表示・変更
@@ -405,7 +405,6 @@ list/trash の --limit は 1～10000、--before-id は古い記録、list --all 
   --conflict skip|overwrite         Existing-object policy; default skip
   --overwrite                       Same as --conflict overwrite
   --distribution affinity|balanced  Default balanced
-  --balanced                        Same as --distribution balanced
   --date-after YYYY-MM-DDTHH:mm:ss   Modified after this time
   --date-before YYYY-MM-DDTHH:mm:ss  Modified before this time; later than the start
   --bandwidth-mbps <value>           Additional task limit, 0.1–1000000 Mbps
@@ -440,9 +439,9 @@ Local transfers
 Register connection aliases with storage first. Paths belong to execution nodes;
 /data, C:\data and UNC paths are supported. Local transfers run prechecks before submission.
 Accepted tasks start automatically; query task status for completion.
-After a lost response, retry Go services with identical arguments and the returned --request-id.
-Use a new ID after changing arguments or for another task. Legacy V4 does not deduplicate;
-check its task list before retrying. Creation is never retried automatically.
+After a lost response, retry with identical arguments and the returned --request-id; no duplicate is created.
+Use a new ID after changing arguments or for another task. Services before 4.1 do not deduplicate;
+check the task list before retrying there. Creation is never retried automatically.
 `, `転送タスクの作成
   oss-transfer-cli task create oss-to-oss <転送元接続名/バケット> <転送先接続名/バケット> [オプション]
   oss-transfer-cli task create oss-to-local <転送元接続名/バケット> --binding ノード=/転送先パス [オプション]
@@ -451,7 +450,6 @@ check its task list before retrying. Creation is never retried automatically.
   --conflict skip|overwrite         既存オブジェクトの処理。既定: skip
   --overwrite                       --conflict overwrite と同じ
   --distribution affinity|balanced  既定: balanced
-  --balanced                        --distribution balanced と同じ
   --date-after YYYY-MM-DDTHH:mm:ss   更新日時の開始条件
   --date-before YYYY-MM-DDTHH:mm:ss  更新日時の終了条件。開始より後を指定
   --bandwidth-mbps <値>              タスクの追加上限。0.1～1000000 Mbps
@@ -486,8 +484,8 @@ OSS 間転送
 接続エイリアスは先に storage で登録してください。パスは実行ノード上のパスです。
 /data、C:\data、UNC パスに対応します。ローカル転送は送信前に事前チェックを行います。
 受理されたタスクは自動開始します。完了はタスク状態で確認してください。
-応答を受信できなかった場合、Go サービスには同じ引数と返された --request-id で再試行できます。
-引数を変えた場合や別タスクには新しい ID を使ってください。旧 V4 は重複排除に対応しないため、
+応答を受信できなかった場合、同じ引数と返された --request-id で再試行でき、重複して作成されません。
+引数を変えた場合や別タスクには新しい ID を使ってください。4.1 より前のサービスは重複排除に対応しないため、
 再試行前に一覧を確認してください。作成リクエストは自動再試行されません。
 `},
 	cliTaskImportHelp: {`Bulk task import
@@ -516,9 +514,9 @@ Same meaning as task create --ranged-download; other directions reject off.
   oss-transfer-cli task import local ./local-requests.json --validate-only
 
 Requests must form a non-empty array. The server still validates nodes, credentials and paths.
-On partial acceptance or lost responses, retry Go with the original file, arguments and --request-id.
+On partial acceptance or lost responses, retry with the original file, arguments and --request-id.
 Do not remove/reorder rows or change arguments while reusing the ID. Prechecks do not use request IDs.
-Legacy V4 does not deduplicate; check its task list before retrying. Creation is never retried automatically.
+Services before 4.1 do not deduplicate; check the task list before retrying there. Creation is never retried automatically.
 `, `タスクの一括インポート
 使い方: oss-transfer-cli task import buckets|tasks|local <ファイル> [オプション]
 
@@ -545,9 +543,9 @@ local のダウンロード行（OSS_TO_LOCAL）では "rangedDownload":"auto" �
   oss-transfer-cli task import local ./local-requests.json --validate-only
 
 リクエストは空でない配列にしてください。サーバーでもノード、認証情報、パスを検証します。
-一部受理や応答消失時は、Go に元のファイル、引数、--request-id で再試行できます。
+一部受理や応答消失時は、元のファイル、引数、--request-id で再試行できます。
 同じ ID で行の削除・並べ替え・引数変更はしないでください。事前チェックには ID を使いません。
-旧 V4 は重複排除に対応しません。再試行前に一覧を確認してください。作成は自動再試行されません。
+4.1 より前のサービスは重複排除に対応しません。再試行前に一覧を確認してください。作成は自動再試行されません。
 `},
 	cliNodeHelp: {`Execution nodes
 Usage: oss-transfer-cli node <subcommand> [arguments]
@@ -944,7 +942,7 @@ diff-objects defaults to sort-merge. Bloom reduces memory use but can produce fa
 Sort the target manifest by key. Use different input and output directories.
 import-inventory reads local .incr files, one UTF-8 key per line, and creates one parent task per file.
 Blank lines are ignored and duplicates removed; other keys are unchanged. Only the key list is submitted.
---node can be repeated; otherwise Master selects nodes. Go Master is required.
+--node can be repeated; otherwise Master selects nodes. Requires Master 4.1 or later.
 After interruption, retain original files and arguments and retry with the returned --request-id.
 Already accepted tasks will not be created again.
 `, `マニフェストツール
@@ -958,7 +956,7 @@ diff-objects の既定はソートマージです。bloom はメモリー使用�
 転送先マニフェストは Key 順にソートしてください。入力と出力は異なるディレクトリを使用します。
 import-inventory は .incr ファイルの各行にある UTF-8 Key を読み取り、ファイルごとに親タスクを作成します。
 空行は無視し重複を除去します。他の Key は変更せず、Key 一覧のみ送信します。
---node は複数回指定できます。省略時は Master が選択します。Go Master が必要です。
+--node は複数回指定できます。省略時は Master が選択します。Master 4.1 以降が必要です。
 中断後は元のファイルと引数を保持し、返された --request-id で再試行してください。
 受理済みのタスクを重複して作成しません。
 `},

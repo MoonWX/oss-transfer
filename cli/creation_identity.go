@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"net/http"
 )
 
 func validateCreationRequestID(id string) error {
@@ -39,6 +41,13 @@ func newCreationRequestID() (string, error) {
 	return "cli-" + hex.EncodeToString(random[:]), nil
 }
 
+// creationSubmissionError explains a creation whose outcome is unknown: the
+// same request ID lets a retry return the saved result instead of creating
+// the tasks again. A definite rejection needs no such advice.
 func creationSubmissionError(err error, requestID string) error {
-	return cliErrorf("%w；请求标识 %s（Go 服务重试请保留原参数并添加 --request-id %s；旧 V4 请先核对任务列表）", err, requestID, requestID)
+	var problem *apiHTTPError
+	if errors.As(err, &problem) && problem.Status >= 400 && problem.Status < 500 && problem.Status != http.StatusRequestTimeout {
+		return err
+	}
+	return cliErrorf("%w；请求标识 %s（重试时请保留原参数并添加 --request-id %s，以免重复创建；先用 task list 核对是否已创建）", err, requestID, requestID)
 }

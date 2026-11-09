@@ -10,17 +10,6 @@ import (
 	"time"
 )
 
-func cliTaskStatus(status string) string {
-	switch status {
-	case "LIST_DONE":
-		return "RUNNING"
-	case "PENDING":
-		return "WAITING"
-	default:
-		return status
-	}
-}
-
 func renderTaskHistoryPage(out io.Writer, data map[string]interface{}, action string) {
 	if before := getInt(data, "nextBeforeId"); before > 0 {
 		fmt.Fprintf(out, cliText(out, "更早记录：task %s --before-id %d（可沿用原有筛选参数）\n"), action, before)
@@ -109,15 +98,18 @@ func cliTaskSpeed(task map[string]interface{}, key string) string {
 
 func cliTaskTimestamp(value interface{}) string {
 	if text, ok := value.(string); ok {
+		if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
+			return cliLocalTime(parsed)
+		}
 		return text
 	}
 	if number, ok := cliNumeric(value); ok && !math.IsNaN(number) && !math.IsInf(number, 0) && number > 0 && number < math.MaxInt64 {
-		return time.UnixMilli(int64(number)).Format("2006-01-02 15:04:05")
+		return cliLocalTime(time.UnixMilli(int64(number)))
 	}
 	return ""
 }
 
-func cliTaskScopeFields(task map[string]interface{}) [][2]string {
+func cliTaskScopeFields(out io.Writer, task map[string]interface{}) [][2]string {
 	fields := [][2]string{}
 	endpoint, _ := task["sourceEndpoint"].(map[string]interface{})
 	for _, field := range [][2]string{{"objectKey", "源对象 Key"}, {"prefix", "源前缀"}} {
@@ -134,6 +126,8 @@ func cliTaskScopeFields(task map[string]interface{}) [][2]string {
 			if value, exists := mapping[field[0]].(string); exists {
 				if value == "" {
 					value = "\"\""
+				} else if field[0] == "mode" {
+					value = cliKeyMappingLabel(out, value)
 				}
 				fields = append(fields, [2]string{field[1], value})
 			}

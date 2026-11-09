@@ -474,7 +474,7 @@ oss-transfer-cli update status --watch 5
 
 A host fixed in place (for example its service account) is checked again within a minute; no restart is needed.
 
-**Docker Agents.** A container Agent cannot replace itself. Its row has **Update commands**, which opens *Update Docker node NAME* with commands to copy and run on its host:
+**Docker Agents.** A container Agent cannot replace itself. Its row has **Update commands**, which opens *Update Docker node NAME* with commands to copy and run on its host. When the Agent already runs the Master's version, the button is **Recreate commands** (*Recreate Docker node NAME*), with the same commands, for example to add a directory mount:
 
 - for an Agent started with `docker run`: `docker pull IMAGE`, `docker rm -f NAME`, then the `docker run -d …` command that starts it again from its data volume `NAME-data`. Keep any extra options you used, such as directory mounts;
 - for an Agent installed with the installer's Docker Compose method: set `image` in `/opt/oss-transfer-compose/agent/docker-compose.yml` to the new image, then run `docker compose -p oss-transfer-agent -f /opt/oss-transfer-compose/agent/docker-compose.yml pull` and `… up -d`.

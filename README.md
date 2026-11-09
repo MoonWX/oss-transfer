@@ -188,7 +188,7 @@ In a Docker installation, run it in the Master container: `docker compose exec m
 Update when no tasks are running, if possible.
 
 1. Update the Master under **Tools → Software updates**, or with `oss-transfer-cli update master --yes`.
-2. Under **Execution nodes → Software updates**, choose **Update all nodes**. The Agents update one at a time. Docker Agents are updated by recreating their containers; their **Update commands** button shows how ([Docker Compose](docs/docker-compose.md#container-agents)).
+2. Under **Execution nodes → Software updates**, choose **Update all nodes**. The Agents update one at a time. Docker Agents are updated by recreating their containers; their **Update commands** button shows how ([Docker Compose](docs/docker-compose.md#container-agents)). At the Master's version the button is **Recreate commands**, for example to add a directory mount.
 
 Each update takes a backup first and deletes it after the new version passes its health check. If startup fails, the previous version is restored. You can also update by rerunning the install command. Update checks only offer stable releases; see [trying a prerelease](docs/operations.md#try-a-prerelease) for betas.
 

@@ -99,7 +99,7 @@ TRANSFER_PORT=1685
 
 容器中的执行节点只能读写挂载进容器的主机目录。在任务中填写容器内看到的路径。请在两侧使用相同的绝对路径，例如 `/mnt/storage:/mnt/storage`，这样主机上和管理页面中的路径一致。
 
-- **`docker run` 方式：** 运行复制的指令之前，在第二条 `docker run` 的镜像名前加上 `-v /mnt/storage:/mnt/storage`。已有的执行节点需要带上这个参数重建容器（方法同[更新容器中的执行节点](#容器中的执行节点)），身份保存在数据卷中，不受影响。
+- **`docker run` 方式：** 运行复制的指令之前，在第二条 `docker run` 的镜像名前加上 `-v /mnt/storage:/mnt/storage`。已有的执行节点需要带上这个参数重建容器：在 **执行节点 → 版本更新** 中点击它所在行的 **重建命令**（有可用更新时为 **更新命令**），方法同[更新容器中的执行节点](#容器中的执行节点)；身份保存在数据卷中，不受影响。
 - **Windows 上的 Docker Desktop：** 把 Windows 文件夹挂载到 Linux 路径，例如 `-v C:\transfer:/mnt/transfer`，在任务中填写 `/mnt/transfer`。
 - **Linux Compose 安装器：** 加上 `--files-dir`，例如 `curl -fsSL '<加入链接>' | sudo bash -s -- --files-dir /mnt/storage`。该目录必须已经存在。
 
@@ -206,7 +206,7 @@ docker compose up -d master
 
 容器中的执行节点不能在线更新，需要用新镜像重建容器；身份和设置保存在数据卷中，会保留。正在执行的子任务会中断，执行节点重新连接后自动恢复。
 
-1. 打开 **执行节点 → 版本更新**。Docker 执行节点所在的行有一个 **更新命令** 按钮。
+1. 打开 **执行节点 → 版本更新**。Docker 执行节点所在的行有一个 **更新命令** 按钮。执行节点已与 Master 版本一致时，按钮显示为 **重建命令**，给出同样的命令，可用于添加目录挂载等。
 2. 窗口中会显示该执行节点的命令，使用 Master 对应的镜像：
    - **用 docker run 加入的节点：** `docker pull <镜像>`、`docker rm -f <容器>`，以及重新启动它的 `docker run` 命令。
    - **用安装脚本以 Docker Compose 部署的节点：** 先把 `/opt/oss-transfer-compose/agent/docker-compose.yml` 中的 `image` 改为新镜像，再运行：

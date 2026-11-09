@@ -474,7 +474,7 @@ oss-transfer-cli update status --watch 5
 
 主机上的问题（例如服务账号）修正后，一分钟内会重新检查，无需重启服务。
 
-**Docker 执行节点。** 容器中的执行节点无法替换自己。它所在的行有 **更新命令** 按钮，点击后打开 *更新 Docker 执行节点 名称*，列出需要在其主机上复制运行的命令：
+**Docker 执行节点。** 容器中的执行节点无法替换自己。它所在的行有 **更新命令** 按钮，点击后打开 *更新 Docker 执行节点 名称*，列出需要在其主机上复制运行的命令。执行节点已与 Master 版本一致时，按钮为 **重建命令**（打开 *重建 Docker 执行节点 名称*），命令相同，可用于添加目录挂载等：
 
 - 用 `docker run` 启动的执行节点：`docker pull 镜像`、`docker rm -f 名称`，然后用 `docker run -d …` 从数据卷 `名称-data` 重新启动它。创建容器时加过的其他参数（例如目录挂载）请一并保留；
 - 用安装脚本的 Docker Compose 方式安装的执行节点：先把 `/opt/oss-transfer-compose/agent/docker-compose.yml` 中的 `image` 改为新镜像，再运行 `docker compose -p oss-transfer-agent -f /opt/oss-transfer-compose/agent/docker-compose.yml pull` 和 `… up -d`。

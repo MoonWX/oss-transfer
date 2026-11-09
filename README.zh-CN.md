@@ -188,7 +188,7 @@ Docker 部署时，在 Master 容器中运行：`docker compose exec master oss-
 建议在没有运行中的任务时升级。
 
 1. 在 **运维工具 → 版本更新** 中更新 Master，或运行 `oss-transfer-cli update master --yes`。
-2. 在 **执行节点 → 版本更新** 中点击 **更新全部节点**，执行节点会逐台更新。Docker 执行节点需要重建容器来更新，点击它的 **更新命令** 按钮即可看到命令（见 [Docker Compose](docs/docker-compose.zh-CN.md#容器中的执行节点)）。
+2. 在 **执行节点 → 版本更新** 中点击 **更新全部节点**，执行节点会逐台更新。Docker 执行节点需要重建容器来更新，点击它的 **更新命令** 按钮即可看到命令（见 [Docker Compose](docs/docker-compose.zh-CN.md#容器中的执行节点)）。版本已与 Master 一致时，按钮为 **重建命令**，可用于添加目录挂载等。
 
 升级前会自动备份，新版本通过健康检查后删除备份；启动失败时会自动回滚。也可以重新运行安装命令来升级。检测更新只提供正式版，试用 beta 版本见[试用预发布版本](docs/operations.zh-CN.md#试用预发布版本)。
 

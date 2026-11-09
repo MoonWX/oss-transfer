@@ -206,6 +206,19 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "Update commands",
     ja: "更新コマンド",
   },
+  重建命令: {
+    en: "Recreate commands",
+    ja: "再作成コマンド",
+  },
+  "重建 Docker 执行节点 {name}": {
+    en: "Recreate Docker node {name}",
+    ja: "Docker 実行ノード {name} を再作成",
+  },
+  "该节点已与 Master 版本一致，无需更新。需要修改容器参数（例如添加本地目录挂载）时，可以用下面的命令重新创建容器，并在 docker run 中加入新的参数。":
+    {
+      en: "This node already runs the Master's version; no update is needed. To change the container's options, for example to add a local directory mount, recreate the container with the commands below and add the new options to docker run.",
+      ja: "このノードは Master と同じバージョンのため、更新は不要です。コンテナーのオプションを変更する場合（ローカルディレクトリのマウントを追加するなど）は、次のコマンドでコンテナーを作り直し、docker run に新しいオプションを追加してください。",
+    },
   "更新 Docker 执行节点 {name}": {
     en: "Update Docker node {name}",
     ja: "Docker 実行ノード {name} を更新",

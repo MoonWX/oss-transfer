@@ -99,7 +99,7 @@ The **Linux Docker Compose** variant runs the installer as root (`curl … | sud
 
 A container Agent can only read or write the host directories mounted into it. In a task, enter the path as the container sees it. Use the same absolute path on both sides, such as `/mnt/storage:/mnt/storage`, so paths look the same on the host and in the console.
 
-- **`docker run` Agents:** before running the copied command, add `-v /mnt/storage:/mnt/storage` to the second `docker run`, before the image name. For an existing Agent, recreate its container with the extra option (as in [updating container Agents](#container-agents)); the identity stays in the volume.
+- **`docker run` Agents:** before running the copied command, add `-v /mnt/storage:/mnt/storage` to the second `docker run`, before the image name. For an existing Agent, recreate its container with the extra option: its row in **Execution nodes → Software updates** has **Recreate commands** (or **Update commands** when an update is available), as in [updating container Agents](#container-agents); the identity stays in the volume.
 - **Docker Desktop on Windows:** mount a Windows folder on a Linux path, for example `-v C:\transfer:/mnt/transfer`, and use `/mnt/transfer` in tasks.
 - **Linux Compose installer:** add `--files-dir`, for example `curl -fsSL '<join link>' | sudo bash -s -- --files-dir /mnt/storage`. The directory must exist.
 
@@ -206,7 +206,7 @@ Keep the existing volumes. `docker compose down -v` deletes them.
 
 Container Agents cannot update online. Recreate each container from the new image; the identity and settings stay in its volume. Running child tasks are interrupted and resume when the Agent reconnects.
 
-1. Open **Execution nodes → Software updates**. A Docker Agent's row has an **Update commands** button.
+1. Open **Execution nodes → Software updates**. A Docker Agent's row has an **Update commands** button. When the Agent already runs the Master's version, the button is labelled **Recreate commands** and shows the same commands, for example to add a directory mount.
 2. The dialog shows the commands for that Agent, using the Master's image:
    - **Nodes joined with docker run:** `docker pull <image>`, `docker rm -f <container>` and the `docker run` command that starts it again.
    - **Nodes installed with the installer's Docker Compose method:** change `image` in `/opt/oss-transfer-compose/agent/docker-compose.yml`, then run:

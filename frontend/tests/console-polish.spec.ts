@@ -432,6 +432,18 @@ test("container Agents get update commands and disabled updates explain why", as
               },
               update: { phase: "IDLE" },
             },
+            {
+              address: "agent-docker-3",
+              displayName: "agent-docker-3",
+              hostname: "oss-transfer-agent-4d5e6f",
+              info: {
+                role: "agent",
+                version: "4.2.0",
+                supported: false,
+                reason: "CONTAINER",
+              },
+              update: { phase: "IDLE" },
+            },
           ],
           latest: { version: "4.2.0" },
           available: false,
@@ -441,7 +453,7 @@ test("container Agents get update commands and disabled updates explain why", as
     }),
   );
   await page.goto("/tools?tab=updates");
-  await expect(page.getByText("v4.2.0", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v4.2.0" })).toBeVisible();
   const row = page.getByRole("row").filter({ hasText: "agent-docker-1" });
   await expect(row.getByRole("cell", { name: "v4.1.41" })).toBeVisible();
   await expect(
@@ -487,5 +499,31 @@ test("container Agents get update commands and disabled updates explain why", as
   // Same options, in the same order, as the join command's docker run.
   expect(named.run.split("\n")[2]).toBe(
     `docker run -d --name oss-transfer-agent-1a2b3c --hostname oss-transfer-agent-1a2b3c --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
+  );
+  // At the Master's version the container can still be recreated, for
+  // example to add a directory mount.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  const current = page.getByRole("row").filter({ hasText: "agent-docker-3" });
+  await expect(current.getByRole("button", { name: "更新命令" })).toHaveCount(
+    0,
+  );
+  await current
+    .getByRole("button", { name: "更新", exact: true })
+    .locator("..")
+    .hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "已与 Master 版本一致，无需更新。",
+  );
+  await current.getByRole("button", { name: "重建命令" }).click();
+  const recreate = page.getByRole("dialog");
+  await expect(
+    recreate.getByRole("heading", {
+      name: "重建 Docker 执行节点 agent-docker-3",
+    }),
+  ).toBeVisible();
+  await expect(recreate).toContainText("添加本地目录挂载");
+  await expect(recreate.locator("pre").nth(0)).toHaveText(
+    containerAgentCommands(image, "oss-transfer-agent-4d5e6f").run,
   );
 });

@@ -18,7 +18,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/comparison"
 )
 
-// Export timing. Tests shorten them; nothing else changes them.
+// Export timing: variables only so that tests can shorten them.
 var (
 	// comparisonExportCallTimeout bounds one page request to the Agent.
 	comparisonExportCallTimeout = 30 * time.Second

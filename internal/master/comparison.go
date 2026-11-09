@@ -31,7 +31,7 @@ type comparisonAssignment struct {
 
 const comparisonAssignmentsBucket = "comparison_assignments"
 
-// Timing of the comparison API. Tests shorten them; nothing else changes them.
+// Timing of the comparison API: variables only so that tests can shorten them.
 var (
 	// comparisonPageBudget bounds how long one page request keeps asking an
 	// Agent for more rows to fill a filtered page.
@@ -125,7 +125,7 @@ func (c *comparisonAPI) start(w http.ResponseWriter, r *http.Request) {
 		}
 		var progress comparison.Progress
 		err = s.agentCall(ctx, node.Session(), "comparison_start", true, request, &progress)
-		if agentStatus(err, 429) || comparisonUnsupported(err) {
+		if agentStatus(err, 429) || comparisonUnsupported(err) || agentUpdating(err) {
 			// These replies explicitly reject admission. Do not leave a mapping
 			// to work which was never started, even if every Agent is busy.
 			if err := c.forget(id); err != nil {
@@ -249,6 +249,13 @@ func (c *comparisonAPI) comparisonOnline(member cluster.Member) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// agentUpdating reports a command refused because the Agent is being
+// updated, by the Agent or by the Master before sending it. Nothing started.
+func agentUpdating(err error) bool {
+	var problem *AgentError
+	return errors.As(err, &problem) && problem.Status == 409 && problem.Message == "Agent update is in progress"
 }
 
 // comparisonGone reports the Agent's answer for a comparison it deleted or

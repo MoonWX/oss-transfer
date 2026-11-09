@@ -8,8 +8,9 @@ var cliOutputMessages = map[string][2]string{
 	"（%s）":        {" (%s)", "（%s）"},
 	"%s（HTTP %d）": {"%s (HTTP %d)", "%s（HTTP %d）"},
 	"提交 %s · 分支 %s · 构建于 %s\n": {"Commit %s · branch %s · built %s\n", "コミット %s · ブランチ %s · ビルド %s\n"},
-	"无":       {"None", "なし"},
-	"查看进度：%s": {"Follow progress: %s", "進行状況: %s"},
+	"提交 %s · 构建于 %s\n":         {"Commit %s · built %s\n", "コミット %s · ビルド %s\n"},
+	"无":                        {"None", "なし"},
+	"查看进度：%s":                  {"Follow progress: %s", "進行状況: %s"},
 
 	// Task creation.
 	"未创建任务：%s":                                     {"No task was created: %s", "タスクは作成されませんでした: %s"},

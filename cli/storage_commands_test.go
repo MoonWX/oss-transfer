@@ -97,6 +97,10 @@ func TestStorageFailureShowsOneSummaryAndDetailOnRequest(t *testing.T) {
 		!strings.Contains(stderr, "提示: 运行 oss-transfer-cli storage update seaweed --path-style true") || !strings.Contains(stderr, "--verbose") {
 		t.Fatalf("summary: %d stdout=%q stderr=%q", code, out, stderr)
 	}
+	// The error comes first; where to find the raw detail follows it.
+	if strings.Index(stderr, "错误:") > strings.Index(stderr, "--verbose") {
+		t.Fatalf("hint before the error: %q", stderr)
+	}
 	if _, set := body["pathStyleEnable"]; !set || body["pathStyleEnable"] != nil {
 		t.Fatalf("--path-style auto must clear the explicit choice: %#v", body)
 	}

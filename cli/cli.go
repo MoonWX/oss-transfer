@@ -134,7 +134,12 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			json.NewEncoder(output).Encode(map[string]string{"version": version, "branch": branch, "commit": commit, "buildTime": buildTime})
 		} else {
 			fmt.Fprintf(output, "OSS Transfer CLI %s\n", cliVersionText(version))
-			fmt.Fprint(output, cliTextf(output, "提交 %s · 分支 %s · 构建于 %s\n", commit, branch, buildTime))
+			if branch == "" || branch == "unknown" {
+				// Builds outside a branch (a tag or detached checkout) have none.
+				fmt.Fprint(output, cliTextf(output, "提交 %s · 构建于 %s\n", commit, buildTime))
+			} else {
+				fmt.Fprint(output, cliTextf(output, "提交 %s · 分支 %s · 构建于 %s\n", commit, branch, buildTime))
+			}
 		}
 		return 0
 	}
@@ -233,13 +238,17 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 				}
 			}
 		}
-		if !options.json {
-			renderErrorDetail(errors, result, options.verbose, callErr != nil)
+		if !options.json && callErr == nil {
+			renderErrorDetail(errors, result, options.verbose, false)
 		}
 		if callErr != nil {
 			fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
 			for _, hint := range cliErrorHints(callErr, options.fallbackHost) {
 				fmt.Fprintln(errors, cliText(errors, hint))
+			}
+			// The raw detail, or where to find it, follows the error.
+			if !options.json {
+				renderErrorDetail(errors, result, options.verbose, true)
 			}
 			if ctx.Err() != nil {
 				return 130

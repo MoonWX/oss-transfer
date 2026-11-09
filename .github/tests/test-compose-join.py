@@ -208,6 +208,18 @@ class ComposeJoin(unittest.TestCase):
         self.assertNotIn("Native configuration/package options", result.stderr)
         self.assertIn("--force applies to native installations only", result.stdout)
 
+    def test_upgrade_names_the_installation_project_and_file(self):
+        # The project recorded in the Compose file, not the directory name,
+        # must be used: a bare docker compose up -d would start a second
+        # container on the same data.
+        self.service.mkdir()
+        (self.service / "docker-compose.yml").write_text("# oss-transfer-project: edge-agent\nservices: {}\n")
+        result = self.join(args=("--upgrade",))
+        self.assertNotEqual(result.returncode, 0)
+        compose = f"docker compose -p edge-agent -f {self.service}/docker-compose.yml"
+        self.assertIn(f"{compose} pull", result.stderr)
+        self.assertIn(f"{compose} up -d", result.stderr)
+
     def test_docker_desktop_is_pointed_to_the_docker_command_before_sudo(self):
         result = self.join(FAKE_OS="Darwin", FAKE_UID="501")
         self.assertNotEqual(result.returncode, 0)

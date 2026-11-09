@@ -2835,7 +2835,6 @@ if [[ "$method" == native ]]; then
 fi
 
 [[ "$os" == Linux && "$user_service" == 0 ]] || fail 'The Compose installer requires Linux and root'
-((upgrade == 0)) || fail 'For an existing Compose installation, run docker compose pull and docker compose up -d in its directory'
 # --force only skips the native same-version check; Compose never skips.
 ((force == 0)) || say 'Note: --force applies to native installations only; it is ignored for Docker Compose.' '提示：--force 仅适用于原生安装，Docker Compose 安装会忽略它。'
 [[ ( -z "$package_dir" || "$prepared_github" == 1 || -n "$local_package_dir" ) && ${#native_args[@]} == 0 && -z "$listen" && -z "$adopt_config" && -z "$cli_path" && "$replace_cli" == 0 ]] || fail 'Native configuration/package options cannot be used with Compose'
@@ -2843,6 +2842,18 @@ service_name=${service_name:-oss-transfer-$role}
 [[ "$service_name" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || fail 'Invalid Compose project name'
 install_dir=${install_dir:-/opt/oss-transfer-compose/$role}
 data_dir=${data_dir:-/var/lib/oss-transfer-compose/$role}
+if ((upgrade)); then
+  # Compose upgrades by pulling the image and recreating the container. The
+  # project name must be the installation's own: without -p, Compose would use
+  # the directory name and start a second container on the same data.
+  existing_file="$install_dir/docker-compose.yml"
+  existing_project=$service_name
+  if [[ -f "$existing_file" ]]; then
+    recorded=$(sed -n 's/^# oss-transfer-project: \([a-z0-9][a-z0-9_-]*\)$/\1/p' "$existing_file" | head -n 1)
+    [[ -z "$recorded" ]] || existing_project=$recorded
+  fi
+  fail "$(say "Upgrade a Compose installation with Docker Compose: docker compose -p $existing_project -f $existing_file pull, then docker compose -p $existing_project -f $existing_file up -d" "请用 Docker Compose 升级 Compose 安装：先运行 docker compose -p $existing_project -f $existing_file pull，再运行 docker compose -p $existing_project -f $existing_file up -d")"
+fi
 for path in "$install_dir" "$data_dir" "$files_dir"; do
   [[ -z "$path" ]] && continue
   [[ "$path" == /* && "$path" != / && "$path" != *[$'\n\r\t\047"\\$']* && "$path" != *'/../'* && "$path" != */.. && "$path" != *'//'* && "$path" != *'/./'* && "$path" != */. && "$path" != */ && "$path" != *:* ]] || fail 'Use clean absolute paths'

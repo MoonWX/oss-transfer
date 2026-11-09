@@ -2527,6 +2527,54 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Offline; it leaves when its execution lease expires and its work continues on the other nodes",
     ja: "オフラインです。実行リースの期限切れ後に離脱し、作業は他のノードで続行されます",
   },
+  "原始错误：{detail}": {
+    en: "Original error: {detail}",
+    ja: "元のエラー：{detail}",
+  },
+  "无法解析主机名 {host}。如果它是“存储桶名.Endpoint 主机名”，说明连接使用了 Virtual-hosted 寻址，自建 S3（MinIO、SeaweedFS、Ceph 等）请把存储连接的寻址方式改为 Path-style；否则请检查 Endpoint 地址和执行节点的 DNS 设置。":
+    {
+      en: 'The host name {host} cannot be resolved. If it is "bucket.endpoint host", the connection uses virtual-hosted addressing: for self-hosted S3 (MinIO, SeaweedFS, Ceph) set the storage connection\'s addressing to Path-style. Otherwise check the endpoint address and the DNS settings of the execution node.',
+      ja: "ホスト名 {host} を解決できません。「バケット名.エンドポイントのホスト名」の形式であれば、接続は仮想ホスト形式を使用しています。セルフホストの S3（MinIO、SeaweedFS、Ceph など）では、ストレージ接続のアドレス指定を Path-style にしてください。それ以外の場合は、エンドポイントのアドレスと実行ノードの DNS 設定を確認してください。",
+    },
+  "{host} 关闭了连接（EOF）。请检查 Endpoint 地址、端口和协议（http 或 https）；自建 S3 请确认存储连接的寻址方式为 Path-style。":
+    {
+      en: "{host} closed the connection (EOF). Check the endpoint address, port and protocol (http or https); for self-hosted S3, make sure the storage connection uses path-style addressing.",
+      ja: "{host} が接続を閉じました（EOF）。エンドポイントのアドレス、ポート、プロトコル（http または https）を確認してください。セルフホストの S3 では、ストレージ接続のアドレス指定が Path-style であることを確認してください。",
+    },
+  "{host} 拒绝了连接，请检查 Endpoint 地址和端口，并确认存储服务已启动。": {
+    en: "{host} refused the connection. Check the endpoint address and port, and that the storage service is running.",
+    ja: "{host} が接続を拒否しました。エンドポイントのアドレスとポート、ストレージサービスが起動していることを確認してください。",
+  },
+  "与 {host} 的连接被重置，请检查 Endpoint 协议（http 或 https）、端口以及代理或防火墙。":
+    {
+      en: "The connection to {host} was reset. Check the endpoint protocol (http or https), the port, and any proxy or firewall.",
+      ja: "{host} との接続がリセットされました。エンドポイントのプロトコル（http または https）、ポート、プロキシやファイアウォールを確認してください。",
+    },
+  "连接 {host} 超时，请检查执行节点到 Endpoint 的网络和防火墙。": {
+    en: "The connection to {host} timed out. Check the network and firewall between the execution node and the endpoint.",
+    ja: "{host} への接続がタイムアウトしました。実行ノードとエンドポイントの間のネットワークとファイアウォールを確認してください。",
+  },
+  "无法验证 {host} 的 TLS 证书，请使用执行节点信任的证书，或确认 Endpoint 是否应使用 http。":
+    {
+      en: "The TLS certificate of {host} cannot be verified. Use a certificate the execution node trusts, or check whether the endpoint should use http.",
+      ja: "{host} の TLS 証明書を検証できません。実行ノードが信頼する証明書を使用するか、エンドポイントで http を使うべきか確認してください。",
+    },
+  "访问被拒绝：凭据没有执行此操作的权限，请检查存储桶权限。": {
+    en: "Access denied: the credentials lack permission for this operation. Check the bucket permissions.",
+    ja: "アクセスが拒否されました。認証情報にこの操作の権限がありません。バケットの権限を確認してください。",
+  },
+  "存储桶不存在，请检查存储桶名称和 Endpoint。": {
+    en: "The bucket does not exist. Check the bucket name and the endpoint.",
+    ja: "バケットが存在しません。バケット名とエンドポイントを確認してください。",
+  },
+  "Access Key 不存在，请检查存储连接的 Access Key。": {
+    en: "The Access Key does not exist. Check the storage connection's Access Key.",
+    ja: "Access Key が存在しません。ストレージ接続の Access Key を確認してください。",
+  },
+  "签名不匹配，请检查存储连接的 Secret Key 和签名版本。": {
+    en: "Signature mismatch. Check the storage connection's Secret Key and signature version.",
+    ja: "署名が一致しません。ストレージ接続の Secret Key と署名バージョンを確認してください。",
+  },
   // Runtime messages from the Master (src/lib/runtimeMessages.ts).
   "错误详情：{detail}": { en: "Details: {detail}", ja: "詳細：{detail}" },
   "节点离线，重新连接并完成或移交其任务后离开": {

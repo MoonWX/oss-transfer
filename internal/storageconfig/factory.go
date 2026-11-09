@@ -45,9 +45,18 @@ func (config Config) S3Config(bucket string) (transferstore.S3Config, error) {
 	return transferstore.S3Config{
 		Endpoint: config.Endpoint, Region: config.Region, Bucket: bucket,
 		AccessKey: config.AccessKey, SecretKey: config.SecretKey, SessionToken: config.SessionToken,
-		PathStyle:        config.PathStyleEnable != nil && *config.PathStyleEnable,
+		PathStyle:        config.EffectivePathStyle(),
 		SignatureVersion: signature,
 	}, nil
+}
+
+// EffectivePathStyle is the addressing the connection uses: its explicit
+// choice, or else the automatic rule of transferstore.AutoPathStyle.
+func (config Config) EffectivePathStyle() bool {
+	if config.PathStyleEnable != nil {
+		return *config.PathStyleEnable
+	}
+	return transferstore.AutoPathStyle(config.Endpoint)
 }
 
 func (f *Factory) Open(ctx context.Context, job execution.Job) (transferstore.Store, transferstore.Store, error) {

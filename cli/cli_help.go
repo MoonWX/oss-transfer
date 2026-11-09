@@ -26,7 +26,7 @@ const cliHelp = `OSS Transfer CLI
   node list|show|details|network|add|invite|update|remove
   agent invite|invite-status|list|show|details|update|remove
   storage list|add|update|remove  管理存储连接
-  storage buckets|test <连接名>  列举 Bucket 并验证连接
+  storage buckets|test <连接名>  列举 Bucket 并检查连接
 
 限速与排障
   limit list|set|history|adjustment
@@ -306,29 +306,41 @@ const cliStorageHelp = `存储连接
   add <连接名> --endpoint URL --access-key-env NAME --secret-key-env NAME
   update <连接名> [要修改的字段]   未指定字段沿用现有配置
   remove <连接名> --yes            删除连接并同步到执行节点
-  buckets <连接名>                列出 Bucket
-  test <连接名>                   通过列举 Bucket 验证连接及列举权限
+  buckets <连接名> [--bucket 名称] 列出 Bucket 并检查连接
+  test <连接名> [--bucket 名称]    检查连接：列举 Bucket，再用实际寻址方式列举一个 Bucket 中的对象
 
 添加/更新选项
-  --endpoint <http[s]://地址>
+  --endpoint <http[s]://地址>      例如 https://s3.example.com 或 http://10.0.0.5:9000
   --region <区域>                 S3 签名区域
   --access-key-env <环境变量名>    或 --access-key-file <文件>
   --secret-key-env <环境变量名>    或 --secret-key-file <文件>
   --session-token-env <环境变量名> 或 --session-token-file <文件>
   --clear-session-token           移除已保存的临时凭据令牌
-  --validate true|false           保存时是否校验连接，默认 true
-  --v2-signer inherit|true|false   签名方式，新增默认继承
-  --path-style inherit|true|false  寻址方式，新增默认继承
+  --validate true|false           保存时是否检查连接，默认 true
+  --v2-signer default|true|false   签名版本：default 为 V4，true 为 V2
+  --path-style auto|true|false     寻址方式，默认 auto
+
+寻址方式
+  auto   Endpoint 带端口、主机是 IP 地址、localhost、不含点的主机名，或以
+         .internal、.local、.lan 结尾时使用 Path-style，其他使用 Virtual-hosted。
+         自建 S3（MinIO、SeaweedFS、Ceph）通常自动为 Path-style；
+         AWS、京东云等云厂商的域名保持 Virtual-hosted。
+  true   始终使用 Path-style（http://endpoint/bucket/key）
+  false  始终使用 Virtual-hosted（http://bucket.endpoint/key）
 
 示例
   oss-transfer-cli storage add source --endpoint https://oss.example.com --access-key-env OSS_ACCESS_KEY --secret-key-env OSS_SECRET_KEY
-  oss-transfer-cli storage update source --endpoint https://new-oss.example.com
+  oss-transfer-cli storage add minio --endpoint http://10.0.0.5:9000 --access-key-env MINIO_ACCESS_KEY --secret-key-env MINIO_SECRET_KEY
+  oss-transfer-cli storage update source --path-style true
   oss-transfer-cli storage test source
+  oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage remove source --yes
 
 密钥仅从环境变量或文件读取，避免出现在命令历史中。
 更新后请关注逐节点同步结果；部分成功时结果不会显示为完整同步。
-连接测试只验证列举操作，迁移所需的读取和写入权限由实际操作验证。
+连接检查先列举 Bucket（ListBuckets），再对一个 Bucket 列举最多 1 个对象（ListObjectsV2）。
+只授权到单个 Bucket 的密钥无法列举 Bucket：保存时只给出警告，可用 test --bucket 检查该 Bucket。
+读取和写入权限由迁移时的实际操作验证。失败时先显示原因和建议，加 --verbose 查看原始错误。
 `
 
 const cliLimitHelp = `节点限速

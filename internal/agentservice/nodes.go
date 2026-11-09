@@ -36,7 +36,7 @@ func configureNodeFactory(factory *storageconfig.Factory, nodes *nodecontrol.Con
 	factory.HTTPClientForEndpoint = func(ctx context.Context, endpoint execution.Endpoint, config storageconfig.Config) *http.Client {
 		info := nodecontrol.RequestContextFrom(ctx)
 		info.ConnectionAlias, info.Bucket = endpoint.Ref, endpoint.Bucket
-		info.PathStyle = config.PathStyleEnable != nil && *config.PathStyleEnable
+		info.PathStyle = config.EffectivePathStyle()
 		var client http.Client
 		if factory.HTTPClient != nil {
 			client = *factory.HTTPClient

@@ -46,7 +46,7 @@ import {
   StopCircleOutlined,
 } from "@mui/icons-material";
 import { api, ApiError, useNotify } from "../lib/api";
-import { runtimeMessageText } from "../lib/runtimeMessages";
+import RuntimeMessageLine from "./RuntimeMessageLine";
 import { ticketDownload } from "../lib/download";
 import {
   formatDate,
@@ -1360,7 +1360,7 @@ function ComparisonResult({
         )}
         {loadError && (
           <Alert severity={progress ? "warning" : "error"}>
-            {runtimeMessageText(loadError)}
+            <RuntimeMessageLine line={loadError} variant="inherit" />
           </Alert>
         )}
         {progress && (
@@ -1417,7 +1417,9 @@ function ComparisonResult({
               </Alert>
             )}
             {actionError && (
-              <Alert severity="error">{runtimeMessageText(actionError)}</Alert>
+              <Alert severity="error">
+                <RuntimeMessageLine line={actionError} variant="inherit" />
+              </Alert>
             )}
             <Box>
               <Stack

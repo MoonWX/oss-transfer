@@ -505,17 +505,95 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Add a storage connection to use in transfer tasks.",
     ja: "転送タスクで使用するストレージ接続を追加してください。",
   },
+  自动寻址: {
+    en: "Automatic addressing",
+    ja: "自動アドレス指定",
+  },
+  "自动 · {style}": {
+    en: "Automatic · {style}",
+    ja: "自動 · {style}",
+  },
+  显示原始错误: {
+    en: "Show original error",
+    ja: "元のエラーを表示",
+  },
+  隐藏原始错误: {
+    en: "Hide original error",
+    ja: "元のエラーを隠す",
+  },
+  "默认签名 · V4": {
+    en: "Default signing · V4",
+    ja: "既定の署名 · V4",
+  },
+  "改用 Path-style": {
+    en: "Use path-style",
+    ja: "Path-style に切り替え",
+  },
+  "https://s3.example.com 或 http://10.0.0.5:9000": {
+    en: "https://s3.example.com or http://10.0.0.5:9000",
+    ja: "https://s3.example.com または http://10.0.0.5:9000",
+  },
+  "以 http:// 或 https:// 开头，可带端口，不含路径。": {
+    en: "Starts with http:// or https://, may include a port, no path.",
+    ja: "http:// または https:// で始め、ポートは任意、パスは含めません。",
+  },
+  "默认（Signature V4）": {
+    en: "Default (Signature V4)",
+    ja: "既定（Signature V4）",
+  },
+  "自动（推荐）": {
+    en: "Automatic (recommended)",
+    ja: "自動（推奨）",
+  },
+  "自动寻址：此 Endpoint 将使用 {style}。": {
+    en: "Automatic addressing: this endpoint uses {style}.",
+    ja: "自動アドレス指定：このエンドポイントでは {style} を使用します。",
+  },
+  "自动寻址在 Endpoint 带端口、主机为 IP 地址、localhost、不含点的主机名，或以 .internal、.local、.lan 结尾时使用 Path-style（自建 MinIO、SeaweedFS、Ceph），否则使用 Virtual-hosted（AWS、京东云等云厂商）。":
+    {
+      en: "Automatic addressing uses path-style when the endpoint has a port, or its host is an IP address, localhost, a name without a dot, or ends with .internal, .local or .lan (self-hosted MinIO, SeaweedFS, Ceph); otherwise virtual-hosted (AWS, JD Cloud and other cloud providers).",
+      ja: "自動アドレス指定では、エンドポイントにポートがある場合、またはホストが IP アドレス、localhost、ドットを含まない名前、.internal・.local・.lan で終わる名前の場合にパス形式（セルフホストの MinIO、SeaweedFS、Ceph）、それ以外は仮想ホスト形式（AWS、JD Cloud などのクラウド）を使用します。",
+    },
+  "Endpoint 需以 http:// 或 https:// 开头，且只包含主机和可选端口，例如 https://s3.example.com 或 http://10.0.0.5:9000":
+    {
+      en: "The endpoint must start with http:// or https:// and contain only a host and an optional port, for example https://s3.example.com or http://10.0.0.5:9000",
+      ja: "エンドポイントは http:// または https:// で始め、ホストと任意のポートのみを指定してください（例：https://s3.example.com、http://10.0.0.5:9000）",
+    },
+  "寻址方式：{style}。": {
+    en: "Addressing: {style}.",
+    ja: "アドレス指定：{style}。",
+  },
+  "已用此寻址方式列举存储桶 {bucket} 中的对象。": {
+    en: "Listed objects in bucket {bucket} with this addressing.",
+    ja: "このアドレス指定でバケット {bucket} のオブジェクトを一覧しました。",
+  },
+  "执行节点版本较旧，未检查存储桶级访问。": {
+    en: "The execution node is too old to check bucket-level access.",
+    ja: "実行ノードが古いため、バケット単位のアクセスは確認していません。",
+  },
+  "没有可检查的存储桶；可在下方指定一个存储桶。": {
+    en: "No bucket to check; name one below.",
+    ja: "確認するバケットがありません。下で指定できます。",
+  },
+  "存储桶读写权限在迁移时验证。": {
+    en: "Bucket read and write permissions are checked during transfers.",
+    ja: "バケットの読み書き権限は転送時に確認します。",
+  },
+  检查指定存储桶: {
+    en: "Check a bucket",
+    ja: "バケットを指定して確認",
+  },
+  "只授权到单个存储桶的密钥无法列举存储桶，可在此填写存储桶名称后检查。": {
+    en: "Keys limited to one bucket cannot list buckets; enter the bucket name here to check it.",
+    ja: "1 つのバケットに限定したキーはバケットを一覧できません。ここにバケット名を入力して確認してください。",
+  },
+  检查: {
+    en: "Check",
+    ja: "確認",
+  },
   "S3 兼容对象存储": {
     en: "S3-compatible object storage",
     ja: "S3 互換オブジェクトストレージ",
-  },
-  默认签名: {
-    en: "Default signing",
-    ja: "デフォルト署名",
-  },
-  默认寻址: {
-    en: "Default addressing",
-    ja: "デフォルトのアドレス形式",
   },
   访问凭据已隐藏: {
     en: "Credentials hidden",
@@ -577,10 +655,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Signature version",
     ja: "署名バージョン",
   },
-  使用服务端默认值: {
-    en: "Use server default",
-    ja: "サーバーのデフォルトを使用",
-  },
   寻址方式: {
     en: "Addressing style",
     ja: "アドレス形式",
@@ -620,10 +694,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   "已获取 {count} 个存储桶。": {
     en: "Found {count} buckets.",
     ja: "{count} 個のバケットを取得しました。",
-  },
-  "此测试仅验证列举存储桶的权限。存储桶读写权限在迁移时验证。": {
-    en: "This tests bucket listing only. Read and write permissions are checked during transfers.",
-    ja: "このテストはバケット一覧の取得権限のみを確認します。読み書き権限は転送時に確認します。",
   },
   关闭: {
     en: "Close",

@@ -349,6 +349,13 @@ type ChildrenRequest struct {
 	After    string `json:"after"`
 	Limit    int    `json:"limit"`
 }
+
+// StorageCheckRequest asks for a connection check: ListBuckets, then one
+// bucket-level request on Bucket, or on the first listed bucket when empty.
+type StorageCheckRequest struct {
+	Config storageconfig.Config `json:"config"`
+	Bucket string               `json:"bucket,omitempty"`
+}
 type StatRequest struct {
 	Endpoint execution.Endpoint `json:"endpoint"`
 	Key      string             `json:"key"`
@@ -606,6 +613,22 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		settings.HTTPClient = s.Factory.HTTPClientForEndpoint(ctx, execution.Endpoint{Ref: config.Alias}, config)
 		buckets, err := transferstore.ListBuckets(ctx, settings)
 		return response(map[string]any{"buckets": buckets}, err)
+	case "storage_check":
+		var request StorageCheckRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		bucket := "validation"
+		if request.Bucket != "" {
+			bucket = request.Bucket
+		}
+		settings, err := request.Config.S3Config(bucket)
+		if err != nil {
+			return response(nil, err)
+		}
+		settings.HTTPClient = s.Factory.HTTPClientForEndpoint(ctx, execution.Endpoint{Ref: request.Config.Alias, Bucket: request.Bucket}, request.Config)
+		result, err := transferstore.CheckConnection(ctx, settings, request.Bucket)
+		return response(result, err)
 	case "object_stat":
 		var request StatRequest
 		if err := decode(c.Payload, &request); err != nil {

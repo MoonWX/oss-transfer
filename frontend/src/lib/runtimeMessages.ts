@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import { storageErrorKind, storageErrorSummary } from "./storageErrors";
 
 /**
  * Runtime messages the Master stores in English (internal/master task runtime).
@@ -109,7 +110,7 @@ export function knownRuntimeMessage(line: string): string | undefined {
     });
     return t(rule.message, values);
   }
-  return undefined;
+  return storageErrorSummary(line);
 }
 
 /** One problem per line, without repeats or blanks. */
@@ -130,8 +131,22 @@ export function runtimeMessageLines(message: string | null | undefined) {
  * untranslated sentence alone. Text that is already Chinese is shown as is.
  */
 export function runtimeMessageText(line: string) {
+  return runtimeMessageParts(line).text;
+}
+
+/**
+ * Text for one runtime line, and the raw line as secondary detail when the
+ * text is a summary of a storage error rather than the line itself.
+ */
+export function runtimeMessageParts(line: string): {
+  text: string;
+  detail?: string;
+} {
   const known = knownRuntimeMessage(line);
-  if (known !== undefined) return known;
-  if (/\p{Script=Han}/u.test(line)) return line;
-  return t("错误详情：{detail}", { detail: line });
+  if (known !== undefined)
+    return storageErrorKind(line)
+      ? { text: known, detail: line }
+      : { text: known };
+  if (/\p{Script=Han}/u.test(line)) return { text: line };
+  return { text: t("错误详情：{detail}", { detail: line }) };
 }

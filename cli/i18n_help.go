@@ -656,27 +656,40 @@ Usage: oss-transfer-cli storage <subcommand> [arguments]
   add <alias> --endpoint URL --access-key-env NAME --secret-key-env NAME
   update <alias> [fields]          Keep unspecified values
   remove <alias> --yes             Remove and sync to execution nodes
-  buckets <alias>                 List buckets
-  test <alias>                    Validate connection and bucket-list permission
+  buckets <alias> [--bucket NAME]  List buckets and check the connection
+  test <alias> [--bucket NAME]     Check the connection: list buckets, then list objects in one bucket with the effective addressing
 
-  --endpoint <http[s]://host>
+  --endpoint <http[s]://host>      For example https://s3.example.com or http://10.0.0.5:9000
   --region <region>               S3 signing region
   --access-key-env <NAME>          Or --access-key-file <file>
   --secret-key-env <NAME>          Or --secret-key-file <file>
   --session-token-env <NAME>       Or --session-token-file <file>
   --clear-session-token           Remove the saved temporary credential token
-  --validate true|false           Validate before saving; default true
-  --v2-signer inherit|true|false   Signature mode; new default inherit
-  --path-style inherit|true|false  Addressing mode; new default inherit
+  --validate true|false           Check the connection before saving; default true
+  --v2-signer default|true|false   Signature version: default is V4, true is V2
+  --path-style auto|true|false     Addressing; default auto
+
+Addressing
+  auto   Path-style when the endpoint has a port, or its host is an IP address,
+         localhost, a name without a dot, or ends with .internal, .local or .lan;
+         otherwise virtual-hosted. Self-hosted S3 (MinIO, SeaweedFS, Ceph) is
+         usually path-style automatically; AWS, JD Cloud and other cloud
+         domains stay virtual-hosted.
+  true   Always path-style (http://endpoint/bucket/key)
+  false  Always virtual-hosted (http://bucket.endpoint/key)
 
   oss-transfer-cli storage add source --endpoint https://oss.example.com --access-key-env OSS_ACCESS_KEY --secret-key-env OSS_SECRET_KEY
-  oss-transfer-cli storage update source --endpoint https://new-oss.example.com
+  oss-transfer-cli storage add minio --endpoint http://10.0.0.5:9000 --access-key-env MINIO_ACCESS_KEY --secret-key-env MINIO_SECRET_KEY
+  oss-transfer-cli storage update source --path-style true
   oss-transfer-cli storage test source
+  oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage remove source --yes
 
 Credentials come from environment variables or files, not command-line values.
 Check each node's sync result; partial success is reported as incomplete.
-Connection tests validate listing; actual operations validate read and write permissions.
+A connection check lists buckets (ListBuckets), then lists at most one object in one bucket (ListObjectsV2).
+Keys limited to one bucket cannot list buckets: saving only warns, and test --bucket checks that bucket.
+Actual operations validate read and write permissions. Failures show the cause and advice first; add --verbose for the original error.
 `, `ストレージ接続
 使い方: oss-transfer-cli storage <サブコマンド> [引数]
 
@@ -684,27 +697,39 @@ Connection tests validate listing; actual operations validate read and write per
   add <接続名> --endpoint URL --access-key-env NAME --secret-key-env NAME
   update <接続名> [変更項目]       未指定項目は現在の値を保持
   remove <接続名> --yes            削除して実行ノードに同期
-  buckets <接続名>                バケット一覧を表示
-  test <接続名>                   接続と一覧取得権限を検証
+  buckets <接続名> [--bucket 名前] バケット一覧を表示して接続を確認
+  test <接続名> [--bucket 名前]    接続を確認: バケットを一覧し、実際のアドレス指定で 1 つのバケットのオブジェクトを一覧
 
-  --endpoint <http[s]://ホスト>
+  --endpoint <http[s]://ホスト>    例: https://s3.example.com、http://10.0.0.5:9000
   --region <リージョン>            S3 署名リージョン
   --access-key-env <NAME>          または --access-key-file <ファイル>
   --secret-key-env <NAME>          または --secret-key-file <ファイル>
   --session-token-env <NAME>       または --session-token-file <ファイル>
   --clear-session-token           保存済みの一時認証トークンを削除
-  --validate true|false           保存時に検証。既定: true
-  --v2-signer inherit|true|false   署名方式。新規の既定: inherit
-  --path-style inherit|true|false  アドレス方式。新規の既定: inherit
+  --validate true|false           保存前に接続を確認。既定: true
+  --v2-signer default|true|false   署名バージョン: default は V4、true は V2
+  --path-style auto|true|false     アドレス指定。既定: auto
+
+アドレス指定
+  auto   エンドポイントにポートがある場合、またはホストが IP アドレス、localhost、
+         ドットを含まない名前、.internal・.local・.lan で終わる名前の場合はパス形式、
+         それ以外は仮想ホスト形式。セルフホストの S3（MinIO、SeaweedFS、Ceph）は
+         通常自動でパス形式になり、AWS や JD Cloud などのクラウドのドメインは仮想ホスト形式のままです。
+  true   常にパス形式（http://endpoint/bucket/key）
+  false  常に仮想ホスト形式（http://bucket.endpoint/key）
 
   oss-transfer-cli storage add source --endpoint https://oss.example.com --access-key-env OSS_ACCESS_KEY --secret-key-env OSS_SECRET_KEY
-  oss-transfer-cli storage update source --endpoint https://new-oss.example.com
+  oss-transfer-cli storage add minio --endpoint http://10.0.0.5:9000 --access-key-env MINIO_ACCESS_KEY --secret-key-env MINIO_SECRET_KEY
+  oss-transfer-cli storage update source --path-style true
   oss-transfer-cli storage test source
+  oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage remove source --yes
 
 認証情報は環境変数またはファイルから読み取ります。コマンドラインには直接指定しません。
 ノードごとの同期結果を確認してください。一部成功は不完全と表示します。
-接続テストは一覧取得を検証します。読み取り・書き込み権限は実際の操作で検証します。
+接続確認ではバケットを一覧し（ListBuckets）、1 つのバケットのオブジェクトを最大 1 件一覧します（ListObjectsV2）。
+1 つのバケットに限定したキーはバケットを一覧できません。保存時は警告のみで、test --bucket でそのバケットを確認できます。
+読み取り・書き込み権限は実際の操作で検証します。失敗時は原因と対処を先に表示し、元のエラーは --verbose で確認できます。
 `},
 	cliLimitHelp: {`Node rate limits
 Usage: oss-transfer-cli limit <subcommand> [arguments]

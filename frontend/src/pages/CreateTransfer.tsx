@@ -357,11 +357,13 @@ function OssFields({
   const [buckets, setBuckets] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const activeRequest = useRef(0);
   useEffect(() => {
     activeRequest.current += 1;
     setBuckets([]);
     setError(null);
+    setWarning(null);
     setLoading(false);
   }, [alias]);
   const fetchBuckets = async () => {
@@ -369,11 +371,15 @@ function OssFields({
     const request = ++activeRequest.current;
     setLoading(true);
     setError(null);
+    setWarning(null);
     try {
-      const result = await api<{ buckets: string[] }>(
+      const result = await api<{ buckets: string[]; warning?: string }>(
         `/api/master/s3-config/${encodeURIComponent(alias)}/buckets`,
       );
-      if (request === activeRequest.current) setBuckets(result.buckets ?? []);
+      if (request === activeRequest.current) {
+        setBuckets(result.buckets ?? []);
+        setWarning(result.warning || null);
+      }
     } catch (e) {
       if (request === activeRequest.current) setError(errorText(e));
     } finally {
@@ -442,11 +448,16 @@ function OssFields({
             </Typography>
           )}
         </Box>
+        {warning && !error && (
+          <Alert severity="warning" sx={{ fontSize: 12 }}>
+            {warning}
+          </Alert>
+        )}
         {error && (
           <Alert severity="warning" sx={{ fontSize: 12 }}>
             {tr(
               "无法获取存储桶列表：{error}。如有对应存储桶的访问权限，可直接填写名称。",
-              { error },
+              { error: error.replace(/[。.]$/, "") },
             )}
           </Alert>
         )}

@@ -2,6 +2,7 @@ package master
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -231,6 +232,10 @@ func (s *Server) authenticateAgent(r *http.Request) (agenttransport.Session, err
 	if err == nil {
 		a.lastSeen[session.NodeID] = s.options.Now().UTC()
 		a.remoteAddress[session.NodeID] = connectionHost(r.RemoteAddr)
+	}
+	if errors.Is(err, cluster.ErrUnauthorized) {
+		// A removed or revoked Agent stops its service instead of restarting.
+		err = fmt.Errorf("%w: %w", agenttransport.ErrCredentialRejected, err)
 	}
 	return session, err
 }

@@ -341,8 +341,9 @@ startup_log_lines=0; startup_previous_attempt=100; startup_timeout=3
 
 class SystemdCompatibilityTests(unittest.TestCase):
     """CentOS 7 / RHEL 7 (systemd 219, bash 4.2) is the oldest supported Linux."""
+    # RestartPreventExitStatus predates systemd 219 (it is documented in 219).
     UNIT_219 = {'Description', 'After', 'Wants', 'Type', 'ExecStart', 'WorkingDirectory', 'Restart',
-                'RestartSec', 'TimeoutStopSec', 'KillMode', 'UMask', 'WantedBy'}
+                'RestartSec', 'RestartPreventExitStatus', 'TimeoutStopSec', 'KillMode', 'UMask', 'WantedBy'}
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='installer-systemd-')
@@ -884,7 +885,7 @@ class ReinstallationTests(unittest.TestCase):
         end = self.source.index('\nif [[ -z "$release_url" && -z "$package_dir" ]]; then', start)
         body = '''set -euo pipefail
 role=$TEST_ROLE; service_name=$TEST_SERVICE; root_dir=$TEST_ROOT/app
-platform=linux; user_service=0; upgrade=0; install_dir=; config_dir=; adopt_config=
+platform=linux; user_service=0; upgrade=0; uninstall=0; install_dir=; config_dir=; adopt_config=
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
 safe_path() { return 0; }
 metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
@@ -923,12 +924,12 @@ metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
         for directory in (original, selected):
             directory.mkdir(parents=True)
             (directory/'install.tsv').write_text('role\tmaster\nserviceName\tisolated-master\n')
-        start = self.source.index('    candidates=()')
-        end = self.source.index('    ((${#candidates[@]})) || fail', start)
+        start = self.source.index('add_candidate() {')
+        end = self.source.index('# BEGIN uninstall', start)
         body = '''set -euo pipefail
 root_dir=$TEST_ROOT/custom; root_explicit=1; platform=darwin; user_service=1; role=; service_name=
 metadata_field() { awk -F '\\t' -v key="$2" '$1==key {print $2}' "$1"; }
-''' + self.source[start:end] + '\nprintf "%s\\n" "${candidates[@]:-}"\n'
+''' + self.source[start:end] + '\ndiscover_installations "$role" "$service_name"\nprintf "%s\\n" "${candidates[@]:-}"\n'
         env = dict(os.environ,TEST_ROOT=str(self.root),HOME=str(home))
         found = subprocess.run(['bash','-c',body],text=True,capture_output=True,env=env,timeout=5)
         self.assertEqual(found.returncode,0,found.stderr)

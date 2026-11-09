@@ -23,6 +23,19 @@ const pollNoWait = "wait=0"
 
 var ErrNoCommand = errors.New("no agent command available")
 
+// EnrollmentHeader marks a 401 response whose credential was definitively
+// rejected. Without it, a 401 may be transient (for example a Master restart)
+// and the Agent keeps its normal reconnect behaviour.
+const EnrollmentHeader = "X-Agent-Enrollment"
+const enrollmentRevoked = "revoked"
+
+func sessionError(resp *http.Response) error {
+	if resp.Header.Get(EnrollmentHeader) == enrollmentRevoked {
+		return ErrRevoked
+	}
+	return ErrSession
+}
+
 type Authenticate func(*http.Request) (Session, error)
 
 // HTTPHandler authenticates each request; enrollment state is rechecked by the
@@ -41,6 +54,9 @@ func (h HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.Authenticate(r)
 	if err != nil {
+		if errors.Is(err, ErrCredentialRejected) {
+			w.Header().Set(EnrollmentHeader, enrollmentRevoked)
+		}
 		http.Error(w, "invalid agent credential", 401)
 		return
 	}
@@ -173,7 +189,7 @@ func (t *HTTPTransport) Poll(ctx context.Context) (Command, error) {
 		return Command{}, ErrNoCommand
 	}
 	if resp.StatusCode == 401 {
-		return Command{}, ErrSession
+		return Command{}, sessionError(resp)
 	}
 	if resp.StatusCode != 200 {
 		return Command{}, fmt.Errorf("agent poll returned HTTP %d", resp.StatusCode)
@@ -205,7 +221,7 @@ func (t *HTTPTransport) Poll(ctx context.Context) (Command, error) {
 	defer ack.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(ack.Body, 4096))
 	if ack.StatusCode == 401 {
-		return Command{}, ErrSession
+		return Command{}, sessionError(ack)
 	}
 	if ack.StatusCode == 409 {
 		return Command{}, ErrNoCommand
@@ -230,7 +246,7 @@ func (t *HTTPTransport) Submit(ctx context.Context, result Result) error {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode == 401 {
-		return ErrSession
+		return sessionError(resp)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("agent result returned HTTP %d", resp.StatusCode)

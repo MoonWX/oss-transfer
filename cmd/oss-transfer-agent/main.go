@@ -23,7 +23,7 @@ var builtAt = "unknown"
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(exitStatus(err))
 	}
 }
 func run() error {
@@ -225,5 +225,5 @@ func serve(ctx context.Context, config servicehost.Config, options agent.Options
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
-	return err
+	return revocation(ctx, err, config.ServiceName, os.Stderr)
 }

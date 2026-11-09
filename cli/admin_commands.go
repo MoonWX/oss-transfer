@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net"
 	"net/url"
@@ -162,7 +163,12 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			if err := adminConfirmed(o); err != nil {
 				return nil, err
 			}
-			return client.Delete("/nodes/" + url.PathEscape(original))
+			result, err := client.Delete("/nodes/" + url.PathEscape(original))
+			if err == nil && client.errors != nil {
+				// Confirm on stderr so --json output keeps its shape.
+				fmt.Fprintf(client.errors, client.text("已移除执行节点 %s。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent\n"), safeCLIText(original))
+			}
+			return result, err
 		}
 		address, label := original, o.Value("label")
 		if action == "update" {

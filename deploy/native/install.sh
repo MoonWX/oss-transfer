@@ -367,12 +367,19 @@ listen=0.0.0.0:1685
 master_url=
 token_stdin=0
 upgrade=0
+uninstall=0
+keep_data=0
+force=0
 yes=0
 user_service=0
 startup_timeout=120
 local_detected=0
 local_stage=
 lang=${OSS_TRANSFER_INSTALL_LANG:-}
+# Service definition locations; isolated tests replace them.
+systemd_unit_dir=/etc/systemd/system
+rc_dir=/usr/local/etc/rc.d
+pid_dir=/var/run
 say() { if [[ "${lang:-en}" == zh ]]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
 usage() {
   cat <<'EOF'
@@ -394,7 +401,14 @@ Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --install-dir DIR --config-dir DIR --data-dir DIR --backup-dir DIR
   --user               macOS: install a LaunchAgent for the current logged-in user
   --startup-timeout N  Readiness timeout, 10–600 seconds (default 120)
+  --force              Reinstall even when the same version is installed and running
   --yes                Proceed without interactive confirmation
+
+Uninstall: bash install.sh --uninstall [--role master|agent] [--keep-data] [--yes]
+  Lists, then removes the services, programs, installation records, CLI and
+  (unless --keep-data) configuration, data and upgrade backups. Only
+  installations recorded by this installer are touched; --service-name,
+  --root-dir, --install-dir and --user select one of them.
 EOF
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -406,6 +420,9 @@ while (($#)); do
       key=${1#--}; key=${key//-/_}; printf -v "$key" '%s' "$2"; shift 2 ;;
     --token-stdin) token_stdin=1; shift;;
     --upgrade) upgrade=1; shift;;
+    --uninstall) uninstall=1; shift;;
+    --keep-data) keep_data=1; shift;;
+    --force) force=1; shift;;
     --replace-cli) replace_cli=1; shift;;
     --yes) yes=1; shift;;
     --user) user_service=1; shift;;
@@ -420,6 +437,13 @@ fi
 export OSS_TRANSFER_INSTALL_LANG=$lang
 [[ -z "$role" || "$role" == master || "$role" == agent ]] || fail 'Role must be master or agent'
 [[ -z "$adopt_config" || "$upgrade" == 0 ]] || fail 'Choose --adopt-config or --upgrade'
+if ((uninstall)); then
+  # Uninstalling never downloads or installs anything.
+  [[ "$upgrade" == 0 && "$force" == 0 && "$replace_cli" == 0 && "$token_stdin" == 0 && -z "$adopt_config$release_url$package_dir$cli_path$master_url$config_dir$data_dir$backup_dir" && "$requested_version" == latest ]] ||
+    fail "$(say '--uninstall accepts only --role, --keep-data, --service-name, --root-dir, --install-dir, --user, --lang and --yes' '--uninstall 只能与 --role、--keep-data、--service-name、--root-dir、--install-dir、--user、--lang 和 --yes 一起使用')"
+elif ((keep_data)); then
+  fail "$(say '--keep-data is used with --uninstall' '--keep-data 需与 --uninstall 一起使用')"
+fi
 if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]] || ((startup_timeout < 10 || startup_timeout > 600)); then fail 'Invalid readiness timeout'; fi
 [[ "$source" == auto || "$source" == github || "$source" == jdoss ]] || fail '--source must be auto, github or jdoss'
 requested_version=${requested_version#v}
@@ -470,8 +494,309 @@ default_root() {
   elif ((user_service)); then printf '%s/Library/Application Support/OSS Transfer\n' "$HOME"
   else printf '/Library/Application Support/OSS Transfer\n'; fi
 }
+# Collect installer-managed installations into candidates. Installation
+# metadata (install.tsv) is the record of ownership; service definitions only
+# lead to installations with custom directories.
+add_candidate() {
+  local directory=$1 existing item_role item_name
+  [[ -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]] || return 0
+  item_role=$(metadata_field "$directory/install.tsv" role)
+  item_name=$(metadata_field "$directory/install.tsv" serviceName)
+  [[ "$item_role" == master || "$item_role" == agent ]] || return 0
+  [[ -z "$want_role" || "$want_role" == "$item_role" ]] || return 0
+  [[ -z "$want_service" || "$want_service" == "$item_name" ]] || return 0
+  for existing in ${candidates[@]+"${candidates[@]}"}; do [[ "$existing" != "$directory" ]] || return 0; done
+  candidates+=("$directory")
+}
+discover_installations() {
+  local want_role=$1 want_service=$2 item_role definition definitions installed_binary directory
+  candidates=()
+  for item_role in master agent; do
+    if [[ "$platform" == linux ]]; then
+      add_candidate "$root_dir/$item_role/bin"
+      if ((root_explicit == 0)); then
+        add_candidate "/opt/oss-transfer/$item_role"
+        add_candidate "/opt/oss-transfer-go/$item_role"
+      fi
+    elif [[ "$platform" == freebsd ]]; then add_candidate "$root_dir/$item_role/bin"; if ((root_explicit == 0)); then add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi
+    elif ((user_service)); then add_candidate "$root_dir/$item_role/bin"
+    else add_candidate "$root_dir/$item_role/bin"; if ((root_explicit == 0)); then add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi; fi
+  done
+  if ((root_explicit)); then :
+  elif [[ "$platform" == linux ]]; then
+    for definition in "$systemd_unit_dir"/*.service; do
+      [[ -f "$definition" && ! -L "$definition" ]] || continue
+      installed_binary=$(sed -nE 's#^ExecStart="([^"]*/oss-transfer-(master|agent))" .*#\1#p' "$definition")
+      [[ -z "$installed_binary" ]] || add_candidate "$(dirname "$installed_binary")"
+    done
+  elif [[ "$platform" == freebsd ]]; then
+    for definition in "$rc_dir"/*; do
+      [[ -f "$definition" && ! -L "$definition" ]] || continue
+      directory=$(sed -n 's/^# oss-transfer-install: //p' "$definition")
+      [[ -z "$directory" ]] || add_candidate "$directory"
+    done
+  else
+    if ((user_service)); then definitions="$HOME/Library/LaunchAgents"; else definitions=/Library/LaunchDaemons; fi
+    for definition in "$definitions"/*.plist; do
+      [[ -f "$definition" && ! -L "$definition" ]] || continue
+      installed_binary=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$definition" 2>/dev/null || true)
+      case "$installed_binary" in */oss-transfer-master|*/oss-transfer-agent) add_candidate "$(dirname "$installed_binary")";; esac
+    done
+  fi
+}
+# BEGIN uninstall
+# Uninstall plans every change before making one: the plan lists what is
+# removed and kept, and nothing outside installer-recorded paths is touched.
+uninstall_targets=()
+uninstall_remaining=()
+uninstall_services=()
+uninstall_actions=()
+uninstall_removed=()
+uninstall_kept=()
+uninstall_agent=0
+uninstall_master=0
+path_depth() { local value=${1//[!\/]/}; printf '%s\n' "${#value}"; }
+# Directories that are never removed as a whole, even when recorded.
+protected_directory() {
+  case "$1" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/mnt|/media|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/usr/local|/usr/local/lib|/usr/local/etc|/var|/var/lib|/var/backups|/var/tmp|/Users|/Library|/Applications|/System|/private|/private/var|/private/tmp) return 0;;
+  esac
+  [[ "$1" != "${HOME:-/}" ]] || return 0
+  (( $(path_depth "$1") < 2 ))
+}
+listed_in() {
+  local wanted=$1 item; shift
+  for item in "$@"; do [[ "$item" != "$wanted" ]] || return 0; done
+  return 1
+}
+# Another remaining installation's recorded paths inside DIRECTORY.
+contains_other_installation() {
+  local directory=$1 other field value
+  for other in ${uninstall_remaining[@]+"${uninstall_remaining[@]}"}; do
+    [[ "$other" != "$directory" && "$other" != "$directory/"* ]] || return 0
+    for field in config dataDir backupDir cliPath; do
+      value=$(metadata_field "$other/install.tsv" "$field")
+      [[ -z "$value" || ( "$value" != "$directory" && "$value" != "$directory/"* ) ]] || return 0
+    done
+  done
+  return 1
+}
+# Only data the service wrote: its database, or nothing but runtime and logs.
+owned_data_directory() {
+  local directory=$1 role_name=$2 entry
+  [[ -f "$directory/$role_name.db" && ! -L "$directory/$role_name.db" ]] && return 0
+  for entry in "$directory"/* "$directory"/.[!.]* "$directory"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    case "${entry##*/}" in runtime|logs) ;; *) return 1;; esac
+  done
+  return 0
+}
+plan_remove_file() {
+  local path=$1 label=$2
+  [[ -e "$path" || -L "$path" ]] || return 0
+  [[ -f "$path" && ! -L "$path" ]] || fail "$(say "Not a regular file; nothing was removed: $path" "不是普通文件，未做任何更改：$path")"
+  uninstall_actions+=("file	$path")
+  [[ -z "$label" ]] || uninstall_removed+=("$label: $path")
+}
+plan_uninstall() {
+  local directory=$1 metadata=$1/install.tsv item_role item_service item_config item_unit item_cli item_backup item_data item_root
+  local binary expected config_parent shared other suffix
+  item_role=$(metadata_field "$metadata" role)
+  item_service=$(metadata_field "$metadata" serviceName)
+  item_config=$(metadata_field "$metadata" config)
+  item_unit=$(metadata_field "$metadata" unit)
+  item_cli=$(metadata_field "$metadata" cliPath)
+  item_backup=$(metadata_field "$metadata" backupDir)
+  item_data=$(metadata_field "$metadata" dataDir)
+  item_root=$(metadata_field "$metadata" rootDir)
+  [[ "$item_role" == master || "$item_role" == agent ]] && [[ "$item_service" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ && "$item_config" == /*/service.json ]] ||
+    fail "$(say "Invalid installation record; nothing was removed: $metadata" "安装记录无效，未做任何更改：$metadata")"
+  if [[ -z "$item_data" && -f "$item_config" && ! -L "$item_config" ]]; then item_data=$(config_field "$item_config" dataDirectory); fi
+  safe_path "$directory"
+  config_parent=$(dirname "$item_config"); safe_path "$config_parent"
+  [[ -z "$item_data" ]] || safe_path "$item_data"
+  [[ -z "$item_backup" ]] || safe_path "$item_backup"
+  [[ -z "$item_root" ]] || safe_path "$item_root"
+  if [[ -n "$item_cli" ]]; then
+    safe_path "$(dirname "$item_cli")"
+    [[ "$(basename "$item_cli")" == oss-transfer-cli ]] || fail "$(say "Invalid CLI path in $metadata" "$metadata 中的 CLI 路径无效")"
+  fi
+  binary=$directory/oss-transfer-$item_role
+  case "$platform" in
+    linux) expected=$systemd_unit_dir/$item_service.service;;
+    freebsd) expected=$rc_dir/$item_service;;
+    *) if ((user_service)); then expected=$HOME/Library/LaunchAgents/$item_service.plist; else expected=/Library/LaunchDaemons/$item_service.plist; fi;;
+  esac
+  [[ -z "$item_unit" || "$item_unit" == "$expected" ]] ||
+    fail "$(say "$item_service is recorded with service definition $item_unit, not $expected; nothing was removed (macOS: add --user for a LaunchAgent)" "$item_service 记录的服务定义是 ${item_unit}，不是 ${expected}；未做任何更改（macOS 用户服务请加 --user）")"
+  [[ ! -L "$expected" ]] || fail "$(say "Service definition is a symlink; nothing was removed: $expected" "服务定义是符号链接，未做任何更改：$expected")"
+  if [[ -f "$expected" ]]; then
+    # Never stop a service that runs anything but this installation.
+    case "$platform" in
+      linux) grep -Fx "ExecStart=\"$binary\" --config \"$item_config\"" "$expected" >/dev/null;;
+      freebsd) grep -Fx "# oss-transfer-install: $directory" "$expected" >/dev/null;;
+      *) [[ $(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$expected" 2>/dev/null) == "$binary" ]];;
+    esac || fail "$(say "Service $item_service does not run $binary; nothing was removed" "服务 $item_service 运行的不是 ${binary}；未做任何更改")"
+    uninstall_services+=("$item_service	$expected")
+    uninstall_removed+=("$(say Service 服务): $item_service ($expected)")
+  fi
+  [[ "$item_role" == agent ]] && uninstall_agent=1
+  [[ "$item_role" == master ]] && uninstall_master=1
+  plan_remove_file "$binary" "$(say Program 程序)"
+  plan_remove_file "$metadata" "$(say 'Installation record' 安装记录)"
+  if [[ -n "$item_cli" ]]; then
+    shared=
+    for other in ${uninstall_remaining[@]+"${uninstall_remaining[@]}"}; do
+      [[ $(metadata_field "$other/install.tsv" cliPath) != "$item_cli" ]] || shared=$other
+    done
+    if [[ -n "$shared" ]]; then
+      uninstall_kept+=("CLI: $item_cli ($(say "used by $shared" "仍由 $shared 使用"))")
+    elif ! listed_in "file	$item_cli" ${uninstall_actions[@]+"${uninstall_actions[@]}"}; then
+      plan_remove_file "$item_cli" CLI
+      for suffix in cluster.json local-auth.json update.lock; do plan_remove_file "$item_cli.$suffix" "$(say 'CLI state' 'CLI 状态文件')"; done
+    fi
+  fi
+  if ((keep_data)); then
+    uninstall_kept+=("$(say Configuration 配置): $item_config")
+    [[ -z "$item_data" ]] || uninstall_kept+=("$(say Data 数据): $item_data")
+    [[ -z "$item_backup" || ! -d "$item_backup" ]] || uninstall_kept+=("$(say 'Upgrade backups' 升级备份): $item_backup")
+  else
+    plan_remove_file "$item_config" "$(say Configuration 配置)"
+    uninstall_actions+=("rmdir	$config_parent")
+    if [[ -n "$item_data" && -d "$item_data" ]]; then
+      if [[ -L "$item_data" ]] || protected_directory "$item_data" || contains_other_installation "$item_data" || ! owned_data_directory "$item_data" "$item_role"; then
+        uninstall_kept+=("$(say Data 数据): $item_data ($(say 'not removed automatically: it holds other files or is a shared directory; check and delete it yourself' '未自动删除：其中有其他文件或是共享目录，请检查后手动删除'))")
+      else
+        uninstall_actions+=("tree	$item_data")
+        uninstall_removed+=("$(say Data 数据): $item_data")
+      fi
+    fi
+    if [[ -n "$item_backup" && -d "$item_backup" && ! -L "$item_backup" ]]; then
+      uninstall_actions+=("backups	$item_backup	$item_service-" "rmdir	$item_backup")
+      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-*")
+    fi
+  fi
+  uninstall_actions+=("rmdir	$directory")
+  if [[ -n "$item_root" && "$directory" == "$item_root/$item_role/bin" ]]; then
+    uninstall_actions+=("rmdir	$item_root/$item_role" "rmdir	$item_root")
+  fi
+}
+# Per-user CLI logins and preferences, removed with the last installation.
+plan_cli_sessions() {
+  local home user base
+  for user in root "${SUDO_USER:-}"; do
+    [[ "$user" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,31}$ ]] || continue
+    if [[ "$user" == root ]]; then home=${HOME:-}
+    elif command -v getent >/dev/null 2>&1; then home=$(getent passwd "$user" | cut -d: -f6)
+    elif [[ "$platform" == darwin ]]; then home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+    else home=; fi
+    [[ "$home" == /* && "$home" != / ]] || continue
+    if [[ "$platform" == darwin ]]; then base=$home/Library/Application\ Support/oss-transfer-cli; else base=$home/.config/oss-transfer-cli; fi
+    [[ -d "$base" && ! -L "$base" ]] || continue
+    listed_in "tree	$base" ${uninstall_actions[@]+"${uninstall_actions[@]}"} && continue
+    uninstall_actions+=("tree	$base")
+    uninstall_removed+=("$(say 'CLI logins and preferences' 'CLI 登录会话和偏好设置'): $base")
+  done
+}
+stop_and_remove_service() {
+  local name=$1 definition=$2 domain=system
+  if [[ "$platform" == linux ]]; then
+    systemctl stop "$name" || return 1
+    systemctl disable "$name" >/dev/null 2>&1 || true
+    rm -f -- "$definition"
+    systemctl daemon-reload || true
+    systemctl reset-failed "$name" >/dev/null 2>&1 || true
+  elif [[ "$platform" == freebsd ]]; then
+    if "$definition" onestatus >/dev/null 2>&1; then "$definition" onestop || return 1; fi
+    rm -f -- "$definition"
+    for pidfile in "$pid_dir/$name.pid" "$pid_dir/$name.supervisor.pid"; do
+      [[ ! -f "$pidfile" || -L "$pidfile" ]] || rm -f -- "$pidfile"
+    done
+  else
+    ((user_service == 0)) || domain=gui/$(id -u)
+    launchctl bootout "$domain/$name" 2>/dev/null || ! launchctl print "$domain/$name" >/dev/null 2>&1 || return 1
+    rm -f -- "$definition"
+  fi
+}
+run_uninstall() {
+  local directory answer item kind first second leftover
+  local -a leftovers=()
+  if [[ -n "$install_dir" ]]; then
+    safe_path "$install_dir"
+    [[ -f "$install_dir/install.tsv" && ! -L "$install_dir/install.tsv" ]] || fail "$(say "No installation record in $install_dir" "$install_dir 中没有安装记录")"
+    candidates=("$install_dir")
+  else
+    discover_installations "$role" "$service_name"
+  fi
+  uninstall_targets=(${candidates[@]+"${candidates[@]}"})
+  if ((${#uninstall_targets[@]} == 0)); then
+    say 'No installation made by this installer was found; nothing to uninstall. Use --root-dir, --install-dir or (macOS) --user for a custom installation.' '未找到由安装脚本安装的服务，无需卸载。自定义位置的安装请指定 --root-dir、--install-dir，macOS 用户服务请加 --user。'
+    return 0
+  fi
+  # Every other installation counts, wherever it is, when deciding what is shared.
+  local selected_root=$root_explicit
+  root_explicit=0
+  discover_installations '' ''
+  root_explicit=$selected_root
+  for directory in ${candidates[@]+"${candidates[@]}"}; do
+    listed_in "$directory" "${uninstall_targets[@]}" || uninstall_remaining+=("$directory")
+  done
+  for directory in "${uninstall_targets[@]}"; do plan_uninstall "$directory"; done
+  if ((keep_data == 0 && ${#uninstall_remaining[@]} == 0)); then plan_cli_sessions; fi
+  say 'Installations to uninstall:' '将卸载以下安装：'
+  for directory in "${uninstall_targets[@]}"; do
+    printf '  %s (%s): %s\n' "$(metadata_field "$directory/install.tsv" serviceName)" "$(metadata_field "$directory/install.tsv" role)" "$directory"
+  done
+  say 'Will remove:' '将删除：'
+  for item in ${uninstall_removed[@]+"${uninstall_removed[@]}"}; do printf '  %s\n' "$item"; done
+  if ((${#uninstall_kept[@]})); then
+    say 'Will keep:' '将保留：'
+    for item in "${uninstall_kept[@]}"; do printf '  %s\n' "$item"; done
+  fi
+  if ((yes == 0)); then
+    { : </dev/tty; } 2>/dev/null || fail "$(say 'Add --yes to uninstall without a prompt' '无交互终端，请加 --yes 确认卸载')"
+    read -r -p "$(say 'Uninstall? [y/N] ' '确认卸载？[y/N] ')" answer </dev/tty
+    [[ "$answer" == y || "$answer" == Y ]] || { say 'Cancelled; nothing was changed.' '已取消，未做任何更改。'; return 0; }
+  fi
+  # Stop every service before removing any file, so a failure leaves a
+  # complete installation behind.
+  for item in ${uninstall_services[@]+"${uninstall_services[@]}"}; do
+    IFS=$'\t' read -r first second <<< "$item"
+    printf "$(say 'Stopping %s...' '正在停止 %s…')\n" "$first"
+    stop_and_remove_service "$first" "$second" || fail "$(say "Cannot stop $first; its files were kept. Stop it and retry." "无法停止 ${first}，已保留其文件。请停止该服务后重试。")"
+  done
+  for item in ${uninstall_actions[@]+"${uninstall_actions[@]}"}; do
+    IFS=$'\t' read -r kind first second <<< "$item"
+    case "$kind" in
+      file) rm -f -- "$first";;
+      tree) rm -rf -- "$first";;
+      backups)
+        for leftover in "$first/$second"*; do
+          [[ -d "$leftover" && ! -L "$leftover" ]] && rm -rf -- "$leftover"
+        done;;
+      rmdir)
+        if [[ -d "$first" && ! -L "$first" ]]; then
+          if [[ -z $(ls -A "$first") ]]; then rmdir -- "$first"
+          elif ! listed_in "$first" ${leftovers[@]+"${leftovers[@]}"}; then leftovers+=("$first"); fi
+        fi;;
+    esac
+  done
+  for leftover in ${leftovers[@]+"${leftovers[@]}"}; do
+    [[ ! -d "$leftover" ]] || printf "$(say 'Kept (contains other files): %s' '已保留（目录中还有其他文件）：%s')\n" "$leftover"
+  done
+  printf '\n=== %s ===\n' "$(say 'Uninstalled' '卸载完成')"
+  ((keep_data == 0)) || say 'Configuration and data were kept; rerun the installer with the same --role (and --root-dir) to reinstall with them.' '已保留配置和数据；使用相同的 --role（及 --root-dir）重新运行安装脚本即可沿用。'
+  ((uninstall_agent == 0)) || say 'If the node is still listed on the Master, remove it there: Nodes page, or oss-transfer-cli agent remove NODE --yes.' '如果 Master 上仍显示此节点，请在 Master 上移除：执行节点页面，或运行 oss-transfer-cli agent remove 节点 --yes。'
+  ((uninstall_master == 0)) || say 'Agents that joined this Master can no longer reach it; uninstall them on their hosts with --uninstall --role agent.' '加入此 Master 的执行节点将无法再连接它；请在各自主机上运行安装脚本 --uninstall --role agent 卸载。'
+}
+# END uninstall
 root_explicit=0; [[ -z "$root_dir" ]] || root_explicit=1
 root_dir=${root_dir:-$(default_root)}
+if ((uninstall)); then
+  safe_path "$root_dir"
+  run_uninstall
+  exit 0
+fi
 if ((upgrade == 0)); then role=${role:-master}; fi
 safe_path "$root_dir"
 # A normal rerun also recognizes an installation whose binary or service was
@@ -549,50 +874,7 @@ if [[ -n "$package_dir" && ! -e "$package_dir/manifest.tsv" ]]; then
 fi
 if ((upgrade)); then
   if [[ -z "$install_dir" ]]; then
-    candidates=()
-    add_candidate() {
-      local directory=$1 existing item_role item_name
-      [[ -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]] || return 0
-      item_role=$(metadata_field "$directory/install.tsv" role)
-      item_name=$(metadata_field "$directory/install.tsv" serviceName)
-      [[ "$item_role" == master || "$item_role" == agent ]] || return 0
-      [[ -z "$role" || "$role" == "$item_role" ]] || return 0
-      [[ -z "$service_name" || "$service_name" == "$item_name" ]] || return 0
-      for existing in "${candidates[@]:-}"; do [[ "$existing" != "$directory" ]] || return 0; done
-      candidates+=("$directory")
-    }
-    for item_role in master agent; do
-      if [[ "$platform" == linux ]]; then
-        add_candidate "$root_dir/$item_role/bin"
-        if ((root_explicit == 0)); then
-          add_candidate "/opt/oss-transfer/$item_role"
-          add_candidate "/opt/oss-transfer-go/$item_role"
-        fi
-      elif [[ "$platform" == freebsd ]]; then add_candidate "$root_dir/$item_role/bin"; if ((root_explicit == 0)); then add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi
-      elif ((user_service)); then add_candidate "$root_dir/$item_role/bin"
-      else add_candidate "$root_dir/$item_role/bin"; if ((root_explicit == 0)); then add_candidate "/usr/local/lib/oss-transfer/$item_role"; fi; fi
-    done
-    if ((root_explicit)); then :
-    elif [[ "$platform" == linux ]]; then
-      for definition in /etc/systemd/system/*.service; do
-        [[ -f "$definition" && ! -L "$definition" ]] || continue
-        installed_binary=$(sed -nE 's#^ExecStart="([^"]*/oss-transfer-(master|agent))" .*#\1#p' "$definition")
-        [[ -z "$installed_binary" ]] || add_candidate "$(dirname "$installed_binary")"
-      done
-    elif [[ "$platform" == freebsd ]]; then
-      for definition in /usr/local/etc/rc.d/*; do
-        [[ -f "$definition" && ! -L "$definition" ]] || continue
-        directory=$(sed -n 's/^# oss-transfer-install: //p' "$definition")
-        [[ -z "$directory" ]] || add_candidate "$directory"
-      done
-    else
-      if ((user_service)); then definitions="$HOME/Library/LaunchAgents"; else definitions=/Library/LaunchDaemons; fi
-      for definition in "$definitions"/*.plist; do
-        [[ -f "$definition" && ! -L "$definition" ]] || continue
-        installed_binary=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$definition" 2>/dev/null || true)
-        case "$installed_binary" in */oss-transfer-master|*/oss-transfer-agent) add_candidate "$(dirname "$installed_binary")";; esac
-      done
-    fi
+    discover_installations "$role" "$service_name"
     ((${#candidates[@]})) || fail 'No managed installation found; use --install-dir for an installation without a service definition'
     printf 'Upgrade installations:\n'
     for directory in "${candidates[@]}"; do printf '  %s: %s\n' "$(metadata_field "$directory/install.tsv" serviceName)" "$directory"; done
@@ -867,6 +1149,38 @@ if [[ "$release_url" == */latest ]]; then
   release_url="${release_url%/latest}/v$version"
   fetch manifest.tsv
   [[ $(sha256 "$work/manifest.tsv") == "$latest_manifest_sha" ]] || fail 'Latest and versioned release manifests differ; retry after publication finishes'
+fi
+# Rerunning the same release over a complete, running installation changes
+# nothing. Anything missing or stale, an enrollment, adoption or CLI change
+# still runs the installation, which repairs it.
+installation_current() {
+  local installed_cli_version
+  ((existed && force == 0 && replace_cli == 0 && cli_migrated == 0 && token_stdin == 0)) || return 1
+  [[ -z "$adopt_config" && -z "${TRANSFER_JOIN_TOKEN:-}" ]] || return 1
+  [[ -f "$metadata" && ! -L "$metadata" && -f "$binary" && ! -L "$binary" && -f "$unit" && ! -L "$unit" && -f "$cli_path" && ! -L "$cli_path" ]] || return 1
+  [[ $(metadata_field "$metadata" version) == "$version" && $(metadata_field "$metadata" cliPath) == "$cli_path" ]] || return 1
+  [[ $("$binary" --version 2>/dev/null) == "oss-transfer-$role $version "* ]] || return 1
+  installed_cli_version=$("$cli_path" --version --json 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') || return 1
+  [[ "$installed_cli_version" == "$version" ]] || return 1
+  if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name" || return 1
+  elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1 || return 1
+  else launchctl print "$domain/$service_name" >/dev/null 2>&1 || return 1; fi
+  # A Master also keeps the release's Agent packages.
+  if [[ "$role" == master ]] && [[ $(awk -F '\t' '$1=="asset" && ($2=="install.sh" || $2=="native-install.sh" || $2=="Install.ps1") {print $2}' "$work/manifest.tsv" | LC_ALL=C sort -u | wc -l | tr -d ' ') == 3 ]]; then
+    [[ -f "$data_dir/packages/manifest.tsv" && ! -L "$data_dir/packages/manifest.tsv" && $(metadata_field "$data_dir/packages/manifest.tsv" version) == "$version" ]] || return 1
+  fi
+}
+if installation_current; then
+  if ((yes == 0)) && { : </dev/tty; } 2>/dev/null; then
+    read -r -p "$(say "$service_name v$version is already installed and running. Reinstall it anyway? [y/N] " "$service_name v$version 已安装且正在运行。仍要重新安装吗？[y/N] ")" answer </dev/tty
+    if [[ "$answer" != y && "$answer" != Y ]]; then
+      say "Nothing was changed." "未做任何更改。"
+      exit 0
+    fi
+  else
+    say "$service_name is already v$version and running; nothing was changed. Add --force to reinstall it." "$service_name 已是 v$version 且正在运行，未做任何更改。如需重新安装，请加 --force。"
+    exit 0
+  fi
 fi
 filename=oss-transfer-$role-$platform-$arch
 record=$(awk -F '\t' -v os="$platform" -v arch="$arch" -v role="$role" '$1=="file" && $2==os && $3==arch && $4==role {print $5 "\t" $6 "\t" $7}' "$work/manifest.tsv")
@@ -1197,6 +1511,7 @@ startup_failure() {
       case "$detail" in
         *'address already in use'*) printf 'Startup failed: the listen address is already in use.\n' >&2;;
         *'permission denied'*) printf 'Startup failed: permission denied.\n' >&2;;
+        *'enrollment was revoked'*) say 'Startup failed: this Agent was removed from the cluster on the Master. Copy a new join command from Nodes > Add node, or uninstall it with --uninstall --role agent.' '启动失败：此 Agent 已在 Master 上被移除。请从“执行节点 > 添加节点”复制新的加入命令重新加入，或使用 --uninstall --role agent 卸载。' >&2;;
         *) printf 'The service reported a startup failure.\n' >&2;;
       esac
       printf 'Service: %s; log: %s\n' "$service_name" "$log_file" >&2
@@ -1462,6 +1777,8 @@ ExecStart="$binary" --config "$config"
 WorkingDirectory=$data_dir
 Restart=on-failure
 RestartSec=5
+# The Agent exits with 78 after the Master removed it; do not restart it.
+RestartPreventExitStatus=78
 TimeoutStopSec=45
 KillMode=control-group
 UMask=0077

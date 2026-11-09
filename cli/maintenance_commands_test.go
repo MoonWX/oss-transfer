@@ -18,7 +18,6 @@ func TestMaintenanceReadEndpointsAndNoImplicitUpgrade(t *testing.T) {
 		payload      map[string]interface{}
 	}{
 		{"update", []string{"status"}, "GET", "/api/master/software-updates", map[string]interface{}{"checking": true, "queue": map[string]interface{}{"phase": "RUNNING"}}},
-		{"update", []string{"check"}, "POST", "/api/master/software-updates/check", map[string]interface{}{"version": "4.1.22"}},
 		{"backup", []string{"list"}, "GET", "/api/master/software-updates/backups", map[string]interface{}{"master": map[string]interface{}{"supported": false, "reason": "BUSY"}}},
 	} {
 		t.Run(test.group+"/"+test.args[0], func(t *testing.T) {
@@ -47,7 +46,7 @@ func TestMaintenanceMutationsRequireExplicitTargetAndConfirmation(t *testing.T) 
 		args  []string
 	}{
 		{"update", nil}, {"update", []string{"upgrade"}}, {"update", []string{"check", "--yes"}},
-		{"update", []string{"master", "--version", "4.1.22"}}, {"update", []string{"master", "--yes"}},
+		{"update", []string{"master", "--version", "4.1.22"}}, {"update", []string{"master"}},
 		{"update", []string{"master", "--version", "latest", "--yes"}}, {"update", []string{"master", "--version", "4.1.22-rc.1", "--yes"}},
 		{"update", []string{"master", "--version", "4.1.22", "--worker", "node-a", "--yes"}},
 		{"update", []string{"master", "--version", "4.1.22", "--all", "--yes"}},
@@ -79,7 +78,6 @@ func TestMaintenanceUpgradeSubmissionPreservesQueuedState(t *testing.T) {
 		path       string
 		readMaster bool
 	}{
-		{[]string{"master", "--version", "v4.1.22", "--yes"}, "/api/master/software-updates/master", false},
 		{[]string{"agent", "--worker", "node-a", "--version", "4.1.22", "--yes"}, "/api/master/software-updates/agents/node-a", false},
 		{[]string{"agent", "--worker", "2001:db8::1", "--yes"}, "/api/master/software-updates/agents/2001:db8::1", true},
 		{[]string{"agents", "--all", "--yes"}, "/api/master/software-updates/agents", true},
@@ -220,13 +218,135 @@ func TestMaintenanceStatusShowsVersionSkewQueueAndOfflineHonestly(t *testing.T) 
 	if !renderMaintenanceResult(&out, result) {
 		t.Fatal("maintenance status not rendered")
 	}
-	for _, want := range []string{"storage (10.0.0.2)", "4.1.21", "4.1.22", "QUEUED", "MISMATCH", "MATCH", "UNKNOWN", "OFFLINE", "RUNNING", "Previous check failed"} {
+	// Human output translates the status codes and shows versions as vX.
+	for _, want := range []string{"storage (10.0.0.2)", "v4.1.21", "v4.1.22", "已排队", "不一致", "一致", "未知", "节点离线", "Agent 更新队列: 进行中", "Previous check failed"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "COMPLETED") {
-		t.Fatalf("queued update called complete: %s", out.String())
+	for _, code := range []string{"COMPLETED", "已完成", "QUEUED", "MISMATCH", "OFFLINE", "RUNNING"} {
+		if strings.Contains(out.String(), code) {
+			t.Fatalf("unexpected %q: %s", code, out.String())
+		}
+	}
+	var english bytes.Buffer
+	renderMaintenanceResult(&cliLocaleWriter{Writer: &english, locale: localeEN}, result)
+	for _, want := range []string{"Queued", "Different", "Match", "Unknown", "Node is offline", "Agent update queue: Running", "Idle"} {
+		if !strings.Contains(english.String(), want) {
+			t.Fatalf("missing %q: %s", want, english.String())
+		}
+	}
+}
+
+// A node that cannot update online explains why, using the Master's
+// localized detail rather than a bare capability code.
+func TestMaintenanceStatusExplainsUnsupportedNodes(t *testing.T) {
+	result := map[string]interface{}{"success": true, "data": map[string]interface{}{
+		"master": map[string]interface{}{"info": map[string]interface{}{"version": "4.1.41", "supported": false, "reason": "CONTAINER", "detail": "此节点运行在容器中，请拉取新镜像并重建容器来更新"}},
+		"agents": []interface{}{
+			map[string]interface{}{"address": "agent-a", "upgradeReason": "UNMANAGED", "info": map[string]interface{}{"version": "4.1.41", "supported": false, "reason": "UNMANAGED"}},
+		},
+	}}
+	var out bytes.Buffer
+	renderMaintenanceResult(&out, result)
+	for _, want := range []string{"此节点运行在容器中，请拉取新镜像并重建容器来更新", "此安装方式不支持在线更新，请使用安装脚本升级"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q: %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "CONTAINER") || strings.Contains(out.String(), "UNMANAGED") {
+		t.Fatalf("status shows a raw code: %s", out.String())
+	}
+}
+
+// update master checks for the latest release itself and installs it when
+// --version is omitted; update check states current → available.
+func TestUpdateMasterChecksAndDefaultsToLatest(t *testing.T) {
+	type call struct{ method, path string }
+	server := func(t *testing.T, current, latest string, calls *[]call, posted *map[string]interface{}) *ApiClient {
+		return adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			*calls = append(*calls, call{r.Method, r.URL.Path})
+			switch {
+			case r.Method == "POST" && r.URL.Path == "/api/master/software-updates/check":
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"version": latest, "tag": "v" + latest, "url": "https://github.com/MoonWX/oss-transfer/releases/tag/v" + latest}})
+			case r.Method == "GET" && r.URL.Path == "/api/master/software-updates":
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"master": map[string]interface{}{"info": map[string]interface{}{"version": current}}}})
+			case r.Method == "POST" && r.URL.Path == "/api/master/software-updates/master":
+				*posted = adminTestBody(t, r)
+				w.WriteHeader(http.StatusAccepted)
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"phase": "QUEUED", "version": latest}})
+			default:
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL)
+			}
+		})
+	}
+	for _, args := range [][]string{{"master", "--yes"}, {"master", "--version", "v4.1.41", "--yes"}, {"master", "--version", "4.1.41", "--allow-prerelease", "--yes"}} {
+		var calls []call
+		var posted map[string]interface{}
+		result, err := runMaintenanceCommand(server(t, "4.1.40", "4.1.41", &calls, &posted), "update", args)
+		if err != nil || adminData(result)["phase"] != "QUEUED" || !reflect.DeepEqual(posted, map[string]interface{}{"version": "4.1.41"}) {
+			t.Fatalf("%v: result=%#v posted=%#v err=%v", args, result, posted, err)
+		}
+		if len(calls) != 3 || calls[0].path != "/api/master/software-updates/check" {
+			t.Fatalf("%v did not check before updating: %v", args, calls)
+		}
+	}
+	var calls []call
+	var posted map[string]interface{}
+	if _, err := runMaintenanceCommand(server(t, "4.1.40", "4.1.41", &calls, &posted), "update", []string{"master", "--version", "4.1.39", "--yes"}); err == nil || !strings.Contains(err.Error(), "v4.1.41") || posted != nil {
+		t.Fatal("installed a version other than the checked latest release", err, posted)
+	}
+	result, err := runMaintenanceCommand(server(t, "4.1.41", "4.1.41", &calls, &posted), "update", []string{"master", "--yes"})
+	if err != nil || posted != nil || adminData(result)["upToDate"] != true {
+		t.Fatal("updated a Master that is already up to date", result, posted, err)
+	}
+	var out bytes.Buffer
+	renderCLIResult(&out, result)
+	if !strings.Contains(out.String(), "Master 已是最新正式版 v4.1.41，无需更新") {
+		t.Fatal(out.String())
+	}
+	result, err = runMaintenanceCommand(server(t, "4.1.40", "4.1.41", &calls, &posted), "update", []string{"check"})
+	if err != nil || adminData(result)["version"] != "4.1.41" || adminData(result)["currentVersion"] != "4.1.40" || adminData(result)["available"] != true {
+		t.Fatal("check did not report the current version", result, err)
+	}
+	for _, test := range []struct {
+		locale cliLocale
+		want   string
+	}{{localeZH, "当前版本 v4.1.40 → 可升级到 v4.1.41"}, {localeEN, "Current version v4.1.40 → update available: v4.1.41"}, {localeJA, "現在のバージョン v4.1.40 → 更新可能: v4.1.41"}} {
+		var rendered bytes.Buffer
+		renderCLIResult(&cliLocaleWriter{Writer: &rendered, locale: test.locale}, result)
+		if !strings.Contains(rendered.String(), test.want) || !strings.Contains(rendered.String(), "releases/tag/v4.1.41") {
+			t.Fatalf("%v: %s", test.locale, rendered.String())
+		}
+	}
+	result, _ = runMaintenanceCommand(server(t, "4.1.41", "4.1.41", &calls, &posted), "update", []string{"check"})
+	var current bytes.Buffer
+	renderCLIResult(&current, result)
+	if !strings.Contains(current.String(), "当前版本 v4.1.41，已是最新正式版（v4.1.41）") {
+		t.Fatal(current.String())
+	}
+}
+
+func TestUpdateUsageErrorsExitTwo(t *testing.T) {
+	for _, args := range [][]string{{"master", "--version", "4.1.41"}, {"master", "--worker", "a", "--yes"}, {"agents", "--yes"}, {"upgrade"}, {"master", "--version", "latest", "--yes"}} {
+		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("usage error made a request: %v", args)
+		})
+		if _, err := runMaintenanceCommand(client, "update", args); !isCLIUsageError(err) {
+			t.Fatalf("%v: %v is not a usage error", args, err)
+		}
+	}
+}
+
+func TestCompareReleases(t *testing.T) {
+	for _, test := range []struct {
+		left, right string
+		sign        int
+	}{{"4.1.41", "4.1.40", 1}, {"4.1.40", "4.1.41", -1}, {"4.10.0", "4.9.9", 1}, {"4.1.41", "4.1.41-rc.1", 1}, {"4.1.41-rc.2", "4.1.41-rc.10", -1}, {"4.1.41-beta", "4.1.41-alpha", 1}, {"v4.1.41", "4.1.41", 0}} {
+		got := compareReleases(test.left, test.right)
+		if (got > 0) != (test.sign > 0) || (got < 0) != (test.sign < 0) {
+			t.Fatalf("compare(%s, %s) = %d", test.left, test.right, got)
+		}
 	}
 }
 

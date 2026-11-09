@@ -47,6 +47,8 @@ type SoftwareInfo = {
   platform?: string;
   supported: boolean;
   reason?: string;
+  // The node's explanation, localized by the Master.
+  detail?: string;
   prereleaseUpdates?: boolean;
 };
 type Update = {
@@ -126,8 +128,10 @@ function reason(info?: SoftwareInfo | null) {
     return t("此版本需先用安装脚本升级一次，之后可在这里更新。");
   if (info.reason === "CONTAINER" || info.reason === "container")
     return t("Docker 部署请更新镜像后重新创建容器。");
+  // The Master localizes the node's own explanation (for example that the
+  // service must run as root); fall back to a generic sentence.
   if (!info.supported)
-    return t("此安装方式暂不支持在线升级，请使用安装脚本升级。");
+    return info.detail || t("此安装方式暂不支持在线升级，请使用安装脚本升级。");
   return "";
 }
 
@@ -374,7 +378,7 @@ export default function SoftwareUpdates({
   };
   const containerCommands =
     containerNode && snapshot?.agentImage
-      ? containerAgentCommands(snapshot.agentImage)
+      ? containerAgentCommands(snapshot.agentImage, containerNode.hostname)
       : undefined;
   return (
     <Stack gap={3}>

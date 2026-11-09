@@ -144,6 +144,17 @@ func (set nodeDisplaySet) lookup(id, address string) NodeDisplay {
 	}
 	return makeNodeDisplay(address, "", "", nodeRuntimeInfo{})
 }
+
+// nodeHostname is the hostname an Agent last reported, or "".
+func (s *Server) nodeHostname(id string) string {
+	if s.agents == nil {
+		return ""
+	}
+	s.agents.mu.Lock()
+	defer s.agents.mu.Unlock()
+	return s.agents.nodeInfo[id].hostname
+}
+
 func (s *Server) rememberNodeInfo(id string, data map[string]any) {
 	if data == nil {
 		return

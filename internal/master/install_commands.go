@@ -144,7 +144,9 @@ func requestInstallerLanguage(r *http.Request) string {
 // no root, no host paths, and the same steps run on Docker Desktop and Linux.
 // The names carry the invitation ID prefix so a second Agent on one host never
 // reuses another Agent's volume, and re-running the same command after a failed
-// enrollment retries with the same pending identity.
+// enrollment retries with the same pending identity. The container's hostname
+// is its name: the Agent reports it, so the console can show the commands that
+// recreate this container with a new image.
 func agentDockerCommands(image, link, invitationID string) (posix, powershell string) {
 	name := "oss-transfer-agent-" + invitationID[:6]
 	volume := name + "-data"
@@ -154,9 +156,9 @@ func agentDockerCommands(image, link, invitationID string) (posix, powershell st
 		hostAlias = " --add-host host.docker.internal:host-gateway"
 	}
 	enroll := func(quoted string) string {
-		return "docker run --rm" + hostAlias + " -v " + volume + ":/data " + image + " oss-transfer-agent --join-url " + quoted + " --data-dir /data --enroll-only"
+		return "docker run --rm --hostname " + name + hostAlias + " -v " + volume + ":/data " + image + " oss-transfer-agent --join-url " + quoted + " --data-dir /data --enroll-only"
 	}
-	run := "docker run -d --name " + name + " --restart unless-stopped" + hostAlias + " --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v " + volume + ":/data " + image + " oss-transfer-agent --data-dir /data"
+	run := "docker run -d --name " + name + " --hostname " + name + " --restart unless-stopped" + hostAlias + " --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v " + volume + ":/data " + image + " oss-transfer-agent --data-dir /data"
 	posix = enroll(shellQuote(link)) + " && " + run
 	// Windows PowerShell 5.1 has no &&; $LASTEXITCODE keeps the same order.
 	powershell = enroll(psQuote(link)) + "; if ($LASTEXITCODE -eq 0) { " + run + " }"

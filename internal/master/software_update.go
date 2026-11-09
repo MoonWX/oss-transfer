@@ -57,6 +57,11 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, reply := range replies {
 		row := map[string]any{"address": reply.Member.Address, "info": nil, "update": nil}
 		addNodeDisplay(row, displays.lookup(reply.Member.ID, reply.Member.Address))
+		if hostname := s.nodeHostname(reply.Member.ID); hostname != "" {
+			// A container Agent added with the Docker command is named after
+			// its hostname; the console uses it in the update commands.
+			row["hostname"] = hostname
+		}
 		if reply.Err != nil {
 			// Older Agents do not implement software_info. Establish reachability
 			// independently so an unsupported updater is not labelled offline.

@@ -469,7 +469,7 @@ func TestAgentDockerCommandsNeedOnlyDockerAndStartAfterEnrollment(t *testing.T) 
 				t.Fatalf("%s contains %q: %s", key, forbidden, command)
 			}
 		}
-		if strings.Count(command, "--add-host host.docker.internal:host-gateway") != 2 || strings.Count(command, " -v "+name+"-data:/data ") != 2 {
+		if strings.Count(command, "--add-host host.docker.internal:host-gateway") != 2 || strings.Count(command, " -v "+name+"-data:/data ") != 2 || strings.Count(command, " --hostname "+name+" ") != 2 {
 			t.Fatalf("%s must reach the host Master and share one named volume: %s", key, command)
 		}
 		if strings.Contains(second[key].(string), name) || strings.Contains(second[key].(string), "--add-host") {
@@ -501,9 +501,9 @@ case "$*" in *--enroll-only) [[ "$FAIL_ENROLLMENT" != true ]] || exit 17 ;; esac
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "run --rm --add-host host.docker.internal:host-gateway -v " + name + "-data:/data moonwx/osstransfer:4.1.41 oss-transfer-agent --join-url " + link + " --data-dir /data --enroll-only\n"
+			want := "run --rm --hostname " + name + " --add-host host.docker.internal:host-gateway -v " + name + "-data:/data moonwx/osstransfer:4.1.41 oss-transfer-agent --join-url " + link + " --data-dir /data --enroll-only\n"
 			if !failedEnrollment {
-				want += "run -d --name " + name + " --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v " + name + "-data:/data moonwx/osstransfer:4.1.41 oss-transfer-agent --data-dir /data\n"
+				want += "run -d --name " + name + " --hostname " + name + " --restart unless-stopped --add-host host.docker.internal:host-gateway --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45 -v " + name + "-data:/data moonwx/osstransfer:4.1.41 oss-transfer-agent --data-dir /data\n"
 			}
 			if string(calls) != want {
 				t.Fatalf("docker calls:\n%s\nwant:\n%s", calls, want)

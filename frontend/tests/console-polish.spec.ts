@@ -375,6 +375,18 @@ test("container Agents get update commands and disabled updates explain why", as
               },
               update: { phase: "IDLE" },
             },
+            {
+              address: "agent-docker-2",
+              displayName: "agent-docker-2",
+              hostname: "oss-transfer-agent-1a2b3c",
+              info: {
+                role: "agent",
+                version: "4.1.41",
+                supported: false,
+                reason: "CONTAINER",
+              },
+              update: { phase: "IDLE" },
+            },
           ],
           latest: { version: "4.2.0" },
           available: false,
@@ -404,5 +416,22 @@ test("container Agents get update commands and disabled updates explain why", as
   await expect(dialog.locator("pre").nth(1)).toHaveText(commands.compose);
   expect(commands.run).toContain(
     `-v oss-transfer-agent-data:/data ${image} oss-transfer-agent --data-dir /data`,
+  );
+  // An Agent added with the v4.2.0 Docker command keeps its own container
+  // and volume names, read from the hostname it reports.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  const joined = page.getByRole("row").filter({ hasText: "agent-docker-2" });
+  await joined.getByRole("button", { name: "更新命令" }).click();
+  const named = containerAgentCommands(image, "oss-transfer-agent-1a2b3c");
+  await expect(page.getByRole("dialog").locator("pre").nth(0)).toHaveText(
+    named.run,
+  );
+  expect(named.run).toContain("docker rm -f oss-transfer-agent-1a2b3c\n");
+  expect(named.run).toContain(
+    `--name oss-transfer-agent-1a2b3c --hostname oss-transfer-agent-1a2b3c `,
+  );
+  expect(named.run).toContain(
+    `-v oss-transfer-agent-1a2b3c-data:/data ${image} oss-transfer-agent --data-dir /data`,
   );
 });

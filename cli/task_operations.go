@@ -194,6 +194,7 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 	groupIndex := map[string]int{}
 	generations := map[int]uint64{}
 	running := map[int]bool{}
+	skipped := []map[string]interface{}{}
 	for _, id := range ids {
 		row := tasks[id]
 		status := getString(row, "status")
@@ -215,8 +216,14 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 			allowed = status != "RUNNING" && status != "LIST_DONE" && status != "STOPPING" && status != "WAITING" && status != "RESUMING" && status != "RECOVERABLE" && !exploring
 			path = "/clear"
 		}
+		if !allowed && taskControlAlreadyDone(action, status, exploring) {
+			// Repeating stop or resume is not an error: report it like the
+			// Master reports a task that needs no action.
+			skipped = append(skipped, map[string]interface{}{"taskId": id, "success": true, "ignored": true, "status": status})
+			continue
+		}
 		if !allowed || status == "" {
-			return nil, cliErrorf("任务 #%d 当前状态 %s 不允许 %s；本次未执行操作", id, cliTaskStatusLabel(&cliLocaleWriter{locale: client.locale}, status), action)
+			return nil, cliErrorf("任务 #%d 当前状态 %s 不允许%s；本次未执行操作", id, cliTaskStatusLabel(&cliLocaleWriter{locale: client.locale}, status), client.text(taskControlActionLabel[action]))
 		}
 		if action == "resume" || action == "retry" {
 			generationText := fmt.Sprint(row["generation"])
@@ -241,6 +248,9 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 		groups[index].ids = append(groups[index].ids, id)
 	}
 	result, err := taskControlBatches(client, action, groups, generations)
+	if len(skipped) > 0 && result != nil {
+		addSkippedTaskControls(client, action, result, skipped)
+	}
 	if len(running) > 0 && result != nil {
 		for _, detail := range objectList(result["details"]) {
 			// A Master without the in-place retry ignores a running task.
@@ -352,6 +362,48 @@ func taskControlBatches(client *ApiClient, action string, groups []taskControlGr
 		return result, fmt.Errorf("%s", strings.Join(issues, "; "))
 	}
 	return result, nil
+}
+
+// addSkippedTaskControls reports the tasks that were not sent because they
+// already are in the requested state.
+func addSkippedTaskControls(client *ApiClient, action string, result map[string]interface{}, skipped []map[string]interface{}) {
+	details, _ := result["details"].([]interface{})
+	taskIDs, _ := result["taskIds"].([]int)
+	if len(details) > 0 || getInt(result, "accepted")+getInt(result, "ignored") == 0 {
+		for _, row := range skipped {
+			details = append(details, row)
+		}
+		result["details"] = details
+	} else {
+		// Aggregate replies carry counts only; count the skipped tasks with them.
+		result["ignored"] = getInt(result, "ignored") + len(skipped)
+	}
+	for _, row := range skipped {
+		taskIDs = append(taskIDs, getInt(row, "taskId"))
+	}
+	result["taskIds"] = taskIDs
+	setCLISummary(result, taskControlSummary(client, action, result)...)
+}
+
+// taskControlAlreadyDone reports a task that is already stopping or stopped
+// for stop, or already running for resume.
+func taskControlAlreadyDone(action, status string, exploring bool) bool {
+	switch action {
+	case "stop":
+		return !exploring && (status == "STOPPING" || status == "STOPPED")
+	case "resume":
+		return !exploring && (status == "RUNNING" || status == "RESUMING" || status == "LIST_DONE")
+	}
+	return false
+}
+
+// Task control operation names. Values are catalog keys.
+var taskControlActionLabel = map[string]string{
+	"stop":   "停止",
+	"resume": "继续",
+	"retry":  "重试",
+	"start":  "启动",
+	"delete": "删除",
 }
 
 // Task control outcomes. Values are catalog keys.

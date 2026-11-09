@@ -293,7 +293,7 @@ var cliMessages = map[string][2]string{
 	"仅受节点上限约束": {"Node limits only", "ノードの上限に従う"},
 	"任务 #%d":   {"Task #%d", "タスク #%d"},
 	"任务 #%d\n": {"Task #%d\n", "タスク #%d\n"},
-	"任务 #%d 当前状态 %s 不允许 %s；本次未执行操作":                    {"Task #%d with status %s does not allow %s; no action was taken", "タスク #%d の状態 %s では %s を実行できません。操作は行われていません"},
+	"任务 #%d 当前状态 %s 不允许%s；本次未执行操作":                     {"Task #%d with status %s does not allow %s; no action was taken", "タスク #%d の状態 %s では%sを実行できません。操作は行われていません"},
 	"--%s 需为 0 或 0.000001–1000000000；取消限制可用 unlimited": {"--%s must be 0 or 0.000001–1000000000; use unlimited to remove a limit", "--%s は 0 または 0.000001～1000000000 を指定します。unlimited で制限を解除できます"},
 	"请求上限范围":   {"Request limit scope", "リクエスト上限の適用範囲"},
 	"请求上限":     {"Request limits", "リクエスト上限"},

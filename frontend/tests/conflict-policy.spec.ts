@@ -83,7 +83,7 @@ async function openTask(page: Page, task: Record<string, unknown>) {
 }
 
 const note =
-  "跳过的对象只按名称判断，未比较大小或内容；源端修改过的对象在目标端可能仍是旧版本。可用对象比对核对，或使用“覆盖有变化的对象”重新创建任务。";
+  "跳过的对象有两种：目标端已存在的对象只按名称判断，未比较大小或内容，源端修改过的对象在目标端可能仍是旧版本，可用对象比对核对，或使用“覆盖有变化的对象”重新创建任务；扫描后在源端被删除的对象也计为跳过，它们在任务报告中的原因为 SOURCE_DELETED。";
 
 test("a finished SKIP task with skipped objects explains them and links to a prefilled comparison", async ({
   page,
@@ -165,7 +165,9 @@ test.describe("English", () => {
       panel.getByText("Skip existing objects or files", { exact: true }),
     ).toBeVisible();
     await expect(
-      panel.getByText(/^Skipped objects were matched by name only/),
+      panel.getByText(
+        /^Skipped objects are of two kinds\. Objects that already existed at the destination were matched by name only.*deleted at the source after the scan are also counted as skipped.*SOURCE_DELETED\.$/,
+      ),
     ).toBeVisible();
     await expect(
       panel.getByRole("link", { name: "Compare objects", exact: true }),

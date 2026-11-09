@@ -951,7 +951,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	}
 	w.Flush()
 	if policyCode == "SKIP" && getInt(task, "skippedObjectCount") > 0 {
-		fmt.Fprintln(out, cliText(out, "提示：跳过的对象只按名称判断，未比较内容。可用 object compare 核对，或用 --conflict changed 重新创建任务以覆盖有变化的对象。"))
+		fmt.Fprintln(out, cliText(out, "提示：跳过的对象有两种。目标端已存在的对象只按名称判断，未比较内容，可用 object compare 核对，或用 --conflict changed 重新创建任务以覆盖有变化的对象；扫描后在源端被删除的对象也计为跳过，它们在任务报告（task report）中的原因为 SOURCE_DELETED。"))
 	}
 	renderTaskMembership(out, task)
 }

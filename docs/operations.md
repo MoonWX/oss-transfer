@@ -108,7 +108,7 @@ If an outage lasted longer, the affected objects fail with a connection or serve
 
 A task lists the source first and transfers later. Objects can change in between:
 
-- **Deleted at the source** (object storage sources): the object is counted as skipped, not failed. The exception record says *The source object was deleted at the source and was skipped*, and the report row has the reason `SOURCE_DELETED`. A file missing from a local source still fails.
+- **Deleted at the source** (object storage sources): an object deleted at the source after the scan, before its transfer, is not a failure: it is counted as skipped and does not appear among the failed objects in the exception records. The [task report](#task-reports) lists it in `file-results.csv` with the result `SKIPPED` and the reason `SOURCE_DELETED`. The skip note in `task show` and in the task details mentions both causes of a skip. A file missing from a local source still fails.
 - **Changed at the source**: the object fails with the reason code `SOURCE_CHANGED` (*The source object changed after the scan; a retry copies its current version*). **Retry failed items** copies the version that exists at retry time, and the task's total size uses its new size. The report marks the object `SOURCE_REFRESHED`.
 
 Changes that happen after an object was copied are not seen by that task. Keep the source stable, or use incremental rounds and a final comparison ([planning](planning.md)).

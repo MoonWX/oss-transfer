@@ -14,6 +14,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/servicehost"
 	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 var version = "4.1.0-dev"
@@ -188,7 +189,12 @@ func serve(ctx context.Context, config servicehost.Config, options agent.Options
 		return err
 	}
 	defer db.Close()
-	service, err := agentservice.New(db, agentservice.Options{SpoolDirectory: filepath.Join(config.DataDirectory, "spool"), NodeControl: nodeOptions, Updater: updater, Comparison: config.Comparison.Options(filepath.Join(config.DataDirectory, "comparisons"))})
+	// Storage retries, transfers and the Master connection are written to
+	// the service log.
+	transferstore.SetRetryLogger(func(line string) { servicehost.Logf("%s", line) })
+	defer transferstore.SetRetryLogger(nil)
+	options.Logf = servicehost.Logf
+	service, err := agentservice.New(db, agentservice.Options{SpoolDirectory: filepath.Join(config.DataDirectory, "spool"), NodeControl: nodeOptions, Updater: updater, Comparison: config.Comparison.Options(filepath.Join(config.DataDirectory, "comparisons")), Logf: servicehost.Logf})
 	if err != nil {
 		return err
 	}

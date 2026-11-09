@@ -180,7 +180,7 @@ The default Master port is `1685`. Change it with `--port 1785` in `install.sh`,
 
 ## Logs
 
-Each service writes its own log file, `logs/service.log` in its data directory (see the table above; the installer prints it as `Log:`). This is where startup errors, task problems, comparison failures and the message of a removed Agent appear:
+Each service writes its own log file, `logs/service.log` in its data directory (see the table above; the installer prints it as `Log:`). This is where startup errors, task problems, comparison failures and the message of a removed Agent appear. An Agent also logs each child task attempt's start and end with its counts, the first failed objects of each attempt, storage retries during an outage and changes of its connection to the Master ([monitoring and logs](operations.md#monitoring-and-logs)):
 
 ```sh
 sudo tail -n 100 /opt/oss-transfer/master/data/logs/service.log

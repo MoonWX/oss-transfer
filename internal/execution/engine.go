@@ -232,16 +232,40 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	return nil
 }
 
+// logf writes a service log line when the engine has a log.
+func (e *Engine) logf(format string, args ...any) {
+	if e.opts.Logf != nil {
+		e.opts.Logf(format, args...)
+	}
+}
+
+// childName is how operators see a child task: #<task>-<number>.
+func childName(job Job) string {
+	return fmt.Sprintf("task #%d-%d (child %s)", job.ParentID, job.Number, job.ChildID)
+}
+
 func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeAttempt) {
 	var runErr error
 	var finalResults []ItemResult
+	c := record.Counters
+	e.logf("%s: attempt %d started: %d of %d objects to transfer (%d succeeded, %d skipped, %d failed before)", childName(record.Job), record.Attempt, c.Total-c.Succeeded-c.Skipped-c.Failed, c.Total, c.Succeeded, c.Skipped, c.Failed)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			runErr = fmt.Errorf("execution panic: %v", recovered)
 		}
 		// This uses an independent context so graceful process shutdown records a
 		// recoverable attempt. An explicit stop fence will reject the old attempt.
-		_, finishErr := e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr, finalResults...)
+		ended, finishErr := e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr, finalResults...)
+		if finishErr == nil {
+			c := ended.Counters
+			line := fmt.Sprintf("%s: attempt %d ended %s: %d succeeded, %d skipped, %d failed of %d objects", childName(record.Job), record.Attempt, ended.Status, c.Succeeded, c.Skipped, c.Failed, c.Total)
+			if runErr != nil {
+				line += ": " + transferstore.LogText(runErr.Error())
+			}
+			e.logf("%s", line)
+		} else {
+			e.logf("%s: attempt %d ended without recording its outcome: %s", childName(record.Job), record.Attempt, transferstore.LogText(finishErr.Error()))
+		}
 		if finishErr != nil && runErr == nil && len(finalResults) > 0 {
 			// Keep the same recovery behavior as a failed periodic result commit.
 			// Stop/generation fences also reject this retry, so an old attempt
@@ -470,6 +494,12 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	}
 	attempt.progress.initialize(record.Counters.SucceededBytes)
 	results := make(chan ItemResult, e.opts.QueueSize)
+	var failures atomic.Int64
+	defer func() {
+		if unlogged := failures.Load() - LoggedObjectFailures; unlogged > 0 {
+			e.logf("%s: %d more object failures not logged; the task's exception records list them all", childName(record.Job), unlogged)
+		}
+	}()
 	var workers sync.WaitGroup
 	workers.Add(1)
 	go func() {
@@ -491,6 +521,9 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				result := e.copyResolvedItem(ctx, record, item, source, target, attempt.progress)
 				if ctx.Err() != nil {
 					return
+				}
+				if result.Status == ItemFailed && failures.Add(1) <= LoggedObjectFailures {
+					e.logf("%s: object %q failed: %s", childName(record.Job), item.Source.Key, transferstore.LogText(result.Error))
 				}
 				select {
 				case results <- result:

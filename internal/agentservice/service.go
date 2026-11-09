@@ -62,6 +62,9 @@ type Options struct {
 	// Comparison configures object comparisons. New sets ResumeFactory and
 	// Logf when they are unset.
 	Comparison comparison.Options
+	// Logf writes service log lines about transfers (see execution.Options)
+	// unless Execution.Logf is set. Nil discards them.
+	Logf func(format string, args ...any)
 }
 
 func New(store *state.Store, options Options) (*Service, error) {
@@ -133,6 +136,9 @@ func New(store *state.Store, options Options) (*Service, error) {
 		nodes.Close()
 		limits.Close()
 		return nil, err
+	}
+	if options.Execution.Logf == nil {
+		options.Execution.Logf = options.Logf
 	}
 	options.Execution.ParentContext = leases.ParentContext
 	options.Execution.JobContext = leases.JobContext

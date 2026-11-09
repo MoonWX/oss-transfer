@@ -229,7 +229,16 @@ type Options struct {
 	// again before each further range; any other target streams a throttled
 	// task's objects, and the share still bounds their speed.
 	TaskLimits func(Job) (transferstore.RangeBudget, bool)
+	// Logf writes one line to the service log: each child task attempt's
+	// start and end with its counts, and its first failed objects (at most
+	// LoggedObjectFailures per attempt, then a count). Nil discards them.
+	Logf func(format string, args ...any)
 }
+
+// LoggedObjectFailures bounds the object failures one child task attempt
+// writes to the service log, so millions of failures cannot fill the disk;
+// the exception records keep every one.
+const LoggedObjectFailures = 20
 
 func terminal(s Status) bool {
 	return s == Completed || s == Failed || s == PartialFailed || s == Deleted || s == Retired

@@ -252,7 +252,9 @@ class Lifecycle:
                      '--service-name',self.names[role],'--install-dir',paths['bin'],'--config-dir',paths['config'],
                      '--data-dir',paths['data'],'--backup-dir',paths['backups'],'--yes','--startup-timeout',str(timeout)]
             if self.system=='Darwin' and not self.args.system:command+=['--user']
-            if upgrade:command+=['--upgrade']
+            # CI upgrades to the same build; --force exercises the full upgrade
+            # instead of the installer's same-version skip.
+            if upgrade:command+=['--upgrade','--force']
             if adopt_config:command+=['--adopt-config',adopt_config]
             command+=['--cli-path',self.cli_path if role=='master' else self.agent_cli_path]
             if replace_cli:command+=['--replace-cli']
@@ -267,7 +269,7 @@ class Lifecycle:
                          '-Upgrade',('-ReleaseUrl' if release_url else '-PackageDir'),release_url or release or self.release,'-Yes','-StartupTimeout',str(timeout)]
                 if not discover_all: command+=['-ServiceName',self.names[role]]
             else:
-                command=['bash',self.args.repo/'install.sh','--upgrade',('--release-url' if release_url else '--package-dir'),release_url or release or self.release,
+                command=['bash',self.args.repo/'install.sh','--upgrade','--force',('--release-url' if release_url else '--package-dir'),release_url or release or self.release,
                          '--yes','--startup-timeout',str(timeout)]
                 if not discover_all: command+=['--service-name',self.names[role]]
                 if self.system == 'Darwin' and not self.args.system: command+=['--user']

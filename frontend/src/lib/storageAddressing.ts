@@ -6,26 +6,39 @@
  * is not a URL.
  */
 export function autoPathStyle(endpoint: string): boolean | undefined {
-  let url: URL;
+  const value = endpoint.trim();
   try {
-    url = new URL(endpoint.trim());
+    new URL(value);
   } catch {
     return undefined;
   }
-  // URL drops a port that is the scheme's default; the Agent still sees it.
-  if (url.port || /^[a-z]+:\/\/[^/?#]*:\d+(?:[/?#]|$)/i.test(endpoint.trim()))
-    return true;
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  // Classify the host as written, as Go's url.Parse keeps it: URL would
+  // rewrite http://10.1 or http://1.2.3.04 to a dotted-quad address, which
+  // Go's net.ParseIP does not accept, and drop a port that is the scheme's
+  // default, which the Agent still sees.
+  const authority = /^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i.exec(value)?.[1];
+  if (authority === undefined) return undefined;
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  if (hostPort.startsWith("[")) return true;
+  const port = /:(\d*)$/.exec(hostPort);
+  if (port?.[1]) return true;
+  const host = hostPort
+    .slice(0, port ? port.index : undefined)
+    .toLowerCase()
+    .replace(/\.$/, "");
   if (!host) return undefined;
-  if (
-    host === "localhost" ||
-    host.startsWith("[") ||
-    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
-    !host.includes(".")
-  )
-    return true;
+  if (host === "localhost" || ipv4(host) || !host.includes(".")) return true;
   return [".internal", ".local", ".lan"].some((suffix) =>
     host.endsWith(suffix),
+  );
+}
+
+/** A dotted-quad IPv4 address as Go's net.ParseIP accepts it: no leading zeros. */
+function ipv4(host: string) {
+  const parts = host.split(".");
+  return (
+    parts.length === 4 &&
+    parts.every((part) => /^(?:0|[1-9]\d{0,2})$/.test(part) && +part <= 255)
   );
 }
 

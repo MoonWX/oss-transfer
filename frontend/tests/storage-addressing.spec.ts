@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, storageConfigs } from "./fixtures";
+import { autoPathStyle } from "../src/lib/storageAddressing";
 
 async function select(page: Page, label: string, option: string) {
   await page.getByRole("dialog").getByLabel(label).click();
@@ -182,4 +183,45 @@ test("cards and the connection test show the resolved addressing and the bucket-
   );
   await expect(dialog.getByTestId("storage-check-warning")).toHaveCount(0);
   expect(queries).toEqual(["", "only-bucket"]);
+});
+
+test("the automatic addressing preview classifies hosts as the Agent does", () => {
+  // The cases of transferstore.TestAutoPathStyle (Go), which the preview must
+  // match: the host is classified as written, not as URL normalizes it.
+  const cases: [string, boolean][] = [
+    ["https://s3.amazonaws.com", false],
+    ["https://s3.us-west-2.amazonaws.com", false],
+    ["https://s3.cn-north-1.jdcloud-oss.com", false],
+    ["https://oss-cn-hangzhou.aliyuncs.com/", false],
+    ["https://storage.example.com.", false],
+    ["https://s3.example.com:443", true],
+    ["http://host.docker.internal:18333", true],
+    ["http://ot-eval-native-s3:8333", true],
+    ["http://10.0.0.5:9000", true],
+    ["http://10.0.0.5", true],
+    ["http://[::1]", true],
+    ["http://[fd00::5]:9000", true],
+    ["http://localhost", true],
+    ["http://LOCALHOST", true],
+    ["http://minio", true],
+    ["http://minio.internal", true],
+    ["http://s3.corp.local", true],
+    ["http://nas.lan", true],
+    ["http://nas.lan.", true],
+    ["https://internal.example.com", false],
+    ["https://bucket-local.example.com", false],
+    ["https://s3.example.local.example.com", false],
+    ["https://s3.example.com/", false],
+    ["http://10.1", false],
+    ["http://192.168.1", false],
+    ["http://1.2.3.04", false],
+    ["http://0x7f.0.0.1", false],
+    ["http://10.0.0.5.", true],
+    ["http://2130706433", true],
+    ["http://user@minio", true],
+    ["http://s3.example:", false],
+  ];
+  for (const [endpoint, pathStyle] of cases)
+    expect(autoPathStyle(endpoint), endpoint).toBe(pathStyle);
+  expect(autoPathStyle("not a url")).toBeUndefined();
 });

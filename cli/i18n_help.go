@@ -172,6 +172,7 @@ Limits and diagnostics
   update master|agent|agents ...
   backup list|prune ...
   object compare ...              Compare buckets, prefixes or objects
+  object list|status|export|resume|cancel|delete  List, inspect, export or resume comparisons
 
 Account
   login --username admin --password-stdin
@@ -250,6 +251,7 @@ Help groups: task, task create, task import, node, agent, storage, limit, except
   update master|agent|agents ...
   backup list|prune ...
   object compare ...              バケット、プレフィックス、オブジェクトの比較
+  object list|status|export|resume|cancel|delete  比較の一覧、確認、エクスポート、再開
 
 アカウント
   login --username admin --password-stdin
@@ -794,33 +796,105 @@ truncatedWorkers が返された場合、詳細には ZIP レポートを使用�
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
 `},
 	cliObjectHelp: {`Compare objects
-  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
-  oss-transfer-cli object status <comparison-id> [--after 50 --limit 100]
-  oss-transfer-cli object cancel <comparison-id>
-  oss-transfer-cli object delete <comparison-id>
+Usage: oss-transfer-cli object <subcommand> [arguments]
 
-Empty prefixes compare whole buckets. Keys are matched after removing each prefix.
-metadata checks size, Content-Type, Content-Encoding, Content-Disposition, Cache-Control and custom metadata without reading content.
-content streams both complete objects into SHA-256 without writing object files locally. Read traffic is charged by your provider.
-ETag, modification time and storage class do not determine equality across stores. Objects changed during comparison are reported separately.
-Comparisons run in the background. status returns counts and paged differences; matching objects are counted only.
-Each node retains 10 comparisons, with up to 10,000 difference rows each. All objects are counted. delete removes finished comparison records only.
-Keys and prefixes are passed unchanged. Quote shell metacharacters and spaces.
+Subcommands
+  compare --source-bucket ALIAS/BUCKET --dest-bucket ALIAS/BUCKET [--scope prefix]
+          [--source-prefix PREFIX] [--dest-prefix PREFIX] [--mode metadata|content]
+                                  Compare two prefixes; without prefixes, whole buckets
+  compare --source-bucket ALIAS/BUCKET --source-key KEY --dest-bucket ALIAS/BUCKET --dest-key KEY
+          [--scope object] [--mode metadata|content]
+                                  Compare one object
+  list                            List comparisons on every node with their status
+  status <ID> [--after NUMBER] [--limit 1–1000] [--status RESULT[,RESULT...]]
+                                  Show counts and a page of differences; 50 per page by default
+  export <ID> --output FILE [--format zip|jsonl] [--status RESULT[,RESULT...]]
+                                  Export every stored difference; ZIP by default
+  resume <ID>                     Continue an interrupted, failed or canceled comparison after its checkpoint
+  cancel <ID>                     Cancel a running comparison
+  delete <ID>                     Delete the results of a finished comparison
+
+Results
+  DIFFERENT, ETAG_MISMATCH (ETag differs), MISSING_TARGET (missing from target), EXTRA_TARGET (only on target),
+  CHANGED_DURING_COMPARE, ERROR (read failed), BOTH_MISSING (missing on both sides).
+
+Examples
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --source-prefix '2026/' --dest-prefix 'backup/'
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
+  oss-transfer-cli object list
+  oss-transfer-cli object status <comparison-id> --watch 5
+  oss-transfer-cli object status <comparison-id> --status MISSING_TARGET,DIFFERENT --limit 200
+  oss-transfer-cli object export <comparison-id> --output comparison.zip
+  oss-transfer-cli object resume <comparison-id>
+
+Notes
+  --scope is optional: object when --source-key/--dest-key are given, otherwise prefix. --mode defaults to metadata.
+  compare starts the comparison in the background and prints its ID. For a single object it waits up to 15 seconds
+  and, when the comparison has finished, prints the result as status does.
+  Empty prefixes compare whole buckets. Keys are matched after removing each prefix.
+  metadata checks size, Content-Type, Content-Encoding, Content-Disposition, Cache-Control and custom metadata without reading content.
+  Matching metadata does not prove matching content: when both ETags are plain MD5 values and differ, the result is ETAG_MISMATCH. Use content to confirm content.
+  content streams both objects into SHA-256 without writing local files. Read traffic is charged by your provider.
+  Modification time and storage class do not determine equality. Objects changed during comparison are reported separately.
+  A comparison runs concurrently in the background on one node, which keeps every difference for 30 days by default; list finds comparison IDs again.
+  The ZIP holds differences.csv, retry-source-keys.incr and summary.json. When both prefixes are equal,
+  import-inventory can use retry-source-keys.incr to transfer missing, different or ETag-mismatched objects again.
+  After an Agent restart or update, a comparison continues automatically when storage connections did not change;
+  otherwise resume continues after the checkpoint and keeps the counts.
+  When differences exceed the node's storage budget or free disk space runs low, later differences are counted but not stored.
+  Exit code 3: status shows truncated differences, export is incomplete, or list cannot reach a node.
+  delete removes finished comparisons only. If an ID starts with -, put -- before it, as in object status -- -abc.
+  Keys and prefixes are passed unchanged. Quote shell metacharacters and spaces.
 `, `オブジェクトの比較
-  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
-  oss-transfer-cli object status <比較 ID> [--after 50 --limit 100]
-  oss-transfer-cli object cancel <比較 ID>
-  oss-transfer-cli object delete <比較 ID>
+使い方: oss-transfer-cli object <サブコマンド> [引数]
 
-プレフィックスが空の場合はバケット全体を比較します。それぞれのプレフィックスを除いた Key で対応付けます。
-metadata はサイズ、Content-Type、Content-Encoding、Content-Disposition、Cache-Control、カスタムメタデータを確認し、内容を読み取りません。
-content は両側の内容を最後までストリームで読み、SHA-256 を計算します。ローカルファイルは作成しません。読み取り通信が発生します。
-ETag、更新日時、ストレージクラスは一致判定に使用しません。比較中に変更されたオブジェクトは別途表示します。
-比較はバックグラウンドで実行されます。status は集計と差分ページを返し、一致したオブジェクトは件数のみ保存します。
-各ノードは直近 10 回の比較結果と、各比較の先頭 10,000 件の差分を保存します。集計は全件を含みます。delete は終了した比較記録のみ削除します。
-Key とプレフィックスは変更せず渡します。空白やシェル特殊文字を含む場合は引用符で囲んでください。
+サブコマンド
+  compare --source-bucket 接続名/バケット --dest-bucket 接続名/バケット [--scope prefix]
+          [--source-prefix プレフィックス] [--dest-prefix プレフィックス] [--mode metadata|content]
+                                  2 つのプレフィックスを比較。プレフィックスがなければバケット全体
+  compare --source-bucket 接続名/バケット --source-key Key --dest-bucket 接続名/バケット --dest-key Key
+          [--scope object] [--mode metadata|content]
+                                  1 つのオブジェクトを比較
+  list                            各ノードの比較と状態を一覧表示
+  status <ID> [--after 番号] [--limit 1–1000] [--status 結果[,結果...]]
+                                  集計と差分の 1 ページを表示。既定は 1 ページ 50 件
+  export <ID> --output ファイル [--format zip|jsonl] [--status 結果[,結果...]]
+                                  保存済みの差分をすべてエクスポート。既定は ZIP
+  resume <ID>                     中断、失敗、キャンセルした比較をチェックポイントの後から再開
+  cancel <ID>                     実行中の比較をキャンセル
+  delete <ID>                     終了した比較の結果を削除
+
+結果
+  DIFFERENT 不一致、ETAG_MISMATCH ETag が異なる、MISSING_TARGET 転送先に存在しない、EXTRA_TARGET 転送先のみに存在、
+  CHANGED_DURING_COMPARE 比較中に変更、ERROR 読み取り失敗、BOTH_MISSING 両側に存在しない。
+
+例
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --source-prefix '2026/' --dest-prefix 'backup/'
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
+  oss-transfer-cli object list
+  oss-transfer-cli object status <比較 ID> --watch 5
+  oss-transfer-cli object status <比較 ID> --status MISSING_TARGET,DIFFERENT --limit 200
+  oss-transfer-cli object export <比較 ID> --output comparison.zip
+  oss-transfer-cli object resume <比較 ID>
+
+説明
+  --scope は省略できます。--source-key/--dest-key を指定すると object、それ以外は prefix です。--mode の既定は metadata です。
+  compare は比較をバックグラウンドで開始し、比較 ID を表示します。単一オブジェクトの場合は最大 15 秒待ち、
+  終了していれば status と同じ形式で結果を表示します。
+  プレフィックスが空の場合はバケット全体を比較します。それぞれのプレフィックスを除いた Key で対応付けます。
+  metadata はサイズ、Content-Type、Content-Encoding、Content-Disposition、Cache-Control、カスタムメタデータを確認し、内容を読み取りません。
+  メタデータが一致しても内容の一致は保証されません。両側の ETag が通常の MD5 形式で異なる場合、結果は ETAG_MISMATCH です。内容を確認するには content を使用してください。
+  content は両側の内容をストリームで読み、SHA-256 を計算します。ローカルファイルは作成しません。読み取り通信が発生します。
+  更新日時とストレージクラスは一致判定に使用しません。比較中に変更されたオブジェクトは別途表示します。
+  比較は 1 つの実行ノードのバックグラウンドで並列に実行され、差分はすべてそのノードに既定で 30 日間保存されます。list で比較 ID を再確認できます。
+  ZIP には differences.csv、retry-source-keys.incr、summary.json が含まれます。両側のプレフィックスが同じ場合、
+  retry-source-keys.incr を import-inventory に使用し、転送先に存在しない、不一致、ETag が異なるオブジェクトを再転送できます。
+  Agent の再起動や更新の後、ストレージ接続が変わっていなければ比較は自動的に再開します。
+  それ以外の場合は resume でチェックポイントの後から再開でき、集計済みの結果は保持されます。
+  差分がノードの保存容量の上限を超えるか、ディスクの空き容量が不足すると、以降の差分は件数のみ集計し保存しません。
+  終了コード 3: status の差分の明細が切り詰められた、export が不完全、または list で接続できないノードがある。
+  delete は終了した比較の結果のみ削除します。ID が - で始まる場合は、object status -- -abc のように ID の前に -- を付けてください。
+  Key とプレフィックスは変更せず渡します。空白やシェル特殊文字を含む場合は引用符で囲んでください。
 `},
 	cliAuthHelp: {`Login and account
   oss-transfer-cli login

@@ -24,10 +24,18 @@ func installToolRoutes(s *Server) {
 		writeJSON(w, 200, map[string]any{"isMaster": true, "role": "master", "masterWebUrl": config.PublicURL, "localTransferSupported": false})
 	}))
 	s.mux.HandleFunc("GET /api/master/object-metadata", s.adminOnly(s.compareMetadata))
-	s.mux.HandleFunc("POST /api/master/comparisons", s.adminOnly(s.startComparison))
-	s.mux.HandleFunc("GET /api/master/comparisons/{id}", s.adminOnly(s.getComparison))
-	s.mux.HandleFunc("POST /api/master/comparisons/{id}/cancel", s.adminOnly(s.cancelComparison))
-	s.mux.HandleFunc("DELETE /api/master/comparisons/{id}", s.adminOnly(s.deleteComparison))
+	comparisons := newComparisonAPI(s)
+	s.mux.HandleFunc("GET /api/master/comparisons", s.adminOnly(comparisons.list))
+	s.mux.HandleFunc("POST /api/master/comparisons", s.adminOnly(comparisons.start))
+	s.mux.HandleFunc("GET /api/master/comparisons/{id}", s.adminOnly(comparisons.page))
+	s.mux.HandleFunc("POST /api/master/comparisons/{id}/cancel", s.adminOnly(comparisons.cancel))
+	s.mux.HandleFunc("POST /api/master/comparisons/{id}/resume", s.adminOnly(comparisons.resume))
+	s.mux.HandleFunc("DELETE /api/master/comparisons/{id}", s.adminOnly(comparisons.delete))
+	s.mux.HandleFunc("GET /api/master/comparisons/{id}/export", s.adminOnly(comparisons.export))
+	s.mux.HandleFunc("GET /api/master/comparisons/{id}/export-ticket", s.adminOnly(comparisons.issueExportTicket))
+	// A browser form cannot send the bearer token; the single-use ticket
+	// carries the login session instead.
+	s.mux.HandleFunc("POST /api/master/comparisons/{id}/export", comparisons.consumeExportTicket)
 }
 func comparisonEndpoint(value string, snapshot storageconfig.Snapshot) (execution.Endpoint, error) {
 	alias, bucket, hasAlias := strings.Cut(value, "/")

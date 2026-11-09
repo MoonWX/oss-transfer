@@ -57,6 +57,9 @@ type Options struct {
 	NodeControl    nodecontrol.Options
 	Execution      execution.Options
 	SpoolDirectory string
+	// Comparison configures object comparisons. New sets ResumeFactory and
+	// Logf when they are unset.
+	Comparison comparison.Options
 }
 
 func New(store *state.Store, options Options) (*Service, error) {
@@ -165,7 +168,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 	s.preflight = preflight
 	comparisons, err := comparison.New(store, factory, func(ctx context.Context, input io.ReadCloser, size int64) (io.ReadCloser, error) {
 		return nodes.Decorator(limits.Decorator)(ctx, execution.Job{}, execution.Item{Source: transferstore.Object{Size: size}}, input)
-	})
+	}, comparisonOptions(options.Comparison, configs, factory))
 	if err != nil {
 		cancel()
 		_ = scanner.Close()
@@ -277,7 +280,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 	switch operation {
 	case "lease_prepare", "lease_grant", "lease_retire", "lease_rejoin", "child_release_queued", "scan_takeover_seed", "scan_takeover_finalize":
 		return true
-	case "comparison_start", "comparison_cancel", "comparison_delete":
+	case "comparison_start", "comparison_cancel", "comparison_delete", "comparison_resume":
 		return true
 	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "child_retry_failed", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
 		return true

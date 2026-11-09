@@ -346,6 +346,40 @@ transfer_local_package_dir() {
   return 1
 }
 
+# shellcheck shell=bash
+# Shared by the standalone Unix installers. Succeeds when release version $1
+# has lower Semantic Versioning precedence than $2 (4.1.41 < 4.2.0-rc.1 <
+# 4.2.0). Build metadata is ignored; an unparsable version never compares.
+transfer_version_older() {
+  LC_ALL=C awk -v left="$1" -v right="$2" '
+  function parse(value, parts,   dash, core, fields, i) {
+    sub(/\+.*/, "", value)
+    dash = index(value, "-")
+    if (dash) { parts["pre"] = substr(value, dash + 1); core = substr(value, 1, dash - 1) }
+    else { parts["pre"] = ""; core = value }
+    if (split(core, fields, ".") != 3) return 0
+    for (i = 1; i <= 3; i++) { if (fields[i] !~ /^[0-9]+$/) return 0; parts[i] = fields[i] + 0 }
+    return dash == 0 || parts["pre"] ~ /^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/
+  }
+  function prerelease_before(x, y,   xs, ys, nx, ny, i, xn, yn) {
+    nx = split(x, xs, "."); ny = split(y, ys, ".")
+    for (i = 1; i <= nx && i <= ny; i++) {
+      xn = xs[i] ~ /^[0-9]+$/; yn = ys[i] ~ /^[0-9]+$/
+      if (xn && yn) { if (xs[i] + 0 != ys[i] + 0) return xs[i] + 0 < ys[i] + 0 }
+      else if (xn != yn) return xn
+      else if (xs[i] "" != ys[i] "") return xs[i] "" < ys[i] ""
+    }
+    return nx < ny
+  }
+  BEGIN {
+    if (!parse(left, a) || !parse(right, b)) exit 1
+    for (i = 1; i <= 3; i++) if (a[i] != b[i]) exit !(a[i] < b[i])
+    if (a["pre"] == b["pre"] || a["pre"] == "") exit 1
+    if (b["pre"] == "") exit 0
+    exit !prerelease_before(a["pre"], b["pre"])
+  }'
+}
+
 # END embedded download source
 # BEGIN embedded native installer
 # Generated from deploy/native/install.sh; used only when an offline package lacks native-install.sh.
@@ -695,6 +729,40 @@ transfer_local_package_dir() {
   return 1
 }
 
+# shellcheck shell=bash
+# Shared by the standalone Unix installers. Succeeds when release version $1
+# has lower Semantic Versioning precedence than $2 (4.1.41 < 4.2.0-rc.1 <
+# 4.2.0). Build metadata is ignored; an unparsable version never compares.
+transfer_version_older() {
+  LC_ALL=C awk -v left="$1" -v right="$2" '
+  function parse(value, parts,   dash, core, fields, i) {
+    sub(/\+.*/, "", value)
+    dash = index(value, "-")
+    if (dash) { parts["pre"] = substr(value, dash + 1); core = substr(value, 1, dash - 1) }
+    else { parts["pre"] = ""; core = value }
+    if (split(core, fields, ".") != 3) return 0
+    for (i = 1; i <= 3; i++) { if (fields[i] !~ /^[0-9]+$/) return 0; parts[i] = fields[i] + 0 }
+    return dash == 0 || parts["pre"] ~ /^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/
+  }
+  function prerelease_before(x, y,   xs, ys, nx, ny, i, xn, yn) {
+    nx = split(x, xs, "."); ny = split(y, ys, ".")
+    for (i = 1; i <= nx && i <= ny; i++) {
+      xn = xs[i] ~ /^[0-9]+$/; yn = ys[i] ~ /^[0-9]+$/
+      if (xn && yn) { if (xs[i] + 0 != ys[i] + 0) return xs[i] + 0 < ys[i] + 0 }
+      else if (xn != yn) return xn
+      else if (xs[i] "" != ys[i] "") return xs[i] "" < ys[i] ""
+    }
+    return nx < ny
+  }
+  BEGIN {
+    if (!parse(left, a) || !parse(right, b)) exit 1
+    for (i = 1; i <= 3; i++) if (a[i] != b[i]) exit !(a[i] < b[i])
+    if (a["pre"] == b["pre"] || a["pre"] == "") exit 1
+    if (b["pre"] == "") exit 0
+    exit !prerelease_before(a["pre"], b["pre"])
+  }'
+}
+
 # END embedded download source
 role=
 original_args=("$@")
@@ -734,6 +802,13 @@ systemd_unit_dir=/etc/systemd/system
 rc_dir=/usr/local/etc/rc.d
 pid_dir=/var/run
 say() { if [[ "${lang:-en}" == zh ]]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
+# A calling installer passes a private file in OSS_TRANSFER_INSTALL_RESULT to
+# learn whether this run changed anything ("installed") or not ("unchanged").
+report_result() {
+  local file=${OSS_TRANSFER_INSTALL_RESULT:-}
+  [[ "$file" == /* && -f "$file" && ! -L "$file" ]] || return 0
+  printf '%s\t%s\n' "$1" "${service_name:-}" >> "$file" || true
+}
 usage() {
   cat <<'EOF'
 Usage: bash install.sh [--role master|agent] [--upgrade] [options]
@@ -754,7 +829,8 @@ Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --install-dir DIR --config-dir DIR --data-dir DIR --backup-dir DIR
   --user               macOS: install a LaunchAgent for the current logged-in user
   --startup-timeout N  Readiness timeout, 10–600 seconds (default 120)
-  --force              Reinstall even when the same version is installed and running
+  --force              Reinstall the same version, or install a version older than
+                       the one that last used the existing data
   --yes                Proceed without interactive confirmation
 
 Uninstall: bash install.sh --uninstall [--role master|agent] [--keep-data] [--yes]
@@ -906,6 +982,7 @@ uninstall_services=()
 uninstall_actions=()
 uninstall_removed=()
 uninstall_kept=()
+uninstall_reinstall=()
 uninstall_agent=0
 uninstall_master=0
 path_depth() { local value=${1//[!\/]/}; printf '%s\n' "${#value}"; }
@@ -953,7 +1030,7 @@ plan_remove_file() {
 }
 plan_uninstall() {
   local directory=$1 metadata=$1/install.tsv item_role item_service item_config item_unit item_cli item_backup item_data item_root
-  local binary expected config_parent shared other suffix
+  local binary expected config_parent shared other suffix item_version
   item_role=$(metadata_field "$metadata" role)
   item_service=$(metadata_field "$metadata" serviceName)
   item_config=$(metadata_field "$metadata" config)
@@ -1013,8 +1090,15 @@ plan_uninstall() {
     uninstall_kept+=("$(say Configuration 配置): $item_config")
     [[ -z "$item_data" ]] || uninstall_kept+=("$(say Data 数据): $item_data")
     [[ -z "$item_backup" || ! -d "$item_backup" ]] || uninstall_kept+=("$(say 'Upgrade backups' 升级备份): $item_backup")
+    # Record the release that last used the kept data: reinstalling an older
+    # one over it asks first, and the reinstall command names this version.
+    item_version=$(metadata_field "$metadata" version)
+    [[ "$item_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || item_version=
+    [[ -z "$item_version" ]] || uninstall_actions+=("version	$config_parent	$item_version")
+    uninstall_reinstall+=("$item_role	$item_version	$directory	$config_parent	$item_root")
   else
     plan_remove_file "$item_config" "$(say Configuration 配置)"
+    plan_remove_file "$config_parent/installed-version" ''
     uninstall_actions+=("rmdir	$config_parent")
     if [[ -n "$item_data" && -d "$item_data" ]]; then
       if [[ -L "$item_data" ]] || protected_directory "$item_data" || contains_other_installation "$item_data" || ! owned_data_directory "$item_data" "$item_role"; then
@@ -1070,6 +1154,34 @@ stop_and_remove_service() {
     launchctl bootout "$domain/$name" 2>/dev/null || ! launchctl print "$domain/$name" >/dev/null 2>&1 || return 1
     rm -f -- "$definition"
   fi
+}
+# The installer command that reinstalls each kept installation with its own
+# release, role and paths. A Master and the local Agent under the same root
+# are reinstalled together, as the combined installation does.
+reinstall_commands() {
+  local item item_role item_version directory config_parent item_root command master_root='' agent_root='' together=0
+  for item in ${uninstall_reinstall[@]+"${uninstall_reinstall[@]}"}; do
+    IFS=$'\t' read -r item_role item_version directory config_parent item_root <<< "$item"
+    [[ -n "$item_root" && "$directory" == "$item_root/$item_role/bin" ]] || continue
+    if [[ "$item_role" == master ]]; then master_root=$item_root; else agent_root=$item_root; fi
+  done
+  [[ -z "$master_root" || "$master_root" != "$agent_root" ]] || together=1
+  for item in ${uninstall_reinstall[@]+"${uninstall_reinstall[@]}"}; do
+    IFS=$'\t' read -r item_role item_version directory config_parent item_root <<< "$item"
+    [[ "$item_role" != agent || "$together" == 0 ]] || continue
+    command="bash install.sh --role $item_role"
+    [[ -z "$item_version" ]] || command+=" --version $item_version"
+    if [[ -n "$item_root" && "$directory" == "$item_root/$item_role/bin" ]]; then
+      [[ "$item_root" == "$(default_root)" ]] || command+=" --root-dir $(printf '%q' "$item_root")"
+    else
+      command+=" --install-dir $(printf '%q' "$directory") --config-dir $(printf '%q' "$config_parent")"
+    fi
+    if [[ "$item_role" == master ]]; then
+      if ((together)); then command+=' --with-agent'; else command+=' --without-agent'; fi
+    fi
+    ((user_service == 0)) || command+=' --user'
+    printf '  %s\n' "$command"
+  done
 }
 run_uninstall() {
   local directory answer item kind first second leftover suffix
@@ -1131,7 +1243,16 @@ run_uninstall() {
           [[ -d "$leftover" && ! -L "$leftover" ]] || continue
           suffix=${leftover##*/}; suffix=${suffix#"$second-"}
           [[ "$suffix" =~ ^[0-9]{8}T[0-9]{6}Z\.[A-Za-z0-9]+$ ]] && rm -rf -- "$leftover"
-        done;;
+        done
+        # The backup retention lock is shared by the directory's installations;
+        # it goes only when nothing else is left there.
+        if [[ $(ls -A "$first") == .retention.lock && -f "$first/.retention.lock" && ! -L "$first/.retention.lock" ]]; then
+          rm -f -- "$first/.retention.lock"
+        fi;;
+      version)
+        if [[ -d "$first" && ! -L "$first" && ! -L "$first/installed-version" ]]; then
+          printf '%s\n' "$second" > "$first/installed-version"
+        fi;;
       rmdir)
         if [[ -d "$first" && ! -L "$first" ]]; then
           if [[ -z $(ls -A "$first") ]]; then rmdir -- "$first"
@@ -1143,8 +1264,13 @@ run_uninstall() {
     [[ ! -d "$leftover" ]] || printf "$(say 'Kept (contains other files): %s' '已保留（目录中还有其他文件）：%s')\n" "$leftover"
   done
   printf '\n=== %s ===\n' "$(say 'Uninstalled' '卸载完成')"
-  ((keep_data == 0)) || say 'Configuration and data were kept; rerun the installer with the same --role (and --root-dir) to reinstall with them.' '已保留配置和数据；使用相同的 --role（及 --root-dir）重新运行安装脚本即可沿用。'
-  ((uninstall_agent == 0)) || say 'If the node is still listed on the Master, remove it there: Nodes page, or oss-transfer-cli agent remove NODE --yes.' '如果 Master 上仍显示此节点，请在 Master 上移除：执行节点页面，或运行 oss-transfer-cli agent remove 节点 --yes。'
+  if ((keep_data)); then
+    say 'Configuration and data were kept. To reinstall with them, run:' '已保留配置和数据。如需沿用，请运行：'
+    reinstall_commands
+    ((uninstall_agent == 0)) || say 'Keep this node on the Master if you reinstall it; removing it there makes the kept identity unusable.' '如需重新安装，请勿在 Master 上移除此节点，否则保留的身份将无法再使用。'
+  else
+    ((uninstall_agent == 0)) || say 'If the node is still listed on the Master, remove it there: Nodes page, or oss-transfer-cli agent remove NODE --yes.' '如果 Master 上仍显示此节点，请在 Master 上移除：执行节点页面，或运行 oss-transfer-cli agent remove 节点 --yes。'
+  fi
   ((uninstall_master == 0)) || say 'Agents that joined this Master can no longer reach it; uninstall them on their hosts with --uninstall --role agent.' '加入此 Master 的执行节点将无法再连接它；请在各自主机上运行安装脚本 --uninstall --role agent 卸载。'
 }
 # END uninstall
@@ -1254,6 +1380,13 @@ if ((upgrade)); then
       curl -fsSL --globoff --proto "=$protocol" --proto-redir "=$protocol" --connect-timeout 10 --max-time 600 --retry 2 "$release_url/manifest.tsv" -o "$pin_work/versioned.tsv"
       [[ $(sha256 "$pin_work/latest.tsv") == "$(sha256 "$pin_work/versioned.tsv")" ]] || fail 'Latest and versioned release manifests differ; retry after publication finishes'
     fi
+    # Each installation reports whether it changed; the caller (or this loop)
+    # ends with one line when none did.
+    own_result=
+    if [[ -z "${OSS_TRANSFER_INSTALL_RESULT:-}" ]]; then
+      own_result=$(mktemp "${TMPDIR:-/tmp}/oss-transfer-result.XXXXXX")
+      export OSS_TRANSFER_INSTALL_RESULT=$own_result
+    fi
     for directory in "${candidates[@]}"; do
       if [[ -n "$release_url" ]]; then
         bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"} --install-dir "$directory" --release-url "$release_url" --yes
@@ -1262,6 +1395,10 @@ if ((upgrade)); then
         bash "${BASH_SOURCE[0]}" ${original_args[@]+"${original_args[@]}"} --install-dir "$directory" ${package_dir:+--package-dir "$package_dir"} --yes
       fi
     done
+    if [[ -n "$own_result" ]]; then
+      if [[ -s "$own_result" ]] && ! grep -qv $'^unchanged\t' "$own_result"; then printf '\n=== %s ===\n' "$(say 'Nothing changed' '无需更改')"; fi
+      rm -f -- "$own_result"
+    fi
     exit 0
   fi
   installed_metadata=$install_dir/install.tsv
@@ -1508,6 +1645,31 @@ if [[ "$release_url" == */latest ]]; then
   fetch manifest.tsv
   [[ $(sha256 "$work/manifest.tsv") == "$latest_manifest_sha" ]] || fail 'Latest and versioned release manifests differ; retry after publication finishes'
 fi
+# Data written by a newer release may not be readable by an older one. The
+# installation record names the release that last used the data; after an
+# uninstall with --keep-data, a marker beside the kept configuration does.
+check_recorded_version() {
+  local recorded_version='' answer
+  if ((existed)); then
+    if [[ -f "$metadata" && ! -L "$metadata" ]]; then recorded_version=$(metadata_field "$metadata" version)
+    elif [[ -f "$config_dir/installed-version" && ! -L "$config_dir/installed-version" ]]; then recorded_version=$(head -n 1 "$config_dir/installed-version")
+    fi
+  fi
+  [[ -n "$recorded_version" ]] && transfer_version_older "$version" "$recorded_version" || return 0
+  if ((force)); then
+    say "Warning: installing $version, older than $recorded_version, which last used this data (--force)." "警告：将安装 ${version}，比上次使用这些数据的 ${recorded_version} 更旧（已加 --force）。" >&2
+  elif ((yes == 0)) && { : </dev/tty; } 2>/dev/null; then
+    read -r -p "$(say "The $service_name data was last used by $recorded_version; $version is older and may not read it. Install $version anyway? [y/N] " "${service_name} 的数据上次由 ${recorded_version} 使用；${version} 是更旧的版本，可能无法读取这些数据。仍要安装 ${version} 吗？[y/N] ")" answer </dev/tty
+    if [[ "$answer" != y && "$answer" != Y ]]; then
+      say 'Cancelled; nothing was changed.' '已取消，未做任何更改。'
+      report_result unchanged
+      exit 0
+    fi
+  else
+    fail "$(say "The $service_name data was last used by $recorded_version; $version is older and may not read it. Nothing was changed. Add --version $recorded_version to install that release, or --force to install $version anyway." "${service_name} 的数据上次由 ${recorded_version} 使用；${version} 是更旧的版本，可能无法读取这些数据。未做任何更改。请加 --version ${recorded_version} 安装该版本，或加 --force 仍安装 ${version}。")"
+  fi
+}
+check_recorded_version
 # Rerunning the same release over a complete, running installation changes
 # nothing. Anything missing or stale, an enrollment, adoption or CLI change
 # still runs the installation, which repairs it.
@@ -1547,11 +1709,13 @@ if installation_current; then
     if [[ "$answer" != y && "$answer" != Y ]]; then
       say "Nothing was changed." "未做任何更改。"
       print_current_installation
+      report_result unchanged
       exit 0
     fi
   else
     say "$service_name is already v$version and running; nothing was changed. Add --force to reinstall it." "$service_name 已是 v$version 且正在运行，未做任何更改。如需重新安装，请加 --force。"
     print_current_installation
+    report_result unchanged
     exit 0
   fi
 fi
@@ -2213,12 +2377,15 @@ if ! publish_master_packages; then
   fi
   fail "$(say 'Service installed, but could not retain Agent packages; rerun the installer to repair the package cache' '服务已就绪，但 Agent 安装包保存失败。请重新运行安装脚本修复。')"
 fi
+# The installation record now names the release that uses the data.
+rm -f -- "$config_dir/installed-version"
 printf '\n%s: %s\n%s: %s\n%s: %s\n' "$(say 'Service' '服务')" "$service_name" "$(say 'Configuration' '配置文件')" "$config" "$(say 'Log' '日志')" "$log_file"
 # These two labels are also consumed by installation tooling.
 printf 'Installation: %s\n' "$install_dir"
 printf 'CLI: %s\n' "$cli_path"
 printf 'Tasks: %q task list\n' "$cli_path"
 printf '\n=== %s %s · %s ===\n' "$role" "$version" "$(say 'Installed successfully' '安装成功')"
+report_result installed
 if [[ "$role" == master ]]; then
   printf '%s: %s\n' "$(say 'Web UI' '访问地址')" "$(console_url)"
 fi
@@ -2260,7 +2427,8 @@ Usage: bash install.sh [options]
   --service-name NAME --adopt-config FILE --listen HOST:PORT
   --user                        macOS user service
   --no-deps                     Do not install missing Docker dependencies
-  --force                       Reinstall even when the same version is running
+  --force                       Reinstall the same version, or install a version
+                                older than the one that last used the data
   --yes                         Skip prompts
 
 Uninstall (lists everything first; nothing is downloaded):
@@ -2470,6 +2638,20 @@ retained_role_config() {
     [[ ! -f "$candidate" || -L "$candidate" ]] || printf '%s\n' "$candidate"
   fi
 }
+# The release that last used a role's installation or kept data: its
+# installation record, or the marker an uninstall with --keep-data leaves
+# beside the configuration. Empty when unknown.
+recorded_version() {
+  local selected=$1 directory config value=
+  if [[ "$selected" == "$role" && -n "$install_dir" ]]; then directory=$install_dir; else directory=$(existing_install_dir "$selected"); fi
+  if [[ -n "$directory" && -f "$directory/install.tsv" && ! -L "$directory/install.tsv" ]]; then
+    value=$(awk -F '\t' '$1=="version"{print $2}' "$directory/install.tsv")
+  else
+    config=$(if [[ "$selected" != "$role" ]]; then install_dir='' config_dir=''; fi; retained_role_config "$selected")
+    if [[ -n "$config" && -f "${config%/*}/installed-version" && ! -L "${config%/*}/installed-version" ]]; then value=$(head -n 1 "${config%/*}/installed-version"); fi
+  fi
+  [[ ! "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || printf '%s\n' "$value"
+}
 # Rerunning the same one-line command offers to upgrade what is already installed.
 if ((interactive && upgrade == 0)) && [[ -z "$role$method$package_dir$release_url$adopt_config" ]]; then
   installed=''
@@ -2611,6 +2793,16 @@ rollback_compose() {
   say 'Removed the containers, network and files created by this attempt. Fix the problem above and run the same command again.' '已清理本次创建的容器、网络和文件。请解决上述问题后重新运行同一条命令。' >&2
 }
 trap cleanup EXIT
+# Native installers (this release and later) report into this file whether
+# each run changed anything; older ones ignore it.
+: > "$stage/install-result"
+export OSS_TRANSFER_INSTALL_RESULT=$stage/install-result
+nothing_changed() {
+  [[ -s "$stage/install-result" ]] && ! grep -qv $'^unchanged\t' "$stage/install-result"
+}
+print_nothing_changed() {
+  printf '\n=== %s ===\n' "$(say 'Nothing changed' '无需更改')"
+}
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; elif [[ -x /sbin/sha256 ]]; then /sbin/sha256 -q "$1"; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 metadata_field() { awk -F '\t' -v key="$2" '$1==key {print $2}' "$1"; }
 native_output() {
@@ -2708,15 +2900,58 @@ install_local_agent() {
   else
     verify_local_agent_cluster "$origin" "$agent_config"
   fi
-  say 'Installing local Agent…' '正在安装本机 Agent…'
+  ((agent_downgrade == 0)) || agent_args+=(--force)
+  if [[ -f "$agent_config" ]]; then say 'Checking local Agent…' '正在检查本机 Agent…'; else say 'Installing local Agent…' '正在安装本机 Agent…'; fi
   if ! bash "$stage/native-install.sh" "${agent_args[@]}"; then
     unset TRANSFER_JOIN_TOKEN
     fail "$(say 'Master is ready. Local Agent installation failed; rerun this installer to finish it.' 'Master 已就绪，但本机 Agent 安装失败。请重新运行安装脚本完成安装。')"
   fi
   unset TRANSFER_JOIN_TOKEN
-  printf '\n=== %s ===\n' "$(say 'Master and local Agent installed successfully' 'Master 和本机 Agent 安装成功')"
-  say 'Local Agent joined the cluster.' '本机 Agent 已加入集群。'
+  if nothing_changed; then
+    print_nothing_changed
+  else
+    printf '\n=== %s ===\n' "$(say 'Master and local Agent installed successfully' 'Master 和本机 Agent 安装成功')"
+    say 'Local Agent joined the cluster.' '本机 Agent 已加入集群。'
+  fi
   print_master_access
+}
+release_kind() {
+  if [[ "$version" == *-* ]]; then say "$version (prerelease)" "${version}（预发布版本）"; else printf '%s\n' "$version"; fi
+}
+# What a native installation will do, shown before it is confirmed. The
+# native installer chooses the same directories and service name.
+print_native_plan() {
+  local metadata_file config='' role_text version_text plan_install plan_data plan_service previous
+  plan_install=${install_dir:-$(default_install_dir "$role")}
+  metadata_file=$plan_install/install.tsv
+  plan_data=$data_dir plan_service=$service_name
+  if [[ -f "$metadata_file" && ! -L "$metadata_file" ]]; then
+    plan_data=${plan_data:-$(awk -F '\t' '$1=="dataDir"{print $2}' "$metadata_file")}
+    plan_service=${plan_service:-$(awk -F '\t' '$1=="serviceName"{print $2}' "$metadata_file")}
+  else
+    config=$(retained_role_config "$role")
+    if [[ -n "$config" ]]; then
+      plan_data=${plan_data:-$(sed -nE 's/.*"dataDirectory"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$config")}
+      plan_service=${plan_service:-$(sed -nE 's/.*"serviceName"[[:space:]]*:[[:space:]]*"([^"\\]*)".*/\1/p' "$config")}
+    fi
+  fi
+  plan_data=${plan_data:-$(dirname "$(default_install_dir "$role")")/data}
+  if [[ -z "$plan_service" ]]; then
+    if [[ "$os" == FreeBSD ]]; then plan_service=oss_transfer_$role; else plan_service=oss-transfer-$role; fi
+  fi
+  if [[ "$role" == agent ]]; then role_text=$(say Agent 执行节点)
+  elif ((with_agent)); then role_text=$(say 'Master + local Agent' '主节点 + 本机 Agent')
+  else role_text=$(say Master 主节点); fi
+  version_text=$(release_kind)
+  previous=$(recorded_version "$role")
+  if [[ -n "$previous" && "$previous" != "$version" ]]; then version_text+=$(say ", replacing $previous" "，替换 $previous")
+  elif [[ "$previous" == "$version" ]]; then version_text+=$(say ', already installed' '，已安装'); fi
+  say 'Installation plan:' '安装计划：'
+  printf '  %s: %s\n' "$(say Role 角色)" "$role_text" "$(say Version 版本)" "$version_text" \
+    "$(say Programs 程序目录)" "$plan_install" "$(say Data 数据目录)" "$plan_data" "$(say Service 服务)" "$plan_service"
+  if [[ "$role" == master && ! -f "$metadata_file" && -z "$config" && -z "$adopt_config" ]]; then
+    printf '  %s: %s\n' "$(say Listen 监听地址)" "${listen:-0.0.0.0:$port}"
+  fi
 }
 [[ -z "$local_package_dir" ]] || package_dir=$local_package_dir
 if [[ -z "$release_url" && -z "$package_dir" ]]; then
@@ -2778,6 +3013,30 @@ if [[ "$method" == native ]]; then
   [[ $(sha256 "$stage/native-install.sh") == "$checksum" && $(wc -c < "$stage/native-install.sh" | tr -d ' ') == "$size" ]] || fail 'Native installer checksum mismatch'
   [[ -z "$root_dir" ]] || native_args+=(--root-dir "$root_dir")
   [[ -z "$config_dir" ]] || native_args+=(--config-dir "$config_dir")
+  # Refuse to put an older release over data a newer one last used, unless
+  # the user confirms it or passes --force. Same-version reruns and upgrades
+  # are not affected.
+  downgrades=() agent_downgrade=0
+  if [[ -n "$role" ]]; then check_roles=$role; else check_roles='master agent'; fi
+  ((with_agent == 0)) || [[ "$check_roles" == *agent* ]] || check_roles+=' agent'
+  for selected in $check_roles; do
+    previous=$(recorded_version "$selected")
+    if [[ -n "$previous" ]] && transfer_version_older "$version" "$previous"; then
+      downgrades+=("$selected $previous")
+      [[ "$selected" != agent || "$role" == agent ]] || agent_downgrade=1
+    fi
+  done
+  if ((${#downgrades[@]})); then
+    for item in "${downgrades[@]}"; do
+      say "Warning: the ${item% *} data was last used by ${item#* }; $version is older and may not read it." "警告：${item% *} 的数据上次由 ${item#* } 使用；${version} 是更旧的版本，可能无法读取这些数据。" >&2
+    done
+    if ((force == 0)); then
+      ((interactive)) || fail "$(say "Nothing was changed. Add --version ${downgrades[0]#* } to install that release, or --force to install $version anyway." "未做任何更改。请加 --version ${downgrades[0]#* } 安装该版本，或加 --force 仍安装 ${version}。")"
+      prompt answer "$(say "Install the older $version anyway? y / n" "仍要安装更旧的 ${version}？y / n")" n
+      [[ "$answer" == y || "$answer" == Y ]] || { say 'Cancelled; nothing was changed.' '已取消，未做任何更改。'; exit 0; }
+      force=1
+    fi
+  fi
   ((force == 0)) || native_args+=(--force)
   if ((upgrade)); then
     native_args+=(--upgrade)
@@ -2789,7 +3048,8 @@ if [[ "$method" == native ]]; then
     ((user_service == 0)) || native_args+=(--user)
     ((yes == 0)) || native_args+=(--yes)
     bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log" | native_output
-    ((with_agent == 0)) || install_local_agent
+    if ((with_agent)); then install_local_agent
+    elif nothing_changed; then print_nothing_changed; fi
     exit 0
   fi
   # Preserve an existing installation, but let the downloaded version choose
@@ -2820,7 +3080,7 @@ if [[ "$method" == native ]]; then
     replace_cli=1
   fi
   if ((yes == 0)); then
-    printf '%s %s (%s)\n' "$role" "$version" "$method"
+    print_native_plan
     prompt answer "$(say 'Install? y / n' '安装？y / n')" y
     [[ "$answer" == y || "$answer" == Y ]] || exit 0
   fi
@@ -2840,7 +3100,8 @@ if [[ "$method" == native ]]; then
   [[ -z "$master_url" ]] || native_args+=(--master-url "$master_url")
   ((token_stdin == 0)) || native_args+=(--token-stdin)
   bash "$stage/native-install.sh" "${native_args[@]}" | tee "$stage/native-install.log" | native_output
-  ((with_agent == 0)) || install_local_agent
+  if ((with_agent)); then install_local_agent
+  elif nothing_changed; then print_nothing_changed; fi
   exit 0
 fi
 
@@ -2938,7 +3199,15 @@ if ! { command -v docker >/dev/null && docker compose version >/dev/null 2>&1; }
 fi
 docker info >/dev/null 2>&1 || fail 'Start the Docker daemon first'
 [[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$service_name") ]] || fail 'Compose project already exists'
-if ((yes == 0)); then printf '%s %s (%s)\n' "$role" "$version" "$image"; prompt answer "$(say 'Install? y / n' '安装？y / n')" y; [[ "$answer" == y || "$answer" == Y ]] || exit 0; fi
+if ((yes == 0)); then
+  say 'Installation plan:' '安装计划：'
+  printf '  %s: %s\n' "$(say Role 角色)" "$(if [[ "$role" == master ]]; then say Master 主节点; else say Agent 执行节点; fi)" \
+    "$(say Version 版本)" "$(release_kind)" "$(say Image 镜像)" "$image" "$(say 'Compose file' 'Compose 文件')" "$install_dir/docker-compose.yml" \
+    "$(say Data 数据目录)" "$data_dir" "$(say 'Compose project' 'Compose 项目')" "$service_name"
+  [[ "$role" != master ]] || printf '  %s: %s\n' "$(say Port 端口)" "$port"
+  prompt answer "$(say 'Install? y / n' '安装？y / n')" y
+  [[ "$answer" == y || "$answer" == Y ]] || exit 0
+fi
 # Reuse the exact release already present locally; otherwise fetch it before
 # creating any application files or containers.
 if [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true) != "$commit" ]]; then

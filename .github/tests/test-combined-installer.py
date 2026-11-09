@@ -32,6 +32,10 @@ role = option('--role')
 event({'event': 'native', 'role': role, 'args': args,
        'lang': os.environ.get('OSS_TRANSFER_INSTALL_LANG'),
        'token': os.environ.get('TRANSFER_JOIN_TOKEN', '')})
+if os.environ.get('NATIVE_RESULT'):
+    # Like a native installer of this release, report whether anything changed.
+    with open(os.environ['OSS_TRANSFER_INSTALL_RESULT'], 'a') as stream:
+        stream.write(os.environ['NATIVE_RESULT'] + '\toss-transfer-' + role + '\n')
 if role != 'master':
     print('Agent installation finished')
     sys.exit(int(os.environ.get('AGENT_EXIT_CODE', '0')))
@@ -53,7 +57,9 @@ shutil.copyfile(os.environ['FIXTURE_CLI'], cli)
 cli.chmod(0o755)
 print('Installation: '+str(install))
 zh = os.environ.get('OSS_TRANSFER_INSTALL_LANG') == 'zh'
-print(('访问地址: ' if zh else 'Web UI: ')+os.environ['MASTER_ORIGIN'])
+if os.environ.get('NATIVE_RESULT') != 'unchanged':
+    # A skipped same-version run prints no access details.
+    print(('访问地址: ' if zh else 'Web UI: ')+os.environ['MASTER_ORIGIN'])
 if os.environ.get('NEW_PASSWORD'):
     print('初始管理员: admin' if zh else 'Initial administrator: admin')
     print(('初始密码: ' if zh else 'Initial password: ')+os.environ['NEW_PASSWORD'])
@@ -311,6 +317,105 @@ class CombinedInstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         agent = self.assert_agent_origin(self.environment['MASTER_ORIGIN'])
         self.assertEqual(agent['args'][agent['args'].index('--service-name')+1], 'oss_transfer_agent')
+
+    def test_same_version_rerun_ends_with_nothing_changed(self):
+        self.seed_agent()
+        result = self.run_installer('--role', 'master', '--with-agent', '--lang', 'zh', NATIVE_RESULT='unchanged')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('正在检查本机 Agent…', result.stdout)
+        self.assertNotIn('正在安装本机 Agent', result.stdout)
+        self.assertNotIn('安装成功', result.stdout)
+        self.assertNotIn('已加入集群', result.stdout)
+        self.assertTrue(result.stdout.rstrip().endswith('=== 无需更改 ==='), result.stdout)
+        # Tooling still finds the installation lines.
+        self.assertIn('Installation: ', result.stdout)
+        result = self.run_installer('--role', 'master', '--without-agent', NATIVE_RESULT='unchanged')
+        self.assertTrue(result.stdout.rstrip().endswith('=== Nothing changed ==='), result.stdout)
+
+    def test_changed_installation_keeps_success_banner(self):
+        self.seed_agent()
+        result = self.run_installer('--role', 'master', '--with-agent', NATIVE_RESULT='installed')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('Master and local Agent installed successfully', result.stdout)
+        self.assertNotIn('Nothing changed', result.stdout)
+        result = self.run_installer('--role', 'master', '--without-agent')
+        self.assertNotIn('Nothing changed', result.stdout)
+
+    def keep_agent_data(self, version):
+        install = self.seed_agent()
+        config = self.cluster/'agent/config'
+        shutil.rmtree(install)
+        (config/'installed-version').write_text(version+'\n')
+        return config
+
+    def test_older_release_over_kept_data_needs_force(self):
+        # The release fixture is 4.1.21; the kept data was last used by a prerelease of 4.2.0.
+        self.keep_agent_data('4.2.0-rc.1')
+        result = self.run_installer('--role', 'agent')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('the agent data was last used by 4.2.0-rc.1; 4.1.21 is older', result.stderr)
+        self.assertIn('Add --version 4.2.0-rc.1', result.stderr)
+        self.assertEqual(self.events(), [])
+        result = self.run_installer('--role', 'agent', '--force')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('--force', self.events()[-1]['args'])
+
+    def test_kept_data_from_the_same_or_older_release_installs_normally(self):
+        for version in ('4.1.21', '4.1.20'):
+            with self.subTest(version=version):
+                self.events_file.unlink(missing_ok=True)
+                self.keep_agent_data(version)
+                result = self.run_installer('--role', 'agent')
+                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+                self.assertNotIn('older', result.stderr)
+                self.assertNotIn('--force', self.events()[-1]['args'])
+
+    def test_older_release_for_kept_local_agent_data_forces_only_after_confirmation(self):
+        self.keep_agent_data('4.2.0')
+        result = self.run_installer('--role', 'master', '--with-agent')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('the agent data was last used by 4.2.0', result.stderr)
+        self.assertEqual(self.events(), [])
+        result = self.run_installer('--role', 'master', '--with-agent', '--force', NEW_PASSWORD='new_test_password')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('--force', [event for event in self.events() if event.get('role') == 'agent'][-1]['args'])
+
+    def plan(self, role='master', with_agent='1', **variables):
+        source = INSTALLER.read_text()
+        wrapper = source[source.index('# END embedded native installer\n'):]
+        functions = ''
+        for name in ('say', 'default_install_dir', 'existing_install_dir', 'retained_role_config', 'recorded_version',
+                     'release_kind', 'print_native_plan'):
+            start = wrapper.index('\n'+name+'() {')+1
+            end = wrapper.index('\n}\n', start) if not wrapper[start:wrapper.index('\n', start)].endswith('}') else wrapper.index('\n', start)
+            functions += wrapper[start:end+1] + ('}\n' if wrapper[end:end+3] == '\n}\n' else '\n')
+        functions += source[source.index('transfer_version_older() {'):source.index('\n}\n', source.index('transfer_version_older() {'))+3]
+        values = dict(lang='en', role=role, with_agent=with_agent, install_dir='', data_dir='', service_name='', config_dir='',
+                      root_dir=str(self.cluster), os='Linux', user_service='0', listen='', port='1685', adopt_config='',
+                      version='4.2.0-rc.1')
+        values.update(variables)
+        script = 'set -euo pipefail\n' + functions + ''.join(f'{key}={self.shell_quote(value)}\n' for key, value in values.items()) + 'print_native_plan\n'
+        result = subprocess.run(['bash', '-c', script], text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_plan_lists_roles_prerelease_directories_and_service(self):
+        plan = self.plan()
+        self.assertEqual(plan, 'Installation plan:\n  Role: Master + local Agent\n  Version: 4.2.0-rc.1 (prerelease)\n'
+                               f'  Programs: {self.cluster}/master/bin\n  Data: {self.cluster}/master/data\n'
+                               '  Service: oss-transfer-master\n  Listen: 0.0.0.0:1685\n')
+        plan = self.plan(role='agent', with_agent='0', version='4.2.0', lang='zh')
+        self.assertIn('角色: 执行节点\n  版本: 4.2.0\n', plan)
+        self.assertNotIn('预发布', plan)
+        self.assertNotIn('监听地址', plan)
+
+    def test_plan_shows_the_kept_installation_it_replaces(self):
+        config = self.keep_agent_data('4.1.41')
+        (config/'service.json').write_text(json.dumps({'serviceName': 'edge-agent', 'dataDirectory': '/srv/agent-data'}))
+        plan = self.plan(role='agent', with_agent='0')
+        self.assertIn('Version: 4.2.0-rc.1 (prerelease), replacing 4.1.41\n', plan)
+        self.assertIn('Data: /srv/agent-data\n', plan)
+        self.assertIn('Service: edge-agent\n', plan)
 
     def test_with_agent_rejects_agent_role_before_native_installation(self):
         result = self.run_installer('--role', 'agent', '--with-agent')

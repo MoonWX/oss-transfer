@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the shared download code embedded in both standalone Unix installers.
+"""Keep the shared download and version code embedded in both standalone Unix installers.
 
 install.sh also embeds the native installer, so a copied GitHub archive plus
 install.sh can be installed offline when native-install.sh was not copied.
@@ -27,7 +27,7 @@ def replace_block(text, start, end, body, anchor):
 
 def sync(check=False):
     body = START + ''.join((ROOT / 'deploy/native' / name).read_text() + '\n'
-                           for name in ('select-source.sh', 'download-source.sh')) + END
+                           for name in ('select-source.sh', 'download-source.sh', 'release-version.sh')) + END
     updated = {}
     for name in ('deploy/native/install.sh', 'install.sh'):
         updated[name] = replace_block((ROOT / name).read_text(), START, END, body, 'umask 077\n')

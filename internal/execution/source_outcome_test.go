@@ -17,11 +17,14 @@ import (
 // An object deleted at its source after discovery is skipped, not failed. An
 // object changed after discovery fails, and a retry of that failure copies the
 // source's current version, pinned durably, with consistent counters.
+// agentFixture models an S3 source with the fixture's local files, as an
+// Agent database would hold it.
 func agentFixture(t *testing.T, count int) *fixture {
 	f := newFixture(t, count)
 	if err := f.db.ClaimRole("agent"); err != nil {
 		t.Fatal(err)
 	}
+	f.job.Source.Kind = "S3"
 	return f
 }
 
@@ -153,7 +156,7 @@ func (t disappearingTarget) Write(ctx context.Context, key string, input io.Read
 func TestSourceErrorsWhileTheTargetReadsAreClassifiedBySide(t *testing.T) {
 	for _, name := range []string{"deleted", "changed", "target"} {
 		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, 2)
+			f := agentFixture(t, 2)
 			f.job.Items = f.job.Items[1:]
 			base := f.factory()
 			f.startEngine(StoreFactoryFunc(func(ctx context.Context, j Job) (transferstore.Store, transferstore.Store, error) {
@@ -186,6 +189,19 @@ func TestSourceErrorsWhileTheTargetReadsAreClassifiedBySide(t *testing.T) {
 				t.Fatalf("destination published: %v", err)
 			}
 		})
+	}
+}
+
+// A missing local source file still fails: the volume may not be mounted.
+func TestMissingLocalSourceFileStillFails(t *testing.T) {
+	f := newFixture(t, 2)
+	if err := os.Remove(filepath.Join(f.src, f.job.Items[1].Source.Key)); err != nil {
+		t.Fatal(err)
+	}
+	f.startEngine(nil, Options{})
+	f.acceptStart()
+	if done := f.wait(); done.Status != PartialFailed || done.Results[1].Status != ItemFailed || done.Results[1].Reconciliation != "" {
+		t.Fatalf("missing local file: %+v", done.Results[1])
 	}
 }
 

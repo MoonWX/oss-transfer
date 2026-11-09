@@ -620,8 +620,10 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 	// A source missing when its transfer runs was deleted after discovery:
 	// there is nothing left to copy, so the object is skipped, not failed.
 	// A key that never had an identity (an inventory entry not found) and
-	// legacy reconciliation keep their own outcomes.
-	deletable := item.Legacy == nil && !SourceIdentityUnknown(item.Source)
+	// legacy reconciliation keep their own outcomes. So does a local source:
+	// a missing file there can be a volume that is not mounted, which must
+	// not complete the task as if every file had been deleted.
+	deletable := sourceDeletable(job, item)
 	sourceFailure := func(stage string, err error) ItemResult {
 		if deletable && errors.Is(err, transferstore.ErrNotFound) {
 			return sourceDeleted(item)
@@ -717,6 +719,10 @@ func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected tr
 		reader = &progressReader{ReadCloser: reader, progress: object}
 	}
 	return &sourceReader{ReadCloser: reader}, nil, nil, metadata, "", nil
+}
+
+func sourceDeletable(job Job, item Item) bool {
+	return job.Source.Kind == "S3" && item.Legacy == nil && !SourceIdentityUnknown(item.Source)
 }
 
 // sourceDeleted is the outcome of an object whose source was deleted after

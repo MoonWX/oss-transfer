@@ -180,7 +180,7 @@ func (e *Engine) copyResolvedItem(ctx context.Context, record Record, item Item,
 		// A retry of an object whose source changed after discovery reads
 		// the source's current version, which is pinned durably first.
 		actual, err := source.Stat(ctx, item.Source.Key)
-		if errors.Is(err, transferstore.ErrNotFound) {
+		if errors.Is(err, transferstore.ErrNotFound) && record.Job.Source.Kind == "S3" {
 			result := sourceDeleted(item)
 			result.ResolvedSource = pinned
 			return result

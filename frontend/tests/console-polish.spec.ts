@@ -125,6 +125,29 @@ test("the help dialog lists the node step first with the current counts", async 
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
+test("the help dialog's add-node link opens the add dialog on the nodes page too", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/nodes");
+  await expect(page.getByRole("heading", { name: "执行节点" })).toBeVisible();
+  for (let round = 0; round < 2; round++) {
+    await page.getByRole("button", { name: "使用帮助" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("listitem")
+      .nth(0)
+      .getByRole("link", { name: "添加节点" })
+      .click();
+    await expect(page).toHaveURL(/\/nodes\?add=1$/);
+    const dialog = page.getByRole("dialog", { name: "添加节点" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page).toHaveURL(/\/nodes$/);
+  }
+});
+
 const multiNode = {
   ...tasks[3],
   taskIndex: 1050,

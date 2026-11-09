@@ -202,6 +202,11 @@ var reportReasonMeanings = map[string]string{
 	"NOT_COMPLETED":               "The object was not processed before the task ended or stopped.",
 	"TRANSFER_FAILED":             "The object could not be migrated; errorMessage has the cause.",
 	"DESTINATION_EXISTS":          "The object was skipped by the task's conflict policy.",
+	"SOURCE_DELETED":              "The source object was deleted after it was listed, so there was nothing to migrate and it was skipped.",
+	"SOURCE_CHANGED":              "The source object changed after it was listed; retrying the failed objects migrates its current version.",
+	"SOURCE_REFRESHED":            "The source object changed after it was listed; a retry migrated its current version, so its size can differ from the listed one.",
+	"SOURCE_MISSING":              "An object recorded by the imported V4.0.x task was not found at the source.",
+	"LEGACY_REPROCESSED":          "The imported V4.0.x task had not migrated the object, so it was migrated again.",
 }
 
 type reportCoverage struct {

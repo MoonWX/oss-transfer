@@ -425,7 +425,7 @@ func TestReportKeepsReadingAnAgentAfterOneChildLedgerIsMissing(t *testing.T) {
 		}
 	}
 	meanings, _ := report.meta["reasonCodeMeaning"].(map[string]any)
-	for _, code := range []string{"LEDGER_UNAVAILABLE", "NODE_REPORT_INCOMPLETE", "TASK_STOPPED"} {
+	for _, code := range []string{"LEDGER_UNAVAILABLE", "NODE_REPORT_INCOMPLETE", "TASK_STOPPED", "SOURCE_DELETED", "SOURCE_CHANGED", "SOURCE_REFRESHED", "SOURCE_MISSING", "LEGACY_REPROCESSED"} {
 		if meanings[code] == nil || meanings[code] == "" {
 			t.Fatal("report code has no explanation", code, meanings)
 		}

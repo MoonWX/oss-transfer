@@ -31,7 +31,7 @@ def function_source(source, name):
 
 def uninstall_functions():
     source = NATIVE.read_text()
-    names = ('say', 'safe_path', 'metadata_field', 'config_field', 'add_candidate', 'discover_installations')
+    names = ('say', 'safe_path', 'metadata_field', 'config_field', 'default_root', 'add_candidate', 'discover_installations')
     block = source[source.index('# BEGIN uninstall\n'):source.index('# END uninstall\n')]
     return ''.join(function_source(source, name) for name in names) + block
 
@@ -57,7 +57,7 @@ class Fixture:
         self.functions = self.base / 'functions.sh'
         self.functions.write_text(uninstall_functions())
 
-    def install(self, role, service=None, cli=None, unit_command=None, data_files=('{role}.db',), foreign_backup=False):
+    def install(self, role, service=None, cli=None, unit_command=None, data_files=('{role}.db',), foreign_backup=False, version='4.2.0'):
         service = service or f'oss-transfer-{role}'
         base = self.root / role
         install, config, data, backups = base / 'bin', base / 'config', base / 'data', base / 'backups'
@@ -77,7 +77,7 @@ class Fixture:
         unit = self.systemd / f'{service}.service'
         unit.write_text('[Service]\n' + (unit_command or f'ExecStart="{binary}" --config "{config}/service.json"') + '\n')
         (install / 'install.tsv').write_text(
-            f'role\t{role}\nserviceName\t{service}\nconfig\t{config}/service.json\nunit\t{unit}\nversion\t4.2.0\n'
+            f'role\t{role}\nserviceName\t{service}\nconfig\t{config}/service.json\nunit\t{unit}\nversion\t{version}\n'
             f'cliPath\t{cli}\nbackupDir\t{backups}\ndataDir\t{data}\nrootDir\t{self.root}\n')
         return {'install': install, 'config': config, 'data': data, 'backups': backups, 'cli': cli, 'unit': unit, 'binary': binary}
 
@@ -185,6 +185,54 @@ class UninstallTests(unittest.TestCase):
         for path in (agent['binary'], agent['install'] / 'install.tsv', agent['unit'], agent['cli']):
             self.assertFalse(path.exists(), path)
         self.assertIn('Configuration and data were kept', result.stdout)
+        # The kept data names the release that last used it, and the hint is
+        # the complete command that reinstalls exactly that release.
+        self.assertEqual((agent['config'] / 'installed-version').read_text(), '4.2.0\n')
+        self.assertIn(f'  bash install.sh --role agent --version 4.2.0 --root-dir {f.root}\n', result.stdout)
+        self.assertIn('Keep this node on the Master', result.stdout)
+        self.assertNotIn('remove it there', result.stdout)
+
+    def test_keep_data_reinstall_command_names_prerelease_and_combined_installation(self):
+        f = self.fixture
+        f.install('master', cli=f.global_bin / 'oss-transfer-cli', version='4.2.0-rc.1')
+        f.install('agent', version='4.2.0-rc.1')
+        result = f.uninstall(keep_data=1, lang='zh')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The Master and its local Agent under one root come back together.
+        commands = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith('bash install.sh')]
+        self.assertEqual(commands, [f'bash install.sh --role master --version 4.2.0-rc.1 --root-dir {f.root} --with-agent'])
+        self.assertIn('已保留配置和数据。如需沿用，请运行：', result.stdout)
+        for role in ('master', 'agent'):
+            self.assertEqual((f.root / role / 'config/installed-version').read_text(), '4.2.0-rc.1\n')
+
+    def test_keep_data_reinstall_command_keeps_a_custom_layout(self):
+        f = self.fixture
+        master = f.install('master', cli=f.global_bin / 'oss-transfer-cli')
+        metadata = master['install'] / 'install.tsv'
+        metadata.write_text(''.join(line + '\n' for line in metadata.read_text().splitlines() if not line.startswith('rootDir\t')))
+        result = f.uninstall(role='master', keep_data=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'  bash install.sh --role master --version 4.2.0 --install-dir {master["install"]} '
+                      f'--config-dir {master["config"]} --without-agent\n', result.stdout)
+
+    def test_uninstall_removes_the_kept_version_marker_and_a_lone_retention_lock(self):
+        f = self.fixture
+        agent = f.install('agent')
+        (agent['config'] / 'installed-version').write_text('4.2.0\n')
+        (agent['backups'] / '.retention.lock').write_text('')
+        result = f.uninstall(role='agent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((f.root / 'agent').exists())
+        self.assertNotIn('Kept (contains other files)', result.stdout)
+
+    def test_retention_lock_stays_while_other_backups_use_the_directory(self):
+        f = self.fixture
+        agent = f.install('agent', foreign_backup=True)
+        (agent['backups'] / '.retention.lock').write_text('')
+        result = f.uninstall(role='agent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((agent['backups'] / '.retention.lock').exists())
+        self.assertTrue((agent['backups'] / 'other-installation').exists())
 
     def test_foreign_service_definition_stops_before_any_change(self):
         f = self.fixture
@@ -435,6 +483,82 @@ installation_current
         self.assertLess(source.index('if installation_current; then'), source.index('fetch "$archive_name"'))
         self.assertIn('Add --force to reinstall it.', source)
         self.assertIn('--force', subprocess.run(['bash', str(PUBLIC), '--help'], text=True, capture_output=True).stdout)
+
+
+class ReleaseVersionTests(unittest.TestCase):
+    """Installing a release older than the one that last used the data asks first."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='installer-version-')
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        source = NATIVE.read_text()
+        self.functions = self.base / 'functions.sh'
+        self.functions.write_text(''.join(function_source(source, name) for name in (
+            'say', 'report_result', 'metadata_field', 'transfer_version_older', 'check_recorded_version')))
+        (self.base / 'config').mkdir()
+
+    def run_check(self, version, recorded=None, marker=None, force='0', lang='en'):
+        if recorded:
+            (self.base / 'install.tsv').write_text(f'role\tagent\nversion\t{recorded}\n')
+        if marker:
+            (self.base / 'config/installed-version').write_text(marker + '\n')
+        result_file = self.base / 'result'
+        result_file.write_text('')
+        script = r'''
+set -euo pipefail
+source "$1"
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+existed=1; yes=1; force=$FORCE; version=$VERSION; lang=$LANGUAGE; service_name=oss-transfer-agent
+metadata=$BASE/install.tsv; config_dir=$BASE/config
+check_recorded_version
+printf 'continued\n'
+'''
+        env = dict(os.environ, BASE=str(self.base), FORCE=force, VERSION=version, LANGUAGE=lang,
+                   OSS_TRANSFER_INSTALL_RESULT=str(result_file))
+        return subprocess.run(['bash', '-c', script, 'test', str(self.functions)], env=env, text=True,
+                              capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
+
+    def test_precedence(self):
+        functions = self.base / 'order.sh'
+        functions.write_text(function_source(NATIVE.read_text(), 'transfer_version_older'))
+        for left, right, older in (('4.1.41', '4.2.0-rc.1', True), ('4.2.0-rc.1', '4.2.0', True),
+                                   ('4.2.0-rc.2', '4.2.0-rc.10', True), ('4.2.0-alpha', '4.2.0-alpha.1', True),
+                                   ('4.2.0-1', '4.2.0-alpha', True), ('4.9.9', '4.10.0', True),
+                                   ('4.2.0', '4.2.0', False), ('4.2.0', '4.2.0-rc.1', False),
+                                   ('4.2.0-rc.10', '4.2.0-rc.2', False), ('4.10.0', '4.9.9', False),
+                                   ('4.2.0+build', '4.2.0', False), ('dev', '4.2.0', False), ('4.2.0', 'dev', False)):
+            with self.subTest(left=left, right=right):
+                result = subprocess.run(['bash', '-c', 'source "$1"; transfer_version_older "$2" "$3"', 'test',
+                                         str(functions), left, right], capture_output=True, timeout=30)
+                self.assertEqual(result.returncode == 0, older)
+
+    def test_older_release_over_kept_data_is_refused_without_force(self):
+        for kind in ('recorded', 'marker'):
+            with self.subTest(kind=kind):
+                result = self.run_check('4.1.41', **{kind: '4.2.0-rc.1'})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('continued', result.stdout)
+                self.assertIn('last used by 4.2.0-rc.1; 4.1.41 is older', result.stderr)
+                self.assertIn('Add --version 4.2.0-rc.1', result.stderr)
+                (self.base / 'install.tsv').unlink(missing_ok=True)
+                (self.base / 'config/installed-version').unlink(missing_ok=True)
+        result = self.run_check('4.1.41', marker='4.2.0-rc.1', lang='zh')
+        self.assertIn('请加 --version 4.2.0-rc.1 安装该版本', result.stderr)
+
+    def test_force_same_version_and_upgrades_continue(self):
+        result = self.run_check('4.1.41', recorded='4.2.0-rc.1', force='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('continued', result.stdout)
+        self.assertIn('Warning: installing 4.1.41, older than 4.2.0-rc.1', result.stderr)
+        for version, recorded in (('4.2.0-rc.1', '4.2.0-rc.1'), ('4.2.0', '4.2.0-rc.1'), ('4.2.0', '4.1.41')):
+            with self.subTest(version=version, recorded=recorded):
+                result = self.run_check(version, recorded=recorded)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, '')
+        # The installation record wins over a marker an older reinstall left behind.
+        result = self.run_check('4.1.41', recorded='4.1.41', marker='4.2.0-rc.1')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class RestartPolicyTests(unittest.TestCase):

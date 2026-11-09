@@ -68,6 +68,7 @@ If the installer stops with an error:
 | `Startup timed out after …s` | Read the log named in the message and `systemctl status`, fix the cause, then run the same command again. |
 | `Startup failed: this Agent was removed from the cluster on the Master` | The Agent's enrollment was revoked. Copy a new join command from **Execution nodes → Add node**, or [uninstall](#uninstall) the Agent. |
 | `… is already v4.2.0 and running; nothing was changed. Add --force to reinstall it.` | The same version is already installed and healthy. Add `--force` only if you want to reinstall it. |
+| `… data was last used by 4.2.0; 4.1.41 is older and may not read it` | The version you are installing (often the latest stable release, when you omit `--version`) is older than the one that last used the data. Add the `--version` the message names, or `--force` if you really want the older version. Nothing was changed. |
 
 ### Add Agents
 
@@ -210,13 +211,17 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 The installer prints `=== master 4.2.0 · Installed successfully ===` (or `agent`) for each upgraded service. If the new version fails to start, the installer restores the previous one and keeps the backup ([recover from a failed upgrade](operations.md#recover-from-a-failed-upgrade)).
 
-Rerunning the same version on an installation that is complete and running changes nothing: interactively the installer asks whether to reinstall it; with `--yes` it prints `… is already v4.2.0 and running; nothing was changed. Add --force to reinstall it.` and exits with status 0. Add `--force` to reinstall it anyway. A missing or damaged part (program, service definition, CLI, Agent packages) is repaired without `--force`. `Install.ps1` has no `-Force`; it always reinstalls.
+Rerunning the same version on an installation that is complete and running changes nothing: interactively the installer asks whether to reinstall it; with `--yes` it prints `… is already v4.2.0 and running; nothing was changed. Add --force to reinstall it.` and exits with status 0. When no installation changed, the run ends with `=== Nothing changed ===` instead of `Installed successfully`. Add `--force` to reinstall it anyway. A missing or damaged part (program, service definition, CLI, Agent packages) is repaired without `--force`. `Install.ps1` has no `-Force`; it always reinstalls.
+
+The installer does not quietly install a version older than the one that last used an installation's data, for example the latest stable release over data from a prerelease. Interactively it warns and asks (the default is no); with `--yes` it stops without changing anything. Add `--version` with the newer version, or `--force` to install the older one anyway.
+
+Before an interactive installation, the installer shows what it will install and asks `Install? y / n`: the role (and whether a local Agent is included), the version (marked as a prerelease when it is one, and the version it replaces), the program and data directories, the service name and, for a new Master, the listen address.
 
 Read [what changes with v4.2.0](operations.md#upgrading-to-v420) before upgrading an existing cluster.
 
 ## Reinstall without losing data
 
-Run the installer again, using the same `--root-dir` if you changed it. It recognizes retained service configuration and data, restores missing programs or service definitions, and reuses the Agent identity. Existing installations in the older layout keep their saved paths.
+Run the installer again, using the same `--root-dir` if you changed it. It recognizes retained service configuration and data, restores missing programs or service definitions, and reuses the Agent identity. Existing installations in the older layout keep their saved paths. After `--uninstall --keep-data`, use the command that the uninstall printed: it names the version that last used the data (`--version`), the role and any non-default paths, for example `bash install.sh --role agent --version 4.2.0`.
 
 Keep each role's `config` and entire `data` directory, including its key file (`master.db.key` or `agent.db.key`). The key must match the database. Without the configuration or key, the installer stops instead of creating an empty replacement. Source files, destination files and shared mounts are separate from these application directories. To move an installation to another host, see [backup and restore](operations.md#backup-and-restore).
 
@@ -239,7 +244,7 @@ With a saved copy, run `sudo bash install.sh --uninstall --role agent`. The opti
 | Option | Effect |
 | --- | --- |
 | `--role master` or `--role agent` | Uninstall only that role. Without it, every installation on the host is uninstalled. |
-| `--keep-data` | Keep the configuration, the data directory and the upgrade backups, so that you can reinstall later with the same identity, tasks and settings. |
+| `--keep-data` | Keep the configuration, the data directory and the upgrade backups, so that you can reinstall later with the same identity, tasks and settings. The installed version is recorded in `installed-version` beside the kept `service.json`, and the output ends with the command that reinstalls it. Keep an Agent on the Master if you will reinstall it. |
 | `--yes` | Do not ask for confirmation. Without a terminal, `--yes` is required. |
 | `--service-name`, `--root-dir`, `--install-dir`, `--user` | Select an installation with a custom name or location, or a macOS user service. |
 
@@ -251,7 +256,7 @@ It removes:
 
 - the service definition (systemd unit, launchd plist or rc.d script) and the program;
 - the installation record (`install.tsv`) and the CLI the installation recorded, such as `/usr/local/bin/oss-transfer-cli`, with its state files;
-- without `--keep-data`: `service.json`, the data directory and this service's own upgrade backups;
+- without `--keep-data`: `service.json` (and `installed-version`), the data directory, this service's own upgrade backups and, when no other backups are left, the backup directory with its `.retention.lock`;
 - when no installation is left on the host (and without `--keep-data`): the CLI logins and preferences of root and of the user who ran `sudo` (`~/.config/oss-transfer-cli`, or `~/Library/Application Support/oss-transfer-cli` on macOS).
 
 It keeps, and says why: a CLI that another installation still uses, other installations' backups, a data directory that contains files it does not recognize or that is a shared or shallow directory, and directories that still contain other files (`Kept (contains other files)`). It refuses and changes nothing if a service definition runs a different program or a service cannot be stopped. With nothing installed, it prints `nothing to uninstall` and exits with status 0. Migrated files in source and destination directories are never touched.

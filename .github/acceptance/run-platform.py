@@ -29,18 +29,24 @@ FAILURE_TAIL_LINES = 150
 
 
 def write_json(path, value):
-    temporary = path.with_suffix(".tmp")
+    # Several processes may write the same file. Each writer uses its own
+    # temporary file, so a reader never gets another writer's partial content.
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    # Windows refuses to replace a file another process has open; the transfer
-    # groups poll the gate file, so retry briefly instead of failing the run.
-    for attempt in range(100):
-        try:
-            temporary.replace(path)
-            return
-        except PermissionError:
-            if attempt == 99:
-                raise
-            time.sleep(0.05)
+    try:
+        # Windows refuses to replace a file another process has open; the
+        # transfer groups poll the gate file, so retry briefly instead of
+        # failing the run.
+        for attempt in range(100):
+            try:
+                temporary.replace(path)
+                return
+            except PermissionError:
+                if attempt == 99:
+                    raise
+                time.sleep(0.05)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def phase(name, command, cwd, *, evidence=None):

@@ -679,6 +679,12 @@ func (s *S3) uploadParts(ctx context.Context, key string, input io.Reader, size,
 // settings as object transfers. Permission and service failures propagate.
 func ListBuckets(ctx context.Context, config S3Config) ([]string, error) {
 	config.Bucket = "oss-transfer-connection-check"
+	// A connection check answers while the operator waits: an unreachable
+	// endpoint fails after the ordinary attempts, not the transfer budget
+	// that rides out an outage.
+	if config.ThrottleRetryMaxAttempts == 0 {
+		config.ThrottleRetryMaxAttempts = max(config.RetryMaxAttempts, 3)
+	}
 	store, err := NewS3(config)
 	if err != nil {
 		return nil, err

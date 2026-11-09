@@ -912,7 +912,7 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 	}
 	writer := csv.NewWriter(file)
 	writer.UseCRLF = true
-	fields := []string{"workerNode", "taskIndex", "parentTaskId", "direction", "sourceBucket", "destBucket", "key", "destinationKey", "localPath", "stage", "errorCode", "errorMessage", "objectSize", "retryCount", "timestamp", "timestampFormatted", "tmpFilePath", "storageId", "nodeId", "retryStatus", "retryUpdatedAt", "retryError", "retryGeneration", "retryExecutionNode", "retryExecutionNodeIp"}
+	fields := []string{"workerNode", "taskIndex", "parentTaskId", "direction", "sourceBucket", "destBucket", "key", "destinationKey", "localPath", "stage", "errorCode", "errorMessage", "objectSize", "retryCount", "timestamp", "timestampFormatted", "tmpFilePath", "storageId", "nodeId", "retryStatus", "retryUpdatedAt", "retryError", "retryGeneration", "retryExecutionNode", "retryExecutionNodeIp", "reasonCode", "retryReasonCode"}
 	if err = writer.Write(fields); err != nil {
 		return err
 	}

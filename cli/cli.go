@@ -752,6 +752,13 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		fields = append(fields, cliTaskRequestLimitFields(out, limits)...)
 	}
 	fields = append(fields, cliTaskScopeFields(task)...)
+	if attention, ok := task["attention"].(map[string]interface{}); ok {
+		if message := getString(attention, "message"); message != "" {
+			// The Master's one-sentence cause: why objects failed, or that
+			// every node of the task is offline.
+			fields = append(fields, [2]string{cliText(out, "需要关注"), message})
+		}
+	}
 	for _, key := range []string{"errorCode", "errorMessage"} {
 		if value := getString(task, key); value != "" {
 			label := cliText(out, "错误代码")
@@ -771,7 +778,20 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	renderTaskMembership(out, task)
 }
 
-var fieldLabels = map[string]string{"maxConcurrentChildren": "子任务并发", "objectsPerChild": "每个子任务的对象并发", "requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "mode": "重试方式", "retriedChildren": "重试子任务", "retriedObjects": "重试对象", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线"}
+var fieldLabels = map[string]string{"maxConcurrentChildren": "子任务并发", "objectsPerChild": "每个子任务的对象并发", "requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "mode": "重试方式", "retriedChildren": "重试子任务", "retriedObjects": "重试对象", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线", "reasonCode": "原因代码", "retryReasonCode": "重试原因", "freeBytes": "可用空间（字节）", "effectiveUid": "Agent 运行 UID", "writeProbeDirectory": "写入检查目录"}
+
+// cliExceptionReason explains the reason codes of objects whose source
+// changed or was deleted after the scan; other codes stay as they are.
+func cliExceptionReason(out io.Writer, value interface{}) string {
+	code, _ := value.(string)
+	switch code {
+	case "SOURCE_CHANGED":
+		return cliText(out, "源对象在扫描后已变化，重试会读取其当前版本") + " (" + code + ")"
+	case "SOURCE_DELETED":
+		return cliText(out, "源对象已在源端删除，已跳过") + " (" + code + ")"
+	}
+	return ""
+}
 
 func renderFields(out io.Writer, data map[string]interface{}, indent string) {
 	renderFieldsWithNodes(out, data, indent, collectCLINodeDisplays(data))
@@ -825,6 +845,11 @@ func renderFieldsWithNodes(out io.Writer, data map[string]interface{}, indent st
 				}
 			}
 		default:
+			if key == "reasonCode" || key == "retryReasonCode" {
+				if reason := cliExceptionReason(out, v); reason != "" {
+					v = reason
+				}
+			}
 			fmt.Fprintf(out, "%s%s: %s\n", indent, label, safeCLIText(v))
 		}
 	}

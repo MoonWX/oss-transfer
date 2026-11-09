@@ -296,3 +296,13 @@ func TestS3RidesOutAStorageOutageAndServerErrors(t *testing.T) {
 		t.Fatalf("a persistent server error must end after ten attempts: %d, %v", server.count("down"), err)
 	}
 }
+
+func TestConnectionChecksFailFastOnAnUnreachableStorage(t *testing.T) {
+	server := newScriptedS3(t, nil)
+	transport := &refusingTransport{next: server.server.Client().Transport}
+	transport.refuse.Store(100)
+	_, err := ListBuckets(context.Background(), S3Config{Endpoint: server.server.URL, AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond, HTTPClient: &http.Client{Transport: transport}})
+	if err == nil || !strings.Contains(err.Error(), "connection refused") || transport.dialled.Load() != 3 {
+		t.Fatalf("connection check: %d attempts, %v", transport.dialled.Load(), err)
+	}
+}

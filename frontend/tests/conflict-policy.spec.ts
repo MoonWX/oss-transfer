@@ -101,10 +101,10 @@ test("a finished SKIP task with skipped objects explains them and links to a pre
   );
   await link.click();
   await expect(page).toHaveURL(/\/tools\?/);
-  await expect(page.getByLabel("源 Bucket")).toHaveValue(
+  await expect(page.getByLabel("源存储桶")).toHaveValue(
     "production/media-archive",
   );
-  await expect(page.getByLabel("目标 Bucket")).toHaveValue(
+  await expect(page.getByLabel("目标存储桶")).toHaveValue(
     "backup/media-backup",
   );
   await expect(page.getByLabel("源前缀")).toHaveValue("2026/");

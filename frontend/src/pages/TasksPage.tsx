@@ -753,31 +753,10 @@ function TaskDetail({
         : undefined);
   // Opens object comparison for this task's source and target, paired the
   // way the task names target keys.
-  const comparisonLink = (() => {
-    if (!current || local || !current.sourceBucket || !current.destBucket)
-      return "";
-    const query = new URLSearchParams({
-      sourceBucket: [current.sourceS3Alias, current.sourceBucket]
-        .filter(Boolean)
-        .join("/"),
-      destBucket: [current.destS3Alias, current.destBucket]
-        .filter(Boolean)
-        .join("/"),
-    });
-    if (sourceObjectKey) {
-      query.set("sourceKey", sourceObjectKey);
-      query.set(
-        "destKey",
-        mapDestinationKey(sourceObjectKey, current.keyMapping),
-      );
-    } else {
-      const prefix = sourcePrefix || "";
-      const target = mapDestinationKey(prefix, current.keyMapping);
-      if (prefix) query.set("sourcePrefix", prefix);
-      if (target) query.set("destPrefix", target);
-    }
-    return `/tools?${query}`;
-  })();
+  const comparisonLink =
+    current && !local
+      ? taskComparisonLink(current, sourceObjectKey, sourcePrefix) || ""
+      : "";
   const shards = numberSubtasks(
     (view?.shards || []).filter(
       (shard) =>

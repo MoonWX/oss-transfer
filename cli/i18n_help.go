@@ -346,6 +346,7 @@ Use --order id or --offset for numbering order; --limit is 1–200.
 list/trash accept --limit 1–10000; --before-id loads older records. list --all follows every page.
 --child loads only the selected child. Use --node when the ID exists on multiple nodes.
 --watch supports list/show/children/progress/cleanup-status/trash and bandwidth/limits without a new value.
+report saves the ZIP and shows the object count of each result; an incomplete report lists the reasons and exits 3.
 Deleting records does not delete source or target objects.
 `, `タスク管理
 使い方: oss-transfer-cli task <サブコマンド> [引数]
@@ -395,6 +396,7 @@ Deleting records does not delete source or target objects.
 list/trash の --limit は 1～10000、--before-id は古い記録、list --all は全ページを取得します。
 --child は指定した子タスクのみ取得します。同じ ID が複数ノードにある場合は --node を指定してください。
 --watch は list/show/children/trash と、新しい値を指定しない bandwidth/limits に対応します。
+report は ZIP を保存し、結果ごとのオブジェクト数を表示します。レポートが不完全な場合は理由を示し、終了コード 3 で終了します。
 記録を削除しても転送元や転送先のオブジェクトは削除されません。
 `},
 	cliTaskCreateHelp: {`Create a transfer task

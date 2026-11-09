@@ -696,5 +696,9 @@ func taskReport(client *ApiClient, args []string) (map[string]interface{}, error
 	if err := client.Download("GET", fmt.Sprintf("/task-reports/%d", id), nil, output); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true, "taskId": id, "output": output, "message": client.text("任务报告已保存")}, nil
+	result := map[string]interface{}{"success": true, "taskId": id, "output": output, "message": client.text("任务报告已保存")}
+	if err := taskReportCompleteness(output, result); err != nil {
+		return result, err
+	}
+	return result, nil
 }

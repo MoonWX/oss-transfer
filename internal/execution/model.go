@@ -184,10 +184,17 @@ type ParentFence struct {
 	CleanupError    string `json:"cleanupError,omitempty"`
 	RetryFailed     bool   `json:"retryFailed,omitempty"`
 	InventorySource bool   `json:"inventorySource,omitempty"`
-	ParentID        int64  `json:"parentId"`
-	Generation      uint64 `json:"generation"`
-	Stopped         bool   `json:"stopped"`
-	Deleted         bool   `json:"deleted"`
+	// SourceRefresh says that the Master which last delivered or retried
+	// this parent's children accepts a refreshed source pin (see
+	// ReasonSourceChanged). Only a Master that knows this Agent advertises
+	// SourceRefreshProtocol says so; without it a retry of a changed source
+	// reads the discovered version and fails again, as older Agents do.
+	// It is local to this Agent and never sent to the Master.
+	SourceRefresh bool   `json:"sourceRefresh,omitempty"`
+	ParentID      int64  `json:"parentId"`
+	Generation    uint64 `json:"generation"`
+	Stopped       bool   `json:"stopped"`
+	Deleted       bool   `json:"deleted"`
 }
 
 // Each Open owns two independent handles, closed after all attempt workers exit.

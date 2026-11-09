@@ -366,6 +366,11 @@ func (t *taskRuntime) retryFailedBatch(ctx context.Context, p task.Parent, batch
 	}
 	node := marked[0].Node
 	request := agentservice.ChildRetryFailedRequest{ParentID: p.ID, Generation: p.Generation}
+	// Only an Agent that advertises source refresh is told that this Master
+	// accepts refreshed source pins; an older Agent would reject the field.
+	if support, err := t.newRangedPass().supported(ctx, node); err == nil && support.refresh {
+		request.SourceRefresh = true
+	}
 	for _, child := range marked {
 		request.Children = append(request.Children, agentservice.ChildRetryTarget{ChildID: child.Job.ChildID, Attempt: child.Record.Attempt})
 	}

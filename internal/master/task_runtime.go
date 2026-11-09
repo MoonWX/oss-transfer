@@ -43,10 +43,10 @@ type taskRuntime struct {
 	leases       *taskLeases
 	cleanup      *taskCleanupRuntime
 	// rangedSupport decides whether a node's Agent understands a job's
-	// rangedDownload field.
+	// rangedDownload field and a delivery's sourceRefresh.
 	rangedSupport rangedDownloadSupport
 	// rangedQuery replaces the capability query in tests.
-	rangedQuery func(context.Context, task.Node) (int, error)
+	rangedQuery func(context.Context, task.Node) (deliveryProtocols, error)
 	// Latest bandwidth/QPS policy delivery per task and node (see policyDelivered).
 	deliveries map[int64]map[string]policyDelivery
 	// Acknowledged share revisions and idle counts (see task_shares.go).

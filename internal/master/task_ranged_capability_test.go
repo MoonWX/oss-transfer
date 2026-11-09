@@ -33,11 +33,15 @@ func (a rangedExecutor) Execute(ctx context.Context, c agenttransport.Command) (
 		caps := a.LeaseCapabilities()
 		if a.old {
 			delete(caps, "rangedDownloadProtocol")
+			delete(caps, "sourceRefreshProtocol")
 		}
 		raw, _ := json.Marshal(caps)
 		return agenttransport.Response{Status: 200, Payload: raw}, nil
 	case a.old && c.Operation == "child_accept" && bytes.Contains(c.Payload, []byte(`"rangedDownload"`)):
 		raw, _ := json.Marshal(map[string]any{"success": false, "message": `json: unknown field "rangedDownload"`})
+		return agenttransport.Response{Status: 400, Payload: raw}, nil
+	case a.old && bytes.Contains(c.Payload, []byte(`"sourceRefresh"`)):
+		raw, _ := json.Marshal(map[string]any{"success": false, "message": `json: unknown field "sourceRefresh"`})
 		return agenttransport.Response{Status: 400, Payload: raw}, nil
 	}
 	return a.Service.Execute(ctx, c)
@@ -179,6 +183,11 @@ func TestRangedDownloadChoiceAcrossAgentVersions(t *testing.T) {
 					t.Fatalf("delivery failed: %v", err)
 				}
 			}
+			// Only a current Agent is told that the Master accepts refreshed
+			// source pins; an older one would reject the field.
+			if fence, err := agent.service.Jobs.Parent(ctx, p.ID); err != nil || fence.SourceRefresh == test.old {
+				t.Fatalf("sourceRefresh delivered=%v to an Agent with old=%v (%v)", fence.SourceRefresh, test.old, err)
+			}
 			if test.old {
 				agent.upgrade() // the stored child is recovered by the new binary
 			}
@@ -202,76 +211,32 @@ func TestRangedDownloadChoiceAcrossAgentVersions(t *testing.T) {
 func TestRangedSupportRemembersOnlyPositiveAnswers(t *testing.T) {
 	var support rangedDownloadSupport
 	queries := map[string]int{}
-	protocols := map[string]int{"new": agentservice.RangedDownloadProtocol, "old": 0}
-	query := func(_ context.Context, node task.Node) (int, error) {
+	current := deliveryProtocols{RangedDownloadProtocol: agentservice.RangedDownloadProtocol, SourceRefreshProtocol: agentservice.SourceRefreshProtocol}
+	// "previous" is a release with ranged downloads but without source refresh.
+	protocols := map[string]deliveryProtocols{"new": current, "previous": {RangedDownloadProtocol: agentservice.RangedDownloadProtocol}, "old": {}}
+	query := func(_ context.Context, node task.Node) (deliveryProtocols, error) {
 		queries[node.ID]++
 		if node.ID == "offline" {
-			return 0, context.DeadlineExceeded
+			return deliveryProtocols{}, context.DeadlineExceeded
 		}
 		return protocols[node.ID], nil
 	}
 	for range 3 {
-		for id, want := range map[string]bool{"new": true, "old": false} {
+		for id, want := range map[string]deliverySupport{"new": {ranged: true, refresh: true}, "previous": {ranged: true}, "old": {}} {
 			if got, err := support.supported(context.Background(), task.Node{ID: id}, query); err != nil || got != want {
-				t.Fatalf("%s: supported=%v err=%v", id, got, err)
+				t.Fatalf("%s: supported=%+v err=%v", id, got, err)
 			}
 		}
 		if _, err := support.supported(context.Background(), task.Node{ID: "offline"}, query); err == nil {
 			t.Fatal("failed query reported an answer")
 		}
 	}
-	if queries["new"] != 1 || queries["old"] != 3 || queries["offline"] != 3 {
+	if queries["new"] != 1 || queries["previous"] != 3 || queries["old"] != 3 || queries["offline"] != 3 {
 		t.Fatalf("queries %v", queries)
 	}
 	// An Agent upgraded after answering "unsupported" is recognised at once.
-	protocols["old"] = agentservice.RangedDownloadProtocol
-	if got, err := support.supported(context.Background(), task.Node{ID: "old"}, query); err != nil || !got {
+	protocols["old"] = current
+	if got, err := support.supported(context.Background(), task.Node{ID: "old"}, query); err != nil || !got.ranged || !got.refresh {
 		t.Fatal("upgraded Agent still treated as unsupported", err)
-	}
-}
-
-// An Agent asked while it was old and then upgraded in place receives the
-// task's choice on its next delivery, for Auto and Off tasks alike.
-func TestUpgradedAgentReceivesTheChoiceOnItsNextDelivery(t *testing.T) {
-	f := newAgentHTTPFixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // hang guard only
-	defer cancel()
-	runtime := f.master.tasks
-	for _, test := range []struct{ name, choice, delivered string }{
-		{"auto", "", execution.RangedDownloadAuto},
-		{"off", execution.RangedDownloadOff, execution.RangedDownloadOff},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			agent := rangedTestAgent(t, f, "ranged-upgrade-"+test.name, true)
-			p, child := rangedDownloadTask(t, runtime, agent.node, "upgrade-"+test.name, test.choice)
-			if supported, err := runtime.rangedSupport.supported(ctx, agent.node, runtime.rangedDownloadProtocol); err != nil || supported {
-				t.Fatal("old Agent reported support", err)
-			}
-			agent.upgrade()
-			retryAgentCall(t, ctx, func() error { return runtime.deliverChildren(ctx, p, []task.Child{child}) })
-			record, err := agent.service.Engine.Get(ctx, child.Job.ChildID)
-			if err != nil || record.Job.RangedDownload != test.delivered {
-				t.Fatalf("upgraded Agent received %q, want %q (%v)", record.Job.RangedDownload, test.delivered, err)
-			}
-			observeAndReport(t, ctx, runtime, agent, p, child)
-		})
-	}
-}
-
-// A takeover seed carries its own copy of the job; both get the same choice.
-func TestRangedDownloadChoiceAppliesToTheSeed(t *testing.T) {
-	job := execution.Job{ChildID: "1-1", RangedDownload: execution.RangedDownloadOff, Assignment: 2}
-	seed := &execution.Record{Job: job}
-	for _, choice := range []string{"", execution.RangedDownloadAuto} {
-		request := withRangedDownload(agentservice.ChildAcceptRequest{Job: job, Seed: seed}, choice)
-		if request.Job.RangedDownload != choice || request.Seed.Job.RangedDownload != choice {
-			t.Fatal("job and seed disagree", request)
-		}
-	}
-	if seed.Job.RangedDownload != execution.RangedDownloadOff {
-		t.Fatal("the stored record was modified")
-	}
-	if agentservice.ReportJobDigest(job) != agentservice.ReportJobDigest(execution.Job{ChildID: "1-1", Assignment: 2}) {
-		t.Fatal("report digest depends on the ranged-download choice")
 	}
 }

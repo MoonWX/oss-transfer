@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"reflect"
+
+	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
 var ErrAssignment = errors.New("stale child assignment")
@@ -12,6 +14,19 @@ var ErrAssignment = errors.New("stale child assignment")
 // never replaces newer local progress. The seeded job must pass normal target
 // revalidation before it can be marked complete.
 func (e *Engine) AcceptSeed(ctx context.Context, job Job, seed *Record, inventorySource ...bool) (Record, error) {
+	return e.AcceptDelivery(ctx, job, seed, Delivery{InventorySource: len(inventorySource) > 0 && inventorySource[0]})
+}
+
+// Delivery is what the Master says about a child it delivers.
+type Delivery struct {
+	InventorySource bool
+	// SourceRefresh says the Master accepts a refreshed source pin. Every
+	// delivery records it for the child's parent (see ParentFence).
+	SourceRefresh bool
+}
+
+// AcceptDelivery is AcceptSeed with everything the Master said about it.
+func (e *Engine) AcceptDelivery(ctx context.Context, job Job, seed *Record, delivery Delivery) (Record, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -29,7 +44,43 @@ func (e *Engine) AcceptSeed(ctx context.Context, job Job, seed *Record, inventor
 			return Record{}, ErrRunning
 		}
 	}
-	return e.repo.accept(ctx, job, seed, inventorySource...)
+	return e.repo.accept(ctx, job, seed, delivery)
+}
+
+// SetSourceRefresh records whether the Master that is about to retry this
+// parent's failed objects accepts a refreshed source pin.
+func (e *Engine) SetSourceRefresh(ctx context.Context, parentID int64, generation uint64, allowed bool) error {
+	return e.repo.setSourceRefresh(ctx, parentID, generation, allowed)
+}
+
+func (r *Repository) setSourceRefresh(ctx context.Context, parentID int64, generation uint64, allowed bool) error {
+	return r.db.Update(func(tx *state.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		p, ok, err := parent(tx, parentID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrNotFound
+		}
+		if p.Generation != generation {
+			return ErrGeneration
+		}
+		if p.SourceRefresh == allowed {
+			return nil
+		}
+		p.SourceRefresh = allowed
+		return tx.Put(parentsBucket, parentKey(parentID), p)
+	})
+}
+
+// sourceRefreshAllowed reports whether the Master accepts a refreshed source
+// pin for this parent. A failed read is treated as no.
+func (r *Repository) sourceRefreshAllowed(ctx context.Context, parentID int64) bool {
+	p, err := r.Parent(ctx, parentID)
+	return err == nil && p.SourceRefresh
 }
 
 func importedRecord(job Job, seed *Record, fingerprint string, inventorySource bool) (Record, error) {

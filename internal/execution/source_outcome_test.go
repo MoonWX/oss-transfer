@@ -55,6 +55,9 @@ func TestSourceDeletedIsSkippedAndChangedSourceIsReadAgainOnRetry(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(f.dst, changed.DestinationKey)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a changed source was published on the first attempt: %v", err)
 	}
+	if err := f.engine.SetSourceRefresh(bg, f.job.ParentID, 1, true); err != nil {
+		t.Fatal(err)
+	}
 	reopened, ok, err := f.engine.RetryFailed(bg, f.job.ChildID, 1, ended.Attempt)
 	if err != nil || !ok || reopened.Results[2].Status != ItemPending || reopened.Results[2].Reconciliation != ReasonSourceChanged {
 		t.Fatalf("retry did not ask to read the source again: %+v %v %v", reopened.Results[2], ok, err)
@@ -104,6 +107,9 @@ func TestRetryOfChangedSourceSkipsObjectDeletedSinceItFailed(t *testing.T) {
 		t.Fatalf("first attempt: %+v", ended.Results[1])
 	}
 	if err := os.Remove(filepath.Join(f.src, key)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.SetSourceRefresh(bg, f.job.ParentID, 1, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := f.engine.RetryFailed(bg, f.job.ChildID, 1, ended.Attempt); err != nil || !ok {
@@ -254,5 +260,100 @@ func TestResolutionValidationAllowsOnlyExplainedRefreshes(t *testing.T) {
 	}
 	if got := PendingResult(ItemResult{ID: "i", Status: ItemSucceeded, Reconciliation: ReasonSourceRefreshed}); got.Reconciliation != "" {
 		t.Fatalf("an unpinned result kept a refresh reason: %+v", got)
+	}
+}
+
+// A Master that predates source refresh rejects a refreshed pin on an object
+// it did not resolve from an inventory. Unless the Master that delivered or
+// retried the child says it accepts one, a retry of a changed source reads
+// the discovered version and fails again, as older Agents do. Each delivery
+// and retry restates it, so a later one from an older Master withdraws it.
+func TestChangedSourceIsReadAgainOnlyForAMasterThatAcceptsRefreshedPins(t *testing.T) {
+	f := agentFixture(t, 2)
+	changed := f.job.Items[1]
+	if err := os.WriteFile(filepath.Join(f.src, changed.Source.Key), []byte("a newer version"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.startEngine(nil, Options{})
+	if _, err := f.engine.AcceptDelivery(bg, f.job, nil, Delivery{SourceRefresh: true}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := f.repo.Parent(bg, f.job.ParentID); err != nil || !p.SourceRefresh {
+		t.Fatalf("delivery did not record the Master's support: %+v %v", p, err)
+	}
+	// A redelivery from an older Master, which never says so, withdraws it.
+	if _, err := f.engine.Accept(bg, f.job); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.Start(bg, f.job.ChildID, 1); err != nil {
+		t.Fatal(err)
+	}
+	ended := f.wait()
+	if ended.Results[1].Status != ItemFailed || ended.Results[1].Reconciliation != ReasonSourceChanged {
+		t.Fatalf("first attempt: %+v", ended.Results[1])
+	}
+	reopened, ok, err := f.engine.RetryFailed(bg, f.job.ChildID, 1, ended.Attempt)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := f.engine.Start(bg, f.job.ChildID, 1); err != nil {
+		t.Fatal(err)
+	}
+	done := f.wait()
+	retried := done.Results[1]
+	if retried.Status != ItemFailed || retried.Reconciliation != ReasonSourceChanged || retried.ResolvedSource != nil {
+		t.Fatalf("an older Master's retry read the current version: %+v", retried)
+	}
+	// The record is what a Master that predates source refresh validates.
+	if err := done.ValidateResolvedSources(false, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dst, changed.DestinationKey)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a changed source was published: %v", err)
+	}
+	// A retry from a Master that accepts refreshed pins copies it.
+	if err := f.engine.SetSourceRefresh(bg, f.job.ParentID, 1, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := f.engine.RetryFailed(bg, f.job.ChildID, 1, done.Attempt); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := f.engine.Start(bg, f.job.ChildID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if final := f.wait(); final.Status != Completed || final.Results[1].Reconciliation != ReasonSourceRefreshed || final.Results[1].ResolvedSource == nil {
+		t.Fatalf("refresh-capable retry: %+v", final.Results[1])
+	}
+	if err := f.engine.SetSourceRefresh(bg, f.job.ParentID, 2, true); !errors.Is(err, ErrGeneration) {
+		t.Fatalf("another generation: %v", err)
+	}
+}
+
+// After a failover from an Agent that refreshed a source to one that predates
+// source refresh, the older Agent keeps the seed's pin but drops its reason.
+// The Master accepts the pin it already holds; it still rejects a changed or
+// an unexplained new one.
+func TestValidationKeepsAPinThatAnOlderAgentReportsWithoutItsReason(t *testing.T) {
+	item := Item{ID: "i", Source: transferstore.Object{Key: "k", Size: 3, ETag: "old"}}
+	pin := transferstore.Object{Key: "k", Size: 9, ETag: "new"}
+	job := Job{Source: Endpoint{Kind: "S3"}, Items: []Item{item}}
+	refreshed := Record{Job: job, Results: []ItemResult{{ID: "i", Status: ItemFailed, Reconciliation: ReasonSourceRefreshed, ResolvedSource: &pin}}}
+	// What a v4.1 Agent makes of that seed: PendingResult without the reason.
+	imported := Record{Job: job, Results: []ItemResult{{ID: "i", Status: ItemPending, ResolvedSource: &pin}}}
+	if err := imported.ValidateResolvedSources(false, &refreshed); err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	copied := Record{Job: job, Results: []ItemResult{{ID: "i", Status: ItemSucceeded, ResolvedSource: &pin}}}
+	if err := copied.ValidateResolvedSources(false, &imported); err != nil {
+		t.Fatalf("succeeded: %v", err)
+	}
+	other := transferstore.Object{Key: "k", Size: 1, ETag: "newer"}
+	changed := Record{Job: job, Results: []ItemResult{{ID: "i", Status: ItemSucceeded, ResolvedSource: &other}}}
+	if err := changed.ValidateResolvedSources(false, &imported); err == nil {
+		t.Fatal("an unexplained changed pin was accepted")
+	}
+	fresh := Record{Job: job, Results: []ItemResult{{ID: "i", Status: ItemPending}}}
+	if err := imported.ValidateResolvedSources(false, &fresh); err == nil {
+		t.Fatal("an unexplained new pin was accepted")
 	}
 }

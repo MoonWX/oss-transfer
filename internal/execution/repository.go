@@ -296,10 +296,10 @@ func (r *Repository) Pending(ctx context.Context, after string, limit int) ([]Re
 // Accept is the durable ACK boundary. It neither schedules work nor silently
 // drops it when a memory queue fills. Replays cannot change the work definition.
 func (r *Repository) Accept(ctx context.Context, job Job, inventorySource ...bool) (Record, error) {
-	return r.accept(ctx, job, nil, inventorySource...)
+	return r.accept(ctx, job, nil, Delivery{InventorySource: len(inventorySource) > 0 && inventorySource[0]})
 }
 
-func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventorySource ...bool) (Record, error) {
+func (r *Repository) accept(ctx context.Context, job Job, seed *Record, delivery Delivery) (Record, error) {
 	fingerprint, err := validate(job)
 	if err != nil {
 		return Record{}, err
@@ -322,6 +322,12 @@ func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventor
 		if err := checkParent(tx, job.ParentID, job.Generation); err != nil {
 			return err
 		}
+		if p.SourceRefresh != delivery.SourceRefresh {
+			p.SourceRefresh = delivery.SourceRefresh
+			if err := tx.Put(parentsBucket, parentKey(job.ParentID), p); err != nil {
+				return err
+			}
+		}
 		existing, err := load(tx, job.ChildID)
 		if err == nil {
 			if existing.ReleasedAssignment != nil && job.Assignment <= *existing.ReleasedAssignment {
@@ -337,7 +343,7 @@ func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventor
 				if seed == nil {
 					return ErrAssignment
 				}
-				result, err = importedRecord(job, seed, fingerprint, len(inventorySource) > 0 && inventorySource[0])
+				result, err = importedRecord(job, seed, fingerprint, delivery.InventorySource)
 				if err != nil {
 					return err
 				}
@@ -365,13 +371,13 @@ func (r *Repository) accept(ctx context.Context, job Job, seed *Record, inventor
 			return err
 		}
 		if seed != nil {
-			result, err = importedRecord(job, seed, fingerprint, len(inventorySource) > 0 && inventorySource[0])
+			result, err = importedRecord(job, seed, fingerprint, delivery.InventorySource)
 			if err != nil {
 				return err
 			}
 			return r.put(tx, nil, &result)
 		}
-		result = Record{InventorySource: len(inventorySource) > 0 && inventorySource[0], Job: job, Status: Waiting, Fingerprint: fingerprint, Results: make([]ItemResult, len(job.Items))}
+		result = Record{InventorySource: delivery.InventorySource, Job: job, Status: Waiting, Fingerprint: fingerprint, Results: make([]ItemResult, len(job.Items))}
 		for i, item := range job.Items {
 			result.Results[i] = ItemResult{ID: item.ID, Status: ItemPending}
 		}

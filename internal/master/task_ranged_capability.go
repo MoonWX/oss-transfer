@@ -15,82 +15,105 @@ import (
 // fails deliveries until the answer expires.
 const rangedSupportTTL = time.Minute
 
-// rangedDownloadSupport remembers Agents that advertised
-// agentservice.RangedDownloadProtocol. Negative answers are not kept: a child
-// delivered without the field streams for good (see execution.Job), so an
-// Agent upgraded in place must be asked again on its next delivery rather
-// than be served a remembered "unsupported". Only an Agent that is still old
-// is asked on every delivery. A slow query that started before an upgrade
-// cannot erase a newer positive answer, because nothing negative is stored.
-type rangedDownloadSupport struct {
-	mu    sync.Mutex
-	until map[string]time.Time
+// deliveryProtocols are the Agent capabilities a child delivery depends on.
+type deliveryProtocols struct {
+	RangedDownloadProtocol int `json:"rangedDownloadProtocol"`
+	SourceRefreshProtocol  int `json:"sourceRefreshProtocol"`
 }
 
-func (r *rangedDownloadSupport) supported(ctx context.Context, node task.Node, query func(context.Context, task.Node) (int, error)) (bool, error) {
+// deliverySupport is what a node's Agent understands of a child delivery:
+// the job's rangedDownload field, and sourceRefresh (see
+// agentservice.SourceRefreshProtocol).
+type deliverySupport struct {
+	ranged, refresh bool
+}
+
+// rangedDownloadSupport remembers Agents that advertised
+// agentservice.RangedDownloadProtocol or agentservice.SourceRefreshProtocol.
+// Negative answers are not kept: a child delivered without the ranged field
+// streams for good (see execution.Job), so an Agent upgraded in place must be
+// asked again on its next delivery rather than be served a remembered
+// "unsupported". Only an Agent that is still old is asked on every delivery.
+// A slow query that started before an upgrade cannot erase a newer positive
+// answer, because nothing negative is stored.
+type rangedDownloadSupport struct {
+	mu      sync.Mutex
+	until   map[string]time.Time
+	refresh map[string]time.Time
+}
+
+func (r *rangedDownloadSupport) supported(ctx context.Context, node task.Node, query func(context.Context, task.Node) (deliveryProtocols, error)) (deliverySupport, error) {
 	now := time.Now()
 	r.mu.Lock()
-	if until, ok := r.until[node.ID]; ok && now.Before(until) {
-		r.mu.Unlock()
-		return true, nil
-	}
+	ranged, rangedKnown := r.until[node.ID]
+	refresh, refreshKnown := r.refresh[node.ID]
 	r.mu.Unlock()
-	protocol, err := query(ctx, node)
-	if err != nil || protocol < agentservice.RangedDownloadProtocol {
-		return false, err
+	if rangedKnown && now.Before(ranged) && refreshKnown && now.Before(refresh) {
+		return deliverySupport{ranged: true, refresh: true}, nil
 	}
+	protocols, err := query(ctx, node)
+	if err != nil {
+		return deliverySupport{}, err
+	}
+	support := deliverySupport{ranged: protocols.RangedDownloadProtocol >= agentservice.RangedDownloadProtocol, refresh: protocols.SourceRefreshProtocol >= agentservice.SourceRefreshProtocol}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.until == nil {
-		r.until = map[string]time.Time{}
+		r.until, r.refresh = map[string]time.Time{}, map[string]time.Time{}
 	}
-	r.until[node.ID] = now.Add(rangedSupportTTL)
-	return true, nil
+	if support.ranged {
+		r.until[node.ID] = now.Add(rangedSupportTTL)
+	}
+	if support.refresh {
+		r.refresh[node.ID] = now.Add(rangedSupportTTL)
+	}
+	return support, nil
 }
 
-// rangedPass memoizes one answer per node, positive or negative, for one
-// delivery or observation pass, so an Agent that is still old is asked once
-// per pass rather than before every child; the next pass asks again and so
-// notices an upgrade. It is safe for concurrent use by node groups.
+// rangedPass memoizes one answer per node, positive, negative or failed, for
+// one delivery or observation pass, so an Agent that is still old is asked
+// once per pass rather than before every child; the next pass asks again and
+// so notices an upgrade. It is safe for concurrent use by node groups.
 type rangedPass struct {
 	t       *taskRuntime
 	mu      sync.Mutex
-	answers map[string]bool
+	answers map[string]deliverySupport
+	failed  map[string]error
 }
 
 func (t *taskRuntime) newRangedPass() *rangedPass {
-	return &rangedPass{t: t, answers: map[string]bool{}}
+	return &rangedPass{t: t, answers: map[string]deliverySupport{}, failed: map[string]error{}}
 }
 
-func (r *rangedPass) supported(ctx context.Context, node task.Node) (bool, error) {
+func (r *rangedPass) supported(ctx context.Context, node task.Node) (deliverySupport, error) {
 	r.mu.Lock()
 	answer, known := r.answers[node.ID]
+	failure := r.failed[node.ID]
 	r.mu.Unlock()
-	if known {
-		return answer, nil
+	if known || failure != nil {
+		return answer, failure
 	}
-	query := r.t.rangedDownloadProtocol
+	query := r.t.deliveryProtocols
 	if r.t.rangedQuery != nil {
 		query = r.t.rangedQuery
 	}
 	answer, err := r.t.rangedSupport.supported(ctx, node, query)
-	if err != nil {
-		return false, err
-	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		r.failed[node.ID] = err
+		return deliverySupport{}, err
+	}
 	r.answers[node.ID] = answer
-	r.mu.Unlock()
 	return answer, nil
 }
 
-func (t *taskRuntime) rangedDownloadProtocol(ctx context.Context, node task.Node) (int, error) {
-	var caps struct {
-		RangedDownloadProtocol int `json:"rangedDownloadProtocol"`
-	}
+func (t *taskRuntime) deliveryProtocols(ctx context.Context, node task.Node) (deliveryProtocols, error) {
+	var caps deliveryProtocols
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err := t.server.agentCall(callCtx, nodeSession(node), "capabilities", false, nil, &caps)
-	return caps.RangedDownloadProtocol, err
+	return caps, err
 }
 
 // acceptRequest is childAcceptance for the child's current node. Every
@@ -105,17 +128,23 @@ func (t *taskRuntime) rangedDownloadProtocol(ctx context.Context, node task.Node
 // including after that Agent is upgraded, so an "off" choice can never be
 // lost to a rolling upgrade; an "auto" child ranges again after the task is
 // stopped and resumed, which delivers the choice anew.
+//
+// An Agent that advertises source refresh is told that this Master accepts
+// refreshed source pins. Without it (an older Agent, or a capability query
+// that failed) the delivery still goes ahead, and that Agent retries a
+// changed source the way older releases do.
 func (t *taskRuntime) acceptRequest(ctx context.Context, pass *rangedPass, p task.Parent, child task.Child) (agentservice.ChildAcceptRequest, error) {
 	request := childAcceptance(p, child)
+	support, err := pass.supported(ctx, child.Node)
+	request.SourceRefresh = err == nil && support.refresh
 	if child.Job.Destination.Kind != "LOCAL" {
 		return request, nil
 	}
-	supported, err := pass.supported(ctx, child.Node)
 	if err != nil {
 		return request, err
 	}
 	choice := ""
-	if supported {
+	if support.ranged {
 		choice = execution.RangedDownloadAuto
 		if child.Job.RangedDownload == execution.RangedDownloadOff {
 			choice = execution.RangedDownloadOff

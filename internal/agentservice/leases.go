@@ -425,11 +425,18 @@ const RangedDownloadProtocol = 1
 // Agents that advertise it; an older Agent rejects the job.
 const ConflictPolicyProtocol = 1
 
+// SourceRefreshProtocol is advertised by Agents that can read a changed
+// source again on a retry and report its current version as a refreshed
+// ResolvedSource. Such an Agent refreshes only for a Master that says it
+// accepts the result (sourceRefresh in child_accept and child_retry_failed),
+// which a Master sends only to Agents that advertise this protocol.
+const SourceRefreshProtocol = 1
+
 func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol}
+	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol, "sourceRefreshProtocol": SourceRefreshProtocol}
 	if s.Comparisons != nil {
 		capabilities["comparisonProtocol"] = comparison.Protocol
 	}

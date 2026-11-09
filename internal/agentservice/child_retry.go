@@ -26,6 +26,9 @@ type ChildRetryFailedRequest struct {
 	ParentID   int64              `json:"parentId"`
 	Generation uint64             `json:"generation"`
 	Children   []ChildRetryTarget `json:"children"`
+	// SourceRefresh says the Master accepts refreshed source pins. A Master
+	// sends it only to Agents that advertise SourceRefreshProtocol.
+	SourceRefresh bool `json:"sourceRefresh,omitempty"`
 }
 
 // ChildRetryTarget names a child and the ended attempt the Master observed.
@@ -68,6 +71,9 @@ func (s *Service) retryFailedChildren(ctx context.Context, request ChildRetryFai
 	}
 	if policy.Stopped || policy.Deleted {
 		return ChildRetryFailedResult{}, execution.ErrStopped
+	}
+	if err := s.Engine.SetSourceRefresh(ctx, request.ParentID, request.Generation, request.SourceRefresh); err != nil {
+		return ChildRetryFailedResult{}, err
 	}
 	result := ChildRetryFailedResult{Children: make([]ChildRetryOutcome, 0, len(request.Children))}
 	queued := false

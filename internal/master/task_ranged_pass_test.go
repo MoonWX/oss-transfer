@@ -20,9 +20,9 @@ func TestOldAgentIsAskedOncePerPass(t *testing.T) {
 	defer cancel()
 	runtime := f.master.tasks
 	var queries atomic.Int64
-	runtime.rangedQuery = func(ctx context.Context, node task.Node) (int, error) {
+	runtime.rangedQuery = func(ctx context.Context, node task.Node) (deliveryProtocols, error) {
 		queries.Add(1)
-		return runtime.rangedDownloadProtocol(ctx, node)
+		return runtime.deliveryProtocols(ctx, node)
 	}
 	agent := rangedTestAgent(t, f, "ranged-pass", true)
 	spec := task.Spec{Direction: "OSS_TO_LOCAL", Source: execution.Endpoint{Kind: "S3", Ref: "qa", Bucket: "source"}, Destination: execution.Endpoint{Kind: "LOCAL"}, Nodes: []task.Node{agent.node}, ConflictPolicy: "SKIP", DistributionMode: "BALANCED"}

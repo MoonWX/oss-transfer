@@ -9,9 +9,11 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
+// comparisonListPageSize is the number of keys each LIST asks for.
+const comparisonListPageSize = 1000
+
 // Listing limits. Package variables so tests can shorten them.
 var (
-	comparisonListPageSize = 1000
 	// listAttemptTimeout bounds one LIST request, including the SDK's own
 	// retries of it.
 	listAttemptTimeout = 3 * time.Minute

@@ -492,7 +492,7 @@ func TestEngineS3NetworkErrorDetailHidesTheEndpoint(t *testing.T) {
 }
 
 func TestEngineS3HeadTimeout(t *testing.T) {
-	engineOverride(t, &headTimeout, 300*time.Millisecond)
+	engineOverride(t, &comparisonHeadTimeout, 300*time.Millisecond)
 	fixture := newEngineS3(t)
 	fixture.put("source-bucket/src/a", "a")
 	fixture.put("target-bucket/backup/a", "a")

@@ -134,7 +134,7 @@ func describeLocalError(err error) string {
 	if errors.As(err, &certificate) {
 		return "TLS certificate error"
 	}
-	if networkError(err) {
+	if isNetworkError(err) {
 		return "network error"
 	}
 	var decode *smithy.DeserializationError
@@ -154,9 +154,17 @@ func describeLocalError(err error) string {
 
 // responseStatus is the HTTP status of a storage error response, or 0.
 func responseStatus(err error) int {
-	var response interface{ HTTPStatusCode() int }
+	var response *smithyhttp.ResponseError
 	if errors.As(err, &response) {
-		return response.HTTPStatusCode()
+		// The SDK's HTTPStatusCode does not check for a missing response.
+		if response.Response == nil || response.Response.Response == nil {
+			return 0
+		}
+		return response.Response.StatusCode
+	}
+	var other interface{ HTTPStatusCode() int }
+	if errors.As(err, &other) {
+		return other.HTTPStatusCode()
 	}
 	return 0
 }
@@ -205,9 +213,9 @@ func detailToken(value string, limit int, requestID bool) string {
 	return value
 }
 
-// networkError reports a failure to send a request or to receive its whole
+// isNetworkError reports a failure to send a request or to receive its whole
 // response: connection errors, transport timeouts and truncated bodies.
-func networkError(err error) bool {
+func isNetworkError(err error) bool {
 	var send *smithyhttp.RequestSendError
 	var network net.Error
 	return errors.As(err, &send) || errors.As(err, &network) || errors.Is(err, io.ErrUnexpectedEOF) ||
@@ -237,7 +245,7 @@ func retryableStorageError(err error) bool {
 		return false
 	}
 	var decode *smithy.DeserializationError
-	return networkError(err) || errors.As(err, &decode)
+	return isNetworkError(err) || errors.As(err, &decode)
 }
 
 // finalReadError reports a content read failure that another attempt cannot
@@ -254,13 +262,13 @@ func finalReadError(err error) bool {
 	return status >= 300 && status < 500 && !retryableStorageError(err)
 }
 
-// changedObjectError reports an object that changed or disappeared after it
+// objectChanged reports an object that changed or disappeared after it
 // was listed or read.
-func changedObjectError(err error) bool {
+func objectChanged(err error) bool {
 	return errors.Is(err, transferstore.ErrSourceChanged) || errors.Is(err, transferstore.ErrNotFound)
 }
 
-func notFoundError(err error) bool { return errors.Is(err, transferstore.ErrNotFound) }
+func objectNotFound(err error) bool { return errors.Is(err, transferstore.ErrNotFound) }
 
 var (
 	detailURLPattern       = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]*`)
@@ -303,9 +311,9 @@ func clipDetail(text string, limit int) string {
 	return text[:cut] + "..."
 }
 
-// sideDetail builds a row's ErrorDetail from the failing sides of one
+// comparisonSideDetail builds a row's ErrorDetail from the failing sides of one
 // operation: "source HEAD: ...", "target HEAD: ..." or both.
-func sideDetail(operation string, sourceErr, targetErr error) string {
+func comparisonSideDetail(operation string, sourceErr, targetErr error) string {
 	var parts []string
 	if sourceErr != nil {
 		parts = append(parts, ErrorDetail(&comparisonSideError{side: "source", operation: operation, err: sourceErr}))

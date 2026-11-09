@@ -16,9 +16,9 @@ import (
 
 type ReaderWrapper func(context.Context, io.ReadCloser, int64) (io.ReadCloser, error)
 
-// headTimeout bounds one HEAD, including the SDK's retries of it. A package
+// comparisonHeadTimeout bounds one HEAD, including the SDK's retries of it. A package
 // variable so tests can shorten it.
-var headTimeout = 2 * time.Minute
+var comparisonHeadTimeout = 2 * time.Minute
 
 func Validate(r Request) error {
 	if r.ID == "" || len(r.ID) > 128 || strings.ContainsAny(r.ID, "/\x00") ||
@@ -56,9 +56,11 @@ type RunOptions struct {
 // fails or ctx ends, it emits the finished rows that are next in order, waits
 // for its goroutines and returns. Rows computed after that point are dropped.
 //
-// A LIST failure is returned as "source LIST: ..." or "target LIST: ..."; a
-// listing the merge cannot use is described by a comparisonListingError; an
-// emit error is returned as is; cancellation returns ctx.Err().
+// A LIST failure is returned as "source LIST: ..." or "target LIST: ..." after
+// retries; a listing that is not in ascending byte order, leaves the prefix or
+// does not advance fails with an error naming the side; an emit error is
+// returned as is; cancellation returns ctx.Err(). ErrorDetail describes any of
+// them without storage response text.
 func Run(ctx context.Context, r Request, source, dest transferstore.Store, wrap ReaderWrapper, options RunOptions, emit func(Row) error) error {
 	if err := Validate(r); err != nil {
 		return err
@@ -281,15 +283,15 @@ func (c *comparer) missingTarget(ctx context.Context, listed transferstore.Objec
 	if err == nil {
 		return c.compare(ctx, listed, actual, key)
 	}
-	if !notFoundError(err) {
-		return errorRow(row, "Cannot read target metadata", sideDetail("HEAD", nil, err))
+	if !objectNotFound(err) {
+		return comparisonErrorRow(row, "Cannot read target metadata", comparisonSideDetail("HEAD", nil, err))
 	}
 	current, err := c.stat(ctx, c.source, listed.Key)
 	switch {
-	case notFoundError(err) || err == nil && !sameVersion(listed, current):
+	case objectNotFound(err) || err == nil && !sameVersion(listed, current):
 		row.Status = StatusChanged
 	case err != nil:
-		return errorRow(row, "Cannot read source metadata", sideDetail("HEAD", err, nil))
+		return comparisonErrorRow(row, "Cannot read source metadata", comparisonSideDetail("HEAD", err, nil))
 	}
 	return row
 }
@@ -301,15 +303,15 @@ func (c *comparer) extraTarget(ctx context.Context, listed transferstore.Object,
 	if err == nil {
 		return c.compare(ctx, actual, listed, key)
 	}
-	if !notFoundError(err) {
-		return errorRow(row, "Cannot read source metadata", sideDetail("HEAD", err, nil))
+	if !objectNotFound(err) {
+		return comparisonErrorRow(row, "Cannot read source metadata", comparisonSideDetail("HEAD", err, nil))
 	}
 	current, err := c.stat(ctx, c.target, listed.Key)
 	switch {
-	case notFoundError(err) || err == nil && !sameVersion(listed, current):
+	case objectNotFound(err) || err == nil && !sameVersion(listed, current):
 		row.Status = StatusChanged
 	case err != nil:
-		return errorRow(row, "Cannot read target metadata", sideDetail("HEAD", nil, err))
+		return comparisonErrorRow(row, "Cannot read target metadata", comparisonSideDetail("HEAD", nil, err))
 	}
 	return row
 }
@@ -320,17 +322,10 @@ func (c *comparer) object(ctx context.Context) Row {
 	row := Row{Key: r.SourcePrefix, SourceKey: r.SourcePrefix, DestinationKey: r.DestinationPrefix}
 	a, ae := c.stat(ctx, c.source, r.SourcePrefix)
 	b, be := c.stat(ctx, c.target, r.DestinationPrefix)
-	sourceFailed, targetFailed := ae != nil && !notFoundError(ae), be != nil && !notFoundError(be)
+	if sourceErr, targetErr := headFailure(ae), headFailure(be); sourceErr != nil || targetErr != nil {
+		return comparisonErrorRow(row, "Cannot read object metadata", comparisonSideDetail("HEAD", sourceErr, targetErr))
+	}
 	switch {
-	case sourceFailed || targetFailed:
-		var sourceErr, targetErr error
-		if sourceFailed {
-			sourceErr = ae
-		}
-		if targetFailed {
-			targetErr = be
-		}
-		return errorRow(row, "Cannot read object metadata", sideDetail("HEAD", sourceErr, targetErr))
 	case ae != nil && be != nil:
 		row.Status = StatusBothMissing
 	case ae != nil:
@@ -350,11 +345,11 @@ func (c *comparer) compare(ctx context.Context, listedA, listedB transferstore.O
 	a, ae := c.stat(ctx, c.source, listedA.Key)
 	b, be := c.stat(ctx, c.target, listedB.Key)
 	if ae != nil || be != nil {
-		if notFoundError(ae) || notFoundError(be) {
+		if objectNotFound(ae) || objectNotFound(be) {
 			row.Status = StatusChanged
 			return row
 		}
-		return errorRow(row, "Cannot read object metadata", sideDetail("HEAD", ae, be))
+		return comparisonErrorRow(row, "Cannot read object metadata", comparisonSideDetail("HEAD", ae, be))
 	}
 	if !sameVersion(listedA, a) || !sameVersion(listedB, b) {
 		row.Status = StatusChanged
@@ -379,24 +374,17 @@ func (c *comparer) compare(ctx context.Context, listedA, listedB transferstore.O
 	}
 	sourceSum, targetSum, ae, be := c.hashBoth(ctx, a, b)
 	if ae != nil || be != nil {
-		if changedObjectError(ae) || changedObjectError(be) {
+		if objectChanged(ae) || objectChanged(be) {
 			row.Status = StatusChanged
 			return row
 		}
-		return errorRow(row, "Cannot read complete object content", sideDetail("GET", ae, be))
+		return comparisonErrorRow(row, "Cannot read complete object content", comparisonSideDetail("GET", ae, be))
 	}
 	// Both objects may have changed while the opposite side was streaming.
 	afterA, ae := c.stat(ctx, c.source, a.Key)
 	afterB, be := c.stat(ctx, c.target, b.Key)
-	if ae != nil && !notFoundError(ae) || be != nil && !notFoundError(be) {
-		var sourceErr, targetErr error
-		if ae != nil && !notFoundError(ae) {
-			sourceErr = ae
-		}
-		if be != nil && !notFoundError(be) {
-			targetErr = be
-		}
-		return errorRow(row, "Cannot read object metadata", sideDetail("HEAD", sourceErr, targetErr))
+	if sourceErr, targetErr := headFailure(ae), headFailure(be); sourceErr != nil || targetErr != nil {
+		return comparisonErrorRow(row, "Cannot read object metadata", comparisonSideDetail("HEAD", sourceErr, targetErr))
 	}
 	if ae != nil || be != nil || !sameVersion(a, afterA) || !sameVersion(b, afterB) {
 		row.Status = StatusChanged
@@ -410,19 +398,27 @@ func (c *comparer) compare(ctx context.Context, listedA, listedB transferstore.O
 	return row
 }
 
-// stat is a HEAD bounded by headTimeout.
+// stat is a HEAD bounded by comparisonHeadTimeout.
 func (c *comparer) stat(ctx context.Context, store transferstore.Store, key string) (transferstore.Object, error) {
-	limit := headTimeout
+	limit := comparisonHeadTimeout
 	callCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	object, err := store.Stat(callCtx, key)
-	if err != nil && ctx.Err() == nil && callCtx.Err() != nil && !changedObjectError(err) {
+	if err != nil && ctx.Err() == nil && callCtx.Err() != nil && !objectChanged(err) {
 		err = &comparisonTimeoutError{operation: "HEAD", limit: limit}
 	}
 	return object, err
 }
 
-func errorRow(row Row, message, detail string) Row {
+// headFailure is err unless it only reports a missing object.
+func headFailure(err error) error {
+	if objectNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func comparisonErrorRow(row Row, message, detail string) Row {
 	row.Status, row.Error, row.ErrorDetail = StatusError, message, detail
 	row.Reasons, row.SourceSHA256, row.DestinationSHA256 = nil, "", ""
 	return row

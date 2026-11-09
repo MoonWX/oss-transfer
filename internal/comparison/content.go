@@ -159,16 +159,21 @@ func (c *comparer) consume(ctx context.Context, watch *readWatchdog, body io.Rea
 		}
 		reader = wrapped
 	}
-	read, err := h.copy(reader, length)
+	read, err := h.copy(ctx, reader, length)
 	_ = reader.Close()
 	return read, err
 }
 
-// copy hashes the reader until EOF and requires exactly length bytes.
-func (h *contentHash) copy(reader io.Reader, length int64) (int64, error) {
+// copy hashes the reader until EOF and requires exactly length bytes. A read
+// returning neither data nor an error ends when ctx does, so a reader that
+// ignores cancellation cannot spin past the idle watchdog.
+func (h *contentHash) copy(ctx context.Context, reader io.Reader, length int64) (int64, error) {
 	var read int64
 	for {
 		n, err := reader.Read(h.buffer)
+		if n == 0 && err == nil {
+			err = ctx.Err()
+		}
 		if n > 0 {
 			if int64(n) > length-read {
 				return read, fmt.Errorf("%w: storage returned more bytes than the object size", transferstore.ErrSizeMismatch)
@@ -226,10 +231,13 @@ type readWatchdog struct {
 	timeout time.Duration
 	cancel  context.CancelCauseFunc
 	timer   *time.Timer
-	armed   bool
-	fired   bool
-	// running counts scheduled or running fire calls, so stop can wait until
-	// no timer callback outlives the attempt.
+	// generation numbers each arming. A timer that expires as it is being
+	// disarmed runs anyway; it must not cancel a later arming.
+	generation uint64
+	armed      bool
+	fired      bool
+	// running counts timer callbacks that are scheduled or running, so stop
+	// can wait until none outlives the attempt.
 	running sync.WaitGroup
 }
 
@@ -240,12 +248,10 @@ func (w *readWatchdog) arm() {
 		return
 	}
 	w.armed = true
+	w.generation++
+	generation := w.generation
 	w.running.Add(1)
-	if w.timer == nil {
-		w.timer = time.AfterFunc(w.timeout, w.fire)
-	} else {
-		w.timer.Reset(w.timeout)
-	}
+	w.timer = time.AfterFunc(w.timeout, func() { w.fire(generation) })
 }
 
 func (w *readWatchdog) disarm() {
@@ -258,14 +264,14 @@ func (w *readWatchdog) disarm() {
 	if w.timer.Stop() {
 		w.running.Done()
 	}
-	// Otherwise fire has started; it sees the watchdog disarmed and returns.
+	// Otherwise the callback has started; it finds itself stale and returns.
 }
 
-func (w *readWatchdog) fire() {
+func (w *readWatchdog) fire(generation uint64) {
 	defer w.running.Done()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.armed {
+	if !w.armed || w.generation != generation {
 		return
 	}
 	w.armed, w.fired = false, true

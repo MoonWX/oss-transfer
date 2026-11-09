@@ -272,10 +272,18 @@ func TestEngineContentFailureStopsTheOtherSide(t *testing.T) {
 	source.put("src/a", "same")
 	target.put("backup/a", "same")
 	var targetStopped atomic.Bool
-	source.openHook = func(context.Context, string, []byte, int) (io.ReadCloser, bool, error) {
+	targetReading := make(chan struct{})
+	source.openHook = func(ctx context.Context, _ string, _ []byte, _ int) (io.ReadCloser, bool, error) {
+		// Fail only once the target read is under way, so stopping it is observable.
+		select {
+		case <-targetReading:
+		case <-ctx.Done():
+			return nil, true, ctx.Err()
+		}
 		return nil, true, engineAPIError(403, "AccessDenied", "G1")
 	}
 	target.openHook = func(ctx context.Context, _ string, _ []byte, _ int) (io.ReadCloser, bool, error) {
+		close(targetReading)
 		<-ctx.Done()
 		targetStopped.Store(true)
 		return nil, true, ctx.Err()
@@ -365,5 +373,66 @@ func TestEngineContentReportsSizeAndHashReasons(t *testing.T) {
 	}
 	if source.opens.Load() != 2 || target.opens.Load() != 2 {
 		t.Fatalf("read %d/%d objects, want 2/2 (no read for a size difference)", source.opens.Load(), target.opens.Load())
+	}
+}
+
+func TestEngineWatchdogIgnoresStaleTimers(t *testing.T) {
+	var cancels atomic.Int64
+	w := &readWatchdog{timeout: time.Hour, cancel: func(error) { cancels.Add(1) }}
+	w.arm()
+	stale := w.generation
+	// The first timer expires just as its read returns: Stop is too late, and
+	// its callback, already started, runs after the next read armed again.
+	w.running.Add(1)
+	w.disarm()
+	w.arm()
+	w.fire(stale)
+	if cancels.Load() != 0 {
+		t.Fatal("a stale timer canceled a later read")
+	}
+	stopped := make(chan struct{})
+	go func() { w.stop(); close(stopped) }()
+	engineWait(t, stopped, "the watchdog to stop")
+	if cancels.Load() != 0 {
+		t.Fatal("stopping the watchdog canceled the attempt")
+	}
+}
+
+func TestEngineWatchdogCancelsAStalledCall(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	w := &readWatchdog{timeout: time.Millisecond, cancel: cancel}
+	w.arm()
+	engineWait(t, ctx.Done(), "the idle timeout")
+	if !errors.Is(context.Cause(ctx), errComparisonReadIdle) {
+		t.Fatalf("cancellation cause = %v", context.Cause(ctx))
+	}
+	w.arm() // a fired watchdog stays fired
+	stopped := make(chan struct{})
+	go func() { w.stop(); close(stopped) }()
+	engineWait(t, stopped, "the watchdog to stop")
+}
+
+// engineSpinningBody never returns data or an error and ignores cancellation.
+type engineSpinningBody struct{}
+
+func (engineSpinningBody) Read([]byte) (int, error) { return 0, nil }
+func (engineSpinningBody) Close() error             { return nil }
+
+func TestEngineContentReaderWithoutProgressTimesOut(t *testing.T) {
+	engineFastRetries(t)
+	engineOverride(t, &readIdleTimeout, 100*time.Millisecond)
+	source, target := newEngineStore(), newEngineStore()
+	source.put("src/a", "same")
+	target.put("backup/a", "same")
+	source.openHook = func(context.Context, string, []byte, int) (io.ReadCloser, bool, error) {
+		return engineSpinningBody{}, true, nil
+	}
+	rows, err := engineRun(context.Background(), engineContentRequest(), source, target, nil, RunOptions{})
+	if err != nil || len(rows) != 1 || rows[0].Status != StatusError || rows[0].ErrorDetail != "source GET: timeout" {
+		t.Fatalf("spinning reader: %v %+v", err, rows)
+	}
+	if source.opens.Load() != int64(1+len(streamRetryDelays)) {
+		t.Fatalf("spinning reader was opened %d times", source.opens.Load())
 	}
 }

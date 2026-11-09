@@ -556,7 +556,7 @@ func TestEngineOneSidedKeysAreConfirmedWithHead(t *testing.T) {
 }
 
 func TestEngineHeadTimeoutIsAnErrorRow(t *testing.T) {
-	engineOverride(t, &headTimeout, 100*time.Millisecond)
+	engineOverride(t, &comparisonHeadTimeout, 100*time.Millisecond)
 	source, target := newEngineStore(), newEngineStore()
 	source.put("src/a", "a")
 	target.put("backup/a", "a")

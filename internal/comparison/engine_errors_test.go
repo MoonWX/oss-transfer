@@ -57,6 +57,7 @@ func TestEngineErrorDetailKeepsStorageFieldsAndRedacts(t *testing.T) {
 		{"successful status with bad body", &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 200, Header: http.Header{}}}, Err: &smithy.DeserializationError{Err: errors.New("xml syntax error")}}, RequestID: "R-200"}, "invalid storage response (request ID R-200)"},
 		{"sdk operation", &smithy.OperationError{ServiceID: "S3", OperationName: "HeadObject", Err: errors.New("endpoint https://minio.internal:9000 rejected")}, "HeadObject failed"},
 		{"plain", errors.New("invalid comparison request"), "invalid comparison request"},
+		{"response error without a response", &smithyhttp.ResponseError{Err: &smithy.GenericAPIError{Code: "SlowDown"}}, "SlowDown"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := ErrorDetail(test.err); got != test.want {
@@ -87,7 +88,7 @@ func TestEngineErrorDetailRedactsUnknownMessages(t *testing.T) {
 	if got := ErrorDetail(errors.New(string([]byte{'a', 0xff, 'b'}))); got != "a�b" {
 		t.Fatalf("invalid UTF-8 kept: %q", got)
 	}
-	both := sideDetail("HEAD", errors.New(strings.Repeat("s", 600)), errors.New(strings.Repeat("t", 600)))
+	both := comparisonSideDetail("HEAD", errors.New(strings.Repeat("s", 600)), errors.New(strings.Repeat("t", 600)))
 	if len(both) > maxErrorDetailBytes || !strings.Contains(both, "; target HEAD: ttt") {
 		t.Fatalf("two-sided detail lost the second side or exceeded the limit: %d %q", len(both), both)
 	}

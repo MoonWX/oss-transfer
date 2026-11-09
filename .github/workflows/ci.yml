@@ -428,6 +428,7 @@ jobs:
         env:
           QA_PLATFORM: ${{ matrix.platform }}
           QA_NAME: ${{ matrix.name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
@@ -518,6 +519,7 @@ jobs:
         env:
           QA_PLATFORM: ${{ matrix.platform }}
           QA_NAME: ${{ matrix.name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
@@ -584,6 +586,7 @@ jobs:
         env:
           QA_PLATFORM: ${{ matrix.platform }}
           QA_NAME: ${{ matrix.name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/prepare.py --platform "$QA_PLATFORM" --directory "$RUNNER_TEMP/native-package"
@@ -654,6 +657,7 @@ jobs:
       - name: Verify target application and test binaries
         env:
           QA_ARCH: ${{ matrix.arch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python .github/acceptance/prepare.py --platform "linux/$QA_ARCH" --fixture-platform linux/amd64 --directory "$RUNNER_TEMP/emulated-package"
           python .github/acceptance/test-binaries.py verify --platform "linux/$QA_ARCH" --directory output/test-binaries --repo "$GITHUB_WORKSPACE"
@@ -713,6 +717,8 @@ jobs:
         with:
           python-version: '3.13'
       - name: Start the native host S3 fixture
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python -m pip install -r .github/acceptance/requirements.txt
           python .github/acceptance/host-s3.py start --directory "$RUNNER_TEMP/freebsd-host-s3" --guest-host 192.168.122.2

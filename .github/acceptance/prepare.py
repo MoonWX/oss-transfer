@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import subprocess
 import tarfile
 import time
 from urllib.error import HTTPError
@@ -29,7 +30,8 @@ WEED = {
 }
 
 
-WEED_RELEASE = "https://github.com/seaweedfs/seaweedfs/releases/download/4.48/"
+WEED_TAG = "4.48"
+WEED_RELEASE = "https://github.com/seaweedfs/seaweedfs/releases/download/" + WEED_TAG + "/"
 
 
 def download(url, target, attempts=5):
@@ -48,6 +50,23 @@ def download(url, target, attempts=5):
             delay = 5 * 2 ** (attempt - 1)
             print(f"Downloading {url} failed ({error}); retrying in {delay} s", flush=True)
             time.sleep(delay)
+
+
+def download_weed(asset, target):
+    """Download a pinned SeaweedFS release archive. CI passes GH_TOKEN: the
+    authenticated API keeps working while GitHub throttles anonymous release
+    downloads. Without a token, or if that fails, use the public URL."""
+    if os.environ.get("GH_TOKEN") and shutil.which("gh"):
+        for attempt in range(1, 4):
+            try:
+                subprocess.run(["gh", "release", "download", WEED_TAG, "--repo", "seaweedfs/seaweedfs",
+                                "--pattern", asset, "--output", str(target), "--clobber"],
+                               check=True, timeout=600)
+                return
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                print(f"gh release download {asset} failed ({error}), attempt {attempt} of 3", flush=True)
+                time.sleep(5 * attempt)
+    download(WEED_RELEASE + asset, target)
 
 
 def digest(path):
@@ -148,7 +167,7 @@ def main():
     fixture_os, fixture_arch = (args.fixture_platform or args.platform).split("/")
     weed_asset = "windows_amd64.zip" if fixture_os == "windows" else f"{fixture_os}_{fixture_arch}.tar.gz"
     weed_archive = directory / weed_asset
-    download(WEED_RELEASE + weed_asset, weed_archive)
+    download_weed(weed_asset, weed_archive)
     if digest(weed_archive) != WEED[weed_asset]:
         raise ValueError("SeaweedFS fixture checksum mismatch")
     weed = directory / ("weed" + extension)

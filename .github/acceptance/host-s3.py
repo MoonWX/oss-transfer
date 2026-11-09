@@ -117,7 +117,7 @@ def start(args):
         raise FixtureError("Host S3 fixture requires Linux or macOS amd64/arm64")
     archive = args.archive.resolve() if args.archive else directory / asset
     if not args.archive:
-        PREPARE.download(PREPARE.WEED_RELEASE + asset, archive)
+        PREPARE.download_weed(asset, archive)
     if PREPARE.digest(archive) != PREPARE.WEED[asset]:
         raise FixtureError("Host SeaweedFS fixture archive checksum mismatch")
     weed = directory / "weed"

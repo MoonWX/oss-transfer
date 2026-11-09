@@ -372,6 +372,11 @@ func renderSoftwareCheck(out io.Writer, data map[string]interface{}) {
 			fmt.Fprintf(out, cliText(out, "发布说明: %s\n"), safeCLIText(notes))
 		}
 		fmt.Fprintln(out, cliText(out, "升级 Master: oss-transfer-cli update master --yes；完成后升级执行节点: oss-transfer-cli update agents --all --yes"))
+	case current != latest && strings.Contains(current, "-"):
+		// A prerelease of the next version is newer than the latest stable one.
+		fmt.Fprintf(out, cliText(out, "当前为预发布版本 v%s，比最新正式版 v%s 新；下一个正式版发布后可以升级\n"), safeCLIText(current), safeCLIText(latest))
+	case current != latest:
+		fmt.Fprintf(out, cliText(out, "当前版本 v%s 比最新正式版 v%s 新\n"), safeCLIText(current), safeCLIText(latest))
 	default:
 		fmt.Fprintf(out, cliText(out, "当前版本 v%s，已是最新正式版（v%s）\n"), safeCLIText(current), safeCLIText(latest))
 	}

@@ -325,6 +325,21 @@ func TestUpdateMasterChecksAndDefaultsToLatest(t *testing.T) {
 	if !strings.Contains(current.String(), "当前版本 v4.1.41，已是最新正式版（v4.1.41）") {
 		t.Fatal(current.String())
 	}
+	// A prerelease of the next version is newer than the latest stable release.
+	result, _ = runMaintenanceCommand(server(t, "4.2.0-rc.1", "4.1.41", &calls, &posted), "update", []string{"check"})
+	if adminData(result)["available"] != false {
+		t.Fatal("offered an older stable release to a prerelease", result)
+	}
+	for _, test := range []struct {
+		locale cliLocale
+		want   string
+	}{{localeZH, "当前为预发布版本 v4.2.0-rc.1，比最新正式版 v4.1.41 新"}, {localeEN, "Current version v4.2.0-rc.1 is a prerelease, newer than the latest stable release v4.1.41"}, {localeJA, "現在のバージョン v4.2.0-rc.1 はプレリリースで、最新の安定版 v4.1.41 より新しい"}} {
+		var rendered bytes.Buffer
+		renderCLIResult(&cliLocaleWriter{Writer: &rendered, locale: test.locale}, result)
+		if !strings.Contains(rendered.String(), test.want) || strings.Contains(rendered.String(), "最新正式版（") {
+			t.Fatalf("%v: %s", test.locale, rendered.String())
+		}
+	}
 }
 
 func TestUpdateUsageErrorsExitTwo(t *testing.T) {

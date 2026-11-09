@@ -94,6 +94,8 @@ var cliMessages = map[string][2]string{
 	"当前版本 v%s → 可升级到 v%s\n": {"Current version v%s → update available: v%s\n", "現在のバージョン v%s → 更新可能: v%s\n"},
 	"发布说明: %s\n":            {"Release notes: %s\n", "リリースノート: %s\n"},
 	"升级 Master: oss-transfer-cli update master --yes；完成后升级执行节点: oss-transfer-cli update agents --all --yes": {"Update the Master: oss-transfer-cli update master --yes; then update the Agents: oss-transfer-cli update agents --all --yes", "Master の更新: oss-transfer-cli update master --yes。完了後に Agent を更新: oss-transfer-cli update agents --all --yes"},
+	"当前为预发布版本 v%s，比最新正式版 v%s 新；下一个正式版发布后可以升级\n":                                                             {"Current version v%s is a prerelease, newer than the latest stable release v%s; you can update when the next stable release is published\n", "現在のバージョン v%s はプレリリースで、最新の安定版 v%s より新しいバージョンです。次の安定版が公開されたら更新できます\n"},
+	"当前版本 v%s 比最新正式版 v%s 新\n":                                                                               {"Current version v%s is newer than the latest stable release v%s\n", "現在のバージョン v%s は最新の安定版 v%s より新しいバージョンです\n"},
 	"当前版本 v%s，已是最新正式版（v%s）\n":                                                                               {"Current version v%s is up to date (latest stable release: v%s)\n", "現在のバージョン v%s は最新です（最新の安定版: v%s）\n"},
 	"空闲":   {"Idle", "待機中"},
 	"未知":   {"Unknown", "不明"},

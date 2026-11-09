@@ -272,7 +272,7 @@ Master 持久保存、确认并授权释放扫描批次后，Agent 才释放这�
 
 **取消比对** 停止正在运行的比对；已取消的前缀比对之后可以继续（见[继续比对](#继续比对)）。**删除比对结果** 删除未在运行的比对；运行中的比对需先取消。比对已被删除时（例如按保留规则清理），页面会提示结果不存在，并停止刷新。
 
-对应的 API：`GET /api/master/comparisons` 列出比对；有节点未响应时，`complete` 为 `false`，`unavailableNodes` 列出这些节点。`GET /api/master/comparisons/{id}?after=0&limit=1000&status=DIFFERENT,MISSING_TARGET` 返回比对及一页结果行：`limit` 为 1–1,000（默认 50），`status` 可以省略。用返回的 `nextAfter` 作为下一次请求的 `after` 继续读取，最后一页没有 `nextAfter`。筛选后的一页可能少于 `limit` 行，甚至为空，但仍可能带有 `nextAfter`。
+对应的 API：`GET /api/master/comparisons` 列出比对；有节点未响应时，`complete` 为 `false`，`unavailableNodes` 列出这些节点，这些节点上的比对状态为 `UNAVAILABLE`。`GET /api/master/comparisons/{id}?after=0&limit=1000&status=DIFFERENT,MISSING_TARGET` 返回比对及一页结果行：`limit` 为 1–1,000（默认 50），`status` 可以省略。用返回的 `nextAfter` 作为下一次请求的 `after` 继续读取，最后一页没有 `nextAfter`。筛选后的一页可能少于 `limit` 行，甚至为空，但仍可能带有 `nextAfter`。除比对设置外，比对记录还包含各项计数 `compared`、`matched`、`different`、`etagMismatch`、`missing`、`extra`、`changed`、`errors` 和 `bothMissing`，已保存的结果行数 `rows`，以及 `rowsTruncated`、`truncatedReason`、`lastStoredKey`、`checkpoint`、`resumable`、`bytesRead`、`elapsedMillis`、`error` 和 `errorDetail`。
 
 ### 导出结果
 

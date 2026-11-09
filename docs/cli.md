@@ -72,7 +72,7 @@ oss-transfer-cli help storage
 
 Local transfers run the same preflight checks as the console. `--validate-only` checks a configuration without creating a task. `--bandwidth-mbps` (0.1–1,000,000 Mbps) and `--list-qps`, `--head-qps` and `--put-qps` set the task's limits when it is created; like the limits below, they are totals for all of the task's nodes.
 
-Downloads to a local directory (`oss-to-local`) accept `--ranged-download auto|off`. The default, `auto`, has each Agent download objects of 128 MiB or more as concurrent 8 MiB byte ranges, four per object and up to 16 while the node has idle capacity, and write them to the file strictly in order. This is right for almost every task. Limits keep the ranges bounded: each object holds at most about one second's worth of the task's bandwidth share on that node (or of the node bandwidth limit, if that is lower) and, with a LIST limit, of the task's GETs per second there, since every range is a GET. An object is downloaded as one stream when one second covers fewer than two ranges ([large objects](operations.md#large-objects)). `off` downloads each object as one sequential stream; choose it only when the target storage or network handles parallel range downloads badly (memory-constrained Agents, storage that throttles many concurrent GETs), or when support asks. The setting is fixed for the task's lifetime and is kept on resume, retry and node changes. `task show` displays it for local-destination tasks. Other directions reject the flag. In `task import local` JSON, the matching field is `"rangedDownload": "auto"` or `"off"`; omitting it means `auto`. Agents from before this option download every object as one stream, whatever the setting ([ranged download option](operations.md#ranged-download-option)).
+Downloads to a local directory (`oss-to-local`) accept `--ranged-download auto|off`. The default, `auto`, has each Agent download objects of 128 MiB or more as concurrent 8 MiB byte ranges, four per object and up to 16 while the node has idle capacity, and write them to the file strictly in order. This is right for almost every task. Limits keep the ranges bounded: each object holds at most about one second's worth of the task's bandwidth share on that node (or of the node bandwidth limit, if that is lower) and, with a LIST / GET limit, of the task's GETs per second there, since every range is a GET. An object is downloaded as one stream when one second covers fewer than two ranges ([large objects](operations.md#large-objects)). `off` downloads each object as one sequential stream; choose it only when the target storage or network handles parallel range downloads badly (memory-constrained Agents, storage that throttles many concurrent GETs), or when support asks. The setting is fixed for the task's lifetime and is kept on resume, retry and node changes. `task show` displays it for local-destination tasks. Other directions reject the flag. In `task import local` JSON, the matching field is `"rangedDownload": "auto"` or `"off"`; omitting it means `auto`. Agents from before this option download every object as one stream, whatever the setting ([ranged download option](operations.md#ranged-download-option)).
 
 ```sh
 oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --ranged-download off
@@ -85,7 +85,9 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-Unspecified fields keep their values. `unlimited` removes a limit; `task limits ID` without options shows the current ones. `task bandwidth ID MBPS` changes only the bandwidth limit. LIST limits also cover GET reads; PUT includes multipart requests. Task limits are totals: the Master divides them among the active Agents by demand, so the nodes that have work share almost all of the limit evenly while idle nodes keep a small floor ([task limits across nodes](operations.md#task-limits-across-nodes)). Node limits, set with `limit set` (see `help limit`), still apply.
+Unspecified fields keep their values, and `unlimited` removes a limit (0 also does for the QPS options); `task limits ID` without options shows the current limits. `task bandwidth ID MBPS|unlimited` changes only the bandwidth limit. QPS values are average rates and may be fractional, from 0.000001 to 1,000,000,000: `--list-qps 0.5` allows one listing or GET every 2 seconds for the whole task. LIST limits also cover GET reads, range reads included; PUT includes multipart requests. A stopped or finished task's limits cannot be changed.
+
+`task show ID` shows the current limits and their scope, and the live request rates next to the task and effective limits. The *Request rate*, *Task request limit* and *Effective request limit* lines are rounded to one decimal, so a limit below 0.05 shows as 0; the *LIST / GET QPS*, *HEAD QPS* and *PUT QPS* lines show exact values. `task nodes ID` shows each node's share. Task limits are totals: the Master divides them among the active Agents by demand, so the nodes that have work share almost all of the limit evenly while idle nodes keep a small floor ([task limits across nodes](operations.md#task-limits-across-nodes)). Node limits ([set node limits](#set-node-limits)) still apply: a request must pass both.
 
 ## Change a task's execution nodes
 
@@ -137,6 +139,30 @@ oss-transfer-cli exceptions clear failed --task-id "$TRANSFER_TASK" --yes
 ```
 
 Clearing removes only records resolved by a successful retry or skip. Unresolved failures remain visible. Use `local` for local-transfer failures, or `fallback` to inspect fallback records.
+
+## Set node limits
+
+Node limits cap the LIST, PUT and HEAD requests per second and the bandwidth of one Agent, shared by all of its tasks ([node limits](operations.md#node-limits)):
+
+```sh
+oss-transfer-cli limit list
+oss-transfer-cli limit set put 500 --all
+oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
+oss-transfer-cli limit set head unlimited --worker 10.0.0.2
+```
+
+`limit list` shows a row per node and type (`list`, `put`, `head`, `bandwidth`): the target limit and its source (*Configured target* when it equals the value from `nodeControl` in the Agent's `service.json` or the built-in default, otherwise *Saved target*), the running limit, the measured rate and the status: *Normal*, *Reduced*, *Recovering*, *Recovered* or *Unlimited* ([limit status](operations.md#limit-status)). Values are printed exactly. A node that does not answer is left out, and the command exits with code 3. Add `--watch 5` to follow an automatic reduction.
+
+`limit set TYPE VALUE` needs either `--worker NODE` or `--all`; `--all` sets the same value on each node. Request limits are in requests per second and may be fractional, from 0.01 to 1,000,000. Bandwidth is in Mbps unless `--unit bps|Kbps|Mbps|Gbps` says otherwise. The value must be greater than 0; `unlimited` removes the limit. The value becomes the node's saved target: it applies at once, ends an automatic reduction and survives restarts. If a limit has never been saved and runs at its configured value, setting that value stores nothing, so later `service.json` edits still apply to it. If an Agent does not confirm, the output lists it and the command exits with code 1.
+
+```sh
+oss-transfer-cli limit history --limit 100
+oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
+```
+
+`limit history` lists the most recent manual and automatic adjustments across all nodes, newest first; `--limit` accepts 1–200 (default 50). `limit adjustment` shows one adjustment with the request that triggered it and every step of its round: pass the node and the `id` of a history entry, and `--cursor` with the printed `nextCursor` for the next 100 steps. Both print the raw fields, with times in milliseconds since 1970 and bandwidth in bit/s; use `--json` in scripts. See [storage throttling](operations.md#storage-throttling).
+
+The V4 commands `rate-limit`, `list-rate-limit`, `rate-limit-history [N]` and `set-rate-limit TYPE VALUE [IP]` still work. `set-rate-limit` reads a bandwidth without a K, M or G suffix as bit/s, treats 0 as unlimited, and applies to every node when no IP is given.
 
 ## Compare stored objects
 

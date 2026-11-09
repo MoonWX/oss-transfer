@@ -72,7 +72,7 @@ oss-transfer-cli help storage
 
 本地传输执行与控制台相同的预检。`--validate-only` 只检查配置，不创建任务。`--bandwidth-mbps`（0.1–1,000,000 Mbps）以及 `--list-qps`、`--head-qps`、`--put-qps` 在创建任务时设置限速；与下文的限速一样，它们是任务所有节点的合计值。
 
-下载到本地目录（`oss-to-local`）时可使用 `--ranged-download auto|off`。默认值 `auto` 让每个 Agent 把 128 MiB 及以上的对象按 8 MiB 字节范围并发下载（每个对象 4 个，节点有空闲能力时最多 16 个），并严格按顺序写入文件，几乎所有任务都应保持默认。限速会约束分段：每个对象同时持有的分段最多相当于该任务在此节点上约一秒的带宽份额（节点带宽上限更低时按节点上限计算）；设有 LIST 限制时，还不超过该任务在此节点上约一秒的 GET 份额，因为每个分段都是一次 GET。一秒的份额不足两个分段时，改为单流下载（见[大对象](operations.zh-CN.md#大对象)）。`off` 对每个对象使用单个顺序流下载；仅在目标存储或网络不适合并发分段下载（Agent 内存紧张、存储会限制大量并发 GET）或技术支持要求时使用。该设置在任务整个生命周期内固定，续传、重试和调整节点时保持不变。`task show` 会为目标为本地的任务显示该设置。其他方向不接受此参数。`task import local` 的 JSON 中对应字段为 `"rangedDownload": "auto"` 或 `"off"`，省略即为 `auto`。早于此选项的 Agent 无论如何设置，都按单个流下载每个对象（见[分段下载选项](operations.zh-CN.md#分段下载选项)）。
+下载到本地目录（`oss-to-local`）时可使用 `--ranged-download auto|off`。默认值 `auto` 让每个 Agent 把 128 MiB 及以上的对象按 8 MiB 字节范围并发下载（每个对象 4 个，节点有空闲能力时最多 16 个），并严格按顺序写入文件，几乎所有任务都应保持默认。限速会约束分段：每个对象同时持有的分段最多相当于该任务在此节点上约一秒的带宽份额（节点带宽上限更低时按节点上限计算）；设有 LIST / GET 限制时，还不超过该任务在此节点上约一秒的 GET 份额，因为每个分段都是一次 GET。一秒的份额不足两个分段时，改为单流下载（见[大对象](operations.zh-CN.md#大对象)）。`off` 对每个对象使用单个顺序流下载；仅在目标存储或网络不适合并发分段下载（Agent 内存紧张、存储会限制大量并发 GET）或技术支持要求时使用。该设置在任务整个生命周期内固定，续传、重试和调整节点时保持不变。`task show` 会为目标为本地的任务显示该设置。其他方向不接受此参数。`task import local` 的 JSON 中对应字段为 `"rangedDownload": "auto"` 或 `"off"`，省略即为 `auto`。早于此选项的 Agent 无论如何设置，都按单个流下载每个对象（见[分段下载选项](operations.zh-CN.md#分段下载选项)）。
 
 ```sh
 oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data/download --ranged-download off
@@ -85,7 +85,9 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-未指定的字段保持原值。`unlimited` 解除对应的限制；不带选项运行 `task limits ID` 会显示当前限速。`task bandwidth ID MBPS` 只修改带宽限制。LIST 限制同时适用于 GET 读取；PUT 包括分片上传请求。任务限速是总量：Master 按需求把它分给活动的 Agent，有工作的节点平分绝大部分限速，空闲节点只保留很小的下限（见[任务限速在节点间的分配](operations.zh-CN.md#任务限速在节点间的分配)）。节点限速（用 `limit set` 设置，见 `help limit`）仍然生效。
+未指定的字段保持原值；`unlimited` 解除对应的限制（QPS 选项也可以写 0）；不带选项运行 `task limits ID` 会显示当前限速。`task bandwidth ID MBPS|unlimited` 只修改带宽限制。QPS 是平均速率，可以是小数，范围为 0.000001–1,000,000,000：`--list-qps 0.5` 表示整个任务每 2 秒发出一个列举或 GET 请求。LIST 限制同时适用于 GET 读取（含区间读取）；PUT 包括分片上传请求。已停止或已结束的任务不能修改限速。
+
+`task show ID` 显示当前限速及其适用范围，并把实时请求速率与任务上限、生效上限对照列出。*请求速率*、*任务请求上限* 和 *生效请求上限* 各行保留一位小数，低于 0.05 的上限显示为 0；*LIST / GET QPS*、*HEAD QPS*、*PUT QPS* 各行显示精确值。`task nodes ID` 显示每个节点的份额。任务限速是总量：Master 按需求把它分给活动的 Agent，有工作的节点平分绝大部分限速，空闲节点只保留很小的下限（见[任务限速在节点间的分配](operations.zh-CN.md#任务限速在节点间的分配)）。节点限速（见[设置节点限速](#设置节点限速)）仍然生效，请求必须同时满足两者。
 
 ## 调整任务的执行节点
 
@@ -137,6 +139,30 @@ oss-transfer-cli exceptions clear failed --task-id "$TRANSFER_TASK" --yes
 ```
 
 清理只删除已通过重试成功或跳过而解决的记录，未解决的失败继续显示。本地传输的失败使用 `local`，查看回退记录使用 `fallback`。
+
+## 设置节点限速
+
+节点限速限制单个 Agent 每秒的 LIST、PUT、HEAD 请求数和带宽，由该节点上的所有任务共用（见[节点限速](operations.zh-CN.md#节点限速)）：
+
+```sh
+oss-transfer-cli limit list
+oss-transfer-cli limit set put 500 --all
+oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
+oss-transfer-cli limit set head unlimited --worker 10.0.0.2
+```
+
+`limit list` 为每个节点的每种类型（`list`、`put`、`head`、`bandwidth`）显示一行：目标上限及其来源（等于 Agent `service.json` 中 `nodeControl` 的值或内置默认值时为 *配置目标*，否则为 *已保存目标*）、运行上限、实测速率和状态，状态为 *正常*、*已降速*、*恢复中*、*已恢复* 或 *不限速*（见[限速状态](operations.zh-CN.md#限速状态)）。数值按精确值输出。没有响应的节点不会列出，命令以退出码 3 结束。加 `--watch 5` 可以跟踪自动降速的过程。
+
+`limit set 类型 数值` 需要指定 `--worker 节点` 或 `--all` 之一；`--all` 为每个节点设置相同的值。请求上限的单位为次/秒，可以是小数，范围为 0.01–1,000,000。带宽默认以 Mbps 为单位，可用 `--unit bps|Kbps|Mbps|Gbps` 指定其他单位。数值必须大于 0；解除限制请使用 `unlimited`。该值成为节点的已保存目标：立即生效，结束正在进行的自动降速，重启后仍然保留。如果该上限从未保存过且正按配置值运行，设置同一个值不会被记录，之后修改 `service.json` 仍会对它生效。有 Agent 未确认时，输出会列出该节点，命令以退出码 1 结束。
+
+```sh
+oss-transfer-cli limit history --limit 100
+oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
+```
+
+`limit history` 按时间倒序列出所有节点最近的手动和自动调整；`--limit` 接受 1–200（默认 50）。`limit adjustment` 显示某次调整、触发它的请求以及该轮调节的每一步：传入节点和历史记录中的 `id`；要查看后续 100 步，再加上 `--cursor` 和输出中的 `nextCursor`。这两个命令输出原始字段，时间为自 1970 年起的毫秒数，带宽单位为 bit/s；脚本中请使用 `--json`。另见[存储限流](operations.zh-CN.md#存储限流)。
+
+V4 的命令 `rate-limit`、`list-rate-limit`、`rate-limit-history [N]` 和 `set-rate-limit 类型 数值 [IP]` 仍然可用。`set-rate-limit` 把不带 K、M、G 后缀的带宽值视为 bit/s，把 0 视为不限速；不指定 IP 时应用到所有节点。
 
 ## 比对存储的对象
 

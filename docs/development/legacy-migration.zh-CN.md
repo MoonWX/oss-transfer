@@ -68,7 +68,7 @@ oss-transfer-master migrate inspect \
 }
 ```
 
-`destination` 必须是尚不存在的绝对路径。将每个节点的导出文件都加入 `snapshots`，并为每个执行节点提供全部九项 `effectiveNodeControl` 属性。把示例值替换为已停止部署的实际生效设置。带宽单位为 bit/s；请求或带宽限制为零表示不限制。持久化的手动限制优先于这些配置目标。
+`destination` 必须是尚不存在的绝对路径。将每个节点的导出文件都加入 `snapshots`，并为每个执行节点提供全部九项 `effectiveNodeControl` 属性。把示例值替换为已停止部署的实际生效设置。带宽单位为 bit/s；请求或带宽限制为零表示不限制。持久化的手动限制优先于这些配置目标。转换工具把这些设置写入各 Agent 的 `service.json` 中的 `nodeControl`：四项限制对应 `listQps`、`putQps`、`headQps` 和 `bandwidthBitsPerSecond`；自动调节设置写入其中的 `autoAdjust` 对象，对应 `consecutive503Threshold`（`throttleThreshold` 的旧名称，现在表示 5 秒窗口内的限流响应数）、`reduceFactor`、`increaseFactor`、`minQps`（现在是 LIST、PUT、HEAD 降速的共同下限）和 `recoveryIntervalMs`（见[调整自动降速参数](../operations.zh-CN.md#调整自动降速参数)）。
 
 `directNodes` 为每个旧版直连 worker（包括旧 Master 上的执行）授权一个新的 Agent 身份。已注册的 Agent 在其私有凭证与 Master 快照匹配后，保留原有身份。
 
@@ -144,7 +144,7 @@ oss-transfer-agent --config '/export/oss-transfer/agents/<instanceId>/service.js
 
 | 设置 | 值 |
 | --- | --- |
-| 请求重试 | AWS SDK 标准策略，含首次请求最多 3 次 |
+| 请求重试 | AWS SDK 标准策略，含首次请求最多 3 次；被限流的请求（HTTP 429、503 或限流错误码）最多尝试 10 次，每次重试前随机退避（见[存储限流](../operations.zh-CN.md#存储限流)） |
 | 对象执行 | 默认每个 Agent 最多 32 个活动子任务，每个子任务 4 个对象工作线程；每个节点可设置 1–256 个子任务、每个子任务 1–64 个对象，子任务数 × 对象数最多 1,024（见[节点并发](../operations.zh-CN.md#节点并发)） |
 | 对象发现 | 每个 Agent 最多 2 个扫描；每批最多 128 个对象或描述内容总计 256 MiB；超大对象单独成批 |
 | 准入 | 每个 Agent 最多 1,024 个未完成的子任务作业；额度用满时新工作等待 |

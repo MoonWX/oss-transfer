@@ -68,7 +68,7 @@ Save a private `migration-plan.json`. This example covers one combined Master/wo
 }
 ```
 
-`destination` must be an absolute path that does not yet exist. Add every node export to `snapshots` and provide all nine `effectiveNodeControl` properties for every execution node. Replace the example values with the stopped deployment's effective settings. Bandwidth uses bits per second; zero request or bandwidth limits mean unlimited. Persisted manual limits take precedence over these configured targets.
+`destination` must be an absolute path that does not yet exist. Add every node export to `snapshots` and provide all nine `effectiveNodeControl` properties for every execution node. Replace the example values with the stopped deployment's effective settings. Bandwidth uses bits per second; zero request or bandwidth limits mean unlimited. Persisted manual limits take precedence over these configured targets. The converter writes these settings to each Agent's `service.json` under `nodeControl`: the four limits become `listQps`, `putQps`, `headQps` and `bandwidthBitsPerSecond`, and the automatic adjustment settings go into its `autoAdjust` object as `consecutive503Threshold` (the earlier name of `throttleThreshold`, now the number of throttled responses within a 5-second window), `reduceFactor`, `increaseFactor`, `minQps` (now the floor for LIST, PUT and HEAD reductions) and `recoveryIntervalMs` ([tuning automatic reduction](../operations.md#tune-automatic-reduction)).
 
 `directNodes` authorizes a new Agent identity for each old directly addressed worker, including execution on the old Master. Existing enrolled Agents retain their identities after their private credential is matched against the Master snapshot.
 
@@ -144,7 +144,7 @@ Retry, concurrency and multipart settings use the Go execution profile after con
 
 | Setting | Value |
 | --- | --- |
-| Request retries | AWS SDK standard policy, at most 3 attempts including the original request |
+| Request retries | AWS SDK standard policy, at most 3 attempts including the original request; throttled requests (HTTP 429 or 503, or a throttling error code) get up to 10 attempts with randomized backoff ([storage throttling](../operations.md#storage-throttling)) |
 | Object execution | Up to 32 active child tasks per Agent and 4 object workers per child by default; each node accepts 1–256 children and 1–64 objects per child, with children × objects at most 1,024 ([node concurrency](../operations.md#node-concurrency)) |
 | Discovery | Up to 2 scans per Agent; batches of at most 128 objects or 256 MiB of described content; oversized objects use a separate batch |
 | Admission | At most 1,024 unfinished child jobs per Agent; new work waits when the budget is full |

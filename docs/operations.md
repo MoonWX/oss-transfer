@@ -8,9 +8,58 @@ Open **Execution nodes → Edit node** to change **Subtask concurrency** and **O
 
 Changes apply to running work and survive a restart. Reducing a limit lets the current requests finish before admitting more. Increasing it can help when the network is underused; node and task bandwidth/QPS limits still apply. Subtask concurrency accepts 1–256 and objects per subtask 1–64, with a combined maximum of 1024. Idle object slots also let large objects fetch more ranges at once ([large objects](#large-objects)).
 
+## Node limits
+
+Two kinds of limits apply to a task's requests. Node limits belong to one Agent and are shared by all tasks running on it. Task limits are totals for one task, divided among its nodes ([task limits across nodes](#task-limits-across-nodes)). A request is sent only when both allow it; requests outside tasks, such as object comparisons, count only against node limits. When the storage service throttles requests, the Agent temporarily lowers its own node request limits ([storage throttling](#storage-throttling)); task limits never change on their own.
+
+Each Agent has four node limits:
+
+| Limit | Default | Covers |
+| --- | --- | --- |
+| LIST | 100 requests/s | Object listings (ListObjects, ListBuckets) |
+| PUT | 1,400 requests/s | Uploads (PutObject, UploadPart, CreateMultipartUpload, CompleteMultipartUpload) |
+| HEAD | 2,800 requests/s | Object metadata (HeadObject) |
+| Bandwidth | 2,000 Mbps | Data read from the source, every range of a large object included |
+
+Object GETs, including the range reads of large objects, have no node request limit: node bandwidth applies to them, and a task's LIST / GET limit caps their rate. Multipart listings (ListParts) and aborts have no node limit either. Each retry counts as a new request.
+
+**Change node limits.** Open **Execution nodes**. On **Live status**, each node card has a **Requests and bandwidth** section with a row per limit. Choose **Adjust** on a row to change that limit on that node, or **Adjust limits** at the top of the page to apply one value to every node (**Apply to: All workers**); each node then gets that value, not a share of it. Request limits are entered in requests per second and bandwidth in Mbps; 0 means unlimited. The Master accepts 0.01–1,000,000 requests/s and up to 1,000,000 Mbps. From the CLI, use `limit set` ([CLI](cli.md#set-node-limits)).
+
+The saved value becomes the node's target. It applies at once, ends any automatic reduction of that limit and is kept across Agent restarts. If some Agents do not confirm the change, the dialog stays open and shows *Some Agents did not confirm the rate update*.
+
+**What a row shows.** **Active limit** is the limit the node enforces now; it is below the target only during an automatic reduction. The target is labeled **Configured target** when it equals the configured value (from `nodeControl`, or the built-in default), or **Saved target** when another value was saved from the console or CLI. **Measured rate** is the requests sent per second, retries included, averaged over the last 5 seconds; for bandwidth, the data read from the source. The chip beside the limit's name shows its [status](#limit-status).
+
+**Configuration file.** The defaults above are built into the Agent. To change them, add a `nodeControl` object to the Agent's `service.json` (`/opt/oss-transfer/agent/config/service.json` on Linux; see [paths](install.md#paths-and-ports)) with any of `listQps`, `putQps`, `headQps` and `bandwidthBitsPerSecond` (bit/s). A value of 0 means unlimited, and keys you leave out keep their defaults. A newly installed Agent has no `nodeControl` object; an Agent converted from V4 has one with all four limits. Edits take effect when the Agent restarts, with these exceptions:
+
+- A limit saved from the console or CLI keeps its saved value. There is no reset: saving the configured value shows **Configured target** again, but the value stays saved. The exception is a limit that has never been saved and runs at its configured value: saving that same value stores nothing, so later `service.json` edits still apply to it.
+- `bandwidthBitsPerSecond` applies only on the Agent's first start. A later edit is ignored, and the bandwidth row then shows the unchanged value as **Saved target**, although nothing was saved. Change node bandwidth from the console or CLI.
+- A raised request limit takes effect gradually: after the restart the row shows *Automatically reduced* and then *Recovering gradually* while the active limit climbs by 20% every 10 seconds until it reaches the new value.
+- A limit that was 0 (unlimited) cannot be raised in the file. If `listQps`, `putQps`, `headQps` or `bandwidthBitsPerSecond` was 0 when the Agent last ran, and no value was saved for that limit from the console or CLI, changing it to a positive number stops the Agent from starting with `invalid saved effective rate`. Set such a limit from the console or CLI instead. If the Agent no longer starts, set the value back to 0 and restart.
+
+Changes from the console or CLI need no restart. Agents installed with Docker have no `service.json` and start with the defaults.
+
+**Request limits are average rates.** Node and task request limits space requests evenly, one every 1/rate seconds, with no bursts, so fractions are valid: 0.5 means one request every 2 seconds. Node limits go down to 0.01 requests/s and task limits down to 0.000001. A task limit is divided among the task's nodes, and each node spaces requests by its own share: at 0.5/s on two busy nodes, each node sends one request every 4 seconds. Under a task limit, a node's first request of each type also waits one interval. Measured rates are averaged over 5 seconds and so change in steps of 0.2 requests/s per node: a node sending 0.5 requests/s shows 0.4 or 0.6.
+
 ## Task limits across nodes
 
-A task's bandwidth limit and its cluster-wide LIST / GET, HEAD and PUT limits are totals for the whole task. The Master divides them among the active nodes by demand, as the task runs. A node is busy while it has unfinished child tasks, can receive new work (the scan is still running or batches are waiting to be assigned), takes part in a queued handoff, or is the scanner of an unfinished scan. While the work or scan of a fenced node is being moved, every node counts as busy. Every other node is idle and keeps 1/64 of an equal share (at least one byte per second); the busy nodes share the rest equally, within any per-node cap. For example, with a 1000 Mbps limit on two nodes, a node that finishes its work releases its share while the other is still transferring its last large object: the busy node gets about 992 Mbps instead of 500. A node counts as idle only after two reconciliation steps in a row (about half a second). A node that receives work again is raised at once, as soon as the other nodes have confirmed their lower shares.
+Set task limits in **Create transfer** under **Transfer options → Task limits**, and change them in the task details with **Adjust** (**Set limit** while the task has no bandwidth limit) or with `task limits` ([CLI](cli.md#create-tasks-and-set-limits)). **Task bandwidth limit** accepts 0.1–1,000,000 Mbps; left blank, only node limits apply. **LIST / GET QPS** caps listings and every object GET, range reads included; **HEAD QPS** caps metadata requests; **PUT QPS** caps uploads, multipart requests included. A blank or 0 QPS sets no limit for that type. The limits of a stopped or finished task cannot be changed; a stopped task resumes with the limits it had.
+
+The task details show the limits as **Request limit (task total)**, with up to six decimals. The **Request rate** table shows, per request type:
+
+- **Current**: requests per second, retries included, averaged over the last 5 seconds. GET counts object reads; LIST includes multipart listings.
+- **Task limit**: the task's limits.
+- **Effective limit**: the most the nodes can send. For HEAD and PUT it adds up, over the nodes, the lower of the task's share and the node limit; for LIST / GET it adds up the task's shares alone, because node LIST limits do not cover GETs. Node limits are shared with other tasks, so the actual ceiling can be lower.
+
+The table rounds to one decimal, so a limit below 0.05 requests/s shows as 0. Rates appear only when every node reports them.
+
+A task's bandwidth limit and its cluster-wide LIST / GET, HEAD and PUT limits are totals for the whole task. The Master divides them among the active nodes by demand, as the task runs. A node is busy while it:
+
+- has unfinished child tasks;
+- can receive new work: the scan is still running or batches are waiting to be assigned;
+- takes part in a queued handoff; or
+- is the scanner of an unfinished scan.
+
+While the task is not running, for example while it resumes or stops, and while the work or scan of a fenced node is being moved, every node counts as busy. Every other node is idle and keeps 1/64 of an equal share (at least one byte per second); the busy nodes share the rest equally, within any per-node cap. For example, with a 1000 Mbps limit on two nodes, a node that finishes its work releases its share while the other is still transferring its last large object: the busy node gets about 992 Mbps instead of 500. A node counts as idle only after two reconciliation steps in a row (about half a second). A node that receives work again is raised at once, as soon as the other nodes have confirmed their lower shares.
 
 At no moment do the shares that Agents may enforce add up to more than the task limit. A node's share is lowered first; the share it released goes to other nodes only after that node has confirmed the lower value. While you lower a limit, the sum stays within the previous limit and falls to the new one as nodes confirm. A node that is offline keeps its last share until it confirms or, with lease fencing, until its execution lease expires and it is fenced; without lease fencing it keeps it until it reconnects. Per-node limits (`PER_NODE` scope) are not divided, and node bandwidth and request limits still apply.
 
@@ -24,11 +73,92 @@ Tasks that were already running when the Master was upgraded from a release that
 
 ## Storage throttling
 
-When the storage service throttles requests, with HTTP 503 or 429 or an error code such as `SlowDown`, `Throttling`, `RequestLimitExceeded` or `TooManyRequests`, the Agent retries them and lowers its own request rate. Short-lived throttling does not fail objects: a request fails only if it is still throttled on its 10th attempt.
+A storage service throttles a client that sends too many requests: it answers with HTTP 503 or 429, or with an error code such as `SlowDown`, `Throttling`, `RequestLimitExceeded` or `TooManyRequests`, whatever the status. The Agent then retries the request after a pause and lowers its own limit for that type of request, raising it again step by step once the throttling stops.
 
-**Retries.** Before each retry of a throttled request the Agent waits a random time of up to 1, 2, 4, 8 and 16 seconds, then up to 20 seconds: about a minute over all ten attempts on average, at most 111 seconds. Other retryable errors keep 3 attempts. Throttled retries do not use up the S3 SDK's retry quota, and stopping a task ends a waiting retry at once. A range of a large object is read again only when its body is interrupted, at most three times, so one range makes at most 30 GET requests.
+Short-lived throttling therefore does not fail objects. 503 or 429 responses in the storage provider's logs, or reductions in the limit history, show that the Agent slowed down, not that objects failed.
 
-**Automatic reduction.** Each Agent counts throttled responses separately for its LIST, PUT and HEAD request limits over 5 seconds. When there are at least 5 of them and they are at least 1% of that limit's responses, the Agent lowers that limit to 90% of the lower of the limit and the most requests it sent in one of the last 5 seconds, but not below 200 requests/s, or the target if that is lower. The default LIST limit of 100 requests/s is already below that floor, and unlimited limits are never lowered. Successful responses in between do not reset the count, so throttling among many concurrent requests is detected. A limit is lowered at most once every 5 seconds, so one burst lowers it once. After 10 seconds without such throttling the limit rises again. For 10 minutes after a reduction it rises by 20% every 10 seconds only up to 90% of the rate that was throttled, then probes above that rate by 5% of it every 30 seconds; each further reduction within those 10 minutes doubles the probe interval, up to 8 minutes. This keeps several Agents that share one bucket's request limit from being throttled again every few seconds. After 10 minutes without a reduction the limit rises by 20% every 10 seconds until it reaches its target. A limit that is back at its target is shown as *Target restored* for one minute and then as *At target limit*; the adjustment history keeps every step. Object GETs, including range reads, have no node request limit: throttled GETs are retried but lower no limit; a task LIST / GET limit caps them. **Execution nodes** shows each reduction with the throttled and total responses in its window and the rule that applied. In the Agent's `service.json`, `nodeControl.autoAdjust` sets `throttleThreshold` (5), `throttleRatio` (0.01) and `throttleWindowMs` (5000); `consecutive503Threshold` is still accepted as the earlier name of `throttleThreshold`.
+### Retries
+
+A throttled request gets up to 10 attempts. Before each retry the Agent waits a random time of up to 1, 2, 4, 8 and 16 seconds, then up to 20 seconds: about a minute over all ten attempts on average, at most 111 seconds. Each retry passes the node and task request limits again, so retries slow down with the limits. Other retryable errors, such as HTTP 500 or a dropped connection, keep 3 attempts. Throttled retries do not use up the S3 SDK's retry quota, and stopping a task ends a waiting retry at once.
+
+An object request (GET, HEAD or PUT) that is still throttled on its 10th attempt fails that object. The error contains `exceeded maximum number of attempts, 10` and the error code, such as `SlowDown`. Retry those objects once the throttling has eased ([retry failed objects](#retry-failed-objects-of-a-running-task)). A range of a large object is read again only when its body is interrupted, up to three reads in total, so one range makes at most 30 GET requests.
+
+A listing that is still throttled on its 10th attempt stops the scan with that error instead. The same applies to the HEAD requests with which a task by file list or single object looks up its keys. Once the objects already listed are done, the task ends as partially failed (failed if no object was transferred or skipped). Objects not yet listed are not recorded as failed objects, so retrying failed objects while the task runs does not transfer them. Retry the task after it has ended: the scan then continues where it stopped ([resume a scan](#resume-a-scan)).
+
+### Automatic reduction
+
+Each Agent counts throttled responses separately for its LIST, PUT and HEAD limits over the last 5 seconds. When one limit has at least 5 throttled responses and they are at least 1% of that limit's responses, the Agent lowers it. Successful responses in between do not reset the count, so throttling among many concurrent requests is still noticed, while sporadic throttling, such as 5 of 1,000 responses, lowers nothing.
+
+The limit drops to 90% of the lower of the active limit and the most requests of that type sent in one of the last 5 seconds, so a limit far above the actual traffic drops at once: a limit of 1,000/s with traffic peaking at 300/s becomes 270. It never drops below 200 requests/s, or below the target if that is lower. Limits already at that floor are not lowered, nor are unlimited ones; with the defaults this includes the LIST limit of 100 requests/s. After a reduction, the same limit is not lowered again for 5 seconds and needs new throttled responses, so one burst lowers it once.
+
+Only the active limit changes: the target, task limits and bandwidth limits are never adjusted automatically. Throttled object GETs, multipart listings and aborts are retried but lower no limit; a task LIST / GET limit caps GETs. Each Agent detects throttling and adjusts its limits on its own, and an active reduction is kept when the Agent restarts.
+
+If throttling keeps coming back, set the limit below the rate at which it starts on every Agent that uses the bucket, or limit the task. **Measured rate before reduction** on the adjustment details shows that rate.
+
+### Recovery
+
+Once throttling stops, a lowered limit climbs back to its target. The first step comes 10 seconds after the last throttling that met the rule above; continued throttling keeps postponing it. The size of the steps depends on how long ago the limit was last lowered:
+
+| Since the last reduction | Each step adds | Next step |
+| --- | --- | --- |
+| Less than 10 minutes | 5% of the throttled rate | After 30 s; each further reduction within those 10 minutes doubles this, up to 8 minutes |
+| 10 minutes or more, or after an Agent restart | 20% of the active limit | After 10 s |
+
+A reduction lands at 90% of the throttled rate, so the first two steps return to that rate and later ones probe above it. With the defaults, a PUT limit throttled at its full 1,400 requests/s drops to 1,260, rises to 1,330 after 10 seconds and is back at 1,400 another 30 seconds later. Probing slowly keeps several Agents that share one bucket's request limit from being throttled again every few seconds. Saving a limit from the console or CLI ends a reduction at once.
+
+### Limit status
+
+Each limit row on **Execution nodes**, and each row of `limit list`, shows a status:
+
+| Console | CLI | Meaning |
+| --- | --- | --- |
+| *Automatically reduced* | *Reduced* | Lowered after throttling; lasts until the first recovery step, at least 10 seconds |
+| *Recovering gradually* | *Recovering* | Raised at least once, still below the target; a new reduction returns it to *Automatically reduced* |
+| *Target restored* | *Recovered* | Back at the target within the last minute |
+| *At target limit* | *Normal* | Running at the target |
+| *Unlimited* | *Unlimited* | No limit: the target is 0 |
+| *Status unconfirmed* | — | Auto-refresh is paused, the last status request failed, or the status is older than 30 seconds (or two refresh intervals, if longer); the values are from the last reading |
+
+Bandwidth is never adjusted, so its row shows only *At target limit* or *Unlimited* (or *Status unconfirmed*). While a request limit is reduced or recovering, its row shows a progress bar, **Active limit / target limit**, and the node card shows *The node may be throttled. Its active limits were adjusted automatically.* with **View details**. The other console pages show a banner for each such node, and on any page a notification appears when a node's limits are reduced, raised or back at target.
+
+### Limit history
+
+The **Limit history** tab on **Execution nodes** lists the 50 most recent adjustments across all nodes, newest first: the change of the active limit, the stage (*Manual change*, *Automatically reduced*, *Recovering gradually* or *Target restored*), the reason and the target at the time. A reduction's reason gives the throttled responses in the window and their share, for example *Storage throttling (HTTP 503, 429, SlowDown or similar): 12 responses in 5 s, 2.4% of these requests.*
+
+**View details** opens **Adjustment details**: the request that triggered the reduction (action, task, bucket, key, HTTP status code, error code, and the request ID to give the storage provider), the trigger conditions and every step of that round. **Increase per step** shows the step used 10 minutes after a reduction (20% by default); before that, the steps are the smaller probes described above. Some texts on this page mention only HTTP 503; the trigger request shows the actual status and error code.
+
+Each Agent keeps every adjustment in its database. From the CLI, `limit history --limit 200` lists up to 200 and `limit adjustment` shows one round ([CLI](cli.md#set-node-limits)).
+
+### Tune automatic reduction
+
+The `autoAdjust` object inside `nodeControl` in the Agent's `service.json` changes these rules. Keys that are left out keep their defaults:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `throttleThreshold` | 5 | Throttled responses needed in the window (1–1,000,000); `consecutive503Threshold` is accepted as its earlier name |
+| `throttleRatio` | 0.01 | Share of that limit's responses that must be throttled (above 0, at most 1) |
+| `throttleWindowMs` | 5000 | Length of the window, and the pause between two reductions of one limit (1,000–60,000, rounded up to whole seconds) |
+| `reduceFactor` | 0.9 | Factor applied by a reduction (above 0, below 1) |
+| `minQps` | 200 | Lowest value a reduction sets; a target at or below it is never lowered (above 0) |
+| `recoveryIntervalMs` | 10000 | Wait before the first recovery step, and between steps after 10 minutes without a reduction; probes wait three times as long |
+| `increaseFactor` | 1.2 | Factor of each step after 10 minutes without a reduction (above 1) |
+
+For example, to let reductions lower the default LIST limit as well, set `minQps` below 100. Add the key to the existing JSON object and keep the other keys:
+
+```json
+"nodeControl": {
+  "autoAdjust": { "minQps": 20 }
+}
+```
+
+A `minQps` at or above every target keeps all limits from being lowered; throttled requests are still retried. An unknown key, an invalid value, or a `throttleThreshold` that differs from `consecutive503Threshold` keeps the Agent from starting. Check the file before restarting the Agent:
+
+```sh
+sudo /opt/oss-transfer/agent/bin/oss-transfer-agent --config /opt/oss-transfer/agent/config/service.json --check-config
+sudo systemctl restart oss-transfer-agent
+```
+
+`--check-config` checks only the file. It does not detect a limit raised from 0, which keeps the Agent from starting ([node limits](#node-limits)).
 
 ## Large objects
 

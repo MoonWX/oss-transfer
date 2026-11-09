@@ -552,6 +552,34 @@ function TaskDetail({
       : null,
     refreshMs,
   );
+  // Only the task detail carries the task-level cause: why its objects
+  // failed, or that its nodes are offline. List rows do not.
+  const attentionWanted =
+    !!task &&
+    taskId != null &&
+    (Number(task.failedObjectCount) > 0 ||
+      ["RUNNING", "LIST_DONE", "RESUMING", "STOPPING", "PENDING"].includes(
+        task.status,
+      ));
+  const attentionDetail = useApi<{ data: Task }>(
+    attentionWanted ? `/api/master/tasks/${taskId}` : null,
+    refreshMs,
+  );
+  const attentionTask =
+    attentionWanted && attentionDetail.data?.data?.taskIndex === taskId
+      ? attentionDetail.data.data
+      : undefined;
+  const attention = attentionTask?.attention as
+    { code: string; severity?: string; message?: string } | undefined;
+  const offlineNodes =
+    (attentionTask?.offlineNodes as
+      { displayLabel?: string; lastSeen?: number }[] | undefined) || [];
+  const attentionCauses =
+    (
+      attentionTask?.failureSummary as
+        | { causes?: { code: string; count: number; message: string }[] }
+        | undefined
+    )?.causes || [];
   const pageData = children.data;
   const childData =
     taskId != null &&
@@ -998,6 +1026,53 @@ function TaskDetail({
               {errorLines.map((line) => (
                 <RuntimeMessageLine key={line} line={line} />
               ))}
+            </Alert>
+          )}
+          {attention?.message && (
+            <Alert
+              severity={attention.severity === "warning" ? "warning" : "error"}
+              sx={{ mb: 2, overflowWrap: "anywhere" }}
+              data-testid="task-attention"
+            >
+              <Typography variant="body2" fontWeight={600}>
+                {attention.message}
+              </Typography>
+              {attention.code === "NODES_OFFLINE" &&
+                offlineNodes.map((node) => (
+                  <Typography
+                    key={node.displayLabel}
+                    variant="caption"
+                    display="block"
+                  >
+                    {node.lastSeen
+                      ? tr("{node} 最后连接于 {time}", {
+                          node: node.displayLabel || "",
+                          time: formatDate(node.lastSeen),
+                        })
+                      : tr("{node} 尚未连接", {
+                          node: node.displayLabel || "",
+                        })}
+                  </Typography>
+                ))}
+              {attention.code === "OBJECTS_FAILED" && (
+                <>
+                  {attentionCauses.slice(1).map((cause) => (
+                    <Typography
+                      key={cause.code}
+                      variant="caption"
+                      display="block"
+                    >
+                      {tr("另有 {count} 个：{message}", {
+                        count: formatNumber(cause.count),
+                        message: cause.message,
+                      })}
+                    </Typography>
+                  ))}
+                  <Typography variant="caption" display="block">
+                    {tr("可在“异常记录”中查看失败对象并重试。")}
+                  </Typography>
+                </>
+              )}
             </Alert>
           )}
           <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>

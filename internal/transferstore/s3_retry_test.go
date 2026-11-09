@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,11 +25,19 @@ func responseError(status int, code string) error {
 	return &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: &smithy.GenericAPIError{Code: code, Message: "test"}}
 }
 
+// ordinaryRetryable is an error the SDK retries that is neither throttling nor
+// a transient failure, such as a probable clock skew.
+type ordinaryRetryable struct{}
+
+func (ordinaryRetryable) Error() string        { return "probable clock skew" }
+func (ordinaryRetryable) RetryableError() bool { return true }
+
 func TestS3RetryerGivesThrottlingItsOwnBudgetBackoffAndNoQuota(t *testing.T) {
 	r := newS3Retryer(3, 10, time.Second, 20*time.Second)
 	r.random = func() float64 { return 0.5 }
 	slowDown, limited, tooMany := responseError(503, "SlowDown"), responseError(400, "RequestLimitExceeded"), responseError(429, "")
-	internal, denied := responseError(500, "InternalError"), responseError(403, "AccessDenied")
+	var internal error = ordinaryRetryable{}
+	denied := responseError(403, "AccessDenied")
 	if r.MaxAttempts() != 10 || !r.IsErrorRetryable(slowDown) || !r.IsErrorRetryable(limited) || !r.IsErrorRetryable(tooMany) || !r.IsErrorRetryable(internal) || r.IsErrorRetryable(denied) {
 		t.Fatal("wrong retry classification")
 	}
@@ -77,7 +90,7 @@ type scriptedS3 struct {
 	server   *httptest.Server
 }
 
-var scriptedCodes = map[int]string{400: "RequestLimitExceeded", 429: "TooManyRequests", 500: "InternalError", 503: "SlowDown"}
+var scriptedCodes = map[int]string{400: "RequestLimitExceeded", 429: "TooManyRequests", 500: "InternalError", 501: "NotImplemented", 502: "BadGateway", 503: "SlowDown"}
 
 func newScriptedS3(t *testing.T, scripts map[string][]int) *scriptedS3 {
 	t.Helper()
@@ -137,7 +150,7 @@ func TestS3ThrottledRequestsOutlastTheOrdinaryAttemptLimit(t *testing.T) {
 		"throttled": {503, 503, 503, 503, 503, 503},
 		"limited":   {400, 429, 400},
 		"read":      {429, 503, 429},
-		"broken":    {-500},
+		"broken":    {-501},
 		"stuck":     {-503},
 	})
 	store := server.store(t)
@@ -159,12 +172,8 @@ func TestS3ThrottledRequestsOutlastTheOrdinaryAttemptLimit(t *testing.T) {
 	if err != nil || string(data) != "data" {
 		t.Fatalf("throttled GET returned %q, %v", data, err)
 	}
-	if err := write("broken"); err == nil || server.count("broken") != 3 || !strings.Contains(err.Error(), "exceeded maximum number of attempts, 3") {
-		t.Fatalf("ordinary errors must keep three attempts: %d, %v", server.count("broken"), err)
-	}
-	// Two retries took from the quota, as before; the last attempt did not.
-	if got := store.retryer.quota.Remaining(); got != retry.DefaultRetryRateTokens-2*retry.DefaultRetryCost {
-		t.Fatalf("retry quota left %d after one failed operation", got)
+	if err := write("broken"); err == nil || server.count("broken") != 1 {
+		t.Fatalf("a request the server does not implement must not be retried: %d, %v", server.count("broken"), err)
 	}
 	if err := write("stuck"); err == nil || server.count("stuck") != 10 || !strings.Contains(err.Error(), "exceeded maximum number of attempts, 10") || !strings.Contains(err.Error(), "SlowDown") {
 		t.Fatalf("persistent throttling must end after ten attempts: %d, %v", server.count("stuck"), err)
@@ -199,5 +208,101 @@ func TestS3ThrottleBackoffEndsWhenTheTransferStops(t *testing.T) {
 		}
 	case <-time.After(time.Minute):
 		t.Fatal("cancelling did not end the throttling backoff")
+	}
+}
+
+func TestS3RetryerGivesTransientFailuresTheThrottlingBudget(t *testing.T) {
+	r := newS3Retryer(3, 10, time.Second, 20*time.Second)
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	reset := &url.Error{Op: "Put", URL: "http://storage/bucket/key", Err: &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ECONNRESET)}}
+	timeout := &url.Error{Op: "Get", URL: "http://storage/bucket/key", Err: &net.DNSError{Err: "i/o timeout", Name: "storage", IsTimeout: true}}
+	temporaryDNS := &net.DNSError{Err: "server misbehaving", Name: "storage", IsTemporary: true}
+	transient := map[string]error{"refused": refused, "reset": reset, "timeout": timeout, "temporary DNS": temporaryDNS,
+		"500": responseError(500, "InternalError"), "502": responseError(502, ""), "504": responseError(504, "GatewayTimeout"), "request timeout": responseError(400, "RequestTimeout")}
+	for name, err := range transient {
+		if !isTransientError(err) || !r.IsErrorRetryable(err) {
+			t.Fatalf("%s is not a transient failure", name)
+		}
+		// The quota never ends a transient retry.
+		for i := range 1000 {
+			if _, tokenErr := r.GetRetryToken(context.Background(), err); tokenErr != nil {
+				t.Fatalf("%s retry %d refused by the quota: %v", name, i, tokenErr)
+			}
+		}
+		// Waits stay between half the ceiling and the ceiling, which doubles
+		// from 1 s and stops at 20 s.
+		for attempt, ceiling := range map[int]time.Duration{1: time.Second, 2: 2 * time.Second, 5: 16 * time.Second, 6: 20 * time.Second, 9: 20 * time.Second} {
+			for _, draw := range []float64{0, 0.999} {
+				r.random = func() float64 { return draw }
+				delay, delayErr := r.RetryDelay(attempt, err)
+				if delayErr != nil || delay < ceiling/2 || delay >= ceiling {
+					t.Fatalf("%s attempt %d: delay %v, %v; want within [%v, %v)", name, attempt, delay, delayErr, ceiling/2, ceiling)
+				}
+			}
+		}
+		var exhausted *retry.MaxAttemptsError
+		if _, delayErr := r.RetryDelay(10, err); !errors.As(delayErr, &exhausted) || exhausted.Attempt != 10 {
+			t.Fatalf("%s: the tenth attempt must be the last: %v", name, delayErr)
+		}
+	}
+	for name, err := range map[string]error{"no such host": &net.DNSError{Err: "no such host", Name: "bucket.storage", IsNotFound: true},
+		"cancelled": &url.Error{Op: "Get", URL: "http://storage", Err: context.Canceled}, "501": responseError(501, "NotImplemented"),
+		"denied": responseError(403, "AccessDenied"), "missing": responseError(404, "NoSuchKey")} {
+		if isTransientError(err) || isPatientError(err) {
+			t.Fatalf("%s must not get the long retry budget", name)
+		}
+	}
+}
+
+// refusingTransport refuses the first connections like a stopped storage
+// service, then forwards requests to the server that has come back.
+type refusingTransport struct {
+	next    http.RoundTripper
+	refuse  atomic.Int32
+	dialled atomic.Int32
+}
+
+func (t *refusingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.dialled.Add(1)
+	if t.refuse.Add(-1) >= 0 {
+		if request.Body != nil {
+			_ = request.Body.Close()
+		}
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	}
+	return t.next.RoundTrip(request)
+}
+
+func TestS3RidesOutAStorageOutageAndServerErrors(t *testing.T) {
+	server := newScriptedS3(t, map[string][]int{"gateway": {502, 502, 502, 502, 502, 502}, "down": {-502}})
+	transport := &refusingTransport{next: server.server.Client().Transport}
+	store, err := NewS3(S3Config{Endpoint: server.server.URL, Bucket: "bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond, HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(key string) error {
+		_, err := store.Write(context.Background(), key, strings.NewReader("payload"), WriteOptions{Size: 7, Overwrite: true})
+		return err
+	}
+	// Seven refused connections: more than the three ordinary attempts.
+	transport.refuse.Store(7)
+	if err := write("restarted"); err != nil || transport.dialled.Load() != 8 || server.count("restarted") != 1 {
+		t.Fatalf("outage: %d requests, %d reached the server, %v", transport.dialled.Load(), server.count("restarted"), err)
+	}
+	if err := write("gateway"); err != nil || server.count("gateway") != 7 {
+		t.Fatalf("server errors: %d attempts, %v", server.count("gateway"), err)
+	}
+	if err := write("down"); err == nil || server.count("down") != 10 || !strings.Contains(err.Error(), "exceeded maximum number of attempts, 10") {
+		t.Fatalf("a persistent server error must end after ten attempts: %d, %v", server.count("down"), err)
+	}
+}
+
+func TestConnectionChecksFailFastOnAnUnreachableStorage(t *testing.T) {
+	server := newScriptedS3(t, nil)
+	transport := &refusingTransport{next: server.server.Client().Transport}
+	transport.refuse.Store(100)
+	_, err := ListBuckets(context.Background(), S3Config{Endpoint: server.server.URL, AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, ThrottleRetryBaseDelay: time.Millisecond, ThrottleRetryMaxDelay: time.Millisecond, HTTPClient: &http.Client{Transport: transport}})
+	if err == nil || !strings.Contains(err.Error(), "connection refused") || transport.dialled.Load() != 3 {
+		t.Fatalf("connection check: %d attempts, %v", transport.dialled.Load(), err)
 	}
 }

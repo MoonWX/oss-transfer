@@ -404,6 +404,10 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		if namespaceErr != nil {
 			return result, namespaceErr
 		}
+		if releaser, ok := registry.(LocalTempNamespaceReleaser); ok {
+			// Deferred first, so it runs after the temporary file is gone.
+			defer releaser.ReleaseNamespace(namespace)
+		}
 		temporaryDirectory, err = OpenLocalTempNamespace(directory, namespace)
 		if err != nil {
 			return result, err

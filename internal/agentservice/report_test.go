@@ -40,14 +40,20 @@ func TestReportReadsRealTransferResultsAndPagesStoppedLedger(t *testing.T) {
 	}
 	defer store.Close()
 	job := execution.Job{ChildID: "7-1", ParentID: 7, Number: 1, Generation: 1, Source: execution.Endpoint{Kind: "LOCAL", Root: source}, Destination: execution.Endpoint{Kind: "LOCAL", Root: target}, ConflictPolicy: "SKIP", DiscoveryComplete: true}
-	for _, key := range []string{"=formula.txt", "skip.txt", "missing.txt"} {
+	// A source that changes after discovery fails; one deleted would be
+	// skipped instead.
+	if err := os.WriteFile(filepath.Join(source, "changed.txt"), []byte("discovered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"=formula.txt", "skip.txt", "changed.txt"} {
 		object, err := store.Stat(ctx, key)
-		if key == "missing.txt" {
-			object = transferstore.Object{Key: key, Size: 12}
-		} else if err != nil {
+		if err != nil {
 			t.Fatal(err)
 		}
 		job.Items = append(job.Items, execution.Item{ID: key, Source: object, DestinationKey: key})
+	}
+	if err := os.WriteFile(filepath.Join(source, "changed.txt"), []byte("changed after discovery"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.Limits.ApplyParent(ctx, ratelimit.ParentLimit{ParentID: 7, Generation: 1, Revision: 1}); err != nil {
 		t.Fatal(err)

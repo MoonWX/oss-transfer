@@ -37,6 +37,22 @@ type Exception struct {
 	RetryUpdatedAt  time.Time          `json:"retryUpdatedAt,omitempty"`
 	RetryError      string             `json:"retryError,omitempty"`
 	RetryNode       string             `json:"retryNode,omitempty"`
+	// Reason and RetryReason are the object's reason code (see
+	// exceptionReason) for the original failure and the latest retry.
+	Reason      string `json:"reason,omitempty"`
+	RetryReason string `json:"retryReason,omitempty"`
+}
+
+// exceptionReason keeps the reason codes that tell an operator what happened
+// to the object: a source changed after discovery, or deleted at its source.
+func exceptionReason(result execution.ItemResult) string {
+	switch {
+	case result.Status == execution.ItemFailed && result.Reconciliation == execution.ReasonSourceChanged:
+		return execution.ReasonSourceChanged
+	case result.Status == execution.ItemSkipped && result.Reconciliation == execution.ReasonSourceDeleted:
+		return execution.ReasonSourceDeleted
+	}
+	return ""
 }
 
 const (
@@ -122,7 +138,7 @@ func syncExceptionIndex(tx *state.Tx, p Parent, child Child, record execution.Re
 		}
 		item.Source = execution.EffectiveSource(item, result)
 		if !exists {
-			entry = Exception{ParentID: p.ID, ChildID: child.Job.ChildID, Generation: record.Job.Generation, Attempt: record.Attempt, Assignment: record.Job.Assignment, Direction: p.Spec.Direction, Node: child.Node.Address, Source: child.Job.Source, Destination: child.Job.Destination, Key: item.Source.Key, DestinationKey: item.DestinationKey, Size: item.Source.Size, Error: result.Error, TargetCommitted: result.TargetCommitted, ObservedAt: record.UpdatedAt, RetryStatus: ExceptionNotRetried}
+			entry = Exception{ParentID: p.ID, ChildID: child.Job.ChildID, Generation: record.Job.Generation, Attempt: record.Attempt, Assignment: record.Job.Assignment, Direction: p.Spec.Direction, Node: child.Node.Address, Source: child.Job.Source, Destination: child.Job.Destination, Key: item.Source.Key, DestinationKey: item.DestinationKey, Size: item.Source.Size, Error: result.Error, TargetCommitted: result.TargetCommitted, ObservedAt: record.UpdatedAt, RetryStatus: ExceptionNotRetried, Reason: exceptionReason(result)}
 			entry.Identity = exceptionFailureIdentity(record, result)
 		} else {
 			before := entry
@@ -211,10 +227,11 @@ func updateExceptionRetry(entry *Exception, record execution.Record, result exec
 	if next == ExceptionRetryFailed {
 		errorText = result.Error
 	}
-	if !newRound && status == next && entry.RetryError == errorText {
+	reason := exceptionReason(result)
+	if !newRound && status == next && entry.RetryError == errorText && entry.RetryReason == reason {
 		return
 	}
-	entry.RetryStatus, entry.RetryError = next, errorText
+	entry.RetryStatus, entry.RetryError, entry.RetryReason = next, errorText, reason
 	entry.RetryGeneration, entry.RetryAssignment, entry.RetryAttempt = record.Job.Generation, record.Job.Assignment, record.Attempt
 	entry.RetryUpdatedAt = record.UpdatedAt
 	if next == ExceptionRetryFailed {

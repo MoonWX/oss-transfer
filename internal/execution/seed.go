@@ -72,7 +72,8 @@ func importedRecord(job Job, seed *Record, fingerprint string, inventorySource b
 			}
 			result.Results[i] = credited
 		} else {
-			result.Results[i] = ItemResult{ID: item.ID, Status: ItemPending, ResolvedSource: credited.ResolvedSource}
+			credited.ID = item.ID
+			result.Results[i] = PendingResult(credited)
 		}
 	}
 	recount(&result)

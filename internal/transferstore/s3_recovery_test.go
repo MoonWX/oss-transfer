@@ -156,3 +156,48 @@ func TestS3RecoveryCanceledUploadRetainsRecordUntilAbortSucceeds(t *testing.T) {
 		})
 	}
 }
+
+// abandoningRecovery also takes uploads whose abort failed.
+type abandoningRecovery struct {
+	*memoryRecovery
+	abandoned []S3UploadRecord
+}
+
+func (r *abandoningRecovery) AbandonUpload(_ context.Context, record S3UploadRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.abandoned = append(r.abandoned, record)
+	return nil
+}
+
+func TestS3FailedAbortHandsTheUploadToTheRegistry(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(map[bool]string{false: "abort-succeeds", true: "abort-denied"}[denied], func(t *testing.T) {
+			p := newProtocolS3(t)
+			p.abortDenied = denied
+			s := p.store(t)
+			s.maxBufferedBytes = 1024 * 1024
+			s.spoolDirectory = t.TempDir()
+			r := &abandoningRecovery{memoryRecovery: newMemoryRecovery()}
+			if err := s.SetRecoveryRegistry(r, "configured", r); err != nil {
+				t.Fatal(err)
+			}
+			payload := bytes.Repeat([]byte("multipart bytes"), 450000)
+			_, err := s.Write(context.Background(), "abandoned", strings.NewReader("partial input"), WriteOptions{Size: int64(len(payload)), Overwrite: true})
+			if err == nil {
+				t.Fatal("short input was written")
+			}
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if !denied {
+				if len(r.abandoned) != 0 || len(r.uploads) != 0 {
+					t.Fatalf("an aborted upload was abandoned: %+v", r.abandoned)
+				}
+				return
+			}
+			if len(r.abandoned) != 1 || len(r.uploads) != 1 || r.abandoned[0] != r.uploads[r.abandoned[0].ID] || r.abandoned[0].Key != "abandoned" {
+				t.Fatalf("the upload whose abort failed was not handed over: %+v %+v", r.abandoned, r.uploads)
+			}
+		})
+	}
+}

@@ -61,7 +61,9 @@ type S3Config struct {
 	// own limit: ThrottleRetryMaxAttempts attempts in total (default 10, at
 	// least RetryMaxAttempts), waiting before retry n a random time below
 	// ThrottleRetryBaseDelay·2^(n-1) (default 1 s), at most
-	// ThrottleRetryMaxDelay (default 20 s).
+	// ThrottleRetryMaxDelay (default 20 s). Transient failures (refused,
+	// reset or timed-out connections, temporary DNS failures and HTTP 5xx)
+	// share this limit and these ceilings, waiting at least half the ceiling.
 	ThrottleRetryMaxAttempts                      int
 	ThrottleRetryBaseDelay, ThrottleRetryMaxDelay time.Duration
 	HTTPClient                                    *http.Client
@@ -543,6 +545,11 @@ func (s *S3) multipart(ctx context.Context, key string, reader io.Reader, option
 		}
 		if abortErr != nil {
 			err = errors.Join(err, fmt.Errorf("abort multipart upload: %w", abortErr))
+			if abandoner, ok := s.uploadRegistry.(S3UploadAbandoner); ok && registered {
+				// The record stays durable either way; this hands it to the
+				// registry's later retries instead of the next restart only.
+				err = errors.Join(err, abandoner.AbandonUpload(context.WithoutCancel(ctx), record))
+			}
 		} else if registered {
 			err = errors.Join(err, s.uploadRegistry.ForgetUpload(context.WithoutCancel(ctx), record.ID))
 		}
@@ -672,6 +679,12 @@ func (s *S3) uploadParts(ctx context.Context, key string, input io.Reader, size,
 // settings as object transfers. Permission and service failures propagate.
 func ListBuckets(ctx context.Context, config S3Config) ([]string, error) {
 	config.Bucket = "oss-transfer-connection-check"
+	// A connection check answers while the operator waits: an unreachable
+	// endpoint fails after the ordinary attempts, not the transfer budget
+	// that rides out an outage.
+	if config.ThrottleRetryMaxAttempts == 0 {
+		config.ThrottleRetryMaxAttempts = max(config.RetryMaxAttempts, 3)
+	}
 	store, err := NewS3(config)
 	if err != nil {
 		return nil, err

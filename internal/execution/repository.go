@@ -521,7 +521,7 @@ func (r *Repository) begin(ctx context.Context, child string, generation uint64,
 		if retryFailed {
 			for i := range j.Results {
 				if j.Results[i].Status == ItemFailed {
-					j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
+					j.Results[i] = PendingResult(j.Results[i])
 				}
 			}
 			recount(j)
@@ -588,7 +588,7 @@ func (r *Repository) invalidate(ctx context.Context, child string, generation, a
 		}
 		for i := range j.Results {
 			if wanted[j.Results[i].ID] {
-				j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
+				j.Results[i] = PendingResult(j.Results[i])
 			}
 		}
 		recount(j)
@@ -782,7 +782,7 @@ func activateGeneration(j *Record, p ParentFence) {
 	if p.RetryFailed {
 		for i := range j.Results {
 			if j.Results[i].Status == ItemFailed {
-				j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
+				j.Results[i] = PendingResult(j.Results[i])
 			}
 		}
 		recount(j)

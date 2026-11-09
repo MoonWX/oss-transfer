@@ -23,7 +23,7 @@ func (e *Engine) rangeReader(job Job, item Item, source transferstore.RangeSourc
 	return func(ctx context.Context, offset, length int64) (io.ReadCloser, error) {
 		input, err := source.OpenRange(ctx, offset, length)
 		if err != nil {
-			return nil, err
+			return nil, markSource(err)
 		}
 		stop := context.AfterFunc(ctx, func() { _ = input.Close() })
 		var reader io.ReadCloser = input
@@ -60,6 +60,7 @@ type progressRange struct {
 
 func (r *progressRange) Read(buffer []byte) (int, error) {
 	n, err := r.reader.Read(buffer)
+	err = markSource(err)
 	if n > 0 && r.progress != nil {
 		r.counted.Add(int64(n))
 		r.progress.bytes.Add(int64(n))

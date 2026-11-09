@@ -54,6 +54,7 @@ const fields: Field[] = [
   { key: "retryExecutionNodeIp", label: "重试节点" },
   { key: "retryUpdatedAt", label: "重试结果时间", date: true },
   { key: "retryError", label: "重试错误" },
+  { key: "retryReasonCode", label: "重试原因" },
   { key: "timestampFormatted", label: "记录时间", date: true },
   { key: "observedAt", label: "观测时间", date: true },
   { key: "targetCommitted", label: "目标已写入" },
@@ -128,6 +129,19 @@ export function exceptionCsv(
       }),
     ].join("\r\n")
   );
+}
+
+// Reason codes the Master reports for objects whose source changed or was
+// deleted after the scan; other codes are shown as they are.
+export function exceptionReasonLabel(code: unknown): string | undefined {
+  switch (code) {
+    case "SOURCE_CHANGED":
+      return "源对象在扫描后已变化，重试会读取其当前版本";
+    case "SOURCE_DELETED":
+      return "源对象已在源端删除，已跳过";
+    default:
+      return undefined;
+  }
 }
 
 export function retryResultLabel(status: string | undefined): string {

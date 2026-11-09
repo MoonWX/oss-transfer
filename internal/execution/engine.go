@@ -556,7 +556,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 	}()
 	fail := func(stage string, err error) ItemResult {
-		result.Error = errorText(fmt.Errorf("%s %q: %w", stage, item.Source.Key, err))
+		result.Error = objectErrorText(fmt.Errorf("%s %q: %w", stage, item.Source.Key, err))
 		return result
 	}
 	expected := item.Source
@@ -617,14 +617,37 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 			_ = closers[i].Close()
 		}
 	}()
+	// A source missing when its transfer runs was deleted after discovery:
+	// there is nothing left to copy, so the object is skipped, not failed.
+	// A key that never had an identity (an inventory entry not found) and
+	// legacy reconciliation keep their own outcomes. So does a local source:
+	// a missing file there can be a volume that is not mounted, which must
+	// not complete the task as if every file had been deleted.
+	deletable := sourceDeletable(job, item)
+	sourceFailure := func(stage string, err error) ItemResult {
+		if deletable && errors.Is(err, transferstore.ErrNotFound) {
+			return sourceDeleted(item)
+		}
+		if errors.Is(err, transferstore.ErrSourceChanged) && result.Reconciliation == "" {
+			result.Reconciliation = ReasonSourceChanged
+		}
+		return fail(stage, err)
+	}
 	reader, ranges, budget, metadata, stage, err := e.openSource(ctx, job, item, expected, source, target, object, &closers)
 	if err != nil {
+		if stage == "open source" {
+			return sourceFailure(stage, err)
+		}
 		return fail(stage, err)
 	}
 	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, RangeBudget: budget})
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {
+		var fault *sourceFault
+		if errors.As(err, &fault) && !write.Committed {
+			return sourceFailure("read source", fault.err)
+		}
 		return fail("write destination", err)
 	}
 	if write.Skipped {
@@ -695,7 +718,41 @@ func (e *Engine) openSource(ctx context.Context, job Job, item Item, expected tr
 	if object != nil {
 		reader = &progressReader{ReadCloser: reader, progress: object}
 	}
-	return reader, nil, nil, metadata, "", nil
+	return &sourceReader{ReadCloser: reader}, nil, nil, metadata, "", nil
+}
+
+func sourceDeletable(job Job, item Item) bool {
+	return job.Source.Kind == "S3" && item.Legacy == nil && !SourceIdentityUnknown(item.Source)
+}
+
+// sourceDeleted is the outcome of an object whose source was deleted after
+// discovery. Its target key keeps the result consistent with other skipped
+// objects; no target object is recorded or checked.
+func sourceDeleted(item Item) ItemResult {
+	return ItemResult{ID: item.ID, Status: ItemSkipped, Target: transferstore.Object{Key: item.DestinationKey}, Reconciliation: ReasonSourceDeleted}
+}
+
+// sourceFault marks a missing or changed source found while the target was
+// reading it, so it is not mistaken for a target failure such as a
+// destination that disappeared during a conditional write.
+type sourceFault struct{ err error }
+
+func (f *sourceFault) Error() string { return f.err.Error() }
+func (f *sourceFault) Unwrap() error { return f.err }
+
+func markSource(err error) error {
+	var fault *sourceFault
+	if err == nil || errors.As(err, &fault) || !(errors.Is(err, transferstore.ErrNotFound) || errors.Is(err, transferstore.ErrSourceChanged)) {
+		return err
+	}
+	return &sourceFault{err: err}
+}
+
+type sourceReader struct{ io.ReadCloser }
+
+func (r *sourceReader) Read(buffer []byte) (int, error) {
+	n, err := r.ReadCloser.Read(buffer)
+	return n, markSource(err)
 }
 
 // rangedWrite reports whether target fetches an object of this size in

@@ -2168,7 +2168,9 @@ export default function CreateTransfer() {
                         >
                           {binding.localPath}
                         </Typography>
-                        {(!binding.valid || binding.pathType === "MISSING") && (
+                        {(!binding.valid ||
+                          binding.pathType === "MISSING" ||
+                          !!binding.message) && (
                           <Typography
                             variant="body2"
                             color={

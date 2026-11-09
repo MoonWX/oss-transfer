@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/cluster"
 	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
@@ -82,7 +83,39 @@ func (s *Server) onlineAgents() ([]cluster.Member, error) {
 	}
 	return result, nil
 }
+
+// syncStorage applies the snapshot on one Agent. An Agent that predates
+// automatic addressing reads an unset pathStyleEnable as virtual-hosted, so
+// it receives the addressing that automatic resolves to (see
+// storageAddressingSnapshot).
 func (s *Server) syncStorage(ctx context.Context, member cluster.Member, snapshot storageconfig.Snapshot) error {
+	resolved, differs := storageAddressingSnapshot(snapshot)
+	if !differs {
+		return s.applyStorage(ctx, member, snapshot)
+	}
+	automatic, err := s.addressing.supported(ctx, member, s.storageAddressingProtocol)
+	if err != nil {
+		return err
+	}
+	preferred, alternative := snapshot, resolved
+	if !automatic {
+		preferred, alternative = resolved, snapshot
+	}
+	err = s.applyStorage(ctx, member, preferred)
+	// The Agent already holds this revision in the other form: a revision
+	// that a v4.1 Master applied before the upgrade (unresolved), or one this
+	// Master resolved while the Agent was old. Both forms are the same
+	// connection to the Agent that holds it, and a revision never changes.
+	var agentErr *AgentError
+	if errors.As(err, &agentErr) && agentErr.Message == storageconfig.ErrRevisionConflict.Error() {
+		if s.applyStorage(ctx, member, alternative) == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func (s *Server) applyStorage(ctx context.Context, member cluster.Member, snapshot storageconfig.Snapshot) error {
 	var result struct {
 		Revision uint64 `json:"revision"`
 	}
@@ -93,6 +126,74 @@ func (s *Server) syncStorage(ctx context.Context, member cluster.Member, snapsho
 		return errors.New("Agent acknowledged a different storage revision")
 	}
 	return nil
+}
+
+// storageAddressingSnapshot returns the snapshot as an Agent without
+// automatic addressing must receive it: an unset choice that resolves to
+// path-style is set explicitly. One that resolves to virtual-hosted stays
+// unset, which such an Agent already reads as virtual-hosted. differs
+// reports whether any connection changed.
+func storageAddressingSnapshot(snapshot storageconfig.Snapshot) (resolved storageconfig.Snapshot, differs bool) {
+	resolved = snapshot
+	resolved.Connections = append([]storageconfig.Config(nil), snapshot.Connections...)
+	for i, config := range resolved.Connections {
+		resolved.Connections[i] = storageConfigForAgent(config)
+		differs = differs || resolved.Connections[i].PathStyleEnable != config.PathStyleEnable
+	}
+	return resolved, differs
+}
+
+// storageConfigForAgent is one connection as an Agent without automatic
+// addressing must receive it (see storageAddressingSnapshot).
+func storageConfigForAgent(config storageconfig.Config) storageconfig.Config {
+	if config.PathStyleEnable == nil && config.EffectivePathStyle() {
+		pathStyle := true
+		config.PathStyleEnable = &pathStyle
+	}
+	return config
+}
+
+func (s *Server) storageAddressingProtocol(ctx context.Context, member cluster.Member) (int, error) {
+	var caps struct {
+		StorageAddressingProtocol int `json:"storageAddressingProtocol"`
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := s.agentCall(callCtx, member.Session(), "capabilities", false, nil, &caps)
+	var agentErr *AgentError
+	if errors.As(err, &agentErr) && agentErr.Message == "unknown_operation" {
+		return 0, nil
+	}
+	return caps.StorageAddressingProtocol, err
+}
+
+// addressingSupport remembers, for a while, Agents that advertised
+// agentservice.StorageAddressingProtocol. Like rangedDownloadSupport it keeps
+// no negative answer, so an Agent upgraded in place is noticed at once.
+type addressingSupport struct {
+	mu    sync.Mutex
+	until map[string]time.Time
+}
+
+func (a *addressingSupport) supported(ctx context.Context, member cluster.Member, query func(context.Context, cluster.Member) (int, error)) (bool, error) {
+	now := time.Now()
+	a.mu.Lock()
+	until, known := a.until[member.ID]
+	a.mu.Unlock()
+	if known && now.Before(until) {
+		return true, nil
+	}
+	protocol, err := query(ctx, member)
+	if err != nil || protocol < agentservice.StorageAddressingProtocol {
+		return false, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.until == nil {
+		a.until = map[string]time.Time{}
+	}
+	a.until[member.ID] = now.Add(rangedSupportTTL)
+	return true, nil
 }
 func installStorageRoutes(s *Server) {
 	s.mux.HandleFunc("GET /api/master/s3-config", s.adminOnly(s.listStorage))

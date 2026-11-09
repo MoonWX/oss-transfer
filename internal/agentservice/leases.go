@@ -432,11 +432,17 @@ const ConflictPolicyProtocol = 1
 // which a Master sends only to Agents that advertise this protocol.
 const SourceRefreshProtocol = 1
 
+// StorageAddressingProtocol is advertised by Agents that read an unset
+// pathStyleEnable as automatic addressing (storageconfig.EffectivePathStyle).
+// Older Agents read it as virtual-hosted, so the Master sends them the
+// resolved value instead.
+const StorageAddressingProtocol = 1
+
 func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol, "sourceRefreshProtocol": SourceRefreshProtocol}
+	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol, "sourceRefreshProtocol": SourceRefreshProtocol, "storageAddressingProtocol": StorageAddressingProtocol}
 	if s.Comparisons != nil {
 		capabilities["comparisonProtocol"] = comparison.Protocol
 	}

@@ -177,7 +177,7 @@ func (s *Server) createAgentInvitation(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Cannot create Agent invitation")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": s.agentInvitationData(masterURL, invite)})
+	writeJSON(w, 200, map[string]any{"success": true, "data": s.agentInvitationData(masterURL, invite, requestInstallerLanguage(r))})
 }
 
 func (s *Server) joinAgent(w http.ResponseWriter, r *http.Request) {

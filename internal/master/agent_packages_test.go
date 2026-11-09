@@ -148,6 +148,10 @@ func testMasterAgentPackageBootstrap(t *testing.T, target, system, machine strin
 	if err := os.WriteFile(filepath.Join(shim, "uname"), []byte(uname), 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The copied command elevates with sudo; the test runs it unprivileged.
+	if err := os.WriteFile(filepath.Join(shim, "sudo"), []byte("#!/bin/sh\nexec \"$@\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command("bash", "-c", bootstrapCommand(link))
 	command.Env = append(os.Environ(), "PACKAGE_RESULT="+result, "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 	output, err := command.CombinedOutput()

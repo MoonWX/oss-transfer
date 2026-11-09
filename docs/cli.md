@@ -25,7 +25,7 @@ oss-transfer-cli login
 oss-transfer-cli whoami
 ```
 
-`login` signs in as `admin` unless you add `--username`, asks for the password without showing it, and prints `Signed in to http://10.0.0.5:1685 as admin`. `whoami` shows the Master, the user and the role. `logout` ends the session (`Signed out of …`). After the first login, change the initial password with `change-password`; a new password needs at least 8 characters and must differ from the user name and from the current password. Sessions belong to one Master address; another Master needs its own login.
+`login` signs in as `admin` unless you add `--username`, asks for the password without showing it, and prints `Signed in to http://10.0.0.5:1685 as admin`. `whoami` shows the Master, the user and the role. `logout` ends the session (`Signed out of …`). After the first login, change the initial password with `change-password`; a new password needs at least 8 characters, must not be a common or easily guessed password (such as `12345678`) and must differ from the user name and from the current password. Sessions belong to one Master address; another Master needs its own login.
 
 `--host URL` selects a Master for one command. Otherwise the address comes from `OSS_TRANSFER_MASTER_SERVER`, the saved preference (`config set master`), then the local installation. `config get master` shows the address and its source in words, for example *Source: Detected from the local installation*. `config set master auto` returns to the local installation. A CLI with none of these uses `http://localhost:1685`; if nothing answers there, it says so and suggests `config set master URL` or `--host`.
 

@@ -25,7 +25,7 @@ oss-transfer-cli login
 oss-transfer-cli whoami
 ```
 
-`login` 默认以 `admin` 登录（其他账号加 `--username`），以不回显的方式询问密码，成功后显示 `已登录 http://10.0.0.5:1685（用户 admin）`。`whoami` 显示 Master、用户和角色。`logout` 结束会话（`已注销 …`）。首次登录后，用 `change-password` 修改初始密码；新密码至少 8 个字符，且不能与用户名或当前密码相同。会话属于某个 Master 地址，连接另一个 Master 需要单独登录。
+`login` 默认以 `admin` 登录（其他账号加 `--username`），以不回显的方式询问密码，成功后显示 `已登录 http://10.0.0.5:1685（用户 admin）`。`whoami` 显示 Master、用户和角色。`logout` 结束会话（`已注销 …`）。首次登录后，用 `change-password` 修改初始密码；新密码至少 8 个字符，不能是常见或容易猜到的密码（如 `12345678`），且不能与用户名或当前密码相同。会话属于某个 Master 地址，连接另一个 Master 需要单独登录。
 
 `--host URL` 为单条命令指定 Master。否则地址依次来自 `OSS_TRANSFER_MASTER_SERVER`、已保存的设置（`config set master`）和本机安装。`config get master` 显示当前地址，并用文字说明其来源，例如 *来源：自动识别本机安装*。`config set master auto` 恢复使用本机安装的集群。以上都没有时，CLI 使用 `http://localhost:1685`；该地址无法连接时，CLI 会说明原因，并建议运行 `config set master URL` 或使用 `--host`。
 

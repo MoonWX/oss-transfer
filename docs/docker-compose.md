@@ -46,7 +46,7 @@ Initial administrator: admin
 Initial password: <random password>
 ```
 
-Open port `1685` of this host in a browser (`http://localhost:1685` on the same computer), sign in as `admin` with the initial password and choose your own password (at least 8 characters, not the user name). After the change, the log says that the initial password is no longer valid.
+Open port `1685` of this host in a browser (`http://localhost:1685` on the same computer), sign in as `admin` with the initial password and choose your own password (at least 8 characters, not a common or easily guessed password, not the user name). After the change, the log says that the initial password is no longer valid.
 
 If the page does not open, check `docker compose ps` (the `master` service should be running) and `docker compose logs master`. Another program may already use port 1685: set another port in `.env`.
 

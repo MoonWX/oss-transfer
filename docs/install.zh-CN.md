@@ -55,7 +55,7 @@ Tasks: /usr/local/bin/oss-transfer-cli task list
 然后确认：
 
 1. `sudo systemctl status oss-transfer-master` 显示 `active (running)`。执行节点的服务名为 `oss-transfer-agent`。
-2. 用浏览器打开 **访问地址**，以 `admin` 和初始密码登录。首次登录必须设置新密码：至少 8 个字符，不能与用户名或初始密码相同。
+2. 用浏览器打开 **访问地址**，以 `admin` 和初始密码登录。首次登录必须设置新密码：至少 8 个字符，不能是常见或容易猜到的密码，也不能与用户名或初始密码相同。
 3. 如果同时安装了本机执行节点，在 Master 主机上运行 `sudo oss-transfer-cli node list`，它应显示为在线。
 
 初始密码只显示一次。如果遗失，请[重置管理员密码](operations.zh-CN.md#重置管理员密码)。

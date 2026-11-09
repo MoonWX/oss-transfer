@@ -9,7 +9,7 @@ import {
 } from "./object-comparison-fixtures";
 import { buildLabel } from "../src/lib/buildAge";
 import { containerAgentCommands } from "../src/lib/containerAgent";
-import { passwordRuleError } from "../src/lib/passwordRule";
+import { passwordRuleError, passwordRuleText } from "../src/lib/passwordRule";
 import { displayVersion } from "../src/lib/semver";
 import { t, translate } from "../src/lib/i18n";
 import "./catalogs";
@@ -38,10 +38,30 @@ test("the console checks the same password rule as the Master", () => {
     t("新密码不能与当前密码相同"),
   );
   expect(passwordRuleError("long enough", "initial", "admin")).toBe("");
-  for (const locale of ["en-US", "ja-JP"] as const)
-    expect(
-      translate(locale, "至少 8 个字符，不能与用户名或当前密码相同。"),
-    ).not.toBe("至少 8 个字符，不能与用户名或当前密码相同。");
+  // Trivial passwords are rejected like the Master does.
+  for (const weak of [
+    "12345678",
+    "Password",
+    " QWERTY123 ",
+    "aaaaaaaa",
+    "98765432",
+    "abcdefgh",
+    "HGFEDCBA",
+  ])
+    expect(passwordRuleError(weak, "initial", "admin")).toBe(
+      t("密码过于常见或容易猜到，请换一个"),
+    );
+  for (const fine of ["12345679", "6789:;<=", "aaaaaaab"])
+    expect(passwordRuleError(fine, "initial", "admin")).toBe("");
+  const rule =
+    "至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。";
+  expect(passwordRuleText()).toBe(t(rule));
+  for (const locale of ["en-US", "ja-JP"] as const) {
+    expect(translate(locale, rule)).not.toBe(rule);
+    expect(translate(locale, "密码过于常见或容易猜到，请换一个")).not.toBe(
+      "密码过于常见或容易猜到，请换一个",
+    );
+  }
 });
 
 test("the change-password dialog states the rule and rejects the current password locally", async ({
@@ -53,7 +73,9 @@ test("the change-password dialog states the rule and rejects the current passwor
   await page.getByRole("menuitem", { name: "修改密码" }).click();
   const dialog = page.getByRole("dialog");
   await expect(
-    dialog.getByText("至少 8 个字符，不能与用户名或当前密码相同。"),
+    dialog.getByText(
+      "至少 8 个字符，不能是常见密码、同一字符重复或连续的数字或字母（如 12345678、abcdefgh），也不能与用户名或当前密码相同。",
+    ),
   ).toBeVisible();
   await dialog.getByLabel(/^当前密码/).fill("current-password");
   await dialog.getByLabel(/^新密码/).fill("current-password");

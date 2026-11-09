@@ -78,7 +78,7 @@ Without the local Agent, the first line is `=== master 4.2.0 · Installed succes
 
 ### 2. Sign in
 
-Open the **Web UI** address and sign in as `admin` with the initial password. Choose a new password: at least 8 characters, different from the user name and from the initial password.
+Open the **Web UI** address and sign in as `admin` with the initial password. Choose a new password: at least 8 characters, not a common or easily guessed password, different from the user name and from the initial password.
 
 **When it worked,** the console opens. **Instructions** (and the empty overview) show a checklist: add execution nodes, add storage connections, create a transfer task, run it and view the results.
 

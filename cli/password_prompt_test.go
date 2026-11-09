@@ -65,6 +65,10 @@ func TestPasswordChangeShowsRuleAndRejectsKnownViolationsBeforeRequest(t *testin
 	for _, c := range []struct{ next, message string }{
 		{"short", "The password must be at least 8 characters"},
 		{"old password", "The new password must be different from the current password"},
+		{"12345678", "The password is too common or too easy to guess"},
+		{"PASSWORD", "The password is too common or too easy to guess"},
+		{"zzzzzzzz", "The password is too common or too easy to guess"},
+		{"hgfedcba", "The password is too common or too easy to guess"},
 	} {
 		client := adminTestClient(t, func(http.ResponseWriter, *http.Request) {
 			t.Fatal("password breaking the rule was sent")
@@ -82,7 +86,7 @@ func TestPasswordChangeShowsRuleAndRejectsKnownViolationsBeforeRequest(t *testin
 		if err == nil || localizedCLIError("en", err) != c.message {
 			t.Fatalf("new password %q: %v", c.next, err)
 		}
-		if len(labels) != 2 || client.text(labels[1]) != "New password (at least 8 characters, different from the user name and the current password): " {
+		if len(labels) != 2 || client.text(labels[1]) != "New password (at least 8 characters, not a common or easily guessed password, different from the user name and the current password): " {
 			t.Fatalf("prompt does not state the password rule: %q", labels)
 		}
 	}

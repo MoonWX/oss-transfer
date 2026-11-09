@@ -68,7 +68,7 @@ server {
 
 - Master 只有一个管理员账号 `admin`，首次启动时生成随机密码。这个密码只输出一次：在安装器输出和服务日志中（Linux 上为 `/opt/oss-transfer/master/data/logs/service.log`），Docker 部署时在 `docker compose logs master` 中。
 - 首次登录时必须设置新密码。之后 Master 会在日志中记录 *Initial password for admin has been changed; the initial password printed earlier is no longer valid.*，原来那一行仍留在日志中，但已经失效。
-- 新密码至少 8 个字符，不能与用户名相同（忽略大小写和首尾空格），也不能与当前密码或初始密码相同。管理页面和 `oss-transfer-cli change-password` 会在提交前检查。
+- 新密码至少 8 个字符，不能与用户名相同（忽略大小写和首尾空格），也不能与当前密码或初始密码相同。新密码也不能容易猜到：Master 会拒绝一小组非常常见的密码，例如 `password`、`qwerty123`（不区分大小写），同一字符重复（`aaaaaaaa`），以及正序或倒序连续的数字或字母（`12345678`、`87654321`、`abcdefgh`）。管理页面和 `oss-transfer-cli change-password` 会在提交前检查。已有密码仍可使用，修改密码时才检查这条规则。
 - 密码以 Argon2id 哈希保存。
 - 多次登录失败不会锁定账号；Master 同时最多校验 4 个密码，其余请求返回 HTTP 429。因此限制网络访问是主要的防护手段。
 - 忘记密码时，在 Master 主机上重置（见[重置管理员密码](operations.zh-CN.md#重置管理员密码)）。重置会使所有会话失效。

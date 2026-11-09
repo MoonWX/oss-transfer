@@ -953,7 +953,7 @@ The service owner or system administrator can use the installed cluster without 
 logout ends only an account session, not local service access. Log in before changing an account password.
 The username defaults to admin; use --username for another account. Terminal password input is hidden.
 After the first login, run change-password. Scripts can select an environment variable, file, or stdin.
-A new password needs at least 8 characters and must differ from the user name and the current password.
+A new password needs at least 8 characters, must not be a common password, one repeated character or a run of consecutive digits or letters (such as 12345678 or abcdefgh), and must differ from the user name and the current password.
 --password-stdin reads standard input; --password-file reads a file.
 Changes also accept --old-password-file / --new-password-file.
 Sessions are saved per --host. OSS_TRANSFER_AUTH_TOKEN supplies a user login token.
@@ -972,7 +972,7 @@ OSS_TRANSFER_INTERNAL_TOKEN is not accepted by the CLI.
 logout はアカウントのセッションのみを終了します。パスワード変更には login が必要です。
 ユーザー名の既定値は admin です。他のアカウントは --username で指定します。入力したパスワードは表示されません。
 初回ログイン後は change-password を実行してください。スクリプトでは環境変数、ファイル、標準入力を選択できます。
-新しいパスワードは 8 文字以上で、ユーザー名や現在のパスワードと異なる必要があります。
+新しいパスワードは 8 文字以上で、よく使われるパスワード、同じ文字の繰り返し、連続した数字や英字（12345678、abcdefgh など）は使えません。ユーザー名や現在のパスワードとも異なる必要があります。
 --password-stdin は標準入力、--password-file はファイルから読み取ります。
 変更には --old-password-file / --new-password-file も使用できます。
 セッションは --host ごとに保存します。OSS_TRANSFER_AUTH_TOKEN でログイントークンを指定できます。

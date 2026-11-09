@@ -199,6 +199,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Choose a password different from the initial password":                             {"Choose a password different from the initial password", "新密码不能与初始密码相同", "初期パスワードとは異なるパスワードを設定してください"},
 	"The password must be at least 8 characters":                                        {"The password must be at least 8 characters", "密码至少需要 8 个字符", "パスワードは 8 文字以上にしてください"},
 	"The password must not be the same as the user name":                                {"The password must not be the same as the user name", "密码不能与用户名相同", "パスワードをユーザー名と同じにすることはできません"},
+	"The password is too common or too easy to guess":                                   {"The password is too common or too easy to guess", "密码过于常见或容易猜到，请换一个", "パスワードがよく使われるものか推測しやすいため、別のパスワードにしてください"},
 	"The new password must be different from the current password":                      {"The new password must be different from the current password", "新密码不能与当前密码相同", "新しいパスワードは現在のパスワードと異なるものにしてください"},
 	"Specify a storage connection and bucket as alias/bucket":                           {"Specify a storage connection and bucket as alias/bucket", "请按 alias/bucket 格式填写存储连接和存储桶", "ストレージ接続とバケットを alias/bucket の形式で指定してください"},
 	"Stop active tasks before removing this Agent":                                      {"Stop active tasks before removing this Agent", "请先停止执行中的任务，再移除此 Agent", "実行中のタスクを停止してから、この Agent を削除してください"},

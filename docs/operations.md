@@ -502,7 +502,7 @@ Online updates install only the latest stable release. To install another versio
 - **Removed Agents stop.** An Agent removed on the Master now stops instead of restarting every 5 seconds. Existing systemd units get `RestartPreventExitStatus=78` on their next upgrade.
 - **Reports** of tasks that were stopped and resumed, or whose failed objects were retried, are complete again. This is fixed on the Master and works with older Agents.
 - **CLI exit codes.** Command-line mistakes found before contacting the Master now exit with 2 (previously 1 for some), and a 401 or 403 always exits with 1. Check scripts that test exit codes ([CLI](cli.md#output-languages-and-exit-codes)).
-- **Passwords** must have at least 8 characters and differ from the user name and the current password.
+- **Passwords** must have at least 8 characters, must not be a common or easily guessed password (see [Security](security.md)) and must differ from the user name and the current password.
 
 ### Try a prerelease
 

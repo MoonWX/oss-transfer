@@ -55,7 +55,7 @@ Initial password: <printed once>
 Then check:
 
 1. `sudo systemctl status oss-transfer-master` shows `active (running)`. For an Agent, use `oss-transfer-agent`.
-2. Open the **Web UI** address in a browser and sign in as `admin` with the initial password. You must choose a new password: at least 8 characters, different from the user name and from the initial password.
+2. Open the **Web UI** address in a browser and sign in as `admin` with the initial password. You must choose a new password: at least 8 characters, not a common or easily guessed password, different from the user name and from the initial password.
 3. On the Master host, `sudo oss-transfer-cli node list` lists the local Agent as online, if you installed one.
 
 The initial password is printed only once. If you lost it, [reset the administrator password](operations.md#reset-the-administrator-password).

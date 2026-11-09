@@ -46,6 +46,12 @@ type LocalTempRegistry struct {
 	closed      bool
 	queue       chan recoveryMutation
 	done        chan struct{}
+	// useMu guards inUse, the writers per namespace key, and used, the keys
+	// prepared since the last sweep. A sweep holds it while removing a
+	// namespace, so no writer can prepare that namespace meanwhile.
+	useMu sync.Mutex
+	inUse map[string]int
+	used  map[string]bool
 }
 
 func NewLocalTempRegistry(store *state.Store) (*LocalTempRegistry, error) {
@@ -77,7 +83,7 @@ func NewLocalTempRegistry(store *state.Store) (*LocalTempRegistry, error) {
 	}); err != nil {
 		return nil, err
 	}
-	r := &LocalTempRegistry{store: store, owner: owner, queue: make(chan recoveryMutation, 256), done: make(chan struct{})}
+	r := &LocalTempRegistry{store: store, owner: owner, queue: make(chan recoveryMutation, 256), done: make(chan struct{}), inUse: map[string]int{}, used: map[string]bool{}}
 	go r.commitLoop()
 	return r, nil
 }

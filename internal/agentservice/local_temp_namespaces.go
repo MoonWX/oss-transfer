@@ -22,7 +22,93 @@ func namespaceKey(parent string) string {
 
 // PrepareNamespace commits the directory identity before Local creates any
 // payload file. Existing namespaces are never replaced or adopted by pathname.
+// The namespace stays in use until ReleaseNamespace.
 func (r *LocalTempRegistry) PrepareNamespace(ctx context.Context, parent *os.Root, parentPath string) (transferstore.LocalTempNamespace, error) {
+	key := namespaceKey(parentPath)
+	r.useMu.Lock()
+	r.inUse[key]++
+	r.used[key] = true
+	r.useMu.Unlock()
+	record, err := r.prepareNamespace(ctx, parent, parentPath)
+	if err != nil {
+		r.release(key)
+	}
+	return record, err
+}
+
+// ReleaseNamespace ends one use of a namespace PrepareNamespace returned.
+func (r *LocalTempRegistry) ReleaseNamespace(record transferstore.LocalTempNamespace) {
+	r.release(namespaceKey(record.ParentPath))
+}
+
+func (r *LocalTempRegistry) release(key string) {
+	r.useMu.Lock()
+	defer r.useMu.Unlock()
+	if r.inUse[key]--; r.inUse[key] <= 0 {
+		delete(r.inUse, key)
+	}
+}
+
+// SweepNamespaces removes the staging namespaces used since the last sweep
+// that no writer uses now and that hold nothing but their marker, so a
+// finished download leaves no staging directory beside its files. A
+// namespace still in use, or holding a retained temporary file, is kept and
+// considered again by a later sweep.
+func (r *LocalTempRegistry) SweepNamespaces(ctx context.Context) (int, error) {
+	r.useMu.Lock()
+	keys := make([]string, 0, len(r.used))
+	for key := range r.used {
+		keys = append(keys, key)
+	}
+	r.used = map[string]bool{}
+	r.useMu.Unlock()
+	removed := 0
+	var errs error
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return removed, err
+		}
+		gone, err := r.sweepNamespace(ctx, key)
+		if gone {
+			removed++
+		}
+		errs = errors.Join(errs, err)
+	}
+	return removed, errs
+}
+
+func (r *LocalTempRegistry) sweepNamespace(ctx context.Context, key string) (bool, error) {
+	r.useMu.Lock()
+	defer r.useMu.Unlock()
+	if r.inUse[key] > 0 {
+		r.used[key] = true
+		return false, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed || !r.ready {
+		return false, nil
+	}
+	var record transferstore.LocalTempNamespace
+	var found bool
+	if err := r.store.View(func(tx *state.Tx) error {
+		var err error
+		found, err = tx.Get(localTempNamespacesBucket, key, &record)
+		return err
+	}); err != nil || !found {
+		return false, err
+	}
+	if record.Owner != r.owner {
+		return false, transferstore.ErrTempIdentity
+	}
+	gone, err := transferstore.RemoveEmptyLocalTempNamespace(ctx, record)
+	if !gone {
+		return false, err
+	}
+	return true, r.store.Update(func(tx *state.Tx) error { return tx.Delete(localTempNamespacesBucket, key) })
+}
+
+func (r *LocalTempRegistry) prepareNamespace(ctx context.Context, parent *os.Root, parentPath string) (transferstore.LocalTempNamespace, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var record transferstore.LocalTempNamespace
@@ -110,6 +196,14 @@ func (r *LocalTempRegistry) recoverNamespaces(ctx context.Context, registered ma
 				err = errors.New("temporary namespace belongs to another database owner")
 			} else {
 				count, err = transferstore.RemoveUnregisteredNamespaceTemps(ctx, record, registered)
+				if err == nil {
+					// Nothing runs yet: an empty namespace is a leftover
+					// staging directory.
+					var gone bool
+					if gone, err = transferstore.RemoveEmptyLocalTempNamespace(ctx, record); gone {
+						err = errors.Join(err, r.store.Update(func(tx *state.Tx) error { return tx.Delete(localTempNamespacesBucket, namespaceKey(record.ParentPath)) }))
+					}
+				}
 			}
 			report.Removed += count
 			if err != nil {

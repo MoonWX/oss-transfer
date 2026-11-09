@@ -49,6 +49,7 @@ type Service struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wake         chan struct{}
+	sweep        chan struct{}
 	workers      sync.WaitGroup
 	nodeConfigMu sync.Mutex
 	softwareMu   sync.RWMutex
@@ -156,7 +157,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{store: store, Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	s := &Service{store: store, Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), sweep: make(chan struct{}, 1)}
 	s.Leases = leases
 	leases.quiesce = func(ctx context.Context, parentID int64) error {
 		return errors.Join(engine.QuiesceParent(ctx, parentID), scanner.QuiesceParent(ctx, parentID))
@@ -181,12 +182,13 @@ func New(store *state.Store, options Options) (*Service, error) {
 	}
 	s.Comparisons = comparisons
 	s.MPU = mpu
-	s.workers.Add(2)
+	s.workers.Add(3)
 	go s.schedule()
 	go func() {
 		defer s.workers.Done()
 		mpu.Run(ctx)
 	}()
+	go s.sweepNamespaces()
 	go preflight.run(ctx)
 	return s, nil
 }
@@ -213,6 +215,19 @@ func (s *Service) signal() {
 	default:
 	}
 }
+// sweepNamespaces removes idle local staging directories after attempts end.
+func (s *Service) sweepNamespaces() {
+	defer s.workers.Done()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.sweep:
+			_, _ = s.Temporary.SweepNamespaces(s.ctx)
+		}
+	}
+}
+
 func (s *Service) schedule() {
 	defer s.workers.Done()
 	timer := time.NewTicker(200 * time.Millisecond)
@@ -225,8 +240,13 @@ func (s *Service) schedule() {
 			return
 		case <-s.wake:
 		case <-capacityChanged:
-			// An attempt ended: retry aborting uploads it could not abort.
+			// An attempt ended: retry aborting uploads it could not abort
+			// and remove the staging directories it no longer uses.
 			s.MPU.Kick()
+			select {
+			case s.sweep <- struct{}{}:
+			default:
+			}
 		case <-timer.C:
 		}
 		// Subscribe before admission; an attempt may finish while this batch is

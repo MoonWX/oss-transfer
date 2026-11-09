@@ -556,7 +556,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 	}()
 	fail := func(stage string, err error) ItemResult {
-		result.Error = errorText(fmt.Errorf("%s %q: %w", stage, item.Source.Key, err))
+		result.Error = objectErrorText(fmt.Errorf("%s %q: %w", stage, item.Source.Key, err))
 		return result
 	}
 	expected := item.Source

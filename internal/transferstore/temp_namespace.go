@@ -286,3 +286,75 @@ func RemoveUnregisteredNamespaceTemps(ctx context.Context, record LocalTempNames
 		}
 	}
 }
+
+// LocalTempNamespaceReleaser is implemented by a namespace registry that
+// tracks which namespaces are in use, so it can remove idle ones. A writer
+// releases each namespace it prepared once it no longer uses the namespace.
+type LocalTempNamespaceReleaser interface {
+	ReleaseNamespace(LocalTempNamespace)
+}
+
+// RemoveEmptyLocalTempNamespace removes a namespace that holds nothing but
+// its marker, so no staging directory is left beside downloaded files. It
+// reports true when the namespace is gone, including when it was already
+// removed; a namespace holding anything else is kept. The caller must ensure
+// no writer uses the namespace meanwhile.
+func RemoveEmptyLocalTempNamespace(ctx context.Context, record LocalTempNamespace) (bool, error) {
+	if err := ValidateLocalTempNamespace(record); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	parent, err := os.OpenRoot(record.ParentPath)
+	if err != nil {
+		return false, err // A missing mount may return; keep the record.
+	}
+	defer parent.Close()
+	if gone, err := LocalTempNamespaceGone(parent, record); err != nil || gone {
+		return gone, err
+	}
+	directory, err := OpenLocalTempNamespace(parent, record)
+	if err != nil {
+		return false, err
+	}
+	stream, err := directory.Open(".")
+	if err != nil {
+		directory.Close()
+		return false, err
+	}
+	entries, readErr := stream.ReadDir(2)
+	stream.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		directory.Close()
+		return false, readErr
+	}
+	if len(entries) != 1 || entries[0].Name() != namespaceMarker {
+		directory.Close()
+		return false, nil
+	}
+	err = directory.Remove(namespaceMarker)
+	directory.Close()
+	if err != nil {
+		return false, err
+	}
+	if err := parent.Remove(record.Name); err != nil {
+		// Put the marker back so the namespace stays usable.
+		return false, errors.Join(err, restoreNamespaceMarker(parent, record))
+	}
+	return true, syncTempNamespace(parent)
+}
+
+func restoreNamespaceMarker(parent *os.Root, record LocalTempNamespace) error {
+	directory, err := parent.OpenRoot(record.Name)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	marker, err := directory.OpenFile(namespaceMarker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := io.WriteString(marker, namespaceContents(record.Owner, record.ID))
+	return errors.Join(writeErr, marker.Sync(), marker.Close())
+}

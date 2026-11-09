@@ -13,41 +13,16 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
-var ErrNotFound = errors.New("comparison not found")
-var ErrBusy = errors.New("another comparison is running on this node")
-
-const MaxStoredDifferences = 10000
-const RetainedComparisons = 10
-
-type Progress struct {
-	Request
-	Status        string    `json:"status"`
-	Compared      int64     `json:"compared"`
-	Matched       int64     `json:"matched"`
-	Different     int64     `json:"different"`
-	Missing       int64     `json:"missing"`
-	Extra         int64     `json:"extra"`
-	Errors        int64     `json:"errors"`
-	Changed       int64     `json:"changed"`
-	Rows          int64     `json:"rows"`
-	RowsTruncated bool      `json:"rowsTruncated"`
-	ResultLimit   int       `json:"resultLimit"`
-	StartedAt     time.Time `json:"startedAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	Error         string    `json:"error,omitempty"`
-}
-
-type Page struct {
-	Progress
-	Items     []Row `json:"items"`
-	NextAfter int64 `json:"nextAfter,omitempty"`
-}
+// legacyRetainedComparisons is the fixed per-node history of Agents before
+// Protocol 2.
+const legacyRetainedComparisons = 10
 
 type Manager struct {
 	mu      sync.Mutex
 	db      *state.Store
 	factory execution.StoreFactory
 	wrap    ReaderWrapper
+	options Options
 	ctx     context.Context
 	cancel  context.CancelFunc
 	active  string
@@ -55,9 +30,9 @@ type Manager struct {
 	workers sync.WaitGroup
 }
 
-func New(db *state.Store, factory execution.StoreFactory, wrap ReaderWrapper) (*Manager, error) {
+func New(db *state.Store, factory execution.StoreFactory, wrap ReaderWrapper, options Options) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{db: db, factory: factory, wrap: wrap, ctx: ctx, cancel: cancel}
+	m := &Manager{db: db, factory: factory, wrap: wrap, options: options, ctx: ctx, cancel: cancel}
 	err := db.Update(func(tx *state.Tx) error {
 		var id string
 		if _, err := tx.Get("comparison_runtime", "active", &id); err != nil {
@@ -112,10 +87,10 @@ func (m *Manager) Start(r Request, factories ...execution.StoreFactory) (Progres
 	if m.active != "" {
 		return p, ErrBusy
 	}
-	p = Progress{Request: r, Status: "RUNNING", StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), ResultLimit: MaxStoredDifferences}
+	p = Progress{Request: r, Status: "RUNNING", StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), ResultLimit: LegacyStoredDifferences}
 	if err := m.db.Update(func(tx *state.Tx) error {
 		var history []Progress
-		if err := tx.Scan("comparisons", "", "", RetainedComparisons+1, func(_ string, raw json.RawMessage) error {
+		if err := tx.Scan("comparisons", "", "", legacyRetainedComparisons+1, func(_ string, raw json.RawMessage) error {
 			var old Progress
 			if err := json.Unmarshal(raw, &old); err != nil {
 				return err
@@ -126,7 +101,7 @@ func (m *Manager) Start(r Request, factories ...execution.StoreFactory) (Progres
 			return err
 		}
 		sort.Slice(history, func(i, j int) bool { return history[i].StartedAt.Before(history[j].StartedAt) })
-		for len(history) >= RetainedComparisons {
+		for len(history) >= legacyRetainedComparisons {
 			if err := deleteResults(tx, history[0].ID); err != nil {
 				return err
 			}
@@ -178,7 +153,7 @@ func (m *Manager) run(ctx context.Context, p Progress, factory execution.StoreFa
 	}
 	source, dest, err := factory.Open(ctx, execution.Job{Source: p.Source, Destination: p.Destination})
 	if err == nil {
-		err = Run(ctx, p.Request, source, dest, m.wrap, func(row Row) error {
+		err = Run(ctx, p.Request, source, dest, m.wrap, RunOptions{}, func(row Row) error {
 			p.Compared++
 			switch row.Status {
 			case "MATCH":
@@ -195,7 +170,7 @@ func (m *Manager) run(ctx context.Context, p Progress, factory execution.StoreFa
 				p.Errors++
 			}
 			if row.Status != "MATCH" {
-				if p.Rows < MaxStoredDifferences {
+				if p.Rows < LegacyStoredDifferences {
 					p.Rows++
 					row.Number = p.Rows
 					rows = append(rows, row)
@@ -313,4 +288,23 @@ func (m *Manager) Get(id string, after int64, limit int) (Page, error) {
 		result.NextAfter = result.Items[len(result.Items)-1].Number
 	}
 	return result, err
+}
+
+// Rows serves comparison_rows: up to q.Limit rows after q.After, optionally
+// filtered by status. See Page for the cursor semantics.
+func (m *Manager) Rows(q RowsQuery) (Page, error) {
+	return Page{}, errors.New("comparison rows are not implemented")
+}
+
+// List returns every retained comparison, newest first, without rows.
+func (m *Manager) List() ([]Progress, error) {
+	return nil, errors.New("comparison list is not implemented")
+}
+
+// Resume continues an interrupted, failed or canceled prefix comparison from
+// its checkpoint with factory. It returns ErrNotResumable when the record has
+// no usable checkpoint, ErrBusy when another comparison runs and ErrNotFound
+// when it does not exist.
+func (m *Manager) Resume(id string, factory execution.StoreFactory) (Progress, error) {
+	return Progress{}, errors.New("comparison resume is not implemented")
 }

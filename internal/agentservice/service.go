@@ -165,7 +165,7 @@ func New(store *state.Store, options Options) (*Service, error) {
 	s.preflight = preflight
 	comparisons, err := comparison.New(store, factory, func(ctx context.Context, input io.ReadCloser, size int64) (io.ReadCloser, error) {
 		return nodes.Decorator(limits.Decorator)(ctx, execution.Job{}, execution.Item{Source: transferstore.Object{Size: size}}, input)
-	})
+	}, comparison.Options{})
 	if err != nil {
 		cancel()
 		_ = scanner.Close()

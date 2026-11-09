@@ -11,33 +11,8 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
-
-type Request struct {
-	ID                string             `json:"id"`
-	StorageRevision   uint64             `json:"storageRevision"`
-	Source            execution.Endpoint `json:"source"`
-	Destination       execution.Endpoint `json:"destination"`
-	SourcePrefix      string             `json:"sourcePrefix"`
-	DestinationPrefix string             `json:"destinationPrefix"`
-	Mode              string             `json:"mode"`
-	Scope             string             `json:"scope"`
-}
-
-type Row struct {
-	Number            int64  `json:"number"`
-	Key               string `json:"key"`
-	SourceKey         string `json:"sourceKey"`
-	DestinationKey    string `json:"destinationKey"`
-	Status            string `json:"status"`
-	SourceSize        int64  `json:"sourceSize"`
-	DestinationSize   int64  `json:"destinationSize"`
-	SourceSHA256      string `json:"sourceSha256,omitempty"`
-	DestinationSHA256 string `json:"destinationSha256,omitempty"`
-	Error             string `json:"error,omitempty"`
-}
 
 type ReaderWrapper func(context.Context, io.ReadCloser, int64) (io.ReadCloser, error)
 
@@ -55,8 +30,10 @@ func Validate(r Request) error {
 type iterator struct {
 	store                transferstore.Store
 	prefix, cursor, last string
-	page                 []transferstore.Object
-	started, done        bool
+	// startAfter is a full key; listing excludes keys up to and including it.
+	startAfter    string
+	page          []transferstore.Object
+	started, done bool
 }
 
 func (i *iterator) next(ctx context.Context) (*transferstore.Object, error) {
@@ -64,7 +41,7 @@ func (i *iterator) next(ctx context.Context) (*transferstore.Object, error) {
 		if i.done {
 			return nil, nil
 		}
-		p, err := i.store.List(ctx, transferstore.ListOptions{Prefix: i.prefix, Cursor: i.cursor, Limit: 256})
+		p, err := i.store.List(ctx, transferstore.ListOptions{Prefix: i.prefix, StartAfter: i.startAfter, Cursor: i.cursor, Limit: 256})
 		if err != nil {
 			return nil, err
 		}
@@ -75,16 +52,31 @@ func (i *iterator) next(ctx context.Context) (*transferstore.Object, error) {
 	}
 	o := i.page[0]
 	i.page = i.page[1:]
-	if !strings.HasPrefix(o.Key, i.prefix) || i.started && o.Key <= i.last {
+	if !strings.HasPrefix(o.Key, i.prefix) || i.started && o.Key <= i.last || i.startAfter != "" && o.Key <= i.startAfter {
 		return nil, errors.New("storage returned an unordered or out-of-scope object listing")
 	}
 	i.last, i.started = o.Key, true
 	return &o, nil
 }
 
+// RunOptions tunes Run. The zero value compares from the first key.
+type RunOptions struct {
+	// StartAfter is a relative key: prefix comparisons list both sides after
+	// it. Object scope ignores it.
+	StartAfter string
+	// Workers bounds concurrent object comparisons; 0 selects the default for
+	// the mode.
+	Workers int
+	// OnBytes receives object content bytes as content mode reads them. It
+	// may be called concurrently.
+	OnBytes func(int64)
+}
+
 // Run merges two ordered listings. Removing the selected prefix on each side
 // defines the relative key; no path cleaning or slash normalization is applied.
-func Run(ctx context.Context, r Request, source, dest transferstore.Store, wrap ReaderWrapper, emit func(Row) error) error {
+// emit is called from one goroutine, in ascending relative key order, so once
+// emit returns for a row every key up to and including row.Key is counted.
+func Run(ctx context.Context, r Request, source, dest transferstore.Store, wrap ReaderWrapper, options RunOptions, emit func(Row) error) error {
 	if err := Validate(r); err != nil {
 		return err
 	}
@@ -112,6 +104,9 @@ func Run(ctx context.Context, r Request, source, dest transferstore.Store, wrap 
 		return emit(row)
 	}
 	a, b := iterator{store: source, prefix: r.SourcePrefix}, iterator{store: dest, prefix: r.DestinationPrefix}
+	if options.StartAfter != "" {
+		a.startAfter, b.startAfter = r.SourcePrefix+options.StartAfter, r.DestinationPrefix+options.StartAfter
+	}
 	x, err := a.next(ctx)
 	if err != nil {
 		return err

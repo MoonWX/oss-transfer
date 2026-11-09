@@ -37,6 +37,7 @@ import {
 } from "@mui/icons-material";
 import { api, useApi, useNotify } from "../lib/api";
 import { EmptyState, PageHeader } from "../components/Common";
+import SelectField from "../components/SelectField";
 type Connection = {
   alias: string;
   endpoint: string;
@@ -575,8 +576,7 @@ export default function StoragePage() {
                 gap: 2,
               }}
             >
-              <TextField
-                select
+              <SelectField
                 label={t("签名版本")}
                 value={optionValue(form.useV2SignerType)}
                 disabled={busy}
@@ -590,9 +590,8 @@ export default function StoragePage() {
                 <MenuItem value="inherit">{t("使用服务端默认值")}</MenuItem>
                 <MenuItem value="false">Signature V4</MenuItem>
                 <MenuItem value="true">Signature V2</MenuItem>
-              </TextField>
-              <TextField
-                select
+              </SelectField>
+              <SelectField
                 label={t("寻址方式")}
                 value={optionValue(form.pathStyleEnable)}
                 disabled={busy}
@@ -606,7 +605,7 @@ export default function StoragePage() {
                 <MenuItem value="inherit">{t("使用服务端默认值")}</MenuItem>
                 <MenuItem value="true">Path-style</MenuItem>
                 <MenuItem value="false">Virtual-hosted</MenuItem>
-              </TextField>
+              </SelectField>
             </Box>
             <FormControlLabel
               control={

@@ -68,6 +68,7 @@ import {
   type RegisteredNode,
   nodeName,
 } from "../lib/nodeRegistry";
+import SelectField from "../components/SelectField";
 const queues = [
   { key: "list", label: "对象扫描" },
   { key: "put", label: "对象传输" },
@@ -690,7 +691,7 @@ export default function NodesPage() {
                             ? formatDate(item.timestamp)
                             : item.timestampFormatted || "—"}
                         </TableCell>
-                        <TableCell sx={{ fontFamily: "monospace" }}>
+                        <TableCell sx={{ fontFamily: "var(--font-mono)" }}>
                           {nodeLabel(item.workerIp, item)}
                         </TableCell>
                         <TableCell>
@@ -942,8 +943,7 @@ export default function NodesPage() {
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {saveError && <Alert severity="error">{saveError}</Alert>}
-            <TextField
-              select
+            <SelectField
               fullWidth
               label={t("应用范围")}
               slotProps={{
@@ -968,9 +968,8 @@ export default function NodesPage() {
                   {nodeLabel(ip)}
                 </MenuItem>
               ))}
-            </TextField>
-            <TextField
-              select
+            </SelectField>
+            <SelectField
               fullWidth
               label={t("限制类型")}
               value={edit?.type ?? "put"}
@@ -993,7 +992,7 @@ export default function NodesPage() {
                   {rateNames[type]}
                 </MenuItem>
               ))}
-            </TextField>
+            </SelectField>
             <TextField
               autoFocus
               required

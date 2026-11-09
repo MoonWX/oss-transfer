@@ -21,6 +21,7 @@ import {
 import { api, ApiError } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
 import { formatBytes, formatNumber } from "./Common";
+import SelectField from "./SelectField";
 
 type Row = {
   number: number;
@@ -250,8 +251,7 @@ export default function ObjectComparison() {
       >
         <Stack spacing={2.5}>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-            <TextField
-              select
+            <SelectField
               label={t("比对范围")}
               value={form.scope}
               disabled={active || submitting}
@@ -262,9 +262,8 @@ export default function ObjectComparison() {
             >
               <MenuItem value="prefix">{t("存储桶 / 前缀")}</MenuItem>
               <MenuItem value="object">{t("单个对象")}</MenuItem>
-            </TextField>
-            <TextField
-              select
+            </SelectField>
+            <SelectField
               label={t("比对方式")}
               value={form.mode}
               disabled={active || submitting}
@@ -275,7 +274,7 @@ export default function ObjectComparison() {
             >
               <MenuItem value="metadata">{t("元数据（快速）")}</MenuItem>
               <MenuItem value="content">{t("内容 SHA-256（流式）")}</MenuItem>
-            </TextField>
+            </SelectField>
           </Stack>
           <Box
             sx={{
@@ -436,7 +435,7 @@ export default function ObjectComparison() {
                         {progress.mode === "content" && (
                           <TableCell
                             sx={{
-                              fontFamily: "monospace",
+                              fontFamily: "var(--font-mono)",
                               overflowWrap: "anywhere",
                               maxWidth: 260,
                             }}

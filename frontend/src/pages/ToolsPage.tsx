@@ -916,7 +916,7 @@ export default function ToolsPage() {
                             </TableCell>
                             <TableCell
                               sx={{
-                                fontFamily: "monospace",
+                                fontFamily: "var(--font-mono)",
                                 whiteSpace: "nowrap",
                               }}
                             >

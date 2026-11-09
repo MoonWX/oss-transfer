@@ -13,14 +13,78 @@ export const radii = {
   pill: "999px",
 } as const;
 
+// Space between a field and its open list. Above a field the list also has to
+// clear the field's floating label.
+export const popupGap = { below: 4, above: 12 } as const;
+
 export function groupedCardRadius(index: number, count: number) {
   const top = index === 0 ? radii.inset : radii.item;
   const bottom = index === count - 1 ? radii.inset : radii.item;
   return `${top} ${top} ${bottom} ${bottom}`;
 }
 
-export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
-  createTheme(
+// userAgentData exists only on secure origins, and consoles are often
+// opened over plain HTTP, where navigator.platform remains. iPadOS reports
+// MacIntel.
+function isApplePlatform() {
+  if (typeof navigator === "undefined") return false;
+  const data = (
+    navigator as Navigator & { userAgentData?: { platform?: string } }
+  ).userAgentData;
+  return /^(mac|iphone|ipad|ipod|ios)/i.test(
+    data?.platform || navigator.platform || "",
+  );
+}
+
+// macOS and iOS show their system font (San Francisco with PingFang SC or
+// Hiragino Sans). Everywhere else, Windows included, the console shows the
+// bundled Google Sans and, for Chinese, Noto Sans SC, as Google's own product
+// pages do, instead of Segoe UI and Microsoft YaHei (see fonts.css). No
+// system font keyword appears in that stack, so none can win over them.
+// Japanese keeps the system's Japanese fonts.
+export function fontStack(locale: Locale, apple = isApplePlatform()) {
+  if (apple)
+    return locale === "ja-JP"
+      ? '-apple-system, system-ui, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif'
+      : '-apple-system, system-ui, "PingFang SC", sans-serif';
+  return locale === "ja-JP"
+    ? '"Google Sans Variable", "Yu Gothic UI", "Yu Gothic", Meiryo, "Noto Sans CJK JP", sans-serif'
+    : '"Google Sans Variable", "Noto Sans SC Variable", sans-serif';
+}
+
+// Monospaced text (paths, object keys, commands) follows the same rule:
+// the system's monospaced font on Apple devices, Google Sans Code elsewhere.
+// Chinese or Japanese characters in it use the fonts above, not the
+// browser's monospaced CJK fallback (NSimSun on Windows).
+export function monoFontStack(locale: Locale, apple = isApplePlatform()) {
+  if (apple)
+    return locale === "ja-JP"
+      ? 'ui-monospace, SFMono-Regular, Menlo, "Hiragino Sans", monospace'
+      : 'ui-monospace, SFMono-Regular, Menlo, "PingFang SC", monospace';
+  return locale === "ja-JP"
+    ? '"Google Sans Code Variable", "Yu Gothic UI", "Noto Sans CJK JP", monospace'
+    : '"Google Sans Code Variable", "Noto Sans SC Variable", monospace';
+}
+
+export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") => {
+  // Menus and autocomplete lists float over cards and dialogs of the same
+  // color, so they need their own edge, shadow and, in dark mode, a lighter
+  // surface.
+  const floatingSurface =
+    mode === "light"
+      ? {
+          backgroundColor: "#ffffff",
+          border: "1px solid #dfe3ea",
+          boxShadow:
+            "0 1px 2px rgba(60, 64, 67, .3), 0 2px 6px 2px rgba(60, 64, 67, .15)",
+        }
+      : {
+          backgroundColor: "#272c34",
+          border: "1px solid #3d444e",
+          boxShadow:
+            "0 1px 3px rgba(0, 0, 0, .5), 0 4px 12px 3px rgba(0, 0, 0, .35)",
+        };
+  return createTheme(
     {
       palette: {
         mode,
@@ -42,10 +106,7 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
       },
       shape: { borderRadius: 16 },
       typography: {
-        fontFamily:
-          locale === "ja-JP"
-            ? 'Roboto, "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif'
-            : 'Roboto, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
+        fontFamily: fontStack(locale),
         h4: { fontSize: "1.85rem", fontWeight: 500, letterSpacing: "-.7px" },
         h5: { fontSize: "1.35rem", fontWeight: 500 },
         h6: { fontSize: "1.05rem", fontWeight: 500 },
@@ -64,6 +125,9 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
             // MUI's scroll lock compensates this html scroll container when a
             // dialog or menu opens; scrollbar-gutter would compensate twice.
             html: { overflowY: "scroll" },
+            // Monospaced text uses var(--font-mono) instead of "monospace".
+            ":root": { "--font-mono": monoFontStack(locale) },
+            "code, kbd, pre, samp": { fontFamily: "var(--font-mono)" },
             body: { margin: 0 },
             "*": { boxSizing: "border-box" },
             a: { color: "inherit" },
@@ -122,12 +186,35 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
           },
         },
         MuiAutocomplete: {
-          defaultProps: { size: "small" },
+          defaultProps: {
+            size: "small",
+            slotProps: {
+              popper: {
+                modifiers: [
+                  {
+                    name: "offset",
+                    options: {
+                      offset: ({ placement }: { placement: string }) => [
+                        0,
+                        placement.startsWith("top")
+                          ? popupGap.above
+                          : popupGap.below,
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
           styleOverrides: {
-            paper: { borderRadius: radii.inset },
+            paper: { borderRadius: radii.inset, ...floatingSurface },
             listbox: {
               padding: 8,
               "& .MuiAutocomplete-option": { borderRadius: radii.control },
+              // A selected option is tinted with the primary color; keep its
+              // secondary captions at 4.5:1 or more, also with keyboard focus.
+              '& .MuiAutocomplete-option[aria-selected="true"] .MuiTypography-caption':
+                { color: mode === "light" ? "#575d65" : "#c8ced6" },
             },
             inputRoot: {
               "&.MuiOutlinedInput-root": {
@@ -185,7 +272,7 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
         },
         MuiMenu: {
           styleOverrides: {
-            paper: { borderRadius: radii.inset },
+            paper: { borderRadius: radii.inset, ...floatingSurface },
             list: { padding: 8 },
           },
         },
@@ -232,3 +319,4 @@ export const makeTheme = (mode: "light" | "dark", locale: Locale = "zh-CN") =>
     },
     locale === "zh-CN" ? zhCN : locale === "ja-JP" ? jaJP : enUS,
   );
+};

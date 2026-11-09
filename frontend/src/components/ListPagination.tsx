@@ -9,6 +9,7 @@ import {
   Typography,
 } from "@mui/material";
 import { t, useI18n } from "../lib/i18n";
+import SelectField from "./SelectField";
 
 export const listPageSizes = [10, 25, 50, 100];
 
@@ -73,8 +74,7 @@ export default function ListPagination({
         >
           {`${count ? (current - 1) * pageSize + 1 : 0}–${Math.min(current * pageSize, count)} / ${count}`}
         </Typography>
-        <TextField
-          select
+        <SelectField
           size="small"
           label={t("每页")}
           value={pageSize}
@@ -86,7 +86,7 @@ export default function ListPagination({
               {size}
             </MenuItem>
           ))}
-        </TextField>
+        </SelectField>
       </Stack>
       <Pagination
         role="presentation"

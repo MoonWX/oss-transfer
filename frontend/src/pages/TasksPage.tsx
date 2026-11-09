@@ -118,6 +118,7 @@ import {
   StatusChip,
   statusLabels,
 } from "../components/Common";
+import SelectField from "../components/SelectField";
 
 type Task = Record<string, any> & { taskIndex: number; status: string };
 const isLocal = (task: Task) =>
@@ -2257,8 +2258,7 @@ export default function TasksPage({
                   },
                 }}
               />
-              <TextField
-                select
+              <SelectField
                 label={tr("任务状态")}
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
@@ -2269,9 +2269,8 @@ export default function TasksPage({
                     {statusLabels[key]}
                   </MenuItem>
                 ))}
-              </TextField>
-              <TextField
-                select
+              </SelectField>
+              <SelectField
                 label={tr("传输方向")}
                 value={direction}
                 onChange={(e) => setDirection(e.target.value)}
@@ -2280,9 +2279,8 @@ export default function TasksPage({
                 <MenuItem value="OSS_TO_OSS">OSS → OSS</MenuItem>
                 <MenuItem value="OSS_TO_LOCAL">{tr("OSS → 本地")}</MenuItem>
                 <MenuItem value="LOCAL_TO_OSS">{tr("本地 → OSS")}</MenuItem>
-              </TextField>
-              <TextField
-                select
+              </SelectField>
+              <SelectField
                 label={tr("执行节点")}
                 value={worker}
                 onChange={(e) => setWorker(e.target.value)}
@@ -2294,7 +2292,7 @@ export default function TasksPage({
                     {label}
                   </MenuItem>
                 ))}
-              </TextField>
+              </SelectField>
             </Box>
             {selected.length > 0 && (
               <Stack
@@ -2529,7 +2527,7 @@ export default function TasksPage({
                           variant="caption"
                           sx={{
                             overflowWrap: "anywhere",
-                            fontFamily: "monospace",
+                            fontFamily: "var(--font-mono)",
                           }}
                         >
                           {workers(task, nodeLabel)}

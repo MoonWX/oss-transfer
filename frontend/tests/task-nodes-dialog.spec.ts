@@ -995,3 +995,55 @@ test("node dialog keeps older equal-split views without a demand field", async (
     dialog(page).getByTestId("task-node-10.0.1.12"),
   ).not.toContainText("需求");
 });
+
+for (const height of [640, 720, 800, 900]) {
+  test(`the add-Agent menu never covers its button in a long dialog at 1280x${height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const nodes = ["12", "13", "16", "17", "18", "19"].map((suffix, index) =>
+      member(`10.0.1.${suffix}`, { scanner: index === 0 }),
+    );
+    await setup(page, {
+      view: () =>
+        nodesView({
+          nodes,
+          candidates: [
+            { id: "node-14", address: "10.0.1.14", eligible: true, reason: "" },
+            { id: "node-20", address: "10.0.1.20", eligible: true, reason: "" },
+            { id: "node-21", address: "10.0.1.21", eligible: true, reason: "" },
+            {
+              id: "node-15",
+              address: "10.0.1.15",
+              eligible: false,
+              reason: "Agent 版本过旧",
+            },
+          ],
+        }),
+    });
+    await openDialog(page);
+    const add = dialog(page).getByRole("button", {
+      name: "添加 Agent",
+      exact: true,
+    });
+    await add.scrollIntoViewIfNeeded();
+    // The open menu hides the dialog from role queries, so measure first.
+    const button = (await (await add.elementHandle())!.boundingBox())!;
+    await add.click();
+    const menu = page.locator(".MuiMenu-paper");
+    await expect(menu).toHaveCSS("transform", "none");
+    const box = (await menu.boundingBox())!;
+    expect(
+      box.y + box.height <= button.y || box.y >= button.y + button.height,
+    ).toBe(true);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(height);
+    expect(
+      Math.abs(box.x + box.width - (button.x + button.width)),
+    ).toBeLessThan(2);
+    await expect(
+      page.getByRole("menuitem", { name: /10\.0\.1\.21/ }),
+    ).toBeVisible();
+  });
+}

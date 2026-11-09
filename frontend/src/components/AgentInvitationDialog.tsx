@@ -280,7 +280,10 @@ export default function AgentInvitationDialog({
                   slotProps={{
                     input: {
                       readOnly: true,
-                      sx: { fontFamily: "monospace", fontSize: "0.85rem" },
+                      sx: {
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "0.85rem",
+                      },
                     },
                   }}
                 />

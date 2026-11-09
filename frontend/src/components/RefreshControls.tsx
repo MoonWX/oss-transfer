@@ -22,6 +22,7 @@ import {
   isRefreshSeconds,
   useRefreshPreference,
 } from "../lib/refreshPreference";
+import SelectField from "./SelectField";
 
 export default function RefreshControls({
   onRefresh,
@@ -57,8 +58,7 @@ export default function RefreshControls({
   return (
     <>
       <Stack direction="row" spacing={0.5} alignItems="center">
-        <TextField
-          select
+        <SelectField
           size="small"
           label={t("自动刷新")}
           value={preset ? refreshSeconds : "custom"}
@@ -79,7 +79,7 @@ export default function RefreshControls({
               ? t("自定义…")
               : t("自定义（{p1} 秒）", { p1: refreshSeconds })}
           </MenuItem>
-        </TextField>
+        </SelectField>
         <Tooltip title={t(refreshLabel)}>
           <span>
             <IconButton

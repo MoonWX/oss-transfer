@@ -333,9 +333,13 @@ test("delayed and failed settings never become an unlimited label, retry can rec
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let fail = true;
+  // Requests keep failing until the retry button is clicked, so the 1-second
+  // auto refresh cannot recover first and remove the button.
   await page.route(detailPath, async (route) => {
-    if (fail) {
+    const retried = await page
+      .evaluate(() => "retryClicked" in window)
+      .catch(() => false);
+    if (!retried) {
       await delayed;
       await route.fulfill({
         status: 503,
@@ -355,7 +359,13 @@ test("delayed and failed settings never become an unlimited label, retry can rec
   await expect(
     page.getByText(/无法读取任务限速：节点信息暂不可用/),
   ).toBeVisible();
-  fail = false;
+  await page.evaluate(() =>
+    document.addEventListener(
+      "click",
+      () => Object.assign(window, { retryClicked: true }),
+      { capture: true, once: true },
+    ),
+  );
   await page.getByRole("button", { name: "重试读取任务限速" }).click();
   await expect(
     page.getByText("带宽上限 80 Mbps", { exact: true }),
@@ -557,6 +567,10 @@ test("a lost PUT response rechecks actual state and confirms success only when a
     if (route.request().method() === "PUT") {
       current = route.request().postDataJSON().limitMbps;
       writes.push(current);
+      // The second write reaches only one node. Changing this here rather
+      // than before opening the dialog keeps the 1-second auto refresh from
+      // showing the partial state before Apply is clicked.
+      if (writes.length === 2) applied = false;
       await route.abort("failed");
       return;
     }
@@ -596,7 +610,6 @@ test("a lost PUT response rechecks actual state and confirms success only when a
     .getByRole("alert", { includeHidden: true })
     .getByRole("button", { name: /Close|关闭/, includeHidden: true })
     .click();
-  applied = false;
   await page.getByRole("button", { name: "调整", exact: true }).click();
   await limitField(page).fill("30");
   await page.getByRole("button", { name: "应用", exact: true }).click();

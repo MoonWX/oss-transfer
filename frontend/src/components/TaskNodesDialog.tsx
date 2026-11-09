@@ -34,7 +34,8 @@ import { api, ApiError, useNotify } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
 import { useNodeLabels } from "../lib/workerStatus";
 import type { NodeDisplay, NodeLabels } from "../lib/nodeRegistry";
-import { groupedCardRadius, radii } from "../theme";
+import { useMenuPlacement } from "../lib/menuPlacement";
+import { groupedCardRadius, popupGap, radii } from "../theme";
 import { formatBytes, formatNumber } from "./Common";
 
 export type NodeShare = {
@@ -347,6 +348,9 @@ export default function TaskNodesDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  // A button has no floating label to clear, so the small gap also applies
+  // when the menu opens above it.
+  const addMenu = useMenuPlacement("right", popupGap.below);
   const sequence = useRef(0);
   const controller = useRef<AbortController | null>(null);
   const reading = useRef(false);
@@ -998,9 +1002,18 @@ export default function TaskNodesDialog({
         anchorEl={menuAnchor}
         open={!!menuAnchor}
         onClose={() => setMenuAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { sx: { maxWidth: 420, minWidth: 260 } } }}
+        anchorOrigin={addMenu.anchorOrigin}
+        transformOrigin={addMenu.transformOrigin}
+        slotProps={{
+          paper: {
+            sx: { maxWidth: 420, minWidth: 260 },
+            style: { maxHeight: addMenu.maxHeight },
+          },
+          transition: {
+            onEnter: (node: HTMLElement) => addMenu.onEnter(menuAnchor, node),
+            onExited: addMenu.onExited,
+          },
+        }}
       >
         {offered.map((candidate) => (
           <MenuItem

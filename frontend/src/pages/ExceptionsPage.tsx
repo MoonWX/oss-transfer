@@ -1,4 +1,3 @@
-import { radii } from "../theme";
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
 import {
@@ -80,6 +79,7 @@ import {
   formatBytes,
   formatNumber,
 } from "../components/Common";
+import SelectField from "../components/SelectField";
 
 type Failure = {
   taskIndex?: number;
@@ -931,18 +931,8 @@ export default function ExceptionsPage() {
               freeSolo
               forcePopupIcon
               openOnFocus
-              slotProps={{
-                paper: {
-                  elevation: 3,
-                  sx: {
-                    mt: 0.5,
-                    border: 1,
-                    borderColor: "divider",
-                    borderRadius: radii.inset,
-                  },
-                },
-                listbox: { sx: { maxHeight: 320 } },
-              }}
+              // Short windows keep MUI's 40vh, so the list fits above or below.
+              slotProps={{ listbox: { sx: { maxHeight: "min(320px, 40vh)" } } }}
               options={[
                 "",
                 ...taskOptions.map((task) => String(task.taskIndex)),
@@ -999,8 +989,7 @@ export default function ExceptionsPage() {
                 />
               )}
             />
-            <TextField
-              select
+            <SelectField
               label={tr("执行节点")}
               size="small"
               value={draft.node}
@@ -1021,11 +1010,10 @@ export default function ExceptionsPage() {
                   {nodeLabel(ip, result?.nodeDisplays?.[ip])}
                 </MenuItem>
               ))}
-            </TextField>
+            </SelectField>
             {isLocal ? (
               <>
-                <TextField
-                  select
+                <SelectField
                   label={tr("迁移方向")}
                   size="small"
                   value={draft.direction}
@@ -1036,7 +1024,7 @@ export default function ExceptionsPage() {
                   <MenuItem value="">{tr("全部方向")}</MenuItem>
                   <MenuItem value="OSS_TO_LOCAL">{tr("OSS → 本地")}</MenuItem>
                   <MenuItem value="LOCAL_TO_OSS">{tr("本地 → OSS")}</MenuItem>
-                </TextField>
+                </SelectField>
                 <TextField
                   label={tr("端点 / 路径")}
                   size="small"
@@ -1065,8 +1053,7 @@ export default function ExceptionsPage() {
                     updateDraft("destination", event.target.value)
                   }
                 />
-                <TextField
-                  select
+                <SelectField
                   label={tr("每节点读取上限")}
                   size="small"
                   value={draft.limit}
@@ -1077,7 +1064,7 @@ export default function ExceptionsPage() {
                       {tr("{count} 条", { count: formatNumber(Number(value)) })}
                     </MenuItem>
                   ))}
-                </TextField>
+                </SelectField>
               </>
             )}
           </Box>
@@ -1346,7 +1333,7 @@ export default function ExceptionsPage() {
                           title={item.key || item.localPath || "—"}
                           sx={{
                             overflowWrap: "anywhere",
-                            fontFamily: "monospace",
+                            fontFamily: "var(--font-mono)",
                             display: "-webkit-box",
                             WebkitLineClamp: 2,
                             WebkitBoxOrient: "vertical",
@@ -1361,7 +1348,7 @@ export default function ExceptionsPage() {
                               variant="body2"
                               title={item.destinationKey}
                               sx={{
-                                fontFamily: "monospace",
+                                fontFamily: "var(--font-mono)",
                                 overflowWrap: "anywhere",
                                 whiteSpace: "pre-wrap",
                                 display: "-webkit-box",
@@ -1412,7 +1399,7 @@ export default function ExceptionsPage() {
                               : tr("调度阶段")
                           }
                           sx={{
-                            fontFamily: "monospace",
+                            fontFamily: "var(--font-mono)",
                             overflowWrap: "anywhere",
                             display: "-webkit-box",
                             WebkitLineClamp: 2,
@@ -1671,7 +1658,7 @@ export default function ExceptionsPage() {
                         m: 0,
                         whiteSpace: "pre-wrap",
                         overflowWrap: "anywhere",
-                        fontFamily: "monospace",
+                        fontFamily: "var(--font-mono)",
                       }}
                     >
                       {key === "retryStatus"

@@ -64,6 +64,7 @@ import {
   validateOssKeyMapping,
   type OssKeyMappingMode,
 } from "../lib/ossKeyMapping";
+import SelectField from "../components/SelectField";
 
 type Direction = "OSS_TO_OSS" | "OSS_TO_LOCAL" | "LOCAL_TO_OSS";
 type Connection = { alias: string; endpoint: string };
@@ -381,8 +382,7 @@ function OssFields({
   };
   return (
     <>
-      <TextField
-        select
+      <SelectField
         required
         fullWidth
         label={tr("{value1}存储连接", { value1: tr(side) })}
@@ -398,7 +398,7 @@ function OssFields({
             {config.alias}
           </MenuItem>
         ))}
-      </TextField>
+      </SelectField>
       <Stack spacing={1}>
         <Autocomplete
           freeSolo
@@ -1337,8 +1337,7 @@ export default function CreateTransfer() {
             }
             onBucket={(value) => update({ sourceBucket: value })}
           />
-          <TextField
-            select
+          <SelectField
             label={tr("迁移范围")}
             value={form.sourceMode}
             onChange={(e) =>
@@ -1350,7 +1349,7 @@ export default function CreateTransfer() {
             <MenuItem value="all">{tr("整个存储桶")}</MenuItem>
             <MenuItem value="prefix">{tr("按对象前缀筛选")}</MenuItem>
             <MenuItem value="object">{tr("单个对象")}</MenuItem>
-          </TextField>
+          </SelectField>
           {form.sourceMode !== "all" && (
             <TextField
               required
@@ -1409,8 +1408,7 @@ export default function CreateTransfer() {
           />
           {form.direction === "LOCAL_TO_OSS" ? (
             <>
-              <TextField
-                select
+              <SelectField
                 label={tr("目标对象命名")}
                 value={form.destinationMode}
                 onChange={(e) =>
@@ -1425,7 +1423,7 @@ export default function CreateTransfer() {
                 </MenuItem>
                 <MenuItem value="prefix">{tr("添加目标前缀")}</MenuItem>
                 <MenuItem value="object">{tr("指定单文件目标 Key")}</MenuItem>
-              </TextField>
+              </SelectField>
               {form.destinationMode !== "original" && (
                 <TextField
                   required
@@ -1446,8 +1444,7 @@ export default function CreateTransfer() {
             </>
           ) : (
             <>
-              <TextField
-                select
+              <SelectField
                 label={tr("目标对象命名")}
                 value={form.ossMappingMode}
                 onChange={(event) =>
@@ -1461,7 +1458,7 @@ export default function CreateTransfer() {
                     {keyMappingLabels[mode]}
                   </MenuItem>
                 ))}
-              </TextField>
+              </SelectField>
               {form.ossMappingMode !== "PRESERVE" && (
                 <TextField
                   required={form.ossMappingMode !== "REPLACE_PREFIX"}
@@ -1840,8 +1837,7 @@ export default function CreateTransfer() {
                           </Tooltip>
                         </Stack>
                       )}
-                      <TextField
-                        select
+                      <SelectField
                         label={tr("目标已存在时")}
                         value={form.conflictPolicy}
                         onChange={(e) =>
@@ -1858,10 +1854,9 @@ export default function CreateTransfer() {
                         <MenuItem value="OVERWRITE">
                           {tr("覆盖同名对象或文件")}
                         </MenuItem>
-                      </TextField>
+                      </SelectField>
                       {form.direction !== "LOCAL_TO_OSS" && (
-                        <TextField
-                          select
+                        <SelectField
                           label={tr("节点分发方式")}
                           value={form.distributionMode}
                           onChange={(e) =>
@@ -1882,7 +1877,7 @@ export default function CreateTransfer() {
                         >
                           <MenuItem value="affinity">{tr("亲和分发")}</MenuItem>
                           <MenuItem value="balanced">{tr("均衡分发")}</MenuItem>
-                        </TextField>
+                        </SelectField>
                       )}
                       <TextField
                         label={tr("修改时间晚于（可选）")}
@@ -1900,8 +1895,7 @@ export default function CreateTransfer() {
                         slotProps={{ inputLabel: { shrink: true } }}
                       />
                       {form.direction === "OSS_TO_LOCAL" && (
-                        <TextField
-                          select
+                        <SelectField
                           label={tr("分段下载")}
                           value={form.rangedDownload}
                           onChange={(e) =>
@@ -1915,7 +1909,7 @@ export default function CreateTransfer() {
                         >
                           <MenuItem value="auto">{tr("自动（默认）")}</MenuItem>
                           <MenuItem value="off">{tr("停用")}</MenuItem>
-                        </TextField>
+                        </SelectField>
                       )}
                       <Box sx={{ gridColumn: "1 / -1" }}>
                         <Divider sx={{ mb: 2.5 }} />
@@ -1981,8 +1975,7 @@ export default function CreateTransfer() {
                       gap: 2,
                     }}
                   >
-                    <TextField
-                      select
+                    <SelectField
                       label={tr("导入类型")}
                       value={batchKind}
                       onChange={(e) => {
@@ -1997,9 +1990,8 @@ export default function CreateTransfer() {
                         {tr("OSS 子任务恢复 / 导入")}
                       </MenuItem>
                       <MenuItem value="local">{tr("本地迁移请求")}</MenuItem>
-                    </TextField>
-                    <TextField
-                      select
+                    </SelectField>
+                    <SelectField
                       label={tr("数据格式")}
                       value={batchKind === "buckets" ? batchFormat : "json"}
                       disabled={batchKind !== "buckets"}
@@ -2010,7 +2002,7 @@ export default function CreateTransfer() {
                     >
                       <MenuItem value="json">{tr("JSON 数组")}</MenuItem>
                       <MenuItem value="csv">{tr("逗号分隔文本")}</MenuItem>
-                    </TextField>
+                    </SelectField>
                   </Box>
                   {batchKind === "tasks" && (
                     <Alert severity="info">
@@ -2041,7 +2033,7 @@ export default function CreateTransfer() {
                     slotProps={{
                       input: {
                         sx: {
-                          fontFamily: "monospace",
+                          fontFamily: "var(--font-mono)",
                           fontSize: 13,
                           lineHeight: 1.8,
                         },

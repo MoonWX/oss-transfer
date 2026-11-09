@@ -15,7 +15,9 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@fontsource/roboto": "^5.3.0",
+    "@fontsource-variable/google-sans": "^5.3.2",
+    "@fontsource-variable/google-sans-code": "^5.3.2",
+    "@fontsource-variable/noto-sans-sc": "^5.3.1",
     "@mui/icons-material": "^7.3.11",
     "@mui/material": "^7.3.11",
     "react": "^19.3.0",

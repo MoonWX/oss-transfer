@@ -14,8 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
-import "@fontsource/roboto/latin-400.css";
-import "@fontsource/roboto/latin-500.css";
+import "../src/fonts";
 import { makeTheme } from "../src/theme";
 
 function InputGeometryFixture() {

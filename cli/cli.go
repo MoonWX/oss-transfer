@@ -831,6 +831,8 @@ func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buck
 	}
 	if bucket := getString(data, "checkedBucket"); bucket != "" {
 		fmt.Fprint(out, cliTextf(out, "存储桶级检查: 已列举存储桶 %s 中的对象\n", safeCLIText(bucket)))
+	} else if bucket := getString(data, "bucketCheckFailed"); bucket != "" {
+		fmt.Fprint(out, cliTextf(out, "存储桶级检查: 存储桶 %s 未通过\n", safeCLIText(bucket)))
 	}
 	if warning := getString(data, "warning"); warning != "" {
 		fmt.Fprintf(out, "%s %s\n", cliText(out, "警告:"), safeCLIText(warning))

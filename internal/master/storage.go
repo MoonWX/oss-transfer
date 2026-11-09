@@ -218,6 +218,9 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()))
 			return
 		}
+		if outcome.failure == nil {
+			outcome.failure = outcome.saveFailure
+		}
 		if outcome.failure != nil {
 			storageFailureResponse(w, 400, "Storage validation failed: ", outcome.failure)
 			return
@@ -332,8 +335,13 @@ func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil}
-			if outcome.check.Bucket != "" {
+			// checkedBucket names a bucket whose check passed; a bucket whose
+			// check failed without blocking is named by bucketCheckFailed,
+			// and the warning says why.
+			if outcome.check.Bucket != "" && outcome.check.BucketError == "" {
 				result["checkedBucket"] = outcome.check.Bucket
+			} else if outcome.check.Bucket != "" {
+				result["bucketCheckFailed"] = outcome.check.Bucket
 			}
 			if !outcome.complete {
 				result["bucketCheckSupported"] = false

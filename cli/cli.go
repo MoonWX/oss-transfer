@@ -445,7 +445,7 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 		}
 	}
 	// Task limits list their execution nodes too: match them before the node table.
-	if renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) || renderTaskNodesResult(out, result) || renderTaskLimitsResult(out, result) {
+	if renderTaskReportResult(out, result) || renderMaintenanceResult(out, result) || renderTaskRuntimeResult(out, result) || renderTaskNodesResult(out, result) || renderTaskLimitsResult(out, result) {
 		return
 	}
 	if renderAdminTable(out, result, data) {

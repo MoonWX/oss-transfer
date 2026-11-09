@@ -149,6 +149,7 @@ const cliTaskHelp = `任务管理
 list/trash 的 --limit 为 1–10000；--before-id 读取更早任务，list --all 自动读取全部分页。
 --child 按编号直接读取详情，不加载其他子任务；同编号在多个节点存在时须用 --node。
 --watch 支持 list/show/children/progress/cleanup-status/trash 及不带新值的 bandwidth/limits。
+report 保存 ZIP 后显示各结果的对象数；报告不完整时列出原因并以退出码 3 结束。
 删除操作只处理迁移记录，源端和目标端的数据对象不受影响。
 `
 

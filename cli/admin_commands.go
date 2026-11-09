@@ -645,7 +645,11 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 		if err := client.Download("GET", "/api/master/local-transfers/report", nil, o.Value("output")); err != nil {
 			return nil, err
 		}
-		return map[string]interface{}{"success": true, "output": o.Value("output"), "message": client.text("本地迁移报告已保存"), "scope": "all-local-transfers"}, nil
+		result := map[string]interface{}{"success": true, "output": o.Value("output"), "message": client.text("本地迁移报告已保存"), "scope": "all-local-transfers"}
+		if err := taskReportCompleteness(o.Value("output"), result); err != nil {
+			return result, err
+		}
+		return result, nil
 	}
 	var result map[string]interface{}
 	if kind == "local" {

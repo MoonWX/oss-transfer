@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,7 +22,8 @@ func installToolRoutes(s *Server) {
 			fail(w, 500, "Cannot read Master configuration")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"isMaster": true, "role": "master", "masterWebUrl": config.PublicURL, "localTransferSupported": false})
+		// Task time filters are read in this zone; the console names it.
+		writeJSON(w, 200, map[string]any{"isMaster": true, "role": "master", "masterWebUrl": config.PublicURL, "localTransferSupported": false, "timeZone": serverTimeZone(s.options.Now().In(time.Local))})
 	}))
 	s.mux.HandleFunc("GET /api/master/object-metadata", s.adminOnly(s.compareMetadata))
 	comparisons := newComparisonAPI(s)
@@ -37,6 +39,25 @@ func installToolRoutes(s *Server) {
 	// carries the login session instead.
 	s.mux.HandleFunc("POST /api/master/comparisons/{id}/export", comparisons.consumeExportTicket)
 }
+
+// serverTimeZone names the zone of t for people: "UTC", "UTC+08:00" or, with
+// a distinct abbreviation, "CST (UTC+08:00)".
+func serverTimeZone(t time.Time) string {
+	name, offset := t.Zone()
+	sign := "+"
+	if offset < 0 {
+		sign, offset = "-", -offset
+	}
+	utc := "UTC"
+	if offset != 0 {
+		utc = fmt.Sprintf("UTC%s%02d:%02d", sign, offset/3600, offset%3600/60)
+	}
+	if name == "" || name == "UTC" || strings.HasPrefix(name, "+") || strings.HasPrefix(name, "-") {
+		return utc
+	}
+	return name + " (" + utc + ")"
+}
+
 func comparisonEndpoint(value string, snapshot storageconfig.Snapshot) (execution.Endpoint, error) {
 	alias, bucket, hasAlias := strings.Cut(value, "/")
 	if !hasAlias {

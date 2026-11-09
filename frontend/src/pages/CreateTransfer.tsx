@@ -65,6 +65,13 @@ import {
   type OssKeyMappingMode,
 } from "../lib/ossKeyMapping";
 import SelectField from "../components/SelectField";
+import {
+  conflictPolicies,
+  conflictPolicyHelp,
+  conflictPolicyLabel,
+  isConflictPolicy,
+  type ConflictPolicy,
+} from "../lib/conflictPolicy";
 
 type Direction = "OSS_TO_OSS" | "OSS_TO_LOCAL" | "LOCAL_TO_OSS";
 type Connection = { alias: string; endpoint: string };
@@ -101,7 +108,7 @@ type TransferForm = {
   targetRelativePath: string;
   bindings: Binding[];
   eligibleWorkerNodes: string[] | null;
-  conflictPolicy: "SKIP" | "OVERWRITE";
+  conflictPolicy: ConflictPolicy;
   distributionMode: "affinity" | "balanced";
   rangedDownload: RangedDownload;
   dateAfter: string;
@@ -259,7 +266,7 @@ function readDraft(): Draft | null {
       !["PRESERVE", "ADD_PREFIX", "REPLACE_PREFIX", "EXACT_KEY"].includes(
         form.ossMappingMode,
       ) ||
-      !["SKIP", "OVERWRITE"].includes(form.conflictPolicy) ||
+      !isConflictPolicy(form.conflictPolicy) ||
       !["affinity", "balanced"].includes(form.distributionMode) ||
       !["auto", "off"].includes(form.rangedDownload) ||
       !Array.isArray(form.bindings) ||
@@ -684,6 +691,11 @@ export default function CreateTransfer() {
           form.ossTargetKey,
         ),
         overwrite: form.conflictPolicy === "OVERWRITE",
+        // SKIP and OVERWRITE keep the payload sent before the policy existed.
+        conflictPolicy:
+          form.conflictPolicy === "OVERWRITE_CHANGED"
+            ? form.conflictPolicy
+            : undefined,
         eligibleWorkerNodes: selectedWorkerNodes,
       };
     }
@@ -1857,14 +1869,13 @@ export default function CreateTransfer() {
                               .value as TransferForm["conflictPolicy"],
                           })
                         }
-                        helperText={tr("覆盖会替换目标同名对象或文件。")}
+                        helperText={conflictPolicyHelp(form.conflictPolicy)}
                       >
-                        <MenuItem value="SKIP">
-                          {tr("跳过同名对象或文件")}
-                        </MenuItem>
-                        <MenuItem value="OVERWRITE">
-                          {tr("覆盖同名对象或文件")}
-                        </MenuItem>
+                        {conflictPolicies.map((policy) => (
+                          <MenuItem key={policy} value={policy}>
+                            {conflictPolicyLabel(policy)}
+                          </MenuItem>
+                        ))}
                       </SelectField>
                       {form.direction !== "LOCAL_TO_OSS" && (
                         <SelectField
@@ -2272,7 +2283,7 @@ export default function CreateTransfer() {
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     {tab === 0
-                      ? `${form.conflictPolicy === "SKIP" ? tr("跳过同名对象或文件") : tr("覆盖同名对象或文件")} · ${distributionLabel(effectiveDistributionMode, form.direction)}`
+                      ? `${conflictPolicyLabel(form.conflictPolicy)} · ${distributionLabel(effectiveDistributionMode, form.direction)}`
                       : tr("提交前请核对存储连接和迁移路径。")}
                     {tab === 0 &&
                     form.direction === "OSS_TO_LOCAL" &&

@@ -247,6 +247,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"no Agent is online; join an Agent before validating storage":                          {"No Agent is online. Add an execution node before testing this connection.", "没有在线执行节点，请先添加执行节点再测试连接。", "オンラインの実行ノードがありません。実行ノードを追加してから接続をテストしてください。"},
 	"no online execution Agent":                                                            {"no online execution Agent", "没有在线执行节点", "オンラインの実行ノードがありません"},
 	"objectKey conflicts with local source path":                                           {"objectKey conflicts with local source path", "objectKey 与本地源路径冲突", "objectKey がローカルの転送元パスと競合しています"},
+	"Agent %s does not support overwriting changed objects; upgrade it first":              {"Agent %s does not support overwriting changed objects; upgrade it first", "执行节点 %s 版本过旧，不支持“覆盖有变化的对象”，请先升级", "Agent %s は古いため「変更されたオブジェクトを上書き」に対応していません。先に更新してください"},
 	"overwrite and conflictPolicy disagree":                                                {"overwrite and conflictPolicy disagree", "overwrite 与 conflictPolicy 不一致", "overwrite と conflictPolicy が一致しません"},
 	"password must contain 1 to 1024 bytes":                                                {"password must contain 1 to 1024 bytes", "密码长度须为 1 到 1024 字节", "パスワードは 1 から 1024 バイトで入力してください"},
 	"prefix and objectKey are mutually exclusive":                                          {"prefix and objectKey are mutually exclusive", "prefix 与 objectKey 不能同时设置", "prefix と objectKey は同時に指定できません"},

@@ -21,6 +21,32 @@ func cliTaskStatus(status string) string {
 	}
 }
 
+// cliConflictPolicyOption maps a --conflict value to the API policy.
+func cliConflictPolicyOption(value string) (string, bool) {
+	switch strings.ToLower(strings.ReplaceAll(value, "-", "_")) {
+	case "skip":
+		return "SKIP", true
+	case "overwrite":
+		return "OVERWRITE", true
+	case "changed", "overwrite_changed":
+		return "OVERWRITE_CHANGED", true
+	}
+	return "", false
+}
+
+// cliConflictPolicy names a task's conflict policy as the console does.
+func cliConflictPolicy(out io.Writer, policy string) string {
+	switch policy {
+	case "SKIP":
+		return cliText(out, "跳过同名对象或文件")
+	case "OVERWRITE":
+		return cliText(out, "覆盖同名对象或文件")
+	case "OVERWRITE_CHANGED":
+		return cliText(out, "覆盖有变化的对象")
+	}
+	return policy
+}
+
 func renderTaskHistoryPage(out io.Writer, data map[string]interface{}, action string) {
 	if before := getInt(data, "nextBeforeId"); before > 0 {
 		fmt.Fprintf(out, cliText(out, "更早记录：task %s --before-id %d（可沿用原有筛选参数）\n"), action, before)

@@ -573,8 +573,8 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
   const [form, setForm] = useState(() => ({
     sourceBucket: params.get("sourceBucket") || "",
     destBucket: params.get("destBucket") || "",
-    sourcePrefix: params.get("sourceKey") || "",
-    destPrefix: params.get("destKey") || "",
+    sourcePrefix: params.get("sourceKey") || params.get("sourcePrefix") || "",
+    destPrefix: params.get("destKey") || params.get("destPrefix") || "",
     scope: params.has("sourceKey") ? "object" : "prefix",
     mode: "metadata",
   }));

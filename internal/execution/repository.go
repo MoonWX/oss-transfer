@@ -91,8 +91,8 @@ func validate(job Job) (string, error) {
 	if job.RangedDownload != "" && job.RangedDownload != RangedDownloadAuto && job.RangedDownload != RangedDownloadOff {
 		return "", errors.New("ranged download must be auto or off")
 	}
-	if job.ConflictPolicy != "SKIP" && job.ConflictPolicy != "OVERWRITE" {
-		return "", errors.New("conflict policy must be SKIP or OVERWRITE")
+	if !ValidConflictPolicy(job.ConflictPolicy) {
+		return "", errors.New("conflict policy must be SKIP, OVERWRITE or OVERWRITE_CHANGED")
 	}
 	if len(job.Items) > 128 {
 		return "", errors.New("a child accepts at most 128 items")

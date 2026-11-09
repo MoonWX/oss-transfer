@@ -64,7 +64,9 @@ test("local summary keeps details available before any child request and loads c
     panel.getByText(summary.errorMessage, { exact: true }),
   ).toBeVisible();
   await expect(panel.getByText("/mnt/datasets", { exact: true })).toBeVisible();
-  await expect(panel.getByText("SKIP", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByText("跳过同名对象或文件", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByTestId("task-children-region")).not.toBeInViewport();
   expect(childReads).toBe(0);
   expect(summaryRequests.length).toBeGreaterThan(0);

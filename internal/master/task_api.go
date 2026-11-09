@@ -309,7 +309,7 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 		spec.ConflictPolicy = "OVERWRITE"
 	}
 	if row.ConflictPolicy != "" {
-		if row.ConflictPolicy != "SKIP" && row.ConflictPolicy != "OVERWRITE" {
+		if !execution.ValidConflictPolicy(row.ConflictPolicy) {
 			return spec, nil, nil, errors.New("invalid conflict policy")
 		}
 		if row.Overwrite != nil && (*row.Overwrite != (row.ConflictPolicy == "OVERWRITE")) {
@@ -617,6 +617,39 @@ func joinAgentPath(root, key string) string {
 }
 
 func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kind string, sets ...nodeDisplaySet) (task.Spec, []bindingCheck, error) {
+	var displays nodeDisplaySet
+	if len(sets) > 0 {
+		displays = sets[0]
+	} else {
+		displays = s.nodeDisplaySnapshot()
+	}
+	spec, checks, err := s.resolveTaskNodes(ctx, row, kind, displays)
+	if err == nil {
+		err = s.checkConflictPolicySupport(ctx, spec, displays)
+	}
+	return spec, checks, err
+}
+
+// checkConflictPolicySupport refuses a policy that one of the selected Agents
+// predates: such an Agent would reject every child of the task.
+func (s *Server) checkConflictPolicySupport(ctx context.Context, spec task.Spec, displays nodeDisplaySet) error {
+	if spec.ConflictPolicy != execution.ConflictOverwriteChanged {
+		return nil
+	}
+	for _, node := range spec.Nodes {
+		caps, err := s.tasks.capabilities(ctx, node)
+		label := displays.lookup(node.ID, node.Address).DisplayLabel
+		if err != nil {
+			return fmt.Errorf(localizeContext(ctx, "execution Agent %q is unavailable"), label)
+		}
+		if !conflictPolicyCapable(spec.ConflictPolicy, caps) {
+			return fmt.Errorf(localizeContext(ctx, "Agent %s does not support overwriting changed objects; upgrade it first"), label)
+		}
+	}
+	return nil
+}
+
+func (s *Server) resolveTaskNodes(ctx context.Context, row taskCreateRequest, kind string, displays nodeDisplaySet) (task.Spec, []bindingCheck, error) {
 	spec, bindings, requested, err := normalizeTaskRequest(row, kind)
 	if err != nil {
 		return spec, nil, err
@@ -624,12 +657,6 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 	members, err := s.onlineAgents()
 	if err != nil {
 		return spec, nil, err
-	}
-	var displays nodeDisplaySet
-	if len(sets) > 0 {
-		displays = sets[0]
-	} else {
-		displays = s.nodeDisplaySnapshot()
 	}
 	byAddress := map[string]cluster.Member{}
 	for _, member := range members {

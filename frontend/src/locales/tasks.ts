@@ -746,10 +746,29 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "If the destination exists",
     ja: "転送先が存在する場合",
   },
-  "覆盖会替换目标同名对象或文件。": {
-    en: "Overwrite replaces objects or files with the same name at the destination.",
-    ja: "上書きすると、転送先の同名オブジェクトまたはファイルが置き換えられます。",
+  "目标已有同名对象或文件时直接跳过，不比较大小或内容；源端修改过的对象不会更新。":
+    {
+      en: "Objects or files that already exist at the destination are skipped without comparing size or content, so objects changed at the source are not updated.",
+      ja: "転送先に同名のオブジェクトまたはファイルがあればスキップします。サイズや内容は比較しないため、転送元で変更されたオブジェクトは更新されません。",
+    },
+  "覆盖会替换目标同名对象或文件，所有对象都会重新传输。": {
+    en: "Overwrite replaces objects or files with the same name at the destination; every object is transferred again.",
+    ja: "転送先の同名オブジェクトまたはファイルを置き換えます。すべてのオブジェクトを再転送します。",
   },
+  "目标不存在、大小不同、MD5 ETag 不同，或源端修改时间晚于目标时覆盖，其余跳过。不读取对象内容，分片上传的 ETag 不参与比较。":
+    {
+      en: "Copies when the destination is missing, and overwrites when the size or MD5 ETag differs or the source was modified after the destination; skips the rest. Content is never read, and multipart-upload ETags are not compared.",
+      ja: "転送先がない場合はコピーし、サイズまたは MD5 ETag が異なる場合、または転送元の更新日時が転送先より新しい場合は上書きします。それ以外はスキップします。内容は読み取らず、マルチパートアップロードの ETag は比較しません。",
+    },
+  覆盖有变化的对象: {
+    en: "Overwrite changed objects",
+    ja: "変更されたオブジェクトを上書き",
+  },
+  "跳过的对象只按名称判断，未比较大小或内容；源端修改过的对象在目标端可能仍是旧版本。可用对象比对核对，或使用“覆盖有变化的对象”重新创建任务。":
+    {
+      en: "Skipped objects were matched by name only; their size and content were not compared, so objects changed at the source may still be old at the destination. Check them with object comparison, or create the task again with “Overwrite changed objects”.",
+      ja: "スキップしたオブジェクトは名前だけで判断しており、サイズや内容は比較していません。転送元で変更されたオブジェクトは、転送先で古いままの可能性があります。オブジェクト比較で確認するか、「変更されたオブジェクトを上書き」でタスクを作り直してください。",
+    },
   跳过同名对象或文件: {
     en: "Skip existing objects or files",
     ja: "既存のオブジェクトまたはファイルをスキップ",

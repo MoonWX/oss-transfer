@@ -596,16 +596,22 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 	}
 	destinationAbsent := false
-	if job.ConflictPolicy == "SKIP" {
+	overwrite := job.ConflictPolicy == ConflictOverwrite
+	if job.ConflictPolicy == ConflictSkip || job.ConflictPolicy == ConflictOverwriteChanged {
 		existing, err := target.Stat(ctx, item.DestinationKey)
 		if err == nil {
-			result.Status, result.Target = ItemSkipped, existing
-			return result
-		}
-		if !errors.Is(err, transferstore.ErrNotFound) {
+			if job.ConflictPolicy == ConflictSkip || !DestinationOutdated(item.Source, existing) {
+				result.Status, result.Target = ItemSkipped, existing
+				return result
+			}
+			// The destination is outdated: replace it. A destination that
+			// is missing is written conditionally, as under SKIP.
+			overwrite = true
+		} else if !errors.Is(err, transferstore.ErrNotFound) {
 			return fail("check destination", err)
+		} else {
+			destinationAbsent = true
 		}
-		destinationAbsent = true
 	}
 	var object *objectProgress
 	if len(progress) > 0 {
@@ -640,7 +646,7 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 		return fail(stage, err)
 	}
-	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: job.ConflictPolicy == "OVERWRITE", DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, RangeBudget: budget})
+	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: overwrite, DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, RangeBudget: budget})
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {

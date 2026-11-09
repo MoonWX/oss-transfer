@@ -101,6 +101,11 @@ import RunningFailureRetry, {
   canRetryRunningFailures,
 } from "../components/RunningFailureRetry";
 import TransferStatistics from "../components/TransferStatistics";
+import {
+  conflictPolicyLabel,
+  taskComparisonLink,
+  taskConflictPolicy,
+} from "../lib/conflictPolicy";
 import TaskRequestRates from "../components/TaskRequestRates";
 import { runtimeMessageLines } from "../lib/runtimeMessages";
 import RuntimeMessageLine from "../components/RuntimeMessageLine";
@@ -129,6 +134,32 @@ const groupIncomplete = (task: Task) =>
 const reportAvailable = (task: Task) =>
   !groupIncomplete(task) &&
   ["STOPPED", "COMPLETED", "FAILED", "PARTIAL_FAILED"].includes(task.status);
+// SKIP decides by name alone, so a finished task with skipped objects says
+// so and points to object comparison when both ends are buckets.
+function SkippedNotCompared({ comparison }: { comparison: string | null }) {
+  return (
+    <Alert
+      severity="info"
+      sx={{ mb: 2 }}
+      action={
+        comparison ? (
+          <Button
+            component={RouterLink}
+            to={comparison}
+            color="inherit"
+            size="small"
+          >
+            {tr("对象比对")}
+          </Button>
+        ) : undefined
+      }
+    >
+      {tr(
+        "跳过的对象只按名称判断，未比较大小或内容；源端修改过的对象在目标端可能仍是旧版本。可用对象比对核对，或使用“覆盖有变化的对象”重新创建任务。",
+      )}
+    </Alert>
+  );
+}
 function TaskStatus({ task }: { task: Task }) {
   return <StatusChip status={task.status} />;
 }
@@ -1098,6 +1129,17 @@ function TaskDetail({
             {tr("传输统计")}
           </Typography>
           <TransferStatistics task={current} />
+          {reportAvailable(current) &&
+            taskConflictPolicy(current) === "SKIP" &&
+            Number(current.skippedObjectCount) > 0 && (
+              <SkippedNotCompared
+                comparison={taskComparisonLink(
+                  current,
+                  sourceObjectKey,
+                  sourcePrefix,
+                )}
+              />
+            )}
           <Box sx={{ mb: 3 }}>
             <Button
               variant="outlined"
@@ -1263,7 +1305,10 @@ function TaskDetail({
               ],
               [
                 sourceObjectKey ? tr("Key 映射") : tr("Key 示例"),
-                !local && current.keyMapping
+                // Keeping every key needs no example.
+                !local &&
+                current.keyMapping &&
+                (sourceObjectKey || current.keyMapping.mode !== "PRESERVE")
                   ? mappingExample(
                       sourceObjectKey
                         ? "object"
@@ -1289,8 +1334,7 @@ function TaskDetail({
               ],
               [
                 tr("冲突策略"),
-                current.conflictPolicy ||
-                  (current.overwrite ? "OVERWRITE" : "SKIP"),
+                conflictPolicyLabel(taskConflictPolicy(current) || "SKIP"),
               ],
             ]
               .filter(([, value]) => value != null && value !== "")

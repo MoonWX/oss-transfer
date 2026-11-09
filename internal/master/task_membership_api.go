@@ -243,7 +243,7 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		if err != nil {
 			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is not online in this enrollment", label(node))
 		}
-		if !joinCapable(caps) {
+		if !joinCapable(caps) || !conflictPolicyCapable(p.Spec.ConflictPolicy, caps) {
 			return nil, membershipReject(ctx, "AGENT_TOO_OLD", "Agent %s is too old to join running tasks; upgrade it first", label(node))
 		}
 	}

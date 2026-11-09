@@ -801,8 +801,10 @@ Usage: oss-transfer-cli object <subcommand> [arguments]
 Subcommands
   compare --source-bucket ALIAS/BUCKET --dest-bucket ALIAS/BUCKET [--scope prefix]
           [--source-prefix PREFIX] [--dest-prefix PREFIX] [--mode metadata|content]
+                                  Compare two prefixes; without prefixes, whole buckets
   compare --source-bucket ALIAS/BUCKET --source-key KEY --dest-bucket ALIAS/BUCKET --dest-key KEY
-          --scope object [--mode metadata|content]
+          [--scope object] [--mode metadata|content]
+                                  Compare one object
   list                            List comparisons on every node with their status
   status <ID> [--after NUMBER] [--limit 1–1000] [--status RESULT[,RESULT...]]
                                   Show counts and a page of differences; 50 per page by default
@@ -817,8 +819,8 @@ Results
   CHANGED_DURING_COMPARE, ERROR (read failed), BOTH_MISSING (missing on both sides).
 
 Examples
-  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --scope object --mode content
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --source-prefix '2026/' --dest-prefix 'backup/'
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
   oss-transfer-cli object list
   oss-transfer-cli object status <comparison-id> --watch 5
   oss-transfer-cli object status <comparison-id> --status MISSING_TARGET,DIFFERENT --limit 200
@@ -826,6 +828,9 @@ Examples
   oss-transfer-cli object resume <comparison-id>
 
 Notes
+  --scope is optional: object when --source-key/--dest-key are given, otherwise prefix. --mode defaults to metadata.
+  compare starts the comparison in the background and prints its ID. For a single object it waits up to 15 seconds
+  and, when the comparison has finished, prints the result as status does.
   Empty prefixes compare whole buckets. Keys are matched after removing each prefix.
   metadata checks size, Content-Type, Content-Encoding, Content-Disposition, Cache-Control and custom metadata without reading content.
   Matching metadata does not prove matching content: when both ETags are plain MD5 values and differ, the result is ETAG_MISMATCH. Use content to confirm content.
@@ -846,8 +851,10 @@ Notes
 サブコマンド
   compare --source-bucket 接続名/バケット --dest-bucket 接続名/バケット [--scope prefix]
           [--source-prefix プレフィックス] [--dest-prefix プレフィックス] [--mode metadata|content]
+                                  2 つのプレフィックスを比較。プレフィックスがなければバケット全体
   compare --source-bucket 接続名/バケット --source-key Key --dest-bucket 接続名/バケット --dest-key Key
-          --scope object [--mode metadata|content]
+          [--scope object] [--mode metadata|content]
+                                  1 つのオブジェクトを比較
   list                            各ノードの比較と状態を一覧表示
   status <ID> [--after 番号] [--limit 1–1000] [--status 結果[,結果...]]
                                   集計と差分の 1 ページを表示。既定は 1 ページ 50 件
@@ -862,8 +869,8 @@ Notes
   CHANGED_DURING_COMPARE 比較中に変更、ERROR 読み取り失敗、BOTH_MISSING 両側に存在しない。
 
 例
-  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --scope object --mode content
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --source-prefix '2026/' --dest-prefix 'backup/'
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
   oss-transfer-cli object list
   oss-transfer-cli object status <比較 ID> --watch 5
   oss-transfer-cli object status <比較 ID> --status MISSING_TARGET,DIFFERENT --limit 200
@@ -871,6 +878,9 @@ Notes
   oss-transfer-cli object resume <比較 ID>
 
 説明
+  --scope は省略できます。--source-key/--dest-key を指定すると object、それ以外は prefix です。--mode の既定は metadata です。
+  compare は比較をバックグラウンドで開始し、比較 ID を表示します。単一オブジェクトの場合は最大 15 秒待ち、
+  終了していれば status と同じ形式で結果を表示します。
   プレフィックスが空の場合はバケット全体を比較します。それぞれのプレフィックスを除いた Key で対応付けます。
   metadata はサイズ、Content-Type、Content-Encoding、Content-Disposition、Cache-Control、カスタムメタデータを確認し、内容を読み取りません。
   メタデータが一致しても内容の一致は保証されません。両側の ETag が通常の MD5 形式で異なる場合、結果は ETAG_MISMATCH です。内容を確認するには content を使用してください。

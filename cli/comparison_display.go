@@ -72,7 +72,13 @@ func renderComparisonResult(out io.Writer, args []string, result map[string]inte
 	case "compare":
 		id := getString(data, "id")
 		if id == "" || getString(data, "status") == "" {
-			return false // the synchronous single-object metadata check
+			return false
+		}
+		// A single-object comparison that finished while object compare
+		// waited: its status page, shown as object status shows it.
+		if _, page := data["items"]; page && comparisonFinished(getString(data, "status")) {
+			renderComparisonStatus(out, comparisonPageOptions{id: id, limit: comparisonDefaultPageRows}, data)
+			return true
 		}
 		fmt.Fprintf(out, cliText(out, "比对已开始，ID：%s\n"), safeCLIText(id))
 		fmt.Fprintf(out, cliText(out, "查看进度：%s\n"), safeCLIText(comparisonCommand("status", id, "--watch", "5")))
@@ -83,8 +89,13 @@ func renderComparisonResult(out io.Writer, args []string, result map[string]inte
 		}
 		switch action {
 		case "resume":
-			fmt.Fprintf(out, cliText(out, "已继续比对 %s\n"), safeCLIText(id))
-			fmt.Fprintf(out, cliText(out, "查看进度：%s\n"), safeCLIText(comparisonCommand("status", id, "--watch", "5")))
+			// Only a RUNNING comparison was resumed; otherwise show its state.
+			if status := getString(data, "status"); status != "RUNNING" {
+				fmt.Fprintf(out, cliText(out, "比对 %s 当前状态：%s\n"), safeCLIText(id), comparisonStatusLabel(out, status))
+			} else {
+				fmt.Fprintf(out, cliText(out, "已继续比对 %s\n"), safeCLIText(id))
+				fmt.Fprintf(out, cliText(out, "查看进度：%s\n"), safeCLIText(comparisonCommand("status", id, "--watch", "5")))
+			}
 		case "cancel":
 			if status := getString(data, "status"); status != "CANCELING" {
 				fmt.Fprintf(out, cliText(out, "比对 %s 当前状态：%s\n"), safeCLIText(id), comparisonStatusLabel(out, status))
@@ -181,6 +192,10 @@ func comparisonIncompleteReason(out io.Writer, reason string) string {
 		return cliTextf(out, "差异明细未全部保存（%s）", comparisonTruncationText(out, value))
 	case "ROW_COUNT_MISMATCH":
 		return cliText(out, "差异数与统计不一致")
+	case "RESULTS_UNAVAILABLE":
+		return cliText(out, "执行节点上的差异明细已不可用")
+	case "RETRY_KEYS_MISMATCH":
+		return cliText(out, "重新迁移的源 Key 数与统计不一致")
 	}
 	return safeCLIText(reason)
 }
@@ -434,7 +449,7 @@ func renderComparisonExport(out io.Writer, data map[string]interface{}) {
 		return
 	}
 	if omitted, ok := comparisonInteger(summary["retryKeysOmitted"]); ok && omitted > 0 {
-		fmt.Fprint(out, cliTextf(out, "%d 个源 Key 无法写入 retry-source-keys.incr（过长、含换行或不是有效 UTF-8），请查看 differences.csv\n", omitted))
+		fmt.Fprint(out, cliTextf(out, "%d 个源 Key 无法写入 retry-source-keys.incr（过长、含换行或不是有效 UTF-8）；需要准确的 Key 时请用 object export --format jsonl 导出\n", omitted))
 	}
 	if retry, _ := comparisonInteger(summary["retryKeys"]); retry > 0 && summary["retryPrefixesMatch"] == false {
 		fmt.Fprintln(out, cliText(out, "源前缀与目标前缀不同：import-inventory 按原 Key 复制，不能直接使用 retry-source-keys.incr"))

@@ -215,6 +215,7 @@ func (s *Service) signal() {
 	default:
 	}
 }
+
 // sweepNamespaces removes idle local staging directories after attempts end.
 func (s *Service) sweepNamespaces() {
 	defer s.workers.Done()

@@ -1103,7 +1103,9 @@ func (s *Server) taskDetailHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Task not found")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": s.taskView(p)})
+	row := s.taskView(p)
+	s.addTaskAttention(r.Context(), row, p)
+	writeJSON(w, 200, map[string]any{"success": true, "data": row})
 }
 func taskPathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

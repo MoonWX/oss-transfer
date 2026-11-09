@@ -214,10 +214,16 @@ test("cursor paging moves forward and back, and polling keeps the current page",
   await expect(keyCell(page, 101)).toBeVisible();
   await expect(page.getByText("第 2 页", { exact: true })).toBeVisible();
   const before = pageQueries(calls).length;
-  await page.clock.runFor(1500);
-  await expect.poll(() => pageQueries(calls).length).toBe(before + 1);
-  await page.clock.runFor(1500);
-  await expect.poll(() => pageQueries(calls).length).toBe(before + 2);
+  // A poll is scheduled once the previous reply has been handled, so advance
+  // in steps shorter than the interval until each poll has been sent.
+  for (const count of [before + 1, before + 2]) {
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(300);
+        return pageQueries(calls).length;
+      })
+      .toBe(count);
+  }
   await expect(keyCell(page, 101)).toBeVisible();
   await expect(keyCell(page, 1)).toHaveCount(0);
   await expect(page.getByText("第 2 页", { exact: true })).toBeVisible();

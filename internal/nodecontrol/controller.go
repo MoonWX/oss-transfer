@@ -108,6 +108,10 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 			return nil, ErrInvalid
 		}
 	}
+	// Bandwidth is enforced, and saved, in whole bytes per second. The
+	// configured target is rounded down the same way, so it equals the value
+	// enforced and is shown as configured.
+	configured["bandwidth"] = float64(int64(configured["bandwidth"]/8)) * 8
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
@@ -137,27 +141,33 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 				return errors.New("invalid saved node concurrency")
 			}
 		}
+		// A limit's target is its saved value, else the configured one, so a
+		// configuration change applies to every limit that was never saved.
+		// The saved effective rate is kept only while it is usable and below a
+		// positive target: an automatic reduction survives a restart, and a
+		// raised target is reached in recovery steps. Otherwise the limit starts
+		// at its target and its reduction, if any, ends. This covers a limit
+		// turned on, lowered or turned off, and bandwidth, which is never
+		// lowered automatically.
 		for kind := range configured {
 			target := c.target(c.data, kind)
-			actual, ok := c.data.Effective[kind]
-			if !ok {
-				c.data.Effective[kind] = target
-			} else if !validRate(kind, actual) || actual == 0 && target > 0 {
-				return errors.New("invalid saved effective rate")
+			if actual, ok := c.data.Effective[kind]; ok && kind != "bandwidth" && validRate(kind, actual) && actual > 0 && actual < target {
+				continue
 			}
-			if target == 0 || actual > target {
-				c.data.Effective[kind] = target
-			}
+			c.data.Effective[kind] = target
+			delete(c.data.Incidents, kind)
 		}
 		return tx.Put("node-control", "settings", c.data)
 	})
 	if err != nil {
 		return nil, err
 	}
-	// The byte limiter is the sole authoritative owner of node bandwidth. Its
-	// existing persisted cap must never be overwritten with a startup default.
-	if policy := bytes.Node(); policy.Revision == 0 {
-		if err := bytes.ApplyNode(context.Background(), ratelimit.NodeLimit{Revision: 1, BandwidthBytesPerSecond: int64(c.target(c.data, "bandwidth") / 8)}); err != nil {
+	// The byte limiter enforces node bandwidth and persists it separately. On
+	// every start it is set to the target, as the request limits are: the saved
+	// value, which SetRate applied already, or else the configured one, which
+	// replaces the value an earlier start applied.
+	if policy, limit := bytes.Node(), int64(c.target(c.data, "bandwidth")/8); policy.Revision == 0 || policy.BandwidthBytesPerSecond != limit {
+		if err := bytes.ApplyNode(context.Background(), ratelimit.NodeLimit{Revision: policy.Revision + 1, BandwidthBytesPerSecond: limit}); err != nil {
 			return nil, err
 		}
 	}

@@ -68,6 +68,15 @@ func (f *fixture) close() {
 		f.db = nil
 	}
 }
+
+// restart reopens the Agent's database with other configured limits, as an
+// edited service.json does.
+func (f *fixture) restart(t *testing.T, change func(*Options)) {
+	t.Helper()
+	f.close()
+	change(&f.options)
+	f.open(t)
+}
 func rate(t *testing.T, c *Controller, kind string) map[string]any {
 	t.Helper()
 	result, err := c.Snapshot()
@@ -290,7 +299,10 @@ func TestInvalidOrFailedConfigurationNeverPublishes(t *testing.T) {
 	f.db = nil
 }
 
-func TestStartupRejectsCorruptUnlimitedRateAndInvalidAutomaticPolicy(t *testing.T) {
+// A saved effective rate that is unusable or unlimited under a limit neither
+// disables the limit nor stops the Agent: the limit starts at its target, and
+// a reduction left at the target by an earlier version ends.
+func TestStartupResetsUnusableEffectiveRateAndRejectsInvalidAutomaticPolicy(t *testing.T) {
 	f := newFixture(t, Options{})
 	must(t, f.controller.Close())
 	f.controller = nil
@@ -300,17 +312,132 @@ func TestStartupRejectsCorruptUnlimitedRateAndInvalidAutomaticPolicy(t *testing.
 		if err != nil {
 			return err
 		}
-		saved.Effective["put"] = 0
+		// Below the 0.01/s minimum, unlimited, at the target.
+		saved.Effective["list"], saved.Effective["put"], saved.Effective["head"], saved.Effective["bandwidth"] = 0.001, 0, 2800, 0
+		saved.Incidents = map[string]string{"list": "old-1", "put": "old-2", "head": "old-3"}
 		return tx.Put("node-control", "settings", saved)
 	}))
-	if c, err := New(f.db, f.limits, Options{}); err == nil {
-		c.Close()
-		t.Fatal("corrupt zero rate silently disabled configured limit")
-	}
 	for _, options := range []Options{{ReduceFactor: math.NaN()}, {IncreaseFactor: math.Inf(1)}, {MinQPS: math.NaN()}} {
 		if c, err := New(f.db, f.limits, options); err == nil {
 			c.Close()
 			t.Fatal("invalid automatic policy accepted")
+		}
+	}
+	var err error
+	f.controller, err = New(f.db, f.limits, Options{})
+	must(t, err)
+	for kind, want := range map[string]float64{"list": 100, "put": 1400, "head": 2800} {
+		if got := rate(t, f.controller, kind); got["limitQps"] != want || got["state"] != "NORMAL" {
+			t.Fatalf("%s did not start at its target over an unusable saved rate: %v", kind, got)
+		}
+	}
+	if _, pending := autoAdjust(t, f.controller)["nextRecoveryAt"]; pending {
+		t.Fatal("a reduction continued for a limit at its target")
+	}
+	if got := f.limits.Node().BandwidthBytesPerSecond; got != 250_000_000 {
+		t.Fatalf("bandwidth did not start at its target over an unusable saved rate: %d bytes/s", got)
+	}
+}
+
+func TestRestartAppliesConfiguredRequestLimits(t *testing.T) {
+	f := newFixture(t, Options{ListQPS: 0, PutQPS: 100, HeadQPS: 100, UseZeroDefaults: true, MinQPS: 10, RecoveryInterval: time.Hour})
+	list := func(limit, target float64, state string) {
+		t.Helper()
+		got := rate(t, f.controller, "list")
+		if got["limitQps"] != limit || got["manualLimitQps"] != target || got["configuredLimitQps"] != target || got["limitSource"] != "CONFIG" || got["state"] != state {
+			t.Fatalf("list: want limit %v, configured target %v, %s; got %v", limit, target, state, got)
+		}
+	}
+	// A limit that was off is turned on at once.
+	f.restart(t, func(o *Options) { o.ListQPS = 50 })
+	list(50, 50, "NORMAL")
+	if got := f.controller.TaskRequests(1, 1).NodeLimits.List; got != 50 {
+		t.Fatalf("LIST requests are not limited to the configured 50/s: %v", got)
+	}
+	// Lowered at once.
+	f.restart(t, func(o *Options) { o.ListQPS = 20 })
+	list(20, 20, "NORMAL")
+	// Raised in recovery steps.
+	f.restart(t, func(o *Options) { o.ListQPS = 40 })
+	list(20, 40, "REDUCED")
+	must(t, f.controller.Tick(time.Now().Add(2*time.Hour)))
+	list(24, 40, "RECOVERING")
+	// Turned off at once.
+	f.restart(t, func(o *Options) { o.ListQPS = 0 })
+	list(0, 0, "UNLIMITED")
+
+	// Turning off a limit during an automatic reduction ends the reduction.
+	useClock(f.controller, time.Now())
+	for range 5 {
+		must(t, f.controller.ObserveResponse(RequestContext{Operation: "PutObject", StatusCode: 503}))
+	}
+	history, err := f.controller.History(1)
+	must(t, err)
+	if len(history) != 1 || history[0].Type != "put" || history[0].IncidentID == "" || rate(t, f.controller, "put")["state"] != "REDUCED" {
+		t.Fatalf("PUT was not reduced: %+v", history)
+	}
+	f.restart(t, func(o *Options) { o.PutQPS = 0 })
+	detail, err := f.controller.Detail(history[0].ID, "")
+	must(t, err)
+	if got := rate(t, f.controller, "put"); got["limitQps"] != float64(0) || got["state"] != "UNLIMITED" || detail.IncidentActive {
+		t.Fatalf("PUT turned off still reduced: %v, incident active %v", got, detail.IncidentActive)
+	}
+	if _, pending := autoAdjust(t, f.controller)["nextRecoveryAt"]; pending {
+		t.Fatal("recovery still scheduled for a limit that is off")
+	}
+	f.restart(t, func(o *Options) { o.PutQPS = 100 })
+	if got := rate(t, f.controller, "put"); got["limitQps"] != float64(100) || got["state"] != "NORMAL" {
+		t.Fatalf("PUT turned on again: %v", got)
+	}
+}
+
+// Bandwidth is never lowered automatically: a configured change applies on
+// every start, not only the first one.
+func TestRestartAppliesConfiguredBandwidth(t *testing.T) {
+	f := newFixture(t, Options{ListQPS: 100, PutQPS: 100, HeadQPS: 100, BandwidthBitsPerSecond: 0, UseZeroDefaults: true, RecoveryInterval: time.Hour})
+	for _, step := range []struct{ configured, enforced float64 }{
+		{0, 0}, {1e9, 1e9}, {4e8, 4e8}, {0, 0}, {2e9, 2e9},
+		// The limiter enforces whole bytes per second.
+		{500_000_004, 500_000_000},
+	} {
+		f.restart(t, func(o *Options) { o.BandwidthBitsPerSecond = step.configured })
+		if got := f.limits.Node().BandwidthBytesPerSecond; got != int64(step.enforced/8) {
+			t.Fatalf("configured %v bit/s: limiter enforces %d bytes/s", step.configured, got)
+		}
+		state := "NORMAL"
+		if step.enforced == 0 {
+			state = "UNLIMITED"
+		}
+		if got := rate(t, f.controller, "bandwidth"); got["limitBps"] != step.enforced || got["manualLimitBps"] != step.enforced || got["configuredLimitBps"] != step.enforced || got["limitSource"] != "CONFIG" || got["state"] != state {
+			t.Fatalf("configured %v bit/s is not shown as the configured target: %v", step.configured, got)
+		}
+	}
+}
+
+func TestSavedLimitsKeepTheirValueWhenTheConfigurationChanges(t *testing.T) {
+	f := newFixture(t, Options{ListQPS: 0, PutQPS: 100, HeadQPS: 100, BandwidthBitsPerSecond: 1e9, UseZeroDefaults: true, RecoveryInterval: time.Hour})
+	ctx := context.Background()
+	must(t, f.controller.SetRate(ctx, "list", 30))
+	must(t, f.controller.SetRate(ctx, "put", 0))
+	must(t, f.controller.SetRate(ctx, "bandwidth", 8e6))
+	// Saving the configured value shows the configured target, but stays saved.
+	must(t, f.controller.SetRate(ctx, "head", 50))
+	must(t, f.controller.SetRate(ctx, "head", 100))
+	if got := rate(t, f.controller, "head")["limitSource"]; got != "CONFIG" {
+		t.Fatalf("saved value equal to the configured one: %v", got)
+	}
+	for _, change := range []func(*Options){
+		func(o *Options) { o.ListQPS, o.PutQPS, o.HeadQPS, o.BandwidthBitsPerSecond = 500, 200, 300, 2e9 },
+		func(o *Options) { o.ListQPS, o.PutQPS, o.HeadQPS, o.BandwidthBitsPerSecond = 0, 50, 0, 0 },
+	} {
+		f.restart(t, change)
+		for kind, want := range map[string]float64{"list": 30, "put": 0, "head": 100} {
+			if got := rate(t, f.controller, kind); got["limitQps"] != want || got["manualLimitQps"] != want || got["limitSource"] != "PERSISTED_MANUAL" {
+				t.Fatalf("saved %s limit changed with the configuration: %v", kind, got)
+			}
+		}
+		if got := rate(t, f.controller, "bandwidth"); f.limits.Node().BandwidthBytesPerSecond != 1e6 || got["limitBps"] != 8e6 || got["manualLimitBps"] != 8e6 || got["limitSource"] != "PERSISTED_MANUAL" {
+			t.Fatalf("saved bandwidth changed with the configuration: %v", got)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/comparison"
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -81,9 +82,7 @@ func TestComparisonMissingResultFileIsReportedAsUnavailable(t *testing.T) {
 	}
 	waitComparison(t, s, "cmp-1", hasStatus(comparison.StateCompleted))
 	sum := sha256.Sum256([]byte("cmp-1"))
-	if err := os.Remove(filepath.Join(directory, hex.EncodeToString(sum[:16]), "rows.jsonl")); err != nil {
-		t.Fatal(err)
-	}
+	removeOnceReleased(t, filepath.Join(directory, hex.EncodeToString(sum[:16]), "rows.jsonl"))
 	for _, op := range []string{"comparison_rows", "comparison_get"} {
 		status, body := comparisonCall(t, s, op, map[string]any{"id": "cmp-1", "limit": 10}, false)
 		encoded, _ := json.Marshal(body)
@@ -100,5 +99,23 @@ func TestComparisonMissingResultFileIsReportedAsUnavailable(t *testing.T) {
 	}
 	if status, body := comparisonCall(t, s, "comparison_resume", comparison.ResumeRequest{ID: "cmp-1", StorageRevision: 1}, true); status != 409 {
 		t.Fatalf("resume of unavailable results: %d %+v", status, body)
+	}
+}
+
+// removeOnceReleased removes a result file. The run commits its final state
+// just before it closes the file, and Windows refuses to remove an open file,
+// so the removal is retried until the writer has let go.
+func removeOnceReleased(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := os.Remove(path)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

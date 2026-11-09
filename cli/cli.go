@@ -835,6 +835,9 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 			label := cliText(out, "错误代码")
 			if key == "errorMessage" {
 				label = cliText(out, "失败原因")
+				if summary := storageErrorSummary(out, value); summary != "" {
+					fields = append(fields, [2]string{cliText(out, "原因说明"), summary})
+				}
 			}
 			fields = append(fields, [2]string{label, value})
 		}

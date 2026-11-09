@@ -110,3 +110,27 @@ func TestStorageFailureShowsOneSummaryAndDetailOnRequest(t *testing.T) {
 		t.Fatalf("json: %d %s", code, out)
 	}
 }
+
+func TestTaskShowExplainsStorageFailureReasons(t *testing.T) {
+	for _, test := range []struct{ raw, want string }{
+		{`operation error S3: ListObjectsV2, exceeded maximum number of attempts, 3, https response error StatusCode: 0, RequestID: , HostID: , request send failed, Get "http://src-data.host.docker.internal:38333/?list-type=2": dial tcp: lookup src-data.host.docker.internal on 127.0.0.11:53: no such host`,
+			"无法解析主机名 src-data.host.docker.internal。"},
+		{`operation error S3: ListObjectsV2, exceeded maximum number of attempts, 3, request send failed, Get "http://src-bucket.ot-eval-native-s3:8333/?list-type=2": EOF`,
+			"src-bucket.ot-eval-native-s3:8333 关闭了连接（EOF）"},
+		{`operation error S3: ListBuckets, https response error StatusCode: 403, api error SignatureDoesNotMatch: signature`, "签名不匹配"},
+		{`dial tcp 10.0.0.5:9000: connect: connection refused`, "10.0.0.5:9000 拒绝了连接"},
+	} {
+		var out strings.Builder
+		renderTaskDetail(&out, map[string]interface{}{"taskIndex": 1, "status": "FAILED", "errorMessage": test.raw})
+		if !strings.Contains(out.String(), "原因说明") || !strings.Contains(out.String(), test.want) || !strings.Contains(out.String(), test.raw) {
+			t.Fatalf("%s\n%s", test.raw, out.String())
+		}
+	}
+	for _, raw := range []string{"unexpected EOF", "AccessDenied: listing source bucket", "context deadline exceeded"} {
+		var out strings.Builder
+		renderTaskDetail(&out, map[string]interface{}{"taskIndex": 1, "status": "FAILED", "errorMessage": raw})
+		if strings.Contains(out.String(), "原因说明") {
+			t.Fatalf("%q was classified without storage context:\n%s", raw, out.String())
+		}
+	}
+}

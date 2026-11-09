@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
 	testAgentJoinURL        = "https://transfer.example/api/agents/bootstrap/once"
-	testAgentInstallCommand = "curl -fsSL '" + testAgentJoinURL + "' | bash"
+	testAgentInstallCommand = "curl -fsSL '" + testAgentJoinURL + "' | sudo bash"
 	testAgentWindowsCommand = "irm '" + testAgentJoinURL + "?platform=windows' | iex"
 	testAgentNativeCommand  = "./oss-transfer-agent --join-url '" + testAgentJoinURL + "'"
 	testAgentDockerCommand  = "curl -fsSL '" + testAgentJoinURL + "?method=compose' | bash"
@@ -44,7 +45,7 @@ func TestAgentInvitationUsesConsoleAPI(t *testing.T) {
 		}
 		var output bytes.Buffer
 		renderCLIResult(&output, result)
-		for _, wanted := range []string{"2026-10-08T12:30:00Z", "Docker", testAgentDockerCommand, "原生部署", testAgentInstallCommand} {
+		for _, wanted := range []string{invitationExpiry("2026-10-08T12:30:00Z"), "Docker", testAgentDockerCommand, "原生部署", testAgentInstallCommand} {
 			if !strings.Contains(output.String(), wanted) {
 				t.Fatalf("invitation output missing %q: %s", wanted, output.String())
 			}
@@ -81,7 +82,7 @@ func TestAgentInvitationShowsNativeCommandsBeforeOptionalDocker(t *testing.T) {
 			output.Reset()
 			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
 			text = output.String()
-			if !strings.Contains(text, locale.text("\n原生部署（Linux / macOS / FreeBSD）")) || !strings.Contains(text, data["windowsCommand"].(string)) || strings.Contains(text, "Docker") || strings.Contains(text, "<nil>") {
+			if !strings.Contains(text, locale.text("\n原生部署（Linux / macOS / FreeBSD，需要 sudo）")) || !strings.Contains(text, data["windowsCommand"].(string)) || strings.Contains(text, "Docker") || strings.Contains(text, "<nil>") {
 				t.Fatalf("native-only invitation does not render cleanly: %s", text)
 			}
 		})
@@ -123,7 +124,7 @@ func TestAgentInvitationDoesNotRepeatJoinURL(t *testing.T) {
 				if strings.Count(text, testAgentJoinURL) != 1 {
 					t.Fatalf("join URL should appear only in the command: %s", text)
 				}
-				if !strings.Contains(text, testAgentNativeCommand) || !strings.Contains(text, data["expiresAt"].(string)) {
+				if !strings.Contains(text, testAgentNativeCommand) || !strings.Contains(text, invitationExpiry(data["expiresAt"].(string))) {
 					t.Fatalf("native fallback command or expiry missing: %s", text)
 				}
 			}
@@ -219,6 +220,66 @@ func TestAgentInvitationExplicitMasterOrigin(t *testing.T) {
 		client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("invalid origin submitted") })
 		if _, err := runAgentAdmin(client, "invite", []string{"--master-url", origin}); err == nil {
 			t.Fatal("invalid origin accepted", origin)
+		}
+	}
+}
+
+func TestAgentInvitationShowsLocalExpiryDockerVariantsAndDownloadSource(t *testing.T) {
+	previous := time.Local
+	time.Local = time.FixedZone("CST", 8*3600)
+	t.Cleanup(func() { time.Local = previous })
+	dockerCommand := "docker run --rm -v oss-transfer-agent-abcdef-data:/data moonwx/osstransfer:4.2.0 oss-transfer-agent --join-url '" + testAgentJoinURL + "' --data-dir /data --enroll-only && docker run -d --name oss-transfer-agent-abcdef moonwx/osstransfer:4.2.0 oss-transfer-agent --data-dir /data"
+	windowsDocker := "docker run --rm oss-transfer-agent --enroll-only; if ($LASTEXITCODE -eq 0) { docker run -d moonwx/osstransfer:4.2.0 }"
+	composeCommand := "curl -fsSL '" + testAgentJoinURL + "?method=compose' | sudo bash"
+	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
+		t.Run(string(locale), func(t *testing.T) {
+			data := map[string]interface{}{
+				"joinUrl":              testAgentJoinURL,
+				"expiresAt":            "2026-11-09T16:24:40.091547292Z",
+				"traditionalCommand":   testAgentInstallCommand,
+				"windowsCommand":       testAgentWindowsCommand,
+				"downloadSource":       map[string]interface{}{"kind": "auto"},
+				"dockerCommand":        dockerCommand,
+				"dockerWindowsCommand": windowsDocker,
+				"composeCommand":       composeCommand,
+			}
+			var output bytes.Buffer
+			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
+			text := output.String()
+			if strings.Contains(text, "2026-11-09T16:24:40") || !strings.Contains(text, "2026-11-10 00:24:40 (UTC+08:00)") {
+				t.Fatalf("expiry must be shown in local time: %s", text)
+			}
+			previous := -1
+			for _, wanted := range []string{
+				locale.text("\n原生部署（Linux / macOS / FreeBSD，需要 sudo）"), testAgentInstallCommand, testAgentWindowsCommand,
+				locale.text("下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）"),
+				locale.text("\nDocker（macOS / Linux，无需 root）"), dockerCommand,
+				locale.text("\nDocker（Windows PowerShell）"), windowsDocker,
+				locale.text("\nDocker Compose（Linux，需要 sudo）"), composeCommand,
+			} {
+				position := strings.Index(text, wanted)
+				if position <= previous {
+					t.Fatalf("missing or out of order %q:\n%s", wanted, text)
+				}
+				previous = position
+			}
+			if strings.Contains(text, locale.text("\nDocker（可选）")) || strings.Contains(text, "回环") || strings.Contains(text, "loopback") {
+				t.Fatalf("unexpected legacy label or loopback warning: %s", text)
+			}
+			data["joinUrl"] = "http://localhost:1685/api/agents/bootstrap/once"
+			output.Reset()
+			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
+			if !strings.Contains(output.String(), locale.text("注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。")) {
+				t.Fatalf("loopback warning missing: %s", output.String())
+			}
+		})
+	}
+	for source, want := range map[string]string{"master": "下载来源：本 Master", "release": "下载来源：https://downloads.example/v4.2.0"} {
+		var output bytes.Buffer
+		renderCLIResult(&output, map[string]interface{}{"joinUrl": testAgentJoinURL, "traditionalCommand": testAgentInstallCommand,
+			"downloadSource": map[string]interface{}{"kind": source, "url": "https://downloads.example/v4.2.0"}})
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("download source %s: %s", source, output.String())
 		}
 	}
 }

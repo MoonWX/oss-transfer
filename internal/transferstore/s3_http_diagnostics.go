@@ -36,6 +36,11 @@ func (c *s3DiagnosticClient) Do(request *http.Request) (*http.Response, error) {
 		connection.Unlock()
 	}}
 	response, err := c.next.Do(request.WithContext(httptrace.WithClientTrace(request.Context(), trace)))
+	if err == nil && response != nil {
+		// The name resolved: if it stops resolving later, that is an outage
+		// (see isTransientError).
+		noteReachedHost(request.URL.Hostname())
+	}
 	if err != nil || response == nil || response.StatusCode < 400 || response.Body == nil {
 		return response, err
 	}

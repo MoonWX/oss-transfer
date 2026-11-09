@@ -141,6 +141,7 @@ func NewS3(config S3Config) (*S3, error) {
 		return nil, errors.New("S3 throttling retries need 1–100 attempts and delays from 0 to 10 minutes")
 	}
 	retryer := newS3Retryer(config.RetryMaxAttempts, config.ThrottleRetryMaxAttempts, config.ThrottleRetryBaseDelay, config.ThrottleRetryMaxDelay)
+	retryer.bucket = config.Bucket
 	sdkConfig := aws.Config{
 		Region:      config.Region,
 		Credentials: credentials.NewStaticCredentialsProvider(config.AccessKey, config.SecretKey, config.SessionToken),
@@ -347,7 +348,81 @@ func (s *S3) Open(ctx context.Context, key string, options OpenOptions) (io.Read
 		_ = out.Body.Close()
 		return nil, Object{}, err
 	}
-	return cancellable(ctx, out.Body, nil), object, nil
+	body := out.Body
+	if size := aws.ToInt64(out.ContentLength); size > 0 && object.ETag != "" && out.ContentRange == nil {
+		body = &resumingBody{ctx: ctx, ranges: &s3Ranges{s: s, key: key, etag: object.ETag, version: object.VersionID, size: size}, body: out.Body, size: size}
+	}
+	return cancellable(ctx, body, nil), object, nil
+}
+
+// resumingBody continues an object stream that a storage restart or network
+// interruption cut off: it reads the rest with a conditional range GET pinned
+// to the ETag (and version) first served, so a changed object fails as
+// changed instead of mixing versions. That GET has the SDK's retries, which
+// ride out an outage of a minute or two (see s3Retryer); a body cut off again
+// before any further byte arrived is resumed at most rangeReadAttempts-1
+// times, as a ranged read is. A provider that ignores Range ends the stream
+// with the original error.
+type resumingBody struct {
+	ctx    context.Context
+	ranges *s3Ranges
+	mu     sync.Mutex // body and closed; Close can run during Read
+	body   io.ReadCloser
+	closed bool
+	// Read only.
+	read, size int64
+	stalled    int
+}
+
+func (b *resumingBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	body := b.body
+	b.mu.Unlock()
+	n, err := body.Read(p)
+	b.read += int64(n)
+	if n > 0 {
+		b.stalled = 0
+	}
+	var interrupted rangeBodyError
+	if err == nil || errors.Is(err, io.EOF) || b.read >= b.size || b.stalled >= rangeReadAttempts-1 || !errors.As(rangeReadError(b.ctx, err), &interrupted) {
+		return n, err
+	}
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if closed {
+		return n, err
+	}
+	b.stalled++
+	next, openErr := b.ranges.OpenRange(b.ctx, b.read, b.size-b.read)
+	if openErr != nil {
+		if errors.Is(openErr, ErrSourceChanged) || errors.Is(openErr, ErrNotFound) {
+			return n, openErr
+		}
+		return n, err
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		_ = next.Close()
+		return n, err
+	}
+	b.body = next
+	b.mu.Unlock()
+	_ = body.Close()
+	logRetry(fmt.Sprintf("storage object %s on bucket %s: resumed reading at byte %d of %d after: %s", b.ranges.key, b.ranges.s.bucket, b.read, b.size, LogText(err.Error())))
+	if n > 0 {
+		return n, nil
+	}
+	return b.Read(p)
+}
+
+func (b *resumingBody) Close() error {
+	b.mu.Lock()
+	b.closed = true
+	body := b.body
+	b.mu.Unlock()
+	return body.Close()
 }
 
 func writtenObject(key string, options WriteOptions, etag, version string) Object {

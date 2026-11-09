@@ -169,6 +169,28 @@ func TestResumeStopsAfterRepeatedUncleanRestarts(t *testing.T) {
 	}
 }
 
+func TestResumeProgressClearsTheRestartCount(t *testing.T) {
+	h := newHarness(t)
+	interrupt(t, h)
+	rec := h.record("test")
+	rec.Status, rec.AutoResume, rec.UncleanResumes = StateRunning, false, maxUncleanResumes-1
+	h.put(runsBucket, "test", rec)
+	source, target, _ := mixedStores(6000, 50)
+	source.listHook = blockAfter("src/0005000")
+	m := h.open(storesFactory(source, target))
+	waitFor(t, "progress after the resume", func() bool {
+		r := h.record("test")
+		return r.Status == StateRunning && r.Compared > rec.Compared && r.UncleanResumes == 0
+	})
+	if _, err := m.Cancel("test"); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkers(t, m)
+	if r := h.record("test"); r.Status != StateCanceled || r.Resumes != 1 {
+		t.Fatalf("resumed run: %+v", r)
+	}
+}
+
 func TestResumeErrors(t *testing.T) {
 	h := newHarness(t)
 	factory := storesFactory(sourceOf(5), newFakeStore())
@@ -245,8 +267,15 @@ func TestUnavailableResultsAreReportedNotResumed(t *testing.T) {
 	if err := os.Remove(h.resultsPath("crashed")); err != nil {
 		t.Fatal(err)
 	}
-	m = h.open(factory)
+	// Lost results no longer use the byte budget: a budget for one
+	// comparison removes none of them.
+	size := h.record("missing").StoredBytes
+	m = h.open(factory, func(o *Options) { o.BudgetBytes = size })
 	waitWorkers(t, m)
+	m.retain()
+	if ids := listedIDs(t, m); len(ids) != 3 {
+		t.Fatalf("retention removed comparisons without results: %v", ids)
+	}
 	for id, detail := range map[string]string{"missing": "result file missing", "short": "result file is shorter than its committed length", "crashed": "result file missing"} {
 		page, err := m.Rows(RowsQuery{ID: id, Limit: 10})
 		p := page.Progress

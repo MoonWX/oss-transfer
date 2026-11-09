@@ -195,11 +195,14 @@ func TestResultsStatusFilterSkipsBlocksWithinScanBudget(t *testing.T) {
 
 func TestResultsPageBytesWithLongKeys(t *testing.T) {
 	h := newHarness(t)
-	// JSON escapes '<' as <, so each 1,000-byte key costs 6 KB per
-	// field and a row about 18 KB.
+	// 1,024-byte source keys. JSON escapes '<' as a six-byte \u sequence, so
+	// each key costs about 6 KB per field and a row about 18 KB.
 	var source []transferstore.Object
 	for i := 0; i < 300; i++ {
-		source = append(source, object(fmt.Sprintf("src/%04d%s", i, strings.Repeat("<", 996)), 1))
+		source = append(source, object(fmt.Sprintf("src/%04d%s", i, strings.Repeat("<", 1016)), 1))
+	}
+	if len(source[0].Key) != 1024 {
+		t.Fatal("key length", len(source[0].Key))
 	}
 	m := h.open(storesFactory(newFakeStore(source...), newFakeStore()))
 	if p := startAndWait(t, m, request()); p.Rows != 300 {
@@ -418,7 +421,11 @@ func TestResultsCancelingIsCommittedBeforeTheRunStops(t *testing.T) {
 	if rec := h.record("test"); rec.Status != StateCanceling {
 		t.Fatalf("CANCELING not committed: %s", rec.Status)
 	}
-	<-gate.entered
+	select {
+	case <-gate.entered:
+	case <-time.After(2 * time.Minute): // hang guard only
+		t.Fatal("the canceled run did not close its stores")
+	}
 	if got, err := m.Get("test", 0, 1); err != nil || got.Status != StateCanceling {
 		t.Fatalf("status flickered: %+v %v", got.Progress, err)
 	}

@@ -20,9 +20,10 @@ import (
 // ErrInvalidQuery reports invalid paging or filter input of Get and Rows.
 var ErrInvalidQuery = errors.New("invalid comparison result query")
 
-// maxUncleanResumes bounds automatic resumes after stops that recorded no
-// terminal state, so a comparison that brings the process down cannot keep
-// the Agent in a restart loop.
+// maxUncleanResumes bounds consecutive automatic resumes after stops that
+// recorded no terminal state and no progress since the previous resume, so a
+// comparison that brings the process down cannot keep the Agent in a restart
+// loop.
 const maxUncleanResumes = 3
 
 // maxRetentionDays keeps the retention period a valid time.Duration.

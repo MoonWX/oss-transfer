@@ -92,7 +92,8 @@ type runRecord struct {
 	// AutoResume marks an INTERRUPTED comparison the next start resumes.
 	AutoResume bool `json:"autoResume,omitempty"`
 	// UncleanResumes counts automatic resumes after a stop that recorded no
-	// terminal state. It is cleared by every terminal state.
+	// terminal state. It is cleared once a run commits progress and by every
+	// terminal state.
 	UncleanResumes int `json:"uncleanResumes,omitempty"`
 	// CheckpointBytes keeps the exact checkpoint when it is not valid UTF-8;
 	// JSON would otherwise replace the invalid bytes.
@@ -242,6 +243,8 @@ type resultWriter struct {
 	bytesRead   atomic.Int64
 	elapsedBase int64
 	started     time.Time
+	// startCompared is Compared when this run began.
+	startCompared int64
 }
 
 // openWriter opens the result file of rec. A fresh file is created empty;
@@ -335,6 +338,7 @@ func (w *resultWriter) begin(rec runRecord) {
 	// Options.Now without UTC keeps the monotonic reading of time.Now, so
 	// elapsed time does not follow wall-clock adjustments.
 	w.elapsedBase, w.started = rec.ElapsedMillis, w.m.options.Now()
+	w.startCompared = rec.Compared
 	if rec.Compared > 0 && rec.Scope == "prefix" {
 		w.startAfter, w.skipRepeat = rec.checkpoint(), true
 	}
@@ -439,6 +443,10 @@ func (w *resultWriter) flushLocked() error {
 		if err := w.file.Sync(); err != nil {
 			return w.failLocked(localFailure("sync comparison results", err))
 		}
+	}
+	if w.live.Compared > w.startCompared {
+		// This run made progress: a later crash is not a restart loop.
+		w.live.UncleanResumes = 0
 	}
 	next := w.live
 	now := w.m.now()

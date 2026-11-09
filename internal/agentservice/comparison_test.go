@@ -395,7 +395,7 @@ func TestComparisonListFitsTheAgentChannel(t *testing.T) {
 	if got := fitComparisonList(small); got.Items[0].Checkpoint != "k" || got.Items[0].ErrorDetail != "detail" {
 		t.Fatalf("small list trimmed: %+v", got)
 	}
-	long := strings.Repeat("<", 1024) // JSON escapes each as <
+	long := strings.Repeat("<", 1024) // JSON escapes each as six bytes
 	var items []comparison.Progress
 	for i := 0; i < comparison.DefaultMaxRetained; i++ {
 		items = append(items, comparison.Progress{Request: comparisonRequestFor(fmt.Sprintf("cmp-%03d", i), 1), Status: comparison.StateFailed, Checkpoint: long, LastStoredKey: long, ErrorDetail: long[:512]})

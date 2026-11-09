@@ -74,7 +74,12 @@ func (m *Manager) retain() {
 			if ended.IsZero() {
 				ended = rec.UpdatedAt
 			}
-			entries = append(entries, retainedComparison{id: rec.ID, started: rec.StartedAt, ended: ended, bytes: rec.StoredBytes, finished: terminalState(rec.Status)})
+			stored := rec.StoredBytes
+			if rec.Unavailable {
+				// The results file is gone; it no longer uses the budget.
+				stored = 0
+			}
+			entries = append(entries, retainedComparison{id: rec.ID, started: rec.StartedAt, ended: ended, bytes: stored, finished: terminalState(rec.Status)})
 			return nil
 		}); err != nil {
 			return err

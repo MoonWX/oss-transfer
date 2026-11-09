@@ -153,6 +153,22 @@ class UninstallTests(unittest.TestCase):
         stops = [line for line in f.systemctl() if line.startswith('stop ')]
         self.assertEqual(sorted(stops), ['stop oss-transfer-agent', 'stop oss-transfer-master'])
 
+    def test_uninstall_removes_only_its_own_backups_from_a_shared_directory(self):
+        f = self.fixture
+        agent = f.install('agent')
+        # Another Agent whose service name extends this one shares the directory.
+        foreign = (agent['backups'] / 'oss-transfer-agent-b-20260101T000000Z.xyz789',
+                   agent['backups'] / 'oss-transfer-agent-20260101T000000Z.abc123.notes',
+                   agent['backups'] / 'oss-transfer-agent-manual')
+        for path in foreign:
+            path.mkdir()
+        result = f.uninstall(role='agent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((agent['backups'] / 'oss-transfer-agent-20260101T000000Z.abc123').exists())
+        for path in foreign:
+            self.assertTrue(path.exists(), path)
+        self.assertIn(f'Kept (contains other files): {agent["backups"]}', result.stdout)
+
     def test_keep_data_keeps_configuration_data_and_backups(self):
         f = self.fixture
         agent = f.install('agent')

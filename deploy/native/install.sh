@@ -672,8 +672,8 @@ plan_uninstall() {
       fi
     fi
     if [[ -n "$item_backup" && -d "$item_backup" && ! -L "$item_backup" ]]; then
-      uninstall_actions+=("backups	$item_backup	$item_service-" "rmdir	$item_backup")
-      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-*")
+      uninstall_actions+=("backups	$item_backup	$item_service" "rmdir	$item_backup")
+      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-YYYYMMDDTHHMMSSZ.*")
     fi
   fi
   uninstall_actions+=("rmdir	$directory")
@@ -719,7 +719,7 @@ stop_and_remove_service() {
   fi
 }
 run_uninstall() {
-  local directory answer item kind first second leftover
+  local directory answer item kind first second leftover suffix
   local -a leftovers=()
   if [[ -n "$install_dir" ]]; then
     safe_path "$install_dir"
@@ -771,8 +771,13 @@ run_uninstall() {
       file) rm -f -- "$first";;
       tree) rm -rf -- "$first";;
       backups)
-        for leftover in "$first/$second"*; do
-          [[ -d "$leftover" && ! -L "$leftover" ]] && rm -rf -- "$leftover"
+        # Only this service's own backups: <service>-<UTC timestamp>.<random>,
+        # exactly as created below. A prefix alone would also match a service
+        # whose name extends this one (oss-transfer-agent-b).
+        for leftover in "$first/$second-"*; do
+          [[ -d "$leftover" && ! -L "$leftover" ]] || continue
+          suffix=${leftover##*/}; suffix=${suffix#"$second-"}
+          [[ "$suffix" =~ ^[0-9]{8}T[0-9]{6}Z\.[A-Za-z0-9]+$ ]] && rm -rf -- "$leftover"
         done;;
       rmdir)
         if [[ -d "$first" && ! -L "$first" ]]; then

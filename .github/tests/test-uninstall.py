@@ -153,6 +153,22 @@ class UninstallTests(unittest.TestCase):
         stops = [line for line in f.systemctl() if line.startswith('stop ')]
         self.assertEqual(sorted(stops), ['stop oss-transfer-agent', 'stop oss-transfer-master'])
 
+    def test_uninstall_removes_only_its_own_backups_from_a_shared_directory(self):
+        f = self.fixture
+        agent = f.install('agent')
+        # Another Agent whose service name extends this one shares the directory.
+        foreign = (agent['backups'] / 'oss-transfer-agent-b-20260101T000000Z.xyz789',
+                   agent['backups'] / 'oss-transfer-agent-20260101T000000Z.abc123.notes',
+                   agent['backups'] / 'oss-transfer-agent-manual')
+        for path in foreign:
+            path.mkdir()
+        result = f.uninstall(role='agent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((agent['backups'] / 'oss-transfer-agent-20260101T000000Z.abc123').exists())
+        for path in foreign:
+            self.assertTrue(path.exists(), path)
+        self.assertIn(f'Kept (contains other files): {agent["backups"]}', result.stdout)
+
     def test_keep_data_keeps_configuration_data_and_backups(self):
         f = self.fixture
         agent = f.install('agent')
@@ -249,7 +265,11 @@ class CombinedUninstallTests(unittest.TestCase):
             'id': 'printf "0\\n"',
             'uname': 'case "$1" in -s) printf "Linux\\n";; -m) printf "x86_64\\n";; esac',
             'curl': 'printf "curl %s\\n" "$*" >> "$EVENTS"; exit 99',
-            'docker': 'printf "docker %s\\n" "$*" >> "$EVENTS"; exit 0',
+            'docker': 'printf "docker %s\\n" "$*" >> "$EVENTS"\n'
+                      'case "$*" in\n'
+                      '  *config_files=*) [ -z "$DOCKER_FILE_PROJECT" ] || printf "%s\\n" "$DOCKER_FILE_PROJECT";;\n'
+                      '  *volume=*) [ -z "$DOCKER_MOUNTED" ] || printf "%s\\n" "$DOCKER_MOUNTED";;\n'
+                      'esac\nexit 0',
             'systemctl': 'printf "systemctl %s\\n" "$*" >> "$EVENTS"; exit 0',
         }.items():
             path = self.commands / name
@@ -257,8 +277,8 @@ class CombinedUninstallTests(unittest.TestCase):
             path.chmod(0o755)
         self.env = dict(os.environ, PATH=str(self.commands) + os.pathsep + os.environ['PATH'], EVENTS=str(self.events), LC_ALL='C')
 
-    def run_public(self, *args):
-        return subprocess.run(['bash', str(PUBLIC), '--lang', 'en', *args], env=self.env, text=True,
+    def run_public(self, *args, **environment):
+        return subprocess.run(['bash', str(PUBLIC), '--lang', 'en', *args], env=dict(self.env, **environment), text=True,
                               capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
 
     def test_native_uninstall_uses_embedded_installer_without_downloading(self):
@@ -283,6 +303,54 @@ class CombinedUninstallTests(unittest.TestCase):
         self.assertFalse(install.exists())
         self.assertFalse(data.exists())
         self.assertIn('Docker image is kept', result.stdout)
+
+    def compose_installation(self, marker=True, data=None):
+        install, data = self.base / 'compose/agent', data or self.base / 'custom-data/agent'
+        install.mkdir(parents=True)
+        data.mkdir(parents=True)
+        (data / 'agent.db').write_text('state')
+        compose = install / 'docker-compose.yml'
+        compose.write_text(('# oss-transfer-project: edge-agent\n' if marker else '') +
+                           "services:\n  agent:\n    image: 'moonwx/osstransfer:4.2.0'\n"
+                           "    command: ['oss-transfer-agent', '--data-dir', '/data']\n"
+                           f"    volumes:\n      - '{data}:/data'\n      - '/srv/files:/srv/files'\n")
+        return install, data, compose
+
+    def test_compose_uninstall_uses_the_recorded_project_and_data_directory(self):
+        for marker in (True, False):
+            with self.subTest(marker=marker):
+                install, data, compose = self.compose_installation(marker)
+                # Earlier releases recorded neither; Compose labels the containers with the file.
+                result = self.run_public('--uninstall', '--method', 'compose', '--role', 'agent', '--install-dir', str(install),
+                                         '--yes', DOCKER_FILE_PROJECT='' if marker else 'edge-agent')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'docker compose --project-name edge-agent --file {compose} down --remove-orphans', self.events.read_text())
+                self.assertIn(f'Remove data: {data}', result.stdout)
+                self.assertFalse(install.exists())
+                self.assertFalse(data.exists())
+                self.events.unlink()
+
+    def test_compose_uninstall_keeps_data_a_container_still_mounts(self):
+        install, data, compose = self.compose_installation()
+        result = self.run_public('--uninstall', '--method', 'compose', '--role', 'agent', '--install-dir', str(install),
+                                 '--yes', DOCKER_MOUNTED='edge-agent-agent-1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('still used by container(s): edge-agent-agent-1', result.stderr)
+        self.assertTrue(compose.exists())
+        self.assertTrue((data / 'agent.db').exists())
+
+    def test_compose_uninstall_refuses_other_names_and_directories(self):
+        install, data, compose = self.compose_installation()
+        for args, message in ((['--service-name', 'oss-transfer-agent'], 'belongs to Compose project edge-agent'),
+                              (['--data-dir', str(self.base / 'other')], f'uses data directory {data}')):
+            with self.subTest(args=args):
+                result = self.run_public('--uninstall', '--method', 'compose', '--role', 'agent', '--install-dir', str(install),
+                                         '--yes', *args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertTrue(compose.exists())
+                self.assertTrue((data / 'agent.db').exists())
+        self.assertNotIn('down', self.events.read_text() if self.events.exists() else '')
 
     def test_compose_uninstall_refuses_a_foreign_compose_file(self):
         install = self.base / 'compose/agent'
@@ -311,6 +379,12 @@ class SameVersionTests(unittest.TestCase):
         shim = self.shims / 'systemctl'
         shim.write_text('#!/bin/sh\n[ "$SERVICE_ACTIVE" = 1 ]\n')
         shim.chmod(0o755)
+        # launchctl print succeeds for any loaded job; only its state says whether it runs.
+        launchctl = self.shims / 'launchctl'
+        launchctl.write_text('#!/bin/sh\n[ -n "$LAUNCHD_STATE" ] || exit 113\n'
+                             'printf \'system/oss-transfer-master = {\\n\\tactive count = 0\\n\\tstate = %s\\n\\n'
+                             '\\tendpoints = {\\n\\t\\tstate = running\\n\\t}\\n}\\n\' "$LAUNCHD_STATE"\n')
+        launchctl.chmod(0o755)
         for name, output in {'binary': 'oss-transfer-master 4.2.0 (abc, built now)', 'cli': '{"version":"4.2.0"}'}.items():
             path = self.base / name
             path.write_text('#!/bin/sh\nprintf \'%s\\n\' \'' + output + '\'\n')
@@ -324,12 +398,12 @@ class SameVersionTests(unittest.TestCase):
 
     def current(self, **overrides):
         values = dict(existed='1', force='0', replace_cli='0', cli_migrated='0', token_stdin='0', adopt_config='',
-                      version='4.2.0', SERVICE_ACTIVE='1', TRANSFER_JOIN_TOKEN='')
+                      version='4.2.0', SERVICE_ACTIVE='1', TRANSFER_JOIN_TOKEN='', PLATFORM='linux', LAUNCHD_STATE='')
         values.update(overrides)
         script = r'''
 set -euo pipefail
 source "$1"
-role=master; platform=linux; service_name=oss-transfer-master; work=$BASE; data_dir=$BASE/data
+role=master; platform=$PLATFORM; domain=system; service_name=oss-transfer-master; work=$BASE; data_dir=$BASE/data
 metadata=$BASE/install.tsv; binary=$BASE/binary; cli_path=$BASE/cli; unit=$BASE/unit
 existed=$existed; force=$force; replace_cli=$replace_cli; cli_migrated=$cli_migrated; token_stdin=$token_stdin
 adopt_config=$adopt_config; version=$version
@@ -341,6 +415,11 @@ installation_current
 
     def test_complete_running_installation_is_current(self):
         self.assertTrue(self.current())
+
+    def test_macos_requires_the_launchd_job_to_be_running(self):
+        self.assertTrue(self.current(PLATFORM='darwin', LAUNCHD_STATE='running'))
+        self.assertFalse(self.current(PLATFORM='darwin', LAUNCHD_STATE='not running'), 'a loaded but stopped job was treated as running')
+        self.assertFalse(self.current(PLATFORM='darwin'), 'an unloaded job was treated as running')
 
     def test_anything_requested_or_stale_runs_the_installation(self):
         for overrides in ({'force': '1'}, {'version': '4.2.1'}, {'SERVICE_ACTIVE': '0'}, {'existed': '0'},

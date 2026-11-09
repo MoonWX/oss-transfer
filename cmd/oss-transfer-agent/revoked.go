@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -13,16 +14,30 @@ import (
 )
 
 // revokedGuidance is written to the service log when the Master definitively
-// rejects this Agent, so an operator knows why the service stopped.
-const revokedGuidance = "This Agent was removed from the cluster or its enrollment was revoked on the Master, so the service has stopped and will not restart automatically. " +
-	"To rejoin, run a new join command from Nodes > Add node on the Master; to remove this Agent, run the installer with --uninstall --role agent"
+// rejects this Agent, so an operator knows why the service stopped. Install.ps1
+// has no uninstall option, so Windows names the manual removal instead.
+func revokedGuidance(goos, serviceName string) string {
+	const stopped = "This Agent was removed from the cluster or its enrollment was revoked on the Master, so the service has stopped and will not restart automatically. " +
+		"To rejoin, run a new join command from Nodes > Add node on the Master; "
+	if goos != "windows" {
+		return stopped + "to remove this Agent, run the installer with --uninstall --role agent"
+	}
+	if serviceName == "" {
+		serviceName = "OSSTransferAgent"
+	}
+	return stopped + "to remove this Agent, run in an administrator PowerShell: Stop-Service -Name '" + serviceName + "'; sc.exe delete '" + serviceName +
+		"'; then delete its installation folder (by default $env:ProgramData\\OSS Transfer\\agent)"
+}
 
 const revokedContainerGuidance = "This Agent was removed from the cluster or its enrollment was revoked on the Master. " +
 	"The container stays idle until it is stopped: remove it (docker rm -f, or docker compose down), or rejoin with a new join command from Nodes > Add node"
 
-type revokedError struct{ err error }
+type revokedError struct {
+	err      error
+	guidance string
+}
 
-func (e revokedError) Error() string { return e.err.Error() + ". " + revokedGuidance }
+func (e revokedError) Error() string { return e.err.Error() + ". " + e.guidance }
 func (e revokedError) Unwrap() error { return e.err }
 
 // containerMarker exists only in the published image. A container restart
@@ -42,7 +57,7 @@ func revocation(ctx context.Context, err error, serviceName string, log io.Write
 		return nil
 	}
 	stopSupervisor(serviceName)
-	return revokedError{err}
+	return revokedError{err, revokedGuidance(runtime.GOOS, serviceName)}
 }
 
 // exitStatus maps a revoked enrollment to a status the service manager does

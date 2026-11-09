@@ -85,14 +85,19 @@ func validateAgentArtifacts(options Options) error {
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
-// bootstrapCommand runs the native installer as root. sudo asks for the
-// password on the terminal before the piped script is read.
+// rootShell runs the piped installer as root: directly when the user is root
+// (FreeBSD's base system and minimal images have no sudo), otherwise through
+// sudo, which asks for the password on the terminal before the script is read.
+// sh -c keeps it one command in any interactive shell, fish included.
+const rootShell = ` | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`
+
+// bootstrapCommand runs the native installer as root.
 func bootstrapCommand(link string) string {
 	// curl 7.29 (CentOS 7) reads the brackets of an IPv6 literal as a glob.
 	if u, err := url.Parse(link); err == nil && strings.HasPrefix(u.Host, "[") {
-		return "curl -fsSL --globoff " + shellQuote(link) + " | sudo bash"
+		return "curl -fsSL --globoff " + shellQuote(link) + rootShell
 	}
-	return "curl -fsSL " + shellQuote(link) + " | sudo bash"
+	return "curl -fsSL " + shellQuote(link) + rootShell
 }
 
 // withQuery appends the non-empty name=value pairs to a bootstrap link.

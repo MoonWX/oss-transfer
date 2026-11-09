@@ -19,11 +19,12 @@ import (
 
 func TestBootstrapCommandDisablesURLGlobbingForIPv6Masters(t *testing.T) {
 	// curl 7.29 (CentOS 7) would read the brackets as a glob range. The native
-	// installer needs root, so the copied command runs it with sudo.
+	// installer needs root, so the copied command runs it as root: directly for
+	// root, with sudo otherwise.
 	for link, want := range map[string]string{
-		"http://[fd00::43]:1685/api/agents/bootstrap/token": "curl -fsSL --globoff 'http://[fd00::43]:1685/api/agents/bootstrap/token' | sudo bash",
-		"http://10.1.0.43:1685/api/agents/bootstrap/token":  "curl -fsSL 'http://10.1.0.43:1685/api/agents/bootstrap/token' | sudo bash",
-		"https://master.example/api/agents/bootstrap/token": "curl -fsSL 'https://master.example/api/agents/bootstrap/token' | sudo bash",
+		"http://[fd00::43]:1685/api/agents/bootstrap/token": "curl -fsSL --globoff 'http://[fd00::43]:1685/api/agents/bootstrap/token'" + rootShell,
+		"http://10.1.0.43:1685/api/agents/bootstrap/token":  "curl -fsSL 'http://10.1.0.43:1685/api/agents/bootstrap/token'" + rootShell,
+		"https://master.example/api/agents/bootstrap/token": "curl -fsSL 'https://master.example/api/agents/bootstrap/token'" + rootShell,
 	} {
 		if got := bootstrapCommand(link); got != want {
 			t.Errorf("bootstrapCommand(%q) = %q, want %q", link, got, want)
@@ -41,14 +42,14 @@ func TestAgentBootstrapExpiresAndCannotBeFetchedAfterEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := f.master.agentInvitationData("https://master.example:1685", invite, "")
-	if data["traditionalCommand"] != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"' | sudo bash" || !strings.Contains(data["windowsCommand"].(string), "platform=windows") {
+	if data["traditionalCommand"] != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"'"+rootShell || !strings.Contains(data["windowsCommand"].(string), "platform=windows") {
 		t.Fatal("bootstrap commands missing")
 	}
 	windows := data["windowsCommand"].(string)
 	if windows != "irm 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?platform=windows' | iex" {
 		t.Fatal("Windows invitation must directly run the downloaded script")
 	}
-	if compose := data["composeCommand"].(string); compose != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?method=compose' | sudo bash" {
+	if compose := data["composeCommand"].(string); compose != "curl -fsSL 'https://master.example:1685/api/agents/bootstrap/"+invite.Token+"?method=compose'"+rootShell {
 		t.Fatal("Linux Compose enrollment must use the unified installer as root", compose)
 	}
 	f.master.options.AgentDockerImage = "registry.example/transfer:custom"
@@ -127,9 +128,11 @@ func TestOfficialAgentBootstrapSelectsSourceOnExecutionHost(t *testing.T) {
 	f.master.options.AgentDockerImage = "moonwx/osstransfer:4.1.6"
 	for _, tc := range []struct {
 		name, country, fallbackCountry, failSource, source, method string
-		wantError, wantIPInfo, failBootstrap                       bool
+		wantError, wantIPInfo, failBootstrap, root                 bool
 	}{
 		{name: "mainland", country: "CN", source: "jdoss"},
+		// FreeBSD's base system and minimal images run as root without sudo.
+		{name: "root-without-sudo", country: "US", source: "github", root: true},
 		{name: "international", country: "US", source: "github"},
 		{name: "compose", country: "CN", source: "jdoss", method: "compose"},
 		{name: "hong-kong", country: "HK", source: "github"},
@@ -189,7 +192,13 @@ case "$url" in
 esac
 `
 			installer := "#!/usr/bin/env bash\nset -eu\nprintf '%s\\n' \"$@\" > \"$BOOTSTRAP_ARGS\"\ncat > \"$BOOTSTRAP_TOKEN\"\n"
-			for name, contents := range map[string]string{"curl": stub, "sudo": "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$SUDO_CALLS\"\nexec \"$@\"\n", "installer.sh": installer, "join.sh": string(body)} {
+			sudo := "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$SUDO_CALLS\"\nexec \"$@\"\n"
+			uid := "1000"
+			if tc.root {
+				sudo, uid = "#!/bin/sh\necho 'sudo: command not found' >&2\nexit 127\n", "0"
+			}
+			id := "#!/bin/sh\nif [ \"$1\" = -u ]; then echo " + uid + "; else exec /usr/bin/id \"$@\"; fi\n"
+			for name, contents := range map[string]string{"curl": stub, "sudo": sudo, "id": id, "installer.sh": installer, "join.sh": string(body)} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -211,9 +220,14 @@ esac
 			if (err != nil) != tc.wantError {
 				t.Fatalf("bootstrap execution: %v\n%s", err, output)
 			}
-			// Only the copied command elevates; the bootstrap itself never calls sudo.
-			if sudo, _ := os.ReadFile(filepath.Join(dir, "sudo-calls")); !tc.failBootstrap && string(sudo) != "bash\n" {
-				t.Fatalf("copied command must pipe the bootstrap to sudo bash exactly once: %q", sudo)
+			// Only the copied command elevates, and only for a user who is not
+			// root; the bootstrap itself never calls sudo.
+			wantSudo := "bash\n"
+			if tc.root {
+				wantSudo = ""
+			}
+			if sudo, _ := os.ReadFile(filepath.Join(dir, "sudo-calls")); !tc.failBootstrap && string(sudo) != wantSudo {
+				t.Fatalf("copied command must pipe the bootstrap to sudo bash exactly once for a user who is not root: %q", sudo)
 			}
 			requests, _ := os.ReadFile(filepath.Join(dir, "requests"))
 			if strings.Contains(string(requests), invite.Token) || strings.Contains(string(requests), "/latest/") || strings.Contains(string(requests), "/main/") {

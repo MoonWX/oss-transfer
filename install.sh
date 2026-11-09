@@ -1025,8 +1025,8 @@ plan_uninstall() {
       fi
     fi
     if [[ -n "$item_backup" && -d "$item_backup" && ! -L "$item_backup" ]]; then
-      uninstall_actions+=("backups	$item_backup	$item_service-" "rmdir	$item_backup")
-      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-*")
+      uninstall_actions+=("backups	$item_backup	$item_service" "rmdir	$item_backup")
+      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-YYYYMMDDTHHMMSSZ.*")
     fi
   fi
   uninstall_actions+=("rmdir	$directory")
@@ -1072,7 +1072,7 @@ stop_and_remove_service() {
   fi
 }
 run_uninstall() {
-  local directory answer item kind first second leftover
+  local directory answer item kind first second leftover suffix
   local -a leftovers=()
   if [[ -n "$install_dir" ]]; then
     safe_path "$install_dir"
@@ -1124,8 +1124,13 @@ run_uninstall() {
       file) rm -f -- "$first";;
       tree) rm -rf -- "$first";;
       backups)
-        for leftover in "$first/$second"*; do
-          [[ -d "$leftover" && ! -L "$leftover" ]] && rm -rf -- "$leftover"
+        # Only this service's own backups: <service>-<UTC timestamp>.<random>,
+        # exactly as created below. A prefix alone would also match a service
+        # whose name extends this one (oss-transfer-agent-b).
+        for leftover in "$first/$second-"*; do
+          [[ -d "$leftover" && ! -L "$leftover" ]] || continue
+          suffix=${leftover##*/}; suffix=${suffix#"$second-"}
+          [[ "$suffix" =~ ^[0-9]{8}T[0-9]{6}Z\.[A-Za-z0-9]+$ ]] && rm -rf -- "$leftover"
         done;;
       rmdir)
         if [[ -d "$first" && ! -L "$first" ]]; then
@@ -1507,7 +1512,7 @@ fi
 # nothing. Anything missing or stale, an enrollment, adoption or CLI change
 # still runs the installation, which repairs it.
 installation_current() {
-  local installed_cli_version
+  local installed_cli_version job
   ((existed && force == 0 && replace_cli == 0 && cli_migrated == 0 && token_stdin == 0)) || return 1
   [[ -z "$adopt_config" && -z "${TRANSFER_JOIN_TOKEN:-}" ]] || return 1
   [[ -f "$metadata" && ! -L "$metadata" && -f "$binary" && ! -L "$binary" && -f "$unit" && ! -L "$unit" && -f "$cli_path" && ! -L "$cli_path" ]] || return 1
@@ -1517,7 +1522,12 @@ installation_current() {
   [[ "$installed_cli_version" == "$version" ]] || return 1
   if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name" || return 1
   elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1 || return 1
-  else launchctl print "$domain/$service_name" >/dev/null 2>&1 || return 1; fi
+  else
+    # A loaded job is not necessarily running: a revoked Agent or a cleanly
+    # stopped Master stays loaded. Only the job's own (top-level) state counts.
+    job=$(launchctl print "$domain/$service_name" 2>/dev/null) || return 1
+    grep -qx $'\tstate = running' <<< "$job" || return 1
+  fi
   # A Master also keeps the release's Agent packages.
   if [[ "$role" == master ]] && [[ $(awk -F '\t' '$1=="asset" && ($2=="install.sh" || $2=="native-install.sh" || $2=="Install.ps1") {print $2}' "$work/manifest.tsv" | LC_ALL=C sort -u | wc -l | tr -d ' ') == 3 ]]; then
     [[ -f "$data_dir/packages/manifest.tsv" && ! -L "$data_dir/packages/manifest.tsv" && $(metadata_field "$data_dir/packages/manifest.tsv" version) == "$version" ]] || return 1
@@ -2209,7 +2219,7 @@ OSS_TRANSFER_EMBEDDED_NATIVE_INSTALLER
 lang='' role='' method='' version=latest source=auto release_url='' package_dir='' yes=0 upgrade=0 user_service=0 answer=''
 install_dir='' data_dir='' cli_path='' service_name='' master_url='' join_url='' files_dir='' image='' port=1685
 listen='' adopt_config='' root_dir='' with_agent='' config_dir=''
-replace_cli=0 token_stdin=0 no_deps=0 uninstall=0 keep_data=0
+replace_cli=0 token_stdin=0 no_deps=0 uninstall=0 keep_data=0 force=0
 prepared_github=0
 local_package_dir=''
 native_args=()
@@ -2270,7 +2280,7 @@ while (($#)); do
     --no-deps) no_deps=1; shift;;
     --uninstall) uninstall=1; shift;;
     --keep-data) keep_data=1; shift;;
-    --force) native_args+=(--force); shift;;
+    --force) force=1; shift;;
     *) fail "Unknown option: $1";;
   esac
 done
@@ -2321,21 +2331,33 @@ case "$(uname -m)" in x86_64|amd64) arch=amd64;; arm64|aarch64) arch=arm64;; arm
 # Uninstall a Docker Compose installation made by this installer: its project
 # containers, Compose file and (without --keep-data) its data directory.
 uninstall_compose() {
-  local roles=master selected directory file data project removed=0 database
+  local roles=master selected directory file data project removed=0 database users path
   [[ "$os" == Linux ]] || fail 'Compose installations exist only on Linux'
   command -v docker >/dev/null && docker compose version >/dev/null 2>&1 || fail "$(say 'Docker Compose is required to remove a Compose installation' '卸载 Compose 安装需要 Docker Compose')"
+  docker info >/dev/null 2>&1 || fail "$(say 'Start the Docker daemon first; nothing was removed' '请先启动 Docker 服务；未做任何更改')"
   if [[ -n "$role" ]]; then roles=$role; else roles='master agent'; fi
   for selected in $roles; do
     directory=${install_dir:-/opt/oss-transfer-compose/$selected}
-    data=${data_dir:-/var/lib/oss-transfer-compose/$selected}
     file=$directory/docker-compose.yml
-    project=${service_name:-oss-transfer-$selected}
     [[ -f "$file" && ! -L "$file" ]] || continue
+    # Only a Compose file written by this installer for this role is removed.
+    grep -Fqx "    command: ['oss-transfer-$selected', '--data-dir', '/data']" "$file" || fail "$(say "$file was not written by this installer; nothing was removed" "$file 不是安装脚本生成的，未做任何更改")"
+    # Act on the project and data directory this installation really uses,
+    # not on today's defaults. Files from earlier releases have no project
+    # line; Compose labels their containers with the file instead.
+    project=$(sed -n 's/^# oss-transfer-project: \([a-z0-9][a-z0-9_-]*\)$/\1/p' "$file" | head -n 1)
+    if [[ -z "$project" ]]; then
+      project=$(docker ps -a --filter "label=com.docker.compose.project.config_files=$file" --format '{{.Label "com.docker.compose.project"}}' | sort -u)
+      [[ "$project" != *$'\n'* ]] || fail "$(say "Several Compose projects use $file: $(printf '%s' "$project" | tr '\n' ' '); nothing was removed" "多个 Compose 项目使用 ${file}：$(printf '%s' "$project" | tr '\n' ' ')；未做任何更改")"
+    fi
+    project=${project:-${service_name:-oss-transfer-$selected}}
+    [[ -z "$service_name" || "$service_name" == "$project" ]] || fail "$(say "$file belongs to Compose project $project, not $service_name; nothing was removed" "$file 属于 Compose 项目 ${project}，不是 ${service_name}；未做任何更改")"
+    data=$(sed -n "s|^      - '\(/[^']*\):/data'\$|\1|p" "$file" | head -n 1)
+    data=${data:-${data_dir:-/var/lib/oss-transfer-compose/$selected}}
+    [[ -z "$data_dir" || "$data_dir" == "$data" ]] || fail "$(say "$file uses data directory $data, not $data_dir; nothing was removed" "$file 使用的数据目录是 ${data}，不是 ${data_dir}；未做任何更改")"
     for path in "$directory" "$data"; do
       [[ "$path" == /*/* && "$path" != *[$'\n\r\t\047"\\$']* && "$path" != *'/../'* && "$path" != */.. ]] || fail 'Use clean absolute paths'
     done
-    # Only a Compose file written by this installer for this role is removed.
-    grep -Fqx "    command: ['oss-transfer-$selected', '--data-dir', '/data']" "$file" || fail "$(say "$file was not written by this installer; nothing was removed" "$file 不是安装脚本生成的，未做任何更改")"
     say "Compose project $project ($selected): $file" "Compose 项目 ${project}（${selected}）：$file"
     if ((keep_data)); then say "  Keep data: $data" "  保留数据：$data"
     else say "  Remove data: $data" "  删除数据：$data"; fi
@@ -2344,6 +2366,11 @@ uninstall_compose() {
       [[ "$answer" == y || "$answer" == Y ]] || { say 'Cancelled; nothing was changed.' '已取消，未做任何更改。'; continue; }
     fi
     docker compose --project-name "$project" --file "$file" down --remove-orphans
+    # A container that still mounts the data (another project name, or one
+    # started by hand) would keep running on deleted files with no Compose
+    # file left to stop it.
+    users=$(docker ps -a --filter "volume=$data" --format '{{.Names}}' | tr '\n' ' ')
+    [[ -z "${users// /}" ]] || fail "$(say "$data is still used by container(s): $users. The Compose file and data were kept; stop and remove those containers, then run the uninstall again." "$data 仍被容器使用：${users}。已保留 Compose 文件和数据；请停止并删除这些容器后重新卸载。")"
     rm -f -- "$file"
     rmdir -- "$directory" 2>/dev/null || say "Kept (contains other files): $directory" "已保留（目录中还有其他文件）：$directory"
     if ((keep_data == 0)) && [[ -d "$data" && ! -L "$data" ]]; then
@@ -2551,7 +2578,7 @@ cleanup() {
   rm -rf -- "$stage"
   unset TRANSFER_JOIN_TOKEN OSS_TRANSFER_JOIN_TOKEN join_url
 }
-compose_rollback=0 created_install_dir=0 created_data_dir=0 compose=()
+compose_rollback=0 created_install_dir=0 created_data_dir=0 reuse_data=0 compose=()
 # A failed Compose installation removes what this run created (containers,
 # network, Compose file and data directory), so the same command can be rerun.
 rollback_compose() {
@@ -2562,6 +2589,8 @@ rollback_compose() {
   fi
   for path in "$data_dir" "$install_dir"; do
     [[ -n "$path" && "$path" == /* && "$path" != / && -d "$path" ]] || continue
+    # Reused data from an earlier installation is never removed.
+    [[ "$path" != "$data_dir" ]] || ((reuse_data == 0)) || continue
     if { [[ "$path" == "$data_dir" ]] && ((created_data_dir)); } || { [[ "$path" == "$install_dir" ]] && ((created_install_dir)); }; then
       rm -rf -- "$path"
     else
@@ -2739,6 +2768,7 @@ if [[ "$method" == native ]]; then
   [[ $(sha256 "$stage/native-install.sh") == "$checksum" && $(wc -c < "$stage/native-install.sh" | tr -d ' ') == "$size" ]] || fail 'Native installer checksum mismatch'
   [[ -z "$root_dir" ]] || native_args+=(--root-dir "$root_dir")
   [[ -z "$config_dir" ]] || native_args+=(--config-dir "$config_dir")
+  ((force == 0)) || native_args+=(--force)
   if ((upgrade)); then
     native_args+=(--upgrade)
     if [[ -n "$package_dir" ]]; then native_args+=(--package-dir "$package_dir"); else native_args+=(--release-url "$release_url"); fi
@@ -2806,6 +2836,8 @@ fi
 
 [[ "$os" == Linux && "$user_service" == 0 ]] || fail 'The Compose installer requires Linux and root'
 ((upgrade == 0)) || fail 'For an existing Compose installation, run docker compose pull and docker compose up -d in its directory'
+# --force only skips the native same-version check; Compose never skips.
+((force == 0)) || say 'Note: --force applies to native installations only; it is ignored for Docker Compose.' '提示：--force 仅适用于原生安装，Docker Compose 安装会忽略它。'
 [[ ( -z "$package_dir" || "$prepared_github" == 1 || -n "$local_package_dir" ) && ${#native_args[@]} == 0 && -z "$listen" && -z "$adopt_config" && -z "$cli_path" && "$replace_cli" == 0 ]] || fail 'Native configuration/package options cannot be used with Compose'
 service_name=${service_name:-oss-transfer-$role}
 [[ "$service_name" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || fail 'Invalid Compose project name'
@@ -2824,16 +2856,36 @@ if [[ -n "$files_dir" ]]; then
     [[ "$files_dir" != "$path" && "$files_dir" != "$path/"* && "$path" != "$files_dir/"* ]] || fail 'Local-files mount must be separate from service data and configuration'
   done
 fi
-for path in "$install_dir" "$data_dir"; do
-  [[ ! -e "$path" || -d "$path" && -z $(ls -A "$path") ]] && continue
-  existing_project=''
-  if command -v docker >/dev/null 2>&1; then existing_project=$(docker ps -aq --filter "label=com.docker.compose.project=$service_name" 2>/dev/null || true); fi
-  if [[ -f "$install_dir/docker-compose.yml" && -n "$existing_project" ]]; then
-    fail "$(say "An installation already exists in $install_dir. To upgrade it, run in that directory: docker compose pull && docker compose up -d" "$install_dir 中已有安装。如需升级，请在该目录运行：docker compose pull && docker compose up -d")"
+compose_command="docker compose -p $service_name -f $install_dir/docker-compose.yml"
+if [[ -f "$install_dir/docker-compose.yml" ]] && command -v docker >/dev/null 2>&1 &&
+  [[ -n $(docker ps -aq --filter "label=com.docker.compose.project=$service_name" 2>/dev/null || true) ]]; then
+  fail "$(say "An installation already exists in $install_dir. To upgrade it, run: $compose_command pull && $compose_command up -d" "$install_dir 中已有安装。如需升级，请运行：$compose_command pull && $compose_command up -d")"
+fi
+# Data kept by --uninstall --keep-data, by docker compose down or by an
+# unfinished join is reused as it is; it is never offered for deletion.
+reuse_data=0
+if [[ -f "$data_dir/master.db" || -f "$data_dir/agent.db" ]]; then
+  if [[ "$role" == master ]]; then other_role=agent; else other_role=master; fi
+  [[ -f "$data_dir/$role.db" && ! -e "$data_dir/$other_role.db" ]] ||
+    fail "$(say "$data_dir holds $other_role data, not $role data. It was not changed; choose another --data-dir." "$data_dir 中是 $other_role 的数据，不是 $role 的数据。未做任何更改，请改用其他 --data-dir。")"
+  data_users=''
+  if command -v docker >/dev/null 2>&1; then data_users=$(docker ps -a --filter "volume=$data_dir" --format '{{.Names}}' 2>/dev/null | tr '\n' ' ' || true); fi
+  [[ -z "${data_users// /}" ]] ||
+    fail "$(say "$data_dir is in use by container(s): $data_users. It was not changed; stop and remove that installation first." "$data_dir 正被容器使用：${data_users}。未做任何更改，请先停止并删除该安装。")"
+  if [[ -e "$install_dir" && -n $(ls -A "$install_dir") ]]; then
+    { [[ $(ls -A "$install_dir") == docker-compose.yml ]] && grep -Fqx "    command: ['oss-transfer-$role', '--data-dir', '/data']" "$install_dir/docker-compose.yml"; } ||
+      fail "$(say "$install_dir contains other files. Nothing was changed; choose an empty --install-dir to reuse the data in $data_dir." "$install_dir 中有其他文件。未做任何更改，请指定一个空的 --install-dir 以沿用 $data_dir 中的数据。")"
   fi
-  # Earlier releases left these behind when enrollment failed.
+  reuse_data=1
+  say "Existing $role data found in $data_dir; it is reused, not removed or reset." "在 $data_dir 中找到已有的 $role 数据，将直接沿用，不会删除或重置。"
+fi
+for path in "$install_dir" "$data_dir"; do
+  ((reuse_data == 0)) || break
+  [[ ! -e "$path" || -d "$path" && -z $(ls -A "$path") ]] && continue
+  # Earlier releases left these behind when enrollment failed. Neither
+  # directory holds a database here, so removing them loses no data.
   fail "$(say "$path contains files from an earlier attempt that did not finish. Remove them, then run the same command again:" "$path 中有上次未完成安装留下的文件。请先删除，再重新运行同一条命令：")
-  docker compose -p $service_name -f $install_dir/docker-compose.yml down; rm -rf $install_dir $data_dir"
+  $compose_command down; rm -rf $install_dir $data_dir"
 done
 enrollment_input
 if [[ "$role" == agent ]]; then
@@ -2880,6 +2932,8 @@ chmod 700 "$install_dir" "$data_dir"
 chown 65532:65532 "$data_dir"
 compose_file=$install_dir/docker-compose.yml
 cat > "$compose_file" <<EOF
+# Written by the OSS Transfer installer. Manage it with: docker compose -p $service_name -f $compose_file COMMAND
+# oss-transfer-project: $service_name
 services:
   $role:
     image: '$image'
@@ -2908,6 +2962,14 @@ if [[ "$role" == agent ]]; then
       say 'The invitation is invalid, expired or already used. Generate a new one in Nodes > Add node.' '加入凭证无效、已过期或已被使用。请在“执行节点 → 添加节点”中重新生成。' >&2
     elif grep -qiE 'connection refused|no such host|timeout|deadline exceeded|network is unreachable' "$stage/enroll.log"; then
       say "The Agent container cannot reach the Master at $master_url. Inside a container, localhost is the container itself; use an address of the Master that this host can reach." "Agent 容器无法连接 Master（${master_url}）。容器内的 localhost 指容器自身，请使用本机可以访问的 Master 地址。" >&2
+    fi
+    # A lost response or an unavailable Master may already have committed the
+    # join, so the pending identity stays for an idempotent retry. Only a
+    # definitive rejection, or a request that never reached the Master, rolls
+    # back.
+    if [[ -f "$data_dir/agent.db" ]] && ! grep -qiE 'HTTP (403|409)|dial tcp|no such host|connection refused|network is unreachable|x509' "$stage/enroll.log"; then
+      compose_rollback=0
+      fail "$(say "Agent enrollment did not finish; the Master may already have accepted this Agent. Its identity is kept in $data_dir. Fix the problem above, then run the same command again; it retries with the same identity." "Agent 加入未完成，Master 可能已接受此节点。身份信息保留在 ${data_dir}。请解决上述问题后重新运行同一条命令，将以同一身份重试。")"
     fi
     fail "$(say 'Agent enrollment failed' 'Agent 加入失败')"
   fi
@@ -2946,6 +3008,7 @@ if [[ "$role" == master ]]; then
     setup_token=$(docker logs "$container" 2>&1 |
       sed -n 's/^Open the console to complete setup\. Setup token: \([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | tail -n 1)
     [[ -z "$setup_token" ]] || printf '%s: %s\n' "$(say 'Setup token' '初始化密钥')" "$setup_token"
+    ((reuse_data == 0)) || [[ -n "$setup_token" ]] || say 'Existing data was reused: sign in with your existing accounts.' '已沿用原有数据：请使用原有账号登录。'
   fi
 else
   sleep 2

@@ -582,7 +582,7 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 		fmt.Fprintf(out, cliText(out, "加入凭证仅可使用一次，有效至 %s\n"), safeCLIText(invitationExpiry(expiry)))
 	}
 	if command := getString(data, "traditionalCommand"); command != "" {
-		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，需要 sudo）"))
+		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
 	} else if command := getString(data, "nativeCommand"); command != "" {
 		fmt.Fprintln(out, cliText(out, "\n原生运行（Linux / macOS / FreeBSD）"))
@@ -611,7 +611,7 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。"))
 	}
 	if command := getString(data, "composeCommand"); command != "" {
-		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，需要 sudo）"))
+		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，需要 root 或 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
 	}
 }

@@ -3,9 +3,10 @@ import { mockApi } from "./fixtures";
 import type { AgentInvitation } from "../src/lib/nodeRegistry";
 
 const joinUrl = "https://transfer.example/api/agents/bootstrap/test-once";
-const traditionalCommand = `curl -fsSL '${joinUrl}' | sudo bash`;
+const rootShell = `sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`;
+const traditionalCommand = `curl -fsSL '${joinUrl}' | ${rootShell}`;
 const windowsCommand = `irm '${joinUrl}?platform=windows' | iex`;
-const upstreamTraditionalCommand = `curl -fsSL '${joinUrl}?source=upstream' | sudo bash`;
+const upstreamTraditionalCommand = `curl -fsSL '${joinUrl}?source=upstream' | ${rootShell}`;
 const upstreamWindowsCommand = `irm '${joinUrl}?platform=windows&source=upstream' | iex`;
 const nativeCommand = `./oss-transfer-agent --join-url '${joinUrl}'`;
 const dockerEnroll = `docker run --rm -v oss-transfer-agent-abcdef-data:/data moonwx/osstransfer:4.2.0 oss-transfer-agent --join-url '${joinUrl}' --data-dir /data --enroll-only`;
@@ -13,7 +14,7 @@ const dockerRun =
   "docker run -d --name oss-transfer-agent-abcdef --restart unless-stopped -v oss-transfer-agent-abcdef-data:/data moonwx/osstransfer:4.2.0 oss-transfer-agent --data-dir /data";
 const dockerCommand = `${dockerEnroll} && ${dockerRun}`;
 const dockerWindowsCommand = `${dockerEnroll}; if ($LASTEXITCODE -eq 0) { ${dockerRun} }`;
-const composeCommand = `curl -fsSL '${joinUrl}?method=compose' | sudo bash`;
+const composeCommand = `curl -fsSL '${joinUrl}?method=compose' | ${rootShell}`;
 
 async function setup(
   page: Page,

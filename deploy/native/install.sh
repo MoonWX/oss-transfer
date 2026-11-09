@@ -672,8 +672,8 @@ plan_uninstall() {
       fi
     fi
     if [[ -n "$item_backup" && -d "$item_backup" && ! -L "$item_backup" ]]; then
-      uninstall_actions+=("backups	$item_backup	$item_service-" "rmdir	$item_backup")
-      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-*")
+      uninstall_actions+=("backups	$item_backup	$item_service" "rmdir	$item_backup")
+      uninstall_removed+=("$(say 'Upgrade backups' 升级备份): $item_backup/$item_service-YYYYMMDDTHHMMSSZ.*")
     fi
   fi
   uninstall_actions+=("rmdir	$directory")
@@ -719,7 +719,7 @@ stop_and_remove_service() {
   fi
 }
 run_uninstall() {
-  local directory answer item kind first second leftover
+  local directory answer item kind first second leftover suffix
   local -a leftovers=()
   if [[ -n "$install_dir" ]]; then
     safe_path "$install_dir"
@@ -771,8 +771,13 @@ run_uninstall() {
       file) rm -f -- "$first";;
       tree) rm -rf -- "$first";;
       backups)
-        for leftover in "$first/$second"*; do
-          [[ -d "$leftover" && ! -L "$leftover" ]] && rm -rf -- "$leftover"
+        # Only this service's own backups: <service>-<UTC timestamp>.<random>,
+        # exactly as created below. A prefix alone would also match a service
+        # whose name extends this one (oss-transfer-agent-b).
+        for leftover in "$first/$second-"*; do
+          [[ -d "$leftover" && ! -L "$leftover" ]] || continue
+          suffix=${leftover##*/}; suffix=${suffix#"$second-"}
+          [[ "$suffix" =~ ^[0-9]{8}T[0-9]{6}Z\.[A-Za-z0-9]+$ ]] && rm -rf -- "$leftover"
         done;;
       rmdir)
         if [[ -d "$first" && ! -L "$first" ]]; then
@@ -1154,7 +1159,7 @@ fi
 # nothing. Anything missing or stale, an enrollment, adoption or CLI change
 # still runs the installation, which repairs it.
 installation_current() {
-  local installed_cli_version
+  local installed_cli_version job
   ((existed && force == 0 && replace_cli == 0 && cli_migrated == 0 && token_stdin == 0)) || return 1
   [[ -z "$adopt_config" && -z "${TRANSFER_JOIN_TOKEN:-}" ]] || return 1
   [[ -f "$metadata" && ! -L "$metadata" && -f "$binary" && ! -L "$binary" && -f "$unit" && ! -L "$unit" && -f "$cli_path" && ! -L "$cli_path" ]] || return 1
@@ -1164,7 +1169,12 @@ installation_current() {
   [[ "$installed_cli_version" == "$version" ]] || return 1
   if [[ "$platform" == linux ]]; then systemctl is-active --quiet "$service_name" || return 1
   elif [[ "$platform" == freebsd ]]; then "$unit" onestatus >/dev/null 2>&1 || return 1
-  else launchctl print "$domain/$service_name" >/dev/null 2>&1 || return 1; fi
+  else
+    # A loaded job is not necessarily running: a revoked Agent or a cleanly
+    # stopped Master stays loaded. Only the job's own (top-level) state counts.
+    job=$(launchctl print "$domain/$service_name" 2>/dev/null) || return 1
+    grep -qx $'\tstate = running' <<< "$job" || return 1
+  fi
   # A Master also keeps the release's Agent packages.
   if [[ "$role" == master ]] && [[ $(awk -F '\t' '$1=="asset" && ($2=="install.sh" || $2=="native-install.sh" || $2=="Install.ps1") {print $2}' "$work/manifest.tsv" | LC_ALL=C sort -u | wc -l | tr -d ' ') == 3 ]]; then
     [[ -f "$data_dir/packages/manifest.tsv" && ! -L "$data_dir/packages/manifest.tsv" && $(metadata_field "$data_dir/packages/manifest.tsv" version) == "$version" ]] || return 1

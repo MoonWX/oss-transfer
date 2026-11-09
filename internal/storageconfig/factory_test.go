@@ -104,3 +104,33 @@ func TestFactoryLocalHandlesAndEndpointValidation(t *testing.T) {
 		t.Fatal("factory ignored cancellation", err)
 	}
 }
+
+func TestS3ConfigResolvesAutomaticAddressing(t *testing.T) {
+	on, off := true, false
+	for _, test := range []struct {
+		endpoint string
+		explicit *bool
+		want     bool
+	}{
+		// Automatic: self-hosted endpoints use path-style, cloud DNS names
+		// stay virtual-hosted.
+		{"http://host.docker.internal:18333", nil, true},
+		{"http://10.0.0.5", nil, true},
+		{"http://seaweed", nil, true},
+		{"https://s3.cn-north-1.jdcloud-oss.com", nil, false},
+		{"https://s3.us-east-1.amazonaws.com", nil, false},
+		// An explicit choice always wins, in both directions.
+		{"http://10.0.0.5:9000", &off, false},
+		{"https://s3.cn-north-1.jdcloud-oss.com", &on, true},
+	} {
+		config := testConfig("qa")
+		config.Endpoint, config.PathStyleEnable = test.endpoint, test.explicit
+		settings, err := config.S3Config("bucket")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings.PathStyle != test.want || config.EffectivePathStyle() != test.want {
+			t.Errorf("%s (explicit %v): path-style %v, want %v", test.endpoint, test.explicit, settings.PathStyle, test.want)
+		}
+	}
+}

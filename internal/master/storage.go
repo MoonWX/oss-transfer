@@ -116,6 +116,7 @@ func (s *Server) listStorage(w http.ResponseWriter, r *http.Request) {
 		Region                 string `json:"region,omitempty"`
 		UseV2SignerType        *bool  `json:"useV2SignerType"`
 		PathStyleEnable        *bool  `json:"pathStyleEnable"`
+		PathStyleEffective     bool   `json:"pathStyleEffective"`
 		CredentialsConfigured  bool   `json:"credentialsConfigured"`
 		SessionTokenConfigured bool   `json:"sessionTokenConfigured"`
 	}
@@ -124,6 +125,7 @@ func (s *Server) listStorage(w http.ResponseWriter, r *http.Request) {
 		connections = append(connections, connection{
 			Alias: config.Alias, Endpoint: config.Endpoint, Region: config.Region,
 			UseV2SignerType: config.UseV2SignerType, PathStyleEnable: config.PathStyleEnable,
+			PathStyleEffective:     config.EffectivePathStyle(),
 			CredentialsConfigured:  config.AccessKey != "" && config.SecretKey != "",
 			SessionTokenConfigured: config.SessionToken != "",
 		})
@@ -131,23 +133,6 @@ func (s *Server) listStorage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]any{"success": true, "configs": connections, "revision": snapshot.Revision})
 }
-func (s *Server) storageBuckets(ctx context.Context, config storageconfig.Config) ([]string, error) {
-	members, err := s.onlineAgents()
-	if err != nil {
-		return nil, err
-	}
-	if len(members) == 0 {
-		return nil, errors.New("no Agent is online; join an Agent before validating storage")
-	}
-	var result struct {
-		Buckets []string `json:"buckets"`
-	}
-	if err := s.agentCall(ctx, members[0].Session(), "storage_buckets", false, config, &result); err != nil {
-		return nil, redactStorageError(err, []storageconfig.Config{config})
-	}
-	return result.Buckets, nil
-}
-
 // Some storage providers include an invalid access key in their error message.
 // Preserve typed status checks while keeping those responses out of the UI.
 type redactedStorageError struct {
@@ -225,11 +210,18 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
+	var warning *storageProblem
 	if request.Validate {
-		if _, err := s.storageBuckets(r.Context(), request.Config); err != nil {
+		outcome, err := s.checkStorage(r.Context(), request.Config, "")
+		if err != nil {
 			fail(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()))
 			return
 		}
+		if outcome.failure != nil {
+			storageFailureResponse(w, 400, "Storage validation failed: ", outcome.failure)
+			return
+		}
+		warning = outcome.warning
 	}
 	var snapshot storageconfig.Snapshot
 	var err error
@@ -242,7 +234,7 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot)
+	s.storageSaved(w, r, snapshot, warning)
 }
 func storageError(w http.ResponseWriter, err error) {
 	status := 500
@@ -264,9 +256,12 @@ func (s *Server) deleteStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot)
+	s.storageSaved(w, r, snapshot, nil)
 }
-func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot) {
+
+// storageSaved reports the synchronization of a saved snapshot; warning is a
+// non-blocking finding of the connection check.
+func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
 		fail(w, 500, "Connection saved; cannot read Agent synchronization status")
@@ -305,7 +300,9 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			count++
 		}
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "message": localize(w, "存储连接已保存"), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details})
+	result := map[string]any{"success": true, "message": localize(w, "存储连接已保存"), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details}
+	storageWarningFields(w, result, warning)
+	writeJSON(w, 200, result)
 }
 func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := storageconfig.NewMaster(s.store).Snapshot()
@@ -315,12 +312,33 @@ func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, config := range snapshot.Connections {
 		if config.Alias == r.PathValue("alias") {
-			buckets, err := s.storageBuckets(r.Context(), config)
+			// An optional bucket is checked instead of the first listed one,
+			// which also checks keys limited to one bucket.
+			bucket := r.URL.Query().Get("bucket")
+			if bucket != "" {
+				if _, err := config.S3Config(bucket); err != nil {
+					fail(w, 400, err.Error())
+					return
+				}
+			}
+			outcome, err := s.checkStorage(r.Context(), config, bucket)
 			if err != nil {
 				fail(w, 502, err.Error())
 				return
 			}
-			writeJSON(w, 200, map[string]any{"success": true, "buckets": buckets})
+			if outcome.failure != nil {
+				storageFailureResponse(w, 502, "", outcome.failure)
+				return
+			}
+			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil}
+			if outcome.check.Bucket != "" {
+				result["checkedBucket"] = outcome.check.Bucket
+			}
+			if !outcome.complete {
+				result["bucketCheckSupported"] = false
+			}
+			storageWarningFields(w, result, outcome.warning)
+			writeJSON(w, 200, result)
 			return
 		}
 	}

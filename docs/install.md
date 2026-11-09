@@ -325,6 +325,8 @@ oss-transfer-cli task list
 Serve the application at the domain root, for example `https://transfer.example.com/`. Add this location to the domain's NGINX server block:
 
 ```nginx
+client_max_body_size 16m;
+
 location / {
     proxy_pass http://127.0.0.1:1685;
     proxy_set_header Host $http_host;
@@ -332,4 +334,4 @@ location / {
 }
 ```
 
-Subpaths such as `/transfer/` are unsupported. When adding an Agent, choose a Master URL that the Agent can reach; it may use a private IP while the browser uses the proxy. For TLS certificates and HTTPS Master URLs, see [security](security.md).
+`client_max_body_size` must allow about 8 MiB: Agents send up to 8 MiB per request, and NGINX allows 1 MiB by default. `proxy_read_timeout` must be longer than 25 seconds, the time an Agent's poll can stay open. Subpaths such as `/transfer/` are unsupported. When adding an Agent, choose a Master URL that the Agent can reach; it may use a private IP while the browser uses the proxy. For TLS certificates and HTTPS Master URLs, see [security](security.md).

@@ -325,6 +325,8 @@ oss-transfer-cli task list
 请把应用部署在域名根路径，例如 `https://transfer.example.com/`。在该域名的 NGINX server 配置中添加：
 
 ```nginx
+client_max_body_size 16m;
+
 location / {
     proxy_pass http://127.0.0.1:1685;
     proxy_set_header Host $http_host;
@@ -332,4 +334,4 @@ location / {
 }
 ```
 
-不支持 `/transfer/` 这类子路径。添加执行节点时，请选择该节点能访问的 Master 地址；浏览器通过反向代理访问时，执行节点仍可使用内网 IP。TLS 证书和 HTTPS Master 地址见[安全](security.zh-CN.md)。
+`client_max_body_size` 至少要允许约 8 MiB：执行节点单次请求最多发送 8 MiB，NGINX 默认只允许 1 MiB。`proxy_read_timeout` 必须大于 25 秒，即执行节点轮询请求最长的保持时间。不支持 `/transfer/` 这类子路径。添加执行节点时，请选择该节点能访问的 Master 地址；浏览器通过反向代理访问时，执行节点仍可使用内网 IP。TLS 证书和 HTTPS Master 地址见[安全](security.zh-CN.md)。

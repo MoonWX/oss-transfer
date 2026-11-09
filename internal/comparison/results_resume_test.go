@@ -297,3 +297,45 @@ func TestUnavailableResultsAreReportedNotResumed(t *testing.T) {
 	}
 	assertGone(t, h, m, "missing")
 }
+
+// slowCloseStore holds a canceled run in CANCELING by blocking Close.
+type slowCloseStore struct {
+	*fakeStore
+	release chan struct{}
+}
+
+func (s *slowCloseStore) Close() error {
+	<-s.release
+	return s.fakeStore.Close()
+}
+
+// A resume that arrives while a cancel is still closing the run would be lost,
+// so it is refused; once the run has stopped it can be resumed.
+func TestResumeWhileCancelingIsRefused(t *testing.T) {
+	h := newHarness(t)
+	blocked := sourceOf(100)
+	blocked.listHook = blockAfter("src/0049")
+	release := make(chan struct{})
+	m := h.open(storesFactory(&pagedStore{fakeStore: blocked, limit: 10}, &slowCloseStore{fakeStore: newFakeStore(), release: release}))
+	if _, err := m.Start(request()); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := m.Cancel("test"); err != nil || p.Status != StateCanceling {
+		t.Fatalf("cancel: %+v %v", p, err)
+	}
+	if _, err := m.Resume("test", storesFactory(sourceOf(100), newFakeStore())); !errors.Is(err, ErrNotResumable) {
+		t.Fatalf("resume while canceling: %v, want ErrNotResumable", err)
+	}
+	close(release)
+	waitWorkers(t, m)
+	if p, _ := m.Get("test", 0, 1); p.Status != StateCanceled || p.Resumes != 0 || !p.Resumable {
+		t.Fatalf("after cancel: %+v", p.Progress)
+	}
+	if _, err := m.Resume("test", storesFactory(sourceOf(100), newFakeStore())); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkers(t, m)
+	if p, _ := m.Get("test", 0, 1); p.Status != StateCompleted || p.Resumes != 1 || p.Compared != 100 {
+		t.Fatalf("after resume: %+v", p.Progress)
+	}
+}

@@ -242,7 +242,15 @@ func (m *Manager) Resume(id string, factory execution.StoreFactory) (Progress, e
 		return Progress{}, err
 	}
 	if id != "" && m.active == id && m.writer != nil {
-		return m.writer.committedProgress(), nil
+		w := m.writer
+		w.mu.Lock()
+		stopping := w.live.Status != StateRunning
+		w.mu.Unlock()
+		if stopping {
+			// A canceled run still closing: resuming now would be lost.
+			return Progress{}, ErrNotResumable
+		}
+		return w.committedProgress(), nil
 	}
 	existing, err := m.load(id)
 	if err != nil {
@@ -287,6 +295,9 @@ func (m *Manager) resumeLocked(rec runRecord, factory execution.StoreFactory, un
 	rec.Resumable, rec.AutoResume = false, false
 	if unclean {
 		rec.UncleanResumes++
+	}
+	if r, ok := factory.(interface{ StorageRevision() uint64 }); ok && r.StorageRevision() != 0 {
+		rec.ResumeRevision = r.StorageRevision()
 	}
 	w.begin(rec)
 	if err := m.db.Update(func(tx *state.Tx) error {
@@ -588,6 +599,9 @@ func (m *Manager) page(q RowsQuery) (Page, error) {
 				if current, e := m.load(q.ID); e == nil && (!current.found || current.rec.Deleting) {
 					return Page{}, ErrNotFound
 				}
+				// Removed by hand while the Agent runs: report what recovery
+				// reports after a restart, without the local path.
+				return Page{Progress: m.markMissing(q.ID, rec), Items: []Row{}}, nil
 			}
 			return Page{}, err
 		}
@@ -597,6 +611,30 @@ func (m *Manager) page(q RowsQuery) (Page, error) {
 		}
 	}
 	return result, nil
+}
+
+// markMissing records that the result file of a finished comparison is gone
+// and returns the Progress to show. The running comparison's record belongs to
+// its writer; recovery marks it after the next start.
+func (m *Manager) markMissing(id string, rec runRecord) Progress {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != id {
+		if err := m.db.Update(func(tx *state.Tx) error {
+			var current runRecord
+			found, err := tx.Get(runsBucket, id, &current)
+			if err != nil || !found || current.Deleting || current.Unavailable {
+				return err
+			}
+			markUnavailable(&current, errResultsMissing)
+			rec = current
+			return tx.Put(runsBucket, id, current)
+		}); err != nil {
+			m.logf("comparison %s: %s", id, localCause(err))
+		}
+	}
+	markUnavailable(&rec, errResultsMissing)
+	return m.public(rec)
 }
 
 // List returns every retained comparison without rows, newest first.
@@ -787,7 +825,7 @@ func (m *Manager) recover() (*pendingResume, error) {
 			detail := ""
 			if unclean && rec.UncleanResumes >= maxUncleanResumes {
 				detail = fmt.Sprintf("not resumed automatically after %d restarts without a clean stop; resume it manually", maxUncleanResumes)
-			} else if factory, err := m.resumeFactory(rec.Request); err != nil {
+			} else if factory, err := m.resumeFactory(resumeRequest(rec)); err != nil {
 				detail = clip(err.Error(), maxDetailBytes)
 			} else {
 				resume = &pendingResume{rec: rec, factory: factory, unclean: unclean}
@@ -816,6 +854,16 @@ func (m *Manager) recover() (*pendingResume, error) {
 	}
 	m.removeOrphans(known)
 	return resume, nil
+}
+
+// resumeRequest is the request an automatic resume checks: it carries the
+// storage revision of the last manual resume when there was one.
+func resumeRequest(rec runRecord) Request {
+	r := rec.Request
+	if rec.ResumeRevision != 0 {
+		r.StorageRevision = rec.ResumeRevision
+	}
+	return r
 }
 
 func (m *Manager) resumeFactory(r Request) (execution.StoreFactory, error) {

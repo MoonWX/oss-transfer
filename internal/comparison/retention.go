@@ -48,9 +48,10 @@ type retainedComparison struct {
 }
 
 // retain continues unfinished deletions, then removes finished comparisons
-// that ended more than RetentionDays ago, then the oldest finished ones while
-// the node's results exceed BudgetBytes or more than MaxRetained comparisons
-// exist. The running comparison is never removed. Passes are serialized.
+// that ended more than RetentionDays ago, then the finished ones that ended
+// earliest while the node's results exceed BudgetBytes or more than
+// MaxRetained comparisons exist. The running comparison is never removed.
+// Passes are serialized.
 func (m *Manager) retain() {
 	m.retention.Lock()
 	defer m.retention.Unlock()
@@ -117,12 +118,15 @@ func (m *Manager) retain() {
 		total += entry.bytes
 	}
 	sort.Slice(kept, func(i, j int) bool {
+		if !kept[i].ended.Equal(kept[j].ended) {
+			return kept[i].ended.Before(kept[j].ended)
+		}
 		if !kept[i].started.Equal(kept[j].started) {
 			return kept[i].started.Before(kept[j].started)
 		}
 		return kept[i].id < kept[j].id
 	})
-	// Oldest finished first, first for the byte budget, then for the count.
+	// Earliest ended first, first for the byte budget, then for the count.
 	count := len(kept)
 	for _, entry := range kept {
 		if total <= m.options.BudgetBytes && count <= m.options.MaxRetained || ctx.Err() != nil {

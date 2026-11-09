@@ -255,3 +255,64 @@ func TestFreeDiskBytesProbe(t *testing.T) {
 		t.Fatal("probe of a missing directory succeeded")
 	}
 }
+
+func smallSource(prefix string, n int) *fakeStore {
+	var objects []transferstore.Object
+	for i := 0; i < n; i++ {
+		objects = append(objects, object(fmt.Sprintf("src/%s%04d", prefix, i), 1))
+	}
+	return newFakeStore(objects...)
+}
+
+// Budget retention removes the comparison that ended first. A comparison that
+// was paused, resumed and has just completed keeps its early start time, but it
+// ended last, so it must survive.
+func TestRetentionBudgetRemovesTheEarliestEndedComparison(t *testing.T) {
+	h := newHarness(t)
+	clock := newTestClock()
+	// Measure the stored sizes with a probe Manager.
+	m := h.open(storesFactory(sourceOf(400), newFakeStore()), func(o *Options) { o.Now = clock.Now })
+	full := startAndWait(t, m, requestWithID("probe-full")).StoredBytes
+	small := startAndWait(t, m, requestWithID("probe-small"), storesFactory(smallSource("b", 20), newFakeStore())).StoredBytes
+	for _, id := range []string{"probe-full", "probe-small"} {
+		if err := m.Delete(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.Close()
+	budget := full + 2*small - 1
+	m = h.open(storesFactory(sourceOf(400), newFakeStore()), func(o *Options) { o.Now, o.BudgetBytes = clock.Now, budget })
+	m.flushEvery = time.Millisecond
+
+	// A starts first and is paused about halfway.
+	blocked := sourceOf(400)
+	blocked.listHook = blockAfter("src/0199")
+	if _, err := m.Start(requestWithID("A"), storesFactory(&pagedStore{fakeStore: blocked, limit: 10}, newFakeStore())); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "A commits rows", func() bool { return h.record("A").Rows >= 100 })
+	if _, err := m.Cancel("A"); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkers(t, m)
+	if p, _ := m.Get("A", 0, 1); p.Status != StateCanceled || !p.Resumable {
+		t.Fatalf("A not paused: %+v", p.Progress)
+	}
+	clock.advance(time.Second)
+	startAndWait(t, m, requestWithID("B"), storesFactory(smallSource("b", 20), newFakeStore()))
+	clock.advance(time.Second)
+	startAndWait(t, m, requestWithID("C"), storesFactory(smallSource("c", 20), newFakeStore()))
+	m.retain()
+	if ids := listedIDs(t, m); strings.Join(ids, ",") != "C,B,A" {
+		t.Fatalf("before resume kept %v", ids)
+	}
+	clock.advance(time.Second)
+	if _, err := m.Resume("A", storesFactory(sourceOf(400), newFakeStore())); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkers(t, m)
+	m.retain()
+	if ids := listedIDs(t, m); strings.Join(ids, ",") != "C,A" {
+		t.Fatalf("budget %d (A %d, B and C %d each) kept %v, want C,A", budget, full, small, ids)
+	}
+}

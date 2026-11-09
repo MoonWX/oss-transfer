@@ -586,9 +586,11 @@ func TestResultsFailureDetailAndElapsedTime(t *testing.T) {
 		return nil
 	}
 	m := h.open(storesFactory(&pagedStore{fakeStore: source, limit: 1}, newFakeStore()), func(o *Options) { o.Now = clock.Now })
+	m.flushEvery = 10 * time.Millisecond
 	if _, err := m.Start(request()); err != nil {
 		t.Fatal(err)
 	}
+	waitFor(t, "row a committed", func() bool { return h.record("test").Compared == 1 })
 	clock.advance(5 * time.Second)
 	close(failFirst)
 	waitWorkers(t, m)

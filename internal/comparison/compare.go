@@ -342,8 +342,7 @@ func (c *comparer) object(ctx context.Context) Row {
 // LIST or HEAD; both sides are read again with HEAD before comparing.
 func (c *comparer) compare(ctx context.Context, listedA, listedB transferstore.Object, key string) Row {
 	row := Row{Key: key, SourceKey: listedA.Key, DestinationKey: listedB.Key, SourceSize: listedA.Size, DestinationSize: listedB.Size}
-	a, ae := c.stat(ctx, c.source, listedA.Key)
-	b, be := c.stat(ctx, c.target, listedB.Key)
+	a, ae, b, be := c.statBoth(ctx, listedA.Key, listedB.Key)
 	if ae != nil || be != nil {
 		if objectNotFound(ae) || objectNotFound(be) {
 			row.Status = StatusChanged
@@ -381,8 +380,7 @@ func (c *comparer) compare(ctx context.Context, listedA, listedB transferstore.O
 		return comparisonErrorRow(row, "Cannot read complete object content", comparisonSideDetail("GET", ae, be))
 	}
 	// Both objects may have changed while the opposite side was streaming.
-	afterA, ae := c.stat(ctx, c.source, a.Key)
-	afterB, be := c.stat(ctx, c.target, b.Key)
+	afterA, ae, afterB, be := c.statBoth(ctx, a.Key, b.Key)
 	if sourceErr, targetErr := headFailure(ae), headFailure(be); sourceErr != nil || targetErr != nil {
 		return comparisonErrorRow(row, "Cannot read object metadata", comparisonSideDetail("HEAD", sourceErr, targetErr))
 	}
@@ -396,6 +394,18 @@ func (c *comparer) compare(ctx context.Context, listedA, listedB transferstore.O
 		row.Status, row.Reasons = StatusDifferent, []string{ReasonSHA256}
 	}
 	return row
+}
+
+// statBoth runs the source and target HEADs of one key concurrently.
+func (c *comparer) statBoth(ctx context.Context, sourceKey, targetKey string) (a transferstore.Object, ae error, b transferstore.Object, be error) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b, be = c.stat(ctx, c.target, targetKey)
+	}()
+	a, ae = c.stat(ctx, c.source, sourceKey)
+	<-done
+	return a, ae, b, be
 }
 
 // stat is a HEAD bounded by comparisonHeadTimeout.

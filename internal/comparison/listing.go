@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
@@ -37,8 +38,11 @@ type comparisonListing struct {
 	side       string // "source" or "target"
 	store      transferstore.Store
 	prefix     string
-	startAfter string // full key; "" lists from the start
-	pages      chan comparisonPage
+	startAfter string // full key sent to the store; "" lists from the start
+	// skipThrough is the exact resume key: keys up to it were already compared
+	// and are skipped, also when the store ignores or shortens startAfter.
+	skipThrough string
+	pages       chan comparisonPage
 
 	// Merge goroutine state.
 	page     []transferstore.Object
@@ -51,10 +55,25 @@ type comparisonListing struct {
 func newComparisonListing(side string, store transferstore.Store, prefix, relativeStartAfter string) *comparisonListing {
 	l := &comparisonListing{side: side, store: store, prefix: prefix, pages: make(chan comparisonPage)}
 	if relativeStartAfter != "" {
-		l.startAfter = prefix + relativeStartAfter
-		l.last, l.ordered = l.startAfter, true
+		full := prefix + relativeStartAfter
+		l.skipThrough = full
+		l.startAfter = comparisonListStartAfter(full)
 	}
 	return l
+}
+
+// comparisonListStartAfter is the longest prefix of key the store accepts as a
+// start key (at most 1024 bytes on a UTF-8 boundary). Keys listed after it up
+// to key itself are skipped by peek.
+func comparisonListStartAfter(key string) string {
+	if len(key) <= 1024 {
+		return key
+	}
+	cut := 1024
+	for cut > 0 && !utf8.RuneStart(key[cut]) {
+		cut--
+	}
+	return key[:cut]
 }
 
 // run fetches pages in order. The channel is unbuffered, so the lister holds
@@ -94,31 +113,39 @@ func (l *comparisonListing) peek(ctx context.Context) (*transferstore.Object, er
 	if l.head != nil {
 		return l.head, nil
 	}
-	for len(l.page) == 0 {
-		if l.finished {
-			return nil, nil
-		}
-		select {
-		case page, ok := <-l.pages:
-			if !ok {
-				// Only cancellation stops a lister before its final page.
-				if err := ctx.Err(); err != nil {
-					return nil, err
+	var object transferstore.Object
+	for {
+		for len(l.page) == 0 {
+			if l.finished {
+				return nil, nil
+			}
+			select {
+			case page, ok := <-l.pages:
+				if !ok {
+					// Only cancellation stops a lister before its final page.
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+					return nil, &comparisonListingError{message: l.side + " listing stopped unexpectedly"}
 				}
-				return nil, &comparisonListingError{message: l.side + " listing stopped unexpectedly"}
+				if page.err != nil {
+					return nil, page.err
+				}
+				l.page, l.finished = page.objects, page.final
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			}
-			if page.err != nil {
-				return nil, page.err
-			}
-			l.page, l.finished = page.objects, page.final
-		case <-ctx.Done():
-			return nil, ctx.Err()
 		}
-	}
-	object := l.page[0]
-	l.page = l.page[1:]
-	if !strings.HasPrefix(object.Key, l.prefix) {
-		return nil, &comparisonListingError{message: l.side + " listing returned a key outside the prefix"}
+		object = l.page[0]
+		l.page = l.page[1:]
+		if !strings.HasPrefix(object.Key, l.prefix) {
+			return nil, &comparisonListingError{message: l.side + " listing returned a key outside the prefix"}
+		}
+		// Keys through the resume key were compared before; skip them until
+		// the first later key, also when the store ignored start-after.
+		if l.ordered || l.skipThrough == "" || object.Key > l.skipThrough {
+			break
+		}
 	}
 	if l.ordered && object.Key <= l.last {
 		return nil, &comparisonListingError{message: fmt.Sprintf("%s listing is not in ascending byte order after key %q", l.side, clipDetail(strings.TrimPrefix(l.last, l.prefix), maxDetailKeyBytes))}

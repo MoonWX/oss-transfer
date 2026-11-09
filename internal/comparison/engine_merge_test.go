@@ -191,7 +191,8 @@ func TestEngineStartAfterSkipsBothSides(t *testing.T) {
 		check.store.mu.Unlock()
 	}
 
-	// A listing that ignores the start key cannot be resumed safely.
+	// A listing that ignores the start key re-lists the compared keys; they
+	// are skipped, and the order is still checked after the start key.
 	ignoring := newEngineStore()
 	ignoring.put("src/a", "a")
 	ignoring.put("src/c", "c")
@@ -199,8 +200,21 @@ func TestEngineStartAfterSkipsBothSides(t *testing.T) {
 		return transferstore.Page{Objects: []transferstore.Object{{Key: "src/a", Size: 1}, {Key: "src/c", Size: 1}}}, true, nil
 	}
 	rows, err = engineRun(context.Background(), request(), ignoring, target, nil, RunOptions{StartAfter: "b"})
-	if want := `source listing is not in ascending byte order after key "b"`; err == nil || err.Error() != want || ErrorDetail(err) != want || len(rows) != 0 {
-		t.Fatalf("listing before the start key was accepted: %v %+v", err, rows)
+	got = nil
+	for _, row := range rows {
+		got = append(got, row.Key+"="+row.Status)
+	}
+	if want := []string{"c=" + StatusMatch, "e=" + StatusExtraTarget}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("listing that ignores the start key: %v %v, want %v", err, got, want)
+	}
+	unordered := newEngineStore()
+	unordered.put("src/c", "c")
+	unordered.listHook = func(_ context.Context, options transferstore.ListOptions, _ int) (transferstore.Page, bool, error) {
+		return transferstore.Page{Objects: []transferstore.Object{{Key: "src/c", Size: 1}, {Key: "src/a", Size: 1}}}, true, nil
+	}
+	_, err = engineRun(context.Background(), request(), unordered, target, nil, RunOptions{StartAfter: "b"})
+	if want := `source listing is not in ascending byte order after key "c"`; err == nil || err.Error() != want {
+		t.Fatalf("unordered listing after the start key: %v", err)
 	}
 }
 

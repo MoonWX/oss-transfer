@@ -113,6 +113,11 @@ func (c *comparer) hashRanges(ctx context.Context, opener transferstore.RangeOpe
 	for offset := int64(0); offset < object.Size; {
 		end := min(offset+contentRangeSize, object.Size)
 		err := retryContentRead(ctx, rangeRetryDelays, func(attemptCtx context.Context, watch *readWatchdog) error {
+			if offset >= end {
+				// An earlier attempt hashed every byte and failed only while
+				// waiting for the end of the body.
+				return nil
+			}
 			watch.arm()
 			body, err := ranges.OpenRange(attemptCtx, offset, end-offset)
 			watch.disarm()

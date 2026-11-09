@@ -105,6 +105,9 @@ type runRecord struct {
 	Legacy bool `json:"legacy,omitempty"`
 	// Unavailable marks results whose file is missing or damaged.
 	Unavailable bool `json:"unavailable,omitempty"`
+	// ResumeRevision is the storage revision the last manual resume ran with;
+	// automatic resumes compare it instead of Request.StorageRevision.
+	ResumeRevision uint64 `json:"resumeRevision,omitempty"`
 }
 
 func (r *runRecord) checkpoint() string {

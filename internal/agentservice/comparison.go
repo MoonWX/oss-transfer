@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"time"
 
@@ -28,8 +29,17 @@ var errComparisonStorageChanged = errors.New("storage connections changed; resum
 func comparisonFactory(factory *storageconfig.Factory, snapshot storageconfig.Snapshot) execution.StoreFactory {
 	frozen := *factory
 	frozen.Source = comparisonSnapshot{snapshot}
-	return &frozen
+	return revisionFactory{Factory: &frozen, revision: snapshot.Revision}
 }
+
+// revisionFactory tells the comparison Manager which storage revision a
+// resumed comparison runs with.
+type revisionFactory struct {
+	*storageconfig.Factory
+	revision uint64
+}
+
+func (f revisionFactory) StorageRevision() uint64 { return f.revision }
 
 // comparisonOptions completes the Agent's comparison settings: an interrupted
 // comparison resumes automatically only with the storage revision it was
@@ -114,6 +124,11 @@ func (s *Service) comparisonCommand(ctx context.Context, c agenttransport.Comman
 		}
 		if status != 0 {
 			return agenttransport.Response{Status: status, Payload: []byte(`{"message":"` + message + `"}`)}, true, nil
+		}
+		// Replies never reveal the Agent's local paths.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			err = fmt.Errorf("%s comparison results: %w", pathErr.Op, pathErr.Err)
 		}
 		r, e := response(value, err)
 		return r, true, e

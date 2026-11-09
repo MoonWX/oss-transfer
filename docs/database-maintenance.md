@@ -2,7 +2,7 @@
 
 [中文](database-maintenance.zh-CN.md)
 
-The database stores object names, scan checkpoints, assignments and transfer results. Object contents are streamed between endpoints. With millions of small files, the number of objects matters more to database size than their total size.
+The database stores object names, scan checkpoints, assignments and transfer results. Object contents are streamed between endpoints. With millions of small files, the number of objects matters more to database size than their total size. Object comparison results are kept outside the database ([comparison results](#comparison-results)).
 
 An unfinished scan keeps an index for deduplication and source-change detection during recovery. After scanning completes, the Agent removes this index in small background transactions. Once the Master has durably saved a batch as child tasks, acknowledged it and authorized its release, the Agent removes that scan batch in the background, even while scanning continues. Unacknowledged batches remain available for delivery; execution records used by retries and reports are retained. Permanently deleting a task removes its scan and execution records; stopping a task or moving it to the recycle bin retains them.
 
@@ -46,3 +46,11 @@ For an encrypted database, compaction also writes `agent.compact.db.key` using t
 The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
 
 Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion requires schema 7; rejoining a task node after failover requires schema 8. Credential encryption requires schema 9, queue handoff requires schema 10, and changing a task's execution nodes raises the Master database to schema 11. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary.
+
+## Comparison results
+
+Agents keep object comparison results as files under `comparisons` in their data directory (`/opt/oss-transfer/agent/data/comparisons` on Linux), not in `agent.db`. Compaction does not include them, and neither do database backups made with `--backup-state`, which the installers also use for upgrade backups. Agents delete these results on their own: 30 days after a comparison ends, and sooner when the results exceed the node's storage budget ([result storage and retention](operations.md#result-storage-and-retention)).
+
+Comparison results can be produced again by comparing again, which checks the objects as they are at that time; deleting them affects no task, transfer or stored object. Delete them with **Delete comparison results** in the console or `object delete` in the CLI. If you remove the files by hand, stop the Agent first: the affected comparisons keep their counts, but their lists of differences are gone and they cannot be resumed. When an Agent starts after an older database has been restored, it cuts each comparison's file back to what that database recorded and deletes the files of comparisons that the database does not know.
+
+Agents of 4.1.40 or earlier stored up to 10,000 differences per comparison in `agent.db`. An updated Agent still reads these results and deletes them under the same retention rules, in small transactions. As with other cleanup, the freed pages are reused, and only compaction shrinks the file.

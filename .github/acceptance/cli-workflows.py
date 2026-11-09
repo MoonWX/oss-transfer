@@ -590,29 +590,62 @@ class Workflows(cluster.Harness):
         self.record("task --all and manual pagination, reconciled ZIP report, delete/restore/background purge retain transferred data")
 
     def comparison(self):
-        for bucket in (self.buckets["source"], self.buckets["destination"]):
+        source, destination = self.buckets["source"], self.buckets["destination"]
+        for bucket in (source, destination):
             for key in ("same", "different"):
-                body = b"12345678" if key == "same" or bucket == self.buckets["source"] else b"87654321"
+                body = b"12345678" if key == "same" or bucket == source else b"87654321"
                 self.s3.put_object(Bucket=bucket, Key="compare/" + key, Body=body, ContentType="application/octet-stream")
+        # Metadata mode reports same-size objects whose plain MD5 ETags differ as
+        # ETAG_MISMATCH. Read the fixture's ETags instead of assuming their form.
+        etags = [self.s3.head_object(Bucket=bucket, Key="compare/different")["ETag"].strip('"').lower() for bucket in (source, destination)]
+        etag_hint = all(re.fullmatch(r"[0-9a-f]{32}", etag) for etag in etags) and etags[0] != etags[1]
+
+        def comparison_cli(action, operation, *arguments, expected=0):
+            # IDs are base64url and may start with "-"; pass them after "--".
+            return self.cli("object", action, *arguments, "--", operation, expected=expected)
+
         for mode in ("metadata", "content"):
-            started = data(self.cli("object", "compare", "--source-bucket", "fixture/" + self.buckets["source"],
-                                    "--dest-bucket", "fixture/" + self.buckets["destination"], "--scope", "prefix",
+            started = data(self.cli("object", "compare", "--source-bucket", "fixture/" + source,
+                                    "--dest-bucket", "fixture/" + destination, "--scope", "prefix",
                                     "--source-prefix", "compare/", "--dest-prefix", "compare/", "--mode", mode))
             operation = started["id"]
             def completed():
-                row = data(self.cli("object", "status", operation, "--limit", "100"))
+                row = data(comparison_cli("status", operation, "--limit", "100"))
                 require(row["status"] not in {"FAILED", "INTERRUPTED"}, "Comparison did not complete")
                 return row if row["status"] == "COMPLETED" else None
             result = self.wait(completed, mode + " prefix comparison")
-            require(result["compared"] == 2 and result["errors"] == 0, "Comparison omitted fixture objects")
-            require(result["matched"] == (2 if mode == "metadata" else 1), "Metadata/content comparison semantics differ")
-            require(result["different"] == (0 if mode == "metadata" else 1), "Same-size content mismatch was not distinguished")
+            expected = "DIFFERENT" if mode == "content" else "ETAG_MISMATCH" if etag_hint else None
+            require(result["compared"] == 2 and result["errors"] == 0 and result["bothMissing"] == 0, "Comparison omitted fixture objects")
+            require(result["matched"] == (1 if expected else 2), "Metadata/content comparison semantics differ")
+            require({"DIFFERENT": result["different"], "ETAG_MISMATCH": result["etagMismatch"]} ==
+                    {status: int(status == expected) for status in ("DIFFERENT", "ETAG_MISMATCH")},
+                    "Same-size content mismatch was not distinguished")
+            require(result["rows"] == (1 if expected else 0) and not result["rowsTruncated"], "Stored differences differ from counts")
+            listed = data(self.cli("object", "list"))
+            require(listed["complete"] is True and operation in {row["id"] for row in listed["items"]}, "Comparison list omitted the run")
             if mode == "content":
-                different = next(row for row in result["items"] if row["status"] == "DIFFERENT")
+                page = data(comparison_cli("status", operation, "--status", "DIFFERENT"))
+                require([row["sourceKey"] for row in page["items"]] == ["compare/different"], "Status filter returned other rows")
+                different = page["items"][0]
+                require(different["status"] == "DIFFERENT" and different["reasons"] == ["sha256"], "Content difference lacks its reason")
                 require(different["sourceSha256"] == digest(b"12345678") and different["destinationSha256"] == digest(b"87654321"), "Content comparison hashes differ from fixture")
-            self.cli("object", "delete", operation)
-            self.cli("object", "status", operation, expected=1)
-        self.record("prefix metadata comparison distinguishes same-size streaming SHA-256 content mismatch")
+            path = self.root / f"comparison-{mode}.zip"
+            exported = comparison_cli("export", operation, "--output", path)
+            require(exported["complete"] is True and exported["exportedRows"] == result["rows"], "CLI reported an incomplete export")
+            with zipfile.ZipFile(path) as archive:
+                require(archive.namelist() == ["differences.csv", "retry-source-keys.incr", "summary.json"], "Export ZIP entries differ")
+                rows = list(csv.DictReader(io.StringIO(archive.read("differences.csv").decode("utf-8-sig"))))
+                retry = archive.read("retry-source-keys.incr").decode("utf-8").splitlines()
+                summary = json.loads(archive.read("summary.json"))
+            require([(row["sourceKey"], row["status"]) for row in rows] == ([("compare/different", expected)] if expected else []),
+                    "Exported rows differ from stored differences")
+            require(retry == (["compare/different"] if expected else []), "Retry key list differs from fixture")
+            require(summary["comparisonId"] == operation and summary["complete"] is True and
+                    summary["exportedRows"] == len(rows) and summary["retryKeys"] == len(retry), "Export summary differs")
+            comparison_cli("delete", operation)
+            comparison_cli("status", operation, expected=1)
+        self.record("prefix comparisons: metadata ETag hint, streaming SHA-256 mismatch, list, status filter and ZIP export",
+                    metadataETagHint=etag_hint)
 
     def maintenance_and_logout(self):
         status = data(self.cli("update", "status"))

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -95,7 +96,7 @@ func (c *ApiClient) Request(method, path string, body interface{}) (map[string]i
 }
 
 func (c *ApiClient) sendRequest(req *http.Request) (map[string]interface{}, error) {
-	resp, err := c.do(req, false)
+	resp, err := c.do(req, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -165,13 +166,15 @@ func (c *ApiClient) newRequest(method, path string, body interface{}) (*http.Req
 	return req, nil
 }
 
-func (c *ApiClient) do(req *http.Request, download bool) (*http.Response, error) {
+// do sends req. A negative timeout keeps the client's default; zero removes the
+// total deadline, and the caller then bounds the request itself.
+func (c *ApiClient) do(req *http.Request, timeout time.Duration) (*http.Response, error) {
 	client := http.Client{Timeout: 60 * time.Second}
 	if c.client != nil {
 		client = *c.client
 	}
-	if download {
-		client.Timeout = 30 * time.Minute
+	if timeout >= 0 {
+		client.Timeout = timeout
 	}
 	previousRedirect := client.CheckRedirect
 	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
@@ -247,12 +250,52 @@ func apiResponseMessage(result map[string]interface{}) string {
 	return ""
 }
 
+// downloadSpec describes one kind of downloaded file.
+type downloadSpec struct {
+	accept string
+	// mediaTypes lists the accepted response types; "" accepts a response
+	// without Content-Type.
+	mediaTypes []string
+	// verify checks the complete temporary file before it is published.
+	verify func(path string) error
+	// timeout bounds the whole download. When idle is set instead, the
+	// download has no total deadline and stops after idle without data.
+	timeout, idle time.Duration
+	text          downloadText
+}
+
+// downloadText holds the catalog messages that name the downloaded file.
+type downloadText struct {
+	wrongType, temporary, interrupted, short, save, publish, idle string
+}
+
+var reportDownload = downloadSpec{
+	accept:     "application/zip",
+	mediaTypes: []string{"application/zip", "application/octet-stream", "application/x-zip-compressed", ""},
+	verify:     validateReportArchive,
+	timeout:    30 * time.Minute,
+	text: downloadText{
+		wrongType:   "服务器未返回 ZIP 报告（Content-Type: %s）",
+		temporary:   "创建报告临时文件失败: %w",
+		interrupted: "报告下载中断: %w",
+		short:       "报告下载不完整：预期 %d 字节，实际 %d 字节",
+		save:        "保存报告失败: %w",
+		publish:     "发布报告文件失败: %w",
+	},
+}
+
 // Download streams a ZIP report to a temporary file beside the destination.
 // The verified complete archive is published atomically without replacing any file.
 func (c *ApiClient) Download(method, path string, body interface{}, destination string) error {
 	if strings.TrimSpace(destination) == "" {
 		return cliErrorf("请指定报告保存路径")
 	}
+	return c.download(method, path, body, destination, reportDownload)
+}
+
+// download streams a response to a temporary file beside the destination,
+// verifies the complete file and publishes it without replacing any file.
+func (c *ApiClient) download(method, path string, body interface{}, destination string, spec downloadSpec) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return cliErrorf("目标文件已存在，请选择其他保存路径: %s", destination)
 	} else if !os.IsNotExist(err) {
@@ -262,43 +305,70 @@ func (c *ApiClient) Download(method, path string, body interface{}, destination 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "application/zip")
-	resp, err := c.do(req, true)
+	req.Header.Set("Accept", spec.accept)
+	var watchdog *idleWatchdog
+	if spec.idle > 0 {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		watchdog = startIdleWatchdog(spec.idle, cancel)
+		defer watchdog.stop()
+		req = req.WithContext(ctx)
+	}
+	resp, err := c.do(req, spec.timeout)
 	if err != nil {
+		if watchdog.expired() {
+			return cliErrorf(spec.text.idle, spec.idle)
+		}
 		return err
 	}
 	defer resp.Body.Close()
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || (mediaType != "application/zip" && mediaType != "application/octet-stream" && mediaType != "application/x-zip-compressed" && mediaType != "") {
+	accepted := false
+	for _, allowed := range spec.mediaTypes {
+		accepted = accepted || mediaType == allowed
+	}
+	if failed := resp.StatusCode < 200 || resp.StatusCode >= 300; failed || !accepted {
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		if readErr != nil {
 			return cliErrorf("读取下载错误信息失败: %w", readErr)
 		}
-		if _, responseErr := decodeAPIResponse(resp.StatusCode, data); responseErr != nil {
-			return responseErr
+		// API errors are JSON. A successful page of another type, such as a
+		// login page, is simply not the requested file.
+		if failed || mediaType == "application/json" {
+			if _, responseErr := decodeAPIResponse(resp.StatusCode, data); responseErr != nil {
+				return responseErr
+			}
 		}
-		return cliErrorf("服务器未返回 ZIP 报告（Content-Type: %s）", mediaType)
+		return cliErrorf(spec.text.wrongType, mediaType)
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".part-*")
 	if err != nil {
-		return cliErrorf("创建报告临时文件失败: %w", err)
+		return cliErrorf(spec.text.temporary, err)
 	}
 	defer os.Remove(temporary.Name())
 	defer temporary.Close()
-	written, err := io.Copy(temporary, resp.Body)
-	if err != nil {
-		return cliErrorf("报告下载中断: %w", err)
+	var source io.Reader = resp.Body
+	if watchdog != nil {
+		source = watchdog.reader(resp.Body)
 	}
+	written, err := io.Copy(temporary, source)
+	if err != nil {
+		if watchdog.expired() {
+			return cliErrorf(spec.text.idle, spec.idle)
+		}
+		return cliErrorf(spec.text.interrupted, err)
+	}
+	watchdog.stop()
 	if resp.ContentLength >= 0 && written != resp.ContentLength {
-		return cliErrorf("报告下载不完整：预期 %d 字节，实际 %d 字节", resp.ContentLength, written)
+		return cliErrorf(spec.text.short, resp.ContentLength, written)
 	}
 	if err := temporary.Sync(); err != nil {
-		return cliErrorf("保存报告失败: %w", err)
+		return cliErrorf(spec.text.save, err)
 	}
 	if err := temporary.Close(); err != nil {
-		return cliErrorf("保存报告失败: %w", err)
+		return cliErrorf(spec.text.save, err)
 	}
-	if err := validateReportArchive(temporary.Name()); err != nil {
+	if err := spec.verify(temporary.Name()); err != nil {
 		return err
 	}
 	// A same-directory hard link gives atomic no-replace publication; Rename can
@@ -307,9 +377,53 @@ func (c *ApiClient) Download(method, path string, body interface{}, destination 
 		if os.IsExist(err) {
 			return cliErrorf("目标文件已存在，请选择其他保存路径: %s", destination)
 		}
-		return cliErrorf("发布报告文件失败: %w", err)
+		return cliErrorf(spec.text.publish, err)
 	}
 	return nil
+}
+
+// idleWatchdog cancels a download that receives no data for its period.
+type idleWatchdog struct {
+	period time.Duration
+	timer  *time.Timer
+	fired  atomic.Bool
+}
+
+func startIdleWatchdog(period time.Duration, cancel context.CancelFunc) *idleWatchdog {
+	watchdog := &idleWatchdog{period: period}
+	watchdog.timer = time.AfterFunc(period, func() {
+		watchdog.fired.Store(true)
+		cancel()
+	})
+	return watchdog
+}
+
+// expired reports whether the watchdog canceled the download; a nil watchdog
+// never does.
+func (w *idleWatchdog) expired() bool { return w != nil && w.fired.Load() }
+
+func (w *idleWatchdog) stop() {
+	if w != nil {
+		w.timer.Stop()
+	}
+}
+
+// reader restarts the period whenever data arrives.
+func (w *idleWatchdog) reader(body io.Reader) io.Reader {
+	return idleWatchdogReader{body, w}
+}
+
+type idleWatchdogReader struct {
+	body     io.Reader
+	watchdog *idleWatchdog
+}
+
+func (r idleWatchdogReader) Read(buffer []byte) (int, error) {
+	n, err := r.body.Read(buffer)
+	if n > 0 && !r.watchdog.expired() {
+		r.watchdog.timer.Reset(r.watchdog.period)
+	}
+	return n, err
 }
 
 func validateReportArchive(path string) error {

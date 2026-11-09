@@ -24,7 +24,7 @@ func TestRangeComparisonPreservesPrefixesAndSupportsStatusCancel(t *testing.T) {
 				t.Fatalf("bad cancel: %s %s", r.Method, r.URL)
 			}
 		}
-		adminTestJSON(t, w, map[string]interface{}{"id": "job-1", "status": "RUNNING"})
+		adminTestJSON(t, w, map[string]interface{}{"id": "job-1", "status": "RUNNING", "items": []interface{}{}})
 	})
 	for _, args := range [][]string{{"compare", "--source-bucket", "source/a", "--dest-bucket", "dest/b", "--source-prefix", " dir/+中文 ", "--dest-prefix", "backup/", "--mode", "content"}, {"status", "job-1", "--after", "100", "--limit", "25"}, {"cancel", "job-1"}} {
 		if _, err := runAdminCommand(client, "object", args); err != nil {

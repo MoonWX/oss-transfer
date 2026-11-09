@@ -32,6 +32,7 @@ const cliHelp = `OSS Transfer CLI
   limit list|set|history|adjustment
   exceptions list|export|clear <failed|fallback|local>
   object compare ...             比对存储桶、前缀或单个对象
+  object list|status|export|resume|cancel|delete  查看、导出或继续比对
   update status|check            查看集群版本或检查新版本
   update master|agent|agents ...  更新服务
   backup list|prune ...          查看或清理升级备份
@@ -394,19 +395,49 @@ complete/partial 表示节点返回是否完整；truncated 表示记录被数�
 `
 
 const cliObjectHelp = `对象比对
-  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
-  oss-transfer-cli object status <比对ID> [--after 50 --limit 100]
-  oss-transfer-cli object cancel <比对ID>
-  oss-transfer-cli object delete <比对ID>
+用法：oss-transfer-cli object <子命令> [参数]
 
-prefix 范围不填前缀时比对整个桶；两端按去掉前缀后的 Key 对应。
-metadata 检查大小、Content-Type、Content-Encoding、Content-Disposition、Cache-Control 和自定义元数据，不读取内容。
-content 完整流式读取两端对象，计算 SHA-256，不将对象写入本地文件。会产生读取流量。
-ETag、修改时间和存储类型不作为跨存储一致依据。比对期间变化的对象单独列出。
-比对异步执行，status 返回总计和分页差异；一致的对象只计数。保存 ID 可在离开页面后继续查询。
-每节点保留最近 10 次结果；每次保存前 10,000 条差异，全部对象仍计数。delete 只删除已结束的比对记录。
-Key 和前缀按原值传递，含空格或 shell 特殊字符时请加引号。
+子命令
+  compare --source-bucket 连接/桶 --dest-bucket 连接/桶 [--scope prefix]
+          [--source-prefix 前缀] [--dest-prefix 前缀] [--mode metadata|content]
+  compare --source-bucket 连接/桶 --source-key Key --dest-bucket 连接/桶 --dest-key Key
+          --scope object [--mode metadata|content]
+  list                            列出各节点上的比对及其状态
+  status <ID> [--after 编号] [--limit 1–1000] [--status 结果[,结果...]]
+                                  查看统计和一页差异，默认每页 50 条
+  export <ID> --output 文件 [--format zip|jsonl] [--status 结果[,结果...]]
+                                  导出全部已保存的差异，默认 ZIP
+  resume <ID>                     从检查点之后继续已中断、失败或已取消的比对
+  cancel <ID>                     取消正在执行的比对
+  delete <ID>                     删除已结束比对的结果
+
+结果
+  DIFFERENT 不一致、ETAG_MISMATCH ETag 不同、MISSING_TARGET 目标缺失、EXTRA_TARGET 目标多余、
+  CHANGED_DURING_COMPARE 比对期间已变化、ERROR 读取失败、BOTH_MISSING 两端均不存在。
+
+示例
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --scope object --mode content
+  oss-transfer-cli object list
+  oss-transfer-cli object status <比对ID> --watch 5
+  oss-transfer-cli object status <比对ID> --status MISSING_TARGET,DIFFERENT --limit 200
+  oss-transfer-cli object export <比对ID> --output comparison.zip
+  oss-transfer-cli object resume <比对ID>
+
+说明
+  prefix 范围不填前缀时比对整个桶；两端按去掉前缀后的 Key 对应。
+  metadata 检查大小、Content-Type、Content-Encoding、Content-Disposition、Cache-Control 和自定义元数据，不读取内容。
+  元数据一致不代表内容一致：两端 ETag 都是普通 MD5 形式且不同时，结果为 ETAG_MISMATCH。需要确认内容时使用 content。
+  content 流式读取两端对象并计算 SHA-256，不写入本地文件，会产生读取流量。
+  修改时间和存储类型不作为一致依据。比对期间变化的对象单独列出。
+  比对在一个执行节点后台并发运行，所有差异保存在该节点上，默认保留 30 天；list 可找回比对 ID。
+  ZIP 包含 differences.csv、retry-source-keys.incr 和 summary.json。两端前缀相同时，
+  retry-source-keys.incr 可用于 import-inventory，重新迁移目标缺失、不一致或 ETag 不同的对象。
+  Agent 重启或升级后，若存储连接未变会自动继续；否则用 resume 从检查点之后继续，已统计的结果保留。
+  差异超过节点的存储预算或磁盘剩余空间不足时，之后的差异只计数不保存。
+  退出码 3：status 的差异明细被截断，export 的结果不完整，或 list 有节点无法连接。
+  delete 只删除已结束的比对结果。比对 ID 以 - 开头时，在 ID 前加 --，如 object status -- -abc。
+  Key 和前缀按原值传递，含空格或 shell 特殊字符时请加引号。
 `
 
 const cliAuthHelp = `登录与账户

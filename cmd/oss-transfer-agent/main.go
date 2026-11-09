@@ -188,7 +188,7 @@ func serve(ctx context.Context, config servicehost.Config, options agent.Options
 		return err
 	}
 	defer db.Close()
-	service, err := agentservice.New(db, agentservice.Options{SpoolDirectory: filepath.Join(config.DataDirectory, "spool"), NodeControl: nodeOptions, Updater: updater})
+	service, err := agentservice.New(db, agentservice.Options{SpoolDirectory: filepath.Join(config.DataDirectory, "spool"), NodeControl: nodeOptions, Updater: updater, Comparison: config.Comparison.Options(filepath.Join(config.DataDirectory, "comparisons"))})
 	if err != nil {
 		return err
 	}

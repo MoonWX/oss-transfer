@@ -150,7 +150,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		return 2
 	}
 	if options.watch > 0 && !watchable(normalized) {
-		fmt.Fprintln(errors, cliText(errors, "错误: --watch 仅用于任务、节点、限速和异常的只读查询"))
+		fmt.Fprintln(errors, cliText(errors, "错误: --watch 仅用于任务、节点、限速、异常和对象比对的只读查询"))
 		return 2
 	}
 	client := NewApiClient(options.host)
@@ -221,7 +221,9 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			if options.watch > 0 {
 				fmt.Fprintln(output, time.Now().Format("2006-01-02 15:04:05"))
 			}
-			renderCLIResult(output, result)
+			if !renderComparisonResult(output, normalized, result, callErr) {
+				renderCLIResult(output, result)
+			}
 		}
 		if callErr != nil {
 			fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
@@ -280,6 +282,8 @@ func watchable(args []string) bool {
 		return args[1] == "list" || args[1] == "history" || args[1] == "adjustment"
 	case "exceptions":
 		return args[1] == "list"
+	case "object":
+		return args[1] == "list" || args[1] == "status"
 	}
 	return false
 }
@@ -838,6 +842,9 @@ func renderIncomplete(out io.Writer, result map[string]interface{}) {
 			fmt.Fprintln(out, line)
 			seen[line] = true
 		}
+	}
+	for _, notice := range comparisonIncompleteNotice(out, responseData(result)) {
+		write("", notice[0], notice[1])
 	}
 	var visit func(map[string]interface{}, string)
 	visit = func(current map[string]interface{}, context string) {

@@ -29,7 +29,8 @@ func (e *Engine) verifyCompleted(parent context.Context, record Record, attempt 
 	go func() {
 		defer workers.Done()
 		for _, result := range record.Results {
-			if result.Status != ItemSucceeded && result.Status != ItemSkipped {
+			if result.Status != ItemSucceeded && result.Status != ItemSkipped || result.Reconciliation == ReasonSourceDeleted {
+				// An object deleted at its source has no target to check.
 				continue
 			}
 			if err := e.acquireObject(ctx, attempt); err != nil {

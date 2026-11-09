@@ -44,6 +44,14 @@ type S3UploadRegistry interface {
 	ForgetUpload(context.Context, string) error
 }
 
+// S3UploadAbandoner is implemented by a registry that retries, later, the
+// abort of an upload whose writer gave up on it. The writer calls it when its
+// own abort failed, typically because the storage was unreachable; the upload
+// is no longer in use and may be aborted at any time.
+type S3UploadAbandoner interface {
+	AbandonUpload(context.Context, S3UploadRecord) error
+}
+
 func s3ConnectionIdentity(config S3Config) S3ConnectionIdentity {
 	credentials, _ := json.Marshal([]string{config.AccessKey, config.SecretKey, config.SessionToken})
 	fingerprint := sha256.Sum256(credentials)

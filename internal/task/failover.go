@@ -346,7 +346,8 @@ func failoverSeed(job execution.Job, previous execution.Record, now time.Time) (
 		switch result.Status {
 		case execution.ItemSucceeded, execution.ItemSkipped:
 		case "", execution.ItemPending, execution.ItemFailed:
-			result = execution.ItemResult{ID: item.ID, Status: execution.ItemPending, ResolvedSource: result.ResolvedSource}
+			result.ID = item.ID
+			result = execution.PendingResult(result)
 		default:
 			return execution.Record{}, ErrConflict
 		}

@@ -53,7 +53,7 @@ func (r *Repository) retryFailed(ctx context.Context, child string, generation, 
 		}
 		for i := range j.Results {
 			if j.Results[i].Status == ItemFailed {
-				j.Results[i] = ItemResult{ID: j.Results[i].ID, Status: ItemPending, ResolvedSource: j.Results[i].ResolvedSource}
+				j.Results[i] = PendingResult(j.Results[i])
 			}
 		}
 		recount(j)

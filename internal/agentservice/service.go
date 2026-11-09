@@ -44,6 +44,7 @@ type Service struct {
 	Temporary    *LocalTempRegistry
 	TempRecovery TempRecoveryReport
 	MPURecovery  S3RecoveryReport
+	MPU          *S3RecoveryRegistry
 	preflight    *preflightProbes
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -179,8 +180,13 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	s.Comparisons = comparisons
-	s.workers.Add(1)
+	s.MPU = mpu
+	s.workers.Add(2)
 	go s.schedule()
+	go func() {
+		defer s.workers.Done()
+		mpu.Run(ctx)
+	}()
 	go preflight.run(ctx)
 	return s, nil
 }
@@ -219,6 +225,8 @@ func (s *Service) schedule() {
 			return
 		case <-s.wake:
 		case <-capacityChanged:
+			// An attempt ended: retry aborting uploads it could not abort.
+			s.MPU.Kick()
 		case <-timer.C:
 		}
 		// Subscribe before admission; an attempt may finish while this batch is

@@ -98,9 +98,46 @@ const (
 	RangedDownloadOff = "off"
 )
 
+// Object outcome reasons carried in ItemResult.Reconciliation. They travel in
+// an existing field, so older Masters accept them unchanged.
+const (
+	// ReasonSourceDeleted marks an object skipped because its source no
+	// longer existed when it was transferred.
+	ReasonSourceDeleted = "SOURCE_DELETED"
+	// ReasonSourceChanged marks an object whose source changed after it was
+	// discovered. On a failed result it says why; on a pending result it asks
+	// the next attempt to read the source's current version.
+	ReasonSourceChanged = "SOURCE_CHANGED"
+	// ReasonSourceRefreshed marks a result whose ResolvedSource is the
+	// current version read on a retry, not the version discovered.
+	ReasonSourceRefreshed = "SOURCE_REFRESHED"
+)
+
+// refreshReason reports a reason that allows a ResolvedSource on an object
+// whose discovered identity is known, and allows the pin to change.
+func refreshReason(reason string) bool {
+	return reason == ReasonSourceChanged || reason == ReasonSourceRefreshed || reason == ReasonSourceDeleted
+}
+
+// PendingResult returns an object to pending for another attempt. It keeps
+// the durable source pin and, with it, the reason that allows the pin; a
+// source that changed after discovery is read again at its current version.
+func PendingResult(result ItemResult) ItemResult {
+	pending := ItemResult{ID: result.ID, Status: ItemPending, ResolvedSource: result.ResolvedSource}
+	switch {
+	case result.Reconciliation == ReasonSourceChanged:
+		pending.Reconciliation = ReasonSourceChanged
+	case refreshReason(result.Reconciliation) && result.ResolvedSource != nil:
+		pending.Reconciliation = ReasonSourceRefreshed
+	}
+	return pending
+}
+
 type ItemResult struct {
 	// ResolvedSource is pinned durably before reading an inventory key that was
-	// absent during discovery. Retries retain this first observed identity.
+	// absent during discovery. Retries retain this first observed identity,
+	// except that a retry of an object whose source changed after discovery
+	// pins the source's current version (see ReasonSourceChanged).
 	ResolvedSource *transferstore.Object `json:"resolvedSource,omitempty"`
 	ID             string                `json:"id"`
 	Status         ItemStatus            `json:"status"`

@@ -84,6 +84,12 @@ func exceptionDTO(e task.Exception) map[string]any {
 	if e.RetryError != "" {
 		result["retryError"] = e.RetryError
 	}
+	if e.Reason != "" {
+		result["reasonCode"] = e.Reason
+	}
+	if e.RetryReason != "" {
+		result["retryReasonCode"] = e.RetryReason
+	}
 	if e.RetryNode != "" {
 		result["retryExecutionNodeIp"] = e.RetryNode
 	}

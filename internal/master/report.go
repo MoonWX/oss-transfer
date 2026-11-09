@@ -451,7 +451,11 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				case execution.ItemFailed:
 					reason = "TRANSFER_FAILED"
 				case execution.ItemSkipped:
-					reason = "DESTINATION_EXISTS"
+					// The object's own reason (fileCSV appends it) says why
+					// it was skipped when not because the target existed.
+					if entry.Result.Reconciliation != execution.ReasonSourceDeleted {
+						reason = "DESTINATION_EXISTS"
+					}
 				}
 				if err := fileCSV(files, issues, p, child, entry.Item, entry.Result, result, reason, observed, displays); err != nil {
 					return err

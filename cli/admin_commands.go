@@ -317,13 +317,19 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			return result, storagePathStyleAdvice(result, err, alias)
 		}
 		if action == "test" {
+			_, checkSupported := result["pathStyle"]
 			switch {
 			case getString(result, "checkedBucket") != "":
 				result["message"] = client.text("连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶")
+			case !checkSupported:
+				// Masters before v4.2 only list buckets and ignore ?bucket=.
+				result["message"] = client.text("已读取存储桶列表；Master 版本较旧，未检查存储桶级访问")
 			case result["bucketCheckSupported"] == false:
 				result["message"] = client.text("已读取存储桶列表；执行节点版本较旧，未检查存储桶级访问")
-			default:
+			case len(adminArray(result["buckets"])) == 0 && !o.Has("bucket"):
 				result["message"] = client.text("已读取存储桶列表；没有可检查的存储桶，可用 --bucket 指定一个")
+			default:
+				result["message"] = client.text("已读取存储桶列表；未检查存储桶级访问")
 			}
 		}
 		return result, nil

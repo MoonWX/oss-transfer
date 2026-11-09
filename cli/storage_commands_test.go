@@ -71,6 +71,24 @@ func TestStorageTestReportsTheBucketLevelCheck(t *testing.T) {
 	if code != 0 || !strings.Contains(stderr, "详情: api error AccessDenied: raw") {
 		t.Fatalf("verbose warning: %d %s %s", code, out, stderr)
 	}
+	// A Master before v4.2 lists buckets only, without the addressing fields.
+	old := func(w http.ResponseWriter, r *http.Request) {
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "buckets": []interface{}{"photos", "logs"}})
+	}
+	for _, args := range [][]string{{"storage", "test", "scoped", "--bucket", "photos"}, {"storage", "test", "scoped"}} {
+		code, out, stderr = runMockCLI(t, args, old)
+		if code != 0 || !strings.Contains(out, "已读取存储桶列表；Master 版本较旧，未检查存储桶级访问") || strings.Contains(out, "没有可检查的存储桶") {
+			t.Fatalf("%v old Master: %d %s %s", args, code, out, stderr)
+		}
+	}
+	// A current Master that checked nothing although a bucket was given.
+	unchecked := func(w http.ResponseWriter, r *http.Request) {
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "buckets": []interface{}{}, "pathStyle": false, "pathStyleAuto": true})
+	}
+	code, out, stderr = runMockCLI(t, []string{"storage", "test", "scoped", "--bucket", "photos"}, unchecked)
+	if code != 0 || !strings.Contains(out, "已读取存储桶列表；未检查存储桶级访问") || strings.Contains(out, "可用 --bucket") {
+		t.Fatalf("unchecked: %d %s %s", code, out, stderr)
+	}
 	for _, args := range [][]string{{"storage", "test", "scoped", "--bucket", "a/b"}, {"storage", "add", "x", "--endpoint", "https://s3.example.com", "--access-key-env", "CLI_TEST_ACCESS", "--secret-key-env", "CLI_TEST_SECRET", "--path-style", "maybe"}} {
 		if code, out, stderr := runMockCLI(t, args, func(http.ResponseWriter, *http.Request) { t.Fatal("usage error made a request") }); code != 2 {
 			t.Fatalf("%v: %d %s %s", args, code, out, stderr)

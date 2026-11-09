@@ -173,20 +173,22 @@ oss-transfer-cli object compare --source-bucket source/photos --dest-bucket targ
 oss-transfer-cli object list
 ```
 
-`--source-bucket` and `--dest-bucket` take `CONNECTION/BUCKET`. A prefix comparison takes `--source-prefix` and `--dest-prefix` (empty for the whole bucket); a single-object comparison takes `--source-key` and `--dest-key`, and is the default scope when keys are given. The mode defaults to `metadata`. `object compare` prints the new comparison's ID and the command to follow it; with `--json` it prints the comparison record. `object list` shows the comparisons of all nodes, newest first: ID, status, mode, scope, source, target, objects checked, differences, start time and node. If some nodes do not answer, it names them and exits with code 3.
+`--source-bucket` and `--dest-bucket` take `CONNECTION/BUCKET`. Every `object compare` starts a comparison. With `--source-key` and `--dest-key` it compares a single object; with `--source-prefix` and `--dest-prefix` it compares a prefix, and with neither keys nor prefixes it compares the whole bucket. The mode defaults to `metadata`. A prefix comparison prints the new comparison's ID and the command to follow it. A single-object comparison waits up to 15 seconds and, if it finishes by then, prints the result as `object status` does; otherwise it prints the ID and the follow-up command. With `--json` it prints the final status page of a finished comparison, otherwise the comparison record. `object list` shows the comparisons of all nodes, newest first: ID, status, mode, scope, source, target, objects checked, differences, start time and node. If some nodes do not answer, it names them and exits with code 3.
 
 Select an ID from the list:
 
 ```bash
 read -r -p 'Comparison ID: ' TRANSFER_COMPARISON
 oss-transfer-cli object status "$TRANSFER_COMPARISON"
-oss-transfer-cli object status "$TRANSFER_COMPARISON" --status MISSING_TARGET,DIFFERENT --limit 1000
-oss-transfer-cli object export "$TRANSFER_COMPARISON" --output "comparison-$TRANSFER_COMPARISON.zip"
+oss-transfer-cli object status --status MISSING_TARGET,DIFFERENT --limit 1000 "$TRANSFER_COMPARISON"
+oss-transfer-cli object export --output "comparison-$TRANSFER_COMPARISON.zip" "$TRANSFER_COMPARISON"
 ```
+
+Put options before the ID. New comparison IDs never begin with `-`. IDs issued by earlier versions may; the CLI accepts such an ID directly when it is a complete ID (43 characters of letters, digits, `-` and `_`), and `--` before the ID always works, for example `object status --limit 100 -- "$TRANSFER_COMPARISON"`.
 
 `object status` shows the comparison's status, mode, scope, source and target, every count, the stored differences, the elapsed time and rate, the bytes read (content mode), the checkpoint, whether it can be resumed, why it stopped storing differences and the last stored key, and any error with its detail. A page of stored rows follows: number, result, source and target key, both sizes and an explanation (the differing properties, or the error and its detail). `--status` keeps only the given results, separated by commas: `DIFFERENT`, `ETAG_MISMATCH`, `MISSING_TARGET`, `EXTRA_TARGET`, `CHANGED_DURING_COMPARE`, `ERROR` and `BOTH_MISSING`. `--limit` sets the page size, 1–1,000 (default 50), and `--after N` starts after row N; when more rows follow, the command prints the `--after` value of the next page. If the comparison stopped storing differences, the command exits with code 3.
 
-`object export ID --output FILE` saves a ZIP with `differences.csv`, `retry-source-keys.incr` and `summary.json` ([export results](operations.md#export-results)), or, with `--format jsonl`, one stored row per line. `--status` limits the exported rows as above; the retry key list always covers every `MISSING_TARGET`, `DIFFERENT` and `ETAG_MISMATCH` row. The file must not exist yet: the CLI downloads to a temporary file beside it and publishes it only once the download is complete and verified. After a ZIP, it prints the counts, whether the export is complete and how many retry keys it holds; an incomplete export exits with code 3.
+`object export ID --output FILE` saves a ZIP with `differences.csv`, `retry-source-keys.incr` and `summary.json` ([export results](operations.md#export-results)), or, with `--format jsonl`, one stored row per line. `--status` limits the exported rows as above; the retry key list always covers every `MISSING_TARGET`, `DIFFERENT` and `ETAG_MISMATCH` row. The file must not exist yet: the CLI downloads to a temporary file beside it and publishes it only once the download is complete and verified. After a ZIP, it prints the counts, whether the export is complete, with the reasons from `summary.json` such as `RESULTS_UNAVAILABLE` or `RETRY_KEYS_MISMATCH`, and how many retry keys it holds; when keys were left out of `retry-source-keys.incr`, it recommends `object export --format jsonl` for their exact values. An incomplete export exits with code 3. A JSON Lines export is checked the same way as a ZIP's `summary.json`: the CLI reports it incomplete when the comparison has not completed, did not store every difference, or, for results that hold every difference, when the exported rows do not add up to the counts of the selected results (`ROW_COUNT_MISMATCH`), for example because the node no longer has the result files ([export results](operations.md#export-results)).
 
 ```sh
 oss-transfer-cli object resume "$TRANSFER_COMPARISON"
@@ -194,7 +196,7 @@ oss-transfer-cli object cancel "$TRANSFER_COMPARISON"
 oss-transfer-cli object delete "$TRANSFER_COMPARISON"
 ```
 
-`object resume` continues an interrupted, failed or canceled prefix comparison from its checkpoint ([resume a comparison](operations.md#resume-a-comparison)). `object cancel` stops a running comparison; a canceled prefix comparison can be resumed later. `object delete` deletes the results of a comparison that is not running. A Master of 4.1.40 or earlier supports none of `object list`, `object export`, `object resume` and `--status`; the CLI then asks you to update the Master.
+`object resume` continues an interrupted, failed or canceled prefix comparison from its checkpoint ([resume a comparison](operations.md#resume-a-comparison)). It prints that the comparison was resumed only when it is running again, and otherwise prints its current status, as `object cancel` does; a comparison that is still being canceled cannot be resumed until it has stopped. `object cancel` stops a running comparison; a canceled prefix comparison can be resumed later. `object delete` deletes the results of a comparison that is not running. For a comparison on an offline node, these commands and `object status` and `object export` fail at once with *Agent is offline*; a comparison on a node removed from the cluster is reported as not found, and `object delete` removes it from the list. A Master of 4.1.40 or earlier supports none of `object list`, `object export`, `object resume` and `--status`; the CLI then asks you to update the Master.
 
 ## Update the cluster
 

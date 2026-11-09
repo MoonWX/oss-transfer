@@ -245,7 +245,7 @@ Master 持久保存、确认并授权释放扫描批次后，Agent 才释放这�
 
 **元数据（不读取内容）** 模式对两侧的每个对象各发送一次 HEAD 请求，比较大小、`Content-Type`、`Content-Encoding`、`Content-Disposition`、`Cache-Control` 和自定义元数据，即迁移会保留的属性。它不读取对象内容，因此元数据一致不代表内容一致。修改时间和存储类型不参与比较；ETag 也不作为跨厂商通用的内容哈希：分片上传和不同的存储服务可能为相同内容生成不同的 ETag。ETag 只用于提示：其他属性都一致，而两端 ETag 都是普通 MD5 形式（32 位十六进制数字，不带分片上传的 `-N` 分片数）且不同时，结果为 *ETag 不同*（`ETAG_MISMATCH`），而不是 *一致*。这说明内容很可能不同，但并不确定：有些存储服务返回的 ETag 形似 MD5，却不是内容的 MD5，例如 Amazon S3 上用 SSE-KMS 或 SSE-C 加密的对象。请用内容比对确认这类对象。任一端的 ETag 来自分片上传时，不比较 ETag。
 
-**内容 SHA-256（流式）** 模式同时读取两端的完整对象，比较大小和 SHA-256，不比较元数据；大小不同的对象不读取内容，直接判为不一致。它不生成本地对象文件，但会通过网络完整传输两端内容，可能产生存储读取费用。对象按 8 MiB 区间读取。某个区间读取失败时，分别在 1、2、4 秒后最多再读 3 次；60 秒内没有收到任何数据的读取视为失败。不支持字节区间读取的存储按单一数据流读取，每个对象最多读取 3 次。读取完成后，再用 HEAD 请求检查两端对象；期间发生变化的对象标为 *比对期间已变化*。进度包括两端已读取的字节数，因此读取大对象时也能看到进展。
+**内容 SHA-256（流式）** 模式同时读取两端的完整对象，比较大小和 SHA-256，不比较元数据；大小不同的对象不读取内容，直接判为不一致。它不生成本地对象文件，但会通过网络完整传输两端内容，可能产生存储读取费用。不超过 8 MiB 的对象，以及不支持字节区间读取的存储上的对象，用一个请求读取，最多尝试 3 次（分别在 1、2 秒后重试）。更大的对象按 8 MiB 区间读取；某个区间读取失败时，分别在 1、2、4 秒后最多再读 3 次。60 秒内没有收到任何数据的读取视为失败。读取完成后，再用 HEAD 请求检查两端对象；期间发生变化的对象标为 *比对期间已变化*。进度包括两端已读取的字节数，因此读取大对象时也能看到进展。
 
 每个已比对的对象得到以下结果之一：
 
@@ -253,7 +253,7 @@ Master 持久保存、确认并授权释放扫描批次后，Agent 才释放这�
 | --- | --- | --- |
 | `MATCH` | *一致* | 只计数，不列出 |
 | `DIFFERENT` | *不一致* | 两端都存在但不相同。该行列出不同的属性：元数据模式为 `size`、`contentType`、`contentEncoding`、`contentDisposition`、`cacheControl` 或 `metadata`；内容模式为 `size` 或 `sha256` |
-| `ETAG_MISMATCH` | *ETag 不同* | 仅元数据模式：比较的属性都一致，但两端普通 MD5 形式的 ETag 不同 |
+| `ETAG_MISMATCH` | *ETag 不同* | 仅元数据模式：比较的属性都一致，但两端普通 MD5 形式的 ETag 不同。这只是提示：不是 MD5 的单段 ETag（例如 SSE-KMS 或 SSE-C 加密的对象）也可能被标出 |
 | `MISSING_TARGET` | *目标缺失* | 只在源端存在；已用 HEAD 请求确认目标端没有该对象 |
 | `EXTRA_TARGET` | *目标多余* | 只在目标端存在；已用 HEAD 请求确认源端没有该对象 |
 | `CHANGED_DURING_COMPARE` | *比对期间已变化* | 比对该对象期间，任一端的对象发生变化、出现或消失；请稍后重新比对 |
@@ -266,13 +266,13 @@ Master 持久保存、确认并授权释放扫描批次后，Agent 才释放这�
 
 ### 查看结果
 
-页面按开始时间倒序列出所有节点上的比对，显示状态、源端和目标端、方式、已检查的对象数、差异数、开始时间和节点。点击某个比对即可查看，页面地址中会保留其 ID（`?comparison=ID`）。有比对在运行时，列表每 5 秒刷新一次。无法连接的节点上的比对显示为 *节点不可用*，不显示计数，页面会提示有几个节点暂时无法连接；节点恢复后，这些比对会重新显示其状态。节点上已删除的比对，以及已从集群移除的节点上的比对，不再列出。
+页面按开始时间倒序列出所有节点上的比对，显示状态、源端和目标端、方式、已检查的对象数、差异数、开始时间和节点。点击某个比对即可查看，页面地址中会保留其 ID（`?comparison=ID`）。有比对在运行时，列表每 5 秒刷新一次。无法连接的节点上的比对显示为 *节点不可用*，不显示计数，页面会提示有几个节点暂时无法连接；有节点不可用时，列表每 15 秒自动刷新一次，因此节点恢复后，这些比对会重新显示其状态。选择这样的比对时，页面提示其节点不可用并自动重试，每次等待的时间加倍，最长 60 秒。节点上已删除的比对，以及已从集群移除的节点上的比对，不再列出；打开这样的比对时，页面提示比对已不存在。使用原数据目录重新注册的节点保留其比对。本版本的 Agent 上报了 Master 不知道的比对时（例如 Master 的数据库恢复之后），这些比对会重新列出，可以照常查看、取消和删除。
 
 比对运行期间，页面显示已检查的对象数、每秒比对的对象数和已用时间，内容模式还显示已读取的字节数。已用时间只计算比对实际运行的时间。各项计数同时也是筛选条件：选择 *全部差异* 或某一种结果，只列出对应的行；*已检查* 和 *一致* 只显示数量。每行显示源端和目标端 Key、结果（附不同的属性，或错误及其详情）、两端大小，内容模式还显示两端的 SHA-256。每页 100 行，用 **上一页** 和 **下一页** 翻页；比对运行期间，当前页每 1.5 秒刷新一次，位置保持不变。所选结果在长列表中很少时，页面会自动往后多查找几页；仍未找到时，点击 **继续查找** 接着查找。
 
-**取消比对** 停止正在运行的比对；已取消的前缀比对之后可以继续（见[继续比对](#继续比对)）。**删除比对结果** 删除未在运行的比对；运行中的比对需先取消。比对已被删除时（例如按保留规则清理），页面会提示结果不存在，并停止刷新。
+**取消比对** 停止正在运行的比对；已取消的前缀比对之后可以继续（见[继续比对](#继续比对)）。**删除比对结果** 删除未在运行的比对；运行中的比对需先取消。比对已被删除时（例如按保留规则清理），页面会提示结果不存在，并停止刷新。比对的结果文件已不在节点上时（例如被手动删除），比对保留其计数和状态，但页面不列出任何结果行，并显示 *该节点上的比对结果已不可用*；这种比对无法继续。
 
-对应的 API：`GET /api/master/comparisons` 列出比对；有节点未响应时，`complete` 为 `false`，`unavailableNodes` 列出这些节点，这些节点上的比对状态为 `UNAVAILABLE`。`GET /api/master/comparisons/{id}?after=0&limit=1000&status=DIFFERENT,MISSING_TARGET` 返回比对及一页结果行：`limit` 为 1–1,000（默认 50），`status` 可以省略。用返回的 `nextAfter` 作为下一次请求的 `after` 继续读取，最后一页没有 `nextAfter`。筛选后的一页可能少于 `limit` 行，甚至为空，但仍可能带有 `nextAfter`。除比对设置外，比对记录还包含各项计数 `compared`、`matched`、`different`、`etagMismatch`、`missing`、`extra`、`changed`、`errors` 和 `bothMissing`，已保存的结果行数 `rows`，以及 `rowsTruncated`、`truncatedReason`、`lastStoredKey`、`checkpoint`、`resumable`、`bytesRead`、`elapsedMillis`、`error` 和 `errorDetail`。
+对应的 API：`GET /api/master/comparisons` 列出比对；有节点未响应时，`complete` 为 `false`，`unavailableNodes` 列出这些节点，这些节点上的比对状态为 `UNAVAILABLE`。`GET /api/master/comparisons/{id}?after=0&limit=1000&status=DIFFERENT,MISSING_TARGET` 返回比对及一页结果行：`limit` 为 1–1,000（默认 50），`status` 可以省略。用返回的 `nextAfter` 作为下一次请求的 `after` 继续读取，最后一页没有 `nextAfter`。离线节点上的比对立即返回 HTTP 503 *节点离线*；已不存在的比对（包括已从集群移除的节点上的比对）返回 HTTP 404 *比对记录不存在*。取消、删除、导出和继续也是如此，只是删除已移除节点上的比对会成功，并且只是把它从列表中移除。筛选后的一页可能少于 `limit` 行，甚至为空，但仍可能带有 `nextAfter`。除比对设置外，比对记录还包含各项计数 `compared`、`matched`、`different`、`etagMismatch`、`missing`、`extra`、`changed`、`errors` 和 `bothMissing`，已保存的结果行数 `rows`，以及 `rowsTruncated`、`truncatedReason`、`lastStoredKey`、`checkpoint`、`resumable`、`bytesRead`、`elapsedMillis`、`error` 和 `errorDetail`。
 
 ### 导出结果
 
@@ -284,9 +284,9 @@ Master 持久保存、确认并授权释放扫描批次后，Agent 才释放这�
 | `retry-source-keys.incr` | 所有 `MISSING_TARGET`、`DIFFERENT` 和 `ETAG_MISMATCH` 行的源端 Key，每行一个，不受结果筛选影响 |
 | `summary.json` | 比对本身（ID、节点、状态、方式、范围、源和目标）、各项计数、`storedRows`、`exportedRows`、`statusFilter`、`complete` 和 `incompleteReasons`、`truncatedReason` 和 `lastStoredKey`、`retryStatuses`、`retryKeys`、`retryKeysOmitted`、`retryPrefixesMatch`、`csvEscaping`，以及开始、结束和导出时间 |
 
-只有比对已完成、保存了全部差异，并且（未指定结果筛选时）文件包含全部已保存的结果行，`complete` 才为 `true`；否则 `incompleteReasons` 列出每一项原因：`NOT_COMPLETED:<状态>`、`ROWS_TRUNCATED:<原因>` 或 `ROW_COUNT_MISMATCH`。运行中的比对也可以导出，此时文件包含已保存的结果行，并标为不完整。下载过程中，结果行逐页从节点读取；节点停止响应时下载失败，而不会得到一个被截短的文件。CLI 还可以导出 JSON Lines（`--format jsonl`）：每行一条已保存的结果，格式与 API 相同，筛选方式与 CSV 文件相同，不含汇总。
+只有比对已完成、其结果在节点上可用、保存了全部差异，并且文件包含全部已保存的结果行（指定结果筛选时，为这些结果的全部已保存行），`complete` 才为 `true`；否则 `incompleteReasons` 列出每一项原因：`NOT_COMPLETED:<状态>`、`ROWS_TRUNCATED:<原因>`、`RESULTS_UNAVAILABLE`（节点上已没有结果文件）、`ROW_COUNT_MISMATCH` 或 `RETRY_KEYS_MISMATCH`。对于保存了全部差异的结果，导出还会与各项计数核对：筛选导出的行数必须等于所选结果的计数之和（`DIFFERENT` 对应 `different`，`ETAG_MISMATCH` 对应 `etagMismatch`，`MISSING_TARGET` 对应 `missing`，`EXTRA_TARGET` 对应 `extra`，`CHANGED_DURING_COMPARE` 对应 `changed`，`ERROR` 对应 `errors`，`BOTH_MISSING` 对应 `bothMissing`），否则为 `ROW_COUNT_MISMATCH`；`retryKeys` 加 `retryKeysOmitted` 必须等于 `missing` + `different` + `etagMismatch`，否则为 `RETRY_KEYS_MISMATCH`。这些计数核对不适用于[旧版 Agent](#旧版-agent) 的结果，旧版 Agent 把 `BOTH_MISSING` 计入错误数。运行中的比对也可以导出，此时文件包含已保存的结果行，并标为不完整。下载过程中，结果行逐页从节点读取；节点停止响应时下载失败，而不会得到一个被截短的文件。CLI 还可以导出 JSON Lines（`--format jsonl`）：每行一条已保存的结果，格式与 API 相同，筛选方式与 CSV 文件相同，不含汇总。
 
-**CSV 转义。** CSV 文件使用 UTF-8 编码和标准的引号规则。为避免电子表格程序把 Key 当作公式执行，以 `=`、`+`、`-`、`@`、`'`、制表符、CR 或 LF 开头的值前面会加一个单引号（`'`）。要还原原值，凡以单引号开头的值，去掉开头的一个单引号即可。`retry-source-keys.incr` 和 JSON Lines 中的 Key 保持原样。
+**CSV 转义。** CSV 文件使用 UTF-8 编码和标准的引号规则。为避免电子表格程序把 Key 当作公式执行，以 `=`、`+`、`-`、`@`、`'`、制表符、CR 或 LF 开头的值前面会加一个单引号（`'`）。要还原原值，凡以单引号开头的值，去掉开头的一个单引号即可。含 CR 或 LF 的值会加引号，其字节保持不变；有些 CSV 读取程序（例如 Go 的 `encoding/csv`）会把值中的 CR LF 转换为 LF。`retry-source-keys.incr` 和 JSON Lines 中的 Key 保持原样；需要每个 Key 都完全准确时，请使用 JSON Lines 导出（`object export --format jsonl`）。
 
 **重新迁移列出的对象。** `retry-source-keys.incr` 是供 `import-inventory` 使用的 Key 清单（见 `oss-transfer-cli help tools`）。`import-inventory` 创建的任务把清单中的每个 Key 从源存储桶复制到目标存储桶中的同名 Key，因此只有比对的源前缀和目标前缀相同（`retryPrefixesMatch` 为 `true`）时才适用；前缀不同时，对象会写到源端 Key 下，请改用替换前缀的迁移任务。把该文件放进单独的目录，并加上 `--overwrite`：不加时，任务会跳过目标端已存在的对象，所有 `DIFFERENT` 和 `ETAG_MISMATCH` 的 Key 都属于这种情况。如果内容比对已确认 `ETAG_MISMATCH` 的对象相同，请先从清单中删除这些 Key。
 
@@ -295,15 +295,15 @@ mkdir retry && unzip comparison-ID.zip retry-source-keys.incr -d retry
 oss-transfer-cli import-inventory source/photos target/archive retry --overwrite
 ```
 
-清单不包含 `import-inventory` 无法读取的 Key：超过 1,024 字节、不是有效的 UTF-8、含 NUL、CR 或 LF，或者只有空白字符。`retryKeysOmitted` 统计这些 Key 的数量，可在 `differences.csv` 中找到它们。`import-inventory` 每个文件最多接受 1000 万个 Key 或 1 GiB 的 Key；清单更长时，拆成同一目录下的多个 `.incr` 文件，每个文件生成一个任务。
+清单不包含 `import-inventory` 无法读取的 Key：超过 1,024 字节、不是有效的 UTF-8、含 NUL、CR 或 LF，或者只有空白字符。`retryKeysOmitted` 统计这些 Key 的数量，可在 JSON Lines 导出（`object export --format jsonl`）中找到它们的准确值。`import-inventory` 每个文件最多接受 1000 万个 Key 或 1 GiB 的 Key；清单更长时，拆成同一目录下的多个 `.incr` 文件，每个文件生成一个任务。
 
 对应的 API：带 Bearer 令牌请求 `GET /api/master/comparisons/{id}/export?format=zip&status=DIFFERENT`；`format` 为 `zip`（默认）或 `jsonl`。
 
 ### 继续比对
 
-前缀比对大约每秒记录一次检查点：到该 Key 为止的所有对象都已比对并计数。比对期间 Agent 重启或升级时，只要该节点的存储连接自比对开始以来没有变化，Agent 重新运行后比对就会从检查点自动继续；否则比对保持 *比对已中断*，错误详情为 `storage connections changed; resume manually`。
+前缀比对大约每秒记录一次检查点：到该 Key 为止的所有对象都已比对并计数。比对期间 Agent 重启或升级时，只要该节点的存储连接自比对开始或上次继续以来没有变化，Agent 重新运行后比对就会从检查点自动继续。集群中任何一个存储连接的任何变化都算作变化，因为 Master 会把每个连接同步到每个节点。否则比对保持 *比对已中断*，错误详情为 `storage connections changed; resume manually`；手动继续该比对后，自动继续会重新生效。
 
-在控制台点击 **继续比对**，或在 CLI 中运行 `object resume ID`，可以继续已中断、失败或已取消的前缀比对，例如在修复存储访问之后；因此取消比对也可以当作暂停。比对仍在保存其结果的节点上运行，该节点必须在线且没有其他比对在运行；比对使用当前的存储连接设置，请确认它们仍指向原来的存储桶。两侧从检查点 Key 之后重新列举。各项计数和已保存的差异接着累计，不会重复计数或遗漏对象，已用时间也会累加。中断时正在比对的对象（例如内容模式下正在读取的大对象）会从头重新比对。对应的 API 是 `POST /api/master/comparisons/{id}/resume`。
+在控制台点击 **继续比对**，或在 CLI 中运行 `object resume ID`，可以继续已中断、失败或已取消的前缀比对，例如在修复存储访问之后；因此取消比对也可以当作暂停。比对仍在保存其结果的节点上运行，该节点必须在线且没有其他比对在运行；比对使用当前的存储连接设置，请确认它们仍指向原来的存储桶。两侧从检查点 Key 之后重新列举。各项计数和已保存的差异接着累计，不会重复计数或遗漏对象，已用时间也会累加。中断时正在比对的对象（例如内容模式下正在读取的大对象）会从头重新比对。正在取消的比对无法继续（*该比对无法继续*），请等它停止后再继续。对应的 API 是 `POST /api/master/comparisons/{id}/resume`。
 
 继续后的比对同样不是快照：比对停止期间，检查点之前的位置上发生的变化不会被发现。单对象比对、无法保存结果的比对，以及 4.1.40 及更早版本的 Agent 上的比对无法继续，请重新开始比对。
 
@@ -322,8 +322,8 @@ LIST 请求因 HTTP 5xx 或 429、`SlowDown` 等限流错误码、网络错误�
 结果按以下规则自动删除，但正在运行的比对的结果不会被删除：
 
 - 比对结束 30 天后删除；
-- 节点上所有比对的结果合计超过 2 GiB 时，从最早的已结束比对开始删除；
-- 节点上的比对超过 500 个时，从最早的已结束比对开始删除。
+- 节点上所有比对的结果合计超过 2 GiB 时，从最早结束的比对开始删除；
+- 节点上的比对超过 500 个时，从最早结束的比对开始删除。
 
 Agent 启动时、每次比对结束时以及每小时都会执行这些规则，因此比对运行期间，合计大小可能暂时超过预算，直到下一次检查删除较早的结果。**删除比对结果** 或 `object delete` 会立即移除比对；其文件在后台删除，Agent 重启后继续删除。
 

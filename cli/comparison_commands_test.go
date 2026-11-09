@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -299,6 +301,11 @@ func TestComparisonActionsPrintDedicatedMessages(t *testing.T) {
 			map[string]interface{}{"success": false, "id": "job-9", "message": "Agent did not answer"}, 1, []string{"启动结果未确认，比对 ID：job-9；稍后用 object status job-9 查看"}, nil},
 		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
 			comparisonTestPage(map[string]interface{}{"status": "RUNNING", "resumes": 1}), 0, []string{"已继续比对 job-1\n", "查看进度：object status job-1 --watch 5\n"}, nil},
+		// Only a RUNNING reply means the comparison was resumed.
+		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
+			comparisonTestPage(map[string]interface{}{"status": "CANCELING"}), 0, []string{"比对 job-1 当前状态：正在取消\n"}, []string{"已继续比对", "查看进度"}},
+		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusAccepted,
+			comparisonTestPage(nil), 0, []string{"比对 job-1 当前状态：已完成\n"}, []string{"已继续比对"}},
 		{[]string{"object", "resume", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/resume", http.StatusConflict,
 			map[string]interface{}{"success": false, "message": "Another comparison is running on this node"}, 1, nil, nil},
 		{[]string{"object", "cancel", "job-1"}, http.MethodPost, "/api/master/comparisons/job-1/cancel", http.StatusOK,
@@ -420,19 +427,39 @@ func TestComparisonCommandHintsQuoteIDs(t *testing.T) {
 }
 
 func TestComparisonExportCompletenessFollowsSummaryRules(t *testing.T) {
+	current := func(overrides map[string]interface{}) map[string]interface{} {
+		progress := map[string]interface{}{"status": "COMPLETED", "resultsProtocol": 2.0, "compared": 10.0, "matched": 3.0, "rows": 7.0, "different": 2.0, "etagMismatch": 1.0, "missing": 1.0, "extra": 1.0, "changed": 1.0, "errors": 0.0, "bothMissing": 1.0}
+		for key, value := range overrides {
+			progress[key] = value
+		}
+		return progress
+	}
 	for _, test := range []struct {
 		progress map[string]interface{}
 		exported int64
-		filtered bool
+		statuses []string
 		want     []string
 	}{
-		{map[string]interface{}{"status": "COMPLETED", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 3, false, []string{}},
-		{map[string]interface{}{"status": "COMPLETED", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 1, true, []string{}},
-		{map[string]interface{}{"status": "COMPLETED", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 2, false, []string{"ROW_COUNT_MISMATCH"}},
-		{map[string]interface{}{"status": "RUNNING", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 3, false, []string{"NOT_COMPLETED:RUNNING"}},
-		{map[string]interface{}{"status": "COMPLETED", "compared": 20000.0, "matched": 0.0, "rows": 10000.0, "rowsTruncated": true, "resultLimit": 10000.0}, 10000, false, []string{"ROWS_TRUNCATED:LEGACY_LIMIT", "ROW_COUNT_MISMATCH"}},
+		{map[string]interface{}{"status": "COMPLETED", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 3, nil, []string{}},
+		{map[string]interface{}{"status": "COMPLETED", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 1, []string{"DIFFERENT"}, []string{}},
+		{map[string]interface{}{"status": "COMPLETED", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 2, nil, []string{"ROW_COUNT_MISMATCH"}},
+		{map[string]interface{}{"status": "RUNNING", "compared": 10.0, "matched": 7.0, "rows": 3.0}, 3, nil, []string{"NOT_COMPLETED:RUNNING"}},
+		{map[string]interface{}{"status": "COMPLETED", "compared": 20000.0, "matched": 0.0, "rows": 10000.0, "rowsTruncated": true, "resultLimit": 10000.0}, 10000, nil, []string{"ROWS_TRUNCATED:LEGACY_LIMIT", "ROW_COUNT_MISMATCH"}},
+		// Current results: a filtered export holds the counts of the selected statuses.
+		{current(nil), 2, []string{"DIFFERENT"}, []string{}},
+		{current(nil), 3, []string{"DIFFERENT", "BOTH_MISSING"}, []string{}},
+		{current(nil), 7, comparisonRowStatuses, []string{}},
+		{current(nil), 0, []string{"DIFFERENT"}, []string{"ROW_COUNT_MISMATCH"}},
+		{current(nil), 0, []string{"ERROR"}, []string{}},
+		{current(nil), 2, []string{"MISSING_TARGET", "ETAG_MISMATCH", "EXTRA_TARGET"}, []string{"ROW_COUNT_MISMATCH"}},
+		{current(nil), 2, []string{"CHANGED_DURING_COMPARE"}, []string{"ROW_COUNT_MISMATCH"}},
+		// Truncated and legacy results are not checked by counts: legacy
+		// Agents counted BOTH_MISSING rows as errors.
+		{current(map[string]interface{}{"rowsTruncated": true, "truncatedReason": "STORAGE_BUDGET"}), 0, []string{"DIFFERENT"}, []string{"ROWS_TRUNCATED:STORAGE_BUDGET"}},
+		{current(map[string]interface{}{"resultsProtocol": nil}), 0, []string{"DIFFERENT"}, []string{}},
+		{current(map[string]interface{}{"resultsProtocol": 1.0}), 0, []string{"DIFFERENT"}, []string{}},
 	} {
-		complete, reasons := comparisonExportCompleteness(test.progress, test.exported, test.filtered)
+		complete, reasons := comparisonExportCompleteness(test.progress, test.exported, test.statuses)
 		if complete != (len(test.want) == 0) || !reflect.DeepEqual(reasons, test.want) {
 			t.Errorf("%v: %v %v", test.progress, complete, reasons)
 		}
@@ -599,7 +626,7 @@ func TestComparisonExportZIPVerifiesAndSummarizes(t *testing.T) {
 
 func TestComparisonExportZIPReportsIncompleteExports(t *testing.T) {
 	archive := comparisonTestArchive(t, []string{"a.jpg"}, []string{"2026/a.jpg"}, map[string]interface{}{
-		"status": "RUNNING", "complete": false, "incompleteReasons": []interface{}{"NOT_COMPLETED:RUNNING", "ROWS_TRUNCATED:STORAGE_BUDGET", "ROW_COUNT_MISMATCH"},
+		"status": "RUNNING", "complete": false, "incompleteReasons": []interface{}{"NOT_COMPLETED:RUNNING", "ROWS_TRUNCATED:STORAGE_BUDGET", "ROW_COUNT_MISMATCH", "RESULTS_UNAVAILABLE", "RETRY_KEYS_MISMATCH"},
 		"truncatedReason": "STORAGE_BUDGET", "lastStoredKey": "a.jpg", "retryKeysOmitted": 2, "retryPrefixesMatch": false,
 	}, "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -608,7 +635,7 @@ func TestComparisonExportZIPReportsIncompleteExports(t *testing.T) {
 	defer server.Close()
 	output := filepath.Join(t.TempDir(), "export.zip")
 	code, out, stderr := runComparisonCLI(t, server, "object", "export", "job-1", "--output", output)
-	for _, want := range []string{"完整", "否", "不完整原因", "比对未完成（正在比对）", "差异明细未全部保存（超过节点的比对结果存储预算）", "差异数与统计不一致", "截断原因", "最后保存的 Key", "2 个源 Key 无法写入 retry-source-keys.incr", "源前缀与目标前缀不同"} {
+	for _, want := range []string{"完整", "否", "不完整原因", "比对未完成（正在比对）", "差异明细未全部保存（超过节点的比对结果存储预算）", "差异数与统计不一致", "执行节点上的差异明细已不可用", "重新迁移的源 Key 数与统计不一致", "截断原因", "最后保存的 Key", "2 个源 Key 无法写入 retry-source-keys.incr", "object export --format jsonl", "源前缀与目标前缀不同"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -711,6 +738,7 @@ func TestComparisonExportJSONL(t *testing.T) {
 		return fmt.Sprintf(`{"number":%d,"key":"k%d","sourceKey":"2026/k%d","destinationKey":"backup/k%d","status":%q,"sourceSize":1,"destinationSize":2}`+"\n", number, number, number, number, status)
 	}
 	completed := comparisonTestPage(map[string]interface{}{"compared": 10, "matched": 7, "rows": 3})
+	current := comparisonTestPage(map[string]interface{}{"resultsProtocol": 2, "compared": 10, "matched": 7, "rows": 3, "different": 2, "etagMismatch": 0, "missing": 1, "extra": 0, "changed": 0, "errors": 0, "bothMissing": 0})
 	three := row(1, "DIFFERENT") + row(5, "MISSING_TARGET") + row(9, "DIFFERENT")
 	for _, test := range []struct {
 		name        string
@@ -726,6 +754,8 @@ func TestComparisonExportJSONL(t *testing.T) {
 		{"complete", completed, "application/x-ndjson; charset=utf-8", three, nil, 0, 3, []interface{}{}, ""},
 		{"filtered", completed, "application/x-ndjson", row(5, "MISSING_TARGET"), []string{"--status", "MISSING_TARGET"}, 0, 1, []interface{}{}, ""},
 		{"empty filter", completed, "application/x-ndjson", "", []string{"--status", "BOTH_MISSING"}, 0, 0, []interface{}{}, ""},
+		{"current filtered", current, "application/x-ndjson", row(1, "DIFFERENT") + row(9, "DIFFERENT"), []string{"--status", "DIFFERENT"}, 0, 2, []interface{}{}, ""},
+		{"current rows unavailable", current, "application/x-ndjson", "", []string{"--status", "DIFFERENT"}, 3, 0, []interface{}{"ROW_COUNT_MISMATCH"}, ""},
 		{"running", comparisonTestPage(map[string]interface{}{"status": "RUNNING", "compared": 10, "matched": 7, "rows": 3}), "application/x-ndjson", three, nil, 3, 3, []interface{}{"NOT_COMPLETED:RUNNING"}, ""},
 		{"rows missing", completed, "application/x-ndjson", row(1, "DIFFERENT"), nil, 3, 1, []interface{}{"ROW_COUNT_MISMATCH"}, ""},
 		{"cut line", completed, "application/x-ndjson", strings.TrimSuffix(three, "\n"), nil, 1, 0, nil, "JSONL 导出不完整：最后一行缺少换行"},
@@ -822,6 +852,219 @@ func TestCountReaderLines(t *testing.T) {
 	for text, want := range map[string]int64{"": 0, "a\n": 1, "a": 1, "a\nb": 2, "a\nb\n": 2, "\n\n": 2} {
 		if got, err := countReaderLines(strings.NewReader(text)); err != nil || got != want {
 			t.Errorf("%q: %d %v", text, got, err)
+		}
+	}
+}
+
+// useComparisonClock replaces object compare's clock and sleep with a fake
+// clock that each sleep advances.
+func useComparisonClock(t *testing.T) {
+	t.Helper()
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	originalNow, originalSleep := comparisonNow, comparisonSleep
+	comparisonNow = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	comparisonSleep = func(ctx context.Context, d time.Duration) bool {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+		return ctx.Err() == nil
+	}
+	t.Cleanup(func() { comparisonNow, comparisonSleep = originalNow, originalSleep })
+}
+
+// comparisonCompareServer answers a start with startReply and each status read
+// with pages(n) for the n-th read (from 1); a nil page answers 503.
+func comparisonCompareServer(t *testing.T, startReply map[string]interface{}, pages func(int) map[string]interface{}) (http.HandlerFunc, *[]map[string]interface{}, *int) {
+	starts, reads := []map[string]interface{}{}, 0
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/master/comparisons":
+			starts = append(starts, adminTestBody(t, r))
+			w.WriteHeader(http.StatusAccepted)
+			adminTestJSON(t, w, startReply)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/master/comparisons/"+getString(startReply, "id"):
+			reads++
+			if query := r.URL.Query(); query.Get("after") != "0" || query.Get("limit") != "50" || query.Has("status") {
+				t.Errorf("status read differs from object status: %s", r.URL.RawQuery)
+			}
+			page := pages(reads)
+			if page == nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				adminTestJSON(t, w, map[string]interface{}{"success": false, "message": "Agent is offline"})
+				return
+			}
+			adminTestJSON(t, w, page)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusTeapot)
+		}
+	}, &starts, &reads
+}
+
+func TestObjectCompareAlwaysStartsAComparison(t *testing.T) {
+	useComparisonClock(t)
+	running := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "RUNNING", "items": nil})
+	for _, test := range []struct {
+		args []string
+		want map[string]interface{}
+	}{
+		// Keys without prefixes: one object, metadata by default.
+		{[]string{"--source-key", "a.jpg", "--dest-key", "b.jpg"}, map[string]interface{}{"scope": "object", "mode": "metadata", "sourcePrefix": "a.jpg", "destPrefix": "b.jpg"}},
+		{[]string{"--source-key", "a.jpg", "--dest-key", "b.jpg", "--mode", "content"}, map[string]interface{}{"scope": "object", "mode": "content", "sourcePrefix": "a.jpg", "destPrefix": "b.jpg"}},
+		// Neither keys nor prefixes: the whole buckets.
+		{nil, map[string]interface{}{"scope": "prefix", "mode": "metadata", "sourcePrefix": "", "destPrefix": ""}},
+		{[]string{"--source-prefix", "2026/"}, map[string]interface{}{"scope": "prefix", "mode": "metadata", "sourcePrefix": "2026/", "destPrefix": ""}},
+	} {
+		handler, starts, _ := comparisonCompareServer(t, running, func(int) map[string]interface{} { return running })
+		args := append([]string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive"}, test.args...)
+		code, out, stderr := runMockCLI(t, args, handler)
+		if code != 0 || len(*starts) != 1 {
+			t.Fatalf("%v: exit %d after %d starts: %s %s", test.args, code, len(*starts), out, stderr)
+		}
+		test.want["sourceBucket"], test.want["destBucket"] = "src/photos", "dst/archive"
+		if !reflect.DeepEqual((*starts)[0], test.want) {
+			t.Errorf("%v: posted %v", test.args, (*starts)[0])
+		}
+		if !strings.Contains(out, "比对已开始，ID：cmp-1\n") || !strings.Contains(out, "查看进度：object status cmp-1 --watch 5\n") {
+			t.Errorf("%v: %s", test.args, out)
+		}
+	}
+	// A key with a prefix, or only one key, is rejected before any request.
+	for _, args := range [][]string{{"--source-key", "a.jpg", "--dest-prefix", "x/"}, {"--source-key", "a.jpg"}, {"--dest-key", "a.jpg"}} {
+		code, out, stderr := runMockCLI(t, append([]string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive"}, args...), comparisonUnexpectedRequest(t))
+		if code != 2 {
+			t.Errorf("%v: exit %d: %s %s", args, code, out, stderr)
+		}
+	}
+}
+
+func TestObjectCompareOfOneObjectWaitsAndPrintsTheResult(t *testing.T) {
+	useComparisonClock(t)
+	started := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "RUNNING", "scope": "object", "sourcePrefix": "a.jpg", "destinationPrefix": "a.jpg", "compared": 0, "matched": 0, "different": 0, "rows": 0, "items": nil})
+	finished := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "COMPLETED", "scope": "object", "sourcePrefix": "a.jpg", "destinationPrefix": "a.jpg", "compared": 1, "matched": 0, "different": 1, "etagMismatch": 0, "missing": 0, "extra": 0, "changed": 0, "errors": 0, "bothMissing": 0, "rows": 1,
+		"items": []interface{}{map[string]interface{}{"number": 1, "key": "a.jpg", "sourceKey": "a.jpg", "destinationKey": "a.jpg", "status": "DIFFERENT", "sourceSize": 2, "destinationSize": 2, "reasons": []interface{}{"contentType"}}}})
+	runningPage := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "RUNNING", "scope": "object"})
+	args := []string{"object", "compare", "--source-bucket", "src/photos", "--source-key", "a.jpg", "--dest-bucket", "dst/archive", "--dest-key", "a.jpg"}
+	// It finishes on the third read: the result is printed as object status prints it.
+	pages := func(n int) map[string]interface{} {
+		if n < 3 {
+			return runningPage
+		}
+		return finished
+	}
+	handler, _, reads := comparisonCompareServer(t, started, pages)
+	code, out, stderr := runMockCLI(t, args, handler)
+	statusHandler, _, _ := comparisonCompareServer(t, started, func(int) map[string]interface{} { return finished })
+	_, statusOut, _ := runMockCLI(t, []string{"object", "status", "cmp-1"}, statusHandler)
+	if code != 0 || stderr != "" || *reads != 3 || out != statusOut || !strings.Contains(out, "已完成") || !strings.Contains(out, "不同：Content-Type") || strings.Contains(out, "比对已开始") {
+		t.Fatalf("exit %d after %d reads: %s %s\nobject status prints:\n%s", code, *reads, out, stderr, statusOut)
+	}
+	// --json prints the final status page.
+	handler, _, _ = comparisonCompareServer(t, started, pages)
+	code, out, _ = runMockCLI(t, append([]string{"--json"}, args...), handler)
+	var result map[string]interface{}
+	if code != 0 || json.Unmarshal([]byte(out), &result) != nil || result["status"] != "COMPLETED" || len(objectList(result["items"])) != 1 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	// Still running after the wait: the ID and the follow-up hint, and --json
+	// prints the start reply.
+	for _, mode := range [][]string{nil, {"--json"}} {
+		handler, _, reads = comparisonCompareServer(t, started, func(int) map[string]interface{} { return runningPage })
+		code, out, stderr = runMockCLI(t, append(mode, args...), handler)
+		if code != 0 || stderr != "" || *reads != int(comparisonObjectWait/comparisonObjectPoll) {
+			t.Fatalf("%v: exit %d after %d reads: %s %s", mode, code, *reads, out, stderr)
+		}
+		if mode == nil && (!strings.Contains(out, "比对已开始，ID：cmp-1\n") || !strings.Contains(out, "查看进度：object status cmp-1 --watch 5\n")) {
+			t.Fatal(out)
+		}
+		if mode != nil {
+			var reply map[string]interface{}
+			err := json.Unmarshal([]byte(out), &reply)
+			if _, page := reply["items"]; err != nil || reply["status"] != "RUNNING" || page {
+				t.Fatal(out)
+			}
+		}
+	}
+	// A failed status read stops waiting; the comparison was started.
+	handler, _, reads = comparisonCompareServer(t, started, func(int) map[string]interface{} { return nil })
+	code, out, stderr = runMockCLI(t, args, handler)
+	if code != 0 || stderr != "" || *reads != 1 || !strings.Contains(out, "比对已开始，ID：cmp-1\n") {
+		t.Fatalf("exit %d after %d reads: %s %s", code, *reads, out, stderr)
+	}
+	// Every finished state is printed as a result; CANCELING is still waited for.
+	for _, status := range []string{"FAILED", "CANCELED", "INTERRUPTED"} {
+		page := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": status, "scope": "object"})
+		handler, _, reads = comparisonCompareServer(t, started, func(n int) map[string]interface{} {
+			if n == 1 {
+				return comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "CANCELING", "scope": "object"})
+			}
+			return page
+		})
+		code, out, _ = runMockCLI(t, args, handler)
+		if code != 0 || *reads != 2 || !strings.Contains(out, comparisonStatusLabels[status]) || strings.Contains(out, "比对已开始") {
+			t.Fatalf("%s: exit %d after %d reads: %s", status, code, *reads, out)
+		}
+	}
+}
+
+func TestComparisonCommandsAcceptIDsThatStartWithADash(t *testing.T) {
+	id := "-" + strings.Repeat("Ab_9-", 8) + "xy" // 43 base64url characters
+	if len(id) != 43 {
+		t.Fatal(len(id))
+	}
+	output := filepath.Join(t.TempDir(), "rows.jsonl")
+	for _, test := range []struct {
+		args         []string
+		method, path string
+	}{
+		{[]string{"object", "status", id}, http.MethodGet, "/api/master/comparisons/" + id},
+		{[]string{"object", "status", "--status", "DIFFERENT", id, "--limit", "10"}, http.MethodGet, "/api/master/comparisons/" + id},
+		{[]string{"object", "status", "--", id}, http.MethodGet, "/api/master/comparisons/" + id},
+		{[]string{"object", "resume", id}, http.MethodPost, "/api/master/comparisons/" + id + "/resume"},
+		{[]string{"object", "cancel", id}, http.MethodPost, "/api/master/comparisons/" + id + "/cancel"},
+		{[]string{"object", "delete", id}, http.MethodDelete, "/api/master/comparisons/" + id},
+	} {
+		requests := []string{}
+		code, out, stderr := runMockCLI(t, test.args, func(w http.ResponseWriter, r *http.Request) {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			adminTestJSON(t, w, comparisonTestPage(map[string]interface{}{"id": id, "status": "RUNNING"}))
+		})
+		if code != 0 || stderr != "" || len(requests) != 1 || requests[0] != test.method+" "+test.path || !strings.Contains(out, id) {
+			t.Errorf("%v: exit %d, requests %v: %s %s", test.args, code, requests, out, stderr)
+		}
+	}
+	exportRequests := []string{}
+	code, out, stderr := runMockCLI(t, []string{"object", "export", id, "--format", "jsonl", "--output", output}, func(w http.ResponseWriter, r *http.Request) {
+		exportRequests = append(exportRequests, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/export") {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		adminTestJSON(t, w, comparisonTestPage(map[string]interface{}{"id": id, "compared": 10, "matched": 10, "rows": 0}))
+	})
+	if code != 0 || !reflect.DeepEqual(exportRequests, []string{"/api/master/comparisons/" + id, "/api/master/comparisons/" + id + "/export"}) {
+		t.Fatalf("exit %d, requests %v: %s %s", code, exportRequests, out, stderr)
+	}
+	// Anything else that starts with '-' is still an option, and the value of
+	// a value flag is never taken as the ID.
+	for _, args := range [][]string{
+		{"object", "status", "-abc"},
+		{"object", "status", "-" + id},
+		{"object", "status", id + "A"},
+		{"object", "status", strings.Replace(id, "_", ".", 1)},
+		{"object", "status", "job-1", "--status", id},
+		{"object", "status", id, "job-1"},
+		{"object", "resume", "--", id, "job-1"},
+	} {
+		code, out, stderr := runMockCLI(t, args, comparisonUnexpectedRequest(t))
+		if code != 2 || stderr == "" {
+			t.Errorf("%v: exit %d: %s %s", args, code, out, stderr)
 		}
 	}
 }

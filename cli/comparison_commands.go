@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -89,8 +92,40 @@ func validComparisonID(id string) error {
 	return nil
 }
 
+// comparisonDashID matches a Master comparison ID, a 43-character base64url
+// token, that starts with a single '-'. Such an argument is the comparison ID,
+// not an option; "--" before an ID keeps working for every other value.
+var comparisonDashID = regexp.MustCompile(`^-[A-Za-z0-9_][A-Za-z0-9_-]{41}$`)
+
+// comparisonOptions parses the arguments of a command that takes one
+// comparison ID, accepting an ID that starts with '-' without "--". The value
+// of a value flag is never taken as the ID.
+func comparisonOptions(args, valueFlags []string) (commandOptions, error) {
+	plain, ids := []string{}, []string{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			ids = append(ids, args[i+1:]...)
+			break
+		}
+		if comparisonDashID.MatchString(arg) {
+			ids = append(ids, arg)
+			continue
+		}
+		plain = append(plain, arg)
+		if name := strings.TrimLeft(arg, "-"); name != arg && !strings.Contains(name, "=") && slices.Contains(valueFlags, name) && i+1 < len(args) {
+			i++
+			plain = append(plain, args[i])
+		}
+	}
+	if len(ids) > 0 {
+		plain = append(append(plain, "--"), ids...)
+	}
+	return adminOptions(plain, valueFlags, nil, 1)
+}
+
 func comparisonIDArgument(args []string) (string, error) {
-	o, err := adminOptions(args, nil, nil, 1)
+	o, err := comparisonOptions(args, nil)
 	if err != nil {
 		return "", asUsageError(err)
 	}
@@ -149,7 +184,7 @@ type comparisonPageOptions struct {
 }
 
 func parseComparisonPageOptions(args []string) (comparisonPageOptions, error) {
-	o, err := adminOptions(args, []string{"after", "limit", "status"}, nil, 1)
+	o, err := comparisonOptions(args, []string{"after", "limit", "status"})
 	if err != nil {
 		return comparisonPageOptions{}, asUsageError(err)
 	}
@@ -218,66 +253,111 @@ func comparisonList(client *ApiClient, args []string) (map[string]interface{}, e
 	return result, nil
 }
 
+// object compare waits up to comparisonObjectWait for a single-object
+// comparison, which usually finishes at once, polling every
+// comparisonObjectPoll. Tests replace the clock and the sleep.
+var (
+	comparisonObjectWait = 15 * time.Second
+	comparisonObjectPoll = 500 * time.Millisecond
+	comparisonNow        = time.Now
+	comparisonSleep      = func(ctx context.Context, d time.Duration) bool {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+)
+
+// comparisonFinished reports a comparison that no longer changes by itself.
+func comparisonFinished(status string) bool {
+	switch status {
+	case "COMPLETED", "FAILED", "CANCELED", "INTERRUPTED":
+		return true
+	}
+	return false
+}
+
+// comparisonCompare starts an asynchronous comparison: of one object when
+// keys are given, otherwise of two prefixes (empty prefixes compare whole
+// buckets). The mode defaults to metadata.
 func comparisonCompare(client *ApiClient, args []string) (map[string]interface{}, error) {
-	fields := map[string]string{"source-bucket": "sourceBucket", "source-key": "sourceKey", "dest-bucket": "destBucket", "dest-key": "destKey"}
 	o, err := adminOptions(args, []string{"source-bucket", "source-key", "dest-bucket", "dest-key", "source-prefix", "dest-prefix", "scope", "mode"}, nil, 0)
 	if err != nil {
 		return nil, asUsageError(err)
 	}
-	if o.Has("scope") || o.Has("mode") || o.Has("source-prefix") || o.Has("dest-prefix") {
-		scope, mode := o.Value("scope"), o.Value("mode")
-		if scope == "" {
-			scope = "prefix"
-			if o.Has("source-key") || o.Has("dest-key") {
-				scope = "object"
-			}
+	scope, mode := o.Value("scope"), o.Value("mode")
+	if scope == "" {
+		scope = "prefix"
+		if o.Has("source-key") || o.Has("dest-key") {
+			scope = "object"
 		}
-		if mode == "" {
-			mode = "metadata"
-		}
-		if scope != "prefix" && scope != "object" || mode != "metadata" && mode != "content" {
-			return nil, asUsageError(cliErrorf("比对范围须为 prefix 或 object，模式须为 metadata 或 content"))
-		}
-		if scope == "prefix" && (o.Has("source-key") || o.Has("dest-key")) || scope == "object" && (o.Has("source-prefix") || o.Has("dest-prefix")) {
-			return nil, asUsageError(cliErrorf("范围比对使用 --source-prefix/--dest-prefix，单对象使用 --source-key/--dest-key"))
-		}
-		source, dest := o.Value("source-prefix"), o.Value("dest-prefix")
-		if scope == "object" {
-			source, dest = o.Value("source-key"), o.Value("dest-key")
-			if source == "" || dest == "" {
-				return nil, asUsageError(cliErrorf("单对象比对须同时指定源和目标 Key"))
-			}
-		}
-		for _, flag := range []string{"source-bucket", "dest-bucket"} {
-			parts := strings.Split(o.Value(flag), "/")
-			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-				return nil, asUsageError(cliErrorf("--%s 必须使用 连接名称/Bucket 格式", flag))
-			}
-		}
-		return client.Post("/comparisons", map[string]interface{}{"sourceBucket": o.Value("source-bucket"), "destBucket": o.Value("dest-bucket"), "sourcePrefix": source, "destPrefix": dest, "mode": mode, "scope": scope})
 	}
-	// Without range options keep the synchronous single-object metadata check.
-	query := url.Values{}
-	for flag, field := range fields {
-		value := o.Value(flag)
-		if value == "" {
-			return nil, asUsageError(cliErrorf("对象比对需要 --%s", flag))
-		}
-		if strings.HasSuffix(flag, "bucket") {
-			parts := strings.Split(value, "/")
-			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-				return nil, asUsageError(cliErrorf("--%s 必须使用 连接名称/Bucket 格式", flag))
-			}
-		}
-		query.Set(field, value)
+	if mode == "" {
+		mode = "metadata"
 	}
-	return client.Get("/object-metadata?" + query.Encode())
+	if scope != "prefix" && scope != "object" || mode != "metadata" && mode != "content" {
+		return nil, asUsageError(cliErrorf("比对范围须为 prefix 或 object，模式须为 metadata 或 content"))
+	}
+	if scope == "prefix" && (o.Has("source-key") || o.Has("dest-key")) || scope == "object" && (o.Has("source-prefix") || o.Has("dest-prefix")) {
+		return nil, asUsageError(cliErrorf("范围比对使用 --source-prefix/--dest-prefix，单对象使用 --source-key/--dest-key"))
+	}
+	source, dest := o.Value("source-prefix"), o.Value("dest-prefix")
+	if scope == "object" {
+		source, dest = o.Value("source-key"), o.Value("dest-key")
+		if source == "" || dest == "" {
+			return nil, asUsageError(cliErrorf("单对象比对须同时指定源和目标 Key"))
+		}
+	}
+	for _, flag := range []string{"source-bucket", "dest-bucket"} {
+		parts := strings.Split(o.Value(flag), "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, asUsageError(cliErrorf("--%s 必须使用 连接名称/Bucket 格式", flag))
+		}
+	}
+	started, err := client.Post("/comparisons", map[string]interface{}{"sourceBucket": o.Value("source-bucket"), "destBucket": o.Value("dest-bucket"), "sourcePrefix": source, "destPrefix": dest, "mode": mode, "scope": scope})
+	if err != nil || scope != "object" {
+		return started, err
+	}
+	return comparisonAwaitObject(client, started), nil
+}
+
+// comparisonAwaitObject returns the status page of a started single-object
+// comparison once it finishes within comparisonObjectWait, otherwise the start
+// reply. A failed status read also returns the start reply: the comparison
+// runs, and object status shows it later.
+func comparisonAwaitObject(client *ApiClient, started map[string]interface{}) map[string]interface{} {
+	id := getString(responseData(started), "id")
+	if validComparisonID(id) != nil {
+		return started
+	}
+	ctx := client.requestContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := comparisonNow().Add(comparisonObjectWait)
+	for comparisonSleep(ctx, comparisonObjectPoll) {
+		page, err := comparisonStatus(client, []string{"--", id})
+		if err != nil {
+			return started
+		}
+		if comparisonFinished(getString(responseData(page), "status")) {
+			return page
+		}
+		if !comparisonNow().Before(deadline) {
+			break
+		}
+	}
+	return started
 }
 
 // comparisonExport downloads every stored row of a comparison. The file is
 // verified completely before it is published, never replacing a file.
 func comparisonExport(client *ApiClient, args []string) (map[string]interface{}, error) {
-	o, err := adminOptions(args, []string{"output", "format", "status"}, nil, 1)
+	o, err := comparisonOptions(args, []string{"output", "format", "status"})
 	if err != nil {
 		return nil, asUsageError(err)
 	}
@@ -345,7 +425,7 @@ func comparisonExport(client *ApiClient, args []string) (map[string]interface{},
 			_, err = comparisonRoute(client, id, nil, err, upgrade)
 			return nil, err
 		}
-		complete, reasons := comparisonExportCompleteness(progress, rows, len(statuses) > 0)
+		complete, reasons := comparisonExportCompleteness(progress, rows, statuses)
 		result["status"] = getString(progress, "status")
 		result["storedRows"] = getInt64(progress, "rows")
 		result["exportedRows"] = rows
@@ -360,19 +440,45 @@ func comparisonDownload(accept string, mediaTypes []string, verify func(string) 
 	return downloadSpec{accept: accept, mediaTypes: mediaTypes, verify: verify, idle: comparisonExportIdle, text: comparisonExportText}
 }
 
+// comparisonStatusCounts names the Progress count of each row status.
+var comparisonStatusCounts = map[string]string{
+	"DIFFERENT":              "different",
+	"ETAG_MISMATCH":          "etagMismatch",
+	"MISSING_TARGET":         "missing",
+	"EXTRA_TARGET":           "extra",
+	"CHANGED_DURING_COMPARE": "changed",
+	"ERROR":                  "errors",
+	"BOTH_MISSING":           "bothMissing",
+}
+
+// comparisonResultsProtocol is the first results protocol whose counts match
+// the stored rows: older Agents counted BOTH_MISSING rows as errors.
+const comparisonResultsProtocol = 2
+
 // comparisonExportCompleteness applies the Master's summary.json rule to a
-// JSONL export: the comparison COMPLETED, every difference was stored and,
-// without a filter, every stored row was exported.
-func comparisonExportCompleteness(progress map[string]interface{}, exported int64, filtered bool) (bool, []string) {
+// JSONL export: the comparison COMPLETED, every difference was stored and
+// every stored row was exported. Without a filter that is every stored row;
+// with one, for current results that were not truncated, the counts of the
+// selected statuses.
+func comparisonExportCompleteness(progress map[string]interface{}, exported int64, statuses []string) (bool, []string) {
 	reasons := []string{}
 	if status := getString(progress, "status"); status != "COMPLETED" {
 		reasons = append(reasons, "NOT_COMPLETED:"+status)
 	}
-	if progress["rowsTruncated"] == true {
+	truncated := progress["rowsTruncated"] == true
+	if truncated {
 		reasons = append(reasons, "ROWS_TRUNCATED:"+comparisonTruncatedReason(progress))
 	}
 	rows := getInt64(progress, "rows")
-	if rows != getInt64(progress, "compared")-getInt64(progress, "matched") || !filtered && exported != rows {
+	mismatch := rows != getInt64(progress, "compared")-getInt64(progress, "matched") || len(statuses) == 0 && exported != rows
+	if len(statuses) > 0 && !truncated && getInt64(progress, "resultsProtocol") >= comparisonResultsProtocol {
+		var selected int64
+		for _, status := range statuses {
+			selected += getInt64(progress, comparisonStatusCounts[status])
+		}
+		mismatch = mismatch || exported != selected
+	}
+	if mismatch {
 		reasons = append(reasons, "ROW_COUNT_MISMATCH")
 	}
 	return len(reasons) == 0, reasons

@@ -428,20 +428,23 @@ func TestAdminLocalExportRejectsIgnoredFiltersAndStreamsReport(t *testing.T) {
 	}
 }
 
-func TestAdminObjectComparePreservesExactKeysAndPartialResponse(t *testing.T) {
+func TestAdminObjectComparePreservesExactKeys(t *testing.T) {
+	useComparisonClock(t)
 	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("sourceKey") != " a+b/&?#对象 " || r.URL.Query().Get("destKey") != "dest/file" || r.URL.Query().Get("sourceBucket") != "source/my-bucket" {
-			t.Fatalf("object identifiers were changed: %s", r.URL)
+		if r.Method == http.MethodGet {
+			adminTestJSON(t, w, map[string]interface{}{"id": "cmp-1", "status": "COMPLETED", "items": []interface{}{}})
+			return
 		}
-		adminTestJSON(t, w, map[string]interface{}{"success": true, "partial": true, "complete": false, "sourceMetadata": map[string]interface{}{"exists": true}, "destMetadata": map[string]interface{}{"queryStatus": "UNAVAILABLE"}})
+		body := adminTestBody(t, r)
+		if r.URL.Path != "/api/master/comparisons" || body["sourcePrefix"] != " a+b/&?#对象 " || body["destPrefix"] != "dest/file" || body["sourceBucket"] != "source/my-bucket" || body["scope"] != "object" {
+			t.Fatalf("object identifiers were changed: %s %v", r.URL, body)
+		}
+		adminTestJSON(t, w, map[string]interface{}{"id": "cmp-1", "status": "RUNNING"})
 	})
 	args := []string{"compare", "--source-bucket", "source/my-bucket", "--source-key", " a+b/&?#对象 ", "--dest-bucket", "dest/other-bucket", "--dest-key", "dest/file"}
 	result, err := runAdminCommand(client, "object", args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result["partial"] != true || result["complete"] != false {
-		t.Fatalf("partial comparison lost: %#v", result)
+	if err != nil || result["status"] != "COMPLETED" {
+		t.Fatalf("%#v %v", result, err)
 	}
 }
 

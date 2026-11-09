@@ -96,10 +96,14 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
   差异: { en: "Differences", ja: "差分" },
   "比对结果保存在执行节点上，默认保留 30 天；每个节点的比对结果默认最多占用 2 GiB，超出时先删除最早结束的比对。":
     {
-      en: "Results are kept on the node that ran the comparison, for 30 days by default. By default each node keeps at most 2 GiB of comparison results and deletes the earliest finished comparisons first when it exceeds that.",
+      en: "Results are kept on the node that ran the comparison, for 30 days by default. By default each node keeps at most 2 GiB of comparison results and deletes the comparisons that ended earliest first when it exceeds that.",
       ja: "比較結果は実行ノードに保存され、既定で 30 日間保持されます。各ノードの比較結果は既定で最大 2 GiB までで、超えた場合は終了が最も早い比較から削除します。",
     },
   比对结果: { en: "Comparison results", ja: "比較結果" },
+  "执行节点暂时无法连接，节点恢复后将自动加载比对结果。": {
+    en: "The node that ran this comparison cannot be reached right now. The results load automatically once the node is back.",
+    ja: "実行ノードに一時的に接続できません。ノードが復旧すると比較結果を自動的に読み込みます。",
+  },
   "比对 ID": { en: "Comparison ID", ja: "比較 ID" },
   "比对结果不存在或已被删除。": {
     en: "The comparison results do not exist or have been deleted.",

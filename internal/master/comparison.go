@@ -93,7 +93,7 @@ func (c *comparisonAPI) start(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	id, err := randomToken()
+	id, err := comparisonID()
 	if err != nil {
 		fail(w, 500, "Cannot create comparison")
 		return
@@ -147,6 +147,17 @@ func (c *comparisonAPI) start(w http.ResponseWriter, r *http.Request) {
 	fail(w, 503, "No Agent is available for comparison; a comparison may already be running")
 }
 
+// comparisonID draws a new comparison ID. It never starts with '-', so that
+// command lines do not take it for an option.
+func comparisonID() (string, error) {
+	for {
+		id, err := randomToken()
+		if err != nil || !strings.HasPrefix(id, "-") {
+			return id, err
+		}
+	}
+}
+
 // preferComparisonProtocol orders nodes so that Agents with
 // comparison.Protocol come first and Agents that did not answer come last,
 // keeping the registry order within each group.
@@ -197,7 +208,9 @@ func (c *comparisonAPI) forget(ids ...string) error {
 	})
 }
 
-// comparisonNode returns the assignment of comparison id and its Agent.
+// comparisonNode returns the assignment of comparison id and its Agent. An
+// assignment of a node that was enrolled again under the same node ID, and so
+// kept its data directory and results, moves to the current enrollment.
 func (c *comparisonAPI) comparisonNode(id string) (comparisonAssignment, cluster.Member, error) {
 	var a comparisonAssignment
 	err := c.server.store.View(func(tx *state.Tx) error {
@@ -218,22 +231,76 @@ func (c *comparisonAPI) comparisonNode(id string) (comparisonAssignment, cluster
 		return a, cluster.Member{}, err
 	}
 	for _, member := range members {
-		if member.ID == a.NodeID && member.EnrollmentID == a.EnrollmentID {
-			return a, member, nil
+		if member.ID != a.NodeID {
+			continue
 		}
+		if member.EnrollmentID != a.EnrollmentID {
+			if a, err = c.rebind(a, member); err != nil {
+				return a, cluster.Member{}, err
+			}
+		}
+		return a, member, nil
 	}
 	return a, cluster.Member{}, errComparisonNodeRemoved
 }
 
-func comparisonNodeFailed(w http.ResponseWriter, err error) {
+// rebind records member's current enrollment in assignment a of the same
+// node, unless the assignment changed or disappeared meanwhile.
+func (c *comparisonAPI) rebind(a comparisonAssignment, member cluster.Member) (comparisonAssignment, error) {
+	err := c.server.store.Update(func(tx *state.Tx) error {
+		var current comparisonAssignment
+		found, err := tx.Get(comparisonAssignmentsBucket, a.Request.ID, &current)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return comparison.ErrNotFound
+		}
+		if current.NodeID != member.ID {
+			return errComparisonNodeRemoved
+		}
+		current.EnrollmentID = member.EnrollmentID
+		a = current
+		return tx.Put(comparisonAssignmentsBucket, a.Request.ID, current)
+	})
+	return a, err
+}
+
+// comparisonMember resolves the Agent of comparison id for a route that
+// talks to it, or replies itself. A comparison whose node was removed went
+// with it: its assignment is forgotten and it is reported as not found, or as
+// deleted when deleting is true. An offline Agent is reported at once instead
+// of after a timeout.
+func (c *comparisonAPI) comparisonMember(w http.ResponseWriter, id string, deleting bool) (cluster.Member, bool) {
+	_, member, err := c.comparisonNode(id)
 	switch {
+	case err == nil:
 	case errors.Is(err, comparison.ErrNotFound):
 		fail(w, 404, "Comparison not found")
+		return member, false
 	case errors.Is(err, errComparisonNodeRemoved):
-		fail(w, 503, errComparisonNodeRemoved.Error())
+		if err := c.forget(id); err != nil {
+			fail(w, 500, "Cannot save comparison")
+		} else if deleting {
+			writeJSON(w, 200, map[string]bool{"success": true})
+		} else {
+			fail(w, 404, "Comparison not found")
+		}
+		return member, false
 	default:
 		fail(w, 500, "Cannot read comparison")
+		return member, false
 	}
+	online, err := c.comparisonOnline(member)
+	if err != nil {
+		fail(w, 500, "Cannot read Agent state")
+		return member, false
+	}
+	if !online {
+		fail(w, 503, "Agent is offline")
+		return member, false
+	}
+	return member, true
 }
 
 // comparisonOnline reports whether member has polled recently enough to
@@ -266,8 +333,9 @@ func comparisonGone(err error) bool {
 }
 
 // agentFailed replies to a failed Agent call about comparison id. A deleted
-// or expired result also removes its assignment; network errors and unknown
-// operations keep it for a later attempt.
+// or expired result also removes its assignment; every other failure,
+// including other 404 replies such as an unknown operation, keeps it for a
+// later attempt and is reported as a gateway error.
 func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error) {
 	if comparisonGone(err) {
 		if forgetErr := c.forget(id); forgetErr != nil {
@@ -277,11 +345,7 @@ func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error)
 		fail(w, 404, "Comparison not found")
 		return
 	}
-	status := 502
-	if agentStatus(err, 404) {
-		status = 404
-	}
-	fail(w, status, err.Error())
+	fail(w, 502, err.Error())
 }
 
 // comparisonProgressReply prepares an Agent's Progress for a client: the
@@ -405,9 +469,8 @@ func (c *comparisonAPI) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	_, member, err := c.comparisonNode(id)
-	if err != nil {
-		comparisonNodeFailed(w, err)
+	member, ok := c.comparisonMember(w, id, false)
+	if !ok {
 		return
 	}
 	page, err := c.collectPage(r.Context(), member.Session(), id, after, limit, statuses)
@@ -464,9 +527,8 @@ func (c *comparisonAPI) collectPage(ctx context.Context, session agenttransport.
 
 func (c *comparisonAPI) cancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_, member, err := c.comparisonNode(id)
-	if err != nil {
-		comparisonNodeFailed(w, err)
+	member, ok := c.comparisonMember(w, id, false)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), comparisonCallTimeout)
@@ -482,14 +544,13 @@ func (c *comparisonAPI) cancel(w http.ResponseWriter, r *http.Request) {
 
 func (c *comparisonAPI) delete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_, member, err := c.comparisonNode(id)
-	if err != nil {
-		comparisonNodeFailed(w, err)
+	member, ok := c.comparisonMember(w, id, true)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), comparisonCallTimeout)
 	defer cancel()
-	err = c.server.agentCall(ctx, member.Session(), "comparison_delete", true, map[string]any{"id": id}, nil)
+	err := c.server.agentCall(ctx, member.Session(), "comparison_delete", true, map[string]any{"id": id}, nil)
 	var problem *AgentError
 	switch {
 	case err == nil:
@@ -515,18 +576,8 @@ func (c *comparisonAPI) delete(w http.ResponseWriter, r *http.Request) {
 func (c *comparisonAPI) resume(w http.ResponseWriter, r *http.Request) {
 	s := c.server
 	id := r.PathValue("id")
-	_, member, err := c.comparisonNode(id)
-	if err != nil {
-		comparisonNodeFailed(w, err)
-		return
-	}
-	online, err := c.comparisonOnline(member)
-	if err != nil {
-		fail(w, 500, "Cannot read Agent state")
-		return
-	}
-	if !online {
-		fail(w, 503, "Agent is offline")
+	member, ok := c.comparisonMember(w, id, false)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -606,6 +657,9 @@ type comparisonNodeListing struct {
 	items       []comparison.Progress
 	unavailable []comparisonAssignment
 	forget      []string
+	// adopt are listed comparisons that have no assignment, for instance
+	// after the Master database was restored from an older backup.
+	adopt []comparison.Progress
 }
 
 func (c *comparisonAPI) assignments() ([]comparisonAssignment, error) {
@@ -634,8 +688,10 @@ func (c *comparisonAPI) assignments() ([]comparisonAssignment, error) {
 }
 
 // list reconciles the Master's assignments with the Agents that keep the
-// results. Assignments an Agent no longer has are forgotten; those of
-// offline or unreachable nodes are listed as UNAVAILABLE and kept.
+// results. Assignments an Agent no longer has, and those of removed nodes,
+// are forgotten; those of offline or unreachable nodes are listed as
+// UNAVAILABLE and kept. Comparisons an Agent lists without an assignment are
+// adopted, so that they can be watched, canceled and deleted.
 func (c *comparisonAPI) list(w http.ResponseWriter, r *http.Request) {
 	s := c.server
 	listedAt := c.now()
@@ -658,50 +714,90 @@ func (c *comparisonAPI) list(w http.ResponseWriter, r *http.Request) {
 	for _, member := range onlineMembers {
 		online[member.Session()] = true
 	}
-	known := map[agenttransport.Session]cluster.Member{}
+	known := map[string]cluster.Member{}
 	for _, member := range members {
-		known[member.Session()] = member
+		known[member.ID] = member
 	}
 	groups := map[agenttransport.Session]int{}
 	var listings []comparisonNodeListing
 	var pending [][]comparisonAssignment
-	for _, a := range assignments {
-		session := agenttransport.Session{NodeID: a.NodeID, EnrollmentID: a.EnrollmentID}
-		member, exists := known[session]
-		if !exists {
-			// A removed node took its results with it.
-			continue
-		}
-		index, seen := groups[session]
+	group := func(member cluster.Member) int {
+		index, seen := groups[member.Session()]
 		if !seen {
 			index = len(listings)
-			groups[session] = index
+			groups[member.Session()] = index
 			listings = append(listings, comparisonNodeListing{member: member})
 			pending = append(pending, nil)
 		}
+		return index
+	}
+	assigned := make(map[string]bool, len(assignments))
+	var forget []string
+	for _, a := range assignments {
+		assigned[a.Request.ID] = true
+		member, exists := known[a.NodeID]
+		if !exists {
+			// A removed node took its results with it.
+			forget = append(forget, a.Request.ID)
+			continue
+		}
+		if member.EnrollmentID != a.EnrollmentID {
+			// The node was enrolled again with the same data directory.
+			if a, err = c.rebind(a, member); err != nil {
+				if errors.Is(err, comparison.ErrNotFound) || errors.Is(err, errComparisonNodeRemoved) {
+					continue
+				}
+				fail(w, 500, "Cannot save comparison")
+				return
+			}
+		}
+		index := group(member)
 		pending[index] = append(pending[index], a)
 	}
+	// Online nodes without assignments may still hold comparisons to adopt.
+	for _, member := range onlineMembers {
+		if _, exists := known[member.ID]; exists {
+			group(member)
+		}
+	}
 	slots := make(chan struct{}, 16)
-	var group sync.WaitGroup
+	var running sync.WaitGroup
 	for i := range listings {
-		group.Add(1)
+		running.Add(1)
 		go func() {
-			defer group.Done()
+			defer running.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			member := listings[i].member
-			listings[i] = c.listNode(r.Context(), member, online[member.Session()], pending[i], listedAt)
+			listings[i] = c.listNode(r.Context(), member, online[member.Session()], pending[i], assigned, listedAt)
 		}()
 	}
-	group.Wait()
+	running.Wait()
 	displays := s.nodeDisplaySnapshot()
 	items := []comparisonListItem{}
 	unavailable := []comparisonUnavailableNode{}
-	var forget []string
+	adopted := map[string]bool{}
 	for _, listing := range listings {
 		member := listing.member
 		name := displays.lookup(member.ID, member.Address).DisplayLabel
 		for _, progress := range listing.items {
+			comparisonProgressReply(w, &progress)
+			items = append(items, comparisonListItem{Progress: progress, StartedAt: progress.StartedAt, UpdatedAt: progress.UpdatedAt, NodeID: member.ID, NodeName: name})
+		}
+		for _, progress := range listing.adopt {
+			if adopted[progress.ID] {
+				continue
+			}
+			created, err := c.adopt(progress, member)
+			if err != nil {
+				fail(w, 500, "Cannot save comparison")
+				return
+			}
+			if !created {
+				// A start recorded it meanwhile; the next list shows it.
+				continue
+			}
+			adopted[progress.ID] = true
 			comparisonProgressReply(w, &progress)
 			items = append(items, comparisonListItem{Progress: progress, StartedAt: progress.StartedAt, UpdatedAt: progress.UpdatedAt, NodeID: member.ID, NodeName: name})
 		}
@@ -735,9 +831,26 @@ func (c *comparisonAPI) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"items": items, "complete": len(unavailable) == 0, "unavailableNodes": unavailable})
 }
 
+// adopt records an assignment for a comparison that member listed without
+// one. It reports false when an assignment exists by now.
+func (c *comparisonAPI) adopt(progress comparison.Progress, member cluster.Member) (bool, error) {
+	created := false
+	err := c.server.store.Update(func(tx *state.Tx) error {
+		found, err := tx.Get(comparisonAssignmentsBucket, progress.ID, &comparisonAssignment{})
+		if err != nil || found {
+			return err
+		}
+		created = true
+		return tx.Put(comparisonAssignmentsBucket, progress.ID, comparisonAssignment{Request: progress.Request, NodeID: member.ID, EnrollmentID: member.EnrollmentID, CreatedAt: progress.StartedAt.UTC()})
+	})
+	return created, err
+}
+
 // listNode asks one node about its assignments: comparison_list once from an
 // Agent with comparison.Protocol, otherwise comparison_get per assignment.
-func (c *comparisonAPI) listNode(parent context.Context, member cluster.Member, online bool, assignments []comparisonAssignment, listedAt time.Time) comparisonNodeListing {
+// Comparisons that comparison_list returns and that are not in assigned are
+// returned for adoption.
+func (c *comparisonAPI) listNode(parent context.Context, member cluster.Member, online bool, assignments []comparisonAssignment, assigned map[string]bool, listedAt time.Time) comparisonNodeListing {
 	result := comparisonNodeListing{member: member}
 	if !online {
 		result.unavailable = assignments
@@ -763,6 +876,9 @@ func (c *comparisonAPI) listNode(parent context.Context, member cluster.Member, 
 			listed := make(map[string]comparison.Progress, len(reply.Items))
 			for _, progress := range reply.Items {
 				listed[progress.ID] = progress
+				if progress.ID != "" && !assigned[progress.ID] {
+					result.adopt = append(result.adopt, progress)
+				}
 			}
 			for _, a := range assignments {
 				if progress, ok := listed[a.Request.ID]; ok {

@@ -46,6 +46,7 @@ import {
   StopCircleOutlined,
 } from "@mui/icons-material";
 import { api, ApiError, useNotify } from "../lib/api";
+import { runtimeMessageText } from "../lib/runtimeMessages";
 import { ticketDownload } from "../lib/download";
 import {
   formatDate,
@@ -125,7 +126,11 @@ type RowsView = {
 const ROWS_PER_PAGE = 100;
 const PAGE_POLL_MS = 1500;
 const HISTORY_POLL_MS = 5000;
+// While a node is unreachable the history checks back at this slower pace.
+const HISTORY_SLOW_POLL_MS = 15000;
 const RETRY_MS = 5000;
+// Retries for an unreachable node double up to this delay.
+const MAX_RETRY_MS = 60000;
 // A filtered page may come back empty after the Master's scan budget while
 // stored rows remain. Continue this many times before asking the operator.
 const AUTO_CONTINUE = 5;
@@ -408,7 +413,10 @@ const destinationSize = (row: Row) =>
     ? "—"
     : formatBytes(row.destinationSize);
 
-/** Loads the comparison list; refreshes itself while a comparison runs. */
+/**
+ * Loads the comparison list; refreshes itself while a comparison runs, and
+ * more slowly while some node cannot be reached.
+ */
 function useComparisonHistory(token: number) {
   const [data, setData] = useState<History>();
   const [error, setError] = useState("");
@@ -420,10 +428,23 @@ function useComparisonHistory(token: number) {
     let timer: number | undefined;
     const running = (history?: History) =>
       (history?.items ?? []).some((item) => isActive(item.status));
+    const unreachable = (history?: History) =>
+      history?.complete === false ||
+      (history?.items ?? []).some((item) => item.status === "UNAVAILABLE");
+    const delay = (history?: History) =>
+      running(history)
+        ? HISTORY_POLL_MS
+        : unreachable(history)
+          ? HISTORY_SLOW_POLL_MS
+          : undefined;
     function poll() {
       timer = undefined;
       // Hidden tabs keep their timer but do not query every node.
-      if (document.hidden) timer = window.setTimeout(poll, HISTORY_POLL_MS);
+      if (document.hidden)
+        timer = window.setTimeout(
+          poll,
+          delay(latest.current) ?? HISTORY_POLL_MS,
+        );
       else void load(true);
     }
     async function load(background: boolean) {
@@ -443,8 +464,8 @@ function useComparisonHistory(token: number) {
       } finally {
         if (!canceled) {
           setLoading(false);
-          if (running(latest.current))
-            timer = window.setTimeout(poll, HISTORY_POLL_MS);
+          const next = delay(latest.current);
+          if (next !== undefined) timer = window.setTimeout(poll, next);
         }
       }
     }
@@ -1004,6 +1025,13 @@ function ComparisonResult({
   const [stalled, setStalled] = useState<{ key: string; next: number }>();
   const [loadError, setLoadError] = useState("");
   const [notFound, setNotFound] = useState(false);
+  // The node holding the results cannot be reached; retried with backoff.
+  const [nodeDown, setNodeDown] = useState(false);
+  const nodeDownRef = useRef(false);
+  nodeDownRef.current = nodeDown;
+  const retryDelay = useRef(RETRY_MS);
+  const listedStatusRef = useRef(listed?.status);
+  listedStatusRef.current = listed?.status;
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState<"" | "cancel" | "resume" | "delete">("");
   const [exporting, setExporting] = useState(false);
@@ -1027,6 +1055,60 @@ function ComparisonResult({
         timer = window.setTimeout(() => poll(after), PAGE_POLL_MS);
       else void load(after, 0);
     }
+    function loaded(latest: Progress) {
+      setProgress(latest);
+      setNotFound(false);
+      setLoadError("");
+      setNodeDown(false);
+      retryDelay.current = RETRY_MS;
+    }
+    function failed(error: unknown, retry: () => void) {
+      if (canceled || isAbort(error)) return;
+      setSearching(false);
+      if (error instanceof ApiError && error.status === 404) {
+        setNotFound(true);
+        setProgress(null);
+        setView(null);
+        changed.current();
+        return;
+      }
+      if (
+        (error instanceof ApiError && error.status === 503) ||
+        listedStatusRef.current === "UNAVAILABLE"
+      ) {
+        // The node is offline: check back less and less often.
+        setNodeDown(true);
+        setLoadError("");
+        const wait = retryDelay.current;
+        retryDelay.current = Math.min(wait * 2, MAX_RETRY_MS);
+        timer = window.setTimeout(retry, wait);
+        return;
+      }
+      setNodeDown(false);
+      setLoadError(errorMessage(error));
+      timer = window.setTimeout(retry, RETRY_MS);
+    }
+    // While a filtered scan waits for "keep searching", only the progress of
+    // a running comparison is refreshed; the cursor and the alert stay.
+    function watch() {
+      timer = undefined;
+      if (document.hidden) timer = window.setTimeout(watch, PAGE_POLL_MS);
+      else void refresh();
+    }
+    async function refresh() {
+      try {
+        const page = await api<Page>(`${comparisonPath(id)}?after=0&limit=1`, {
+          signal: controller.signal,
+        });
+        if (canceled) return;
+        const { items, nextAfter, ...latest } = page;
+        loaded(latest);
+        if (isActive(latest.status))
+          timer = window.setTimeout(watch, PAGE_POLL_MS);
+      } catch (error) {
+        failed(error, watch);
+      }
+    }
     async function load(after: number, hops: number): Promise<void> {
       try {
         const page = await api<Page>(
@@ -1035,9 +1117,7 @@ function ComparisonResult({
         );
         if (canceled) return;
         const { items = [], nextAfter = 0, ...latest } = page;
-        setProgress(latest);
-        setNotFound(false);
-        setLoadError("");
+        loaded(latest);
         if (items.length === 0 && nextAfter > after) {
           // Nothing matched within the scan budget, but stored rows remain.
           if (hops < AUTO_CONTINUE) {
@@ -1046,6 +1126,8 @@ function ComparisonResult({
           }
           setSearching(false);
           setStalled({ key, next: nextAfter });
+          if (isActive(latest.status))
+            timer = window.setTimeout(watch, PAGE_POLL_MS);
           return;
         }
         setSearching(false);
@@ -1053,17 +1135,7 @@ function ComparisonResult({
         if (isActive(latest.status))
           timer = window.setTimeout(() => poll(after), PAGE_POLL_MS);
       } catch (error) {
-        if (canceled || isAbort(error)) return;
-        setSearching(false);
-        if (error instanceof ApiError && error.status === 404) {
-          setNotFound(true);
-          setProgress(null);
-          setView(null);
-          changed.current();
-          return;
-        }
-        setLoadError(errorMessage(error));
-        timer = window.setTimeout(() => poll(after), RETRY_MS);
+        failed(error, () => poll(after));
       }
     }
     const stop = () => {
@@ -1080,19 +1152,23 @@ function ComparisonResult({
   const lastStatus = useRef<string>(undefined);
   const status = progress?.status;
   useEffect(() => {
-    if (status && lastStatus.current && lastStatus.current !== status)
-      changed.current();
-    if (status) lastStatus.current = status;
+    if (!status) return;
+    // The first load also refreshes a history that shows another state,
+    // for example a node that was unavailable and is back.
+    const previous = lastStatus.current ?? listedStatusRef.current;
+    if (previous && previous !== status) changed.current();
+    lastStatus.current = status;
   }, [status]);
   // Conversely, reload when the history sees a newer state, for example a
-  // comparison resumed from the CLI while this panel was not polling.
+  // comparison resumed from the CLI while this panel was not polling, or a
+  // node that is reachable again.
   const listedStatus = listed?.status;
   useEffect(() => {
     if (
       listedStatus &&
       listedStatus !== "UNAVAILABLE" &&
-      lastStatus.current &&
-      listedStatus !== lastStatus.current
+      (nodeDownRef.current ||
+        (lastStatus.current && listedStatus !== lastStatus.current))
     )
       setReload((value) => value + 1);
   }, [listedStatus]);
@@ -1101,6 +1177,8 @@ function ComparisonResult({
   const current = view?.key === requestKey;
   const shownRows = view?.items ?? [];
   const stalledHere = stalled?.key === requestKey ? stalled : undefined;
+  const unavailable =
+    nodeDown || (!progress && !notFound && listed?.status === "UNAVAILABLE");
 
   function choose(next: string) {
     if (next === filter) return;
@@ -1267,7 +1345,7 @@ function ComparisonResult({
         {notFound && (
           <Alert severity="info">{t("比对结果不存在或已被删除。")}</Alert>
         )}
-        {!progress && !notFound && !loadError && (
+        {!progress && !notFound && !loadError && !unavailable && (
           <Stack direction="row" spacing={1.5} alignItems="center">
             <CircularProgress size={18} />
             <Typography variant="body2" color="text.secondary">
@@ -1275,8 +1353,15 @@ function ComparisonResult({
             </Typography>
           </Stack>
         )}
+        {unavailable && (
+          <Alert severity="warning">
+            {t("执行节点暂时无法连接，节点恢复后将自动加载比对结果。")}
+          </Alert>
+        )}
         {loadError && (
-          <Alert severity={progress ? "warning" : "error"}>{loadError}</Alert>
+          <Alert severity={progress ? "warning" : "error"}>
+            {runtimeMessageText(loadError)}
+          </Alert>
         )}
         {progress && (
           <>
@@ -1331,7 +1416,9 @@ function ComparisonResult({
                 )}
               </Alert>
             )}
-            {actionError && <Alert severity="error">{actionError}</Alert>}
+            {actionError && (
+              <Alert severity="error">{runtimeMessageText(actionError)}</Alert>
+            )}
             <Box>
               <Stack
                 direction={{ xs: "column", sm: "row" }}

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"io"
@@ -27,7 +28,11 @@ var (
 	comparisonExportRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 )
 
-const comparisonCSVEscaping = "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."
+const comparisonCSVEscaping = "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value. Values containing CR or LF are quoted with those bytes kept, but some CSV readers turn an embedded CR LF into LF; the JSON Lines export holds every key exactly."
+
+// comparisonResultsUnavailable is the Agent's Progress.Error for a
+// comparison whose stored rows are gone from its node.
+const comparisonResultsUnavailable = "Comparison results are unavailable on this node"
 
 var comparisonDifferencesHeader = []string{"number", "key", "status", "sourceKey", "destinationKey", "sourceSize", "destinationSize", "sourceSha256", "destinationSha256", "reasons", "error", "errorDetail"}
 
@@ -81,8 +86,7 @@ func (c *comparisonAPI) issueExportTicket(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id := r.PathValue("id")
-	if _, _, err := c.comparisonNode(id); err != nil {
-		comparisonNodeFailed(w, err)
+	if _, ok := c.comparisonMember(w, id, false); !ok {
 		return
 	}
 	value, err := randomToken()
@@ -147,22 +151,13 @@ func (c *comparisonAPI) consumeExportTicket(w http.ResponseWriter, r *http.Reque
 // still be JSON, then streams the file. A later failure resets the connection
 // instead of ending a truncated file as if it were complete.
 func (c *comparisonAPI) streamExport(w http.ResponseWriter, r *http.Request, id, format string, statuses []string) {
-	_, member, err := c.comparisonNode(id)
-	if err != nil {
-		comparisonNodeFailed(w, err)
-		return
-	}
-	online, err := c.comparisonOnline(member)
-	if err != nil {
-		fail(w, 500, "Cannot read Agent state")
-		return
-	}
-	if !online {
-		fail(w, 503, "Agent is offline")
+	member, ok := c.comparisonMember(w, id, false)
+	if !ok {
 		return
 	}
 	ctx := r.Context()
 	source := &comparisonRowSource{api: c, session: member.Session(), id: id}
+	var err error
 	if source.protocol, err = c.comparisonProtocol(ctx, source.session); err != nil {
 		fail(w, 502, err.Error())
 		return
@@ -367,13 +362,41 @@ type comparisonExportSummary struct {
 	GeneratedAt        time.Time                `json:"generatedAt"`
 }
 
+// comparisonStatusCount is the number of compared objects whose result is
+// one of statuses.
+func comparisonStatusCount(p comparison.Progress, statuses []string) int64 {
+	var total int64
+	for _, status := range statuses {
+		switch status {
+		case comparison.StatusDifferent:
+			total += p.Different
+		case comparison.StatusETagMismatch:
+			total += p.ETagMismatch
+		case comparison.StatusMissingTarget:
+			total += p.Missing
+		case comparison.StatusExtraTarget:
+			total += p.Extra
+		case comparison.StatusChanged:
+			total += p.Changed
+		case comparison.StatusError:
+			total += p.Errors
+		case comparison.StatusBothMissing:
+			total += p.BothMissing
+		}
+	}
+	return total
+}
+
 func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer, source *comparisonRowSource, first *comparison.Page, member cluster.Member, statuses []string) error {
 	buffered := bufio.NewWriterSize(output, 64<<10)
 	zipper := zip.NewWriter(buffered)
-	differences, err := reportWriter(zipper, "differences.csv")
+	entry, err := zipper.Create("differences.csv")
 	if err != nil {
 		return err
 	}
+	// Unlike task reports, keep CR and LF inside values byte for byte: keys
+	// may contain them, and UseCRLF would drop or rewrite them.
+	differences := csv.NewWriter(entry)
 	if err := differences.Write(comparisonDifferencesHeader); err != nil {
 		return err
 	}
@@ -387,7 +410,7 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 	if err := flushReport(differences); err != nil {
 		return err
 	}
-	entry, err := zipper.Create("retry-source-keys.incr")
+	entry, err = zipper.Create("retry-source-keys.incr")
 	if err != nil {
 		return err
 	}
@@ -446,8 +469,17 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 	if p.RowsTruncated {
 		summary.IncompleteReasons = append(summary.IncompleteReasons, "ROWS_TRUNCATED:"+p.TruncatedReason)
 	}
-	if p.Rows != p.Compared-p.Matched || len(statuses) == 0 && exported != p.Rows {
+	if p.Error == comparisonResultsUnavailable {
+		summary.IncompleteReasons = append(summary.IncompleteReasons, "RESULTS_UNAVAILABLE")
+	}
+	// Results of Agents before comparison.Protocol counted BOTH_MISSING rows
+	// as errors, so only current results are checked against the counts.
+	current := p.ResultsProtocol >= comparison.Protocol && !p.RowsTruncated
+	if p.Rows != p.Compared-p.Matched || len(statuses) == 0 && exported != p.Rows || current && len(statuses) > 0 && exported != comparisonStatusCount(p, statuses) {
 		summary.IncompleteReasons = append(summary.IncompleteReasons, "ROW_COUNT_MISMATCH")
+	}
+	if current && retryKeys+omitted != p.Missing+p.Different+p.ETagMismatch {
+		summary.IncompleteReasons = append(summary.IncompleteReasons, "RETRY_KEYS_MISMATCH")
 	}
 	summary.Complete = len(summary.IncompleteReasons) == 0
 	entry, err = zipper.Create("summary.json")

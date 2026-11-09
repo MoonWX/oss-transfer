@@ -400,8 +400,10 @@ const cliObjectHelp = `对象比对
 子命令
   compare --source-bucket 连接/桶 --dest-bucket 连接/桶 [--scope prefix]
           [--source-prefix 前缀] [--dest-prefix 前缀] [--mode metadata|content]
+                                  比对两个前缀；不填前缀时比对整个桶
   compare --source-bucket 连接/桶 --source-key Key --dest-bucket 连接/桶 --dest-key Key
-          --scope object [--mode metadata|content]
+          [--scope object] [--mode metadata|content]
+                                  比对单个对象
   list                            列出各节点上的比对及其状态
   status <ID> [--after 编号] [--limit 1–1000] [--status 结果[,结果...]]
                                   查看统计和一页差异，默认每页 50 条
@@ -416,8 +418,8 @@ const cliObjectHelp = `对象比对
   CHANGED_DURING_COMPARE 比对期间已变化、ERROR 读取失败、BOTH_MISSING 两端均不存在。
 
 示例
-  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --scope prefix --source-prefix '2026/' --dest-prefix 'backup/' --mode metadata
-  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --scope object --mode content
+  oss-transfer-cli object compare --source-bucket source/photos --dest-bucket target/archive --source-prefix '2026/' --dest-prefix 'backup/'
+  oss-transfer-cli object compare --source-bucket source/photos --source-key '2026/a.jpg' --dest-bucket target/archive --dest-key 'backup/a.jpg' --mode content
   oss-transfer-cli object list
   oss-transfer-cli object status <比对ID> --watch 5
   oss-transfer-cli object status <比对ID> --status MISSING_TARGET,DIFFERENT --limit 200
@@ -425,6 +427,8 @@ const cliObjectHelp = `对象比对
   oss-transfer-cli object resume <比对ID>
 
 说明
+  --scope 可省略：指定 --source-key/--dest-key 时为 object，否则为 prefix；--mode 默认 metadata。
+  compare 在后台启动比对并显示比对 ID。单对象比对最多等待 15 秒，结束时直接按 status 的格式显示结果。
   prefix 范围不填前缀时比对整个桶；两端按去掉前缀后的 Key 对应。
   metadata 检查大小、Content-Type、Content-Encoding、Content-Disposition、Cache-Control 和自定义元数据，不读取内容。
   元数据一致不代表内容一致：两端 ETag 都是普通 MD5 形式且不同时，结果为 ETAG_MISMATCH。需要确认内容时使用 content。

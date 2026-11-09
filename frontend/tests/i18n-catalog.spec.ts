@@ -6,6 +6,7 @@ import { coreMessages } from "../src/locales/core";
 import { adminMessages } from "../src/locales/admin";
 import { tasksMessages } from "../src/locales/tasks";
 import { updatesMessages } from "../src/locales/updates";
+import { comparisonMessages } from "../src/locales/comparison";
 import { buildCatalog } from "../src/locales/index.ts";
 import { normalizeLocale, translate } from "../src/lib/i18n";
 import "./catalogs";
@@ -25,6 +26,7 @@ test("all catalog entries have both translations and preserve interpolation para
     adminMessages,
     tasksMessages,
     updatesMessages,
+    comparisonMessages,
   ]) {
     for (const [source, translations] of Object.entries(catalog)) {
       for (const locale of ["en", "ja"] as const) {

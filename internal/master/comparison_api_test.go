@@ -601,12 +601,13 @@ func TestComparisonListReconcilesAssignmentsWithAgents(t *testing.T) {
 	if string(unavailable) != string(want) {
 		t.Fatal("unavailable nodes", string(unavailable))
 	}
-	for id, exists := range map[string]bool{"current-listed": true, "current-gone": false, "current-starting": true, "current-unknown-age": false, "legacy-kept": true, "legacy-gone": false, "legacy-starting": true, "legacy-failing": true, "offline-a": true, "offline-b": true, "removed": true} {
+	for id, exists := range map[string]bool{"current-listed": true, "current-gone": false, "current-starting": true, "current-unknown-age": false, "legacy-kept": true, "legacy-gone": false, "legacy-starting": true, "legacy-failing": true, "offline-a": true, "offline-b": true, "removed": false} {
 		if comparisonAssignmentExists(t, f, id) != exists {
 			t.Fatal("reconciliation", id, exists)
 		}
 	}
-	if code, body := comparisonGet(t, f, "GET", "/api/master/comparisons/removed", "", nil); code != 503 || body["message"] != "The comparison node has been removed" {
+	// A removed node took its comparisons with it.
+	if code, body := comparisonGet(t, f, "GET", "/api/master/comparisons/removed", "", nil); code != 404 || body["message"] != "Comparison not found" {
 		t.Fatal("comparison of a removed node", code, body)
 	}
 	if calls := current.calledWith("comparison_list"); len(calls) != 1 || string(calls[0]) != "{}" {

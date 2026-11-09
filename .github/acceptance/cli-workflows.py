@@ -644,8 +644,27 @@ class Workflows(cluster.Harness):
                     summary["exportedRows"] == len(rows) and summary["retryKeys"] == len(retry), "Export summary differs")
             comparison_cli("delete", operation)
             comparison_cli("status", operation, expected=1)
-        self.record("prefix comparisons: metadata ETag hint, streaming SHA-256 mismatch, list, status filter and ZIP export",
-                    metadataETagHint=etag_hint)
+        # Keys alone start a single-object comparison (no --scope). object
+        # compare waits for it and prints its final status page, or the start
+        # reply when it is still running after the wait.
+        single = data(self.cli("object", "compare", "--source-bucket", "fixture/" + source, "--source-key", "compare/different",
+                               "--dest-bucket", "fixture/" + destination, "--dest-key", "compare/different", "--mode", "content"))
+        single_id, finished_in_wait = single["id"], "items" in single
+        require(single["scope"] == "object" and single["mode"] == "content", "Key-only compare did not start a single-object comparison")
+        if not finished_in_wait:
+            require(single["status"] in {"RUNNING", "CANCELING"}, "Unfinished single-object comparison was not reported as running")
+            def single_completed():
+                row = data(comparison_cli("status", single_id))
+                require(row["status"] not in {"FAILED", "INTERRUPTED", "CANCELED"}, "Single-object comparison did not complete")
+                return row if row["status"] == "COMPLETED" else None
+            single = self.wait(single_completed, "single-object comparison")
+        require(single["status"] == "COMPLETED" and single["compared"] == 1 and single["matched"] == 0 and single["different"] == 1 and
+                [(row["sourceKey"], row["destinationKey"], row["status"]) for row in single["items"]] ==
+                [("compare/different", "compare/different", "DIFFERENT")], "Single-object comparison result differs from fixture")
+        comparison_cli("delete", single_id)
+        self.record("prefix comparisons: metadata ETag hint, streaming SHA-256 mismatch, list, status filter and ZIP export; "
+                    "key-only single-object comparison waits and prints its result",
+                    metadataETagHint=etag_hint, singleObjectFinishedInWait=finished_in_wait)
 
     def maintenance_and_logout(self):
         status = data(self.cli("update", "status"))

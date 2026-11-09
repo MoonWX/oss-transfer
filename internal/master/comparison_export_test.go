@@ -312,7 +312,7 @@ func TestComparisonExportJSONLStopsAtFirstSnapshot(t *testing.T) {
 	agent.setIntercept(nil)
 	_, files := comparisonArchive(t, mustDownloadComparison(t, f, "GET", "/api/master/comparisons/cmp-running/export", f.admin, ""))
 	summary := exportSummary(t, files["summary.json"])
-	if summary.Complete || !slices.Equal(summary.IncompleteReasons, []string{"NOT_COMPLETED:RUNNING", "ROW_COUNT_MISMATCH"}) || summary.EndedAt != nil || summary.ExportedRows != 2000 {
+	if summary.Complete || !slices.Equal(summary.IncompleteReasons, []string{"NOT_COMPLETED:RUNNING", "ROW_COUNT_MISMATCH", "RETRY_KEYS_MISMATCH"}) || summary.EndedAt != nil || summary.ExportedRows != 2000 {
 		t.Fatalf("running summary %+v", summary)
 	}
 }
@@ -509,6 +509,52 @@ func TestComparisonExportRetriesTransientFailuresAndAbortsLateOnes(t *testing.T)
 	if download := mustDownloadComparison(t, f, "GET", "/api/master/comparisons/cmp-retry/export", f.admin, ""); download.status != 502 || download.message(t) != "injected failure" || attemptsAt(0) != 1 {
 		t.Fatal("first page failure", download.status, string(download.body), attemptsAt(0))
 	}
+	// The same for the second walk, which lists the keys to transfer again.
+	retryAttempts := 0
+	failingRetryPass := func(status, times int) {
+		mu.Lock()
+		retryAttempts = 0
+		mu.Unlock()
+		agent.setIntercept(func(c agenttransport.Command) (agenttransport.Response, bool) {
+			var q comparison.RowsQuery
+			if c.Operation != "comparison_rows" || json.Unmarshal(c.Payload, &q) != nil || !slices.Equal(q.Statuses, comparison.RetryStatuses) || q.After != 0 {
+				return agenttransport.Response{}, false
+			}
+			mu.Lock()
+			retryAttempts++
+			count := retryAttempts
+			mu.Unlock()
+			if times >= 0 && count > times {
+				return agenttransport.Response{}, false
+			}
+			response, _ := fakeReply(status, map[string]string{"code": "operation_failed", "message": "injected failure"})
+			return response, true
+		})
+	}
+	retryAttemptsMade := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return retryAttempts
+	}
+	failingRetryPass(503, 2)
+	_, files = comparisonArchive(t, mustDownloadComparison(t, f, "GET", "/api/master/comparisons/cmp-retry/export", f.admin, ""))
+	if summary := exportSummary(t, files["summary.json"]); !summary.Complete || summary.RetryKeys != 1072 || strings.Count(string(files["retry-source-keys.incr"]), "\n") != 1072 || retryAttemptsMade() != 3 {
+		t.Fatalf("transient retry pass failures were not retried: %d %+v", retryAttemptsMade(), summary)
+	}
+	failingRetryPass(503, -1)
+	if download, err := downloadComparison(t, f, "GET", "/api/master/comparisons/cmp-retry/export", f.admin, ""); err == nil {
+		t.Fatal("failed retry pass ended as a complete response", download.status, len(download.body))
+	}
+	if retryAttemptsMade() != 1+len(comparisonExportRetryDelays) {
+		t.Fatal("retry pass retries", retryAttemptsMade())
+	}
+	failingRetryPass(400, -1)
+	if download, err := downloadComparison(t, f, "GET", "/api/master/comparisons/cmp-retry/export?status=EXTRA_TARGET", f.admin, ""); err == nil {
+		t.Fatal("failed retry pass ended as a complete response", download.status, len(download.body))
+	}
+	if retryAttemptsMade() != 1 {
+		t.Fatal("a non-transient retry pass failure was retried", retryAttemptsMade())
+	}
 	agent.setIntercept(nil)
 	if download := mustDownloadComparison(t, f, "GET", "/api/master/comparisons/cmp-offline/export", f.admin, ""); download.status != 503 || download.message(t) != "Agent is offline" {
 		t.Fatal("offline node", download.status, string(download.body))
@@ -534,6 +580,97 @@ func TestComparisonImportableKeysMatchImportInventory(t *testing.T) {
 	} {
 		if importableKey(key) != want {
 			t.Fatalf("%q: want %v", key, want)
+		}
+	}
+}
+
+func TestComparisonExportKeepsLineBreaksInCSVKeys(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	agent := newFakeComparisonAgent(true)
+	node := comparisonTestNode(t, f, "export-line-breaks", agent)
+	rows := fakeComparisonRows(10)
+	// Rows 1, 2, 3 and 8 have retry statuses; import-inventory cannot read
+	// these keys back, so the export is the only place that names them.
+	keys := map[int]string{0: "src/a\rb", 1: "\rlead", 2: "src/a\nb", 7: "src/trail\r"}
+	for i, key := range keys {
+		rows[i].SourceKey, rows[i].Key = key, key
+	}
+	agent.put(completedComparison("cmp-breaks", rows), rows)
+	putComparisonAssignment(t, f, node, comparisonTestRequest("cmp-breaks"), time.Now())
+	_, files := comparisonArchive(t, mustDownloadComparison(t, f, "GET", "/api/master/comparisons/cmp-breaks/export", f.admin, ""))
+	raw := string(files["differences.csv"])
+	if !strings.Contains(raw, "src/a\rb") || !strings.Contains(raw, "src/a\nb") || strings.Contains(raw, "\r\n") {
+		t.Fatalf("CR or LF inside keys was rewritten: %q", raw)
+	}
+	exported := differenceRows(t, files["differences.csv"])
+	for i, key := range keys {
+		for _, column := range []string{"key", "sourceKey"} {
+			if got := strings.TrimPrefix(exported[i][column], "'"); got != key {
+				t.Fatalf("row %d %s: got %q, want %q", i+1, column, got, key)
+			}
+		}
+	}
+	if summary := exportSummary(t, files["summary.json"]); !summary.Complete || summary.RetryKeys != 2 || summary.RetryKeysOmitted != 4 {
+		t.Fatalf("summary %+v", summary)
+	}
+}
+
+func TestComparisonExportReportsUnavailableResults(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	agent := newFakeComparisonAgent(true)
+	node := comparisonTestNode(t, f, "export-unavailable", agent)
+	// The Agent keeps the counts of a comparison whose stored rows are gone
+	// and serves empty pages.
+	p := completedComparison("cmp-unavailable", fakeComparisonRows(14))
+	p.Error, p.ErrorDetail = comparisonResultsUnavailable, "result file missing"
+	agent.put(p, nil)
+	putComparisonAssignment(t, f, node, comparisonTestRequest("cmp-unavailable"), time.Now())
+	for query, reasons := range map[string][]string{
+		"":                     {"RESULTS_UNAVAILABLE", "ROW_COUNT_MISMATCH", "RETRY_KEYS_MISMATCH"},
+		"?status=DIFFERENT":    {"RESULTS_UNAVAILABLE", "ROW_COUNT_MISMATCH", "RETRY_KEYS_MISMATCH"},
+		"?status=EXTRA_TARGET": {"RESULTS_UNAVAILABLE", "ROW_COUNT_MISMATCH", "RETRY_KEYS_MISMATCH"},
+	} {
+		_, files := comparisonArchive(t, mustDownloadComparison(t, f, "GET", "/api/master/comparisons/cmp-unavailable/export"+query, f.admin, ""))
+		if summary := exportSummary(t, files["summary.json"]); summary.Complete || !slices.Equal(summary.IncompleteReasons, reasons) || summary.ExportedRows != 0 || summary.RetryKeys != 0 {
+			t.Fatalf("%s: %+v", query, summary)
+		}
+	}
+}
+
+func TestComparisonExportChecksFilteredRowsAgainstCounts(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	agent := newFakeComparisonAgent(true)
+	node := comparisonTestNode(t, f, "export-counts", agent)
+	rows := fakeComparisonRows(70)
+	agent.put(completedComparison("cmp-exact", rows), rows)
+	// The counts name one more DIFFERENT and one fewer ERROR result than the
+	// stored rows hold: the rows and the counts still add up.
+	short := completedComparison("cmp-short", rows)
+	short.Different, short.Errors = short.Different+1, short.Errors-1
+	agent.put(short, rows)
+	// Results of an older Agent counted BOTH_MISSING as errors.
+	legacy := short
+	legacy.ID, legacy.ResultsProtocol = "cmp-old-results", 0
+	agent.put(legacy, rows)
+	for _, id := range []string{"cmp-exact", "cmp-short", "cmp-old-results"} {
+		putComparisonAssignment(t, f, node, comparisonTestRequest(id), time.Now())
+	}
+	for _, test := range []struct {
+		id, query string
+		reasons   []string
+	}{
+		{"cmp-exact", "?status=DIFFERENT,BOTH_MISSING", []string{}},
+		{"cmp-exact", "?status=ERROR", []string{}},
+		{"cmp-short", "", []string{"RETRY_KEYS_MISMATCH"}},
+		{"cmp-short", "?status=DIFFERENT", []string{"ROW_COUNT_MISMATCH", "RETRY_KEYS_MISMATCH"}},
+		{"cmp-short", "?status=DIFFERENT,ERROR", []string{"RETRY_KEYS_MISMATCH"}},
+		{"cmp-short", "?status=EXTRA_TARGET", []string{"RETRY_KEYS_MISMATCH"}},
+		{"cmp-old-results", "?status=DIFFERENT", []string{}},
+	} {
+		_, files := comparisonArchive(t, mustDownloadComparison(t, f, "GET", "/api/master/comparisons/"+test.id+"/export"+test.query, f.admin, ""))
+		summary := exportSummary(t, files["summary.json"])
+		if summary.Complete != (len(test.reasons) == 0) || !slices.Equal(summary.IncompleteReasons, test.reasons) {
+			t.Fatalf("%s%s: %+v", test.id, test.query, summary)
 		}
 	}
 }

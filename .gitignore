@@ -40,3 +40,4 @@ secrets/
 *.pem
 *.key
 application.local.yml
+/cli/oss-transfer-cli

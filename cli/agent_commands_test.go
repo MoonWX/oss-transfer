@@ -13,7 +13,7 @@ import (
 
 const (
 	testAgentJoinURL        = "https://transfer.example/api/agents/bootstrap/once"
-	testAgentInstallCommand = "curl -fsSL '" + testAgentJoinURL + "' | sudo bash"
+	testAgentInstallCommand = "curl -fsSL '" + testAgentJoinURL + "' | sh -c 'if [ \"$(id -u)\" = 0 ]; then exec bash; else exec sudo bash; fi'"
 	testAgentWindowsCommand = "irm '" + testAgentJoinURL + "?platform=windows' | iex"
 	testAgentNativeCommand  = "./oss-transfer-agent --join-url '" + testAgentJoinURL + "'"
 	testAgentDockerCommand  = "curl -fsSL '" + testAgentJoinURL + "?method=compose' | bash"
@@ -82,7 +82,7 @@ func TestAgentInvitationShowsNativeCommandsBeforeOptionalDocker(t *testing.T) {
 			output.Reset()
 			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
 			text = output.String()
-			if !strings.Contains(text, locale.text("\n原生部署（Linux / macOS / FreeBSD，需要 sudo）")) || !strings.Contains(text, data["windowsCommand"].(string)) || strings.Contains(text, "Docker") || strings.Contains(text, "<nil>") {
+			if !strings.Contains(text, locale.text("\n原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）")) || !strings.Contains(text, data["windowsCommand"].(string)) || strings.Contains(text, "Docker") || strings.Contains(text, "<nil>") {
 				t.Fatalf("native-only invitation does not render cleanly: %s", text)
 			}
 		})
@@ -230,7 +230,7 @@ func TestAgentInvitationShowsLocalExpiryDockerVariantsAndDownloadSource(t *testi
 	t.Cleanup(func() { time.Local = previous })
 	dockerCommand := "docker run --rm -v oss-transfer-agent-abcdef-data:/data moonwx/osstransfer:4.2.0 oss-transfer-agent --join-url '" + testAgentJoinURL + "' --data-dir /data --enroll-only && docker run -d --name oss-transfer-agent-abcdef moonwx/osstransfer:4.2.0 oss-transfer-agent --data-dir /data"
 	windowsDocker := "docker run --rm oss-transfer-agent --enroll-only; if ($LASTEXITCODE -eq 0) { docker run -d moonwx/osstransfer:4.2.0 }"
-	composeCommand := "curl -fsSL '" + testAgentJoinURL + "?method=compose' | sudo bash"
+	composeCommand := "curl -fsSL '" + testAgentJoinURL + "?method=compose' | sh -c 'if [ \"$(id -u)\" = 0 ]; then exec bash; else exec sudo bash; fi'"
 	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
 		t.Run(string(locale), func(t *testing.T) {
 			data := map[string]interface{}{
@@ -251,11 +251,11 @@ func TestAgentInvitationShowsLocalExpiryDockerVariantsAndDownloadSource(t *testi
 			}
 			previous := -1
 			for _, wanted := range []string{
-				locale.text("\n原生部署（Linux / macOS / FreeBSD，需要 sudo）"), testAgentInstallCommand, testAgentWindowsCommand,
+				locale.text("\n原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）"), testAgentInstallCommand, testAgentWindowsCommand,
 				locale.text("下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）"),
 				locale.text("\nDocker（macOS / Linux，无需 root）"), dockerCommand,
 				locale.text("\nDocker（Windows PowerShell）"), windowsDocker,
-				locale.text("\nDocker Compose（Linux，需要 sudo）"), composeCommand,
+				locale.text("\nDocker Compose（Linux，需要 root 或 sudo）"), composeCommand,
 			} {
 				position := strings.Index(text, wanted)
 				if position <= previous {

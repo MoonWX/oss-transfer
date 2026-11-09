@@ -148,7 +148,7 @@ func testMasterAgentPackageBootstrap(t *testing.T, target, system, machine strin
 	if err := os.WriteFile(filepath.Join(shim, "uname"), []byte(uname), 0700); err != nil {
 		t.Fatal(err)
 	}
-	// The copied command elevates with sudo; the test runs it unprivileged.
+	// The copied command elevates with sudo unless it already runs as root.
 	if err := os.WriteFile(filepath.Join(shim, "sudo"), []byte("#!/bin/sh\nexec \"$@\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}

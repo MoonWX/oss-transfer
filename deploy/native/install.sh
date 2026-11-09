@@ -1180,15 +1180,25 @@ installation_current() {
     [[ -f "$data_dir/packages/manifest.tsv" && ! -L "$data_dir/packages/manifest.tsv" && $(metadata_field "$data_dir/packages/manifest.tsv" version) == "$version" ]] || return 1
   fi
 }
+# A skipped reinstall still says where the installation is and how to use it,
+# as a completed one does; tooling reads the Installation/CLI/Tasks labels.
+print_current_installation() {
+  printf '\n%s: %s\n%s: %s\n' "$(say 'Service' '服务')" "$service_name" "$(say 'Configuration' '配置文件')" "$config"
+  printf 'Installation: %s\n' "$install_dir"
+  printf 'CLI: %s\n' "$cli_path"
+  printf 'Tasks: %q task list\n' "$cli_path"
+}
 if installation_current; then
   if ((yes == 0)) && { : </dev/tty; } 2>/dev/null; then
     read -r -p "$(say "$service_name v$version is already installed and running. Reinstall it anyway? [y/N] " "$service_name v$version 已安装且正在运行。仍要重新安装吗？[y/N] ")" answer </dev/tty
     if [[ "$answer" != y && "$answer" != Y ]]; then
       say "Nothing was changed." "未做任何更改。"
+      print_current_installation
       exit 0
     fi
   else
     say "$service_name is already v$version and running; nothing was changed. Add --force to reinstall it." "$service_name 已是 v$version 且正在运行，未做任何更改。如需重新安装，请加 --force。"
+    print_current_installation
     exit 0
   fi
 fi

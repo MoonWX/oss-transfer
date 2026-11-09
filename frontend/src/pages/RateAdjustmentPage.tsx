@@ -247,7 +247,7 @@ function DetailContent({
               ) : data.incidentActive && !currentUnknown ? (
                 <Alert severity="warning">
                   {tr(
-                    "该节点曾收到 HTTP 503，已自动调整请求上限，最近读取时尚未恢复到目标。",
+                    "该节点曾收到 OSS 限流响应（HTTP 503、429 或 SlowDown 等），已自动调整请求上限，最近读取时尚未恢复到目标。",
                   )}
                 </Alert>
               ) : !manual &&

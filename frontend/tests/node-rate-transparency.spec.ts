@@ -322,6 +322,37 @@ test("history explains a throttle-window reduction", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("history caption counts the latest 50 records across all nodes", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/nodes");
+  await page.getByRole("tab", { name: "限速历史", exact: true }).click();
+  // The Master merges the nodes' records and keeps the newest 50 in total.
+  for (const [language, caption] of [
+    [
+      null,
+      "显示所有节点中最近的 50 条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。",
+    ],
+    [
+      "English",
+      "Shows the latest 50 records across all nodes. Automatic reductions and recovery change the active limit, not the saved target. Missing values and reasons in older records are shown as unknown.",
+    ],
+    [
+      "日本語",
+      "全ノードを合わせた最新 50 件を表示します。自動制限と回復は実行中の上限を変更し、保存済みの目標値は変更しません。旧レコードにない変更前の値と理由は不明と表示します。",
+    ],
+  ] as const) {
+    if (language) {
+      await page
+        .getByRole("button", { name: /^(Language|言語|语言)$/ })
+        .click();
+      await page.getByRole("menuitem", { name: language, exact: true }).click();
+    }
+    await expect(page.getByText(caption, { exact: true })).toBeVisible();
+  }
+});
+
 test("node rate details fit a 360px mobile viewport", async ({
   page,
 }, testInfo) => {

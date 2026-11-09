@@ -958,10 +958,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Some nodes returned no records.",
     ja: "一部のノードから履歴を取得できません。",
   },
-  "显示各节点最近 50 条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。":
+  "显示所有节点中最近的 50 条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。":
     {
-      en: "Shows the latest 50 records per node. Automatic reductions and recovery change the active limit, not the saved target. Missing values and reasons in older records are shown as unknown.",
-      ja: "各ノードの最新 50 件を表示します。自動制限と回復は実行中の上限を変更し、保存済みの目標値は変更しません。旧レコードにない変更前の値と理由は不明と表示します。",
+      en: "Shows the latest 50 records across all nodes. Automatic reductions and recovery change the active limit, not the saved target. Missing values and reasons in older records are shown as unknown.",
+      ja: "全ノードを合わせた最新 50 件を表示します。自動制限と回復は実行中の上限を変更し、保存済みの目標値は変更しません。旧レコードにない変更前の値と理由は不明と表示します。",
     },
   时间: {
     en: "Time",

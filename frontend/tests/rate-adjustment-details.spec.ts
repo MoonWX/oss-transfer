@@ -201,6 +201,48 @@ test("a real adjustment warning opens request details without replacing the shel
   await expect(page).toHaveURL("/nodes");
 });
 
+test("an active reduction names storage throttling, not only HTTP 503", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  // HTTP 429 and throttling error codes such as SlowDown lower limits too.
+  state.response.triggerEvent.triggerRequest = {
+    ...state.response.triggerEvent.triggerRequest,
+    statusCode: 429,
+    errorCode: "SlowDown",
+  };
+  await page.goto(detailsPath);
+  await expect(page.getByTestId("rate-trigger-request")).toContainText(
+    "SlowDown",
+  );
+  for (const [language, notice] of [
+    [
+      null,
+      "该节点曾收到 OSS 限流响应（HTTP 503、429 或 SlowDown 等），已自动调整请求上限，最近读取时尚未恢复到目标。",
+    ],
+    [
+      "English",
+      "This agent received storage throttling responses (HTTP 503, 429, SlowDown or similar) and automatically reduced its request limits. The last reading was still below the target.",
+    ],
+    [
+      "日本語",
+      "このノードで OSS のスロットリング応答（HTTP 503、429、SlowDown など）を受信し、リクエスト上限を自動的に引き下げました。直近の取得時点では目標値まで回復していません。",
+    ],
+  ] as const) {
+    if (language) {
+      await page
+        .getByRole("button", { name: /^(Language|言語|语言)$/ })
+        .click();
+      await page.getByRole("menuitem", { name: language, exact: true }).click();
+    }
+    const alert = page
+      .getByRole("alert")
+      .filter({ has: page.getByText(notice, { exact: true }) });
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveClass(/MuiAlert-standardWarning/);
+  }
+});
+
 test("adjustment history appends the next page and refreshes from the first page", async ({
   page,
 }) => {

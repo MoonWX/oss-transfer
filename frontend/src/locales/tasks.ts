@@ -1948,10 +1948,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Auto-refresh is paused. Showing the last retrieved data.",
     ja: "自動更新は一時停止中です。最後に取得した結果を表示しています。",
   },
-  "该节点曾收到 HTTP 503，已自动调整请求上限，最近读取时尚未恢复到目标。": {
-    en: "This agent received HTTP 503 and automatically reduced its request limits. The last reading was still below the target.",
-    ja: "このノードで HTTP 503 を受信し、リクエスト上限を自動的に引き下げました。直近の取得時点では目標値まで回復していません。",
-  },
+  "该节点曾收到 OSS 限流响应（HTTP 503、429 或 SlowDown 等），已自动调整请求上限，最近读取时尚未恢复到目标。":
+    {
+      en: "This agent received storage throttling responses (HTTP 503, 429, SlowDown or similar) and automatically reduced its request limits. The last reading was still below the target.",
+      ja: "このノードで OSS のスロットリング応答（HTTP 503、429、SlowDown など）を受信し、リクエスト上限を自動的に引き下げました。直近の取得時点では目標値まで回復していません。",
+    },
   "本轮调节已结束。": {
     en: "This adjustment has ended.",
     ja: "この調整は終了しました。",

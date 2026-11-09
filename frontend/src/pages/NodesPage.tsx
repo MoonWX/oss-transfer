@@ -661,7 +661,7 @@ export default function NodesPage() {
           )}
           <Typography variant="body2" color="text.secondary">
             {t(
-              "显示各节点最近 50 条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。",
+              "显示所有节点中最近的 50 条记录。自动降速与恢复改变运行上限，不覆盖已保存目标。旧记录未保存的调整前值和原因显示为未知。",
             )}
           </Typography>
           {history.loading && !history.data && <LinearProgress />}

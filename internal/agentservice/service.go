@@ -666,7 +666,8 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if err := decode(c.Payload, &request); err != nil {
 			return badRequest(err)
 		}
-		store, err := s.Factory.OpenEndpoint(ctx, request.Endpoint)
+		// A person waits for the answer (the object comparison tool).
+		store, err := s.Factory.OpenInteractive(ctx, request.Endpoint)
 		if err != nil {
 			return response(nil, err)
 		}

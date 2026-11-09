@@ -265,7 +265,11 @@ class CombinedUninstallTests(unittest.TestCase):
             'id': 'printf "0\\n"',
             'uname': 'case "$1" in -s) printf "Linux\\n";; -m) printf "x86_64\\n";; esac',
             'curl': 'printf "curl %s\\n" "$*" >> "$EVENTS"; exit 99',
-            'docker': 'printf "docker %s\\n" "$*" >> "$EVENTS"; exit 0',
+            'docker': 'printf "docker %s\\n" "$*" >> "$EVENTS"\n'
+                      'case "$*" in\n'
+                      '  *config_files=*) [ -z "$DOCKER_FILE_PROJECT" ] || printf "%s\\n" "$DOCKER_FILE_PROJECT";;\n'
+                      '  *volume=*) [ -z "$DOCKER_MOUNTED" ] || printf "%s\\n" "$DOCKER_MOUNTED";;\n'
+                      'esac\nexit 0',
             'systemctl': 'printf "systemctl %s\\n" "$*" >> "$EVENTS"; exit 0',
         }.items():
             path = self.commands / name
@@ -273,8 +277,8 @@ class CombinedUninstallTests(unittest.TestCase):
             path.chmod(0o755)
         self.env = dict(os.environ, PATH=str(self.commands) + os.pathsep + os.environ['PATH'], EVENTS=str(self.events), LC_ALL='C')
 
-    def run_public(self, *args):
-        return subprocess.run(['bash', str(PUBLIC), '--lang', 'en', *args], env=self.env, text=True,
+    def run_public(self, *args, **environment):
+        return subprocess.run(['bash', str(PUBLIC), '--lang', 'en', *args], env=dict(self.env, **environment), text=True,
                               capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
 
     def test_native_uninstall_uses_embedded_installer_without_downloading(self):
@@ -299,6 +303,54 @@ class CombinedUninstallTests(unittest.TestCase):
         self.assertFalse(install.exists())
         self.assertFalse(data.exists())
         self.assertIn('Docker image is kept', result.stdout)
+
+    def compose_installation(self, marker=True, data=None):
+        install, data = self.base / 'compose/agent', data or self.base / 'custom-data/agent'
+        install.mkdir(parents=True)
+        data.mkdir(parents=True)
+        (data / 'agent.db').write_text('state')
+        compose = install / 'docker-compose.yml'
+        compose.write_text(('# oss-transfer-project: edge-agent\n' if marker else '') +
+                           "services:\n  agent:\n    image: 'moonwx/osstransfer:4.2.0'\n"
+                           "    command: ['oss-transfer-agent', '--data-dir', '/data']\n"
+                           f"    volumes:\n      - '{data}:/data'\n      - '/srv/files:/srv/files'\n")
+        return install, data, compose
+
+    def test_compose_uninstall_uses_the_recorded_project_and_data_directory(self):
+        for marker in (True, False):
+            with self.subTest(marker=marker):
+                install, data, compose = self.compose_installation(marker)
+                # Earlier releases recorded neither; Compose labels the containers with the file.
+                result = self.run_public('--uninstall', '--method', 'compose', '--role', 'agent', '--install-dir', str(install),
+                                         '--yes', DOCKER_FILE_PROJECT='' if marker else 'edge-agent')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'docker compose --project-name edge-agent --file {compose} down --remove-orphans', self.events.read_text())
+                self.assertIn(f'Remove data: {data}', result.stdout)
+                self.assertFalse(install.exists())
+                self.assertFalse(data.exists())
+                self.events.unlink()
+
+    def test_compose_uninstall_keeps_data_a_container_still_mounts(self):
+        install, data, compose = self.compose_installation()
+        result = self.run_public('--uninstall', '--method', 'compose', '--role', 'agent', '--install-dir', str(install),
+                                 '--yes', DOCKER_MOUNTED='edge-agent-agent-1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('still used by container(s): edge-agent-agent-1', result.stderr)
+        self.assertTrue(compose.exists())
+        self.assertTrue((data / 'agent.db').exists())
+
+    def test_compose_uninstall_refuses_other_names_and_directories(self):
+        install, data, compose = self.compose_installation()
+        for args, message in ((['--service-name', 'oss-transfer-agent'], 'belongs to Compose project edge-agent'),
+                              (['--data-dir', str(self.base / 'other')], f'uses data directory {data}')):
+            with self.subTest(args=args):
+                result = self.run_public('--uninstall', '--method', 'compose', '--role', 'agent', '--install-dir', str(install),
+                                         '--yes', *args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertTrue(compose.exists())
+                self.assertTrue((data / 'agent.db').exists())
+        self.assertNotIn('down', self.events.read_text() if self.events.exists() else '')
 
     def test_compose_uninstall_refuses_a_foreign_compose_file(self):
         install = self.base / 'compose/agent'

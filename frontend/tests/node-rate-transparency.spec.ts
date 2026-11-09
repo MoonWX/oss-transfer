@@ -167,11 +167,13 @@ test("node links active adjustments to details and keeps recovery progress conci
   state.worker = workerState(1000, "RECOVERED", 3);
   await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(put.getByText("已恢复目标", { exact: true })).toBeVisible();
-  await expect(put.getByRole("progressbar")).toHaveAttribute(
-    "aria-valuenow",
-    "100",
-  );
+  // A limit back at its target needs no progress bar.
+  await expect(put.getByRole("progressbar")).toHaveCount(0);
   await expect(notice).toHaveCount(0);
+  state.worker = workerState(1000, "NORMAL", 3);
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(put.getByText("按目标运行", { exact: true })).toBeVisible();
+  await expect(put.getByRole("progressbar")).toHaveCount(0);
   await put.screenshot({ path: testInfo.outputPath("rate-recovered.png") });
 });
 

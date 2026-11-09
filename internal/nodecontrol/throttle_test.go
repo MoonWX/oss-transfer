@@ -123,6 +123,11 @@ func TestInterleavedThrottlingLowersItsOwnLimitOncePerWindowAndRecovers(t *testi
 	if got := rate(t, f.controller, "put"); got["limitQps"] != float64(1000) || got["state"] != "RECOVERED" {
 		t.Fatalf("did not recover to target: %v", got)
 	}
+	// After a moment a recovered limit runs at its target like any other.
+	clock.Advance(recoveredDisplay + time.Second)
+	if got := rate(t, f.controller, "put"); got["limitQps"] != float64(1000) || got["state"] != "NORMAL" {
+		t.Fatalf("recovery reported indefinitely: %v", got)
+	}
 }
 
 func TestThrottlingLowersFromTheMeasuredRate(t *testing.T) {
@@ -284,5 +289,92 @@ func TestThrottledPutsAtHighConcurrencyFinishWithoutFailuresAndLowerTheNodeLimit
 	must(t, err)
 	if len(history) != 1 || history[0].Type != "put" || history[0].Value != 90_000 || rate(t, f.controller, "put")["state"] != "REDUCED" || rate(t, f.controller, "head")["limitQps"] != float64(100_000) {
 		t.Fatalf("throttled PUTs must lower the node PUT limit once: %+v", history)
+	}
+}
+
+// A limit shared by several Agents (one bucket's request limit) must not be
+// hit again every few seconds: recovery returns quickly only to just below the
+// rate that was throttled, probes above it in small, slowing steps, and is
+// multiplicative again once throttling has stayed away.
+func TestRecoveryProbesSlowlyAboveTheThrottledRate(t *testing.T) {
+	f := newFixture(t, Options{PutQPS: 2000, MinQPS: 10, RecoveryInterval: 10 * time.Second})
+	clock := useClock(f.controller, time.Now().Truncate(time.Second))
+	put := func() float64 { return rate(t, f.controller, "put")["limitQps"].(float64) }
+	tick := func(d time.Duration) {
+		t.Helper()
+		clock.Advance(d)
+		must(t, f.controller.Tick(clock.Now()))
+	}
+	// throttle sends 1000 PUTs in one second, then the storage service
+	// throttles enough of the responses to lower the limit.
+	throttle := func() {
+		t.Helper()
+		f.controller.mu.Lock()
+		clock.Advance(time.Second)
+		f.controller.addSample(kindIndex("put"), 1000)
+		f.controller.mu.Unlock()
+		clock.Advance(time.Second)
+		respond(t, f.controller, "PutObject", 1000)
+	}
+	throttle() // throttled at 1000 requests/s
+	if got := put(); got != 900 {
+		t.Fatalf("reduction from the measured rate: PUT %v, want 900", got)
+	}
+	tick(10 * time.Second)
+	if got := put(); got != 950 {
+		t.Fatalf("first probe above the safe level: PUT %v, want 950 (900 + 5%% of 1000)", got)
+	}
+	tick(20 * time.Second)
+	if got := put(); got != 950 {
+		t.Fatalf("probed again before the probe interval: PUT %v", got)
+	}
+	tick(10 * time.Second)
+	if got := put(); got != 1000 {
+		t.Fatalf("second probe: PUT %v, want 1000", got)
+	}
+	tick(30 * time.Second)
+	if got := put(); got != 1050 {
+		t.Fatalf("probing continues above the old ceiling: PUT %v, want 1050", got)
+	}
+
+	// Throttled again at the same rate: the probe interval doubles.
+	clock.Advance(5 * time.Second)
+	throttle()
+	if got := put(); got != 900 {
+		t.Fatalf("repeated reduction: PUT %v, want 900", got)
+	}
+	tick(10 * time.Second)
+	if got := put(); got != 950 {
+		t.Fatalf("probe after a repeated reduction: PUT %v, want 950", got)
+	}
+	tick(30 * time.Second)
+	if got := put(); got != 950 {
+		t.Fatalf("a repeated reduction must slow probing: PUT %v", got)
+	}
+	tick(30 * time.Second)
+	if got := put(); got != 1000 {
+		t.Fatalf("probe after the doubled interval: PUT %v, want 1000", got)
+	}
+
+	// Long without throttling, recovery is multiplicative again.
+	tick(throttleMemory)
+	if got := put(); got != 1200 {
+		t.Fatalf("recovery after the throttle memory: PUT %v, want 1200 (×1.2)", got)
+	}
+	for range 5 {
+		tick(10 * time.Second)
+	}
+	if got := rate(t, f.controller, "put"); got["limitQps"] != float64(2000) || got["state"] != "RECOVERED" {
+		t.Fatalf("did not recover to the target: %v", got)
+	}
+
+	// A limit the user sets starts without that memory.
+	clock.Advance(5 * time.Second)
+	throttle()
+	must(t, f.controller.SetRate(context.Background(), "put", 1500))
+	clock.Advance(5 * time.Second)
+	throttle()
+	if !f.controller.reducedAt[1].Equal(clock.Now()) || f.controller.strikes[1] != 0 {
+		t.Fatalf("a manual limit kept the throttle memory: strikes %d", f.controller.strikes[1])
 	}
 }

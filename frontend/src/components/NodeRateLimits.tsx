@@ -206,7 +206,7 @@ export default function NodeRateLimits({
             target !== undefined &&
             target > 0 &&
             limit !== undefined &&
-            (reduced || recovered);
+            reduced;
           const percentage =
             target && target > 0 && limit !== undefined
               ? Math.max(0, Math.min(100, (limit / target) * 100))

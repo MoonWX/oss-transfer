@@ -42,10 +42,17 @@ type Controller struct {
 	lastThrottle time.Time
 	cooldown     [throttleOther]time.Time
 	nextRecovery [throttleOther]time.Time
-	fault        error
-	closed       bool
-	stop         chan struct{}
-	done         chan struct{}
+	// Recovery memory per limit: the rate at which the storage service last
+	// throttled, when that happened, and how many reductions followed each
+	// other within throttleMemory. Kept in memory only; a restart recovers
+	// as before.
+	ceiling   [throttleOther]float64
+	reducedAt [throttleOther]time.Time
+	strikes   [throttleOther]int
+	fault     error
+	closed    bool
+	stop      chan struct{}
+	done      chan struct{}
 }
 
 func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, error) {
@@ -197,7 +204,7 @@ func (c *Controller) healthy() error {
 
 func (c *Controller) event(next *persisted, kind string, old, value, oldTarget, target float64, reason, incident string, trigger *RequestContext, evidence *throttleEvidence) Adjustment {
 	next.Sequence++
-	event := Adjustment{ID: fmt.Sprintf("%s:%d", c.processID, next.Sequence), ProcessID: c.processID, Sequence: next.Sequence, Type: kind, Value: value, PreviousValue: old, PreviousManualTarget: oldTarget, ManualTarget: target, Manual: reason == "MANUAL_SET", Timestamp: time.Now().UnixMilli(), ReasonCode: reason, IncidentID: incident, DetailsAvailable: true, IntervalMS: c.options.RecoveryInterval.Milliseconds(), IncreaseFactor: c.options.IncreaseFactor, TriggerRequest: trigger}
+	event := Adjustment{ID: fmt.Sprintf("%s:%d", c.processID, next.Sequence), ProcessID: c.processID, Sequence: next.Sequence, Type: kind, Value: value, PreviousValue: old, PreviousManualTarget: oldTarget, ManualTarget: target, Manual: reason == "MANUAL_SET", Timestamp: c.now().UnixMilli(), ReasonCode: reason, IncidentID: incident, DetailsAvailable: true, IntervalMS: c.options.RecoveryInterval.Milliseconds(), IncreaseFactor: c.options.IncreaseFactor, TriggerRequest: trigger}
 	if evidence != nil {
 		event.ThrottleCount, event.ThrottleResponses = evidence.count, evidence.responses
 		event.ThrottleThreshold, event.ThrottleRatio = c.options.Threshold, c.options.ThrottleRatio
@@ -276,6 +283,12 @@ func (c *Controller) SetRate(ctx context.Context, kind string, value float64) er
 		return err
 	}
 	delete(c.next, kind)
+	for index, name := range throttleKinds {
+		if name == kind {
+			// A limit the user set starts without throttle memory.
+			c.ceiling[index], c.reducedAt[index], c.strikes[index] = 0, time.Time{}, 0
+		}
+	}
 	return nil
 }
 
@@ -450,7 +463,48 @@ func (c *Controller) ObserveResponse(request RequestContext) error {
 		return c.fault
 	}
 	c.cooldown[index] = now.Add(c.options.ThrottleWindow)
+	if !c.reducedAt[index].IsZero() && now.Sub(c.reducedAt[index]) < throttleMemory {
+		c.strikes[index] = min(c.strikes[index]+1, maxProbeStrikes)
+	} else {
+		c.strikes[index] = 0
+	}
+	c.ceiling[index], c.reducedAt[index] = from, now
 	return nil
+}
+
+// throttleMemory is how long a throttle shapes recovery. Within it a limit
+// returns quickly only to the level just below where throttling started, then
+// probes above it in small steps that slow down when throttling repeats, so a
+// shared bottleneck (one bucket's limit seen by several Agents) is not hit
+// again every few seconds. Without throttling for this long, recovery is
+// multiplicative again.
+const throttleMemory = 10 * time.Minute
+
+// Above the safe level a probe adds probeFraction of the throttled rate every
+// probeIntervals recovery intervals, doubled for each repeated reduction.
+const (
+	probeFraction   = 0.05
+	probeIntervals  = 3
+	maxProbeStrikes = 4
+)
+
+// recoveryStep is the next value of a lowered limit and the wait before the
+// step after it.
+func (c *Controller) recoveryStep(index int, old, target float64, now time.Time) (float64, time.Duration) {
+	value, wait := math.Min(target, old*c.options.IncreaseFactor), c.options.RecoveryInterval
+	ceiling := c.ceiling[index]
+	if ceiling <= 0 || now.Sub(c.reducedAt[index]) >= throttleMemory {
+		return value, wait
+	}
+	if safe := ceiling * c.options.ReduceFactor; old < safe {
+		return math.Min(value, safe), wait
+	}
+	value = math.Min(target, old+ceiling*probeFraction)
+	if value > ceiling {
+		// A probe above the old ceiling passed without throttling.
+		c.ceiling[index] = value
+	}
+	return value, c.options.RecoveryInterval * time.Duration(probeIntervals<<c.strikes[index])
 }
 
 // Tick raises each lowered limit by IncreaseFactor once a RecoveryInterval has
@@ -472,10 +526,13 @@ func (c *Controller) Tick(now time.Time) error {
 	}
 	next := clone(c.data)
 	events := []Adjustment{}
-	for _, index := range due {
+	waits := make([]time.Duration, len(due))
+	ceilings := c.ceiling
+	for i, index := range due {
 		kind := throttleKinds[index]
 		old, target := next.Effective[kind], c.target(next, kind)
-		value := math.Min(target, old*c.options.IncreaseFactor)
+		value, wait := c.recoveryStep(index, old, target, now)
+		waits[i] = wait
 		reason := "RECOVERY_STEP"
 		if value == target {
 			reason = "RECOVERED"
@@ -487,11 +544,12 @@ func (c *Controller) Tick(now time.Time) error {
 		}
 	}
 	if err := c.commit(next, events); err != nil {
+		c.ceiling = ceilings // nothing was applied
 		c.fault = fmt.Errorf("recovery adjustment persistence failed: %w", err)
 		return c.fault
 	}
-	for _, index := range due {
-		c.nextRecovery[index] = now.Add(c.options.RecoveryInterval)
+	for i, index := range due {
+		c.nextRecovery[index] = now.Add(waits[i])
 	}
 	return nil
 }
@@ -521,6 +579,10 @@ func (c *Controller) Close() error {
 	defer c.mu.Unlock()
 	return c.fault
 }
+
+// recoveredDisplay is how long a limit that reached its target again is
+// reported as RECOVERED before it reports NORMAL.
+const recoveredDisplay = time.Minute
 
 func (c *Controller) Snapshot() (map[string]any, error) {
 	c.mu.Lock()
@@ -563,7 +625,9 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 			if last.ReasonCode == "RECOVERY_STEP" {
 				status = "RECOVERING"
 			}
-		} else if last.ReasonCode == "RECOVERED" {
+		} else if last.ReasonCode == "RECOVERED" && now.Sub(time.UnixMilli(last.Timestamp)) < recoveredDisplay {
+			// Recovery is news for a moment; afterwards the limit simply runs
+			// at its target again. The history keeps the event.
 			status = "RECOVERED"
 		}
 		rate := map[string]any{"limit" + unit: current, "manualLimit" + unit: target, "configuredLimit" + unit: c.configured[kind], "current" + unit: actual, "limitSource": source, "state": status}

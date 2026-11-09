@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 
 	"github.com/aws/smithy-go"
@@ -77,13 +78,22 @@ func ClassifyStorageError(err error) StorageErrorKind {
 	return StorageErrorUnknown
 }
 
+// modeledErrorCode finds the code of an error the SDK models (NoSuchBucket),
+// which it reports as "<code>: <message>" after the response's request IDs,
+// without the "api error" prefix of other codes.
+var modeledErrorCode = regexp.MustCompile(`HostID: [^,]*, (\w+): `)
+
 // ClassifyStorageMessage classifies the text of a storage error. The order
 // matters: a storage error code in the reply wins over the transport words
 // that may surround it, and a TLS handshake timeout is a timeout.
 func ClassifyStorageMessage(message string) StorageErrorKind {
 	lower := strings.ToLower(message)
+	modeled := ""
+	if match := modeledErrorCode.FindStringSubmatch(message); match != nil {
+		modeled = match[1]
+	}
 	for _, code := range []string{"InvalidAccessKeyId", "SignatureDoesNotMatch", "NoSuchBucket", "AccessDenied", "AllAccessDisabled"} {
-		if strings.Contains(message, "api error "+code) || strings.Contains(message, "<Code>"+code+"</Code>") {
+		if strings.Contains(message, "api error "+code) || strings.Contains(message, "<Code>"+code+"</Code>") || modeled == code {
 			return storageErrorCodes[code]
 		}
 	}

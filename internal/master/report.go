@@ -259,14 +259,20 @@ func reportCSV(writer *csv.Writer, values ...any) error {
 	}
 	return writer.Write(row)
 }
-func reportWriter(zipper *zip.Writer, name string) (*csv.Writer, error) {
-	entry, err := zipper.Create(name)
+func reportWriter(zipper *zip.Writer, name string, generated time.Time) (*csv.Writer, error) {
+	entry, err := reportEntry(zipper, name, generated)
 	if err != nil {
 		return nil, err
 	}
 	writer := csv.NewWriter(entry)
 	writer.UseCRLF = true
 	return writer, nil
+}
+
+// reportEntry adds a ZIP entry dated at the export time; without it entries
+// show 1979/1980 dates.
+func reportEntry(zipper *zip.Writer, name string, generated time.Time) (io.Writer, error) {
+	return zipper.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate, Modified: generated})
 }
 func flushReport(writer *csv.Writer) error { writer.Flush(); return writer.Error() }
 func reportEndpoint(ep execution.Endpoint) string {
@@ -367,7 +373,8 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		}
 	}
 	zipper := zip.NewWriter(output)
-	summary, err := reportWriter(zipper, "task-summary.csv")
+	generated := s.options.Now().UTC()
+	summary, err := reportWriter(zipper, "task-summary.csv", generated)
 	if err != nil {
 		return err
 	}
@@ -397,7 +404,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 	if err := flushReport(summary); err != nil {
 		return err
 	}
-	files, err := reportWriter(zipper, "file-results.csv")
+	files, err := reportWriter(zipper, "file-results.csv", generated)
 	if err != nil {
 		return err
 	}
@@ -565,7 +572,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 	if _, err := exceptions.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	entry, err := zipper.Create("exception-details.csv")
+	entry, err := reportEntry(zipper, "exception-details.csv", generated)
 	if err != nil {
 		return err
 	}
@@ -585,7 +592,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		unreachableNodes = append(unreachableNodes, node)
 	}
 	sort.Strings(unreachableNodes)
-	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": s.options.Now().UTC(), "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "reasonCodeMeaning": reportReasonMeanings, "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
+	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": generated, "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "reasonCodeMeaning": reportReasonMeanings, "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
 	for _, coverage := range coverages {
 		if coverage.LegacyHistorical {
 			metadata["containsLegacyHistory"] = true
@@ -605,7 +612,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		metadata["stableSnapshot"] = c.Stable
 		metadata["countsReconciled"] = c.CountsReconciled
 	}
-	entry, err = zipper.Create("report-metadata.json")
+	entry, err = reportEntry(zipper, "report-metadata.json", generated)
 	if err != nil {
 		return err
 	}

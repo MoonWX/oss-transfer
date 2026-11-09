@@ -167,6 +167,12 @@ func (r *runtime) close() {
 	}
 }
 
+// Logf writes one timestamped line to the service log: the os.Stderr of the
+// moment, which Run redirects to the log file after start-up.
+func Logf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "%s %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
 // The supervisor may not retain stderr. Write failures before restoring the
 // console handles so a background service's startup error survives shutdown.
 func (r *runtime) finish(err error) {

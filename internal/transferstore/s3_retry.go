@@ -3,10 +3,14 @@ package transferstore
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -77,11 +81,28 @@ var transientErrorCodes = map[string]bool{
 // isTransientError reports a failure that a storage restart, failover or
 // network interruption causes and that ends by itself: a refused, reset or
 // aborted connection, a timeout, a temporary DNS failure, or an HTTP 5xx
-// response other than 501 and 505, which never change on retry. A host name
-// that does not exist is not transient, and neither is a cancelled request.
+// response other than 501 and 505, which never change on retry.
+//
+// Two failures are transient only from a host this process has had a response
+// from before: a connection that ended without a (complete) response (EOF),
+// and a host name that does not exist. A storage service that stops closes
+// the connections of requests in flight, and a stopped container's name stops
+// resolving until it starts again; a misconfigured Endpoint or addressing
+// style shows the same errors but never answered, and fails fast. A cancelled
+// request is not transient.
 func isTransientError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		// Without a request URL the response itself was cut short, so the
+		// host had answered.
+		var request *url.Error
+		if !errors.As(err, &request) {
+			return true
+		}
+		address, parseErr := url.Parse(request.URL)
+		return parseErr == nil && hostReached(address.Hostname())
 	}
 	var response interface{ HTTPStatusCode() int }
 	if errors.As(err, &response) {
@@ -95,7 +116,10 @@ func isTransientError(err error) bool {
 	}
 	var dnsError *net.DNSError
 	if errors.As(err, &dnsError) {
-		return !dnsError.IsNotFound && (dnsError.IsTemporary || dnsError.IsTimeout)
+		if dnsError.IsNotFound {
+			return hostReached(dnsError.Name)
+		}
+		return dnsError.IsTemporary || dnsError.IsTimeout
 	}
 	for _, errno := range transientErrnos {
 		if errors.Is(err, errno) {
@@ -107,13 +131,45 @@ func isTransientError(err error) bool {
 		return true
 	}
 	message := err.Error()
-	for _, text := range []string{"connection refused", "connection reset", "broken pipe", "use of closed network connection"} {
+	for _, text := range []string{"connection refused", "connection reset", "broken pipe", "use of closed network connection", "server closed idle connection"} {
 		if strings.Contains(message, text) {
 			return true
 		}
 	}
 	var timeout interface{ Timeout() bool }
 	return errors.As(err, &timeout) && timeout.Timeout()
+}
+
+// reachedHosts are the storage host names this process has had an HTTP
+// response from. Bounded: past the limit, further names are not remembered
+// and fail fast when they stop resolving, as before.
+var reachedHosts = struct {
+	sync.Mutex
+	names map[string]struct{}
+}{names: map[string]struct{}{}}
+
+const maxReachedHosts = 4096
+
+func normalizeHost(name string) string { return strings.ToLower(strings.TrimSuffix(name, ".")) }
+
+func noteReachedHost(name string) {
+	name = normalizeHost(name)
+	if name == "" {
+		return
+	}
+	reachedHosts.Lock()
+	defer reachedHosts.Unlock()
+	if _, ok := reachedHosts.names[name]; !ok && len(reachedHosts.names) < maxReachedHosts {
+		reachedHosts.names[name] = struct{}{}
+	}
+}
+
+func hostReached(name string) bool {
+	name = normalizeHost(name)
+	reachedHosts.Lock()
+	defer reachedHosts.Unlock()
+	_, ok := reachedHosts.names[name]
+	return name != "" && ok
 }
 
 // transientErrnos are the connection failures a restarting server causes.
@@ -145,6 +201,7 @@ type s3Retryer struct {
 	throttleAttempts int
 	base, maxDelay   time.Duration
 	random           func() float64 // uniform in [0, 1)
+	bucket           string         // for the service log
 }
 
 func newS3Retryer(attempts, throttleAttempts int, base, maxDelay time.Duration) *s3Retryer {
@@ -221,6 +278,15 @@ func (r *s3Retryer) GetRetryToken(ctx context.Context, err error) (func(error) e
 	if count, ok := ctx.Value(retryCountKey{}).(*int); ok {
 		*count++
 		attempt = *count
+	}
+	if isPatientError(err) {
+		// The SDK asks for a token only before a retry it will make, and
+		// never after the last attempt.
+		reason := "transient failure"
+		if isThrottleError(err) {
+			reason = "throttled"
+		}
+		logRetry(fmt.Sprintf("storage request %s on bucket %s: attempt %d of %d failed (%s), retrying: %s", middleware.GetOperationName(ctx), r.bucket, attempt, r.throttleAttempts, reason, LogText(err.Error())))
 	}
 	if isPatientError(err) || attempt >= r.attempts {
 		return func(error) error { return nil }, nil

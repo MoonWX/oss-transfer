@@ -150,6 +150,21 @@ test("a storage failure shows its cause and action first and keeps the original 
   );
 });
 
+test("a missing bucket, which the SDK reports without 'api error', is explained", async ({
+  page,
+}) => {
+  const raw =
+    "operation error S3: ListObjectsV2, https response error StatusCode: 404, RequestID: 18E67EBE0619C75DC8DA4BE2, HostID: , NoSuchBucket: The specified bucket does not exist [storage response: http=404, content-type=application/xml, request-id=18E67EBE0619C75DC8DA4BE2, protocol=HTTP/1.1, connection=reused, idle-ms=11455, request-length=0, body=xml]";
+  await setup(page, () => ({ status: "FAILED", errorMessage: raw }));
+  await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
+  await expect(alert(page).locator("p")).toHaveText([
+    "存储桶不存在，请检查存储桶名称和 Endpoint。",
+  ]);
+  await expect(alert(page).getByTestId("runtime-message-detail")).toHaveText(
+    `原始错误：${raw}`,
+  );
+});
+
 test("storage error text is classified only in storage context", async ({
   page,
 }) => {

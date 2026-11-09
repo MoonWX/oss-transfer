@@ -325,3 +325,31 @@ func TestReportStopsOnWriterFailureAndCancellation(t *testing.T) {
 		t.Fatal("canceled report kept reading", err)
 	}
 }
+
+func TestReportEntriesCarryTheExportTime(t *testing.T) {
+	f, p := stoppedReportFixture(t)
+	file, err := os.CreateTemp(t.TempDir(), "exceptions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var output bytes.Buffer
+	// ZIP times have whole seconds.
+	before := f.master.options.Now().UTC().Truncate(time.Second)
+	if err := f.master.writeTaskReport(context.Background(), &output, file, []task.Parent{p}); err != nil {
+		t.Fatal(err)
+	}
+	after := f.master.options.Now().UTC()
+	archive, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.File) != 4 {
+		t.Fatalf("report has %d entries", len(archive.File))
+	}
+	for _, entry := range archive.File {
+		if entry.Modified.Before(before) || entry.Modified.After(after) {
+			t.Errorf("%s dated %s, want the export time between %s and %s", entry.Name, entry.Modified, before, after)
+		}
+	}
+}

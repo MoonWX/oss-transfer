@@ -228,3 +228,32 @@ func TestCheckConnectionStopsAfterFailedListing(t *testing.T) {
 		t.Fatalf("a canceled check must return the cancellation: %v", err)
 	}
 }
+
+// The SDK reports a modeled S3 error such as NoSuchBucket as "NoSuchBucket:
+// <message>", without the "api error" prefix of generic codes. Its text, as
+// a task stores it, must still be recognized.
+func TestClassifyStorageMessageRecognizesModeledErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusNotFound)
+		io.WriteString(w, "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message></Error>")
+	}))
+	defer server.Close()
+	store, err := NewS3(S3Config{Endpoint: server.URL, Bucket: "missing", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.List(context.Background(), ListOptions{})
+	if err == nil || strings.Contains(err.Error(), "api error NoSuchBucket") || strings.Contains(err.Error(), "<Code>") {
+		t.Fatalf("the SDK no longer reports a modeled error without its prefix: %v", err)
+	}
+	if kind := ClassifyStorageMessage(err.Error()); kind != StorageErrorNoSuchBucket {
+		t.Fatalf("ClassifyStorageMessage(%q) = %q", err.Error(), kind)
+	}
+	// A key or prefix that merely contains a code is not that error.
+	for _, message := range []string{`read "NoSuchBucket: notes.txt": EOF`, `object NoSuchBucket-log failed`} {
+		if kind := ClassifyStorageMessage(message); kind == StorageErrorNoSuchBucket {
+			t.Errorf("ClassifyStorageMessage(%q) = %q", message, kind)
+		}
+	}
+}

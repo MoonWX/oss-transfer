@@ -22,6 +22,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/cluster"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 type Identity struct {
@@ -46,6 +47,9 @@ type Options struct {
 	// OnCLIAuth publishes a dedicated cluster administration grant to private
 	// local storage. Its failures never stop Agent execution or readiness.
 	OnCLIAuth func(token string) error
+	// Logf writes a service log line when the connection to the Master is
+	// established, lost or restored. Nil discards them.
+	Logf func(format string, args ...any)
 }
 type Agent struct {
 	store    *state.Store
@@ -252,7 +256,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		defer func() { cancel(); <-done }()
 	}
 	readyFailures := make(chan error, 1)
-	connected := &readyTransport{Transport: transport, ready: a.options.OnReady, failed: func(err error) { readyFailures <- err; cancel() }}
+	connected := &readyTransport{Transport: transport, ready: a.options.OnReady, failed: func(err error) { readyFailures <- err; cancel() }, logf: a.options.Logf, master: a.identity.MasterURL, now: time.Now}
 	err = agenttransport.NewRunner(connected, executor, journal, agenttransport.RunnerOptions{}).Run(ctx)
 	select {
 	case failed := <-readyFailures:
@@ -303,10 +307,38 @@ type readyTransport struct {
 	once   sync.Once
 	ready  func() error
 	failed func(error)
+	// The connection state the service log last reported. Polls run one
+	// at a time.
+	logf      func(format string, args ...any)
+	master    string
+	now       func() time.Time
+	reported  bool // a poll has been reported
+	connected bool
+	lostAt    time.Time
+}
+
+// logConnection reports when the Master connection is established, lost or
+// restored: once per change, not once per poll.
+func (t *readyTransport) logConnection(ctx context.Context, err error) {
+	if t.logf == nil || ctx.Err() != nil {
+		return
+	}
+	up := err == nil || errors.Is(err, agenttransport.ErrNoCommand)
+	switch {
+	case up && !t.reported:
+		t.logf("Connected to the Master at %s", t.master)
+	case up && !t.connected:
+		t.logf("Connection to the Master at %s restored after %s", t.master, t.now().Sub(t.lostAt).Round(time.Second))
+	case !up && (t.connected || !t.reported):
+		t.lostAt = t.now()
+		t.logf("Connection to the Master at %s lost, retrying: %s", t.master, transferstore.LogText(err.Error()))
+	}
+	t.reported, t.connected = true, up
 }
 
 func (t *readyTransport) Poll(ctx context.Context) (agenttransport.Command, error) {
 	command, err := t.Transport.Poll(ctx)
+	t.logConnection(ctx, err)
 	if err == nil || errors.Is(err, agenttransport.ErrNoCommand) {
 		t.once.Do(func() {
 			if t.ready != nil {

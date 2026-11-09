@@ -44,6 +44,10 @@ const transport: [RegExp, StorageErrorKind][] = [
   [/(?:^|: )EOF\s*$|: EOF\b|unexpected EOF/, "eof"],
 ];
 
+// The SDK reports an error it models (NoSuchBucket) as "<code>: <message>"
+// after the response's request IDs, without the "api error" prefix.
+const modeledCode = /HostID: [^,]*, (\w+): /;
+
 // Transport words alone are too general (a node's own request can time out):
 // only text that comes from a storage request is classified.
 const storageContext =
@@ -53,10 +57,12 @@ export function storageErrorKind(
   text: string | null | undefined,
 ): StorageErrorKind | undefined {
   if (!text) return undefined;
+  const modeled = modeledCode.exec(text)?.[1];
   for (const [code, kind] of errorCodes)
     if (
       text.includes(`api error ${code}`) ||
-      text.includes(`<Code>${code}</Code>`)
+      text.includes(`<Code>${code}</Code>`) ||
+      modeled === code
     )
       return kind;
   if (!storageContext.test(text)) return undefined;

@@ -415,3 +415,60 @@ func TestTaskNodesShowsDemandColumn(t *testing.T) {
 		t.Fatal("an older Master's equal split has no demand", got)
 	}
 }
+
+// A stopped or finished task's nodes no longer execute or share its limits, so
+// the table names that state and shows no demand or share.
+func TestTaskNodesOfInactiveTaskShowNoRuntimeShare(t *testing.T) {
+	for status, wants := range map[string]map[cliLocale]string{
+		"STOPPED":        {localeZH: "已停止", localeEN: "Stopped", localeJA: "停止済み"},
+		"FAILED":         {localeZH: "已结束", localeEN: "Finished", localeJA: "終了"},
+		"COMPLETED":      {localeZH: "已结束", localeEN: "Finished", localeJA: "終了"},
+		"PARTIAL_FAILED": {localeZH: "已结束", localeEN: "Finished", localeJA: "終了"},
+	} {
+		view := taskNodesTestView(false)
+		view["status"], view["pending"] = status, false
+		for _, raw := range view["nodes"].([]interface{}) {
+			raw.(map[string]interface{})["demand"] = "busy"
+		}
+		master := &taskNodesFakeMaster{view: view}
+		result, err := runTaskCommand(adminTestClient(t, master.handler(t)), []string{"nodes", "12"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for locale, want := range wants {
+			text := renderTaskNodesForTest(result, locale)
+			if strings.Contains(text, "0.5 Mbps") || strings.Contains(text, "4 Mbps") {
+				t.Errorf("%s %v output still shows a bandwidth share:\n%s", status, locale, text)
+			}
+			for _, stale := range []string{"执行中", "按需（忙）", "Active", "On demand (busy)", "移出中", "Draining"} {
+				if strings.Contains(text, stale) {
+					t.Errorf("%s %v output still shows runtime state %q:\n%s", status, locale, stale, text)
+				}
+			}
+			if strings.Count(text, want) < 3 {
+				t.Errorf("%s %v output must mark each node %q:\n%s", status, locale, want, text)
+			}
+		}
+	}
+	// A running task keeps its live state and shares.
+	view := taskNodesTestView(false)
+	master := &taskNodesFakeMaster{view: view}
+	result, err := runTaskCommand(adminTestClient(t, master.handler(t)), []string{"nodes", "12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := renderTaskNodesForTest(result, localeZH); !strings.Contains(text, "执行中") || !strings.Contains(text, "Mbps") {
+		t.Fatalf("running task lost its live node state:\n%s", text)
+	}
+}
+
+func TestTaskShowMembershipOfStoppedTaskShowsNoRuntimeShare(t *testing.T) {
+	var buffer bytes.Buffer
+	view := taskNodesTestView(false)
+	renderTaskMembership(&cliLocaleWriter{Writer: &buffer, locale: localeZH}, map[string]interface{}{
+		"status": "STOPPED", "executionMembership": map[string]interface{}{"nodeRevision": 3, "nodes": view["nodes"]},
+	})
+	if text := buffer.String(); strings.Contains(text, "Mbps") || strings.Contains(text, "执行中") || !strings.Contains(text, "已停止") {
+		t.Fatalf("task show membership of a stopped task:\n%s", text)
+	}
+}

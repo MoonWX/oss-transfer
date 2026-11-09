@@ -651,6 +651,12 @@ var cliMessages = map[string][2]string{
 	"，离线":               {", offline", "、オフライン"},
 	"执行节点成员（成员版本 %d）\n": {"Execution node membership (revision %d)\n", "実行ノードのメンバー（メンバー版 %d）\n"},
 
+	// Members of a task that is not running.
+	"已停止": {"Stopped", "停止済み"},
+	"已结束": {"Finished", "終了"},
+	// A finished comparison without differences.
+	"未发现差异": {"No differences found", "差分は見つかりませんでした"},
+
 	// Retrying the failed objects of a running task.
 	"重试方式":  {"Retry mode", "再試行方式"},
 	"重试子任务": {"Retried subtasks", "再試行した子タスク"},

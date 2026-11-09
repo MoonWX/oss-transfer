@@ -38,11 +38,18 @@ func checkResponseError(result map[string]interface{}) bool {
 	return false
 }
 
-func printVersion() {
-	fmt.Printf("Version: %s\n", version)
-	fmt.Printf("Branch: %s\n", branch)
-	fmt.Printf("Commit: %s\n", commit)
-	fmt.Printf("BuildTime: %s\n", buildTime)
+// displayVersion shows a release version as users see it everywhere, "v4.2.0",
+// with an optional commit as secondary detail: "v4.2.0 (33b320a)". Unknown or
+// empty versions are returned unchanged.
+func displayVersion(value, revision string) string {
+	value = strings.TrimSpace(value)
+	if value != "" && value != "unknown" && !strings.HasPrefix(value, "v") {
+		value = "v" + value
+	}
+	if revision = strings.TrimSpace(revision); revision != "" && revision != "unknown" && value != "" {
+		return value + " (" + revision + ")"
+	}
+	return value
 }
 
 func printUsage() { fmt.Print(cliHelp) }

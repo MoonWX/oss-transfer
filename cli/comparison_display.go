@@ -327,7 +327,9 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	if getString(data, "mode") == "content" {
 		fields = append(fields, [2]string{cliText(out, "已读取"), cliTaskSize(data, "bytesRead")})
 	}
-	if checkpoint := getString(data, "checkpoint"); checkpoint != "" {
+	// The checkpoint only matters for resuming a listing: a single object has
+	// none, and a completed comparison is never resumed.
+	if checkpoint := getString(data, "checkpoint"); checkpoint != "" && getString(data, "scope") != "object" && getString(data, "status") != "COMPLETED" {
 		fields = append(fields, [2]string{cliText(out, "检查点"), checkpoint})
 	}
 	fields = append(fields, [2]string{cliText(out, "可继续"), comparisonYesNo(out, data["resumable"] == true)})
@@ -348,7 +350,12 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	}
 	table.Flush()
 	fmt.Fprintln(out)
-	renderComparisonRows(out, objectList(data["items"]))
+	rows := objectList(data["items"])
+	if len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && getString(data, "status") == "COMPLETED" && getInt64(data, "compared") == getInt64(data, "matched") {
+		fmt.Fprintln(out, cliText(out, "未发现差异"))
+	} else {
+		renderComparisonRows(out, rows)
+	}
 	if next := getInt64(data, "nextAfter"); next > 0 {
 		flags := []string{"--after", strconv.FormatInt(next, 10), "--limit", strconv.Itoa(options.limit)}
 		if len(options.statuses) > 0 {

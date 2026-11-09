@@ -272,7 +272,7 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 				}
 			}
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(name), safeCLIText(version), safeCLIText(phase), match, safeCLIText(reason))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(name), safeCLIText(displayVersion(version, "")), safeCLIText(phase), match, safeCLIText(reason))
 	}
 	printNode("Master", master, true)
 	for _, row := range objectList(data["agents"]) {
@@ -280,7 +280,7 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 	}
 	table.Flush()
 	if latest, ok := data["latest"].(map[string]interface{}); ok {
-		fmt.Fprintf(out, cliText(out, "最新版本: %s\n"), safeCLIText(latest["version"]))
+		fmt.Fprintf(out, cliText(out, "最新版本: %s\n"), safeCLIText(displayVersion(getString(latest, "version"), "")))
 	}
 	if data["checking"] == true {
 		fmt.Fprintln(out, cliText(out, "正在检查新版本"))

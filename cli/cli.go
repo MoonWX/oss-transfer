@@ -129,7 +129,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		if options.json {
 			json.NewEncoder(output).Encode(map[string]string{"version": version, "branch": branch, "commit": commit, "buildTime": buildTime})
 		} else {
-			fmt.Fprintf(output, "OSS Transfer CLI\nVersion: %s\nBranch: %s\nCommit: %s\nBuildTime: %s\n", version, branch, commit, buildTime)
+			fmt.Fprintf(output, "OSS Transfer CLI %s\nVersion: %s\nBranch: %s\nCommit: %s\nBuildTime: %s\n", displayVersion(version, commit), displayVersion(version, ""), branch, commit, buildTime)
 		}
 		return 0
 	}

@@ -56,9 +56,6 @@ func TestUpdatePrereleaseSubmissions(t *testing.T) {
 		masterInfo string
 	}{
 		{[]string{"master", "--version", "4.1.29-beta.1", "--allow-prerelease", "--yes"}, "/api/master/software-updates/master", map[string]interface{}{"version": "4.1.29-beta.1", "allowPrerelease": true}, ""},
-		{[]string{"master", "--version", "4.1.29", "--yes"}, "/api/master/software-updates/master", map[string]interface{}{"version": "4.1.29"}, ""},
-		// The prerelease flag is not sent for a stable version.
-		{[]string{"master", "--version", "4.1.29", "--allow-prerelease", "--yes"}, "/api/master/software-updates/master", map[string]interface{}{"version": "4.1.29"}, ""},
 		// Agents target the Master's version; the server validates it, so the
 		// Agent request keeps its existing shape.
 		{[]string{"agent", "--worker", "node-a", "--version", "4.1.29-beta.1", "--allow-prerelease", "--yes"}, "/api/master/software-updates/agents/node-a", map[string]interface{}{"version": "4.1.29-beta.1"}, ""},

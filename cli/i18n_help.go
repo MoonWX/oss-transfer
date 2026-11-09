@@ -79,11 +79,14 @@ Examples
 	cliUpdateHelp: {`Service updates
   oss-transfer-cli update status
   oss-transfer-cli update check
-  oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update master --yes
   oss-transfer-cli update master --version 4.1.21-beta.1 --allow-prerelease --yes
   oss-transfer-cli update agent --worker NODE --yes
   oss-transfer-cli update agents --all --yes
 
+update check shows "current version → available version". update master checks for
+a new version itself and, without --version, installs the latest stable release; it
+reports and exits when the Master is already up to date.
 Agents default to the Master's current version; --version selects another release.
 Update checks offer stable releases only. A prerelease (beta/rc) is installed only
 with an exact --version plus --allow-prerelease; Agents may follow a prerelease Master.
@@ -91,11 +94,14 @@ Follow queued updates with update status --watch 5. Acceptance is not completion
 `, `サービス更新
   oss-transfer-cli update status
   oss-transfer-cli update check
-  oss-transfer-cli update master --version 4.1.20 --yes
+  oss-transfer-cli update master --yes
   oss-transfer-cli update master --version 4.1.21-beta.1 --allow-prerelease --yes
   oss-transfer-cli update agent --worker ノード --yes
   oss-transfer-cli update agents --all --yes
 
+update check は「現在のバージョン → 更新可能なバージョン」を表示します。update master は
+新しいバージョンを自動で確認し、--version を省略すると最新の安定版に更新します。
+Master がすでに最新の場合は、その旨を表示して終了します。
 Agent は既定で Master の現在のバージョンに更新します。--version で変更できます。
 更新の確認では安定版のみを提示します。プレリリース（beta/rc）は --version で正確に
 指定し --allow-prerelease を付けた場合のみインストールします。Master がプレリリースの

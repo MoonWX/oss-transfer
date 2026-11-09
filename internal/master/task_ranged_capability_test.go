@@ -240,3 +240,40 @@ func TestRangedSupportRemembersOnlyPositiveAnswers(t *testing.T) {
 		t.Fatal("upgraded Agent still treated as unsupported", err)
 	}
 }
+
+// An S3 delivery asks for source refresh support only for a child with an
+// object whose source changed, and says so only to an Agent that supports it.
+func TestDeliveryAllowsSourceRefreshOnlyWhereItMatters(t *testing.T) {
+	runtime := &taskRuntime{}
+	queries := 0
+	protocols := deliveryProtocols{}
+	runtime.rangedQuery = func(context.Context, task.Node) (deliveryProtocols, error) {
+		queries++
+		return protocols, nil
+	}
+	job := execution.Job{ChildID: "1-1", ParentID: 1, Number: 1, Generation: 1, Source: execution.Endpoint{Kind: "S3", Ref: "qa", Bucket: "source"}, Destination: execution.Endpoint{Kind: "S3", Ref: "qa", Bucket: "target"}}
+	changed := &execution.Record{Job: job, Results: []execution.ItemResult{{ID: "a", Status: execution.ItemFailed, Reconciliation: execution.ReasonSourceChanged}}}
+	other := &execution.Record{Job: job, Results: []execution.ItemResult{{ID: "a", Status: execution.ItemFailed}}}
+	for _, test := range []struct {
+		name    string
+		record  *execution.Record
+		current bool
+		queried bool
+		allowed bool
+	}{
+		{"first delivery", nil, true, false, false},
+		{"other failure", other, true, false, false},
+		{"changed, current Agent", changed, true, true, true},
+		{"changed, previous Agent", changed, false, true, false},
+	} {
+		queries, protocols = 0, deliveryProtocols{}
+		if test.current {
+			protocols.SourceRefreshProtocol = agentservice.SourceRefreshProtocol
+		}
+		runtime.rangedSupport = rangedDownloadSupport{}
+		request, err := runtime.acceptRequest(context.Background(), runtime.newRangedPass(), task.Parent{}, task.Child{Job: job, Record: test.record, Node: task.Node{ID: "n"}})
+		if err != nil || request.SourceRefresh != test.allowed || (queries > 0) != test.queried {
+			t.Fatalf("%s: sourceRefresh=%v queries=%d err=%v", test.name, request.SourceRefresh, queries, err)
+		}
+	}
+}

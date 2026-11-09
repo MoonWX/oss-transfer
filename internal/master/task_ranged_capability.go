@@ -130,14 +130,21 @@ func (t *taskRuntime) deliveryProtocols(ctx context.Context, node task.Node) (de
 // stopped and resumed, which delivers the choice anew.
 //
 // An Agent that advertises source refresh is told that this Master accepts
-// refreshed source pins. Without it (an older Agent, or a capability query
-// that failed) the delivery still goes ahead, and that Agent retries a
+// refreshed source pins. The Agent is asked only when that can matter, for a
+// child with an object that failed because its source changed (or for a
+// LOCAL destination, whose answer is needed anyway). Without it (an older
+// Agent, a capability query that failed, or a failure the Master has not
+// observed yet) the delivery still goes ahead, and that Agent retries a
 // changed source the way older releases do.
 func (t *taskRuntime) acceptRequest(ctx context.Context, pass *rangedPass, p task.Parent, child task.Child) (agentservice.ChildAcceptRequest, error) {
 	request := childAcceptance(p, child)
+	local := child.Job.Destination.Kind == "LOCAL"
+	if !local && !sourceChanged(child.Record) {
+		return request, nil
+	}
 	support, err := pass.supported(ctx, child.Node)
 	request.SourceRefresh = err == nil && support.refresh
-	if child.Job.Destination.Kind != "LOCAL" {
+	if !local {
 		return request, nil
 	}
 	if err != nil {
@@ -163,4 +170,18 @@ func withRangedDownload(request agentservice.ChildAcceptRequest, choice string) 
 		request.Seed = &seed
 	}
 	return request
+}
+
+// sourceChanged reports an object of the record whose source changed after
+// discovery, which a retry reads again only where the Master allows it.
+func sourceChanged(record *execution.Record) bool {
+	if record == nil {
+		return false
+	}
+	for _, result := range record.Results {
+		if result.Reconciliation == execution.ReasonSourceChanged {
+			return true
+		}
+	}
+	return false
 }

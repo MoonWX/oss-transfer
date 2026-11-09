@@ -251,7 +251,7 @@ const cliNodeHelp = `执行节点
   show <节点>                     查看节点运行状态
   details <节点>                  查看主机、网卡 IP 和挂载目录
   network [--public-url URL] [--agent-url URL]
-  add <节点> [--label 名称]        生成指定地址的 Agent 加入指令
+  add <节点> [--label 名称] [--master-url URL]
   invite [--address 节点] [--label 名称] [--master-url URL]
   update <节点> [--address 新地址] [--label 名称]
   update <节点> --child-concurrency 32 --object-concurrency 4
@@ -265,7 +265,7 @@ const cliNodeHelp = `执行节点
 
 命令中的节点使用 node list 的“节点标识”列。新增节点使用 agent invite，--address 支持名称、IPv4 和 IPv6；省略时自动生成。
 Agent 地址注册后不能直接修改，替换节点需重新加入。
-node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址。
+node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址，可用 --master-url 指定 Agent 可访问的地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `

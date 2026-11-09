@@ -581,6 +581,11 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 	if expiry := getString(data, "expiresAt"); expiry != "" {
 		fmt.Fprintf(out, cliText(out, "加入凭证仅可使用一次，有效至 %s\n"), safeCLIText(invitationExpiry(expiry)))
 	}
+	// Every command below, native or Docker, carries this address; only a
+	// native Agent on the Master's own host can reach a loopback address.
+	if master, err := url.Parse(getString(data, "joinUrl")); err == nil && loopbackHost(master.Hostname()) {
+		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，只有在 Master 主机上原生运行的 Agent 能访问。其他主机上的 Agent 请用 --master-url 指定局域网地址；Master 主机上的 Docker 容器请指定 host.docker.internal。"))
+	}
 	if command := getString(data, "traditionalCommand"); command != "" {
 		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，需要 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
@@ -607,9 +612,6 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 	fmt.Fprintln(out, safeCLIText(getString(data, "dockerCommand")))
 	fmt.Fprintln(out, cliText(out, "\nDocker（Windows PowerShell）"))
 	fmt.Fprintln(out, safeCLIText(getString(data, "dockerWindowsCommand")))
-	if master, err := url.Parse(getString(data, "joinUrl")); err == nil && loopbackHost(master.Hostname()) {
-		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。"))
-	}
 	if command := getString(data, "composeCommand"); command != "" {
 		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，需要 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))

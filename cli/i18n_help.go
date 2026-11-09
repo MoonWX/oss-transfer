@@ -572,7 +572,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   show <node>                     Node runtime status
   details <node>                  Host, interface IPs and mounted directories
   network [--public-url URL] [--agent-url URL]
-  add <node> [--label name]        Generate Agent join commands
+  add <node> [--label name] [--master-url URL]
   invite [--address node] [--label name] [--master-url URL]
   update <node> [--address new-address] [--label name]
   update <node> --child-concurrency 32 --object-concurrency 4
@@ -584,7 +584,7 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
 
 Use the Node ID column from node list to select a node in commands. Add nodes with agent invite; --address accepts a name, IPv4 or IPv6 and is generated when omitted.
 Agent addresses cannot be edited after registration; join again when replacing a node.
-node network retains legacy address settings. New invitations use the current CLI connection address.
+node network retains legacy address settings. New invitations use the current CLI connection address; --master-url sets an address the Agent can reach.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
 Use --json for queue/raw rate data; use limit list for limits.
 `, `実行ノード
@@ -594,7 +594,7 @@ Use --json for queue/raw rate data; use limit list for limits.
   show <ノード>                   稼働状態を表示
   details <ノード>                ホスト、インターフェース IP、マウントを表示
   network [--public-url URL] [--agent-url URL]
-  add <ノード> [--label 名前]      Agent 参加コマンドを生成
+  add <ノード> [--label 名前] [--master-url URL]
   invite [--address ノード] [--label 名前] [--master-url URL]
   update <ノード> [--address 新アドレス] [--label 名前]
   update <ノード> --child-concurrency 32 --object-concurrency 4
@@ -606,7 +606,7 @@ Use --json for queue/raw rate data; use limit list for limits.
 
 コマンドのノード指定には node list の「ノード ID」列を使います。追加は agent invite を使い、--address は名前、IPv4、IPv6 に対応します。省略時は自動生成されます。
 登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
-node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。
+node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。Agent が接続できるアドレスは --master-url で指定できます。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。
 キューや速度の生データは --json、上限は limit list で確認できます。
 `},

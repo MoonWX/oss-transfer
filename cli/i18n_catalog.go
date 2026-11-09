@@ -187,7 +187,7 @@ var cliMessages = map[string][2]string{
 	"下载来源：本 Master":                           {"Download source: this Master", "ダウンロード元: この Master"},
 	"下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）": {"Download source: GitHub or JD Cloud OSS, chosen by the new node's public IP location (queries cloudflare.com and ipinfo.io)", "ダウンロード元: 新しいノードのパブリック IP の所在地に応じて GitHub または JD Cloud OSS を自動選択（cloudflare.com と ipinfo.io に問い合わせます）"},
 	"下载来源：%s": {"Download source: %s", "ダウンロード元: %s"},
-	"注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。": {"Note: the Master address is a loopback address, which an Agent in a Docker container cannot reach. Use --master-url with host.docker.internal when Docker runs on the Master's host, or with a LAN address otherwise.", "注意: Master のアドレスはループバックアドレスのため、Docker コンテナ内の Agent からは接続できません。Docker が Master と同じホストにある場合は --master-url に host.docker.internal を、それ以外は LAN アドレスを指定してください。"},
+	"注意：Master 地址是本机回环地址，只有在 Master 主机上原生运行的 Agent 能访问。其他主机上的 Agent 请用 --master-url 指定局域网地址；Master 主机上的 Docker 容器请指定 host.docker.internal。": {"Note: the Master address is a loopback address, which only an Agent running natively on the Master's host can reach. For an Agent on another host, use --master-url with a LAN address; for a Docker container on the Master's host, use host.docker.internal.", "注意: Master のアドレスはループバックアドレスのため、Master のホストでネイティブに動作する Agent からしか接続できません。他のホストの Agent には --master-url で LAN アドレスを、Master のホスト上の Docker コンテナには host.docker.internal を指定してください。"},
 	"\nDocker（可选）": {"\nDocker (optional)", "\nDocker（任意）"},
 	" (扫描中)":       {" (scanning)", " (スキャン中)"},
 	" 次/秒":         {" req/s", " 回/秒"},

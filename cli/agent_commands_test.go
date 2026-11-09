@@ -205,21 +205,43 @@ func TestAgentConfigurationNeverSendsLocalExecutorCredentialToMaster(t *testing.
 }
 
 func TestAgentInvitationExplicitMasterOrigin(t *testing.T) {
-	for _, origin := range []string{"https://transfer.example", "http://10.0.0.2:1685", "https://[2001:db8::1]:8443"} {
-		client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-			if adminTestBody(t, r)["masterUrl"] != origin {
-				t.Fatal("Master endpoint override was lost")
+	// node add accepts --master-url too: the loopback warning names it.
+	invite := map[string]func(*ApiClient, []string) (map[string]interface{}, error){
+		"agent invite": func(client *ApiClient, args []string) (map[string]interface{}, error) {
+			return runAgentAdmin(client, "invite", args)
+		},
+		"node add": func(client *ApiClient, args []string) (map[string]interface{}, error) {
+			return runAdminCommand(client, "node", append([]string{"add", "10.0.0.9"}, args...))
+		},
+	}
+	for name, run := range invite {
+		for _, origin := range []string{"https://transfer.example", "http://10.0.0.2:1685", "https://[2001:db8::1]:8443"} {
+			client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if adminTestBody(t, r)["masterUrl"] != origin {
+					t.Fatal(name, "Master endpoint override was lost")
+				}
+				adminTestJSON(t, w, map[string]any{"success": true})
+			})
+			if _, err := run(client, []string{"--master-url", origin + "/"}); err != nil {
+				t.Fatal(name, err)
 			}
-			adminTestJSON(t, w, map[string]any{"success": true})
-		})
-		if _, err := runAgentAdmin(client, "invite", []string{"--master-url", origin + "/"}); err != nil {
-			t.Fatal(err)
+		}
+		for _, origin := range []string{"", "ftp://host", "https://host/path", "https://host:0", "https://host:65536", "https://user:secret@host"} {
+			client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal(name, "invalid origin submitted") })
+			if _, err := run(client, []string{"--master-url", origin}); err == nil {
+				t.Fatal(name, "invalid origin accepted", origin)
+			}
 		}
 	}
-	for _, origin := range []string{"", "ftp://host", "https://host/path", "https://host:0", "https://host:65536", "https://user:secret@host"} {
-		client := adminTestClient(t, func(http.ResponseWriter, *http.Request) { t.Fatal("invalid origin submitted") })
-		if _, err := runAgentAdmin(client, "invite", []string{"--master-url", origin}); err == nil {
-			t.Fatal("invalid origin accepted", origin)
+}
+
+func TestAgentInvitationWarnsAboutLoopbackForNativeCommands(t *testing.T) {
+	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
+		var output bytes.Buffer
+		renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, map[string]interface{}{
+			"joinUrl": "http://127.0.0.1:1685/api/agents/bootstrap/once", "traditionalCommand": testAgentInstallCommand})
+		if !strings.Contains(output.String(), locale.text("注意：Master 地址是本机回环地址，只有在 Master 主机上原生运行的 Agent 能访问。其他主机上的 Agent 请用 --master-url 指定局域网地址；Master 主机上的 Docker 容器请指定 host.docker.internal。")) {
+			t.Fatalf("%s: loopback warning missing for a native command: %s", locale, output.String())
 		}
 	}
 }
@@ -269,7 +291,7 @@ func TestAgentInvitationShowsLocalExpiryDockerVariantsAndDownloadSource(t *testi
 			data["joinUrl"] = "http://localhost:1685/api/agents/bootstrap/once"
 			output.Reset()
 			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
-			if !strings.Contains(output.String(), locale.text("注意：Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。Docker 与 Master 在同一台主机时，请用 --master-url 指定 host.docker.internal，否则指定局域网地址。")) {
+			if !strings.Contains(output.String(), locale.text("注意：Master 地址是本机回环地址，只有在 Master 主机上原生运行的 Agent 能访问。其他主机上的 Agent 请用 --master-url 指定局域网地址；Master 主机上的 Docker 容器请指定 host.docker.internal。")) {
 				t.Fatalf("loopback warning missing: %s", output.String())
 			}
 		})

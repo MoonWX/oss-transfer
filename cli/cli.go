@@ -217,13 +217,16 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 				fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, err))
 				return 1
 			}
-		} else if result != nil {
+		} else if result != nil && !(callErr != nil && errorEnvelopeOnly(result)) {
 			if options.watch > 0 {
 				fmt.Fprintln(output, time.Now().Format("2006-01-02 15:04:05"))
 			}
 			if !renderComparisonResult(output, normalized, result, callErr) {
 				renderCLIResult(output, result)
 			}
+		}
+		if !options.json {
+			renderErrorDetail(errors, result, options.verbose, callErr != nil)
 		}
 		if callErr != nil {
 			fmt.Fprintln(errors, cliText(errors, "错误:"), localizedCLIError(language, callErr))
@@ -258,6 +261,38 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 		}
 	}
 }
+
+// errorEnvelopeOnly reports whether a failed response carries nothing but its
+// message, which the error line already shows.
+func errorEnvelopeOnly(result map[string]interface{}) bool {
+	for key := range result {
+		switch key {
+		case "success", "message", "error", "code", "detail", "reasonCode", "pathStyleHint":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// renderErrorDetail shows the raw storage error behind a short message with
+// --verbose, and otherwise says where to find it.
+func renderErrorDetail(out io.Writer, result map[string]interface{}, verbose, failed bool) {
+	key := "warningDetail"
+	if failed {
+		key = "detail"
+	}
+	detail := getString(result, key)
+	if detail == "" {
+		return
+	}
+	if verbose {
+		fmt.Fprintln(out, cliText(out, "详情:"), safeCLIText(detail))
+	} else if failed {
+		fmt.Fprintln(out, cliText(out, "提示: 使用 --verbose 查看原始错误信息。"))
+	}
+}
+
 func watchable(args []string) bool {
 	if len(args) < 2 {
 		return false
@@ -494,6 +529,10 @@ func renderCLIResult(out io.Writer, result map[string]interface{}) {
 }
 
 func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
+	if buckets, ok := data["buckets"].([]interface{}); ok {
+		renderStorageCheck(out, result, data, buckets)
+		return true
+	}
 	if agentURL, ok := data["agentUrl"].(string); ok && getString(data, "publicUrl") != "" {
 		if agentURL == "" {
 			agentURL = getString(data, "effectiveAgentUrl")
@@ -536,7 +575,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 	if raw, ok := data["configs"]; ok {
 		configs := objectList(raw)
 		w := newCLITable(out)
-		fmt.Fprintln(w, cliText(out, "连接名称\tEndpoint\tAccess Key\tSecret Key\tV2 签名\tPath Style"))
+		fmt.Fprintln(w, cliText(out, "连接名称\tEndpoint\tAccess Key\tSecret Key\t签名版本\t寻址方式"))
 		for _, config := range configs {
 			credential := func(key string) string {
 				if configured, ok := config["credentialsConfigured"].(bool); ok {
@@ -550,16 +589,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 				}
 				return cliText(out, "未配置")
 			}
-			option := func(key string) string {
-				if value, ok := config[key].(bool); ok {
-					if value {
-						return cliText(out, "开启")
-					}
-					return cliText(out, "关闭")
-				}
-				return cliText(out, "继承")
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(config["alias"]), safeCLIText(config["endpoint"]), credential("accessKey"), credential("secretKey"), option("useV2SignerType"), option("pathStyleEnable"))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(config["alias"]), safeCLIText(config["endpoint"]), credential("accessKey"), credential("secretKey"), storageSignatureLabel(out, config), storageAddressingLabel(out, config))
 		}
 		w.Flush()
 		fmt.Fprint(out, cliTextf(out, "共 %d 个存储连接\n", len(configs)))
@@ -684,6 +714,54 @@ func cliNumeric(value interface{}) (float64, bool) {
 		return value, err == nil
 	}
 	return 0, false
+}
+
+// storageSignatureLabel shows the signature version of a connection; without
+// a choice the Master signs with V4.
+func storageSignatureLabel(out io.Writer, config map[string]interface{}) string {
+	if value, ok := config["useV2SignerType"].(bool); ok {
+		if value {
+			return "V2"
+		}
+		return "V4"
+	}
+	return cliText(out, "默认（V4）")
+}
+
+// storageAddressingLabel shows the addressing of a connection, including what
+// automatic addressing resolves to.
+func storageAddressingLabel(out io.Writer, config map[string]interface{}) string {
+	if value, ok := config["pathStyleEnable"].(bool); ok {
+		return map[bool]string{true: "Path-style", false: "Virtual-hosted"}[value]
+	}
+	if value, ok := config["pathStyleEffective"].(bool); ok {
+		return cliTextf(out, "自动（%s）", map[bool]string{true: "Path-style", false: "Virtual-hosted"}[value])
+	}
+	return cliText(out, "自动")
+}
+
+// renderStorageCheck prints a connection test or bucket listing.
+func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buckets []interface{}) {
+	fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	for _, bucket := range buckets {
+		fmt.Fprintf(out, "  %s\n", safeCLIText(bucket))
+	}
+	if pathStyle, ok := data["pathStyle"].(bool); ok {
+		label := map[bool]string{true: "Path-style", false: "Virtual-hosted"}[pathStyle]
+		if data["pathStyleAuto"] == true {
+			label = cliTextf(out, "自动（%s）", label)
+		}
+		fmt.Fprintf(out, "%s: %s\n", cliText(out, "寻址方式"), label)
+	}
+	if bucket := getString(data, "checkedBucket"); bucket != "" {
+		fmt.Fprint(out, cliTextf(out, "存储桶级检查: 已列举存储桶 %s 中的对象\n", safeCLIText(bucket)))
+	}
+	if warning := getString(data, "warning"); warning != "" {
+		fmt.Fprintf(out, "%s %s\n", cliText(out, "警告:"), safeCLIText(warning))
+	}
+	if message := getString(result, "message"); message != "" {
+		fmt.Fprintln(out, safeCLIText(message))
+	}
 }
 
 func renderCLIAdminMessage(out io.Writer, result map[string]interface{}) {

@@ -263,11 +263,11 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		}
 		return result, err
 	case "buckets", "test", "remove":
-		switches := []string{}
+		switches, values := []string{}, []string{"bucket"}
 		if action == "remove" {
-			switches = append(switches, "yes")
+			switches, values = append(switches, "yes"), nil
 		}
-		o, err := adminOptions(args, nil, switches, 1)
+		o, err := adminOptions(args, values, switches, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -281,11 +281,29 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			}
 			return client.Delete("/s3-config/" + url.PathEscape(alias))
 		}
-		result, err := client.Get("/s3-config/" + url.PathEscape(alias) + "/buckets")
-		if err == nil && action == "test" {
-			result["message"] = client.text("Bucket 列表读取成功；此检查验证连接及列举权限")
+		path := "/s3-config/" + url.PathEscape(alias) + "/buckets"
+		if o.Has("bucket") {
+			bucket := o.Value("bucket")
+			if strings.TrimSpace(bucket) == "" || strings.ContainsAny(bucket, "/\\ ") {
+				return nil, cliUsageErrorf("--bucket 需为存储桶名称，不能为空或包含斜杠、空格")
+			}
+			path += "?bucket=" + url.QueryEscape(bucket)
 		}
-		return result, err
+		result, err := client.Get(path)
+		if err != nil {
+			return result, storagePathStyleAdvice(result, err, alias)
+		}
+		if action == "test" {
+			switch {
+			case getString(result, "checkedBucket") != "":
+				result["message"] = client.text("连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶")
+			case result["bucketCheckSupported"] == false:
+				result["message"] = client.text("已读取存储桶列表；执行节点版本较旧，未检查存储桶级访问")
+			default:
+				result["message"] = client.text("已读取存储桶列表；没有可检查的存储桶，可用 --bucket 指定一个")
+			}
+		}
+		return result, nil
 	case "add", "update":
 		o, err := adminOptions(args, []string{"endpoint", "region", "access-key-env", "access-key-file", "secret-key-env", "secret-key-file", "session-token-env", "session-token-file", "validate", "v2-signer", "path-style"}, []string{"clear-session-token"}, 1)
 		if err != nil {
@@ -349,13 +367,19 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 					body[field] = true
 				case "false":
 					body[field] = false
-				case "inherit":
+				case "inherit", "auto", "default":
 					if flag == "validate" {
 						return nil, cliErrorf("--validate 只支持 true 或 false")
 					}
 					body[field] = nil
 				default:
-					return nil, cliErrorf("--%s 需使用 true、false%s", flag, map[bool]string{true: "", false: " 或 inherit"}[flag == "validate"])
+					if flag == "validate" {
+						return nil, cliErrorf("--validate 只支持 true 或 false")
+					}
+					if flag == "path-style" {
+						return nil, cliUsageErrorf("--path-style 需使用 auto、true 或 false")
+					}
+					return nil, cliUsageErrorf("--v2-signer 需使用 default、true 或 false")
 				}
 			}
 		}
@@ -376,15 +400,27 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		}
 		endpoint, err := url.Parse(body["endpoint"].(string))
 		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil {
-			return nil, cliErrorf("Endpoint 必须是 http:// 或 https:// 地址，且不得包含用户名或密码")
+			return nil, cliErrorf("Endpoint 必须是 http:// 或 https:// 地址，且不得包含用户名或密码，例如 https://s3.example.com 或 http://10.0.0.5:9000")
 		}
+		var result map[string]interface{}
 		if action == "add" {
-			return client.Post("/s3-config", body)
+			result, err = client.Post("/s3-config", body)
+		} else {
+			result, err = client.Put("/s3-config/"+url.PathEscape(alias), body)
 		}
-		return client.Put("/s3-config/"+url.PathEscape(alias), body)
+		return result, storagePathStyleAdvice(result, err, alias)
 	default:
 		return nil, cliErrorf("未知 storage 子命令: %s", action)
 	}
+}
+
+// storagePathStyleAdvice adds the command that applies the Master's advice to
+// switch a connection to path-style addressing.
+func storagePathStyleAdvice(result map[string]interface{}, err error, alias string) error {
+	if err == nil || result == nil || result["pathStyleHint"] != true {
+		return err
+	}
+	return cliErrorf("%w\n提示: 运行 oss-transfer-cli storage update %s --path-style true", err, alias)
 }
 
 func adminAlias(alias string) error {

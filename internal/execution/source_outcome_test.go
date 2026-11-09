@@ -357,3 +357,53 @@ func TestValidationKeepsAPinThatAnOlderAgentReportsWithoutItsReason(t *testing.T
 		t.Fatal("an unexplained new pin was accepted")
 	}
 }
+
+// removedVersionSource answers a read pinned to a version as S3 does once
+// that version was removed: NoSuchVersion, mapped to ErrNotFound. The key
+// itself exists unless keyGone.
+type removedVersionSource struct {
+	transferstore.Store
+	keyGone bool
+}
+
+func (s removedVersionSource) Open(ctx context.Context, key string, opts transferstore.OpenOptions) (io.ReadCloser, transferstore.Object, error) {
+	if opts.Expected != nil && opts.Expected.VersionID != "" {
+		return nil, transferstore.Object{}, fmt.Errorf("%w: NoSuchVersion", transferstore.ErrNotFound)
+	}
+	return s.Store.Open(ctx, key, opts)
+}
+
+func (s removedVersionSource) Stat(ctx context.Context, key string) (transferstore.Object, error) {
+	if s.keyGone {
+		return transferstore.Object{}, transferstore.ErrNotFound
+	}
+	return s.Store.Stat(ctx, key)
+}
+
+// A pinned version that no longer exists is a deleted source only when the
+// key is gone too; a key that has another version changed.
+func TestMissingPinnedVersionIsDeletedOnlyWhenTheKeyIsGone(t *testing.T) {
+	for _, keyGone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "key-exists", true: "key-gone"}[keyGone], func(t *testing.T) {
+			f := agentFixture(t, 2)
+			f.job.Items = f.job.Items[1:]
+			f.job.Items[0].Source.VersionID = "v1"
+			base := f.factory()
+			f.startEngine(StoreFactoryFunc(func(ctx context.Context, j Job) (transferstore.Store, transferstore.Store, error) {
+				s, d, err := base.Open(ctx, j)
+				return removedVersionSource{Store: s, keyGone: keyGone}, d, err
+			}), Options{})
+			f.acceptStart()
+			result := f.wait().Results[0]
+			if keyGone {
+				if result.Status != ItemSkipped || result.Reconciliation != ReasonSourceDeleted {
+					t.Fatalf("deleted key: %+v", result)
+				}
+				return
+			}
+			if result.Status != ItemFailed || result.Reconciliation != ReasonSourceChanged || !strings.Contains(result.Error, "source changed") {
+				t.Fatalf("a key with another version was not reported as changed: %+v", result)
+			}
+		})
+	}
+}

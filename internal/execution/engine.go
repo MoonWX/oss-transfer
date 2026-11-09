@@ -632,7 +632,23 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 	deletable := sourceDeletable(job, item)
 	sourceFailure := func(stage string, err error) ItemResult {
 		if deletable && errors.Is(err, transferstore.ErrNotFound) {
-			return sourceDeleted(item)
+			if expected.VersionID == "" {
+				return sourceDeleted(item)
+			}
+			// A read pinned to a version finds that version missing
+			// (NoSuchVersion) also when only the version was removed and
+			// the key now has another one. Only a key that is gone was
+			// deleted; otherwise the source changed, and a retry reads
+			// its current version.
+			_, statErr := source.Stat(ctx, item.Source.Key)
+			switch {
+			case errors.Is(statErr, transferstore.ErrNotFound):
+				return sourceDeleted(item)
+			case statErr == nil:
+				err = fmt.Errorf("%w: version %s no longer exists: %w", transferstore.ErrSourceChanged, expected.VersionID, err)
+			default:
+				return fail(stage, err)
+			}
 		}
 		if errors.Is(err, transferstore.ErrSourceChanged) && result.Reconciliation == "" {
 			result.Reconciliation = ReasonSourceChanged

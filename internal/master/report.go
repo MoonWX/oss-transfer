@@ -434,7 +434,16 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				unreachable[node.Address] = coverage.NodeIssues[node.Address]
 			}
 		}
-		var resolvedBytes int64
+		// resolvedDelta is what source pins add to the dispatched sizes: the
+		// whole size of an inventory key resolved after discovery (dispatched
+		// with size 0), and the size difference of a source refreshed on a
+		// retry after it changed. It is counted from the rows themselves.
+		var resolvedDelta int64
+		addResolved := func(item execution.Item, result execution.ItemResult) {
+			if result.ResolvedSource != nil {
+				resolvedDelta += result.ResolvedSource.Size - item.Source.Size
+			}
+		}
 		err := s.walkReportChildren(ctx, p, func(child task.Child) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -444,7 +453,6 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				for _, result := range child.Record.Results {
 					if result.ResolvedSource != nil {
 						resolved[result.ID] = result.ResolvedSource
-						resolvedBytes += result.ResolvedSource.Size
 					}
 				}
 			}
@@ -468,6 +476,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 					coverage.FileRows++
 					coverage.ResultCounts["UNKNOWN"]++
 					coverage.ResultBytes["UNKNOWN"] += execution.EffectiveSource(item, execution.ItemResult{ResolvedSource: resolved[item.ID]}).Size
+					addResolved(item, execution.ItemResult{ResolvedSource: resolved[item.ID]})
 				}
 				return nil
 			}
@@ -492,6 +501,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 				coverage.FileRows++
 				coverage.ResultCounts[result]++
 				coverage.ResultBytes[result] += execution.EffectiveSource(entry.Item, entry.Result).Size
+				addResolved(entry.Item, entry.Result)
 			}
 			return nil
 		})
@@ -508,7 +518,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		for _, bytes := range coverage.ResultBytes {
 			fileBytes += bytes
 		}
-		coverage.CountsReconciled = coverage.CountsReconciled && fileBytes == p.DispatchedBytes+resolvedBytes && (!p.ScanComplete || (coverage.FileRows == p.ScannedObjects && fileBytes == p.ScannedBytes+resolvedBytes))
+		coverage.CountsReconciled = coverage.CountsReconciled && fileBytes == p.DispatchedBytes+resolvedDelta && (!p.ScanComplete || (coverage.FileRows == p.ScannedObjects && fileBytes == p.ScannedBytes+resolvedDelta))
 		if !p.ScanComplete {
 			coverage.PartialReasons = append(coverage.PartialReasons, "SCAN_INCOMPLETE")
 		}

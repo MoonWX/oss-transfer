@@ -64,6 +64,8 @@ type generationReport struct {
 	engine   *execution.Engine
 	failures *failingWrites
 	parent   task.Parent
+	db       *state.Store
+	source   string
 }
 
 func newGenerationReport(t *testing.T, keys ...string) *generationReport {
@@ -140,7 +142,7 @@ func newGenerationReport(t *testing.T, keys ...string) *generationReport {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &generationReport{t: t, f: f, engine: engine, failures: failures, parent: p}
+	return &generationReport{t: t, f: f, engine: engine, failures: failures, parent: p, db: db, source: sourceRoot}
 }
 
 func (g *generationReport) refresh() task.Parent {
@@ -428,4 +430,39 @@ func TestReportKeepsReadingAnAgentAfterOneChildLedgerIsMissing(t *testing.T) {
 			t.Fatal("report code has no explanation", code, meanings)
 		}
 	}
+}
+
+// An object that changed at its source fails; retrying it copies its current
+// version, pinned with another size. The report of the completed task counts
+// only the size difference of that pin, so it reconciles.
+func TestReportAfterRetryingAChangedSourceIsComplete(t *testing.T) {
+	g := newGenerationReport(t, "a", "b")
+	if err := g.db.ClaimRole("agent"); err != nil {
+		t.Fatal(err)
+	}
+	g.assign([]string{"a"}, []string{"b"})
+	if err := os.WriteFile(filepath.Join(g.source, "b"), []byte("a newer, larger version"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g.run(1)
+	if record := g.run(2); record.Status != execution.Failed || record.Results[0].Reconciliation != execution.ReasonSourceChanged {
+		t.Fatal("fixture child did not fail with a changed source", record.Status, record.Results)
+	}
+	g.finish("PARTIAL_FAILED")
+	g.resume()
+	ctx := context.Background()
+	child := g.child(2)
+	if _, err := g.engine.AcceptDelivery(ctx, child.Job, nil, execution.Delivery{SourceRefresh: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.engine.Start(ctx, child.Job.ChildID, g.parent.Generation); err != nil {
+		t.Fatal(err)
+	}
+	record, err := g.engine.Wait(ctx, child.Job.ChildID)
+	if err != nil || record.Status != execution.Completed || record.Results[0].Reconciliation != execution.ReasonSourceRefreshed || record.Results[0].ResolvedSource == nil {
+		t.Fatal("retried child did not copy the current version", record.Status, record.Results, err)
+	}
+	g.observe(2)
+	g.finish("COMPLETED")
+	g.export().assertComplete(t, "a", "b")
 }

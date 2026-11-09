@@ -188,6 +188,22 @@ var reportFileHeader = []string{"parentTaskId", "childTaskId", "direction", "log
 var reportErrorHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "size", "node", "reasonCode", "errorMessage", "timestamp", "nodeId"}
 var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond", "nodeId", "executionDurationMillis", "executionDurationEstimated", "executionDurationIncomplete"}
 
+// reportReasonMeanings explains, in words, the codes the report files use:
+// partialReasons in report-metadata.json and reasonCode in the CSV files.
+var reportReasonMeanings = map[string]string{
+	"SCAN_INCOMPLETE":             "Not every source object was listed.",
+	"TASK_STOPPED":                "The task was stopped before every object was migrated.",
+	"UNPROCESSED_OBJECTS":         "Some objects were not processed.",
+	"NODE_REPORT_INCOMPLETE":      "Some object results could not be read from the execution nodes; those objects are reported as UNKNOWN.",
+	"STATE_CHANGED_DURING_EXPORT": "The task changed during the export; export the report again.",
+	"COUNTS_DO_NOT_RECONCILE":     "The object rows do not add up to the task's success, skip and failure totals.",
+	"TASK_ERROR":                  "The task recorded an error.",
+	"LEDGER_UNAVAILABLE":          "The object's result could not be read from its execution node, so its outcome is unknown.",
+	"NOT_COMPLETED":               "The object was not processed before the task ended or stopped.",
+	"TRANSFER_FAILED":             "The object could not be migrated; errorMessage has the cause.",
+	"DESTINATION_EXISTS":          "The object was skipped by the task's conflict policy.",
+}
+
 type reportCoverage struct {
 	LegacyHistorical     bool              `json:"legacyHistorical,omitempty"`
 	LegacyOriginalStatus string            `json:"legacyOriginalStatus,omitempty"`
@@ -407,9 +423,15 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 			continue
 		}
 		coverage := newCoverage(p)
+		// unreachable holds the nodes whose later children are not requested:
+		// the Agent is offline or did not answer. An Agent that answered for one
+		// child (for example, refused that child's ledger) is still asked for the
+		// others, so one bad child cannot turn a whole node's results UNKNOWN.
+		unreachable := map[string]string{}
 		for _, node := range p.Spec.Nodes {
 			if online[node.ID] != node.EnrollmentID {
 				coverage.NodeIssues[node.Address] = "execution Agent is unavailable in its recorded enrollment"
+				unreachable[node.Address] = coverage.NodeIssues[node.Address]
 			}
 		}
 		var resolvedBytes int64
@@ -426,14 +448,21 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 					}
 				}
 			}
-			items, observed, readErr := s.reportChild(ctx, p, child, online, coverage.NodeIssues)
+			items, observed, readErr := s.reportChild(ctx, p, child, online, unreachable)
 			if readErr != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				coverage.NodeIssues[child.Node.Address] = readErr.Error()
+				if _, found := coverage.NodeIssues[child.Node.Address]; !found {
+					coverage.NodeIssues[child.Node.Address] = readErr.Error()
+				}
+				var agentErr *AgentError
+				if !errors.As(readErr, &agentErr) {
+					unreachable[child.Node.Address] = readErr.Error()
+				}
 				for _, item := range child.Job.Items {
-					if err := fileCSV(files, issues, p, child, item, execution.ItemResult{ID: item.ID, Error: readErr.Error(), ResolvedSource: resolved[item.ID]}, "UNKNOWN", "LEDGER_UNAVAILABLE", time.Time{}, displays); err != nil {
+					message := "The object result could not be read from its execution node: " + readErr.Error()
+					if err := fileCSV(files, issues, p, child, item, execution.ItemResult{ID: item.ID, Error: message, ResolvedSource: resolved[item.ID]}, "UNKNOWN", "LEDGER_UNAVAILABLE", time.Time{}, displays); err != nil {
 						return err
 					}
 					coverage.FileRows++
@@ -537,7 +566,7 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		unreachableNodes = append(unreachableNodes, node)
 	}
 	sort.Strings(unreachableNodes)
-	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": s.options.Now().UTC(), "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
+	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": s.options.Now().UTC(), "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "reasonCodeMeaning": reportReasonMeanings, "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
 	for _, coverage := range coverages {
 		if coverage.LegacyHistorical {
 			metadata["containsLegacyHistory"] = true
@@ -572,22 +601,16 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 	return zipper.Close()
 }
 
-func (s *Server) reportChild(ctx context.Context, p task.Parent, child task.Child, online map[string]string, nodeIssues map[string]string) ([]agentservice.ReportItem, time.Time, error) {
-	if previous := nodeIssues[child.Node.Address]; previous != "" {
+func (s *Server) reportChild(ctx context.Context, p task.Parent, child task.Child, online map[string]string, unreachable map[string]string) ([]agentservice.ReportItem, time.Time, error) {
+	if previous := unreachable[child.Node.Address]; previous != "" {
 		return nil, time.Time{}, errors.New(previous)
 	}
 	if online[child.Node.ID] != child.Node.EnrollmentID {
 		return nil, time.Time{}, errors.New("execution Agent is unavailable in its recorded enrollment")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	var page agentservice.ReportPage
-	err := s.agentCall(ctx, nodeSession(child.Node), "report_page", false, agentservice.ReportRequest{ParentID: p.ID, Generation: p.Generation, ChildID: child.Job.ChildID, Limit: 128}, &page)
+	page, job, err := s.reportChildPage(ctx, p, child)
 	if err != nil {
 		return nil, time.Time{}, err
-	}
-	if page.ParentID != p.ID || page.Generation != p.Generation || page.ChildID != child.Job.ChildID || page.JobDigest != agentservice.ReportJobDigest(child.Job) || page.Total != len(child.Job.Items) || page.Offset != 0 || !page.Done || page.NextOffset != len(child.Job.Items) || len(page.Items) != len(child.Job.Items) {
-		return nil, time.Time{}, errors.New("Agent returned a different or incomplete child ledger")
 	}
 	if page.Status != execution.Completed && page.Status != execution.Failed && page.Status != execution.PartialFailed && page.Status != execution.Stopped {
 		return nil, time.Time{}, errors.New("Agent child is not ended")
@@ -602,7 +625,7 @@ func (s *Server) reportChild(ctx context.Context, p task.Parent, child task.Chil
 			return nil, time.Time{}, errors.New("Agent returned an unknown object status")
 		}
 	}
-	record := execution.Record{Job: child.Job}
+	record := execution.Record{Job: job}
 	for _, entry := range page.Items {
 		record.Results = append(record.Results, entry.Result)
 	}
@@ -610,6 +633,75 @@ func (s *Server) reportChild(ctx context.Context, p task.Parent, child task.Chil
 		return nil, time.Time{}, err
 	}
 	return page.Items, page.ObservedAt, nil
+}
+
+// reportChildGenerations lists the generations whose Agent ledger may hold a
+// child's final results, most recent first. A child keeps the generation it
+// last ran in: resuming a stopped task or retrying failed objects readmits
+// only unfinished children at the new generation, so a child that completed
+// earlier keeps its older generation and ledger. A child that was readmitted
+// but stopped again before its Agent accepted it still has its ledger at the
+// generation of its last observed record.
+func reportChildGenerations(p task.Parent, child task.Child) []uint64 {
+	var generations []uint64
+	for _, generation := range []uint64{child.Job.Generation, recordGeneration(child)} {
+		if generation == 0 || generation > p.Generation || (len(generations) > 0 && generations[0] == generation) {
+			continue
+		}
+		generations = append(generations, generation)
+	}
+	return generations
+}
+
+func recordGeneration(child task.Child) uint64 {
+	if child.Record == nil {
+		return 0
+	}
+	return child.Record.Job.Generation
+}
+
+func staleLedgerGeneration(err error) bool {
+	var agentErr *AgentError
+	return errors.As(err, &agentErr) && agentErr.Status == http.StatusConflict && agentErr.Message == execution.ErrGeneration.Error()
+}
+
+// reportChildPage reads a child's whole ledger at the generation it ran in and
+// returns it with the job it describes.
+func (s *Server) reportChildPage(ctx context.Context, p task.Parent, child task.Child) (agentservice.ReportPage, execution.Job, error) {
+	generations := reportChildGenerations(p, child)
+	if len(generations) == 0 {
+		return agentservice.ReportPage{}, execution.Job{}, errors.New("child ledger generation is not valid for this task")
+	}
+	var firstErr error
+	for _, generation := range generations {
+		job := child.Job
+		job.Generation = generation
+		page, err := s.reportChildPageAt(ctx, p, job, child.Node)
+		if err == nil {
+			return page, job, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if !staleLedgerGeneration(err) {
+			break
+		}
+	}
+	return agentservice.ReportPage{}, execution.Job{}, firstErr
+}
+
+func (s *Server) reportChildPageAt(ctx context.Context, p task.Parent, job execution.Job, node task.Node) (agentservice.ReportPage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var page agentservice.ReportPage
+	err := s.agentCall(ctx, nodeSession(node), "report_page", false, agentservice.ReportRequest{ParentID: p.ID, Generation: job.Generation, ChildID: job.ChildID, Limit: 128}, &page)
+	if err != nil {
+		return page, err
+	}
+	if page.ParentID != p.ID || page.Generation != job.Generation || page.ChildID != job.ChildID || page.JobDigest != agentservice.ReportJobDigest(job) || page.Total != len(job.Items) || page.Offset != 0 || !page.Done || page.NextOffset != len(job.Items) || len(page.Items) != len(job.Items) {
+		return page, errors.New("Agent returned a different or incomplete child ledger")
+	}
+	return page, nil
 }
 
 func fileCSV(files, issues *csv.Writer, p task.Parent, child task.Child, item execution.Item, result execution.ItemResult, status, reason string, observed time.Time, sets ...nodeDisplaySet) error {

@@ -1,6 +1,6 @@
 import { radii } from "../theme";
 import { t, useI18n } from "../lib/i18n";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import React, { useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Alert,
   AlertTitle,
@@ -8,6 +8,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -35,7 +36,8 @@ import {
   SearchRounded,
   ShieldOutlined,
 } from "@mui/icons-material";
-import { api, useApi, useNotify } from "../lib/api";
+import { api, ApiError, useApi, useNotify } from "../lib/api";
+import { autoPathStyle, validEndpoint } from "../lib/storageAddressing";
 import { EmptyState, PageHeader } from "../components/Common";
 import SelectField from "../components/SelectField";
 type Connection = {
@@ -45,10 +47,15 @@ type Connection = {
   credentialsConfigured?: boolean;
   useV2SignerType?: boolean | null;
   pathStyleEnable?: boolean | null;
+  /** What automatic addressing resolves to (Master v4.2.0 and later). */
+  pathStyleEffective?: boolean;
 };
 type SaveResult = {
   success?: boolean;
   message?: string;
+  /** A finding of the connection check that did not block the save. */
+  warning?: string;
+  warningDetail?: string;
   details?: string[];
   partial?: boolean;
   successCount?: number;
@@ -78,6 +85,73 @@ const blankForm = (): Form => ({
   pathStyleEnable: null,
 });
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** A storage failure: the Master's short sentence, and the raw error. */
+type StorageFailure = {
+  message: string;
+  detail?: string;
+  pathStyleHint?: boolean;
+};
+const storageFailure = (e: unknown): StorageFailure => {
+  const response = e instanceof ApiError ? e.response : undefined;
+  return {
+    message: errorText(e),
+    detail:
+      typeof response?.detail === "string" && response.detail
+        ? response.detail
+        : undefined,
+    pathStyleHint: response?.pathStyleHint === true,
+  };
+};
+const styleName = (pathStyle: boolean) =>
+  pathStyle ? "Path-style" : "Virtual-hosted";
+/** The addressing a connection uses, with the resolution of automatic. */
+const addressingLabel = (connection: Connection) => {
+  if (connection.pathStyleEnable != null)
+    return styleName(connection.pathStyleEnable);
+  const resolved =
+    connection.pathStyleEffective ?? autoPathStyle(connection.endpoint);
+  return resolved == null
+    ? t("自动寻址")
+    : t("自动 · {style}", { style: styleName(resolved) });
+};
+
+/** A failure sentence with the raw error behind a toggle. */
+function StorageFailureAlert({
+  failure,
+  action,
+}: {
+  failure: StorageFailure;
+  action?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Alert severity="error" action={action} sx={{ overflowWrap: "anywhere" }}>
+      {failure.message}
+      {failure.detail && (
+        <Box sx={{ mt: 0.5 }}>
+          <Button
+            size="small"
+            color="inherit"
+            onClick={() => setOpen((value) => !value)}
+            sx={{ px: 0, minWidth: 0 }}
+          >
+            {open ? t("隐藏原始错误") : t("显示原始错误")}
+          </Button>
+          <Collapse in={open}>
+            <Typography
+              variant="caption"
+              component="div"
+              data-testid="storage-error-detail"
+              sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}
+            >
+              {failure.detail}
+            </Typography>
+          </Collapse>
+        </Box>
+      )}
+    </Alert>
+  );
+}
 const optionValue = (value: boolean | null | undefined) =>
   value == null ? "inherit" : String(value);
 const parseOption = (value: string) =>
@@ -93,7 +167,7 @@ export default function StoragePage() {
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(blankForm);
   const [busy, setBusy] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<StorageFailure | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
   const [result, setResult] = useState<
     | (SaveResult & {
@@ -105,8 +179,14 @@ export default function StoragePage() {
     alias: string;
     loading: boolean;
     buckets: string[];
-    error?: string;
+    error?: StorageFailure;
+    pathStyle?: boolean;
+    pathStyleAuto?: boolean;
+    checkedBucket?: string;
+    bucketCheckSupported?: boolean;
+    warning?: string;
   } | null>(null);
+  const [checkBucket, setCheckBucket] = useState("");
   const [bucketOpen, setBucketOpen] = useState(false);
   const bucketRequest = useRef(0);
   const configs = data?.configs ?? [];
@@ -147,18 +227,28 @@ export default function StoragePage() {
       (!editing &&
         ![form.accessKey, form.secretKey].every((value) => value.trim()))
     ) {
-      setFormError(t("请填写连接名称、Endpoint、Access Key 和 Secret Key。"));
+      setFormError({
+        message: t("请填写连接名称、Endpoint、Access Key 和 Secret Key。"),
+      });
+      return;
+    }
+    if (!validEndpoint(form.endpoint)) {
+      setFormError({ message: endpointRule });
       return;
     }
     if (Boolean(form.accessKey) !== Boolean(form.secretKey)) {
-      setFormError(t("更换凭据时，请同时填写 Access Key 和 Secret Key。"));
+      setFormError({
+        message: t("更换凭据时，请同时填写 Access Key 和 Secret Key。"),
+      });
       return;
     }
     if (
       !editing &&
       configs.some((config) => config.alias === form.alias.trim())
     ) {
-      setFormError(t("连接名称已存在，请更换名称或编辑现有连接。"));
+      setFormError({
+        message: t("连接名称已存在，请更换名称或编辑现有连接。"),
+      });
       return;
     }
     setBusy(true);
@@ -181,13 +271,14 @@ export default function StoragePage() {
       setEditorOpen(false);
       setForm(blankForm());
       notify(
-        response.message ||
+        response.warning ||
+          response.message ||
           (editing ? t("存储连接已更新") : t("存储连接已添加")),
-        partialResult(response) ? "warning" : "success",
+        partialResult(response) || response.warning ? "warning" : "success",
       );
       await refresh();
     } catch (e) {
-      setFormError(errorText(e));
+      setFormError(storageFailure(e));
     } finally {
       setBusy(false);
     }
@@ -213,19 +304,33 @@ export default function StoragePage() {
       setBusy(false);
     }
   };
-  const testConnection = async (alias: string) => {
+  const testConnection = async (alias: string, bucket = "") => {
     const request = ++bucketRequest.current;
+    if (!bucket) setCheckBucket("");
     setBucketState({ alias, loading: true, buckets: [] });
     setBucketOpen(true);
     try {
       const response = await api<{
         buckets: string[];
-      }>(`/api/master/s3-config/${encodeURIComponent(alias)}/buckets`);
+        pathStyle?: boolean;
+        pathStyleAuto?: boolean;
+        checkedBucket?: string;
+        bucketCheckSupported?: boolean;
+        warning?: string;
+      }>(
+        `/api/master/s3-config/${encodeURIComponent(alias)}/buckets` +
+          (bucket ? `?bucket=${encodeURIComponent(bucket)}` : ""),
+      );
       if (request === bucketRequest.current)
         setBucketState({
           alias,
           loading: false,
           buckets: response.buckets ?? [],
+          pathStyle: response.pathStyle,
+          pathStyleAuto: response.pathStyleAuto,
+          checkedBucket: response.checkedBucket,
+          bucketCheckSupported: response.bucketCheckSupported,
+          warning: response.warning,
         });
     } catch (e) {
       if (request === bucketRequest.current)
@@ -233,10 +338,18 @@ export default function StoragePage() {
           alias,
           loading: false,
           buckets: [],
-          error: errorText(e),
+          error: storageFailure(e),
         });
     }
   };
+  const endpointRule = t(
+    "Endpoint 需以 http:// 或 https:// 开头，且只包含主机和可选端口，例如 https://s3.example.com 或 http://10.0.0.5:9000",
+  );
+  const endpointInvalid =
+    form.endpoint.trim() !== "" && !validEndpoint(form.endpoint);
+  const formAuto = validEndpoint(form.endpoint)
+    ? autoPathStyle(form.endpoint)
+    : undefined;
   const closeBuckets = () => {
     bucketRequest.current += 1;
     // Keep the result during the closing transition; clearing it renders a
@@ -260,7 +373,7 @@ export default function StoragePage() {
       />
       {result && (
         <Alert
-          severity={partial ? "warning" : "success"}
+          severity={partial || result.warning ? "warning" : "success"}
           onClose={() => setResult(null)}
         >
           <AlertTitle>
@@ -277,6 +390,11 @@ export default function StoragePage() {
                   : t("连接添加完成")}
           </AlertTitle>
           {result.message}
+          {result.warning && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {result.warning}
+            </Typography>
+          )}
           {result.details && result.details.length > 0 && (
             <Box component="ul" sx={{ mb: 0, pl: 2 }}>
               {result.details.map((detail, index) => (
@@ -440,7 +558,7 @@ export default function StoragePage() {
                   variant="outlined"
                   label={
                     connection.useV2SignerType == null
-                      ? t("默认签名")
+                      ? t("默认签名 · V4")
                       : connection.useV2SignerType
                         ? "Signature V2"
                         : "Signature V4"
@@ -449,13 +567,7 @@ export default function StoragePage() {
                 <Chip
                   size="small"
                   variant="outlined"
-                  label={
-                    connection.pathStyleEnable == null
-                      ? t("默认寻址")
-                      : connection.pathStyleEnable
-                        ? "Path-style"
-                        : "Virtual-hosted"
-                  }
+                  label={addressingLabel(connection)}
                 />
               </Stack>
               <Stack
@@ -526,7 +638,25 @@ export default function StoragePage() {
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
-            {formError && <Alert severity="error">{formError}</Alert>}
+            {formError && (
+              <StorageFailureAlert
+                failure={formError}
+                action={
+                  formError.pathStyleHint && form.pathStyleEnable !== true ? (
+                    <Button
+                      color="inherit"
+                      size="small"
+                      onClick={() => {
+                        setForm({ ...form, pathStyleEnable: true });
+                        setFormError(null);
+                      }}
+                    >
+                      {t("改用 Path-style")}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            )}
             <TextField
               autoFocus
               required
@@ -544,9 +674,15 @@ export default function StoragePage() {
             <TextField
               required
               label="Endpoint"
-              placeholder="https://s3.example.com"
+              placeholder={t("https://s3.example.com 或 http://10.0.0.5:9000")}
               value={form.endpoint}
               disabled={busy}
+              error={endpointInvalid}
+              helperText={
+                endpointInvalid
+                  ? endpointRule
+                  : t("以 http:// 或 https:// 开头，可带端口，不含路径。")
+              }
               onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
             />
             <TextField
@@ -587,7 +723,7 @@ export default function StoragePage() {
                   })
                 }
               >
-                <MenuItem value="inherit">{t("使用服务端默认值")}</MenuItem>
+                <MenuItem value="inherit">{t("默认（Signature V4）")}</MenuItem>
                 <MenuItem value="false">Signature V4</MenuItem>
                 <MenuItem value="true">Signature V2</MenuItem>
               </SelectField>
@@ -602,11 +738,25 @@ export default function StoragePage() {
                   })
                 }
               >
-                <MenuItem value="inherit">{t("使用服务端默认值")}</MenuItem>
+                <MenuItem value="inherit">{t("自动（推荐）")}</MenuItem>
                 <MenuItem value="true">Path-style</MenuItem>
                 <MenuItem value="false">Virtual-hosted</MenuItem>
               </SelectField>
             </Box>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              data-testid="addressing-help"
+            >
+              {form.pathStyleEnable == null && formAuto != null
+                ? t("自动寻址：此 Endpoint 将使用 {style}。", {
+                    style: styleName(formAuto),
+                  }) + " "
+                : ""}
+              {t(
+                "自动寻址在 Endpoint 带端口、主机为 IP 地址、localhost、不含点的主机名，或以 .internal、.local、.lan 结尾时使用 Path-style（自建 MinIO、SeaweedFS、Ceph），否则使用 Virtual-hosted（AWS、京东云等云厂商）。",
+              )}
+            </Typography>
             <FormControlLabel
               control={
                 <Switch
@@ -683,7 +833,7 @@ export default function StoragePage() {
               </Typography>
             </Stack>
           ) : bucketState?.error ? (
-            <Alert severity="error">{bucketState.error}</Alert>
+            <StorageFailureAlert failure={bucketState.error} />
           ) : bucketState ? (
             <Stack spacing={2}>
               <Alert severity="success">
@@ -691,10 +841,36 @@ export default function StoragePage() {
                   count: bucketState.buckets.length,
                 })}
               </Alert>
-              <Typography variant="body2" color="text.secondary">
-                {t(
-                  "此测试仅验证列举存储桶的权限。存储桶读写权限在迁移时验证。",
-                )}
+              {bucketState.warning && (
+                <Typography
+                  variant="body2"
+                  color="warning.main"
+                  data-testid="storage-check-warning"
+                >
+                  {bucketState.warning}
+                </Typography>
+              )}
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                data-testid="storage-check-summary"
+              >
+                {bucketState.pathStyle != null &&
+                  t("寻址方式：{style}。", {
+                    style: bucketState.pathStyleAuto
+                      ? t("自动 · {style}", {
+                          style: styleName(bucketState.pathStyle),
+                        })
+                      : styleName(bucketState.pathStyle),
+                  }) + " "}
+                {bucketState.checkedBucket
+                  ? t("已用此寻址方式列举存储桶 {bucket} 中的对象。", {
+                      bucket: bucketState.checkedBucket,
+                    })
+                  : bucketState.bucketCheckSupported === false
+                    ? t("执行节点版本较旧，未检查存储桶级访问。")
+                    : t("没有可检查的存储桶；可在下方指定一个存储桶。")}{" "}
+                {t("存储桶读写权限在迁移时验证。")}
               </Typography>
               <Box sx={{ maxHeight: 360, overflowY: "auto" }}>
                 {bucketState.buckets.map((bucket) => (
@@ -715,6 +891,40 @@ export default function StoragePage() {
             </Stack>
           ) : null}
         </DialogContent>
+        {bucketState && !bucketState.loading && (
+          <DialogContent sx={{ pt: 0 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="flex-start"
+              component="form"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                if (checkBucket.trim())
+                  void testConnection(bucketState.alias, checkBucket.trim());
+              }}
+            >
+              <TextField
+                size="small"
+                fullWidth
+                label={t("检查指定存储桶")}
+                helperText={t(
+                  "只授权到单个存储桶的密钥无法列举存储桶，可在此填写存储桶名称后检查。",
+                )}
+                value={checkBucket}
+                onChange={(e) => setCheckBucket(e.target.value)}
+              />
+              <Button
+                type="submit"
+                variant="outlined"
+                disabled={!checkBucket.trim()}
+                sx={{ flexShrink: 0, mt: 0.25 }}
+              >
+                {t("检查")}
+              </Button>
+            </Stack>
+          </DialogContent>
+        )}
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeBuckets}>{t("关闭")}</Button>
         </DialogActions>

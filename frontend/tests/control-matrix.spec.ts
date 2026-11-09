@@ -221,7 +221,7 @@ test("pagination and all-results selection cannot leak hidden task IDs into an a
 });
 
 for (const signature of [
-  { label: "使用服务端默认值", value: null },
+  { label: "默认（Signature V4）", value: null },
   { label: "Signature V4", value: false },
   { label: "Signature V2", value: true },
 ]) {
@@ -249,7 +249,7 @@ for (const signature of [
     });
     await page.goto("/storage");
     for (const addressing of [
-      { label: "使用服务端默认值", value: null },
+      { label: "自动（推荐）", value: null },
       { label: "Path-style", value: true },
       { label: "Virtual-hosted", value: false },
     ]) {

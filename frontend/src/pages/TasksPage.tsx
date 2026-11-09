@@ -102,10 +102,8 @@ import RunningFailureRetry, {
 } from "../components/RunningFailureRetry";
 import TransferStatistics from "../components/TransferStatistics";
 import TaskRequestRates from "../components/TaskRequestRates";
-import {
-  runtimeMessageLines,
-  runtimeMessageText,
-} from "../lib/runtimeMessages";
+import { runtimeMessageLines } from "../lib/runtimeMessages";
+import RuntimeMessageLine from "../components/RuntimeMessageLine";
 import { useStableMessages } from "../lib/stableMessages";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
 import {
@@ -998,9 +996,7 @@ function TaskDetail({
               data-testid="task-runtime-alert"
             >
               {errorLines.map((line) => (
-                <Typography key={line} variant="body2">
-                  {runtimeMessageText(line)}
-                </Typography>
+                <RuntimeMessageLine key={line} line={line} />
               ))}
             </Alert>
           )}

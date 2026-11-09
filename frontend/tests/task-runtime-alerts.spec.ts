@@ -135,6 +135,45 @@ test("an ended task's error is final and shows at once", async ({ page }) => {
   expect(responses()).toBeLessThan(3);
 });
 
+test("a storage failure shows its cause and action first and keeps the original error", async ({
+  page,
+}) => {
+  const raw =
+    'operation error S3: ListObjectsV2, exceeded maximum number of attempts, 3, https response error StatusCode: 0, RequestID: , HostID: , request send failed, Get "http://src.host.docker.internal:18333/?list-type=2": dial tcp: lookup src.host.docker.internal on 127.0.0.11:53: no such host';
+  await setup(page, () => ({ status: "FAILED", errorMessage: raw }));
+  await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
+  await expect(alert(page).locator("p")).toHaveText([
+    "无法解析主机名 src.host.docker.internal。如果它是“存储桶名.Endpoint 主机名”，说明连接使用了 Virtual-hosted 寻址，自建 S3（MinIO、SeaweedFS、Ceph 等）请把存储连接的寻址方式改为 Path-style；否则请检查 Endpoint 地址和执行节点的 DNS 设置。",
+  ]);
+  await expect(alert(page).getByTestId("runtime-message-detail")).toHaveText(
+    `原始错误：${raw}`,
+  );
+});
+
+test("storage error text is classified only in storage context", async ({
+  page,
+}) => {
+  await setup(page, () => ({
+    status: "FAILED",
+    errorMessage: [
+      "operation error S3: ListBuckets, https response error StatusCode: 403, api error InvalidAccessKeyId: The access key does not exist",
+      'Get "http://seaweed:8333/src?list-type=2": EOF',
+      "dial tcp 10.0.0.5:9000: connect: connection refused",
+      "unexpected EOF",
+    ].join("\n"),
+  }));
+  await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
+  await expect(alert(page).locator("p")).toHaveText([
+    "Access Key 不存在，请检查存储连接的 Access Key。",
+    "seaweed:8333 关闭了连接（EOF）。请检查 Endpoint 地址、端口和协议（http 或 https）；自建 S3 请确认存储连接的寻址方式为 Path-style。",
+    "10.0.0.5:9000 拒绝了连接，请检查 Endpoint 地址和端口，并确认存储服务已启动。",
+    "错误详情：unexpected EOF",
+  ]);
+  await expect(alert(page).getByTestId("runtime-message-detail")).toHaveCount(
+    3,
+  );
+});
+
 test.describe("English", () => {
   test.use({ locale: "en-US" });
 

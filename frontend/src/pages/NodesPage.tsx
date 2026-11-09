@@ -70,6 +70,7 @@ import {
   nodeName,
 } from "../lib/nodeRegistry";
 import SelectField from "../components/SelectField";
+import { knownRuntimeMessage } from "../lib/runtimeMessages";
 /** One node's answer to a rate change, as the Master returns it. */
 type RateResult = NodeDisplay & {
   workerIp: string;
@@ -984,7 +985,12 @@ export default function NodesPage() {
                         sx={{ overflowWrap: "anywhere" }}
                       >
                         {nodeLabel(result.workerIp, result)}：
-                        {result.message || t("状态待确认")}
+                        {/* Known timeouts and cancellations are translated;
+                            other Agent reasons are shown as reported. */}
+                        {(result.message &&
+                          knownRuntimeMessage(result.message)) ||
+                          result.message ||
+                          t("状态待确认")}
                       </Typography>
                     ))}
                   </Stack>

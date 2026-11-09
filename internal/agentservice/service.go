@@ -659,6 +659,16 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(errors.New("path must be a regular file or directory"))
 		}
 		return response(map[string]any{"path": request.Path, "pathType": kind, "size": info.Size(), "exists": true}, nil)
+	case "local_write_probe":
+		var request PathRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		if !filepath.IsAbs(request.Path) {
+			return badRequest(errors.New("path must be absolute on this Agent"))
+		}
+		probe, err := probeLocalWrite(ctx, request.Path)
+		return response(probe, err)
 	case "child_accept":
 		var request ChildAcceptRequest
 		if err := decode(c.Payload, &request); err != nil {

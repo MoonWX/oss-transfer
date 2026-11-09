@@ -77,6 +77,12 @@ type bindingCheck struct {
 	PathType string `json:"pathType,omitempty"`
 	Code     string `json:"code,omitempty"`
 	Message  string `json:"message,omitempty"`
+	// Download destinations only: where the Agent proved it can write (the
+	// destination or its nearest existing ancestor), the user it writes as,
+	// and the free space there.
+	WriteProbeDirectory string `json:"writeProbeDirectory,omitempty"`
+	EffectiveUID        *int   `json:"effectiveUid,omitempty"`
+	FreeBytes           *int64 `json:"freeBytes,omitempty"`
 }
 
 func installTaskRoutes(s *Server) error {
@@ -688,6 +694,9 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 				check.Message = localizeContext(ctx, "下载目标必须是目录")
 			} else if probe.PathType != "FILE" && probe.PathType != "DIRECTORY" && probe.PathType != "MISSING" {
 				check.Message = localizeContext(ctx, "节点未返回有效路径类型")
+			} else if message, writable := s.checkDownloadWritable(ctx, member, spec.Direction, binding.LocalPath, &check); !writable {
+				check.Code = "LOCAL_PATH_NOT_WRITABLE"
+				check.Message = message
 			} else {
 				check.Valid = true
 				root := binding.LocalPath
@@ -696,6 +705,14 @@ func (s *Server) resolveTaskSpec(ctx context.Context, row taskCreateRequest, kin
 				}
 				if probe.PathType == "MISSING" {
 					check.Message = localizeContext(ctx, "目标目录将在任务开始时创建")
+				}
+				if check.FreeBytes != nil {
+					free := fmt.Sprintf(localizeContext(ctx, "可用空间 %s"), formatBinaryBytes(*check.FreeBytes))
+					if check.Message == "" {
+						check.Message = fmt.Sprintf(localizeContext(ctx, "目标目录可写，%s"), free)
+					} else {
+						check.Message = fmt.Sprintf(localizeContext(ctx, "%s；%s"), check.Message, free)
+					}
 				}
 				spec.Nodes = append(spec.Nodes, task.Node{ID: member.ID, EnrollmentID: member.EnrollmentID, Address: member.Address, LocalRoot: root})
 			}

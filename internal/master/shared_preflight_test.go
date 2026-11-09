@@ -27,6 +27,17 @@ func (a legacyPreflightAgent) Execute(ctx context.Context, command agenttranspor
 
 func preflightTestAgent(t *testing.T, f *agentHTTPFixture, number int, legacy ...bool) task.Node {
 	t.Helper()
+	return connectTestAgent(t, f, number, func(service *agentservice.Service) agenttransport.Executor {
+		if len(legacy) > 0 && legacy[0] {
+			return legacyPreflightAgent{service}
+		}
+		return service
+	})
+}
+
+// connectTestAgent joins a real Agent service whose commands pass through wrap.
+func connectTestAgent(t *testing.T, f *agentHTTPFixture, number int, wrap func(*agentservice.Service) agenttransport.Executor) task.Node {
+	t.Helper()
 	credential := agentCredential(t)
 	address := fmt.Sprintf("preflight-%d.example", number)
 	code, session := f.join(t, f.invite(t, address), fmt.Sprintf("preflight-%d", number), credential)
@@ -43,10 +54,7 @@ func preflightTestAgent(t *testing.T, f *agentHTTPFixture, number int, legacy ..
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	var executor agenttransport.Executor = service
-	if len(legacy) > 0 && legacy[0] {
-		executor = legacyPreflightAgent{service}
-	}
+	executor := wrap(service)
 	runner := agenttransport.NewRunner(agentClient(t, f, credential), executor, nil, agenttransport.RunnerOptions{ReconnectDelay: time.Millisecond})
 	done := make(chan error, 1)
 	go func() { done <- runner.Run(ctx) }()

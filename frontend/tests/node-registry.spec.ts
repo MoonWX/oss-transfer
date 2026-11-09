@@ -3,12 +3,17 @@ import { mockApi } from "./fixtures";
 import type { AgentInvitation } from "../src/lib/nodeRegistry";
 
 const joinUrl = "https://transfer.example/api/agents/bootstrap/test-once";
-const traditionalCommand = `curl -fsSL '${joinUrl}' | bash`;
+const traditionalCommand = `curl -fsSL '${joinUrl}' | sudo bash`;
 const windowsCommand = `irm '${joinUrl}?platform=windows' | iex`;
-const upstreamTraditionalCommand = `curl -fsSL '${joinUrl}?source=upstream' | bash`;
+const upstreamTraditionalCommand = `curl -fsSL '${joinUrl}?source=upstream' | sudo bash`;
 const upstreamWindowsCommand = `irm '${joinUrl}?platform=windows&source=upstream' | iex`;
 const nativeCommand = `./oss-transfer-agent --join-url '${joinUrl}'`;
-const dockerCommand = `curl -fsSL '${joinUrl}?method=compose' | bash`;
+const dockerEnroll = `docker run --rm -v oss-transfer-agent-abcdef-data:/data moonwx/osstransfer:4.2.0 oss-transfer-agent --join-url '${joinUrl}' --data-dir /data --enroll-only`;
+const dockerRun =
+  "docker run -d --name oss-transfer-agent-abcdef --restart unless-stopped -v oss-transfer-agent-abcdef-data:/data moonwx/osstransfer:4.2.0 oss-transfer-agent --data-dir /data";
+const dockerCommand = `${dockerEnroll} && ${dockerRun}`;
+const dockerWindowsCommand = `${dockerEnroll}; if ($LASTEXITCODE -eq 0) { ${dockerRun} }`;
+const composeCommand = `curl -fsSL '${joinUrl}?method=compose' | sudo bash`;
 
 async function setup(
   page: Page,
@@ -54,6 +59,8 @@ async function setup(
             expiresAt: new Date(Date.now() + 1800000).toISOString(),
             joinUrl,
             dockerCommand,
+            dockerWindowsCommand,
+            composeCommand,
             traditionalCommand,
             ...installCommands,
           },
@@ -279,6 +286,8 @@ for (const [method, commands] of [
   }) => {
     await setup(page, true, {
       dockerCommand: undefined,
+      dockerWindowsCommand: undefined,
+      composeCommand: undefined,
       traditionalCommand: undefined,
       nativeAgent: { available: true },
       ...commands,
@@ -319,7 +328,10 @@ test("invitation generation supports automatic address and preserves errors", as
   await dialog
     .getByRole("button", { name: "生成加入指令", exact: true })
     .click();
-  await expect(dialog.getByRole("alert")).toContainText("无法生成加入链接");
+  // The dev server origin is a loopback address, so its warning is shown too.
+  await expect(
+    dialog.getByRole("alert").filter({ hasText: "无法生成加入链接" }),
+  ).toBeVisible();
   await expect(
     dialog.getByRole("textbox", { name: "节点名称", exact: true }),
   ).toHaveValue("Agent 1");
@@ -615,4 +627,119 @@ test("invitation retries temporary status failures until the node joins", async 
   const dialog = await openInvitation(page);
   await expect(dialog).toBeHidden();
   expect(checks).toBe(2);
+});
+
+test("Docker join offers Docker Desktop, PowerShell and Linux Compose commands and names the download source", async ({
+  page,
+}) => {
+  const state = await setup(page, true, {
+    nativeAgent: { available: true },
+    windowsCommand,
+    upstreamTraditionalCommand,
+    upstreamWindowsCommand,
+    downloadSource: { kind: "master" },
+    upstreamDownloadSource: { kind: "auto" },
+  });
+  // Registered after the generic API mock so that this route takes precedence.
+  await page.route("**/api/master/network", (route) =>
+    route.fulfill({
+      json: { success: true, data: { lanAddresses: ["192.168.1.20"] } },
+    }),
+  );
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Docker Agent");
+  const address = dialog.getByRole("textbox", {
+    name: "Master 地址（Agent 需能访问）",
+  });
+  await address.fill("http://localhost:1685");
+  const warning = dialog.getByText(/这是本机回环地址/);
+  await expect(warning).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "192.168.1.20（局域网地址）", exact: true })
+    .click();
+  await expect(address).toHaveValue("http://192.168.1.20:1685");
+  await expect(warning).toHaveCount(0);
+  await address.fill("http://127.0.0.1:1685/");
+  await dialog
+    .getByRole("button", {
+      name: "host.docker.internal（Docker 与 Master 在同一台主机）",
+      exact: true,
+    })
+    .click();
+  await expect(address).toHaveValue("http://host.docker.internal:1685");
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  expect(state.invitations[0].body).toEqual({
+    label: "Docker Agent",
+    masterUrl: "http://host.docker.internal:1685",
+  });
+  await expect(
+    dialog.getByText("下载来源：本 Master，新节点无需访问公网。"),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "改用公网下载", exact: true })
+    .click();
+  await expect(
+    dialog.getByText(/下载来源：GitHub 或京东云 OSS.*ipinfo\.io/),
+  ).toBeVisible();
+  await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
+  const commandField = dialog.getByLabel("Docker 指令", { exact: true });
+  await expect(commandField).toHaveValue(dockerCommand);
+  await expect(dialog.getByText(/下载来源/)).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "macOS / Linux", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.getByText(/无需 root/)).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "Windows PowerShell", exact: true })
+    .click();
+  await expect(commandField).toHaveValue(dockerWindowsCommand);
+  await dialog
+    .getByRole("button", { name: "Linux Docker Compose", exact: true })
+    .click();
+  await expect(commandField).toHaveValue(composeCommand);
+  await expect(
+    dialog.getByText(/以 root 安装 Docker Compose 项目/),
+  ).toBeVisible();
+  await expect(dialog.getByText(/Docker 容器内的 Agent 无法访问/)).toHaveCount(
+    0,
+  );
+});
+
+test("Docker tab sends a loopback Master address back for correction", async ({
+  page,
+}) => {
+  const loopbackJoin = "http://localhost:1685/api/agents/bootstrap/test-once";
+  const state = await setup(page, true, { joinUrl: loopbackJoin });
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Loopback Agent");
+  await dialog
+    .getByRole("textbox", { name: "Master 地址（Agent 需能访问）" })
+    .fill("http://localhost:1685");
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
+  await expect(
+    dialog.getByText(
+      "Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。请修改地址后重新生成。",
+    ),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "修改 Master 地址", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("textbox", { name: "节点名称", exact: true }),
+  ).toHaveValue("Loopback Agent");
+  await expect(
+    dialog.getByRole("textbox", { name: "Master 地址（Agent 需能访问）" }),
+  ).toHaveValue("http://localhost:1685");
+  expect(state.invitations).toHaveLength(1);
 });

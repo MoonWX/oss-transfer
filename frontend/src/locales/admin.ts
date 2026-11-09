@@ -55,10 +55,62 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   权限: { en: "Access", ja: "アクセス" },
   只读: { en: "Read only", ja: "読み取り専用" },
   浏览器访问地址: { en: "Web address", ja: "ブラウザー用アドレス" },
-  "Agent 连接地址": { en: "Agent connection address", ja: "Agent 接続先" },
-  "填写新节点可访问的主节点地址，同一 VPC 可使用内网地址。": {
-    en: "Use a Master address reachable from the new node. A private address works within the same VPC.",
-    ja: "新しいノードから到達できる Master のアドレスを指定します。同じ VPC 内ではプライベートアドレスを使用できます。",
+  "Master 地址（Agent 需能访问）": {
+    en: "Master address (reachable from the Agent)",
+    ja: "Master のアドレス（Agent から到達可能なもの）",
+  },
+  "新节点通过此地址连接 Master，同一 VPC 可使用内网地址。": {
+    en: "The new node connects to the Master at this address. A private address works within the same VPC.",
+    ja: "新しいノードはこのアドレスで Master に接続します。同じ VPC 内ではプライベートアドレスを使用できます。",
+  },
+  "这是本机回环地址，只有与 Master 在同一台主机上原生运行的 Agent 能访问。其他机器或 Docker 容器中的 Agent 请改用：":
+    {
+      en: "This is a loopback address. Only an Agent running natively on the Master's host can reach it. For Agents on other machines or in Docker containers, use:",
+      ja: "これはループバックアドレスです。到達できるのは Master と同じホストでネイティブに動作する Agent だけです。他のマシンや Docker コンテナー内の Agent には次のアドレスを使用してください：",
+    },
+  "{address}（Docker 与 Master 在同一台主机）": {
+    en: "{address} (Docker on the Master's host)",
+    ja: "{address}（Docker が Master と同じホスト）",
+  },
+  "{address}（局域网地址）": {
+    en: "{address} (LAN address)",
+    ja: "{address}（LAN アドレス）",
+  },
+  "修改 Master 地址": {
+    en: "Change Master address",
+    ja: "Master のアドレスを変更",
+  },
+  "Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。请修改地址后重新生成。":
+    {
+      en: "The Master address is a loopback address, which an Agent in a Docker container cannot reach. Change the address and generate the commands again.",
+      ja: "Master のアドレスはループバックアドレスのため、Docker コンテナー内の Agent からは接続できません。アドレスを変更してコマンドを再生成してください。",
+    },
+  "Docker 运行环境": {
+    en: "Docker environment",
+    ja: "Docker の実行環境",
+  },
+  "适用于 macOS、Windows 的 Docker Desktop 和 Linux 上的 Docker，无需 root（Linux 用户需能运行 docker 命令）。指令先加入集群，成功后才启动 Agent 容器，数据保存在指令中的 Docker 卷里；加入失败时可直接重新运行同一条指令。":
+    {
+      en: "Works with Docker Desktop on macOS and Windows and with Docker on Linux, without root (on Linux, your user must be able to run docker). The command joins the cluster first and starts the Agent container only after that succeeds; Agent data is kept in the Docker volume named in the command. If joining fails, run the same command again.",
+      ja: "macOS・Windows の Docker Desktop と Linux の Docker で、root なしで動作します（Linux ではユーザーが docker コマンドを実行できる必要があります）。コマンドはまずクラスターに参加し、成功した場合にだけ Agent コンテナーを起動します。データはコマンド内の Docker ボリュームに保存されます。参加に失敗した場合は同じコマンドをもう一度実行してください。",
+    },
+  "在 Linux 上以 root 安装 Docker Compose 项目，文件位于 /opt/oss-transfer-compose 和 /var/lib/oss-transfer-compose。安装失败会自动清理，可直接重新运行。":
+    {
+      en: "Installs a Docker Compose project as root on Linux, with files in /opt/oss-transfer-compose and /var/lib/oss-transfer-compose. A failed installation cleans up after itself, so you can run it again.",
+      ja: "Linux で root として Docker Compose プロジェクトをインストールします。ファイルは /opt/oss-transfer-compose と /var/lib/oss-transfer-compose に置かれます。失敗した場合は自動で片付けられるため、そのまま再実行できます。",
+    },
+  "下载来源：本 Master，新节点无需访问公网。": {
+    en: "Download source: this Master. The new node needs no internet access.",
+    ja: "ダウンロード元: この Master。新しいノードからインターネットへのアクセスは不要です。",
+  },
+  "下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）。":
+    {
+      en: "Download source: GitHub or JD Cloud OSS, chosen by the new node's public IP location (queries cloudflare.com and ipinfo.io).",
+      ja: "ダウンロード元: 新しいノードのパブリック IP の所在地に応じて GitHub または JD Cloud OSS を自動選択します（cloudflare.com と ipinfo.io に問い合わせます）。",
+    },
+  "下载来源：{url}": {
+    en: "Download source: {url}",
+    ja: "ダウンロード元: {url}",
   },
   "留空使用浏览器地址。同一 VPC 可填写主节点内网地址。": {
     en: "Defaults to the web address. Use the Master's private address within the same VPC.",

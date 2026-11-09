@@ -12,12 +12,16 @@ import {
   Tab,
   Tabs,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { ContentCopyRounded } from "@mui/icons-material";
 import {
   createAgentInvitation,
   getAgentInvitationStatus,
+  getMasterLanAddresses,
+  type AgentDownloadSource,
   type AgentInvitation,
 } from "../lib/nodeRegistry";
 import { ApiError, useNotify } from "../lib/api";
@@ -45,6 +49,47 @@ async function copyText(value: string) {
     previousFocus?.focus();
   }
 }
+/** True for addresses that only the Master's own host can reach. */
+function isLoopbackHost(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127(\.\d{1,3}){3}$/.test(host) ||
+    host === "::1" ||
+    host === "0:0:0:0:0:0:0:1"
+  );
+}
+function loopbackOrigin(value: string) {
+  try {
+    const url = new URL(value.trim() || window.location.origin);
+    return isLoopbackHost(url.hostname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+function downloadSourceText(source?: AgentDownloadSource) {
+  switch (source?.kind) {
+    case "master":
+      return t("下载来源：本 Master，新节点无需访问公网。");
+    case "auto":
+      return t(
+        "下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）。",
+      );
+    case "release":
+      return t("下载来源：{url}", { url: source.url });
+    default:
+      return null;
+  }
+}
+type DockerVariant = "posix" | "windows" | "compose";
+type DockerOption = readonly [DockerVariant, string, string | undefined];
+type InstallMethod = {
+  label: string;
+  command?: string;
+  upstreamCommand?: string;
+  variants?: DockerOption[];
+};
 export default function AgentInvitationDialog({
   open,
   onClose,
@@ -61,6 +106,8 @@ export default function AgentInvitationDialog({
   const [invitation, setInvitation] = useState<AgentInvitation | null>(null);
   const [tab, setTab] = useState(0);
   const [upstream, setUpstream] = useState(false);
+  const [dockerVariant, setDockerVariant] = useState<DockerVariant>("posix");
+  const [lanAddresses, setLanAddresses] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef<AbortController | null>(null);
@@ -70,6 +117,17 @@ export default function AgentInvitationDialog({
   }, [onClose, onJoined, notify]);
   useEffect(() => {
     return () => generation.current?.abort();
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    // Suggestions only: the dialog works the same without them.
+    getMasterLanAddresses(controller.signal)
+      .then((addresses) => {
+        if (!controller.signal.aborted) setLanAddresses(addresses);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
   }, [open]);
   useEffect(() => {
     if (!open || !invitation) return;
@@ -154,6 +212,7 @@ export default function AgentInvitationDialog({
         throw new Error(t("加入指令不完整，请重新生成。"));
       setTab(0);
       setUpstream(false);
+      setDockerVariant("posix");
       setInvitation(next);
     } catch (failure) {
       if (!controller.signal.aborted)
@@ -170,40 +229,79 @@ export default function AgentInvitationDialog({
       notify(t("复制失败，请选择文本后手动复制。"), "error");
     }
   }
-  const methods = [
-    {
-      label: invitation?.nativeAgent
-        ? "Linux / macOS / FreeBSD"
-        : t("传统部署"),
-      command: invitation?.traditionalCommand,
-      upstreamCommand: invitation?.upstreamTraditionalCommand,
-    },
-    {
-      label: "Windows",
-      command: invitation?.windowsCommand,
-      upstreamCommand: invitation?.upstreamWindowsCommand,
-    },
-    {
-      label: t("直接运行"),
-      command: invitation?.traditionalCommand
-        ? undefined
-        : invitation?.nativeCommand,
-    },
-    { label: "Docker", command: invitation?.dockerCommand },
-  ].filter(
-    (
-      item,
-    ): item is {
-      label: string;
-      command: string;
-      upstreamCommand?: string;
-    } => !!item.command,
+  const methods = (
+    [
+      {
+        label: invitation?.nativeAgent
+          ? "Linux / macOS / FreeBSD"
+          : t("传统部署"),
+        command: invitation?.traditionalCommand,
+        upstreamCommand: invitation?.upstreamTraditionalCommand,
+      },
+      {
+        label: "Windows",
+        command: invitation?.windowsCommand,
+        upstreamCommand: invitation?.upstreamWindowsCommand,
+      },
+      {
+        label: t("直接运行"),
+        command: invitation?.traditionalCommand
+          ? undefined
+          : invitation?.nativeCommand,
+      },
+      {
+        label: "Docker",
+        command: invitation?.dockerCommand,
+        // Masters before v4.2 return only the Linux Compose installer here.
+        variants: invitation?.dockerWindowsCommand
+          ? (
+              [
+                ["posix", "macOS / Linux", invitation.dockerCommand],
+                [
+                  "windows",
+                  "Windows PowerShell",
+                  invitation.dockerWindowsCommand,
+                ],
+                ["compose", "Linux Docker Compose", invitation.composeCommand],
+              ] as DockerOption[]
+            ).filter((item) => !!item[2])
+          : undefined,
+      },
+    ] as InstallMethod[]
+  ).filter(
+    (item): item is InstallMethod & { command: string } => !!item.command,
   );
   const method = methods[tab];
+  const dockerTab = method?.label === "Docker";
+  const variant = method?.variants?.find((item) => item[0] === dockerVariant);
   const command =
-    (upstream && method?.upstreamCommand
-      ? method.upstreamCommand
-      : method?.command) || "";
+    (variant
+      ? variant[2]
+      : upstream && method?.upstreamCommand
+        ? method.upstreamCommand
+        : method?.command) || "";
+  const source =
+    method && !dockerTab && method.command !== invitation?.nativeCommand
+      ? downloadSourceText(
+          upstream && method.upstreamCommand
+            ? invitation?.upstreamDownloadSource
+            : invitation?.downloadSource,
+        )
+      : null;
+  const loopback = loopbackOrigin(masterUrl);
+  let joinLoopback = false;
+  try {
+    joinLoopback =
+      !!invitation && isLoopbackHost(new URL(invitation.joinUrl).hostname);
+  } catch {
+    joinLoopback = false;
+  }
+  const replaceHost = (host: string) => {
+    if (!loopback) return;
+    const next = new URL(loopback.origin);
+    next.hostname = host;
+    setMasterUrl(next.origin);
+  };
   const expiry = invitation ? new Date(invitation.expiresAt) : null;
   return (
     <Dialog
@@ -230,16 +328,52 @@ export default function AgentInvitationDialog({
                 onChange={(event) => setLabel(event.target.value)}
               />
               <TextField
-                label={t("Agent 连接地址")}
+                label={t("Master 地址（Agent 需能访问）")}
                 fullWidth
                 value={masterUrl}
                 placeholder={window.location.origin}
                 disabled={saving}
                 helperText={t(
-                  "填写新节点可访问的主节点地址，同一 VPC 可使用内网地址。",
+                  "新节点通过此地址连接 Master，同一 VPC 可使用内网地址。",
                 )}
                 onChange={(event) => setMasterUrl(event.target.value)}
               />
+              {loopback && (
+                <Alert severity="warning">
+                  <Typography variant="body2">
+                    {t(
+                      "这是本机回环地址，只有与 Master 在同一台主机上原生运行的 Agent 能访问。其他机器或 Docker 容器中的 Agent 请改用：",
+                    )}
+                  </Typography>
+                  <Stack
+                    direction="row"
+                    useFlexGap
+                    sx={{ flexWrap: "wrap", gap: 1, mt: 1 }}
+                  >
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={saving}
+                      onClick={() => replaceHost("host.docker.internal")}
+                    >
+                      {t("{address}（Docker 与 Master 在同一台主机）", {
+                        address: "host.docker.internal",
+                      })}
+                    </Button>
+                    {lanAddresses.map((address) => (
+                      <Button
+                        key={address}
+                        size="small"
+                        variant="outlined"
+                        disabled={saving}
+                        onClick={() => replaceHost(address)}
+                      >
+                        {t("{address}（局域网地址）", { address })}
+                      </Button>
+                    ))}
+                  </Stack>
+                </Alert>
+              )}
             </>
           ) : (
             <>
@@ -260,14 +394,63 @@ export default function AgentInvitationDialog({
                     <Tab key={method.label} label={method.label} />
                   ))}
                 </Tabs>
-                {methods[tab]?.label === "Docker" && (
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
+                {dockerTab && joinLoopback && (
+                  <Alert
+                    severity="warning"
                     sx={{ mb: 2 }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        onClick={() => setInvitation(null)}
+                      >
+                        {t("修改 Master 地址")}
+                      </Button>
+                    }
                   >
-                    {t("访问本地文件前，请将所需目录挂载到容器。")}
-                  </Typography>
+                    {t(
+                      "Master 地址是本机回环地址，Docker 容器内的 Agent 无法访问。请修改地址后重新生成。",
+                    )}
+                  </Alert>
+                )}
+                {dockerTab && method?.variants && (
+                  <ToggleButtonGroup
+                    exclusive
+                    size="small"
+                    value={variant?.[0] ?? null}
+                    onChange={(_, next: DockerVariant | null) =>
+                      next && setDockerVariant(next)
+                    }
+                    aria-label={t("Docker 运行环境")}
+                    sx={{ mb: 2, flexWrap: "wrap" }}
+                  >
+                    {method.variants.map(([value, label]) => (
+                      <ToggleButton key={value} value={value}>
+                        {label}
+                      </ToggleButton>
+                    ))}
+                  </ToggleButtonGroup>
+                )}
+                {dockerTab && (
+                  <Stack spacing={0.5} sx={{ mb: 2 }}>
+                    {method?.variants && variant?.[0] !== "compose" && (
+                      <Typography variant="body2" color="text.secondary">
+                        {t(
+                          "适用于 macOS、Windows 的 Docker Desktop 和 Linux 上的 Docker，无需 root（Linux 用户需能运行 docker 命令）。指令先加入集群，成功后才启动 Agent 容器，数据保存在指令中的 Docker 卷里；加入失败时可直接重新运行同一条指令。",
+                        )}
+                      </Typography>
+                    )}
+                    {variant?.[0] === "compose" && (
+                      <Typography variant="body2" color="text.secondary">
+                        {t(
+                          "在 Linux 上以 root 安装 Docker Compose 项目，文件位于 /opt/oss-transfer-compose 和 /var/lib/oss-transfer-compose。安装失败会自动清理，可直接重新运行。",
+                        )}
+                      </Typography>
+                    )}
+                    <Typography variant="body2" color="text.secondary">
+                      {t("访问本地文件前，请将所需目录挂载到容器。")}
+                    </Typography>
+                  </Stack>
                 )}
                 <TextField
                   label={t("{method} 指令", {
@@ -287,6 +470,15 @@ export default function AgentInvitationDialog({
                     },
                   }}
                 />
+                {source && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 1 }}
+                  >
+                    {source}
+                  </Typography>
+                )}
                 <Button
                   variant="outlined"
                   startIcon={<ContentCopyRounded />}
@@ -295,7 +487,7 @@ export default function AgentInvitationDialog({
                 >
                   {t("复制指令")}
                 </Button>
-                {method?.upstreamCommand && (
+                {method?.upstreamCommand && !variant && (
                   <Button
                     onClick={() => setUpstream((value) => !value)}
                     sx={{ mt: 1.5, ml: 1 }}

@@ -15,6 +15,8 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Upgrade this Agent once with the installer to enable online updates": {"Upgrade this Agent once with the installer to enable online updates", "此节点需先用安装脚本升级一次，之后即可在线更新", "この Agent はインストーラーで一度更新すると、オンライン更新を利用できます"},
 	"Agent is offline": {"Agent is offline", "节点离线", "Agent がオフラインです"},
 
+	"The node holding this comparison did not respond; its results stay on that node and load again when it reconnects": {"The node holding this comparison did not respond; its results stay on that node and load again when it reconnects", "保存该比对结果的执行节点没有响应；结果仍保存在该节点上，节点重新连接后会自动加载", "この比較結果を保存している実行ノードが応答しません。結果はそのノードに残っており、再接続後に自動で読み込まれます"},
+
 	"Only older stable Agent releases can be updated":                                         {"Only older stable Agent releases can be updated", "仅支持将较旧的稳定版节点更新到 Master 版本", "Master より古い安定版の Agent のみ更新できます"},
 	"Version checking is unavailable":                                                         {"Version checking is unavailable", "当前不支持版本检测", "バージョンの確認は利用できません"},
 	"A version check is already running":                                                      {"A version check is already running", "正在检测版本，请稍候", "バージョンを確認中です"},

@@ -121,9 +121,14 @@ func TestSoftwareUpdateQueueStopsAfterRejectedUpgradeAndExplainsLegacy(t *testin
 		t.Fatal(q, err)
 	}
 	legacy := nodeTestAgent(t, f, "legacy")
+	f.master.options.AgentDockerImage = "registry.example/transfer:4.1.15"
 	status, body := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/software-updates", f.admin, nil)
 	if status != 200 {
 		t.Fatal(status, body)
+	}
+	// The console builds the container Agent update commands from this image.
+	if image := body["data"].(map[string]any)["agentImage"]; image != "registry.example/transfer:4.1.15" {
+		t.Fatal("container Agent image missing from the update status", image)
 	}
 	for _, raw := range body["data"].(map[string]any)["agents"].([]any) {
 		row := raw.(map[string]any)

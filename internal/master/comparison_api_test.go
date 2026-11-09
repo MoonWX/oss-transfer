@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -657,5 +659,32 @@ func TestComparisonMessagesAreLocalized(t *testing.T) {
 		if !ok || entry.en == "" || entry.zh == "" || entry.ja == "" || entry.zh == entry.en || entry.ja == entry.en {
 			t.Fatalf("%q is not localized: %+v", message, entry)
 		}
+	}
+}
+
+// A node that stops answering is reported as unavailable, in the user's
+// language, instead of a raw gateway error such as "context deadline exceeded".
+func TestComparisonSilentNodeIsUnavailableNotGatewayError(t *testing.T) {
+	api := &comparisonAPI{}
+	for _, err := range []error{
+		context.DeadlineExceeded,
+		fmt.Errorf("call: %w", context.DeadlineExceeded),
+		agenttransport.ErrSession,
+		agenttransport.ErrNotDelivered,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest("GET", "/api/master/comparisons/x", nil)
+		request.Header.Set("Accept-Language", "zh-CN")
+		w, _ := localizedAPI(recorder, request)
+		api.agentFailed(w, "x", err)
+		var body map[string]any
+		if json.Unmarshal(recorder.Body.Bytes(), &body) != nil || recorder.Code != 503 || body["message"] != "保存该比对结果的执行节点没有响应；结果仍保存在该节点上，节点重新连接后会自动加载" {
+			t.Fatalf("%v: %d %s", err, recorder.Code, recorder.Body)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	api.agentFailed(recorder, "x", &AgentError{Status: 500, Message: "disk full"})
+	if recorder.Code != 502 {
+		t.Fatal("an answer from the node is still a gateway error", recorder.Code)
 	}
 }

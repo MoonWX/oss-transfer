@@ -105,6 +105,8 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 		"latest": latest, "checkedAt": checked, "checking": checking, "checkError": localize(w, checkError),
 		"available": latest != nil && newerSoftware(latest.Version, info.Version),
 		"queue":     queue,
+		// Container Agents are updated by recreating them from this image.
+		"agentImage": s.options.AgentDockerImage,
 	}})
 }
 

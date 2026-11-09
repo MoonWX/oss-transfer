@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -64,11 +65,32 @@ func TestRemovedAgentStopsWithoutRestart(t *testing.T) {
 		t.Fatal("removed Agent did not report a revoked enrollment", err)
 	}
 	stopped := revocation(ctx, err, "oss-transfer-agent", &bytes.Buffer{})
-	if !strings.Contains(stopped.Error(), "will not restart automatically") || !strings.Contains(stopped.Error(), "--uninstall --role agent") {
+	if !strings.Contains(stopped.Error(), "will not restart automatically") || !strings.Contains(stopped.Error(), revokedGuidance(runtime.GOOS, "oss-transfer-agent")) {
 		t.Fatal("service log does not explain the stop", stopped)
 	}
 	if exitStatus(stopped) != revokedExitStatus || exitStatus(errors.New("other failure")) != 1 {
 		t.Fatal("revocation did not select the non-restarting exit status")
+	}
+}
+
+// Install.ps1 has no uninstall option, so Windows must not be told to use one.
+func TestRevokedGuidanceMatchesThePlatformInstaller(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin", "freebsd"} {
+		if guidance := revokedGuidance(goos, "oss-transfer-agent"); !strings.Contains(guidance, "--uninstall --role agent") {
+			t.Fatal(goos, guidance)
+		}
+	}
+	guidance := revokedGuidance("windows", "OSSTransferAgent")
+	for _, want := range []string{"Stop-Service -Name 'OSSTransferAgent'", "sc.exe delete 'OSSTransferAgent'", `$env:ProgramData\OSS Transfer\agent`} {
+		if !strings.Contains(guidance, want) {
+			t.Fatal("Windows guidance lacks", want, guidance)
+		}
+	}
+	if strings.Contains(guidance, "--uninstall") {
+		t.Fatal("Windows guidance names an option Install.ps1 lacks", guidance)
+	}
+	if !strings.Contains(revokedGuidance("windows", ""), "'OSSTransferAgent'") {
+		t.Fatal("Windows guidance without a configured name does not use the default service name")
 	}
 }
 

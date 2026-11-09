@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MoonWX/oss-transfer/internal/comparison"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
@@ -423,5 +424,9 @@ func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	return map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol}
+	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol}
+	if s.Comparisons != nil {
+		capabilities["comparisonProtocol"] = comparison.Protocol
+	}
+	return capabilities
 }

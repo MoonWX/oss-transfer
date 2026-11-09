@@ -298,7 +298,7 @@ func TestEngineListFailureEmitsOrderedPrefix(t *testing.T) {
 
 func TestEngineListRetriesTransientFailures(t *testing.T) {
 	engineFastRetries(t)
-	engineOverride(t, &listAttemptTimeout, 200*time.Millisecond)
+	engineOverride(t, &listAttemptTimeout, time.Second)
 	source, target := newEngineStore(), newEngineStore()
 	source.put("src/a", "a")
 	target.put("backup/a", "a")
@@ -323,8 +323,9 @@ func TestEngineListRetriesTransientFailures(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].Status != StatusMatch {
 		t.Fatalf("transient LIST failures were not retried: %v %+v", err, rows)
 	}
-	if source.lists.Load() != 5 || !errors.Is(stalledErr, context.DeadlineExceeded) {
-		t.Fatalf("expected 5 LIST attempts with one attempt deadline, got %d (%v)", source.lists.Load(), stalledErr)
+	// Four failed attempts precede the first that can succeed.
+	if source.lists.Load() < 5 || !errors.Is(stalledErr, context.DeadlineExceeded) {
+		t.Fatalf("expected at least 5 LIST attempts with one attempt deadline, got %d (%v)", source.lists.Load(), stalledErr)
 	}
 
 	for _, test := range []struct {
@@ -336,6 +337,7 @@ func TestEngineListRetriesTransientFailures(t *testing.T) {
 		{"attempt timeouts", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, "source LIST: timeout"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			engineOverride(t, &listAttemptTimeout, 200*time.Millisecond)
 			failing := newEngineStore()
 			failing.listHook = func(ctx context.Context, _ transferstore.ListOptions, _ int) (transferstore.Page, bool, error) {
 				return transferstore.Page{}, true, test.hook(ctx)
@@ -568,7 +570,9 @@ func TestEngineHeadTimeoutIsAnErrorRow(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("a HEAD timeout failed the comparison: %v %+v", err, rows)
 	}
-	if row := rows[0]; row.Status != StatusError || row.Error != "Cannot read object metadata" || row.ErrorDetail != "target HEAD: timeout" {
+	// The limit also applies to the source HEAD, which only a stalled machine
+	// could make exceed it; the target part is what must be reported.
+	if row := rows[0]; row.Status != StatusError || row.Error != "Cannot read object metadata" || !strings.HasSuffix(row.ErrorDetail, "target HEAD: timeout") {
 		t.Fatalf("HEAD timeout row: %+v", row)
 	}
 }

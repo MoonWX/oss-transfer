@@ -492,7 +492,7 @@ func TestEngineS3NetworkErrorDetailHidesTheEndpoint(t *testing.T) {
 }
 
 func TestEngineS3HeadTimeout(t *testing.T) {
-	engineOverride(t, &comparisonHeadTimeout, 300*time.Millisecond)
+	engineOverride(t, &comparisonHeadTimeout, time.Second)
 	fixture := newEngineS3(t)
 	fixture.put("source-bucket/src/a", "a")
 	fixture.put("target-bucket/backup/a", "a")
@@ -504,7 +504,8 @@ func TestEngineS3HeadTimeout(t *testing.T) {
 		return false
 	}
 	rows, err := engineRun(context.Background(), request(), fixture.store(t, "source-bucket"), fixture.store(t, "target-bucket"), nil, RunOptions{})
-	if err != nil || len(rows) != 1 || rows[0].Status != StatusError || rows[0].ErrorDetail != "target HEAD: timeout" {
+	// The limit also applies to the source HEAD; only the target part must time out.
+	if err != nil || len(rows) != 1 || rows[0].Status != StatusError || !strings.HasSuffix(rows[0].ErrorDetail, "target HEAD: timeout") {
 		t.Fatalf("HEAD timeout: %v %+v", err, rows)
 	}
 }

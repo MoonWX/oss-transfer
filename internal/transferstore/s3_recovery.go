@@ -69,6 +69,16 @@ func (s *S3) ConnectionIdentity(alias string) S3ConnectionIdentity {
 	return identity
 }
 
+// sameUploadOwner reports whether an upload recorded under one connection
+// identity belongs to the account and endpoint of another. Addressing is left
+// out: it changes how a request names the bucket, not who owns the upload,
+// and automatic addressing can change it on an upgrade (records written by
+// v4.1.41 hold the old effective value).
+func sameUploadOwner(recorded, current S3ConnectionIdentity) bool {
+	recorded.PathStyle = current.PathStyle
+	return recorded == current
+}
+
 func ValidateS3UploadRecord(record S3UploadRecord) error {
 	if !validHex(record.Owner, 32) || !validHex(record.ID, 16) || record.Connection.Alias == "" ||
 		!validHex(record.Connection.CredentialFingerprint, 32) || record.Bucket == "" || strings.ContainsAny(record.Bucket, "/\\\x00") ||
@@ -100,7 +110,7 @@ func (s *S3) AbortRecordedUpload(ctx context.Context, record S3UploadRecord) err
 	if err := ValidateS3UploadRecord(record); err != nil {
 		return err
 	}
-	if record.Bucket != s.bucket || record.Connection != s.ConnectionIdentity(record.Connection.Alias) {
+	if record.Bucket != s.bucket || !sameUploadOwner(record.Connection, s.ConnectionIdentity(record.Connection.Alias)) {
 		return ErrUploadIdentity
 	}
 	for attempt := 0; attempt < 3; attempt++ {

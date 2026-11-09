@@ -86,7 +86,7 @@ func BackupOfflineWithProgress(path, role, destination string, progress io.Write
 		complete = true
 		monitor.stop()
 		if progress != nil {
-			fmt.Fprintf(progress, "Database backup complete: %s (%s).\n", backupSize(raw.Size()), time.Since(monitor.started).Round(time.Second))
+			fmt.Fprintf(progress, backupText("Database backup complete: %s (%s).\n", "数据库备份完成：%s（用时 %s）。\n"), backupSize(raw.Size()), time.Since(monitor.started).Round(time.Second))
 		}
 		return nil
 	})
@@ -100,12 +100,21 @@ type backupProgress struct {
 	finished chan struct{}
 }
 
+// backupText picks the language of the progress an installer shows while it
+// backs up a database: the installers export OSS_TRANSFER_INSTALL_LANG.
+func backupText(english, chinese string) string {
+	if os.Getenv("OSS_TRANSFER_INSTALL_LANG") == "zh" {
+		return chinese
+	}
+	return english
+}
+
 func newBackupProgress(output io.Writer, size int64, interval time.Duration) *backupProgress {
 	p := &backupProgress{started: time.Now()}
 	if output == nil {
 		return p
 	}
-	fmt.Fprintf(output, "Backing up database: %s.\n", backupSize(size))
+	fmt.Fprintf(output, backupText("Backing up database: %s.\n", "正在备份数据库：%s。\n"), backupSize(size))
 	p.done, p.finished = make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(p.finished)
@@ -118,10 +127,10 @@ func newBackupProgress(output io.Writer, size int64, interval time.Duration) *ba
 			case <-ticker.C:
 				elapsed := time.Since(p.started).Round(time.Second)
 				if p.syncing.Load() {
-					fmt.Fprintf(output, "Database backup: syncing to disk (%s elapsed).\n", elapsed)
+					fmt.Fprintf(output, backupText("Database backup: syncing to disk (%s elapsed).\n", "数据库备份：正在写入磁盘（已用 %s）。\n"), elapsed)
 				} else {
 					copied := p.copied.Load()
-					fmt.Fprintf(output, "Database backup: %s / %s (%.0f%%; %s elapsed).\n", backupSize(copied), backupSize(size), 100*float64(copied)/float64(size), elapsed)
+					fmt.Fprintf(output, backupText("Database backup: %s / %s (%.0f%%; %s elapsed).\n", "数据库备份：%s / %s（%.0f%%，已用 %s）。\n"), backupSize(copied), backupSize(size), 100*float64(copied)/float64(size), elapsed)
 				}
 			}
 		}

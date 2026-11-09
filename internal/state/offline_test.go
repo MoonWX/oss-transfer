@@ -12,7 +12,36 @@ import (
 	"time"
 )
 
+// An installer run in Chinese shows the backup progress in Chinese.
+func TestOfflineBackupProgressFollowsTheInstallerLanguage(t *testing.T) {
+	for language, want := range map[string][2]string{"": {"Backing up database:", "Database backup complete:"}, "zh": {"正在备份数据库：", "数据库备份完成："}} {
+		t.Run("lang="+language, func(t *testing.T) {
+			t.Setenv("OSS_TRANSFER_INSTALL_LANG", language)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "master.db")
+			db, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.ClaimRole("master"); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var progress bytes.Buffer
+			if err := BackupOfflineWithProgress(path, "master", filepath.Join(dir, "backup.db"), &progress); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(progress.String(), want[0]) || !strings.Contains(progress.String(), want[1]) {
+				t.Fatalf("progress in the wrong language: %s", progress.String())
+			}
+		})
+	}
+}
+
 func TestOfflineAdoptionSnapshotsWithoutMutatingSource(t *testing.T) {
+	t.Setenv("OSS_TRANSFER_INSTALL_LANG", "")
 	for _, role := range []string{"master", "agent"} {
 		t.Run(role, func(t *testing.T) {
 			dir := t.TempDir()

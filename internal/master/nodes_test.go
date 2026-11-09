@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 	"github.com/MoonWX/oss-transfer/internal/softwareupdate"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
 type nodeFixture struct {
@@ -196,6 +198,58 @@ func TestNodeHTTPSettingsReachEachAgentAndSurviveRestart(t *testing.T) {
 	status, body = call("GET", "/api/master/worker-status", nil)
 	if status != 200 || body["workers"].(map[string]any)[b.address].(map[string]any)["rateLimit"].(map[string]any)["put"].(map[string]any)["state"] != "NORMAL" {
 		t.Fatal("displayed warning without automatic reduction", body)
+	}
+}
+
+// Enrolled Agents answer through the real broker: one confirms the rate and one
+// rejects it. The console localizes the outcome by its code, so the code and the
+// English message must not depend on the request language.
+func TestNodeRateUpdateMarksUnconfirmedAgentsWithStableCode(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	serve := func(name string, status int, reply any) string {
+		address := name + ".example"
+		code, session := f.join(t, f.invite(t, address), name, agentCredential(t))
+		if code != 200 {
+			t.Fatal("join failed", name, code)
+		}
+		// This helper answers every brokered command for the session, not only scan releases.
+		serveScanReleaseAgent(t, f, task.Node{ID: session.NodeID, EnrollmentID: session.EnrollmentID}, func(command agenttransport.Command) (any, int) {
+			if command.Operation != "node_rate_set" {
+				return map[string]string{"code": "unknown_operation"}, 404
+			}
+			var request struct {
+				Type string  `json:"type"`
+				QPS  float64 `json:"qps"`
+			}
+			if err := json.Unmarshal(command.Payload, &request); err != nil || request.Type != "put" || request.QPS != 100 {
+				t.Errorf("%s received %s: %v", name, command.Payload, err)
+			}
+			return reply, status
+		})
+		return address
+	}
+	confirmed := serve("confirmed", 200, map[string]any{"put": map[string]any{"limitQps": 100}})
+	rejected := serve("rejected", 503, map[string]string{"code": "unavailable", "message": "node controller is unavailable"})
+	for _, language := range []string{"", "zh-CN", "ja-JP"} {
+		status, _, body, err := localizedRequest(f.http.Client(), "POST", f.http.URL+"/api/master/rate-limit/put", f.admin, language, map[string]any{"qps": 100})
+		if err != nil || status != 200 {
+			t.Fatalf("language %q: %d %v %v", language, status, body, err)
+		}
+		if body["success"] != false || body["code"] != "RATE_UPDATE_UNCONFIRMED" || body["message"] != "Some Agents did not confirm the rate update" || body["successCount"] != float64(1) || body["failedCount"] != float64(1) {
+			t.Fatalf("language %q: partial update not marked: %v", language, body)
+		}
+		results := map[string]map[string]any{}
+		for _, raw := range body["results"].([]any) {
+			result := raw.(map[string]any)
+			results[result["workerIp"].(string)] = result
+		}
+		if results[confirmed]["success"] != true || results[rejected]["success"] != false || results[rejected]["message"] != "node controller is unavailable" || results[rejected]["displayLabel"] == "" {
+			t.Fatalf("language %q: per-node results changed: %v", language, results)
+		}
+	}
+	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/rate-limit/put/"+confirmed, f.admin, map[string]any{"qps": 100})
+	if _, found := body["code"]; status != 200 || body["success"] != true || found || body["message"] != "Node rate updated" {
+		t.Fatal("confirmed update reported a failure code", status, body)
 	}
 }
 

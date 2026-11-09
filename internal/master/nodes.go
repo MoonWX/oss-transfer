@@ -281,11 +281,13 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 			good++
 		}
 	}
-	message := "Node rate updated"
+	body := map[string]any{"success": good == len(members), "successCount": good, "failedCount": len(members) - good, "results": results, "nodeDisplays": displays.byAddress, "message": "Node rate updated"}
 	if good != len(members) {
-		message = "Some Agents did not confirm the rate update"
+		// The console translates this outcome by its stable code. The English
+		// message stays for API and CLI clients, which print it as is.
+		body["code"], body["message"] = "RATE_UPDATE_UNCONFIRMED", "Some Agents did not confirm the rate update"
 	}
-	writeJSON(w, 200, map[string]any{"success": good == len(members), "successCount": good, "failedCount": len(members) - good, "results": results, "nodeDisplays": displays.byAddress, "message": message})
+	writeJSON(w, 200, body)
 }
 
 type workerAdjustment struct {

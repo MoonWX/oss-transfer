@@ -39,7 +39,7 @@ import {
   DeleteOutlineRounded,
   InfoOutlined,
 } from "@mui/icons-material";
-import { api, useApi, useNotify } from "../lib/api";
+import { api, ApiError, useApi, useNotify } from "../lib/api";
 import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
 import type { Worker } from "../lib/rateStatus";
 import NodeRateLimits, {
@@ -65,10 +65,17 @@ import { EmptyState, PageHeader, formatNumber } from "../components/Common";
 import {
   removeNode,
   saveNode,
+  type NodeDisplay,
   type RegisteredNode,
   nodeName,
 } from "../lib/nodeRegistry";
 import SelectField from "../components/SelectField";
+/** One node's answer to a rate change, as the Master returns it. */
+type RateResult = NodeDisplay & {
+  workerIp: string;
+  success?: boolean;
+  message?: string;
+};
 const queues = [
   { key: "list", label: "对象扫描" },
   { key: "put", label: "对象传输" },
@@ -97,7 +104,11 @@ export default function NodesPage() {
     value: string;
   } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<{
+    message: string;
+    /** Nodes that did not confirm the change, as the Master reports them. */
+    unconfirmed?: RateResult[];
+  } | null>(null);
   const [nodeEdit, setNodeEdit] = useState<{
     original: string | null;
     address: string;
@@ -247,7 +258,7 @@ export default function NodesPage() {
       ? Number(edit.value) * (edit.type === "bandwidth" ? 1000000 : 1)
       : NaN;
     if (!edit || edit.value.trim() === "" || !Number.isFinite(qps) || qps < 0) {
-      setSaveError(t("请输入大于或等于 0 的数值。"));
+      setSaveError({ message: t("请输入大于或等于 0 的数值。") });
       return;
     }
     setSaving(true);
@@ -261,7 +272,26 @@ export default function NodesPage() {
       setEdit(null);
       await refresh();
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
+      const response = error instanceof ApiError ? error.response : undefined;
+      if (response?.code === "RATE_UPDATE_UNCONFIRMED") {
+        // The Master keeps an English message for API and CLI clients; its
+        // stable code selects the text in the console language.
+        const unconfirmed = (
+          Array.isArray(response.results) ? response.results : []
+        ).filter((result: RateResult) => result.success !== true);
+        setSaveError({
+          message: t(
+            "{count} 个执行节点未确认限速设置，请核对节点状态后重试。",
+            {
+              count: formatNumber(response.failedCount ?? unconfirmed.length),
+            },
+          ),
+          unconfirmed,
+        });
+      } else
+        setSaveError({
+          message: error instanceof Error ? error.message : String(error),
+        });
       await workers.refresh();
     } finally {
       setSaving(false);
@@ -942,7 +972,25 @@ export default function NodesPage() {
         <DialogTitle>{t("调整传输限速")}</DialogTitle>
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
-            {saveError && <Alert severity="error">{saveError}</Alert>}
+            {saveError && (
+              <Alert severity="error">
+                {saveError.message}
+                {!!saveError.unconfirmed?.length && (
+                  <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                    {saveError.unconfirmed.map((result) => (
+                      <Typography
+                        key={result.workerIp}
+                        variant="body2"
+                        sx={{ overflowWrap: "anywhere" }}
+                      >
+                        {nodeLabel(result.workerIp, result)}：
+                        {result.message || t("状态待确认")}
+                      </Typography>
+                    ))}
+                  </Stack>
+                )}
+              </Alert>
+            )}
             <SelectField
               fullWidth
               label={t("应用范围")}

@@ -797,6 +797,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Limits submitted. Refreshing node status.",
     ja: "制限値を送信しました。ノードの状態を更新しています。",
   },
+  "{count} 个执行节点未确认限速设置，请核对节点状态后重试。": {
+    en: "{count} nodes did not confirm the new limit. Check node status and try again.",
+    ja: "{count} 台の実行ノードで新しい制限値を確認できませんでした。ノードの状態を確認してから再試行してください。",
+  },
   执行节点: {
     en: "Workers",
     ja: "実行ノード",

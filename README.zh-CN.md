@@ -41,7 +41,7 @@ OSS Transfer 是一个分布式数据迁移工具，用于在 S3 兼容对象存
 
 有两种安装方式：
 
-- **原生服务**：在使用 systemd 的 Linux（CentOS 7 / RHEL 7 及更新版本）上运行下面的一行安装命令。macOS、Windows、FreeBSD 和自定义目录见[安装选项](docs/install.zh-CN.md)，无法联网的主机见[离线安装](docs/offline-install.zh-CN.md)。
+- **原生服务**：在使用 systemd 的 Linux 上运行下面的一行安装命令。macOS、Windows、FreeBSD 和自定义目录见[安装选项](docs/install.zh-CN.md)，无法联网的主机见[离线安装](docs/offline-install.zh-CN.md)。
 - **Docker**：用 Docker Compose 运行 Master，用容器运行执行节点，适用于 Linux 以及 macOS、Windows 上的 Docker Desktop。第 1 到 3 步按 [Docker Compose](docs/docker-compose.zh-CN.md) 操作，然后从第 4 步继续。
 
 ### 1. 安装 Master

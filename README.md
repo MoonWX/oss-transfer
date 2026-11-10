@@ -41,7 +41,7 @@ Read [planning](docs/planning.md) before a real migration: where to run the Agen
 
 There are two ways to install:
 
-- **Native services** on Linux with systemd (CentOS 7 / RHEL 7 or later): the one-line installer below. [Installation options](docs/install.md) covers macOS, Windows, FreeBSD and custom paths, and [offline installation](docs/offline-install.md) hosts without internet access.
+- **Native services** on Linux with systemd: the one-line installer below. [Installation options](docs/install.md) covers macOS, Windows, FreeBSD and custom paths, and [offline installation](docs/offline-install.md) hosts without internet access.
 - **Docker:** the Master with Docker Compose and Agents as containers, on Linux or with Docker Desktop on macOS and Windows. Follow [Docker Compose](docs/docker-compose.md) for steps 1 to 3, then continue here at step 4.
 
 ### 1. Install the Master

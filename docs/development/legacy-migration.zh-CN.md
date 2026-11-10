@@ -194,7 +194,7 @@ V4.0.x 在 RocksDB 默认列族中使用 UTF-8 键和 Fastjson 值。导出工�
 
 `legacyimport.Prepare` 在映射前将导出文件复制到同级的私有暂存目录。`Prepared.Master`、`Prepared.Agents` 和 `Prepared.Iterate` 用于访问暂存的数据库和原始记录。重新打开暂存目录时会再次检查校验和、权限和迁移身份。
 
-暂存的数据库带有 `migration/state.pending=true`，会阻止服务启动。最终发布时记录数据库的最终绝对路径，并通过原子重命名发布目录；目标已存在时拒绝发布。Linux 使用带 `RENAME_NOREPLACE` 的 `renameat2`，macOS 使用带 `RENAME_EXCL` 的 `renamex_np`。在不支持 `renameat2` 的 Linux 内核（例如早期 CentOS / RHEL 7 内核）上，或文件系统拒绝该标志时，最终发布会先以独占方式创建空的目标目录，再重命名到该目录上；`rename(2)` 只会替换空目录，因此仍不会覆盖已有数据。最终发布中断后可从暂存目录重试。服务启动时会同时检查角色和最终路径。
+暂存的数据库带有 `migration/state.pending=true`，会阻止服务启动。最终发布时记录数据库的最终绝对路径，并通过原子重命名发布目录；目标已存在时拒绝发布。Linux 使用带 `RENAME_NOREPLACE` 的 `renameat2`，macOS 使用带 `RENAME_EXCL` 的 `renamex_np`。在不支持 `renameat2` 的 Linux 内核上，或文件系统拒绝该标志时，最终发布会先以独占方式创建空的目标目录，再重命名到该目录上；`rename(2)` 只会替换空目录，因此仍不会覆盖已有数据。最终发布中断后可从暂存目录重试。服务启动时会同时检查角色和最终路径。
 
 `MapEffectiveNodeControl` 要求计划中提供全部九项已确定的设置，拒绝占位值和未知属性。`WriteRuntimeConfig` 为每个角色写入一个包含最终路径的 `service.json`。节点连接不一致、身份缺失或清单不完整，都必须在最终发布前解决。
 

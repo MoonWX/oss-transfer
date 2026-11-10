@@ -17,7 +17,9 @@ func TestConflictPolicyIsValidatedAndReachesChildren(t *testing.T) {
 			t.Errorf("conflict policy %q accepted", policy)
 		}
 	}
-	_, repo := openTest(t, filepath.Join(t.TempDir(), "master.db"))
+	db, repo := openTest(t, filepath.Join(t.TempDir(), "master.db"))
+	// Windows cannot remove the temporary directory while the database is open.
+	defer db.Close()
 	for _, policy := range []string{execution.ConflictSkip, execution.ConflictOverwrite, execution.ConflictOverwriteChanged} {
 		spec := testSpec()
 		spec.ConflictPolicy = policy

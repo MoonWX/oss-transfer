@@ -21,15 +21,18 @@ One Master serves the web console and API and schedules tasks. Agents (execution
 ## Architecture
 
 ```text
- Browser / oss-transfer-cli
-           │ HTTP :1685
-           ▼
-   ┌────────────────┐   long poll / heartbeat   ┌───────────────┐
-   │     Master     │ ◄──────────────────────── │    Agent A    │ ──► source / destination
-   │ console · API  │ ◄──────────────────────── │    Agent B    │ ──► object storage or
-   │ scheduling     │                           │      ...      │     local directories
-   └────────────────┘                           └───────────────┘
+  Browser / oss-transfer-cli
+             |
+             | HTTP :1685
+             v
+  +--------------+    long poll    +-----------+       +------------------+
+  |    Master    | <-------------- |  Agent A  | ----> |  Object storage  |
+  | console, API | <-------------- |  Agent B  | ----> |  or local files  |
+  |  scheduling  |    heartbeat    |    ...    |       |                  |
+  +--------------+                 +-----------+       +------------------+
 ```
+
+The Master serves the console and the API and schedules tasks. Agents (execution nodes) connect to it with long polls and heartbeats, and move data between object storage and local directories.
 
 Agents connect to the Master, so the Master never needs to reach them. Data flows only between Agents and storage, never through the Master.
 

@@ -170,6 +170,68 @@ docker compose logs master
 
 日志中有 `admin` 的初始密码。Docker Desktop、容器中的执行节点如何访问 Master（`host.docker.internal`）、目录挂载、日志、在容器中使用 CLI、更新和删除，见 [Docker Compose](docs/docker-compose.zh-CN.md)。
 
+## 手动运行（不依赖 systemd 和 Docker）
+
+主机没有 systemd、也不能用 Docker 时（例如容器化的开发机），可以直接运行发布包中的程序。[`deploy/manual/oss-transfer-run.sh`](deploy/manual/oss-transfer-run.sh) 负责启动、停止、异常退出后自动重启、日志和首次加入。
+
+1. 下载并解压发布包（中国大陆可把下载地址换成 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.42/`），并把脚本放在程序旁边：
+
+   ```sh
+   curl -fLO https://github.com/MoonWX/oss-transfer/releases/download/v4.1.42/oss-transfer-linux-amd64.tar.gz
+   tar -xzf oss-transfer-linux-amd64.tar.gz && cd oss-transfer-linux-amd64
+   curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/manual/oss-transfer-run.sh -o oss-transfer-run.sh && chmod +x oss-transfer-run.sh
+   ```
+
+2. 启动 Master，输出中有 `admin` 的初始密码：
+
+   ```sh
+   ./oss-transfer-run.sh master start
+   ```
+
+3. 在控制台 **执行节点 → 添加节点** 或用 `./oss-transfer-cli agent invite --master-url http://<Master IP>:1685` 生成邀请，复制其中的邀请链接（`…/api/agents/bootstrap/<令牌>`），在要加入的主机上运行。以后再启动时不需要 `--join-url`：
+
+   ```sh
+   ./oss-transfer-run.sh agent start --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<令牌>'
+   ```
+
+用法：`./oss-transfer-run.sh <master|agent> <start|stop|restart|status|logs> [选项]`
+
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--data 目录` | `<脚本目录>/data/<角色>` | 数据目录，日志在其中的 `logs/service.log`。每次都要使用同一个目录 |
+| `--listen 地址:端口` | `0.0.0.0:1685` | 仅 Master：监听地址 |
+| `--join-url 链接` | 无 | 仅 Agent，首次启动时必填：邀请链接，末尾的 `?lang=…` 会自动去掉 |
+
+`status` 只有在程序本身运行时才显示“正在运行”；程序反复退出时显示“正在重启”。被 Master 移除的 Agent 以状态码 78 退出，脚本不会再重启它。
+
+也可以不用脚本，直接运行程序：
+
+```sh
+./oss-transfer-master --listen 0.0.0.0:1685 --data-dir /data/oss-transfer/master
+./oss-transfer-agent --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<令牌>' --data-dir /data/oss-transfer/agent   # 首次
+./oss-transfer-agent --data-dir /data/oss-transfer/agent                                                                   # 之后
+```
+
+| 程序 | 参数 | 说明 |
+| --- | --- | --- |
+| `oss-transfer-master` | `--listen` | 监听地址，默认 `:1685` |
+| | `--data-dir` | 数据目录，默认 `./data/master` |
+| | `--config` | 用 `service.json` 指定以上设置和日志文件，代替命令行参数 |
+| | `--reset-admin-password [--username 名称]` | Master 停止时重置管理员密码 |
+| `oss-transfer-agent` | `--join-url` | 首次加入用的邀请链接，只能使用一次，30 分钟内有效；不能带 `?lang=…` 这类参数 |
+| | `--master-url` 和 `--join-token` | 代替 `--join-url`：分别给出 Master 地址和邀请令牌（也可用环境变量 `OSS_TRANSFER_JOIN_TOKEN`） |
+| | `--data-dir` | 数据目录，默认 `./data/agent`，保存节点身份；之后启动只需要它 |
+| | `--label`、`--address` | 节点显示名称；节点地址或名称 |
+| | `--enroll-only` | 只完成加入并退出，不开始执行任务 |
+| | `--config` | 用 `service.json` 指定数据目录和日志文件 |
+| 两者 | `--version` | 显示版本 |
+
+注意：
+
+- 邀请里的 Master 地址必须是执行节点能访问的地址；`127.0.0.1` 只适用于与 Master 在同一台主机上的执行节点。
+- 脚本不处理开机自启，可在 root 的 crontab 中加入 `@reboot /路径/oss-transfer-run.sh master start`（执行节点同理）。
+- 这种方式不支持控制台和 CLI 的在线更新，也不支持安装脚本的 `--uninstall`。升级时先 `stop`，把三个程序换成新版本再 `start`，数据目录保持不变；卸载时停止后删除目录即可。
+
 ## 命令行
 
 在已安装的 Master 或执行节点主机上，以 root（或服务所属账号）运行 CLI，会直接连接本机所属的集群，不需要登录：

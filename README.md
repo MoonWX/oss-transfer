@@ -170,6 +170,68 @@ docker compose logs master
 
 The log shows the initial `admin` password. See [Docker Compose](docs/docker-compose.md) for Docker Desktop, how Agents in containers reach the Master (`host.docker.internal`), directory mounts, logs, the CLI in the container, updates and removal.
 
+## Run manually (without systemd or Docker)
+
+When a host has no systemd and cannot use Docker (for example a containerized development machine), run the programs of the release archive directly. [`deploy/manual/oss-transfer-run.sh`](deploy/manual/oss-transfer-run.sh) starts and stops them, restarts them after an unexpected exit, keeps their logs and handles the first join.
+
+1. Download and extract the release archive (in mainland China, download from `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.42/` instead), and put the script next to the programs:
+
+   ```sh
+   curl -fLO https://github.com/MoonWX/oss-transfer/releases/download/v4.1.42/oss-transfer-linux-amd64.tar.gz
+   tar -xzf oss-transfer-linux-amd64.tar.gz && cd oss-transfer-linux-amd64
+   curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/deploy/manual/oss-transfer-run.sh -o oss-transfer-run.sh && chmod +x oss-transfer-run.sh
+   ```
+
+2. Start the Master; the output shows the initial `admin` password:
+
+   ```sh
+   ./oss-transfer-run.sh master start
+   ```
+
+3. Create an invitation in the console under **Execution nodes → Add node**, or with `./oss-transfer-cli agent invite --master-url http://<Master IP>:1685`, copy its invitation link (`…/api/agents/bootstrap/<token>`) and run on the host to add. Later starts need no `--join-url`:
+
+   ```sh
+   ./oss-transfer-run.sh agent start --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<token>'
+   ```
+
+Usage: `./oss-transfer-run.sh <master|agent> <start|stop|restart|status|logs> [options]`
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--data DIR` | `<script directory>/data/<role>` | Data directory; the log is `logs/service.log` in it. Use the same directory every time |
+| `--listen ADDRESS:PORT` | `0.0.0.0:1685` | Master only: listen address |
+| `--join-url LINK` | none | Agent only, required on the first start: the invitation link; a trailing `?lang=…` is removed |
+
+`status` reports running only while the program itself runs, and restarting while it keeps exiting. An Agent removed on the Master exits with status 78, and the script does not restart it.
+
+You can also run the programs without the script:
+
+```sh
+./oss-transfer-master --listen 0.0.0.0:1685 --data-dir /data/oss-transfer/master
+./oss-transfer-agent --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<token>' --data-dir /data/oss-transfer/agent   # first start
+./oss-transfer-agent --data-dir /data/oss-transfer/agent                                                                    # later
+```
+
+| Program | Parameter | Meaning |
+| --- | --- | --- |
+| `oss-transfer-master` | `--listen` | Listen address, default `:1685` |
+| | `--data-dir` | Data directory, default `./data/master` |
+| | `--config` | Read these settings and the log file from a `service.json` instead of parameters |
+| | `--reset-admin-password [--username NAME]` | Reset an administrator password while the Master is stopped |
+| `oss-transfer-agent` | `--join-url` | Invitation link for the first join; works once and expires after 30 minutes; must not carry parameters such as `?lang=…` |
+| | `--master-url` and `--join-token` | Instead of `--join-url`: the Master address and the invitation token (or the `OSS_TRANSFER_JOIN_TOKEN` environment variable) |
+| | `--data-dir` | Data directory, default `./data/agent`; it keeps the node identity, so later starts need only this |
+| | `--label`, `--address` | Node display name; node address or name |
+| | `--enroll-only` | Join and exit without running tasks |
+| | `--config` | Read the data directory and the log file from a `service.json` |
+| Both | `--version` | Print the version |
+
+Notes:
+
+- The Master address in the invitation must be reachable from the Agent; `127.0.0.1` works only for an Agent on the Master's host.
+- The script does not start anything at boot. Add `@reboot /path/oss-transfer-run.sh master start` (and the same for the Agent) to root's crontab.
+- Online updates from the console or the CLI and the installer's `--uninstall` do not apply. To upgrade, `stop`, replace the three programs with the new version and `start`; keep the data directory. To uninstall, stop and delete the directory.
+
 ## Command line
 
 On an installed Master or Agent host, run the CLI as root (or the service owner). It connects to the local cluster without a login:

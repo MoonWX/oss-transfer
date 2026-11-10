@@ -112,6 +112,26 @@ func (a *storageCheckAgent) Execute(ctx context.Context, c agenttransport.Comman
 			return fakeReply(500, map[string]string{"message": err.Error()})
 		}
 		return fakeReply(200, check)
+	case "storage_permissions":
+		if a.legacy {
+			return fakeUnknownOperation()
+		}
+		var request struct {
+			Config storageconfig.Config `json:"config"`
+			Bucket string               `json:"bucket"`
+			Write  bool                 `json:"write"`
+		}
+		if err := fakeDecode(c.Payload, &request); err != nil {
+			return fakeReply(400, map[string]string{"message": err.Error()})
+		}
+		// Read access, PUT denied, as read-only keys give.
+		check := transferstore.PermissionCheck{Bucket: request.Bucket, PathStyle: true, Write: request.Write, Results: []transferstore.PermissionResult{
+			{Operation: transferstore.PermissionList, Status: transferstore.PermissionPassed},
+			{Operation: transferstore.PermissionHead, Status: transferstore.PermissionPassed, Key: "a.jpg"},
+			{Operation: transferstore.PermissionGet, Status: transferstore.PermissionPassed, Key: "a.jpg"},
+			{Operation: transferstore.PermissionPut, Status: transferstore.PermissionFailed, Key: transferstore.PermissionProbePrefix + "x", Error: "api error AccessDenied: denied for secret-fixture-key", ErrorKind: transferstore.StorageErrorAccessDenied},
+		}}
+		return fakeReply(200, check)
 	case "storage_buckets":
 		var config storageconfig.Config
 		if err := fakeDecode(c.Payload, &config); err != nil {
@@ -286,5 +306,41 @@ func TestStorageCheckWarnsWhenTheFirstListedBucketFails(t *testing.T) {
 	if code != 200 || fmt.Sprint(body["buckets"]) != "[src]" || body["bucketCheckFailed"] != "src" || body["warningPathStyleHint"] != true ||
 		!strings.Contains(fmt.Sprint(body["warning"]), "Path-style") {
 		t.Fatalf("addressing bucket list: HTTP %d %v", code, body)
+	}
+}
+
+// The permission check reports each operation, explains failures in the
+// caller's language without credentials, and names an Agent too old for it.
+func TestStoragePermissionCheckReportsEachOperation(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	s3 := newStorageCheckS3(t)
+	agent := &storageCheckAgent{s3: s3}
+	comparisonTestNode(t, f, "storage-permissions", agent)
+	config := storageCheckConfig("http://storage.example.com:9000", nil)
+	config["validate"] = false
+	if code, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/s3-config", f.admin, config); code != 200 {
+		t.Fatalf("save: HTTP %d %v", code, body)
+	}
+	url := f.http.URL + "/api/master/s3-config/selfhosted/permissions"
+	code, _, body, err := localizedRequest(f.http.Client(), "POST", url, f.admin, "zh-CN", map[string]any{"bucket": "src", "write": true})
+	if err != nil || code != 200 || body["bucket"] != "src" || body["write"] != true {
+		t.Fatalf("check: HTTP %d %v %v", code, body, err)
+	}
+	results, _ := body["results"].([]any)
+	if len(results) != 4 {
+		t.Fatalf("results %v", body["results"])
+	}
+	put, _ := results[3].(map[string]any)
+	if put["status"] != "FAILED" || put["reasonCode"] != "STORAGE_ACCESS_DENIED" || !strings.HasPrefix(fmt.Sprint(put["message"]), "访问被拒绝") ||
+		strings.Contains(fmt.Sprint(put["detail"]), "secret-fixture-key") {
+		t.Fatalf("PUT row %v", put)
+	}
+	if code, body := request(t, f.http.Client(), "POST", url, f.admin, map[string]any{"bucket": ""}); code != 400 {
+		t.Fatalf("empty bucket: HTTP %d %v", code, body)
+	}
+	agent.legacy = true
+	code, _, body, _ = localizedRequest(f.http.Client(), "POST", url, f.admin, "zh-CN", map[string]any{"bucket": "src"})
+	if code != 409 || !strings.Contains(fmt.Sprint(body["message"]), "执行节点版本较旧") {
+		t.Fatalf("older Agent: HTTP %d %v", code, body)
 	}
 }

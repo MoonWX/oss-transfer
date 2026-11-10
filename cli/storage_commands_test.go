@@ -37,7 +37,19 @@ func TestStorageTestReportsTheBucketLevelCheck(t *testing.T) {
 	t.Setenv("CLI_TEST_ACCESS", "access")
 	t.Setenv("CLI_TEST_SECRET", "secret")
 	var query string
+	var permissionRequests []map[string]interface{}
 	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/master/s3-config/scoped/permissions" {
+			body := adminTestBody(t, r)
+			permissionRequests = append(permissionRequests, body)
+			adminTestJSON(t, w, map[string]interface{}{"success": true, "bucket": "only-bucket", "write": body["write"], "node": "worker-a", "results": []interface{}{
+				map[string]interface{}{"operation": "LIST", "status": "PASSED"},
+				map[string]interface{}{"operation": "HEAD", "status": "PASSED"},
+				map[string]interface{}{"operation": "GET", "status": "PASSED"},
+				map[string]interface{}{"operation": "PUT", "status": "SKIPPED", "reason": "NOT_REQUESTED"},
+			}})
+			return
+		}
 		query = r.URL.RawQuery
 		if r.URL.Path != "/api/master/s3-config/scoped/buckets" {
 			t.Fatalf("unexpected request %s", r.URL)
@@ -48,10 +60,18 @@ func TestStorageTestReportsTheBucketLevelCheck(t *testing.T) {
 	if code != 0 || query != "bucket=only-bucket" {
 		t.Fatalf("%d %q %s %s", code, query, out, stderr)
 	}
-	for _, want := range []string{"存储桶（1 个）", "  only-bucket", "寻址方式: 自动（Path-style）", "存储桶级检查: 已列举存储桶 only-bucket 中的对象", "连接测试通过"} {
+	for _, want := range []string{"存储桶（1 个）", "  only-bucket", "寻址方式: 自动（Path-style）", "存储桶级检查: 已列举存储桶 only-bucket 中的对象", "连接测试通过",
+		"存储桶 only-bucket 的权限检查（由执行节点 worker-a 检查）：", "[通过] 读取对象内容（GetObject）", "[跳过] 写入对象（PutObject，条件写入）：未检查写入，加 --write 检查",
+		"结论：存储桶 only-bucket 读取权限正常，可以作为迁移的源；作为目标时请加 --write 检查写入。"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %s", want, out)
 		}
+	}
+	if len(permissionRequests) != 1 || permissionRequests[0]["bucket"] != "only-bucket" || permissionRequests[0]["write"] != false {
+		t.Fatalf("permission requests %v", permissionRequests)
+	}
+	if code, _, stderr := runMockCLI(t, []string{"storage", "test", "scoped", "--write"}, handler); code != 2 || !strings.Contains(stderr, "--bucket") {
+		t.Fatalf("--write without --bucket: %d %s", code, stderr)
 	}
 	code, out, stderr = runMockCLI(t, []string{"--lang", "en", "storage", "test", "scoped", "--json"}, handler)
 	var result map[string]interface{}
@@ -172,5 +192,35 @@ func TestTaskShowExplainsStorageFailureReasons(t *testing.T) {
 		if strings.Contains(out.String(), "原因说明") {
 			t.Fatalf("%q was classified without storage context:\n%s", raw, out.String())
 		}
+	}
+}
+
+// A denied write fails the command; an older Master without the check is named.
+func TestStorageTestPermissionFailuresAndOlderMasters(t *testing.T) {
+	handler := func(older bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/master/s3-config/src/permissions" {
+				if older {
+					w.WriteHeader(http.StatusNotFound)
+					adminTestJSON(t, w, map[string]interface{}{"success": false, "message": "not found"})
+					return
+				}
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "bucket": "data", "write": true, "results": []interface{}{
+					map[string]interface{}{"operation": "LIST", "status": "PASSED"},
+					map[string]interface{}{"operation": "PUT", "status": "FAILED", "message": "访问被拒绝：凭据有效，但没有执行此请求的权限。"},
+				}})
+				return
+			}
+			adminTestJSON(t, w, map[string]interface{}{"success": true, "buckets": []interface{}{"data"}, "pathStyle": false, "checkedBucket": "data"})
+		}
+	}
+	code, out, stderr := runMockCLI(t, []string{"storage", "test", "src", "--bucket", "data", "--write"}, handler(false))
+	if code != 1 || !strings.Contains(out, "[未通过] 写入对象（PutObject，条件写入）") || !strings.Contains(out, "访问被拒绝") ||
+		!strings.Contains(out, "结论：存储桶 data 读取正常但不能写入，只能作为迁移的源。") || !strings.Contains(stderr, "存储桶 data：1 项权限检查未通过") {
+		t.Fatalf("denied write: %d %s %s", code, out, stderr)
+	}
+	code, out, stderr = runMockCLI(t, []string{"storage", "test", "src", "--bucket", "data"}, handler(true))
+	if code != 0 || !strings.Contains(out, "Master 版本较旧，未逐项检查存储桶权限") {
+		t.Fatalf("older Master: %d %s %s", code, out, stderr)
 	}
 }

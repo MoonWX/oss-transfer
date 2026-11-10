@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"math"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -284,6 +286,9 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		return result, err
 	case "buckets", "test", "remove":
 		switches, values := []string{}, []string{"bucket"}
+		if action == "test" {
+			switches = append(switches, "write")
+		}
 		if action == "remove" {
 			switches, values = append(switches, "yes"), nil
 		}
@@ -333,6 +338,12 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 				result["message"] = client.text("已读取存储桶列表；没有可检查的存储桶，可用 --bucket 指定一个")
 			default:
 				result["message"] = client.text("已读取存储桶列表；未检查存储桶级访问")
+			}
+			if o.Has("write") && !o.Has("bucket") {
+				return nil, cliUsageErrorf("--write 需要与 --bucket 一起使用")
+			}
+			if o.Has("bucket") {
+				return storagePermissions(client, alias, o.Value("bucket"), o.Has("write"), result)
 			}
 		}
 		return result, nil
@@ -1078,4 +1089,34 @@ func storageSavedSummary(client *ApiClient, done string, result map[string]inter
 		}
 	}
 	return lines
+}
+
+// storagePermissions runs, through the Master, each request a migration makes
+// on one bucket, and fails when a required one is denied.
+func storagePermissions(client *ApiClient, alias, bucket string, write bool, result map[string]interface{}) (map[string]interface{}, error) {
+	check, err := client.Post("/s3-config/"+url.PathEscape(alias)+"/permissions", map[string]interface{}{"bucket": bucket, "write": write})
+	var problem *apiHTTPError
+	switch {
+	case err == nil:
+		result["permissions"] = check
+	case errors.As(err, &problem) && problem.Status == http.StatusNotFound:
+		// Masters before v4.1.43 have no permission check.
+		result["permissionsNote"] = client.text("Master 版本较旧，未逐项检查存储桶权限")
+		return result, nil
+	case errors.As(err, &problem) && problem.Status == http.StatusConflict:
+		result["permissionsNote"] = problem.Message
+		return result, nil
+	default:
+		return result, err
+	}
+	failed := 0
+	for _, row := range objectList(check["results"]) {
+		if getString(row, "status") == "FAILED" && getString(row, "operation") != "DELETE_PROBE" {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return result, cliErrorf("存储桶 %s：%d 项权限检查未通过", bucket, failed)
+	}
+	return result, nil
 }

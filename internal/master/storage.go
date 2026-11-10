@@ -201,6 +201,7 @@ func installStorageRoutes(s *Server) {
 	s.mux.HandleFunc("PUT /api/master/s3-config/{alias}", s.adminOnly(s.saveStorage))
 	s.mux.HandleFunc("DELETE /api/master/s3-config/{alias}", s.adminOnly(s.deleteStorage))
 	s.mux.HandleFunc("GET /api/master/s3-config/{alias}/buckets", s.adminOnly(s.listStorageBuckets))
+	s.mux.HandleFunc("POST /api/master/s3-config/{alias}/permissions", s.adminOnly(s.checkStoragePermissions))
 }
 func (s *Server) listStorage(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := storageconfig.NewMaster(s.store).Snapshot()

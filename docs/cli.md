@@ -115,7 +115,7 @@ This walk-through copies the prefix `2026/` of bucket `photos` on one object sto
 oss-transfer-cli storage list
 oss-transfer-cli storage add NAME --endpoint URL --access-key-env NAME --secret-key-env NAME [options]
 oss-transfer-cli storage update NAME [options]
-oss-transfer-cli storage test NAME [--bucket BUCKET]
+oss-transfer-cli storage test NAME [--bucket BUCKET [--write]]
 oss-transfer-cli storage buckets NAME [--bucket BUCKET]
 oss-transfer-cli storage remove NAME --yes
 ```
@@ -130,7 +130,7 @@ oss-transfer-cli storage remove NAME --yes
 | `--v2-signer default\|true\|false` | Signature version: `default` is V4; `true` uses V2 for services that need it |
 | `--validate true\|false` | Check the connection before saving; default `true` |
 
-`storage list` shows each connection with masked credentials, its signature version and its addressing, for example *Automatic (Path-style)*. `storage test` lists the buckets, then lists one object in the bucket given with `--bucket` (or the first bucket) and prints *Connection test passed: buckets listed and one bucket reached with the current addressing*, the addressing, the bucket-level check and any warning. Keys limited to one bucket cannot list buckets: saving only warns, and `storage test NAME --bucket BUCKET` checks that bucket. Failures print the cause and what to do; see [connection check failures](operations.md#a-storage-connection-check-fails). Changes are synchronized to every node; the command reports nodes that are still waiting.
+`storage list` shows each connection with masked credentials, its signature version and its addressing, for example *Automatic (Path-style)*. `storage test` lists the buckets, then lists one object in the bucket given with `--bucket` (or the first bucket) and prints *Connection test passed: buckets listed and one bucket reached with the current addressing*, the addressing, the bucket-level check and any warning. Keys limited to one bucket cannot list buckets: saving only warns, and `storage test NAME --bucket BUCKET` checks that bucket. With `--bucket`, it also checks each request a migration makes (list, HEAD, GET), and `--write` adds the write checks; it exits 1 when a required check fails ([check each permission of a bucket](planning.md#check-each-permission-of-a-bucket)). Failures print the cause and what to do; see [connection check failures](operations.md#a-storage-connection-check-fails). Changes are synchronized to every node; the command reports nodes that are still waiting.
 
 ## Inspect and control tasks
 

@@ -135,9 +135,25 @@ Keys limited to one bucket usually cannot list buckets. The connection is then s
 - In the console, open **Test connection**, enter the bucket under **Check a bucket** and choose **Check**.
 - From the CLI: `oss-transfer-cli storage test <connection> --bucket <bucket>`.
 
-The check passes when it reports that it listed objects in that bucket. When you create a task, type the bucket name. If listing the objects of the bucket is denied too, the save still succeeds with a warning, but transfers from that bucket will fail: fix its permissions first.
+The check passes when it reports that it listed objects in that bucket; the result of each permission is described in the next section. When you create a task, type the bucket name. If listing the objects of the bucket is denied too, the save still succeeds with a warning, but transfers from that bucket will fail: fix its permissions first.
 
 Automatic addressing and the bucket-level check run on the Agent, so they need Agents on v4.1.42. With older Agents, the check only lists buckets.
+
+### Check each permission of a bucket
+
+In **Test connection**, enter a bucket under **Check a bucket** and choose **Check** (CLI: `oss-transfer-cli storage test <connection> --bucket <bucket>`). The check makes, on that bucket, each request a migration uses, and shows for each one whether it passed, failed or was skipped, plus a one-sentence result (for example "reading works; it can be a migration source"):
+
+| Check | Request | Used by migrations to |
+| --- | --- | --- |
+| List objects | ListObjectsV2 | Scan sources, compare |
+| Read object metadata | HeadObject (first listed object) | Find existing targets, verify results |
+| Read object content | GetObject of one byte | Read source objects |
+| Write an object (with the write check, CLI `--write`) | PutObject with `If-None-Match: *` | Write targets; "Skip existing objects" uses this conditional write |
+| Read the written object back | HeadObject | Verify after writing |
+| Multipart upload | CreateMultipartUpload, UploadPart, AbortMultipartUpload | Upload and clean up large objects |
+| Delete the test object | DeleteObject | Not needed for migrations; only removes the test object |
+
+The write check writes a tiny test object under `.oss-transfer-permission-check/` and deletes it afterwards; the multipart upload is aborted and leaves no data. Without delete permission, the result names the leftover test object so you can delete it. In an empty bucket, reading objects cannot be checked and shows as skipped. In the CLI, the command exits 1 when a required check fails. The check needs a Master and Agents on v4.1.43 or later.
 
 ## Speed and what limits it
 

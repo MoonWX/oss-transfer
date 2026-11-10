@@ -266,6 +266,8 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"local transfers select storage through their endpoints":                               {"local transfers select storage through their endpoints", "本地迁移通过端点选择存储", "ローカル転送ではエンドポイントでストレージを選択します"},
 	"local transfers use destination prefix/objectKey or targetRelativePath":               {"local transfers use destination prefix/objectKey or targetRelativePath", "本地迁移使用目标端 prefix/objectKey 或 targetRelativePath", "ローカル転送では転送先の prefix/objectKey または targetRelativePath を使用してください"},
 	"local-transfers requires a local endpoint":                                            {"local-transfers requires a local endpoint", "local-transfers 必须包含本地端点", "local-transfers にはローカルエンドポイントが必要です"},
+	"Enter the bucket to check":                                                            {"Enter the bucket to check", "请填写要检查的存储桶", "確認するバケットを入力してください"},
+	"The execution node is too old to check bucket permissions; update it first":           {"The execution node is too old to check bucket permissions; update it first", "执行节点版本较旧，不支持检查存储桶权限，请先更新执行节点", "実行ノードのバージョンが古いため、バケットの権限を確認できません。先に実行ノードを更新してください"},
 	"no Agent is online; join an Agent before validating storage":                          {"No Agent is online. Add an execution node before testing this connection.", "没有在线执行节点，请先添加执行节点再测试连接。", "オンラインの実行ノードがありません。実行ノードを追加してから接続をテストしてください。"},
 	"no online execution Agent":                                                            {"no online execution Agent", "没有在线执行节点", "オンラインの実行ノードがありません"},
 	"objectKey conflicts with local source path":                                           {"objectKey conflicts with local source path", "objectKey 与本地源路径冲突", "objectKey がローカルの転送元パスと競合しています"},

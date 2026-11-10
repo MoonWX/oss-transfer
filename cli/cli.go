@@ -846,6 +846,93 @@ func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buck
 	if message := getString(result, "message"); message != "" {
 		fmt.Fprintln(out, safeCLIText(message))
 	}
+	if check, ok := result["permissions"].(map[string]interface{}); ok {
+		renderPermissionCheck(out, check)
+	}
+	if note := getString(result, "permissionsNote"); note != "" {
+		fmt.Fprintln(out, safeCLIText(note))
+	}
+}
+
+// Storage requests of a bucket permission check, as the console names them.
+var cliPermissionLabels = map[string]string{
+	"LIST":         "列举对象（ListObjectsV2）",
+	"HEAD":         "读取对象元数据（HeadObject）",
+	"GET":          "读取对象内容（GetObject）",
+	"PUT":          "写入对象（PutObject，条件写入）",
+	"HEAD_WRITTEN": "读回写入的对象（HeadObject）",
+	"MULTIPART":    "分片上传（创建、上传分片、中止）",
+	"DELETE_PROBE": "删除测试对象（DeleteObject，迁移不需要）",
+}
+
+var cliPermissionSkips = map[string]string{
+	"EMPTY_BUCKET":   "存储桶为空，没有可读取的对象",
+	"LIST_FAILED":    "列举失败，无法选取要读取的对象",
+	"PUT_FAILED":     "写入失败，跳过",
+	"NOT_REQUESTED":  "未检查写入，加 --write 检查",
+	"NO_SUCH_BUCKET": "存储桶不存在，不尝试写入",
+}
+
+// renderPermissionCheck lists each storage request of a permission check and
+// says in one sentence what the bucket can be used for.
+func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
+	bucket := getString(check, "bucket")
+	fmt.Fprintln(out)
+	if node := getString(check, "node"); node != "" {
+		fmt.Fprint(out, cliTextf(out, "存储桶 %s 的权限检查（由执行节点 %s 检查）：\n", safeCLIText(bucket), safeCLIText(node)))
+	} else {
+		fmt.Fprint(out, cliTextf(out, "存储桶 %s 的权限检查：\n", safeCLIText(bucket)))
+	}
+	failed, readFailed, readSkipped := 0, 0, false
+	for _, row := range objectList(check["results"]) {
+		operation, status := getString(row, "operation"), getString(row, "status")
+		label := operation
+		if key, ok := cliPermissionLabels[operation]; ok {
+			label = cliText(out, key)
+		}
+		write := operation == "PUT" || operation == "HEAD_WRITTEN" || operation == "MULTIPART"
+		switch status {
+		case "PASSED":
+			fmt.Fprintf(out, "  [%s] %s\n", cliText(out, "通过"), label)
+		case "FAILED":
+			fmt.Fprintf(out, "  [%s] %s\n", cliText(out, "未通过"), label)
+			message := getString(row, "message")
+			if message == "" {
+				message = getString(row, "detail")
+			}
+			fmt.Fprintf(out, "         %s\n", safeCLIText(message))
+			if operation != "DELETE_PROBE" {
+				failed++
+				if !write {
+					readFailed++
+				}
+			}
+		default:
+			reason := getString(row, "reason")
+			if key, ok := cliPermissionSkips[reason]; ok {
+				reason = cliText(out, key)
+			}
+			fmt.Fprintf(out, "  [%s] %s：%s\n", cliText(out, "跳过"), label, safeCLIText(reason))
+			if !write {
+				readSkipped = true
+			}
+		}
+	}
+	switch {
+	case failed > 0 && readFailed == 0:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常但不能写入，只能作为迁移的源。\n", safeCLIText(bucket)))
+	case failed > 0:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 有 %d 项检查未通过。\n", safeCLIText(bucket), failed))
+	case readSkipped:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 可以列举对象，但存储桶为空，未能检查读取对象。\n", safeCLIText(bucket)))
+	case check["write"] == true:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取和写入权限都正常，可以作为迁移的源或目标。\n", safeCLIText(bucket)))
+	default:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取权限正常，可以作为迁移的源；作为目标时请加 --write 检查写入。\n", safeCLIText(bucket)))
+	}
+	if key := getString(check, "leftoverKey"); key != "" {
+		fmt.Fprint(out, cliTextf(out, "注意：测试对象 %s 未能删除（删除不是迁移所需的权限），请手动删除。\n", safeCLIText(key)))
+	}
 }
 
 func renderCLIAdminMessage(out io.Writer, result map[string]interface{}) {

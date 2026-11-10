@@ -40,6 +40,7 @@ import { api, ApiError, useApi, useNotify } from "../lib/api";
 import { autoPathStyle, validEndpoint } from "../lib/storageAddressing";
 import { EmptyState, PageHeader } from "../components/Common";
 import SelectField from "../components/SelectField";
+import BucketPermissionCheck from "../components/BucketPermissionCheck";
 type Connection = {
   alias: string;
   endpoint: string;
@@ -187,7 +188,6 @@ export default function StoragePage() {
     bucketCheckSupported?: boolean;
     warning?: string;
   } | null>(null);
-  const [checkBucket, setCheckBucket] = useState("");
   const [bucketOpen, setBucketOpen] = useState(false);
   const bucketRequest = useRef(0);
   const configs = data?.configs ?? [];
@@ -307,7 +307,6 @@ export default function StoragePage() {
   };
   const testConnection = async (alias: string, bucket = "") => {
     const request = ++bucketRequest.current;
-    if (!bucket) setCheckBucket("");
     setBucketState({ alias, loading: true, buckets: [] });
     setBucketOpen(true);
     try {
@@ -885,7 +884,7 @@ export default function StoragePage() {
                     : bucketState.bucketCheckSupported === false
                       ? t("执行节点版本较旧，未检查存储桶级访问。")
                       : t("没有可检查的存储桶；可在下方指定一个存储桶。")}{" "}
-                {t("存储桶读写权限在迁移时验证。")}
+                {t("要确认某个存储桶的读写权限，请在下方检查。")}
               </Typography>
               <Box sx={{ maxHeight: 360, overflowY: "auto" }}>
                 {bucketState.buckets.map((bucket) => (
@@ -905,41 +904,15 @@ export default function StoragePage() {
               </Box>
             </Stack>
           ) : null}
-        </DialogContent>
-        {bucketState && !bucketState.loading && (
-          <DialogContent sx={{ pt: 0 }}>
-            <Stack
-              direction="row"
-              spacing={1}
-              alignItems="flex-start"
-              component="form"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault();
-                if (checkBucket.trim())
-                  void testConnection(bucketState.alias, checkBucket.trim());
-              }}
-            >
-              <TextField
-                size="small"
-                fullWidth
-                label={t("检查指定存储桶")}
-                helperText={t(
-                  "只授权到单个存储桶的密钥无法列举存储桶，可在此填写存储桶名称后检查。",
-                )}
-                value={checkBucket}
-                onChange={(e) => setCheckBucket(e.target.value)}
+          {bucketState && !bucketState.loading && (
+            <Box sx={{ mt: 2 }}>
+              <BucketPermissionCheck
+                key={bucketState.alias}
+                alias={bucketState.alias}
               />
-              <Button
-                type="submit"
-                variant="outlined"
-                disabled={!checkBucket.trim()}
-                sx={{ flexShrink: 0, mt: 0.25 }}
-              >
-                {t("检查")}
-              </Button>
-            </Stack>
-          </DialogContent>
-        )}
+            </Box>
+          )}
+        </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeBuckets}>{t("关闭")}</Button>
         </DialogActions>

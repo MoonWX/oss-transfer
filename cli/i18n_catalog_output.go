@@ -3,6 +3,32 @@ package main
 // Catalog entries of the human output: command summaries, the exceptions
 // table, error summaries and hints. They join cliMessages at start-up.
 var cliOutputMessages = map[string][2]string{
+	// Bucket permission checks.
+	"列举对象（ListObjectsV2）":                 {"List objects (ListObjectsV2)", "オブジェクトの一覧（ListObjectsV2）"},
+	"读取对象元数据（HeadObject）":                 {"Read object metadata (HeadObject)", "オブジェクトのメタデータを読み取り（HeadObject）"},
+	"读取对象内容（GetObject）":                   {"Read object content (GetObject)", "オブジェクトの内容を読み取り（GetObject）"},
+	"写入对象（PutObject，条件写入）":                {"Write an object (PutObject, conditional)", "オブジェクトを書き込み（PutObject、条件付き）"},
+	"读回写入的对象（HeadObject）":                 {"Read the written object back (HeadObject)", "書き込んだオブジェクトを読み戻し（HeadObject）"},
+	"分片上传（创建、上传分片、中止）":                    {"Multipart upload (create, upload a part, abort)", "マルチパートアップロード（作成、パートのアップロード、中止）"},
+	"删除测试对象（DeleteObject，迁移不需要）":          {"Delete the test object (DeleteObject, not needed for migrations)", "テストオブジェクトを削除（DeleteObject、移行には不要）"},
+	"存储桶为空，没有可读取的对象":                      {"The bucket is empty: no object to read", "バケットが空のため、読み取るオブジェクトがありません"},
+	"列举失败，无法选取要读取的对象":                     {"Listing failed, so no object could be chosen to read", "一覧の取得に失敗したため、読み取るオブジェクトを選べません"},
+	"写入失败，跳过":                             {"Skipped because the write failed", "書き込みに失敗したためスキップ"},
+	"存储桶不存在，不尝试写入":                        {"The bucket does not exist; writing is not tried", "バケットが存在しないため、書き込みは試しません"},
+	"未检查写入，加 --write 检查":                  {"Writing not checked; add --write", "書き込みは未確認です。--write を付けて確認してください"},
+	"跳过":                                  {"skipped", "スキップ"},
+	"存储桶 %s 的权限检查（由执行节点 %s 检查）：\n":        {"Permission check of bucket %s (by execution node %s):\n", "バケット %s の権限の確認（実行ノード %s）:\n"},
+	"存储桶 %s 的权限检查：\n":                     {"Permission check of bucket %s:\n", "バケット %s の権限の確認:\n"},
+	"结论：存储桶 %s 读取正常但不能写入，只能作为迁移的源。\n":     {"Result: bucket %s can be read but not written; it can only be a migration source.\n", "結果: バケット %s は読み取れますが書き込めません。移行元としてのみ使えます。\n"},
+	"结论：存储桶 %s 有 %d 项检查未通过。\n":            {"Result: bucket %s has %d failed checks.\n", "結果: バケット %s の確認のうち %d 件が失敗しました。\n"},
+	"结论：存储桶 %s 可以列举对象，但存储桶为空，未能检查读取对象。\n": {"Result: objects of bucket %s can be listed, but the bucket is empty, so reading objects could not be checked.\n", "結果: バケット %s のオブジェクトは一覧できますが、バケットが空のため読み取りを確認できませんでした。\n"},
+	"结论：存储桶 %s 读取和写入权限都正常，可以作为迁移的源或目标。\n": {"Result: bucket %s can be read and written; it can be a migration source or target.\n", "結果: バケット %s は読み取りも書き込みもできます。移行元にも移行先にも使えます。\n"},
+	"结论：存储桶 %s 读取权限正常，可以作为迁移的源；作为目标时请加 --write 检查写入。\n": {"Result: bucket %s can be read; it can be a migration source. To use it as a target, check writing with --write.\n", "結果: バケット %s は読み取れます。移行元として使えます。移行先にする場合は --write で書き込みを確認してください。\n"},
+	"注意：测试对象 %s 未能删除（删除不是迁移所需的权限），请手动删除。\n":             {"Note: the test object %s could not be deleted (deleting is not needed for migrations); delete it manually.\n", "注意: テストオブジェクト %s を削除できませんでした（削除は移行に必要な権限ではありません）。手動で削除してください。\n"},
+	"Master 版本较旧，未逐项检查存储桶权限":                            {"This Master is too old to check bucket permissions one by one", "この Master はバージョンが古いため、バケットの権限を 1 つずつ確認できません"},
+	"存储桶 %s：%d 项权限检查未通过":                                {"Bucket %s: %d permission checks failed", "バケット %s: 権限の確認のうち %d 件が失敗しました"},
+	"--write 需要与 --bucket 一起使用":                         {"--write needs --bucket", "--write は --bucket と一緒に指定してください"},
+
 	// Generic formatting.
 	"%s：%s":       {"%s: %s", "%s：%s"},
 	"（%s）":        {" (%s)", "（%s）"},

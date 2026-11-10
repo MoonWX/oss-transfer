@@ -176,13 +176,98 @@ test("cards and the connection test show the resolved addressing and the bucket-
   await expect(dialog.getByTestId("storage-check-summary")).toContainText(
     "寻址方式：自动 · Path-style。",
   );
-  await dialog.getByLabel("检查指定存储桶").fill("only-bucket");
-  await dialog.getByRole("button", { name: "检查", exact: true }).click();
-  await expect(dialog.getByTestId("storage-check-summary")).toContainText(
-    "已用此寻址方式列举存储桶 only-bucket 中的对象。",
+  const checks: unknown[] = [];
+  await page.route(
+    "**/api/master/s3-config/production/permissions",
+    (route) => {
+      const body = route.request().postDataJSON();
+      checks.push(body);
+      return route.fulfill({
+        json: {
+          success: true,
+          bucket: body.bucket,
+          write: body.write,
+          node: "worker-a (10.0.0.5)",
+          results: body.write
+            ? [
+                { operation: "LIST", status: "PASSED" },
+                { operation: "HEAD", status: "PASSED", key: "a.jpg" },
+                { operation: "GET", status: "PASSED", key: "a.jpg" },
+                {
+                  operation: "PUT",
+                  status: "FAILED",
+                  message: "访问被拒绝：凭据有效，但没有执行此请求的权限。",
+                  detail: "api error AccessDenied: Access Denied",
+                },
+                {
+                  operation: "HEAD_WRITTEN",
+                  status: "SKIPPED",
+                  reason: "PUT_FAILED",
+                },
+                { operation: "MULTIPART", status: "PASSED" },
+              ]
+            : [
+                { operation: "LIST", status: "PASSED" },
+                { operation: "HEAD", status: "PASSED", key: "a.jpg" },
+                { operation: "GET", status: "PASSED", key: "a.jpg" },
+                {
+                  operation: "PUT",
+                  status: "SKIPPED",
+                  reason: "NOT_REQUESTED",
+                },
+                {
+                  operation: "HEAD_WRITTEN",
+                  status: "SKIPPED",
+                  reason: "NOT_REQUESTED",
+                },
+                {
+                  operation: "MULTIPART",
+                  status: "SKIPPED",
+                  reason: "NOT_REQUESTED",
+                },
+              ],
+        },
+      });
+    },
   );
-  await expect(dialog.getByTestId("storage-check-warning")).toHaveCount(0);
-  expect(queries).toEqual(["", "only-bucket"]);
+  await dialog.getByLabel("检查指定存储桶").fill("only-bucket");
+  // The floated label is not cut off by the scrolling dialog content.
+  const label = dialog.locator("label", { hasText: "检查指定存储桶" });
+  const [labelBox, contentBox] = await Promise.all([
+    label.boundingBox(),
+    dialog.locator(".MuiDialogContent-root").last().boundingBox(),
+  ]);
+  expect(labelBox!.y).toBeGreaterThanOrEqual(contentBox!.y);
+  await dialog.getByRole("button", { name: "检查", exact: true }).click();
+  await expect(dialog.getByTestId("permission-summary")).toHaveText(
+    "存储桶 only-bucket：读取权限正常，可以作为迁移的源。作为目标时请勾选写入检查。",
+  );
+  await expect(dialog.getByTestId("permission-GET")).toContainText(
+    "读取对象内容（GetObject） · 通过",
+  );
+  await expect(dialog.getByTestId("permission-PUT")).toContainText(
+    "未勾选写入检查",
+  );
+  await dialog.getByLabel(/同时检查写入/).check();
+  await dialog.getByRole("button", { name: "检查", exact: true }).click();
+  await expect(dialog.getByTestId("permission-summary")).toContainText(
+    "存储桶 only-bucket：1 项检查未通过",
+  );
+  await expect(dialog.getByTestId("permission-summary")).toContainText(
+    "读取正常，只是不能写入：只能作为迁移的源。",
+  );
+  await expect(dialog.getByTestId("permission-PUT")).toContainText(
+    "访问被拒绝：凭据有效，但没有执行此请求的权限。",
+  );
+  await expect(dialog.getByTestId("permission-PUT")).toContainText(
+    "原始错误：api error AccessDenied",
+  );
+  await page.screenshot({ path: test.info().outputPath("check-field.png") });
+  expect(checks).toEqual([
+    { bucket: "only-bucket", write: false },
+    { bucket: "only-bucket", write: true },
+  ]);
+  expect(queries).toEqual([""]);
 });
 
 test("a failed check of the first listed bucket keeps the bucket list and says the check did not pass", async ({

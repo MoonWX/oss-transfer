@@ -635,6 +635,117 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Bucket read and write permissions are checked during transfers.",
     ja: "バケットの読み書き権限は転送時に確認します。",
   },
+  "列举对象（ListObjectsV2）": {
+    en: "List objects (ListObjectsV2)",
+    ja: "オブジェクトの一覧（ListObjectsV2）",
+  },
+  "读取对象元数据（HeadObject）": {
+    en: "Read object metadata (HeadObject)",
+    ja: "オブジェクトのメタデータを読み取り（HeadObject）",
+  },
+  "读取对象内容（GetObject）": {
+    en: "Read object content (GetObject)",
+    ja: "オブジェクトの内容を読み取り（GetObject）",
+  },
+  "写入对象（PutObject，条件写入）": {
+    en: "Write an object (PutObject, conditional)",
+    ja: "オブジェクトを書き込み（PutObject、条件付き）",
+  },
+  "读回写入的对象（HeadObject）": {
+    en: "Read the written object back (HeadObject)",
+    ja: "書き込んだオブジェクトを読み戻し（HeadObject）",
+  },
+  "分片上传（创建、上传分片、中止）": {
+    en: "Multipart upload (create, upload a part, abort)",
+    ja: "マルチパートアップロード（作成、パートのアップロード、中止）",
+  },
+  "删除测试对象（DeleteObject，迁移不需要）": {
+    en: "Delete the test object (DeleteObject, not needed for migrations)",
+    ja: "テストオブジェクトを削除（DeleteObject、移行には不要）",
+  },
+  "存储桶为空，没有可读取的对象": {
+    en: "The bucket is empty: no object to read",
+    ja: "バケットが空のため、読み取るオブジェクトがありません",
+  },
+  "列举失败，无法选取要读取的对象": {
+    en: "Listing failed, so no object could be chosen to read",
+    ja: "一覧の取得に失敗したため、読み取るオブジェクトを選べません",
+  },
+  "写入失败，跳过": {
+    en: "Skipped because the write failed",
+    ja: "書き込みに失敗したためスキップ",
+  },
+  "存储桶不存在，不尝试写入": {
+    en: "The bucket does not exist; writing is not tried",
+    ja: "バケットが存在しないため、書き込みは試しません",
+  },
+  未勾选写入检查: {
+    en: "Write check not selected",
+    ja: "書き込みの確認は選択されていません",
+  },
+  "逐项检查迁移会用到的操作；只授权到单个存储桶的密钥也可在此检查。": {
+    en: "Checks each request a migration makes; keys limited to one bucket can be checked here too.",
+    ja: "移行で使う操作を 1 つずつ確認します。1 つのバケットだけに権限があるキーもここで確認できます。",
+  },
+  正在检查: {
+    en: "Checking",
+    ja: "確認中",
+  },
+  "同时检查写入（会在 .oss-transfer-permission-check/ 下写入一个测试对象，检查后删除）":
+    {
+      en: "Also check writing (writes a test object under .oss-transfer-permission-check/ and deletes it afterwards)",
+      ja: "書き込みも確認する（.oss-transfer-permission-check/ にテストオブジェクトを書き込み、確認後に削除します）",
+    },
+  "存储桶 {bucket}：{count} 项检查未通过，见下方说明。": {
+    en: "Bucket {bucket}: {count} checks failed; see below.",
+    ja: "バケット {bucket}：{count} 件の確認が失敗しました。詳細は下記を参照してください。",
+  },
+  "存储桶 {bucket}：可以列举对象，但存储桶为空，未能检查读取对象；写入的检查结果见下方。":
+    {
+      en: "Bucket {bucket}: objects can be listed, but the bucket is empty, so reading objects could not be checked; write results are below.",
+      ja: "バケット {bucket}：オブジェクトの一覧は取得できますが、バケットが空のため読み取りを確認できませんでした。書き込みの結果は下記のとおりです。",
+    },
+  "存储桶 {bucket}：读取和写入权限都正常，可以作为迁移的源或目标。": {
+    en: "Bucket {bucket}: reading and writing both work; it can be a migration source or target.",
+    ja: "バケット {bucket}：読み取りと書き込みの権限はどちらも正常です。移行元にも移行先にも使えます。",
+  },
+  "存储桶 {bucket}：读取权限正常，可以作为迁移的源。作为目标时请勾选写入检查。":
+    {
+      en: "Bucket {bucket}: reading works; it can be a migration source. To use it as a target, also check writing.",
+      ja: "バケット {bucket}：読み取りの権限は正常で、移行元として使えます。移行先にする場合は書き込みも確認してください。",
+    },
+  "读取正常，只是不能写入：只能作为迁移的源。": {
+    en: "Reading works but writing does not: it can only be a migration source.",
+    ja: "読み取りはできますが書き込みはできません。移行元としてのみ使えます。",
+  },
+  通过: {
+    en: "passed",
+    ja: "成功",
+  },
+  未通过: {
+    en: "failed",
+    ja: "失敗",
+  },
+  跳过: {
+    en: "skipped",
+    ja: "スキップ",
+  },
+  "原始错误：{detail}": {
+    en: "Raw error: {detail}",
+    ja: "元のエラー：{detail}",
+  },
+  "测试对象 {key} 未能删除（删除不是迁移所需的权限），请手动删除。": {
+    en: "The test object {key} could not be deleted (deleting is not needed for migrations); delete it manually.",
+    ja: "テストオブジェクト {key} を削除できませんでした（削除は移行に必要な権限ではありません）。手動で削除してください。",
+  },
+  "由执行节点 {node} 检查。": {
+    en: "Checked by execution node {node}.",
+    ja: "実行ノード {node} で確認しました。",
+  },
+  "要确认某个存储桶的读写权限，请在下方检查。": {
+    en: "To confirm read and write access to a bucket, check it below.",
+    ja: "バケットの読み書きの権限は、下で確認してください。",
+  },
   检查指定存储桶: {
     en: "Check a bucket",
     ja: "バケットを指定して確認",

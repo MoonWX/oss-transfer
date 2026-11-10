@@ -394,6 +394,13 @@ type StorageCheckRequest struct {
 	Config storageconfig.Config `json:"config"`
 	Bucket string               `json:"bucket,omitempty"`
 }
+// StoragePermissionsRequest asks for a permission check of one bucket: the
+// read requests a migration makes and, with Write, the write requests.
+type StoragePermissionsRequest struct {
+	Config storageconfig.Config `json:"config"`
+	Bucket string               `json:"bucket"`
+	Write  bool                 `json:"write,omitempty"`
+}
 type StatRequest struct {
 	Endpoint execution.Endpoint `json:"endpoint"`
 	Key      string             `json:"key"`
@@ -666,6 +673,21 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		}
 		settings.HTTPClient = s.Factory.HTTPClientForEndpoint(ctx, execution.Endpoint{Ref: request.Config.Alias, Bucket: request.Bucket}, request.Config)
 		result, err := transferstore.CheckConnection(ctx, settings, request.Bucket)
+		return response(result, err)
+	case "storage_permissions":
+		var request StoragePermissionsRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		if request.Bucket == "" {
+			return badRequest(errors.New("bucket is required"))
+		}
+		settings, err := request.Config.S3Config(request.Bucket)
+		if err != nil {
+			return response(nil, err)
+		}
+		settings.HTTPClient = s.Factory.HTTPClientForEndpoint(ctx, execution.Endpoint{Ref: request.Config.Alias, Bucket: request.Bucket}, request.Config)
+		result, err := transferstore.CheckBucketPermissions(ctx, settings, request.Write)
 		return response(result, err)
 	case "object_stat":
 		var request StatRequest

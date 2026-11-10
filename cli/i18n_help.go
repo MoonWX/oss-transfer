@@ -680,6 +680,8 @@ Usage: oss-transfer-cli storage <subcommand> [arguments]
   remove <alias> --yes             Remove and sync to execution nodes
   buckets <alias> [--bucket NAME]  List buckets and check the connection
   test <alias> [--bucket NAME]     Check the connection: list buckets, then list objects in one bucket with the effective addressing
+      With --bucket, checks each request a migration makes (list, HEAD, GET); exits 1 if one fails
+      --write                       Also check writing: conditional PUT, read back, multipart upload; writes and deletes a test object
 
   --endpoint <http[s]://host>      For example https://s3.example.com or http://10.0.0.5:9000
   --region <region>               S3 signing region
@@ -705,6 +707,7 @@ Addressing
   oss-transfer-cli storage update source --path-style true
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
+  oss-transfer-cli storage test target --bucket backup --write
   oss-transfer-cli storage remove source --yes
 
 Credentials come from environment variables or files, not command-line values.
@@ -721,6 +724,8 @@ Actual operations validate read and write permissions. Failures show the cause a
   remove <接続名> --yes            削除して実行ノードに同期
   buckets <接続名> [--bucket 名前] バケット一覧を表示して接続を確認
   test <接続名> [--bucket 名前]    接続を確認: バケットを一覧し、実際のアドレス指定で 1 つのバケットのオブジェクトを一覧
+      --bucket を指定すると、移行で使う操作（一覧、HEAD、GET）を 1 つずつ確認し、失敗があれば終了コード 1
+      --write                       書き込みも確認: 条件付き PUT、読み戻し、マルチパートアップロード。テストオブジェクトを書き込んで削除します
 
   --endpoint <http[s]://ホスト>    例: https://s3.example.com、http://10.0.0.5:9000
   --region <リージョン>            S3 署名リージョン
@@ -745,6 +750,7 @@ Actual operations validate read and write permissions. Failures show the cause a
   oss-transfer-cli storage update source --path-style true
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
+  oss-transfer-cli storage test target --bucket backup --write
   oss-transfer-cli storage remove source --yes
 
 認証情報は環境変数またはファイルから読み取ります。コマンドラインには直接指定しません。

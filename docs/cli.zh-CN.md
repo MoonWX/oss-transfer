@@ -115,7 +115,7 @@ oss-transfer-cli whoami
 oss-transfer-cli storage list
 oss-transfer-cli storage add 连接名 --endpoint URL --access-key-env 变量名 --secret-key-env 变量名 [选项]
 oss-transfer-cli storage update 连接名 [选项]
-oss-transfer-cli storage test 连接名 [--bucket 存储桶]
+oss-transfer-cli storage test 连接名 [--bucket 存储桶 [--write]]
 oss-transfer-cli storage buckets 连接名 [--bucket 存储桶]
 oss-transfer-cli storage remove 连接名 --yes
 ```
@@ -130,7 +130,7 @@ oss-transfer-cli storage remove 连接名 --yes
 | `--v2-signer default\|true\|false` | 签名版本：`default` 为 V4；`true` 为需要 V2 的服务使用 V2 |
 | `--validate true\|false` | 保存前检查连接；默认 `true` |
 
-`storage list` 显示每个连接（凭据已遮盖）、签名版本和寻址方式，例如 *自动（Path-style）*。`storage test` 先列举存储桶，再在 `--bucket` 指定的存储桶（或第一个存储桶）中列举一个对象，显示 *连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶*、寻址方式、存储桶级检查结果以及警告。只授权到单个存储桶的密钥无法列举存储桶：保存时只会警告，可用 `storage test 连接名 --bucket 存储桶` 检查该存储桶。失败时会显示原因和处理方法，见[存储连接检查失败](operations.zh-CN.md#存储连接检查失败)。连接的修改会同步到每个节点，命令会列出仍在等待同步的节点。
+`storage list` 显示每个连接（凭据已遮盖）、签名版本和寻址方式，例如 *自动（Path-style）*。`storage test` 先列举存储桶，再在 `--bucket` 指定的存储桶（或第一个存储桶）中列举一个对象，显示 *连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶*、寻址方式、存储桶级检查结果以及警告。只授权到单个存储桶的密钥无法列举存储桶：保存时只会警告，可用 `storage test 连接名 --bucket 存储桶` 检查该存储桶。指定 `--bucket` 时还会逐项检查迁移用到的请求（列举、HEAD、GET），加 `--write` 同时检查写入，任一必需项未通过时退出码为 1，见[逐项检查存储桶权限](planning.zh-CN.md#逐项检查存储桶权限)。失败时会显示原因和处理方法，见[存储连接检查失败](operations.zh-CN.md#存储连接检查失败)。连接的修改会同步到每个节点，命令会列出仍在等待同步的节点。
 
 ## 查看和控制任务
 

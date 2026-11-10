@@ -315,6 +315,8 @@ const cliStorageHelp = `存储连接
   remove <连接名> --yes            删除连接并同步到执行节点
   buckets <连接名> [--bucket 名称] 列出 Bucket 并检查连接
   test <连接名> [--bucket 名称]    检查连接：列举 Bucket，再用实际寻址方式列举一个 Bucket 中的对象
+      指定 --bucket 时逐项检查迁移用到的操作（列举、HEAD、GET），任一项未通过则退出码为 1
+      --write                       同时检查写入：条件 PUT、读回、分片上传，会写入并删除一个测试对象
 
 添加/更新选项
   --endpoint <http[s]://地址>      例如 https://s3.example.com 或 http://10.0.0.5:9000
@@ -341,6 +343,7 @@ const cliStorageHelp = `存储连接
   oss-transfer-cli storage update source --path-style true
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
+  oss-transfer-cli storage test target --bucket backup --write
   oss-transfer-cli storage remove source --yes
 
 密钥仅从环境变量或文件读取，避免出现在命令历史中。

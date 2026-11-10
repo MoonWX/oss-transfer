@@ -153,6 +153,8 @@ Automatic addressing and the bucket-level check run on the Agent, so they need A
 
 In **Test connection**, enter a bucket under **Check a bucket** and choose **Check** (CLI: `oss-transfer-cli storage test <connection> --bucket <bucket>`). The check makes, on that bucket, each request a migration uses, and shows for each one whether it passed, failed or was skipped, plus a one-sentence result (for example "reading works; it can be a migration source"):
 
+<p align="center"><img src="images/permission-check.en.png" width="520" alt="Connection test dialog with the bucket field, the write check option and the result outlined"></p>
+
 | Check | Request | Used by migrations to |
 | --- | --- | --- |
 | List objects | ListObjectsV2 | Scan sources, compare |

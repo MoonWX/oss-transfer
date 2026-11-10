@@ -71,9 +71,11 @@ TRANSFER_PORT=1685
    | --- | --- | --- |
    | **macOS / Linux** | macOS 上的 Docker Desktop、Linux 上的 Docker Engine | 普通的 `docker run` 命令，不需要 root（Linux 上当前用户需能运行 `docker`） |
    | **Windows PowerShell** | Windows 上的 Docker Desktop | 同样的命令，PowerShell 写法 |
-   | **Linux Docker Compose** | 有 root 权限的 Linux | Compose 安装器（`curl … \| sh -c '…'`，以 root 或通过 `sudo` 运行），见[下文](#linux-compose-安装器) |
+   | **Linux Docker Compose** | 有 root 权限的 Linux | Compose 安装器（`curl … \| bash`，以 root 或通过 `sudo` 运行），见[下文](#linux-compose-安装器) |
 
 4. 点击 **复制指令**，在 30 分钟内到执行节点主机上运行。指令只能使用一次。
+
+<p align="center"><img src="images/docker-join.zh-CN.png" width="720" alt="添加节点窗口的 Docker 页签，红框标出运行环境选择和 Docker 命令"></p>
 
 `docker run` 方式包含两条命令。第一条在临时容器中加入集群，并把执行节点的身份保存到 Docker 数据卷中；只有它成功后，第二条才会启动执行节点：
 
@@ -205,6 +207,8 @@ docker compose up -d master
 ### 容器中的执行节点
 
 容器中的执行节点不能在线更新，需要用新镜像重建容器；身份和设置保存在数据卷中，会保留。正在执行的子任务会中断，执行节点重新连接后自动恢复。
+
+<p align="center"><img src="images/docker-recreate.zh-CN.png" width="720" alt="版本更新中 Docker 执行节点的重建命令窗口，红框标出 docker run 命令"></p>
 
 1. 打开 **执行节点 → 版本更新**。Docker 执行节点所在的行有一个 **更新命令** 按钮。执行节点已与 Master 版本一致时，按钮显示为 **重建命令**，给出同样的命令，可用于添加目录挂载等。
 2. 窗口中会显示该执行节点的命令，使用 Master 对应的镜像：

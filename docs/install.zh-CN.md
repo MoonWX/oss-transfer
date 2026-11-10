@@ -74,6 +74,8 @@ Tasks: /usr/local/bin/oss-transfer-cli task list
 
 在控制台打开 **执行节点 → 添加节点**，填写节点名称和新节点能访问的 Master 地址，点击 **生成加入指令**。复制与该节点系统对应的命令，在该主机上运行。Linux、macOS 和 FreeBSD 的原生命令形如 `curl -fsSL '<链接>' | bash`，以 root 运行，或由可以使用 `sudo` 的用户运行（安装脚本会自动通过 `sudo` 重新执行并询问密码）。几秒钟后，该节点会在 **执行节点** 页面显示为在线。使用 CLI 时，`oss-transfer-cli agent invite` 会打印同样的命令（见 [CLI](cli.zh-CN.md#添加和移除执行节点)）。Docker 指令见 [Docker Compose](docker-compose.zh-CN.md)。
 
+<p align="center"><img src="images/join-command.zh-CN.png" width="720" alt="添加节点窗口，红框标出加入命令和复制按钮"></p>
+
 ## 其他系统
 
 ### 较旧的 systemd

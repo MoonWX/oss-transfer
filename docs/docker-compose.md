@@ -71,9 +71,11 @@ TRANSFER_PORT=1685
    | --- | --- | --- |
    | **macOS / Linux** | Docker Desktop on macOS, Docker Engine on Linux | Plain `docker run` commands; no root (on Linux, your user must be allowed to run `docker`) |
    | **Windows PowerShell** | Docker Desktop on Windows | The same commands for PowerShell |
-   | **Linux Docker Compose** | Linux with root | The Compose installer (`curl … \| sh -c '…'`, as root or with `sudo`); see [below](#the-linux-compose-installer) |
+   | **Linux Docker Compose** | Linux with root | The Compose installer (`curl … \| bash`, as root or with `sudo`); see [below](#the-linux-compose-installer) |
 
 4. Choose **Copy command** and run it on the Agent host within 30 minutes. The command works once.
+
+<p align="center"><img src="images/docker-join.en.png" width="720" alt="Docker tab of the Add node dialog with the environment choice and the Docker command outlined"></p>
 
 The `docker run` variant runs two commands. The first joins the cluster in a temporary container and saves the Agent's identity in a Docker volume. Only if that succeeds, the second starts the Agent:
 
@@ -205,6 +207,8 @@ Keep the existing volumes. `docker compose down -v` deletes them.
 ### Container Agents
 
 Container Agents cannot update online. Recreate each container from the new image; the identity and settings stay in its volume. Running child tasks are interrupted and resume when the Agent reconnects.
+
+<p align="center"><img src="images/docker-recreate.en.png" width="720" alt="Recreate commands dialog of a Docker Agent in Software updates, with the docker run commands outlined"></p>
 
 1. Open **Execution nodes → Software updates**. A Docker Agent's row has an **Update commands** button. When the Agent already runs the Master's version, the button is labelled **Recreate commands** and shows the same commands, for example to add a directory mount.
 2. The dialog shows the commands for that Agent, using the Master's image:

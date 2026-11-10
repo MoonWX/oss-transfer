@@ -42,10 +42,11 @@ Read [planning](docs/planning.md) before a real migration: where to run the Agen
 
 ## Quick start
 
-There are two ways to install:
+There are three ways to install:
 
 - **Native services** on Linux with systemd: the one-line installer below. [Installation options](docs/install.md) covers macOS, Windows, FreeBSD and custom paths, and [offline installation](docs/offline-install.md) hosts without internet access.
 - **Docker:** the Master with Docker Compose and Agents as containers, on Linux or with Docker Desktop on macOS and Windows. Follow [Docker Compose](docs/docker-compose.md) for steps 1 to 3, then continue here at step 4.
+- **Run manually:** on hosts without systemd that cannot use Docker (for example containerized development machines), run the programs of the release archive directly; see [Run manually](#run-manually-without-systemd-or-docker). To add an Agent, copy the command from the **Run manually** tab of the **Add node** dialog. Then continue here at step 2.
 
 ### 1. Install the Master
 
@@ -156,6 +157,17 @@ On the **Transfer tasks** page, choose a task to open its details on the right:
 
 In the task details, choose **Compare source and target** (object storage to object storage tasks). It opens **Tools → Compare objects** with the task's buckets and prefixes filled in. Choose **Compare**.
 
+<p align="center"><img src="docs/images/comparison.en.png" width="720" alt="Object comparison results with the result filter and the Export all differences button outlined"></p>
+
+**Why compare:** a completed task only says that every scanned object was handled. The default "Skip existing objects or files" matches by name and never compares content. A comparison lists both sides again and checks each object, so it finds objects missing at the target, objects whose size or metadata differ, and extra objects at the target (for example objects deleted at the source). Run at least a metadata comparison before you switch over.
+
+**Costs and limits:**
+
+- **Extra requests and charges:** both sides are listed once more, and each object gets one HEAD on each side; storage that bills per request charges for them.
+- **Speed:** one comparison is limited by sequential listing, about 600 objects per second in our test environment. For many objects, split the comparison by prefix so several Agents run in parallel ([verifying a large migration](docs/planning.md#verify-a-large-migration)).
+- **Metadata mode does not read content:** objects with the same size and metadata but different content are not found. A different ETag is only a hint, because multipart uploads and server-side encryption also change ETags. **Content mode** reads both sides in full and compares SHA-256: more reliable, but slow and possibly billed for traffic, so use it for samples.
+- **It uses Agents:** comparisons share an Agent's limits with transfer tasks, and their results are stored on the Agent, so they are no longer available after that Agent is removed.
+
 **When it worked,** the comparison completes with **No differences found.** Otherwise, export the differences: the ZIP includes a key list for transferring the missing and different objects again ([object comparison](docs/operations.md#compare-objects), [verifying a large migration](docs/planning.md#verify-a-large-migration)).
 
 ## Docker Compose
@@ -176,6 +188,8 @@ The log shows the initial `admin` password. See [Docker Compose](docs/docker-com
 ## Run manually (without systemd or Docker)
 
 When a host has no systemd and cannot use Docker (for example a containerized development machine), run the programs of the release archive directly. [`deploy/manual/oss-transfer-run.sh`](deploy/manual/oss-transfer-run.sh) starts and stops them, restarts them after an unexpected exit, keeps their logs and handles the first join.
+
+<p align="center"><img src="docs/images/manual-run.en.png" width="720" alt="Run manually tab of the Add node dialog with the tab, the method, the command and the Copy invitation link button outlined"></p>
 
 1. Download and extract the release archive (in mainland China, download from `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.42/` instead), and put the script next to the programs:
 

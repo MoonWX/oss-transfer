@@ -42,10 +42,11 @@ OSS Transfer 是一个分布式数据迁移工具，用于在 S3 兼容对象存
 
 ## 快速开始
 
-有两种安装方式：
+有三种安装方式：
 
 - **原生服务**：在使用 systemd 的 Linux 上运行下面的一行安装命令。macOS、Windows、FreeBSD 和自定义目录见[安装选项](docs/install.zh-CN.md)，无法联网的主机见[离线安装](docs/offline-install.zh-CN.md)。
 - **Docker**：用 Docker Compose 运行 Master，用容器运行执行节点，适用于 Linux 以及 macOS、Windows 上的 Docker Desktop。第 1 到 3 步按 [Docker Compose](docs/docker-compose.zh-CN.md) 操作，然后从第 4 步继续。
+- **手动运行**：没有 systemd、也不能用 Docker 时（例如容器化的开发机），直接运行发布包中的程序，见[手动运行](#手动运行不依赖-systemd-和-docker)。加入执行节点时，可在 **添加节点** 窗口的 **手动运行** 页签复制命令。之后从第 2 步继续。
 
 ### 1. 安装 Master
 
@@ -156,6 +157,17 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 在任务详情中点击 **比对源和目标**（对象存储 → 对象存储任务），会打开 **运维工具 → 对象比对** 并填好该任务的存储桶和前缀。点击 **开始比对**。
 
+<p align="center"><img src="docs/images/comparison.zh-CN.png" width="720" alt="对象比对结果，红框标出按结果筛选和导出全部差异按钮"></p>
+
+**为什么要比对：** 任务完成只说明每个扫描到的对象都处理过了。默认的“跳过同名对象或文件”只按名称判断，不比较内容。比对会重新列举两端并逐个核对，能发现目标端缺失的对象、大小或元数据不一致的对象，以及目标端多出的对象（例如源端已删除的对象）。正式切换前，建议至少做一次元数据比对。
+
+**代价和局限：**
+
+- **额外请求和费用**：两端各列举一遍，每个对象在两端各发一次 HEAD；按请求计费的存储会产生相应费用。
+- **速度**：单个比对受顺序列举限制，在测试环境中约每秒 600 个对象。对象很多时，按前缀拆成多个比对，让多个执行节点并行（见[验收大规模迁移](docs/planning.zh-CN.md#验收大规模迁移)）。
+- **元数据模式不读内容**：大小和元数据都相同、只有内容不同的对象发现不了。ETag 不同只作为提示，因为分片上传和服务端加密也会让 ETag 不同。**内容模式** 会完整读取两端数据并比较 SHA-256，更可靠，但慢，还可能产生流量费用，适合抽样。
+- **占用执行节点**：比对与迁移任务共用节点限速；比对结果保存在执行节点上，移除该节点后结果无法再读取。
+
 **成功时**，比对完成并显示 **未发现差异。** 否则请导出差异：ZIP 中附带用于重新迁移缺失和不一致对象的 Key 清单（见[对象比对](docs/operations.zh-CN.md#对象比对)、[验收大规模迁移](docs/planning.zh-CN.md#验收大规模迁移)）。
 
 ## Docker Compose
@@ -176,6 +188,8 @@ docker compose logs master
 ## 手动运行（不依赖 systemd 和 Docker）
 
 主机没有 systemd、也不能用 Docker 时（例如容器化的开发机），可以直接运行发布包中的程序。[`deploy/manual/oss-transfer-run.sh`](deploy/manual/oss-transfer-run.sh) 负责启动、停止、异常退出后自动重启、日志和首次加入。
+
+<p align="center"><img src="docs/images/manual-run.zh-CN.png" width="720" alt="添加节点窗口的手动运行页签，红框依次标出页签、运行方式、命令和复制邀请链接按钮"></p>
 
 1. 下载并解压发布包（中国大陆可把下载地址换成 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.42/`），并把脚本放在程序旁边：
 

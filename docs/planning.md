@@ -58,17 +58,27 @@ Give OSS Transfer its own keys, limited to the buckets of the migration. The tab
 
 **Target bucket**
 
-| Action | Used for |
-| --- | --- |
-| `s3:PutObject` | Writing objects: PutObject and the multipart upload calls (CreateMultipartUpload, UploadPart, CompleteMultipartUpload) |
-| `s3:AbortMultipartUpload` | Cleaning up a multipart upload that failed or was interrupted |
-| `s3:ListMultipartUploadParts` | Checking an interrupted multipart upload after an Agent restart (ListParts) |
-| `s3:GetObject` | HeadObject before writing (conflict policies) and object comparison; GetObject for content comparison |
-| `s3:ListBucket` | The connection check and object comparison. On AWS, without it a HeadObject on a missing key answers 403 instead of 404, which can make writes of new objects fail. |
+Which permissions the target needs depends on the conflict policy and on whether you compare objects:
+
+| Permission | When it is needed | Without it |
+| --- | --- | --- |
+| `s3:PutObject` | Always: PutObject and the multipart calls CreateMultipartUpload, UploadPart and CompleteMultipartUpload | Nothing can be written |
+| `s3:AbortMultipartUpload` | When objects are larger than 8 MiB (they use multipart uploads) | Failed or interrupted multipart uploads cannot be cleaned up, and their parts use (and are billed as) storage; the cleanup record is kept and retried every 5 minutes |
+| `s3:ListMultipartUploadParts` | As above: confirms that the parts are gone after an abort (ListParts) | The upload is aborted, but completion cannot be confirmed; the cleanup record is kept and retried |
+| `s3:GetObject` (grants HeadObject and GetObject) | With the conflict policy **Skip existing objects or files** (the default) or **Overwrite changed objects**: each object is checked with HEAD before it is written, to find whether the target exists or changed. After an Agent restart or a resumed task, to verify objects written before the interruption. For object comparison, and to read target objects in a content comparison | Writes fail under those two policies; the check after a resume fails; comparison is impossible |
+| `s3:ListBucket` | The connection check (it lists one object in the bucket) and object comparison. On AWS and similar services, without it a HEAD on a missing key answers 403 instead of 404 | The connection check only warns; under the two policies above, new objects fail to be written; comparison is impossible |
+
+Common minimal sets:
+
+- **Default (Skip existing objects or files) or incremental runs (Overwrite changed objects):** `s3:PutObject`, `s3:GetObject` and `s3:ListBucket`, plus `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` for large objects.
+- **Only "Overwrite existing objects or files", without object comparison:** normal writes need only `s3:PutObject` (plus the two multipart cleanup permissions for large objects). The check after an Agent restart or a resumed task still uses HEAD, so `s3:GetObject` is still recommended.
+- **Object comparison:** `s3:ListBucket` and `s3:GetObject` on both buckets.
+
+When in doubt, run [the per-permission check](#check-each-permission-of-a-bucket) of the connection test on the target bucket with the write check selected.
 
 **Optional:** `s3:ListAllMyBuckets` lets the connection check and the console list your buckets. Without it, see [bucket-scoped keys](#bucket-scoped-keys-and-the-connection-check).
 
-OSS Transfer never deletes objects or buckets, so it needs no `s3:DeleteObject` permission. If you want to delete objects that exist only on the target (see [deletions at the source](#deletions-at-the-source)), use your provider's tools with a separate key.
+Migrations never delete objects or buckets, so they need no `s3:DeleteObject` permission. Only the per-permission check, with the write check selected, tries to delete the test object it wrote; without delete permission the check still reports its results. If you want to delete objects that exist only on the target (see [deletions at the source](#deletions-at-the-source)), use your provider's tools with a separate key.
 
 By direction:
 
@@ -99,7 +109,7 @@ A minimal AWS-style policy for the source key (replace `source-bucket`):
 }
 ```
 
-And for the target key (replace `target-bucket`):
+And for the target key, covering the default conflict policy, incremental runs and object comparison (replace `target-bucket`):
 
 ```json
 {

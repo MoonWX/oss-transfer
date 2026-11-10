@@ -58,17 +58,27 @@
 
 **目标端存储桶**
 
-| 操作 | 用途 |
-| --- | --- |
-| `s3:PutObject` | 写入对象：PutObject 和分片上传的各个调用（CreateMultipartUpload、UploadPart、CompleteMultipartUpload） |
-| `s3:AbortMultipartUpload` | 清理失败或中断的分片上传 |
-| `s3:ListMultipartUploadParts` | 执行节点重启后检查中断的分片上传（ListParts） |
-| `s3:GetObject` | 写入前的 HeadObject（冲突策略）和对象比对；内容比对时的 GetObject |
-| `s3:ListBucket` | 连接检查和对象比对。在 AWS 上，缺少这个权限时，对不存在的对象执行 HeadObject 会返回 403 而不是 404，可能导致新对象写入失败。 |
+目标端需要哪些权限，取决于冲突策略和是否做对象比对：
+
+| 权限 | 何时需要 | 没有时会怎样 |
+| --- | --- | --- |
+| `s3:PutObject` | 始终需要。包括 PutObject 和分片上传的 CreateMultipartUpload、UploadPart、CompleteMultipartUpload | 无法写入 |
+| `s3:AbortMultipartUpload` | 有大于 8 MiB 的对象时（这些对象用分片上传） | 失败或中断的分片上传无法清理，残留分片占用存储并计费；清理记录会保留并每 5 分钟重试 |
+| `s3:ListMultipartUploadParts` | 同上，用于中止分片上传后确认分片已删除（ListParts） | 分片上传已中止，但无法确认完成，清理记录会保留并定期重试 |
+| `s3:GetObject`（授权 HeadObject 和 GetObject） | 冲突策略为 **跳过同名对象或文件**（默认）或 **覆盖有变化的对象** 时：每个对象写入前先 HEAD，判断目标是否已存在、是否有变化。执行节点重启或任务恢复后，核对中断前已写入的对象。对象比对，以及内容比对时读取目标对象 | 使用这两种策略时对象写入失败；恢复后的核对失败；无法比对 |
+| `s3:ListBucket` | 连接检查（在存储桶中列举一个对象）和对象比对。在 AWS 等服务上，没有这个权限时，对不存在的对象执行 HEAD 会返回 403 而不是 404 | 连接检查只给出警告；配合上面两种策略时，新对象会写入失败；无法比对 |
+
+常见的最小组合：
+
+- **默认（跳过同名对象或文件）或增量迁移（覆盖有变化的对象）**：`s3:PutObject`、`s3:GetObject`、`s3:ListBucket`，有大对象时再加 `s3:AbortMultipartUpload` 和 `s3:ListMultipartUploadParts`。
+- **只用“覆盖同名对象或文件”，且不做对象比对**：正常写入只需要 `s3:PutObject`（大对象加上两个分片清理权限）。但执行节点重启或任务恢复后的核对仍要 HEAD，所以仍建议授予 `s3:GetObject`。
+- **对象比对**：两端都需要 `s3:ListBucket` 和 `s3:GetObject`。
+
+不确定时，用连接测试里的[逐项检查存储桶权限](#逐项检查存储桶权限)在目标存储桶上勾选写入检查实际试一遍。
 
 **可选：** `s3:ListAllMyBuckets` 让连接检查和管理页面能列出你的存储桶。没有这个权限时，见[只授权到单个存储桶的密钥](#只授权到单个存储桶的密钥与连接检查)。
 
-OSS Transfer 从不删除对象或存储桶，所以不需要 `s3:DeleteObject` 权限。如果要删除只存在于目标端的对象（见[源端删除](#源端删除的对象)），请用服务商的工具和另一把密钥操作。
+迁移本身从不删除对象或存储桶，所以不需要 `s3:DeleteObject` 权限；只有在逐项检查中勾选写入检查时，会尝试删除它写入的测试对象，没有删除权限也不影响检查结果。如果要删除只存在于目标端的对象（见[源端删除](#源端删除的对象)），请用服务商的工具和另一把密钥操作。
 
 按迁移方向：
 
@@ -99,7 +109,7 @@ OSS Transfer 从不删除对象或存储桶，所以不需要 `s3:DeleteObject` 
 }
 ```
 
-目标端密钥（把 `target-bucket` 换成实际名称）：
+目标端密钥，适用于默认冲突策略、增量迁移和对象比对（把 `target-bucket` 换成实际名称）：
 
 ```json
 {

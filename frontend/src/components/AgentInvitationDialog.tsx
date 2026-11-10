@@ -82,7 +82,7 @@ function downloadSourceText(source?: AgentDownloadSource) {
       return null;
   }
 }
-type DockerVariant = "posix" | "windows" | "compose";
+type DockerVariant = "posix" | "windows" | "compose" | "script" | "binary";
 type DockerOption = readonly [DockerVariant, string, string | undefined];
 type InstallMethod = {
   label: string;
@@ -229,6 +229,10 @@ export default function AgentInvitationDialog({
       notify(t("复制失败，请选择文本后手动复制。"), "error");
     }
   }
+  const joinLink = invitation?.joinUrl ?? "";
+  const quotedLink = "'" + joinLink.replaceAll("'", "'\\''") + "'";
+  const manualScript = `./oss-transfer-run.sh agent start --join-url ${quotedLink}`;
+  const manualBinary = `./oss-transfer-agent --join-url ${quotedLink} --data-dir ./data/agent`;
   const methods = (
     [
       {
@@ -242,12 +246,6 @@ export default function AgentInvitationDialog({
         label: "Windows",
         command: invitation?.windowsCommand,
         upstreamCommand: invitation?.upstreamWindowsCommand,
-      },
-      {
-        label: t("直接运行"),
-        command: invitation?.traditionalCommand
-          ? undefined
-          : invitation?.nativeCommand,
       },
       {
         label: "Docker",
@@ -267,12 +265,25 @@ export default function AgentInvitationDialog({
             ).filter((item) => !!item[2])
           : undefined,
       },
+      {
+        // Hosts without systemd or Docker: run the programs of the release
+        // archive (README "Run manually").
+        label: t("手动运行"),
+        command: invitation?.joinUrl ? manualScript : undefined,
+        variants: invitation?.joinUrl
+          ? ([
+              ["script", t("管理脚本"), manualScript],
+              ["binary", t("直接运行程序"), manualBinary],
+            ] as DockerOption[])
+          : undefined,
+      },
     ] as InstallMethod[]
   ).filter(
     (item): item is InstallMethod & { command: string } => !!item.command,
   );
   const method = methods[tab];
   const dockerTab = method?.label === "Docker";
+  const manualTab = method?.command === manualScript;
   const variant = method?.variants?.find((item) => item[0] === dockerVariant);
   const command =
     (variant
@@ -281,7 +292,10 @@ export default function AgentInvitationDialog({
         ? method.upstreamCommand
         : method?.command) || "";
   const source =
-    method && !dockerTab && method.command !== invitation?.nativeCommand
+    method &&
+    !dockerTab &&
+    !manualTab &&
+    method.command !== invitation?.nativeCommand
       ? downloadSourceText(
           upstream && method.upstreamCommand
             ? invitation?.upstreamDownloadSource
@@ -383,7 +397,11 @@ export default function AgentInvitationDialog({
               <Box sx={{ minWidth: 0 }}>
                 <Tabs
                   value={tab}
-                  onChange={(_, next: number) => setTab(next)}
+                  onChange={(_, next: number) => {
+                    setTab(next);
+                    const first = methods[next]?.variants?.[0]?.[0];
+                    if (first) setDockerVariant(first);
+                  }}
                   variant="scrollable"
                   scrollButtons="auto"
                   allowScrollButtonsMobile
@@ -413,7 +431,7 @@ export default function AgentInvitationDialog({
                     )}
                   </Alert>
                 )}
-                {dockerTab && method?.variants && (
+                {(dockerTab || manualTab) && method?.variants && (
                   <ToggleButtonGroup
                     exclusive
                     size="small"
@@ -430,6 +448,21 @@ export default function AgentInvitationDialog({
                       </ToggleButton>
                     ))}
                   </ToggleButtonGroup>
+                )}
+                {manualTab && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 2 }}
+                  >
+                    {variant?.[0] === "binary"
+                      ? t(
+                          "适用于没有 systemd 也不用 Docker 的主机：在解压后的发布包目录中运行。加入后再启动时只需 --data-dir，进程退出后不会自动重启。",
+                        )
+                      : t(
+                          "适用于没有 systemd 也不用 Docker 的主机：在解压后的发布包目录中放好 oss-transfer-run.sh 后运行，它负责后台运行、异常退出后重启和日志。下载方法见 README 的“手动运行”一节。",
+                        )}
+                  </Typography>
                 )}
                 {dockerTab && (
                   <Stack spacing={0.5} sx={{ mb: 2 }}>
@@ -487,6 +520,15 @@ export default function AgentInvitationDialog({
                 >
                   {t("复制指令")}
                 </Button>
+                {joinLink && (
+                  <Button
+                    onClick={() => void copy(joinLink)}
+                    sx={{ mt: 1.5, ml: 1 }}
+                    data-testid="copy-join-url"
+                  >
+                    {t("复制邀请链接（用于 --join-url）")}
+                  </Button>
+                )}
                 {method?.upstreamCommand && !variant && (
                   <Button
                     onClick={() => setUpstream((value) => !value)}

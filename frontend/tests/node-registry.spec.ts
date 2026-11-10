@@ -221,6 +221,7 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     "Linux / macOS / FreeBSD",
     "Windows",
     "Docker",
+    "手动运行",
   ]);
   await expect(dialog.getByRole("tab").first()).toHaveAttribute(
     "aria-selected",
@@ -257,9 +258,6 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
     windowsCommand,
   );
-  await expect(
-    dialog.getByRole("tab", { name: "直接运行", exact: true }),
-  ).toHaveCount(0);
   await dialog.getByRole("tab", { name: "Docker", exact: true }).click();
   await expect(dialog.getByLabel("Docker 指令", { exact: true })).toHaveValue(
     dockerCommand,
@@ -267,6 +265,18 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   await expect(
     dialog.getByRole("button", { name: /改用公网下载|改从 Master 下载/ }),
   ).toHaveCount(0);
+  // Hosts without systemd or Docker: the management script or the program.
+  await dialog.getByRole("tab", { name: "手动运行", exact: true }).click();
+  await expect(dialog.getByLabel("手动运行 指令", { exact: true })).toHaveValue(
+    `./oss-transfer-run.sh agent start --join-url '${joinUrl}'`,
+  );
+  await dialog
+    .getByRole("button", { name: "直接运行程序", exact: true })
+    .click();
+  await expect(dialog.getByLabel("手动运行 指令", { exact: true })).toHaveValue(
+    `./oss-transfer-agent --join-url '${joinUrl}' --data-dir ./data/agent`,
+  );
+  await expect(dialog.getByTestId("copy-join-url")).toBeVisible();
   await dialog
     .getByRole("tab", { name: "Linux / macOS / FreeBSD", exact: true })
     .click();
@@ -277,10 +287,16 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
   expect(state.writes).toHaveLength(0);
 });
 
-for (const [method, commands] of [
-  ["Linux / macOS / FreeBSD", { traditionalCommand }],
-  ["Windows", { windowsCommand }],
-  ["直接运行", { nativeCommand }],
+const manualScript = `./oss-transfer-run.sh agent start --join-url '${joinUrl}'`;
+for (const [method, commands, tabs, value] of [
+  [
+    "Linux / macOS / FreeBSD",
+    { traditionalCommand },
+    ["Linux / macOS / FreeBSD", "手动运行"],
+    traditionalCommand,
+  ],
+  ["Windows", { windowsCommand }, ["Windows", "手动运行"], windowsCommand],
+  ["手动运行", { nativeCommand }, ["手动运行"], manualScript],
 ] as const) {
   test(`native-only invitation supports ${method} without a Docker command`, async ({
     page,
@@ -301,14 +317,14 @@ for (const [method, commands] of [
     await dialog
       .getByRole("button", { name: "生成加入指令", exact: true })
       .click();
-    await expect(dialog.getByRole("tab")).toHaveText([method]);
-    await expect(dialog.getByRole("tab")).toHaveAttribute(
+    await expect(dialog.getByRole("tab")).toHaveText([...tabs]);
+    await expect(dialog.getByRole("tab").first()).toHaveAttribute(
       "aria-selected",
       "true",
     );
     await expect(
       dialog.getByLabel(`${method} 指令`, { exact: true }),
-    ).toHaveValue(Object.values(commands)[0]);
+    ).toHaveValue(value);
     await expect(dialog.getByRole("alert")).toHaveCount(0);
   });
 }

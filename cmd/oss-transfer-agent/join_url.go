@@ -16,7 +16,7 @@ func withJoinURL(value string, options agent.Options, explicitEnrollmentFlag boo
 	const prefix = "/api/agents/bootstrap/"
 	u, err := url.Parse(value)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
-		u.User != nil || u.Opaque != "" || u.RawPath != "" || u.ForceQuery || u.RawQuery != "" ||
+		u.User != nil || u.Opaque != "" || u.RawPath != "" || u.ForceQuery || !installerQuery(u.RawQuery) ||
 		strings.Contains(value, "#") || !strings.HasPrefix(u.Path, prefix) {
 		return options, errors.New("--join-url must be an HTTP or HTTPS Agent invitation link")
 	}
@@ -38,4 +38,25 @@ func withJoinURL(value string, options agent.Options, explicitEnrollmentFlag boo
 	options.MasterURL = u.Scheme + "://" + u.Host
 	options.JoinToken = token
 	return options, nil
+}
+
+// installerQuery accepts the parameters a copied join command adds for the
+// installer (language, download source, platform, method); the Agent ignores
+// them. Anything else is not an invitation link.
+func installerQuery(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	query, err := url.ParseQuery(raw)
+	if err != nil {
+		return false
+	}
+	for key := range query {
+		switch key {
+		case "lang", "source", "platform", "method":
+		default:
+			return false
+		}
+	}
+	return true
 }

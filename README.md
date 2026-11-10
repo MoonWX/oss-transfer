@@ -188,7 +188,7 @@ When a host has no systemd and cannot use Docker (for example a containerized de
    ./oss-transfer-run.sh master start
    ```
 
-3. Create an invitation in the console under **Execution nodes → Add node**, or with `./oss-transfer-cli agent invite --master-url http://<Master IP>:1685`, copy its invitation link (`…/api/agents/bootstrap/<token>`) and run on the host to add. Later starts need no `--join-url`:
+3. Create an invitation in the console under **Execution nodes → Add node**, or with `./oss-transfer-cli agent invite --master-url http://<Master IP>:1685`, copy its invitation link (`…/api/agents/bootstrap/<token>`) and run on the host to add. The console's **Run manually** tab gives this command and the one that runs the program directly, and **Copy invitation link** copies the link alone. Later starts need no `--join-url`:
 
    ```sh
    ./oss-transfer-run.sh agent start --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<token>'
@@ -218,7 +218,7 @@ You can also run the programs without the script:
 | | `--data-dir` | Data directory, default `./data/master` |
 | | `--config` | Read these settings and the log file from a `service.json` instead of parameters |
 | | `--reset-admin-password [--username NAME]` | Reset an administrator password while the Master is stopped |
-| `oss-transfer-agent` | `--join-url` | Invitation link for the first join; works once and expires after 30 minutes; must not carry parameters such as `?lang=…` |
+| `oss-transfer-agent` | `--join-url` | Invitation link for the first join; works once and expires after 30 minutes; installer parameters such as `?lang=…` copied with it are ignored |
 | | `--master-url` and `--join-token` | Instead of `--join-url`: the Master address and the invitation token (or the `OSS_TRANSFER_JOIN_TOKEN` environment variable) |
 | | `--data-dir` | Data directory, default `./data/agent`; it keeps the node identity, so later starts need only this |
 | | `--label`, `--address` | Node display name; node address or name |

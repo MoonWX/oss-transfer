@@ -76,6 +76,32 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "{address} (LAN address)",
     ja: "{address}（LAN アドレス）",
   },
+  手动运行: {
+    en: "Run manually",
+    ja: "手動で実行",
+  },
+  管理脚本: {
+    en: "Management script",
+    ja: "管理スクリプト",
+  },
+  直接运行程序: {
+    en: "Run the program",
+    ja: "プログラムを直接実行",
+  },
+  "适用于没有 systemd 也不用 Docker 的主机：在解压后的发布包目录中运行。加入后再启动时只需 --data-dir，进程退出后不会自动重启。":
+    {
+      en: "For hosts without systemd or Docker: run it in the extracted release archive. Later starts need only --data-dir; the process is not restarted if it exits.",
+      ja: "systemd も Docker も使わないホスト向けです。展開したリリースアーカイブのディレクトリで実行します。参加後の起動には --data-dir だけが必要です。プロセスが終了しても自動では再起動しません。",
+    },
+  "适用于没有 systemd 也不用 Docker 的主机：在解压后的发布包目录中放好 oss-transfer-run.sh 后运行，它负责后台运行、异常退出后重启和日志。下载方法见 README 的“手动运行”一节。":
+    {
+      en: 'For hosts without systemd or Docker: put oss-transfer-run.sh in the extracted release archive and run it there; it runs the Agent in the background, restarts it after an unexpected exit and keeps its log. See "Run manually" in the README for the downloads.',
+      ja: "systemd も Docker も使わないホスト向けです。展開したリリースアーカイブのディレクトリに oss-transfer-run.sh を置いて実行します。バックグラウンド実行、異常終了後の再起動、ログを担当します。ダウンロード方法は README の「手動で実行」を参照してください。",
+    },
+  "复制邀请链接（用于 --join-url）": {
+    en: "Copy invitation link (for --join-url)",
+    ja: "招待リンクをコピー（--join-url 用）",
+  },
   "修改 Master 地址": {
     en: "Change Master address",
     ja: "Master のアドレスを変更",

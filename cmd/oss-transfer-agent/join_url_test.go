@@ -32,6 +32,16 @@ func TestJoinURLOrigins(t *testing.T) {
 	}
 }
 
+// A link copied with the installer's parameters (?lang=zh …) still joins.
+func TestJoinURLIgnoresInstallerParameters(t *testing.T) {
+	for _, query := range []string{"?lang=zh", "?lang=en&source=upstream", "?platform=windows&lang=zh", "?method=compose"} {
+		options, err := withJoinURL("http://10.1.0.43:1685/api/agents/bootstrap/token-1"+query, agent.Options{}, false)
+		if err != nil || options.MasterURL != "http://10.1.0.43:1685" || options.JoinToken != "token-1" {
+			t.Fatalf("%s: %+v %v", query, options, err)
+		}
+	}
+}
+
 func TestJoinURLRejectsMalformedLinks(t *testing.T) {
 	for _, value := range []string{
 		"",
@@ -42,6 +52,7 @@ func TestJoinURLRejectsMalformedLinks(t *testing.T) {
 		"http://user:password@master.example/api/agents/bootstrap/secret",
 		"http://master.example/api/agents/bootstrap/secret?x=1",
 		"http://master.example/api/agents/bootstrap/secret?",
+		"http://master.example/api/agents/bootstrap/secret?lang=zh&x=1",
 		"http://master.example/api/agents/bootstrap/secret#fragment",
 		"http://master.example/api/agents/bootstrap/secret#",
 		"http://master.example/api/agents/bootstrap/",

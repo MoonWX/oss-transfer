@@ -188,7 +188,7 @@ docker compose logs master
    ./oss-transfer-run.sh master start
    ```
 
-3. 在控制台 **执行节点 → 添加节点** 或用 `./oss-transfer-cli agent invite --master-url http://<Master IP>:1685` 生成邀请，复制其中的邀请链接（`…/api/agents/bootstrap/<令牌>`），在要加入的主机上运行。以后再启动时不需要 `--join-url`：
+3. 在控制台 **执行节点 → 添加节点** 或用 `./oss-transfer-cli agent invite --master-url http://<Master IP>:1685` 生成邀请，复制其中的邀请链接（`…/api/agents/bootstrap/<令牌>`），在要加入的主机上运行。控制台的 **手动运行** 页签会直接给出这条命令和直接运行程序的命令，**复制邀请链接** 只复制链接本身。以后再启动时不需要 `--join-url`：
 
    ```sh
    ./oss-transfer-run.sh agent start --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<令牌>'
@@ -218,7 +218,7 @@ docker compose logs master
 | | `--data-dir` | 数据目录，默认 `./data/master` |
 | | `--config` | 用 `service.json` 指定以上设置和日志文件，代替命令行参数 |
 | | `--reset-admin-password [--username 名称]` | Master 停止时重置管理员密码 |
-| `oss-transfer-agent` | `--join-url` | 首次加入用的邀请链接，只能使用一次，30 分钟内有效；不能带 `?lang=…` 这类参数 |
+| `oss-transfer-agent` | `--join-url` | 首次加入用的邀请链接，只能使用一次，30 分钟内有效；复制时带上的 `?lang=…` 等安装参数会被忽略 |
 | | `--master-url` 和 `--join-token` | 代替 `--join-url`：分别给出 Master 地址和邀请令牌（也可用环境变量 `OSS_TRANSFER_JOIN_TOKEN`） |
 | | `--data-dir` | 数据目录，默认 `./data/agent`，保存节点身份；之后启动只需要它 |
 | | `--label`、`--address` | 节点显示名称；节点地址或名称 |

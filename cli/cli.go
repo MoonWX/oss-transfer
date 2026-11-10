@@ -591,7 +591,7 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 		fmt.Fprintln(out, cliText(out, "注意：Master 地址是本机回环地址，只有在 Master 主机上原生运行的 Agent 能访问。其他主机上的 Agent 请用 --master-url 指定局域网地址；Master 主机上的 Docker 容器请指定 host.docker.internal。"))
 	}
 	if command := getString(data, "traditionalCommand"); command != "" {
-		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）"))
+		fmt.Fprintln(out, cliText(out, "\n原生部署（Linux / macOS / FreeBSD，root 或 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
 	} else if command := getString(data, "nativeCommand"); command != "" {
 		fmt.Fprintln(out, cliText(out, "\n原生运行（Linux / macOS / FreeBSD）"))
@@ -617,7 +617,7 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 	fmt.Fprintln(out, cliText(out, "\nDocker（Windows PowerShell）"))
 	fmt.Fprintln(out, safeCLIText(getString(data, "dockerWindowsCommand")))
 	if command := getString(data, "composeCommand"); command != "" {
-		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，需要 root 或 sudo）"))
+		fmt.Fprintln(out, cliText(out, "\nDocker Compose（Linux，root 或 sudo）"))
 		fmt.Fprintln(out, safeCLIText(command))
 	}
 }

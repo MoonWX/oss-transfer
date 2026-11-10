@@ -276,7 +276,7 @@ oss-transfer-cli agent invite-status 邀请ID
 
 `agent invite` 打印加入命令，以本地时间显示有效期（*加入凭证仅可使用一次，有效至 …*；邀请有效 30 分钟），并显示下载来源：
 
-- *原生部署（Linux / macOS / FreeBSD，需要 root 或 sudo）*：`curl -fsSL '<链接>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，以 root 运行时直接执行安装脚本，否则通过 `sudo` 执行（Master 地址为 IPv6 时会加上 `--globoff`）；
+- *原生部署（Linux / macOS / FreeBSD，root 或 sudo）*：`curl -fsSL '<链接>' | bash`（Master 地址为 IPv6 时会加上 `--globoff`）；以其他用户运行时，安装脚本会自动通过 `sudo` 重新执行；
 - *原生部署（Windows PowerShell）*；
 - *Docker（macOS / Linux，无需 root）* 和 *Docker（Windows PowerShell）*：普通的 `docker run` 命令，创建容器 `oss-transfer-agent-<6 个字符>` 及其数据卷；
 - *Docker Compose（Linux，需要 root 或 sudo）*：安装脚本的 Compose 方式，命令形式相同。

@@ -97,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 <p align="center"><img src="docs/images/join-command.zh-CN.png" width="720" alt="添加节点窗口，红框标出加入命令和“复制指令”按钮"></p>
 
-原生命令的形式是 `curl -fsSL '…' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，以 root 运行或通过 `sudo` 运行均可；Windows 命令请在管理员 PowerShell 中运行。窗口会显示执行节点从哪里下载安装包：默认从 Master 本身下载，点击 **改用公网下载** 后改为从公网下载。指令只能使用一次，30 分钟后过期。
+原生命令的形式是 `curl -fsSL '…' | bash`，以 root 运行，或由可以使用 `sudo` 的用户运行（安装脚本会自动通过 `sudo` 重新执行并询问密码）；Windows 命令请在管理员 PowerShell 中运行。窗口会显示执行节点从哪里下载安装包：默认从 Master 本身下载，点击 **改用公网下载** 后改为从公网下载。指令只能使用一次，30 分钟后过期。
 
 **成功时**，安装器输出 `=== agent 4.1.42 · 安装成功 ===`，**执行节点** 页面中该节点显示为 **在线**（也可以运行 `oss-transfer-cli node list` 查看）。
 

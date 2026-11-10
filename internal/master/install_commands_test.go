@@ -220,14 +220,10 @@ esac
 			if (err != nil) != tc.wantError {
 				t.Fatalf("bootstrap execution: %v\n%s", err, output)
 			}
-			// Only the copied command elevates, and only for a user who is not
-			// root; the bootstrap itself never calls sudo.
-			wantSudo := "bash\n"
-			if tc.root {
-				wantSudo = ""
-			}
-			if sudo, _ := os.ReadFile(filepath.Join(dir, "sudo-calls")); !tc.failBootstrap && string(sudo) != wantSudo {
-				t.Fatalf("copied command must pipe the bootstrap to sudo bash exactly once for a user who is not root: %q", sudo)
+			// The copied command pipes to plain bash and never calls sudo; a
+			// user who is not root is told by the installer to use sudo.
+			if sudo, _ := os.ReadFile(filepath.Join(dir, "sudo-calls")); len(sudo) != 0 {
+				t.Fatalf("copied command called sudo: %q", sudo)
 			}
 			requests, _ := os.ReadFile(filepath.Join(dir, "requests"))
 			if strings.Contains(string(requests), invite.Token) || strings.Contains(string(requests), "/latest/") || strings.Contains(string(requests), "/main/") {

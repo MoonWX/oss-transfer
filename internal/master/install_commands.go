@@ -85,11 +85,9 @@ func validateAgentArtifacts(options Options) error {
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 func psQuote(value string) string    { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
-// rootShell runs the piped installer as root: directly when the user is root
-// (FreeBSD's base system and minimal images have no sudo), otherwise through
-// sudo, which asks for the password on the terminal before the script is read.
-// sh -c keeps it one command in any interactive shell, fish included.
-const rootShell = ` | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`
+// rootShell pipes the bootstrap to bash. Run by a user who is not root, the
+// installer it downloads restarts itself through sudo.
+const rootShell = ` | bash`
 
 // bootstrapCommand runs the native installer as root.
 func bootstrapCommand(link string) string {

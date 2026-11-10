@@ -394,6 +394,7 @@ type StorageCheckRequest struct {
 	Config storageconfig.Config `json:"config"`
 	Bucket string               `json:"bucket,omitempty"`
 }
+
 // StoragePermissionsRequest asks for a permission check of one bucket: the
 // read requests a migration makes and, with Write, the write requests.
 type StoragePermissionsRequest struct {

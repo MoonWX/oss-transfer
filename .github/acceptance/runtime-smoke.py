@@ -173,7 +173,7 @@ def main():
                 checks.append("packaged Master generates Linux/macOS and Windows Agent commands pinned to its release")
             if number == 1 and args.expect_agent_image:
                 compose_bootstrap = bootstrap + "?method=compose"
-                assert invitation.get("composeCommand") == "curl -fsSL '" + compose_bootstrap + "' | sh -c 'if [ \"$(id -u)\" = 0 ]; then exec bash; else exec sudo bash; fi'", "Agent Compose command must run this Master's Compose bootstrap as root"
+                assert invitation.get("composeCommand") == "curl -fsSL '" + compose_bootstrap + "' | bash", "Agent Compose command must run this Master's Compose bootstrap as root"
                 docker_enroll, _, docker_run = invitation.get("dockerCommand", "").partition(" && ")
                 assert docker_enroll.startswith("docker run --rm ") and docker_enroll.endswith("--enroll-only") and bootstrap in docker_enroll \
                     and " " + args.expect_agent_image + " " in docker_enroll, "Docker command must enroll with this Master's invitation and matching image"

@@ -3,7 +3,7 @@ import { mockApi } from "./fixtures";
 import type { AgentInvitation } from "../src/lib/nodeRegistry";
 
 const joinUrl = "https://transfer.example/api/agents/bootstrap/test-once";
-const rootShell = `sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`;
+const rootShell = `bash`;
 const traditionalCommand = `curl -fsSL '${joinUrl}' | ${rootShell}`;
 const windowsCommand = `irm '${joinUrl}?platform=windows' | iex`;
 const upstreamTraditionalCommand = `curl -fsSL '${joinUrl}?source=upstream' | ${rootShell}`;

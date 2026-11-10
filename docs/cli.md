@@ -276,7 +276,7 @@ oss-transfer-cli agent invite-status INVITATION_ID
 
 `agent invite` prints the join commands, with the expiry in local time (*The join credential works once and expires at …*; invitations last 30 minutes) and the download source:
 
-- *Native installation (Linux / macOS / FreeBSD, as root or with sudo)*: `curl -fsSL '<link>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`, which runs the installer directly as root and through `sudo` otherwise (an IPv6 Master address adds `--globoff`);
+- *Native installation (Linux / macOS / FreeBSD, root or sudo)*: `curl -fsSL '<link>' | bash` (an IPv6 Master address adds `--globoff`); run by another user, the installer restarts itself through `sudo`;
 - *Native installation (Windows PowerShell)*;
 - *Docker (macOS / Linux, no root needed)* and *Docker (Windows PowerShell)*: plain `docker run` commands that create the container `oss-transfer-agent-<6 characters>` and its volume;
 - *Docker Compose (Linux, as root or with sudo)*: the installer's Compose method, in the same form.

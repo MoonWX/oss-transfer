@@ -58,7 +58,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role mast
 
 ## 3. Add Agents
 
-Open **Execution nodes → Add node**, name the node and enter a Master address it can reach. Choose **Generate join commands**, then copy the command for its operating system and run it on the Agent host. On Linux, macOS and FreeBSD it has the form `curl -fsSL '<link>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'` (run as root or with `sudo`), and the dialog shows *Download source: this Master. The new node needs no internet access.*
+Open **Execution nodes → Add node**, name the node and enter a Master address it can reach. Choose **Generate join commands**, then copy the command for its operating system and run it on the Agent host. On Linux, macOS and FreeBSD it has the form `curl -fsSL '<link>' | bash` (run as root or as a user with `sudo`), and the dialog shows *Download source: this Master. The new node needs no internet access.*
 
 The command downloads the installer and package from the Master, starts the Agent and joins the cluster. Once the node appears online on **Execution nodes**, you can select it for a transfer. For Docker Agents, load the image on the host first (see the last point below).
 

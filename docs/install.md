@@ -72,7 +72,7 @@ If the installer stops with an error:
 
 ### Add Agents
 
-Open **Execution nodes → Add node** in the console, enter a node name and a Master address that the new node can reach, and choose **Generate join commands**. Copy the command for the node's system and run it on that host. The native command for Linux, macOS and FreeBSD is `curl -fsSL '<link>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`: run it as root or as a user with `sudo`. The node appears online on **Execution nodes** within a few seconds. From the CLI, `oss-transfer-cli agent invite` prints the same commands ([CLI](cli.md#add-and-remove-agents)). For the Docker commands, see [Docker Compose](docker-compose.md).
+Open **Execution nodes → Add node** in the console, enter a node name and a Master address that the new node can reach, and choose **Generate join commands**. Copy the command for the node's system and run it on that host. The native command for Linux, macOS and FreeBSD is `curl -fsSL '<link>' | bash`: run it as root, or as a user with `sudo`: the installer then restarts itself through `sudo` and asks for the password. The node appears online on **Execution nodes** within a few seconds. From the CLI, `oss-transfer-cli agent invite` prints the same commands ([CLI](cli.md#add-and-remove-agents)). For the Docker commands, see [Docker Compose](docker-compose.md).
 
 ## Other systems
 

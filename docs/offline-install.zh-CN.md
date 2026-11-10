@@ -58,7 +58,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role mast
 
 ## 3. 添加执行节点
 
-打开 **执行节点 → 添加节点**，填写节点名称和该节点能访问的 Master 地址。点击 **生成加入指令** 后，复制对应系统的命令，在执行节点主机上运行。Linux、macOS 和 FreeBSD 的命令形如 `curl -fsSL '<链接>' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`（以 root 或通过 `sudo` 运行），窗口中显示 *下载来源：本 Master，新节点无需访问公网。*
+打开 **执行节点 → 添加节点**，填写节点名称和该节点能访问的 Master 地址。点击 **生成加入指令** 后，复制对应系统的命令，在执行节点主机上运行。Linux、macOS 和 FreeBSD 的命令形如 `curl -fsSL '<链接>' | bash`（以 root 或可使用 `sudo` 的用户运行），窗口中显示 *下载来源：本 Master，新节点无需访问公网。*
 
 命令会从 Master 获取安装脚本和程序包，启动执行节点并加入集群。确认节点在 **执行节点** 页面显示为在线后，即可用它创建迁移任务。Docker 执行节点需要先在主机上导入镜像（见最后一条注意事项）。
 

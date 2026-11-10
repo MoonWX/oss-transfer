@@ -30,7 +30,7 @@ export function buildAge(now: number, builtAt: number, locale: Locale) {
   return translate(locale, "不到 1 分钟前");
 }
 
-/** "v4.2.0 (33b320a)": the release version first, the commit as detail. */
+/** "v4.1.42 (33b320a)": the release version first, the commit as detail. */
 export function buildLabel(release: string | undefined, revision: string) {
   const name = release?.trim().replace(/^v/, "");
   return name ? `v${name} (${revision})` : revision;

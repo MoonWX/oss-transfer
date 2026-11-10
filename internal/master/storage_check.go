@@ -130,7 +130,7 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 	err = s.agentCall(ctx, members[0].Session(), "storage_check", false, request, &outcome.check)
 	var agentError *AgentError
 	if errors.As(err, &agentError) && agentError.Status == http.StatusNotFound && agentError.Message == "unknown_operation" {
-		// Agents before v4.2.0 only list buckets. They read an unset
+		// Agents before v4.1.42 only list buckets. They read an unset
 		// addressing as virtual-hosted, so they are given the resolved one,
 		// as storage_apply gives it to them: the addressing reported is what
 		// that node uses.

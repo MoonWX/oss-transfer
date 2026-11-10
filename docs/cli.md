@@ -95,7 +95,7 @@ This walk-through copies the prefix `2026/` of bucket `photos` on one object sto
 
 **`--watch N`** refreshes a read-only command every N seconds (1–3600), for example `task list`, `task show`, `node list`, `limit list` or `update status`.
 
-**`--version`** prints `OSS Transfer CLI v4.2.0` and a line with the commit, branch and build time. `--version --json` prints the same fields for scripts.
+**`--version`** prints `OSS Transfer CLI v4.1.42` and a line with the commit, branch and build time. `--version --json` prints the same fields for scripts.
 
 **Exit codes:**
 
@@ -176,7 +176,7 @@ oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data
 oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/data/upload --target-prefix upload/
 ```
 
-- `--conflict skip|overwrite|changed` chooses the [conflict policy](operations.md#conflict-policies); the default is `skip`. `--overwrite` equals `--conflict overwrite` and cannot be combined with another `--conflict`. `changed` needs Agents of v4.2.0 or later.
+- `--conflict skip|overwrite|changed` chooses the [conflict policy](operations.md#conflict-policies); the default is `skip`. `--overwrite` equals `--conflict overwrite` and cannot be combined with another `--conflict`. `changed` needs Agents of v4.1.42 or later.
 - `--date-after` and `--date-before` take `YYYY-MM-DDTHH:mm:ss`, read in the Master's time zone, or RFC 3339 with an offset.
 - `--distribution balanced|affinity` chooses how child tasks are placed.
 - `import buckets|tasks|local FILE` creates many tasks from a file; see `help task import`.
@@ -360,12 +360,12 @@ oss-transfer-cli update agents --all --yes
 oss-transfer-cli update status --watch 5
 ```
 
-`update check` prints *Current version v4.1.41 → update available: v4.2.0*, the release notes link and the two commands to run, or that the current version is up to date. `update master --yes` checks for itself and installs the latest stable release; if the Master is already current, it says so and exits with 0. `update agents --all --yes` brings every eligible Agent to the Master's version, one at a time; `update agent --worker NODE --yes` updates one. Accepting the request does not mean the upgrade has finished: follow it with `update status --watch 5`, which shows versions, translated phases, whether each node matches the Master and, for nodes that cannot update online, why ([software updates](operations.md#software-updates)).
+`update check` prints *Current version v4.1.41 → update available: v4.1.42*, the release notes link and the two commands to run, or that the current version is up to date. `update master --yes` checks for itself and installs the latest stable release; if the Master is already current, it says so and exits with 0. `update agents --all --yes` brings every eligible Agent to the Master's version, one at a time; `update agent --worker NODE --yes` updates one. Accepting the request does not mean the upgrade has finished: follow it with `update status --watch 5`, which shows versions, translated phases, whether each node matches the Master and, for nodes that cannot update online, why ([software updates](operations.md#software-updates)).
 
-Online updates install only the latest stable release: `update master --version X` with another stable version is refused with a message; run the installer with `--version` on the Master host instead. To install a prerelease such as `4.2.1-beta.1`, give the exact version and confirm it explicitly:
+Online updates install only the latest stable release: `update master --version X` with another stable version is refused with a message; run the installer with `--version` on the Master host instead. To install a prerelease such as `4.1.43-beta.1`, give the exact version and confirm it explicitly:
 
 ```sh
-oss-transfer-cli update master --version 4.2.1-beta.1 --allow-prerelease --yes
+oss-transfer-cli update master --version 4.1.43-beta.1 --allow-prerelease --yes
 ```
 
 Without `--allow-prerelease`, a prerelease version is rejected before any request with exit code 2. The same applies when `update agent` or `update agents` is given a prerelease `--version`. Without `--version`, Agents follow the Master's current version, including a prerelease, without the flag. Missing `--yes` and other usage errors exit with 2. See [prerelease updates](operations.md#try-a-prerelease).

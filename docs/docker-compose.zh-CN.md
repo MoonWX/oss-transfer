@@ -57,7 +57,7 @@ OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest
 TRANSFER_PORT=1685
 ```
 
-`latest` 跟随正式版。想自己决定何时升级，请固定版本，例如 `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.2.0`。
+`latest` 跟随正式版。想自己决定何时升级，请固定版本，例如 `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.42`。
 
 ## 添加执行节点
 
@@ -232,7 +232,7 @@ docker compose up -d master
    docker volume rm oss-transfer-agent-<id>-data
    ```
 
-   v4.2.0 之前的版本添加的执行节点，名称为 `oss-transfer-agent` 和 `oss-transfer-agent-data`。
+   v4.1.42 之前的版本添加的执行节点，名称为 `oss-transfer-agent` 和 `oss-transfer-agent-data`。
 
 **用 Linux Compose 安装器安装的执行节点：** 按上面的方法移除节点，然后在它的主机上运行：
 

@@ -8,7 +8,7 @@
 
 在联网机器上把发布文件下载到同一个文件夹。以下两个来源的文件完全相同：
 
-- 京东云 OSS，最新正式版的固定地址：`https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/<文件名>`。需要指定版本时，把 `latest` 换成版本号，例如 `v4.2.0`。
+- 京东云 OSS，最新正式版的固定地址：`https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/<文件名>`。需要指定版本时，把 `latest` 换成版本号，例如 `v4.1.42`。
 - [GitHub Release](https://github.com/MoonWX/oss-transfer/releases) 中的附件。
 
 需要下载 `install.sh`、`native-install.sh`、`manifest.tsv`、Windows 使用的 `Install.ps1`，以及每个目标平台的压缩包。例如 Master 和执行节点都是 Linux amd64（x86-64）时：
@@ -48,7 +48,7 @@ sudo bash install.sh --role master
 
 安装脚本会使用脚本所在文件夹（或当前文件夹）中的发布文件，输出 `使用本地安装包目录（离线）: <文件夹>`，且不会访问网络。如果指定了 `--version`，它必须与这些文件的版本一致。需要使用其他文件夹时加 `--package-dir DIR`；需要改为在线下载时加 `--source github|jdoss`。
 
-按提示选择是否同时安装本机执行节点；选择安装后，它会自动加入集群。安装脚本最后显示 `=== master 4.2.0 · 安装成功 ===`、访问地址和初始密码。打开 `http://<master-ip>:1685`，使用 `admin` 和该密码登录，再设置至少 8 个字符的新密码。其他检查项见[检查安装结果](install.zh-CN.md#检查安装结果)。
+按提示选择是否同时安装本机执行节点；选择安装后，它会自动加入集群。安装脚本最后显示 `=== master 4.1.42 · 安装成功 ===`、访问地址和初始密码。打开 `http://<master-ip>:1685`，使用 `admin` 和该密码登录，再设置至少 8 个字符的新密码。其他检查项见[检查安装结果](install.zh-CN.md#检查安装结果)。
 
 macOS 和 FreeBSD 使用同样的命令。macOS 安装当前用户服务时，去掉 `sudo` 并加上 `--user`，升级时也要保留该参数。FreeBSD 没有 `sudo` 时，切换到 root 执行。Windows 在拷贝后的文件夹中打开管理员 PowerShell：
 
@@ -74,7 +74,7 @@ sudo bash native-install.sh --role master --upgrade --yes
 sudo bash native-install.sh --role agent --upgrade --yes
 ```
 
-较早版本的安装脚本不会自动识别文件夹，需要加 `--package-dir "$PWD"`（Windows 为 `-PackageDir $PWD.Path`）。Windows 在原安装命令上加 `-Upgrade`，执行节点使用 `-Role agent`。升级保留原配置、任务和节点身份。确认各节点都已在线且版本一致后，再继续任务；v4.2.0 的多项功能要求执行节点也升级到 v4.2.0（见[升级到 v4.2.0](operations.zh-CN.md#升级到-v420)）。对运行正常的安装重复安装相同版本时，不加 `--force` 不会做任何更改。
+较早版本的安装脚本不会自动识别文件夹，需要加 `--package-dir "$PWD"`（Windows 为 `-PackageDir $PWD.Path`）。Windows 在原安装命令上加 `-Upgrade`，执行节点使用 `-Role agent`。升级保留原配置、任务和节点身份。确认各节点都已在线且版本一致后，再继续任务；v4.1.42 的多项功能要求执行节点也升级到 v4.1.42（见[升级到 v4.1.42](operations.zh-CN.md#升级到-v420)）。对运行正常的安装重复安装相同版本时，不加 `--force` 不会做任何更改。
 
 删除程序后重装，要保留原配置和完整数据目录，包括 `.db.key` 文件。重新运行安装命令即可；使用过自定义目录时，填写原路径。具体见[重装说明](install.zh-CN.md#重装且不丢失数据)。卸载同样可以离线进行：`sudo bash install.sh --uninstall --role agent` 不下载任何内容（见[卸载](install.zh-CN.md#卸载)）。
 

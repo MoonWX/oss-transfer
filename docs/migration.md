@@ -2,7 +2,7 @@
 
 [中文](migration.zh-CN.md)
 
-Data of v4.0.x needs an offline conversion before v4.1 or later, including v4.2.0, can use it. The converter keeps accounts, storage connections, node limits, task history and the recycle bin. Unfinished tasks enter the new installation stopped.
+Data of v4.0.x needs an offline conversion before v4.1 or later, including v4.1.42, can use it. The converter keeps accounts, storage connections, node limits, task history and the recycle bin. Unfinished tasks enter the new installation stopped.
 
 For a fresh installation, follow the [installation instructions](install.md). For an existing installation of v4.1 or later, use [software updates](operations.md#software-updates).
 

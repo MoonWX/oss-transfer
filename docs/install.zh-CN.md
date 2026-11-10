@@ -45,7 +45,7 @@ Installation: /opt/oss-transfer/master/bin
 CLI: /usr/local/bin/oss-transfer-cli
 Tasks: /usr/local/bin/oss-transfer-cli task list
 
-=== master 4.2.0 · 安装成功 ===
+=== master 4.1.42 · 安装成功 ===
 访问地址: http://10.0.0.5:1685
 
 初始管理员: admin
@@ -67,8 +67,8 @@ Tasks: /usr/local/bin/oss-transfer-cli task list
 | `Cannot listen on …: port 1685 is already in use by …` | 停止占用端口的程序，或用 `--port` 换一个端口（仅 Master，见[路径和端口](#路径和端口)）。安装脚本没有做任何更改。 |
 | `启动等待超过 … 秒` | 查看提示中的日志和 `systemctl status`，排除原因后重新运行同一命令。 |
 | `启动失败：此 Agent 已在 Master 上被移除` | 该执行节点的加入凭据已被撤销。从 **执行节点 → 添加节点** 复制新的加入命令，或[卸载](#卸载)该执行节点。 |
-| `… 已是 v4.2.0 且正在运行，未做任何更改。如需重新安装，请加 --force。` | 相同版本已安装且运行正常。只有确实要重装时才加 `--force`。 |
-| `… 的数据上次由 4.2.0 使用；4.1.41 是更旧的版本，可能无法读取这些数据` | 要安装的版本（不加 `--version` 时通常是最新正式版）比上次使用这些数据的版本更旧。请加提示中给出的 `--version`；确实要安装旧版本时加 `--force`。未做任何更改。 |
+| `… 已是 v4.1.42 且正在运行，未做任何更改。如需重新安装，请加 --force。` | 相同版本已安装且运行正常。只有确实要重装时才加 `--force`。 |
+| `… 的数据上次由 4.1.42 使用；4.1.41 是更旧的版本，可能无法读取这些数据` | 要安装的版本（不加 `--version` 时通常是最新正式版）比上次使用这些数据的版本更旧。请加提示中给出的 `--version`；确实要安装旧版本时加 `--force`。未做任何更改。 |
 
 ### 添加执行节点
 
@@ -103,7 +103,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/MoonWX/oss-transfer/main/dep
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master
 ```
 
-在中国大陆，也可以从 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/Install.ps1` 获取该脚本。安装成功时会显示 `安装成功：master 4.2.0`、访问地址、服务名称（`OSSTransferMaster` 或 `OSSTransferAgent`）、各个路径和日志文件。运行 `Get-Help .\Install.ps1` 可查看选项。
+在中国大陆，也可以从 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/Install.ps1` 获取该脚本。安装成功时会显示 `安装成功：master 4.1.42`、访问地址、服务名称（`OSSTransferMaster` 或 `OSSTransferAgent`）、各个路径和日志文件。运行 `Get-Help .\Install.ps1` 可查看选项。
 
 ### FreeBSD
 
@@ -119,7 +119,7 @@ bash install.sh --role master
 
 ## 下载源
 
-安装脚本默认从 GitHub 下载；主机公网 IP 位于中国大陆时，改从京东云 OSS 镜像下载。首选来源无法访问时，会自动尝试另一个。判断所在地时，依次访问 `https://www.cloudflare.com/cdn-cgi/trace` 和 `https://ipinfo.io/country`。使用 `--source github` 或 `--source jdoss`（`Install.ps1` 使用 `-Source`）可直接指定来源并跳过这一步。镜像中的 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` 始终包含最新正式版的全部文件，其中也有 `install.sh` 和 `Install.ps1`；每个版本（包括预发布版本）另有自己的目录，例如 `v4.2.0/`。
+安装脚本默认从 GitHub 下载；主机公网 IP 位于中国大陆时，改从京东云 OSS 镜像下载。首选来源无法访问时，会自动尝试另一个。判断所在地时，依次访问 `https://www.cloudflare.com/cdn-cgi/trace` 和 `https://ipinfo.io/country`。使用 `--source github` 或 `--source jdoss`（`Install.ps1` 使用 `-Source`）可直接指定来源并跳过这一步。镜像中的 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` 始终包含最新正式版的全部文件，其中也有 `install.sh` 和 `Install.ps1`；每个版本（包括预发布版本）另有自己的目录，例如 `v4.1.42/`。
 
 以文件形式保存的安装脚本（而不是通过管道交给 shell 运行）会依次在自身所在文件夹和当前目录中查找 `manifest.tsv` 或本机平台的压缩包。找到其中之一时，直接用该文件夹中的文件安装，不下载任何内容；如果指定了 `--version`，它必须与这些文件的版本一致。加 `--source github` 或 `--source jdoss`（`Install.ps1` 使用 `-Source`）则改为在线下载。详见[离线安装](offline-install.zh-CN.md)。
 
@@ -130,23 +130,23 @@ bash install.sh --role master
 安装脚本默认使用最新正式版。需要安装固定版本时，用 `--version`（`Install.ps1` 使用 `-Version`）指定，开头的 `v` 可写可不写：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --version 4.2.0
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --version 4.1.42
 ```
 
 ```sh
-bash install.sh --role master --version 4.2.0
+bash install.sh --role master --version 4.1.42
 ```
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -Version 4.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -Version 4.1.42
 ```
 
-安装脚本会从 GitHub 发布 `v4.2.0` 或镜像目录 `oss-transfer/v4.2.0/` 下载该版本。每个版本的发布说明和全部文件见 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases)。
+安装脚本会从 GitHub 发布 `v4.1.42` 或镜像目录 `oss-transfer/v4.1.42/` 下载该版本。每个版本的发布说明和全部文件见 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases)。
 
-预发布版本（例如 `4.2.1-beta.1`）的安装方式相同：
+预发布版本（例如 `4.1.43-beta.1`）的安装方式相同：
 
 ```sh
-bash install.sh --role master --version 4.2.1-beta.1
+bash install.sh --role master --version 4.1.43-beta.1
 ```
 
 安装脚本校验预发布版本的方式与正式版完全相同：使用该标签的 GitHub 发布摘要或带版本号的 OSS 清单，而不是 `latest`。带 `--upgrade` 和 `--version` 重新运行安装脚本，可以把已有安装升级到该版本，包括从预发布版本升级到对应的正式版。从控制台添加的执行节点会下载与 Master 相同的版本。
@@ -154,7 +154,7 @@ bash install.sh --role master --version 4.2.1-beta.1
 Docker Compose 部署在 `.env` 中设置精确的镜像标签；`latest` 和 `X.Y` 只跟随正式版：
 
 ```dotenv
-OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.2.0
+OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.42
 ```
 
 预发布版本属于实验性质；在线更新和回到正式版的方法见[试用预发布版本](operations.zh-CN.md#试用预发布版本)。
@@ -209,19 +209,19 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 `--upgrade` 会找出本机已安装的原生服务，逐个备份、安装新版本并确认能够启动。加 `--role master` 或 `--role agent` 只升级其中一个，加 `--version` 指定版本。在已有安装的主机上不带参数重新运行一行安装命令，安装脚本也会询问是否升级。Windows 在安装命令后加 `-Upgrade`。
 
-每个升级成功的服务都会显示 `=== master 4.2.0 · 安装成功 ===`（或 `agent`）。新版本无法启动时，安装脚本会恢复旧版本并保留备份（见[从失败的升级中恢复](operations.zh-CN.md#从失败的升级中恢复)）。
+每个升级成功的服务都会显示 `=== master 4.1.42 · 安装成功 ===`（或 `agent`）。新版本无法启动时，安装脚本会恢复旧版本并保留备份（见[从失败的升级中恢复](operations.zh-CN.md#从失败的升级中恢复)）。
 
-对完整且正在运行的安装重新运行相同版本时，不会做任何更改：交互运行时安装脚本会询问是否重装；带 `--yes` 时打印 `… 已是 v4.2.0 且正在运行，未做任何更改。如需重新安装，请加 --force。` 并以状态 0 退出。没有任何安装发生变化时，结尾显示 `=== 无需更改 ===`，而不是“安装成功”。确实要重装时加 `--force`。缺失或损坏的部分（程序、服务定义、CLI、执行节点安装包）不需要 `--force` 也会修复。`Install.ps1` 没有 `-Force`，总是重新安装。
+对完整且正在运行的安装重新运行相同版本时，不会做任何更改：交互运行时安装脚本会询问是否重装；带 `--yes` 时打印 `… 已是 v4.1.42 且正在运行，未做任何更改。如需重新安装，请加 --force。` 并以状态 0 退出。没有任何安装发生变化时，结尾显示 `=== 无需更改 ===`，而不是“安装成功”。确实要重装时加 `--force`。缺失或损坏的部分（程序、服务定义、CLI、执行节点安装包）不需要 `--force` 也会修复。`Install.ps1` 没有 `-Force`，总是重新安装。
 
 安装脚本不会悄悄安装比上次使用该安装数据的版本更旧的版本，例如在预发布版本的数据上安装最新正式版。交互运行时它会警告并询问（默认为否）；带 `--yes` 时直接停止，不做任何更改。请用 `--version` 指定较新的版本；确实要安装旧版本时加 `--force`。
 
 交互安装前，安装脚本会列出安装内容并询问 `安装？y / n`：角色（以及是否同时安装本机 Agent）、版本（预发布版本会注明，并显示被替换的版本）、程序目录和数据目录、服务名称，以及新安装 Master 的监听地址。
 
-升级现有集群之前，请先阅读 [v4.2.0 带来的变化](operations.zh-CN.md#升级到-v420)。
+升级现有集群之前，请先阅读 [v4.1.42 带来的变化](operations.zh-CN.md#升级到-v420)。
 
 ## 重装且不丢失数据
 
-再次运行安装脚本；如果修改过 `--root-dir`，请使用相同的值。安装脚本会识别保留下来的服务配置和数据，补回缺失的程序或服务定义，并沿用执行节点的身份。旧目录结构的现有安装继续使用其保存的路径。使用 `--uninstall --keep-data` 卸载后，请运行卸载结尾给出的命令：它包含上次使用这些数据的版本（`--version`）、角色和非默认路径，例如 `bash install.sh --role agent --version 4.2.0`。
+再次运行安装脚本；如果修改过 `--root-dir`，请使用相同的值。安装脚本会识别保留下来的服务配置和数据，补回缺失的程序或服务定义，并沿用执行节点的身份。旧目录结构的现有安装继续使用其保存的路径。使用 `--uninstall --keep-data` 卸载后，请运行卸载结尾给出的命令：它包含上次使用这些数据的版本（`--version`）、角色和非默认路径，例如 `bash install.sh --role agent --version 4.1.42`。
 
 保留每个角色的 `config` 目录和完整的 `data` 目录，包括密钥文件（`master.db.key` 或 `agent.db.key`）。密钥必须与数据库匹配。缺少配置或密钥时，安装脚本会停止，而不是创建一个空的替代安装。源文件、目标文件和共享挂载与这些应用目录相互独立。需要把安装迁到另一台主机时，见[备份与恢复](operations.zh-CN.md#备份与恢复)。
 
@@ -278,7 +278,7 @@ docker rm -f oss-transfer-agent-1a2b3c
 docker volume rm oss-transfer-agent-1a2b3c-data
 ```
 
-v4.2.0 之前用此命令添加的执行节点使用 `oss-transfer-agent` 和 `oss-transfer-agent-data`。自行编写的 Compose 项目见 [Docker Compose](docker-compose.zh-CN.md)。
+v4.1.42 之前用此命令添加的执行节点使用 `oss-transfer-agent` 和 `oss-transfer-agent-data`。自行编写的 Compose 项目见 [Docker Compose](docker-compose.zh-CN.md)。
 
 ### Windows
 
@@ -300,10 +300,10 @@ Remove-Item -Recurse -Force "$env:ProgramData\OSS Transfer\agent\config", "$env:
 
 ## 在其他电脑上安装 CLI
 
-每个发布压缩包都包含 CLI。要在工作站上管理集群，下载与该电脑对应的压缩包，校验后取出 `oss-transfer-cli`。以 Linux amd64 和 v4.2.0 为例：
+每个发布压缩包都包含 CLI。要在工作站上管理集群，下载与该电脑对应的压缩包，校验后取出 `oss-transfer-cli`。以 Linux amd64 和 v4.1.42 为例：
 
 ```sh
-v=4.2.0 p=linux-amd64
+v=4.1.42 p=linux-amd64
 curl -fLO "https://github.com/MoonWX/oss-transfer/releases/download/v$v/oss-transfer-$p.tar.gz"
 curl -fLO "https://github.com/MoonWX/oss-transfer/releases/download/v$v/SHA256SUMS"
 grep " oss-transfer-$p.tar.gz\$" SHA256SUMS
@@ -323,7 +323,7 @@ oss-transfer-cli login
 oss-transfer-cli task list
 ```
 
-`--version` 显示 `OSS Transfer CLI v4.2.0` 和构建信息。`login` 以 `admin` 登录（其他账号加 `--username`），以不回显的方式询问密码，成功后显示 `已登录 …（用户 admin）`。脚本用法和其他选项见 [CLI](cli.zh-CN.md#连接-master)。
+`--version` 显示 `OSS Transfer CLI v4.1.42` 和构建信息。`login` 以 `admin` 登录（其他账号加 `--username`），以不回显的方式询问密码，成功后显示 `已登录 …（用户 admin）`。脚本用法和其他选项见 [CLI](cli.zh-CN.md#连接-master)。
 
 ## 反向代理
 

@@ -59,7 +59,7 @@ curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/inst
 按提示选择 Master 和原生服务，并决定是否同时安装本机执行节点。程序、配置和数据默认放在 `/opt/oss-transfer/`。要通过管道传递参数，请加 `-s --`，例如不提问、安装指定版本：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --role master --with-agent --version 4.2.0 --yes
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --role master --with-agent --version 4.1.42 --yes
 ```
 
 **成功时**，输出的最后几行类似：
@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 初始密码: <随机密码>
 ```
 
-不安装本机执行节点时，第一行是 `=== master 4.2.0 · 安装成功 ===`。
+不安装本机执行节点时，第一行是 `=== master 4.1.42 · 安装成功 ===`。
 
 **失败时**，安装器会输出原因和日志路径。运行 `sudo systemctl status oss-transfer-master` 查看服务状态，解决问题后重新运行同一条命令：它会修复未完成的安装。
 
@@ -99,7 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 原生命令的形式是 `curl -fsSL '…' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'`，以 root 运行或通过 `sudo` 运行均可；Windows 命令请在管理员 PowerShell 中运行。窗口会显示执行节点从哪里下载安装包：默认从 Master 本身下载，点击 **改用公网下载** 后改为从公网下载。指令只能使用一次，30 分钟后过期。
 
-**成功时**，安装器输出 `=== agent 4.2.0 · 安装成功 ===`，**执行节点** 页面中该节点显示为 **在线**（也可以运行 `oss-transfer-cli node list` 查看）。
+**成功时**，安装器输出 `=== agent 4.1.42 · 安装成功 ===`，**执行节点** 页面中该节点显示为 **在线**（也可以运行 `oss-transfer-cli node list` 查看）。
 
 **失败时**：确认执行节点主机能访问 Master 地址（例如 `curl http://10.0.0.5:1685/`）。指令已过期或已被使用时，重新生成。
 

@@ -57,7 +57,7 @@ OSS_TRANSFER_IMAGE=moonwx/osstransfer:latest
 TRANSFER_PORT=1685
 ```
 
-`latest` follows stable releases. To control when you upgrade, pin a version, for example `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.2.0`.
+`latest` follows stable releases. To control when you upgrade, pin a version, for example `OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.42`.
 
 ## Add an Agent
 
@@ -232,7 +232,7 @@ Container Agents cannot update online. Recreate each container from the new imag
    docker volume rm oss-transfer-agent-<id>-data
    ```
 
-   Agents added by versions before v4.2.0 use the names `oss-transfer-agent` and `oss-transfer-agent-data`.
+   Agents added by versions before v4.1.42 use the names `oss-transfer-agent` and `oss-transfer-agent-data`.
 
 **An Agent installed with the Linux Compose installer:** remove the node as above, then run on its host:
 

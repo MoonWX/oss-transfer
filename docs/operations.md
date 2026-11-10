@@ -51,7 +51,7 @@ Two results are warnings, not errors: the connection is saved and can be used.
 - *These credentials cannot list buckets (ListBuckets was denied) …*: the key is limited to one bucket. Type the bucket name when you create a task, and check it with **Check a bucket** in the **Test connection** dialog, or `oss-transfer-cli storage test NAME --bucket BUCKET`.
 - *The credentials cannot list the objects of bucket … (AccessDenied) …*: check the bucket's permissions before migrating from it.
 
-**Addressing.** **Automatic (recommended)**, the default, uses path-style when the endpoint has a port, or its host is an IP address, `localhost`, a name without a dot, or ends with `.internal`, `.local` or `.lan`; otherwise it uses virtual-hosted. The form shows which one the endpoint gets, and the connection card shows *Automatic · Path-style* or *Automatic · Virtual-hosted*. Choose Path-style or Virtual-hosted explicitly when the rule is wrong for your service, for example self-hosted storage behind a DNS name without a port. Automatic addressing and the bucket-level check run on the Agent: an Agent older than v4.2.0 treats a connection without an explicit choice as virtual-hosted and only lists buckets (the test dialog says the node is too old).
+**Addressing.** **Automatic (recommended)**, the default, uses path-style when the endpoint has a port, or its host is an IP address, `localhost`, a name without a dot, or ends with `.internal`, `.local` or `.lan`; otherwise it uses virtual-hosted. The form shows which one the endpoint gets, and the connection card shows *Automatic · Path-style* or *Automatic · Virtual-hosted*. Choose Path-style or Virtual-hosted explicitly when the rule is wrong for your service, for example self-hosted storage behind a DNS name without a port. Automatic addressing and the bucket-level check run on the Agent: an Agent older than v4.1.42 treats a connection without an explicit choice as virtual-hosted and only lists buckets (the test dialog says the node is too old).
 
 ### An Agent is offline
 
@@ -127,7 +127,7 @@ Before a download to a local directory starts, each Agent writes and removes a p
 | *The disk holding … has no free space* | Free space or choose another disk |
 | *… is not a directory and cannot be a download destination* | Choose a directory |
 
-In the CLI, the precheck fields are `writeProbeDirectory`, `effectiveUid` and `freeBytes` (`--validate-only` runs the precheck without creating a task). Agents older than v4.2.0 run the earlier check without the probe file.
+In the CLI, the precheck fields are `writeProbeDirectory`, `effectiveUid` and `freeBytes` (`--validate-only` runs the precheck without creating a task). Agents older than v4.1.42 run the earlier check without the probe file.
 
 ### Staging directories in download destinations
 
@@ -176,7 +176,7 @@ Otherwise it is skipped and counted as skipped. The decision uses listing metada
 - A change that keeps the size, on objects whose ETags are not comparable (multipart uploads, objects of 128 MiB or more copied by OSS Transfer), with a source time that is not later, is not detected.
 - Objects encrypted with SSE-KMS or SSE-C have ETags that are not MD5s of the content. If both sides look like MD5 ETags but differ, every such object is overwritten.
 - The rule compares the clocks of two storage systems. After a first copy, the destination's Last-Modified is the copy time, so later source changes are detected.
-- Every Agent of the task must run v4.2.0 or later. Creating such a task on an older Agent fails with *Agent … does not support overwriting changed objects; upgrade it first*, and older Agents cannot join it.
+- Every Agent of the task must run v4.1.42 or later. Creating such a task on an older Agent fails with *Agent … does not support overwriting changed objects; upgrade it first*, and older Agents cannot join it.
 
 **Incremental rounds.** For a source that keeps changing, run a full migration, then repeat the same task definition with **Overwrite changed objects** (or with **Skip existing objects or files** and a **Modified after** time) until the remaining changes are small, stop writes, run a last round and [compare](#compare-objects) before switching over. Deletions at the source are not applied to the destination. [Planning](planning.md) has the full cut-over runbook.
 
@@ -461,7 +461,7 @@ oss-transfer-cli update agents --all --yes
 oss-transfer-cli update status --watch 5
 ```
 
-`update check` prints *Current version v4.1.41 → update available: v4.2.0* with the release notes link, or that the version is up to date. `update master` checks by itself and installs the latest stable release; when the Master is already current it says so and exits with status 0. Accepting an update does not mean it has finished: follow it with `update status`.
+`update check` prints *Current version v4.1.41 → update available: v4.1.42* with the release notes link, or that the version is up to date. `update master` checks by itself and installs the latest stable release; when the Master is already current it says so and exits with status 0. Accepting an update does not mean it has finished: follow it with `update status`.
 
 **Nodes that cannot update online.** The **Update** button is then disabled, and its tooltip says why; `update status` shows the same reason. Common reasons and what to do:
 
@@ -497,10 +497,10 @@ For a planned downgrade, make a separate backup of each service's programs, conf
 
 Online updates install only the latest stable release. To install another version, run the installer on the host with `--version` ([install](install.md#install-a-specific-or-prerelease-version)); `update master --version X` with any other stable X is refused. The first upgrade from a version without online updates also uses the installer. Replacing a binary inside a running container would be lost when the container is recreated.
 
-### Upgrading to v4.2.0
+### Upgrading to v4.1.42
 
-- **Update the Agents too.** Several v4.2.0 features run on the Agent: automatic addressing and the bucket-level connection check, **Overwrite changed objects**, the longer retries for storage outages, skipping objects deleted at the source, and the download write probe. With older Agents, the Master falls back to the previous behavior.
-- **Addressing of existing connections.** Connections that never chose an addressing style now use automatic addressing once their Agents run v4.2.0: an endpoint with a port, an IP address or a local host name becomes path-style. This is what self-hosted storage needs; if your service needs virtual-hosted addressing, choose it explicitly.
+- **Update the Agents too.** Several v4.1.42 features run on the Agent: automatic addressing and the bucket-level connection check, **Overwrite changed objects**, the longer retries for storage outages, skipping objects deleted at the source, and the download write probe. With older Agents, the Master falls back to the previous behavior.
+- **Addressing of existing connections.** Connections that never chose an addressing style now use automatic addressing once their Agents run v4.1.42: an endpoint with a port, an IP address or a local host name becomes path-style. This is what self-hosted storage needs; if your service needs virtual-hosted addressing, choose it explicitly.
 - **Removed Agents stop.** An Agent removed on the Master now stops instead of restarting every 5 seconds. Existing systemd units get `RestartPreventExitStatus=78` on their next upgrade.
 - **Reports** of tasks that were stopped and resumed, or whose failed objects were retried, are complete again. This is fixed on the Master and works with older Agents.
 - **CLI exit codes.** Command-line mistakes found before contacting the Master now exit with 2 (previously 1 for some), and a 401 or 403 always exits with 1. Check scripts that test exit codes ([CLI](cli.md#output-languages-and-exit-codes)).

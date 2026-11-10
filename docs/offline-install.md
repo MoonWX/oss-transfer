@@ -8,7 +8,7 @@ Prepare the files on a connected machine and copy them to the Master. Other Agen
 
 On a connected machine, download the release files into one folder. Two sources hold the same complete set:
 
-- JD Cloud OSS, a fixed URL for the latest stable release: `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/<file>`. For a specific version, replace `latest` with the tag, for example `v4.2.0`.
+- JD Cloud OSS, a fixed URL for the latest stable release: `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/<file>`. For a specific version, replace `latest` with the tag, for example `v4.1.42`.
 - The assets of a [GitHub Release](https://github.com/MoonWX/oss-transfer/releases).
 
 Download `install.sh`, `native-install.sh`, `manifest.tsv`, `Install.ps1` for Windows, and the archive of each platform you install. For example, for a Master and Agents all running Linux amd64 (x86-64):
@@ -48,7 +48,7 @@ sudo bash install.sh --role master
 
 The installer uses the release files in its own folder (or the current folder), prints `Using local release files (offline): <folder>` and does not access the network. If you pass `--version`, it must match the version of these files. Use `--package-dir DIR` to choose another folder, or `--source github|jdoss` to download instead.
 
-Choose whether to install an Agent on the Master host; it joins automatically. The installer ends with `=== master 4.2.0 · Installed successfully ===`, the web console address and the initial password. Open `http://<master-ip>:1685`, sign in as `admin` with that password, and choose a new password of at least 8 characters. See [check the installation](install.md#check-the-installation) for what else to check.
+Choose whether to install an Agent on the Master host; it joins automatically. The installer ends with `=== master 4.1.42 · Installed successfully ===`, the web console address and the initial password. Open `http://<master-ip>:1685`, sign in as `admin` with that password, and choose a new password of at least 8 characters. See [check the installation](install.md#check-the-installation) for what else to check.
 
 macOS and FreeBSD use the same command. For a macOS user service, omit `sudo` and add `--user`; keep that option when upgrading. On FreeBSD, run as root if `sudo` is unavailable. On Windows, open Administrator PowerShell in the copied folder:
 
@@ -74,7 +74,7 @@ sudo bash native-install.sh --role master --upgrade --yes
 sudo bash native-install.sh --role agent --upgrade --yes
 ```
 
-Installers from older releases do not detect the folder automatically; add `--package-dir "$PWD"` (Windows: `-PackageDir $PWD.Path`) for them. On Windows, add `-Upgrade` to the installation command and use `-Role agent` for Agents. Upgrades keep configuration, tasks and node identities. Check that all nodes are online at the new version before resuming tasks; several v4.2.0 features need the Agents at v4.2.0 ([upgrading to v4.2.0](operations.md#upgrading-to-v420)). Rerunning the same version on a healthy installation changes nothing unless you add `--force`.
+Installers from older releases do not detect the folder automatically; add `--package-dir "$PWD"` (Windows: `-PackageDir $PWD.Path`) for them. On Windows, add `-Upgrade` to the installation command and use `-Role agent` for Agents. Upgrades keep configuration, tasks and node identities. Check that all nodes are online at the new version before resuming tasks; several v4.1.42 features need the Agents at v4.1.42 ([upgrading to v4.1.42](operations.md#upgrading-to-v420)). Rerunning the same version on a healthy installation changes nothing unless you add `--force`.
 
 To reinstall after removing the programs, keep the original configuration and entire data directory, including the `.db.key` file. Rerun the installer with the original paths if you customized them; see [reinstallation](install.md#reinstall-without-losing-data). Uninstalling works offline too: `sudo bash install.sh --uninstall --role agent` downloads nothing ([uninstall](install.md#uninstall)).
 

@@ -325,7 +325,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			case getString(result, "bucketCheckFailed") != "":
 				result["message"] = client.text("已读取存储桶列表；第一个存储桶的存储桶级检查未通过，见警告；可用 --bucket 检查要迁移的存储桶")
 			case !checkSupported:
-				// Masters before v4.2 only list buckets and ignore ?bucket=.
+				// Masters before v4.1.42 only list buckets and ignore ?bucket=.
 				result["message"] = client.text("已读取存储桶列表；Master 版本较旧，未检查存储桶级访问")
 			case result["bucketCheckSupported"] == false:
 				result["message"] = client.text("已读取存储桶列表；执行节点版本较旧，未检查存储桶级访问")

@@ -45,7 +45,7 @@ Installation: /opt/oss-transfer/master/bin
 CLI: /usr/local/bin/oss-transfer-cli
 Tasks: /usr/local/bin/oss-transfer-cli task list
 
-=== master 4.2.0 · Installed successfully ===
+=== master 4.1.42 · Installed successfully ===
 Web UI: http://10.0.0.5:1685
 
 Initial administrator: admin
@@ -67,8 +67,8 @@ If the installer stops with an error:
 | `Cannot listen on …: port 1685 is already in use by …` | Stop the other program, or install with `--port` (Master only, see [paths and ports](#paths-and-ports)). Nothing was changed. |
 | `Startup timed out after …s` | Read the log named in the message and `systemctl status`, fix the cause, then run the same command again. |
 | `Startup failed: this Agent was removed from the cluster on the Master` | The Agent's enrollment was revoked. Copy a new join command from **Execution nodes → Add node**, or [uninstall](#uninstall) the Agent. |
-| `… is already v4.2.0 and running; nothing was changed. Add --force to reinstall it.` | The same version is already installed and healthy. Add `--force` only if you want to reinstall it. |
-| `… data was last used by 4.2.0; 4.1.41 is older and may not read it` | The version you are installing (often the latest stable release, when you omit `--version`) is older than the one that last used the data. Add the `--version` the message names, or `--force` if you really want the older version. Nothing was changed. |
+| `… is already v4.1.42 and running; nothing was changed. Add --force to reinstall it.` | The same version is already installed and healthy. Add `--force` only if you want to reinstall it. |
+| `… data was last used by 4.1.42; 4.1.41 is older and may not read it` | The version you are installing (often the latest stable release, when you omit `--version`) is older than the one that last used the data. Add the `--version` the message names, or `--force` if you really want the older version. Nothing was changed. |
 
 ### Add Agents
 
@@ -103,7 +103,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/MoonWX/oss-transfer/main/dep
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master
 ```
 
-In mainland China, the script is also available at `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/Install.ps1`. The installer ends with `Installation successful: master 4.2.0`, the web console address, the service name (`OSSTransferMaster` or `OSSTransferAgent`), the paths and the log file. Run `Get-Help .\Install.ps1` for the options.
+In mainland China, the script is also available at `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/Install.ps1`. The installer ends with `Installation successful: master 4.1.42`, the web console address, the service name (`OSSTransferMaster` or `OSSTransferAgent`), the paths and the log file. Run `Get-Help .\Install.ps1` for the options.
 
 ### FreeBSD
 
@@ -119,7 +119,7 @@ On every system, sign in with the `admin` password printed by the installer. The
 
 ## Download sources
 
-The installers download from GitHub, or from the JD Cloud OSS mirror when the host's public IP is in mainland China, and try the other source if the first cannot be reached. To find the location, they ask `https://www.cloudflare.com/cdn-cgi/trace`, then `https://ipinfo.io/country`. Pass `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) to choose a source and skip this lookup. On the mirror, `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` always holds every file of the latest stable release, including `install.sh` and `Install.ps1`; each version, prereleases included, also has its own directory, such as `v4.2.0/`.
+The installers download from GitHub, or from the JD Cloud OSS mirror when the host's public IP is in mainland China, and try the other source if the first cannot be reached. To find the location, they ask `https://www.cloudflare.com/cdn-cgi/trace`, then `https://ipinfo.io/country`. Pass `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) to choose a source and skip this lookup. On the mirror, `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` always holds every file of the latest stable release, including `install.sh` and `Install.ps1`; each version, prereleases included, also has its own directory, such as `v4.1.42/`.
 
 An installer saved as a file (not piped into the shell) looks for `manifest.tsv` or this host's platform archive in its own folder, then in the current directory. If either is there, it installs from the files in that folder without downloading anything, and `--version`, if given, must match them; `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) forces a download instead. See [offline installation](offline-install.md).
 
@@ -130,23 +130,23 @@ Agents added from the console download the installer and package from the Master
 Installers use the latest stable release by default. To install a fixed version, pass it with `--version` (`-Version` for `Install.ps1`). A leading `v` is optional:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --version 4.2.0
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --version 4.1.42
 ```
 
 ```sh
-bash install.sh --role master --version 4.2.0
+bash install.sh --role master --version 4.1.42
 ```
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -Version 4.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -Role master -Version 4.1.42
 ```
 
-The installer downloads that release from the GitHub release `v4.2.0` or from the mirror directory `oss-transfer/v4.2.0/`. Release notes and all files of a version are on [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases).
+The installer downloads that release from the GitHub release `v4.1.42` or from the mirror directory `oss-transfer/v4.1.42/`. Release notes and all files of a version are on [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases).
 
-Prereleases, such as `4.2.1-beta.1`, are installed the same way:
+Prereleases, such as `4.1.43-beta.1`, are installed the same way:
 
 ```sh
-bash install.sh --role master --version 4.2.1-beta.1
+bash install.sh --role master --version 4.1.43-beta.1
 ```
 
 The installer verifies a prerelease exactly like a stable release: the GitHub release digest for that tag or the versioned OSS manifest, never `latest`. Rerunning the installer with `--upgrade` and `--version` upgrades an existing installation to that version, including from a prerelease to its stable release. Agents added from the console download the Master's own version.
@@ -154,7 +154,7 @@ The installer verifies a prerelease exactly like a stable release: the GitHub re
 For Docker Compose, set the exact image tag in `.env`; `latest` and `X.Y` only follow stable releases:
 
 ```dotenv
-OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.2.0
+OSS_TRANSFER_IMAGE=moonwx/osstransfer:4.1.42
 ```
 
 Prereleases are experimental; see [trying a prerelease](operations.md#try-a-prerelease) for online updates and returning to stable.
@@ -209,19 +209,19 @@ curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh
 
 `--upgrade` finds the native services installed on the host, backs each one up, installs the new version and checks that it starts. Add `--role master` or `--role agent` to upgrade only one of them, and `--version` to choose the version. Rerunning the one-line command without options on a host that already has an installation also offers to upgrade it. On Windows, add `-Upgrade` to the installation command.
 
-The installer prints `=== master 4.2.0 · Installed successfully ===` (or `agent`) for each upgraded service. If the new version fails to start, the installer restores the previous one and keeps the backup ([recover from a failed upgrade](operations.md#recover-from-a-failed-upgrade)).
+The installer prints `=== master 4.1.42 · Installed successfully ===` (or `agent`) for each upgraded service. If the new version fails to start, the installer restores the previous one and keeps the backup ([recover from a failed upgrade](operations.md#recover-from-a-failed-upgrade)).
 
-Rerunning the same version on an installation that is complete and running changes nothing: interactively the installer asks whether to reinstall it; with `--yes` it prints `… is already v4.2.0 and running; nothing was changed. Add --force to reinstall it.` and exits with status 0. When no installation changed, the run ends with `=== Nothing changed ===` instead of `Installed successfully`. Add `--force` to reinstall it anyway. A missing or damaged part (program, service definition, CLI, Agent packages) is repaired without `--force`. `Install.ps1` has no `-Force`; it always reinstalls.
+Rerunning the same version on an installation that is complete and running changes nothing: interactively the installer asks whether to reinstall it; with `--yes` it prints `… is already v4.1.42 and running; nothing was changed. Add --force to reinstall it.` and exits with status 0. When no installation changed, the run ends with `=== Nothing changed ===` instead of `Installed successfully`. Add `--force` to reinstall it anyway. A missing or damaged part (program, service definition, CLI, Agent packages) is repaired without `--force`. `Install.ps1` has no `-Force`; it always reinstalls.
 
 The installer does not quietly install a version older than the one that last used an installation's data, for example the latest stable release over data from a prerelease. Interactively it warns and asks (the default is no); with `--yes` it stops without changing anything. Add `--version` with the newer version, or `--force` to install the older one anyway.
 
 Before an interactive installation, the installer shows what it will install and asks `Install? y / n`: the role (and whether a local Agent is included), the version (marked as a prerelease when it is one, and the version it replaces), the program and data directories, the service name and, for a new Master, the listen address.
 
-Read [what changes with v4.2.0](operations.md#upgrading-to-v420) before upgrading an existing cluster.
+Read [what changes with v4.1.42](operations.md#upgrading-to-v420) before upgrading an existing cluster.
 
 ## Reinstall without losing data
 
-Run the installer again, using the same `--root-dir` if you changed it. It recognizes retained service configuration and data, restores missing programs or service definitions, and reuses the Agent identity. Existing installations in the older layout keep their saved paths. After `--uninstall --keep-data`, use the command that the uninstall printed: it names the version that last used the data (`--version`), the role and any non-default paths, for example `bash install.sh --role agent --version 4.2.0`.
+Run the installer again, using the same `--root-dir` if you changed it. It recognizes retained service configuration and data, restores missing programs or service definitions, and reuses the Agent identity. Existing installations in the older layout keep their saved paths. After `--uninstall --keep-data`, use the command that the uninstall printed: it names the version that last used the data (`--version`), the role and any non-default paths, for example `bash install.sh --role agent --version 4.1.42`.
 
 Keep each role's `config` and entire `data` directory, including its key file (`master.db.key` or `agent.db.key`). The key must match the database. Without the configuration or key, the installer stops instead of creating an empty replacement. Source files, destination files and shared mounts are separate from these application directories. To move an installation to another host, see [backup and restore](operations.md#backup-and-restore).
 
@@ -278,7 +278,7 @@ docker rm -f oss-transfer-agent-1a2b3c
 docker volume rm oss-transfer-agent-1a2b3c-data
 ```
 
-Agents added with this command before v4.2.0 use `oss-transfer-agent` and `oss-transfer-agent-data`. For your own Compose projects, see [Docker Compose](docker-compose.md).
+Agents added with this command before v4.1.42 use `oss-transfer-agent` and `oss-transfer-agent-data`. For your own Compose projects, see [Docker Compose](docker-compose.md).
 
 ### Windows
 
@@ -300,10 +300,10 @@ Each user's CLI logins and preferences are in `%APPDATA%\oss-transfer-cli`; remo
 
 ## Install the CLI on another computer
 
-Every release archive contains the CLI. To manage a cluster from a workstation, download the archive for that computer, check it, and copy out `oss-transfer-cli`. For Linux amd64 and v4.2.0:
+Every release archive contains the CLI. To manage a cluster from a workstation, download the archive for that computer, check it, and copy out `oss-transfer-cli`. For Linux amd64 and v4.1.42:
 
 ```sh
-v=4.2.0 p=linux-amd64
+v=4.1.42 p=linux-amd64
 curl -fLO "https://github.com/MoonWX/oss-transfer/releases/download/v$v/oss-transfer-$p.tar.gz"
 curl -fLO "https://github.com/MoonWX/oss-transfer/releases/download/v$v/SHA256SUMS"
 grep " oss-transfer-$p.tar.gz\$" SHA256SUMS
@@ -323,7 +323,7 @@ oss-transfer-cli login
 oss-transfer-cli task list
 ```
 
-`--version` prints `OSS Transfer CLI v4.2.0` and the build. `login` signs in as `admin` (add `--username` for another account), asks for the password without showing it, and prints `Signed in to … as admin`. See [CLI](cli.md#connect-to-a-master) for scripts and other options.
+`--version` prints `OSS Transfer CLI v4.1.42` and the build. `login` signs in as `admin` (add `--username` for another account), asks for the password without showing it, and prints `Signed in to … as admin`. See [CLI](cli.md#connect-to-a-master) for scripts and other options.
 
 ## Reverse proxy
 

@@ -252,7 +252,7 @@ export default function AgentInvitationDialog({
       {
         label: "Docker",
         command: invitation?.dockerCommand,
-        // Masters before v4.2 return only the Linux Compose installer here.
+        // Masters before v4.1.42 return only the Linux Compose installer here.
         variants: invitation?.dockerWindowsCommand
           ? (
               [

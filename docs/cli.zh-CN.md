@@ -95,7 +95,7 @@ oss-transfer-cli whoami
 
 **`--watch N`** 每 N 秒（1–3600）刷新一次只读命令，例如 `task list`、`task show`、`node list`、`limit list` 或 `update status`。
 
-**`--version`** 显示 `OSS Transfer CLI v4.2.0`，以及包含提交、分支和构建时间的一行。`--version --json` 以字段形式输出同样的信息，供脚本使用。
+**`--version`** 显示 `OSS Transfer CLI v4.1.42`，以及包含提交、分支和构建时间的一行。`--version --json` 以字段形式输出同样的信息，供脚本使用。
 
 **退出码：**
 
@@ -176,7 +176,7 @@ oss-transfer-cli task create oss-to-local source/photos --binding 10.0.0.2=/data
 oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/data/upload --target-prefix upload/
 ```
 
-- `--conflict skip|overwrite|changed` 选择[冲突策略](operations.zh-CN.md#冲突策略)，默认为 `skip`。`--overwrite` 等同于 `--conflict overwrite`，不能与其他 `--conflict` 值同时使用。`changed` 需要 v4.2.0 及以上版本的执行节点。
+- `--conflict skip|overwrite|changed` 选择[冲突策略](operations.zh-CN.md#冲突策略)，默认为 `skip`。`--overwrite` 等同于 `--conflict overwrite`，不能与其他 `--conflict` 值同时使用。`changed` 需要 v4.1.42 及以上版本的执行节点。
 - `--date-after` 和 `--date-before` 接受 `YYYY-MM-DDTHH:mm:ss`（按 Master 的时区解释），或带时区偏移的 RFC 3339 格式。
 - `--distribution balanced|affinity` 选择子任务的分发方式。
 - `import buckets|tasks|local 文件` 从文件批量创建任务，见 `help task import`。
@@ -360,12 +360,12 @@ oss-transfer-cli update agents --all --yes
 oss-transfer-cli update status --watch 5
 ```
 
-`update check` 显示 *当前版本 v4.1.41 → 可升级到 v4.2.0*、发布说明链接和接下来要运行的两条命令，或说明当前已是最新正式版。`update master --yes` 自行检查并安装最新正式版；Master 已是最新版本时会说明并以 0 退出。`update agents --all --yes` 把所有可更新的执行节点逐台更新到 Master 的版本；`update agent --worker 节点 --yes` 只更新一个。请求被受理并不代表升级已经完成：用 `update status --watch 5` 跟踪，它显示版本、翻译后的阶段、每个节点是否与 Master 一致，以及无法在线更新的节点的原因（见[版本更新](operations.zh-CN.md#版本更新)）。
+`update check` 显示 *当前版本 v4.1.41 → 可升级到 v4.1.42*、发布说明链接和接下来要运行的两条命令，或说明当前已是最新正式版。`update master --yes` 自行检查并安装最新正式版；Master 已是最新版本时会说明并以 0 退出。`update agents --all --yes` 把所有可更新的执行节点逐台更新到 Master 的版本；`update agent --worker 节点 --yes` 只更新一个。请求被受理并不代表升级已经完成：用 `update status --watch 5` 跟踪，它显示版本、翻译后的阶段、每个节点是否与 Master 一致，以及无法在线更新的节点的原因（见[版本更新](operations.zh-CN.md#版本更新)）。
 
-在线更新只安装最新正式版：`update master --version X` 指定其他正式版时会被拒绝并给出说明，请改为在 Master 主机上带 `--version` 运行安装脚本。安装 `4.2.1-beta.1` 这类预发布版本时，需要指定精确版本并明确确认：
+在线更新只安装最新正式版：`update master --version X` 指定其他正式版时会被拒绝并给出说明，请改为在 Master 主机上带 `--version` 运行安装脚本。安装 `4.1.43-beta.1` 这类预发布版本时，需要指定精确版本并明确确认：
 
 ```sh
-oss-transfer-cli update master --version 4.2.1-beta.1 --allow-prerelease --yes
+oss-transfer-cli update master --version 4.1.43-beta.1 --allow-prerelease --yes
 ```
 
 不加 `--allow-prerelease` 时，预发布版本会在发送任何请求之前被拒绝，退出码为 2。为 `update agent` 或 `update agents` 指定预发布的 `--version` 时同样如此。不指定 `--version` 时，执行节点跟随 Master 的当前版本（包括预发布版本），无需该标志。缺少 `--yes` 等用法错误同样以 2 退出。见[预发布版本更新](operations.zh-CN.md#试用预发布版本)。

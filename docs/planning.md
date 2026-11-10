@@ -137,7 +137,7 @@ Keys limited to one bucket usually cannot list buckets. The connection is then s
 
 The check passes when it reports that it listed objects in that bucket. When you create a task, type the bucket name. If listing the objects of the bucket is denied too, the save still succeeds with a warning, but transfers from that bucket will fail: fix its permissions first.
 
-Automatic addressing and the bucket-level check run on the Agent, so they need Agents on v4.2.0. With older Agents, the check only lists buckets.
+Automatic addressing and the bucket-level check run on the Agent, so they need Agents on v4.1.42. With older Agents, the check only lists buckets.
 
 ## Speed and what limits it
 
@@ -223,7 +223,7 @@ Otherwise the object is skipped and counted as skipped. Its limits:
 - **Same-size changes can be missed.** An object changed at the source keeps the same size, has a multipart ETag (`…-N`) or another non-MD5 ETag, and its Last-Modified time is not later than the target's: it is not detected. Multipart ETags, and the fingerprints of local files, are never compared.
 - **Encryption can make everything look changed.** With SSE-KMS or SSE-C, and on some providers, ETags look like MD5 values but are not the MD5 of the content. Source and target ETags then differ for identical objects, and the policy copies them again, like **Overwrite existing objects or files**. Check a pilot first: if almost nothing is skipped in a second round, this is the cause.
 - **Two clocks are compared.** The source's Last-Modified time comes from the source service and the target's from the target service. A target copy normally has a later time (when it was written), so rule 3 fires only for objects changed at the source after they were copied. A clock that is far off on either side can cause extra copies or missed changes.
-- It needs Agents on v4.2.0. The Master refuses the policy when a selected Agent is older.
+- It needs Agents on v4.1.42. The Master refuses the policy when a selected Agent is older.
 
 ### Runbook
 
@@ -251,5 +251,5 @@ To find objects that exist only on the target, run an object comparison of the s
 
 Update all Agents to the Master's version before a large migration ([software updates](operations.md#software-updates)). Older Agents keep working, but:
 
-- connections without an explicit addressing choice stay virtual-hosted on Agents before v4.2.0, and their connection checks only list buckets;
-- the Master refuses **Overwrite changed objects** on Agents before v4.2.0.
+- connections without an explicit addressing choice stay virtual-hosted on Agents before v4.1.42, and their connection checks only list buckets;
+- the Master refuses **Overwrite changed objects** on Agents before v4.1.42.

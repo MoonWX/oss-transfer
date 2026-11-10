@@ -605,7 +605,7 @@ func renderAgentInvitation(out io.Writer, data map[string]interface{}) {
 		fmt.Fprintln(out, source)
 	}
 	if getString(data, "dockerWindowsCommand") == "" {
-		// Masters before v4.2 return the Linux Compose installer here.
+		// Masters before v4.1.42 return the Linux Compose installer here.
 		if command := getString(data, "dockerCommand"); command != "" {
 			fmt.Fprintln(out, cliText(out, "\nDocker（可选）"))
 			fmt.Fprintln(out, safeCLIText(command))

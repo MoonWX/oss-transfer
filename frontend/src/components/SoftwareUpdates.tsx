@@ -86,7 +86,7 @@ type Snapshot = {
   checkedAt?: string;
   checking?: boolean;
   checkError?: string;
-  // The image container Agents are recreated from (Master 4.2 and later).
+  // The image container Agents are recreated from (Master 4.1.42 and later).
   agentImage?: string;
 };
 type Target = {

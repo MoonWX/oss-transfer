@@ -47,7 +47,7 @@ type Connection = {
   credentialsConfigured?: boolean;
   useV2SignerType?: boolean | null;
   pathStyleEnable?: boolean | null;
-  /** What automatic addressing resolves to (Master v4.2.0 and later). */
+  /** What automatic addressing resolves to (Master v4.1.42 and later). */
   pathStyleEffective?: boolean;
 };
 type SaveResult = {

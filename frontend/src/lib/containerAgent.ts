@@ -1,7 +1,7 @@
 // Container Agents are updated by recreating them from a new image with the
 // same data volume.
 //
-// The console's Docker command (v4.2.0 and later) names each container
+// The console's Docker command (v4.1.42 and later) names each container
 // oss-transfer-agent-<6 hex characters>, uses that name as the hostname the
 // Agent reports, and keeps its data in the volume <name>-data. Containers
 // added by earlier versions use the fixed names below.

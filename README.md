@@ -59,7 +59,7 @@ curl -fsSL https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/inst
 Choose Master and native deployment, and whether to install an Agent on the same host. Programs, configuration and data go under `/opt/oss-transfer/` by default. To pass options through the pipe, add `-s --`, for example a fixed version without questions:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --role master --with-agent --version 4.2.0 --yes
+curl -fsSL https://raw.githubusercontent.com/MoonWX/oss-transfer/main/install.sh | sudo bash -s -- --role master --with-agent --version 4.1.42 --yes
 ```
 
 **When it worked,** the output ends like this:
@@ -72,7 +72,7 @@ Initial administrator: admin
 Initial password: <random password>
 ```
 
-Without the local Agent, the first line is `=== master 4.2.0 · Installed successfully ===`.
+Without the local Agent, the first line is `=== master 4.1.42 · Installed successfully ===`.
 
 **When it did not,** the installer prints the reason and the log path. Check `sudo systemctl status oss-transfer-master`, fix the cause and run the same command again: it repairs an incomplete installation.
 
@@ -99,7 +99,7 @@ Enter a node name and the **Master address (reachable from the Agent)**: a priva
 
 The native command has the form `curl -fsSL '…' | sh -c 'if [ "$(id -u)" = 0 ]; then exec bash; else exec sudo bash; fi'` and runs as root or with `sudo`; on Windows, run its command in Administrator PowerShell. The dialog shows where the Agent downloads its package from: by default the Master itself, or the public sources after **Download from public sources**. The command works once and expires after 30 minutes.
 
-**When it worked,** the installer prints `=== agent 4.2.0 · Installed successfully ===`, and the node appears as **Online** on the **Execution nodes** page (or in `oss-transfer-cli node list`).
+**When it worked,** the installer prints `=== agent 4.1.42 · Installed successfully ===`, and the node appears as **Online** on the **Execution nodes** page (or in `oss-transfer-cli node list`).
 
 **When it did not:** check that the Agent host can open the Master address (for example `curl http://10.0.0.5:1685/`). If the command has expired or was used, generate a new one.
 

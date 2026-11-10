@@ -58,6 +58,6 @@ export function compareVersions(a: string, b: string): number | null {
 export const newerVersion = (target: string, current: string) =>
   compareVersions(target, current) === 1;
 
-/** A release version as users see it: "v4.2.0". Empty stays empty. */
+/** A release version as users see it: "v4.1.42". Empty stays empty. */
 export const displayVersion = (value?: string | null) =>
   !value ? "" : value.startsWith("v") ? value : `v${value}`;

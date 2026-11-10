@@ -272,7 +272,7 @@ To reinstall, keep each role's `config` directory and its entire `data` director
 | Windows | amd64, arm64 |
 | FreeBSD | amd64, arm64 |
 
-Native Linux services need systemd 219 or later; CentOS 7 / RHEL 7 (systemd 219, Bash 4.2, curl 7.29) is the oldest supported release. Online updates have two limits on older systemd. Below 236, such as on CentOS 7, a failed update leaves its `oss-transfer-update-*` helper unit listed as failed until you run `systemctl reset-failed`. Below 240, an update helper that cannot start is not reported at once; the update is marked failed only when it times out.
+Native Linux services need systemd 219 or later, Bash 4.2 and curl 7.29 or later. Online updates have two limits on older systemd. Below 236, a failed update leaves its `oss-transfer-update-*` helper unit listed as failed until you run `systemctl reset-failed`. Below 240, an update helper that cannot start is not reported at once; the update is marked failed only when it times out.
 
 Each release is published to [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases), Docker Hub as `moonwx/osstransfer`, and an OSS mirror in mainland China. GitHub Releases and the mirror both hold every file an offline installation needs (the archives, `manifest.tsv` and the three installers `install.sh`, `native-install.sh` and `Install.ps1`), plus `SHA256SUMS`. The mirror's `latest/` directory always holds the newest stable release.
 

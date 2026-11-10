@@ -80,7 +80,7 @@ To reinstall after removing the programs, keep the original configuration and en
 
 ## Things to check
 
-- Prepare Bash, curl, tar and a SHA-256 tool on Unix hosts. Linux needs systemd 219 or later; CentOS 7 / RHEL 7 work with the systemd 219, Bash 4.2 and curl 7.29 they ship. On FreeBSD, run `pkg install -y bash curl` before disconnecting. Run installation commands as root if `sudo` is unavailable.
+- Prepare Bash, curl, tar and a SHA-256 tool on Unix hosts. Linux needs systemd 219, Bash 4.2 and curl 7.29 or later. On FreeBSD, run `pkg install -y bash curl` before disconnecting. Run installation commands as root if `sudo` is unavailable.
 - Keep all packages from the same release. If an offline Master is missing an Agent platform, add that package to the original installation folder and run the Master upgrade command above to import it. This restarts the Master.
 - Invitations expire and work once. Generate a new one if needed.
 - Successful upgrades delete their temporary backup. Failed upgrades attempt recovery and retain the backup. Make a separate backup before a planned downgrade; see [backup and restore](operations.md#backup-and-restore).

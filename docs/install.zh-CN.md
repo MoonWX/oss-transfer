@@ -8,7 +8,7 @@
 
 ## 开始之前
 
-- **Linux：** systemd 219 及以上版本（CentOS 7 / RHEL 7 及更新版本），以及 Bash、curl、tar 和 SHA-256 工具。以 root 身份或通过 `sudo` 运行安装脚本。
+- **Linux：** systemd 219 及以上版本，以及 Bash、curl、tar 和 SHA-256 工具。以 root 身份或通过 `sudo` 运行安装脚本。
 - **macOS、Windows、FreeBSD：** 见[其他系统](#其他系统)。
 - **端口：** Master 默认监听 TCP `1685`。浏览器、CLI 和每个执行节点（Agent）都需要能访问它；执行节点不需要开放入站端口。完整清单见[规划](planning.zh-CN.md)。
 - **哪些以 root 运行：** 安装脚本安装的原生服务在 Linux 和 FreeBSD 上以 root 运行（systemd 单元和 rc.d 脚本没有指定其他用户），macOS 系统服务以 root 运行，Windows 服务以 LocalSystem 运行；macOS 的 `--user` 安装以当前登录用户运行。在线更新需要这些权限。用控制台 Docker 指令启动的执行节点在容器内以 UID 65532 运行。
@@ -76,9 +76,9 @@ Tasks: /usr/local/bin/oss-transfer-cli task list
 
 ## 其他系统
 
-### CentOS 7 / RHEL 7
+### 较旧的 systemd
 
-CentOS 7 和 RHEL 7 是支持的最早的 Linux 版本，安装命令与其他 Linux 相同：安装脚本和在线更新都能使用系统自带的 systemd 219、Bash 4.2 和 curl 7.29。较旧的 systemd 会让在线更新有两处不同：
+安装脚本和在线更新支持 systemd 219、Bash 4.2、curl 7.29 及以上版本，安装命令与其他 Linux 相同。较旧的 systemd 会让在线更新有两处不同：
 
 - systemd 低于 236 时，在线更新失败后，其辅助单元 `oss-transfer-update-*` 会一直显示为失败状态，执行 `systemctl reset-failed` 即可清除。
 - systemd 低于 240 时，无法启动的更新辅助进程不会被立即报告，要等更新超时后才显示失败。

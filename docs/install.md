@@ -8,7 +8,7 @@ Before installing a cluster for a large migration, read [planning](planning.md) 
 
 ## Before you start
 
-- **Linux:** systemd 219 or later (CentOS 7 / RHEL 7 and newer), Bash, curl, tar and a SHA-256 tool. Run the installer as root or through `sudo`.
+- **Linux:** systemd 219 or later, Bash, curl, tar and a SHA-256 tool. Run the installer as root or through `sudo`.
 - **macOS, Windows, FreeBSD:** see [other systems](#other-systems).
 - **Ports:** the Master listens on TCP `1685` by default. Browsers, the CLI and every Agent (execution node) must reach it. Agents need no inbound port. See [planning](planning.md) for the full list.
 - **What runs as root:** native services installed by the installer run as root on Linux and FreeBSD (the systemd unit or rc.d script sets no other user), as root for a macOS system service, and as LocalSystem on Windows. A macOS `--user` installation runs as the signed-in user. Online updates need these privileges. An Agent started with the console's Docker command runs as UID 65532 inside its container.
@@ -76,9 +76,9 @@ Open **Execution nodes → Add node** in the console, enter a node name and a Ma
 
 ## Other systems
 
-### CentOS 7 / RHEL 7
+### Older systemd
 
-These are the oldest supported Linux releases. Install with the same command as on other Linux systems: the installers and online updates work with the systemd 219, Bash 4.2 and curl 7.29 they ship. Older systemd changes two details of online updates:
+The installers and online updates work with systemd 219, Bash 4.2 and curl 7.29 or later; install with the same command as on other Linux systems. Older systemd changes two details of online updates:
 
 - Before systemd 236, a failed update leaves its `oss-transfer-update-*` helper unit listed as failed until you run `systemctl reset-failed`.
 - Before systemd 240, an update helper that cannot start is not reported at once; the update fails only when it times out.

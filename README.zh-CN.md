@@ -272,7 +272,7 @@ Docker 部署时，在 Master 容器中运行：`docker compose exec master oss-
 | Windows | amd64、arm64 |
 | FreeBSD | amd64、arm64 |
 
-Linux 原生服务需要 systemd 219 及以上版本，最早支持 CentOS 7 / RHEL 7（systemd 219、Bash 4.2、curl 7.29）。在较旧的 systemd 上，在线更新有两点限制。低于 236 时（例如 CentOS 7），在线更新失败后，其辅助单元 `oss-transfer-update-*` 会一直显示为失败状态，执行 `systemctl reset-failed` 即可清除。低于 240 时，更新辅助进程无法启动不会立即报告，要等更新超时后才会标记为失败。
+Linux 原生服务需要 systemd 219、Bash 4.2、curl 7.29 及以上版本。在较旧的 systemd 上，在线更新有两点限制。低于 236 时，在线更新失败后，其辅助单元 `oss-transfer-update-*` 会一直显示为失败状态，执行 `systemctl reset-failed` 即可清除。低于 240 时，更新辅助进程无法启动不会立即报告，要等更新超时后才会标记为失败。
 
 每个版本都会发布到 [GitHub Releases](https://github.com/MoonWX/oss-transfer/releases)、Docker Hub `moonwx/osstransfer` 和国内 OSS 镜像。GitHub Releases 和镜像都包含离线安装所需的全部文件（各平台安装包、`manifest.tsv` 和三个安装脚本 `install.sh`、`native-install.sh`、`Install.ps1`），另附 `SHA256SUMS`。镜像的 `latest/` 目录始终是最新正式版。
 

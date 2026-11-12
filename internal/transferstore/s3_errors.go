@@ -6,9 +6,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"strings"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
 )
 
@@ -36,6 +38,17 @@ var storageErrorCodes = map[string]StorageErrorKind{
 	"NoSuchBucket":          StorageErrorNoSuchBucket,
 	"InvalidAccessKeyId":    StorageErrorInvalidAccessKey,
 	"SignatureDoesNotMatch": StorageErrorSignatureMismatch,
+}
+
+// IsAccessDenied reports whether the storage refused a request (HTTP 403).
+// A HEAD response has no body, so its error code is only "Forbidden"; the
+// status decides.
+func IsAccessDenied(err error) bool {
+	var response *awshttp.ResponseError
+	if errors.As(err, &response) && response.HTTPStatusCode() == http.StatusForbidden {
+		return true
+	}
+	return ClassifyStorageError(err) == StorageErrorAccessDenied
 }
 
 // ClassifyStorageError returns the kind of a storage error, or

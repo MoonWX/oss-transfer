@@ -89,6 +89,12 @@ func verifyCompletedObjectForJob(ctx context.Context, target transferstore.Store
 		return result.ID, nil
 	}
 	if err != nil {
+		// Under "overwrite" the target may be write-only (HEAD denied). An
+		// object that cannot be read back is treated as unconfirmed and written
+		// again: overwriting it is idempotent, so the task is not stuck.
+		if job.ConflictPolicy == ConflictOverwrite && transferstore.IsAccessDenied(err) {
+			return result.ID, nil
+		}
 		return "", fmt.Errorf("verify completed target %q: %w", result.Target.Key, err)
 	}
 	expected := result.Target

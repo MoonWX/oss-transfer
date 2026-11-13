@@ -2,94 +2,109 @@
 
 [中文](planning.zh-CN.md)
 
-Read this page before you install. It covers where to run the Master and the Agents (execution nodes), which network connections to open, which storage permissions to grant, what limits the speed, how much disk to plan for, how to verify a large migration, and how to run incremental rounds and the final cut-over. For security settings, see [security](security.md).
+Read this page before you install. You need to settle several things: where to deploy the nodes, which ports to open, what permissions to grant the keys, how to estimate speed and disk usage, and how to plan the verification and the cut-over. Security settings are in [security](security.md).
 
 ## Checklist
 
-1. Choose the hosts: one Master, and one or more Agents near the data ([topology](#topology)).
+1. Choose the hosts: one Master, and one or more execution nodes near the data (see [topology](#topology)).
 2. Open the ports in the [network table](#network-and-firewall).
-3. Create storage keys with the [minimum permissions](#storage-permissions) for the source and the target.
-4. Run a pilot task on a representative prefix and measure its speed ([speed](#speed-and-what-limits-it)).
-5. Change the defaults that would hold a large migration back ([defaults to review](#defaults-to-review-for-large-migrations)).
-6. Plan the verification and the cut-over ([verification](#verify-a-large-migration), [cut-over](#incremental-migration-and-cut-over)).
+3. Create keys with only the [minimum permissions](#storage-permissions) for the source and the target.
+4. Run a pilot task on a representative prefix to measure the actual speed (see [speed](#speed-and-what-limits-it)).
+5. Change the defaults that slow down large migrations (see [defaults to review](#defaults-to-review-for-large-migrations)).
+6. Plan the verification and the cut-over (see [verification](#verify-a-large-migration), [cut-over](#incremental-migration-and-cut-over)).
 
 ## Topology
 
 | Component | How many | Where |
 | --- | --- | --- |
-| Master | Exactly one per cluster | Any host that the operators' browsers and every Agent can reach. It serves the console and the API and schedules tasks; no object data passes through it. |
-| Agent | One or more | Hosts with good bandwidth to both the source and the target. Each Agent reads from the source and writes to the target itself. |
+| Master | One per cluster | A host reachable by the operators' browsers and all execution nodes |
+| Execution node (Agent) | One or more | Hosts with good bandwidth to both the source and the target |
 
-- **One Agent per host.** Several Agents on one host share its network card and disks. To use a bigger host better, raise the node's concurrency and limits instead ([defaults to review](#defaults-to-review-for-large-migrations)).
-- **Near the source or near the target.** Every Agent of a task needs to reach both storage endpoints. Each object is read once from the source and written once to the target, so the data crosses the link between the two sites once wherever the Agent runs. Put the Agents on the side where the network is faster or traffic is cheaper. For example, with an Agent in the source cloud, it reads over the internal endpoint and sends the data out over the host's internet connection; with an Agent in the target cloud, it reads from the source's public endpoint and writes over the internal endpoint. Compare your providers' prices for those two kinds of outbound traffic.
-- **Local directories need an Agent on that host.** A local path in a task is a path on the Agent's host. To upload or download a local directory, run an Agent on the host that has the directory, or on a host that mounts it. When several Agents work on one local directory, it must be shared storage that every one of them mounts.
-- **The Master is a single service.** It is not clustered. Back up its data directory ([database maintenance](database-maintenance.md)). Agents reconnect by themselves after a Master restart.
-- **The Master can also run an Agent.** The native installer offers to install a local Agent on the Master host. That is convenient for small migrations; for large ones, run the Agents on separate hosts so transfers do not compete with the console.
+The Master provides the console and the API and schedules tasks. No object data passes through it, so it does not need to be near the data; it only needs to be reachable by the operators' browsers and all execution nodes. Execution nodes are different: each one reads from the source and writes to the target, so they should be deployed close to the data.
+
+Every execution node in a task needs to reach both the source and the target storage endpoints. Each object is read once from the source and written once to the target; no matter which side the execution node is on, the data crosses the link between the two sites once. With the execution node in the source cloud, it reads through the internal endpoint and sends data out over the public internet to the target. With the execution node in the target cloud, it reads from the source over the public internet and writes through the internal endpoint. Compare the outbound traffic prices of the two providers in each direction and place the execution nodes on the side where the network is faster or traffic is cheaper.
+
+Run only one execution node per host. Multiple execution nodes sharing a network card and disks contend for resources. To make better use of a larger host, raise that node's concurrency and limits instead of adding another execution node (see [defaults to review](#defaults-to-review-for-large-migrations)).
+
+When migrating local directories, the path in the task is a path on the execution node's host. Run the execution node on the host that owns or mounts that directory. When multiple execution nodes work on the same local directory, it must be shared storage that every node mounts.
+
+The Master does not support clustered deployment; back up its data directory (see [database maintenance](database-maintenance.md)). Execution nodes reconnect automatically after a Master restart. The native installer asks whether to install a local execution node on the Master host, which is convenient for small migrations. For large migrations, deploy execution nodes on other hosts so that transfers and the console do not compete for resources.
 
 ## Network and firewall
 
-Agents open every connection themselves. The Master never connects to an Agent, so Agents need no inbound ports.
+All connections are initiated by execution nodes. The Master never connects to an execution node, so execution nodes need no inbound ports.
 
-| From | To | Port | Needed for | Required |
+| From | To | Port | Used for | Required |
 | --- | --- | --- | --- | --- |
-| Operators' browsers | Master | TCP 1685 (HTTP), or 443 behind an HTTPS proxy | The console | Yes |
+| Operators' browsers | Master | TCP 1685 (HTTP), or 443 behind an HTTPS reverse proxy | The console | Yes |
 | `oss-transfer-cli` on another computer | Master | Same as the browser | Remote CLI use | Only for remote CLI |
-| Agents | Master | Same address as given in the join command | Commands, results, heartbeats (HTTP long polling) | Yes |
-| Agents | Source and target storage endpoints | Usually 443 (HTTPS) or 80; self-hosted S3 often uses its own port, such as 9000 | Transfers, connection checks, object comparison | Yes |
-| New native Agents | Master, or GitHub / JD Cloud OSS | 443 | Downloading the Agent package during the join. The **Add node** dialog shows the download source. When packages come from the public sources, the installer also asks `cloudflare.com` and `ipinfo.io` for the host's location, unless you choose the source with `--source github` or `--source jdoss` ([download sources](install.md#download-sources)). | During the join |
-| New Docker Agents | Docker Hub (or your registry) | 443 | Pulling the `moonwx/osstransfer` image | During the join and updates |
-| Master and native Agents | GitHub (`api.github.com`, `github.com`, `raw.githubusercontent.com`) or `moonwx.s3.cn-north-1.jdcloud-oss.com`, plus `www.cloudflare.com` | 443 | Update checks and online updates | Only for online updates |
+| Execution nodes | Master | The address given in the join command | Commands, results and heartbeats (HTTP long polling) | Yes |
+| Execution nodes | Source and target storage endpoints | Usually 443 (HTTPS) or 80; self-hosted S3 often uses its own port, such as 9000 | Transfers, connection checks, object comparison | Yes |
+| New native execution nodes | Master, or GitHub / JD Cloud OSS (public or internal address) | 443 | Downloading the execution node package | During the join |
+| New Docker execution nodes | Docker Hub (or your registry) | 443 | Pulling the `moonwx/osstransfer` image | During the join and updates |
+| Master and native execution nodes | GitHub (`api.github.com`, `github.com`, `raw.githubusercontent.com`) or `moonwx.s3.cn-north-1.jdcloud-oss.com`, plus `www.cloudflare.com` | 443 | Update checks and online updates | Only for online updates |
 
-- The Master listens on `0.0.0.0:1685` by default. To use another port, pass `--port` to `install.sh`; to bind one address, pass `--listen HOST:PORT` (first installation only; see [installation options](install.md#paths-and-ports)).
-- The Master never contacts the storage endpoints. Connection checks, bucket lists and comparisons run on an Agent: the check when you save a connection runs on one online Agent chosen by the Master. So add at least one Agent before you add storage connections, and make sure every Agent can reach every endpoint.
-- Hosts without internet access can do everything except online updates and public downloads. Install and upgrade them with [offline installation](offline-install.md).
-- Agents may connect to the Master through an HTTPS reverse proxy. See [security](security.md#https-with-a-reverse-proxy) for the proxy settings that Agents need.
+The download source for native execution nodes during the join is shown in the **Add node** dialog. When downloading from the public internet, the installer also contacts `cloudflare.com` and `ipinfo.io` to detect the host's region, unless you specify the download source with `--source github`, `--source jdoss` or `--source jdoss-internal` (see [download sources](install.md#download-sources)). Execution nodes in the JD Cloud Beijing region can select **JD Cloud internal (Beijing)** in the dialog, which accesses only the internal address `moonwx.s3-internal.cn-north-1.jdcloud-oss.com`.
+
+The Master listens on `0.0.0.0:1685` by default. To use a different port, pass `--port` to `install.sh`; to bind a specific address, pass `--listen HOST:PORT` (effective only on the first installation; see [installation options](install.md#paths-and-ports)).
+
+The Master never contacts storage endpoints. Connection checks, bucket lists and object comparisons all run on execution nodes; the check when you save a connection is also run on an online execution node chosen by the Master. Add at least one execution node before you add storage connections, and make sure every execution node can reach every storage endpoint.
+
+Hosts without internet access can use all features except online updates and public downloads. Install and upgrade them with [offline installation](offline-install.md). Execution nodes can also connect to the Master through an HTTPS reverse proxy; see [security](security.md#https-with-a-reverse-proxy) for the proxy settings.
 
 ## Storage permissions
 
-Give OSS Transfer its own keys, limited to the buckets of the migration. The tables use AWS IAM action names; other S3-compatible services name the same permissions in their own policy language.
+Create separate keys for OSS Transfer, authorized only for the buckets involved in this migration. The tables below use AWS IAM action names; other S3-compatible services have their own corresponding permissions.
 
-**Source bucket**
+### Source bucket
 
 | Action | Used for |
 | --- | --- |
-| `s3:ListBucket` | Listing the objects to transfer (ListObjectsV2), the connection check and object comparison |
-| `s3:GetObject` | Reading objects (GetObject, including byte ranges of large objects). On AWS it also authorizes HeadObject. |
+| `s3:ListBucket` | Listing the objects to transfer (ListObjectsV2), connection checks and object comparison |
+| `s3:GetObject` | Reading objects (GetObject, including byte-range reads of large objects). On AWS it also authorizes HeadObject. |
 
-**Target bucket**
+### Target bucket
 
-Which permissions the target needs depends on the conflict policy and on whether you compare objects:
+Which permissions the target needs depends on the chosen conflict policy and whether you use object comparison.
 
-| Permission | When it is needed | Without it |
+| Permission | When needed | Without it |
 | --- | --- | --- |
-| `s3:PutObject` | Always: PutObject and the multipart calls CreateMultipartUpload, UploadPart and CompleteMultipartUpload | Nothing can be written |
-| `s3:AbortMultipartUpload` | When objects are larger than 8 MiB (they use multipart uploads) | Failed or interrupted multipart uploads cannot be cleaned up, and their parts use (and are billed as) storage; the cleanup record is kept and retried every 5 minutes |
-| `s3:ListMultipartUploadParts` | As above: confirms that the parts are gone after an abort (ListParts) | The upload is aborted, but completion cannot be confirmed; the cleanup record is kept and retried |
-| `s3:GetObject` (grants HeadObject and GetObject) | With the conflict policy **Skip existing objects or files** (the default) or **Overwrite changed objects**: each object is checked with HEAD before it is written, to find whether the target exists or changed. After an Agent restart or a resumed task, to verify objects written before the interruption. For object comparison, and to read target objects in a content comparison | Writes fail under those two policies; the check after a resume fails; comparison is impossible |
-| `s3:ListBucket` | The connection check (it lists one object in the bucket) and object comparison. On AWS and similar services, without it a HEAD on a missing key answers 403 instead of 404 | The connection check only warns; under the two policies above, new objects fail to be written; comparison is impossible |
+| `s3:PutObject` | Always | Cannot write |
+| `s3:AbortMultipartUpload` | When there are objects larger than 8 MiB | Leftover parts occupy storage and are billed |
+| `s3:ListMultipartUploadParts` | Same as above | Cannot confirm that parts have been cleaned up |
+| `s3:GetObject` | Skip or Overwrite changed policies; object comparison | Writes, verification and comparison all fail |
+| `s3:ListBucket` | Connection checks and object comparison | The connection check only warns; new objects fail to be written under Skip or Overwrite changed; comparison is impossible |
 
-Common minimal sets:
+`s3:PutObject` covers normal writes and multipart uploads (CreateMultipartUpload, UploadPart, CompleteMultipartUpload). Objects larger than 8 MiB use multipart uploads; when a part fails or is interrupted, `s3:AbortMultipartUpload` cleans up the leftover parts. Without this permission, leftover parts occupy storage and are billed, and the system retries the cleanup every 5 minutes. `s3:ListMultipartUploadParts` is used to confirm after an abort that all parts have been cleaned up (ListParts); without it the system retries the confirmation periodically.
 
-- **Default (Skip existing objects or files) or incremental runs (Overwrite changed objects):** `s3:PutObject`, `s3:GetObject` and `s3:ListBucket`, plus `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` for large objects.
-- **Only "Overwrite existing objects or files", without object comparison:** normal writes need only `s3:PutObject` (plus the two multipart cleanup permissions for large objects). The check after an Agent restart or a resumed task still uses HEAD, so `s3:GetObject` is still recommended.
-- **Object comparison:** `s3:ListBucket` and `s3:GetObject` on both buckets.
+With **Skip existing objects or files** (the default) or **Overwrite changed objects**, each object is checked with HEAD on the target before writing, to determine whether it already exists or has changed. After an execution node restart or a resumed task, objects written before the interruption are also verified with HEAD. Content comparison reads target objects too. All of this requires `s3:GetObject` on the target (on AWS it also authorizes HeadObject).
 
-When in doubt, run [the per-permission check](#check-each-permission-of-a-bucket) of the connection test on the target bucket with the write check selected.
+`s3:ListBucket` is used for connection checks (listing one object in the bucket) and object comparison. On AWS and similar services, without this permission a HEAD on a nonexistent object returns 403 instead of 404; combined with the two policies above, this causes new objects to fail to be written.
 
-**Optional:** `s3:ListAllMyBuckets` lets the connection check and the console list your buckets. Without it, see [bucket-scoped keys](#bucket-scoped-keys-and-the-connection-check).
+The three common minimal sets are as follows.
 
-Migrations never delete objects or buckets, so they need no `s3:DeleteObject` permission. Only the per-permission check, with the write check selected, tries to delete the test object it wrote; without delete permission the check still reports its results. If you want to delete objects that exist only on the target (see [deletions at the source](#deletions-at-the-source)), use your provider's tools with a separate key.
+With the default policy (**Skip existing objects or files**) or for incremental migration (**Overwrite changed objects**), grant `s3:PutObject`, `s3:GetObject` and `s3:ListBucket`, plus `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` when there are large objects.
 
-By direction:
+With only **Overwrite existing objects or files** and without object comparison, normal writes need only `s3:PutObject` (plus the two multipart cleanup permissions for large objects). The verification after an execution node restart or a resumed task still requires HEAD, so `s3:GetObject` is still recommended.
+
+For object comparison alone, grant `s3:ListBucket` and `s3:GetObject` on both buckets.
+
+If you are not sure whether the permissions are sufficient, use the [per-permission check](#check-each-permission-of-a-bucket) in the connection test on the target bucket with the write check selected to verify.
+
+`s3:ListAllMyBuckets` is optional. With this permission, connection checks and the console can list your buckets. Without it, you can still use the system; see [bucket-scoped keys](#bucket-scoped-keys-and-the-connection-check).
+
+Migrations never delete objects or buckets, so `s3:DeleteObject` is not needed. The per-permission check with the write check selected attempts to delete the test object it wrote; without delete permission the check still reports its results. If you want to delete objects that exist only on the target (see [deletions at the source](#deletions-at-the-source)), use your provider's tools with a separate key.
+
+Summary by direction:
 
 | Direction | Source permissions | Target permissions |
 | --- | --- | --- |
 | Object storage → object storage | Source bucket table | Target bucket table |
-| Object storage → local | Source bucket table | The Agent's service account writes the local directory |
-| Local → object storage | The Agent's service account reads the local directory | Target bucket table |
-| Object comparison | `s3:ListBucket` and `s3:GetObject` on both buckets | |
+| Object storage → local | Source bucket table | The execution node's service account can write the local directory |
+| Local → object storage | The execution node's service account can read the local directory | Target bucket table |
+| Object comparison | Both buckets need `s3:ListBucket` and `s3:GetObject` | |
 
-A minimal AWS-style policy for the source key (replace `source-bucket`):
+A minimal AWS-style policy for the source key (replace `source-bucket` with the actual name):
 
 ```json
 {
@@ -109,7 +124,7 @@ A minimal AWS-style policy for the source key (replace `source-bucket`):
 }
 ```
 
-And for the target key, covering the default conflict policy, incremental runs and object comparison (replace `target-bucket`):
+For the target key, covering the default conflict policy, incremental migration and object comparison (replace `target-bucket` with the actual name):
 
 ```json
 {
@@ -134,150 +149,154 @@ And for the target key, covering the default conflict policy, incremental runs a
 }
 ```
 
-Add a statement with `"Action": ["s3:ListAllMyBuckets"]` and `"Resource": "*"` if you want bucket lists. On AWS, buckets encrypted with SSE-KMS also need `kms:Decrypt` on the source key and `kms:GenerateDataKey` on the target key in the KMS key policy.
+To list buckets, add a statement with `"Action": ["s3:ListAllMyBuckets"]` and `"Resource": "*"`. On AWS, buckets encrypted with SSE-KMS also need `kms:Decrypt` on the source key and `kms:GenerateDataKey` on the target key in the KMS key policy.
 
 ### Bucket-scoped keys and the connection check
 
-A connection check (saving with **Validate access when saving**, **Test connection**, **Fetch buckets**, `storage test` and `storage buckets`) first lists the buckets (ListBuckets), then lists at most one object (ListObjectsV2) in one bucket with the connection's addressing: the bucket you name, or else the first one listed.
+A connection check (saving with **Validate access when saving**, **Test connection**, **Fetch buckets**, `storage test` or `storage buckets`) first lists the buckets (ListBuckets), then lists at most one object (ListObjectsV2) in one bucket using the connection's addressing: the bucket you specify, or the first one listed.
 
-Keys limited to one bucket usually cannot list buckets. The connection is then still saved, with a warning instead of an error. Check the bucket itself:
+Keys authorized for only a single bucket usually cannot list buckets. In that case the connection is still saved, with a warning rather than an error. Check the bucket separately: in the console, open **Test connection**, enter the bucket name under **Check a bucket** and choose **Check**; from the CLI, run `oss-transfer-cli storage test <connection> --bucket <bucket>`.
 
-- In the console, open **Test connection**, enter the bucket under **Check a bucket** and choose **Check**.
-- From the CLI: `oss-transfer-cli storage test <connection> --bucket <bucket>`.
+The check passes when it reports that objects have been listed in that bucket. The result of each permission is described in the next section. When creating a task, enter the bucket name directly. If listing the objects in that bucket is also denied, the connection is still saved with a warning, but transfers from that bucket will fail; fix the permissions first.
 
-The check passes when it reports that it listed objects in that bucket; the result of each permission is described in the next section. When you create a task, type the bucket name. If listing the objects of the bucket is denied too, the save still succeeds with a warning, but transfers from that bucket will fail: fix its permissions first.
-
-Automatic addressing and the bucket-level check run on the Agent, so they need Agents on v4.1.42. With older Agents, the check only lists buckets.
+Automatic addressing and the bucket-level check run on the execution node and require Agents on v4.1.42. Older execution nodes only list buckets.
 
 ### Check each permission of a bucket
 
-In **Test connection**, enter a bucket under **Check a bucket** and choose **Check** (CLI: `oss-transfer-cli storage test <connection> --bucket <bucket>`). The check makes, on that bucket, each request a migration uses, and shows for each one whether it passed, failed or was skipped, plus a one-sentence result (for example "reading works; it can be a migration source"):
+In **Test connection**, enter a bucket name under **Check a bucket** and choose **Check** (CLI: `oss-transfer-cli storage test <connection> --bucket <bucket>`). It executes, on that bucket, each request a migration uses, and shows for each one whether it passed, failed or was skipped, together with a one-sentence conclusion (for example, "reading works; it can be a migration source").
 
-<p align="center"><img src="images/permission-check.en.png" width="520" alt="Connection test dialog with the bucket field, the write check option and the result outlined"></p>
+<p align="center"><img src="images/permission-check.en.png" width="520" alt="Connection test dialog with the bucket input field, the write check option and the check conclusion highlighted"></p>
 
 | Check | Request | Used by migrations to |
 | --- | --- | --- |
-| List objects | ListObjectsV2 | Scan sources, compare |
-| Read object metadata | HeadObject (first listed object) | Find existing targets, verify results |
-| Read object content | GetObject of one byte | Read source objects |
-| Write an object (with the write check, CLI `--write`) | PutObject with `If-None-Match: *` | Write targets; "Skip existing objects" uses this conditional write |
-| Read the written object back | HeadObject | Verify after writing |
+| List objects | ListObjectsV2 | Scan the source, compare |
+| Read object metadata | HeadObject (first listed object) | Determine whether the target exists, verify results |
+| Read object content | GetObject, only 1 byte | Read source objects |
+| Write an object (with the write check selected, CLI `--write`) | PutObject with `If-None-Match: *` | Write to the target; "Skip existing objects" uses this conditional write |
+| Read back the written object | HeadObject | Verify after writing |
 | Multipart upload | CreateMultipartUpload, UploadPart, AbortMultipartUpload | Upload and clean up large objects |
 | Delete the test object | DeleteObject | Not needed for migrations; only removes the test object |
 
-The write check writes a tiny test object under `.oss-transfer-permission-check/` and deletes it afterwards; the multipart upload is aborted and leaves no data. Without delete permission, the result names the leftover test object so you can delete it. In an empty bucket, reading objects cannot be checked and shows as skipped. In the CLI, the command exits 1 when a required check fails. The check needs a Master and Agents on v4.1.43 or later.
+The write check writes a very small test object under `.oss-transfer-permission-check/` and deletes it afterwards. The multipart upload is aborted after the check and leaves no data. Without delete permission, the result shows the key of the leftover test object so you can delete it manually. When the bucket is empty, reading objects cannot be checked and shows as skipped. In the CLI, the command exits with code 1 when any required check fails. This check requires a Master and Agents on v4.1.43 or later.
 
 ## Speed and what limits it
 
-A migration runs as fast as its slowest limit:
+Migration speed is determined by the most restrictive limit. The defaults per execution node are:
 
-| Limit | Default per Agent | Effect |
+| Limit | Default | Effect |
 | --- | --- | --- |
 | Node bandwidth | 2,000 Mbps | Data read from the source |
-| LIST requests | 100 per second | Listing the source (and object comparisons) |
-| PUT requests | 1,400 per second | Each written object or part costs at least one |
+| LIST requests | 100 per second | Listing the source (and object comparison) |
+| PUT requests | 1,400 per second | At least one per written object or part |
 | HEAD requests | 2,800 per second | Metadata checks |
-| Concurrency | 32 child tasks × 4 objects = 128 objects at once | How many objects are in flight |
-| Storage service | Set by your provider | Request rate limits per bucket or prefix, throttling (`SlowDown`), latency |
-| Network | Your hosts and links | Bandwidth and round-trip time to each endpoint |
+| Concurrency | 32 child tasks x 4 objects each = 128 objects at once | Number of objects processed simultaneously |
+| Storage service | Set by the provider | Per-bucket or per-prefix request limits, throttling (`SlowDown`), latency |
+| Network | Your hosts and links | Bandwidth and round-trip time to each storage endpoint |
 
-These defaults are explained in [node concurrency](operations.md#node-concurrency) and [node limits](operations.md#node-limits). A task can have its own lower limits, and when the storage service throttles, Agents slow down by themselves ([storage throttling](operations.md#storage-throttling)).
+These defaults are explained in [node concurrency](operations.md#node-concurrency) and [node limits](operations.md#node-limits). A task can set lower task-level limits; when the storage service throttles, execution nodes slow down automatically (see [storage throttling](operations.md#storage-throttling)).
 
-Small objects are limited by requests and latency, large objects by bandwidth. The documentation gives no general speed figures, because they depend on the provider, the region and the object sizes. Measure instead:
+Small objects are limited mainly by request rates and latency; large objects are limited mainly by bandwidth. Speed depends on the provider, the region and the object sizes. There is no universal figure; measure it yourself:
 
-1. Run a pilot task on a prefix whose object sizes are typical of the whole dataset.
-2. In the task details, watch the speed and the LIST, GET, HEAD and PUT rates with their limits. If a rate sits at its limit, that limit is the bottleneck.
-3. Estimate the duration: the larger of *total bytes ÷ measured bytes per second* and *object count ÷ measured objects per second*.
-4. Estimate the Agents you need: the required rate divided by one Agent's measured rate, rounded up, as long as the storage service allows the total.
+1. Choose a prefix whose object size distribution is representative of the overall data and create a pilot task.
+2. In the task details, observe the speed and the actual rates and limits for LIST, GET, HEAD and PUT. Whichever rate consistently approaches its limit is the bottleneck.
+3. Estimate the duration: take the larger of *total bytes / measured bytes per second* and *object count / measured objects per second*.
+4. Estimate the number of execution nodes: the required rate divided by one execution node's measured rate, rounded up, provided the storage service allows that total rate.
 
 ### Defaults to review for large migrations
 
-| Setting | Default | Change it when | How |
+| Setting | Default | When to change | How |
 | --- | --- | --- | --- |
 | Node bandwidth | 2,000 Mbps | The host has 10 Gbps or more | **Execution nodes → Live status → Adjust**, or `oss-transfer-cli limit set bandwidth 8 --unit Gbps --all` |
-| Node LIST / PUT / HEAD limits | 100 / 1,400 / 2,800 per second | Many small objects and the provider allows more | **Adjust**, or `limit set list 500 --all` |
-| Child tasks and objects per child task | 32 and 4 | High latency or small objects leave bandwidth unused (at most 256, 64 and 1,024 objects in total) | **Execution nodes → Edit node**, or `node update <node> --child-concurrency 64 --object-concurrency 8` |
-| Comparison result budget | 2 GiB per Agent, kept 30 days | You expect many differences | `comparison` in the Agent's `service.json` ([result storage](operations.md#result-storage-and-retention)) |
+| Node LIST / PUT / HEAD limits | 100 / 1,400 / 2,800 per second | Many small objects and the provider allows higher rates | **Adjust**, or `limit set list 500 --all` |
+| Child task concurrency and objects per child task | 32 and 4 | High latency or small objects leave bandwidth unused (maximum 256, 64, for a total of 1,024 objects) | **Execution nodes → Edit node**, or `node update <node> --child-concurrency 64 --object-concurrency 8` |
+| Comparison result budget | 2 GiB per execution node, kept 30 days | You expect many differences | `comparison` in the execution node's `service.json` (see [result storage](operations.md#result-storage-and-retention)) |
 
-Raise one value at a time and watch the throttling status and error rate.
+Raise one setting at a time and observe the throttling status and error rate before deciding the next step.
 
 ## Disk and database
 
-| Where | What grows | Plan for |
+| Where | What grows | Planning guidance |
 | --- | --- | --- |
 | Master data directory (`/opt/oss-transfer/master/data` on Linux) | `master.db`: tasks, child tasks and their results | Grows with the number of objects, not their size |
-| Agent data directory (`/opt/oss-transfer/agent/data`) | `agent.db`: scan and execution records; `spool`: parts of large objects that do not fit in memory; `comparisons`: comparison results | Records grow with the number of objects. Comparison results take up to 2 GiB per Agent by default (about 8 million differences with 40-byte keys), and storing them stops when less than 1 GiB would stay free. |
-| Local download destination | The files, plus temporary files in a hidden `.oss-transfer-staging-…` directory | Room for the data plus the objects in flight. The download precheck reports the free space. |
+| Execution node data directory (`/opt/oss-transfer/agent/data`) | `agent.db`: scan and execution records; `spool`: parts of large objects that do not fit in memory; `comparisons`: object comparison results | Records grow with the number of objects; the space limit for comparison results is described below |
+| Local download destination | The files themselves, plus temporary files in a hidden `.oss-transfer-staging-…` directory | Allow room for the data plus the objects currently in flight. The download preflight shows the available space |
 
-The documentation gives no fixed size per object. Measure it in the pilot: note the size of `master.db` and `agent.db` before and after, divide by the number of objects, and scale to the full dataset with a safety margin. Records stay until you permanently delete the task; stopping a task or moving it to the trash keeps them. Freed space is reused, and only an offline compaction shrinks the file; compaction needs room for a full copy of the database ([database maintenance](database-maintenance.md#reclaim-disk-space)).
+Object comparison results take up to 2 GiB per execution node by default (about 8 million differences with 40-byte keys). When less than 1 GiB of free space would remain, the system stops saving difference details.
+
+There is no fixed "space per object" figure. The most reliable approach is to measure during the pilot: note the size of `master.db` and `agent.db` before and after, divide by the number of objects, and scale to the full dataset with a safety margin.
+
+These records are kept until the task is permanently deleted; stopping a task or moving it to the trash does not remove them. Freed space is reused by later records, but the database file itself does not shrink. Shrinking the file requires offline compaction, which needs enough room for a full copy of the database (see [database maintenance](database-maintenance.md#reclaim-disk-space)).
 
 ## Verify a large migration
 
-Use [object comparison](operations.md#compare-objects) (**Tools → Compare objects**, or `oss-transfer-cli object compare`):
+Use [object comparison](operations.md#compare-objects) to verify the data after migration (**Tools → Compare objects**, or `oss-transfer-cli object compare`). It has two modes.
 
-- **Metadata mode** compares size, content headers and custom metadata with one HEAD request per object on each side. It reads no content. Use it for every object.
-- **Content mode** reads both objects in full and compares SHA-256. Both sides are read and may be charged. Use it for samples, such as a few prefixes or your most important data.
+Metadata mode sends one HEAD request per object on each side and compares size, content-related headers and custom metadata, without reading content. Use it for all objects.
 
-For many objects:
+Content mode reads both objects in full and compares SHA-256. Both sides are read, which may incur charges. Use it for samples, such as a few prefixes or your most important data.
 
-1. **Split by prefix.** Each Agent runs one comparison at a time, and each comparison runs on one Agent. Start one comparison per prefix: the Master places each on an Agent that is not running one, so several prefixes run in parallel on several Agents.
-2. **Avoid running them with transfers.** Comparisons share the node's request and bandwidth limits with the transfers on that Agent. Run them after the copy, or on Agents that are not transferring.
-3. **Watch the result budget.** One comparison stores at most the Agent's budget (2 GiB by default) of differences; beyond that it keeps counting but stops listing them. Use narrower prefixes or raise the budget.
-4. **Check that the export is complete.** `summary.json` in the exported ZIP has `complete: true`; `object export` exits with status 3 when the export is incomplete.
-5. **Transfer the differences again.** The export's `retry-source-keys.incr` lists the keys that are missing or different on the target; import it with `import-inventory ... --overwrite` ([export results](operations.md#export-results)).
+When there are many objects, split by prefix to speed up the process. Each execution node runs only one comparison at a time, and each comparison runs on only one node. Start one comparison per prefix; the Master assigns each to an idle execution node, so multiple prefixes run in parallel.
 
-From the task details of an object storage → object storage task, **Compare source and target** opens the comparison form filled in with the task's buckets and prefixes.
+Do not run comparisons at the same time as migration tasks, because they share the node's rate and bandwidth limits. Run comparisons after the copy completes, or use execution nodes that have no migration tasks.
+
+One comparison stores at most the execution node's budget (2 GiB by default) of differences; beyond that it continues counting but stops saving difference details. If this happens, narrow the prefix range or raise the budget.
+
+When exporting results, confirm that `summary.json` in the ZIP has `complete: true`. When the export is incomplete, `object export` exits with status code 3.
+
+If there are inconsistent objects, the export's `retry-source-keys.incr` lists the missing or inconsistent keys. Import it with `import-inventory ... --overwrite` to transfer these objects again (see [export results](operations.md#export-results)).
+
+In the task details of an object storage to object storage task, **Compare source and target** opens the comparison form pre-filled with the task's buckets and prefixes.
 
 ## Incremental migration and cut-over
 
-A large dataset usually changes while you copy it. Copy it in rounds and stop writes only for the last, short round.
+During a large-scale copy, the data usually continues to change. The approach is to copy in rounds and stop writes only during the last, short round.
 
 ### What each conflict policy does with existing objects
 
 | Conflict policy | `--conflict` | An object that already exists on the target |
 | --- | --- | --- |
-| Skip existing objects or files (default) | `skip` | Is skipped, matched by name only. Objects changed at the source stay old on the target. |
-| Overwrite changed objects | `changed` | Is overwritten when it looks changed (rule below), otherwise skipped |
-| Overwrite existing objects or files | `overwrite` | Is always copied again |
+| Skip existing objects or files (default) | `skip` | Skipped by name only. Objects modified at the source remain the old version on the target. |
+| Overwrite changed objects | `changed` | Overwritten when it appears changed (rules below); otherwise skipped |
+| Overwrite existing objects or files | `overwrite` | Always copied again |
 
-**Overwrite changed objects** decides from the metadata of the listing and one HEAD request, without reading content. It overwrites the target object when:
+**Overwrite changed objects** decides from the metadata of the listing and one HEAD request, without reading content. It overwrites the target object when any of the following conditions is met:
 
-1. the sizes differ; or
-2. both ETags are plain MD5 ETags (32 hexadecimal digits) and they differ; or
-3. the source's Last-Modified time is later than the target's.
+- The sizes on the two sides differ.
+- Both ETags are plain MD5 ETags (32 hexadecimal digits) and they differ.
+- The source's Last-Modified time is later than the target's.
 
-Otherwise the object is skipped and counted as skipped. Its limits:
+Otherwise the object is skipped and counted as skipped.
 
-- **Same-size changes can be missed.** An object changed at the source keeps the same size, has a multipart ETag (`…-N`) or another non-MD5 ETag, and its Last-Modified time is not later than the target's: it is not detected. Multipart ETags, and the fingerprints of local files, are never compared.
-- **Encryption can make everything look changed.** With SSE-KMS or SSE-C, and on some providers, ETags look like MD5 values but are not the MD5 of the content. Source and target ETags then differ for identical objects, and the policy copies them again, like **Overwrite existing objects or files**. Check a pilot first: if almost nothing is skipped in a second round, this is the cause.
-- **Two clocks are compared.** The source's Last-Modified time comes from the source service and the target's from the target service. A target copy normally has a later time (when it was written), so rule 3 fires only for objects changed at the source after they were copied. A clock that is far off on either side can cause extra copies or missed changes.
-- It needs Agents on v4.1.42. The Master refuses the policy when a selected Agent is older.
+This policy has several limitations. If an object is modified at the source without a change in size, has a multipart ETag (`…-N`) or another non-MD5 format, and its Last-Modified time is not later than the target's, the policy cannot detect the change. Multipart ETags and the fingerprints of local files are never compared.
+
+Encryption can make all objects appear changed. With SSE-KMS or SSE-C, and on some providers, ETags look like MD5 values but are not the MD5 of the content. Source and target ETags then differ for identical objects, and the policy copies them all again, equivalent to **Overwrite existing objects or files**. Verify with a pilot first: if almost no objects are skipped in a second round, this is the cause.
+
+The comparison is between two systems' clocks. The source's Last-Modified time comes from the source service and the target's from the target service. A target copy normally has a later time (the time it was written), so the Last-Modified rule fires only when an object has already been copied to the target and is then modified at the source. A clock that is far off on either side can cause extra copies or missed changes.
+
+This policy requires Agents on v4.1.42. The Master refuses the policy when a selected execution node's version is too old.
 
 ### Runbook
 
-1. **Full copy.** Create the tasks, for example per bucket or top-level prefix:
+1. Perform the full copy. Create migration tasks, for example by bucket or top-level prefix:
 
    ```sh
    oss-transfer-cli task create oss-to-oss source/photos target/photos --conflict changed
    ```
 
-   Wait until the task is **Completed**. Retry failed objects from **Exceptions**.
-2. **Incremental rounds.** Create the same task again with **Overwrite changed objects** (`--conflict changed`). Each round lists the whole source again and checks each existing object, but copies only new and changed objects. Repeat until a round is short enough to fit in your maintenance window. To list less, you can add **Modified after** (`--date-after`), which filters by the source's Last-Modified time in the server's time zone; choose a time well before the previous round started, to allow for clock differences.
-3. **Freeze writes.** Stop the applications from writing to the source, or switch them to read-only.
-4. **Final round.** Run one more round with **Overwrite changed objects** and wait until it is **Completed** with no failed objects.
-5. **Verify.** Run a metadata comparison of every prefix and content comparisons of samples ([verification](#verify-a-large-migration)). A result of **No differences found** means every object matches. If objects are missing or different, export the comparison, transfer `retry-source-keys.incr` again with `import-inventory ... --overwrite`, and compare again.
-6. **Switch the applications** to the target endpoint, bucket and keys.
+   Wait until the task reaches **Completed**. Retry failed objects from **Exceptions**.
+2. Run incremental rounds. Create the same task again with **Overwrite changed objects** (`--conflict changed`). Each round lists the entire source again and checks each existing object, copying only new and changed objects. Repeat until a round is short enough to fit in your maintenance window. To reduce the listing scope, you can add **Modified after** (`--date-after`), which filters by the source's Last-Modified time interpreted in the server's time zone. Choose a time well before the previous round started, to allow for clock differences.
+3. Freeze writes at the source. Stop the applications from writing, or switch them to read-only.
+4. Run the final round. Run one more round with **Overwrite changed objects** and wait until it reaches **Completed** with no failed objects.
+5. Verify. Run a metadata comparison for each prefix and content comparisons for samples (see [verification](#verify-a-large-migration)). A result of **No differences found** means all objects match. If objects are missing or inconsistent, export the comparison results, transfer `retry-source-keys.incr` again with `import-inventory ... --overwrite`, and compare again.
+6. Switch the applications to the target endpoint, bucket and keys.
 7. Keep the source read-only until you are sure you no longer need it.
 
 ### Deletions at the source
 
-OSS Transfer copies; it never deletes. Objects deleted at the source between rounds stay on the target. An object deleted after the scan of a running task is counted as skipped, with the reason `SOURCE_DELETED` in the task report.
+OSS Transfer only copies; it never deletes. Objects deleted at the source between rounds remain on the target. If an object is deleted from the source after the task has scanned it, the task counts it as skipped, with the reason `SOURCE_DELETED` in the report.
 
-To find objects that exist only on the target, run an object comparison of the same scope after the final round. They appear as **Only on target** (`EXTRA_TARGET`). List them with `oss-transfer-cli object status <comparison-id> --status EXTRA_TARGET`, or export them with `object export <comparison-id> --output extra.zip --status EXTRA_TARGET` and read `differences.csv`. Delete them with your provider's tools if you need an exact copy.
+To find objects that exist only on the target, run an object comparison of the same scope after the final round. These objects appear as **Only on target** (`EXTRA_TARGET`). View them with `oss-transfer-cli object status <comparison-id> --status EXTRA_TARGET`, or export them with `object export <comparison-id> --output extra.zip --status EXTRA_TARGET` and read `differences.csv`. Delete them with your provider's tools when you need both sides to be identical.
 
 ## Mixed versions
 
-Update all Agents to the Master's version before a large migration ([software updates](operations.md#software-updates)). Older Agents keep working, but:
-
-- connections without an explicit addressing choice stay virtual-hosted on Agents before v4.1.42, and their connection checks only list buckets;
-- the Master refuses **Overwrite changed objects** on Agents before v4.1.42.
+Before a large migration, update all execution nodes to the same version as the Master (see [software updates](operations.md#software-updates)). Older execution nodes continue to work, but with two limitations. First, connections without an explicitly chosen addressing method use Virtual-hosted on execution nodes before v4.1.42, and their connection checks only list buckets. Second, the Master does not allow **Overwrite changed objects** on execution nodes before v4.1.42.

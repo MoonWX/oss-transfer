@@ -2,23 +2,29 @@
 
 [中文](database-maintenance.zh-CN.md)
 
-The database stores object names, scan checkpoints, assignments and transfer results. Object contents are streamed between endpoints. With millions of small files, the number of objects matters more to database size than their total size. Object comparison results are kept outside the database ([comparison results](#comparison-results)). [Planning](planning.md) explains how to estimate the space a database needs.
+The database file grows as a migration progresses. This page explains why the database file grows and how to reclaim disk space. Object comparison results are not stored in the database; the last section, [Comparison results](#comparison-results), covers them separately. If you have not yet started migrating, see the disk estimation method in [Planning](planning.md).
 
-An unfinished scan keeps an index for deduplication and source-change detection during recovery. After scanning completes, the Agent (execution node) removes this index in small background transactions. Once the Master has durably saved a batch as child tasks, acknowledged it and authorized its release, the Agent removes that scan batch in the background, even while scanning continues. Unacknowledged batches remain available for delivery; execution records used by retries and reports are retained. Permanently deleting a task removes its scan and execution records; stopping a task or moving it to the recycle bin retains them.
+The database stores object names, scan checkpoints, child-task assignments and transfer results. Object contents are streamed directly between the source and the destination without passing through the database, so database size depends on the number of objects and has little to do with the size of individual objects. This becomes especially apparent when small files reach millions.
 
-New writes use compact object records and compress larger values when compression saves space. Existing plain records remain readable. Cleanup makes pages reusable, but does not reduce the database file's size on disk.
+While a scan has not yet finished, the database retains an index used for deduplication and for detecting source-side changes during recovery. After the scan completes, the Agent (execution node) removes this index in small background transactions. Scan batches follow a separate release rule: after the Master has durably saved a batch as child tasks, acknowledged receipt and authorized its release, the Agent deletes that batch in the background, even while the scan is still in progress. Batches that have not been acknowledged remain available for delivery, and execution records used by retries and reports are retained.
 
-Storage credentials are encrypted with AES-256-GCM in both the Master and Agent databases. Each database has its own adjacent `.key` file, restricted to its service account and system administrators. Keep the key with database backups; copying only the database does not produce a usable credential backup. This protects a database copied without its key, not an account that can read both files.
+Permanently deleting a task removes its scan and execution records. Stopping a task or moving it to the recycle bin does not.
 
-The first startup migrates existing storage configurations. Old plaintext can remain in unused database pages until one offline compaction rewrites the file. Compaction removes those pages from the new database; it does not erase older backups or guarantee physical disk erasure. Future restarts do not repeat the full rewrite.
+Permanent deletion runs in the background. Closing the page or restarting the service does not cancel the operation, which will continue to completion afterwards. Until cleanup finishes, the recycle bin page shows the cleanup stage, the number of deleted records and the completed nodes. In the CLI, `oss-transfer-cli task trash` provides the same information. Nodes that are offline retry automatically when they come back online; nodes that have been removed retain their own local history. Cleanup deletes task records only and does not touch files at the source or the destination.
 
-Permanent deletion runs in the background. The recycle bin shows the cleanup stage, deleted record count and completed nodes until cleanup finishes. Closing the page or restarting a service does not discard the operation. An offline node is retried automatically when it returns; an explicitly removed node's local history is retained. In the CLI, use `oss-transfer-cli task trash` to check progress. Cleanup removes task records, not source or destination files.
+New object records use a compact format, and larger values are compressed only when compression saves space. Existing uncompressed records are still read normally. Pages freed by deletion and cleanup are reused for subsequent writes, but the database file itself does not shrink. To reduce the file size, run an offline compaction; see [Reclaim disk space](#reclaim-disk-space).
 
-Managed installations authorize release only after the installer commits a successful startup. This retains the scan copy if an upgrade rolls back the Master's database. Older Masters and installers do not authorize release, so their acknowledged batches remain; tasks already finished before authorization also retain those batches.
+Storage credentials in both the Master and Agent databases are encrypted with AES-256-GCM. Each database has a `.key` file beside it, readable only by the corresponding service account and system administrators. The key must be backed up alongside the database. Copying the database alone does not produce a usable credential backup. This mechanism protects against the database file being copied without the key. If an attacker can read both files, the encryption provides no protection.
+
+On first startup, the program migrates existing storage configurations. Old plaintext credentials may remain in unused database pages until an offline compaction is performed. The compacted database no longer contains those pages, although plaintext in older backups cannot be removed by compaction, and physical disk erasure is not guaranteed. Subsequent restarts do not rewrite the entire database.
+
+In native installations, the installer authorizes release of scan copies only after confirming a successful service startup. This is a safety measure: if an upgrade rolls back the Master's database, the scan copies remain. Older Masters and installers do not have the ability to authorize release, so their acknowledged batches are retained. Tasks that finished before authorization also retain those batches.
 
 ## Reclaim disk space
 
-Stop the service before compacting its database, and take a backup first ([backup and restore](operations.md#backup-and-restore)). Compaction writes a separate file, packs its pages, converts old Agent scan-index records and compresses eligible values. It verifies every record before publishing the new file. The original is unchanged, and an existing output file is never overwritten. Progress is printed every 10 seconds.
+Before compacting, stop the corresponding service and back up the database as described in [Backup and restore](operations.md#backup-and-restore).
+
+The compaction tool writes a new file with tightly packed data pages, converts old-format Agent scan-index records and compresses eligible values. After writing, it verifies every record before publishing the new file. The original file is never modified, and an existing output file is never overwritten. Progress is printed every 10 seconds.
 
 For an Agent installed at the default Linux paths:
 
@@ -29,7 +35,7 @@ sudo /opt/oss-transfer/agent/bin/oss-transfer-agent \
   --compact-state /opt/oss-transfer/agent/data/agent.compact.db
 ```
 
-If compaction succeeds, keep the service stopped and install the verified copy. These commands preserve the original's owner and permissions and refuse to overwrite an existing `agent.before-compact.db`:
+After compaction succeeds, keep the service stopped and replace the original file with the compacted one. The following commands preserve the original file's owner and permissions and refuse to overwrite an existing `agent.before-compact.db`:
 
 ```sh
 sudo cp --attributes-only --preserve=mode,ownership /opt/oss-transfer/agent/data/agent.db /opt/oss-transfer/agent/data/agent.compact.db &&
@@ -39,18 +45,35 @@ sudo mv -nT /opt/oss-transfer/agent/data/agent.compact.db /opt/oss-transfer/agen
 sudo systemctl start oss-transfer-agent
 ```
 
-Check that the node reconnects and its tasks and reports are present before deleting the retained original. For a Master, substitute `master` for `agent` in these commands. Use the installation's actual paths and service name if they were customized.
+After starting the service, confirm that the node has reconnected and that its tasks and reports are still present before deleting the retained original. To compact a Master database, substitute `master` for `agent` in these commands. If you customized the installation path or service name, use the actual values.
 
-For an encrypted database, compaction also writes `agent.compact.db.key` using the same key as `agent.db.key`. Leave `agent.db.key` in place when installing the compacted file. Keep a copy of that key beside any retained database backup; the extra compact key copy can be removed after verifying startup.
+If the database is encrypted, compaction also writes `agent.compact.db.key` with the same key as `agent.db.key`. Leave `agent.db.key` in place when replacing the file. Keep a copy of the key beside every database backup you retain. After confirming that the service starts normally, you can delete the extra compact-copy key.
 
-The destination needs room for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus room for the next database growth. If it fails, it removes its temporary output and leaves the original intact; restart the service with the original. Other programs can still consume space during maintenance.
+The destination needs enough free space for the compacted copy. The tool checks free space before each write transaction and reserves at least 256 MiB plus the amount needed for the next database growth. If compaction fails (insufficient space is the most common cause), the tool removes its temporary output and leaves the original intact. Restart the service with the original file. Other programs may also consume disk space during maintenance, and this should be taken into account.
 
-Compact storage uses database schema 4, automatic task takeover requires schema 5, and releasing acknowledged scan batches raises the Agent database to schema 6. Accepting background deletion requires schema 7; rejoining a task node after failover requires schema 8. Credential encryption requires schema 9, queue handoff requires schema 10, and changing a task's execution nodes raises the Master database to schema 11. Older binaries cannot open a database whose schema they do not support. To downgrade, restore the matching database backup made before upgrading along with the old binary. v4.1.42 introduces no new schema.
+Each feature corresponds to a database schema version:
+
+| Schema | Feature |
+|--------|---------|
+| 4 | Compact storage |
+| 5 | Automatic task takeover |
+| 6 | Release of acknowledged scan batches (Agent database) |
+| 7 | Accept background deletion |
+| 8 | Agent rejoins task after failover |
+| 9 | Credential encryption |
+| 10 | Queue handoff |
+| 11 | Change a task's execution nodes (Master database) |
+
+Older binaries cannot open a database whose schema version they do not support. To downgrade, restore both the database backup made before the upgrade and the old binary.
 
 ## Comparison results
 
-Agents keep object comparison results as files under `comparisons` in their data directory (`/opt/oss-transfer/agent/data/comparisons` on Linux), not in `agent.db`. Compaction does not include them, and neither do database backups made with `--backup-state`, which the installers also use for upgrade backups. Agents delete these results on their own: 30 days after a comparison ends, and sooner when the results exceed the node's storage budget ([result storage and retention](operations.md#result-storage-and-retention)).
+Agents store object comparison results as files under `comparisons` in their data directory (`/opt/oss-transfer/agent/data/comparisons` on Linux), not in `agent.db`. Database compaction does not touch these files. Database backups made with `--backup-state` do not include them, and neither do the installer's upgrade backups.
 
-Comparison results can be produced again by comparing again, which checks the objects as they are at that time; deleting them affects no task, transfer or stored object. Delete them with **Delete comparison results** in the console or `object delete` in the CLI. If you remove the files by hand, stop the Agent first: the affected comparisons keep their counts, but their lists of differences are gone, they show *Comparison results are unavailable on this node*, their exports are marked incomplete (`RESULTS_UNAVAILABLE`) and they cannot be resumed. When an Agent starts after an older database has been restored, it cuts each comparison's file back to what that database recorded and deletes the files of comparisons that the database does not know.
+Agents clean up these results automatically: they delete a result 30 days after the comparison ends, and delete older results sooner when the stored results exceed the node's storage budget. See [Result storage and retention](operations.md#result-storage-and-retention) for the cleanup rules and configuration.
 
-Agents of 4.1.40 or earlier stored up to 10,000 differences per comparison in `agent.db`. An updated Agent still reads these results and deletes them under the same retention rules, in small transactions. As with other cleanup, the freed pages are reused, and only compaction shrinks the file.
+To obtain a deleted result, run the comparison again. The new comparison checks the objects as they are at that time. Deleting results does not affect any task, transfer or stored object. You can delete them with **Delete comparison results** in the console or with `object delete` in the CLI.
+
+If you need to manually delete files under `comparisons`, stop the Agent first. After direct deletion, the affected comparisons retain only their summary counts. The difference lists are lost and the comparisons cannot be resumed. The page shows *Comparison results are unavailable on this node*, and exports are marked incomplete (`RESULTS_UNAVAILABLE`). When an Agent starts after an older database has been restored, it truncates each comparison's file to the length recorded in the database and deletes files for comparisons the database does not know about.
+
+Agents of 4.1.40 or earlier stored up to 10,000 differences per comparison inside `agent.db`. An upgraded Agent still reads these records and deletes them under the same retention rules, in small transactions. As with other cleanup, the freed pages are reused for subsequent writes, and only compaction shrinks the file.

@@ -123,6 +123,13 @@ On every system, sign in with the `admin` password printed by the installer. The
 
 The installers download from GitHub, or from the JD Cloud OSS mirror when the host's public IP is in mainland China, and try the other source if the first cannot be reached. To find the location, they ask `https://www.cloudflare.com/cdn-cgi/trace`, then `https://ipinfo.io/country`. Pass `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) to choose a source and skip this lookup. On the mirror, `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` always holds every file of the latest stable release, including `install.sh` and `Install.ps1`; each version, prereleases included, also has its own directory, such as `v4.1.42/`.
 
+Hosts in the JD Cloud cn-north-1 (Beijing) region can pass `--source jdoss-internal` to download the same files through the internal endpoint `https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/`, which uses no public bandwidth and works without access to the internet. This source applies only to the Linux, macOS and FreeBSD installers, and automatic selection never picks it. The installer itself can be downloaded from the internal endpoint as well:
+
+```bash
+curl -fsSL https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh -o install.sh
+sudo bash install.sh --source jdoss-internal
+```
+
 An installer saved as a file (not piped into the shell) looks for `manifest.tsv` or this host's platform archive in its own folder, then in the current directory. If either is there, it installs from the files in that folder without downloading anything, and `--version`, if given, must match them; `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) forces a download instead. See [offline installation](offline-install.md).
 
 Agents added from the console download the installer and package from the Master by default, so they need no internet access. The join dialog shows the download source.

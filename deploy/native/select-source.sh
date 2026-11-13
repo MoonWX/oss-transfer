@@ -8,6 +8,13 @@ transfer_release_url() {
   printf '%s\n' "$url"
 }
 
+# jdoss-internal is the same bucket through JD Cloud's internal endpoint: hosts
+# in the cn-north-1 (Beijing) region download without public bandwidth.
+transfer_oss_base() {
+  if [[ "$1" == jdoss-internal ]]; then printf '%s\n' https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer
+  else printf '%s\n' https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer; fi
+}
+
 transfer_country() {
   local response country
   response=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 \
@@ -27,8 +34,8 @@ transfer_source_probe() {
     url=https://api.github.com/repos/MoonWX/oss-transfer/releases/latest
     [[ "$version" == latest ]] || url=https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v$version
   else
-    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv
-    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$version/manifest.tsv
+    url=$(transfer_oss_base "$source")/latest/manifest.tsv
+    [[ "$version" == latest ]] || url=$(transfer_oss_base "$source")/v$version/manifest.tsv
   fi
   curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 5 \
     -A OSS-Transfer-Installer "$url" -o /dev/null 2>/dev/null
@@ -37,7 +44,7 @@ transfer_source_probe() {
 transfer_select_source() {
   local requested=$1 version=$2 selected other country
   case "$requested" in
-    github|jdoss) printf '%s\n' "$requested"; return;;
+    github|jdoss|jdoss-internal) printf '%s\n' "$requested"; return;;
     auto) ;;
     *) printf 'Invalid download source: %s\n' "$requested" >&2; return 1;;
   esac

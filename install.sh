@@ -17,6 +17,13 @@ transfer_release_url() {
   printf '%s\n' "$url"
 }
 
+# jdoss-internal is the same bucket through JD Cloud's internal endpoint: hosts
+# in the cn-north-1 (Beijing) region download without public bandwidth.
+transfer_oss_base() {
+  if [[ "$1" == jdoss-internal ]]; then printf '%s\n' https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer
+  else printf '%s\n' https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer; fi
+}
+
 transfer_country() {
   local response country
   response=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 \
@@ -36,8 +43,8 @@ transfer_source_probe() {
     url=https://api.github.com/repos/MoonWX/oss-transfer/releases/latest
     [[ "$version" == latest ]] || url=https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v$version
   else
-    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv
-    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$version/manifest.tsv
+    url=$(transfer_oss_base "$source")/latest/manifest.tsv
+    [[ "$version" == latest ]] || url=$(transfer_oss_base "$source")/v$version/manifest.tsv
   fi
   curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 5 \
     -A OSS-Transfer-Installer "$url" -o /dev/null 2>/dev/null
@@ -46,7 +53,7 @@ transfer_source_probe() {
 transfer_select_source() {
   local requested=$1 version=$2 selected other country
   case "$requested" in
-    github|jdoss) printf '%s\n' "$requested"; return;;
+    github|jdoss|jdoss-internal) printf '%s\n' "$requested"; return;;
     auto) ;;
     *) printf 'Invalid download source: %s\n' "$requested" >&2; return 1;;
   esac
@@ -400,6 +407,13 @@ transfer_release_url() {
   printf '%s\n' "$url"
 }
 
+# jdoss-internal is the same bucket through JD Cloud's internal endpoint: hosts
+# in the cn-north-1 (Beijing) region download without public bandwidth.
+transfer_oss_base() {
+  if [[ "$1" == jdoss-internal ]]; then printf '%s\n' https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer
+  else printf '%s\n' https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer; fi
+}
+
 transfer_country() {
   local response country
   response=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 \
@@ -419,8 +433,8 @@ transfer_source_probe() {
     url=https://api.github.com/repos/MoonWX/oss-transfer/releases/latest
     [[ "$version" == latest ]] || url=https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v$version
   else
-    url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv
-    [[ "$version" == latest ]] || url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v$version/manifest.tsv
+    url=$(transfer_oss_base "$source")/latest/manifest.tsv
+    [[ "$version" == latest ]] || url=$(transfer_oss_base "$source")/v$version/manifest.tsv
   fi
   curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 5 \
     -A OSS-Transfer-Installer "$url" -o /dev/null 2>/dev/null
@@ -429,7 +443,7 @@ transfer_source_probe() {
 transfer_select_source() {
   local requested=$1 version=$2 selected other country
   case "$requested" in
-    github|jdoss) printf '%s\n' "$requested"; return;;
+    github|jdoss|jdoss-internal) printf '%s\n' "$requested"; return;;
     auto) ;;
     *) printf 'Invalid download source: %s\n' "$requested" >&2; return 1;;
   esac
@@ -814,7 +828,7 @@ usage() {
 Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --lang en|zh         Output language (default: system locale)
   --release-url URL    Release directory (default: public latest)
-  --source auto|github|jdoss  Download source (default: public IP location)
+  --source auto|github|jdoss|jdoss-internal  Download source (default: public IP location; jdoss-internal: JD Cloud Beijing internal network)
   --version VERSION   Release version (default: latest)
   --package-dir DIR    Install verified files from a local release directory
   --upgrade            Back up and upgrade an existing installation
@@ -874,7 +888,7 @@ elif ((keep_data)); then
   fail "$(say '--keep-data is used with --uninstall' '--keep-data 需与 --uninstall 一起使用')"
 fi
 if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]] || ((startup_timeout < 10 || startup_timeout > 600)); then fail 'Invalid readiness timeout'; fi
-[[ "$source" == auto || "$source" == github || "$source" == jdoss ]] || fail '--source must be auto, github or jdoss'
+[[ "$source" == auto || "$source" == github || "$source" == jdoss || "$source" == jdoss-internal ]] || fail '--source must be auto, github, jdoss or jdoss-internal'
 requested_version=${requested_version#v}
 [[ "$requested_version" == latest || "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid version'
 release_url=$(transfer_release_url "$release_url")
@@ -1343,7 +1357,7 @@ if [[ -z "$release_url" && -z "$package_dir" ]]; then
       exit 0
     fi
     release_part=$requested_version; [[ "$requested_version" == latest ]] || release_part=v$requested_version
-    release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$release_part
+    release_url=$(transfer_oss_base "$selected_source")/$release_part
   fi
 fi
 # An archive copied from a GitHub Release has no manifest.tsv beside it. Build
@@ -2413,7 +2427,7 @@ Usage: bash install.sh [options]
   --root-dir DIR                Keep programs, configuration and data under DIR
   --method native|compose        Native service (default) or Docker Compose
   --version latest|VERSION       Release version (default: latest)
-  --source auto|github|jdoss      Download source (default: public IP location)
+  --source auto|github|jdoss|jdoss-internal  Download source (default: public IP location; jdoss-internal: JD Cloud Beijing internal network)
   --release-url URL              Fixed release directory or latest
   --package-dir DIR              Local verified native release files
   --port PORT                    Master port (default: 1685)
@@ -2466,7 +2480,7 @@ done
 # Bootstrap scripts from the console pass its language this way; older
 # installers that predate --lang ignore it.
 if [[ -z "$lang" ]]; then case "${OSS_TRANSFER_INSTALL_LANG:-}" in en|zh) lang=$OSS_TRANSFER_INSTALL_LANG;; esac; fi
-[[ "$source" == auto || "$source" == github || "$source" == jdoss ]] || fail '--source must be auto, github or jdoss'
+[[ "$source" == auto || "$source" == github || "$source" == jdoss || "$source" == jdoss-internal ]] || fail '--source must be auto, github, jdoss or jdoss-internal'
 version=${version#v}
 version_requested=$version
 [[ "$version" == latest || "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail 'Invalid version'
@@ -2965,7 +2979,7 @@ if [[ -z "$release_url" && -z "$package_dir" ]]; then
     prepared_github=1
   else
     release_part=$version; [[ "$version" == latest ]] || release_part=v$version
-    release_url=https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/$release_part
+    release_url=$(transfer_oss_base "$selected_source")/$release_part
   fi
 fi
 # An archive copied from a GitHub Release has no manifest.tsv beside it. Build

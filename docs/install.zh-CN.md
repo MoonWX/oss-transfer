@@ -123,6 +123,13 @@ bash install.sh --role master
 
 安装脚本默认从 GitHub 下载；主机公网 IP 位于中国大陆时，改从京东云 OSS 镜像下载。首选来源无法访问时，会自动尝试另一个。判断所在地时，依次访问 `https://www.cloudflare.com/cdn-cgi/trace` 和 `https://ipinfo.io/country`。使用 `--source github` 或 `--source jdoss`（`Install.ps1` 使用 `-Source`）可直接指定来源并跳过这一步。镜像中的 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` 始终包含最新正式版的全部文件，其中也有 `install.sh` 和 `Install.ps1`；每个版本（包括预发布版本）另有自己的目录，例如 `v4.1.42/`。
 
+位于京东云华北-北京地域的主机可以使用 `--source jdoss-internal`，经内网地址 `https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/` 下载同一套文件，不占用公网带宽，也不依赖主机能否访问公网。这个来源只用于 Linux、macOS 和 FreeBSD 的安装脚本，自动选择时不会使用它。安装脚本本身同样可以从内网地址下载：
+
+```bash
+curl -fsSL https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/latest/install.sh -o install.sh
+sudo bash install.sh --source jdoss-internal
+```
+
 以文件形式保存的安装脚本（而不是通过管道交给 shell 运行）会依次在自身所在文件夹和当前目录中查找 `manifest.tsv` 或本机平台的压缩包。找到其中之一时，直接用该文件夹中的文件安装，不下载任何内容；如果指定了 `--version`，它必须与这些文件的版本一致。加 `--source github` 或 `--source jdoss`（`Install.ps1` 使用 `-Source`）则改为在线下载。详见[离线安装](offline-install.zh-CN.md)。
 
 从控制台添加的执行节点默认从 Master 下载安装脚本和安装包，因此不需要访问公网；加入对话框会显示下载来源。

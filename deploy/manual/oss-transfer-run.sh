@@ -52,6 +52,9 @@ start() {
       echo "加入失败，详见 $log" >&2; tail -n 5 "$log" >&2; exit 1; }
   fi
   rm -f "$stopfile"
+  # Only this start's output counts: the log keeps earlier runs, whose initial
+  # password may belong to a database that no longer exists.
+  offset=0; [[ ! -f "$log" ]] || offset=$(wc -c < "$log" | tr -d ' ')
   # The supervisor loop runs detached; it restarts the program 5 s after an
   # unexpected exit and stops when asked to, or when the Agent was revoked (78).
   nohup bash -c '
@@ -76,8 +79,17 @@ start() {
     stop >/dev/null; exit 1
   fi
   if [[ "$role" == master ]]; then
-    password=$(grep -m1 -i "initial password" "$log" || true)
-    [[ -n "$password" ]] && echo "$password（首次登录后请修改）"
+    # Print the password alone on its line so that copying it, by selection
+    # or double-click, cannot pick up neighbouring text.
+    password=$(tail -c +"$((offset + 1))" "$log" | sed -n 's/^Initial password: //p' | tail -n 1)
+    if [[ -n "$password" ]]; then
+      echo "初始账号 / username: admin"
+      echo "初始密码 / password:"
+      echo "$password"
+      echo "首次登录后需要修改密码。"
+    else
+      echo "管理员账号已存在，请使用已设置的密码登录。忘记密码时，先运行 $0 master stop，再运行 $binary --data-dir $data --reset-admin-password"
+    fi
     echo "控制台：http://<本机IP>:${listen##*:}"
   fi
 }

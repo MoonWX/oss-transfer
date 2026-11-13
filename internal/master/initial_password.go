@@ -2,20 +2,34 @@ package master
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 
 	"github.com/MoonWX/oss-transfer/internal/auth"
 	"github.com/MoonWX/oss-transfer/internal/state"
 )
 
+// initialAlphabet has only letters and digits: a terminal's double-click
+// selection stops at "-" or "_", so a password containing them was copied
+// incompletely and then rejected at the first sign-in.
+const initialAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// initialPasswordLength characters of 62 give about 143 bits, more than the
+// 18 random bytes used before.
+const initialPasswordLength = 24
+
 func initialCredential() (password, hash string, err error) {
-	var entropy [18]byte
-	if _, err = rand.Read(entropy[:]); err != nil {
-		return "", "", err
+	characters := make([]byte, initialPasswordLength)
+	limit := big.NewInt(int64(len(initialAlphabet)))
+	for i := range characters {
+		index, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return "", "", err
+		}
+		characters[i] = initialAlphabet[index.Int64()]
 	}
-	password = base64.RawURLEncoding.EncodeToString(entropy[:])
+	password = string(characters)
 	hash, err = auth.HashPassword(password)
 	return
 }

@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('master','agent')][string]$Role,
-    [ValidateSet('auto','github','jdoss')][string]$Source = 'auto',
+    [ValidateSet('auto','github','jdoss','jdoss-internal')][string]$Source = 'auto',
     [ValidateSet('en','zh')][string]$Lang,
     [string]$Version = 'latest',
     [string]$ReleaseUrl,
@@ -106,8 +106,9 @@ function Get-PublicIPCountry {
     return ''
 }
 function Get-SourceMetadata([string]$Selected,[string]$RequestedVersion,[string]$Architecture) {
-    if ($Selected -eq 'jdoss') {
-        $base = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer'
+    if ($Selected -in @('jdoss','jdoss-internal')) {
+        # jdoss-internal is the same bucket through JD Cloud's internal endpoint.
+        $base = if ($Selected -eq 'jdoss-internal') { 'https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer' } else { 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer' }
         $url = "$base/$RequestedVersion"
         $manifest = Invoke-SourceRequest "$url/manifest.tsv"
         if ([Text.Encoding]::UTF8.GetByteCount($manifest) -ge 65536) { throw 'Manifest too large.' }
@@ -126,7 +127,7 @@ function Get-SourceMetadata([string]$Selected,[string]$RequestedVersion,[string]
             catch { throw 'Could not verify the versioned release manifest.' }
             if ($manifest -cne $pinned) { throw 'Latest and versioned release manifests differ; retry after publication finishes.' }
         }
-        return @{Source='jdoss'; Version=$tag; ReleaseUrl=$url}
+        return @{Source=$Selected; Version=$tag; ReleaseUrl=$url}
     }
     $endpoint = if ($RequestedVersion -eq 'latest') { 'latest' } else { 'tags/' + $RequestedVersion }
     $body = Invoke-SourceRequest "https://api.github.com/repos/MoonWX/oss-transfer/releases/$endpoint"

@@ -1,12 +1,23 @@
 export const adminMessages: Record<string, { en: string; ja: string }> = {
-  "改从 Master 下载": {
-    en: "Download from Master",
-    ja: "Master からダウンロード",
+  "从 Master 下载": {
+    en: "From the Master",
+    ja: "Master から",
   },
-  改用公网下载: {
-    en: "Download from public sources",
-    ja: "公開サイトからダウンロード",
+  "公网（自动选择）": {
+    en: "Public (automatic)",
+    ja: "公開サイト（自動選択）",
   },
+  发布地址: { en: "Release URL", ja: "リリース URL" },
+  "京东云内网（华北-北京）": {
+    en: "JD Cloud internal (Beijing)",
+    ja: "JD Cloud 内部ネットワーク（北京）",
+  },
+  下载来源: { en: "Download source", ja: "ダウンロード元" },
+  "下载来源：京东云 OSS 内网地址 {url}，仅适用于京东云华北-北京地域的主机，不占用公网带宽，也无需访问公网。":
+    {
+      en: "Download source: the JD Cloud OSS internal endpoint {url}, for hosts in the JD Cloud cn-north-1 (Beijing) region only. It uses no public bandwidth and needs no internet access.",
+      ja: "ダウンロード元: JD Cloud OSS の内部エンドポイント {url}。JD Cloud の cn-north-1（北京）リージョンのホスト専用で、パブリック帯域を使わず、インターネット接続も不要です。",
+    },
   已清理: { en: "Cleaned up", ja: "クリーンアップ済み" },
   "已受理清理；已移除节点的本地历史保留：{value1}。": {
     en: "Cleanup accepted. Local history remains on removed nodes: {value1}.",

@@ -78,6 +78,11 @@ function downloadSourceText(source?: AgentDownloadSource) {
       );
     case "release":
       return t("下载来源：{url}", { url: source.url });
+    case "internal":
+      return t(
+        "下载来源：京东云 OSS 内网地址 {url}，仅适用于京东云华北-北京地域的主机，不占用公网带宽，也无需访问公网。",
+        { url: source.url },
+      );
     default:
       return null;
   }
@@ -88,6 +93,7 @@ type InstallMethod = {
   label: string;
   command?: string;
   upstreamCommand?: string;
+  internalCommand?: string;
   variants?: DockerOption[];
 };
 export default function AgentInvitationDialog({
@@ -105,7 +111,11 @@ export default function AgentInvitationDialog({
   const [masterUrl, setMasterUrl] = useState(() => window.location.origin);
   const [invitation, setInvitation] = useState<AgentInvitation | null>(null);
   const [tab, setTab] = useState(0);
-  const [upstream, setUpstream] = useState(false);
+  // Where a native installer downloads from: the invitation's default, the
+  // public sources, or JD Cloud's internal endpoint.
+  const [download, setDownload] = useState<"default" | "upstream" | "internal">(
+    "default",
+  );
   const [dockerVariant, setDockerVariant] = useState<DockerVariant>("posix");
   const [lanAddresses, setLanAddresses] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -211,7 +221,7 @@ export default function AgentInvitationDialog({
       )
         throw new Error(t("加入指令不完整，请重新生成。"));
       setTab(0);
-      setUpstream(false);
+      setDownload("default");
       setDockerVariant("posix");
       setInvitation(next);
     } catch (failure) {
@@ -241,11 +251,13 @@ export default function AgentInvitationDialog({
           : t("传统部署"),
         command: invitation?.traditionalCommand,
         upstreamCommand: invitation?.upstreamTraditionalCommand,
+        internalCommand: invitation?.internalTraditionalCommand,
       },
       {
         label: "Windows",
         command: invitation?.windowsCommand,
         upstreamCommand: invitation?.upstreamWindowsCommand,
+        internalCommand: invitation?.internalWindowsCommand,
       },
       {
         label: "Docker",
@@ -288,20 +300,47 @@ export default function AgentInvitationDialog({
   const command =
     (variant
       ? variant[2]
-      : upstream && method?.upstreamCommand
-        ? method.upstreamCommand
-        : method?.command) || "";
-  const source =
-    method &&
+      : download === "internal" && method?.internalCommand
+        ? method.internalCommand
+        : download === "upstream" && method?.upstreamCommand
+          ? method.upstreamCommand
+          : method?.command) || "";
+  const installerTab =
+    !!method &&
     !dockerTab &&
     !manualTab &&
-    method.command !== invitation?.nativeCommand
+    method.command !== invitation?.nativeCommand;
+  const source =
+    method && installerTab
       ? downloadSourceText(
-          upstream && method.upstreamCommand
-            ? invitation?.upstreamDownloadSource
-            : invitation?.downloadSource,
+          download === "internal" && method.internalCommand
+            ? invitation?.internalDownloadSource
+            : download === "upstream" && method.upstreamCommand
+              ? invitation?.upstreamDownloadSource
+              : invitation?.downloadSource,
         )
       : null;
+  // The public sources are a separate choice only when the default is the Master.
+  const downloadChoices = (
+    [
+      [
+        "default",
+        invitation?.downloadSource?.kind === "auto"
+          ? t("公网（自动选择）")
+          : invitation?.downloadSource?.kind === "release"
+            ? t("发布地址")
+            : t("从 Master 下载"),
+        true,
+      ],
+      [
+        "upstream",
+        t("公网（自动选择）"),
+        !!method?.upstreamCommand &&
+          invitation?.downloadSource?.kind !== "auto",
+      ],
+      ["internal", t("京东云内网（华北-北京）"), !!method?.internalCommand],
+    ] as const
+  ).filter((item) => item[2]);
   const loopback = loopbackOrigin(masterUrl);
   let joinLoopback = false;
   try {
@@ -485,6 +524,27 @@ export default function AgentInvitationDialog({
                     </Typography>
                   </Stack>
                 )}
+                {installerTab && !variant && downloadChoices.length > 1 && (
+                  <ToggleButtonGroup
+                    size="small"
+                    exclusive
+                    value={
+                      downloadChoices.some((item) => item[0] === download)
+                        ? download
+                        : "default"
+                    }
+                    onChange={(_, next) => next && setDownload(next)}
+                    aria-label={t("下载来源")}
+                    sx={{ mb: 2, flexWrap: "wrap" }}
+                    data-testid="download-source"
+                  >
+                    {downloadChoices.map(([value, label]) => (
+                      <ToggleButton key={value} value={value}>
+                        {label}
+                      </ToggleButton>
+                    ))}
+                  </ToggleButtonGroup>
+                )}
                 <TextField
                   label={t("{method} 指令", {
                     method: methods[tab]?.label || t("加入"),
@@ -527,14 +587,6 @@ export default function AgentInvitationDialog({
                     data-testid="copy-join-url"
                   >
                     {t("复制邀请链接（用于 --join-url）")}
-                  </Button>
-                )}
-                {method?.upstreamCommand && !variant && (
-                  <Button
-                    onClick={() => setUpstream((value) => !value)}
-                    sx={{ mt: 1.5, ml: 1 }}
-                  >
-                    {upstream ? t("改从 Master 下载") : t("改用公网下载")}
                   </Button>
                 )}
               </Box>

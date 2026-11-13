@@ -214,7 +214,10 @@ export type NodeChange = {
   objectsPerChild?: number;
 };
 export type AgentDownloadSource =
-  { kind: "master" } | { kind: "auto" } | { kind: "release"; url: string };
+  | { kind: "master" }
+  | { kind: "auto" }
+  | { kind: "release"; url: string }
+  | { kind: "internal"; url: string };
 export type AgentInvitation = {
   id: string;
   expiresAt: string;
@@ -226,10 +229,13 @@ export type AgentInvitation = {
   windowsCommand?: string;
   upstreamTraditionalCommand?: string;
   upstreamWindowsCommand?: string;
+  internalTraditionalCommand?: string;
+  internalWindowsCommand?: string;
   nativeCommand?: string;
   nativeAgent?: { available: boolean };
   downloadSource?: AgentDownloadSource;
   upstreamDownloadSource?: AgentDownloadSource;
+  internalDownloadSource?: AgentDownloadSource;
 };
 /** Private IPv4 addresses of the Master host; empty when it runs in a container. */
 export async function getMasterLanAddresses(signal: AbortSignal) {

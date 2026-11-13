@@ -231,13 +231,13 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
   ).toHaveValue(traditionalCommand);
   await dialog
-    .getByRole("button", { name: "改用公网下载", exact: true })
+    .getByRole("button", { name: "公网（自动选择）", exact: true })
     .click();
   await expect(
     dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
   ).toHaveValue(upstreamTraditionalCommand);
   await dialog
-    .getByRole("button", { name: "改从 Master 下载", exact: true })
+    .getByRole("button", { name: "从 Master 下载", exact: true })
     .click();
   await expect(
     dialog.getByLabel("Linux / macOS / FreeBSD 指令", { exact: true }),
@@ -247,13 +247,13 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     windowsCommand,
   );
   await dialog
-    .getByRole("button", { name: "改用公网下载", exact: true })
+    .getByRole("button", { name: "公网（自动选择）", exact: true })
     .click();
   await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
     upstreamWindowsCommand,
   );
   await dialog
-    .getByRole("button", { name: "改从 Master 下载", exact: true })
+    .getByRole("button", { name: "从 Master 下载", exact: true })
     .click();
   await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
     windowsCommand,
@@ -263,7 +263,7 @@ test("native Agent commands precede Docker and switching tabs preserves join cre
     dockerCommand,
   );
   await expect(
-    dialog.getByRole("button", { name: /改用公网下载|改从 Master 下载/ }),
+    dialog.getByRole("button", { name: /公网（自动选择）|从 Master 下载/ }),
   ).toHaveCount(0);
   // Hosts without systemd or Docker: the management script or the program.
   await dialog.getByRole("tab", { name: "手动运行", exact: true }).click();
@@ -708,7 +708,7 @@ test("Docker join offers Docker Desktop, PowerShell and Linux Compose commands a
     dialog.getByText("下载来源：本 Master，新节点无需访问公网。"),
   ).toBeVisible();
   await dialog
-    .getByRole("button", { name: "改用公网下载", exact: true })
+    .getByRole("button", { name: "公网（自动选择）", exact: true })
     .click();
   await expect(
     dialog.getByText(/下载来源：GitHub 或京东云 OSS.*ipinfo\.io/),
@@ -769,4 +769,50 @@ test("Docker tab sends a loopback Master address back for correction", async ({
     dialog.getByRole("textbox", { name: "Master 地址（Agent 需能访问）" }),
   ).toHaveValue("http://localhost:1685");
   expect(state.invitations).toHaveLength(1);
+});
+
+test("the JD Cloud internal source is offered beside the public sources", async ({
+  page,
+}) => {
+  const internal = `curl -fsSL '${joinUrl}?source=jdoss-internal' | ${rootShell}`;
+  await setup(page, true, {
+    nativeAgent: { available: true },
+    windowsCommand,
+    nativeCommand,
+    downloadSource: { kind: "auto" },
+    upstreamTraditionalCommand,
+    upstreamWindowsCommand,
+    upstreamDownloadSource: { kind: "auto" },
+    internalTraditionalCommand: internal,
+    internalWindowsCommand: `irm '${joinUrl}?platform=windows&source=jdoss-internal' | iex`,
+    internalDownloadSource: {
+      kind: "internal",
+      url: "https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/",
+    },
+  });
+  await page.getByRole("button", { name: "添加节点", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加节点", exact: true });
+  await dialog
+    .getByRole("textbox", { name: "节点名称", exact: true })
+    .fill("Beijing Agent");
+  await dialog
+    .getByRole("button", { name: "生成加入指令", exact: true })
+    .click();
+  const field = dialog.getByLabel("Linux / macOS / FreeBSD 指令", {
+    exact: true,
+  });
+  await expect(field).toHaveValue(traditionalCommand);
+  // The default is already the public sources, so only two choices remain.
+  await expect(
+    dialog.getByTestId("download-source").getByRole("button"),
+  ).toHaveText(["公网（自动选择）", "京东云内网（华北-北京）"]);
+  await dialog
+    .getByRole("button", { name: "京东云内网（华北-北京）", exact: true })
+    .click();
+  await expect(field).toHaveValue(internal);
+  await expect(dialog.getByText(/下载来源：京东云 OSS 内网地址/)).toBeVisible();
+  await dialog.getByRole("tab", { name: "Windows", exact: true }).click();
+  await expect(dialog.getByLabel("Windows 指令", { exact: true })).toHaveValue(
+    `irm '${joinUrl}?platform=windows&source=jdoss-internal' | iex`,
+  );
 });

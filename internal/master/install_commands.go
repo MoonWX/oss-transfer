@@ -21,6 +21,10 @@ var artifactBase = regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za
 const officialAgentArtifactBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer"
 const legacyAgentArtifactBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/osstransfer"
 
+// internalAgentArtifactBase is the same bucket through JD Cloud's internal
+// endpoint, for Agents in the cn-north-1 (Beijing) region.
+const internalAgentArtifactBase = "https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer"
+
 func (s *Server) agentArtifactBase() string {
 	base := strings.TrimRight(s.options.AgentArtifactBase, "/")
 	if base == legacyAgentArtifactBase {
@@ -35,12 +39,22 @@ func (s *Server) regionalAgentArtifacts() bool {
 		return false
 	}
 	// Earlier pinned installers do not accept --source / -Source.
+	return s.agentArtifactsAtLeast(4, 1, 6)
+}
+
+// internalAgentArtifacts reports whether the pinned installers accept
+// --source jdoss-internal (install.sh since 4.1.44, Install.ps1 since 4.1.45).
+func (s *Server) internalAgentArtifacts() bool {
+	return s.regionalAgentArtifacts() && s.agentArtifactsAtLeast(4, 1, 45)
+}
+
+func (s *Server) agentArtifactsAtLeast(minimums ...int) bool {
 	version := strings.SplitN(strings.TrimPrefix(s.options.AgentArtifactVersion, "v"), "-", 2)[0]
 	parts := strings.Split(version, ".")
 	if len(parts) != 3 {
 		return false
 	}
-	for i, minimum := range []int{4, 1, 6} {
+	for i, minimum := range minimums {
 		number, err := strconv.Atoi(parts[i])
 		if err != nil {
 			return false
@@ -214,6 +228,11 @@ func (s *Server) agentInvitationData(masterURL string, invite cluster.Invitation
 			data["upstreamDownloadSource"] = source
 		}
 	}
+	if s.internalAgentArtifacts() {
+		data["internalTraditionalCommand"] = bootstrapCommand(withQuery(link, "source=jdoss-internal", language))
+		data["internalWindowsCommand"] = "irm " + psQuote(withQuery(link, "platform=windows", "source=jdoss-internal", language)) + " | iex"
+		data["internalDownloadSource"] = map[string]any{"kind": "internal", "url": internalAgentArtifactBase + "/"}
+	}
 	if s.options.AgentDockerImage != "" {
 		data["dockerCommand"], data["dockerWindowsCommand"] = agentDockerCommands(s.options.AgentDockerImage, link, id)
 		data["dockerImage"] = s.options.AgentDockerImage
@@ -227,7 +246,7 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	lang := r.URL.Query().Get("lang")
 	windows := r.URL.Query().Get("platform") == "windows"
-	if method != "" && method != "native" && method != "compose" || windows && method == "compose" || source != "" && source != "upstream" || lang != "" && lang != "en" && lang != "zh" {
+	if method != "" && method != "native" && method != "compose" || windows && method == "compose" || source != "" && source != "upstream" && source != "jdoss-internal" || lang != "" && lang != "en" && lang != "zh" {
 		fail(w, http.StatusBadRequest, "Unsupported Agent installation method")
 		return
 	}
@@ -263,7 +282,11 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if method != "compose" && source != "upstream" {
+	if source == "jdoss-internal" && (method == "compose" || !s.internalAgentArtifacts()) {
+		fail(w, http.StatusServiceUnavailable, "JD Cloud internal downloads are not available for this Master's Agent artifacts")
+		return
+	}
+	if method != "compose" && source == "" {
 		root, _, cacheErr := s.openAgentPackages()
 		if cacheErr == nil {
 			root.Close()
@@ -288,6 +311,10 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	installerOptions := "--method native"
 	if method == "compose" {
 		installerOptions = "--method compose --image " + shellQuote(s.options.AgentDockerImage)
+	}
+	if source == "jdoss-internal" {
+		s.internalAgentBootstrap(w, windows, token, masterURL, installerOptions, lang)
+		return
 	}
 	if s.regionalAgentArtifacts() {
 		s.officialAgentBootstrap(w, windows, token, masterURL, installerOptions, lang)
@@ -350,6 +377,34 @@ docker run --rm -e OSS_TRANSFER_JOIN_TOKEN -v oss-transfer-agent-data:/data %s o
 unset OSS_TRANSFER_JOIN_TOKEN
 docker run -d --name oss-transfer-agent --restart unless-stopped -v oss-transfer-agent-data:/data %s oss-transfer-agent --data-dir /data
 `, shellQuote(token), image, shellQuote(masterURL), image)
+}
+
+// internalAgentBootstrap downloads only through JD Cloud's internal endpoint:
+// such hosts may have no route to GitHub or the public mirror.
+func (s *Server) internalAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions, lang string) {
+	version := "v" + strings.TrimPrefix(s.options.AgentArtifactVersion, "v")
+	release := internalAgentArtifactBase + "/" + version
+	if windows {
+		fmt.Fprintf(w, `$ErrorActionPreference = 'Stop'
+%s$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
+try {
+  Invoke-WebRequest -UseBasicParsing -Uri %s -OutFile $installer -TimeoutSec 60
+  $env:TRANSFER_JOIN_TOKEN = %s
+  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -Source jdoss-internal -Version %s -MasterUrl %s -Yes
+} finally {
+  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item $installer -ErrorAction SilentlyContinue
+}
+`, languageEnv(lang, true), psQuote(release+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
+		return
+	}
+	fmt.Fprintf(w, `#!/usr/bin/env bash
+set -euo pipefail
+%sinstaller=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 %s -o "$installer"
+printf '%%s' %s | bash "$installer" --role agent %s --source jdoss-internal --version %s --master-url %s --token-stdin --yes "$@"
+`, languageEnv(lang, false), shellQuote(release+"/install.sh"), shellQuote(token), installerOptions, shellQuote(version), shellQuote(masterURL))
 }
 
 func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions, lang string) {

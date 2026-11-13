@@ -637,6 +637,14 @@ if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was chan
         Assert ($result.Source -ceq 'jdoss' -and $result.ReleaseUrl -ceq "$jdoss/v4.1.5") 'China source was not pinned.'
         Assert ($script:requests[0].Timeout -eq 3) 'Geolocation timeout differs.'
     }
+    Check 'internal source uses only the internal endpoint' {
+        $internal = 'https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer'
+        $script:responses["$internal/latest/manifest.tsv"]=$jdManifest
+        $script:responses["$internal/v4.1.5/manifest.tsv"]=$jdManifest
+        $result=Resolve-DownloadSource 'jdoss-internal' 'latest' 'amd64'
+        Assert ($result.Source -ceq 'jdoss-internal' -and $result.ReleaseUrl -ceq "$internal/v4.1.5") 'Internal source was not pinned.'
+        Assert (@($script:requests | Where-Object { -not $_.Url.StartsWith($internal) }).Count -eq 0) 'Internal source contacted another host.'
+    }
     Check 'non-CN public IP selects GitHub' {
         $script:responses[$traceURL]="loc=JP`n"; $script:responses[$githubAPI]=GitHub-JSON
         Assert ((Resolve-DownloadSource 'auto' 'latest' 'amd64').Source -ceq 'github') 'Wrong source outside China.'

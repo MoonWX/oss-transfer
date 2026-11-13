@@ -631,3 +631,63 @@ func TestAgentInvitationNamesItsDownloadSource(t *testing.T) {
 		t.Fatal("download source shown without native packages", data)
 	}
 }
+
+// Agents in JD Cloud's Beijing region can download only through the internal
+// endpoint, with no detection request and no public fallback.
+func TestAgentInvitationOffersTheInternalSource(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	f.master.options.AgentArtifactBase = officialAgentArtifactBase
+	f.master.options.AgentArtifactVersion = "v4.1.45"
+	data := f.master.agentInvitationData("http://10.1.0.43:1685", cluster.Invitation{Token: "token-for-internal-check"}, "zh")
+	if got, _ := data["internalDownloadSource"].(map[string]any); got["kind"] != "internal" ||
+		!strings.Contains(data["internalTraditionalCommand"].(string), "source=jdoss-internal") ||
+		!strings.Contains(data["internalWindowsCommand"].(string), "source=jdoss-internal") {
+		t.Fatalf("internal commands missing: %#v", data)
+	}
+	body := strings.NewReader(`{"label":"internal-check","masterUrl":"http://10.1.0.43:1685"}`)
+	request, _ := http.NewRequest("POST", f.http.URL+"/api/master/agents/invitations", body)
+	request.Header.Set("Authorization", "Bearer "+f.admin)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := f.http.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil || response.StatusCode != 200 {
+		t.Fatal(response.StatusCode, err)
+	}
+	response.Body.Close()
+	link := created["data"].(map[string]any)["joinUrl"].(string)
+	link = f.http.URL + link[strings.Index(link, "/api/"):]
+	for suffix, want := range map[string]string{
+		"?source=jdoss-internal":                  internalAgentArtifactBase + "/v4.1.45/install.sh' -o \"$installer\"\n",
+		"?platform=windows&source=jdoss-internal": internalAgentArtifactBase + "/v4.1.45/Install.ps1' -OutFile",
+	} {
+		response, err := http.Get(link + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		text := string(script)
+		if response.StatusCode != 200 || !strings.Contains(text, want) || !strings.Contains(text, "jdoss-internal --version") && !strings.Contains(text, "-Source jdoss-internal -Version") ||
+			strings.Contains(text, "github") || strings.Contains(text, "cloudflare") || strings.Contains(text, "moonwx.s3.cn-north-1") {
+			t.Fatalf("bootstrap %q: HTTP %d\n%s", suffix, response.StatusCode, text)
+		}
+	}
+	// Installers before 4.1.45 do not accept the source; Compose has no use for it.
+	response, _ = http.Get(link + "?method=compose&source=jdoss-internal")
+	response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatal("compose accepted the internal source", response.StatusCode)
+	}
+	f.master.options.AgentArtifactVersion = "v4.1.44"
+	if _, ok := f.master.agentInvitationData("http://10.1.0.43:1685", cluster.Invitation{Token: "t"}, "")["internalTraditionalCommand"]; ok {
+		t.Fatal("internal source offered for installers that do not accept it")
+	}
+	response, _ = http.Get(link + "?source=jdoss-internal")
+	response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatal("internal bootstrap served for v4.1.44 installers", response.StatusCode)
+	}
+}

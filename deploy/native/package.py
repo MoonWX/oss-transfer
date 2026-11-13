@@ -16,6 +16,11 @@ INSTALLERS = {
     'native-install.sh': 'deploy/native/install.sh',
     'Install.ps1': 'deploy/native/Install.ps1',
 }
+# Published beside the installers but not listed in manifest.tsv: installers
+# and Masters read only the assets they know.
+EXTRAS = {
+    'oss-transfer-run.sh': 'deploy/manual/oss-transfer-run.sh',
+}
 
 SPEC = importlib.util.spec_from_file_location('native_platforms', pathlib.Path(__file__).with_name('platforms.py'))
 TARGETS = importlib.util.module_from_spec(SPEC)
@@ -121,6 +126,10 @@ def package(source, destination, scripts, require_all=True, unpack_binaries=Fals
             payload = (scripts/source_name).read_bytes()
             (stage/name).write_bytes(payload)
             rows.append('\t'.join(('asset',name,hashlib.sha256(payload).hexdigest(),str(len(payload)))))
+        for name, source_name in EXTRAS.items():
+            if (scripts/source_name).is_file():
+                (stage/name).write_bytes((scripts/source_name).read_bytes())
+                (stage/name).chmod(0o755)
         (stage/'manifest.tsv').write_text('\n'.join(['format\toss-transfer-go-v1', 'version\t'+identity[0], 'commit\t'+identity[1]]+rows)+'\n', encoding="utf-8")
         stage.rename(destination)
     print(destination)

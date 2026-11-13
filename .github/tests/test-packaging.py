@@ -145,7 +145,7 @@ class Packaging(unittest.TestCase):
     def test_release_uses_identical_payloads_and_committed_installers(self):
         self.assemble()
         names = {PACKAGE.TARGETS.archive_name(*platform) for platform in PACKAGE.PLATFORMS}
-        names.update({'install.sh', 'native-install.sh', 'Install.ps1', 'manifest.tsv', 'release.json', 'SHA256SUMS'})
+        names.update({'install.sh', 'native-install.sh', 'Install.ps1', 'oss-transfer-run.sh', 'manifest.tsv', 'release.json', 'SHA256SUMS'})
         self.assertEqual({p.name for p in self.output.iterdir()}, names)
         manifest = [line.split('\t') for line in (self.output / 'manifest.tsv').read_text().splitlines()]
         archive_rows = [row for row in manifest if row[0] == 'archive']
@@ -329,7 +329,7 @@ if sys.argv[1:3] == ['release', 'view']:
         self.assemble()
         shutil.copytree(self.output, self.root / "output")
         expected = {"output/" + PACKAGE.TARGETS.archive_name(*platform) for platform in PACKAGE.PLATFORMS}
-        expected |= {"output/" + name for name in ("manifest.tsv", "SHA256SUMS", "install.sh", "native-install.sh", "Install.ps1")}
+        expected |= {"output/" + name for name in ("manifest.tsv", "SHA256SUMS", "install.sh", "native-install.sh", "Install.ps1", "oss-transfer-run.sh")}
         for existing in (False, True):
             with self.subTest(existing_release=existing):
                 result, commands = self.github_publication(existing)

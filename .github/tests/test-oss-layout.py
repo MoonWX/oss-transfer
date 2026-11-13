@@ -29,7 +29,7 @@ def sha(data):
 
 
 def payloads():
-    files = {name: name.encode() for name in ("install.sh", "native-install.sh", "Install.ps1")}
+    files = {name: name.encode() for name in ("install.sh", "native-install.sh", "Install.ps1", "oss-transfer-run.sh")}
     rows = ["format\toss-transfer-go-v1", "version\t" + VERSION, "commit\t" + COMMIT]
     for operating_system, architecture in PUBLISH.PLATFORMS.PLATFORMS:
         name = PUBLISH.PLATFORMS.archive_name(operating_system, architecture)
@@ -61,7 +61,7 @@ class OSSLayout(unittest.TestCase):
     def test_publisher_accepts_only_archive_payloads_and_required_metadata(self):
         names = self.verify_local(payloads())
         self.assertEqual(set(names), PUBLISH.release_names())
-        self.assertEqual(len(names), len(PUBLISH.PLATFORMS.PLATFORMS) + 6)
+        self.assertEqual(len(names), len(PUBLISH.PLATFORMS.PLATFORMS) + 7)
 
     def test_publisher_rejects_redundant_assets_even_with_valid_checksums(self):
         for extra in ("oss-transfer-master-linux-amd64", "oss-transfer-linux-amd64.tar.gz.sha256",

@@ -45,6 +45,11 @@ def release_sources(destination, commit):
             )
         (destination / name).parent.mkdir(parents=True, exist_ok=True)
         (destination / name).write_bytes(result.stdout)
+    for name in PACKAGE.EXTRAS.values():
+        result = subprocess.run(["git", "show", commit + ":" + name], cwd=repository, capture_output=True)
+        if result.returncode == 0:
+            (destination / name).parent.mkdir(parents=True, exist_ok=True)
+            (destination / name).write_bytes(result.stdout)
 
 
 def assemble(packages, output, version, commit):

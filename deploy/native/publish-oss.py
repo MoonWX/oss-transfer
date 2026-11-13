@@ -38,7 +38,7 @@ SPEC.loader.exec_module(PLATFORMS)
 
 def release_names():
     return {PLATFORMS.archive_name(*target) for target in PLATFORMS.PLATFORMS} | {
-        "install.sh", "native-install.sh", "Install.ps1", "manifest.tsv", "release.json", "SHA256SUMS",
+        "install.sh", "native-install.sh", "Install.ps1", "oss-transfer-run.sh", "manifest.tsv", "release.json", "SHA256SUMS",
     }
 
 

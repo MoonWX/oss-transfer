@@ -13,6 +13,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/comparison"
 	"github.com/MoonWX/oss-transfer/internal/discovery"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 const leaseBucket = "agent-parent-leases"
@@ -70,10 +71,13 @@ type leaseCandidate struct {
 }
 type leaseTimer interface{ Stop() bool }
 type parentLease struct {
-	opMu            sync.Mutex
-	record          leaseRecord
-	ctx             context.Context
-	cancel          context.CancelFunc
+	opMu   sync.Mutex
+	record leaseRecord
+	ctx    context.Context
+	// cancel ends the lease's I/O with a cause: transferstore's
+	// ErrInterrupted when the same Agent may continue, ErrMoved when the
+	// work moves to another.
+	cancel          context.CancelCauseFunc
 	active, expired bool
 	deadline        time.Time
 	pending         *leaseCandidate
@@ -91,7 +95,7 @@ type Leases struct {
 	closed        bool
 	now           func() time.Time
 	afterFunc     func(time.Duration, func()) leaseTimer
-	quiesce       func(context.Context, int64) error
+	quiesce       func(context.Context, int64, error) error
 	rejoinCleanup func(context.Context, int64, uint64) error
 	rejoinScanner func(context.Context, LeaseRejoinRequest) error
 }
@@ -140,16 +144,16 @@ func leaseKey(parent int64) string { return fmt.Sprintf("%020d", parent) }
 func (m *Leases) entryLocked(parent int64) *parentLease {
 	p := m.parents[parent]
 	if p == nil {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancelCause(context.Background())
 		p = &parentLease{record: leaseRecord{ParentID: parent}, ctx: ctx, cancel: cancel}
 		m.parents[parent] = p
 	}
 	return p
 }
-func (m *Leases) closeLocked(p *parentLease) {
+func (m *Leases) closeLocked(p *parentLease, cause error) {
 	p.active = false
 	if p.cancel != nil {
-		p.cancel()
+		p.cancel(cause)
 	}
 	if p.timer != nil {
 		p.timer.Stop()
@@ -159,7 +163,8 @@ func (m *Leases) closeLocked(p *parentLease) {
 func (m *Leases) expireLocked(p *parentLease) {
 	if p.active && !m.now().Before(p.deadline) {
 		p.expired = true
-		m.closeLocked(p)
+		// The Master may grant this Agent the lease again.
+		m.closeLocked(p, transferstore.ErrInterrupted)
 	}
 }
 func (m *Leases) ParentContext(parentID int64, generation uint64) (context.Context, error) {
@@ -258,7 +263,7 @@ func (m *Leases) Prepare(ctx context.Context, request LeasePrepareRequest) (Leas
 	}
 	rearm := !same || !p.active
 	if rearm {
-		m.closeLocked(p)
+		m.closeLocked(p, transferstore.ErrInterrupted)
 		p.record = leaseRecord{ParentID: request.ParentID, Generation: request.Generation, LeaseID: request.LeaseID, Required: true, OwnerEpoch: request.OwnerEpoch}
 		p.expired, p.pending = false, nil
 	}
@@ -271,7 +276,7 @@ func (m *Leases) Prepare(ctx context.Context, request LeasePrepareRequest) (Leas
 			return LeasePrepared{}, err
 		}
 		if m.quiesce != nil {
-			if err := m.quiesce(ctx, request.ParentID); err != nil {
+			if err := m.quiesce(ctx, request.ParentID, transferstore.ErrInterrupted); err != nil {
 				return LeasePrepared{}, err
 			}
 		}
@@ -353,7 +358,7 @@ func (m *Leases) Grant(ctx context.Context, request LeaseGrantRequest) error {
 		return err
 	}
 	if p.ctx == nil || p.ctx.Err() != nil {
-		p.ctx, p.cancel = context.WithCancel(context.Background())
+		p.ctx, p.cancel = context.WithCancelCause(context.Background())
 	}
 	p.record, p.deadline, p.active = row, candidate.deadline, true
 	candidate.granted = true
@@ -385,7 +390,7 @@ func (m *Leases) Retire(ctx context.Context, parentID int64, epochs ...uint64) e
 		return ErrLeaseConflict
 	}
 	p.record.Required, p.record.Retired = true, true
-	m.closeLocked(p)
+	m.closeLocked(p, transferstore.ErrMoved)
 	m.mu.Unlock()
 	p.opMu.Lock()
 	defer p.opMu.Unlock()
@@ -400,7 +405,7 @@ func (m *Leases) Retire(ctx context.Context, parentID int64, epochs ...uint64) e
 		return err
 	}
 	if m.quiesce != nil {
-		return m.quiesce(ctx, parentID)
+		return m.quiesce(ctx, parentID, transferstore.ErrMoved)
 	}
 	return nil
 }
@@ -412,7 +417,7 @@ func (m *Leases) Close() {
 	defer m.mu.Unlock()
 	m.closed = true
 	for _, p := range m.parents {
-		m.closeLocked(p)
+		m.closeLocked(p, transferstore.ErrInterrupted)
 	}
 }
 

@@ -130,7 +130,7 @@ func TestRejoinRetriesDurableQuiescenceAfterFailure(t *testing.T) {
 	ctx := context.Background()
 	grantPrepared(t, leases, leaseRequest(1, "initial", 1))
 	injected := errors.New("still shutting down")
-	leases.quiesce = func(context.Context, int64) error { return injected }
+	leases.quiesce = func(context.Context, int64, error) error { return injected }
 	req := LeaseRejoinRequest{ParentID: 1, Generation: 1, OwnerEpoch: 1}
 	if err := leases.Rejoin(ctx, req); !errors.Is(err, injected) {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestRejoinRetriesDurableQuiescenceAfterFailure(t *testing.T) {
 		t.Fatal("partial handshake admitted work", err)
 	}
 	quiesced := false
-	fresh.quiesce = func(context.Context, int64) error { quiesced = true; return nil }
+	fresh.quiesce = func(context.Context, int64, error) error { quiesced = true; return nil }
 	if err = fresh.Rejoin(ctx, req); err != nil || !quiesced {
 		t.Fatal("did not finish persisted handshake", err)
 	}
@@ -195,7 +195,7 @@ func TestRejoinedScannerCanTakeOverLaterWithoutRevivingOldScan(t *testing.T) {
 		}
 	}
 	completed(0)
-	leases.quiesce = scanner.QuiesceParent
+	leases.quiesce = func(ctx context.Context, parent int64, _ error) error { return scanner.QuiesceParent(ctx, parent) }
 	leases.rejoinScanner = func(ctx context.Context, req LeaseRejoinRequest) error {
 		return scanner.AdoptCompletedOwner(ctx, req.ParentID, req.Generation, *req.ScannerEpoch, req.ScannerThrough, req.OwnerEpoch)
 	}

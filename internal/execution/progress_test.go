@@ -532,3 +532,81 @@ func BenchmarkProgressReader(b *testing.B) {
 		})
 	}
 }
+
+// causeStore blocks every write until its context ends and reports why.
+type causeStore struct {
+	transferstore.Store
+	entered chan struct{}
+	causes  chan error
+}
+
+func (s *causeStore) Write(ctx context.Context, _ string, _ io.Reader, _ transferstore.WriteOptions) (transferstore.WriteResult, error) {
+	s.entered <- struct{}{}
+	<-ctx.Done()
+	s.causes <- context.Cause(ctx)
+	return transferstore.WriteResult{}, ctx.Err()
+}
+
+// An attempt ends with the reason it was cancelled for: a stop, a shutdown
+// and an interrupted lease may continue on this Agent; a task moved to another
+// Agent and a deleted task may not. Behaviour does not depend on it yet.
+func TestAttemptsEndWithTheirCause(t *testing.T) {
+	type trigger func(f *fixture, lease context.CancelCauseFunc) error
+	for _, tc := range []struct {
+		name string
+		stop trigger
+		want error
+	}{
+		{"stop child", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.Stop(bg, f.job.ChildID, 1)
+		}, transferstore.ErrInterrupted},
+		{"stop task", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.StopParent(bg, f.job.ParentID, 1)
+		}, transferstore.ErrInterrupted},
+		{"resume fence", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.ResumeParent(bg, f.job.ParentID, 2, false)
+		}, transferstore.ErrInterrupted},
+		{"quiesce interrupted", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.QuiesceParent(bg, f.job.ParentID, transferstore.ErrInterrupted)
+		}, transferstore.ErrInterrupted},
+		{"quiesce moved", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.QuiesceParent(bg, f.job.ParentID, transferstore.ErrMoved)
+		}, transferstore.ErrMoved},
+		{"lease moved", func(_ *fixture, lease context.CancelCauseFunc) error {
+			lease(transferstore.ErrMoved)
+			return nil
+		}, transferstore.ErrMoved},
+		{"delete", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.RequestDeleteParent(bg, f.job.ParentID, 1)
+		}, transferstore.ErrTaskDeleted},
+		{"shutdown", func(f *fixture, _ context.CancelCauseFunc) error {
+			return f.engine.Close(bg)
+		}, transferstore.ErrInterrupted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 2)
+			store := &causeStore{entered: make(chan struct{}, 1), causes: make(chan error, 1)}
+			base := f.factory()
+			lease, cancelLease := context.WithCancelCause(bg)
+			defer cancelLease(nil)
+			f.startEngine(StoreFactoryFunc(func(ctx context.Context, job Job) (transferstore.Store, transferstore.Store, error) {
+				src, dst, err := base.Open(ctx, job)
+				store.Store = dst
+				return src, store, err
+			}), Options{WorkersPerJob: 1, JobContext: func(Job) (context.Context, error) { return lease, nil }})
+			f.acceptStart()
+			awaitProgressGate(t, store.entered)
+			if err := tc.stop(f, cancelLease); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case cause := <-store.causes:
+				if !errors.Is(cause, tc.want) {
+					t.Fatalf("write ended with %v, want %v", cause, tc.want)
+				}
+			case <-time.After(time.Minute): // hang guard only
+				t.Fatal("the write was not cancelled")
+			}
+		})
+	}
+}

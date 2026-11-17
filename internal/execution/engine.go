@@ -14,9 +14,10 @@ import (
 )
 
 type activeAttempt struct {
-	parentID       int64
-	generation     uint64
-	cancel         context.CancelFunc
+	parentID   int64
+	generation uint64
+	// cancel ends the attempt with a cause (see transferstore.ErrInterrupted).
+	cancel         context.CancelCauseFunc
 	done           chan struct{}
 	objects        int
 	objectsChanged chan struct{}
@@ -30,7 +31,7 @@ type Engine struct {
 	factory     StoreFactory
 	opts        Options
 	ctx         context.Context
-	cancel      context.CancelFunc
+	cancel      context.CancelCauseFunc
 	changed     chan struct{}
 	mu          sync.Mutex
 	active      map[string]*activeAttempt
@@ -82,7 +83,7 @@ func NewEngine(repo *Repository, factory StoreFactory, opts Options) (*Engine, e
 	if err := repo.recoverRunning(context.Background()); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	e := &Engine{repo: repo, factory: factory, opts: opts, ctx: ctx, cancel: cancel, changed: make(chan struct{}), active: make(map[string]*activeAttempt), cleanupWake: make(chan struct{}, 1), cleanupDone: make(chan struct{})}
 	e.objectSlots.Store(int64(opts.MaxConcurrentJobs * opts.WorkersPerJob))
 	go e.cleanupLoop()
@@ -217,13 +218,14 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	if err != nil {
 		return err
 	}
-	ioCtx, cancel := context.WithCancel(e.ctx)
-	stopLease := context.AfterFunc(parentCtx, cancel)
+	// The attempt ends with its lease, for the lease's reason.
+	ioCtx, cancel := context.WithCancelCause(e.ctx)
+	stopLease := context.AfterFunc(parentCtx, func() { cancel(context.Cause(parentCtx)) })
 	if parentCtx.Err() != nil {
-		cancel()
+		cancel(context.Cause(parentCtx))
 	}
 	baseCancel := cancel
-	cancel = func() { stopLease(); baseCancel() }
+	cancel = func(cause error) { stopLease(); baseCancel(cause) }
 	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{}), objectsChanged: make(chan struct{})}
 	var rate func(int64)
 	if count := e.opts.CountTransferred; count != nil {
@@ -278,7 +280,7 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 			// can never regain ownership by recording its persistence error.
 			_, _ = e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, fmt.Errorf("persist object results: %w", finishErr))
 		}
-		attempt.cancel()
+		attempt.cancel(nil)
 		e.lifetimes.Delete(record.Job.ChildID)
 		e.mu.Lock()
 		delete(e.active, record.Job.ChildID)
@@ -289,14 +291,16 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 	finalResults, runErr = e.run(ctx, record, attempt)
 }
 
-// QuiesceParent only interrupts live work. The lease gate already prevents new
-// attempts; ledgers settle as Recoverable and retain their committed results.
-func (e *Engine) QuiesceParent(ctx context.Context, parentID int64) error {
+// QuiesceParent only interrupts live work, for cause: transferstore's
+// ErrInterrupted when the same Agent may continue, ErrMoved when the work
+// moves to another. The lease gate already prevents new attempts; ledgers
+// settle as Recoverable and retain their committed results.
+func (e *Engine) QuiesceParent(ctx context.Context, parentID int64, cause error) error {
 	var pending []chan struct{}
 	e.lifetimes.Range(func(_, value any) bool {
 		a := value.(*activeAttempt)
 		if a.parentID == parentID {
-			a.cancel()
+			a.cancel(cause)
 			pending = append(pending, a.done)
 		}
 		return true
@@ -322,7 +326,7 @@ func (e *Engine) Stop(ctx context.Context, child string, generation uint64) erro
 	}
 	active := e.active[child]
 	if active != nil {
-		active.cancel()
+		active.cancel(transferstore.ErrInterrupted)
 	}
 	e.mu.Unlock()
 	if active != nil {
@@ -368,6 +372,10 @@ func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint
 	}
 	var pending []chan struct{}
 	var stopErr error
+	cause := transferstore.ErrInterrupted
+	if deleted {
+		cause = transferstore.ErrTaskDeleted
+	}
 	for child, a := range e.active {
 		if a.parentID == parentID {
 			if len(fenceOnly) > 0 && fenceOnly[0] {
@@ -376,7 +384,7 @@ func (e *Engine) stopParent(ctx context.Context, parentID int64, generation uint
 				_, err := e.repo.stop(ctx, child, generation)
 				stopErr = errors.Join(stopErr, err)
 			}
-			a.cancel()
+			a.cancel(cause)
 			pending = append(pending, a.done)
 		}
 	}
@@ -447,7 +455,7 @@ func (e *Engine) Wait(ctx context.Context, child string) (Record, error) {
 func (e *Engine) Close(ctx context.Context) error {
 	e.mu.Lock()
 	e.closed = true
-	e.cancel()
+	e.cancel(transferstore.ErrInterrupted)
 	pending := make([]chan struct{}, 0, len(e.active))
 	for _, a := range e.active {
 		pending = append(pending, a.done)

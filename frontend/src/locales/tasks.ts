@@ -2784,6 +2784,16 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Access denied: the credentials lack permission for this operation. Check the bucket permissions.",
     ja: "アクセスが拒否されました。認証情報にこの操作の権限がありません。バケットの権限を確認してください。",
   },
+  "存储桶需要通过 Endpoint {endpoint} 访问，这通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该 Endpoint 创建存储连接。":
+    {
+      en: "The bucket must be accessed through endpoint {endpoint}, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that endpoint.",
+      ja: "このバケットにはエンドポイント {endpoint} でアクセスする必要があります。通常はバケットのあるリージョンのエンドポイントです。このバケットを転送するには、このエンドポイントでストレージ接続を作成してください。",
+    },
+  "存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该地域的 Endpoint 创建存储连接。":
+    {
+      en: "The bucket must be accessed through another endpoint, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that region's endpoint.",
+      ja: "このバケットには別のエンドポイント（通常はバケットのあるリージョンのエンドポイント）でアクセスする必要があります。このバケットを転送するには、そのリージョンのエンドポイントでストレージ接続を作成してください。",
+    },
   "存储桶不存在，请检查存储桶名称和 Endpoint。": {
     en: "The bucket does not exist. Check the bucket name and the endpoint.",
     ja: "バケットが存在しません。バケット名とエンドポイントを確認してください。",

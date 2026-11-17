@@ -96,6 +96,8 @@ func TestTaskRequestDecodingDoesNotImportProgressOrSilentlyDropOptions(t *testin
 	exported["taskIndex"], exported["putObjectCount"], exported["status"] = 900, 100000, "COMPLETED"
 	exported["startKey"], exported["endKey"], exported["marker"] = "a", "z", "middle"
 	exported["localPath"], exported["nodeBindings"] = nil, []any{}
+	// Exported by a Master that showed a running scan's activity.
+	exported["scanActivity"] = map[string]any{"state": "UNSUPPORTED"}
 	encoded, _ := json.Marshal([]any{exported})
 	response := httptest.NewRecorder()
 	rows, ok := readTaskRows(response, httptest.NewRequest("POST", "/api/master/import", bytes.NewReader(encoded)))
@@ -404,19 +406,28 @@ func TestLocalTaskExportCanBeValidatedAndImportedWithSameSelectors(t *testing.T)
 				if err != nil {
 					t.Fatal(err)
 				}
-				exported := f.master.taskView(task.Parent{ID: 900, Spec: original, Status: "COMPLETED", ScanComplete: true, ChildCount: 7, Counters: execution.Counters{Succeeded: 500}})
-				status, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []any{exported})
-				if status != 200 || response["data"].(map[string]any)["valid"] != true {
-					t.Fatal("export cannot be validated", status, response)
-				}
-				status, response = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers", f.admin, []any{exported})
-				if status != 200 || response["data"].(map[string]any)["acceptedCount"] != float64(1) {
-					t.Fatal("export cannot be imported", status, response)
-				}
-				id := int64(response["data"].(map[string]any)["parentTaskIds"].([]any)[0].(float64))
-				created, err := f.master.tasks.repo.Get(id)
-				if err != nil || !reflect.DeepEqual(created.Spec, original) || created.ID == 900 || created.Status != "RUNNING" || created.Counters.Succeeded != 0 || created.ChildCount != 0 || created.ScanComplete {
-					t.Fatalf("import changed selectors or trusted exported progress: %+v; expected %+v; %v", created, original, err)
+				finished := task.Parent{ID: 900, Spec: original, Status: "COMPLETED", ScanComplete: true, ChildCount: 7, Counters: execution.Counters{Succeeded: 500}}
+				// A task exported while its scan runs carries the scan's activity.
+				running := task.Parent{ID: 901, Generation: 1, Spec: original, Status: "RUNNING"}
+				f.master.tasks.recordScan(running, scanningReply(running, "run-1"), nil)
+				for _, parent := range []task.Parent{finished, running} {
+					exported := f.master.taskView(parent)
+					if _, scanning := exported["scanActivity"]; scanning != (parent.Status == "RUNNING") {
+						t.Fatalf("%s export: scan activity %v", parent.Status, exported["scanActivity"])
+					}
+					status, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []any{exported})
+					if status != 200 || response["data"].(map[string]any)["valid"] != true {
+						t.Fatal("export cannot be validated", parent.Status, status, response)
+					}
+					status, response = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers", f.admin, []any{exported})
+					if status != 200 || response["data"].(map[string]any)["acceptedCount"] != float64(1) {
+						t.Fatal("export cannot be imported", parent.Status, status, response)
+					}
+					id := int64(response["data"].(map[string]any)["parentTaskIds"].([]any)[0].(float64))
+					created, err := f.master.tasks.repo.Get(id)
+					if err != nil || !reflect.DeepEqual(created.Spec, original) || created.ID == parent.ID || created.Status != "RUNNING" || created.Counters.Succeeded != 0 || created.ChildCount != 0 || created.ScanComplete {
+						t.Fatalf("import changed selectors or trusted exported progress: %+v; expected %+v; %v", created, original, err)
+					}
 				}
 			})
 		}

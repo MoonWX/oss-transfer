@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
 
@@ -228,6 +229,24 @@ test("the nodes dialog shows the scan progress and why a takeover waits", async 
     "其余节点版本较旧，无法接续此扫描；任一节点升级后自动继续",
   );
   await expect(box.getByTestId("scan-progress")).toHaveCount(0);
+});
+
+test("an exported running task leaves the scan activity out", async ({
+  page,
+}) => {
+  await arrange(page, reading());
+  await page.goto("/tasks");
+  await row(page)
+    .getByRole("checkbox", { name: "选择任务 61", exact: true })
+    .check();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出 JSON", exact: true }).click();
+  const exported = JSON.parse(
+    await readFile((await (await download).path()) as string, "utf8"),
+  );
+  expect(exported).toHaveLength(1);
+  expect(exported[0].taskIndex).toBe(61);
+  expect(exported[0]).not.toHaveProperty("scanActivity");
 });
 
 test.describe("in English", () => {

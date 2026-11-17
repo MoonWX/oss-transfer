@@ -41,3 +41,4 @@ secrets/
 *.key
 application.local.yml
 /cli/oss-transfer-cli
+/cli/oss-transfer-cli.exe

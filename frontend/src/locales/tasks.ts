@@ -1717,14 +1717,20 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Task records will move to the recycle bin. Source and destination objects will not be deleted.",
     ja: "タスクの記録をゴミ箱に移動します。転送元・転送先のオブジェクトは削除されません。",
   },
-  "停止扫描和传输，保留已完成的对象与进度。": {
-    en: "Stop scanning and transfer. Completed objects and progress are kept.",
-    ja: "スキャンと転送を停止します。転送済みオブジェクトと進捗は保持されます。",
+  "停止扫描和传输。已完成的对象会保留，正在传输的对象在任务继续后从头传输。": {
+    en: "Stop scanning and transfer. Completed objects are kept; objects in transfer start over from the beginning when the task continues.",
+    ja: "スキャンと転送を停止します。完了したオブジェクトは保持されますが、転送中のオブジェクトはタスクの再開後に最初から転送し直します。",
   },
-  "继续扫描和处理未完成的对象，保留已有传输进度。": {
-    en: "Resume scanning and process unfinished objects, keeping existing progress.",
-    ja: "既存の進捗を保持してスキャンを再開し、未処理のオブジェクトを転送します。",
-  },
+  "当前正在传输 {count} 个对象，已传输 {bytes}；任务继续后，这些对象需要从头重新传输。":
+    {
+      en: "In transfer now: {count} objects, {bytes} sent so far. When the task continues, these objects are transferred again from the beginning.",
+      ja: "現在 {count} 個のオブジェクトを転送中で、{bytes} を転送済みです。タスクの再開後、これらのオブジェクトは最初から転送し直します。",
+    },
+  "继续扫描和传输未完成的对象。已完成的对象不会重复传输，停止时正在传输的对象从头传输。":
+    {
+      en: "Resume scanning and transfer unfinished objects. Completed objects are not transferred again; objects that were in transfer at the stop start over from the beginning.",
+      ja: "スキャンを再開し、未完了のオブジェクトを転送します。完了したオブジェクトは再転送しません。停止時に転送中だったオブジェクトは最初から転送し直します。",
+    },
   "任务将开始传输，请确认来源和目标配置。": {
     en: "Tasks will start transferring. Confirm the source and destination settings.",
     ja: "転送を開始します。転送元と転送先の設定を確認してください。",

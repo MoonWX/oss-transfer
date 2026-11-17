@@ -94,7 +94,7 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     ja: "{version} をインストールし、サービスを再起動します。現在のバージョンをバックアップし、起動に失敗した場合は復元します。",
   },
   "正在执行的子任务会中断，节点重新连接后自动恢复。": {
-    en: "Running child tasks will pause and recover after the node reconnects.",
+    en: "Running child tasks are interrupted and resume automatically after the node reconnects.",
     ja: "実行中の子タスクは中断され、ノードの再接続後に自動復旧します。",
   },
   正在提交: { en: "Submitting", ja: "送信中" },

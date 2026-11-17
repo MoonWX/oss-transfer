@@ -174,8 +174,13 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	if entry.valid && requests != nil {
 		entry.requests, entry.nodeLimits = requests, nodeLimits
 	}
+	// Every reporting node's basis is known; the task's only when all
+	// reported.
+	if entry.valid || entry.partial {
+		entry.nodeBasis = nodeBasis
+	}
 	if entry.valid {
-		entry.basis, entry.nodeBasis = combinedBasis(nodeBasis), nodeBasis
+		entry.basis = combinedBasis(nodeBasis)
 	}
 	if !entry.valid && !entry.partial && last.generation == p.Generation && last.progressSupported {
 		// A failed collection cannot establish that an Agent lacks progress
@@ -295,15 +300,16 @@ func (s *Server) addTaskRate(row map[string]any, p task.Parent, child *task.Chil
 		row["currentSpeedBytesPerSecond"] = float64(0)
 		return
 	}
-	entry, fresh := s.tasks.rateSnapshot(p)
-	if !fresh {
+	// A partial sample still gives the speed of a child whose node reported,
+	// but not the task's (see rate).
+	if rate, ok := s.tasks.rate(p, child); ok {
+		row["currentSpeedBytesPerSecond"] = rate
+	} else {
 		return
 	}
+	entry, _ := s.tasks.sampleSnapshot(p, taskRateMaxAge)
 	basis := entry.basis
-	if child == nil {
-		row["currentSpeedBytesPerSecond"] = entry.total
-	} else {
-		row["currentSpeedBytesPerSecond"] = entry.children[child.Job.ChildID]
+	if child != nil {
 		basis = entry.nodeBasis[child.Node.ID]
 	}
 	if basis != "" {

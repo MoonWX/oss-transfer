@@ -29,7 +29,7 @@ func TestTaskRateAPIUsesAllAgentsAndRejectsStaleCache(t *testing.T) {
 	if row["currentSpeedBytesPerSecond"] != float64(200) {
 		t.Fatal(row)
 	}
-	if rate, ok := f.master.tasks.rate(parent, "9-1"); !ok || rate != 200 {
+	if rate, ok := f.master.tasks.rate(parent, &task.Child{Job: execution.Job{ChildID: "9-1"}, Node: node}); !ok || rate != 200 {
 		t.Fatal(rate, ok)
 	}
 	parent.Generation = 2

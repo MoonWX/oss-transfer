@@ -16,8 +16,10 @@ import (
 
 func liveTask(status string) bool { return status == "RUNNING" || status == "STOPPING" }
 
+// progressSnapshot is the sample that file progress reads: complete, or
+// partial with the reporting nodes' children.
 func (t *taskRuntime) progressSnapshot(p task.Parent) (taskRateCache, bool) {
-	return t.cachedRates(p, 3*time.Second)
+	return t.sampleSnapshot(p, 3*time.Second)
 }
 
 // Live bytes are an observation, never durable success credit. Taking the
@@ -26,7 +28,12 @@ func (t *taskRuntime) progressSnapshot(p task.Parent) (taskRateCache, bool) {
 //
 // transferredBytes is always set so clients need no fallback; inFlightBytes is
 // nil when a live task's sample is missing or stale (unknown, not zero).
-func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.Child) {
+//
+// liveProgress is LIVE for a complete sample. It is PARTIAL for a task whose
+// nodes did not all report: transferredBytes then holds the reporting nodes'
+// in-flight bytes only, a lower bound, and unreportedNodes names the others.
+// A child on such a node is STALE and names its node.
+func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.Child, displays nodeDisplaySet) {
 	durable, _ := row["putObjectSize"].(int64)
 	row["transferredBytes"], row["inFlightBytes"], row["liveProgress"] = durable, int64(0), "NONE"
 	defer addProgressPercent(row)
@@ -34,7 +41,7 @@ func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.
 		return
 	}
 	row["inFlightBytes"], row["liveProgress"] = nil, "STALE"
-	entry, fresh := s.tasks.rateSnapshot(p)
+	entry, fresh := s.tasks.sampleSnapshot(p, taskRateMaxAge)
 	if fresh && !entry.progressSupported {
 		// Older Agents report speed only. Keep their completed-object average.
 		row["liveProgress"] = "UNSUPPORTED"
@@ -43,7 +50,20 @@ func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.
 	if !entry.progressSupported {
 		return
 	}
-	if !fresh || entry.progress == nil {
+	var unreported []task.Node
+	if fresh && entry.partial {
+		unreported = entry.missing
+		if child != nil {
+			unreported = nil
+			if entry.missed(child.Node) {
+				unreported = []task.Node{child.Node}
+			}
+		}
+	}
+	if len(unreported) > 0 {
+		row["unreportedNodes"] = unreportedNodeViews(unreported, displays)
+	}
+	if !fresh || entry.progress == nil || child != nil && len(unreported) > 0 {
 		// An unavailable live sample is unknown, not zero throughput.
 		if p.ResumeTiming == nil {
 			delete(row, "averageSpeedBytesPerSecond")
@@ -63,6 +83,14 @@ func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.
 				break
 			}
 		}
+	}
+	if len(unreported) > 0 {
+		// The task's average needs every node's bytes.
+		row["transferredBytes"], row["inFlightBytes"], row["liveProgress"] = bytes, bytes-durable, "PARTIAL"
+		if p.ResumeTiming == nil {
+			delete(row, "averageSpeedBytesPerSecond")
+		}
+		return
 	}
 	row["transferredBytes"], row["inFlightBytes"], row["liveProgress"] = bytes, bytes-durable, "LIVE"
 	if p.ResumeTiming != nil {
@@ -117,6 +145,16 @@ func addProgressPercent(row map[string]any) {
 	}
 	// Truncate so 99.996 never rounds up to 100 in a client.
 	row["progressPercent"] = math.Floor(percent*100) / 100
+}
+
+// unreportedNodeViews names the nodes whose live progress is missing from a
+// sample, as offlineTaskNodes names offline nodes.
+func unreportedNodeViews(nodes []task.Node, displays nodeDisplaySet) []map[string]any {
+	views := make([]map[string]any, 0, len(nodes))
+	for _, node := range nodes {
+		views = append(views, map[string]any{"executionNodeIp": node.Address, "displayLabel": displays.lookup(node.ID, node.Address).DisplayLabel})
+	}
+	return views
 }
 
 type fileProgressReply struct {
@@ -188,6 +226,21 @@ func (s *Server) taskProgressHTTP(w http.ResponseWriter, r *http.Request) {
 		data["supported"] = false
 		write()
 		return
+	}
+	displays := s.nodeDisplaySnapshot()
+	if entry.partial {
+		// The reporting nodes' files are listed; the others are named. A
+		// child's view depends on its own node only.
+		unreported := entry.missing
+		if number > 0 {
+			unreported = nil
+			if children, err := s.tasks.repo.Children(id, number-1, 1); err == nil && len(children) == 1 && children[0].Job.Number == number && entry.missed(children[0].Node) {
+				unreported = []task.Node{children[0].Node}
+			}
+		}
+		if len(unreported) > 0 {
+			data["partial"], data["unreportedNodes"] = true, unreportedNodeViews(unreported, displays)
+		}
 	}
 	if entry.progress == nil {
 		data["partial"] = true
@@ -272,7 +325,6 @@ func (s *Server) taskProgressHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, child := range projection.Children {
 		allowed[child.Progress.ChildID] = child
 	}
-	displays := s.nodeDisplaySnapshot()
 	for index, result := range results {
 		if !accepted[index] {
 			continue

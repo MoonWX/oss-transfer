@@ -14,10 +14,6 @@ import {
   Chip,
   Checkbox,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   Divider,
   FormControlLabel,
   IconButton,
@@ -71,6 +67,7 @@ import {
   type OssKeyMappingMode,
 } from "../lib/ossKeyMapping";
 import SelectField from "../components/SelectField";
+import SkipSharedCheckDialog from "../components/SkipSharedCheckDialog";
 import {
   conflictPolicies,
   conflictPolicyHelp,
@@ -542,7 +539,6 @@ export default function CreateTransfer() {
   );
   const [busy, setBusy] = useState<"create" | "validate" | null>(null);
   const [skipDialogOpen, setSkipDialogOpen] = useState(false);
-  const [skipConfirmed, setSkipConfirmed] = useState(false);
   const [precheck, setPrecheck] = useState<Precheck | null>(null);
   const precheckRequest = useRef<string | null>(null);
   const [submission, setSubmission] = useState<Submission | null>(null);
@@ -1386,7 +1382,6 @@ export default function CreateTransfer() {
                     update({ skipSharedCheck: false });
                     return;
                   }
-                  setSkipConfirmed(false);
                   setSkipDialogOpen(true);
                 }}
               />
@@ -1415,82 +1410,16 @@ export default function CreateTransfer() {
               )}
         </Alert>
       )}
-      <Dialog
+      <SkipSharedCheckDialog
         open={skipDialogOpen}
-        onClose={() => setSkipDialogOpen(false)}
-        aria-labelledby="skip-shared-check-title"
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle id="skip-shared-check-title">
-          {tr("跳过共享目录校验？")}
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            {tr(
-              "跳过后，系统不再验证各执行节点看到的是同一份存储。如果它们实际挂载的不是同一份存储：",
-            )}
-          </Typography>
-          <Box component="ul" sx={{ mt: 0, pl: 3 }}>
-            {(form.direction === "OSS_TO_LOCAL"
-              ? [
-                  tr(
-                    "下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据；",
-                  ),
-                  tr(
-                    "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
-                  ),
-                  tr("任务报告可能显示成功，而本地目标实际不完整；"),
-                  tr(
-                    "节点失联后的自动接管和之后添加的节点也不做校验，可能写入另一个目录。",
-                  ),
-                ]
-              : [
-                  tr("不同节点会从不同的数据中读取对象；"),
-                  tr("部分文件可能漏传，或从错误的副本上传；"),
-                  tr("任务报告可能显示成功，而目标端实际不完整或不一致；"),
-                  tr(
-                    "节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。",
-                  ),
-                ]
-            ).map((line) => (
-              <Typography component="li" variant="body2" key={line}>
-                {line}
-              </Typography>
-            ))}
-          </Box>
-          {form.direction === "LOCAL_TO_OSS" && (
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              {tr(
-                "所有节点都无法写入测试文件的上传源通常无需跳过：预检会自动改为抽样比对文件的大小及首尾各 64 KiB。",
-              )}
-            </Typography>
-          )}
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={skipConfirmed}
-                onChange={(event) => setSkipConfirmed(event.target.checked)}
-              />
-            }
-            label={tr("我已确认所有执行节点挂载的是同一份存储")}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSkipDialogOpen(false)}>{tr("取消")}</Button>
-          <Button
-            color="error"
-            variant="contained"
-            disabled={!skipConfirmed}
-            onClick={() => {
-              setSkipDialogOpen(false);
-              update({ skipSharedCheck: true });
-            }}
-          >
-            {tr("跳过校验")}
-          </Button>
-        </DialogActions>
-      </Dialog>
+        direction={form.direction}
+        scope="create"
+        onCancel={() => setSkipDialogOpen(false)}
+        onConfirm={() => {
+          setSkipDialogOpen(false);
+          update({ skipSharedCheck: true });
+        }}
+      />
       {form.direction === "OSS_TO_LOCAL" && form.sourceMode === "object" && (
         <TextField
           label={tr("目标相对路径（可选）")}
@@ -2288,7 +2217,7 @@ export default function CreateTransfer() {
                       data-testid="batch-skip-shared-check-warning"
                     >
                       {tr(
-                        "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管和之后添加的节点也不做校验。",
+                        "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管也不做校验。之后添加节点时仍会校验共享目录，除非届时再次确认跳过。",
                         { rows: batchSkippedRows.join(", ") },
                       )}
                     </Alert>

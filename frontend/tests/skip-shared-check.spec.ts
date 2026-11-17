@@ -70,9 +70,15 @@ test("skipping the shared check needs an explicit confirmation and sends the ack
     "不同节点会从不同的数据中读取对象；",
     "部分文件可能漏传，或从错误的副本上传；",
     "任务报告可能显示成功，而目标端实际不完整或不一致；",
-    "节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。",
+    "节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。",
   ])
     await expect(dialog(page).getByText(consequence)).toBeVisible();
+  // A node added later is checked unless that change skips the check itself.
+  await expect(
+    dialog(page).getByText(
+      "之后添加节点时仍会校验共享目录，除非届时再次确认跳过。",
+    ),
+  ).toBeVisible();
   const confirm = dialog(page).getByRole("button", { name: "跳过校验" });
   await expect(confirm).toBeDisabled();
   await dialog(page).getByRole("button", { name: "取消" }).click();
@@ -156,7 +162,12 @@ test("task details keep warning about a skipped shared check", async ({
   await expect(warning).toContainText("即使任务显示成功");
   // Task 1046 is a download: its consequence is a split destination.
   await expect(warning).toContainText("下载的文件会分散写入各节点各自的目录");
-  await expect(warning).toContainText("之后添加的节点也不做校验");
+  // A node change can record the skip too, and later nodes are still checked.
+  await expect(warning).toContainText("创建任务或添加节点时");
+  await expect(warning).not.toContainText("创建时未验证");
+  await expect(warning).toContainText(
+    "之后添加节点时仍会校验共享目录，除非届时再次确认跳过",
+  );
   await expect(warning).not.toContainText("从错误的副本上传");
   await page.goto("/tasks?taskId=1048");
   await expect(page.getByText("执行信息", { exact: true })).toBeVisible();
@@ -183,6 +194,7 @@ test("a download states a download's consequences and the check it keeps", async
     "下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据；",
     "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
     "任务报告可能显示成功，而本地目标实际不完整；",
+    "节点失联后的自动接管也不做校验，可能写入另一个目录。",
   ])
     await expect(dialog(page).getByText(consequence)).toBeVisible();
   await expect(dialog(page).getByText(/从错误的副本上传/)).toHaveCount(0);
@@ -227,6 +239,7 @@ test("imported rows that skip the check are named with the consequences", async 
     .fill(JSON.stringify([row(false), row(true), row(true)]));
   await expect(warning).toContainText("第 2, 3 项跳过了共享目录校验");
   await expect(warning).toContainText("下载的文件会分散在各节点各自的目录中");
+  await expect(warning).toContainText("之后添加节点时仍会校验共享目录");
 });
 
 test("a restored draft says that a skipped submission may already be accepted", async ({
@@ -267,18 +280,24 @@ const member = (address: string) => ({
   share: { bandwidthBytesPerSecond: 0, listQps: 0, headQps: 0, putQps: 0 },
 });
 
-test("adding a node to a skipped task needs its own acknowledgement and shows it unchecked", async ({
-  page,
-}) => {
+/**
+ * Opens the node dialog of task 1048, a local transfer on two nodes, and
+ * answers each node change as the Master does: the added node is checked
+ * unless the request skips the check with its acknowledgement.
+ */
+async function openNodeChange(
+  page: Page,
+  options: { direction?: string; sharedCheckSkipped?: boolean } = {},
+) {
   await mockApi(page);
   const view = {
     taskId: 1048,
     generation: 1,
     nodeRevision: 3,
     status: "RUNNING",
-    direction: "LOCAL_TO_OSS",
+    direction: options.direction ?? "LOCAL_TO_OSS",
     localTransfer: true,
-    sharedCheckSkipped: true,
+    ...(options.sharedCheckSkipped ? { sharedCheckSkipped: true } : {}),
     editable: true,
     reason: "",
     nowSupported: true,
@@ -297,6 +316,7 @@ test("adding a node to a skipped task needs its own acknowledgement and shows it
       return route.fulfill({ json: { success: true, data: view } });
     const body = route.request().postDataJSON();
     posts.push(body);
+    const skipped = body.skipSharedCheck === true;
     return route.fulfill({
       json: {
         success: true,
@@ -311,9 +331,16 @@ test("adding a node to a skipped task needs its own acknowledgement and shows it
               localPath: "/mnt/share",
               valid: true,
               pathType: "DIRECTORY",
-              code: "SHARED_STORAGE_CHECK_SKIPPED",
-              message:
-                "未校验：此任务创建时跳过了共享目录校验，未验证此节点与任务的其他节点挂载的是同一份存储",
+              ...(skipped
+                ? {
+                    code: "SHARED_STORAGE_CHECK_SKIPPED",
+                    message:
+                      "已按要求跳过共享目录校验；未验证各节点是否挂载同一份存储",
+                  }
+                : {
+                    code: "SHARED_STORAGE_VERIFIED",
+                    message: "已写入测试文件，所有节点读取校验通过并已清理",
+                  }),
             },
           ],
           validationErrors: [],
@@ -350,34 +377,152 @@ test("adding a node to a skipped task needs its own acknowledgement and shows it
   await box
     .getByRole("textbox", { name: /10\.0\.1\.14 的本地绝对路径/ })
     .fill("/mnt/share");
-  const warning = box.getByTestId("task-nodes-skip-shared-check");
-  await expect(warning).toContainText("新节点的目录同样不会校验");
-  await expect(warning).toContainText("从错误的副本上传");
+  return { box, posts };
+}
+
+const joinSkipBox = (page: Page) =>
+  page.getByRole("checkbox", { name: "跳过新节点的共享目录校验（不推荐）" });
+const joinDialog = (page: Page) =>
+  page.getByRole("dialog", { name: "跳过新节点的共享目录校验？" });
+
+test("nodes added to a skipped task are checked unless the change skips the check itself", async ({
+  page,
+}) => {
+  const { box, posts } = await openNodeChange(page, {
+    sharedCheckSkipped: true,
+  });
+  // The task's earlier skip is stated, and so is what happens to the new node.
+  const notice = box.getByTestId("task-nodes-skipped-task");
+  await expect(notice).toContainText("此任务跳过了共享目录校验");
+  await expect(notice).toContainText("本次添加的节点仍会校验共享目录");
+  await expect(joinSkipBox(page)).not.toBeChecked();
   await box.getByRole("button", { name: "预检", exact: true }).click();
   const result = box.getByTestId("task-nodes-preflight");
-  await expect(result).toContainText("路径检查通过，共享目录未校验");
-  await expect(result).toContainText("未校验：此任务创建时跳过了共享目录校验");
-  await expect(result).not.toContainText("预检通过");
-  await expect(
-    box.getByText("未校验共享目录（此任务已跳过校验）", { exact: true }),
-  ).toBeVisible();
-  const next = box.getByRole("button", { name: "预览变更", exact: true });
-  await expect(next).toBeDisabled();
-  await expect(box.getByTestId("task-nodes-footer")).toHaveText(
-    "确认新节点挂载同一份存储后才能继续",
+  await expect(result).toContainText("预检通过");
+  // The Master's note is shown for a node that passed, too.
+  await expect(result).toContainText(
+    "已写入测试文件，所有节点读取校验通过并已清理",
   );
-  await warning
-    .getByRole("checkbox", { name: "我已确认新节点挂载的是同一份存储" })
-    .check();
-  await expect(next).toBeEnabled();
-  await next.click();
+  await expect(result).toContainText("通过 · 目录");
+  await box.getByRole("button", { name: "预览变更", exact: true }).click();
   await expect(box.getByTestId("task-nodes-summary")).toContainText(
-    "此任务跳过了共享目录校验，新节点同样不做校验",
+    "此任务跳过了共享目录校验；本次添加的节点已通过校验",
   );
   await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
   await expect.poll(() => posts.filter((body) => !body.dryRun).length).toBe(1);
-  expect(posts.find((body) => !body.dryRun)).toMatchObject({
-    add: ["10.0.1.14"],
-    skipSharedCheckAcknowledged: true,
+  // Neither the dry run nor the change asked to skip anything.
+  for (const body of posts) {
+    expect(body).not.toHaveProperty("skipSharedCheck");
+    expect(body).not.toHaveProperty("skipSharedCheckAcknowledged");
+  }
+});
+
+test("skipping the check for added nodes needs the consequences and sends both fields", async ({
+  page,
+}) => {
+  const { box, posts } = await openNodeChange(page);
+  // Not a skipped task: nothing to say about an earlier skip.
+  await expect(box.getByTestId("task-nodes-skipped-task")).toHaveCount(0);
+  await box.getByRole("button", { name: "预检", exact: true }).click();
+  await expect(box.getByTestId("task-nodes-preflight")).toContainText(
+    "预检通过",
+  );
+
+  await joinSkipBox(page).click();
+  await expect(joinDialog(page)).toBeVisible();
+  for (const consequence of [
+    "新节点会从与其他节点不同的数据中读取对象；",
+    "部分文件可能漏传，或从错误的副本上传；",
+    "任务报告可能显示成功，而目标端实际不完整或不一致；",
+    "节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。",
+  ])
+    await expect(joinDialog(page).getByText(consequence)).toBeVisible();
+  const confirm = joinDialog(page).getByRole("button", { name: "跳过校验" });
+  await expect(confirm).toBeDisabled();
+  await joinDialog(page).getByRole("button", { name: "取消" }).click();
+  await expect(joinDialog(page)).toHaveCount(0);
+  await expect(joinSkipBox(page)).not.toBeChecked();
+
+  await joinSkipBox(page).click();
+  // The acknowledgement from the previous opening is not remembered.
+  await expect(confirm).toBeDisabled();
+  await joinDialog(page)
+    .getByRole("checkbox", { name: "我已确认新节点挂载的是同一份存储" })
+    .check();
+  await confirm.click();
+  await expect(joinDialog(page)).toHaveCount(0);
+  await expect(joinSkipBox(page)).toBeChecked();
+  await expect(box.getByTestId("task-nodes-skip-shared-check")).toContainText(
+    "已跳过新节点的共享目录校验",
+  );
+  // The earlier result checked the shared directory; it no longer applies.
+  await expect(box.getByTestId("task-nodes-preflight")).toHaveCount(0);
+  const next = box.getByRole("button", { name: "预览变更", exact: true });
+  await expect(next).toBeDisabled();
+  await box.getByRole("button", { name: "预检", exact: true }).click();
+  const result = box.getByTestId("task-nodes-preflight");
+  await expect(result).toContainText("路径检查通过，共享目录未校验");
+  await expect(result).toContainText("已按要求跳过共享目录校验");
+  await expect(result.getByText("未校验", { exact: true })).toBeVisible();
+  await expect(
+    box.getByText("未校验共享目录（已跳过校验）", { exact: true }),
+  ).toBeVisible();
+  await next.click();
+  await expect(box.getByTestId("task-nodes-summary")).toContainText(
+    "已跳过共享目录校验，未验证新节点挂载的是同一份存储",
+  );
+  await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
+  await expect.poll(() => posts.filter((body) => !body.dryRun).length).toBe(1);
+  const [plain, skippedRun, change] = posts;
+  expect(plain).not.toHaveProperty("skipSharedCheck");
+  for (const body of [skippedRun, change])
+    expect(body).toMatchObject({
+      add: ["10.0.1.14"],
+      skipSharedCheck: true,
+      skipSharedCheckAcknowledged: true,
+    });
+  expect(skippedRun.dryRun).toBe(true);
+  expect(change.dryRun).toBeUndefined();
+});
+
+test("a download's node change states a download's consequences and drops the skip with the node", async ({
+  page,
+}) => {
+  const { box, posts } = await openNodeChange(page, {
+    direction: "OSS_TO_LOCAL",
+    sharedCheckSkipped: true,
   });
+  await expect(
+    box.getByText(/预检仍会检查新节点能否写入下载目标/),
+  ).toBeVisible();
+  await joinSkipBox(page).click();
+  for (const consequence of [
+    "新节点下载的文件会写入其他节点看不到的目录，没有一个目录包含完整的数据；",
+    "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
+    "任务报告可能显示成功，而本地目标实际不完整；",
+    "节点失联后的自动接管也不做校验，可能写入另一个目录。",
+  ])
+    await expect(joinDialog(page).getByText(consequence)).toBeVisible();
+  await expect(joinDialog(page).getByText(/从错误的副本上传/)).toHaveCount(0);
+  await expect(joinDialog(page).getByText(/抽样比对/)).toHaveCount(0);
+  await joinDialog(page)
+    .getByRole("checkbox", { name: "我已确认新节点挂载的是同一份存储" })
+    .check();
+  await joinDialog(page).getByRole("button", { name: "跳过校验" }).click();
+  await expect(box.getByTestId("task-nodes-skip-shared-check")).toContainText(
+    "新节点下载的文件会写入其他节点看不到的目录",
+  );
+  await expect(box.getByTestId("task-nodes-skipped-task")).toContainText(
+    "本次添加的节点同样不校验共享目录",
+  );
+  // Dropping the only added node drops the skip, so it never returns unasked.
+  await box.getByRole("button", { name: /^撤销添加 / }).click();
+  await expect(joinSkipBox(page)).toHaveCount(0);
+  await box.getByRole("button", { name: "添加 Agent", exact: true }).click();
+  await page.getByRole("menuitem", { name: /10\.0\.1\.14/ }).click();
+  await expect(joinSkipBox(page)).not.toBeChecked();
+  await expect(box.getByTestId("task-nodes-skipped-task")).toContainText(
+    "本次添加的节点仍会校验共享目录",
+  );
+  expect(posts).toHaveLength(0);
 });

@@ -18,10 +18,12 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   FormControlLabel,
   ListItemText,
   Menu,
   MenuItem,
+  Paper,
   Radio,
   RadioGroup,
   Stack,
@@ -38,6 +40,7 @@ import type { NodeDisplay, NodeLabels } from "../lib/nodeRegistry";
 import { useMenuPlacement } from "../lib/menuPlacement";
 import { groupedCardRadius, popupGap, radii } from "../theme";
 import { formatBytes, formatNumber } from "./Common";
+import SkipSharedCheckDialog from "./SkipSharedCheckDialog";
 
 export type NodeShare = {
   bandwidthBytesPerSecond?: number;
@@ -100,8 +103,9 @@ type NodesView = {
   /** SCANNING, HANDOFF, WAITING or COMPLETE; older Masters omit it. */
   scan?: { phase?: string; complete?: boolean };
   /**
-   * The task was created with the shared directory check skipped: added
-   * nodes are not checked either and need their own acknowledgement.
+   * The shared directory check was skipped for this task, when it was
+   * created or when nodes were added. Nodes added later are still checked
+   * unless their change skips the check itself.
    */
   sharedCheckSkipped?: boolean;
 };
@@ -114,6 +118,13 @@ type BindingCheck = NodeDisplay & {
   pathType?: string;
   code?: string;
   message?: string;
+  /**
+   * Download destinations: where the write probe wrote, as which user, and
+   * the free space there. Older Masters omit them.
+   */
+  writeProbeDirectory?: string;
+  effectiveUid?: number;
+  freeBytes?: number;
 };
 type ChangeResult = {
   accepted: boolean;
@@ -150,6 +161,45 @@ function isAbsoluteAgentPath(value: string) {
     /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+(?:\\|$)/.test(value)
   );
 }
+
+/**
+ * What the write probe found at a download destination: where it wrote, as
+ * which user, and the free space there; "" when it reported nothing.
+ */
+function writeProbeDetails(binding: BindingCheck) {
+  return [
+    binding.writeProbeDirectory
+      ? t("写入检查目录：{directory}", {
+          directory: binding.writeProbeDirectory,
+        })
+      : "",
+    binding.effectiveUid != null
+      ? t("Agent 运行 UID：{uid}", { uid: String(binding.effectiveUid) })
+      : "",
+    binding.freeBytes != null
+      ? t("可用空间：{size}", { size: formatBytes(binding.freeBytes) })
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** The result chip of a node's preflight, as on the creation page. */
+function bindingVerdict(binding: BindingCheck) {
+  if (!binding.valid) return t("未通过");
+  if (binding.code === SHARED_CHECK_SKIPPED) return t("未校验");
+  return t("通过{value1}", {
+    value1:
+      binding.pathType === "FILE"
+        ? ` · ${t("文件")}`
+        : binding.pathType === "DIRECTORY"
+          ? ` · ${t("目录")}`
+          : "",
+  });
+}
+
+// Join problems whose message already asks the operator to cancel the join.
+const CANCEL_NAMED = new Set(["ENROLLMENT_CHANGED", "REVISIONS_EXHAUSTED"]);
 
 const leaving = (state?: string) =>
   state === "DRAINING" || state === "REMOVING";
@@ -359,9 +409,10 @@ export default function TaskNodesDialog({
   const [checking, setChecking] = useState(false);
   const [step, setStep] = useState<"edit" | "confirm">("edit");
   const [submitting, setSubmitting] = useState(false);
-  // Confirms, for a task that skips the shared check, that added nodes mount
-  // the same storage. It is not part of the selection a preflight checks.
-  const [skipAcknowledged, setSkipAcknowledged] = useState(false);
+  // The operator chose, in the consequences dialog, to skip the shared
+  // directory check for the nodes this change adds, as at creation.
+  const [skipCheck, setSkipCheck] = useState(false);
+  const [skipDialogOpen, setSkipDialogOpen] = useState(false);
   const [error, setError] = useState("");
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   // A button has no floating label to clear, so the small gap also applies
@@ -437,7 +488,8 @@ export default function TaskNodesDialog({
     setPreflight(undefined);
     setStep("edit");
     setError("");
-    setSkipAcknowledged(false);
+    setSkipCheck(false);
+    setSkipDialogOpen(false);
     setMenuAnchor(null);
     pendingRequest.current = undefined;
     backgroundFailures.current = 0;
@@ -500,22 +552,31 @@ export default function TaskNodesDialog({
         localPath: (paths[address] ?? "").trim(),
       }))
     : [];
+  const needsPreflight = local && joinAdds.length > 0;
+  // A skip covers the nodes this change adds. Without any it is dropped, so
+  // it never returns unasked when nodes are added again.
+  useEffect(() => {
+    if (!needsPreflight) setSkipCheck(false);
+  }, [needsPreflight]);
+  const skip = skipCheck && needsPreflight;
   const selection = {
     add: validAdds,
     remove: validRemoves,
     ...(local && joinAdds.length ? { bindings } : {}),
     ...(validRemoves.length ? { mode: effectiveMode } : {}),
+    // The skip and its acknowledgement are part of what the preflight
+    // checked: a skipped check passes paths that the real one may refuse.
+    ...(skip
+      ? { skipSharedCheck: true, skipSharedCheckAcknowledged: true }
+      : {}),
   };
-  // Added nodes of a task that skips the shared check are not checked either.
-  const unchecked = local && joinAdds.length > 0 && !!view?.sharedCheckSkipped;
   const change = {
     ...selection,
     expectedGeneration: view?.generation,
     expectedNodeRevision: view?.nodeRevision,
-    ...(unchecked && skipAcknowledged
-      ? { skipSharedCheckAcknowledged: true }
-      : {}),
   };
+  // The task skipped the check earlier, at creation or for nodes added then.
+  const taskSkipped = needsPreflight && !!view?.sharedCheckSkipped;
   // What the user chose. Live refreshes do not change it, so a passed
   // preflight stays valid while statistics update.
   const fingerprint = JSON.stringify(selection);
@@ -530,7 +591,6 @@ export default function TaskNodesDialog({
   const pathMissing = bindings.some(
     (binding) => !isAbsoluteAgentPath(binding.localPath),
   );
-  const needsPreflight = local && joinAdds.length > 0;
   const preflightPassed =
     !needsPreflight ||
     (preflight?.fingerprint === fingerprint && preflight.valid);
@@ -569,6 +629,8 @@ export default function TaskNodesDialog({
         errors: result.validationErrors || [],
       });
     } catch (failure) {
+      // A refused change (an offline or outdated Agent, a stale view) is a
+      // preflight result too: its reason belongs with the other results.
       const response = failure instanceof ApiError ? failure.response : null;
       setPreflight({
         fingerprint: checked,
@@ -576,11 +638,12 @@ export default function TaskNodesDialog({
         bindings: Array.isArray(response?.nodeBindings)
           ? response.nodeBindings
           : [],
-        errors: [],
+        errors: [
+          failure instanceof Error && failure.message
+            ? failure.message
+            : t("预检失败，请重试。"),
+        ],
       });
-      setError(
-        failure instanceof Error ? failure.message : t("预检失败，请重试。"),
-      );
     } finally {
       setChecking(false);
     }
@@ -624,6 +687,7 @@ export default function TaskNodesDialog({
       setRemoves([]);
       setPaths({});
       setPreflight(undefined);
+      setSkipCheck(false);
       setMode("drain");
       setStep("edit");
       if (next) {
@@ -819,6 +883,41 @@ export default function TaskNodesDialog({
             {actions}
           </Stack>
         </Stack>
+        {node.state === "JOINING" &&
+          (node.joinProblem?.message ? (
+            // The join keeps failing or waiting: say why next to its state,
+            // so the operator can fix the node or cancel the join.
+            <Box sx={{ mt: 0.25 }}>
+              <Typography
+                variant="caption"
+                color="warning.main"
+                component="div"
+                sx={{ overflowWrap: "anywhere" }}
+                data-testid={`task-node-join-problem-${node.address}`}
+              >
+                {node.joinProblem.message}
+              </Typography>
+              {editable && !CANCEL_NAMED.has(node.joinProblem.code) && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  component="div"
+                  data-testid={`task-node-join-hint-${node.address}`}
+                >
+                  {t("如需放弃此次加入，可点击“取消加入”。")}
+                </Typography>
+              )}
+            </Box>
+          ) : (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={{ mt: 0.25 }}
+            >
+              {t("正在完成握手与检查，加入后开始分配任务")}
+            </Typography>
+          ))}
         <Stack
           direction="row"
           columnGap={2}
@@ -841,29 +940,6 @@ export default function TaskNodesDialog({
             </Field>
           )}
         </Stack>
-        {node.state === "JOINING" &&
-          (node.joinProblem?.message ? (
-            // The join keeps failing or waiting; say why, so the operator can
-            // fix the node or cancel the join.
-            <Typography
-              variant="caption"
-              color="warning.main"
-              component="div"
-              sx={{ mt: 0.5, overflowWrap: "anywhere" }}
-              data-testid={`task-node-join-problem-${node.address}`}
-            >
-              {node.joinProblem.message}
-            </Typography>
-          ) : (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
-              sx={{ mt: 0.5 }}
-            >
-              {t("正在完成握手与检查，加入后开始分配任务")}
-            </Typography>
-          ))}
         {node.progress === "LEASE_EXPIRY" && (
           <Typography
             variant="caption"
@@ -923,7 +999,7 @@ export default function TaskNodesDialog({
               : check
                 ? check.valid
                   ? check.code === SHARED_CHECK_SKIPPED
-                    ? t("未校验共享目录（此任务已跳过校验）")
+                    ? t("未校验共享目录（已跳过校验）")
                     : t("预检通过")
                   : check.message || t("预检未通过")
                 : t("与任务其他节点指向同一共享目录")
@@ -1118,39 +1194,71 @@ export default function TaskNodesDialog({
           {joinAdds.map(addRow)}
         </Stack>
       )}
-      {unchecked && (
-        <Alert
-          severity="warning"
-          sx={{ mt: 1.5 }}
-          data-testid="task-nodes-skip-shared-check"
-        >
-          <Typography variant="body2" fontWeight={600}>
-            {t("此任务跳过了共享目录校验")}
-          </Typography>
-          <Typography variant="body2">
-            {view?.direction === "OSS_TO_LOCAL"
-              ? t(
-                  "新节点的目录同样不会校验。若新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，本地目标不再完整，任务仍会显示成功。",
-                )
-              : t(
-                  "新节点的目录同样不会校验。若新节点挂载的不是同一份存储，它会从不同的数据读取对象，部分文件可能漏传或从错误的副本上传，任务仍会显示成功。",
-                )}
-          </Typography>
+      {needsPreflight && (
+        <Box sx={{ mt: 1.5 }}>
+          {taskSkipped && (
+            <Alert
+              severity="info"
+              sx={{ mb: 1 }}
+              data-testid="task-nodes-skipped-task"
+            >
+              <Typography variant="body2" fontWeight={600}>
+                {t("此任务跳过了共享目录校验")}
+              </Typography>
+              <Typography variant="body2">
+                {skip
+                  ? t("本次添加的节点同样不校验共享目录。")
+                  : t(
+                      "本次添加的节点仍会校验共享目录：预检会验证它们与可连接的现有节点看到的是同一份存储。",
+                    )}
+              </Typography>
+            </Alert>
+          )}
           <FormControlLabel
             control={
               <Checkbox
-                checked={skipAcknowledged}
+                checked={skip}
                 disabled={locked}
-                onChange={(event) => setSkipAcknowledged(event.target.checked)}
+                onChange={(event) => {
+                  setError("");
+                  if (!event.target.checked) setSkipCheck(false);
+                  else setSkipDialogOpen(true);
+                }}
               />
             }
-            label={t("我已确认新节点挂载的是同一份存储")}
+            label={t("跳过新节点的共享目录校验（不推荐）")}
           />
-        </Alert>
-      )}
-      {needsPreflight && (
-        <Box sx={{ mt: 1.5 }}>
-          <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap">
+          <Typography variant="caption" color="text.secondary" display="block">
+            {view?.direction === "OSS_TO_LOCAL"
+              ? t(
+                  "仅在确定新节点挂载同一份存储、但校验无法通过时使用。跳过后，预检仍会检查新节点能否写入下载目标。",
+                )
+              : t(
+                  "仅在确定新节点挂载同一份存储、但校验无法通过时使用。所有节点都无法写入测试文件（无写入权限、只读或存储已满）的上传源通常无需跳过：预检会改为抽样比对最多 16 个文件的大小及首尾各 64 KiB。",
+                )}
+          </Typography>
+          {skip && (
+            <Alert
+              severity="warning"
+              sx={{ mt: 1 }}
+              data-testid="task-nodes-skip-shared-check"
+            >
+              {view?.direction === "OSS_TO_LOCAL"
+                ? t(
+                    "已跳过新节点的共享目录校验：系统不会验证新节点写入的是同一份存储。若实际不是，新节点下载的文件会写入其他节点看不到的目录，任务仍会显示成功。",
+                  )
+                : t(
+                    "已跳过新节点的共享目录校验：系统不会验证新节点看到的是同一份存储。若实际不是，可能漏传文件或从错误的副本上传，任务仍会显示成功。",
+                  )}
+            </Alert>
+          )}
+          <Stack
+            direction="row"
+            gap={1.5}
+            alignItems="center"
+            flexWrap="wrap"
+            sx={{ mt: 1.5 }}
+          >
             <Button
               variant="outlined"
               size="small"
@@ -1171,48 +1279,126 @@ export default function TaskNodesDialog({
             )}
           </Stack>
           {preflight?.fingerprint === fingerprint && (
-            <Alert
-              severity={
-                !preflight.valid
-                  ? "error"
-                  : preflightUnchecked
-                    ? "warning"
-                    : "success"
-              }
-              sx={{ mt: 1 }}
+            // As on the creation page: a verdict, the reasons that concern
+            // the whole change, then each node with its path and the
+            // Master's note, also when it passed.
+            <Paper
+              variant="outlined"
+              sx={{ mt: 1, overflow: "hidden" }}
               data-testid="task-nodes-preflight"
             >
-              <Typography variant="body2">
-                {!preflight.valid
-                  ? t("预检未通过")
-                  : preflightUnchecked
-                    ? t("路径检查通过，共享目录未校验")
-                    : t("预检通过")}
-              </Typography>
-              {preflight.errors.map((message) => (
-                <Typography key={message} variant="body2">
-                  {message}
+              <Alert
+                severity={
+                  !preflight.valid
+                    ? "error"
+                    : preflightUnchecked
+                      ? "warning"
+                      : "success"
+                }
+                sx={{ borderRadius: 0 }}
+              >
+                <Typography variant="body2" fontWeight={600}>
+                  {!preflight.valid
+                    ? t("预检未通过")
+                    : preflightUnchecked
+                      ? t("路径检查通过，共享目录未校验")
+                      : t("预检通过")}
                 </Typography>
-              ))}
-              {preflight.bindings.map((binding) => (
-                <Typography
-                  key={binding.executionNodeIp}
-                  variant="body2"
-                  sx={{ overflowWrap: "anywhere" }}
-                >
-                  {label(binding.executionNodeIp, binding)}：
-                  {!binding.valid
-                    ? binding.message || t("未通过")
-                    : binding.code === SHARED_CHECK_SKIPPED
-                      ? binding.message ||
-                        t("未校验共享目录（此任务已跳过校验）")
-                      : t("通过")}
-                </Typography>
-              ))}
-            </Alert>
+                {preflight.errors.map((message) => (
+                  <Typography
+                    key={message}
+                    variant="body2"
+                    sx={{ overflowWrap: "anywhere" }}
+                  >
+                    {message}
+                  </Typography>
+                ))}
+              </Alert>
+              {preflight.bindings.length > 0 && (
+                <Stack divider={<Divider />} sx={{ px: 2 }}>
+                  {preflight.bindings.map((binding) => {
+                    const details = writeProbeDetails(binding);
+                    return (
+                      <Stack
+                        key={binding.executionNodeIp}
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="flex-start"
+                        gap={1}
+                        sx={{ py: 1.25 }}
+                        data-testid={`task-nodes-preflight-${binding.executionNodeIp}`}
+                      >
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={600}>
+                            {label(binding.executionNodeIp, binding)}
+                          </Typography>
+                          {binding.localPath && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              sx={{ overflowWrap: "anywhere" }}
+                            >
+                              {binding.localPath}
+                            </Typography>
+                          )}
+                          {binding.message && (
+                            <Typography
+                              variant="body2"
+                              color={
+                                !binding.valid
+                                  ? "error.main"
+                                  : binding.code === SHARED_CHECK_SKIPPED
+                                    ? "warning.main"
+                                    : "text.secondary"
+                              }
+                              sx={{ overflowWrap: "anywhere" }}
+                            >
+                              {binding.message}
+                            </Typography>
+                          )}
+                          {details && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              sx={{ overflowWrap: "anywhere" }}
+                            >
+                              {details}
+                            </Typography>
+                          )}
+                        </Box>
+                        <Chip
+                          size="small"
+                          color={
+                            !binding.valid
+                              ? "error"
+                              : binding.code === SHARED_CHECK_SKIPPED
+                                ? "warning"
+                                : "success"
+                          }
+                          label={bindingVerdict(binding)}
+                          sx={{ flexShrink: 0 }}
+                        />
+                      </Stack>
+                    );
+                  })}
+                </Stack>
+              )}
+            </Paper>
           )}
         </Box>
       )}
+      <SkipSharedCheckDialog
+        open={skipDialogOpen}
+        direction={view?.direction}
+        scope="join"
+        onCancel={() => setSkipDialogOpen(false)}
+        onConfirm={() => {
+          setSkipDialogOpen(false);
+          setSkipCheck(true);
+        }}
+      />
     </Box>
   );
 
@@ -1317,9 +1503,7 @@ export default function TaskNodesDialog({
             ? t("正在预检…")
             : !preflightPassed
               ? t("预检通过后才能继续")
-              : unchecked && !skipAcknowledged
-                ? t("确认新节点挂载同一份存储后才能继续")
-                : "";
+              : "";
   const canConfirm = !blocked && !submitting;
   const footerText =
     step === "confirm"
@@ -1465,9 +1649,11 @@ export default function TaskNodesDialog({
                     ? `${summaryLabel(address)} (${(paths[address] ?? "").trim()})`
                     : summaryLabel(address),
                 ),
-                unchecked
-                  ? t("此任务跳过了共享目录校验，新节点同样不做校验")
-                  : undefined,
+                skip
+                  ? t("已跳过共享目录校验，未验证新节点挂载的是同一份存储")
+                  : taskSkipped
+                    ? t("此任务跳过了共享目录校验；本次添加的节点已通过校验")
+                    : undefined,
               )}
             {cancels > 0 &&
               summarySection(

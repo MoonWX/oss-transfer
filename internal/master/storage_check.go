@@ -57,13 +57,36 @@ type storageCheckOutcome struct {
 	pathStyle   bool
 	// complete is false when the Agent predates bucket-level checks.
 	complete bool
+	// node names the Agent that ran the check. One online Agent runs it, so
+	// a result holds for that node, not for every node a task may use.
+	node string
 }
+
+// storageErrorWrongEndpoint is a bucket that must be addressed through
+// another endpoint. OSS reports it as AccessDenied, so the Agent's kind says
+// access_denied; the reply's text decides.
+const storageErrorWrongEndpoint transferstore.StorageErrorKind = "wrong_endpoint"
 
 // newStorageProblem chooses the sentence for a classified failure. host is the
 // endpoint host (with port); bucket names the bucket of a bucket-level
 // request, empty for ListBuckets.
 func newStorageProblem(kind transferstore.StorageErrorKind, detail string, config storageconfig.Config, bucket string, pathStyle bool) *storageProblem {
 	problem := &storageProblem{kind: kind, detail: detail}
+	if mismatch, endpoint := transferstore.EndpointMismatch(detail); mismatch {
+		// Usually a bucket in another region (OSS lists the buckets of every
+		// region): not a permission problem, and every bucket of this region
+		// still works with the connection.
+		problem.kind = storageErrorWrongEndpoint
+		switch {
+		case bucket != "" && endpoint != "":
+			problem.message, problem.args = "Bucket %s must be accessed through endpoint %s, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that endpoint.", []any{bucket, endpoint}
+		case bucket != "":
+			problem.message, problem.args = "Bucket %s must be accessed through another endpoint, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that region's endpoint.", []any{bucket}
+		default:
+			problem.message = "The bucket must be accessed through another endpoint, usually the endpoint of the region the bucket is in. Create a storage connection with that region's endpoint."
+		}
+		return problem
+	}
 	endpoint, _ := url.Parse(config.Endpoint)
 	host, hostname := config.Endpoint, config.Endpoint
 	if endpoint != nil && endpoint.Host != "" {
@@ -108,6 +131,16 @@ func newStorageProblem(kind transferstore.StorageErrorKind, detail string, confi
 	return problem
 }
 
+// noOnlineAgentError says why no Agent can run a storage check: none has been
+// added yet, or every registered one is offline, which adding another one
+// does not fix.
+func (s *Server) noOnlineAgentError() error {
+	if members, err := s.agents.registry.Members(); err == nil && len(members) > 0 {
+		return errors.New("every registered Agent is offline; bring one back online before validating storage")
+	}
+	return errors.New("no Agent is online; join an Agent before validating storage")
+}
+
 // checkStorage runs the connection check on one online Agent. An error means
 // the check could not run (no Agent, Agent unavailable, invalid settings);
 // storage failures are in the outcome.
@@ -118,8 +151,9 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 		return outcome, err
 	}
 	if len(members) == 0 {
-		return outcome, errors.New("no Agent is online; join an Agent before validating storage")
+		return outcome, s.noOnlineAgentError()
 	}
+	outcome.node = s.nodeDisplaySnapshot().lookup(members[0].ID, members[0].Address).DisplayLabel
 	redact := func(message string) string {
 		return redactStorageError(errors.New(message), []storageconfig.Config{config}).Error()
 	}
@@ -169,17 +203,20 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 	if check.BucketError != "" {
 		problem := newStorageProblem(check.BucketErrorKind, redact(check.BucketError), config, check.Bucket, outcome.pathStyle)
 		switch {
-		case check.BucketErrorKind == transferstore.StorageErrorAccessDenied:
-			problem.message, problem.args = "The credentials cannot list the objects of bucket %s (AccessDenied). Check the bucket permissions before you migrate from this bucket.", []any{check.Bucket}
-			outcome.warning = problem
 		case bucket == "" && check.ListError == "":
 			// Nobody named this bucket: it is the first listed one, and
 			// other buckets can still work (one in another region, for
-			// example). The buckets were listed, so the connection works.
+			// example). The buckets were listed, so the connection works,
+			// whatever this bucket answered.
 			outcome.warning = &storageProblem{kind: problem.kind, message: "The connection works, but the check of bucket %s, the first listed bucket, failed: %s", args: []any{check.Bucket}, cause: problem, detail: problem.detail, pathStyleHint: problem.pathStyleHint}
 			if problem.pathStyleHint {
 				outcome.saveFailure = problem
 			}
+		case check.BucketErrorKind == transferstore.StorageErrorAccessDenied:
+			if problem.kind != storageErrorWrongEndpoint {
+				problem.message, problem.args = "The credentials cannot list the objects of bucket %s (AccessDenied). Check the bucket permissions before you migrate from this bucket.", []any{check.Bucket}
+			}
+			outcome.warning = problem
 		default:
 			outcome.failure = problem
 		}
@@ -188,12 +225,26 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 }
 
 // storageFailureResponse reports a failed check: the localized sentence as the
-// message, the raw error as detail.
-func storageFailureResponse(w http.ResponseWriter, status int, prefix string, problem *storageProblem) {
-	writeJSON(w, status, map[string]any{
+// message, the raw error as detail, and the node that ran the check.
+func storageFailureResponse(w http.ResponseWriter, status int, prefix string, problem *storageProblem, node string) {
+	body := map[string]any{
 		"success": false, "message": localize(w, prefix) + problem.summary(w),
 		"detail": problem.detail, "reasonCode": problem.reasonCode(), "pathStyleHint": problem.pathStyleHint,
-	})
+	}
+	if node != "" {
+		body["node"] = node
+	}
+	writeJSON(w, status, body)
+}
+
+// storageCheckFailed reports a check that could not run, with the node it was
+// sent to when one was chosen.
+func storageCheckFailed(w http.ResponseWriter, status int, message, node string) {
+	body := map[string]any{"success": false, "message": message}
+	if node != "" {
+		body["node"] = node
+	}
+	writeJSON(w, status, body)
 }
 
 // storageWarningFields adds a non-blocking warning to a response.

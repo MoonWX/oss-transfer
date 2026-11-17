@@ -109,9 +109,14 @@ update check shows "current version → available version". update master checks
 a new version itself and, without --version, installs the latest stable release; it
 reports and exits when the Master is already up to date.
 Agents default to the Master's current version; --version selects another release.
+Agents already on that version, running in a container or unable to update online are
+skipped and listed with the reason. When the queue reaches an offline Agent, it waits up to
+30 seconds for the Agent to reconnect and skips it otherwise. When no Agent can be updated,
+nothing is queued.
 Update checks offer stable releases only. A prerelease (beta/rc) is installed only
 with an exact --version plus --allow-prerelease; Agents may follow a prerelease Master.
 Follow queued updates with update status --watch 5. Acceptance is not completion.
+The Master stops briefly while it updates; --watch keeps retrying meanwhile, for up to 30 minutes.
 `, `サービス更新
   oss-transfer-cli update status
   oss-transfer-cli update check
@@ -124,10 +129,14 @@ update check は「現在のバージョン → 更新可能なバージョン�
 新しいバージョンを自動で確認し、--version を省略すると最新の安定版に更新します。
 Master がすでに最新の場合は、その旨を表示して終了します。
 Agent は既定で Master の現在のバージョンに更新します。--version で変更できます。
+すでにそのバージョンの Agent、コンテナで動作する Agent、オンライン更新できない Agent は
+スキップされ、理由とともに表示されます。キューの順番がオフラインの Agent に来ると、
+最大 30 秒再接続を待ち、再接続しなければスキップします。更新できる Agent がない場合は何も予定しません。
 更新の確認では安定版のみを提示します。プレリリース（beta/rc）は --version で正確に
 指定し --allow-prerelease を付けた場合のみインストールします。Master がプレリリースの
 場合、Agent は同じバージョンに追従できます。
 update status --watch 5 で結果を確認します。受付は更新完了を意味しません。
+Master の更新中はサービスが一時的に停止しますが、--watch はその間、最長 30 分間再試行を続けます。
 `},
 	cliBackupHelp: {`Upgrade backups
   oss-transfer-cli backup list
@@ -341,7 +350,8 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   trash [--task-id ID] [--worker NODE] [--direction DIRECTION] [--search TEXT]
         [--limit 100] [--before-id ID] [--all]
 
-  stop <ID...>                     Stop and retain progress
+  stop <ID...>                     Stop scanning and transfer; completed objects are kept,
+                                   objects in transfer start over when the task continues
   resume|retry <ID...>             Resume stopped/failed tasks, retaining completed work
   retry <ID...>                    On a running task, retry only failed objects of finished
                                    subtasks, without interrupting the transfer
@@ -391,7 +401,8 @@ Deleting records does not delete source or target objects.
   trash [--task-id ID] [--worker ノード] [--direction 方向] [--search 文字列]
         [--limit 100] [--before-id ID] [--all]
 
-  stop <ID...>                     進捗を保持して停止
+  stop <ID...>                     スキャンと転送を停止。完了したオブジェクトは保持し、
+                                   転送中のオブジェクトは再開後に最初から転送し直します
   resume|retry <ID...>             完了済みの処理を保持して停止・失敗タスクを再開
   retry <ID...>                    実行中のタスクでは、終了した子タスクの失敗オブジェクトのみを
                                    転送を中断せずに再試行
@@ -575,6 +586,9 @@ Same meaning as task create --ranged-download; other directions reject off.
 local rows may set "skipSharedCheck":true to skip the multi-node shared directory check; they must
 also set "skipSharedCheckAcknowledged":true to confirm that every execution node mounts the same
 storage. The consequences are those of task create --skip-shared-check; import warns for each such row.
+A marker in tasks rows is not used: each subtask scans its whole range after startKey and does not resume
+from a checkpoint; objects that already exist at the destination are handled by the conflict policy.
+Import warns for each row that sets a marker.
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -607,6 +621,8 @@ local のダウンロード行（OSS_TO_LOCAL）では "rangedDownload":"auto" �
 local の行で "skipSharedCheck":true を指定すると複数ノードの共有ディレクトリ検証を省略します。
 すべての実行ノードが同じストレージをマウントしていることの確認として "skipSharedCheckAcknowledged":true も
 必要です。影響は task create --skip-shared-check と同じで、インポート時に該当する行ごとに警告します。
+tasks の行の marker は使用されません。各子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは
+再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。marker を指定した行ごとに警告します。
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -729,8 +745,12 @@ Usage: oss-transfer-cli storage <subcommand> [arguments]
   remove <alias> --yes             Remove and sync to execution nodes
   buckets <alias> [--bucket NAME]  List buckets and check the connection
   test <alias> [--bucket NAME]     Check the connection: list buckets, then list objects in one bucket with the effective addressing
-      With --bucket, checks each request a migration makes (list, HEAD, GET); exits 1 if one fails
-      --write                       Also check writing: conditional PUT, read back, multipart upload; writes and deletes a test object
+      With --bucket, checks each request a migration makes (list, HEAD, GET); exits 1 if a required one fails
+      --write                       Also check writing: conditional PUT, read back, multipart upload; writes and deletes a test object.
+                                    Aborting the multipart upload and deleting the test object are not needed to write; a failure only warns
+      --prefix <prefix>             Prefix the write check writes below; a missing trailing "/" is added, as
+                                    --mapping add-prefix adds a target prefix. For a key that may only write below a prefix,
+                                    enter the migration's target prefix, for example backup/. Needs --write
 
   --endpoint <http[s]://host>      For example https://s3.example.com or http://10.0.0.5:9000
   --region <region>               S3 signing region
@@ -757,10 +777,13 @@ Addressing
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage test target --bucket backup --write
+  oss-transfer-cli storage test team --bucket shared --write --prefix team-a/
   oss-transfer-cli storage remove source --yes
 
 Credentials come from environment variables or files, not command-line values.
-Check each node's sync result; partial success is reported as incomplete.
+After a connection is saved or removed, nodes that have not synchronized yet are listed and the
+command exits with status 3; those nodes synchronize before they next run a task or an object comparison.
+After a connection is removed, every task that uses it, running or stopped, cannot continue until a connection with the same name is added again.
 A connection check lists buckets (ListBuckets), then lists at most one object in one bucket (ListObjectsV2).
 Keys limited to one bucket cannot list buckets: saving only warns, and test --bucket checks that bucket.
 Actual operations validate read and write permissions. Failures show the cause and advice first; add --verbose for the original error.
@@ -773,8 +796,12 @@ Actual operations validate read and write permissions. Failures show the cause a
   remove <接続名> --yes            削除して実行ノードに同期
   buckets <接続名> [--bucket 名前] バケット一覧を表示して接続を確認
   test <接続名> [--bucket 名前]    接続を確認: バケットを一覧し、実際のアドレス指定で 1 つのバケットのオブジェクトを一覧
-      --bucket を指定すると、移行で使う操作（一覧、HEAD、GET）を 1 つずつ確認し、失敗があれば終了コード 1
-      --write                       書き込みも確認: 条件付き PUT、読み戻し、マルチパートアップロード。テストオブジェクトを書き込んで削除します
+      --bucket を指定すると、移行で使う操作（一覧、HEAD、GET）を 1 つずつ確認し、必須の項目が失敗すれば終了コード 1
+      --write                       書き込みも確認: 条件付き PUT、読み戻し、マルチパートアップロード。テストオブジェクトを書き込んで削除します。
+                                    マルチパートアップロードの中止とテストオブジェクトの削除は書き込みに不要で、失敗しても注意を表示するだけです
+      --prefix <プレフィックス>      書き込みの確認に使うプレフィックス。テストオブジェクトをこの下に書き込みます。末尾に「/」がなければ、
+                                    --mapping add-prefix で転送先プレフィックスを付けるときと同じく補います。キーが特定のプレフィックスにしか
+                                    書き込めない場合は、移行先のプレフィックス（例: backup/）を指定します。--write と一緒に指定してください
 
   --endpoint <http[s]://ホスト>    例: https://s3.example.com、http://10.0.0.5:9000
   --region <リージョン>            S3 署名リージョン
@@ -800,10 +827,13 @@ Actual operations validate read and write permissions. Failures show the cause a
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage test target --bucket backup --write
+  oss-transfer-cli storage test team --bucket shared --write --prefix team-a/
   oss-transfer-cli storage remove source --yes
 
 認証情報は環境変数またはファイルから読み取ります。コマンドラインには直接指定しません。
-ノードごとの同期結果を確認してください。一部成功は不完全と表示します。
+接続を保存または削除した後、まだ同期していない実行ノードがあれば一覧に表示し、終了コード 3 で終了します。
+これらのノードは、次にタスクまたはオブジェクト比較を実行する前に自動で同期します。
+接続を削除すると、その接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。
 接続確認ではバケットを一覧し（ListBuckets）、1 つのバケットのオブジェクトを最大 1 件一覧します（ListObjectsV2）。
 1 つのバケットに限定したキーはバケットを一覧できません。保存時は警告のみで、test --bucket でそのバケットを確認できます。
 読み取り・書き込み権限は実際の操作で検証します。失敗時は原因と対処を先に表示し、元のエラーは --verbose で確認できます。
@@ -877,8 +907,9 @@ Local ZIP exports all local task reports without filters; use task report for on
 Only ended or stopped tasks can be exported. Clear removes recovered or skipped exception records;
 unresolved failures and tasks remain. Use filters or --all, not both.
 Filters: --task-id, --worker, --direction, --source-bucket, --dest-bucket, --endpoint.
-complete/partial describe node coverage; truncated describes the size cap. Legacy caps may return
-truncatedWorkers; use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
+partial (complete false) means an offline Agent has unfinished subtasks whose failures may not be
+reported yet; truncated describes the size cap. Legacy caps may return truncatedWorkers;
+use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
 
   oss-transfer-cli exceptions export failed --task-id 224 --output task-224-failures.csv
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
@@ -900,7 +931,8 @@ CSV は今回の記録と完全性・件数省略の情報を出力します。�
 出力できるのは終了・停止したタスクのみです。削除するのは回復済み・スキップ済みの例外記録です。
 未解決の失敗とタスクは残ります。絞り込み条件と --all は併用できません。
 絞り込み: --task-id、--worker、--direction、--source-bucket、--dest-bucket、--endpoint。
-complete/partial は応答の完全性、truncated は件数上限による省略を示します。
+partial（complete が false）は、未完了のサブタスクを持つノードがオフラインで、失敗記録がまだ報告されていない可能性を示します。
+truncated は件数上限による省略を示します。
 truncatedWorkers が返された場合、詳細には ZIP レポートを使用してください。
 ダウンロード成功は転送データの検証完了を示しません。
 
@@ -948,7 +980,8 @@ Notes
   Matching metadata does not prove matching content: when both ETags are plain MD5 values and differ, the result is ETAG_MISMATCH. Use content to confirm content.
   content streams both objects into SHA-256 without writing local files. Read traffic is charged by your provider.
   Modification time and storage class do not determine equality. Objects changed during comparison are reported separately.
-  A comparison runs concurrently in the background on one node, which keeps every difference for 30 days by default; list finds comparison IDs again.
+  A comparison runs concurrently in the background on one node, which keeps its differences for at most 30 days by default; list finds comparison IDs again.
+  When the comparison results on a node exceed its storage budget (2 GiB by default) or number more than 500, the comparisons that ended earliest are deleted first.
   The ZIP holds differences.csv, retry-source-keys.incr and summary.json. When both prefixes are equal,
   import-inventory can use retry-source-keys.incr to transfer missing, different or ETag-mismatched objects again.
   After an Agent restart or update, a comparison continues automatically when storage connections did not change;
@@ -998,7 +1031,8 @@ Notes
   メタデータが一致しても内容の一致は保証されません。両側の ETag が通常の MD5 形式で異なる場合、結果は ETAG_MISMATCH です。内容を確認するには content を使用してください。
   content は両側の内容をストリームで読み、SHA-256 を計算します。ローカルファイルは作成しません。読み取り通信が発生します。
   更新日時とストレージクラスは一致判定に使用しません。比較中に変更されたオブジェクトは別途表示します。
-  比較は 1 つの実行ノードのバックグラウンドで並列に実行され、差分はすべてそのノードに既定で 30 日間保存されます。list で比較 ID を再確認できます。
+  比較は 1 つの実行ノードのバックグラウンドで並列に実行され、差分はすべてそのノードに既定で最長 30 日間保存されます。list で比較 ID を再確認できます。
+  ノード上の比較結果の合計が保存容量の上限（既定 2 GiB）を超えるか、比較が 500 件を超えると、終了が最も早い比較から先に削除されます。
   ZIP には differences.csv、retry-source-keys.incr、summary.json が含まれます。両側のプレフィックスが同じ場合、
   retry-source-keys.incr を import-inventory に使用し、転送先に存在しない、不一致、ETag が異なるオブジェクトを再転送できます。
   Agent の再起動や更新の後、ストレージ接続が変わっていなければ比較は自動的に再開します。

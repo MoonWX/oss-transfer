@@ -72,3 +72,28 @@ func TestUpdateSupportIsReevaluated(t *testing.T) {
 		t.Fatal("Start did not re-evaluate update support", err, probes)
 	}
 }
+
+// A node supervised by oss-transfer-run.sh, even in a development container
+// with /.dockerenv, is updated by replacing its programs: neither the
+// installer nor a new image applies. Installer metadata still outranks it.
+func TestRunScriptLauncherIsReportedAsManual(t *testing.T) {
+	options, executable := managedFixture(t)
+	withContainerMarker(t, true)
+	t.Setenv(LauncherVariable, RunScriptLauncher)
+	unmanaged := filepath.Join(t.TempDir(), "oss-transfer-master"+executableSuffix())
+	if err := os.WriteFile(unmanaged, []byte("binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	manual := options
+	manual.ConfigPath = ""
+	if info := evaluate(manual, unmanaged); info.Supported || info.Reason != "MANUAL" || info.Detail != ManualUpdateMessage {
+		t.Fatal("run-script node was not reported as a manual installation", info)
+	}
+	if info := evaluate(options, executable); info.Reason == "MANUAL" || info.Reason == "CONTAINER" {
+		t.Fatal("installer metadata was overridden by the launcher variable", info)
+	}
+	t.Setenv(LauncherVariable, "")
+	if info := evaluate(manual, unmanaged); info.Reason != "CONTAINER" {
+		t.Fatal("a container without the run script lost its container guidance", info)
+	}
+}

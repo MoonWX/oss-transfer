@@ -365,7 +365,7 @@ for (const theme of ["light", "dark"] as const)
     await page.goto("/tools?comparison=comparison-1");
     await expect(
       page.getByText(
-        /^已检查 10，.* 个\/秒，已用 1 小时 2 分，已读取 5 GiB（.+\/秒）$/,
+        /^已检查 10，平均 .* 个\/秒，已用 1 小时 2 分，已读取 5 GiB（平均 .+\/秒）$/,
       ),
     ).toBeVisible();
     await expect(
@@ -420,7 +420,9 @@ test("desktop layout pages a long history and keeps the result inside the viewpo
   await page.goto("/tools?comparison=comparison-1");
   await expect(page.getByRole("button", { name: "继续比对" })).toBeVisible();
   await expect(
-    page.getByText("已检查 1,000，7.4 个/秒，已用 2 分 15 秒", { exact: true }),
+    page.getByText("已检查 1,000，平均 7.4 个/秒，已用 2 分 15 秒", {
+      exact: true,
+    }),
   ).toBeVisible();
   const history = page.getByRole("table", { name: "比对历史" });
   await expect(history.getByRole("row")).toHaveCount(11);
@@ -480,7 +482,8 @@ test("empty result pages say whether nothing differs, nothing matches or nothing
     truncatedReason: "LOW_DISK_SPACE",
   };
   await page.getByRole("button", { name: "刷新" }).click();
-  await page.getByRole("button", { name: "全部差异 0" }).click();
+  // Truncated: the unfiltered view holds the stored differences only.
+  await page.getByRole("button", { name: "已保存差异 0" }).click();
   await expect(
     page.getByText("暂无已保存的差异明细。", { exact: true }),
   ).toBeVisible();
@@ -740,7 +743,7 @@ test("a stalled filtered scan keeps refreshing the progress of a running compari
   await settle(page, calls);
   const stats = (value: number) =>
     page.getByText(
-      `已检查 ${value.toLocaleString("en-US")}，100 个/秒，已用 ${value / 100} 秒`,
+      `已检查 ${value.toLocaleString("en-US")}，平均 100 个/秒，已用 ${value / 100} 秒`,
       { exact: true },
     );
   for (const reads of [1, 2]) {
@@ -765,3 +768,31 @@ test("a stalled filtered scan keeps refreshing the progress of a running compari
   expect(filtered()).toBe(scanned);
   await expect(stalledText).toBeVisible();
 });
+
+// A node deletes the earliest ended comparisons when its results exceed the
+// storage budget or number more than 500; the footer names both limits.
+for (const { locale, text } of [
+  {
+    locale: "zh-CN",
+    text: "比对结果保存在执行节点上，默认最多保留 30 天；每个节点的比对结果默认最多占用 2 GiB，且最多保留 500 个比对，超出任一限制时先删除最早结束的比对。",
+  },
+  {
+    locale: "en-US",
+    text: "Results are kept on the node that ran the comparison, for at most 30 days by default. Each node keeps at most 2 GiB of comparison results by default and at most 500 comparisons; beyond either limit, the comparisons that ended earliest are deleted first.",
+  },
+]) {
+  test.describe(`retention footer (${locale})`, () => {
+    test.use({ locale });
+    test("the history footer names every limit that deletes results early", async ({
+      page,
+    }) => {
+      await mockApi(page);
+      await routeComparisons(page, {
+        list: () => ({ items: [historyItem()], complete: true }),
+        page: (_id, query) => pageOf(progress, rows, query),
+      });
+      await page.goto("/tools");
+      await expect(page.getByText(text, { exact: true })).toBeVisible();
+    });
+  });
+}

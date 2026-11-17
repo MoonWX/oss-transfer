@@ -392,11 +392,24 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "The returned metadata fields match.",
     ja: "取得したメタデータのフィールドは一致しています。",
   },
-  "回收站保留已标记删除的任务。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。":
+  "回收站保留已标记删除的任务，选择后可还原到任务列表。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。":
     {
-      en: "The recycle bin holds deleted tasks. Permanent deletion removes task records only and cannot be undone. Source and destination objects are kept.",
-      ja: "ごみ箱には削除済みタスクが保存されます。完全削除で消去されるのはタスクレコードのみで、復元はできません。転送元と転送先のオブジェクトは残ります。",
+      en: "The recycle bin holds deleted tasks; select tasks to restore them to the task list. Permanent deletion removes task records only and cannot be undone. Source and destination objects are kept.",
+      ja: "ごみ箱には削除済みタスクが保存されます。選択するとタスク一覧に復元できます。完全削除で消去されるのはタスクレコードのみで、復元はできません。転送元と転送先のオブジェクトは残ります。",
     },
+  还原: { en: "Restore", ja: "復元" },
+  "已还原 {count} 个任务，可在任务列表中查看。": {
+    en: "Restored {count} tasks; they are in the task list again.",
+    ja: "{count} 件のタスクを復元しました。タスク一覧で確認できます。",
+  },
+  "部分任务未还原：{value1}": {
+    en: "Some tasks were not restored: {value1}",
+    ja: "一部のタスクは復元されませんでした: {value1}",
+  },
+  "请刷新后重试。": {
+    en: "Refresh and try again.",
+    ja: "更新してから再試行してください。",
+  },
   "节点清单读取失败，无法确认回收站是否覆盖全部节点。": {
     en: "The node list could not be read. Recycle bin coverage is unknown.",
     ja: "ノード一覧を取得できないため、全ノードのごみ箱データが揃っているか確認できません。",
@@ -715,6 +728,31 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Multipart upload (create, upload a part, abort)",
     ja: "マルチパートアップロード（作成、パートのアップロード、中止）",
   },
+  "分片上传（创建、上传分片）": {
+    en: "Multipart upload (create, upload a part)",
+    ja: "マルチパートアップロード（作成、パートのアップロード）",
+  },
+  "中止分片上传（AbortMultipartUpload，用于清理残留分片）": {
+    en: "Abort the multipart upload (AbortMultipartUpload, used to clean up leftover parts)",
+    ja: "マルチパートアップロードを中止（AbortMultipartUpload、残ったパートの削除に使用）",
+  },
+  "没有创建分片上传，无需中止": {
+    en: "No multipart upload was created, so there is nothing to abort",
+    ja: "マルチパートアップロードが作成されなかったため、中止は不要です",
+  },
+  "对象：{key}": {
+    en: "Object: {key}",
+    ja: "オブジェクト：{key}",
+  },
+  "写入位置前缀（可选）": {
+    en: "Write prefix (optional)",
+    ja: "書き込み先のプレフィックス（任意）",
+  },
+  "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中；前缀末尾没有“/”时自动补上，与迁移的“添加目标前缀”相同。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。":
+    {
+      en: 'The test objects are written under .oss-transfer-permission-check/ below this prefix. A missing trailing "/" is added, as "Add destination prefix" does for a migration. If the key may only write below a prefix, enter the migration\'s target prefix, for example backup/.',
+      ja: "テストオブジェクトは、このプレフィックスの下の .oss-transfer-permission-check/ に書き込みます。末尾に「/」がなければ、移行の「転送先プレフィックスを追加」と同じく補います。キーが特定のプレフィックスにしか書き込めない場合は、移行先のプレフィックス（例: backup/）を入力してください。",
+    },
   "删除测试对象（DeleteObject，迁移不需要）": {
     en: "Delete the test object (DeleteObject, not needed for migrations)",
     ja: "テストオブジェクトを削除（DeleteObject、移行には不要）",
@@ -770,10 +808,21 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
       en: "Bucket {bucket}: reading works; it can be a migration source. To use it as a target, also check writing.",
       ja: "バケット {bucket}：読み取りの権限は正常で、移行元として使えます。移行先にする場合は書き込みも確認してください。",
     },
-  "读取正常，只是不能写入：只能作为迁移的源。": {
-    en: "Reading works but writing does not: it can only be a migration source.",
-    ja: "読み取りはできますが書き込みはできません。移行元としてのみ使えます。",
-  },
+  "存储桶 {bucket}：读取正常，也可以在前缀 {prefix} 下写入，可以作为迁移的源或写入此前缀的目标。":
+    {
+      en: "Bucket {bucket}: reading works and writing below the prefix {prefix} works; it can be a migration source or a target that writes below this prefix.",
+      ja: "バケット {bucket}：読み取りも、プレフィックス {prefix} への書き込みもできます。移行元にも、このプレフィックスに書き込む移行先にも使えます。",
+    },
+  "读取正常，但在前缀 {prefix} 下写入失败：可以作为迁移的源，不能作为写入此前缀的目标。":
+    {
+      en: "Reading works, but writing below the prefix {prefix} failed: it can be a migration source, but not a target that writes below this prefix.",
+      ja: "読み取りはできますが、プレフィックス {prefix} への書き込みに失敗しました。移行元としては使えますが、このプレフィックスに書き込む移行先にはできません。",
+    },
+  "读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请填写写入位置前缀后重新检查。":
+    {
+      en: "Reading works, but writing at the bucket root failed: it can be a migration source. If the key may only write below a prefix, enter that write prefix and check again.",
+      ja: "読み取りはできますが、バケットのルートへの書き込みに失敗しました。移行元としては使えます。キーが特定のプレフィックスにしか書き込めない場合は、書き込み先のプレフィックスを入力して再確認してください。",
+    },
   通过: {
     en: "passed",
     ja: "成功",
@@ -794,9 +843,18 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "The test object {key} could not be deleted (deleting is not needed for migrations); delete it manually.",
     ja: "テストオブジェクト {key} を削除できませんでした（削除は移行に必要な権限ではありません）。手動で削除してください。",
   },
+  "分片上传 {key}（上传 ID：{uploadId}）未能中止，存储桶中留下一个未完成的分片上传，其分片会占用存储并计费。写入不需要中止权限，但缺少它时，迁移中失败的大对象上传也会留下这样的分片。请用有权限的密钥中止此上传，或配置生命周期规则清理未完成的分片上传。":
+    {
+      en: "The multipart upload {key} (upload ID {uploadId}) could not be aborted, so an incomplete multipart upload is left in the bucket; its parts take up storage and are billed. Writing does not need permission to abort, but without it a large-object upload that fails during a migration also leaves parts behind. Abort this upload with a key that may, or add a lifecycle rule that removes incomplete multipart uploads.",
+      ja: "マルチパートアップロード {key}（アップロード ID：{uploadId}）を中止できなかったため、未完了のマルチパートアップロードがバケットに残っています。残ったパートはストレージを占有し、課金されます。書き込みに中止の権限は不要ですが、この権限がないと、移行中に失敗した大きなオブジェクトのアップロードでも同じようにパートが残ります。権限のあるキーでこのアップロードを中止するか、未完了のマルチパートアップロードを削除するライフサイクルルールを設定してください。",
+    },
   "由执行节点 {node} 检查。": {
     en: "Checked by execution node {node}.",
     ja: "実行ノード {node} で確認しました。",
+  },
+  "保存前已由执行节点 {node} 验证连接。": {
+    en: "Execution node {node} validated the connection before it was saved.",
+    ja: "保存前に実行ノード {node} で接続を検証しました。",
   },
   "要确认某个存储桶的读写权限，请在下方检查。": {
     en: "To confirm read and write access to a bucket, check it below.",
@@ -902,10 +960,11 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Delete storage connection",
     ja: "ストレージ接続を削除",
   },
-  "删除连接 {alias} 后，后续迁移将无法使用此连接。此操作会同步到执行节点。": {
-    en: "After deleting {alias}, future transfers cannot use this connection. The change is synced to workers.",
-    ja: "{alias} を削除すると、以後の転送でこの接続を使用できなくなります。変更は実行ノードに同期されます。",
-  },
+  "删除连接 {alias} 后，所有使用此连接的任务都将无法继续执行（包括执行中和已停止的任务），直到重新添加同名连接；后续迁移也无法使用此连接。此操作会同步到执行节点。":
+    {
+      en: "After you delete {alias}, every task that uses this connection, running or stopped, cannot continue until a connection with the same name is added again, and future transfers cannot use it. The change is synced to execution nodes.",
+      ja: "{alias} を削除すると、この接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。今後の転送でもこの接続は使えなくなります。変更は実行ノードに同期されます。",
+    },
   "连接测试 · {alias}": {
     en: "Connection test · {alias}",
     ja: "接続テスト · {alias}",
@@ -913,6 +972,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   "正在获取可访问的存储桶…": {
     en: "Listing accessible buckets…",
     ja: "アクセス可能なバケットを取得中…",
+  },
+  "该凭据无权列举存储桶，未获取存储桶列表。": {
+    en: "These credentials may not list buckets, so no bucket list was obtained.",
+    ja: "この認証情報にはバケットを一覧する権限がないため、バケット一覧は取得されていません。",
   },
   "已获取 {count} 个存储桶。": {
     en: "Found {count} buckets.",
@@ -1094,6 +1157,18 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "{count} nodes did not confirm the new limit. Check node status and try again.",
     ja: "{count} 台の実行ノードで新しい制限値を確認できませんでした。ノードの状態を確認してから再試行してください。",
   },
+  "{count} 个执行节点的版本不支持“{type}”限速，请先升级。": {
+    en: "{count} nodes rejected the {type} limit because their version does not support it. Upgrade them first.",
+    ja: "{count} 台の実行ノードはバージョンが「{type}」の制限に対応していません。先に更新してください。",
+  },
+  "此节点版本不支持“{type}”限速，请先升级。": {
+    en: "This node's version does not support the {type} limit. Upgrade it first.",
+    ja: "このノードのバージョンは「{type}」の制限に対応していません。先に更新してください。",
+  },
+  "{count} 个执行节点的版本不支持“{type}”限速，不会应用此设置。": {
+    en: "The {type} limit will not take effect on {count} nodes, whose version does not support it.",
+    ja: "{count} 台の実行ノードはバージョンが「{type}」の制限に対応していないため、この設定は適用されません。",
+  },
   执行节点: {
     en: "Workers",
     ja: "実行ノード",
@@ -1182,6 +1257,18 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   "节点离线时无法调整并发。": {
     en: "Concurrency cannot be changed while the node is offline.",
     ja: "オフラインのノードでは並列数を変更できません。",
+  },
+  "未能读取节点当前的并发设置，请刷新后再调整。": {
+    en: "The node's current concurrency could not be read. Refresh, then change it.",
+    ja: "ノードの現在の並列数を読み取れませんでした。更新してから変更してください。",
+  },
+  "节点离线，重新连接后显示运行状态。": {
+    en: "The node is offline. Its status appears when it reconnects.",
+    ja: "ノードはオフラインです。再接続すると状態が表示されます。",
+  },
+  未能读取节点状态: {
+    en: "Could not read the node status",
+    ja: "ノードの状態を読み取れませんでした",
   },
   未完成子任务: {
     en: "Unfinished subtasks",
@@ -1352,10 +1439,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Remove node {node}",
     ja: "ノード {node} を削除",
   },
-  "移除后，该节点不能再连接集群，节点上的 Agent 服务会自行停止。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。":
+  "移除后，该节点不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。":
     {
-      en: "After removal the node can no longer connect to the cluster, and its Agent service stops by itself. Files, objects and the database on the node are not deleted; uninstall it, or delete its container and volume, on its host if needed.",
-      ja: "削除後、このノードはクラスターに接続できなくなり、ノード上の Agent サービスは自動的に停止します。ノード上のファイル、オブジェクト、データベースは削除されません。必要に応じて、そのホストでアンインストールするか、コンテナーとデータボリュームを削除してください。",
+      en: "After removal the node can no longer connect to the cluster. An Agent running in a container stays idle until the container is removed; any other Agent stops by itself and does not restart. Files, objects and the database on the node are not deleted; uninstall it, or delete its container and volume, on its host if needed.",
+      ja: "削除後、このノードはクラスターに接続できなくなります。コンテナーで動作する Agent はコンテナーを削除するまで待機状態のままになり、それ以外の Agent は自動的に停止して再起動しません。ノード上のファイル、オブジェクト、データベースは削除されません。必要に応じて、そのホストでアンインストールするか、コンテナーとデータボリュームを削除してください。",
     },
   "任务报告中逐个对象的结果和对象比对结果保存在执行节点上。移除后，此节点上的这些结果将无法再获取：任务报告会不完整，比对记录会消失。需要保留时，请先导出任务报告和比对结果。":
     {
@@ -1900,18 +1987,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   降级记录: {
     en: "Fallback records",
     ja: "フォールバックレコード",
-  },
-  部分节点删除失败: {
-    en: "Deletion failed on some nodes",
-    ja: "一部のノードで削除に失敗しました",
-  },
-  部分节点更新失败: {
-    en: "Update failed on some nodes",
-    ja: "一部のノードで更新に失敗しました",
-  },
-  部分节点添加失败: {
-    en: "Addition failed on some nodes",
-    ja: "一部のノードで追加に失敗しました",
   },
   连接删除完成: { en: "Connection deleted", ja: "接続を削除しました" },
   连接更新完成: { en: "Connection updated", ja: "接続を更新しました" },

@@ -1097,7 +1097,7 @@ class CLIPlacementTests(unittest.TestCase):
         Path(str(self.global_cli)+'.local-auth.json').write_text('new private grant')
         rollback=self.source[self.source.index('backup_cli_sidecars() {'):self.source.index('\ncheck_listener\n')]
         body=r"""set -euo pipefail
-existed=0; cli_changed=1; had_cli=0; cli_migrated=1; platform=linux; adopt_config=; enrollment_attempted=0
+existed=0; cli_changed=1; had_cli=0; cli_migrated=1; platform=linux; adopt_config=; enrollment_attempted=0; enrollment_failed=0
 cli_path=$1; previous_cli=$2; unit=$3/unit; backup=$3/backup; log_file=$3/log; database=$3/missing.db; data_dir=$3/data
 systemctl() { return 0; }
 stop_service() { return 0; }
@@ -1182,6 +1182,71 @@ stop_service() { return 0; }
             self.assertEqual(self.old.exists(),not committed)
             self.assertEqual(Path(str(self.old)+'.cluster.json').exists(),not committed)
             self.assertEqual(Path(str(self.old)+'.local-auth.json').exists(),not committed)
+
+
+class EnrollmentFailureTests(unittest.TestCase):
+    """A refused join is explained by the Master's reason, not as a connection or startup problem."""
+    AGENT = """#!/bin/sh
+case "$FAKE_ENROLL" in
+  ok) echo 'Agent enrolled: node-1'; exit 0;;
+  403) echo 'enroll Agent: HTTP 403: Invalid or expired Agent invitation' >&2;;
+  409) echo 'enroll Agent: HTTP 409: Agent identity or address is already registered' >&2;;
+  network) echo 'enroll Agent: Post "http://10.0.0.1:1685/api/agents/join": dial tcp 10.0.0.1:1685: connect: connection refused' >&2;;
+  503) echo 'enroll Agent: HTTP 503: Agent command service is unavailable; retry joining' >&2;;
+esac
+exit 1
+"""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='installer-enrollment-failure-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root/'work').mkdir()
+        self.binary = self.root/'oss-transfer-agent'
+        self.binary.write_text(self.AGENT)
+        self.binary.chmod(0o755)
+        (self.root/'agent.db').write_text('identity')
+        source = INSTALLER.read_text()
+        rollback = source[source.index('backup_cli_sidecars() {'):source.index('\ncheck_listener\n')]
+        start = source.index('if ((enrollment_requested)); then\n')
+        enrollment = source[start:source.index('\nunset TRANSFER_JOIN_TOKEN\n', start)]
+        self.body = installer_say(source) + r"""set -euo pipefail
+existed=0; cli_changed=0; had_cli=0; platform=linux; adopt_config=; enrollment_requested=1; enrollment_attempted=0; enrollment_failed=0
+root=$1; work=$root/work; binary=$root/oss-transfer-agent; config=$root/service.json; unit=$root/unit
+backup=; log_file=$root/service.log; database=$root/agent.db; master_url=http://10.0.0.1:1685; TRANSFER_JOIN_TOKEN=token
+systemctl() { return 0; }
+stop_service() { return 0; }
+""" + rollback + '\ntrap rollback ERR\n' + enrollment + '\nfalse\n'
+
+    def install(self, outcome, lang='en'):
+        return subprocess.run(['bash','-c',self.body,'test',str(self.root)], env=dict(os.environ, FAKE_ENROLL=outcome, lang=lang),
+                              text=True, capture_output=True, timeout=10)
+
+    def test_each_failure_names_its_cause_and_next_step(self):
+        cases = {
+            '403': ('HTTP 403: Invalid or expired Agent invitation', 'invalid, has expired (invitations are valid for 30 minutes) or was already used by another node', 'Generate a new join command for this host'),
+            '409': ('HTTP 409: Agent identity or address is already registered', 'already registered', 'remove the old node in Nodes first'),
+            'network': ('connection refused', 'Check the connection to the Master',),
+            '503': ('HTTP 503', 'Fix the problem above, then run the same command again; it retries with the same identity.',),
+        }
+        for outcome, expected in cases.items():
+            with self.subTest(outcome=outcome):
+                result = self.install(outcome)
+                self.assertNotEqual(result.returncode, 0)
+                for text in expected:
+                    self.assertIn(text, result.stderr)
+                self.assertNotIn('startup error', result.stderr)
+                if outcome in ('403', '409', '503'):
+                    self.assertNotIn('connection', result.stderr.replace('connection refused', ''))
+        result = self.install('403', 'zh')
+        self.assertIn('Master 拒绝了加入凭证：凭证无效、已过期（有效期 30 分钟）或已被其他节点使用。', result.stderr)
+
+    def test_failure_after_a_successful_join_is_not_blamed_on_the_join(self):
+        result = self.install('ok')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Agent enrolled: node-1', result.stdout)
+        self.assertIn('The Agent joined the cluster; its data and identity were retained.', result.stderr)
+        self.assertNotIn('Master connection', result.stderr)
 
 
 if __name__ == '__main__':

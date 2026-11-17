@@ -160,7 +160,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete sharedCheckSkipped childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership scanActivity") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes inFlightObjectCount inFlightObjectBytes failedChildCount liveProgress unreportedNodes progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete sharedCheckSkipped childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership scanActivity") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -683,9 +683,18 @@ func localPathProblem(ctx context.Context, direction, pathType string) string {
 	return ""
 }
 
-// addFreeSpaceNote adds the free space that the write probe found to a passed
-// download destination's note.
-func addFreeSpaceNote(ctx context.Context, check *bindingCheck) {
+// addWriteCheckNotes adds to a passing download binding's message what its
+// write check found: an Agent too old to check the directory, and the free
+// space there.
+func addWriteCheckNotes(ctx context.Context, check *bindingCheck) {
+	if check.Code == localPathWriteNotChecked {
+		note := localizeContext(ctx, "执行节点版本较旧，未检查目录是否可写；升级该节点后重新预检即可检查")
+		if check.Message == "" {
+			check.Message = note
+		} else {
+			check.Message = fmt.Sprintf(localizeContext(ctx, "%s；%s"), check.Message, note)
+		}
+	}
 	if check.FreeBytes == nil {
 		return
 	}
@@ -777,7 +786,7 @@ func (s *Server) resolveTaskNodes(ctx context.Context, row taskCreateRequest, ki
 				if probe.PathType == "MISSING" {
 					check.Message = localizeContext(ctx, "目标目录将在任务开始时创建")
 				}
-				addFreeSpaceNote(ctx, &check)
+				addWriteCheckNotes(ctx, &check)
 				spec.Nodes = append(spec.Nodes, task.Node{ID: member.ID, EnrollmentID: member.EnrollmentID, Address: member.Address, LocalRoot: root})
 			}
 		}
@@ -968,6 +977,11 @@ func taskDTO(p task.Parent) map[string]any {
 			row["creationStatus"] = p.Status
 		}
 	}
+	// failedChildCount counts the child tasks of the current run that ended
+	// with failed objects. Right after a retry or resume failedObjectCount
+	// still includes the previous run's failures; only these children can be
+	// retried in place while the task runs.
+	row["failedChildCount"] = p.FailedChildren
 	if task.Historical(p) {
 		row["legacyHistorical"] = true
 		if p.CreatedAt.IsZero() {
@@ -1000,6 +1014,7 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 	row["workerNode"] = c.Node.Address
 	row["ossTaskGroup"] = false
 	delete(row, "creationStatus")
+	delete(row, "failedChildCount")
 	row["scanComplete"] = c.Job.DiscoveryComplete
 	row["status"] = "PENDING"
 	row["listObjectCount"] = len(c.Job.Items)
@@ -1432,11 +1447,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			p, admitted, err := outcome.parent, outcome.admitted, outcome.err
 			item := map[string]any{"taskId": id, "status": p.Status, "generation": p.Generation, "success": err == nil, "accepted": err == nil && admitted, "ignored": err == nil && !admitted}
 			if result, ok := inPlace[id]; ok {
-				item["mode"] = "FAILED_OBJECTS"
-				item["retriedChildren"], item["retriedObjects"] = result.Accepted, result.RetriedObjects
-				if result.Message != "" {
-					item["message"] = result.Message
-				}
+				inPlaceRetryDetail(item, result)
 			}
 			if action == "permanent-delete" && err == nil {
 				item["purged"] = p.Purged
@@ -1605,6 +1616,13 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A node that is not connected receives the limits from the step that
+	// prepares it once it reconnects. Only a running task delivers them then;
+	// a stopping or ended one delivers them when it runs again.
+	notConnected, appliesOnReconnect := "执行节点未连接", false
+	if parent.Status == "RUNNING" || parent.Status == "LIST_DONE" || parent.Status == "RESUMING" {
+		notConnected, appliesOnReconnect = "执行节点未连接，重新连接后自动应用", true
+	}
 	var value any
 	if parent.Spec.BandwidthMbps > 0 {
 		value = parent.Spec.BandwidthMbps
@@ -1638,7 +1656,12 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			for index := range indexes {
 				node := activeNodes[index]
 				if online[node.ID] != node.EnrollmentID {
-					nodes[index] = map[string]any{"address": node.Address, "applied": false, "pending": false, "message": localize(w, "执行节点未连接")}
+					nodes[index] = map[string]any{"address": node.Address, "applied": false, "pending": false, "message": localize(w, notConnected)}
+					if appliesOnReconnect {
+						// Not a failure, and nothing to retry: the node
+						// receives the limits when it reconnects.
+						nodes[index]["appliesOnReconnect"] = true
+					}
 					addNodeDisplay(nodes[index], displays.lookup(node.ID, node.Address))
 					continue
 				}
@@ -1702,8 +1725,13 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 		pending = pending || node["pending"] == true
 		failed = failed || (node["applied"] != true && node["pending"] != true)
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes,
-		"allocation": shareAllocation(parent), "shareCommits": s.tasks.shareCommits(parent.ID)}})
+	result := map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes,
+		"allocation": shareAllocation(parent), "shareCommits": s.tasks.shareCommits(parent.ID)}}
+	if r.Method == http.MethodPut {
+		// The nodes above say where the limits apply; this says they are kept.
+		result["message"] = localize(w, "任务限速已保存")
+	}
+	writeJSON(w, 200, result)
 }
 
 const rangedDownloadOffLocalOnly = "rangedDownload off applies only to downloads to a local directory"

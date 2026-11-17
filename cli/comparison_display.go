@@ -81,6 +81,7 @@ func renderComparisonResult(out io.Writer, args []string, result map[string]inte
 			return true
 		}
 		fmt.Fprintf(out, cliText(out, "比对已开始，ID：%s\n"), safeCLIText(id))
+		renderLegacyComparisonNote(out, data)
 		fmt.Fprintf(out, cliText(out, "查看进度：%s\n"), safeCLIText(comparisonCommand("status", id, "--watch", "5")))
 	case "resume", "cancel", "delete":
 		id, err := comparisonIDArgument(rest)
@@ -227,7 +228,28 @@ func comparisonElapsed(data map[string]interface{}) string {
 	return elapsed.Round(time.Second).String()
 }
 
-// comparisonRate is compared objects per second of comparison time.
+// comparisonStallNotice is how long a running comparison may produce no new
+// result before status says so, for instance while a LIST or HEAD keeps
+// timing out and is retried.
+const comparisonStallNotice = time.Minute
+
+// comparisonStalled is how long a running comparison has counted no object
+// and read no content, by the node's clock: updatedAt advances every second
+// while it runs, progressAt only with progress. Older Agents omit progressAt.
+func comparisonStalled(data map[string]interface{}) time.Duration {
+	if getString(data, "status") != "RUNNING" {
+		return 0
+	}
+	since, sinceErr := time.Parse(time.RFC3339Nano, getString(data, "progressAt"))
+	now, nowErr := time.Parse(time.RFC3339Nano, getString(data, "updatedAt"))
+	if sinceErr != nil || nowErr != nil || !now.After(since) {
+		return 0
+	}
+	return now.Sub(since)
+}
+
+// comparisonRate is compared objects per second of comparison time: an
+// average over every run, which a stall lowers only slowly.
 func comparisonRate(out io.Writer, data map[string]interface{}) string {
 	compared, comparedOK := cliNumeric(data["compared"])
 	millis, millisOK := cliNumeric(data["elapsedMillis"])
@@ -339,9 +361,9 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	// reports how fast it read the object instead.
 	switch {
 	case single && content:
-		fields = append(fields, [2]string{cliText(out, "读取速率"), comparisonReadRate(data)})
+		fields = append(fields, [2]string{cliText(out, "平均读取速率"), comparisonReadRate(data)})
 	case !single:
-		fields = append(fields, [2]string{cliText(out, "速率"), comparisonRate(out, data)})
+		fields = append(fields, [2]string{cliText(out, "平均速率"), comparisonRate(out, data)})
 	}
 	if content {
 		fields = append(fields, [2]string{cliText(out, "已读取"), cliTaskSize(data, "bytesRead")})
@@ -358,7 +380,11 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 			fields = append(fields, [2]string{cliText(out, "最后保存的 Key"), key})
 		}
 	}
-	for _, field := range [][2]string{{cliText(out, "开始时间"), comparisonTime(data["startedAt"])}, {cliText(out, "结束时间"), comparisonTime(data["endedAt"])}, {cliText(out, "保留至"), comparisonTime(data["expiresAt"])}, {cliText(out, "错误"), getString(data, "error")}, {cliText(out, "错误详情"), getString(data, "errorDetail")}} {
+	// expiresAt is the end time plus the retention period. The node deletes
+	// the earliest ended comparisons sooner when its results exceed the
+	// storage budget or number more than 500.
+	expires := comparisonTime(data["expiresAt"])
+	for _, field := range [][2]string{{cliText(out, "开始时间"), comparisonTime(data["startedAt"])}, {cliText(out, "结束时间"), comparisonTime(data["endedAt"])}, {cliText(out, "最晚保留至"), expires}, {cliText(out, "错误"), getString(data, "error")}, {cliText(out, "错误详情"), getString(data, "errorDetail")}} {
 		if field[1] != "" {
 			fields = append(fields, field)
 		}
@@ -368,10 +394,17 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 		fmt.Fprintf(table, "%s\t%s\n", field[0], safeCLIText(field[1]))
 	}
 	table.Flush()
+	if expires != "" {
+		fmt.Fprintln(out, cliText(out, "注：节点上的比对结果合计超过存储预算（默认 2 GiB）或超过 500 个时，最早结束的比对会在此日期之前被删除；需要的结果请及时用 object export 导出"))
+	}
+	renderLegacyComparisonNote(out, data)
+	if stalled := comparisonStalled(data); stalled >= comparisonStallNotice {
+		fmt.Fprintln(out, cliTextf(out, "已有 %s 没有新的比对结果，执行节点可能正在等待存储响应或重试。", stalled.Round(time.Second)))
+	}
 	fmt.Fprintln(out)
 	rows := objectList(data["items"])
-	if len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && getString(data, "status") == "COMPLETED" && getInt64(data, "rows") == 0 {
-		fmt.Fprintln(out, cliText(out, "未发现差异"))
+	if conclusion := comparisonConclusion(out, data); len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && conclusion != "" {
+		fmt.Fprintln(out, conclusion)
 	} else {
 		renderComparisonRows(out, rows)
 	}
@@ -387,6 +420,43 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	}
 }
 
+// comparisonConclusion is what an empty first page of a comparison means, or
+// "" when it means only that the page is empty. Differences are what was
+// compared and did not match; stored rows can be fewer (or none) when the
+// node stopped saving them, and lag behind while it runs. A completed
+// comparison that checked nothing found no objects at all, which is not a
+// finding of no differences.
+func comparisonConclusion(out io.Writer, data map[string]interface{}) string {
+	compared, matched := getInt64(data, "compared"), getInt64(data, "matched")
+	differences := compared - matched
+	status := getString(data, "status")
+	switch {
+	case status == "RUNNING" || status == "CANCELING":
+		return ""
+	case differences > 0 && getInt64(data, "rows") == 0:
+		if data["rowsTruncated"] == true {
+			return cliTextf(out, "发现 %d 条差异，但节点未保存明细，原因见上方“截断原因”", differences)
+		}
+		return cliTextf(out, "发现 %d 条差异，但没有保存明细", differences)
+	case status != "COMPLETED":
+		return ""
+	case compared == 0 && getString(data, "scope") != "object":
+		return cliText(out, "没有找到任何对象，请检查两端的存储桶和前缀（Key 区分大小写，通常不以 / 开头）")
+	case compared > 0 && differences == 0:
+		return cliText(out, "未发现差异")
+	}
+	return ""
+}
+
+// renderLegacyComparisonNote warns about a comparison that an Agent before
+// results protocol 2 ran: it reports a fixed row limit, and its counts are
+// known to be unreliable.
+func renderLegacyComparisonNote(out io.Writer, data map[string]interface{}) {
+	if limit, ok := cliNumeric(data["resultLimit"]); ok && limit > 0 {
+		fmt.Fprintln(out, cliText(out, "注意：该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请在 4.1.41 或更高版本的节点上重新比对。"))
+	}
+}
+
 func renderComparisonRows(out io.Writer, rows []map[string]interface{}) {
 	if len(rows) == 0 {
 		fmt.Fprintln(out, cliText(out, "本页没有差异记录"))
@@ -397,10 +467,11 @@ func renderComparisonRows(out io.Writer, rows []map[string]interface{}) {
 	for _, row := range rows {
 		status := getString(row, "status")
 		sourceSize, destinationSize := cliTaskSize(row, "sourceSize"), cliTaskSize(row, "destinationSize")
-		if status == "EXTRA_TARGET" || status == "BOTH_MISSING" {
+		// A side that is missing, or whose size was not read, has no size.
+		if status == "EXTRA_TARGET" || status == "BOTH_MISSING" || row["sourceSizeUnknown"] == true {
 			sourceSize = "—"
 		}
-		if status == "MISSING_TARGET" || status == "BOTH_MISSING" {
+		if status == "MISSING_TARGET" || status == "BOTH_MISSING" || row["destinationSizeUnknown"] == true {
 			destinationSize = "—"
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cliTaskCount(row, "number"), comparisonStatusLabel(out, status), safeCLIText(getString(row, "sourceKey")), safeCLIText(getString(row, "destinationKey")), sourceSize, destinationSize, safeCLIText(comparisonRowDetail(out, row)))

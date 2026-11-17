@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -96,6 +97,38 @@ func ClassifyStorageError(err error) StorageErrorKind {
 // without the "api error" prefix of other codes.
 var modeledErrorCode = regexp.MustCompile(`HostID: [^,]*, (\w+): `)
 
+var (
+	apiErrorCode       = regexp.MustCompile(`api error (\w+)`)
+	xmlErrorCode       = regexp.MustCompile(`<Code>(\w+)</Code>`)
+	responseStatusCode = regexp.MustCompile(`StatusCode: (\d{3})\b`)
+)
+
+// StorageErrorReply returns the error code and HTTP status of the storage
+// reply that an error's text reports, as the SDK formats it. A reply without
+// a body (HEAD, or an error page) has only its status text as code, such as
+// "Forbidden"; that code is returned empty, so the status decides. The code is
+// empty and the status 0 when the text reports no reply, as for a connection
+// that failed.
+func StorageErrorReply(message string) (code string, status int) {
+	if match := responseStatusCode.FindStringSubmatch(message); match != nil {
+		status, _ = strconv.Atoi(match[1])
+	}
+	for _, pattern := range []*regexp.Regexp{apiErrorCode, modeledErrorCode, xmlErrorCode} {
+		if match := pattern.FindStringSubmatch(message); match != nil {
+			code = match[1]
+			break
+		}
+	}
+	if status > 0 && code == strings.ReplaceAll(http.StatusText(status), " ", "") {
+		code = ""
+	}
+	return code, status
+}
+
+// IsThrottleCode reports whether a storage error code asks the client to
+// lower its request rate (see IsThrottleResponse).
+func IsThrottleCode(code string) bool { return throttleErrorCodes[code] }
+
 // ClassifyStorageMessage classifies the text of a storage error. The order
 // matters: a storage error code in the reply wins over the transport words
 // that may surround it, and a TLS handshake timeout is a timeout.
@@ -131,6 +164,32 @@ func ClassifyStorageMessage(message string) StorageErrorKind {
 		return StorageErrorEOF
 	}
 	return StorageErrorUnknown
+}
+
+// endpointMismatch is how S3 (PermanentRedirect, HTTP 301) and Alibaba Cloud
+// OSS (AccessDenied, HTTP 403, EC 0003-00001403) say that a bucket must be
+// reached through another endpoint, usually the one of its region.
+const endpointMismatch = "must be addressed using the specified endpoint"
+
+var (
+	diagnosticEndpoint = regexp.MustCompile(`\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)`)
+	// An OSS reply without a body, such as that to HEAD, says it by its EC
+	// header alone (see the storage response diagnostic).
+	diagnosticEndpointCode = regexp.MustCompile(`\[storage response: [^\]]*\bec=0003-00001403\b`)
+)
+
+// EndpointMismatch reports whether a storage error says that the bucket must
+// be addressed through another endpoint, and that endpoint when the reply
+// named it (see the storage response diagnostic). OSS answers such a request
+// with AccessDenied although the credentials are not the problem.
+func EndpointMismatch(message string) (bool, string) {
+	if !strings.Contains(strings.ToLower(message), endpointMismatch) && !diagnosticEndpointCode.MatchString(message) {
+		return false, ""
+	}
+	if match := diagnosticEndpoint.FindStringSubmatch(message); match != nil {
+		return true, match[1]
+	}
+	return true, ""
 }
 
 // StorageErrorSuggestsPathStyle reports whether a failed bucket-level request

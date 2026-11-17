@@ -44,8 +44,21 @@ type BandwidthStatus = {
     applied: boolean;
     pending?: boolean;
     message?: string;
+    /** Not connected; receives the limits when it reconnects. */
+    appliesOnReconnect?: boolean;
   })[];
 };
+type BandwidthNode = BandwidthStatus["nodes"][number];
+/** Nodes that answered with an error or cannot receive the limits now. */
+const failedNodes = (status?: BandwidthStatus) =>
+  status?.nodes.filter(
+    (node) => !node.applied && !node.pending && !node.appliesOnReconnect,
+  ) || [];
+/** Nodes that receive the limits when they reconnect. */
+const reconnectingNodes = (status?: BandwidthStatus) =>
+  status?.nodes.filter(
+    (node) => !node.applied && !node.pending && node.appliesOnReconnect,
+  ) || [];
 function readStatus(response: { data?: BandwidthStatus }): BandwidthStatus {
   const status = response.data;
   if (
@@ -205,6 +218,13 @@ export default function TaskBandwidth({
       if (next.applied) {
         notify(t("任务限速已更新。"));
         setOpen(false);
+      } else if (
+        failedNodes(next).length === 0 &&
+        reconnectingNodes(next).length > 0
+      ) {
+        // Saved, and applied on every connected node: nothing to retry.
+        notify(t("任务限速已保存；未连接的执行节点重新连接后自动应用。"));
+        setOpen(false);
       }
     } catch (error) {
       if (error instanceof ApiError && error.response?.data) {
@@ -238,19 +258,35 @@ export default function TaskBandwidth({
       setSaving(false);
     }
   }
-  const failures =
-    status?.nodes.filter((node) => !node.applied && !node.pending) || [];
+  const failures = failedNodes(status);
+  const reconnecting = reconnectingNodes(status);
   const partial =
-    status && !status.applied && (!status.pending || failures.length > 0);
+    status &&
+    !status.applied &&
+    (failures.length > 0 || (!status.pending && reconnecting.length === 0));
   // Outside the edit dialog, show only a mismatch that persists while the task
   // runs: a node change briefly leaves a member on its previous share until it
   // receives the new one. An ended task's mismatch is final and shows at once.
-  const settledPartial =
-    useStableMessages(partial ? ["partial"] : [], status, {
+  const settled = useStableMessages(
+    partial ? ["partial"] : reconnecting.length > 0 ? ["reconnecting"] : [],
+    status,
+    {
       enabled: live,
       refreshMs,
       scope: taskId,
-    }).length > 0;
+    },
+  );
+  const settledPartial = settled.includes("partial");
+  const settledReconnecting = settled.includes("reconnecting");
+  const reconnectNote = (
+    <Alert severity="info" sx={{ mt: 1.5 }}>
+      {t("未连接的执行节点会在重新连接后自动应用此限速：{nodes}", {
+        nodes: reconnecting
+          .map((node: BandwidthNode) => nodeLabel(node.address, node))
+          .join(t("、")),
+      })}
+    </Alert>
+  );
   const warning = (
     <Alert
       severity="warning"
@@ -351,6 +387,11 @@ export default function TaskBandwidth({
         </Alert>
       )}
       {!open && settledPartial && warning}
+      {!open &&
+        !settledPartial &&
+        settledReconnecting &&
+        reconnecting.length > 0 &&
+        reconnectNote}
       <Dialog
         open={open && active}
         onClose={() => {
@@ -413,6 +454,7 @@ export default function TaskBandwidth({
               </Typography>
             )}
             {partial && warning}
+            {!partial && reconnecting.length > 0 && reconnectNote}
             {status?.pending && !partial && (
               <Typography
                 role="status"

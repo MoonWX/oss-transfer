@@ -60,7 +60,7 @@ import {
   ReplayRounded,
 } from "@mui/icons-material";
 import { api, ApiError, download, getToken, useNotify } from "../lib/api";
-import { storageErrorSummary } from "../lib/storageErrors";
+import { objectErrorSummary } from "../lib/storageErrors";
 import FailedTaskRetryDialog from "../components/FailedTaskRetryDialog";
 import RunningFailureRetry, {
   canRetryRunningFailures,
@@ -71,6 +71,8 @@ import ListPagination, {
 } from "../components/ListPagination";
 import {
   canRetrySnapshot,
+  recoveryRunning,
+  runningRetryAllowed,
   useTaskRecovery,
   useVisibleRecoveryTasks,
   type RecoveryTaskSnapshot,
@@ -137,6 +139,11 @@ type Result = {
   workerErrors?: Record<string, string>;
   respondingNodes?: string[];
   nodeDisplays?: Record<string, NodeDisplay>;
+  // The task filter names a task converted from v4.0.x: its failed objects
+  // are in its task report, not in these records.
+  legacyHistorical?: boolean;
+  // The Master records no fallback objects.
+  fallbackUnsupported?: boolean;
 };
 const initialFilters: Filters = {
   task: "",
@@ -225,7 +232,9 @@ export default function ExceptionsPage() {
   const labels = [tr("失败对象"), tr("降级迁移记录"), tr("本地迁移失败")];
   const tabDescriptions = [
     tr("对象存储之间迁移失败的对象。"),
-    tr("旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。"),
+    tr(
+      "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。",
+    ),
     tr("与执行节点本地目录之间迁移失败的文件。"),
   ];
 
@@ -318,6 +327,9 @@ export default function ExceptionsPage() {
           search: taskSearch,
           limit: "100",
         });
+        // Failed objects lists only transfers between object storages;
+        // uploads and downloads have their own tab.
+        if (mode === "failed") params.set("direction", "OSS_TO_OSS");
         const response = await api<{
           data: { items: ExceptionTask[]; hasMore: boolean };
         }>(`/api/master/exceptions/tasks?${params}`, {
@@ -413,6 +425,7 @@ export default function ExceptionsPage() {
           } else {
             const body = {
               ...exceptionFilters(filters),
+              ...(mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
               ...(mode === "failed" && filters.resolution
                 ? { resolution: filters.resolution }
                 : {}),
@@ -470,6 +483,9 @@ export default function ExceptionsPage() {
                 Record<string, string> | undefined,
               nodeDisplays: raw.nodeDisplays as
                 Record<string, NodeDisplay> | undefined,
+              legacyHistorical: raw.legacyHistorical === true,
+              fallbackUnsupported:
+                mode === "fallback" && raw.supported === false,
             };
           }
           if (
@@ -536,6 +552,9 @@ export default function ExceptionsPage() {
         )
       : [];
   const missingNodes = missingExceptionNodes(result, legacyNodes);
+  const missingNodeLabels = missingNodes
+    .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
+    .join(tr("、"));
   const visible = result?.items
     ? isLocal
       ? result.items
@@ -631,6 +650,7 @@ export default function ExceptionsPage() {
         body: {
           type: clearScope.mode,
           ...exceptionFilters(clearScope.filters),
+          ...(clearScope.mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
         },
       });
       if (
@@ -821,14 +841,19 @@ export default function ExceptionsPage() {
       setBusy(false);
     }
   }
+  // A pending request shows its own phase. Once the task runs in the accepted
+  // generation the request has taken effect, and the task's state decides.
   const retryPhase = (id: number) => {
-    const phase = recovery.states[id]?.phase;
-    if (phase) return phase;
+    const guard = recovery.states[id];
     const snapshot = visibleTasks.tasks[id];
+    if (guard && !recoveryRunning(guard, snapshot)) return guard.phase;
     if (snapshot === undefined) return "loading";
     if (snapshot === null) return "unavailable";
     if (snapshot.status === "COMPLETED") return "completed";
-    return canRetrySnapshot(snapshot) ? undefined : "accepted";
+    if (canRetrySnapshot(snapshot)) return undefined;
+    if (["RUNNING", "LIST_DONE"].includes(snapshot.status)) return "running";
+    if (snapshot.status === "STOPPING") return "stopping";
+    return "accepted";
   };
   const actionSnapshot =
     actionTaskId === undefined ? undefined : visibleTasks.tasks[actionTaskId];
@@ -843,13 +868,17 @@ export default function ExceptionsPage() {
           ? tr("检查状态…")
           : actionPhase === "unavailable"
             ? tr("状态暂不可用")
-            : actionPhase
-              ? tr("处理中…")
-              : actionSnapshot?.status === "STOPPED"
-                ? tr("继续传输")
-                : actionSnapshot?.status === "PARTIAL_FAILED"
-                  ? tr("重试失败项")
-                  : tr("重试任务");
+            : actionPhase === "running"
+              ? tr("暂无可重试的对象")
+              : actionPhase === "stopping"
+                ? tr("等待任务停止")
+                : actionPhase
+                  ? tr("处理中…")
+                  : actionSnapshot?.status === "STOPPED"
+                    ? tr("继续传输")
+                    : actionSnapshot?.status === "PARTIAL_FAILED"
+                      ? tr("重试失败项")
+                      : tr("重试任务");
   async function report() {
     setBusy(true);
     try {
@@ -1154,13 +1183,18 @@ export default function ExceptionsPage() {
         result?.complete === false ||
         missingNodes.length > 0) && (
         <Alert severity="warning">
-          {missingNodes.length > 0
-            ? tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
-                nodes: missingNodes
-                  .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
-                  .join("、"),
-              })
-            : tr("部分节点未返回数据，当前结果不完整。")}
+          {missingNodes.length === 0
+            ? tr("部分节点未返回数据，当前结果不完整。")
+            : hasMembershipSnapshot
+              ? // The Master reads its own failure index; it names only the
+                // offline nodes that still own unfinished subtasks.
+                tr(
+                  "执行节点 {nodes} 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。",
+                  { nodes: missingNodeLabels },
+                )
+              : tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
+                  nodes: missingNodeLabels,
+                })}
           {Object.entries(result?.workerErrors ?? {}).map(([node, message]) => (
             <Typography key={node} variant="body2">
               {nodeLabel(node, result?.nodeDisplays?.[node])}：{message}
@@ -1181,9 +1215,13 @@ export default function ExceptionsPage() {
       )}
       {mode === "fallback" && (
         <Alert severity="info">
-          {tr(
-            "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
-          )}
+          {result?.fallbackUnsupported
+            ? tr(
+                "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。",
+              )
+            : tr(
+                "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
+              )}
         </Alert>
       )}
       <Paper
@@ -1240,7 +1278,7 @@ export default function ExceptionsPage() {
                 onClick={() => void report()}
                 disabled={busy}
               >
-                {tr("完整迁移报告")}
+                {tr("导出全部本地任务报告")}
               </Button>
             )}
             {mode !== "fallback" && (
@@ -1279,7 +1317,11 @@ export default function ExceptionsPage() {
             {actionSnapshot && <StatusChip status={actionSnapshot.status} />}
             {canRetryRunningFailures(
               actionSnapshot && { ...actionSnapshot, taskIndex: actionTaskId },
-            ) && !recovery.states[actionTaskId] ? (
+            ) &&
+            runningRetryAllowed(
+              recovery.states[actionTaskId],
+              actionSnapshot,
+            ) ? (
               <RunningFailureRetry
                 task={{ ...actionSnapshot!, taskIndex: actionTaskId }}
                 size="small"
@@ -1287,8 +1329,10 @@ export default function ExceptionsPage() {
                 onSubmitted={() => void load(true)}
                 onStale={(fresh) => {
                   visibleTasks.update(actionTaskId, fresh);
-                  // An ended task keeps the ordinary retry of a new generation.
-                  if (canRetrySnapshot(fresh)) void retry(actionTaskId, fresh);
+                  // An ended task keeps the ordinary retry of a new generation,
+                  // once an earlier recovery of it is no longer guarded.
+                  if (canRetrySnapshot(fresh) && !recovery.states[actionTaskId])
+                    void retry(actionTaskId, fresh);
                   else notify(tr("任务状态已更新，请查看任务详情。"), "info");
                 }}
               />
@@ -1299,7 +1343,9 @@ export default function ExceptionsPage() {
                 startIcon={
                   actionPhase === "completed" ? (
                     <CheckCircleOutlineRounded />
-                  ) : actionPhase && actionPhase !== "unavailable" ? (
+                  ) : actionPhase &&
+                    actionPhase !== "unavailable" &&
+                    actionPhase !== "running" ? (
                     <CircularProgress size={16} color="inherit" />
                   ) : actionSnapshot?.status === "STOPPED" ? (
                     <PlayArrowRounded />
@@ -1455,7 +1501,7 @@ export default function ExceptionsPage() {
                                 overflow: "hidden",
                               }}
                             >
-                              {storageErrorSummary(item.errorMessage) ||
+                              {objectErrorSummary(item.errorMessage) ||
                                 item.errorMessage ||
                                 item.errorCode ||
                                 tr("未提供原因")}
@@ -1550,7 +1596,7 @@ export default function ExceptionsPage() {
                                 overflow: "hidden",
                               }}
                             >
-                              {storageErrorSummary(item.errorMessage) ||
+                              {objectErrorSummary(item.errorMessage) ||
                                 item.errorMessage ||
                                 item.errorCode ||
                                 tr("未提供原因")}
@@ -1694,7 +1740,13 @@ export default function ExceptionsPage() {
                     ? tr(
                         "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。",
                       )
-                    : tr("请调整筛选条件，或在任务执行后刷新。")
+                    : result.fallbackUnsupported
+                      ? undefined
+                      : result.legacyHistorical
+                        ? tr(
+                            "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                          )
+                        : tr("请调整筛选条件，或在任务执行后刷新。")
                 }
               />
             )
@@ -1717,7 +1769,7 @@ export default function ExceptionsPage() {
       {isLocal && (
         <Typography variant="caption" color="text.secondary">
           {tr(
-            "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。",
+            "报告包含全部本地迁移任务，不受当前筛选条件影响；只有在所有本地迁移都已结束或停止时才能导出，任务总数超过 1 万个时请改用单任务报告。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。",
           )}
         </Typography>
       )}

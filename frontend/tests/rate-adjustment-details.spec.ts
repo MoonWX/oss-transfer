@@ -311,7 +311,7 @@ test("a throttle-window reduction shows its evidence and rule", async ({
     "37 / 412（5 秒内）",
     "降速条件",
     "至少 5 次，且不低于该类请求的 1%",
-    "降速前实测速率",
+    "降速前单秒峰值",
     "780 次/秒",
   ])
     await expect(page.getByText(text, { exact: true })).toBeVisible();

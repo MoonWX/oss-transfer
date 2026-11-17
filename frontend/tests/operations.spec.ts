@@ -227,6 +227,8 @@ test("warns about missing workers and confirms scoped resolved-record cleanup", 
   page,
 }) => {
   const requests = await mockApi(page);
+  // The Master reads its own failure index and names the offline node that
+  // still owns unfinished subtasks of the task.
   await page.route("**/api/master/failed", (route) =>
     route.fulfill({
       json: {
@@ -235,7 +237,13 @@ test("warns about missing workers and confirms scoped resolved-record cleanup", 
         failedKeys: {
           "10.0.1.12": [{ ...failure, retryStatus: "RECOVERED" }],
           "10.0.1.12Count": 1,
+          "10.0.1.13": [],
+          "10.0.1.13Count": 0,
         },
+        failedWorkers: ["10.0.1.13"],
+        unreachableWorkers: ["10.0.1.13"],
+        complete: false,
+        partial: true,
         clearableCount: 1,
       },
     }),
@@ -246,7 +254,7 @@ test("warns about missing workers and confirms scoped resolved-record cleanup", 
   ).toBeVisible();
   await expect(
     page.getByText(
-      "部分节点未返回数据，当前结果不完整。不可达节点：agent (10.0.1.13)",
+      "执行节点 agent (10.0.1.13) 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。",
     ),
   ).toBeVisible();
   await page.getByRole("button", { name: "清理已处理记录" }).click();
@@ -276,7 +284,7 @@ test("warns about missing workers and confirms scoped resolved-record cleanup", 
   ).toBe(true);
   expect(
     requests.find((item) => item.path === "/api/master/failed/clear")?.body,
-  ).toEqual({ type: "failed", taskIndex: 123 });
+  ).toEqual({ type: "failed", taskIndex: 123, direction: "OSS_TO_OSS" });
 });
 
 test("deletes only selected recycle task IDs", async ({ page }) => {

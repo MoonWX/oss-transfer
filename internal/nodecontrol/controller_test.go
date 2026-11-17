@@ -286,6 +286,19 @@ func TestInvalidOrFailedConfigurationNeverPublishes(t *testing.T) {
 	if err := f.controller.SetRoots(ctx, []string{"relative"}); !errors.Is(err, ErrInvalid) {
 		t.Fatal("relative root accepted")
 	}
+	// Each rejection still counts as an invalid setting, and its message
+	// names the setting instead of leaving the user to guess.
+	for _, test := range []struct {
+		err, want error
+	}{
+		{f.controller.SetRoots(ctx, []string{"relative"}), ErrInvalidRoots},
+		{f.controller.SetRate(ctx, "localIops", 10), ErrUnknownRate},
+		{ValidateConcurrency(32, 64), ErrInvalidConcurrency},
+	} {
+		if !errors.Is(test.err, test.want) || !errors.Is(test.err, ErrInvalid) || test.err.Error() == ErrInvalid.Error() {
+			t.Fatalf("rejection does not name the setting: %v", test.err)
+		}
+	}
 	must(t, f.db.Close())
 	if err := f.controller.SetRate(ctx, "put", 42); err == nil {
 		t.Fatal("save to closed DB reported success")
@@ -357,11 +370,22 @@ func TestRestartAppliesConfiguredRequestLimits(t *testing.T) {
 	// Lowered at once.
 	f.restart(t, func(o *Options) { o.ListQPS = 20 })
 	list(20, 20, "NORMAL")
-	// Raised in recovery steps.
+	// Raised in steps. Nothing throttled it, so it is neither reduced nor
+	// recovering: it climbs to the raised target.
 	f.restart(t, func(o *Options) { o.ListQPS = 40 })
-	list(20, 40, "REDUCED")
+	list(20, 40, "RAISING")
 	must(t, f.controller.Tick(time.Now().Add(2*time.Hour)))
-	list(24, 40, "RECOVERING")
+	list(24, 40, "RAISING")
+	if last := rate(t, f.controller, "list")["lastAdjustment"].(Adjustment); last.ReasonCode != "RAISE_STEP" || last.IncidentID != "" {
+		t.Fatalf("a step to a raised target was recorded as a recovery: %+v", last)
+	}
+	for step := 3; step < 20 && rate(t, f.controller, "list")["limitQps"] != float64(40); step++ {
+		must(t, f.controller.Tick(time.Now().Add(time.Duration(step)*time.Hour)))
+	}
+	list(40, 40, "NORMAL")
+	if last := rate(t, f.controller, "list")["lastAdjustment"].(Adjustment); last.ReasonCode != "RAISED" {
+		t.Fatalf("reaching a raised target was recorded as %q", last.ReasonCode)
+	}
 	// Turned off at once.
 	f.restart(t, func(o *Options) { o.ListQPS = 0 })
 	list(0, 0, "UNLIMITED")

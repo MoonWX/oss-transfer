@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptrace"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,11 @@ func (c *s3DiagnosticClient) Do(request *http.Request) (*http.Response, error) {
 			break
 		}
 	}
+	// Alibaba Cloud OSS also names its error code (EC) in a header, the only
+	// account of the error in a reply without a body, such as that to HEAD.
+	if value := diagnosticToken(response.Header.Get("X-Oss-Ec"), 64, c.credentials); value != "" {
+		fields = append(fields, "ec="+value)
+	}
 	switch response.Proto {
 	case "HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0":
 		fields = append(fields, "protocol="+response.Proto)
@@ -78,15 +84,16 @@ func (c *s3DiagnosticClient) Do(request *http.Request) (*http.Response, error) {
 	if strings.EqualFold(request.Header.Get("Expect"), "100-continue") {
 		fields = append(fields, "expect=100-continue")
 	}
-	response.Body = &s3ErrorBody{ReadCloser: response.Body, fields: fields}
+	response.Body = &s3ErrorBody{ReadCloser: response.Body, fields: fields, credentials: c.credentials}
 	return response, nil
 }
 
 type s3ErrorBody struct {
 	io.ReadCloser
-	mu     sync.Mutex
-	prefix []byte
-	fields []string
+	mu          sync.Mutex
+	prefix      []byte
+	fields      []string
+	credentials []string
 }
 
 func (b *s3ErrorBody) Read(p []byte) (int, error) {
@@ -104,8 +111,19 @@ func (b *s3ErrorBody) Read(p []byte) (int, error) {
 func (b *s3ErrorBody) diagnostic() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return strings.Join(b.fields, ", ") + ", body=" + s3ErrorBodyKind(b.prefix)
+	diagnostic := strings.Join(b.fields, ", ") + ", body=" + s3ErrorBodyKind(b.prefix)
+	// A bucket that must be addressed through another endpoint (S3
+	// PermanentRedirect, OSS EC 0003-00001403) names that endpoint. Only a
+	// host-like token is kept, never other response text.
+	if match := s3ErrorEndpoint.FindSubmatch(b.prefix); match != nil {
+		if endpoint := diagnosticToken(string(match[1]), 255, b.credentials); endpoint != "" && !strings.ContainsAny(endpoint, "/+=") {
+			diagnostic += ", endpoint=" + endpoint
+		}
+	}
+	return diagnostic
 }
+
+var s3ErrorEndpoint = regexp.MustCompile(`<Endpoint>\s*([^<\s]{1,255})\s*</Endpoint>`)
 
 // Never copy arbitrary response text. Gateways can echo request URLs, tokens,
 // credentials or object contents in their error pages.

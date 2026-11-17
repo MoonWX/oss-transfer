@@ -148,7 +148,20 @@ test("container installation shows Compose commands and never offers in-containe
   await expect(
     page.getByText("Docker 部署请更新镜像后重新创建容器。", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText(/docker compose pull/)).toBeVisible();
+  // The installer pins the image tag and names the project and file: a bare
+  // "docker compose pull / up -d" would not update it, so the tag change and
+  // the full commands are given.
+  await expect(page.getByText(/仅拉取镜像不会更新/)).toBeVisible();
+  const commands = page.getByText(
+    "docker compose -p oss-transfer-master -f /opt/oss-transfer-compose/master/docker-compose.yml pull",
+  );
+  await expect(commands).toBeVisible();
+  await expect(commands).toContainText(
+    "docker compose -p oss-transfer-master -f /opt/oss-transfer-compose/master/docker-compose.yml up -d",
+  );
+  await expect(
+    page.getByText(/^docker compose pull\s+docker compose up -d$/),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "更新 Master", exact: true }),
   ).toBeDisabled();
@@ -240,4 +253,150 @@ test("legacy Agent instructions differ from an offline Agent", async ({
   await expect(
     page.getByRole("button", { name: "更新全部节点", exact: true }),
   ).toBeDisabled();
+});
+
+const unreachable =
+  "Master 无法连接 GitHub 和京东云 OSS，因此无法检测新版本。在能够访问其中之一之前，重新检测不会成功；也可以使用离线安装包升级（见文档“离线安装”）";
+const sourceReasons =
+  'github: Get "https://api.github.com/repos/MoonWX/oss-transfer/releases/latest": dial tcp: lookup api.github.com: no such host\njdoss: Get "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/release.json": dial tcp: lookup moonwx.s3.cn-north-1.jdcloud-oss.com: no such host';
+
+/** Counts the version checks and snapshot reads the page makes. */
+async function countRequests(page: Page) {
+  const counts = { checks: 0, reads: 0 };
+  await page.route("**/api/master/software-updates**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/check")) counts.checks++;
+    else if (route.request().method() === "GET") counts.reads++;
+    await route.fallback();
+  });
+  return counts;
+}
+
+test("a failed check shows the Master's reason and each source's, and is not repeated on every visit", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  Object.assign(f.state, {
+    latest: undefined,
+    available: false,
+    checkedAt: "0001-01-01T00:00:00Z",
+    checkError: unreachable,
+    checkErrorDetail: sourceReasons,
+    checkFailedAt: new Date().toISOString(),
+  });
+  const counts = await countRequests(page);
+  await page.goto("/tools?tab=updates");
+  const alert = page.getByRole("alert").filter({ hasText: unreachable });
+  await expect(alert).toBeVisible();
+  await expect(alert.getByTestId("version-check-detail")).toHaveText(
+    sourceReasons,
+  );
+  await expect(alert).toContainText("检测时间：");
+  await expect(alert).not.toContainText("请重试");
+  // The page reads the snapshot again without checking on its own.
+  const reads = counts.reads;
+  // The snapshot is read every 3 seconds; the timeout only guards a hang.
+  await expect
+    .poll(() => counts.reads, { timeout: 30000 })
+    .toBeGreaterThan(reads);
+  expect(counts.checks).toBe(0);
+});
+
+test("a failure from more than an hour ago is checked again on opening", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  Object.assign(f.state, {
+    checkedAt: "0001-01-01T00:00:00Z",
+    checkError: unreachable,
+    checkErrorDetail: sourceReasons,
+    checkFailedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+  });
+  const counts = await countRequests(page);
+  await page.goto("/tools?tab=updates");
+  await expect.poll(() => counts.checks).toBe(1);
+});
+
+test("a check that fails on the page shows the reason the Master returned", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.route("**/api/master/software-updates/check", (route) =>
+    route.fulfill({
+      status: 502,
+      json: { success: false, message: unreachable, detail: sourceReasons },
+    }),
+  );
+  await page.goto("/tools?tab=updates");
+  await page.getByRole("button", { name: "检测新版本", exact: true }).click();
+  const alert = page.getByRole("alert").filter({ hasText: unreachable });
+  await expect(alert.getByTestId("version-check-detail")).toHaveText(
+    sourceReasons,
+  );
+});
+
+test("the node page's version tab, which cannot check, does not show a check failure", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  Object.assign(f.state, {
+    checkError: unreachable,
+    checkErrorDetail: sourceReasons,
+    checkFailedAt: new Date().toISOString(),
+  });
+  await page.goto("/nodes");
+  await page.getByRole("tab", { name: "版本更新", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "更新全部节点", exact: true }),
+  ).toBeVisible();
+  // Neither the Master's reason nor the console's own wording.
+  await expect(page.getByText(/无法检测新版本|版本检测失败/)).toHaveCount(0);
+});
+
+test("a stopped node update stops being reported once each node runs its version", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  // The queue to 4.1.14 stopped on agent-a and held agent-b back; agent-a was
+  // then upgraded with the installer, as its failure advised.
+  f.state.queue = {
+    phase: "FAILED",
+    version: "4.1.14",
+    items: [
+      {
+        address: "agent-a",
+        phase: "FAILED",
+        reason: "TIMEOUT",
+        error: "节点更新未完成，请检查节点服务后重试",
+      },
+      { address: "agent-b", phase: "SKIPPED", reason: "PREVIOUS_FAILED" },
+    ],
+  };
+  Object.assign(f.state.agents[0], {
+    info: { role: "agent", version: "4.1.14", supported: true },
+  });
+  Object.assign(f.state.agents[1], {
+    info: { role: "agent", version: "4.1.13", supported: true },
+    unavailable: false,
+  });
+  await page.goto("/tools?tab=updates");
+  const rows = page
+    .getByRole("table", { name: "节点版本", exact: true })
+    .getByRole("row");
+  const banner = page.getByText("节点更新已停止，请处理失败原因后重试。", {
+    exact: true,
+  });
+  await expect(rows.nth(1)).toContainText("版本一致");
+  await expect(rows.nth(1)).not.toContainText("节点更新未完成");
+  // agent-b still runs the old version, so the stop and its reason remain.
+  await expect(banner).toBeVisible();
+  await expect(rows.nth(2)).toContainText("前一节点更新失败，尚未更新");
+  Object.assign(f.state.agents[1], {
+    info: { role: "agent", version: "4.1.14", supported: true },
+  });
+  await page.reload();
+  await expect(rows.nth(2)).toContainText("版本一致");
+  await expect(rows.nth(1)).toContainText("版本一致");
+  await expect(banner).toHaveCount(0);
+  await expect(page.getByText("前一节点更新失败，尚未更新")).toHaveCount(0);
 });

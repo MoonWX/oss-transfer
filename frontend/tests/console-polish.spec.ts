@@ -264,7 +264,7 @@ test("a single-object content comparison shows its read rate and resumes", async
   await page.goto("/tools?comparison=single");
   const result = page.getByRole("region", { name: "比对结果" });
   await expect(
-    result.getByText("已用 1 分 0 秒，已读取 600 MiB（10 MiB/秒）"),
+    result.getByText("已用 1 分 0 秒，已读取 600 MiB（平均 10 MiB/秒）"),
   ).toBeVisible();
   await expect(result.getByText(/个\/秒/)).toHaveCount(0);
   await expect(
@@ -365,7 +365,7 @@ test("failure records show unresolved records by default", async ({ page }) => {
     .toBe("unresolved");
   await expect(page.getByRole("tab", { name: "降级迁移记录" })).toHaveAttribute(
     "title",
-    /当前版本不再产生这类记录/,
+    /当前版本不会改用备用传输方式，因此不产生降级记录/,
   );
 });
 

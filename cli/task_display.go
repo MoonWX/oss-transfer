@@ -50,12 +50,25 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 		}
 		return
 	}
-	if total > 0 && limit > 0 {
+	children := objectList(result["children"])
+	active := getString(page, "view") == "active"
+	switch {
+	case active:
+		// In the active view the Master reads the subtasks in progress after
+		// child number --offset; totalCount counts those in progress, and
+		// their numbers have gaps where subtasks finished.
+		if len(children) > 0 {
+			first, last := subtaskNumber(children[0]), subtaskNumber(children[len(children)-1])
+			fmt.Fprint(out, cliTextf(out, "本页 %d 个进行中的子任务（编号 %d–%d），共 %d 个进行中\n", len(children), first, last, total))
+		} else if total > 0 {
+			fmt.Fprint(out, cliTextf(out, "编号 %d 之后没有进行中的子任务，共 %d 个进行中\n", offset, total))
+		}
+	case total > 0 && limit > 0:
 		end := offset + limit
 		if end > total {
 			end = total
 		}
-		if len(objectList(result["children"])) == 0 || offset >= total {
+		if len(children) == 0 || offset >= total {
 			fmt.Fprintf(out, cliText(out, "此编号范围无记录，最大编号 %d\n"), total)
 		} else {
 			fmt.Fprintf(out, cliText(out, "子任务编号 %d–%d / %d\n"), offset+1, end, total)
@@ -63,7 +76,13 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 	}
 	if page["hasMore"] == true && limit > 0 {
 		parent := getInt(page, "parentTaskId")
-		command := fmt.Sprintf("task children %d --offset %d --limit %d", parent, offset+limit, limit)
+		// The next page starts after the last child number this page read;
+		// an older Master without nextOffset numbers pages by position.
+		next := offset + limit
+		if after := getInt(page, "nextOffset"); after > offset {
+			next = after
+		}
+		command := fmt.Sprintf("task children %d --offset %d --limit %d", parent, next, limit)
 		if getString(page, "order") == "id" {
 			command += " --order id"
 		}
@@ -72,6 +91,17 @@ func renderSubtaskPage(out io.Writer, result map[string]interface{}) {
 		}
 		fmt.Fprintf(out, cliText(out, "下一页：%s\n"), command)
 	}
+}
+
+// subtaskNumber is a child's number within its parent: subtaskNumber, or the
+// part after the dash of childTaskId (224-26).
+func subtaskNumber(child map[string]interface{}) int {
+	if number := getInt(child, "subtaskNumber"); number > 0 {
+		return number
+	}
+	_, number, _ := strings.Cut(getString(child, "childTaskId"), "-")
+	value, _ := strconv.Atoi(number)
+	return value
 }
 
 func quoteTaskCursor(cursor string) string {

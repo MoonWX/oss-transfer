@@ -159,9 +159,9 @@ func TestComparisonStatusRendersDedicatedSummaryAndRows(t *testing.T) {
 			}
 		}
 	}
-	// Content mode shows bytes read; a finished comparison without stored
-	// differences says that none were found.
-	content := comparisonTestPage(map[string]interface{}{"mode": "content", "bytesRead": 3 << 20, "rows": 0, "elapsedMillis": 0})
+	// Content mode shows bytes read; a finished comparison whose checked
+	// objects all matched says that no differences were found.
+	content := comparisonTestPage(map[string]interface{}{"mode": "content", "bytesRead": 3 << 20, "rows": 0, "elapsedMillis": 0, "matched": 1200, "different": 0, "etagMismatch": 0, "missing": 0, "extra": 0, "changed": 0, "errors": 0, "bothMissing": 0})
 	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, content) })
 	if code != 0 || !strings.Contains(out, "内容 SHA-256") || !strings.Contains(out, "已读取") || !strings.Contains(out, "3 MiB") || !strings.Contains(out, "未发现差异") || strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "下一页") || strings.Contains(out, "个对象/秒") {
 		t.Fatalf("%d %s", code, out)
@@ -175,7 +175,7 @@ func TestComparisonStatusRendersDedicatedSummaryAndRows(t *testing.T) {
 		{[]string{"--status", "DIFFERENT"}, comparisonTestPage(map[string]interface{}{"rows": 0})},
 		{[]string{"--after", "10"}, comparisonTestPage(map[string]interface{}{"rows": 0})},
 		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "RUNNING"})},
-		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "CANCELED"})},
+		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "CANCELED", "matched": 1200})},
 	} {
 		code, out, _ := runMockCLI(t, append([]string{"object", "status", "job-1"}, test.args...), func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, test.page) })
 		if code != 0 || !strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "未发现差异") {
@@ -191,7 +191,7 @@ func TestComparisonStatusOfOneObjectShowsReadRateWithoutCheckpoint(t *testing.T)
 		wants, avoid []string
 	}{
 		// Content mode over one object: how fast it was read, not objects/s.
-		{"content", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "checkpoint": "a.jpg", "rows": 0}),
+		{"content", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "matched": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "checkpoint": "a.jpg", "rows": 0}),
 			[]string{"读取速率", "2 MiB/s", "已读取", "4 MiB", "未发现差异"}, []string{"个对象/秒", "检查点", "a.jpg\n"}},
 		// Metadata mode over one object: no rate at all.
 		{"metadata", comparisonTestPage(map[string]interface{}{"scope": "object", "compared": 1, "elapsedMillis": 6, "checkpoint": "a.jpg", "rows": 0}),
@@ -1179,5 +1179,134 @@ func TestComparisonStatusOmitsUnusableCheckpointAndSaysNoDifferences(t *testing.
 	})
 	if code != 0 || !strings.Contains(out, "No differences found") {
 		t.Fatalf("%d %s", code, out)
+	}
+}
+
+// The retention date is the end time plus the retention period, but a node
+// deletes the earliest ended comparisons sooner when its results exceed the
+// storage budget or number more than 500. object status and help object say
+// so instead of presenting the date as a promise.
+func TestComparisonRetentionDateIsALatestDate(t *testing.T) {
+	page := comparisonTestPage(map[string]interface{}{"expiresAt": "2026-12-09T12:01:00Z"})
+	for _, test := range []struct{ lang, label, note, avoid string }{
+		{"zh", "最晚保留至", "最早结束的比对会在此日期之前被删除", "\n保留至"},
+		{"en", "Kept until at the latest", "the comparisons that ended earliest are deleted before this date", "Retained until"},
+		{"ja", "最長の保持期限", "この日付より前に削除されます", "\n保持期限"},
+	} {
+		code, out, stderr := runMockCLI(t, []string{"--lang", test.lang, "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, page) })
+		if code != 0 || stderr != "" || !strings.Contains(out, "\n"+test.label) || !strings.Contains(out, test.note) || !strings.Contains(out, "500") || strings.Contains(out, test.avoid) {
+			t.Fatalf("%s: %d\n%s%s", test.lang, code, out, stderr)
+		}
+	}
+	// No retention date, no note.
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, comparisonTestPage(nil)) })
+	if code != 0 || strings.Contains(out, "保留至") || strings.Contains(out, "500") {
+		t.Fatalf("%d\n%s", code, out)
+	}
+	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
+		if help := helpForLocale([]string{"object"}, locale); !strings.Contains(help, "500") || !strings.Contains(help, "2 GiB") {
+			t.Fatalf("%s help object does not mention early deletion:\n%s", locale, help)
+		}
+	}
+}
+
+// A comparison that an Agent before results protocol 2 ran reports a fixed
+// row limit. Its counts are known to be unreliable, so the start and the
+// status say where the result came from and what to do.
+func TestComparisonFromAnOlderNodeIsMarked(t *testing.T) {
+	useComparisonClock(t)
+	note := "注意：该结果来自 4.1.40 及更早版本的执行节点"
+	legacy := comparisonTestPage(map[string]interface{}{"resultLimit": 10000, "changed": 999988})
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	// The node may have been upgraded since; only a new comparison helps.
+	if code != 0 || !strings.Contains(out, note) || !strings.Contains(out, "请在 4.1.41 或更高版本的节点上重新比对") || strings.Contains(out, "升级该节点") {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out, _ = runMockCLI(t, []string{"--lang", "en", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, "Note: this result comes from an execution node of version 4.1.40 or earlier") || !strings.Contains(out, "Compare again on a node of version 4.1.41 or later.") {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out, _ = runMockCLI(t, []string{"--lang", "ja", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, "4.1.41 以降のバージョンのノードで再度比較してください。") {
+		t.Fatalf("%d %s", code, out)
+	}
+	current := comparisonTestPage(nil)
+	code, out, _ = runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, current) })
+	if code != 0 || strings.Contains(out, note) {
+		t.Fatalf("a current node's result was marked as older: %d %s", code, out)
+	}
+	running := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "RUNNING", "items": nil, "resultLimit": 10000})
+	handler, _, _ := comparisonCompareServer(t, running, func(int) map[string]interface{} { return running })
+	code, out, _ = runMockCLI(t, []string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive"}, handler)
+	if code != 0 || !strings.Contains(out, "比对已开始，ID：cmp-1\n") || !strings.Contains(out, note) {
+		t.Fatalf("the start did not say an older node runs the comparison: %d %s", code, out)
+	}
+}
+
+// A side whose size was not read, or that does not exist, shows no size: 0 B
+// would be the size of an empty object.
+func TestComparisonRowsWithoutAKnownSizeShowNoSize(t *testing.T) {
+	page := comparisonTestPage(map[string]interface{}{"items": []interface{}{
+		map[string]interface{}{"number": 1, "key": "denied.jpg", "sourceKey": "2026/denied.jpg", "destinationKey": "backup/denied.jpg", "status": "ERROR", "sourceSize": 2048, "destinationSize": 0, "destinationSizeUnknown": true, "error": "Cannot read target metadata"},
+		map[string]interface{}{"number": 2, "key": "gone.jpg", "sourceKey": "2026/gone.jpg", "destinationKey": "backup/gone.jpg", "status": "CHANGED_DURING_COMPARE", "sourceSize": 0, "sourceSizeUnknown": true, "destinationSize": 1024},
+		map[string]interface{}{"number": 3, "key": "empty.jpg", "sourceKey": "2026/empty.jpg", "destinationKey": "backup/empty.jpg", "status": "DIFFERENT", "sourceSize": 0, "destinationSize": 0, "reasons": []interface{}{"contentType"}},
+	}})
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, page) })
+	if code != 0 {
+		t.Fatal(code, out)
+	}
+	lines := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		for _, key := range []string{"denied.jpg", "gone.jpg", "empty.jpg"} {
+			if strings.Contains(line, "2026/"+key) {
+				lines[key] = line
+			}
+		}
+	}
+	if !strings.Contains(lines["denied.jpg"], "2 KiB") || strings.Contains(lines["denied.jpg"], "0 B") || !strings.Contains(lines["denied.jpg"], "—") {
+		t.Errorf("unread target size: %q", lines["denied.jpg"])
+	}
+	if !strings.Contains(lines["gone.jpg"], "1 KiB") || strings.Contains(lines["gone.jpg"], "0 B") || !strings.Contains(lines["gone.jpg"], "—") {
+		t.Errorf("absent source size: %q", lines["gone.jpg"])
+	}
+	if strings.Count(lines["empty.jpg"], "0 B") != 2 {
+		t.Errorf("an empty object lost its real size: %q", lines["empty.jpg"])
+	}
+}
+
+// The rate is an average over the whole comparison, which a stall lowers
+// only slowly; status labels it so and says how long a running comparison
+// has produced no new result, by the node's own clock.
+func TestComparisonStatusLabelsAverageRatesAndReportsStalls(t *testing.T) {
+	running := func(progressAt interface{}) map[string]interface{} {
+		return comparisonTestPage(map[string]interface{}{"status": "RUNNING", "endedAt": nil, "updatedAt": "2026-11-09T13:15:00Z", "progressAt": progressAt})
+	}
+	for _, test := range []struct {
+		name         string
+		locale       string
+		page         map[string]interface{}
+		wants, avoid []string
+	}{
+		{"stalled", "zh", running("2026-11-09T13:03:00Z"), []string{"平均速率", "20.0 个对象/秒", "已有 12m0s 没有新的比对结果，执行节点可能正在等待存储响应或重试。"}, nil},
+		{"stalled in English", "en", running("2026-11-09T13:03:00Z"), []string{"Average rate", "No new comparison results for 12m0s"}, nil},
+		{"progressing", "zh", running("2026-11-09T13:14:30Z"), []string{"平均速率"}, []string{"没有新的比对结果"}},
+		{"older Agent", "zh", running(nil), []string{"平均速率"}, []string{"没有新的比对结果"}},
+		{"finished", "zh", comparisonTestPage(map[string]interface{}{"progressAt": "2026-11-09T12:00:00Z"}), []string{"平均速率"}, []string{"没有新的比对结果"}},
+		{"one object", "zh", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "rows": 0}), []string{"平均读取速率", "2 MiB/s"}, nil},
+	} {
+		code, out, stderr := runMockCLI(t, []string{"--lang", test.locale, "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, test.page) })
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s: %d %s %s", test.name, code, out, stderr)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s lacks %q:\n%s", test.name, want, out)
+			}
+		}
+		for _, avoid := range test.avoid {
+			if strings.Contains(out, avoid) {
+				t.Errorf("%s contains %q:\n%s", test.name, avoid, out)
+			}
+		}
 	}
 }

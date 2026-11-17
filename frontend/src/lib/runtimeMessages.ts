@@ -29,6 +29,14 @@ export const runtimeMessageRules: readonly {
       /^Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it$/,
     message: "等待升级后的执行节点接续扫描；其余节点版本较旧，无法接续此扫描",
   },
+  // A scanner that answers but cannot prepare the task, or is being updated;
+  // its own line says why.
+  {
+    pattern:
+      /^Waiting for scanning node (.+) to become available; existing child tasks remain assigned to their original nodes$/s,
+    message: "等待扫描节点 {node} 恢复可用；已分配的子任务仍保留在原节点",
+    values: ["node"],
+  },
   // Wording of Masters before v4.1.31, without the node name.
   {
     pattern: /^Waiting for an unavailable node's execution lease to expire$/,

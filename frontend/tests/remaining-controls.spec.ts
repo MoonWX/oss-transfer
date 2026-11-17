@@ -153,18 +153,24 @@ test("OSS exception filters submit only applied bucket and limit criteria and is
   await page.getByRole("button", { name: "应用筛选", exact: true }).click();
   await expect(page.getByText("node-a.bin", { exact: true })).toHaveCount(0);
   await expect(page.getByText("node-b.bin", { exact: true })).toBeVisible();
+  // The failed-objects tab lists object-storage failures only.
   expect(queries.at(-1)).toEqual({
     taskIndex: 700,
     executionNodeIp: "10.0.1.13",
     sourceBucket: "source",
     destBucket: "target",
+    direction: "OSS_TO_OSS",
     resolution: "unresolved",
     limit: 5000,
   });
   await page.getByRole("button", { name: "重置", exact: true }).click();
   await expect(page.getByText("node-a.bin", { exact: true })).toBeVisible();
   // Unresolved records are the default view.
-  expect(queries.at(-1)).toEqual({ resolution: "unresolved", limit: 1000 });
+  expect(queries.at(-1)).toEqual({
+    direction: "OSS_TO_OSS",
+    resolution: "unresolved",
+    limit: 1000,
+  });
   await expect(
     page.getByRole("combobox", { name: "所属任务", exact: true }),
   ).toHaveValue("");

@@ -139,6 +139,40 @@ func TestSlowScanPublishesPendingBatchWithoutWaitingForMoreObjects(t *testing.T)
 	}
 }
 
+// A resume, restart or takeover lists a page again whose objects were already
+// assigned. One of them was rewritten in between. The scan keeps the object's
+// first assignment and goes on; it does not fail at that page on every resume.
+func TestReplayedPageKeepsChangedObjectAssignment(t *testing.T) {
+	scanner, db, attempt := commitFixture(t)
+	ctx := context.Background()
+	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{scanTestBatch(0)}); err != nil {
+		t.Fatal(err)
+	}
+	replay := scanTestBatch(0)
+	replay.objects[5].Size, replay.objects[5].ETag = 20, "rewritten"
+	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{replay, scanTestBatch(1)}); err != nil {
+		t.Fatalf("a changed object on a replayed page failed the scan: %v", err)
+	}
+	status, err := scanner.Status(ctx, 1)
+	if err != nil || status.TotalObjects != 256 || status.TotalBytes != 256*9 || status.LastBatch != 2 || status.SeenObjects != 256 {
+		t.Fatalf("the replayed page was assigned again or lost the following page: %+v %v", status, err)
+	}
+	if err := db.View(func(tx *state.Tx) error {
+		var object discoveredObject
+		found, err := tx.Get(objects, objectKey(1, replay.objects[5].Key), &object)
+		if err == nil && (!found || object.Object.Size != 9 || object.Object.ETag != "immutable") {
+			t.Errorf("the discovery index replaced the assigned identity: %+v", object.Object)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, found, err := scanner.Batch(ctx, 1, 1, 0)
+	if err != nil || !found || first.Objects[5].Size != 9 || first.Objects[5].ETag != "immutable" {
+		t.Fatalf("the assigned batch changed: %+v %v", first.Objects[5], err)
+	}
+}
+
 func TestScanGroupedFailureDoesNotPublishPartialObjectsOrBatchNumbers(t *testing.T) {
 	scanner, db, attempt := commitFixture(t)
 	ctx := context.Background()
@@ -146,10 +180,10 @@ func TestScanGroupedFailureDoesNotPublishPartialObjectsOrBatchNumbers(t *testing
 	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{first}); err != nil {
 		t.Fatal(err)
 	}
-	conflict := scanTestBatch(0)
-	conflict.objects[0].Size++
-	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{scanTestBatch(1), conflict}); !errors.Is(err, ErrSourceChanged) {
-		t.Fatalf("changed source did not roll back its group: %v", err)
+	invalid := scanTestBatch(2)
+	invalid.objects[0].Size = -1
+	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{scanTestBatch(1), invalid}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an invalid object did not roll back its group: %v", err)
 	}
 	status, err := scanner.Status(ctx, 1)
 	if err != nil || status.TotalObjects != 128 || status.LastBatch != 1 {

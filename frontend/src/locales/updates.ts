@@ -43,10 +43,7 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "This node is updating or cleaning up backups. Refresh after it finishes.",
     ja: "ノードの更新またはバックアップの削除中です。完了後に再読み込みしてください。",
   },
-  "版本检测失败，请重试。": {
-    en: "Version check failed. Try again.",
-    ja: "バージョンの確認に失敗しました。再試行してください。",
-  },
+  "检测时间：{time}": { en: "Checked at: {time}", ja: "確認日時：{time}" },
   版本更新: { en: "Software updates", ja: "ソフトウェア更新" },
   更新已排队: { en: "Update queued", ja: "更新待ち" },
   正在下载更新: { en: "Downloading update", ja: "更新をダウンロード中" },
@@ -58,6 +55,20 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "For Docker, pull the new image and recreate the container.",
     ja: "Docker の場合は新しいイメージを取得し、コンテナを再作成してください。",
   },
+  "镜像标签固定为某个版本时（安装脚本生成的 compose 文件即是如此），仅拉取镜像不会更新。请先把 image 改为新版本的标签，再拉取镜像并重新创建容器。":
+    {
+      en: "When the image tag is pinned to a version, as in the Compose file written by the installer, pulling alone does not update. Change the image tag to the new version first, then pull the image and recreate the container.",
+      ja: "インストーラーが作成した Compose ファイルのようにイメージのタグがバージョンに固定されている場合、イメージを取得するだけでは更新されません。先に image のタグを新しいバージョンに変更してから、イメージを取得してコンテナを再作成してください。",
+    },
+  "用安装脚本以 Docker Compose 部署的 Master": {
+    en: "Master installed with the installer's Docker Compose method",
+    ja: "インストーラーの Docker Compose 方式で導入した Master",
+  },
+  "安装时指定了其他目录时，请替换 compose 文件路径。用仓库中的 docker-compose.yml 部署时，请在其所在目录运行 docker compose pull master 和 docker compose up -d master；如果 .env 固定了版本，请先修改其中的 OSS_TRANSFER_IMAGE。":
+    {
+      en: "If you chose other directories during installation, replace the Compose file path. For a deployment from the repository's docker-compose.yml, run docker compose pull master and docker compose up -d master in its directory; if .env pins a version, change OSS_TRANSFER_IMAGE there first.",
+      ja: "インストール時に別のディレクトリを指定した場合は、Compose ファイルのパスを置き換えてください。リポジトリの docker-compose.yml で導入した場合は、そのディレクトリで docker compose pull master と docker compose up -d master を実行します。.env でバージョンを固定している場合は、先に OSS_TRANSFER_IMAGE を変更してください。",
+    },
   "此安装方式暂不支持在线升级，请使用安装脚本升级。": {
     en: "Use the installer to update this installation.",
     ja: "この環境ではインストールスクリプトで更新してください。",
@@ -94,7 +105,7 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     ja: "{version} をインストールし、サービスを再起動します。現在のバージョンをバックアップし、起動に失敗した場合は復元します。",
   },
   "正在执行的子任务会中断，节点重新连接后自动恢复。": {
-    en: "Running child tasks will pause and recover after the node reconnects.",
+    en: "Running child tasks are interrupted and resume automatically after the node reconnects.",
     ja: "実行中の子タスクは中断され、ノードの再接続後に自動復旧します。",
   },
   正在提交: { en: "Submitting", ja: "送信中" },

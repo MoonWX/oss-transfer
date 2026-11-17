@@ -102,7 +102,8 @@ const cliTaskHelp = `任务管理
   trash [--task-id ID] [--worker 节点] [--direction 方向] [--search 关键词]
 
 操作
-  stop <ID...>                    停止传输并保留进度
+  stop <ID...>                    停止扫描和传输；已完成的对象会保留，
+                                  正在传输的对象在任务继续后从头传输
   resume <ID...>                  继续已停止或失败的任务
   retry <ID...>                   重试未完成对象，保留已完成进度
                                   运行中的任务只重试已结束子任务的失败对象，不中断传输
@@ -244,6 +245,8 @@ local 下载请求（OSS_TO_LOCAL）可设置 "rangedDownload":"auto" 或 "off"�
 local 请求可设置 "skipSharedCheck":true 跳过多节点共享目录校验，须同时设置
 "skipSharedCheckAcknowledged":true，表示已确认所有执行节点挂载的是同一份存储。
 后果同 task create --skip-shared-check；导入时会对每个跳过校验的行给出警告。
+tasks 请求中的 marker 不会被使用：每个子任务从 startKey 之后完整扫描其范围，不会从断点继续，
+目标端已存在的对象按冲突策略处理；导入时会对每个设置了 marker 的行给出警告。
 
 示例
   oss-transfer-cli task import buckets ./buckets.csv
@@ -326,8 +329,12 @@ const cliStorageHelp = `存储连接
   remove <连接名> --yes            删除连接并同步到执行节点
   buckets <连接名> [--bucket 名称] 列出 Bucket 并检查连接
   test <连接名> [--bucket 名称]    检查连接：列举 Bucket，再用实际寻址方式列举一个 Bucket 中的对象
-      指定 --bucket 时逐项检查迁移用到的操作（列举、HEAD、GET），任一项未通过则退出码为 1
-      --write                       同时检查写入：条件 PUT、读回、分片上传，会写入并删除一个测试对象
+      指定 --bucket 时逐项检查迁移用到的操作（列举、HEAD、GET），任一必需项未通过则退出码为 1
+      --write                       同时检查写入：条件 PUT、读回、分片上传，会写入并删除一个测试对象；
+                                    中止分片上传和删除测试对象不是写入所必需的，未通过时只给出提示
+      --prefix <前缀>                写入检查使用的前缀，测试对象写在此前缀下；末尾没有“/”时自动补上，
+                                    与 --mapping add-prefix 添加目标前缀相同；密钥只能写入某个前缀时，
+                                    填写迁移的目标前缀，例如 backup/；需与 --write 一起使用
 
 添加/更新选项
   --endpoint <http[s]://地址>      例如 https://s3.example.com 或 http://10.0.0.5:9000
@@ -355,10 +362,13 @@ const cliStorageHelp = `存储连接
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage test target --bucket backup --write
+  oss-transfer-cli storage test team --bucket shared --write --prefix team-a/
   oss-transfer-cli storage remove source --yes
 
 密钥仅从环境变量或文件读取，避免出现在命令历史中。
-更新后请关注逐节点同步结果；部分成功时结果不会显示为完整同步。
+保存或删除连接后，如有执行节点尚未同步，结果会列出这些节点，并以退出码 3 结束；
+这些节点会在下次执行任务或对象比对前自动同步。
+删除连接后，所有使用此连接的任务（包括执行中和已停止的任务）都将无法继续执行，直到重新添加同名连接。
 连接检查先列举 Bucket（ListBuckets），再对一个 Bucket 列举最多 1 个对象（ListObjectsV2）。
 只授权到单个 Bucket 的密钥无法列举 Bucket：保存时只给出警告，可用 test --bucket 检查该 Bucket。
 读取和写入权限由迁移时的实际操作验证。失败时先显示原因和建议，加 --verbose 查看原始错误。
@@ -426,7 +436,8 @@ const cliExceptionsHelp = `异常记录
   oss-transfer-cli exceptions export local --output local-report.zip
   oss-transfer-cli exceptions clear failed --all --yes
 
-complete/partial 表示节点返回是否完整；truncated 表示记录被数量上限截断。
+partial（complete 为 false）表示有执行节点离线，其未完成子任务的失败记录可能尚未上报；
+truncated 表示记录被数量上限截断。
 旧版服务可能限制每节点记录数，超过时显示 truncatedWorkers；更多记录用 ZIP 报告。
 报告仅可导出已结束或已停止任务，不能将下载成功视为迁移验收通过。
 `
@@ -471,7 +482,8 @@ const cliObjectHelp = `对象比对
   元数据一致不代表内容一致：两端 ETag 都是普通 MD5 形式且不同时，结果为 ETAG_MISMATCH。需要确认内容时使用 content。
   content 流式读取两端对象并计算 SHA-256，不写入本地文件，会产生读取流量。
   修改时间和存储类型不作为一致依据。比对期间变化的对象单独列出。
-  比对在一个执行节点后台并发运行，所有差异保存在该节点上，默认保留 30 天；list 可找回比对 ID。
+  比对在一个执行节点后台并发运行，所有差异保存在该节点上，默认最多保留 30 天；list 可找回比对 ID。
+  节点上的比对结果合计超过存储预算（默认 2 GiB）或超过 500 个时，从最早结束的比对开始提前删除。
   ZIP 包含 differences.csv、retry-source-keys.incr 和 summary.json。两端前缀相同时，
   retry-source-keys.incr 可用于 import-inventory，重新迁移目标缺失、不一致或 ETag 不同的对象。
   Agent 重启或升级后，若存储连接未变会自动继续；否则用 resume 从检查点之后继续，已统计的结果保留。

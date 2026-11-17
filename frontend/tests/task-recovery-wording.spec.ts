@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import { mockApi, tasks } from "./fixtures";
 
 const retryDescription = "重试失败或未完成的对象，已完成的对象不重复传输。";
-const resumeDescription = "继续扫描和处理未完成的对象，保留已有传输进度。";
+const resumeDescription =
+  "继续扫描和传输未完成的对象。已完成的对象不会重复传输，停止时正在传输的对象从头传输。";
 
 for (const entry of [
   {

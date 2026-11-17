@@ -223,6 +223,7 @@ for (const { locale, suffix } of locales) {
             { operation: "PUT", status: "PASSED" },
             { operation: "HEAD_WRITTEN", status: "PASSED" },
             { operation: "MULTIPART", status: "PASSED" },
+            { operation: "MULTIPART_ABORT", status: "PASSED" },
             { operation: "DELETE_PROBE", status: "PASSED" },
           ],
         },
@@ -242,7 +243,9 @@ for (const { locale, suffix } of locales) {
     await expect(dialog.getByTestId("permission-summary")).toBeVisible();
     await page.waitForTimeout(300);
     await annotate(page, [
-      dialog.locator(".MuiTextField-root").last(),
+      dialog.locator(".MuiTextField-root", {
+        has: page.getByTestId("permission-bucket"),
+      }),
       dialog.locator(".MuiFormControlLabel-root"),
       dialog.getByTestId("permission-summary"),
     ]);

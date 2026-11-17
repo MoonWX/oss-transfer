@@ -141,7 +141,7 @@ test("content mode starts a streaming SHA-256 comparison and cancellation keeps 
   ).toBeVisible();
   await expect(
     // One object: the read rate, not objects per second.
-    page.getByText(/^已用 1 分 5 秒，已读取 3 MiB（.+\/秒）$/),
+    page.getByText(/^已用 1 分 5 秒，已读取 3 MiB（平均 .+\/秒）$/),
   ).toBeVisible();
   await expect(page.getByText("a".repeat(64), { exact: true })).toBeVisible();
   await expect(page.getByText("不同：SHA-256", { exact: true })).toBeVisible();
@@ -255,7 +255,7 @@ test("differences show localized reasons, ETag mismatches and credential-free er
   await expect(extra.getByRole("cell").nth(3)).toHaveText("—");
   await expect(page.getByText("一致 1", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("已检查 6，1.5 个/秒，已用 4 秒", { exact: true }),
+    page.getByText("已检查 6，平均 1.5 个/秒，已用 4 秒", { exact: true }),
   ).toBeVisible();
   const chips = page.getByRole("group", { name: "按结果筛选" });
   for (const label of [
@@ -576,7 +576,9 @@ test("the English console translates comparison labels, reasons and counts", asy
     }),
   ).toBeVisible();
   await expect(
-    page.getByText("Checked 10, 2.5 objects/s, elapsed 4 s", { exact: true }),
+    page.getByText("Checked 10, 2.5 objects/s on average, elapsed 4 s", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Export all differences (ZIP)" }),
@@ -607,4 +609,48 @@ test("comparison messages have both translations and keep their parameters", () 
         parameters(source),
       );
     }
+});
+
+test("a running comparison labels its rate an average and says when it stalls", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await installPausedClock(page);
+  // The node's clock: updatedAt advances every second while the comparison
+  // runs; progressAt stopped twelve minutes earlier, while LIST retried.
+  let current = {
+    ...progress,
+    status: "RUNNING",
+    compared: 3_600_000,
+    elapsedMillis: 4_500_000,
+    endedAt: undefined,
+    updatedAt: "2026-09-22T12:15:00Z",
+    progressAt: "2026-09-22T12:03:00Z",
+  };
+  await routeComparisons(page, {
+    list: () => ({
+      items: [historyItem({ status: "RUNNING" })],
+      complete: true,
+    }),
+    page: (_, query) => pageOf(current, rows, query),
+  });
+  await page.goto("/tools?comparison=comparison-1");
+  const stalled = page.getByTestId("comparison-stalled");
+  await advanceUntilVisible(page, stalled);
+  await expect(stalled).toHaveText(
+    "已有 12 分 0 秒没有新的比对结果，执行节点可能正在等待存储响应或重试。",
+  );
+  await expect(
+    page.getByText("已检查 3,600,000，平均 800 个/秒，已用 1 小时 15 分", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  // Progress resumes: the notice goes away with the next refresh.
+  current = { ...current, progressAt: current.updatedAt };
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(400);
+      return stalled.count();
+    })
+    .toBe(0);
 });

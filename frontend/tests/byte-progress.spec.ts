@@ -76,16 +76,21 @@ test("a large object in flight moves byte progress instead of sitting at 99%", a
   await expect(page.getByRole("tooltip")).toContainText(
     "12,708 / 12,709 个对象",
   );
-  // A failed attempt drops its live bytes; the bar must not move backwards,
-  // and the byte label holds the same sample so the two never disagree.
+  // An object that fails loses its in-flight bytes for good: the row shows
+  // the Master's lower value at once, as the details and the CLI do, instead
+  // of holding the old peak until other transfers catch up with it.
   state.task = {
     ...state.task,
     transferredBytes: 6 * GiB,
     progressPercent: 60,
   };
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
-  await expect(row).toContainText("7 GiB / 10 GiB");
-  await expect(row).toContainText("70%");
+  await expect(row).toContainText("6 GiB / 10 GiB");
+  await expect(row).toContainText("60%");
+  await expect(row.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "60",
+  );
   state.task = {
     ...state.task,
     transferredBytes: 8 * GiB,
@@ -145,6 +150,10 @@ test("task details show in-flight bytes and observed request rates", async ({
   // LIST and GET share one task limit, so that cell spans both columns.
   expect(await cells("任务上限")).toEqual(["100", "不限", "不限"]);
   expect(await cells("生效上限")).toEqual(["100", "不限", "1,400"]);
+  // The node that scans also bounds ListObjects with its LIST limit.
+  await expect(requests.getByTestId("request-rate-list-note")).toHaveText(
+    "LIST 请求还受扫描节点的 LIST 上限约束，上表未计入。",
+  );
 
   // A stale sample or an unreachable Agent is unknown, never a smaller number.
   state.task = {
@@ -209,7 +218,7 @@ for (const status of ["STOPPED", "FAILED", "PARTIAL_FAILED"]) {
   });
 }
 
-test("a stale sample drops the stored peak so later live samples start fresh", async ({
+test("after a stale sample, later live samples show their own value", async ({
   page,
 }) => {
   const { state, row } = await reachNinety(page);
@@ -274,4 +283,43 @@ test("a failover reassignment restarts the child shard line from zero", async ({
     },
   ];
   await expect(line).toHaveText("1 GiB / 100 GiB · 1%");
+});
+
+test("a node that does not report leaves a lower bound that names it", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  // The Master counts the reporting nodes' in-flight bytes only.
+  state.task = {
+    ...state.task,
+    transferredBytes: 6.5 * GiB,
+    inFlightBytes: 0.5 * GiB,
+    liveProgress: "PARTIAL",
+    progressPercent: 65,
+    unreportedNodes: [
+      { displayLabel: "worker-b (10.0.1.13)", executionNodeIp: "10.0.1.13" },
+    ],
+  } as typeof state.task;
+  const note =
+    "执行节点 worker-b (10.0.1.13) 暂未上报实时进度：已迁移数据不含其正在传输的部分，速度暂时未知。";
+  await page.goto("/tasks");
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("button", { name: "#61", exact: true }) });
+  await expect(row).toContainText("6.5 GiB / 10 GiB");
+  await expect(row).toContainText("65%");
+  await row.getByText("6.5 GiB / 10 GiB").hover();
+  await expect(page.getByRole("tooltip")).toContainText(note);
+  await page.goto("/tasks?taskId=61");
+  await expect(page.getByTestId("unreported-nodes")).toHaveText(note);
+  // Once every node reports again, the note goes away.
+  state.task = {
+    ...state.task,
+    transferredBytes: 7 * GiB,
+    inFlightBytes: 1 * GiB,
+    liveProgress: "LIVE",
+    progressPercent: 70,
+    unreportedNodes: undefined,
+  } as typeof state.task;
+  await expect(page.getByTestId("unreported-nodes")).toHaveCount(0);
 });

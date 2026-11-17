@@ -279,6 +279,18 @@ func (s *Server) retryFailedInPlace(ctx context.Context, id int64, expected *uin
 	return result, nil
 }
 
+// inPlaceRetryDetail reports an in-place retry in a row of the bulk control
+// result. One request reopens at most retryFailedChildLimit children; hasMore
+// says that the search for more ended before every child was examined, so the
+// remaining failed objects need another retry.
+func inPlaceRetryDetail(item map[string]any, result retryFailedResult) {
+	item["mode"] = "FAILED_OBJECTS"
+	item["retriedChildren"], item["retriedObjects"], item["hasMore"] = result.Accepted, result.RetriedObjects, result.HasMore
+	if result.Message != "" {
+		item["message"] = result.Message
+	}
+}
+
 func retryChild(child task.Child, outcome, message string) retryFailedChild {
 	value := retryFailedChild{ChildTaskID: child.Job.ChildID, Number: child.Job.Number, Node: child.Node.Address, Outcome: outcome, Message: message}
 	if child.Record != nil {

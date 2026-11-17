@@ -25,9 +25,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "No failed objects can be retried right now.",
     ja: "今すぐ再試行できる失敗オブジェクトはありません。",
   },
-  "还有更多失败的子任务，稍后可再次重试。": {
-    en: " More child tasks have failed objects; retry again later.",
-    ja: "失敗オブジェクトのあるサブタスクがほかにもあります。後で再度再試行してください。",
+  "其他子任务可能还有未重试的失败对象，可再次重试。": {
+    en: " Other child tasks may still have failed objects that were not retried; you can retry again.",
+    ja: "ほかのサブタスクにも再試行していない失敗オブジェクトが残っている可能性があります。もう一度再試行できます。",
   },
   "重试中…": { en: "Retrying…", ja: "再試行中…" },
   确认重试: { en: "Confirm retry", ja: "再試行を確定" },
@@ -162,21 +162,43 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The source object changed after the scan; a retry copies its current version",
     ja: "スキャン後にソースオブジェクトが変更されました。再試行すると現在のバージョンをコピーします",
   },
+  "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。":
+    {
+      en: "This task was converted from v4.0.x; its failed objects are not listed in the exception records. Export its task report and see file-results.csv and exception-details.csv.",
+      ja: "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。",
+    },
+  "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。":
+    {
+      en: "This version does not switch to a fallback transfer method, so it records no fallback objects; fallback records of tasks converted from v4.0.x are not listed here.",
+      ja: "このバージョンは代替の転送方式に切り替えないため、フォールバック記録は作成されません。v4.0.x から変換したタスクのフォールバック記録はここに表示されません。",
+    },
   "源对象已在源端删除，已跳过": {
     en: "The source object was deleted at the source and was skipped",
     ja: "ソースオブジェクトはソース側で削除されたため、スキップしました",
+  },
+  "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端": {
+    en: "The source does not have this object recorded by the v4.0.x task; a retry checks the source again",
+    ja: "v4.0.x のタスクが記録したこのオブジェクトが転送元に見つかりません。再試行すると転送元を再確認します",
   },
   "{node} 最后连接于 {time}": {
     en: "{node} last connected at {time}",
     ja: "{node} の最終接続: {time}",
   },
-  "{node} 尚未连接": {
-    en: "{node} has not connected yet",
-    ja: "{node} はまだ接続していません",
+  "{node} 自 Master 启动（{time}）以来未连接": {
+    en: "{node} has not connected since the Master started at {time}",
+    ja: "{node} は Master の起動（{time}）以降接続していません",
+  },
+  "{node} 的最后连接时间未知": {
+    en: "The last connection of {node} is unknown",
+    ja: "{node} の最終接続日時は不明です",
   },
   "另有 {count} 个：{message}": {
     en: "{count} more: {message}",
     ja: "ほかに {count} 件: {message}",
+  },
+  "{count} 条：{message}": {
+    en: "{count} records: {message}",
+    ja: "{count} 件: {message}",
   },
   "可在“异常记录”中查看失败对象并重试。": {
     en: "Open Exceptions to see the failed objects and retry them.",
@@ -232,6 +254,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "处理中…": {
     en: "Processing…",
     ja: "処理中…",
+  },
+  暂无可重试的对象: {
+    en: "Nothing to retry yet",
+    ja: "再試行できるオブジェクトはまだありません",
+  },
+  等待任务停止: {
+    en: "Waiting for the task to stop",
+    ja: "タスクの停止を待っています",
   },
   "任务状态已更新，请查看任务详情。": {
     en: "The task status has changed. Open the task for details.",
@@ -896,6 +926,19 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Not checked",
     ja: "未検証",
   },
+  "路径预检通过，未检查目录是否可写": {
+    en: "Paths passed the precheck; writing to the directory was not checked",
+    ja: "パスの事前チェックに成功しました。ディレクトリへの書き込みは確認していません",
+  },
+  未检查写入: {
+    en: "Write not checked",
+    ja: "書き込み未確認",
+  },
+  "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管和之后添加的节点也不做校验。":
+    {
+      en: "Rows {rows} skip the shared directory check: nothing verifies that their execution nodes mount the same storage. If they do not, an upload can miss files or read them from the wrong copy, and a download leaves the files split across each node's own directory, while the task still shows success; automatic takeover and nodes added later are not checked either.",
+      ja: "{rows} 件目は共有ディレクトリの検証を省略します。各実行ノードが同じストレージをマウントしているかは確認されません。同じでない場合、アップロードではファイルの漏れや誤ったコピーからの読み取りが起き、ダウンロードではファイルが各ノードのディレクトリに分散しますが、タスクは成功と表示されます。自動引き継ぎや後から追加したノードも検証されません。",
+    },
   "skipSharedCheck：设为 true 跳过多节点共享目录校验，须同时设置 skipSharedCheckAcknowledged:true，表示已确认所有执行节点挂载的是同一份存储；后果同“配置迁移”中的“跳过共享目录校验（不推荐）”。":
     {
       en: "skipSharedCheck: true skips the multi-node shared directory check and requires skipSharedCheckAcknowledged:true, confirming that every execution node mounts the same storage; the consequences are those of “Skip the shared directory check (not recommended)” under “Configure transfer”.",
@@ -1107,10 +1150,15 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Comma-separated text",
     ja: "カンマ区切りテキスト",
   },
-  "用于导入已有的 OSS 子任务或恢复断点。支持 startKey、endKey、marker 和 workerNode；留空 workerNode 时由集群分配。":
+  "用于按 Key 范围导入 OSS 子任务。支持 startKey、endKey 和 workerNode，留空 workerNode 时由集群分配。每个子任务从 startKey 之后完整扫描其范围，不会从断点继续；目标端已存在的对象按冲突策略处理。":
     {
-      en: "Import existing OSS subtasks or restore checkpoints. Supports startKey, endKey, marker, and workerNode. Leave workerNode empty for cluster assignment.",
-      ja: "既存の OSS 子タスクをインポートするか、チェックポイントから復元します。startKey、endKey、marker、workerNode に対応しています。workerNode を省略するとクラスターが割り当てます。",
+      en: "Imports OSS subtasks by key range. Supports startKey, endKey and workerNode; leave workerNode empty for cluster assignment. Each subtask scans its whole range after startKey and does not resume from a checkpoint; objects that already exist at the destination are handled by the conflict policy.",
+      ja: "OSS 子タスクをキー範囲でインポートします。startKey、endKey、workerNode に対応しており、workerNode を省略するとクラスターが割り当てます。各子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。",
+    },
+  "第 {rows} 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。":
+    {
+      en: "Rows {rows} set a marker, which is not used: these subtasks scan their whole range after startKey and do not resume from a checkpoint; objects that already exist at the destination are handled by the conflict policy.",
+      ja: "{rows} 件目に marker が指定されていますが、marker は使用されません。これらの子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。",
     },
   "每行一个任务：源连接/源桶,目标连接/目标桶,修改时间晚于,是否覆盖,分发模式。后三项可留空。前缀或修改时间早于筛选请使用 JSON。目标命名规则和任务带宽上限请使用 JSON 配置。":
     {
@@ -1143,10 +1191,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
       en: "sourceS3Alias / destS3Alias: connection names; sourceBucket / destBucket: buckets. prefix filters the source; objectKey selects a single source object. These are mutually exclusive. {value1}Omit keyMapping or set null to keep the full source key. Modes: PRESERVE, ADD_PREFIX (targetPrefix), REPLACE_PREFIX (sourcePrefix must equal the source filter; targetPrefix may be empty), EXACT_KEY (single object only; targetKey). ADD_PREFIX appends / when missing; REPLACE_PREFIX uses literal replacement without adding /. Keys and prefixes retain spaces and slashes. dateAfter / dateBefore: modification time range, YYYY-MM-DDTHH:mm:ss. overwrite: overwrite existing objects. distributionMode: affinity or balanced. taskBandwidthLimitMbps: task-wide limit in Mbps, 0.1–1,000,000; omit or use null to apply only agent limits.",
       ja: "sourceS3Alias / destS3Alias：接続名。sourceBucket / destBucket：バケット。prefix は転送元の絞り込み、objectKey は単一オブジェクトの選択に使用し、同時指定はできません。{value1}keyMapping を省略または null にすると、完全な転送元キーを維持します。mode：PRESERVE、ADD_PREFIX（targetPrefix）、REPLACE_PREFIX（sourcePrefix は転送元の絞り込みと一致、targetPrefix は空でも可）、EXACT_KEY（単一オブジェクトのみ、targetKey）。ADD_PREFIX は末尾に / がなければ追加します。REPLACE_PREFIX は文字列をそのまま置換し、/ は追加しません。キーとプレフィックスの空白とスラッシュは保持します。dateAfter / dateBefore：更新日時の範囲（YYYY-MM-DDTHH:mm:ss）。overwrite：上書き。distributionMode：affinity または balanced。taskBandwidthLimitMbps：タスク全体の上限（Mbps、0.1–1,000,000）。省略または null の場合はノードの制限のみ適用します。",
     },
-  "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、marker、workerNode。":
+  "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、workerNode；marker 不会被使用。":
     {
-      en: "Subtasks also support sourceEndpoint.objectKey. sourceEndpoint.prefix requires sourceEndpoint.prefixFilterEnabled:true; duplicate top-level values must match. Optional: startKey, endKey, marker, workerNode. ",
-      ja: "子タスクは sourceEndpoint.objectKey も指定できます。sourceEndpoint.prefix を使用する場合は sourceEndpoint.prefixFilterEnabled:true が必要です。トップレベルの値と重複する場合は一致させてください。任意項目：startKey、endKey、marker、workerNode。",
+      en: "Subtasks also support sourceEndpoint.objectKey. sourceEndpoint.prefix requires sourceEndpoint.prefixFilterEnabled:true; duplicate top-level values must match. Optional: startKey, endKey, workerNode; a marker is not used. ",
+      ja: "子タスクは sourceEndpoint.objectKey も指定できます。sourceEndpoint.prefix を使用する場合は sourceEndpoint.prefixFilterEnabled:true が必要です。トップレベルの値と重複する場合は一致させてください。任意項目：startKey、endKey、workerNode。marker は使用されません。",
     },
   "存储桶迁移会按源范围生成子任务。": {
     en: "Bucket transfers generate subtasks for the selected source scope. ",
@@ -1804,14 +1852,20 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Task records will move to the recycle bin. Source and destination objects will not be deleted.",
     ja: "タスクの記録をゴミ箱に移動します。転送元・転送先のオブジェクトは削除されません。",
   },
-  "停止扫描和传输，保留已完成的对象与进度。": {
-    en: "Stop scanning and transfer. Completed objects and progress are kept.",
-    ja: "スキャンと転送を停止します。転送済みオブジェクトと進捗は保持されます。",
+  "停止扫描和传输。已完成的对象会保留，正在传输的对象在任务继续后从头传输。": {
+    en: "Stop scanning and transfer. Completed objects are kept; objects in transfer start over from the beginning when the task continues.",
+    ja: "スキャンと転送を停止します。完了したオブジェクトは保持されますが、転送中のオブジェクトはタスクの再開後に最初から転送し直します。",
   },
-  "继续扫描和处理未完成的对象，保留已有传输进度。": {
-    en: "Resume scanning and process unfinished objects, keeping existing progress.",
-    ja: "既存の進捗を保持してスキャンを再開し、未処理のオブジェクトを転送します。",
-  },
+  "当前正在传输 {count} 个对象，已传输 {bytes}；任务继续后，这些对象需要从头重新传输。":
+    {
+      en: "In transfer now: {count} objects, {bytes} sent so far. When the task continues, these objects are transferred again from the beginning.",
+      ja: "現在 {count} 個のオブジェクトを転送中で、{bytes} を転送済みです。タスクの再開後、これらのオブジェクトは最初から転送し直します。",
+    },
+  "继续扫描和传输未完成的对象。已完成的对象不会重复传输，停止时正在传输的对象从头传输。":
+    {
+      en: "Resume scanning and transfer unfinished objects. Completed objects are not transferred again; objects that were in transfer at the stop start over from the beginning.",
+      ja: "スキャンを再開し、未完了のオブジェクトを転送します。完了したオブジェクトは再転送しません。停止時に転送中だったオブジェクトは最初から転送し直します。",
+    },
   "任务将开始传输，请确认来源和目标配置。": {
     en: "Tasks will start transferring. Confirm the source and destination settings.",
     ja: "転送を開始します。転送元と転送先の設定を確認してください。",
@@ -1972,9 +2026,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Export loaded records",
     ja: "読み込み済みの記録をエクスポート",
   },
-  完整迁移报告: {
-    en: "Full transfer report",
-    ja: "完全な転送レポート",
+  导出全部本地任务报告: {
+    en: "Export report of all local tasks",
+    ja: "すべてのローカルタスクのレポートをエクスポート",
   },
   清除全部记录: {
     en: "Clear all records",
@@ -2044,10 +2098,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Last page",
     ja: "最後のページ",
   },
-  "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。":
+  "报告包含全部本地迁移任务，不受当前筛选条件影响；只有在所有本地迁移都已结束或停止时才能导出，任务总数超过 1 万个时请改用单任务报告。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。":
     {
-      en: "The full report includes all local transfer tasks and failures, with unreachable agents listed in the ZIP. Current filters do not apply.",
-      ja: "完全なレポートには全ローカル転送タスクと失敗記録が含まれます。接続できないノードの情報も ZIP に含まれます。現在のフィルターは適用されません。",
+      en: "The report covers every local transfer task; current filters do not apply. It can be exported only when every local transfer has ended or stopped; with more than 10,000 tasks in total, use single-task reports instead. Whether it is complete is recorded as complete in report-metadata.json, which also lists the reasons when it is not (for example an unreachable node or unprocessed objects).",
+      ja: "レポートにはすべてのローカル転送タスクが含まれ、現在のフィルターは適用されません。エクスポートできるのは、すべてのローカル転送が終了または停止している場合のみです。タスクが合計 10,000 件を超える場合は、タスクごとのレポートを使用してください。レポートが完全かどうかは report-metadata.json の complete に記録され、不完全な場合（接続できないノードや未処理のオブジェクトがある場合など）は理由も記載されます。",
     },
   清除全部: {
     en: "Clear all",
@@ -2294,13 +2348,54 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "At least {value1}, and at least {value2}% of requests of this type",
     ja: "{value1} 件以上、かつこの種類のリクエストの {value2}% 以上",
   },
-  降速前实测速率: {
-    en: "Measured rate before reduction",
-    ja: "引き下げ前の実測レート",
+  降速前单秒峰值: {
+    en: "Peak one-second rate before reduction",
+    ja: "引き下げ前の 1 秒間の最大レート",
   },
-  降速幅度: {
-    en: "Reduction",
-    ja: "引き下げ率",
+  降速方式: {
+    en: "How the limit was lowered",
+    ja: "引き下げ方法",
+  },
+  "降为原运行上限与降速前单秒峰值中较低者的 {value1}%": {
+    en: "To {value1}% of the lower of the previous running limit and the peak one-second rate before reduction",
+    ja: "以前の実行上限と引き下げ前の 1 秒間の最大レートのうち低い方の {value1}% に引き下げ",
+  },
+  "降为原运行上限的 {value1}%": {
+    en: "To {value1}% of the previous running limit",
+    ja: "以前の実行上限の {value1}% に引き下げ",
+  },
+  本次降幅: {
+    en: "This reduction",
+    ja: "今回の引き下げ",
+  },
+  "{change}（下降 {value1}%）": {
+    en: "{change} (down {value1}%)",
+    ja: "{change}（{value1}% 減）",
+  },
+  调整原因: {
+    en: "Reason",
+    ja: "調整の理由",
+  },
+  按新目标逐步提升: {
+    en: "Rising to the new target",
+    ja: "新しい目標へ段階的に引き上げ中",
+  },
+  逐步提升: {
+    en: "Rising step",
+    ja: "段階的な引き上げ",
+  },
+  已达到新目标: {
+    en: "New target reached",
+    ja: "新しい目標に到達",
+  },
+  "目标已调高（如修改 service.json 后重启），运行上限逐步提升；仍低于目标。未出现限流。":
+    {
+      en: "The target was raised (for example in service.json before a restart); the running limit rises in steps and is still below the target. No throttling occurred.",
+      ja: "目標が引き上げられたため（例: service.json を変更して再起動）、実行上限を段階的に引き上げています。まだ目標を下回っています。スロットリングは発生していません。",
+    },
+  "运行上限已达到调高后的目标。": {
+    en: "The running limit reached the raised target.",
+    ja: "実行上限が引き上げ後の目標に到達しました。",
   },
   降速下限: {
     en: "Minimum limit",
@@ -2479,6 +2574,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "{operation} {count} tasks?",
     ja: "{count}件のタスクを{operation}しますか？",
   },
+  "LIST 请求还受扫描节点的 LIST 上限约束，上表未计入。": {
+    en: "LIST requests are also bounded by the LIST limit of the node that scans, which this table does not include.",
+    ja: "LIST リクエストはスキャンするノードの LIST 上限にも制限されます。この表には含まれていません。",
+  },
+  "以下统计仅包含最近 {count} 个任务，更早的任务未计入。": {
+    en: "The statistics below cover only the {count} most recent tasks; earlier tasks are not counted.",
+    ja: "以下の統計には直近の {count} 件のタスクのみが含まれ、それより前のタスクは含まれません。",
+  },
   "已加载 {count} 个任务。统计仅包含最近一页。": {
     en: "Loaded {count} tasks. Statistics cover only the most recent page.",
     ja: "{count}件のタスクを読み込みました。統計には直近のページのみ含まれます。",
@@ -2525,6 +2628,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Some agents did not return data. Results are incomplete. Unreachable agents: {nodes}",
     ja: "一部のノードからデータが返されませんでした。結果は不完全です。接続できないノード：{nodes}",
   },
+  "执行节点 {nodes} 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。":
+    {
+      en: "Offline agents with unfinished subtasks: {nodes}. Failures of those subtasks may not be reported yet, so these results may be incomplete.",
+      ja: "ノード {nodes} はオフラインです。未完了のサブタスクの失敗記録がまだ報告されていない可能性があり、結果は不完全な場合があります。",
+    },
   "记录清除后无法恢复。清除范围也包括本地迁移产生的失败对象。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。":
     {
       en: "Cleared records cannot be restored. This includes failed objects from local transfers. Only exception records are deleted; tasks are not retried. Export any records you need first.",
@@ -2919,6 +3027,16 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Access denied: the credentials lack permission for this operation. Check the bucket permissions.",
     ja: "アクセスが拒否されました。認証情報にこの操作の権限がありません。バケットの権限を確認してください。",
   },
+  "存储桶需要通过 Endpoint {endpoint} 访问，这通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该 Endpoint 创建存储连接。":
+    {
+      en: "The bucket must be accessed through endpoint {endpoint}, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that endpoint.",
+      ja: "このバケットにはエンドポイント {endpoint} でアクセスする必要があります。通常はバケットのあるリージョンのエンドポイントです。このバケットを転送するには、このエンドポイントでストレージ接続を作成してください。",
+    },
+  "存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该地域的 Endpoint 创建存储连接。":
+    {
+      en: "The bucket must be accessed through another endpoint, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that region's endpoint.",
+      ja: "このバケットには別のエンドポイント（通常はバケットのあるリージョンのエンドポイント）でアクセスする必要があります。このバケットを転送するには、そのリージョンのエンドポイントでストレージ接続を作成してください。",
+    },
   "存储桶不存在，请检查存储桶名称和 Endpoint。": {
     en: "The bucket does not exist. Check the bucket name and the endpoint.",
     ja: "バケットが存在しません。バケット名とエンドポイントを確認してください。",
@@ -2931,6 +3049,35 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Signature mismatch. Check the storage connection's Secret Key and signature version.",
     ja: "署名が一致しません。ストレージ接続の Secret Key と署名バージョンを確認してください。",
   },
+  // Live progress from some nodes only (liveProgress PARTIAL).
+  "执行节点 {nodes} 暂未上报实时进度：已迁移数据不含其正在传输的部分，速度暂时未知。":
+    {
+      en: "No live progress from {nodes}: the data transferred leaves out what is in flight there, and the speed is unknown for now.",
+      ja: "ノード {nodes} からリアルタイムの進捗が届いていません。転送済みデータには、そのノードが転送中の分は含まれず、速度は現在不明です。",
+    },
+  "执行节点 {nodes} 未响应，其文件进度暂未更新": {
+    en: "No reply from {nodes}; file progress there is not up to date",
+    ja: "ノード {nodes} が応答しないため、そのファイルの進捗は更新されていません",
+  },
+  // Causes of failed objects (objectErrorSummary in src/lib/storageErrors.ts).
+  "源对象为归档存储，需先解冻再重试。": {
+    en: "The source object is archived. Restore it before retrying.",
+    ja: "転送元オブジェクトはアーカイブされています。復元してから再試行してください。",
+  },
+  "存储服务持续限流，请调低任务的请求上限后重试。": {
+    en: "The storage service kept throttling requests. Lower the task's request limits, then retry.",
+    ja: "ストレージサービスがリクエストを制限し続けました。タスクのリクエスト上限を下げてから再試行してください。",
+  },
+  "{host} 在传输中关闭了连接（EOF）。可在存储恢复后重试失败对象；若反复出现，请检查存储前端代理或负载均衡的超时设置。":
+    {
+      en: "{host} closed the connection during the transfer (EOF). Retry the failed objects once the storage is available; if this keeps happening, check the timeouts of any proxy or load balancer in front of the storage.",
+      ja: "{host} が転送中に接続を閉じました（EOF）。ストレージの復旧後に失敗したオブジェクトを再試行してください。繰り返し発生する場合は、ストレージの前段にあるプロキシやロードバランサーのタイムアウト設定を確認してください。",
+    },
+  "与 {host} 的连接在传输中被重置。可在存储恢复后重试失败对象；若反复出现，请检查存储前端代理、负载均衡或防火墙的设置。":
+    {
+      en: "The connection to {host} was reset during the transfer. Retry the failed objects once the storage is available; if this keeps happening, check any proxy, load balancer or firewall in front of the storage.",
+      ja: "{host} との接続が転送中にリセットされました。ストレージの復旧後に失敗したオブジェクトを再試行してください。繰り返し発生する場合は、ストレージの前段にあるプロキシ、ロードバランサー、ファイアウォールの設定を確認してください。",
+    },
   // Runtime messages from the Master (src/lib/runtimeMessages.ts).
   "错误详情：{detail}": { en: "Details: {detail}", ja: "詳細：{detail}" },
   "节点离线，重新连接并完成或移交其任务后离开": {
@@ -2948,6 +3095,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "等待升级后的执行节点接续扫描；其余节点版本较旧，无法接续此扫描": {
     en: "Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it",
     ja: "アップグレードされた実行ノードがスキャンを引き継ぐのを待っています。残りのノードはバージョンが古いため、このスキャンを引き継げません",
+  },
+  "等待扫描节点 {node} 恢复可用；已分配的子任务仍保留在原节点": {
+    en: "Waiting for scanning node {node} to become available; assigned subtasks stay on their nodes",
+    ja: "スキャンノード {node} が利用可能になるのを待っています。割り当て済みのサブタスクは元のノードに残ります",
   },
   等待不可用节点的执行租约到期: {
     en: "Waiting for an unavailable node's execution lease to expire",
@@ -3021,13 +3172,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Times use the server time zone ({zone}).",
     ja: "時刻はサーバーのタイムゾーン（{zone}）で解釈します。",
   },
+  // A time filter at the offset the Master read it in (src/lib/filterTime.ts).
+  "{time}（{zone}）": {
+    en: "{time} ({zone})",
+    ja: "{time}（{zone}）",
+  },
   "对象存储之间迁移失败的对象。": {
     en: "Objects that failed to transfer between object storages.",
     ja: "オブジェクトストレージ間で転送に失敗したオブジェクト。",
-  },
-  "旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。": {
-    en: "Objects the legacy transfer engine moved with its fallback method. This version no longer creates such records.",
-    ja: "旧版の転送エンジンが代替方式で転送したオブジェクト。現在のバージョンではこの記録は作成されません。",
   },
   "与执行节点本地目录之间迁移失败的文件。": {
     en: "Files that failed to transfer to or from an execution node's local directory.",
@@ -3060,5 +3212,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   开始使用: {
     en: "Getting started",
     ja: "はじめに",
+  },
+  // Task limits saved while some of the task's nodes are not connected.
+  "任务限速已保存；未连接的执行节点重新连接后自动应用。": {
+    en: "Task limits saved; nodes that are not connected apply them when they reconnect.",
+    ja: "タスクの速度制限を保存しました。接続されていない実行ノードは、再接続すると自動で適用します。",
+  },
+  "未连接的执行节点会在重新连接后自动应用此限速：{nodes}": {
+    en: "Nodes that are not connected apply these limits when they reconnect: {nodes}",
+    ja: "接続されていない実行ノードは、再接続すると自動でこの速度制限を適用します: {nodes}",
   },
 };

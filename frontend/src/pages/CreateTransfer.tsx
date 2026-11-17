@@ -168,6 +168,13 @@ type Draft = {
 const DRAFT_KEY = "oss-transfer-create-draft";
 // The Master's binding code when the shared directory check was skipped.
 const SHARED_CHECK_SKIPPED = "SHARED_STORAGE_CHECK_SKIPPED";
+// The Master's binding code for a download destination on an Agent too old
+// to check whether it can write there.
+const WRITE_NOT_CHECKED = "LOCAL_PATH_WRITE_NOT_CHECKED";
+// A binding that passed without everything having been checked.
+const uncheckedBinding = (binding: { valid: boolean; code?: string }) =>
+  binding.valid &&
+  (binding.code === SHARED_CHECK_SKIPPED || binding.code === WRITE_NOT_CHECKED);
 const localUploadMode = (nodeCount: number) =>
   nodeCount > 1 ? "balanced" : "affinity";
 const distributionLabel = (mode: string | undefined, direction?: string) =>
@@ -649,6 +656,30 @@ export default function CreateTransfer() {
   const precheckProblems = precheck
     ? rowProblems(precheck.validationErrors, precheck.rows ?? 1)
     : [];
+  const precheckWriteUnchecked = !!precheck?.nodeBindings.some(
+    (binding) => binding.valid && binding.code === WRITE_NOT_CHECKED,
+  );
+  // Imported subtasks with a marker, numbered from 1. The marker is not used:
+  // a v4.0 marker names the upload that ended last, not a point before which
+  // every object is done, so the scan does not resume there.
+  const batchMarkerRows = useMemo(() => {
+    if (tab !== 1 || batchKind !== "tasks") return [];
+    try {
+      const rows: unknown = JSON.parse(batchText);
+      return Array.isArray(rows)
+        ? rows.flatMap((row, index) =>
+            row &&
+            typeof row === "object" &&
+            typeof row.marker === "string" &&
+            row.marker !== ""
+              ? [index + 1]
+              : [],
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  }, [tab, batchKind, batchText]);
   // Imported local rows that skip the shared check, numbered from 1.
   const batchSkippedRows = useMemo(() => {
     if (tab !== 1 || batchKind !== "local") return [];
@@ -1060,20 +1091,28 @@ export default function CreateTransfer() {
         };
         setPrecheck(checked);
         precheckRequest.current = checked.valid ? checkedRequest : null;
-        // A skipped check passes the paths, not the shared directory.
+        // A skipped check passes the paths, not the shared directory; an
+        // older Agent passes the path without checking that it can write.
         const unchecked = checked.nodeBindings.some(
           (binding) => binding.code === SHARED_CHECK_SKIPPED,
         );
         const [reason] = rowProblems(checked.validationErrors, payload.length);
+        const writeUnchecked = checked.nodeBindings.some(
+          (binding) => binding.valid && binding.code === WRITE_NOT_CHECKED,
+        );
         notify(
           checked.valid
             ? unchecked
               ? tr("路径预检通过，共享目录未校验")
-              : tr("所有节点预检通过")
+              : writeUnchecked
+                ? tr("路径预检通过，未检查目录是否可写")
+                : tr("所有节点预检通过")
             : checked.nodeBindings.some((binding) => !binding.valid) || !reason
               ? tr("预检完成，存在未通过的节点。")
               : tr("预检未通过：{reason}", { reason }),
-          checked.valid && !unchecked ? "success" : "warning",
+          checked.valid && !unchecked && !writeUnchecked
+            ? "success"
+            : "warning",
         );
         return;
       }
@@ -2173,7 +2212,7 @@ export default function CreateTransfer() {
                   {batchKind === "tasks" && (
                     <Alert severity="info">
                       {tr(
-                        "用于导入已有的 OSS 子任务或恢复断点。支持 startKey、endKey、marker 和 workerNode；留空 workerNode 时由集群分配。",
+                        "用于按 Key 范围导入 OSS 子任务。支持 startKey、endKey 和 workerNode，留空 workerNode 时由集群分配。每个子任务从 startKey 之后完整扫描其范围，不会从断点继续；目标端已存在的对象按冲突策略处理。",
                       )}
                     </Alert>
                   )}
@@ -2240,6 +2279,17 @@ export default function CreateTransfer() {
                       {tr("填入示例")}
                     </Button>
                   </Stack>
+                  {batchMarkerRows.length > 0 && (
+                    <Alert
+                      severity="warning"
+                      data-testid="batch-marker-warning"
+                    >
+                      {tr(
+                        "第 {rows} 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。",
+                        { rows: batchMarkerRows.join(", ") },
+                      )}
+                    </Alert>
+                  )}
                   {batchSkippedRows.length > 0 && (
                     <Alert
                       severity="warning"
@@ -2291,7 +2341,7 @@ export default function CreateTransfer() {
                                 value1:
                                   batchKind === "tasks"
                                     ? tr(
-                                        "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、marker、workerNode。",
+                                        "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、workerNode；marker 不会被使用。",
                                       )
                                     : tr("存储桶迁移会按源范围生成子任务。"),
                               },
@@ -2307,7 +2357,11 @@ export default function CreateTransfer() {
               <Paper variant="outlined" sx={{ overflow: "hidden" }}>
                 <Alert
                   severity={
-                    precheck.valid && !precheckUnchecked ? "success" : "warning"
+                    precheck.valid &&
+                    !precheckUnchecked &&
+                    !precheckWriteUnchecked
+                      ? "success"
+                      : "warning"
                   }
                   sx={{ borderRadius: 0 }}
                 >
@@ -2315,7 +2369,9 @@ export default function CreateTransfer() {
                     {precheck.valid
                       ? precheckUnchecked
                         ? tr("路径预检通过，共享目录未校验")
-                        : tr("节点预检通过")
+                        : precheckWriteUnchecked
+                          ? tr("路径预检通过，未检查目录是否可写")
+                          : tr("节点预检通过")
                       : precheckNodeFailed || precheckProblems.length === 0
                         ? tr("节点预检未通过")
                         : tr("预检未通过")}
@@ -2371,7 +2427,7 @@ export default function CreateTransfer() {
                             color={
                               !binding.valid
                                 ? "error.main"
-                                : binding.code === SHARED_CHECK_SKIPPED
+                                : uncheckedBinding(binding)
                                   ? "warning.main"
                                   : "text.secondary"
                             }
@@ -2387,25 +2443,28 @@ export default function CreateTransfer() {
                         color={
                           !binding.valid
                             ? "error"
-                            : binding.code === SHARED_CHECK_SKIPPED
+                            : uncheckedBinding(binding)
                               ? "warning"
                               : "success"
                         }
                         label={
                           binding.valid && binding.code === SHARED_CHECK_SKIPPED
                             ? tr("未校验")
-                            : binding.valid
-                              ? tr("通过{value1}", {
-                                  value1:
-                                    binding.pathType === "FILE"
-                                      ? ` · ${tr("文件")}`
-                                      : binding.pathType === "DIRECTORY"
-                                        ? ` · ${tr("目录")}`
-                                        : binding.pathType === "MISSING"
-                                          ? ` · ${tr("将创建目录")}`
-                                          : "",
-                                })
-                              : tr("未通过")
+                            : binding.valid &&
+                                binding.code === WRITE_NOT_CHECKED
+                              ? tr("未检查写入")
+                              : binding.valid
+                                ? tr("通过{value1}", {
+                                    value1:
+                                      binding.pathType === "FILE"
+                                        ? ` · ${tr("文件")}`
+                                        : binding.pathType === "DIRECTORY"
+                                          ? ` · ${tr("目录")}`
+                                          : binding.pathType === "MISSING"
+                                            ? ` · ${tr("将创建目录")}`
+                                            : "",
+                                  })
+                                : tr("未通过")
                         }
                         sx={{ alignSelf: "flex-start" }}
                       />

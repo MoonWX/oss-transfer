@@ -164,10 +164,11 @@ test("one exception task action stays locked across rows, navigation, and reload
     expect(body.expectedGenerations).toEqual({ "1": latest.generation });
     generations.push(body.expectedGenerations["1"]);
     await submitted.promise;
+    // The accepted retry is still being prepared: the lock stays.
     latest = {
       ...task,
       generation: latest.generation + 1,
-      status: "RUNNING",
+      status: "RESUMING",
     };
     await route.fulfill({ json: acceptedResult(latest.generation) });
   });
@@ -196,7 +197,7 @@ test("one exception task action stays locked across rows, navigation, and reload
     await expect(processing).toHaveCount(1);
     await expect(processing.first()).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: "完整迁移报告" }),
+      page.getByRole("button", { name: "导出全部本地任务报告" }),
     ).toBeEnabled();
     await expect(
       page.getByRole("tab", { name: "失败对象", exact: true }),
@@ -388,7 +389,7 @@ test("a retry preflight from an old login cannot submit using the new login", as
     preflight.release();
     // The preflight has returned and the handler has completed its finally block.
     await expect(
-      page.getByRole("button", { name: "完整迁移报告" }),
+      page.getByRole("button", { name: "导出全部本地任务报告" }),
     ).toBeEnabled();
     expect(sent).toBe(0);
     expect(
@@ -466,6 +467,7 @@ test("a delayed 401 from recovery polling cannot clear a newer login", async ({
 
 // A RUNNING task with failed objects instead offers the in-place retry of
 // those objects (running-retry.spec.ts); it never resumes older failures.
+// Without any, the page says that there is nothing to retry yet.
 for (const status of ["COMPLETED", "RUNNING"] as const) {
   test(`a fresh exception page disables historical failures for a ${status} task`, async ({
     page,
@@ -502,7 +504,7 @@ for (const status of ["COMPLETED", "RUNNING"] as const) {
       await expect(checking.first()).toBeDisabled();
       inspected.release();
       const action = page.getByRole("button", {
-        name: status === "COMPLETED" ? "任务已完成" : "处理中…",
+        name: status === "COMPLETED" ? "任务已完成" : "暂无可重试的对象",
         exact: true,
       });
       await expect(action).toHaveCount(1);

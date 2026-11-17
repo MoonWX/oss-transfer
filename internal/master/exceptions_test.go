@@ -65,6 +65,20 @@ func TestExceptionsHTTPFiltersClearAndLocalEnvelope(t *testing.T) {
 	if code != 200 || body["totalCount"] != float64(4) {
 		t.Fatal("clear hid unresolved failures", code, body)
 	}
+	// The console's failed-objects tab lists transfers between object
+	// storages only; its records, task picker and cleanup take the direction.
+	code, body = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/failed", f.admin, map[string]any{"limit": 1000, "direction": "OSS_TO_OSS"})
+	if code != 200 || body["totalCount"] != float64(2) {
+		t.Fatal("direction filter of the failed list", code, body)
+	}
+	code, body = request(t, f.http.Client(), "GET", f.http.URL+"/api/master/exceptions/tasks?type=failed&direction=OSS_TO_OSS", f.admin, nil)
+	catalog := body["data"].(map[string]any)["items"].([]any)
+	if code != 200 || len(catalog) != 1 || catalog[0].(map[string]any)["taskIndex"] != float64(ids[0]) {
+		t.Fatal("task picker of the failed-objects tab listed local tasks", code, body)
+	}
+	if code, body := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/exceptions/tasks?type=failed&direction=SIDEWAYS", f.admin, nil); code != 400 {
+		t.Fatal("invalid direction accepted", code, body)
+	}
 	parent, err := f.master.tasks.repo.Get(ids[0])
 	if err != nil || parent.Counters.Failed != 2 {
 		t.Fatal("clear destroyed task evidence", parent, err)

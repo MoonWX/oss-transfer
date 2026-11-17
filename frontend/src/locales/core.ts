@@ -257,5 +257,7 @@ export const coreMessages: Record<string, { en: string; ja: string }> =
         "The new password must be different from the current password",
         "新しいパスワードは現在のパスワードと異なるものにしてください",
       ],
+      // Separates the names of a list, such as node names, in a sentence.
+      ["、", ", ", "、"],
     ].map(([source, en, ja]) => [source, { en, ja }]),
   );

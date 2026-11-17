@@ -76,12 +76,10 @@ func (s *Server) onlineAgents() ([]cluster.Member, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.agents.mu.Lock()
-	defer s.agents.mu.Unlock()
+	connected := s.connectedAgents(members)
 	var result []cluster.Member
 	for _, member := range members {
-		seen, ok := s.agents.lastSeen[member.ID]
-		if ok && s.options.Now().Sub(seen) < 75*time.Second {
+		if connected[member.ID] {
 			result = append(result, member)
 		}
 	}
@@ -318,20 +316,21 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var warning *storageProblem
+	var validationNode string
 	if request.Validate {
 		outcome, err := s.checkStorage(r.Context(), request.Config, "")
 		if err != nil {
-			fail(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()))
+			storageCheckFailed(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()), outcome.node)
 			return
 		}
 		if outcome.failure == nil {
 			outcome.failure = outcome.saveFailure
 		}
 		if outcome.failure != nil {
-			storageFailureResponse(w, 400, "Storage validation failed: ", outcome.failure)
+			storageFailureResponse(w, 400, "Storage validation failed: ", outcome.failure, outcome.node)
 			return
 		}
-		warning = outcome.warning
+		warning, validationNode = outcome.warning, outcome.node
 	}
 	var snapshot storageconfig.Snapshot
 	var err error
@@ -344,7 +343,7 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot, warning)
+	s.storageSaved(w, r, snapshot, warning, validationNode, false)
 }
 func storageError(w http.ResponseWriter, err error) {
 	status := 500
@@ -366,12 +365,16 @@ func (s *Server) deleteStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot, nil)
+	s.storageSaved(w, r, snapshot, nil, "", true)
 }
 
-// storageSaved reports the synchronization of a saved snapshot; warning is a
-// non-blocking finding of the connection check.
-func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem) {
+// storageSaved reports the synchronization of a saved or deleted snapshot;
+// warning is a non-blocking finding of the connection check, which
+// validationNode ran. Nothing pushes
+// the snapshot later: a node that misses it is synced before it next works
+// on a task or a comparison (prepareMembers, retries, recoveries and
+// comparisons sync first), or by the next storage change.
+func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem, validationNode string, deleted bool) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
 		fail(w, 500, "Connection saved; cannot read Agent synchronization status")
@@ -380,11 +383,18 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	displays := s.nodeDisplaySnapshot()
+	connected := s.connectedAgents(members)
 	details := make([]string, len(members))
 	success := make([]bool, len(members))
 	slots := make(chan struct{}, 8)
 	var group sync.WaitGroup
 	for i, member := range members {
+		pending := displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
+		if !connected[member.ID] {
+			// Not asked: waiting for an offline node would hold a slot.
+			details[i] = pending
+			continue
+		}
 		group.Add(1)
 		go func() {
 			defer group.Done()
@@ -392,11 +402,11 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
 			case <-ctx.Done():
-				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
+				details[i] = pending
 				return
 			}
 			if err := s.syncStorage(ctx, member, snapshot); err != nil {
-				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
+				details[i] = pending
 			} else {
 				success[i] = true
 				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "同步成功")
@@ -410,7 +420,17 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			count++
 		}
 	}
-	result := map[string]any{"success": true, "message": localize(w, "存储连接已保存"), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details}
+	message, note := "存储连接已保存", "未同步的节点会在下次执行任务或对象比对前自动同步。"
+	if deleted {
+		message, note = "存储连接已删除", "未同步的节点会在下次执行任务或对象比对前自动同步；在此之前，这些节点上仍保留该连接及其凭据。"
+	}
+	result := map[string]any{"success": true, "message": localize(w, message), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details}
+	if count < len(members) {
+		result["syncNote"] = localize(w, note)
+	}
+	if validationNode != "" {
+		result["validationNode"] = validationNode
+	}
 	storageWarningFields(w, result, warning)
 	writeJSON(w, 200, result)
 }
@@ -433,14 +453,21 @@ func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 			}
 			outcome, err := s.checkStorage(r.Context(), config, bucket)
 			if err != nil {
-				fail(w, 502, err.Error())
+				storageCheckFailed(w, 502, localize(w, err.Error()), outcome.node)
 				return
 			}
 			if outcome.failure != nil {
-				storageFailureResponse(w, 502, "", outcome.failure)
+				storageFailureResponse(w, 502, "", outcome.failure, outcome.node)
 				return
 			}
-			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil}
+			// node names the one Agent that ran the check.
+			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil, "node": outcome.node}
+			if outcome.check.ListError != "" {
+				// ListBuckets was denied (any other listing failure fails
+				// the check): the bucket list is empty because it was
+				// refused, not because there are no buckets.
+				result["listBucketsDenied"] = true
+			}
 			// checkedBucket names a bucket whose check passed; a bucket whose
 			// check failed without blocking is named by bucketCheckFailed,
 			// and the warning says why.

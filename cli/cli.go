@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -210,8 +211,32 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			client.SetAuthToken(token)
 		}
 	}
+	// reached marks a watch that has had an answer from the Master; from then
+	// on a Master that stops answering is most likely restarting, not
+	// misconfigured, and the watch keeps polling for a while.
+	reached := false
+	var unreachableSince time.Time
 	for {
 		result, callErr := dispatchCLI(client, normalized, input, options.host)
+		if options.watch > 0 && reached && callErr != nil && ctx.Err() == nil && masterUnreachable(callErr) {
+			now := watchNow()
+			if unreachableSince.IsZero() {
+				unreachableSince = now
+			}
+			if now.Sub(unreachableSince) < watchReconnectLimit {
+				if options.json {
+					json.NewEncoder(output).Encode(map[string]interface{}{"success": false, "error": localizedCLIError(language, callErr), "retrying": true})
+				}
+				fmt.Fprintf(errors, cliText(errors, "提示: 暂时无法连接 Master（%s）：%s。Master 可能正在重启或更新；%s 后重试，按 Ctrl+C 停止。\n"), safeCLIText(options.host), localizedCLIError(language, callErr), options.watch)
+				if !watchWait(ctx, options.watch) {
+					return 130
+				}
+				continue
+			}
+		}
+		if callErr == nil {
+			reached, unreachableSince = true, time.Time{}
+		}
 		if options.json {
 			if result == nil {
 				result = map[string]interface{}{}
@@ -268,7 +293,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			return 1
 		}
 		partial := incompleteResult(result)
-		if partial {
+		if partial && !storageSyncPending(result) {
 			fmt.Fprintln(errors, cliText(errors, "提示: 返回不完整，当前结果不代表全量。"))
 			renderIncomplete(errors, result)
 		}
@@ -278,14 +303,48 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			}
 			return 0
 		}
-		timer := time.NewTimer(options.watch)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !watchWait(ctx, options.watch) {
 			return 130
-		case <-timer.C:
 		}
 	}
+}
+
+// watchReconnectLimit bounds how long a watch keeps polling a Master that
+// stopped answering after the watch had reached it. An online update stops
+// the Master to back up its database, replaces it and starts it again; the
+// installer may take 15 minutes, and 5 more to roll back.
+const watchReconnectLimit = 30 * time.Minute
+
+var (
+	watchNow = time.Now
+	// watchWait waits for the next poll; it reports false when the user
+	// interrupts the watch.
+	watchWait = func(ctx context.Context, interval time.Duration) bool {
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+)
+
+// masterUnreachable reports a request that got no answer from the Master:
+// the connection was refused, reset, closed or timed out, the name did not
+// resolve, or a proxy in front of the Master answered 502, 503 or 504 for it.
+// The Master's own answer, even an error status, is not such a failure.
+func masterUnreachable(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var answered *apiHTTPError
+	if errors.As(err, &answered) {
+		return answered.gateway
+	}
+	var network net.Error
+	return errors.As(err, &network) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // errorEnvelopeOnly reports whether a failed response carries nothing but its
@@ -767,7 +826,9 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 					target = rate["configuredLimit"+suffix]
 				}
 				state := getString(rate, "state")
-				if translated, ok := map[string]string{"NORMAL": cliText(out, "正常"), "REDUCED": cliText(out, "已降速"), "RECOVERING": cliText(out, "恢复中"), "RECOVERED": cliText(out, "已恢复"), "UNLIMITED": cliText(out, "不限速")}[state]; ok {
+				// RAISING: a target raised in service.json is reached in steps,
+				// without throttling.
+				if translated, ok := map[string]string{"NORMAL": cliText(out, "正常"), "REDUCED": cliText(out, "已降速"), "RECOVERING": cliText(out, "恢复中"), "RECOVERED": cliText(out, "已恢复"), "RAISING": cliText(out, "按新目标逐步提升"), "UNLIMITED": cliText(out, "不限速")}[state]; ok {
 					state = translated
 				}
 				if state == "" {
@@ -836,7 +897,12 @@ func storageAddressingLabel(out io.Writer, config map[string]interface{}) string
 
 // renderStorageCheck prints a connection test or bucket listing.
 func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buckets []interface{}) {
-	fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	if data["listBucketsDenied"] == true && len(buckets) == 0 {
+		// The listing was refused; "0 buckets" would read as an empty account.
+		fmt.Fprintln(out, cliText(out, "存储桶：无权列举（ListBuckets 被拒绝）"))
+	} else {
+		fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	}
 	for _, bucket := range buckets {
 		fmt.Fprintf(out, "  %s\n", safeCLIText(bucket))
 	}
@@ -851,6 +917,10 @@ func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buck
 		fmt.Fprint(out, cliTextf(out, "存储桶级检查: 已列举存储桶 %s 中的对象\n", safeCLIText(bucket)))
 	} else if bucket := getString(data, "bucketCheckFailed"); bucket != "" {
 		fmt.Fprint(out, cliTextf(out, "存储桶级检查: 存储桶 %s 未通过\n", safeCLIText(bucket)))
+	}
+	// One node runs the check; the others were not checked.
+	if node := getString(data, "node"); node != "" {
+		fmt.Fprint(out, cliTextf(out, "执行检查的节点: %s\n", safeCLIText(node)))
 	}
 	if warning := getString(data, "warning"); warning != "" {
 		fmt.Fprintf(out, "%s %s\n", cliText(out, "警告:"), safeCLIText(warning))
@@ -867,22 +937,35 @@ func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buck
 }
 
 // Storage requests of a bucket permission check, as the console names them.
+// Older Agents abort the multipart upload within the MULTIPART row; newer ones
+// report the abort as MULTIPART_ABORT.
 var cliPermissionLabels = map[string]string{
-	"LIST":         "列举对象（ListObjectsV2）",
-	"HEAD":         "读取对象元数据（HeadObject）",
-	"GET":          "读取对象内容（GetObject）",
-	"PUT":          "写入对象（PutObject，条件写入）",
-	"HEAD_WRITTEN": "读回写入的对象（HeadObject）",
-	"MULTIPART":    "分片上传（创建、上传分片、中止）",
-	"DELETE_PROBE": "删除测试对象（DeleteObject，迁移不需要）",
+	"LIST":            "列举对象（ListObjectsV2）",
+	"HEAD":            "读取对象元数据（HeadObject）",
+	"GET":             "读取对象内容（GetObject）",
+	"PUT":             "写入对象（PutObject，条件写入）",
+	"HEAD_WRITTEN":    "读回写入的对象（HeadObject）",
+	"MULTIPART":       "分片上传（创建、上传分片）",
+	"MULTIPART_ABORT": "中止分片上传（AbortMultipartUpload，用于清理残留分片）",
+	"DELETE_PROBE":    "删除测试对象（DeleteObject，迁移不需要）",
 }
 
+const cliPermissionMultipartWithAbort = "分片上传（创建、上传分片、中止）"
+
+// cliOptionalPermissions are not needed to write: a migration aborts only an
+// upload that already failed, and never deletes.
+var cliOptionalPermissions = map[string]bool{"MULTIPART_ABORT": true, "DELETE_PROBE": true}
+
+// cliWritePermissions are the write check's requests.
+var cliWritePermissions = map[string]bool{"PUT": true, "HEAD_WRITTEN": true, "MULTIPART": true, "MULTIPART_ABORT": true, "DELETE_PROBE": true}
+
 var cliPermissionSkips = map[string]string{
-	"EMPTY_BUCKET":   "存储桶为空，没有可读取的对象",
-	"LIST_FAILED":    "列举失败，无法选取要读取的对象",
-	"PUT_FAILED":     "写入失败，跳过",
-	"NOT_REQUESTED":  "未检查写入，加 --write 检查",
-	"NO_SUCH_BUCKET": "存储桶不存在，不尝试写入",
+	"EMPTY_BUCKET":     "存储桶为空，没有可读取的对象",
+	"LIST_FAILED":      "列举失败，无法选取要读取的对象",
+	"PUT_FAILED":       "写入失败，跳过",
+	"NOT_REQUESTED":    "未检查写入，加 --write 检查",
+	"NO_SUCH_BUCKET":   "存储桶不存在，不尝试写入",
+	"MULTIPART_FAILED": "没有创建分片上传，无需中止",
 }
 
 // renderPermissionCheck lists each storage request of a permission check and
@@ -895,14 +978,29 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 	} else {
 		fmt.Fprint(out, cliTextf(out, "存储桶 %s 的权限检查：\n", safeCLIText(bucket)))
 	}
-	failed, readFailed, readSkipped := 0, 0, false
-	for _, row := range objectList(check["results"]) {
+	rows := objectList(check["results"])
+	// An older Agent reports no abort row: its multipart row includes it.
+	abortReported, multipartRan := false, false
+	for _, row := range rows {
+		switch getString(row, "operation") {
+		case "MULTIPART_ABORT":
+			abortReported = true
+		case "MULTIPART":
+			multipartRan = getString(row, "status") != "SKIPPED"
+		}
+	}
+	abortIncluded := multipartRan && !abortReported
+	failed, readFailed, readSkipped, putFailed := 0, 0, false, false
+	for _, row := range rows {
 		operation, status := getString(row, "operation"), getString(row, "status")
 		label := operation
 		if key, ok := cliPermissionLabels[operation]; ok {
 			label = cliText(out, key)
 		}
-		write := operation == "PUT" || operation == "HEAD_WRITTEN" || operation == "MULTIPART"
+		if operation == "MULTIPART" && abortIncluded {
+			label = cliText(out, cliPermissionMultipartWithAbort)
+		}
+		write := cliWritePermissions[operation]
 		switch status {
 		case "PASSED":
 			fmt.Fprintf(out, "  [%s] %s\n", cliText(out, "通过"), label)
@@ -913,11 +1011,12 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 				message = getString(row, "detail")
 			}
 			fmt.Fprintf(out, "         %s\n", safeCLIText(message))
-			if operation != "DELETE_PROBE" {
+			if !cliOptionalPermissions[operation] {
 				failed++
 				if !write {
 					readFailed++
 				}
+				putFailed = putFailed || operation == "PUT"
 			}
 		default:
 			reason := getString(row, "reason")
@@ -929,14 +1028,24 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 				readSkipped = true
 			}
 		}
+		if key := getString(row, "key"); key != "" {
+			fmt.Fprintf(out, "         %s\n", cliTextf(out, "对象：%s", safeCLIText(key)))
+		}
 	}
+	prefix := getString(check, "prefix")
 	switch {
-	case failed > 0 && readFailed == 0:
-		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常但不能写入，只能作为迁移的源。\n", safeCLIText(bucket)))
+	// Only a failed PUT means the bucket cannot be written where the check
+	// wrote; a key limited to another prefix may still write there.
+	case failed > 0 && readFailed == 0 && !readSkipped && putFailed && prefix != "":
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常，但在前缀 %s 下写入失败：可以作为迁移的源，不能作为写入此前缀的目标。\n", safeCLIText(bucket), safeCLIText(prefix)))
+	case failed > 0 && readFailed == 0 && !readSkipped && putFailed:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请加 --prefix 重新检查。\n", safeCLIText(bucket)))
 	case failed > 0:
 		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 有 %d 项检查未通过。\n", safeCLIText(bucket), failed))
 	case readSkipped:
 		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 可以列举对象，但存储桶为空，未能检查读取对象。\n", safeCLIText(bucket)))
+	case check["write"] == true && prefix != "":
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常，也可以在前缀 %s 下写入，可以作为迁移的源或写入此前缀的目标。\n", safeCLIText(bucket), safeCLIText(prefix)))
 	case check["write"] == true:
 		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取和写入权限都正常，可以作为迁移的源或目标。\n", safeCLIText(bucket)))
 	default:
@@ -944,6 +1053,9 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 	}
 	if key := getString(check, "leftoverKey"); key != "" {
 		fmt.Fprint(out, cliTextf(out, "注意：测试对象 %s 未能删除（删除不是迁移所需的权限），请手动删除。\n", safeCLIText(key)))
+	}
+	if key := getString(check, "leftoverUploadKey"); key != "" {
+		fmt.Fprint(out, cliTextf(out, "注意：分片上传 %s（上传 ID：%s）未能中止，存储桶中留下一个未完成的分片上传，其分片会占用存储并计费。写入不需要中止权限，但缺少它时，迁移中失败的大对象上传也会留下这样的分片。请用有权限的密钥中止此上传，或配置生命周期规则清理未完成的分片上传。\n", safeCLIText(key), safeCLIText(getString(check, "leftoverUploadId"))))
 	}
 }
 
@@ -1025,6 +1137,17 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		bandwidth = safeCLIText(fmt.Sprint(value)) + " Mbps"
 	}
 	fields := [][2]string{{cliText(out, "方向"), cliDirectionLabel(out, taskDirection(task))}, {cliText(out, "状态"), cliTaskStatusLabel(out, getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), distribution}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已发现"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	if nodes := cliUnreportedNodes(out, task); nodes != "" {
+		// A partial live sample: progress is a lower bound and the speed is
+		// unknown until these nodes report again.
+		for i, field := range fields {
+			if field[0] == cliText(out, "进度") {
+				note := [2]string{cliText(out, "实时进度"), cliTextf(out, "执行节点 %s 未上报，已迁移和进度不含其正在传输的部分，速度暂时未知", nodes)}
+				fields = append(fields[:i+1], append([][2]string{note}, fields[i+1:]...)...)
+				break
+			}
+		}
+	}
 	if taskDirection(task) == "OSS_TO_LOCAL" {
 		// Parent rows always carry the setting (older tasks report auto); a child
 		// row without it inherits the parent's, so do not guess a value there.
@@ -1085,7 +1208,8 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 var fieldLabels = map[string]string{"maxConcurrentChildren": "子任务并发", "objectsPerChild": "每个子任务的对象并发", "requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "mode": "重试方式", "retriedChildren": "重试子任务", "retriedObjects": "重试对象", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线", "reasonCode": "原因代码", "retryReasonCode": "重试原因", "freeBytes": "可用空间（字节）", "effectiveUid": "Agent 运行 UID", "writeProbeDirectory": "写入检查目录"}
 
 // cliExceptionReason explains the reason codes of objects whose source
-// changed or was deleted after the scan; other codes stay as they are.
+// changed or was deleted after the scan, and of objects of a recovered
+// v4.0.x task that the source does not have; other codes stay as they are.
 func cliExceptionReason(out io.Writer, value interface{}) string {
 	code, _ := value.(string)
 	switch code {
@@ -1093,6 +1217,8 @@ func cliExceptionReason(out io.Writer, value interface{}) string {
 		return cliText(out, "源对象在扫描后已变化，重试会读取其当前版本") + " (" + code + ")"
 	case "SOURCE_DELETED":
 		return cliText(out, "源对象已在源端删除，已跳过") + " (" + code + ")"
+	case "SOURCE_MISSING":
+		return cliText(out, "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端") + " (" + code + ")"
 	}
 	return ""
 }
@@ -1181,6 +1307,12 @@ func renderFieldsWithNodes(out io.Writer, data map[string]interface{}, indent st
 func renderIncomplete(out io.Writer, result map[string]interface{}) {
 	seen := map[string]bool{}
 	displays := collectCLINodeDisplays(result)
+	failedLabel, unreachableLabel := cliText(out, "失败节点"), cliText(out, "未响应节点")
+	if result[cliOfflineNodesKey] == true {
+		// Both lists name the same nodes, printed once.
+		failedLabel = cliText(out, "离线且有未完成子任务的节点")
+		unreachableLabel = failedLabel
+	}
 	write := func(context, label string, value interface{}) {
 		line := label + ": " + safeCLIText(value)
 		if context != "" {
@@ -1199,7 +1331,7 @@ func renderIncomplete(out io.Writer, result map[string]interface{}) {
 		if id := getInt(current, "taskIndex"); id > 0 {
 			context = fmt.Sprintf(cliText(out, "任务 #%d"), id)
 		}
-		for _, entry := range [][2]string{{"failedWorkers", cliText(out, "失败节点")}, {"unreachableWorkers", cliText(out, "未响应节点")}, {"unavailableWorkers", cliText(out, "不可用节点")}, {"truncatedWorkers", cliText(out, "记录被截断的节点")}, {"missingTaskIds", cliText(out, "缺失子任务 ID")}, {"errors", cliText(out, "错误详情")}, {"workerErrors", cliText(out, "节点错误")}, {"nodeErrors", cliText(out, "节点错误")}} {
+		for _, entry := range [][2]string{{"failedWorkers", failedLabel}, {"unreachableWorkers", unreachableLabel}, {"unavailableWorkers", cliText(out, "不可用节点")}, {"truncatedWorkers", cliText(out, "记录被截断的节点")}, {"missingTaskIds", cliText(out, "缺失子任务 ID")}, {"errors", cliText(out, "错误详情")}, {"workerErrors", cliText(out, "节点错误")}, {"nodeErrors", cliText(out, "节点错误")}} {
 			if value := current[entry[0]]; nonEmptyCLICollection(value) {
 				if cliNodeCollectionField(entry[0]) {
 					value = cliNodeCollection(value, displays, localeOf(out))

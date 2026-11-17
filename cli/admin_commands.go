@@ -170,7 +170,7 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			}
 			result, err := client.Delete("/nodes/" + url.PathEscape(original))
 			if err == nil {
-				setCLISummary(result, strings.TrimSuffix(client.locale.format("已移除执行节点 %s。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent\n", original), "\n"))
+				setCLISummary(result, strings.TrimSuffix(client.locale.format("已移除执行节点 %s，它不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的程序和数据不会被删除；需要时请按其部署方式删除：用安装脚本安装的，在该主机运行安装脚本并加 --uninstall --role agent；容器请删除容器和数据卷；Windows 服务和手动运行的程序请手动删除（见安装文档的“卸载”一节）\n", original), "\n"))
 			}
 			return result, err
 		}
@@ -287,7 +287,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 	case "buckets", "test", "remove":
 		switches, values := []string{}, []string{"bucket"}
 		if action == "test" {
-			switches = append(switches, "write")
+			switches, values = append(switches, "write"), append(values, "prefix")
 		}
 		if action == "remove" {
 			switches, values = append(switches, "yes"), nil
@@ -320,13 +320,18 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		}
 		result, err := client.Get(path)
 		if err != nil {
-			return result, storagePathStyleAdvice(result, err, alias)
+			return result, storagePathStyleAdvice(result, storageCheckNode(result, err), alias)
 		}
 		if action == "test" {
 			_, checkSupported := result["pathStyle"]
 			switch {
+			case getString(result, "checkedBucket") != "" && result["listBucketsDenied"] == true:
+				// Keys limited to one bucket: nothing was listed.
+				result["message"] = client.locale.format("连接测试通过：ListBuckets 被拒绝，已用当前寻址方式直接访问存储桶 %s", getString(result, "checkedBucket"))
 			case getString(result, "checkedBucket") != "":
 				result["message"] = client.text("连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶")
+			case result["listBucketsDenied"] == true && !o.Has("bucket"):
+				result["message"] = client.text("ListBuckets 被拒绝，未获取存储桶列表；可用 --bucket 指定要检查的存储桶")
 			case getString(result, "bucketCheckFailed") != "":
 				result["message"] = client.text("已读取存储桶列表；第一个存储桶的存储桶级检查未通过，见警告；可用 --bucket 检查要迁移的存储桶")
 			case !checkSupported:
@@ -342,8 +347,15 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			if o.Has("write") && !o.Has("bucket") {
 				return nil, cliUsageErrorf("--write 需要与 --bucket 一起使用")
 			}
+			if o.Has("prefix") && !o.Has("write") {
+				return nil, cliUsageErrorf("--prefix 需要与 --write 一起使用")
+			}
+			// The Master's rule (transferstore.ValidPermissionPrefix).
+			if prefix := o.Value("prefix"); len(prefix) > 512 || !utf8.ValidString(prefix) || strings.ContainsFunc(prefix, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+				return nil, cliUsageErrorf("--prefix 不能超过 512 字节，且不能包含控制字符")
+			}
 			if o.Has("bucket") {
-				return storagePermissions(client, alias, o.Value("bucket"), o.Has("write"), result)
+				return storagePermissions(client, alias, o.Value("bucket"), o.Has("write"), o.Value("prefix"), result)
 			}
 		}
 		return result, nil
@@ -452,13 +464,23 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			result, err = client.Put("/s3-config/"+url.PathEscape(alias), body)
 		}
 		if err != nil {
-			return result, storagePathStyleAdvice(result, err, alias)
+			return result, storagePathStyleAdvice(result, storageCheckNode(result, err), alias)
 		}
 		setCLISummary(result, storageSavedSummary(client, client.locale.format("存储连接 %s 已保存", alias), result)...)
 		return result, nil
 	default:
 		return nil, cliErrorf("未知 storage 子命令: %s", action)
 	}
+}
+
+// storageCheckNode names the node that ran a failed storage check. One node
+// runs it, so the failure is what that node saw, not every node.
+func storageCheckNode(result map[string]interface{}, err error) error {
+	node := getString(result, "node")
+	if err == nil || node == "" {
+		return err
+	}
+	return cliErrorf("%w\n执行检查的节点: %s", err, safeCLIText(node))
 }
 
 // storagePathStyleAdvice adds the command that applies the Master's advice to
@@ -739,7 +761,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	if kind == "local" && action == "export" {
 		for key := range o.Values {
 			if key != "output" {
-				return nil, cliErrorf("本地迁移报告 API 导出所有已结束或停止任务的 ZIP，不支持 --%s 筛选；单任务报告请使用 task report", key)
+				return nil, cliErrorf("本地迁移报告包含全部本地迁移任务，只能在所有本地迁移都已结束或停止时导出，不支持 --%s 筛选；单任务报告请使用 task report", key)
 			}
 		}
 		if err := client.Download("GET", "/api/master/local-transfers/report", nil, o.Value("output")); err != nil {
@@ -760,6 +782,11 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	} else {
 		result, err = adminOSSExceptions(client, kind, o)
 	}
+	if _, indexed := result["queriedWorkers"].([]interface{}); indexed {
+		// The Master read its own index and named the offline nodes whose
+		// unfinished subtasks may not have reported every failure yet.
+		result[cliOfflineNodesKey] = true
+	}
 	if err == nil && action == "list" {
 		setCLISummary(result, exceptionsListSummary(client, kind, o, result)...)
 	}
@@ -775,7 +802,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	delete(result, "items")
 	summary := []string{client.locale.format("已导出 %d 条记录到 %s", result["exported"], o.Value("output"))}
 	if result["truncated"] == true {
-		summary = append(summary, client.text("仅导出了部分记录；可调大 --limit 后重新导出"))
+		summary = append(summary, exceptionsTruncatedLines(client, kind, o, true)...)
 	}
 	setCLISummary(result, summary...)
 	return result, nil
@@ -1073,6 +1100,14 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 	return writer.Error()
 }
 
+// storageSyncPending reports a saved or removed storage connection that some
+// nodes have not received yet. The change itself is complete and nothing was
+// left out of the result: the summary names those nodes and says when they
+// synchronize, and the exit status 3 only marks them.
+func storageSyncPending(result map[string]interface{}) bool {
+	return getString(result, "syncNote") != ""
+}
+
 // storageSavedSummary reports a saved or deleted connection and its
 // synchronization to the execution nodes.
 func storageSavedSummary(client *ApiClient, done string, result map[string]interface{}) []string {
@@ -1090,7 +1125,12 @@ func storageSavedSummary(client *ApiClient, done string, result map[string]inter
 			lines = append(lines, "  "+detail)
 		}
 	}
-	for _, key := range []string{"warning", "connectionWarning"} {
+	// One node validates the connection; the others were not checked.
+	if node := getString(result, "validationNode"); node != "" {
+		lines = append(lines, client.locale.format("保存前已由执行节点 %s 验证连接", node))
+	}
+	// When the nodes that missed the change receive it, as the Master says.
+	for _, key := range []string{"syncNote", "warning", "connectionWarning"} {
 		if warning := getString(result, key); warning != "" {
 			lines = append(lines, warning)
 		}
@@ -1099,9 +1139,15 @@ func storageSavedSummary(client *ApiClient, done string, result map[string]inter
 }
 
 // storagePermissions runs, through the Master, each request a migration makes
-// on one bucket, and fails when a required one is denied.
-func storagePermissions(client *ApiClient, alias, bucket string, write bool, result map[string]interface{}) (map[string]interface{}, error) {
-	check, err := client.Post("/s3-config/"+url.PathEscape(alias)+"/permissions", map[string]interface{}{"bucket": bucket, "write": write})
+// on one bucket, and fails when a required one is denied. The write check
+// writes below prefix when one is given.
+func storagePermissions(client *ApiClient, alias, bucket string, write bool, prefix string, result map[string]interface{}) (map[string]interface{}, error) {
+	body := map[string]interface{}{"bucket": bucket, "write": write}
+	if prefix != "" {
+		// Only sent when given: a Master before it refuses the field.
+		body["prefix"] = prefix
+	}
+	check, err := client.Post("/s3-config/"+url.PathEscape(alias)+"/permissions", body)
 	var problem *apiHTTPError
 	switch {
 	case err == nil:
@@ -1113,12 +1159,14 @@ func storagePermissions(client *ApiClient, alias, bucket string, write bool, res
 	case errors.As(err, &problem) && problem.Status == http.StatusConflict:
 		result["permissionsNote"] = problem.Message
 		return result, nil
+	case errors.As(err, &problem) && problem.Status == http.StatusBadRequest && prefix != "":
+		return result, cliErrorf("%w\n提示: 较旧的 Master 不支持 --prefix，请升级 Master，或去掉 --prefix 在存储桶根目录检查", err)
 	default:
 		return result, err
 	}
 	failed := 0
 	for _, row := range objectList(check["results"]) {
-		if getString(row, "status") == "FAILED" && getString(row, "operation") != "DELETE_PROBE" {
+		if getString(row, "status") == "FAILED" && !cliOptionalPermissions[getString(row, "operation")] {
 			failed++
 		}
 	}

@@ -478,8 +478,9 @@ test.describe("localized subtask timestamps", () => {
     for (const value of [
       "9/24/2026, 01:02:03",
       "9/24/2026, 01:03:04",
-      "9/22/2026, 12:00:00",
-      "9/25/2026, 18:00:00",
+      // Time filters name the zone the Master read them in.
+      "9/22/2026, 12:00:00 (UTC)",
+      "9/25/2026, 18:00:00 (UTC)",
       dateLikeKey,
       "2026-09-24/日本語.txt",
     ])
@@ -500,8 +501,8 @@ test.describe("localized subtask timestamps", () => {
     for (const value of [
       "2026/9/24 1:02:03",
       "2026/9/24 1:03:04",
-      "2026/9/22 12:00:00",
-      "2026/9/25 18:00:00",
+      "2026/9/22 12:00:00（UTC）",
+      "2026/9/25 18:00:00（UTC）",
       dateLikeKey,
       "2026-09-24/日本語.txt",
     ])
@@ -695,4 +696,26 @@ test("completed children and stopped parents do not offer manual child recovery"
   await expect(
     page.getByRole("button", { name: "立即恢复", exact: true }),
   ).toHaveCount(0);
+});
+
+test.describe("with the browser in another time zone", () => {
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("a child shows its time filters at the offset the Master read them in", async ({
+    page,
+  }) => {
+    const { data } = await arrange(page, "OSS_TO_OSS");
+    data.children[1].dateAfter = "2026-11-01T00:00:00Z";
+    data.children[1].dateBefore = "2026-11-02T08:30:00+08:00";
+    await page.goto("/tasks?taskId=821");
+    await revealChildren(page);
+    await page.getByRole("button", { name: "查看子任务 821-2" }).click();
+    const child = await expectChild(page);
+    await expect(
+      child.getByText("2026/11/1 00:00:00（UTC）", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      child.getByText("2026/11/2 08:30:00（UTC+08:00）", { exact: true }),
+    ).toBeVisible();
+  });
 });

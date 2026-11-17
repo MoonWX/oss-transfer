@@ -348,9 +348,40 @@ func (s *Server) changeTaskLimits(ctx context.Context, id int64, mbps *float64, 
 		if updateErr != nil {
 			return updateErr
 		}
-		return s.tasks.policies(ctx, p)
+		// The limits are saved. The connected nodes receive them now, each
+		// within five seconds; a node that is not connected, or does not
+		// answer in time, receives them from the step that prepares it. The
+		// caller reports each node, so a missed delivery is not an error:
+		// waiting thirty seconds for each offline node held this task's
+		// runtime slot and failed a change that had been saved.
+		available, err := s.connectedTaskNodes(p)
+		if err != nil {
+			return nil
+		}
+		s.tasks.deliverShares(ctx, p, available)
+		return nil
 	})
 	return
+}
+
+// connectedTaskNodes reports which of p's active nodes are connected in the
+// enrollment the task uses.
+func (s *Server) connectedTaskNodes(p task.Parent) (map[string]bool, error) {
+	members, err := s.onlineAgents()
+	if err != nil {
+		return nil, err
+	}
+	enrollments := make(map[string]string, len(members))
+	for _, member := range members {
+		enrollments[member.ID] = member.EnrollmentID
+	}
+	available := map[string]bool{}
+	for _, node := range p.ActiveNodes() {
+		if enrollment, ok := enrollments[node.ID]; ok && enrollment == node.EnrollmentID {
+			available[node.ID] = true
+		}
+	}
+	return available, nil
 }
 
 // parentPolicy is the policy every sender delivers to the index-th active
@@ -451,13 +482,40 @@ func (t *taskRuntime) scanSpec(p task.Parent) discovery.Spec {
 	return spec
 }
 
+// memberProblem is why an active node could not be prepared in a step.
+type memberProblem struct {
+	// err is the task's runtime problem, which names the node.
+	err error
+	// updating marks a node being updated, whose work is never taken over.
+	updating bool
+	// answered marks an Agent that replied with an error: it is connected
+	// and keeps renewing its lease, so its lease does not expire.
+	answered bool
+}
+
+// joinMemberProblems joins the problems in the order of the active nodes.
+func joinMemberProblems(p task.Parent, problems map[string]memberProblem) error {
+	var errs []error
+	for _, node := range p.ActiveNodes() {
+		if problem, ok := problems[node.ID]; ok {
+			errs = append(errs, problem.err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Prepare peers independently: one unavailable Agent must not consume the
 // entire reconciliation deadline before healthy peers can report or accept work.
 func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapshot storageconfig.Snapshot) (map[string]bool, error) {
+	available, problems := t.prepareMemberProblems(ctx, p, snapshot)
+	return available, joinMemberProblems(p, problems)
+}
+
+func (t *taskRuntime) prepareMemberProblems(ctx context.Context, p task.Parent, snapshot storageconfig.Snapshot) (map[string]bool, map[string]memberProblem) {
 	available := map[string]bool{}
 	var mu sync.Mutex
 	var workers sync.WaitGroup
-	var problems []error
+	problems := map[string]memberProblem{}
 	slots := make(chan struct{}, 8)
 	displays := t.server.nodeDisplaySnapshot()
 	for i, node := range p.ActiveNodes() {
@@ -467,7 +525,7 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 			if t.server.softwareUpdateBlocksNode(node.ID) {
 				t.notePolicyDelivery(p, node.ID, errors.New("Agent update is in progress"))
 				mu.Lock()
-				problems = append(problems, fmt.Errorf("Agent %s is updating; its assigned work remains on that node", displays.lookup(node.ID, node.Address).DisplayLabel))
+				problems[node.ID] = memberProblem{err: fmt.Errorf("Agent %s is updating; its assigned work remains on that node", displays.lookup(node.ID, node.Address).DisplayLabel), updating: true}
 				mu.Unlock()
 				return
 			}
@@ -495,14 +553,48 @@ func (t *taskRuntime) prepareMembers(ctx context.Context, p task.Parent, snapsho
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				problems = append(problems, fmt.Errorf("Agent %s is unavailable; its assigned work remains on that node: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err))
+				problems[node.ID] = memberProblem{err: fmt.Errorf("Agent %s is unavailable; its assigned work remains on that node: %w", displays.lookup(node.ID, node.Address).DisplayLabel, err), answered: !agentSilent(err)}
 			} else {
 				available[node.ID] = true
 			}
 		}()
 	}
 	workers.Wait()
-	return available, errors.Join(problems...)
+	return available, problems
+}
+
+// failoverProblems explains why active nodes of a task with lease fencing,
+// prepared in this step, cannot work. Only a node that stopped answering
+// waits for its lease to expire, after which another node takes over its
+// work. A node that answered with an error keeps renewing its lease in the
+// background, so its lease does not expire and its work stays on it until
+// the cause is fixed; its cause is reported. A node being updated, by the
+// online updater or by an installer that asked the Master to hold its tasks,
+// is never taken over meanwhile.
+func (t *taskRuntime) failoverProblems(p task.Parent, available, prepared map[string]bool, problems map[string]memberProblem) error {
+	var errs []error
+	var waiting []string
+	displays := t.server.nodeDisplaySnapshot()
+	for _, node := range p.ActiveNodes() {
+		if available[node.ID] || !prepared[node.ID] || plannedLeaving(p, node.ID) {
+			continue
+		}
+		label := displays.lookup(node.ID, node.Address).DisplayLabel
+		problem := problems[node.ID]
+		maintained, err := t.server.agentUnderMaintenance(node.ID)
+		switch {
+		case problem.updating || err == nil && maintained:
+			errs = append(errs, fmt.Errorf("Agent %s is updating; its assigned work remains on that node", label))
+		case problem.answered:
+			errs = append(errs, problem.err)
+		default:
+			waiting = append(waiting, label)
+		}
+	}
+	if len(waiting) > 0 {
+		errs = append(errs, fmt.Errorf("Waiting for the execution lease of unavailable node %s to expire", strings.Join(waiting, ", ")))
+	}
+	return errors.Join(errs...)
 }
 
 func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
@@ -572,7 +664,8 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	available, memberErr := t.prepareMembers(ctx, p, snapshot)
+	available, problems := t.prepareMemberProblems(ctx, p, snapshot)
+	memberErr := joinMemberProblems(p, problems)
 	// Members admitted later in this step (a joining or returning node) are
 	// prepared by the next step; they are not unavailable.
 	prepared := map[string]bool{}
@@ -599,16 +692,7 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		// Retired peers are no longer required for progress or control ACKs.
 		// A node the user is removing leaves through the same lease fence when
 		// it is offline; the node view reports that wait as removal progress.
-		memberErr = nil
-		var waiting []string
-		for _, node := range p.ActiveNodes() {
-			if !available[node.ID] && prepared[node.ID] && !plannedLeaving(p, node.ID) {
-				waiting = append(waiting, t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel)
-			}
-		}
-		if len(waiting) > 0 {
-			memberErr = fmt.Errorf("Waiting for the execution lease of unavailable node %s to expire", strings.Join(waiting, ", "))
-		}
+		memberErr = t.failoverProblems(p, available, prepared, problems)
 	}
 	defer func() { resultErr = errors.Join(memberErr, membershipErr, resultErr) }()
 	// Observations do not require the scanner. Preserve healthy peers' progress
@@ -650,7 +734,10 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			// shows this as a scan handoff, not as a reconnect wait.
 			return nil
 		}
-		return t.scannerWait(p)
+		problem := problems[p.ScannerNode().ID]
+		// A node that answered with an error or is being updated is not
+		// disconnected; its own problem says why it cannot work.
+		return t.scannerWait(p, problem.updating || problem.answered)
 	}
 	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {
 		return errors.New("Waiting for all task nodes to acknowledge recovery")

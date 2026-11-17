@@ -104,7 +104,11 @@ func evaluate(options Options, executable string) Info {
 	info := Info{Role: options.Role, Version: options.Version, Commit: options.Commit, Platform: platform(), PrereleaseUpdates: true}
 	installed, err := inspectInstallation(options, executable)
 	if err != nil {
-		if container := checkContainer(); container != nil {
+		// oss-transfer-run.sh names itself, also inside a development
+		// container: neither the installer nor a new image updates it.
+		if os.Getenv(LauncherVariable) == RunScriptLauncher {
+			err = &capabilityError{"MANUAL", ManualUpdateMessage}
+		} else if container := checkContainer(); container != nil {
 			err = container
 		}
 	}
@@ -338,7 +342,17 @@ func checkHost() error { return hostSupport() }
 var containerMarkers = []string{"/usr/local/share/oss-transfer/provenance.json", "/.dockerenv"}
 
 // ContainerUpdateMessage is localized by the Master; keep it in sync there.
-const ContainerUpdateMessage = "This node runs in a container; update it by pulling the new image and recreating the container (for example docker compose pull, then docker compose up -d)"
+// Pulling alone does not update a pinned tag, which is what the installer's
+// Compose file uses.
+const ContainerUpdateMessage = "This node runs in a container; update it by recreating the container from the new version's image. If the image tag is pinned, as in the Compose file written by the installer, change it to the new version first, then run docker compose pull and docker compose up -d (for the installer's deployment, with the -p and -f options it printed)"
+
+// LauncherVariable names how a process was started. deploy/manual/oss-transfer-run.sh
+// sets it to RunScriptLauncher for the programs it supervises.
+const LauncherVariable = "OSS_TRANSFER_LAUNCHER"
+const RunScriptLauncher = "run-script"
+
+// ManualUpdateMessage is localized by the Master; keep it in sync there.
+const ManualUpdateMessage = "This node was started with oss-transfer-run.sh, which online updates do not manage; to update it, stop it with the script, replace the programs with those of the new release, and start it again with the same data directory"
 
 func checkContainer() error {
 	for _, path := range containerMarkers {

@@ -148,11 +148,14 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 					return err
 				}
 				if found && !sameScanObject(attempt, prior, object) {
-					if attempt.Spec.InventoryID == "" || !execution.SourceIdentityUnknown(prior.Object) {
-						return changed(object.Key)
-					}
-					// Keep the original missing-key assignment on rescan. Execution
-					// pins its first available identity before reading any data.
+					// The key was assigned with the identity first discovered, and
+					// a replayed or rescanned page does not assign it again.
+					// Execution reads the source against that identity: a later
+					// change fails the object as SOURCE_CHANGED, and retrying it
+					// copies the current version. An inventory key that was
+					// missing keeps its assignment too; execution pins its first
+					// available identity before reading any data. Failing the
+					// scan here instead would fail every resume at this page.
 					object = prior.Object
 				}
 				if prior.SeenAttempt == scanIdentity(attempt) {
@@ -373,16 +376,18 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 		outside := (!attempt.Spec.ModifiedFrom.IsZero() && object.ModifiedAt.Before(attempt.Spec.ModifiedFrom)) ||
 			(!attempt.Spec.ModifiedUntil.IsZero() && !object.ModifiedAt.Before(attempt.Spec.ModifiedUntil))
 		if outside && !manifest.Exact && !absent {
-			return s.store.View(func(tx *state.Tx) error {
-				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, object.Key)
-				if err != nil {
-					return err
-				}
-				if found && !sameScanObject(attempt, prior, object) {
-					return changed(object.Key)
-				}
-				return nil
+			assigned := false
+			err := s.store.View(func(tx *state.Tx) error {
+				_, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, object.Key)
+				assigned = found
+				return err
 			})
+			if err != nil || !assigned {
+				return err
+			}
+			// The object was discovered inside the range and assigned. A change
+			// that moved it out of the range does not withdraw the assignment:
+			// the commit keeps its first identity and counts it as seen.
 		}
 		// One oversized object is emitted alone. Object metadata is not split
 		// into multipart pieces, and the scanner never reads the object body.

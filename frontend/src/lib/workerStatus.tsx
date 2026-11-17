@@ -16,6 +16,7 @@ import {
   activeRates,
   adjustmentLink,
   describeRateEvents,
+  raisedTargetEvent,
   type WorkerStatusResponse,
 } from "./rateStatus";
 import {
@@ -97,9 +98,11 @@ export function WorkerStatusProvider({
       // Initial and restarted processes establish a baseline. Persistent state is
       // shown in the banner; old history must not replay as new notifications.
       if (!prior || prior.processId !== snapshot.processId) continue;
+      // Steps towards a raised target are not throttling: no notification.
       const events = (snapshot.events ?? []).filter(
         (event) =>
           !event.manual &&
+          !raisedTargetEvent(event) &&
           event.sequence != null &&
           event.sequence > prior.sequence,
       );

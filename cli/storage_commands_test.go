@@ -216,11 +216,43 @@ func TestStorageTestPermissionFailuresAndOlderMasters(t *testing.T) {
 	}
 	code, out, stderr := runMockCLI(t, []string{"storage", "test", "src", "--bucket", "data", "--write"}, handler(false))
 	if code != 1 || !strings.Contains(out, "[未通过] 写入对象（PutObject，条件写入）") || !strings.Contains(out, "访问被拒绝") ||
-		!strings.Contains(out, "结论：存储桶 data 读取正常但不能写入，只能作为迁移的源。") || !strings.Contains(stderr, "存储桶 data：1 项权限检查未通过") {
+		!strings.Contains(out, "结论：存储桶 data 读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请加 --prefix 重新检查。") || !strings.Contains(stderr, "存储桶 data：1 项权限检查未通过") {
 		t.Fatalf("denied write: %d %s %s", code, out, stderr)
 	}
 	code, out, stderr = runMockCLI(t, []string{"storage", "test", "src", "--bucket", "data"}, handler(true))
 	if code != 0 || !strings.Contains(out, "Master 版本较旧，未逐项检查存储桶权限") {
 		t.Fatalf("older Master: %d %s %s", code, out, stderr)
+	}
+}
+
+// Keys limited to one bucket: ListBuckets is denied. The test says that the
+// listing was refused and that the named bucket was reached directly; it
+// does not claim that buckets were listed, or that there are none.
+func TestStorageTestOfABucketScopedKeyDoesNotClaimAListing(t *testing.T) {
+	scoped := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/master/s3-config/scoped/permissions" {
+			adminTestJSON(t, w, map[string]interface{}{"success": true, "bucket": "only-bucket", "write": false, "results": []interface{}{map[string]interface{}{"operation": "LIST", "status": "PASSED"}}})
+			return
+		}
+		reply := map[string]interface{}{"success": true, "buckets": []interface{}{}, "pathStyle": false, "pathStyleAuto": true, "listBucketsDenied": true}
+		if r.URL.Query().Get("bucket") != "" {
+			reply["checkedBucket"] = "only-bucket"
+		} else {
+			reply["warning"] = "该凭据无权列举存储桶（ListBuckets 被拒绝）"
+		}
+		adminTestJSON(t, w, reply)
+	}
+	code, out, stderr := runMockCLI(t, []string{"storage", "test", "scoped", "--bucket", "only-bucket"}, scoped)
+	if code != 0 || !strings.Contains(out, "连接测试通过：ListBuckets 被拒绝，已用当前寻址方式直接访问存储桶 only-bucket") ||
+		strings.Contains(out, "已列举存储桶，并") || strings.Contains(out, "存储桶（0 个）") || !strings.Contains(out, "存储桶：无权列举（ListBuckets 被拒绝）") {
+		t.Fatalf("bucket named: %d %s %s", code, out, stderr)
+	}
+	code, out, stderr = runMockCLI(t, []string{"storage", "test", "scoped"}, scoped)
+	if code != 0 || !strings.Contains(out, "ListBuckets 被拒绝，未获取存储桶列表；可用 --bucket 指定要检查的存储桶") || strings.Contains(out, "已读取存储桶列表") {
+		t.Fatalf("no bucket named: %d %s %s", code, out, stderr)
+	}
+	code, out, _ = runMockCLI(t, []string{"--lang", "en", "storage", "test", "scoped", "--bucket", "only-bucket"}, scoped)
+	if code != 0 || !strings.Contains(out, "ListBuckets was denied; bucket only-bucket was reached directly") {
+		t.Fatalf("en: %d %s", code, out)
 	}
 }

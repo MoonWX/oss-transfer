@@ -160,13 +160,18 @@ func (t *taskRuntime) waitsForScanUpgrade(p task.Parent) bool {
 // scannerWait is what a running task waits for while its scanner is not
 // available: an upgraded member, when none of the others can resume the scan
 // checkpoint (the fenced scanner cannot rejoin while its scan is incomplete),
-// or else the scanner's reconnect.
-func (t *taskRuntime) scannerWait(p task.Parent) error {
+// or else the scanner: its reconnect, or, when reachable (it answered with an
+// error or is being updated), its becoming available.
+func (t *taskRuntime) scannerWait(p task.Parent, reachable bool) error {
 	if t.waitsForScanUpgrade(p) {
 		return errors.New("Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it")
 	}
 	scanning := p.ScannerNode()
-	return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel)
+	label := t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel
+	if reachable {
+		return fmt.Errorf("Waiting for scanning node %s to become available; existing child tasks remain assigned to their original nodes", label)
+	}
+	return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", label)
 }
 
 // requiredScanProtocol is the protocol an Agent must speak to take over from

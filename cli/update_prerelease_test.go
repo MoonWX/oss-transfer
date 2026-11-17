@@ -58,7 +58,7 @@ func TestUpdatePrereleaseSubmissions(t *testing.T) {
 		{[]string{"master", "--version", "4.1.29-beta.1", "--allow-prerelease", "--yes"}, "/api/master/software-updates/master", map[string]interface{}{"version": "4.1.29-beta.1", "allowPrerelease": true}, ""},
 		// Agents target the Master's version; the server validates it, so the
 		// Agent request keeps its existing shape.
-		{[]string{"agent", "--worker", "node-a", "--version", "4.1.29-beta.1", "--allow-prerelease", "--yes"}, "/api/master/software-updates/agents/node-a", map[string]interface{}{"version": "4.1.29-beta.1"}, ""},
+		{[]string{"agent", "--worker", "node-a", "--version", "4.1.29-beta.1", "--allow-prerelease", "--yes"}, "/api/master/software-updates/agents/node-a", map[string]interface{}{"version": "4.1.29-beta.1"}, "4.1.29-beta.1"},
 		{[]string{"agents", "--all", "--yes"}, "/api/master/software-updates/agents", map[string]interface{}{"version": "4.1.29-beta.1"}, "4.1.29-beta.1"},
 	} {
 		t.Run(strings.Join(test.args, " "), func(t *testing.T) {

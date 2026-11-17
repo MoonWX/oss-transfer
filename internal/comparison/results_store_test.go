@@ -658,3 +658,60 @@ func TestResultsWriterCommitsBytesRead(t *testing.T) {
 		t.Fatal("repeated key accepted")
 	}
 }
+
+// A stalled comparison, such as one whose LIST keeps timing out, still
+// commits its running time every second. Only a counted object or content
+// read moves ProgressAt, so a client can tell how long it has made no
+// progress instead of reading an average rate that barely falls.
+func TestResultsProgressTimeMovesOnlyWithProgress(t *testing.T) {
+	h := newHarness(t)
+	clock := newTestClock()
+	m := h.open(storesFactory(newFakeStore(), newFakeStore()), func(o *Options) { o.Now = clock.Now })
+	started, err := m.Start(requestWithID("started"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.ProgressAt.IsZero() || !started.ProgressAt.Equal(started.StartedAt) {
+		t.Fatalf("a new comparison has no progress time: %+v", started)
+	}
+	waitWorkers(t, m)
+	now := clock.Now()
+	rec := runRecord{Progress: Progress{Request: requestWithID("stall"), Status: StateRunning, ResultsProtocol: Protocol, StartedAt: now, UpdatedAt: now, ProgressAt: now}, Directory: resultDirectory("stall")}
+	w, err := m.openWriter(rec, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.file.Close()
+	w.begin(rec)
+	flush := func() Progress {
+		t.Helper()
+		w.mu.Lock()
+		err := w.flushLocked()
+		w.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h.record("stall").Progress
+	}
+	stalled := func(p Progress) time.Duration { return p.UpdatedAt.Sub(p.ProgressAt) }
+	clock.advance(3 * time.Minute)
+	if p := flush(); stalled(p) != 3*time.Minute || p.ElapsedMillis != 180000 {
+		t.Fatalf("a stall moved the progress time: %+v", p)
+	}
+	if err := w.emit(Row{Key: "a", Status: StatusMatch}); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(time.Second)
+	if p := flush(); stalled(p) != 0 || p.Compared != 1 {
+		t.Fatalf("a compared object did not move the progress time: %+v", p)
+	}
+	clock.advance(time.Minute)
+	if p := flush(); stalled(p) != time.Minute {
+		t.Fatalf("stall after progress: %+v", p)
+	}
+	w.addBytes(4096)
+	clock.advance(time.Second)
+	if p := flush(); stalled(p) != 0 || p.BytesRead != 4096 {
+		t.Fatalf("content read did not move the progress time: %+v", p)
+	}
+}

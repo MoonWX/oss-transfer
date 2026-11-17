@@ -72,6 +72,10 @@ type Row = {
   status: string;
   sourceSize: number;
   destinationSize: number;
+  // A side that was not read, or that does not exist, on an ERROR or
+  // CHANGED_DURING_COMPARE row: its size field is 0, not an object size.
+  sourceSizeUnknown?: boolean;
+  destinationSizeUnknown?: boolean;
   sourceSha256?: string;
   destinationSha256?: string;
   error?: string;
@@ -103,6 +107,11 @@ type Progress = {
   lastStoredKey?: string;
   bytesRead?: number;
   elapsedMillis?: number;
+  // The node's clock: updatedAt advances every second while the comparison
+  // runs, progressAt only when it counts an object or reads content. Older
+  // Agents do not report progressAt.
+  updatedAt?: string;
+  progressAt?: string;
   // How often the comparison continued from its checkpoint, e.g. after the
   // node restarted.
   resumes?: number;
@@ -224,12 +233,24 @@ const stateColors: Record<
   FAILED: "error",
   COMPLETED: "success",
 };
-function StateChip({ status }: { status?: string }) {
+// A completed prefix comparison that found no object compared nothing: it is
+// not a finding that the objects match.
+const foundNothing = (progress: Progress) =>
+  progress.status === "COMPLETED" &&
+  progress.scope !== "object" &&
+  progress.compared === 0;
+function StateChip({
+  status,
+  empty = false,
+}: {
+  status?: string;
+  empty?: boolean;
+}) {
   return (
     <Chip
-      label={stateLabel(status)}
+      label={empty ? t("未找到对象") : stateLabel(status)}
       size="small"
-      color={stateColors[status || ""] || "default"}
+      color={empty ? "warning" : stateColors[status || ""] || "default"}
       variant="outlined"
       sx={{ fontWeight: 500, fontSize: 12, height: 26 }}
     />
@@ -292,10 +313,16 @@ function reasonsText(reasons?: string[]) {
 /** Status filters in display order; "" lists every stored difference. */
 const filters: {
   status: string;
-  label: () => string;
+  label: (progress: Progress) => string;
   count: (progress: Progress) => number | undefined;
 }[] = [
-  { status: "", label: () => t("全部差异"), count: (p) => p.rows },
+  {
+    status: "",
+    // Once rows are truncated, later differences are only counted: this
+    // filter then holds the stored ones, not all of them.
+    label: (p) => (p.rowsTruncated ? t("已保存差异") : t("全部差异")),
+    count: (p) => p.rows,
+  },
   { status: "DIFFERENT", label: () => t("不一致"), count: (p) => p.different },
   {
     status: "ETAG_MISMATCH",
@@ -357,6 +384,8 @@ function formatElapsed(milliseconds: number) {
   return t("{seconds} 秒", { seconds });
 }
 
+// Rates are averages over the whole running time, resumed runs included:
+// they hide a stall, which stalledMillis shows instead.
 function statsText(progress: Progress) {
   const count = formatNumber(progress.compared);
   const elapsedMillis = progress.elapsedMillis ?? 0;
@@ -376,7 +405,7 @@ function statsText(progress: Progress) {
     elapsed: formatElapsed(elapsedMillis),
   };
   if (progress.mode !== "content")
-    return t("已检查 {count}，{rate} 个/秒，已用 {elapsed}", values);
+    return t("已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}", values);
   // Content mode reads whole objects: the read rate shows progress while a
   // large object is still being checked, and is the only rate of one object.
   const read = {
@@ -385,11 +414,28 @@ function statsText(progress: Progress) {
     byteRate: formatBytes((progress.bytesRead ?? 0) / seconds),
   };
   return progress.scope === "object"
-    ? t("已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）", read)
+    ? t("已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）", read)
     : t(
-        "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）",
+        "已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）",
         read,
       );
+}
+
+// A running comparison with no new result for this long is shown as stalled,
+// for instance while a LIST or HEAD keeps timing out and is retried.
+const STALL_NOTICE_MS = 60_000;
+
+/**
+ * How long a running comparison has counted no object and read no content,
+ * by the node's clock; 0 when it is not running or the node does not say.
+ */
+function stalledMillis(progress: Progress) {
+  if (progress.status !== "RUNNING" || !progress.progressAt) return 0;
+  const since = Date.parse(progress.progressAt);
+  const now = Date.parse(progress.updatedAt ?? "");
+  return Number.isFinite(since) && Number.isFinite(now)
+    ? Math.max(0, now - since)
+    : 0;
 }
 
 function truncationText(progress: Progress) {
@@ -418,11 +464,15 @@ function truncationText(progress: Progress) {
 }
 
 const sourceSize = (row: Row) =>
-  row.status === "EXTRA_TARGET" || row.status === "BOTH_MISSING"
+  row.sourceSizeUnknown ||
+  row.status === "EXTRA_TARGET" ||
+  row.status === "BOTH_MISSING"
     ? "—"
     : formatBytes(row.sourceSize);
 const destinationSize = (row: Row) =>
-  row.status === "MISSING_TARGET" || row.status === "BOTH_MISSING"
+  row.destinationSizeUnknown ||
+  row.status === "MISSING_TARGET" ||
+  row.status === "BOTH_MISSING"
     ? "—"
     : formatBytes(row.destinationSize);
 
@@ -617,6 +667,14 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
       setSubmitting(false);
     }
   }
+  // Keys are compared exactly: a stray space or a leading slash usually
+  // matches no object, and the comparison then checks nothing.
+  const keyHint = (value: string) =>
+    value !== value.trim()
+      ? t("首尾有空白字符。Key 按原样匹配，空白也会参与匹配。")
+      : value.startsWith("/")
+        ? t("以 / 开头。对象 Key 通常不以 / 开头。")
+        : undefined;
   const field = (
     key: "sourceBucket" | "destBucket" | "sourcePrefix" | "destPrefix",
     label: string,
@@ -628,6 +686,12 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
       value={form[key]}
       required={required}
       disabled={submitting}
+      helperText={
+        key === "sourcePrefix" || key === "destPrefix"
+          ? keyHint(form[key])
+          : undefined
+      }
+      slotProps={{ formHelperText: { sx: { color: "warning.main" } } }}
       onChange={(e) =>
         setForm((previous) => ({ ...previous, [key]: e.target.value }))
       }
@@ -866,7 +930,10 @@ function ComparisonHistory({
                           sx={{ cursor: "pointer" }}
                         >
                           <TableCell>
-                            <StateChip status={item.status} />
+                            <StateChip
+                              status={item.status}
+                              empty={foundNothing(item)}
+                            />
                           </TableCell>
                           <TableCell
                             sx={{
@@ -948,7 +1015,10 @@ function ComparisonHistory({
                         gap={1}
                         sx={{ mb: 0.75 }}
                       >
-                        <StateChip status={item.status} />
+                        <StateChip
+                          status={item.status}
+                          empty={foundNothing(item)}
+                        />
                         <Typography variant="caption" color="text.secondary">
                           {modeLabel(item.mode)}
                         </Typography>
@@ -1003,7 +1073,7 @@ function ComparisonHistory({
         sx={{ mt: 1.5, px: 0.5 }}
       >
         {t(
-          "比对结果保存在执行节点上，默认保留 30 天；每个节点的比对结果默认最多占用 2 GiB，超出时先删除最早结束的比对。",
+          "比对结果保存在执行节点上，默认最多保留 30 天；每个节点的比对结果默认最多占用 2 GiB，且最多保留 500 个比对，超出任一限制时先删除最早结束的比对。",
         )}
       </Typography>
     </Box>
@@ -1379,6 +1449,14 @@ function ComparisonResult({
         {progress && (
           <>
             {active && <LinearProgress aria-label={t("比对进度")} />}
+            {stalledMillis(progress) >= STALL_NOTICE_MS && (
+              <Alert severity="warning" data-testid="comparison-stalled">
+                {t(
+                  "已有 {duration}没有新的比对结果，执行节点可能正在等待存储响应或重试。",
+                  { duration: formatElapsed(stalledMillis(progress)) },
+                )}
+              </Alert>
+            )}
             <Box sx={{ display: "flex", gap: 2.5, flexWrap: "wrap" }}>
               <Typography variant="body2">{statsText(progress)}</Typography>
               <Typography variant="body2">
@@ -1402,7 +1480,7 @@ function ComparisonResult({
                 return (
                   <Chip
                     key={option.status || "all"}
-                    label={`${option.label()} ${formatNumber(option.count(progress))}`}
+                    label={`${option.label(progress)} ${formatNumber(option.count(progress))}`}
                     clickable
                     color={selected ? "primary" : "default"}
                     variant={selected ? "filled" : "outlined"}
@@ -1414,6 +1492,15 @@ function ComparisonResult({
             </Box>
             {progress.rowsTruncated && (
               <Alert severity="warning">{truncationText(progress)}</Alert>
+            )}
+            {!!progress.resultLimit && (
+              // Agents before results protocol 2 report a fixed row limit.
+              // Their results are known to be unreliable; say so.
+              <Alert severity="warning" data-testid="legacy-comparison-node">
+                {t(
+                  "该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请在 4.1.41 或更高版本的节点上重新比对。",
+                )}
+              </Alert>
             )}
             {(progress.error || progress.errorDetail) && (
               <Alert
@@ -1475,7 +1562,11 @@ function ComparisonResult({
                   disabled={exporting}
                   onClick={() => void exportResults()}
                 >
-                  {exporting ? t("正在准备下载") : t("导出全部差异（ZIP）")}
+                  {exporting
+                    ? t("正在准备下载")
+                    : progress.rowsTruncated || active
+                      ? t("导出已保存的差异（ZIP）")
+                      : t("导出全部差异（ZIP）")}
                 </Button>
                 {!active && (
                   <Button
@@ -1551,17 +1642,40 @@ function ComparisonResult({
                   })}
                 </Alert>
               )}
-              {current && shownRows.length === 0 && !stalledHere && (
-                <Typography variant="body2" color="text.secondary">
-                  {filter
-                    ? t("没有符合条件的差异。")
-                    : differences(progress) > 0
-                      ? t("暂无已保存的差异明细。")
-                      : active
-                        ? t("暂未发现差异。")
-                        : t("未发现差异。")}
-                </Typography>
-              )}
+              {current &&
+                shownRows.length === 0 &&
+                !stalledHere &&
+                (!filter && !active && foundNothing(progress) ? (
+                  <Alert severity="warning" data-testid="comparison-empty">
+                    {t(
+                      "没有找到任何对象。请检查两端的存储桶和前缀：Key 区分大小写，通常不以 / 开头。",
+                    )}
+                  </Alert>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    {filter
+                      ? progress.rowsTruncated &&
+                        (filters
+                          .find((option) => option.status === filter)
+                          ?.count(progress) ?? 0) > 0
+                        ? t(
+                            "已保存的差异中没有符合条件的记录；截断之后的差异只计数，未保存明细。",
+                          )
+                        : t("没有符合条件的差异。")
+                      : differences(progress) > 0
+                        ? t("暂无已保存的差异明细。")
+                        : active
+                          ? t("暂未发现差异。")
+                          : progress.status === "COMPLETED"
+                            ? t("未发现差异。")
+                            : progress.compared
+                              ? t(
+                                  "比对未完成：已检查的 {count} 个对象中暂未发现差异。",
+                                  { count: formatNumber(progress.compared) },
+                                )
+                              : t("比对未完成，尚未检查任何对象。")}
+                  </Typography>
+                ))}
               {shownRows.length > 0 && !stalledHere && (
                 <Box
                   sx={{

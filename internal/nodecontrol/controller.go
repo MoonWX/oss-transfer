@@ -267,6 +267,10 @@ func (c *Controller) commit(next persisted, events []Adjustment) error {
 }
 
 func (c *Controller) SetRate(ctx context.Context, kind string, value float64) error {
+	if kindIndex(kind) < 0 {
+		// A newer Master can offer a limit this Agent does not have.
+		return ErrUnknownRate
+	}
 	if !validRate(kind, value) {
 		return ErrInvalid
 	}
@@ -330,13 +334,13 @@ func (c *Controller) SetRate(ctx context.Context, kind string, value float64) er
 
 func validatedRoots(roots []string) ([]string, error) {
 	if len(roots) > 100 {
-		return nil, ErrInvalid
+		return nil, ErrInvalidRoots
 	}
 	out := []string{}
 	seen := map[string]bool{}
 	for _, root := range roots {
 		if !utf8.ValidString(root) || len(root) > 4096 || strings.ContainsAny(root, "\x00\r\n") || !filepath.IsAbs(root) {
-			return nil, ErrInvalid
+			return nil, ErrInvalidRoots
 		}
 		root = filepath.Clean(root)
 		if !seen[root] {
@@ -577,6 +581,14 @@ func (c *Controller) Tick(now time.Time) error {
 		if value == target {
 			reason = "RECOVERED"
 		}
+		if next.Incidents[kind] == "" {
+			// No throttling lowered this limit: its target was raised, in
+			// service.json, and the running limit climbs to it.
+			reason = "RAISE_STEP"
+			if value == target {
+				reason = "RAISED"
+			}
+		}
 		events = append(events, c.event(&next, kind, old, value, target, target, reason, next.Incidents[kind], nil, nil))
 		next.Effective[kind] = value
 		if value == target {
@@ -662,8 +674,13 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 		}
 		status := "NORMAL"
 		last, hasLast := c.data.Last[kind]
+		_, throttled := c.data.Incidents[kind]
 		if target == 0 {
 			status = "UNLIMITED"
+		} else if current < target && !throttled {
+			// Below its target without throttling: the target was raised in
+			// service.json and the running limit climbs to it in steps.
+			status = "RAISING"
 		} else if current < target {
 			status = "REDUCED"
 			if last.ReasonCode == "RECOVERY_STEP" {

@@ -4,17 +4,24 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 )
 
+// localPathWriteNotChecked marks a download destination on an Agent from
+// before the write probe: its path was checked, but not whether the Agent can
+// write there or how much space is left.
+const localPathWriteNotChecked = "LOCAL_PATH_WRITE_NOT_CHECKED"
+
 // checkDownloadWritable asks the Agent to create and remove a file in a
 // download destination, or the nearest existing directory above it, and
-// records where it wrote, as which user and the free space there. Uploads and
-// Agents from before the probe pass unchecked; the task then reports any
-// write failure per object, as before. Creating a task runs it for every
-// selected node, adding nodes for every added node.
+// records where it wrote, as which user and the free space there. Uploads
+// pass unchecked. Agents from before the probe pass with the code
+// localPathWriteNotChecked; the task then reports any write failure per
+// object, as before. Creating a task runs it for every selected node, adding
+// nodes for every added node.
 func (s *Server) checkDownloadWritable(ctx context.Context, session agenttransport.Session, direction, path string, check *bindingCheck) (string, bool) {
 	if direction != "OSS_TO_LOCAL" {
 		return "", true
@@ -22,6 +29,7 @@ func (s *Server) checkDownloadWritable(ctx context.Context, session agenttranspo
 	var probe agentservice.WriteProbe
 	if err := s.agentCall(ctx, session, "local_write_probe", false, agentservice.PathRequest{Path: path}, &probe); err != nil {
 		if comparisonUnsupported(err) {
+			check.Code = localPathWriteNotChecked
 			return "", true
 		}
 		return err.Error(), false
@@ -40,8 +48,15 @@ func writeProbeMessage(ctx context.Context, probe agentservice.WriteProbe) strin
 	}
 	switch probe.ErrorCode {
 	case agentservice.WriteProbePermissionDenied:
-		if probe.EffectiveUID != nil {
-			return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s）"), directory, strconv.Itoa(*probe.EffectiveUID), strconv.Itoa(*probe.EffectiveUID))
+		switch {
+		case probe.EffectiveUID != nil && *probe.EffectiveUID == 0:
+			// File permissions never refuse root, so ownership is not the
+			// cause and chown cannot help. Under NFS root_squash the client
+			// cannot even run chown.
+			return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s：Agent 以 root 运行仍被拒绝，常见原因是 NFS 的 root_squash 将 root 映射为匿名用户（通常为 UID 65534）、FUSE 挂载未启用 allow_other，或 SELinux、macOS 隐私保护等安全策略；请让该目录对映射后的用户可写，或调整导出选项、挂载选项和安全策略"), directory)
+		case probe.EffectiveUID != nil:
+			uid := strconv.Itoa(*probe.EffectiveUID)
+			return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s %s）；网络文件系统可能会把此 UID 映射为其他用户"), directory, uid, uid, shellWord(directory))
 		}
 		return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s，请为 Agent 服务账户授予写权限"), directory)
 	case agentservice.WriteProbeReadOnly:
@@ -52,6 +67,17 @@ func writeProbeMessage(ctx context.Context, probe agentservice.WriteProbe) strin
 		return fmt.Sprintf(localizeContext(ctx, "%s 不是目录，无法作为下载目标"), directory)
 	}
 	return fmt.Sprintf(localizeContext(ctx, "无法在 %s 中写入测试文件：%s"), directory, probe.Error)
+}
+
+// shellWord is value as one word of a POSIX shell command, quoted only when
+// it needs to be, so a suggested command can be pasted as it is.
+func shellWord(value string) string {
+	if value != "" && strings.IndexFunc(value, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+:@%,=", r))
+	}) < 0 {
+		return value
+	}
+	return shellQuote(value)
 }
 
 // formatBinaryBytes renders a byte count with a binary unit, such as 12.3 GiB.

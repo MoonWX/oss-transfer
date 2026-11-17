@@ -103,15 +103,21 @@ type Request struct {
 }
 
 type Row struct {
-	Number            int64  `json:"number"`
-	Key               string `json:"key"`
-	SourceKey         string `json:"sourceKey"`
-	DestinationKey    string `json:"destinationKey"`
-	Status            string `json:"status"`
-	SourceSize        int64  `json:"sourceSize"`
-	DestinationSize   int64  `json:"destinationSize"`
-	SourceSHA256      string `json:"sourceSha256,omitempty"`
-	DestinationSHA256 string `json:"destinationSha256,omitempty"`
+	Number          int64  `json:"number"`
+	Key             string `json:"key"`
+	SourceKey       string `json:"sourceKey"`
+	DestinationKey  string `json:"destinationKey"`
+	Status          string `json:"status"`
+	SourceSize      int64  `json:"sourceSize"`
+	DestinationSize int64  `json:"destinationSize"`
+	// SourceSizeUnknown and DestinationSizeUnknown mark a side of an ERROR or
+	// CHANGED_DURING_COMPARE row whose size was not read: its HEAD failed, or
+	// it does not exist. Its size field is then 0, not an object size. Rows
+	// whose status already says that a side is missing do not set them.
+	SourceSizeUnknown      bool   `json:"sourceSizeUnknown,omitempty"`
+	DestinationSizeUnknown bool   `json:"destinationSizeUnknown,omitempty"`
+	SourceSHA256           string `json:"sourceSha256,omitempty"`
+	DestinationSHA256      string `json:"destinationSha256,omitempty"`
 	// Error is a fixed English sentence; the Master localizes it.
 	Error string `json:"error,omitempty"`
 	// Reasons lists Reason* values for DIFFERENT and ETAG_MISMATCH rows.
@@ -158,6 +164,11 @@ type Progress struct {
 	UpdatedAt       time.Time `json:"updatedAt"`
 	EndedAt         time.Time `json:"endedAt,omitzero"`
 	ExpiresAt       time.Time `json:"expiresAt,omitzero"`
+	// ProgressAt is when the running comparison last counted an object or
+	// read content, or when it started or resumed. UpdatedAt advances every
+	// second while it runs, so UpdatedAt - ProgressAt is how long it has made
+	// no progress by the node's clock. Older Agents do not report it.
+	ProgressAt time.Time `json:"progressAt,omitzero"`
 	// Error is a fixed English sentence; the Master localizes it.
 	Error string `json:"error,omitempty"`
 	// ErrorDetail is the specific, credential-free cause of a failure.

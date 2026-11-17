@@ -512,7 +512,7 @@ func (s *Server) checkJoiningPath(ctx context.Context, direction string, node ta
 		return
 	}
 	check.Valid = true
-	addFreeSpaceNote(ctx, check)
+	addWriteCheckNotes(ctx, check)
 }
 
 func digestValue(value any) string {

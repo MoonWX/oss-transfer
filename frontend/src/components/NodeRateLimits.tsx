@@ -77,6 +77,10 @@ export const adjustmentPhase = (event: Adjustment) => {
       return t("逐步恢复");
     case "RECOVERED":
       return t("已恢复目标");
+    case "RAISE_STEP":
+      return t("逐步提升");
+    case "RAISED":
+      return t("已达到新目标");
     default:
       return t("自动调整");
   }
@@ -110,6 +114,12 @@ export const adjustmentReason = (event: Adjustment) => {
       return t("定时恢复，提高运行上限；仍低于目标。");
     case "RECOVERED":
       return t("定时恢复，运行上限已达到目标。");
+    case "RAISE_STEP":
+      return t(
+        "目标已调高（如修改 service.json 后重启），运行上限逐步提升；仍低于目标。未出现限流。",
+      );
+    case "RAISED":
+      return t("运行上限已达到调高后的目标。");
     case "AUTO_ADJUST":
       return t("自动调整；未记录更具体的原因。");
     default:
@@ -204,26 +214,31 @@ export default function NodeRateLimits({
           const hasRecoveryStatus = autoAdjustedRate(type);
           const recovered = !uncertain && rate?.state === "RECOVERED";
           const recovering = !uncertain && rate?.state === "RECOVERING";
+          // A target raised in service.json is reached in steps; nothing
+          // throttled the node.
+          const raising = rate?.state === "RAISING";
           const stateLabel = uncertain
             ? t("状态待确认")
             : reduced
               ? rate?.state === "RECOVERING"
                 ? t("逐步恢复")
                 : t("自动降速")
-              : recovered
-                ? t("已恢复目标")
-                : target !== undefined && target <= 0
-                  ? t("不限速")
-                  : rate?.state === "NORMAL"
-                    ? t("按目标运行")
-                    : undefined;
+              : raising
+                ? t("按新目标逐步提升")
+                : recovered
+                  ? t("已恢复目标")
+                  : target !== undefined && target <= 0
+                    ? t("不限速")
+                    : rate?.state === "NORMAL"
+                      ? t("按目标运行")
+                      : undefined;
           const showProgress =
             hasRecoveryStatus &&
             !uncertain &&
             target !== undefined &&
             target > 0 &&
             limit !== undefined &&
-            reduced;
+            (reduced || raising);
           const percentage =
             target && target > 0 && limit !== undefined
               ? Math.max(0, Math.min(100, (limit / target) * 100))
@@ -239,7 +254,9 @@ export default function NodeRateLimits({
                     ? recovering
                       ? "info.main"
                       : "warning.main"
-                    : "divider",
+                    : raising && !uncertain
+                      ? "info.main"
+                      : "divider",
                 borderRadius: groupedCardRadius(index, rateTypes.length),
                 p: { xs: 2, sm: 2.5 },
                 minWidth: 0,
@@ -272,9 +289,11 @@ export default function NodeRateLimits({
                             ? recovering
                               ? "info"
                               : "warning"
-                            : recovered
-                              ? "success"
-                              : "default"
+                            : raising
+                              ? "info"
+                              : recovered
+                                ? "success"
+                                : "default"
                       }
                     />
                   )}
@@ -356,7 +375,11 @@ export default function NodeRateLimits({
                     variant="determinate"
                     value={percentage}
                     color={
-                      recovered ? "success" : recovering ? "info" : "warning"
+                      recovered
+                        ? "success"
+                        : recovering || raising
+                          ? "info"
+                          : "warning"
                     }
                     aria-label={t("{value1}运行上限占目标比例", {
                       value1: rateNames[type],

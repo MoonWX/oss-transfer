@@ -30,12 +30,23 @@ var (
 	storageModeledCode = regexp.MustCompile(`HostID: [^,]*, (\w+): `)
 	// Transport words alone are too general; classify only storage requests.
 	storageErrorContext = regexp.MustCompile(`operation error S3|api error |dial tcp|lookup \S|https?://|request send failed`)
-	storageLookupHost   = regexp.MustCompile(`lookup (\S+?)(?: on |: |$)`)
-	storageDialHost     = regexp.MustCompile(`dial tcp (\[[^\]]+\]:\d+|[^\s:]+:\d+)`)
-	storageURLHost      = regexp.MustCompile(`https?://([^/"\s?]+)`)
+	// S3 (PermanentRedirect) and Alibaba Cloud OSS (AccessDenied, EC
+	// 0003-00001403) say this when a bucket must be reached through another
+	// endpoint, usually the one of its region: not a permission problem. An
+	// OSS reply without a body, such as that to HEAD, says it by its EC alone,
+	// kept in the storage response diagnostic.
+	storageEndpointMismatch = regexp.MustCompile(`(?i)must be addressed using the specified endpoint|\[storage response: [^\]]*\bec=0003-00001403\b`)
+	// The endpoint the reply named, kept in the storage response diagnostic.
+	storageDiagnosticEndpoint = regexp.MustCompile(`\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)`)
+	storageLookupHost         = regexp.MustCompile(`lookup (\S+?)(?: on |: |$)`)
+	storageDialHost           = regexp.MustCompile(`dial tcp (\[[^\]]+\]:\d+|[^\s:]+:\d+)`)
+	storageURLHost            = regexp.MustCompile(`https?://([^/"\s?]+)`)
 )
 
 func storageErrorKind(text string) string {
+	if storageEndpointMismatch.MatchString(text) {
+		return "wrong_endpoint"
+	}
 	modeled := ""
 	if match := storageModeledCode.FindStringSubmatch(text); match != nil {
 		modeled = match[1]
@@ -82,6 +93,11 @@ func storageErrorSummary(out io.Writer, text string) string {
 		return cliTextf(out, "连接 %s 超时，请检查执行节点到 Endpoint 的网络和防火墙。", host)
 	case "tls":
 		return cliTextf(out, "无法验证 %s 的 TLS 证书，请使用执行节点信任的证书，或确认 Endpoint 是否应使用 http。", host)
+	case "wrong_endpoint":
+		if match := storageDiagnosticEndpoint.FindStringSubmatch(text); match != nil {
+			return cliTextf(out, "存储桶需要通过 Endpoint %s 访问，这通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请用该 Endpoint 添加存储连接（storage add）。", match[1])
+		}
+		return cliText(out, "存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请用该地域的 Endpoint 添加存储连接（storage add）。")
 	case "access_denied":
 		return cliText(out, "访问被拒绝：凭据没有执行此操作的权限，请检查存储桶权限。")
 	case "no_such_bucket":

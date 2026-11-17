@@ -43,10 +43,22 @@ func (e *comparisonSideError) Unwrap() error { return e.err }
 
 // comparisonListingError is a listing that a merge cannot use: unordered, out
 // of the prefix or not advancing. Its message is built here, names the side and
-// holds no storage response text, so ErrorDetail shows it as is.
-type comparisonListingError struct{ message string }
+// holds no storage response text, so ErrorDetail shows it as is. unusable
+// marks what the storage itself returned, which a retry or a resume meets
+// again; a lister that stopped early is not marked.
+type comparisonListingError struct {
+	message  string
+	unusable bool
+}
 
 func (e *comparisonListingError) Error() string { return e.message }
+
+// unusableListing reports a failure caused by a listing that the storage
+// returns in a form a comparison cannot use.
+func unusableListing(err error) bool {
+	var listing *comparisonListingError
+	return errors.As(err, &listing) && listing.unusable
+}
 
 // comparisonTimeoutError is a storage call that exceeded one of the engine's
 // own time limits while the comparison itself was still running. It does not

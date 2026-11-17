@@ -33,21 +33,28 @@ type nodeReply struct {
 
 // A missing Agent stays visible. Requests share one deadline and bounded fanout,
 // so one offline Agent cannot hold a page open for a full timeout per node.
+// An Agent that is not connected answers errAgentOffline without a request:
+// waiting for it would hold one of the slots the connected Agents need.
 func (s *Server) nodeReplies(ctx context.Context, operation string) ([]nodeReply, error) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
 		return nil, err
 	}
+	connected := s.connectedAgents(members)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out := make([]nodeReply, len(members))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 8)
 	for index, member := range members {
+		out[index].Member = member
+		if !connected[member.ID] {
+			out[index].Err = errAgentOffline
+			continue
+		}
 		wg.Add(1)
 		go func(index int, member cluster.Member) {
 			defer wg.Done()
-			out[index].Member = member
 			select {
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
@@ -76,7 +83,7 @@ func (s *Server) workerStatus(w http.ResponseWriter, r *http.Request) {
 	missing := []string{}
 	for _, reply := range replies {
 		if reply.Err != nil {
-			workers[reply.Member.Address] = map[string]any{"success": false, "message": reply.Err.Error()}
+			workers[reply.Member.Address] = nodeFailure(w, reply.Err)
 			missing = append(missing, reply.Member.Address)
 		} else {
 			workers[reply.Member.Address] = reply.Value
@@ -94,6 +101,16 @@ func (s *Server) workerStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"success": true, "workers": workers, "nodeDisplays": displays.byAddress, "complete": len(missing) == 0, "partial": len(missing) > 0, "failedWorkers": missing})
 }
 
+// nodeFailure is a node's entry when it did not answer: offline marks an
+// Agent that was not asked because it is not connected, so it is not
+// mistaken for a connected Agent whose reply failed.
+func nodeFailure(w http.ResponseWriter, err error) map[string]any {
+	if errors.Is(err, errAgentOffline) {
+		return map[string]any{"success": false, "offline": true, "message": localize(w, errAgentOffline.Error())}
+	}
+	return map[string]any{"success": false, "message": err.Error()}
+}
+
 func (s *Server) localNodesWithSettings(w http.ResponseWriter, r *http.Request) {
 	replies, err := s.nodeReplies(r.Context(), "node_config")
 	if err != nil {
@@ -108,7 +125,11 @@ func (s *Server) localNodesWithSettings(w http.ResponseWriter, r *http.Request) 
 		s.agents.mu.Unlock()
 		node := map[string]any{"executionNodeIp": reply.Member.Address, "id": reply.Member.ID, "label": reply.Member.Label, "connectionAddress": remote, "reachable": reply.Err == nil, "localTransferSupported": true, "agent": true}
 		if reply.Err != nil {
-			node["message"] = reply.Err.Error()
+			for key, value := range nodeFailure(w, reply.Err) {
+				if key != "success" {
+					node[key] = value
+				}
+			}
 		} else {
 			node["advertisedLocalRoots"] = reply.Value["advertisedLocalRoots"]
 			node["hostname"] = reply.Value["hostname"]
@@ -147,6 +168,26 @@ func nodeHTTPError(w http.ResponseWriter, err error) {
 	}
 	fail(w, status, err.Error())
 }
+
+// genericNodeRejection reports an Agent up to 4.1.46 rejecting a node setting
+// without naming it; later Agents name the setting (see nodecontrol).
+func genericNodeRejection(err error) bool {
+	var remote *AgentError
+	return errors.As(err, &remote) && remote.Status == http.StatusBadRequest && remote.Message == nodecontrol.ErrInvalid.Error()
+}
+
+// unknownNodeRate reports an Agent that rejects a limit type it does not have.
+// The value was validated above with the Agent's own bounds, so an Agent up
+// to 4.1.46, which names no setting, rejects a local storage limit only
+// because it predates them.
+func unknownNodeRate(kind string, err error) bool {
+	var remote *AgentError
+	if errors.As(err, &remote) && remote.Status == http.StatusBadRequest && remote.Message == nodecontrol.ErrUnknownRate.Error() {
+		return true
+	}
+	return (kind == "localOps" || kind == "localBandwidth") && genericNodeRejection(err)
+}
+
 func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 	var change struct {
 		Address  string    `json:"address"`
@@ -184,6 +225,11 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if err := s.agentCall(ctx, member.Session(), "node_config_set", true, nodecontrol.ConfigChange{AdvertisedLocalRoots: change.Roots, MaxConcurrentChildren: change.Children, ObjectsPerChild: change.Objects}, nil); err != nil {
+			if change.Children == nil && change.Objects == nil && genericNodeRejection(err) {
+				// An Agent up to 4.1.46 names no setting, but only the
+				// recorded directories were sent.
+				err = &AgentError{Status: http.StatusBadRequest, Message: nodecontrol.ErrInvalidRoots.Error(), NodeID: member.ID}
+			}
 			nodeHTTPError(w, err)
 			return
 		}
@@ -249,10 +295,19 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	displays := s.nodeDisplaySnapshot()
+	connected := s.connectedAgents(members)
 	results := make([]map[string]any, len(members))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 8)
 	for index, member := range members {
+		if !connected[member.ID] {
+			// Not sent: the node keeps its previous rate.
+			result := nodeFailure(w, errAgentOffline)
+			result["workerIp"] = member.Address
+			addNodeDisplay(result, displays.lookup(member.ID, member.Address))
+			results[index] = result
+			continue
+		}
 		wg.Add(1)
 		go func(index int, member cluster.Member) {
 			defer wg.Done()
@@ -268,6 +323,11 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 			}
 			var rates map[string]any
 			if err := s.agentCall(ctx, member.Session(), "node_rate_set", true, map[string]any{"type": kind, "qps": value}, &rates); err != nil {
+				if unknownNodeRate(kind, err) {
+					// Retrying cannot help until the node is upgraded.
+					result["code"], result["message"] = "RATE_TYPE_UNSUPPORTED", localize(w, "This node's version does not support this limit; upgrade it first")
+					return
+				}
 				result["message"] = err.Error()
 				return
 			}
@@ -317,9 +377,16 @@ func (s *Server) nodeRateHistory(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	slots := make(chan struct{}, 8)
 	displays := s.nodeDisplaySnapshot()
+	connected := s.connectedAgents(members)
 	adjustments := []workerAdjustment{}
 	missing := []string{}
 	for _, member := range members {
+		if !connected[member.ID] {
+			mu.Lock()
+			missing = append(missing, member.Address)
+			mu.Unlock()
+			continue
+		}
 		wg.Add(1)
 		go func(member cluster.Member) {
 			defer wg.Done()

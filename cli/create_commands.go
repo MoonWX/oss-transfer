@@ -281,7 +281,31 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 	if kind == "local" {
 		createWarnSkippedRows(client, rows)
 	}
+	if kind == "tasks" {
+		createWarnMarkerRows(client, rows)
+	}
 	return createSubmit(client, kind, rows, opts.Has("validate-only"), requestID)
+}
+
+// createWarnMarkerRows states, before anything is submitted, that a marker in
+// an imported subtask is not used: the scan does not resume there. A v4.0
+// marker names the upload that ended last, not a point before which every
+// object is done, so resuming from it could skip objects.
+func createWarnMarkerRows(client *ApiClient, rows []map[string]interface{}) {
+	var marked []string
+	for i, row := range rows {
+		if marker, _ := row["marker"].(string); marker != "" {
+			marked = append(marked, strconv.Itoa(i+1))
+		}
+	}
+	if len(marked) == 0 {
+		return
+	}
+	warnings := client.errors
+	if warnings == nil {
+		warnings = os.Stderr
+	}
+	fmt.Fprintln(warnings, cliTextf(warnings, "警告：第 %s 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。", strings.Join(marked, cliListSeparator(warnings))))
 }
 
 // createWarnSkippedRows states, before anything is submitted, which imported
@@ -892,10 +916,28 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			}
 			return checked, cliErrorf("节点预检未通过，请检查节点和本地路径；尚未提交创建请求")
 		}
+		// An Agent from before the write probe passes a download destination
+		// without checking that it can write there; the Master says so.
+		var writeUnchecked []string
+		for _, item := range bindings {
+			if binding, ok := item.(map[string]interface{}); ok && getString(binding, "code") == "LOCAL_PATH_WRITE_NOT_CHECKED" {
+				writeUnchecked = append(writeUnchecked, cliNodeLabel(binding, getString(binding, "executionNodeIp"), client.locale))
+			}
+		}
 		if validateOnly {
 			checked["submissionStatus"] = "validated"
 			checked["message"] = client.text("节点预检通过，尚未创建迁移任务")
+			if len(writeUnchecked) > 0 {
+				checked["message"] = client.locale.format("路径预检通过，但执行节点 %s 版本较旧，未检查目录是否可写；尚未创建迁移任务", strings.Join(writeUnchecked, client.text("、")))
+			}
 			return checked, nil
+		}
+		if len(writeUnchecked) > 0 {
+			warnings := client.errors
+			if warnings == nil {
+				warnings = os.Stderr
+			}
+			fmt.Fprintln(warnings, cliTextf(warnings, "警告：执行节点 %s 版本较旧，未检查下载目录是否可写；目录不可写时，对象会在迁移中逐个失败。", safeCLIText(strings.Join(writeUnchecked, cliListSeparator(warnings)))))
 		}
 		path, countField = "/local-transfers", "acceptedCount"
 	}

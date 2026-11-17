@@ -112,6 +112,10 @@ func New(store *state.Store, options Options) (*Agent, error) {
 				identity.Label, _ = os.Hostname()
 			}
 		}
+		if identity.Credential == "" && identity.EnrollmentID == "" && identity.PendingToken == "" {
+			// What a rejected first invitation leaves behind (rejectEnrollment).
+			return errors.New("Agent has not joined the Master: its last invitation was rejected; start it with a new join link (--join-url) from Nodes > Add node")
+		}
 		if identity.Credential == "" || (identity.EnrollmentID == "" && identity.PendingToken == "") {
 			return errors.New("Agent identity is incomplete; refusing to generate a replacement identity")
 		}
@@ -155,15 +159,22 @@ func (a *Agent) Enroll(ctx context.Context) error {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
+		// The Master's reason tells an invalid, expired or used invitation
+		// (403) from a node or address that is already registered (409);
+		// installers and operators act on it.
+		status := fmt.Sprintf("HTTP %d", response.StatusCode)
+		if reason := rejectionMessage(response.Body); reason != "" {
+			status += ": " + reason
+		}
 		// Only definitive Join rejections release a pending identity. A lost
 		// response or unavailable Master may have committed it already, so its
 		// credential must remain durable for an idempotent retry.
 		if a.identity.PendingToken != "" && (response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusConflict) {
 			if err := a.rejectEnrollment(); err != nil {
-				return fmt.Errorf("enroll Agent: HTTP %d; restore previous identity: %w", response.StatusCode, err)
+				return fmt.Errorf("enroll Agent: %s; restore previous identity: %w", status, err)
 			}
 		}
-		return fmt.Errorf("enroll Agent: HTTP %d", response.StatusCode)
+		return fmt.Errorf("enroll Agent: %s", status)
 	}
 	var result struct {
 		Success bool           `json:"success"`
@@ -191,6 +202,29 @@ func (a *Agent) Enroll(ctx context.Context) error {
 	}
 	a.identity = next
 	return nil
+}
+
+// rejectionMessage reads the Master's explanation from an error response, for
+// example "Invalid or expired Agent invitation". A response that is not the
+// Master's JSON (a proxy page, for instance) yields nothing; the text is kept
+// to one short printable line because it is written to terminals and logs.
+func rejectionMessage(body io.Reader) string {
+	var reply struct {
+		Message string `json:"message"`
+	}
+	if json.NewDecoder(io.LimitReader(body, 4096)).Decode(&reply) != nil {
+		return ""
+	}
+	message := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(reply.Message))
+	if runes := []rune(message); len(runes) > 200 {
+		message = string(runes[:200]) + "…"
+	}
+	return message
 }
 
 func (a *Agent) rejectEnrollment() error {

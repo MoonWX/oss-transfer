@@ -315,7 +315,7 @@ func TestRunningTaskRetryIsFencedByStop(t *testing.T) {
 		t.Fatal("bulk retry of a running task was not accepted", code, body)
 	}
 	detail := details[0].(map[string]any)
-	if detail["mode"] != "FAILED_OBJECTS" || detail["retriedChildren"] != float64(1) || detail["retriedObjects"] != float64(1) || detail["generation"] != float64(r.parent.Generation) {
+	if detail["mode"] != "FAILED_OBJECTS" || detail["retriedChildren"] != float64(1) || detail["retriedObjects"] != float64(1) || detail["generation"] != float64(r.parent.Generation) || detail["hasMore"] != false {
 		t.Fatal("bulk retry did not report the in-place retry", detail)
 	}
 	select {
@@ -393,5 +393,29 @@ func TestRunningTaskRetryRefusesOldAgent(t *testing.T) {
 	}
 	if entry := r.exception(t); entry.RetryStatus != task.ExceptionNotRetried || entry.RetryCount != 0 {
 		t.Fatal("refused retry was recorded as a retry", entry)
+	}
+}
+
+// One request reopens at most retryFailedChildLimit children. The bulk retry
+// route, which the CLI uses, says so as the single-task route does, so the
+// caller knows that other children still hold failed objects.
+func TestBulkRetryReportsChildrenLeftForTheNextRequest(t *testing.T) {
+	for _, more := range []bool{false, true} {
+		item := map[string]any{"taskId": int64(107)}
+		inPlaceRetryDetail(item, retryFailedResult{Accepted: retryFailedChildLimit, RetriedObjects: 1280, HasMore: more})
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded["mode"] != "FAILED_OBJECTS" || decoded["retriedChildren"] != float64(retryFailedChildLimit) || decoded["retriedObjects"] != float64(1280) || decoded["hasMore"] != more {
+			t.Fatal("bulk retry detail lost the remaining children", more, decoded)
+		}
+		if _, ok := decoded["message"]; ok {
+			t.Fatal("an empty message was reported", decoded)
+		}
 	}
 }

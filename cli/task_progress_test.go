@@ -46,9 +46,9 @@ func TestTaskShowIncludesInFlightBytesAndRequestRates(t *testing.T) {
 		locale cliLocale
 		want   []string
 	}{
-		{localeZH, []string{"12708 / 7 GiB", "进度", "70%", "请求速率", "LIST 0 · GET 2.4 · HEAD 0 · PUT 85.2 次/秒", "任务请求上限", "LIST / GET 100 · HEAD 不限 · PUT 不限", "生效请求上限", "PUT 1400"}},
-		{localeEN, []string{"12708 / 7 GiB", "Progress", "Request rate", "PUT 85.2 req/s", "Task request limit", "HEAD unlimited", "Effective request limit"}},
-		{localeJA, []string{"12708 / 7 GiB", "進捗", "リクエストレート", "PUT 85.2 回/秒", "実効リクエスト上限", "無制限"}},
+		{localeZH, []string{"12708 / 7 GiB", "进度", "70%", "请求速率", "LIST 0 · GET 2.4 · HEAD 0 · PUT 85.2 次/秒", "任务请求上限", "LIST / GET 100 · HEAD 不限 · PUT 不限", "生效请求上限", "PUT 1400（LIST 还受扫描节点的 LIST 上限约束，未计入）"}},
+		{localeEN, []string{"12708 / 7 GiB", "Progress", "Request rate", "PUT 85.2 req/s", "Task request limit", "HEAD unlimited", "Effective request limit", "PUT 1400 (LIST is also bounded by the LIST limit of the node that scans, not included)"}},
+		{localeJA, []string{"12708 / 7 GiB", "進捗", "リクエストレート", "PUT 85.2 回/秒", "実効リクエスト上限", "無制限", "スキャンするノードの LIST 上限"}},
 	} {
 		var output bytes.Buffer
 		renderTaskDetail(&cliLocaleWriter{Writer: &output, locale: test.locale}, task)

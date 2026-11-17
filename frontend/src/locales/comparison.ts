@@ -38,6 +38,20 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
   大小: { en: "Size", ja: "サイズ" },
   "不同：{reasons}": { en: "Differs: {reasons}", ja: "相違：{reasons}" },
   全部差异: { en: "All differences", ja: "すべての差分" },
+  已保存差异: { en: "Stored differences", ja: "保存済みの差分" },
+  "导出已保存的差异（ZIP）": {
+    en: "Export stored differences (ZIP)",
+    ja: "保存済みの差分をエクスポート（ZIP）",
+  },
+  "已保存的差异中没有符合条件的记录；截断之后的差异只计数，未保存明细。": {
+    en: "No stored difference matches. Differences after the truncation are counted but not stored.",
+    ja: "保存済みの差分に該当する記録はありません。切り捨て以降の差分は件数のみで、詳細は保存されていません。",
+  },
+  "该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请在 4.1.41 或更高版本的节点上重新比对。":
+    {
+      en: "This result comes from an execution node of version 4.1.40 or earlier, and its counts may be wrong: on storage whose LIST times have millisecond precision, “Changed during comparison” can be a false alarm and can also include objects that are really missing; a single-object comparison counts “Missing on both sides” as “Read failed”; at most 10,000 differences are kept. Compare again on a node of version 4.1.41 or later.",
+      ja: "この結果は 4.1.40 以前のバージョンの実行ノードによるもので、集計が正しくない可能性があります。LIST の時刻がミリ秒精度のストレージでは、「比較中に変更」は誤検知の可能性があり、実際に欠落しているオブジェクトも含まれることがあります。単一オブジェクトの比較では「両側に存在しない」が「読み取り失敗」に数えられます。保存される差分は最大 10,000 件です。4.1.41 以降のバージョンのノードで再度比較してください。",
+    },
   按结果筛选: { en: "Filter by result", ja: "結果で絞り込み" },
   "{days} 天 {hours} 小时": {
     en: "{days} d {hours} h",
@@ -52,9 +66,13 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
     ja: "{minutes} 分 {seconds} 秒",
   },
   "{seconds} 秒": { en: "{seconds} s", ja: "{seconds} 秒" },
-  "已检查 {count}，{rate} 个/秒，已用 {elapsed}": {
-    en: "Checked {count}, {rate} objects/s, elapsed {elapsed}",
-    ja: "確認済み {count}、{rate} 件/秒、経過 {elapsed}",
+  "已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}": {
+    en: "Checked {count}, {rate} objects/s on average, elapsed {elapsed}",
+    ja: "確認済み {count}、平均 {rate} 件/秒、経過 {elapsed}",
+  },
+  "已有 {duration}没有新的比对结果，执行节点可能正在等待存储响应或重试。": {
+    en: "No new comparison results for {duration}; the node may be waiting for the storage to respond, or retrying.",
+    ja: "{duration}の間、新しい比較結果がありません。ノードはストレージの応答を待っているか、再試行している可能性があります。",
   },
   "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}": {
     en: "Checked {count}, {rate} objects/s, elapsed {elapsed}, read {bytes}",
@@ -94,10 +112,10 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
   暂无比对记录: { en: "No comparisons yet", ja: "比較の記録はありません" },
   "源 → 目标": { en: "Source → target", ja: "転送元 → 転送先" },
   差异: { en: "Differences", ja: "差分" },
-  "比对结果保存在执行节点上，默认保留 30 天；每个节点的比对结果默认最多占用 2 GiB，超出时先删除最早结束的比对。":
+  "比对结果保存在执行节点上，默认最多保留 30 天；每个节点的比对结果默认最多占用 2 GiB，且最多保留 500 个比对，超出任一限制时先删除最早结束的比对。":
     {
-      en: "Results are kept on the node that ran the comparison, for 30 days by default. By default each node keeps at most 2 GiB of comparison results and deletes the comparisons that ended earliest first when it exceeds that.",
-      ja: "比較結果は実行ノードに保存され、既定で 30 日間保持されます。各ノードの比較結果は既定で最大 2 GiB までで、超えた場合は終了が最も早い比較から削除します。",
+      en: "Results are kept on the node that ran the comparison, for at most 30 days by default. Each node keeps at most 2 GiB of comparison results by default and at most 500 comparisons; beyond either limit, the comparisons that ended earliest are deleted first.",
+      ja: "比較結果は実行ノードに保存され、既定で最長 30 日間保持されます。各ノードの比較結果は既定で最大 2 GiB、比較は最大 500 件までです。いずれかを超えると、終了が最も早い比較から削除します。",
     },
   比对结果: { en: "Comparison results", ja: "比較結果" },
   "执行节点暂时无法连接，节点恢复后将自动加载比对结果。": {
@@ -182,6 +200,28 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
   "未发现差异。": {
     en: "No differences found.",
     ja: "差分は見つかりませんでした。",
+  },
+  "没有找到任何对象。请检查两端的存储桶和前缀：Key 区分大小写，通常不以 / 开头。":
+    {
+      en: "No object was found. Check the bucket and prefix on both sides: keys are case-sensitive and usually do not start with /.",
+      ja: "オブジェクトが見つかりませんでした。両側のバケットとプレフィックスを確認してください。Key は大文字と小文字を区別し、通常 / で始まりません。",
+    },
+  "比对未完成：已检查的 {count} 个对象中暂未发现差异。": {
+    en: "The comparison did not finish: no differences so far among the {count} objects checked.",
+    ja: "比較は完了していません。確認済みの {count} 個のオブジェクトには、これまで差分はありません。",
+  },
+  "比对未完成，尚未检查任何对象。": {
+    en: "The comparison did not finish and has checked no object.",
+    ja: "比較は完了しておらず、確認したオブジェクトはありません。",
+  },
+  未找到对象: { en: "No objects found", ja: "オブジェクトなし" },
+  "首尾有空白字符。Key 按原样匹配，空白也会参与匹配。": {
+    en: "Starts or ends with a space. Keys are matched exactly, spaces included.",
+    ja: "先頭または末尾に空白があります。Key はそのまま照合され、空白も照合の対象です。",
+  },
+  "以 / 开头。对象 Key 通常不以 / 开头。": {
+    en: "Starts with /. Object keys usually do not start with /.",
+    ja: "/ で始まっています。オブジェクトの Key は通常 / で始まりません。",
   },
   "内容 SHA-256（流式）": {
     en: "Content SHA-256 (streaming)",
@@ -302,14 +342,14 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
     en: "Comparison results are unavailable on this node",
     ja: "このノードでは比較結果を利用できません",
   },
-  "已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）": {
-    en: "Elapsed {elapsed}, read {bytes} ({byteRate}/s)",
-    ja: "経過 {elapsed}、読み取り {bytes}（{byteRate}/秒）",
+  "已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）": {
+    en: "Elapsed {elapsed}, read {bytes} ({byteRate}/s on average)",
+    ja: "経過 {elapsed}、読み取り {bytes}（平均 {byteRate}/秒）",
   },
-  "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）":
+  "已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）":
     {
-      en: "Checked {count}, {rate} objects/s, elapsed {elapsed}, read {bytes} ({byteRate}/s)",
-      ja: "確認済み {count}、{rate} 件/秒、経過 {elapsed}、読み取り {bytes}（{byteRate}/秒）",
+      en: "Checked {count}, {rate} objects/s on average, elapsed {elapsed}, read {bytes} ({byteRate}/s on average)",
+      ja: "確認済み {count}、平均 {rate} 件/秒、経過 {elapsed}、読み取り {bytes}（平均 {byteRate}/秒）",
     },
   "存储桶填写为“连接名称/存储桶”，如 production/photos。前缀留空比对整个存储桶，两端按去掉前缀后的 Key 对应。":
     {

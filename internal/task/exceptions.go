@@ -44,13 +44,16 @@ type Exception struct {
 }
 
 // exceptionReason keeps the reason codes that tell an operator what happened
-// to the object: a source changed after discovery, or deleted at its source.
+// to the object: a source changed after discovery, deleted at its source, or
+// an object of a recovered V4.0.x task that the source does not have.
 func exceptionReason(result execution.ItemResult) string {
 	switch {
 	case result.Status == execution.ItemFailed && result.Reconciliation == execution.ReasonSourceChanged:
 		return execution.ReasonSourceChanged
 	case result.Status == execution.ItemSkipped && result.Reconciliation == execution.ReasonSourceDeleted:
 		return execution.ReasonSourceDeleted
+	case result.Status == execution.ItemFailed && result.Reconciliation == execution.ReasonSourceMissing:
+		return execution.ReasonSourceMissing
 	}
 	return ""
 }

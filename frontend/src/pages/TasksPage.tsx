@@ -72,7 +72,7 @@ import {
 } from "@mui/icons-material";
 import { api, ApiError, saveFile, useApi, useNotify } from "../lib/api";
 import { runTaskBatches, type BatchProgress } from "../lib/taskBatches";
-import { useTaskRecovery } from "../lib/taskRecovery";
+import { runningRetryAllowed, useTaskRecovery } from "../lib/taskRecovery";
 import {
   compareActiveSubtasks,
   compareAllSubtasks,
@@ -82,7 +82,12 @@ import {
 } from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
-import { byteProgress, shownProgress, taskPercent } from "../lib/taskProgress";
+import {
+  byteProgress,
+  shownProgress,
+  taskPercent,
+  unreportedNodeNames,
+} from "../lib/taskProgress";
 import {
   keyMappingLabels,
   mapDestinationKey,
@@ -116,6 +121,7 @@ import {
 } from "../lib/conflictPolicy";
 import TaskRequestRates from "../components/TaskRequestRates";
 import { runtimeMessageLines } from "../lib/runtimeMessages";
+import { formatFilterTime } from "../lib/filterTime";
 import RuntimeMessageLine from "../components/RuntimeMessageLine";
 import { useStableMessages } from "../lib/stableMessages";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
@@ -317,10 +323,31 @@ const recoveryVerb = (tasks: Task[]) => {
       ? "继续传输"
       : "重试";
 };
+// A stop keeps completed objects but discards the bytes of objects in
+// transfer: when the task continues, those objects start over. Running rows
+// with a live sample say how many objects that is and how much was sent.
+const inFlightAtStop = (tasks: Task[]) => {
+  let count = 0,
+    bytes = 0;
+  for (const task of tasks) {
+    if (!["RUNNING", "STOPPING"].includes(task.status)) continue;
+    if (
+      task.liveProgress !== "LIVE" ||
+      typeof task.inFlightObjectCount !== "number" ||
+      typeof task.inFlightObjectBytes !== "number"
+    )
+      return undefined;
+    count += task.inFlightObjectCount;
+    bytes += task.inFlightObjectBytes;
+  }
+  return { count, bytes };
+};
 const recoveryDescription = (tasks: Task[]) => {
   const label = recoveryLabel(tasks);
   if (label === "继续传输")
-    return tr("继续扫描和处理未完成的对象，保留已有传输进度。");
+    return tr(
+      "继续扫描和传输未完成的对象。已完成的对象不会重复传输，停止时正在传输的对象从头传输。",
+    );
   if (label === "恢复任务")
     return tr(
       "失败任务重试失败或未完成的对象；已停止任务继续扫描和传输。已完成的对象不重复传输。",
@@ -655,13 +682,21 @@ function TaskDetail({
     { code: string; severity?: string; message?: string } | undefined;
   const offlineNodes =
     (attentionTask?.offlineNodes as
-      { displayLabel?: string; lastSeen?: number }[] | undefined) || [];
-  const attentionCauses =
-    (
-      attentionTask?.failureSummary as
-        | { causes?: { code: string; count: number; message: string }[] }
-        | undefined
-    )?.causes || [];
+      | {
+          displayLabel?: string;
+          lastSeen?: number;
+          /** No connection recorded since the Master started at this time. */
+          notConnectedSince?: number;
+        }[]
+      | undefined) || [];
+  const failureSummary = attentionTask?.failureSummary as
+    | {
+        causes?: { code: string; count: number; message: string }[];
+        // The causes were counted in the first records only (a sample).
+        truncated?: boolean;
+      }
+    | undefined;
+  const attentionCauses = failureSummary?.causes || [];
   const pageData = children.data;
   const childData =
     taskId != null &&
@@ -1034,13 +1069,14 @@ function TaskDetail({
                   {tr("停止任务")}
                 </Button>
               )}
-              {canRetryRunningFailures(current) && !recoveryState && (
-                <RunningFailureRetry
-                  task={current}
-                  disabled={busy}
-                  onSubmitted={onRefresh}
-                />
-              )}
+              {canRetryRunningFailures(current) &&
+                runningRetryAllowed(recoveryState, current) && (
+                  <RunningFailureRetry
+                    task={current}
+                    disabled={busy}
+                    onSubmitted={onRefresh}
+                  />
+                )}
               {canResumeTask(current) && (
                 <Button
                   variant="contained"
@@ -1157,9 +1193,14 @@ function TaskDetail({
                           node: node.displayLabel || "",
                           time: formatDate(node.lastSeen),
                         })
-                      : tr("{node} 尚未连接", {
-                          node: node.displayLabel || "",
-                        })}
+                      : node.notConnectedSince
+                        ? tr("{node} 自 Master 启动（{time}）以来未连接", {
+                            node: node.displayLabel || "",
+                            time: formatDate(node.notConnectedSince),
+                          })
+                        : tr("{node} 的最后连接时间未知", {
+                            node: node.displayLabel || "",
+                          })}
                   </Typography>
                 ))}
               {attention.code === "OBJECTS_FAILED" && (
@@ -1170,10 +1211,16 @@ function TaskDetail({
                       variant="caption"
                       display="block"
                     >
-                      {tr("另有 {count} 个：{message}", {
-                        count: formatNumber(cause.count),
-                        message: cause.message,
-                      })}
+                      {failureSummary?.truncated
+                        ? // Counts of the sampled records, not of all objects.
+                          tr("{count} 条：{message}", {
+                            count: formatNumber(cause.count),
+                            message: cause.message,
+                          })
+                        : tr("另有 {count} 个：{message}", {
+                            count: formatNumber(cause.count),
+                            message: cause.message,
+                          })}
                     </Typography>
                   ))}
                   <Typography variant="caption" display="block">
@@ -1259,21 +1306,34 @@ function TaskDetail({
             )}
           </Box>
           {(current.failedObjectCount > 0 ||
-            ["FAILED", "PARTIAL_FAILED"].includes(current.status)) && (
-            <Button
-              component={RouterLink}
-              to={`/exceptions?taskId=${current.taskIndex}&type=${local ? "local" : "oss"}`}
-              onClick={onClose}
-              color="warning"
-              variant="outlined"
-              endIcon={<ArrowForwardRounded />}
-              sx={{ mb: 3 }}
-            >
-              {current.failedObjectCount > 0
-                ? tr("查看失败对象")
-                : tr("查看异常记录")}
-            </Button>
-          )}
+            ["FAILED", "PARTIAL_FAILED"].includes(current.status)) &&
+            (current.legacyHistorical ? (
+              // A task converted from v4.0.x: its failed objects are only in
+              // its task report, so the exception records would be empty.
+              <Alert
+                severity="info"
+                data-testid="legacy-failures-note"
+                sx={{ mb: 3 }}
+              >
+                {tr(
+                  "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                )}
+              </Alert>
+            ) : (
+              <Button
+                component={RouterLink}
+                to={`/exceptions?taskId=${current.taskIndex}&type=${local ? "local" : "oss"}`}
+                onClick={onClose}
+                color="warning"
+                variant="outlined"
+                endIcon={<ArrowForwardRounded />}
+                sx={{ mb: 3 }}
+              >
+                {current.failedObjectCount > 0
+                  ? tr("查看失败对象")
+                  : tr("查看异常记录")}
+              </Button>
+            ))}
           <Divider sx={{ mb: 3 }} />
           <Typography variant="h6" sx={{ mb: 2 }}>
             {tr("执行信息")}
@@ -1419,13 +1479,15 @@ function TaskDetail({
                 tr("修改时间晚于"),
                 current.dateAfter == null || current.dateAfter === ""
                   ? null
-                  : formatDate(current.dateAfter),
+                  : (formatFilterTime(current.dateAfter) ??
+                    formatDate(current.dateAfter)),
               ],
               [
                 tr("修改时间早于"),
                 current.dateBefore == null || current.dateBefore === ""
                   ? null
-                  : formatDate(current.dateBefore),
+                  : (formatFilterTime(current.dateBefore) ??
+                    formatDate(current.dateBefore)),
               ],
               [
                 tr("冲突策略"),
@@ -1911,6 +1973,18 @@ export default function TasksPage({
     setSelected((s) =>
       s.includes(id) ? s.filter((i) => i !== id) : [...s, id],
     );
+  // The dialog stays open while rows refresh: count from their latest sample.
+  const stopInFlight =
+    operation === "停止"
+      ? inFlightAtStop(
+          confirmationTasks.map(
+            (task) =>
+              actionCandidates.find(
+                (latest) => latest.taskIndex === task.taskIndex,
+              ) ?? task,
+          ),
+        )
+      : undefined;
   async function execute() {
     if (!confirmationTasks.length || actionInFlight.current) return;
     const recovering = operation === "启动" || operation === "继续传输";
@@ -2199,14 +2273,23 @@ export default function TasksPage({
     const percent = complete ? shown.percent : 0;
     const counts = `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`;
     const bytes = byteProgress(task);
+    const unreported = unreportedNodeNames(task);
+    // A PARTIAL sample is a lower bound: say which nodes it leaves out.
+    const tips = [
+      bytes && countsCurrent ? tr("{value1} 个对象", { value1: counts }) : "",
+      unreported
+        ? tr(
+            "执行节点 {nodes} 暂未上报实时进度：已迁移数据不含其正在传输的部分，速度暂时未知。",
+            { nodes: unreported },
+          )
+        : "",
+    ].filter(Boolean);
     return (
       <Box sx={{ minWidth: 120 }}>
         <Stack direction="row" justifyContent="space-between" gap={1}>
           <Tooltip
             title={
-              bytes && countsCurrent
-                ? tr("{value1} 个对象", { value1: counts })
-                : ""
+              tips.length ? tips.map((tip) => <Box key={tip}>{tip}</Box>) : ""
             }
           >
             <Typography variant="caption" color="text.secondary">
@@ -2297,6 +2380,24 @@ export default function TasksPage({
         >
           {tr("已加载 {count} 个任务。统计仅包含最近一页。", {
             count: formatNumber(tasks.length),
+          })}
+        </Alert>
+      )}
+      {overview && data?.truncated && (
+        // The Master totals one page of the most recent tasks; older tasks
+        // are not counted in the cards below.
+        <Alert
+          severity="info"
+          data-testid="overview-truncated"
+          sx={{ mb: 2 }}
+          action={
+            <Button component={RouterLink} to="/tasks" size="small">
+              {tr("查看全部")}
+            </Button>
+          }
+        >
+          {tr("以下统计仅包含最近 {count} 个任务，更早的任务未计入。", {
+            count: formatNumber(data.tasks?.length ?? 0),
           })}
         </Alert>
       )}
@@ -2777,7 +2878,22 @@ export default function TasksPage({
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        {task.failedObjectCount > 0 ? (
+                        {task.failedObjectCount > 0 && task.legacyHistorical ? (
+                          <Tooltip
+                            title={tr(
+                              "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                            )}
+                          >
+                            <Typography
+                              variant="body2"
+                              color="warning.main"
+                              tabIndex={0}
+                              data-testid="legacy-failed-count"
+                            >
+                              {formatNumber(task.failedObjectCount)}
+                            </Typography>
+                          </Tooltip>
+                        ) : task.failedObjectCount > 0 ? (
                           <Button
                             size="small"
                             color="warning"
@@ -2966,11 +3082,28 @@ export default function TasksPage({
             {operation === "删除"
               ? tr("任务记录将移至回收站，不会删除源或目标存储中的对象。")
               : operation === "停止"
-                ? tr("停止扫描和传输，保留已完成的对象与进度。")
+                ? tr(
+                    "停止扫描和传输。已完成的对象会保留，正在传输的对象在任务继续后从头传输。",
+                  )
                 : operation === "继续传输"
                   ? recoveryDescription(confirmationTasks)
                   : tr("任务将开始传输，请确认来源和目标配置。")}
           </Typography>
+          {operation === "停止" && !!stopInFlight?.count && (
+            <Typography
+              variant="body2"
+              sx={{ mt: 2 }}
+              data-testid="stop-in-flight"
+            >
+              {tr(
+                "当前正在传输 {count} 个对象，已传输 {bytes}；任务继续后，这些对象需要从头重新传输。",
+                {
+                  count: formatNumber(stopInFlight.count),
+                  bytes: formatBytes(stopInFlight.bytes),
+                },
+              )}
+            </Typography>
+          )}
           <Typography variant="body2" sx={{ mt: 2 }}>
             {tr("任务：")}
             {confirmationTasks

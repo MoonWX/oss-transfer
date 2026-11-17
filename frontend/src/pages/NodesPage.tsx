@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   Chip,
@@ -47,6 +48,7 @@ import NodeRateLimits, {
   adjustmentDetailsPath,
   adjustmentPhase,
   adjustmentReason,
+  localRateTypes,
   rateNames,
   rateText,
   rateTypes,
@@ -77,7 +79,11 @@ type RateResult = NodeDisplay & {
   workerIp: string;
   success?: boolean;
   message?: string;
+  /** RATE_TYPE_UNSUPPORTED: the node's version does not have this limit. */
+  code?: string;
 };
+const unsupportedRate = (result: RateResult) =>
+  result.code === "RATE_TYPE_UNSUPPORTED";
 const queues = [
   { key: "list", label: "对象扫描" },
   { key: "put", label: "对象传输" },
@@ -110,6 +116,8 @@ export default function NodesPage() {
     message: string;
     /** Nodes that did not confirm the change, as the Master reports them. */
     unconfirmed?: RateResult[];
+    /** The limit that was set, which nodes too old for it are named with. */
+    type?: RateType;
   } | null>(null);
   const [nodeEdit, setNodeEdit] = useState<{
     original: string | null;
@@ -123,6 +131,8 @@ export default function NodesPage() {
     initialObjects?: number;
     concurrencyEditable: boolean;
     online: boolean;
+    /** The node's current settings were read. */
+    statusRead: boolean;
   } | null>(null);
   const [nodeDelete, setNodeDelete] = useState<RegisteredNode | null>(null);
   const [nodeSaving, setNodeSaving] = useState(false);
@@ -157,6 +167,20 @@ export default function NodesPage() {
   }).length;
   const refresh = () =>
     Promise.all([workers.refresh(), history.refresh(), registry.refresh()]);
+  // Agents before local storage limits report no row for them. An offline
+  // node reports nothing, so whether it has them is unknown.
+  const lacksLocalLimits = (ip: string) => {
+    const rateLimit = workers.data?.workers?.[ip]?.rateLimit;
+    return !!rateLimit && localRateTypes.every((type) => !rateLimit[type]);
+  };
+  // The nodes a local storage limit being edited cannot take effect on.
+  const withoutLocalLimits =
+    edit && localRateTypes.includes(edit.type)
+      ? (edit.worker
+          ? [edit.worker]
+          : Object.keys(workers.data?.workers ?? {})
+        ).filter(lacksLocalLimits)
+      : [];
   const openNodeEditor = (node?: RegisteredNode) => {
     setNodeError(null);
     const worker = workers.data?.workers?.[node?.address ?? ""];
@@ -173,7 +197,12 @@ export default function NodesPage() {
       initialObjects: execution?.objectsPerChild,
       concurrencyEditable:
         !!worker?.success && typeof execution?.objectsPerChild === "number",
-      online: !!worker?.success,
+      // An Agent's connection comes from the registry: a connected Agent can
+      // still fail to answer one status read.
+      online: node?.agent
+        ? node.online === true && !worker?.offline
+        : !!worker?.success,
+      statusRead: !!worker?.success,
     });
   };
   async function saveNodeEdit() {
@@ -286,14 +315,26 @@ export default function NodesPage() {
         const unconfirmed = (
           Array.isArray(response.results) ? response.results : []
         ).filter((result: RateResult) => result.success !== true);
+        // A node too old for the limit rejected it; retrying cannot help
+        // until it is upgraded, so it is not counted as unconfirmed.
+        const tooOld = unconfirmed.filter(unsupportedRate).length;
+        const pending = (response.failedCount ?? unconfirmed.length) - tooOld;
         setSaveError({
-          message: t(
-            "{count} 个执行节点未确认限速设置，请核对节点状态后重试。",
-            {
-              count: formatNumber(response.failedCount ?? unconfirmed.length),
-            },
-          ),
+          message: [
+            pending > 0 &&
+              t("{count} 个执行节点未确认限速设置，请核对节点状态后重试。", {
+                count: formatNumber(pending),
+              }),
+            tooOld > 0 &&
+              t("{count} 个执行节点的版本不支持“{type}”限速，请先升级。", {
+                count: formatNumber(tooOld),
+                type: rateNames[edit.type],
+              }),
+          ]
+            .filter(Boolean)
+            .join("\n"),
           unconfirmed,
+          type: edit.type,
         });
       } else
         setSaveError({
@@ -601,10 +642,23 @@ export default function NodesPage() {
                     </Stack>
                   )}
                   {!worker.success ? (
-                    <Alert severity="error" sx={{ mx: 2.5, mb: 2.5 }}>
-                      {worker.message ||
-                        t("节点未返回有效状态，请检查节点服务和网络。")}
-                    </Alert>
+                    worker.offline ||
+                    (registered?.agent && registered.online !== true) ? (
+                      // The Master does not ask an Agent that is not connected.
+                      <Alert severity="info" sx={{ mx: 2.5, mb: 2.5 }}>
+                        {t("节点离线，重新连接后显示运行状态。")}
+                      </Alert>
+                    ) : (
+                      <Alert severity="error" sx={{ mx: 2.5, mb: 2.5 }}>
+                        <AlertTitle>{t("未能读取节点状态")}</AlertTitle>
+                        <Box component="span">
+                          {(worker.message &&
+                            knownRuntimeMessage(worker.message)) ||
+                            worker.message ||
+                            t("节点未返回有效状态，请检查节点服务和网络。")}
+                        </Box>
+                      </Alert>
+                    )
                   ) : (
                     <>
                       <Divider />
@@ -925,9 +979,11 @@ export default function NodesPage() {
                 </Stack>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  {nodeEdit.online
-                    ? t("升级节点后可调整并发。")
-                    : t("节点离线时无法调整并发。")}
+                  {!nodeEdit.online
+                    ? t("节点离线时无法调整并发。")
+                    : nodeEdit.statusRead
+                      ? t("升级节点后可调整并发。")
+                      : t("未能读取节点当前的并发设置，请刷新后再调整。")}
                 </Typography>
               ))}
           </Stack>
@@ -961,7 +1017,7 @@ export default function NodesPage() {
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
             <Typography>
               {t(
-                "移除后，该节点不能再连接集群，节点上的 Agent 服务会自行停止。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。",
+                "移除后，该节点不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。",
               )}
             </Typography>
             <Alert severity="warning">
@@ -1001,7 +1057,10 @@ export default function NodesPage() {
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {saveError && (
               <Alert severity="error">
-                {saveError.message}
+                {/* One line per outcome: unconfirmed, and too old for the limit. */}
+                <Box component="span" sx={{ whiteSpace: "pre-line" }}>
+                  {saveError.message}
+                </Box>
                 {!!saveError.unconfirmed?.length && (
                   <Stack spacing={0.5} sx={{ mt: 0.75 }}>
                     {saveError.unconfirmed.map((result) => (
@@ -1013,10 +1072,14 @@ export default function NodesPage() {
                         {nodeLabel(result.workerIp, result)}：
                         {/* Known timeouts and cancellations are translated;
                             other Agent reasons are shown as reported. */}
-                        {(result.message &&
-                          knownRuntimeMessage(result.message)) ||
-                          result.message ||
-                          t("状态待确认")}
+                        {unsupportedRate(result) && saveError.type
+                          ? t("此节点版本不支持“{type}”限速，请先升级。", {
+                              type: rateNames[saveError.type],
+                            })
+                          : (result.message &&
+                              knownRuntimeMessage(result.message)) ||
+                            result.message ||
+                            t("状态待确认")}
                       </Typography>
                     ))}
                   </Stack>
@@ -1068,7 +1131,16 @@ export default function NodesPage() {
               }
             >
               {rateTypes.map((type) => (
-                <MenuItem key={type} value={type}>
+                <MenuItem
+                  key={type}
+                  value={type}
+                  // A node too old for local storage limits is not offered them.
+                  disabled={
+                    localRateTypes.includes(type) &&
+                    !!edit?.worker &&
+                    lacksLocalLimits(edit.worker)
+                  }
+                >
                   {rateNames[type]}
                 </MenuItem>
               ))}
@@ -1107,6 +1179,21 @@ export default function NodesPage() {
                 {t("设置逐一应用于全部执行节点，各节点使用相同上限。")}
               </Alert>
             )}
+            {edit && withoutLocalLimits.length > 0 && (
+              <Alert severity="warning">
+                {edit.worker
+                  ? t("此节点版本不支持“{type}”限速，请先升级。", {
+                      type: rateNames[edit.type],
+                    })
+                  : t(
+                      "{count} 个执行节点的版本不支持“{type}”限速，不会应用此设置。",
+                      {
+                        count: formatNumber(withoutLocalLimits.length),
+                        type: rateNames[edit.type],
+                      },
+                    )}
+              </Alert>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -1115,7 +1202,9 @@ export default function NodesPage() {
           </Button>
           <Button
             variant="contained"
-            disabled={saving}
+            disabled={
+              saving || (!!edit?.worker && withoutLocalLimits.length > 0)
+            }
             onClick={() => void saveRate()}
             startIcon={
               saving ? (

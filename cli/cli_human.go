@@ -28,6 +28,12 @@ func setCLISummary(result map[string]interface{}, lines ...string) {
 	}
 }
 
+// cliOfflineNodesKey marks a failure list of the Master's exception index,
+// whose failedWorkers and unreachableWorkers name the offline nodes with
+// unfinished subtasks: no node is asked for the list, so none of them failed
+// or left a request unanswered. It never reaches --json output.
+const cliOfflineNodesKey = "_cliOfflineNodes"
+
 // quietCLIResult marks a result whose error line says everything: human
 // output prints nothing else.
 func quietCLIResult(result map[string]interface{}) {
@@ -38,12 +44,14 @@ func quietCLIResult(result map[string]interface{}) {
 
 // withoutHumanFields returns result without the human-only entries.
 func withoutHumanFields(result map[string]interface{}) map[string]interface{} {
-	if _, ok := result[cliSummaryKey]; !ok {
+	_, summary := result[cliSummaryKey]
+	_, offline := result[cliOfflineNodesKey]
+	if !summary && !offline {
 		return result
 	}
 	copy := make(map[string]interface{}, len(result))
 	for key, value := range result {
-		if key != cliSummaryKey {
+		if key != cliSummaryKey && key != cliOfflineNodesKey {
 			copy[key] = value
 		}
 	}
@@ -341,38 +349,139 @@ func cliTruncate(text string, width int) string {
 	return string(runes) + "…"
 }
 
-// cliErrorSummaries recognize common storage and network failures in raw
-// error text. Values are catalog keys: a short sentence saying what to do.
+// cliErrorSummaries recognize common network and local failures in the
+// cause of an object failure (cliObjectErrorCause), after the storage reply
+// codes (cliStorageReplySummary). Values are catalog keys: a short sentence
+// saying what to do.
 var cliErrorSummaries = []struct {
 	pattern *regexp.Regexp
 	key     string
 }{
 	{regexp.MustCompile(`(?i)no such host|server misbehaving|temporary failure in name resolution|name resolution`), "无法解析存储服务地址，请检查 Endpoint；自建存储可改用 path-style 寻址"},
 	{regexp.MustCompile(`(?i)connection refused|actively refused`), "存储服务拒绝连接，请检查 Endpoint 地址和端口"},
-	{regexp.MustCompile(`(?i)connection reset|broken pipe`), "连接被存储服务中断，可重试失败对象"},
+	{regexp.MustCompile(`(?i)connection reset|broken pipe|forcibly closed`), "连接被存储服务中断，可重试失败对象"},
 	{regexp.MustCompile(`(?i)x509|certificate|tls: `), "存储服务的 TLS 证书无效或不受信任"},
 	{regexp.MustCompile(`(?i)timeout|timed out|deadline exceeded`), "连接存储服务超时，请检查网络后重试"},
-	{regexp.MustCompile(`InvalidAccessKeyId`), "Access Key 无效，请检查存储连接的凭据"},
-	{regexp.MustCompile(`SignatureDoesNotMatch`), "签名不匹配，请检查 Secret Key 和签名方式"},
-	{regexp.MustCompile(`AccessDenied|(?i)\b403\b|forbidden`), "存储服务拒绝访问，请检查凭据对该存储桶的权限"},
-	{regexp.MustCompile(`NoSuchBucket`), "存储桶不存在，请检查存储桶名称"},
-	{regexp.MustCompile(`NoSuchKey|(?i)\b404\b|not found`), "源对象已不存在"},
-	{regexp.MustCompile(`PreconditionFailed|(?i)\b412\b|etag mismatch`), "源对象在迁移期间发生变化，可重试失败对象"},
-	{regexp.MustCompile(`SlowDown|(?i)\b503\b|too many requests|\b429\b|throttl`), "存储服务限流，可稍后重试失败对象"},
-	{regexp.MustCompile(`(?i)\bEOF\b`), "连接意外中断，可重试失败对象"},
+	{regexp.MustCompile(`(?i)not found`), "源对象已不存在"},
+	{regexp.MustCompile(`(?i)etag mismatch`), "源对象在迁移期间发生变化，可重试失败对象"},
+	{regexp.MustCompile(`(?:^|: )EOF\b|unexpected EOF`), "连接意外中断，可重试失败对象"},
 }
 
-// cliErrorSummary returns a short sentence for a raw storage error: a known
-// cause, otherwise the first line of the text.
+// An object failure begins with its stage and quoted key (the Agent's
+// execution.ObjectErrorCause); a file-system cause may precede them. A failed
+// request names its URL, which holds the key too.
+var (
+	cliObjectFailureStage = regexp.MustCompile(`(?:^|: )(?:open source|read source|reconcile source|reconcile legacy result|check destination|write destination|verify write) "(?:[^"\\]|\\.)*": `)
+	cliQuotedURL          = regexp.MustCompile(`"https?://[^"]*"`)
+)
+
+// cliObjectErrorCause is an object failure's text without its stage, key and
+// request URL, so that no word of the key is taken for the cause.
+func cliObjectErrorCause(message string) string {
+	if match := cliObjectFailureStage.FindStringIndex(message); match != nil {
+		if match[0] == 0 {
+			message = message[match[1]:]
+		} else {
+			message = message[:match[0]] + ": " + message[match[1]:]
+		}
+	}
+	return cliQuotedURL.ReplaceAllString(message, `"URL"`)
+}
+
+var (
+	cliAPIErrorCode     = regexp.MustCompile(`api error (\w+)`)
+	cliXMLErrorCode     = regexp.MustCompile(`<Code>(\w+)</Code>`)
+	cliResponseStatus   = regexp.MustCompile(`StatusCode: (\d{3})\b`)
+	cliRetryAttempts    = regexp.MustCompile(`exceeded maximum number of attempts, (\d+)`)
+	cliThrottleCodes    = map[string]bool{"SlowDown": true, "Throttling": true, "ThrottlingException": true, "ThrottledException": true, "RequestThrottled": true, "RequestThrottledException": true, "RequestLimitExceeded": true, "TooManyRequests": true, "TooManyRequestsException": true}
+	cliStorageCodeTexts = map[string]string{
+		"InvalidAccessKeyId":    "Access Key 无效，请检查存储连接的凭据",
+		"SignatureDoesNotMatch": "签名不匹配，请检查 Secret Key 和签名方式",
+		"AccessDenied":          "存储服务拒绝访问，请检查凭据对该存储桶的权限",
+		"AllAccessDisabled":     "存储服务拒绝访问，请检查凭据对该存储桶的权限",
+		"NoSuchBucket":          "存储桶不存在，请检查存储桶名称",
+		"NoSuchKey":             "源对象已不存在",
+		"NoSuchVersion":         "源对象已不存在",
+		"PreconditionFailed":    "源对象在迁移期间发生变化，可重试失败对象",
+		"InternalError":         "存储服务端出错，可在存储恢复后重试失败对象",
+		"ServiceUnavailable":    "存储服务端出错，可在存储恢复后重试失败对象",
+		"RequestTimeout":        "连接存储服务超时，请检查网络后重试",
+	}
+)
+
+// cliStorageReplySummary names the cause of a storage reply as the Master's
+// task summary does: by the reply's error code, and by its HTTP status only
+// when it has none (a HEAD reply has no body; the SDK then gives the status
+// text, such as "Forbidden", as its code). A 503 without a throttling code
+// can be an outage, so only those codes and 429 are throttling.
+func cliStorageReplySummary(cause string) string {
+	// A bucket that must be reached through another endpoint is refused with
+	// AccessDenied (OSS) or PermanentRedirect (S3); the reply's text, not its
+	// code, says so, and the credentials are not the problem.
+	if storageEndpointMismatch.MatchString(cause) {
+		return "存储桶需要通过其所在地域的 Endpoint 访问，请用该 Endpoint 添加存储连接"
+	}
+	code, status := "", 0
+	if match := cliResponseStatus.FindStringSubmatch(cause); match != nil {
+		status, _ = strconv.Atoi(match[1])
+	}
+	for _, pattern := range []*regexp.Regexp{cliAPIErrorCode, storageModeledCode, cliXMLErrorCode} {
+		if match := pattern.FindStringSubmatch(cause); match != nil {
+			code = match[1]
+			break
+		}
+	}
+	if status > 0 && code == strings.ReplaceAll(http.StatusText(status), " ", "") {
+		code = ""
+	}
+	if text, ok := cliStorageCodeTexts[code]; ok {
+		return text
+	}
+	switch {
+	case code == "InvalidObjectState" && strings.Contains(cause, "S3: GetObject"):
+		return "源对象为归档存储，需先解冻再重试"
+	case cliThrottleCodes[code] || status == http.StatusTooManyRequests:
+		return "存储服务限流，可稍后重试失败对象"
+	case status >= 500:
+		return "存储服务端出错，可在存储恢复后重试失败对象"
+	case code != "":
+		return ""
+	case status == http.StatusForbidden:
+		return "存储服务拒绝访问，请检查凭据对该存储桶的权限"
+	case status == http.StatusNotFound:
+		return "源对象已不存在"
+	case status == http.StatusPreconditionFailed:
+		return "源对象在迁移期间发生变化，可重试失败对象"
+	}
+	return ""
+}
+
+// cliErrorSummary returns a short sentence for the raw error of a failed
+// object: a known cause, otherwise the first line of the text. A storage
+// that closed connections in a running task, where other objects reached it,
+// was interrupted; a host that never answered the node fails after the
+// ordinary three attempts instead of ten, and points to the Endpoint.
 func cliErrorSummary(out io.Writer, message string) string {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return "—"
 	}
+	cause := cliObjectErrorCause(message)
+	if key := cliStorageReplySummary(cause); key != "" {
+		return cliText(out, key)
+	}
 	for _, summary := range cliErrorSummaries {
-		if summary.pattern.MatchString(message) {
-			return cliText(out, summary.key)
+		if !summary.pattern.MatchString(cause) {
+			continue
 		}
+		if summary.key == "连接意外中断，可重试失败对象" {
+			if match := cliRetryAttempts.FindStringSubmatch(cause); match != nil {
+				if attempts, _ := strconv.Atoi(match[1]); attempts <= 3 {
+					return cliText(out, "连接在存储服务应答前关闭，请检查 Endpoint 地址、端口和协议")
+				}
+			}
+		}
+		return cliText(out, summary.key)
 	}
 	line, _, _ := strings.Cut(message, "\n")
 	return cliTruncate(line, 60)
@@ -437,7 +546,7 @@ func cliErrorHints(err error, fallbackHost bool) []string {
 }
 
 // cliMasterUnreachableHint is followed by the Master address the CLI used.
-const cliMasterUnreachableHint = "提示: 无法连接 Master（%s）。请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。"
+const cliMasterUnreachableHint = "提示: 无法连接 Master（%s）。Master 可能正在重启或更新，请稍后重试；如果一直无法连接，请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。"
 
 // cliAuthFailure reports a rejected session or permission: a failure, never
 // an incomplete result.
@@ -477,6 +586,11 @@ func humanErrorResult(result map[string]interface{}, err error, locale cliLocale
 			continue
 		case "message", "error":
 			if text, ok := value.(string); ok && (text == "" || strings.Contains(printed, text) || strings.Contains(printed, translateServerMessage(locale, text)) || problem != nil && text == problem.Message) {
+				continue
+			}
+		case "node":
+			// The node that ran a failed storage check, which the error names.
+			if text, ok := value.(string); ok && text != "" && strings.Contains(printed, safeCLIText(text)) {
 				continue
 			}
 		}

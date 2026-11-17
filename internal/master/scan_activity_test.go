@@ -156,7 +156,7 @@ func TestScanCheckpointWaitsForAMemberThatSpeaksItsProtocol(t *testing.T) {
 	if membership := f.master.taskView(moved)["executionMembership"].(map[string]any); membership["scanPhase"] != scanPhaseWaiting || membership["scanUpgradeRequired"] != true {
 		t.Fatalf("task row of the wait: %v", membership)
 	}
-	if err := runtime.scannerWait(moved); err == nil || err.Error() != "Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it" {
+	if err := runtime.scannerWait(moved, false); err == nil || err.Error() != "Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it" {
 		t.Fatalf("task error during the wait: %v", err)
 	}
 	// An unreachable member is not known to be old.
@@ -168,7 +168,7 @@ func TestScanCheckpointWaitsForAMemberThatSpeaksItsProtocol(t *testing.T) {
 	if membership := f.master.taskView(moved)["executionMembership"].(map[string]any); membership["scanUpgradeRequired"] != nil {
 		t.Fatalf("task row without a wait: %v", membership)
 	}
-	if err := runtime.scannerWait(moved); err == nil || !strings.HasPrefix(err.Error(), "Waiting for scanning node ") {
+	if err := runtime.scannerWait(moved, false); err == nil || !strings.HasPrefix(err.Error(), "Waiting for scanning node ") {
 		t.Fatalf("task error without an upgrade wait: %v", err)
 	}
 	protocols["node-1"], protocols["node-2"] = 0, discovery.ScanProtocol

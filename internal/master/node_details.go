@@ -14,15 +14,17 @@ func (s *Server) agentNodeDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	s.agents.mu.Lock()
 	seen := s.agents.lastSeen[member.ID]
+	last, known := s.agents.lastConnectionLocked(member.ID)
 	remote := s.agents.remoteAddress[member.ID]
 	s.agents.mu.Unlock()
 	data := map[string]any{
 		"id": member.ID, "address": member.Address, "label": member.Label,
-		"online":            !seen.IsZero() && s.options.Now().Sub(seen) < 75*time.Second,
+		"online":            !seen.IsZero() && s.options.Now().Sub(seen) < agentOnlineWindow,
 		"connectionAddress": remote, "complete": false,
 	}
-	if !seen.IsZero() {
-		data["lastSeen"] = seen
+	if known {
+		// Also a time saved before the Master restarted.
+		data["lastSeen"] = last
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()

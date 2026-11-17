@@ -592,6 +592,22 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		result.Error = objectErrorText(fmt.Errorf("%s %q: %w", stage, item.Source.Key, err))
 		return result
 	}
+	if item.Legacy != nil && item.Legacy.Missing {
+		// The legacy recovery scan did not find this key. Every attempt, a
+		// retry included, looks at the source again before calling it
+		// missing: a volume that was not mounted or an object restored at
+		// the source is reconciled as if the scan had listed it now.
+		actual, err := source.Stat(ctx, item.Source.Key)
+		if errors.Is(err, transferstore.ErrNotFound) {
+			result.Reconciliation = ReasonSourceMissing
+		}
+		if err != nil {
+			return fail("reconcile source", err)
+		}
+		legacy := *item.Legacy
+		legacy.Missing = false
+		item.Source, item.Legacy = actual, &legacy
+	}
 	expected := item.Source
 	if job.SharedLocalSource && job.Source.Kind == "LOCAL" {
 		// A verified shared mount can expose different device/inode IDs on each
@@ -603,10 +619,6 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		expected.ETag = ""
 	}
 	if item.Legacy != nil {
-		if item.Legacy.Missing {
-			result.Reconciliation = "SOURCE_MISSING"
-			return fail("reconcile source", transferstore.ErrNotFound)
-		}
 		actual, err := source.Stat(ctx, item.Source.Key)
 		if err != nil {
 			return fail("reconcile source", err)

@@ -61,6 +61,10 @@ type SaveResult = {
   partial?: boolean;
   successCount?: number;
   failedCount?: number;
+  /** When nodes that missed the change will receive it. */
+  syncNote?: string;
+  /** The one node that validated the connection before it was saved. */
+  validationNode?: string;
 };
 type StorageAction = "ADD" | "UPDATE" | "DELETE";
 const partialResult = (result?: SaveResult | null) => {
@@ -91,6 +95,8 @@ type StorageFailure = {
   message: string;
   detail?: string;
   pathStyleHint?: boolean;
+  /** The node that ran the check; other nodes were not checked. */
+  node?: string;
 };
 const storageFailure = (e: unknown): StorageFailure => {
   const response = e instanceof ApiError ? e.response : undefined;
@@ -101,6 +107,10 @@ const storageFailure = (e: unknown): StorageFailure => {
         ? response.detail
         : undefined,
     pathStyleHint: response?.pathStyleHint === true,
+    node:
+      typeof response?.node === "string" && response.node
+        ? response.node
+        : undefined,
   };
 };
 const styleName = (pathStyle: boolean) =>
@@ -128,6 +138,11 @@ function StorageFailureAlert({
   return (
     <Alert severity="error" action={action} sx={{ overflowWrap: "anywhere" }}>
       {failure.message}
+      {failure.node && (
+        <Typography variant="body2" data-testid="storage-check-node">
+          {t("由执行节点 {node} 检查。", { node: failure.node })}
+        </Typography>
+      )}
       {failure.detail && (
         <Box sx={{ mt: 0.5 }}>
           <Button
@@ -151,6 +166,39 @@ function StorageFailureAlert({
         </Box>
       )}
     </Alert>
+  );
+}
+// The provider's own text under a non-blocking warning, on request: the
+// warning is a summary, and only the raw text has every detail the
+// provider gave (an endpoint to use, a request ID).
+function RawWarningDetail({ detail }: { detail?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!detail) return null;
+  return (
+    <Box sx={{ mt: 0.5 }}>
+      <Button
+        size="small"
+        color="inherit"
+        onClick={() => setOpen((value) => !value)}
+        sx={{ px: 0, minWidth: 0 }}
+      >
+        {open ? t("隐藏原始错误") : t("显示原始错误")}
+      </Button>
+      <Collapse in={open}>
+        <Typography
+          variant="caption"
+          component="div"
+          data-testid="storage-warning-detail"
+          sx={{
+            fontFamily: "monospace",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {detail}
+        </Typography>
+      </Collapse>
+    </Box>
   );
 }
 const optionValue = (value: boolean | null | undefined) =>
@@ -186,7 +234,10 @@ export default function StoragePage() {
     checkedBucket?: string;
     bucketCheckFailed?: string;
     bucketCheckSupported?: boolean;
+    listBucketsDenied?: boolean;
     warning?: string;
+    warningDetail?: string;
+    node?: string;
   } | null>(null);
   const [bucketOpen, setBucketOpen] = useState(false);
   const bucketRequest = useRef(0);
@@ -275,7 +326,11 @@ export default function StoragePage() {
         response.warning ||
           response.message ||
           (editing ? t("存储连接已更新") : t("存储连接已添加")),
-        partialResult(response) || response.warning ? "warning" : "success",
+        response.warning
+          ? "warning"
+          : partialResult(response)
+            ? "info"
+            : "success",
       );
       await refresh();
     } catch (e) {
@@ -296,7 +351,7 @@ export default function StoragePage() {
       setDeleting(null);
       notify(
         response.message || t("存储连接已删除"),
-        partialResult(response) ? "warning" : "success",
+        partialResult(response) ? "info" : "success",
       );
       await refresh();
     } catch (e) {
@@ -317,7 +372,10 @@ export default function StoragePage() {
         checkedBucket?: string;
         bucketCheckFailed?: string;
         bucketCheckSupported?: boolean;
+        listBucketsDenied?: boolean;
         warning?: string;
+        warningDetail?: string;
+        node?: string;
       }>(
         `/api/master/s3-config/${encodeURIComponent(alias)}/buckets` +
           (bucket ? `?bucket=${encodeURIComponent(bucket)}` : ""),
@@ -332,7 +390,10 @@ export default function StoragePage() {
           checkedBucket: response.checkedBucket,
           bucketCheckFailed: response.bucketCheckFailed,
           bucketCheckSupported: response.bucketCheckSupported,
+          listBucketsDenied: response.listBucketsDenied,
           warning: response.warning,
+          warningDetail: response.warningDetail,
+          node: response.node,
         });
     } catch (e) {
       if (request === bucketRequest.current)
@@ -374,28 +435,39 @@ export default function StoragePage() {
         }
       />
       {result && (
+        // The Master has saved the change; a node that missed it is synced
+        // before it next works, so a partial result is not a failure.
         <Alert
-          severity={partial || result.warning ? "warning" : "success"}
+          severity={result.warning ? "warning" : partial ? "info" : "success"}
           onClose={() => setResult(null)}
         >
           <AlertTitle>
-            {partial
-              ? result.action === "DELETE"
-                ? t("部分节点删除失败")
-                : result.action === "UPDATE"
-                  ? t("部分节点更新失败")
-                  : t("部分节点添加失败")
-              : result.action === "DELETE"
-                ? t("连接删除完成")
-                : result.action === "UPDATE"
-                  ? t("连接更新完成")
-                  : t("连接添加完成")}
+            {result.action === "DELETE"
+              ? t("连接删除完成")
+              : result.action === "UPDATE"
+                ? t("连接更新完成")
+                : t("连接添加完成")}
           </AlertTitle>
           {result.message}
-          {result.warning && (
+          {result.validationNode && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
-              {result.warning}
+              {t("保存前已由执行节点 {node} 验证连接。", {
+                node: result.validationNode,
+              })}
             </Typography>
+          )}
+          {partial && result.syncNote && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {result.syncNote}
+            </Typography>
+          )}
+          {result.warning && (
+            <>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                {result.warning}
+              </Typography>
+              <RawWarningDetail detail={result.warningDetail} />
+            </>
           )}
           {result.details && result.details.length > 0 && (
             <Box component="ul" sx={{ mb: 0, pl: 2 }}>
@@ -807,8 +879,10 @@ export default function StoragePage() {
         <DialogTitle>{t("删除存储连接")}</DialogTitle>
         <DialogContent>
           <Typography>
+            {/* Tasks keep only the connection name and open storage from
+                it for every subtask, so a deleted connection stops them. */}
             {t(
-              "删除连接 {alias} 后，后续迁移将无法使用此连接。此操作会同步到执行节点。",
+              "删除连接 {alias} 后，所有使用此连接的任务都将无法继续执行（包括执行中和已停止的任务），直到重新添加同名连接；后续迁移也无法使用此连接。此操作会同步到执行节点。",
               { alias: deleting?.alias || "" },
             )}
           </Typography>
@@ -843,19 +917,39 @@ export default function StoragePage() {
             <StorageFailureAlert failure={bucketState.error} />
           ) : bucketState ? (
             <Stack spacing={2}>
-              <Alert severity="success">
-                {t("已获取 {count} 个存储桶。", {
-                  count: bucketState.buckets.length,
-                })}
-              </Alert>
-              {bucketState.warning && (
+              {bucketState.listBucketsDenied ? (
+                // The listing was refused: no bucket list was obtained.
+                <Alert severity="warning" data-testid="storage-list-denied">
+                  {t("该凭据无权列举存储桶，未获取存储桶列表。")}
+                </Alert>
+              ) : (
+                <Alert severity="success">
+                  {t("已获取 {count} 个存储桶。", {
+                    count: bucketState.buckets.length,
+                  })}
+                </Alert>
+              )}
+              {bucketState.node && (
+                // One node runs the test; the others were not checked.
                 <Typography
                   variant="body2"
-                  color="warning.main"
-                  data-testid="storage-check-warning"
+                  color="text.secondary"
+                  data-testid="storage-check-node"
                 >
-                  {bucketState.warning}
+                  {t("由执行节点 {node} 检查。", { node: bucketState.node })}
                 </Typography>
+              )}
+              {bucketState.warning && (
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="warning.main"
+                    data-testid="storage-check-warning"
+                  >
+                    {bucketState.warning}
+                  </Typography>
+                  <RawWarningDetail detail={bucketState.warningDetail} />
+                </Box>
               )}
               <Typography
                 variant="body2"

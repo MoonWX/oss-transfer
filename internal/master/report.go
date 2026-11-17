@@ -233,6 +233,11 @@ const sharedCheckSkippedMeaning = "The shared directory check was skipped at the
 func newCoverage(p task.Parent) reportCoverage {
 	return reportCoverage{SharedCheckSkipped: p.Spec.SharedCheckSkipped, ParentTaskID: p.ID, Status: p.Status, ScanComplete: p.ScanComplete, Stable: true, ResultCounts: map[string]int64{"SUCCESS": 0, "SKIPPED": 0, "FAILED": 0, "UNPROCESSED": 0, "UNKNOWN": 0}, ResultBytes: map[string]int64{}, PartialReasons: []string{}, NodeIssues: map[string]string{}}
 }
+
+// reportIssueTimestamps explains the timestamp column of exception-details.csv
+// for rows that are not object results.
+const reportIssueTimestamps = "In exception-details.csv, a TASK_ERROR row has no timestamp because the time of a task error is not recorded, and a NODE_REPORT_INCOMPLETE row carries the export time, when its node could not be read."
+
 func csvValue(value any) string {
 	if value == nil {
 		return ""
@@ -444,13 +449,9 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		// the Agent is offline or did not answer. An Agent that answered for one
 		// child (for example, refused that child's ledger) is still asked for the
 		// others, so one bad child cannot turn a whole node's results UNKNOWN.
+		// Only a node that holds a child of this task is a node issue: an
+		// offline or removed node without children leaves no result unread.
 		unreachable := map[string]string{}
-		for _, node := range p.Spec.Nodes {
-			if online[node.ID] != node.EnrollmentID {
-				coverage.NodeIssues[node.Address] = "execution Agent is unavailable in its recorded enrollment"
-				unreachable[node.Address] = coverage.NodeIssues[node.Address]
-			}
-		}
 		// resolvedDelta is what source pins add to the dispatched sizes: the
 		// whole size of an inventory key resolved after discovery (dispatched
 		// with size 0), and the size difference of a source refreshed on a
@@ -556,7 +557,9 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		}
 		if p.Error != "" {
 			coverage.PartialReasons = append(coverage.PartialReasons, "TASK_ERROR")
-			if err := reportCSV(issues, p.ID, "", p.Spec.Direction, "", "", "", "TASK_ERROR", p.Error, s.options.Now(), ""); err != nil {
+			// The task does not record when its error happened. An export
+			// time here would read as the time of the error.
+			if err := reportCSV(issues, p.ID, "", p.Spec.Direction, "", "", "", "TASK_ERROR", p.Error, nil, ""); err != nil {
 				return err
 			}
 		}
@@ -597,11 +600,11 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		unreachableNodes = append(unreachableNodes, node)
 	}
 	sort.Strings(unreachableNodes)
-	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": generated, "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded.", "reasonCodeMeaning": reportReasonMeanings, "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
+	metadata := map[string]any{"schemaVersion": 4, "nodeDisplays": reportNodes, "generatedAt": generated, "complete": complete, "contentVerified": false, "tasks": coverages, "unreachableNodes": unreachableNodes, "completenessMeaning": "Complete covers the task's discovered objects, not an independent inventory or checksum verification.", "timestampMeaning": "ledgerObservedAt is the child ledger update time. Per-object discovery and completion timestamps are not recorded. " + reportIssueTimestamps, "reasonCodeMeaning": reportReasonMeanings, "csvStringEscaping": "Strings starting with apostrophe, =, +, -, @, TAB, CR or LF gain one leading apostrophe. Remove that added apostrophe after CSV parsing to recover the original value."}
 	for _, coverage := range coverages {
 		if coverage.LegacyHistorical {
 			metadata["containsLegacyHistory"] = true
-			metadata["timestampMeaning"] = "Legacy rows retain recorded discovery/completion timestamps when available. Native Go rows use ledgerObservedAt. Empty fields were not recorded."
+			metadata["timestampMeaning"] = "Legacy rows retain recorded discovery/completion timestamps when available. Native Go rows use ledgerObservedAt. Empty fields were not recorded. " + reportIssueTimestamps
 			metadata["legacyContentMeaning"] = "V4.0.x object results are retained historical records. Their source and destination contents have not been reverified by this export."
 			break
 		}

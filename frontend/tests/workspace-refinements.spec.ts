@@ -255,8 +255,9 @@ test("storage synchronization presents the master and every remote result includ
     await expect(summary).toContainText(
       run === 0 ? "10.0.1.13: 更新成功" : "10.0.1.13: 更新异常 - Timeout",
     );
-    await expect(summary).toContainText(
-      run === 0 ? "连接更新完成" : "部分节点更新失败",
+    await expect(summary).toContainText("连接更新完成");
+    await expect(summary).toHaveClass(
+      run === 0 ? /MuiAlert-standardSuccess/ : /MuiAlert-standardInfo/,
     );
   }
 });

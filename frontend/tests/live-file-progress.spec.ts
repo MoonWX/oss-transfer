@@ -306,3 +306,28 @@ test("switching children never carries over file progress while the next respons
   ).toBeHidden();
   expect(state.reads.every((url) => url.includes("childNumber=1"))).toBe(true);
 });
+
+test("a node that does not respond is named instead of asking for a refresh", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
+  const progress = section.getByRole("progressbar", {
+    name: "文件进度：training/big.bin",
+  });
+  await expect(progress).toHaveAttribute("aria-valuenow", "25");
+  Object.assign(state.progress, {
+    partial: true,
+    unreportedNodes: [{ displayLabel: "worker-two (10.0.1.13)" }],
+  });
+  state.fileCount = 0;
+  await expect(
+    section.getByText(
+      "执行节点 worker-two (10.0.1.13) 未响应，其文件进度暂未更新",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(section.getByText("进度暂未更新", { exact: true })).toHaveCount(
+    0,
+  );
+});

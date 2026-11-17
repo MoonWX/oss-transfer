@@ -128,6 +128,28 @@ test("a persistent runtime error appears translated, one line per problem, and s
   expect(responses()).toBeGreaterThan(cleared);
 });
 
+test("a connected scanner that cannot prepare is awaited with its cause, not as a reconnect", async ({
+  page,
+}) => {
+  const cause =
+    "Agent scanner (10.0.1.12) is unavailable; its assigned work remains on that node: storage snapshot is older than the applied revision";
+  const awaited =
+    "Waiting for scanning node scanner (10.0.1.12) to become available; existing child tasks remain assigned to their original nodes";
+  const { responses } = await setup(page, (n) => ({
+    errorMessage: n >= 3 ? `${cause}\n${awaited}` : "",
+  }));
+  while (!(await alert(page).isVisible())) {
+    await nextRefresh(page, responses);
+    expect(responses()).toBeLessThan(20);
+  }
+  await expect(alert(page).locator("p")).toHaveText([
+    "执行节点 scanner (10.0.1.12) 不可用，已分配的工作仍保留在该节点：storage snapshot is older than the applied revision",
+    "等待扫描节点 scanner (10.0.1.12) 恢复可用；已分配的子任务仍保留在原节点",
+  ]);
+  await expect(alert(page)).not.toContainText("重新连接");
+  await expect(alert(page)).not.toContainText("租约");
+});
+
 test("an ended task's error is final and shows at once", async ({ page }) => {
   const { responses } = await setup(page, () => ({
     status: "FAILED",

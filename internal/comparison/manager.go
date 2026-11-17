@@ -212,7 +212,7 @@ func (m *Manager) Start(r Request, factories ...execution.StoreFactory) (Progres
 		return Progress{}, errors.New("comparison storage is unavailable")
 	}
 	now := m.now()
-	rec := runRecord{Progress: Progress{Request: r, Status: StateRunning, ResultsProtocol: Protocol, StartedAt: now, UpdatedAt: now}, Directory: resultDirectory(r.ID)}
+	rec := runRecord{Progress: Progress{Request: r, Status: StateRunning, ResultsProtocol: Protocol, StartedAt: now, UpdatedAt: now, ProgressAt: now}, Directory: resultDirectory(r.ID)}
 	w, err := m.openWriter(rec, true)
 	if err != nil {
 		return Progress{}, err
@@ -289,7 +289,7 @@ func (m *Manager) resumeLocked(rec runRecord, factory execution.StoreFactory, un
 		return Progress{}, err
 	}
 	now := m.now()
-	rec.Status, rec.Resumes, rec.UpdatedAt = StateRunning, rec.Resumes+1, now
+	rec.Status, rec.Resumes, rec.UpdatedAt, rec.ProgressAt = StateRunning, rec.Resumes+1, now, now
 	rec.Error, rec.ErrorDetail = "", ""
 	rec.EndedAt, rec.ExpiresAt = time.Time{}, time.Time{}
 	rec.Resumable, rec.AutoResume = false, false
@@ -398,8 +398,15 @@ func (m *Manager) finish(ctx context.Context, w *resultWriter, runErr error) {
 		case runErr != nil:
 			status = StateFailed
 			next.Error, next.ErrorDetail = errorFailed, failureDetail(runErr)
+			if unusableListing(runErr) {
+				next.Error = errorListing
+			}
 		}
 		m.endAt(next, status, now)
+		if status == StateFailed && unusableListing(runErr) {
+			// A resume lists the same storage and meets the same listing.
+			next.Resumable = false
+		}
 		next.AutoResume = status == StateInterrupted && next.Resumable
 		if status == StateFailed {
 			m.logf("comparison %s failed: %s", next.ID, detailOrUnknown(next.ErrorDetail))

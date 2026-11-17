@@ -56,9 +56,9 @@ var cliOutputMessages = map[string][2]string{
 	"启动":                 {"start", "開始"},
 	"删除":                 {"delete", "削除"},
 	"已请求停止":              {"Stop requested", "停止を要求しました"},
-	"已恢复执行":              {"Resumed", "再開しました"},
-	"已开始重试":              {"Retry started", "再試行を開始しました"},
-	"已启动":                {"Started", "開始しました"},
+	"已请求继续":              {"Resume requested", "再開を要求しました"},
+	"已请求重试":              {"Retry requested", "再試行を要求しました"},
+	"已请求启动":              {"Start requested", "開始を要求しました"},
 	"已移入回收站":             {"Moved to trash", "ごみ箱に移動しました"},
 	"已从回收站恢复":            {"Restored from trash", "ごみ箱から復元しました"},
 	"%s %d 个任务，%d 个无需处理": {"%s %d tasks; %d needed no action", "%s: %d 件、対応不要: %d 件"},
@@ -67,7 +67,11 @@ var cliOutputMessages = map[string][2]string{
 	"失败：%s":         {"Failed: %s", "失敗: %s"},
 	"无需处理":          {"No action needed", "対応不要"},
 	"无需处理（当前状态：%s）": {"No action needed (current state: %s)", "対応不要（現在の状態: %s）"},
-	"已重试 %d 个失败对象，任务继续运行":                  {"Retried %d failed objects; the task keeps running", "失敗した %d 件のオブジェクトを再試行しました。タスクは実行を続けます"},
+	"已开始重试 %d 个失败对象（%d 个子任务），任务继续运行":                          {"Retry started for %d failed objects (%d child tasks); the task keeps running", "失敗した %d 件のオブジェクトの再試行を開始しました（子タスク %d 件）。タスクは実行を続けます"},
+	"；其他子任务可能还有未重试的失败对象，请再次运行 oss-transfer-cli task retry %d": {"; other child tasks may still have failed objects that were not retried; run oss-transfer-cli task retry %d again", "。ほかの子タスクにも再試行していない失敗オブジェクトが残っている可能性があります。oss-transfer-cli task retry %d を再度実行してください"},
+	"%s（当前状态：%s）": {"%s (current state: %s)", "%s（現在の状態: %s）"},
+	"任务在所有执行节点准备就绪后恢复执行；可用 oss-transfer-cli task show %d 查看进展和等待原因":               {"The task resumes once every execution node is ready; check its progress and what it waits for with oss-transfer-cli task show %d", "すべての実行ノードの準備が整うとタスクが再開します。進行状況と待機の理由は oss-transfer-cli task show %d で確認してください"},
+	"任务在所有执行节点准备就绪后恢复执行；可用 oss-transfer-cli task list 查看进展，用 task show ID 查看等待原因": {"The tasks resume once every execution node is ready; check their progress with oss-transfer-cli task list and what a task waits for with task show ID", "すべての実行ノードの準備が整うとタスクが再開します。進行状況は oss-transfer-cli task list で、待機の理由は task show ID で確認してください"},
 	"任务 #%d 的报告已保存到 %s":                    {"Report of task #%d saved to %s", "タスク #%d のレポートを %s に保存しました"},
 	"任务报告已写到标准输出，但报告不完整：%s":                {"The task report was written to standard output, but it is incomplete: %s", "タスクレポートを標準出力に書き込みましたが、レポートは不完全です: %s"},
 	"--output - 把报告写到标准输出，不能与 --json 同时使用": {"--output - writes the report to standard output and cannot be combined with --json", "--output - はレポートを標準出力に書き出すため、--json と同時に使用できません"},
@@ -79,15 +83,20 @@ var cliOutputMessages = map[string][2]string{
 	"显示 %d 条，共 %d 条\n": {"Showing %d of %d records\n", "%d 件を表示（全 %d 件）\n"},
 	"共 %d 条\n":         {"%d records\n", "%d 件\n"},
 	"没有失败对象":           {"No failed objects", "失敗したオブジェクトはありません"},
-	"仅显示部分记录；可调大 --limit，或用 exceptions export 导出全部": {"Only some records are shown; raise --limit or use exceptions export for all of them", "一部の記録のみ表示しています。--limit を増やすか、exceptions export ですべてをエクスポートしてください"},
-	"完整错误信息：加 --json，或用 exceptions export 导出 CSV":   {"Full error messages: add --json, or export a CSV with exceptions export", "完全なエラーメッセージ: --json を付けるか、exceptions export で CSV をエクスポートしてください"},
-	"当前传输引擎不使用降级记录":                                 {"The current transfer engine does not use fallback records", "現在の転送エンジンはフォールバック記録を使用しません"},
-	"当前传输引擎不使用降级记录，无需清理":                            {"The current transfer engine does not use fallback records; nothing to clear", "現在の転送エンジンはフォールバック記録を使用しないため、削除は不要です"},
-	"已清理 %d 条已处理的记录":                                {"Cleared %d handled records", "処理済みの記録を %d 件削除しました"},
-	"已导出 %d 条记录到 %s":                                {"Exported %d records to %s", "%d 件の記録を %s にエクスポートしました"},
-	"仅导出了部分记录；可调大 --limit 后重新导出":                    {"Only some records were exported; raise --limit and export again", "一部の記録のみエクスポートしました。--limit を増やして再度エクスポートしてください"},
-	"本地迁移报告已保存到 %s":                                 {"Local transfer report saved to %s", "ローカル転送レポートを %s に保存しました"},
+	"仅显示部分记录：每个节点最多返回 %d 条，可用 --limit 调大到 10000；exceptions export 受同样的限制": {"Only some records are shown: each node returns at most %d; --limit can raise this to 10000. exceptions export has the same limit", "一部の記録のみ表示しています。ノードごとに最大 %d 件を返します。--limit で 10000 まで増やせます。exceptions export にも同じ上限があります"},
+	"仅显示部分记录：每个节点最多返回 10000 条；exceptions export 受同样的限制":                   {"Only some records are shown: each node returns at most 10000; exceptions export has the same limit", "一部の記録のみ表示しています。ノードごとに最大 10000 件を返します。exceptions export にも同じ上限があります"},
+	"任务停止或结束后，task report ID 导出的报告中 exception-details.csv 列出该任务的全部失败对象":   {"Once the task stops or ends, exception-details.csv in the report from task report ID lists all of its failed objects", "タスクの停止または終了後に task report ID で出力したレポートでは、exception-details.csv にそのタスクのすべての失敗オブジェクトが含まれます"},
+	"完整错误信息：加 --json，或用 exceptions export 导出 CSV":                         {"Full error messages: add --json, or export a CSV with exceptions export", "完全なエラーメッセージ: --json を付けるか、exceptions export で CSV をエクスポートしてください"},
+	"当前传输引擎不使用降级记录":                                                       {"The current transfer engine does not use fallback records", "現在の転送エンジンはフォールバック記録を使用しません"},
+	"当前传输引擎不使用降级记录，无需清理":                                                  {"The current transfer engine does not use fallback records; nothing to clear", "現在の転送エンジンはフォールバック記録を使用しないため、削除は不要です"},
+	"已清理 %d 条已处理的记录":                                                      {"Cleared %d handled records", "処理済みの記録を %d 件削除しました"},
+	"已导出 %d 条记录到 %s":                                                      {"Exported %d records to %s", "%d 件の記録を %s にエクスポートしました"},
+	"仅导出了部分记录：每个节点最多导出 %d 条，可用 --limit 调大到 10000 后重新导出":                   {"Only some records were exported: at most %d per node; raise --limit up to 10000 and export again", "一部の記録のみエクスポートしました。ノードごとに最大 %d 件です。--limit を 10000 まで増やして再度エクスポートできます"},
+	"仅导出了部分记录：每个节点最多导出 10000 条":                                           {"Only some records were exported: at most 10000 per node", "一部の記録のみエクスポートしました。ノードごとに最大 10000 件です"},
+	"本地迁移报告已保存到 %s":                                                       {"Local transfer report saved to %s", "ローカル転送レポートを %s に保存しました"},
 
+	// Exceptions of a task converted from v4.0.x.
+	"该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出；请用 task report 导出任务报告，在 file-results.csv 和 exception-details.csv 中查看": {"This task was converted from v4.0.x; its failed objects are not listed here. Export its report with task report and see file-results.csv and exception-details.csv", "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。task report でタスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください"},
 	// Error summaries of failed objects.
 	"无法解析存储服务地址，请检查 Endpoint；自建存储可改用 path-style 寻址": {"Cannot resolve the storage address; check the endpoint, or use path-style addressing for self-hosted storage", "ストレージのアドレスを解決できません。エンドポイントを確認するか、自前のストレージではパススタイルを使用してください"},
 	"存储服务拒绝连接，请检查 Endpoint 地址和端口":                   {"The storage service refused the connection; check the endpoint address and port", "ストレージサービスが接続を拒否しました。エンドポイントのアドレスとポートを確認してください"},
@@ -97,17 +106,22 @@ var cliOutputMessages = map[string][2]string{
 	"Access Key 无效，请检查存储连接的凭据":                      {"The access key is invalid; check the storage connection's credentials", "アクセスキーが無効です。ストレージ接続の認証情報を確認してください"},
 	"签名不匹配，请检查 Secret Key 和签名方式":                    {"Signature mismatch; check the secret key and the signature version", "署名が一致しません。シークレットキーと署名方式を確認してください"},
 	"存储服务拒绝访问，请检查凭据对该存储桶的权限":                        {"Access denied; check the credentials' permissions on the bucket", "アクセスが拒否されました。認証情報のバケットへの権限を確認してください"},
+	"存储桶需要通过其所在地域的 Endpoint 访问，请用该 Endpoint 添加存储连接": {"The bucket must be accessed through the endpoint of its region; add a storage connection with that endpoint", "バケットにはそのリージョンのエンドポイントでアクセスする必要があります。そのエンドポイントでストレージ接続を追加してください"},
 	"存储桶不存在，请检查存储桶名称":                               {"The bucket does not exist; check its name", "バケットが存在しません。名前を確認してください"},
 	"源对象已不存在": {"The source object no longer exists", "転送元オブジェクトはすでに存在しません"},
-	"源对象在迁移期间发生变化，可重试失败对象": {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},
-	"存储服务限流，可稍后重试失败对象":     {"The storage service is throttling; retry the failed objects later", "ストレージサービスがスロットリングしています。後で失敗したオブジェクトを再試行してください"},
-	"连接意外中断，可重试失败对象":       {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
+	"源对象在迁移期间发生变化，可重试失败对象":               {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},
+	"存储服务限流，可稍后重试失败对象":                   {"The storage service is throttling; retry the failed objects later", "ストレージサービスがスロットリングしています。後で失敗したオブジェクトを再試行してください"},
+	"连接意外中断，可重试失败对象":                     {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
+	"源对象为归档存储，需先解冻再重试":                   {"The source object is archived; restore it before retrying", "転送元オブジェクトはアーカイブされています。復元してから再試行してください"},
+	"存储服务端出错，可在存储恢复后重试失败对象":              {"The storage service returned a server error; retry the failed objects once it recovers", "ストレージサービスがサーバーエラーを返しました。復旧後に失敗したオブジェクトを再試行してください"},
+	"连接在存储服务应答前关闭，请检查 Endpoint 地址、端口和协议": {"The connection closed before the storage service answered; check the endpoint address, port and protocol", "ストレージサービスが応答する前に接続が閉じられました。エンドポイントのアドレス、ポート、プロトコルを確認してください"},
 
 	// Hints after an error.
 	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。": {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},
 	"提示: 请运行 oss-transfer-cli login 登录。":                {"Hint: run oss-transfer-cli login to sign in.", "ヒント: oss-transfer-cli login でサインインしてください。"},
-	"提示: 无法连接 Master（%s）。请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。": {"Hint: could not connect to the Master (%s). Check that the address and port are correct and that the Master service is running; name the address with --host, or save it with oss-transfer-cli config set master URL.", "ヒント: Master（%s）に接続できません。アドレスとポートが正しいこと、Master サービスが動作していることを確認してください。--host でアドレスを指定するか、oss-transfer-cli config set master URL で保存できます。"},
-	"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。":                         {"Hint: no installation was found on this computer and no Master is configured; run oss-transfer-cli config set master URL, or name the Master with --host.", "ヒント: このコンピューターにインストールが見つからず、Master も設定されていません。oss-transfer-cli config set master URL を実行するか、--host で Master を指定してください。"},
+	"提示: 无法连接 Master（%s）。Master 可能正在重启或更新，请稍后重试；如果一直无法连接，请检查地址和端口是否正确、Master 服务是否在运行；可用 --host 指定地址，或运行 oss-transfer-cli config set master URL 保存地址。": {"Hint: could not connect to the Master (%s). It may be restarting or updating; try again shortly. If it stays unreachable, check that the address and port are correct and that the Master service is running; name the address with --host, or save it with oss-transfer-cli config set master URL.", "ヒント: Master（%s）に接続できません。Master が再起動中または更新中の可能性があるため、しばらくしてから再試行してください。接続できない状態が続く場合は、アドレスとポートが正しいこと、Master サービスが動作していることを確認してください。--host でアドレスを指定するか、oss-transfer-cli config set master URL で保存できます。"},
+	"提示: 暂时无法连接 Master（%s）：%s。Master 可能正在重启或更新；%s 后重试，按 Ctrl+C 停止。\n":                                                                                 {"Hint: cannot reach the Master (%s) right now: %s. It may be restarting or updating; retrying in %s, press Ctrl+C to stop.\n", "ヒント: Master（%s）に一時的に接続できません: %s。再起動中または更新中の可能性があります。%s 後に再試行します。Ctrl+C で停止します。\n"},
+	"提示: 未找到本机安装，也未配置 Master；请运行 oss-transfer-cli config set master URL，或用 --host 指定 Master。":                                                         {"Hint: no installation was found on this computer and no Master is configured; run oss-transfer-cli config set master URL, or name the Master with --host.", "ヒント: このコンピューターにインストールが見つからず、Master も設定されていません。oss-transfer-cli config set master URL を実行するか、--host で Master を指定してください。"},
 
 	// Accounts.
 	"已登录 %s（用户 %s）": {"Signed in to %s as %s", "%s にサインインしました（ユーザー %s）"},
@@ -130,10 +144,16 @@ var cliOutputMessages = map[string][2]string{
 	"已提交 %d 个清单文件：%s":         {"Submitted %d inventory files: %s", "%d 件のインベントリファイルを送信しました: %s"},
 
 	// Updates.
-	"Master 正在更新到 %s；服务会短暂重启\n":                     {"Master is updating to %s; the service restarts briefly\n", "Master を %s に更新しています。サービスは一時的に再起動します\n"},
-	"已安排把 %d 个 Agent 更新到 %s\n":                      {"Scheduled %d agent updates to %s\n", "%d 台の Agent を %s に更新するよう予定しました\n"},
-	"节点\t状态\t说明":                                    {"Node\tState\tDetails", "ノード\t状態\t詳細"},
-	"查看进度：oss-transfer-cli update status --watch 5": {"Follow progress: oss-transfer-cli update status --watch 5", "進行状況: oss-transfer-cli update status --watch 5"},
+	"Master 正在更新到 %s；服务会短暂重启\n": {"Master is updating to %s; the service restarts briefly\n", "Master を %s に更新しています。サービスは一時的に再起動します\n"},
+	"已安排把 %d 个 Agent 更新到 %s\n":  {"Scheduled %d agent updates to %s\n", "%d 台の Agent を %s に更新するよう予定しました\n"},
+	"节点\t状态\t说明":                {"Node\tState\tDetails", "ノード\t状態\t詳細"},
+	"节点\t原因":                    {"Node\tReason", "ノード\t理由"},
+	"将跳过":                       {"Will be skipped", "スキップ予定"},
+	"没有可以在线更新到 %s 的 Agent，本次未安排更新\n":                      {"No Agent can be updated online to %s; no update was scheduled\n", "%s にオンライン更新できる Agent はないため、更新を予定しませんでした\n"},
+	"已有更新到 %s 的 Agent 更新正在进行，本次未安排新的更新\n":                 {"An Agent update to %s is already in progress; no new update was scheduled\n", "%s への Agent 更新がすでに進行中のため、新しい更新は予定しませんでした\n"},
+	"已把 %d 个 Agent 加入更新队列，目标 %s；已是该版本、离线或不能在线更新的节点会被跳过\n": {"Queued %d agents for an update to %s; agents already on that version, offline or unable to update online are skipped\n", "%d 台の Agent を %s への更新キューに追加しました。すでにそのバージョンのノード、オフラインのノード、オンライン更新できないノードはスキップされます\n"},
+	"已安排把 %d 个 Agent 更新到 %s；%d 个不会更新，原因见下表\n":             {"Scheduled %d agent updates to %s; %d agents will not be updated, see the table for why\n", "%d 台の Agent を %s に更新するよう予定しました。%d 台は更新されません。理由は下表のとおりです\n"},
+	"查看进度：oss-transfer-cli update status --watch 5":       {"Follow progress: oss-transfer-cli update status --watch 5", "進行状況: oss-transfer-cli update status --watch 5"},
 
 	// Local preferences.
 	"来源：%s\n":                             {"Source: %s\n", "取得元: %s\n"},
@@ -144,8 +164,23 @@ var cliOutputMessages = map[string][2]string{
 
 	// Comparisons.
 	"比对 %s 已在运行，无需继续": {"Comparison %s is already running; nothing to resume", "比較 %s はすでに実行中です。再開は不要です"},
-	"读取速率":            {"Read rate", "読み取り速度"},
-	"未发现差异":           {"No differences found", "差異は見つかりませんでした"},
+	"平均读取速率":          {"Average read rate", "平均読み取り速度"},
+	"已有 %s 没有新的比对结果，执行节点可能正在等待存储响应或重试。": {"No new comparison results for %s; the node may be waiting for the storage to respond, or retrying.", "%s の間、新しい比較結果がありません。ノードはストレージの応答を待っているか、再試行している可能性があります。"},
+	"未发现差异": {"No differences found", "差異は見つかりませんでした"},
+
+	// Agent updates that reach Agents offline when they are queued.
+	"已安排把 %d 个 Agent 更新到 %s；其中 %d 个当前离线，只有在队列轮到时已重新连接才会更新\n":                {"Scheduled %d agent updates to %s, including %d offline agents: each is updated only if it has reconnected when the queue reaches it\n", "%d 台の Agent を %s に更新するよう予定しました。うち %d 台は現在オフラインで、キューの順番が来たときに再接続していれば更新されます\n"},
+	"已安排把 %d 个 Agent 更新到 %s；其中 %d 个当前离线，只有在队列轮到时已重新连接才会更新；%d 个不会更新，原因见下表\n": {"Scheduled %d agent updates to %s, including %d offline agents: each is updated only if it has reconnected when the queue reaches it; %d agents will not be updated, see the table for why\n", "%d 台の Agent を %s に更新するよう予定しました。うち %d 台は現在オフラインで、キューの順番が来たときに再接続していれば更新されます。%d 台は更新されません。理由は下表のとおりです\n"},
+	"节点当前离线：队列轮到它时会等待它重新连接，最多 30 秒；连接后更新，否则跳过":                              {"The node is offline: when the queue reaches it, the Master waits up to 30 seconds for it to reconnect and then updates it; otherwise it is skipped", "ノードは現在オフラインです。キューの順番が来ると Master は最大 30 秒再接続を待ち、再接続すれば更新し、しなければスキップします"},
+
+	// The offline nodes an exception list names.
+	"离线且有未完成子任务的节点": {"Offline nodes with unfinished subtasks", "未完了のサブタスクがあるオフラインのノード"},
+
+	// Separates the names of a list within a sentence.
+	"、": {", ", "、"},
+
+	// The local report covers every local task and needs them all ended.
+	"本地迁移报告包含全部本地迁移任务，只能在所有本地迁移都已结束或停止时导出，不支持 --%s 筛选；单任务报告请使用 task report": {"The local report covers every local transfer task and can be exported only when all local transfers have ended or stopped; it does not support --%s. Use task report for one task", "ローカルレポートにはすべてのローカル転送タスクが含まれ、すべてのローカル転送が終了または停止している場合にのみエクスポートできます。--%s での絞り込みには対応しません。単一タスクには task report を使用してください"},
 }
 
 func init() {

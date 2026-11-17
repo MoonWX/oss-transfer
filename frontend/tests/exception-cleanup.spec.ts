@@ -102,6 +102,8 @@ test("cleanup uses applied task, bucket and node filters, includes resolved reco
       sourceBucket: "source",
       destBucket: "target",
       executionNodeIp: "10.0.1.12",
+      // The tab lists transfers between object storages only.
+      direction: "OSS_TO_OSS",
     },
   ]);
   await expect(
@@ -200,6 +202,7 @@ test("task choices only use exception membership and refresh after the last reso
     expect(route.request().postDataJSON()).toEqual({
       type: "failed",
       taskIndex: 41,
+      direction: "OSS_TO_OSS",
     });
     cleared = true;
     return route.fulfill({ json: { success: true, clearedCount: 1 } });
@@ -490,6 +493,8 @@ for (const mode of ["failed", "local"] as const) {
       expect(route.request().postDataJSON()).toEqual({
         type: mode,
         taskIndex: 61,
+        // Failed objects lists transfers between object storages only.
+        ...(mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
       });
       cleared = true;
       return route.fulfill({

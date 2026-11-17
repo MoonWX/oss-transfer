@@ -23,6 +23,7 @@ import ChildRecovery from "./ChildRecovery";
 import LiveFileProgress from "./LiveFileProgress";
 import TransferStatistics from "./TransferStatistics";
 import { useNodeLabels } from "../lib/workerStatus";
+import { formatFilterTime } from "../lib/filterTime";
 import { taskNodeLabels } from "../lib/nodeRegistry";
 type Props = {
   childId: string;
@@ -101,8 +102,14 @@ export default function SubtaskDetails({
         ],
         [t("目标前缀"), task.keyMapping?.targetPrefix],
         [t("目标对象 Key"), task.keyMapping?.targetKey],
-        [t("修改时间晚于"), timestamp(task.dateAfter)],
-        [t("修改时间早于"), timestamp(task.dateBefore)],
+        [
+          t("修改时间晚于"),
+          formatFilterTime(task.dateAfter) ?? timestamp(task.dateAfter),
+        ],
+        [
+          t("修改时间早于"),
+          formatFilterTime(task.dateBefore) ?? timestamp(task.dateBefore),
+        ],
         [t("冲突策略"), conflictLabel(task)],
       ].filter(([, value]) => value != null && value !== "")
     : [];

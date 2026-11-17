@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/task"
@@ -86,7 +85,9 @@ func (s *Server) addTaskAttention(ctx context.Context, row map[string]any, p tas
 }
 
 // offlineTaskNodes lists the task's current nodes that have not connected
-// within the online window, with when each was last seen.
+// within the online window, with when each was last seen. A node with no
+// known time has not connected since this Master started (notConnectedSince):
+// it may well have been connected before.
 func (s *Server) offlineTaskNodes(p task.Parent) []map[string]any {
 	nodes := p.CurrentNodes()
 	if len(nodes) == 0 {
@@ -99,12 +100,14 @@ func (s *Server) offlineTaskNodes(p task.Parent) []map[string]any {
 	var offline []map[string]any
 	for _, node := range nodes {
 		seen, ok := s.agents.lastSeen[node.ID]
-		if ok && now.Sub(seen) < 75*time.Second {
+		if ok && now.Sub(seen) < agentOnlineWindow {
 			continue
 		}
 		entry := map[string]any{"executionNodeIp": node.Address, "displayLabel": displays.lookup(node.ID, node.Address).DisplayLabel}
-		if ok {
-			entry["lastSeen"] = seen.UnixMilli()
+		if last, known := s.agents.lastConnectionLocked(node.ID); known {
+			entry["lastSeen"] = last.UnixMilli()
+		} else {
+			entry["notConnectedSince"] = s.agents.startedAt.UnixMilli()
 		}
 		offline = append(offline, entry)
 	}

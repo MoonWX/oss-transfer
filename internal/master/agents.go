@@ -29,6 +29,12 @@ type agentControl struct {
 	// Serializes node information writes so memory and storage agree.
 	nodeInfoWrite sync.Mutex
 	packageSlot   chan struct{}
+	// lastSeen is when each Agent last connected to this process, which
+	// decides whether it is online; lastSeenSaved is the time last saved,
+	// also from before a restart (see agent_last_seen.go).
+	lastSeenSaved map[string]time.Time
+	// startedAt is when this process began to accept Agents.
+	startedAt time.Time
 }
 
 // agentOnlineWindow is how recently an Agent must have connected to count as
@@ -60,6 +66,7 @@ func (s *Server) Close() error {
 	s.closeSoftwareUpdates()
 	var err error
 	if s.agents != nil {
+		s.flushLastSeen()
 		err = s.agents.broker.Close()
 	}
 	if s.tasks != nil {
@@ -73,11 +80,16 @@ func installAgentRoutes(s *Server) error {
 		registry:      cluster.New(s.store, s.options.Now),
 		broker:        agenttransport.NewBroker(agenttransport.BrokerOptions{}),
 		lastSeen:      make(map[string]time.Time),
+		lastSeenSaved: make(map[string]time.Time),
+		startedAt:     s.options.Now().UTC(),
 		remoteAddress: make(map[string]string),
 		nodeInfo:      make(map[string]nodeRuntimeInfo),
 		packageSlot:   make(chan struct{}, 1),
 	}
 	if err := loadNodeInfo(s.store, a.nodeInfo); err != nil {
+		return err
+	}
+	if err := loadLastSeen(s.store, a.lastSeenSaved); err != nil {
 		return err
 	}
 	members, err := a.registry.Members()
@@ -229,7 +241,9 @@ func (s *Server) joinAgent(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "Agent command service is unavailable; retry joining")
 		return
 	}
-	a.lastSeen[member.ID] = s.options.Now().UTC()
+	if now := s.options.Now().UTC(); a.noteConnectionLocked(member.ID, now) {
+		_ = s.saveLastSeen(map[string]time.Time{member.ID: now})
+	}
 	a.remoteAddress[member.ID] = connectionHost(r.RemoteAddr)
 	writeJSON(w, 200, map[string]any{"success": true, "data": member, "session": member.Session()})
 }
@@ -250,11 +264,17 @@ func (s *Server) agentInvitationStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authenticateAgent(r *http.Request) (agenttransport.Session, error) {
 	a := s.agents
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	session, err := a.registry.Authenticate(r.Header.Get("X-Agent-Key"))
+	now, save := s.options.Now().UTC(), false
 	if err == nil {
-		a.lastSeen[session.NodeID] = s.options.Now().UTC()
+		save = a.noteConnectionLocked(session.NodeID, now)
 		a.remoteAddress[session.NodeID] = connectionHost(r.RemoteAddr)
+	}
+	a.mu.Unlock()
+	if save {
+		// At most once a minute per Agent, and outside the lock that every
+		// Agent request takes.
+		_ = s.saveLastSeen(map[string]time.Time{session.NodeID: now})
 	}
 	if errors.Is(err, cluster.ErrUnauthorized) {
 		// A removed or revoked Agent stops its service instead of restarting.
@@ -299,7 +319,10 @@ func (s *Server) agentNodeData() (map[string]any, error) {
 		node := registeredAgentNode{ID: member.ID, Address: member.Address, Label: member.Label, Agent: true, NodeDisplay: displays.lookup(member.ID, member.Address)}
 		if seen, ok := a.lastSeen[member.ID]; ok {
 			node.LastSeen = &seen
-			node.Online = s.options.Now().Sub(seen) < 75*time.Second
+			node.Online = s.options.Now().Sub(seen) < agentOnlineWindow
+		} else if seen, ok := a.lastConnectionLocked(member.ID); ok {
+			// Saved before the Master restarted; not connected since.
+			node.LastSeen = &seen
 		}
 		nodes = append(nodes, node)
 	}
@@ -384,6 +407,7 @@ func (s *Server) removeAgentNode(w http.ResponseWriter, r *http.Request) {
 		// response does not grant the old credential another activation path.
 		_ = a.broker.Revoke(session)
 		delete(a.lastSeen, found.ID)
+		delete(a.lastSeenSaved, found.ID)
 	}
 	a.mu.Unlock()
 	if err != nil {

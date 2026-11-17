@@ -319,6 +319,8 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"已删除任务记录；已移除节点的本地历史保留：":                          {"Task records deleted; local history remains on removed nodes: ", "已删除任务记录；已移除节点的本地历史保留：", "タスクレコードを削除しました。削除済みノードのローカル履歴は残ります："},
 	"已受理清理；已移除节点的本地历史保留：":                            {"Cleanup accepted; local history remains on removed nodes: ", "已受理清理；已移除节点的本地历史保留：", "クリーンアップを受け付けました。削除済みノードのローカル履歴は残ります："},
 	"执行节点未连接":                         {"Worker is not connected", "执行节点未连接", "実行ノードが接続されていません"},
+	"执行节点未连接，重新连接后自动应用":               {"The execution node is not connected; it applies the limits when it reconnects", "执行节点未连接，重新连接后自动应用", "実行ノードが接続されていません。再接続すると自動で適用されます"},
+	"任务限速已保存":                         {"Task limits saved", "任务限速已保存", "タスクの速度制限を保存しました"},
 	"执行节点重复":                          {"Duplicate worker", "执行节点重复", "実行ノードが重複しています"},
 	"本地路径必须为绝对路径":                     {"Local path must be absolute", "本地路径必须为绝对路径", "ローカルパスは絶対パスにしてください"},
 	"源路径不存在":                          {"Source path does not exist", "源路径不存在", "転送元のパスが存在しません"},

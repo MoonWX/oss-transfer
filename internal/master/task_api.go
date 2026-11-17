@@ -1579,6 +1579,13 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A node that is not connected receives the limits from the step that
+	// prepares it once it reconnects. Only a running task delivers them then;
+	// a stopping or ended one delivers them when it runs again.
+	notConnected := "执行节点未连接"
+	if parent.Status == "RUNNING" || parent.Status == "LIST_DONE" || parent.Status == "RESUMING" {
+		notConnected = "执行节点未连接，重新连接后自动应用"
+	}
 	var value any
 	if parent.Spec.BandwidthMbps > 0 {
 		value = parent.Spec.BandwidthMbps
@@ -1612,7 +1619,7 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 			for index := range indexes {
 				node := activeNodes[index]
 				if online[node.ID] != node.EnrollmentID {
-					nodes[index] = map[string]any{"address": node.Address, "applied": false, "pending": false, "message": localize(w, "执行节点未连接")}
+					nodes[index] = map[string]any{"address": node.Address, "applied": false, "pending": false, "message": localize(w, notConnected)}
 					addNodeDisplay(nodes[index], displays.lookup(node.ID, node.Address))
 					continue
 				}
@@ -1676,8 +1683,13 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 		pending = pending || node["pending"] == true
 		failed = failed || (node["applied"] != true && node["pending"] != true)
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes,
-		"allocation": shareAllocation(parent), "shareCommits": s.tasks.shareCommits(parent.ID)}})
+	result := map[string]any{"success": true, "data": map[string]any{"limitMbps": value, "requestLimits": parent.Spec.RequestLimits, "applied": applied, "pending": pending && !failed, "sharedTaskCount": 1, "canEdit": !task.Ended(parent.Status), "nodes": nodes,
+		"allocation": shareAllocation(parent), "shareCommits": s.tasks.shareCommits(parent.ID)}}
+	if r.Method == http.MethodPut {
+		// The nodes above say where the limits apply; this says they are kept.
+		result["message"] = localize(w, "任务限速已保存")
+	}
+	writeJSON(w, 200, result)
 }
 
 const rangedDownloadOffLocalOnly = "rangedDownload off applies only to downloads to a local directory"

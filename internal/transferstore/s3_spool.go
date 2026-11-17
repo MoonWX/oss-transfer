@@ -13,12 +13,12 @@ import (
 	"sync"
 )
 
-func (s *S3) readPart(ctx context.Context, reader io.Reader, size, memoryLimit int64) (*partBody, error) {
+func (s *S3) readPart(ctx context.Context, reader io.Reader, size, memoryLimit int64, progress WriteProgress) (*partBody, error) {
 	resident := size
 	if size > memoryLimit {
 		resident = 256 * 1024
 	}
-	release, err := s.uploadMemory.acquire(ctx, resident)
+	release, err := acquireUploadMemory(ctx, s.uploadMemory, resident, progress)
 	if err != nil {
 		return nil, err
 	}

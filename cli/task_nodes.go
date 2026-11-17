@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -12,12 +13,12 @@ import (
 // read first so the change carries the revision the operator reviewed; the
 // Master rejects it when another change landed in between.
 func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error) {
-	opts, err := parseCommandOptions(args, []string{"add", "remove", "binding", "request-id", "expected-revision"}, []string{"now", "yes"})
+	opts, err := parseCommandOptions(args, []string{"add", "remove", "binding", "request-id", "expected-revision"}, []string{"now", "yes", "skip-shared-check"})
 	if err != nil {
 		return nil, asUsageError(err)
 	}
 	if len(opts.Positionals) != 1 {
-		return nil, asUsageError(cliErrorf("用法: task nodes <ID> [--add 节点] [--remove 节点] [--binding 节点=/绝对路径] [--now] [--yes]"))
+		return nil, asUsageError(cliErrorf("用法: task nodes <ID> [--add 节点] [--remove 节点] [--binding 节点=/绝对路径] [--now] [--skip-shared-check] [--yes]"))
 	}
 	id, err := taskID(opts.Positionals[0])
 	if err != nil {
@@ -48,6 +49,9 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		return nil, asUsageError(cliErrorf("--now 仅与 --remove 一起使用"))
 	}
 	changing := len(add) > 0 || len(remove) > 0
+	if opts.Has("skip-shared-check") && len(add) == 0 {
+		return nil, asUsageError(cliErrorf("--skip-shared-check 仅用于向创建时跳过了共享目录校验的任务添加节点"))
+	}
 	if !changing {
 		for _, flag := range []string{"yes", "request-id", "expected-revision"} {
 			if opts.Has(flag) {
@@ -124,6 +128,23 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 	if local {
 		body["bindings"] = bindings
 	}
+	// A task created with the shared directory check skipped does not check
+	// added nodes either; that needs its own acknowledgement.
+	skipped := local && view["sharedCheckSkipped"] == true && joins > 0
+	if opts.Has("skip-shared-check") && !skipped {
+		return nil, asUsageError(cliErrorf("--skip-shared-check 仅用于向创建时跳过了共享目录校验的任务添加节点"))
+	}
+	if skipped {
+		warnings := client.errors
+		if warnings == nil {
+			warnings = os.Stderr
+		}
+		fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipJoinWarning(getString(view, "direction"))))
+		if !opts.Has("skip-shared-check") {
+			return nil, asUsageError(cliErrorf("确认新节点挂载的是同一份存储后，添加 --skip-shared-check 才能加入；本次未提交"))
+		}
+		body["skipSharedCheckAcknowledged"] = true
+	}
 	plan := map[string]interface{}{"taskId": id, "add": add, "remove": remove, "mode": mode, "expectedNodeRevision": expectedRevision}
 	if local {
 		plan["bindings"] = bindings
@@ -169,6 +190,14 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		result["taskNodesChange"] = map[string]interface{}{"taskId": id, "add": add, "remove": remove, "mode": mode}
 	}
 	return result, err
+}
+
+// sharedCheckSkipJoinWarning says what adding an unchecked node can cost.
+func sharedCheckSkipJoinWarning(direction string) string {
+	if direction == "OSS_TO_LOCAL" {
+		return "警告：此任务创建时跳过了共享目录校验，新加入的节点同样不会校验。如果新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，本地目标不再完整，任务仍可能显示成功。"
+	}
+	return "警告：此任务创建时跳过了共享目录校验，新加入的节点同样不会校验。如果新节点挂载的不是同一份存储，它会从不同的数据读取对象，部分文件可能漏传或从错误的副本上传，任务仍可能显示成功。"
 }
 
 // Accept repeated flags and comma-separated lists, like --node in task create.
@@ -307,6 +336,9 @@ func renderTaskNodeBindingChecks(out io.Writer, checks []map[string]interface{})
 		state := cliText(out, "未通过")
 		if check["valid"] == true {
 			state = cliText(out, "通过")
+			if getString(check, "code") == "SHARED_STORAGE_CHECK_SKIPPED" {
+				state = cliText(out, "未校验")
+			}
 		}
 		node := cliNodeLabel(check, getString(check, "executionNodeIp"), localeOf(out))
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(node), safeCLIText(getString(check, "localPath")), state, safeCLIText(dashIfEmpty(getString(check, "pathType"))), safeCLIText(dashIfEmpty(getString(check, "message"))))

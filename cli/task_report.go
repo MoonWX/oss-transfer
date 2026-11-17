@@ -166,7 +166,7 @@ func renderTaskReportResult(out io.Writer, result map[string]interface{}) bool {
 	}
 	table.Flush()
 	if result["sharedCheckSkipped"] == true {
-		fmt.Fprintln(out, cliText(out, sharedCheckSkippedNotice))
+		fmt.Fprintln(out, cliText(out, sharedCheckSkippedReportNotice))
 	}
 	if !complete && counts["UNKNOWN"] > 0 {
 		fmt.Fprintln(out, cliText(out, "结果未知的对象未能确认迁移结果；exception-details.csv 列出了每个对象和原因。"))

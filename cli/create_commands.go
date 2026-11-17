@@ -160,7 +160,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	if err != nil {
 		return nil, err
 	}
-	if err := createSkipSharedCheckOption(client, opts, len(bindings), row); err != nil {
+	if err := createSkipSharedCheckOption(client, opts, len(bindings), row, direction); err != nil {
 		return nil, err
 	}
 	local := map[string]interface{}{"type": "LOCAL", "nodeBindings": bindings}
@@ -278,7 +278,29 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 			return nil, wrapped
 		}
 	}
+	if kind == "local" {
+		createWarnSkippedRows(client, rows)
+	}
 	return createSubmit(client, kind, rows, opts.Has("validate-only"), requestID)
+}
+
+// createWarnSkippedRows states, before anything is submitted, which imported
+// rows skip the shared directory check and what that can cost.
+func createWarnSkippedRows(client *ApiClient, rows []map[string]interface{}) {
+	var skipped []string
+	for i, row := range rows {
+		if row["skipSharedCheck"] == true {
+			skipped = append(skipped, strconv.Itoa(i+1))
+		}
+	}
+	if len(skipped) == 0 {
+		return
+	}
+	warnings := client.errors
+	if warnings == nil {
+		warnings = os.Stderr
+	}
+	fmt.Fprintln(warnings, cliTextf(warnings, sharedCheckSkipImportWarning, strings.Join(skipped, ", ")))
 }
 
 // The old import-tasks command has a different CSV schema from the WebUI. Keep
@@ -358,14 +380,25 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 	return createSubmit(client, "buckets", rows, false, requestID)
 }
 
-// sharedCheckSkipWarning states what skipping the shared-directory check can
-// cost. It is printed to standard error whenever the flag is used.
-const sharedCheckSkipWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传，任务报告可能显示成功而目标端实际不完整或不一致，节点失联后的自动接管也可能在另一个目录上继续执行。"
+// What skipping the shared-directory check can cost, printed to standard error
+// whenever it is requested. Uploads and downloads fail differently.
+const (
+	sharedCheckSkipUploadWarning   = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。"
+	sharedCheckSkipDownloadWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；节点失联后的自动接管和之后添加的节点也不做校验，可能写入另一个目录。"
+	sharedCheckSkipImportWarning   = "警告：第 %s 项跳过了共享目录校验，不会验证这些任务的各执行节点挂载的是同一份存储。如果不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务报告仍可能显示成功；自动接管和之后添加的节点也不做校验。"
+)
+
+func sharedCheckSkipWarning(direction string) string {
+	if direction == "OSS_TO_LOCAL" {
+		return sharedCheckSkipDownloadWarning
+	}
+	return sharedCheckSkipUploadWarning
+}
 
 // createSkipSharedCheckOption adds the skip request and its acknowledgement
 // to a local transfer row. --yes is the acknowledgement; without it nothing
 // is sent. One bound node has nothing to compare, so the flag is ignored.
-func createSkipSharedCheckOption(client *ApiClient, opts commandOptions, bindings int, row map[string]interface{}) error {
+func createSkipSharedCheckOption(client *ApiClient, opts commandOptions, bindings int, row map[string]interface{}, direction string) error {
 	if !opts.Has("skip-shared-check") {
 		if opts.Has("yes") {
 			return asUsageError(cliErrorf("--yes 仅用于确认 --skip-shared-check"))
@@ -380,7 +413,7 @@ func createSkipSharedCheckOption(client *ApiClient, opts commandOptions, binding
 		fmt.Fprintln(warnings, cliText(warnings, "提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check"))
 		return nil
 	}
-	fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipWarning))
+	fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipWarning(direction)))
 	if !opts.Has("yes") {
 		return asUsageError(cliErrorf("确认所有执行节点挂载的是同一份存储后，添加 --yes 才能跳过共享目录校验；本次未提交"))
 	}

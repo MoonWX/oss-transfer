@@ -187,9 +187,13 @@ OSS 间迁移
 本地迁移
   --binding <节点=绝对路径>         按节点绑定本地路径，可重复
   --validate-only                  只执行节点和路径预检，不创建任务
-  --skip-shared-check --yes        跳过多节点共享目录校验（慎用）。若各节点挂载的不是同一份
-        存储，可能漏传文件或从错误的副本上传，任务报告仍显示成功，自动接管也可能在另一个
-        目录上继续；须同时添加 --yes 确认。只读上传源无需此项，会自动改为比对文件内容。
+  --skip-shared-check --yes        跳过多节点共享目录校验（慎用），须同时添加 --yes 确认。
+        若各节点挂载的不是同一份存储：上传可能漏传文件或从错误的副本读取；下载的文件会
+        分散在各节点各自的目录中，没有一个目录完整；任务报告仍显示成功，自动接管和之后
+        添加的节点也不做校验。
+        所有节点都无法写入测试文件（无写入权限、只读或存储已满）的上传源通常无需此项：
+        预检会改为抽样比对最多 16 个文件的大小及首尾各 64 KiB。这弱于测试文件校验，
+        内容相同的不同副本也能通过。
   下载：--prefix <前缀> 或 --object-key <Key>
         --target-relative-path <相对路径> 仅用于单对象下载
         --ranged-download auto|off 默认 auto：单个 Agent 内 128 MiB 及以上的对象按字节范围
@@ -236,6 +240,9 @@ JSON 使用 WebUI 对应 API 的请求字段，例如 buckets：
   [{"sourceS3Alias":"source","sourceBucket":"photos","destS3Alias":"target","destBucket":"archive","eligibleWorkerNodes":["10.0.0.2"],"distributionMode":"balanced"}]
 local 下载请求（OSS_TO_LOCAL）可设置 "rangedDownload":"auto" 或 "off"，省略即 auto；
 含义同 task create --ranged-download，其他方向不接受 off。
+local 请求可设置 "skipSharedCheck":true 跳过多节点共享目录校验，须同时设置
+"skipSharedCheckAcknowledged":true，表示已确认所有执行节点挂载的是同一份存储。
+后果同 task create --skip-shared-check；导入时会对每个跳过校验的行给出警告。
 
 示例
   oss-transfer-cli task import buckets ./buckets.csv
@@ -580,7 +587,7 @@ Master 默认从所在安装识别。保存其他 Master 后持续使用，auto 
 const cliTaskNodesHelp = `调整任务执行节点
 用法：
   oss-transfer-cli task nodes <ID>
-  oss-transfer-cli task nodes <ID> [--add 节点 ...] [--remove 节点 ...] [--binding 节点=/绝对路径 ...] [--now] [--yes]
+  oss-transfer-cli task nodes <ID> [--add 节点 ...] [--remove 节点 ...] [--binding 节点=/绝对路径 ...] [--now] [--skip-shared-check] [--yes]
 
 不带 --add 或 --remove 时，只显示当前执行节点、状态、扫描节点、待完成子任务、
 每个节点的带宽和 QPS 份额、已移出的节点以及可加入的 Agent。
@@ -590,13 +597,16 @@ const cliTaskNodesHelp = `调整任务执行节点
   --remove 节点       移出执行节点，可重复填写或用逗号分隔
   --binding 节点=路径  本地迁移任务必须为每个加入的节点指定一个共享目录
   --now               立即移出：撤回运行中的工作，由其余节点继续；默认等待当前工作完成后移出
+  --skip-shared-check 任务创建时跳过了共享目录校验时，加入的节点同样不做校验；须加此项确认
+                      新节点挂载的是同一份存储
   --yes               确认提交；未指定时只显示变更内容和预检结果，不提交
   --request-id ID     结果未确认时，用输出的请求标识安全重试
   --expected-revision N  重试时沿用输出的成员版本
 
 说明
   默认的移出方式不再分配新工作，排队的工作交给其他节点，运行中的工作完成后离开。
-  本地迁移会先检查共享目录；预检未通过时不会提交。
+  本地迁移会先检查共享目录；预检未通过时不会提交。创建时跳过了共享目录校验的任务，
+  加入的节点同样不校验，须同时添加 --skip-shared-check 和 --yes。
   有节点正在加入或移出时，只能取消加入、立即移出正在移出的节点，或重新加入以撤回移出。
   若其他人已先调整成员，Master 会拒绝本次变更，请重新查看后再提交。
   已停止或失败的任务也可调整，恢复后生效；已完成任务和单对象/单文件任务不能调整。

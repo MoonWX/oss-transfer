@@ -18,7 +18,7 @@ var cliHelpTranslations = map[string][2]string{
 	cliTaskNodesHelp: {`Change task execution nodes
 Usage:
   oss-transfer-cli task nodes <ID>
-  oss-transfer-cli task nodes <ID> [--add NODE ...] [--remove NODE ...] [--binding NODE=/absolute/path ...] [--now] [--yes]
+  oss-transfer-cli task nodes <ID> [--add NODE ...] [--remove NODE ...] [--binding NODE=/absolute/path ...] [--now] [--skip-shared-check] [--yes]
 
 Without --add or --remove, shows the current execution nodes, their state, the scanner,
 pending subtasks, each node's bandwidth and QPS share, removed nodes and Agents that can be added.
@@ -29,6 +29,8 @@ Options
   --binding NODE=PATH  Local transfers need one shared directory for each added node
   --now                Remove now: running work is revoked and continues on the remaining nodes;
                        by default a node leaves after its current work finishes
+  --skip-shared-check  For a task created with the shared directory check skipped, confirms that
+                       the added nodes mount the same storage; they are not checked either
   --yes                Submit; without it the change and preflight results are only shown
   --request-id ID      Retry safely with the printed request ID when a result is unknown
   --expected-revision N  Reuse the printed membership revision when retrying
@@ -36,6 +38,8 @@ Options
 Notes
   The default removal assigns no new work, hands queued work to other nodes and leaves after running work finishes.
   Local transfers check the shared directory first; nothing is submitted when the preflight fails.
+  For a task created with the shared directory check skipped, added nodes are not checked either;
+  add --skip-shared-check together with --yes.
   While nodes are joining or draining, you can only cancel a join, remove a draining node now, or add it back.
   If someone else changed the membership first, the Master rejects the change; review it again and resubmit.
   Stopped or failed tasks can be changed and apply on resume; completed and single-object/single-file tasks cannot.
@@ -48,7 +52,7 @@ Examples
 `, `タスクの実行ノードの変更
 使い方:
   oss-transfer-cli task nodes <ID>
-  oss-transfer-cli task nodes <ID> [--add ノード ...] [--remove ノード ...] [--binding ノード=/絶対パス ...] [--now] [--yes]
+  oss-transfer-cli task nodes <ID> [--add ノード ...] [--remove ノード ...] [--binding ノード=/絶対パス ...] [--now] [--skip-shared-check] [--yes]
 
 --add と --remove を指定しない場合は、現在の実行ノード、状態、スキャンノード、未完了の子タスク、
 ノードごとの帯域と QPS の割り当て、削除済みノード、追加可能な Agent を表示します。
@@ -59,13 +63,16 @@ Examples
   --binding ノード=パス  ローカル転送では追加する各ノードに共有ディレクトリを 1 つ指定
   --now                 即時削除: 実行中の処理を取り消し、残りのノードで継続。
                         既定では実行中の処理の完了後に削除
+  --skip-shared-check   共有ディレクトリの検証を省略して作成したタスクで、追加するノードが同じ
+                        ストレージをマウントしていることを確認します（追加するノードも検証されません）
   --yes                 送信を確定。指定しない場合は変更内容と事前チェック結果のみ表示
   --request-id ID       結果が未確認のとき、表示されたリクエスト ID で安全に再試行
   --expected-revision N  再試行時に表示されたメンバー版を指定
 
 説明
   既定の削除では新しい処理を割り当てず、待機中の処理を他のノードへ渡し、実行中の処理の完了後に離脱します。
-  ローカル転送では先に共有ディレクトリを確認し、不合格の場合は送信しません。
+  ローカル転送では先に共有ディレクトリを確認し、不合格の場合は送信しません。共有ディレクトリの検証を
+  省略して作成したタスクでは追加するノードも検証されないため、--skip-shared-check と --yes を指定します。
   ノードの追加・削除が進行中は、追加の取り消し、削除中ノードの即時削除、または再追加による削除の取り消しのみ可能です。
   他の操作が先にメンバーを変更した場合、Master は変更を拒否します。再確認してから送信してください。
   停止・失敗したタスクも変更でき、再開時に反映されます。完了済みや単一オブジェクト/単一ファイルのタスクは変更できません。
@@ -438,11 +445,15 @@ OSS-to-OSS
 Local transfers
   --binding <node=absolute-path>     Bind paths per node; repeatable
   --validate-only                   Precheck nodes and paths without creating tasks
-  --skip-shared-check --yes         Skip the multi-node shared directory check (use with care).
-            If the nodes do not mount the same storage, files can be missed or uploaded
-            from the wrong copy while the task report still shows success, and automatic
-            takeover may resume against another directory; --yes confirms. A read-only
-            upload source does not need it: its file contents are compared instead.
+  --skip-shared-check --yes         Skip the multi-node shared directory check (use with care);
+            --yes confirms. If the nodes do not mount the same storage, an upload can miss
+            files or read them from the wrong copy, and a download leaves the files split
+            across each node's own directory, none of them complete; the task report still
+            shows success, and takeover and nodes added later are not checked either.
+            An upload source that no node can write (no write permission, read-only or
+            full storage) usually does not need it: the precheck then compares up to 16
+            sampled files by size and their first and last 64 KiB. That is weaker than the
+            test file, and separate copies holding identical files also pass.
   Download: --prefix <prefix> or --object-key <key>
             --target-relative-path <path> for a single-object download
             --ranged-download auto|off Default auto: inside one Agent, objects of 128 MiB or
@@ -494,11 +505,15 @@ OSS 間転送
 ローカル転送
   --binding <ノード=絶対パス>        ノードごとのパス。複数回指定可能
   --validate-only                   作成せずにノードとパスを事前チェック
-  --skip-shared-check --yes         複数ノードの共有ディレクトリ検証を省略（注意して使用）。
-                    各ノードが同じストレージをマウントしていない場合、ファイルの漏れや誤った
-                    コピーからのアップロードが起きてもタスクレポートは成功と表示され、自動
-                    引き継ぎも別のディレクトリで再開されることがあります。--yes で確認します。
-                    読み取り専用のアップロード元には不要です（ファイル内容を比較します）。
+  --skip-shared-check --yes         複数ノードの共有ディレクトリ検証を省略（注意して使用）。--yes で確認します。
+                    各ノードが同じストレージをマウントしていない場合、アップロードではファイルの
+                    漏れや誤ったコピーからの読み取りが起き、ダウンロードではファイルが各ノードの
+                    ディレクトリに分散してどれも完全になりません。タスクレポートは成功と表示され、
+                    自動引き継ぎや後から追加したノードも検証されません。
+                    どのノードも書き込めない（書き込み権限なし、読み取り専用、容量不足）アップロード
+                    元では通常は不要です。事前チェックは最大 16 個の抽出ファイルのサイズと先頭・末尾
+                    64 KiB を比較します。テストファイルによる検証より弱く、同じファイルを持つ別の
+                    コピーでも一致します。
   ダウンロード: --prefix <プレフィックス> または --object-key <Key>
                 --target-relative-path <パス> は単一オブジェクトのみ
                 --ranged-download auto|off 既定: auto。1 つの Agent 内で 128 MiB 以上の
@@ -539,6 +554,9 @@ JSON uses WebUI API request fields. Example for buckets:
   [{"sourceS3Alias":"source","sourceBucket":"photos","destS3Alias":"target","destBucket":"archive","eligibleWorkerNodes":["10.0.0.2"],"distributionMode":"balanced"}]
 local download rows (OSS_TO_LOCAL) may set "rangedDownload":"auto" or "off"; omitted means auto.
 Same meaning as task create --ranged-download; other directions reject off.
+local rows may set "skipSharedCheck":true to skip the multi-node shared directory check; they must
+also set "skipSharedCheckAcknowledged":true to confirm that every execution node mounts the same
+storage. The consequences are those of task create --skip-shared-check; import warns for each such row.
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -568,6 +586,9 @@ JSON は WebUI API の項目を使用します。buckets の例:
   [{"sourceS3Alias":"source","sourceBucket":"photos","destS3Alias":"target","destBucket":"archive","eligibleWorkerNodes":["10.0.0.2"],"distributionMode":"balanced"}]
 local のダウンロード行（OSS_TO_LOCAL）では "rangedDownload":"auto" または "off" を指定できます。
 省略時は auto です。意味は task create --ranged-download と同じで、他の方向では off を指定できません。
+local の行で "skipSharedCheck":true を指定すると複数ノードの共有ディレクトリ検証を省略します。
+すべての実行ノードが同じストレージをマウントしていることの確認として "skipSharedCheckAcknowledged":true も
+必要です。影響は task create --skip-shared-check と同じで、インポート時に該当する行ごとに警告します。
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only

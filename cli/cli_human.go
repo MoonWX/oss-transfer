@@ -354,6 +354,7 @@ var cliErrorSummaries = []struct {
 	{regexp.MustCompile(`(?i)timeout|timed out|deadline exceeded`), "连接存储服务超时，请检查网络后重试"},
 	{regexp.MustCompile(`InvalidAccessKeyId`), "Access Key 无效，请检查存储连接的凭据"},
 	{regexp.MustCompile(`SignatureDoesNotMatch`), "签名不匹配，请检查 Secret Key 和签名方式"},
+	{storageEndpointMismatch, "存储桶需要通过其所在地域的 Endpoint 访问，请用该 Endpoint 添加存储连接"},
 	{regexp.MustCompile(`AccessDenied|(?i)\b403\b|forbidden`), "存储服务拒绝访问，请检查凭据对该存储桶的权限"},
 	{regexp.MustCompile(`NoSuchBucket`), "存储桶不存在，请检查存储桶名称"},
 	{regexp.MustCompile(`NoSuchKey|(?i)\b404\b|not found`), "源对象已不存在"},

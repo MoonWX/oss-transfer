@@ -264,14 +264,24 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 		// This uses an independent context so graceful process shutdown records a
 		// recoverable attempt. An explicit stop fence will reject the old attempt.
 		ended, finishErr := e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr, finalResults...)
-		if finishErr == nil {
+		if (errors.Is(finishErr, ErrStopped) || errors.Is(finishErr, ErrAttempt)) && runErr != nil && len(finalResults) > 0 {
+			// A stop fenced the attempt out after it completed these
+			// objects. They are at the destination: record them before
+			// done closes, which the stop waits for.
+			if stopped, err := e.repo.commitAfterStop(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, finalResults); err == nil {
+				c := stopped.Counters
+				e.logf("%s: attempt %d stopped; recorded %d objects it completed before the stop: %d succeeded, %d skipped, %d failed of %d objects", childName(record.Job), record.Attempt, len(finalResults), c.Succeeded, c.Skipped, c.Failed, c.Total)
+				finishErr = nil
+			}
+		} else if finishErr == nil {
 			c := ended.Counters
 			line := fmt.Sprintf("%s: attempt %d ended %s: %d succeeded, %d skipped, %d failed of %d objects", childName(record.Job), record.Attempt, ended.Status, c.Succeeded, c.Skipped, c.Failed, c.Total)
 			if runErr != nil {
 				line += ": " + transferstore.LogText(runErr.Error())
 			}
 			e.logf("%s", line)
-		} else {
+		}
+		if finishErr != nil {
 			e.logf("%s: attempt %d ended without recording its outcome: %s", childName(record.Job), record.Attempt, transferstore.LogText(finishErr.Error()))
 		}
 		if finishErr != nil && runErr == nil && len(finalResults) > 0 {
@@ -534,6 +544,9 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				}
 				result := e.copyResolvedItem(ctx, record, item, source, target, attempt.progress)
 				if ctx.Err() != nil {
+					if keptOnInterrupt(ctx, result) {
+						results <- result // Received until the channel closes.
+					}
 					return
 				}
 				if result.Status == ItemFailed && failures.Add(1) <= LoggedObjectFailures {
@@ -542,6 +555,9 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 				select {
 				case results <- result:
 				case <-ctx.Done():
+					if keptOnInterrupt(ctx, result) {
+						results <- result
+					}
 				}
 			}(item)
 		}
@@ -553,16 +569,26 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 	pending := record.Counters.Total - record.Counters.Succeeded - record.Counters.Skipped - record.Counters.Failed
 	var received int64
 	var commitErr error
+	fenced := false
 	flush := func() {
-		if len(batch) == 0 || commitErr != nil || ctx.Err() != nil {
+		if len(batch) == 0 || commitErr != nil || fenced || ctx.Err() != nil {
 			return
 		}
 		_, err := e.repo.commit(ctx, record.Job.ChildID, record.Job.Generation, record.Attempt, batch)
-		if err != nil {
+		switch {
+		case err == nil:
+			batch = batch[:0]
+		case ctx.Err() != nil:
+			// Cancelled meanwhile: the batch stays for the attempt's end.
+		case errors.Is(err, ErrStopped) || errors.Is(err, ErrAttempt):
+			// A stop fenced the attempt out and cancels it next. The batch
+			// stays for the attempt's end, which records it after the stop.
+			fenced = true
+		default:
 			commitErr = fmt.Errorf("persist object results: %w", err)
 			cancel()
+			batch = batch[:0]
 		}
-		batch = batch[:0]
 	}
 	for {
 		select {
@@ -572,6 +598,10 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 					return nil, commitErr
 				}
 				if err := ctx.Err(); err != nil {
+					if transferstore.Interrupted(ctx) {
+						// The attempt's end records the objects it completed.
+						return completedOnly(batch), err
+					}
 					return nil, err
 				}
 				return batch, nil
@@ -589,6 +619,25 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 			flush()
 		}
 	}
+}
+
+// keptOnInterrupt reports whether an attempt an interruption cancelled still
+// records result: an object it completed, which is at the destination. A
+// failure is not kept, since the interruption may have caused it; the object
+// stays pending.
+func keptOnInterrupt(ctx context.Context, result ItemResult) bool {
+	return transferstore.Interrupted(ctx) && (result.Status == ItemSucceeded || result.Status == ItemSkipped)
+}
+
+// completedOnly keeps the succeeded and skipped results.
+func completedOnly(results []ItemResult) []ItemResult {
+	kept := make([]ItemResult, 0, len(results))
+	for _, result := range results {
+		if result.Status == ItemSucceeded || result.Status == ItemSkipped {
+			kept = append(kept, result)
+		}
+	}
+	return kept
 }
 
 func changed(actual, saved transferstore.Object) bool {

@@ -608,6 +608,13 @@ func (r *Repository) finish(ctx context.Context, child string, generation, attem
 			return err
 		}
 		if runErr != nil {
+			// An interrupted attempt, such as one a shutdown or a lease
+			// change quiesced, still records the objects it completed.
+			if completed := completedOnly(finalResults); len(completed) > 0 {
+				if err := applyResults(j, completed); err != nil {
+					return err
+				}
+			}
 			j.Status = Recoverable
 			j.Error = errorText(runErr)
 			return nil
@@ -619,6 +626,34 @@ func (r *Repository) finish(ctx context.Context, child string, generation, attem
 		}
 		settle(j)
 		return nil
+	})
+}
+
+// commitAfterStop records the objects an attempt completed before a stop
+// fenced it out, which finish then refuses: only succeeded and skipped
+// objects, never a failure, and only those still pending. It applies only to
+// the stop of this very attempt: the task's fence is at the attempt's
+// generation and not deleted, and the record was stopped from this attempt
+// (Attempt was raised by one). The record stays Stopped. The attempt calls it
+// before its done channel closes, which the stop waits for, so the Master
+// reads the ledger only after it.
+func (r *Repository) commitAfterStop(ctx context.Context, child string, generation, attempt uint64, results []ItemResult) (Record, error) {
+	completed := completedOnly(results)
+	return r.mutate(ctx, child, func(tx *state.Tx, j *Record) error {
+		p, ok, err := parent(tx, j.Job.ParentID)
+		if err != nil {
+			return err
+		}
+		if !ok || p.Generation != generation {
+			return ErrGeneration
+		}
+		if p.Deleted {
+			return ErrDeleted
+		}
+		if j.Job.Generation != generation || j.Status != Stopped || j.Attempt != attempt+1 {
+			return ErrAttempt
+		}
+		return applyResults(j, completed)
 	})
 }
 

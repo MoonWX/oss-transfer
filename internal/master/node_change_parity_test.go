@@ -284,10 +284,12 @@ func TestAddingDownloadNodesProbesWritesAsCreationDoes(t *testing.T) {
 	var calls atomic.Int64
 	agents := sharedTestAgents(t, f, &calls, "writable", "writable", "writable")
 	joiner := agents[2].node
+	var lockedProbes atomic.Int64
 	locked := overrideTestAgent(t, f, 4, func(command agenttransport.Command) (agenttransport.Response, bool) {
 		if command.Operation != "local_write_probe" {
 			return agenttransport.Response{}, false
 		}
+		lockedProbes.Add(1)
 		var request agentservice.PathRequest
 		_ = json.Unmarshal(command.Payload, &request)
 		uid := 4242
@@ -356,6 +358,19 @@ func TestAddingDownloadNodesProbesWritesAsCreationDoes(t *testing.T) {
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Fatal("the preflight created the destination", err)
+	}
+	// A join never creates the destination: a missing one is reported as
+	// missing, not as a directory above it that the Agent cannot write.
+	probes := lockedProbes.Load()
+	for _, extra := range []map[string]any{dryRunChange, {"dryRun": true, "skipSharedCheck": true, "skipSharedCheckAcknowledged": true}} {
+		status, body := nodeChange(t, f, download.ID, "zh-CN", joinBody(locked, missing, extra))
+		data, check := addedNode(t, body)
+		if status != 200 || data["valid"] != false || check["code"] != "SHARED_DIRECTORY_REQUIRED" || check["message"] != "共享目标目录不存在" || check["writeProbeDirectory"] != nil {
+			t.Fatal("a missing destination was not reported as missing", extra, status, body)
+		}
+	}
+	if lockedProbes.Load() != probes {
+		t.Fatal("a missing destination was probed for writes")
 	}
 }
 

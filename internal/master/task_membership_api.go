@@ -475,9 +475,11 @@ func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining
 // checkJoiningPath checks an added node's local path as the creation preflight
 // checks a binding, with its messages and its write probe of a download
 // destination (also when the shared check is skipped). The task's shared
-// directory exists already and a join never creates it: validateSharedBindings
-// then refuses any path that is not a directory, a missing download
-// destination as missing.
+// directory exists already and a join never creates it: a missing download
+// destination is refused as missing before any write probe, which would
+// otherwise probe (and ask to change the permissions of) a directory above
+// it, and validateSharedBindings refuses any other path that is not a
+// directory.
 func (s *Server) checkJoiningPath(ctx context.Context, direction string, node task.Node, check *bindingCheck) {
 	if !absoluteAgentPath(node.LocalRoot) || strings.ContainsRune(node.LocalRoot, 0) {
 		check.Message = localizeContext(ctx, "本地路径必须为绝对路径")
@@ -494,6 +496,11 @@ func (s *Server) checkJoiningPath(ctx context.Context, direction string, node ta
 	}
 	if message := localPathProblem(ctx, direction, probe.PathType); message != "" {
 		check.Message = message
+		return
+	}
+	if direction == "OSS_TO_LOCAL" && probe.PathType == "MISSING" {
+		check.Code = "SHARED_DIRECTORY_REQUIRED"
+		check.Message = localizeContext(ctx, "Shared destination directory does not exist")
 		return
 	}
 	if message, writable := s.checkDownloadWritable(ctx, nodeSession(node), direction, node.LocalRoot, check); !writable {

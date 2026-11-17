@@ -229,6 +229,23 @@ func (a *ScanActivity) listed(names, next int) {
 	a.directory.names, a.directory.done = int64(names), int64(next)
 }
 
+// ended records that the listing of the directory at key, which the scan
+// examines while reading it, has ended: its names are all read, and it shows
+// as being examined from now on.
+func (a *ScanActivity) ended(key string) {
+	if a == nil {
+		return
+	}
+	if key == "." {
+		key = ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.directory.set && a.directory.key == key {
+		a.directory.reading = false
+	}
+}
+
 // Outcomes of one consumed directory entry.
 const (
 	entryExamined = iota

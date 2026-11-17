@@ -81,6 +81,7 @@ func (scan *localScan) readAhead(ctx context.Context, key string, stream *nameSt
 		scan.activity.read(len(batch))
 		stream.add(batch)
 		if err == io.EOF {
+			scan.activity.ended(key)
 			stream.end(nil)
 			return
 		}

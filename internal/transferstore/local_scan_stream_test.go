@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // streamingTree is a random tree with directories long enough to stream at
@@ -427,7 +428,7 @@ func TestLocalScanReportsStreamingActivity(t *testing.T) {
 	if _, err := scanAll(local, context.Background(), ListOptions{Activity: activity}); err != nil {
 		t.Fatal(err)
 	}
-	if s := snapshots["big/f0019"]; s == nil || s.Mode != ScanModeStreaming || s.Directory.Key != "big" || !s.Directory.Reading {
+	if s := snapshots["big/f0019"]; s == nil || s.Mode != ScanModeStreaming || s.Directory.Key != "big" {
 		t.Fatalf("activity while big streams: %+v", s)
 	}
 	if s := snapshots["big/sub/x"]; s == nil || s.Mode != ScanModeSorted || s.Directory.Key != "big/sub" {
@@ -579,5 +580,50 @@ func TestLocalScanAsksDoneAgainAfterAStreamedPage(t *testing.T) {
 	})
 	if err != nil || emitted != 1 || spy.called("lstat", "big/f0001") != 1 || len(committed.keys) != 20 {
 		t.Fatalf("big/f0001 emitted %d times after %d lookups, %d objects: %v", emitted, spy.called("lstat", "big/f0001"), len(committed.keys), err)
+	}
+}
+
+// Once a streamed listing has ended, the directory shows as being examined,
+// entry x of the names read, and no longer as being read.
+func TestLocalScanShowsAStreamedListingAsReadOnceItEnds(t *testing.T) {
+	local, root := localFixture(t)
+	writeFiles(t, root, numbered("big/f", 20)...)
+	spy := spyOnScan(local, root)
+	local.scanTuning.streamAfter = 8
+	activity := NewScanActivity()
+	var open *ScanActivitySnapshot
+	// The read that ends the listing finds it still being read.
+	listing := &inBatches{dir: "big", n: 10, holdAt: 3, hold: func() { open = activity.Snapshot() }}
+	listing.install(spy)
+	release := make(chan struct{})
+	spy.lstat = func(key string, call func() (fs.FileInfo, error)) (fs.FileInfo, error) {
+		if strings.HasPrefix(key, "big/") {
+			<-release
+		}
+		return call()
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := scanAll(local, context.Background(), ListOptions{Activity: activity})
+		done <- err
+	}()
+	// No entry of big can be consumed meanwhile, so the scan still streams.
+	var listed *ScanActivitySnapshot
+	for deadline := time.Now().Add(time.Minute); listed == nil; time.Sleep(time.Millisecond) {
+		if s := activity.Snapshot(); s != nil && s.Mode == ScanModeStreaming && s.Directory != nil && !s.Directory.Reading {
+			listed = s
+		} else if time.Now().After(deadline) {
+			t.Fatal("hang guard: the ended listing still shows as being read")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if open == nil || open.Directory == nil || !open.Directory.Reading || open.Directory.Key != "big" {
+		t.Fatalf("activity while the listing was open: %+v", open)
+	}
+	if d := listed.Directory; d.Key != "big" || d.Names != 20 || d.Position != 1 {
+		t.Fatalf("activity once the listing ended: %+v", d)
 	}
 }

@@ -77,13 +77,16 @@ func TestRuntimeProgressNamesNodesThatDidNotAnswer(t *testing.T) {
 			}
 		}
 	}
-	task := map[string]interface{}{"taskIndex": 61, "status": "RUNNING", "direction": "OSS_TO_OSS", "scanComplete": true, "listObjectCount": 10, "listObjectSize": 1 << 30, "putObjectCount": 4, "transferredBytes": 1 << 29, "progressPercent": 50, "liveProgress": "PARTIAL", "unreportedNodes": silent}
+	task := map[string]interface{}{"taskIndex": 61, "status": "RUNNING", "direction": "OSS_TO_OSS", "scanComplete": true, "listObjectCount": 10, "listObjectSize": 1 << 30, "putObjectCount": 4, "transferredBytes": 1 << 29, "progressPercent": 50, "liveProgress": "PARTIAL",
+		"unreportedNodes": append(silent, map[string]interface{}{"displayLabel": "worker-c (10.0.1.14)", "executionNodeIp": "10.0.1.14"})}
+	// Names are separated as each language separates a list.
 	for _, test := range []struct {
 		locale cliLocale
 		want   string
 	}{
-		{localeZH, "执行节点 worker-b (10.0.1.13) 未上报，已迁移和进度不含其正在传输的部分，速度暂时未知"},
-		{localeEN, "No live progress from worker-b (10.0.1.13)"},
+		{localeZH, "执行节点 worker-b (10.0.1.13)、worker-c (10.0.1.14) 未上报，已迁移和进度不含其正在传输的部分，速度暂时未知"},
+		{localeEN, "No live progress from worker-b (10.0.1.13), worker-c (10.0.1.14)"},
+		{localeJA, "worker-b (10.0.1.13)、worker-c (10.0.1.14)"},
 	} {
 		var out bytes.Buffer
 		renderTaskDetail(&cliLocaleWriter{Writer: &out, locale: test.locale}, task)

@@ -305,7 +305,7 @@ func createWarnMarkerRows(client *ApiClient, rows []map[string]interface{}) {
 	if warnings == nil {
 		warnings = os.Stderr
 	}
-	fmt.Fprintln(warnings, cliTextf(warnings, "警告：第 %s 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。", strings.Join(marked, ", ")))
+	fmt.Fprintln(warnings, cliTextf(warnings, "警告：第 %s 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。", strings.Join(marked, cliListSeparator(warnings))))
 }
 
 // createWarnSkippedRows states, before anything is submitted, which imported
@@ -918,7 +918,7 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			checked["submissionStatus"] = "validated"
 			checked["message"] = client.text("节点预检通过，尚未创建迁移任务")
 			if len(writeUnchecked) > 0 {
-				checked["message"] = client.locale.format("路径预检通过，但执行节点 %s 版本较旧，未检查目录是否可写；尚未创建迁移任务", strings.Join(writeUnchecked, ", "))
+				checked["message"] = client.locale.format("路径预检通过，但执行节点 %s 版本较旧，未检查目录是否可写；尚未创建迁移任务", strings.Join(writeUnchecked, client.text("、")))
 			}
 			return checked, nil
 		}
@@ -927,7 +927,7 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			if warnings == nil {
 				warnings = os.Stderr
 			}
-			fmt.Fprintln(warnings, cliTextf(warnings, "警告：执行节点 %s 版本较旧，未检查下载目录是否可写；目录不可写时，对象会在迁移中逐个失败。", safeCLIText(strings.Join(writeUnchecked, ", "))))
+			fmt.Fprintln(warnings, cliTextf(warnings, "警告：执行节点 %s 版本较旧，未检查下载目录是否可写；目录不可写时，对象会在迁移中逐个失败。", safeCLIText(strings.Join(writeUnchecked, cliListSeparator(warnings)))))
 		}
 		path, countField = "/local-transfers", "acceptedCount"
 	}

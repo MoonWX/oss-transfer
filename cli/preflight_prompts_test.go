@@ -195,8 +195,15 @@ func TestImportSubtasksSaysAMarkerIsNotUsed(t *testing.T) {
 	if _, err := runTaskImport(client, []string{"tasks", file}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(warnings.String(), "警告：第 2, 4 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续") {
+	if !strings.Contains(warnings.String(), "警告：第 2、4 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续") {
 		t.Fatalf("warnings %q", warnings.String())
+	}
+	// Each language separates the row numbers as it separates a list.
+	warnings.Reset()
+	client = creationTestClient(t, creationExchange{method: "POST", path: "/import", response: `{"success":true,"importedCount":4,"taskIds":[72,73,74,75]}`})
+	client.errors = &cliLocaleWriter{Writer: &warnings, locale: localeEN}
+	if _, err := runTaskImport(client, []string{"tasks", file}); err != nil || !strings.Contains(warnings.String(), "Warning: rows 2, 4 set a marker") {
+		t.Fatalf("%v %q", err, warnings.String())
 	}
 	warnings.Reset()
 	file = creationImportFile(t, "plain.json", `[{`+row+`}]`)

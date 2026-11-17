@@ -175,6 +175,9 @@ var cliOutputMessages = map[string][2]string{
 
 	// The offline nodes an exception list names.
 	"离线且有未完成子任务的节点": {"Offline nodes with unfinished subtasks", "未完了のサブタスクがあるオフラインのノード"},
+
+	// Separates the names of a list within a sentence.
+	"、": {", ", "、"},
 }
 
 func init() {

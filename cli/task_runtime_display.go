@@ -35,7 +35,7 @@ func renderTaskRuntimeResult(out io.Writer, result map[string]interface{}) bool 
 	if data["partial"] == true {
 		// Name the nodes that did not answer: their files are missing, and
 		// waiting for a refresh does not help while they stay silent.
-		if nodes := cliUnreportedNodes(data); nodes != "" {
+		if nodes := cliUnreportedNodes(out, data); nodes != "" {
 			fmt.Fprintln(out, cliTextf(out, "执行节点 %s 未响应，其文件进度暂不可用。", nodes))
 		} else {
 			fmt.Fprintln(out, cliText(out, "部分文件进度暂不可用，请稍后刷新。"))
@@ -67,12 +67,16 @@ func renderTaskRuntimeResult(out io.Writer, result map[string]interface{}) bool 
 
 // cliUnreportedNodes lists the nodes a reply names as not reporting live
 // progress (unreportedNodes), or "".
-func cliUnreportedNodes(data map[string]interface{}) string {
+func cliUnreportedNodes(out io.Writer, data map[string]interface{}) string {
 	var names []string
 	for _, node := range objectList(data["unreportedNodes"]) {
 		if name := firstNodeString(node, "displayLabel", "executionNodeIp"); name != "" {
 			names = append(names, safeCLIText(name))
 		}
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, cliListSeparator(out))
 }
+
+// cliListSeparator separates the names of a list within a sentence: "、" in
+// Chinese and Japanese, ", " in English.
+func cliListSeparator(out io.Writer) string { return cliText(out, "、") }

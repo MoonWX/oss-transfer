@@ -79,6 +79,46 @@ type localScanFrame struct {
 	ring  []*localLookup
 	done  localDoneAnswers
 	found bool // the open page holds objects found below this directory
+
+	// A directory whose listing passes streamAfter names is streamed: it is
+	// examined in readdir order while stream reads the rest, and marked as
+	// Streamed. Its After stays where it was, as its files are not done in
+	// name order: a resumed scan reads the directory again and finds them
+	// done. Its subdirectories are deferred, then entered in sorted order once
+	// the listing has ended, each with the identity its lookup found.
+	stream       *nameStream
+	listed       int // names its listing returned
+	deferred     []deferredDirectory
+	deferredDirs map[string]fs.FileInfo // after the listing: names holds these
+	pageKeys     map[string]struct{}    // files emitted in the open page
+}
+
+// name is the frame's name at index: from its sorted names, or from the
+// stream in readdir order.
+func (frame *localScanFrame) name(index int) string {
+	if frame.stream != nil {
+		return frame.stream.at(index)
+	}
+	return frame.names[index]
+}
+
+// length is how many names the frame can consume now.
+func (frame *localScanFrame) length() int {
+	if frame.stream != nil {
+		available, _, _ := frame.stream.available()
+		return available
+	}
+	return len(frame.names)
+}
+
+// progress is the frame's name count and next index as the activity shows
+// them. After a streamed listing, the deferred subdirectories are its last
+// entries.
+func (frame *localScanFrame) progress() (names, next int) {
+	if frame.deferredDirs != nil {
+		return frame.listed, frame.listed - (len(frame.names) - frame.next)
+	}
+	return len(frame.names), frame.next
 }
 
 // localDoneAnswers keeps ListOptions.Done's answers for a frame's files.
@@ -123,9 +163,12 @@ func (rootScanFS) ReadNames(file *os.File, n int) ([]string, error) { return fil
 
 // localScanTuning replaces the scan's source access and bounds in tests.
 type localScanTuning struct {
-	fs         localScanFS
-	window     int
-	earlyFlush int
+	fs           localScanFS
+	window       int
+	earlyFlush   int
+	streamAfter  int
+	streamBuffer int
+	holdLookups  bool // lookups wait for the end of a streamed listing or a full buffer
 }
 
 func scanEntryName(name string) bool {
@@ -222,21 +265,24 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 }
 
 type localScan struct {
-	s          *Local
-	ctx        context.Context
-	options    ListOptions
-	limit      int
-	emit       func(Page) error
-	activity   *ScanActivity
-	fs         localScanFS
-	window     int
-	earlyFlush int
-	frames     []*localScanFrame
-	objects    []Object
-	visited    int
-	slots      chan struct{} // one per lookup in flight
-	released   chan struct{} // signalled whenever a lookup returns its slot
-	workers    sync.WaitGroup
+	s                   *Local
+	ctx                 context.Context
+	options             ListOptions
+	limit               int
+	emit                func(Page) error
+	activity            *ScanActivity
+	fs                  localScanFS
+	window              int
+	earlyFlush          int
+	streamAfter         int
+	streamBuffer        int
+	lookupsWhileListing bool
+	frames              []*localScanFrame
+	objects             []Object
+	visited             int
+	slots               chan struct{} // one per lookup in flight
+	released            chan struct{} // signalled whenever a lookup returns its slot
+	workers             sync.WaitGroup
 	// page is cancelled when the open page ends, releasing the lookups that
 	// still wait for the local operation limit.
 	page    context.Context
@@ -245,7 +291,8 @@ type localScan struct {
 
 func (s *Local) newScan(ctx context.Context, options ListOptions, limit int, emit func(Page) error) *localScan {
 	scan := &localScan{s: s, ctx: ctx, options: options, limit: limit, emit: emit, activity: options.Activity,
-		fs: rootScanFS{}, window: localScanWindow, earlyFlush: localScanEarlyFlush, objects: make([]Object, 0, limit)}
+		fs: rootScanFS{}, window: localScanWindow, earlyFlush: localScanEarlyFlush, streamAfter: localScanStreamAfter,
+		streamBuffer: localScanStreamBuffer, lookupsWhileListing: localScanLookupsWhileListing, objects: make([]Object, 0, limit)}
 	if tuning := s.scanTuning; tuning != nil {
 		if tuning.fs != nil {
 			scan.fs = tuning.fs
@@ -256,6 +303,13 @@ func (s *Local) newScan(ctx context.Context, options ListOptions, limit int, emi
 		if tuning.earlyFlush > 0 {
 			scan.earlyFlush = tuning.earlyFlush
 		}
+		if tuning.streamAfter > 0 {
+			scan.streamAfter = tuning.streamAfter
+		}
+		if tuning.streamBuffer > 0 {
+			scan.streamBuffer = tuning.streamBuffer
+		}
+		scan.lookupsWhileListing = scan.lookupsWhileListing && !tuning.holdLookups
 	}
 	scan.slots, scan.released = make(chan struct{}, scan.window), make(chan struct{}, 1)
 	scan.page, scan.endPage = context.WithCancel(ctx)
@@ -270,12 +324,21 @@ func (scan *localScan) run() error {
 			return err
 		}
 		frame := scan.top()
-		if !frame.read {
+		if !frame.read && frame.stream == nil {
 			if err := scan.load(frame, false); err != nil {
 				return err
 			}
 		}
-		if frame.next == len(frame.names) {
+		if frame.stream != nil {
+			more, err := scan.awaitName(frame)
+			if err != nil {
+				return err
+			}
+			if !more {
+				scan.finishStream(frame)
+				continue
+			}
+		} else if frame.next == len(frame.names) {
 			if err := scan.pop(); err != nil {
 				return err
 			}
@@ -285,6 +348,12 @@ func (scan *localScan) run() error {
 			return err
 		}
 		if scan.visited >= scan.limit {
+			// A page without objects while a frame streams would save the
+			// cursor it saved before: a streamed frame's After does not move.
+			if frame.stream != nil && len(scan.objects) == 0 {
+				scan.visited = 0
+				continue
+			}
 			if err := scan.flush(); err != nil {
 				return err
 			}
@@ -395,7 +464,8 @@ func (frame *localScanFrame) adopt(file *os.File, info fs.FileInfo) error {
 // entry, and then sorts them, so the frame continues after its saved After
 // and saves After again. When early is set and the listing passes
 // earlyFlush names, a page holding objects is saved before reading on: the
-// objects found so far need not wait for the rest of a large listing.
+// objects found so far need not wait for the rest of a large listing. A
+// listing that passes streamAfter names streams instead (see startStream).
 func (scan *localScan) load(frame *localScanFrame, early bool) error {
 	file := frame.listing
 	frame.listing = nil
@@ -410,7 +480,26 @@ func (scan *localScan) load(frame *localScanFrame, early bool) error {
 			return fmt.Errorf("%w: scan directory %q was replaced", ErrSourceChanged, frame.key)
 		}
 	}
-	defer file.Close()
+	names, streaming, err := scan.readNames(frame, file, early)
+	if streaming {
+		scan.startStream(frame, file, names)
+		return nil
+	}
+	_ = file.Close()
+	if err != nil {
+		return err
+	}
+	slices.Sort(names)
+	frame.names, frame.read = slices.Compact(names), true
+	frame.next = sort.Search(len(frame.names), func(index int) bool { return frame.names[index] > frame.After })
+	frame.issue = frame.next
+	scan.activity.listed(len(frame.names), frame.next)
+	return nil
+}
+
+// readNames reads a directory listing to its end, or until it passes
+// streamAfter names, which it reports as streaming.
+func (scan *localScan) readNames(frame *localScanFrame, file *os.File, early bool) ([]string, bool, error) {
 	frame.loading = true
 	defer func() { frame.loading = false }()
 	scan.activity.enter(frame.key, true, 0, 0)
@@ -424,7 +513,7 @@ func (scan *localScan) load(frame *localScanFrame, early bool) error {
 	for {
 		if !short {
 			if err := scan.operation(); err != nil {
-				return err
+				return nil, false, err
 			}
 		}
 		end := scan.activity.call()
@@ -432,40 +521,53 @@ func (scan *localScan) load(frame *localScanFrame, early bool) error {
 		end()
 		if short && len(batch) > 0 {
 			if err := scan.operation(); err != nil {
-				return err
+				return nil, false, err
 			}
 		}
 		short = len(batch) < localScanNames
 		names = append(names, batch...)
 		scan.activity.read(len(batch))
 		if err == io.EOF {
-			break
+			return names, false, nil
 		}
 		if err != nil {
-			return scanPathError(err, frame.key)
+			return nil, false, scanPathError(err, frame.key)
 		}
 		if !flushed && len(names) > scan.earlyFlush && len(scan.objects) > 0 {
 			flushed = true
 			if err := scan.flush(); err != nil {
-				return err
+				return nil, false, err
 			}
 		}
+		if len(names) > scan.streamAfter {
+			return names, true, nil
+		}
 	}
-	slices.Sort(names)
-	frame.names, frame.read = slices.Compact(names), true
-	frame.next = sort.Search(len(frame.names), func(index int) bool { return frame.names[index] > frame.After })
-	frame.issue = frame.next
-	scan.activity.listed(len(frame.names), frame.next)
-	return nil
 }
 
 // step consumes the frame's next name.
 func (scan *localScan) step(frame *localScanFrame) error {
-	name := frame.names[frame.next]
+	name := frame.name(frame.next)
+	if !frame.pending(name) {
+		// Done before the saved position, as in a sorted directory.
+		frame.next++
+		frame.stream.release(frame.next)
+		return nil
+	}
+	key := path.Join(frame.key, name)
+	if info, deferred := frame.deferredDirs[name]; deferred {
+		// Examined while its parent streamed.
+		scan.consume(frame, entryUnexamined)
+		return scan.descend(frame, name, key, info)
+	}
 	if !scanEntryName(name) {
 		return ErrInvalidKey
 	}
-	key := path.Join(frame.key, name)
+	if _, emitted := frame.pageKeys[name]; emitted {
+		// The listing repeated a file the open page holds already.
+		scan.consume(frame, entryAlreadyFound)
+		return nil
+	}
 	file, directory := scan.candidate(key)
 	if !file && !directory {
 		scan.consume(frame, entryUnexamined)
@@ -495,7 +597,13 @@ func (scan *localScan) step(frame *localScanFrame) error {
 		if lookup.keep {
 			scan.objects = append(scan.objects, lookup.object)
 			frame.found = true
+			if frame.pageKeys != nil {
+				frame.pageKeys[name] = struct{}{}
+			}
 		}
+		scan.consume(frame, entryExamined)
+	case directory && info.IsDir() && !lookup.staging && frame.stream != nil:
+		frame.deferred = append(frame.deferred, deferredDirectory{name: name, info: info})
 		scan.consume(frame, entryExamined)
 	case directory && info.IsDir() && !lookup.staging:
 		// Advance only once the child is open; on failure the caller keeps
@@ -519,10 +627,30 @@ func (scan *localScan) candidate(key string) (file, directory bool) {
 	return file, directory
 }
 
+// consume marks the frame's next name done. A streamed frame keeps its After:
+// names after it are done in readdir order, not in name order.
 func (scan *localScan) consume(frame *localScanFrame, outcome int) {
-	frame.After, frame.next = frame.names[frame.next], frame.next+1
+	if len(frame.ring) > 0 && frame.ring[0].index == frame.next {
+		// Issued, then not needed: a name the open page holds already. Its
+		// worker finishes on its own.
+		frame.ring[0] = nil
+		frame.ring = frame.ring[1:]
+	}
+	if frame.stream != nil {
+		frame.next++
+		frame.stream.release(frame.next)
+	} else {
+		frame.After, frame.next = frame.names[frame.next], frame.next+1
+	}
 	scan.visited++
-	scan.activity.consumed(outcome, frame.next)
+	_, next := frame.progress()
+	scan.activity.consumed(outcome, next)
+}
+
+// pending reports whether a name of the frame is still to be done: a
+// streamed frame has done the names up to its After already.
+func (frame *localScanFrame) pending(name string) bool {
+	return frame.stream == nil || name > frame.After
 }
 
 // done reports whether ListOptions.Done has the file at index as committed in
@@ -549,10 +677,10 @@ func (scan *localScan) done(frame *localScanFrame, index int) (bool, error) {
 func (scan *localScan) askDone(frame *localScanFrame, from int) error {
 	var keys []string
 	var indexes []int
-	index := from
-	for ; index < len(frame.names) && len(keys) < localScanNames; index++ {
-		name := frame.names[index]
-		if !scanEntryName(name) {
+	index, end := from, frame.length()
+	for ; index < end && len(keys) < localScanNames; index++ {
+		name := frame.name(index)
+		if !frame.pending(name) || !scanEntryName(name) {
 			continue
 		}
 		key := path.Join(frame.key, name)
@@ -613,14 +741,24 @@ func (scan *localScan) head(frame *localScanFrame) (*localLookup, error) {
 // and the slots of those that finish go to the next names. The head's own
 // lookup waits for a free slot; the others are issued only while one is free.
 func (scan *localScan) fill(frame *localScanFrame, behind bool) {
-	end := min(len(frame.names), frame.next+scan.limit-scan.visited)
+	if frame.deferredDirs != nil {
+		return // Deferred directories were looked up as their parent streamed.
+	}
+	// Names consumed without a lookup leave issue behind; a stream has
+	// released them.
+	frame.issue = max(frame.issue, frame.next)
+	end := min(frame.length(), frame.next+scan.limit-scan.visited)
 	held := scan.window
 	if behind {
 		held = scan.parked(frame)
 	}
 	for frame.issue < end && len(frame.ring) < held {
 		index := frame.issue
-		name := frame.names[index]
+		name := frame.name(index)
+		if !frame.pending(name) {
+			frame.issue++
+			continue
+		}
 		if !scanEntryName(name) {
 			return // The scan fails there; nothing after it is needed.
 		}
@@ -928,13 +1066,18 @@ func (scan *localScan) pop() error {
 	scan.closeFrame(frame)
 	if len(scan.frames) > 0 {
 		if top := scan.top(); top.read {
-			scan.activity.enter(top.key, false, len(top.names), top.next)
+			names, next := top.progress()
+			scan.activity.enter(top.key, false, names, next)
 		}
 	}
 	return nil
 }
 
 func (scan *localScan) closeFrame(frame *localScanFrame) {
+	if frame.stream != nil {
+		frame.stream.close()
+		frame.stream = nil
+	}
 	if frame.listing != nil {
 		_ = frame.listing.Close()
 		frame.listing = nil
@@ -982,6 +1125,9 @@ func (scan *localScan) flush() error {
 	scan.objects, scan.visited = make([]Object, 0, scan.limit), 0
 	for _, frame := range scan.frames {
 		frame.found = false
+		if frame.pageKeys != nil {
+			frame.pageKeys = map[string]struct{}{}
+		}
 	}
 	if err := scan.ctx.Err(); err != nil {
 		return err
@@ -1010,13 +1156,13 @@ func (scan *localScan) popExhausted() error {
 		if frame.loading {
 			return nil
 		}
-		if !frame.read {
+		if !frame.read && frame.stream == nil {
 			if err := scan.load(frame, false); err != nil {
 				return err
 			}
 		}
-		if frame.next < len(frame.names) {
-			return nil
+		if frame.stream != nil || frame.next < len(frame.names) {
+			return nil // A streamed listing is not done until it ends.
 		}
 		if err := scan.pop(); err != nil {
 			return err

@@ -127,7 +127,9 @@ type RecoveryCheckpoint struct {
 // replies and capabilities:
 //   - 1: a local scan skips keys this pass has already committed, so a
 //     resumed or taken-over scan does not look them up or compare them again,
-//     and the scan reports its live activity.
+//     and the scan reports its live activity. It keeps the mark of a streamed
+//     directory in its cursors, and a checkpoint whose cursor names one
+//     requires protocol 1.
 const ScanProtocol = 1
 
 type Batch struct {

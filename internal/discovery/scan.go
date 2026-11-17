@@ -25,6 +25,10 @@ type pendingBatch struct {
 	objects    []transferstore.Object
 	missing    map[string]bool
 	checkpoint *Checkpoint
+	// streamed marks a checkpoint whose cursor names a streamed directory:
+	// only an Agent with ListOptions.Done resumes it without failing on a
+	// changed file or replaying the whole directory.
+	streamed bool
 }
 
 func scanIdentity(attempt State) string {
@@ -161,6 +165,9 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 					recovery := &RecoveryCheckpoint{Version: 1, Epoch: current.Epoch, Sequence: sequence, ThroughBatch: current.LastBatch,
 						Objects: current.TotalObjects, Bytes: current.TotalBytes, Cursor: checkpoint.Cursor,
 						SourceDone: checkpoint.SourceDone, SourceRoot: attempt.Spec.Source.Root}
+					if part.streamed {
+						recovery.RequiresScanProtocol = 1
+					}
 					current.TransferCheckpoint = recovery
 					// Attach the boundary to the last output batch atomically with the
 					// source page. A concurrent reader cannot observe it ahead of data.
@@ -331,14 +338,15 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 		return nil
 	}
 	emit := func(object transferstore.Object) error { return emitAll(object, false, false) }
-	checkpoint := func(cursor string, done bool) error {
+	pageCheckpoint := func(cursor string, done, streamed bool) error {
 		if err := flush(); err != nil {
 			return err
 		}
 		progress := *attempt.Checkpoint
 		progress.Cursor, progress.SourceDone = cursor, done
-		return commit(pendingBatch{checkpoint: &progress})
+		return commit(pendingBatch{checkpoint: &progress, streamed: streamed})
 	}
+	checkpoint := func(cursor string, done bool) error { return pageCheckpoint(cursor, done, false) }
 	if attempt.Checkpoint != nil && attempt.Checkpoint.SourceDone {
 		// A crash after the last page does not reopen the source enumeration.
 	} else if attempt.Spec.InventoryID != "" {
@@ -370,7 +378,9 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 					return err
 				}
 			}
-			return checkpoint(page.NextCursor, page.NextCursor == "")
+			// A cursor naming a streamed directory goes to another Agent only
+			// if that Agent resumes it with Done (see RequiresScanProtocol).
+			return pageCheckpoint(page.NextCursor, page.NextCursor == "", page.Streamed)
 		})
 	} else {
 		err = store.Scan(ctx, transferstore.ListOptions{Prefix: attempt.Spec.Prefix, StartAfter: attempt.Spec.StartKey}, emit)

@@ -51,6 +51,13 @@ type localScanFrame struct {
 	Name     string `json:"name,omitempty"`
 	Identity string `json:"identity"`
 	After    string `json:"after,omitempty"`
+	// Streamed marks a directory that a scan examined in readdir order, as
+	// an Agent that streams long directories does: files after After may be
+	// found already, so the cursor resumes correctly only through
+	// ListOptions.Done. The mark stays while the directory is on the path,
+	// across resumes and takeovers, whichever order the directory is read in
+	// then; scans that predate it ignore it.
+	Streamed bool `json:"streamed,omitempty"`
 
 	key string
 	// dir is this directory: the store's root for frame 0 and a root of its
@@ -297,7 +304,8 @@ func (scan *localScan) resume(saved []localScanFrame) error {
 		if err := scan.ctx.Err(); err != nil {
 			return err
 		}
-		frame := &localScanFrame{Name: saved[index].Name, Identity: saved[index].Identity, After: saved[index].After, key: saved[index].key}
+		frame := &localScanFrame{Name: saved[index].Name, Identity: saved[index].Identity, After: saved[index].After,
+			Streamed: saved[index].Streamed, key: saved[index].key}
 		var err error
 		if index == 0 {
 			err = scan.openRootFrame(frame)
@@ -936,6 +944,18 @@ func (scan *localScan) closeFrame(frame *localScanFrame) {
 	}
 }
 
+// streamed reports whether a directory on the cursor's path is marked as
+// streamed: the cursor then resumes correctly only through ListOptions.Done
+// (see Page.Streamed).
+func (scan *localScan) streamed() bool {
+	for _, frame := range scan.frames {
+		if frame.Streamed {
+			return true
+		}
+	}
+	return false
+}
+
 // flush ends the open page. No lookup outlives it, and every directory the
 // cursor names must still be linked where it was before the page is handed
 // on. The links are checked again after the callback, which may have taken
@@ -955,7 +975,7 @@ func (scan *localScan) flush() error {
 	if err != nil {
 		return err
 	}
-	if err := scan.emit(Page{Objects: scan.objects, NextCursor: cursor}); err != nil {
+	if err := scan.emit(Page{Objects: scan.objects, NextCursor: cursor, Streamed: scan.streamed()}); err != nil {
 		return err
 	}
 	scan.activity.Saved()
@@ -1053,7 +1073,7 @@ func (scan *localScan) checkLink(parent, frame *localScanFrame) error {
 func (scan *localScan) cursor() (string, error) {
 	frames := make([]localScanFrame, len(scan.frames))
 	for index, frame := range scan.frames {
-		frames[index] = localScanFrame{Name: frame.Name, Identity: frame.Identity, After: frame.After}
+		frames[index] = localScanFrame{Name: frame.Name, Identity: frame.Identity, After: frame.After, Streamed: frame.Streamed}
 	}
 	return scan.s.scanCursor(scan.options, frames)
 }

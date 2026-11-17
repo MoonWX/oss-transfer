@@ -61,6 +61,10 @@ type ListOptions struct {
 type Page struct {
 	Objects    []Object `json:"objects"`
 	NextCursor string   `json:"nextCursor,omitempty"`
+	// Streamed marks a local cursor naming a directory that was examined in
+	// readdir order. Resuming it looks every name after its position up
+	// again, unless ListOptions.Done reports the files already committed.
+	Streamed bool `json:"streamed,omitempty"`
 }
 
 // CheckpointScanner streams bounded source pages with a durable-resume cursor.

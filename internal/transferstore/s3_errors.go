@@ -133,6 +133,27 @@ func ClassifyStorageMessage(message string) StorageErrorKind {
 	return StorageErrorUnknown
 }
 
+// endpointMismatch is how S3 (PermanentRedirect, HTTP 301) and Alibaba Cloud
+// OSS (AccessDenied, HTTP 403, EC 0003-00001403) say that a bucket must be
+// reached through another endpoint, usually the one of its region.
+const endpointMismatch = "must be addressed using the specified endpoint"
+
+var diagnosticEndpoint = regexp.MustCompile(`\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)`)
+
+// EndpointMismatch reports whether a storage error says that the bucket must
+// be addressed through another endpoint, and that endpoint when the reply
+// named it (see the storage response diagnostic). OSS answers such a request
+// with AccessDenied although the credentials are not the problem.
+func EndpointMismatch(message string) (bool, string) {
+	if !strings.Contains(strings.ToLower(message), endpointMismatch) {
+		return false, ""
+	}
+	if match := diagnosticEndpoint.FindStringSubmatch(message); match != nil {
+		return true, match[1]
+	}
+	return true, ""
+}
+
 // StorageErrorSuggestsPathStyle reports whether a failed bucket-level request
 // of a virtual-hosted connection is likely an addressing problem: the bucket
 // host name did not resolve, or the server dropped the request for an

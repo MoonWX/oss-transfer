@@ -23,6 +23,9 @@ var failureCauses = []struct {
 	{"READ_ONLY", "目标文件系统为只读", []string{"read-only file system"}},
 	{"LOCAL_PERMISSION_DENIED", "执行节点没有本地目录的读写权限", []string{"permission denied", "access is denied"}},
 	{"INVALID_CREDENTIALS", "存储访问密钥无效，请检查连接配置", []string{"InvalidAccessKeyId", "SignatureDoesNotMatch"}},
+	// OSS refuses a bucket of another region with AccessDenied: the reply
+	// names the endpoint to use, and the credentials are not the problem.
+	{"WRONG_ENDPOINT", "存储桶需要通过其所在地域的 Endpoint 访问，请使用该 Endpoint 创建存储连接", []string{"must be addressed using the specified endpoint"}},
 	{"ACCESS_DENIED", "存储拒绝访问，请检查凭据和存储桶权限", []string{"AccessDenied", "StatusCode: 403"}},
 	{"NO_SUCH_BUCKET", "存储桶不存在", []string{"NoSuchBucket"}},
 	{"HOST_NOT_FOUND", "无法解析存储地址，请检查 Endpoint 或改用路径风格访问", []string{"no such host"}},

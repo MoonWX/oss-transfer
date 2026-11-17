@@ -59,11 +59,31 @@ type storageCheckOutcome struct {
 	complete bool
 }
 
+// storageErrorWrongEndpoint is a bucket that must be addressed through
+// another endpoint. OSS reports it as AccessDenied, so the Agent's kind says
+// access_denied; the reply's text decides.
+const storageErrorWrongEndpoint transferstore.StorageErrorKind = "wrong_endpoint"
+
 // newStorageProblem chooses the sentence for a classified failure. host is the
 // endpoint host (with port); bucket names the bucket of a bucket-level
 // request, empty for ListBuckets.
 func newStorageProblem(kind transferstore.StorageErrorKind, detail string, config storageconfig.Config, bucket string, pathStyle bool) *storageProblem {
 	problem := &storageProblem{kind: kind, detail: detail}
+	if mismatch, endpoint := transferstore.EndpointMismatch(detail); mismatch {
+		// Usually a bucket in another region (OSS lists the buckets of every
+		// region): not a permission problem, and every bucket of this region
+		// still works with the connection.
+		problem.kind = storageErrorWrongEndpoint
+		switch {
+		case bucket != "" && endpoint != "":
+			problem.message, problem.args = "Bucket %s must be accessed through endpoint %s, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that endpoint.", []any{bucket, endpoint}
+		case bucket != "":
+			problem.message, problem.args = "Bucket %s must be accessed through another endpoint, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that region's endpoint.", []any{bucket}
+		default:
+			problem.message = "The bucket must be accessed through another endpoint, usually the endpoint of the region the bucket is in. Create a storage connection with that region's endpoint."
+		}
+		return problem
+	}
 	endpoint, _ := url.Parse(config.Endpoint)
 	host, hostname := config.Endpoint, config.Endpoint
 	if endpoint != nil && endpoint.Host != "" {
@@ -169,17 +189,20 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 	if check.BucketError != "" {
 		problem := newStorageProblem(check.BucketErrorKind, redact(check.BucketError), config, check.Bucket, outcome.pathStyle)
 		switch {
-		case check.BucketErrorKind == transferstore.StorageErrorAccessDenied:
-			problem.message, problem.args = "The credentials cannot list the objects of bucket %s (AccessDenied). Check the bucket permissions before you migrate from this bucket.", []any{check.Bucket}
-			outcome.warning = problem
 		case bucket == "" && check.ListError == "":
 			// Nobody named this bucket: it is the first listed one, and
 			// other buckets can still work (one in another region, for
-			// example). The buckets were listed, so the connection works.
+			// example). The buckets were listed, so the connection works,
+			// whatever this bucket answered.
 			outcome.warning = &storageProblem{kind: problem.kind, message: "The connection works, but the check of bucket %s, the first listed bucket, failed: %s", args: []any{check.Bucket}, cause: problem, detail: problem.detail, pathStyleHint: problem.pathStyleHint}
 			if problem.pathStyleHint {
 				outcome.saveFailure = problem
 			}
+		case check.BucketErrorKind == transferstore.StorageErrorAccessDenied:
+			if problem.kind != storageErrorWrongEndpoint {
+				problem.message, problem.args = "The credentials cannot list the objects of bucket %s (AccessDenied). Check the bucket permissions before you migrate from this bucket.", []any{check.Bucket}
+			}
+			outcome.warning = problem
 		default:
 			outcome.failure = problem
 		}

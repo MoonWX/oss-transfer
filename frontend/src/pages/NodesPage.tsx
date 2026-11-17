@@ -1017,7 +1017,7 @@ export default function NodesPage() {
             {nodeError && <Alert severity="error">{nodeError}</Alert>}
             <Typography>
               {t(
-                "移除后，该节点不能再连接集群，节点上的 Agent 服务会自行停止。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。",
+                "移除后，该节点不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。",
               )}
             </Typography>
             <Alert severity="warning">

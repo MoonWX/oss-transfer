@@ -1439,10 +1439,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Remove node {node}",
     ja: "ノード {node} を削除",
   },
-  "移除后，该节点不能再连接集群，节点上的 Agent 服务会自行停止。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。":
+  "移除后，该节点不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的文件、对象和数据库不会被删除；需要时请在其主机上卸载或删除容器和数据卷。":
     {
-      en: "After removal the node can no longer connect to the cluster, and its Agent service stops by itself. Files, objects and the database on the node are not deleted; uninstall it, or delete its container and volume, on its host if needed.",
-      ja: "削除後、このノードはクラスターに接続できなくなり、ノード上の Agent サービスは自動的に停止します。ノード上のファイル、オブジェクト、データベースは削除されません。必要に応じて、そのホストでアンインストールするか、コンテナーとデータボリュームを削除してください。",
+      en: "After removal the node can no longer connect to the cluster. An Agent running in a container stays idle until the container is removed; any other Agent stops by itself and does not restart. Files, objects and the database on the node are not deleted; uninstall it, or delete its container and volume, on its host if needed.",
+      ja: "削除後、このノードはクラスターに接続できなくなります。コンテナーで動作する Agent はコンテナーを削除するまで待機状態のままになり、それ以外の Agent は自動的に停止して再起動しません。ノード上のファイル、オブジェクト、データベースは削除されません。必要に応じて、そのホストでアンインストールするか、コンテナーとデータボリュームを削除してください。",
     },
   "任务报告中逐个对象的结果和对象比对结果保存在执行节点上。移除后，此节点上的这些结果将无法再获取：任务报告会不完整，比对记录会消失。需要保留时，请先导出任务报告和比对结果。":
     {

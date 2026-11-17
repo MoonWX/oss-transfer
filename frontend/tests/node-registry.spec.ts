@@ -450,6 +450,12 @@ test("node removal requires confirmation and retains inaccessible or referenced 
     exact: true,
   });
   await expect(dialog.getByText(/文件、对象和数据库不会被删除/)).toBeVisible();
+  // A removed Agent in a container keeps running idle; others stop.
+  await expect(
+    dialog.getByText(
+      /以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启/,
+    ),
+  ).toBeVisible();
   // Results stored on the node are lost with it: say so and suggest exporting.
   await expect(
     dialog

@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,6 +101,44 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("restart --join-url", result.stderr)
         self.assertEqual((self.data("agent") / "join-calls").read_text().splitlines(), ["http://master:1685/api/agents/bootstrap/a"])
 
+    def test_running_agent_accepts_the_link_it_joined_with(self):
+        link = "http://master:1685/api/agents/bootstrap/a"
+        self.assertEqual(self.run_script("agent", "start", "--join-url", link + "?lang=zh").returncode, 0)
+        # An ensure-running job repeats the command it joined with.
+        again = self.run_script("agent", "start", "--join-url", link)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("已在运行", again.stdout)
+        self.assertEqual((self.data("agent") / "join-calls").read_text().splitlines(), [link])
+        # The digest of the link is kept, not the link and its token.
+        self.assertNotIn("bootstrap", (self.data("agent") / "run" / "joined").read_text())
+
+    def test_joined_agent_starts_when_the_master_cannot_be_reached(self):
+        # For example @reboot with the join command, and the Agent's host
+        # boots before the Master's.
+        data = self.data("agent")
+        link = "http://master:1685/api/agents/bootstrap/a"
+        self.assertEqual(self.run_script("agent", "start", "--join-url", link).returncode, 0)
+        self.assertEqual(self.run_script("agent", "stop").returncode, 0)
+        (data / "enroll-result").write_text("network")
+        result = self.run_script("agent", "start", "--join-url", link)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no such host", result.stderr)
+        self.assertIn("本机已用此链接加入，Agent 照常启动", result.stderr)
+        self.assertIn("connects once the Master can be reached", result.stderr)
+        self.assertEqual(self.run_script("agent", "status").returncode, 0)
+        self.assertEqual(self.run_script("agent", "stop").returncode, 0)
+        # A link it has not joined with is not confirmed: nothing starts.
+        other = self.run_script("agent", "start", "--join-url", "http://master:1685/api/agents/bootstrap/b")
+        self.assertEqual(other.returncode, 1, other.stdout)
+        self.assertIn("无法连接 Master", other.stderr)
+        self.assertNotEqual(self.run_script("agent", "status").returncode, 0)
+        # An answer that refuses the link it joined with (a removed node) stops the start.
+        (data / "enroll-result").write_text("403")
+        refused = self.run_script("agent", "start", "--join-url", link)
+        self.assertEqual(refused.returncode, 1, refused.stdout)
+        self.assertIn("生成新的加入链接", refused.stderr)
+        self.assertNotEqual(self.run_script("agent", "status").returncode, 0)
+
     def test_refused_join_names_the_reason_and_what_to_do(self):
         cases = {
             "403": ("HTTP 403: Invalid or expired Agent invitation", "生成新的加入链接", "Create a new join link"),
@@ -162,6 +201,50 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("127.0.0.1:18080", moved.stdout)
         self.assertIn("http://<本机IP / host IP>:18081", moved.stdout)
         self.assertEqual((data / "listen-calls").read_text().splitlines()[-1], "0.0.0.0:18081")
+
+    def start_master_as_earlier_scripts_did(self, listen):
+        """Starts the Master as the script did before it kept run/listen: the
+        PID file holds only the supervisor's PID, and nothing records --listen."""
+        data = self.data("master")
+        for directory in ("run", "logs"):
+            (data / directory).mkdir(exist_ok=True)
+        log = data / "logs" / "service.log"
+        loop = r'''binary=$1 log=$2 stopfile=$3 childfile=$4; shift 4
+trap "kill -TERM \$child 2>/dev/null; wait \$child; exit 0" TERM INT
+while [[ ! -f "$stopfile" ]]; do
+  "$binary" "$@" >> "$log" 2>&1 & child=$!
+  echo $child > "$childfile"
+  wait $child && code=0 || code=$?
+  rm -f "$childfile"
+  [[ -f "$stopfile" || $code -eq 78 ]] && break
+  sleep 5
+done'''
+        supervisor = subprocess.Popen(
+            ["bash", "-c", loop, "oss-transfer-supervisor", str(self.root / "oss-transfer-master"), str(log),
+             str(data / "run" / "stop"), str(data / "run" / "master.pid"), "--data-dir", str(data), "--listen", listen],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.unrelated.append(supervisor)
+        (data / "run" / "supervisor.pid").write_text(f"{supervisor.pid}\n")
+        for _ in range(600):
+            if (data / "run" / "master.pid").exists() and log.exists() and "Master listening on" in log.read_text():
+                return
+            time.sleep(0.1)
+        self.fail("the Master of the earlier script did not start")
+
+    def test_master_started_by_an_earlier_script_keeps_its_listen_address(self):
+        data = self.data("master")
+        self.start_master_as_earlier_scripts_did("127.0.0.1:18090")
+        same = self.run_script("master", "start", "--listen", "127.0.0.1:18090")
+        self.assertEqual(same.returncode, 0, same.stdout + same.stderr)
+        self.assertIn("已在运行", same.stdout)
+        self.assertEqual((data / "run" / "listen").read_text(), "127.0.0.1:18090\n")
+        other = self.run_script("master", "start", "--listen", "0.0.0.0:18099")
+        self.assertEqual(other.returncode, 1, other.stdout)
+        self.assertIn("restart --listen 0.0.0.0:18099", other.stderr)
+        restart = self.run_script("master", "restart")
+        self.assertEqual(restart.returncode, 0, restart.stdout + restart.stderr)
+        self.assertIn("http://127.0.0.1:18090", restart.stdout)
+        self.assertEqual((data / "listen-calls").read_text().splitlines(), ["127.0.0.1:18090"] * 2)
 
     def test_restart_keeps_the_initial_password_valid_and_says_so(self):
         first = self.run_script("master", "start")

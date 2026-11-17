@@ -30,16 +30,15 @@ while [[ $# -gt 0 ]]; do
     *) echo "未知选项 / unknown option: $1" >&2; usage;;
   esac
 done
+# The invitation link must not carry the installer's query (?lang=zh …).
+join_url=${join_url%%\?*}
 binary="$dir/oss-transfer-$role"
 [[ -x "$binary" ]] || { echo "找不到 $binary / program not found" >&2; exit 1; }
 mkdir -p "$data/logs" "$data/run"
 log="$data/logs/service.log" pidfile="$data/run/supervisor.pid" childfile="$data/run/$role.pid" stopfile="$data/run/stop"
-# The Master's address of the last successful start. Agents keep the address
-# they joined with, so a start without --listen (restart, @reboot) reuses it.
-listenfile="$data/run/listen" saved_listen=""
-if [[ "$role" == master && -f "$listenfile" ]]; then saved_listen=$(head -n 1 "$listenfile"); fi
-explicit_listen=$listen
-listen=${listen:-${saved_listen:-0.0.0.0:1685}}
+# A digest of the join link this Agent last joined with. The link is a secret
+# until it is used, so only its digest is kept.
+joinfile="$data/run/joined"
 
 # PID files survive a reboot or a container restart, and their numbers can
 # then belong to unrelated processes. A recorded PID is acted on only when
@@ -75,8 +74,43 @@ program_pid() {
 running() { supervisor_pid > /dev/null; }
 program_up() { program_pid > /dev/null; }
 
+# The Master's address of the last successful start. Agents keep the address
+# they joined with, so a start without --listen (restart, @reboot) reuses it.
+# A Master started by an earlier version of this script has no listen file;
+# the command line of its program names the address.
+listenfile="$data/run/listen" saved_listen=""
+if [[ "$role" == master ]]; then
+  listen_option=' --listen ([^ ]+)'
+  if [[ -f "$listenfile" ]]; then saved_listen=$(head -n 1 "$listenfile")
+  elif pid=$(program_pid) && [[ "$(process_args "$pid")" =~ $listen_option ]]; then
+    saved_listen=${BASH_REMATCH[1]}
+    printf '%s\n' "$saved_listen" > "$listenfile"
+  fi
+fi
+explicit_listen=$listen
+listen=${listen:-${saved_listen:-0.0.0.0:1685}}
+
 args=(--data-dir "$data")
 [[ "$role" == master ]] && args+=(--listen "$listen")
+
+link_digest() {
+  local digest
+  digest=$( { sha256sum || shasum -a 256 || cksum; } <<< "$1" 2>/dev/null) || return 1
+  printf '%s\n' "${digest%% *}"
+}
+# Whether this Agent has joined with the link $1: the program then only asks
+# the Master to confirm the link again.
+joined_with() {
+  local recorded='' digest
+  [[ -f "$data/agent.db" ]] || return 1
+  { read -r recorded < "$joinfile"; } 2>/dev/null || return 1
+  digest=$(link_digest "$1") || return 1
+  [[ -n "$recorded" && "$recorded" == "$digest" ]]
+}
+# Whether a failed join got no answer from the Master: the request failed or
+# timed out, or the Master (or a proxy in front of it) could not take it now.
+# Only an HTTP 4xx answer refuses the link.
+join_unanswered() { grep -q '^enroll Agent: ' <<< "$1" && ! grep -q '^enroll Agent: HTTP 4' <<< "$1"; }
 
 # The Master's explanation of a refused join, and what to do about it.
 join_advice() {
@@ -95,11 +129,17 @@ join_advice() {
 start() {
   if running; then
     if [[ -n "$join_url" ]]; then
+      if [[ "$role" == agent ]] && joined_with "$join_url"; then
+        echo "agent 已在运行，并已用此链接加入（如需重启请用 restart） / agent is already running and joined with this link (use restart to restart it)"; return 0
+      fi
       echo "$role 已在运行，本次没有使用 --join-url。如需用新链接重新加入，请运行 restart --join-url …" >&2
       echo "$role is already running; --join-url was not used. To rejoin with a new link, run restart --join-url …" >&2
       exit 1
     fi
-    if [[ "$role" == master && -n "$explicit_listen" && "$explicit_listen" != "$saved_listen" ]]; then
+    if [[ "$role" == master && -n "$explicit_listen" && -z "$saved_listen" ]]; then
+      echo "master 已在运行，但无法确认它的监听地址；本次没有使用 --listen。如需确保监听 ${explicit_listen}，请运行 restart --listen $explicit_listen" >&2
+      echo "The Master is already running, but its listen address is unknown; --listen was not used. To make sure it listens on $explicit_listen, run restart --listen $explicit_listen" >&2
+    elif [[ "$role" == master && -n "$explicit_listen" && "$explicit_listen" != "$saved_listen" ]]; then
       echo "master 已在运行，本次没有使用 --listen。如需改为监听 ${explicit_listen}，请运行 restart --listen $explicit_listen" >&2
       echo "The Master is already running; --listen was not used. To listen on $explicit_listen, run restart --listen $explicit_listen" >&2
       exit 1
@@ -111,17 +151,25 @@ start() {
   if [[ "$role" == agent && -n "$join_url" ]]; then
     # A join link always joins: the program reuses an existing identity,
     # rejoins after the node was removed, and refuses another Master's link.
-    # The invitation link must not carry the installer's query (?lang=zh …).
-    join_url=${join_url%%\?*}
     echo "正在加入 Master… / joining the Master…"
-    if ! output=$("$binary" --join-url "$join_url" --data-dir "$data" --enroll-only 2>&1); then
+    if output=$("$binary" --join-url "$join_url" --data-dir "$data" --enroll-only 2>&1); then
       printf '%s\n' "$output" >> "$log"
-      echo "加入失败 / joining failed: $(printf '%s\n' "$output" | tail -n 1)" >&2
-      join_advice "$output" >&2
-      echo "日志 / log: $log" >&2
-      exit 1
+      link_digest "$join_url" > "$joinfile" || rm -f "$joinfile"
+    else
+      printf '%s\n' "$output" >> "$log"
+      if joined_with "$join_url" && join_unanswered "$output"; then
+        # The link it joined with only had to be confirmed. The Agent of a
+        # removed node stops by itself once it reaches the Master.
+        echo "注意 / note: $(printf '%s\n' "$output" | tail -n 1)" >&2
+        echo "无法向 Master 确认加入链接。本机已用此链接加入，Agent 照常启动，Master 可以访问后会自动连接。" >&2
+        echo "The join link could not be confirmed with the Master. This host already joined with this link, so the Agent starts and connects once the Master can be reached." >&2
+      else
+        echo "加入失败 / joining failed: $(printf '%s\n' "$output" | tail -n 1)" >&2
+        join_advice "$output" >&2
+        echo "日志 / log: $log" >&2
+        exit 1
+      fi
     fi
-    printf '%s\n' "$output" >> "$log"
   elif [[ "$role" == agent && ! -f "$data/agent.db" ]]; then
     echo "首次启动需要 --join-url（在控制台“添加节点”或 oss-transfer-cli agent invite 获取） / the first start needs --join-url (from Nodes > Add node, or oss-transfer-cli agent invite)" >&2; exit 1
   fi

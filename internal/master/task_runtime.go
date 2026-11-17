@@ -36,6 +36,12 @@ type taskRuntime struct {
 	closed       bool
 	sharedProofs map[int64]string
 	rates        map[int64]taskRateCache
+	// The latest scan_start reply per task, and tasks whose scan checkpoint
+	// waits for a member that speaks its scan protocol (see scan_activity.go).
+	scans        map[int64]scanSample
+	upgradeWaits map[int64]uint64
+	// scanQuery replaces the scan protocol query in tests.
+	scanQuery func(context.Context, task.Node) (int, error)
 	observeAfter map[int64]int
 	stopProgress map[int64]*stopObservation
 	stopWaits    map[int64]stopWait
@@ -681,10 +687,13 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			memberErr = errors.Join(memberErr, err)
 		}
 	}
-	var scan discovery.State
-	if err := s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &scan); err != nil {
+	var reply agentservice.ScanReply
+	err = s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &reply)
+	t.recordScan(p, reply, err)
+	if err != nil {
 		return err
 	}
+	scan := reply.State
 	if err := t.repo.ScanProgressForScanner(p.ID, p.Generation, p.ScannerEpoch(), scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error, scan.TransferCheckpoint); err != nil {
 		return err
 	}

@@ -1218,11 +1218,16 @@ func TestComparisonFromAnOlderNodeIsMarked(t *testing.T) {
 	note := "注意：该结果来自 4.1.40 及更早版本的执行节点"
 	legacy := comparisonTestPage(map[string]interface{}{"resultLimit": 10000, "changed": 999988})
 	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
-	if code != 0 || !strings.Contains(out, note) || !strings.Contains(out, "请升级该节点后重新比对") {
+	// The node may have been upgraded since; only a new comparison helps.
+	if code != 0 || !strings.Contains(out, note) || !strings.Contains(out, "请在 4.1.41 或更高版本的节点上重新比对") || strings.Contains(out, "升级该节点") {
 		t.Fatalf("%d %s", code, out)
 	}
 	code, out, _ = runMockCLI(t, []string{"--lang", "en", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
-	if code != 0 || !strings.Contains(out, "Note: this result comes from an execution node of version 4.1.40 or earlier") {
+	if code != 0 || !strings.Contains(out, "Note: this result comes from an execution node of version 4.1.40 or earlier") || !strings.Contains(out, "Compare again on a node of version 4.1.41 or later.") {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out, _ = runMockCLI(t, []string{"--lang", "ja", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, "4.1.41 以降のバージョンのノードで再度比較してください。") {
 		t.Fatalf("%d %s", code, out)
 	}
 	current := comparisonTestPage(nil)

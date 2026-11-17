@@ -453,7 +453,7 @@ func comparisonConclusion(out io.Writer, data map[string]interface{}) string {
 // known to be unreliable.
 func renderLegacyComparisonNote(out io.Writer, data map[string]interface{}) {
 	if limit, ok := cliNumeric(data["resultLimit"]); ok && limit > 0 {
-		fmt.Fprintln(out, cliText(out, "注意：该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。"))
+		fmt.Fprintln(out, cliText(out, "注意：该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请在 4.1.41 或更高版本的节点上重新比对。"))
 	}
 }
 

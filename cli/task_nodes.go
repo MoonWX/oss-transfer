@@ -383,16 +383,24 @@ func renderTaskNodeNotes(out io.Writer, membership map[string]interface{}) {
 	}
 	// The node view reports the scan as {"scan": {"phase"}}; task rows as scanPhase.
 	phase := getString(membership, "scanPhase")
-	if scan, ok := membership["scan"].(map[string]interface{}); ok {
+	scan, _ := membership["scan"].(map[string]interface{})
+	if scan != nil {
 		phase = getString(scan, "phase")
 	}
 	switch phase {
+	case "SCANNING":
+		// Only the node view carries the activity; task show prints it above.
+		renderScanActivity(out, cliScanActivity(scan["activity"]))
 	case "COMPLETE":
 		fmt.Fprintln(out, cliText(out, "扫描已完成，不再需要扫描节点。"))
 	case "HANDOFF":
 		fmt.Fprintln(out, cliText(out, "扫描正在移交给新的扫描节点，从 Master 保存的断点继续。"))
 	case "WAITING":
-		fmt.Fprintln(out, cliText(out, "原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描。"))
+		if scan["upgradeRequired"] == true {
+			fmt.Fprintln(out, cliText(out, "其余节点版本较旧，无法接续此扫描；任一节点升级后自动继续。"))
+		} else {
+			fmt.Fprintln(out, cliText(out, "原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描。"))
+		}
 	}
 }
 

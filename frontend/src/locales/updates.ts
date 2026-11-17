@@ -43,10 +43,7 @@ export const updatesMessages: Record<string, { en: string; ja: string }> = {
     en: "This node is updating or cleaning up backups. Refresh after it finishes.",
     ja: "ノードの更新またはバックアップの削除中です。完了後に再読み込みしてください。",
   },
-  "版本检测失败，请重试。": {
-    en: "Version check failed. Try again.",
-    ja: "バージョンの確認に失敗しました。再試行してください。",
-  },
+  "检测时间：{time}": { en: "Checked at: {time}", ja: "確認日時：{time}" },
   版本更新: { en: "Software updates", ja: "ソフトウェア更新" },
   更新已排队: { en: "Update queued", ja: "更新待ち" },
   正在下载更新: { en: "Downloading update", ja: "更新をダウンロード中" },

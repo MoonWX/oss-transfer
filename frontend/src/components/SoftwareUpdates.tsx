@@ -27,10 +27,10 @@ import {
   SystemUpdateAltRounded,
 } from "@mui/icons-material";
 import { useSearchParams } from "react-router-dom";
-import { api, useNotify } from "../lib/api";
+import { api, ApiError, useNotify } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import { containerAgentCommands } from "../lib/containerAgent";
-import { t, useI18n } from "../lib/i18n";
+import { formatDate, t, useI18n } from "../lib/i18n";
 import { displayNode, type NodeDisplay } from "../lib/nodeRegistry";
 import {
   displayVersion,
@@ -86,6 +86,10 @@ type Snapshot = {
   checkedAt?: string;
   checking?: boolean;
   checkError?: string;
+  // The reason each release source gave for the failed check, and when it
+  // failed (Master 4.1.47 and later).
+  checkErrorDetail?: string;
+  checkFailedAt?: string;
   // The image container Agents are recreated from (Master 4.1.42 and later).
   agentImage?: string;
 };
@@ -105,6 +109,9 @@ const prereleaseChannelValue = "prerelease";
 
 const busyUpdate = (update?: Update) =>
   ["QUEUED", "DOWNLOADING", "APPLYING"].includes(update?.phase ?? "");
+/** Whether a time from the Master lies within the last hour. */
+const withinHour = (value?: string) =>
+  !!value && Date.now() - Date.parse(value) <= 3600_000;
 function phaseText(update?: Update) {
   switch (update?.phase) {
     case "QUEUED":
@@ -192,7 +199,12 @@ export default function SoftwareUpdates({
   useI18n();
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [error, setError] = useState("");
-  const [checkError, setCheckError] = useState("");
+  // A check that failed on this page; one that failed earlier comes with the
+  // snapshot.
+  const [checkError, setCheckError] = useState<{
+    message: string;
+    detail?: string;
+  }>();
   const [checking, setChecking] = useState(false);
   const [target, setTarget] = useState<Target>();
   const [starting, setStarting] = useState(false);
@@ -237,7 +249,7 @@ export default function SoftwareUpdates({
   }, []);
   const check = useCallback(async () => {
     setChecking(true);
-    setCheckError("");
+    setCheckError(undefined);
     try {
       await api("/api/master/software-updates/check", {
         method: "POST",
@@ -246,7 +258,13 @@ export default function SoftwareUpdates({
       await refresh();
     } catch (e) {
       if (mounted.current)
-        setCheckError(e instanceof Error ? e.message : String(e));
+        setCheckError({
+          message: e instanceof Error ? e.message : String(e),
+          detail:
+            e instanceof ApiError && typeof e.response?.detail === "string"
+              ? e.response.detail
+              : undefined,
+        });
     } finally {
       if (mounted.current) setChecking(false);
     }
@@ -267,9 +285,11 @@ export default function SoftwareUpdates({
   useEffect(() => {
     if (agentsOnly || !snapshot || firstCheck.current) return;
     firstCheck.current = true;
+    // A check that failed within the hour is shown with its reason instead:
+    // without access to the release sources every check fails the same way.
     if (
-      (!snapshot.checkedAt ||
-        Date.now() - Date.parse(snapshot.checkedAt) > 3600_000) &&
+      !withinHour(snapshot.checkedAt) &&
+      !withinHour(snapshot.checkFailedAt) &&
       !snapshot.checking &&
       !busyUpdate(snapshot.master.update)
     )
@@ -413,9 +433,25 @@ export default function SoftwareUpdates({
           {masterBusy ? t("正在重新连接主节点…") : error}
         </Alert>
       )}
-      {(checkError || snapshot?.checkError) && (
+      {!agentsOnly && (checkError || snapshot?.checkError) && (
         <Alert severity="error">
-          {checkError || t("版本检测失败，请重试。")}
+          {checkError?.message || snapshot?.checkError}
+          {(checkError ? checkError.detail : snapshot?.checkErrorDetail) && (
+            <Box
+              component="pre"
+              data-testid="version-check-detail"
+              sx={{ m: 0, mt: 1, whiteSpace: "pre-wrap", fontSize: 13 }}
+            >
+              {checkError ? checkError.detail : snapshot?.checkErrorDetail}
+            </Box>
+          )}
+          {!checkError && snapshot?.checkFailedAt && (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              {t("检测时间：{time}", {
+                time: formatDate(snapshot.checkFailedAt),
+              })}
+            </Typography>
+          )}
         </Alert>
       )}
       {!agentsOnly && master && (

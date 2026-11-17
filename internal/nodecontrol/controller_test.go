@@ -286,6 +286,19 @@ func TestInvalidOrFailedConfigurationNeverPublishes(t *testing.T) {
 	if err := f.controller.SetRoots(ctx, []string{"relative"}); !errors.Is(err, ErrInvalid) {
 		t.Fatal("relative root accepted")
 	}
+	// Each rejection still counts as an invalid setting, and its message
+	// names the setting instead of leaving the user to guess.
+	for _, test := range []struct {
+		err, want error
+	}{
+		{f.controller.SetRoots(ctx, []string{"relative"}), ErrInvalidRoots},
+		{f.controller.SetRate(ctx, "localIops", 10), ErrUnknownRate},
+		{ValidateConcurrency(32, 64), ErrInvalidConcurrency},
+	} {
+		if !errors.Is(test.err, test.want) || !errors.Is(test.err, ErrInvalid) || test.err.Error() == ErrInvalid.Error() {
+			t.Fatalf("rejection does not name the setting: %v", test.err)
+		}
+	}
 	must(t, f.db.Close())
 	if err := f.controller.SetRate(ctx, "put", 42); err == nil {
 		t.Fatal("save to closed DB reported success")

@@ -267,6 +267,10 @@ func (c *Controller) commit(next persisted, events []Adjustment) error {
 }
 
 func (c *Controller) SetRate(ctx context.Context, kind string, value float64) error {
+	if kindIndex(kind) < 0 {
+		// A newer Master can offer a limit this Agent does not have.
+		return ErrUnknownRate
+	}
 	if !validRate(kind, value) {
 		return ErrInvalid
 	}
@@ -330,13 +334,13 @@ func (c *Controller) SetRate(ctx context.Context, kind string, value float64) er
 
 func validatedRoots(roots []string) ([]string, error) {
 	if len(roots) > 100 {
-		return nil, ErrInvalid
+		return nil, ErrInvalidRoots
 	}
 	out := []string{}
 	seen := map[string]bool{}
 	for _, root := range roots {
 		if !utf8.ValidString(root) || len(root) > 4096 || strings.ContainsAny(root, "\x00\r\n") || !filepath.IsAbs(root) {
-			return nil, ErrInvalid
+			return nil, ErrInvalidRoots
 		}
 		root = filepath.Clean(root)
 		if !seen[root] {

@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,6 +23,12 @@ type softwareUpdateState struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	closed    bool
+
+	// errorDetail is the reason each release source gave for the last
+	// failed check, and failedAt when it failed. A successful check clears
+	// both; checkedAt records only successful checks.
+	errorDetail string
+	failedAt    time.Time
 }
 
 func installSoftwareUpdateRoutes(s *Server) {
@@ -104,6 +111,7 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.updates.mu.Lock()
 	latest, checked, checking, checkError := s.updates.latest, s.updates.checkedAt, s.updates.checking, s.updates.error
+	checkErrorDetail, checkFailed := s.updates.errorDetail, s.updates.failedAt
 	s.updates.mu.Unlock()
 	queue, _ := s.softwareQueue()
 	for i := range queue.Items {
@@ -116,14 +124,37 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{
+	data := map[string]any{
 		"master": map[string]any{"info": info, "update": status}, "agents": nodes,
 		"latest": latest, "checkedAt": checked, "checking": checking, "checkError": localize(w, checkError),
 		"available": latest != nil && newerSoftware(latest.Version, info.Version),
 		"queue":     queue,
 		// Container Agents are updated by recreating them from this image.
 		"agentImage": s.options.AgentDockerImage,
-	}})
+	}
+	if checkError != "" {
+		// The console does not check again on its own soon after a failure.
+		data["checkErrorDetail"], data["checkFailedAt"] = checkErrorDetail, checkFailed
+	}
+	writeJSON(w, 200, map[string]any{"success": true, "data": data})
+}
+
+// Why a version check failed: no release source answered, so checking again
+// cannot help until the Master can reach one, or a source answered with an
+// error.
+const (
+	versionSourcesUnreachable = `The Master cannot reach GitHub or JD Cloud OSS to check for new versions. Checking again will not succeed until it can reach one of them; to upgrade without them, use an offline package (see "Offline installation" in the documentation)`
+	versionCheckFailed        = "Version check failed: the release sources did not return a valid release"
+)
+
+// versionCheckFailure explains a failed version check and gives the reason
+// each release source gave, one source per line.
+func versionCheckFailure(err error) (message, detail string) {
+	detail = strings.TrimSpace(err.Error())
+	if softwareupdate.SourcesUnreachable(err) {
+		return versionSourcesUnreachable, detail
+	}
+	return versionCheckFailed, detail
 }
 
 func (s *Server) checkSoftwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
@@ -146,16 +177,21 @@ func (s *Server) checkSoftwareUpdatesHTTP(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 	release, err := s.options.Updater.Check(ctx)
+	message, detail := "", ""
+	if err != nil {
+		message, detail = versionCheckFailure(err)
+		log.Printf("version check failed: %s", strings.ReplaceAll(detail, "\n", "; "))
+	}
 	s.updates.mu.Lock()
-	s.updates.checking, s.updates.error = false, ""
+	s.updates.checking, s.updates.error, s.updates.errorDetail = false, message, detail
 	if err == nil {
-		s.updates.latest, s.updates.checkedAt = &release, time.Now().UTC()
+		s.updates.latest, s.updates.checkedAt, s.updates.failedAt = &release, time.Now().UTC(), time.Time{}
 	} else {
-		s.updates.error = "Version check failed; try again"
+		s.updates.failedAt = time.Now().UTC()
 	}
 	s.updates.mu.Unlock()
 	if err != nil {
-		fail(w, 502, "Version check failed; try again")
+		writeJSON(w, 502, map[string]any{"success": false, "message": localize(w, message), "detail": detail})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": release})

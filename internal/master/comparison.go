@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"sort"
@@ -114,8 +116,12 @@ func (c *comparisonAPI) start(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	displays := s.nodeDisplaySnapshot()
+	var refusals comparisonRefusals
 	for _, node := range c.preferComparisonProtocol(ctx, nodes) {
+		label := displays.lookup(node.ID, node.Address).DisplayLabel
 		if err = s.syncStorage(ctx, node, snapshot); err != nil {
+			refusals.unsynced(label, redactStorageError(err, snapshot.Connections))
 			continue
 		}
 		assignment := comparisonAssignment{Request: request, NodeID: node.ID, EnrollmentID: node.EnrollmentID, CreatedAt: c.now().UTC()}
@@ -132,6 +138,7 @@ func (c *comparisonAPI) start(w http.ResponseWriter, r *http.Request) {
 				fail(w, 500, "Cannot save comparison")
 				return
 			}
+			refusals.refused(label, err)
 			continue
 		}
 		if err != nil {
@@ -144,7 +151,72 @@ func (c *comparisonAPI) start(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 202, progress)
 		return
 	}
-	fail(w, 503, "No Agent is available for comparison; a comparison may already be running")
+	log.Printf("comparison %s was not started: %s", id, refusals.message(func(message string) string { return message }))
+	writeJSON(w, 503, map[string]any{"success": false, "message": refusals.message(func(message string) string { return localize(w, message) })})
+}
+
+// comparisonRefusals records why each online Agent did not start a new
+// comparison, so that a start no Agent accepted names the actual reasons.
+type comparisonRefusals struct {
+	// Node labels by reason: running another comparison, being updated, too
+	// old for comparisons, or not answering.
+	busy, updating, outdated, silent []string
+	// The label and redacted error of each node that could not apply the
+	// storage connections.
+	failed [][2]string
+}
+
+// refused records an Agent's explicit refusal of comparison_start.
+func (r *comparisonRefusals) refused(label string, err error) {
+	switch {
+	case agentUpdating(err):
+		r.updating = append(r.updating, label)
+	case comparisonUnsupported(err):
+		r.outdated = append(r.outdated, label)
+	default:
+		r.busy = append(r.busy, label)
+	}
+}
+
+// unsynced records an Agent that could not apply the storage connections,
+// which a comparison needs first.
+func (r *comparisonRefusals) unsynced(label string, err error) {
+	if agentSilent(err) {
+		r.silent = append(r.silent, label)
+		return
+	}
+	r.failed = append(r.failed, [2]string{label, err.Error()})
+}
+
+// message explains why no Agent started the comparison; translate localizes
+// each catalog sentence.
+func (r *comparisonRefusals) message(translate func(string) string) string {
+	list := func(labels []string) string { return strings.Join(labels, translate(", ")) }
+	var clauses []string
+	for _, group := range []struct {
+		labels []string
+		clause string
+	}{
+		{r.busy, "another comparison is running on %s and must finish or be canceled first"},
+		{r.updating, "an update is in progress on %s and must finish first"},
+		{r.outdated, "%s must be upgraded to run comparisons"},
+		{r.silent, "%s did not respond"},
+	} {
+		if len(group.labels) > 0 {
+			clauses = append(clauses, fmt.Sprintf(translate(group.clause), list(group.labels)))
+		}
+	}
+	for _, failure := range r.failed {
+		clauses = append(clauses, fmt.Sprintf(translate("the storage connections could not be applied on %s: %s"), failure[0], failure[1]))
+	}
+	if len(clauses) == 0 {
+		return translate("No Agent is available for comparison")
+	}
+	joined := clauses[0]
+	for _, clause := range clauses[1:] {
+		joined = fmt.Sprintf(translate("%s; %s"), joined, clause)
+	}
+	return fmt.Sprintf(translate("No Agent can start this comparison: %s"), joined)
 }
 
 // comparisonID draws a new comparison ID. It never starts with '-', so that
@@ -345,7 +417,7 @@ func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error)
 		fail(w, 404, "Comparison not found")
 		return
 	}
-	if comparisonNodeSilent(err) {
+	if agentSilent(err) {
 		// Not a gateway failure the operator can act on: the node went away
 		// after its last poll. Its results stay there until it reconnects.
 		fail(w, 503, "The node holding this comparison did not respond; its results stay on that node and load again when it reconnects")
@@ -354,9 +426,9 @@ func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error)
 	fail(w, 502, err.Error())
 }
 
-// comparisonNodeSilent reports an Agent call that got no answer: the node
-// stopped polling, lost its enrollment session, or never took the command.
-func comparisonNodeSilent(err error) bool {
+// agentSilent reports an Agent call that got no answer: the node stopped
+// polling, lost its enrollment session, or never took the command.
+func agentSilent(err error) bool {
 	var problem *AgentError
 	if errors.As(err, &problem) {
 		return false

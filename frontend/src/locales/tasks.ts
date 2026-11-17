@@ -2833,6 +2833,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Waiting for scanning node {node} to reconnect; assigned subtasks stay on their nodes",
     ja: "スキャンノード {node} の再接続を待っています。割り当て済みのサブタスクは元のノードに残ります",
   },
+  "等待扫描节点 {node} 恢复可用；已分配的子任务仍保留在原节点": {
+    en: "Waiting for scanning node {node} to become available; assigned subtasks stay on their nodes",
+    ja: "スキャンノード {node} が利用可能になるのを待っています。割り当て済みのサブタスクは元のノードに残ります",
+  },
   等待不可用节点的执行租约到期: {
     en: "Waiting for an unavailable node's execution lease to expire",
     ja: "利用できないノードの実行リースの期限切れを待っています",

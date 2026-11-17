@@ -186,6 +186,26 @@ func (c *client) release(ctx context.Context, version string, allowPrerelease bo
 	}
 	return Release{}, errors.Join(errs...)
 }
+
+// SourcesUnreachable reports a failed release lookup in which no release
+// source answered: every request failed before an HTTP response (name
+// resolution, connection, proxy, TLS or timeout). Trying again cannot succeed
+// until the host can reach a source; an answer that was an error, such as
+// HTTP 403 or invalid metadata, is not this.
+func SourcesUnreachable(err error) bool {
+	var sources interface{ Unwrap() []error }
+	if !errors.As(err, &sources) || len(sources.Unwrap()) == 0 {
+		return false
+	}
+	for _, source := range sources.Unwrap() {
+		var request *url.Error
+		if !errors.As(source, &request) {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *client) releaseFrom(ctx context.Context, source, version string, allowPrerelease bool) (Release, error) {
 	var release Release
 	// "latest" never selects a prerelease, even if the flag is set.

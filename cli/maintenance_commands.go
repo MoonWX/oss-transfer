@@ -681,6 +681,10 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 	}
 	if checkError := getString(data, "checkError"); checkError != "" {
 		fmt.Fprintln(out, safeCLIText(checkError))
+		// The failure stays until a check succeeds; say when it happened.
+		if failed, ok := cliTimeValue(data["checkFailedAt"]); ok && failed != "" {
+			fmt.Fprintf(out, cliText(out, "检测失败时间: %s\n"), failed)
+		}
 	}
 	if phase := getString(queue, "phase"); phase != "" && phase != "IDLE" {
 		fmt.Fprintf(out, cliText(out, "Agent 更新队列: %s\n"), softwarePhaseText(out, phase))

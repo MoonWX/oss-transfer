@@ -365,7 +365,7 @@ test("failure records show unresolved records by default", async ({ page }) => {
     .toBe("unresolved");
   await expect(page.getByRole("tab", { name: "降级迁移记录" })).toHaveAttribute(
     "title",
-    /当前版本不再产生这类记录/,
+    /当前版本不会改用备用传输方式，因此不产生降级记录/,
   );
 });
 

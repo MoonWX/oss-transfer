@@ -799,6 +799,15 @@ var cliMessages = map[string][2]string{
 	"重试子任务": {"Retried subtasks", "再試行した子タスク"},
 	"重试对象":  {"Retried objects", "再試行したオブジェクト"},
 	"主节点未执行运行中重试；请升级主节点后重试失败项": {"The Master did not retry the running task; upgrade the Master to retry its failed objects", "Master は実行中タスクを再試行しませんでした。失敗項目を再試行するには Master を更新してください"},
+	// Storage checks, recovered v4.0.x objects, node limits and results of
+	// older comparison nodes.
+	"连接测试通过：ListBuckets 被拒绝，已用当前寻址方式直接访问存储桶 %s":      {"Connection test passed: ListBuckets was denied; bucket %s was reached directly with the current addressing", "接続テストに成功しました。ListBuckets は拒否されたため、現在のアドレス指定でバケット %s に直接アクセスしました"},
+	"ListBuckets 被拒绝，未获取存储桶列表；可用 --bucket 指定要检查的存储桶": {"ListBuckets was denied, so no bucket list was obtained; name the bucket to check with --bucket", "ListBuckets が拒否されたため、バケット一覧は取得していません。--bucket で確認するバケットを指定してください"},
+	"存储桶：无权列举（ListBuckets 被拒绝）":                      {"Buckets: not listed (ListBuckets was denied)", "バケット: 一覧できません（ListBuckets が拒否されました）"},
+	"源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端":             {"The source does not have this object recorded by the v4.0.x task; a retry checks the source again", "v4.0.x のタスクが記録したこのオブジェクトが転送元に見つかりません。再試行すると転送元を再確認します"},
+	"按新目标逐步提升":                     {"Rising to the new target", "新しい目標へ段階的に引き上げ中"},
+	"（LIST 还受扫描节点的 LIST 上限约束，未计入）": {" (LIST is also bounded by the LIST limit of the node that scans, not included)", "（LIST はスキャンするノードの LIST 上限にも制限されます。含まれていません）"},
+	"注意：该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。": {"Note: this result comes from an execution node of version 4.1.40 or earlier, and its counts may be wrong: on storage whose LIST times have millisecond precision, \"Changed during comparison\" can be a false alarm and can also include objects that are really missing; a single-object comparison counts \"Missing on both sides\" as \"Read failed\"; at most 10,000 differences are kept. Upgrade the node and compare again.", "注意: この結果は 4.1.40 以前のバージョンの実行ノードによるもので、集計が正しくない可能性があります。LIST の時刻がミリ秒精度のストレージでは、「比較中に変更」は誤検知の可能性があり、実際に欠落しているオブジェクトも含まれることがあります。単一オブジェクトの比較では「両側に存在しない」が「読み取り失敗」に数えられます。保存される差分は最大 10,000 件です。ノードをアップグレードしてから再度比較してください。"},
 	// Object comparisons.
 	"正在比对":       {"Running", "比較中"},
 	"正在取消":       {"Canceling", "キャンセル中"},

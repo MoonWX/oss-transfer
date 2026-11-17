@@ -423,12 +423,12 @@ func TestCheckpointCannotAdvancePastRolledBackBatchesOrOldAttempt(t *testing.T) 
 	}
 	next := committed
 	next.Cursor = "must-not-be-visible"
-	conflict := scanTestBatch(0)
-	conflict.objects[0].Size++
-	// The marker is intentionally before the conflicting row. A transaction
+	invalid := scanTestBatch(2)
+	invalid.objects[0].Size = -1
+	// The marker is intentionally before the invalid row. A transaction
 	// failure after updating the cursor must roll back cursor and output alike.
-	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{scanTestBatch(1), {checkpoint: &next}, conflict}); !errors.Is(err, ErrSourceChanged) {
-		t.Fatalf("conflicting page did not fail its transaction: %v", err)
+	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{scanTestBatch(1), {checkpoint: &next}, invalid}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an invalid page did not fail its transaction: %v", err)
 	}
 	for _, field := range []string{"generation", "epoch", "attempt"} {
 		t.Run(field, func(t *testing.T) {

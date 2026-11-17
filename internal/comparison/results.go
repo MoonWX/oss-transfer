@@ -60,6 +60,7 @@ const (
 // Fixed sentences; the Master localizes them.
 const (
 	errorFailed      = "Comparison could not finish; check storage access and retry."
+	errorListing     = "The storage returned a listing that a comparison cannot use; retrying or resuming does not help."
 	errorSave        = "Cannot save comparison results"
 	errorUnavailable = "Comparison results are unavailable on this node"
 )

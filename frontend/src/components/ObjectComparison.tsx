@@ -72,6 +72,10 @@ type Row = {
   status: string;
   sourceSize: number;
   destinationSize: number;
+  // A side that was not read, or that does not exist, on an ERROR or
+  // CHANGED_DURING_COMPARE row: its size field is 0, not an object size.
+  sourceSizeUnknown?: boolean;
+  destinationSizeUnknown?: boolean;
   sourceSha256?: string;
   destinationSha256?: string;
   error?: string;
@@ -304,10 +308,16 @@ function reasonsText(reasons?: string[]) {
 /** Status filters in display order; "" lists every stored difference. */
 const filters: {
   status: string;
-  label: () => string;
+  label: (progress: Progress) => string;
   count: (progress: Progress) => number | undefined;
 }[] = [
-  { status: "", label: () => t("全部差异"), count: (p) => p.rows },
+  {
+    status: "",
+    // Once rows are truncated, later differences are only counted: this
+    // filter then holds the stored ones, not all of them.
+    label: (p) => (p.rowsTruncated ? t("已保存差异") : t("全部差异")),
+    count: (p) => p.rows,
+  },
   { status: "DIFFERENT", label: () => t("不一致"), count: (p) => p.different },
   {
     status: "ETAG_MISMATCH",
@@ -430,11 +440,15 @@ function truncationText(progress: Progress) {
 }
 
 const sourceSize = (row: Row) =>
-  row.status === "EXTRA_TARGET" || row.status === "BOTH_MISSING"
+  row.sourceSizeUnknown ||
+  row.status === "EXTRA_TARGET" ||
+  row.status === "BOTH_MISSING"
     ? "—"
     : formatBytes(row.sourceSize);
 const destinationSize = (row: Row) =>
-  row.status === "MISSING_TARGET" || row.status === "BOTH_MISSING"
+  row.destinationSizeUnknown ||
+  row.status === "MISSING_TARGET" ||
+  row.status === "BOTH_MISSING"
     ? "—"
     : formatBytes(row.destinationSize);
 
@@ -1434,7 +1448,7 @@ function ComparisonResult({
                 return (
                   <Chip
                     key={option.status || "all"}
-                    label={`${option.label()} ${formatNumber(option.count(progress))}`}
+                    label={`${option.label(progress)} ${formatNumber(option.count(progress))}`}
                     clickable
                     color={selected ? "primary" : "default"}
                     variant={selected ? "filled" : "outlined"}
@@ -1446,6 +1460,15 @@ function ComparisonResult({
             </Box>
             {progress.rowsTruncated && (
               <Alert severity="warning">{truncationText(progress)}</Alert>
+            )}
+            {!!progress.resultLimit && (
+              // Agents before results protocol 2 report a fixed row limit.
+              // Their results are known to be unreliable; say so.
+              <Alert severity="warning" data-testid="legacy-comparison-node">
+                {t(
+                  "该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。",
+                )}
+              </Alert>
             )}
             {(progress.error || progress.errorDetail) && (
               <Alert
@@ -1507,7 +1530,11 @@ function ComparisonResult({
                   disabled={exporting}
                   onClick={() => void exportResults()}
                 >
-                  {exporting ? t("正在准备下载") : t("导出全部差异（ZIP）")}
+                  {exporting
+                    ? t("正在准备下载")
+                    : progress.rowsTruncated || active
+                      ? t("导出已保存的差异（ZIP）")
+                      : t("导出全部差异（ZIP）")}
                 </Button>
                 {!active && (
                   <Button
@@ -1595,7 +1622,14 @@ function ComparisonResult({
                 ) : (
                   <Typography variant="body2" color="text.secondary">
                     {filter
-                      ? t("没有符合条件的差异。")
+                      ? progress.rowsTruncated &&
+                        (filters
+                          .find((option) => option.status === filter)
+                          ?.count(progress) ?? 0) > 0
+                        ? t(
+                            "已保存的差异中没有符合条件的记录；截断之后的差异只计数，未保存明细。",
+                          )
+                        : t("没有符合条件的差异。")
                       : differences(progress) > 0
                         ? t("暂无已保存的差异明细。")
                         : active

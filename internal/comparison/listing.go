@@ -89,7 +89,7 @@ func (l *comparisonListing) run(ctx context.Context) {
 			}
 			err = &comparisonSideError{side: l.side, operation: "LIST", err: err}
 		} else if page.NextCursor != "" && page.NextCursor == cursor {
-			err = &comparisonListingError{message: l.side + " listing did not advance"}
+			err = &comparisonListingError{message: l.side + " listing did not advance", unusable: true}
 		}
 		result := comparisonPage{objects: page.Objects, final: err == nil && page.NextCursor == "", err: err}
 		if err != nil {
@@ -139,7 +139,7 @@ func (l *comparisonListing) peek(ctx context.Context) (*transferstore.Object, er
 		object = l.page[0]
 		l.page = l.page[1:]
 		if !strings.HasPrefix(object.Key, l.prefix) {
-			return nil, &comparisonListingError{message: l.side + " listing returned a key outside the prefix"}
+			return nil, &comparisonListingError{message: l.side + " listing returned a key outside the prefix", unusable: true}
 		}
 		// Keys through the resume key were compared before; skip them until
 		// the first later key, also when the store ignored start-after.
@@ -148,7 +148,7 @@ func (l *comparisonListing) peek(ctx context.Context) (*transferstore.Object, er
 		}
 	}
 	if l.ordered && object.Key <= l.last {
-		return nil, &comparisonListingError{message: fmt.Sprintf("%s listing is not in ascending byte order after key %q", l.side, clipDetail(strings.TrimPrefix(l.last, l.prefix), maxDetailKeyBytes))}
+		return nil, &comparisonListingError{message: fmt.Sprintf("%s listing is not in ascending byte order after key %q", l.side, clipDetail(strings.TrimPrefix(l.last, l.prefix), maxDetailKeyBytes)), unusable: true}
 	}
 	l.last, l.ordered = object.Key, true
 	l.head = &object

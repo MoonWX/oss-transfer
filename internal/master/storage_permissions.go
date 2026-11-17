@@ -61,7 +61,7 @@ func (s *Server) checkStoragePermissions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if len(members) == 0 {
-		fail(w, 409, "no Agent is online; join an Agent before validating storage")
+		fail(w, 409, s.noOnlineAgentError().Error())
 		return
 	}
 	request := struct {

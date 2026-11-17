@@ -39,6 +39,7 @@ import {
   CompareArrowsRounded,
   DeleteForeverRounded,
   RefreshRounded,
+  RestoreFromTrashRounded,
   SystemUpdateAltRounded,
 } from "@mui/icons-material";
 import { api, getToken, useApi, useNotify } from "../lib/api";
@@ -263,6 +264,7 @@ export default function ToolsPage() {
     null,
   );
   const [confirmedIds, setConfirmedIds] = useState<number[]>([]);
+  const [restoring, setRestoring] = useState(false);
   const [showDeleteDetails, setShowDeleteDetails] = useState(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -602,6 +604,73 @@ export default function ToolsPage() {
       if (deletingSession === token) setDeletingSession(null);
     }
   }
+  // Restoring moves selected tasks back to the task list; a task whose
+  // permanent deletion has started cannot be selected.
+  async function restoreTasks() {
+    const taskIds = activeSelection;
+    if (!taskIds.length || restoring || deleting) return;
+    setRestoring(true);
+    const issues: string[] = [];
+    try {
+      const result = await runTaskBatches(
+        [{ path: "/api/master/restore", taskIds }],
+        {
+          isCurrent: () => mounted.current,
+          onResult: (detail) => {
+            for (const item of Array.isArray(detail.details)
+              ? detail.details
+              : [])
+              if (item.success === false || item.error)
+                issues.push(
+                  `#${item.taskId}: ${item.message || item.error || t("请求失败")}`,
+                );
+          },
+        },
+      );
+      const restored = new Set(result.successfulIds);
+      if (mounted.current) {
+        setSelectedIds((previous) =>
+          previous.filter((id) => !restored.has(id)),
+        );
+        setEarlierRows((previous) =>
+          previous.filter((task) => !restored.has(task.taskIndex)),
+        );
+      }
+      for (const issue of result.issues)
+        issues.push(
+          `${issue.taskIds
+            .slice(0, 5)
+            .map((id) => `#${id}`)
+            .join(", ")}: ${issue.message}`,
+        );
+      if (
+        issues.length ||
+        result.failedIds.length ||
+        result.uncertainIds.length ||
+        result.unsubmittedIds.length
+      )
+        notify(
+          t("部分任务未还原：{value1}", {
+            value1: issues.join("；") || t("请刷新后重试。"),
+          }),
+          "warning",
+        );
+      else
+        notify(
+          t("已还原 {count} 个任务，可在任务列表中查看。", {
+            count: formatNumber(restored.size),
+          }),
+          "success",
+        );
+    } catch (error) {
+      notify(errorText(error), "error");
+    } finally {
+      if (mounted.current) {
+        setRestoring(false);
+        void recycle.refresh();
+      }
+    }
+  }
   const deletionProgress = deleteProgress && (
     <Stack spacing={1} role="status" aria-live="polite">
       <Typography variant="body2">
@@ -671,7 +740,7 @@ export default function ToolsPage() {
         <>
           <Alert severity="info">
             {t(
-              "回收站保留已标记删除的任务。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。",
+              "回收站保留已标记删除的任务，选择后可还原到任务列表。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。",
             )}
           </Alert>
           {recycle.error && <Alert severity="error">{recycle.error}</Alert>}
@@ -797,10 +866,26 @@ export default function ToolsPage() {
                 </Button>
                 <Button
                   variant="outlined"
+                  startIcon={<RestoreFromTrashRounded />}
+                  disabled={
+                    !activeSelection.length ||
+                    deleting ||
+                    restoring ||
+                    recycle.loading
+                  }
+                  onClick={() => void restoreTasks()}
+                >
+                  {t("还原")}
+                </Button>
+                <Button
+                  variant="outlined"
                   color="error"
                   startIcon={<DeleteForeverRounded />}
                   disabled={
-                    !activeSelection.length || deleting || recycle.loading
+                    !activeSelection.length ||
+                    deleting ||
+                    restoring ||
+                    recycle.loading
                   }
                   onClick={() => {
                     setConfirmedIds([...activeSelection]);

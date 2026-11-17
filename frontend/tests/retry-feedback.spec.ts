@@ -197,7 +197,7 @@ test("one exception task action stays locked across rows, navigation, and reload
     await expect(processing).toHaveCount(1);
     await expect(processing.first()).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: "完整迁移报告" }),
+      page.getByRole("button", { name: "导出全部本地任务报告" }),
     ).toBeEnabled();
     await expect(
       page.getByRole("tab", { name: "失败对象", exact: true }),
@@ -389,7 +389,7 @@ test("a retry preflight from an old login cannot submit using the new login", as
     preflight.release();
     // The preflight has returned and the handler has completed its finally block.
     await expect(
-      page.getByRole("button", { name: "完整迁移报告" }),
+      page.getByRole("button", { name: "导出全部本地任务报告" }),
     ).toBeEnabled();
     expect(sent).toBe(0);
     expect(

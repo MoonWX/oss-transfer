@@ -85,7 +85,9 @@ func cliTaskRequestRates(out io.Writer, task map[string]interface{}) [][2]string
 		fields = append(fields, [2]string{cliText(out, "任务请求上限"), cliRequestLimits(out, limits)})
 	}
 	if limits, ok := rates["effective"].(map[string]interface{}); ok {
-		fields = append(fields, [2]string{cliText(out, "生效请求上限"), cliRequestLimits(out, limits)})
+		// ListObjects also waits for the LIST limit of the node that scans,
+		// which this sum does not include.
+		fields = append(fields, [2]string{cliText(out, "生效请求上限"), cliRequestLimits(out, limits) + cliText(out, "（LIST 还受扫描节点的 LIST 上限约束，未计入）")})
 	}
 	return fields
 }

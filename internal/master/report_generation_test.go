@@ -466,3 +466,36 @@ func TestReportAfterRetryingAChangedSourceIsComplete(t *testing.T) {
 	g.finish("COMPLETED")
 	g.export().assertComplete(t, "a", "b")
 }
+
+// The task does not record when its scan error happened. Its TASK_ERROR row
+// leaves the timestamp empty rather than showing the export time as if the
+// error had happened then, and the metadata says so.
+func TestReportTaskErrorRowHasNoInventedTime(t *testing.T) {
+	g := newGenerationReport(t, "a")
+	g.assign([]string{"a"})
+	if err := g.f.master.tasks.repo.ScanProgress(g.parent.ID, g.parent.Generation, 1, 1, 1, false, "source listing failed: HTTP 503"); err != nil {
+		t.Fatal(err)
+	}
+	g.run(1)
+	if finished, err := g.f.master.tasks.repo.FinishIfReady(g.parent.ID, g.parent.Generation); err != nil || !finished {
+		t.Fatal("task with a scan error did not end", finished, err)
+	}
+	g.refresh()
+	report := g.export()
+	found := false
+	for _, row := range report.exceptions {
+		if row["reasonCode"] != "TASK_ERROR" {
+			continue
+		}
+		found = true
+		if row["timestamp"] != "" || row["errorMessage"] != "source listing failed: HTTP 503" {
+			t.Fatalf("task error row: %v", row)
+		}
+	}
+	if !found {
+		t.Fatal("no TASK_ERROR row", report.exceptions)
+	}
+	if meaning, _ := report.meta["timestampMeaning"].(string); !strings.Contains(meaning, "TASK_ERROR row has no timestamp") {
+		t.Fatalf("timestampMeaning does not explain the TASK_ERROR row: %q", meaning)
+	}
+}

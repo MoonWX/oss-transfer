@@ -190,7 +190,10 @@ func (s *Server) failureSummary(ctx context.Context, p task.Parent) map[string]a
 		}
 		causes = append(causes, map[string]any{"code": g.code, "count": g.count, "message": message, "sample": g.sample})
 	}
-	allFailed := task.Ended(p.Status) && p.Counters.Succeeded+p.Counters.Skipped == 0
+	// "All" only when every discovered object was attempted: the scan finished
+	// and the task ended on its own. A stopped task, or a task whose scan did
+	// not finish, has objects that were never tried.
+	allFailed := task.Ended(p.Status) && p.Status != "STOPPED" && p.ScanComplete && p.Counters.Succeeded+p.Counters.Skipped == 0
 	truncated := errors.Is(err, errSummaryFull)
 	main := causes[0]["message"].(string)
 	var message string

@@ -1209,3 +1209,62 @@ func TestComparisonRetentionDateIsALatestDate(t *testing.T) {
 		}
 	}
 }
+
+// A comparison that an Agent before results protocol 2 ran reports a fixed
+// row limit. Its counts are known to be unreliable, so the start and the
+// status say where the result came from and what to do.
+func TestComparisonFromAnOlderNodeIsMarked(t *testing.T) {
+	useComparisonClock(t)
+	note := "注意：该结果来自 4.1.40 及更早版本的执行节点"
+	legacy := comparisonTestPage(map[string]interface{}{"resultLimit": 10000, "changed": 999988})
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, note) || !strings.Contains(out, "请升级该节点后重新比对") {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out, _ = runMockCLI(t, []string{"--lang", "en", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, "Note: this result comes from an execution node of version 4.1.40 or earlier") {
+		t.Fatalf("%d %s", code, out)
+	}
+	current := comparisonTestPage(nil)
+	code, out, _ = runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, current) })
+	if code != 0 || strings.Contains(out, note) {
+		t.Fatalf("a current node's result was marked as older: %d %s", code, out)
+	}
+	running := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "RUNNING", "items": nil, "resultLimit": 10000})
+	handler, _, _ := comparisonCompareServer(t, running, func(int) map[string]interface{} { return running })
+	code, out, _ = runMockCLI(t, []string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive"}, handler)
+	if code != 0 || !strings.Contains(out, "比对已开始，ID：cmp-1\n") || !strings.Contains(out, note) {
+		t.Fatalf("the start did not say an older node runs the comparison: %d %s", code, out)
+	}
+}
+
+// A side whose size was not read, or that does not exist, shows no size: 0 B
+// would be the size of an empty object.
+func TestComparisonRowsWithoutAKnownSizeShowNoSize(t *testing.T) {
+	page := comparisonTestPage(map[string]interface{}{"items": []interface{}{
+		map[string]interface{}{"number": 1, "key": "denied.jpg", "sourceKey": "2026/denied.jpg", "destinationKey": "backup/denied.jpg", "status": "ERROR", "sourceSize": 2048, "destinationSize": 0, "destinationSizeUnknown": true, "error": "Cannot read target metadata"},
+		map[string]interface{}{"number": 2, "key": "gone.jpg", "sourceKey": "2026/gone.jpg", "destinationKey": "backup/gone.jpg", "status": "CHANGED_DURING_COMPARE", "sourceSize": 0, "sourceSizeUnknown": true, "destinationSize": 1024},
+		map[string]interface{}{"number": 3, "key": "empty.jpg", "sourceKey": "2026/empty.jpg", "destinationKey": "backup/empty.jpg", "status": "DIFFERENT", "sourceSize": 0, "destinationSize": 0, "reasons": []interface{}{"contentType"}},
+	}})
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, page) })
+	if code != 0 {
+		t.Fatal(code, out)
+	}
+	lines := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		for _, key := range []string{"denied.jpg", "gone.jpg", "empty.jpg"} {
+			if strings.Contains(line, "2026/"+key) {
+				lines[key] = line
+			}
+		}
+	}
+	if !strings.Contains(lines["denied.jpg"], "2 KiB") || strings.Contains(lines["denied.jpg"], "0 B") || !strings.Contains(lines["denied.jpg"], "—") {
+		t.Errorf("unread target size: %q", lines["denied.jpg"])
+	}
+	if !strings.Contains(lines["gone.jpg"], "1 KiB") || strings.Contains(lines["gone.jpg"], "0 B") || !strings.Contains(lines["gone.jpg"], "—") {
+		t.Errorf("absent source size: %q", lines["gone.jpg"])
+	}
+	if strings.Count(lines["empty.jpg"], "0 B") != 2 {
+		t.Errorf("an empty object lost its real size: %q", lines["empty.jpg"])
+	}
+}

@@ -22,7 +22,15 @@ func exceptionsListSummary(client *ApiClient, kind string, o commandOptions, res
 		}
 		return cliTextLines(text.String())
 	}
-	if len(items) == 0 {
+	if len(items) == 0 && result["legacyHistorical"] == true {
+		// A task converted from v4.0.x keeps its failed objects in the task
+		// report only; "no failed objects" would contradict its failed count.
+		if message := getString(result, "message"); message != "" {
+			fmt.Fprintln(out, safeCLIText(message))
+		} else {
+			fmt.Fprintln(out, cliText(out, "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出；请用 task report 导出任务报告，在 file-results.csv 和 exception-details.csv 中查看"))
+		}
+	} else if len(items) == 0 {
 		fmt.Fprintln(out, cliText(out, "没有失败对象"))
 	} else {
 		renderExceptionRows(out, items)

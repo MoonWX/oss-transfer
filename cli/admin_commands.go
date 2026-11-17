@@ -325,8 +325,13 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		if action == "test" {
 			_, checkSupported := result["pathStyle"]
 			switch {
+			case getString(result, "checkedBucket") != "" && result["listBucketsDenied"] == true:
+				// Keys limited to one bucket: nothing was listed.
+				result["message"] = client.locale.format("连接测试通过：ListBuckets 被拒绝，已用当前寻址方式直接访问存储桶 %s", getString(result, "checkedBucket"))
 			case getString(result, "checkedBucket") != "":
 				result["message"] = client.text("连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶")
+			case result["listBucketsDenied"] == true && !o.Has("bucket"):
+				result["message"] = client.text("ListBuckets 被拒绝，未获取存储桶列表；可用 --bucket 指定要检查的存储桶")
 			case getString(result, "bucketCheckFailed") != "":
 				result["message"] = client.text("已读取存储桶列表；第一个存储桶的存储桶级检查未通过，见警告；可用 --bucket 检查要迁移的存储桶")
 			case !checkSupported:

@@ -480,7 +480,8 @@ test("empty result pages say whether nothing differs, nothing matches or nothing
     truncatedReason: "LOW_DISK_SPACE",
   };
   await page.getByRole("button", { name: "刷新" }).click();
-  await page.getByRole("button", { name: "全部差异 0" }).click();
+  // Truncated: the unfiltered view holds the stored differences only.
+  await page.getByRole("button", { name: "已保存差异 0" }).click();
   await expect(
     page.getByText("暂无已保存的差异明细。", { exact: true }),
   ).toBeVisible();

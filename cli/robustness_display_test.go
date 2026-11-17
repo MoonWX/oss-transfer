@@ -28,6 +28,12 @@ func TestExceptionReasonCodesAreExplained(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, output)
 		}
 	}
+	// An object of a recovered v4.0.x task that the source does not have.
+	buffer.Reset()
+	renderFields(&cliLocaleWriter{Writer: &buffer, locale: localeZH}, map[string]interface{}{"reasonCode": "SOURCE_MISSING"}, "")
+	if !strings.Contains(buffer.String(), "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端 (SOURCE_MISSING)") {
+		t.Fatal(buffer.String())
+	}
 	// Unknown codes stay as they are.
 	buffer.Reset()
 	renderFields(&cliLocaleWriter{Writer: &buffer, locale: localeEN}, map[string]interface{}{"reasonCode": "TRANSFER_FAILED"}, "")

@@ -398,8 +398,15 @@ func (m *Manager) finish(ctx context.Context, w *resultWriter, runErr error) {
 		case runErr != nil:
 			status = StateFailed
 			next.Error, next.ErrorDetail = errorFailed, failureDetail(runErr)
+			if unusableListing(runErr) {
+				next.Error = errorListing
+			}
 		}
 		m.endAt(next, status, now)
+		if status == StateFailed && unusableListing(runErr) {
+			// A resume lists the same storage and meets the same listing.
+			next.Resumable = false
+		}
 		next.AutoResume = status == StateInterrupted && next.Resumable
 		if status == StateFailed {
 			m.logf("comparison %s failed: %s", next.ID, detailOrUnknown(next.ErrorDetail))

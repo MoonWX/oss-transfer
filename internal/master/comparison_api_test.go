@@ -745,6 +745,7 @@ func TestComparisonMessagesAreLocalized(t *testing.T) {
 		"Invalid download form", "Invalid or expired download ticket", "Cannot validate download session", "Sign in required",
 		"invalid comparison request", "Specify a storage connection and bucket as alias/bucket", "Storage connection not found",
 		"Comparison could not finish; check storage access and retry.", "Cannot save comparison results",
+		"The storage returned a listing that a comparison cannot use; retrying or resuming does not help.",
 		"Comparison results are unavailable on this node", "Cannot read object metadata", "Cannot read source metadata",
 		"Cannot read target metadata", "Cannot read complete object content",
 	} {

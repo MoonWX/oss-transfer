@@ -234,6 +234,7 @@ export default function StoragePage() {
     checkedBucket?: string;
     bucketCheckFailed?: string;
     bucketCheckSupported?: boolean;
+    listBucketsDenied?: boolean;
     warning?: string;
     warningDetail?: string;
     node?: string;
@@ -371,6 +372,7 @@ export default function StoragePage() {
         checkedBucket?: string;
         bucketCheckFailed?: string;
         bucketCheckSupported?: boolean;
+        listBucketsDenied?: boolean;
         warning?: string;
         warningDetail?: string;
         node?: string;
@@ -388,6 +390,7 @@ export default function StoragePage() {
           checkedBucket: response.checkedBucket,
           bucketCheckFailed: response.bucketCheckFailed,
           bucketCheckSupported: response.bucketCheckSupported,
+          listBucketsDenied: response.listBucketsDenied,
           warning: response.warning,
           warningDetail: response.warningDetail,
           node: response.node,
@@ -914,11 +917,18 @@ export default function StoragePage() {
             <StorageFailureAlert failure={bucketState.error} />
           ) : bucketState ? (
             <Stack spacing={2}>
-              <Alert severity="success">
-                {t("已获取 {count} 个存储桶。", {
-                  count: bucketState.buckets.length,
-                })}
-              </Alert>
+              {bucketState.listBucketsDenied ? (
+                // The listing was refused: no bucket list was obtained.
+                <Alert severity="warning" data-testid="storage-list-denied">
+                  {t("该凭据无权列举存储桶，未获取存储桶列表。")}
+                </Alert>
+              ) : (
+                <Alert severity="success">
+                  {t("已获取 {count} 个存储桶。", {
+                    count: bucketState.buckets.length,
+                  })}
+                </Alert>
+              )}
               {bucketState.node && (
                 // One node runs the test; the others were not checked.
                 <Typography

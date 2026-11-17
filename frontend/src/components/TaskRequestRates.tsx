@@ -56,6 +56,21 @@ export default function TaskRequestRates({ rates }: { rates: Rates }) {
         },
       }}
     >
+      {rates.effective && (
+        // ListObjects also waits for the LIST limit of the node that scans,
+        // which the effective limit does not include.
+        <caption
+          style={{ captionSide: "bottom", textAlign: "left", padding: 0 }}
+        >
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            data-testid="request-rate-list-note"
+          >
+            {t("LIST 请求还受扫描节点的 LIST 上限约束，上表未计入。")}
+          </Typography>
+        </caption>
+      )}
       <TableHead>
         <TableRow>
           <TableCell sx={{ width: 72 }}>

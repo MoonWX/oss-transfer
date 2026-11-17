@@ -162,9 +162,23 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The source object changed after the scan; a retry copies its current version",
     ja: "スキャン後にソースオブジェクトが変更されました。再試行すると現在のバージョンをコピーします",
   },
+  "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。":
+    {
+      en: "This task was converted from v4.0.x; its failed objects are not listed in the exception records. Export its task report and see file-results.csv and exception-details.csv.",
+      ja: "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。",
+    },
+  "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。":
+    {
+      en: "This version does not switch to a fallback transfer method, so it records no fallback objects; fallback records of tasks converted from v4.0.x are not listed here.",
+      ja: "このバージョンは代替の転送方式に切り替えないため、フォールバック記録は作成されません。v4.0.x から変換したタスクのフォールバック記録はここに表示されません。",
+    },
   "源对象已在源端删除，已跳过": {
     en: "The source object was deleted at the source and was skipped",
     ja: "ソースオブジェクトはソース側で削除されたため、スキップしました",
+  },
+  "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端": {
+    en: "The source does not have this object recorded by the v4.0.x task; a retry checks the source again",
+    ja: "v4.0.x のタスクが記録したこのオブジェクトが転送元に見つかりません。再試行すると転送元を再確認します",
   },
   "{node} 最后连接于 {time}": {
     en: "{node} last connected at {time}",
@@ -1920,9 +1934,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Export loaded records",
     ja: "読み込み済みの記録をエクスポート",
   },
-  完整迁移报告: {
-    en: "Full transfer report",
-    ja: "完全な転送レポート",
+  导出全部本地任务报告: {
+    en: "Export report of all local tasks",
+    ja: "すべてのローカルタスクのレポートをエクスポート",
   },
   清除全部记录: {
     en: "Clear all records",
@@ -1992,10 +2006,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Last page",
     ja: "最後のページ",
   },
-  "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。":
+  "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。":
     {
-      en: "The full report includes all local transfer tasks and failures, with unreachable agents listed in the ZIP. Current filters do not apply.",
-      ja: "完全なレポートには全ローカル転送タスクと失敗記録が含まれます。接続できないノードの情報も ZIP に含まれます。現在のフィルターは適用されません。",
+      en: "The report covers every ended or stopped local transfer task; current filters do not apply. Whether it is complete is recorded as complete in report-metadata.json, which also lists the reasons when it is not (for example an unreachable node or unprocessed objects).",
+      ja: "レポートには終了または停止したすべてのローカル転送タスクが含まれ、現在のフィルターは適用されません。レポートが完全かどうかは report-metadata.json の complete に記録され、不完全な場合（接続できないノードや未処理のオブジェクトがある場合など）は理由も記載されます。",
     },
   清除全部: {
     en: "Clear all",
@@ -2242,13 +2256,54 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "At least {value1}, and at least {value2}% of requests of this type",
     ja: "{value1} 件以上、かつこの種類のリクエストの {value2}% 以上",
   },
-  降速前实测速率: {
-    en: "Measured rate before reduction",
-    ja: "引き下げ前の実測レート",
+  降速前单秒峰值: {
+    en: "Peak one-second rate before reduction",
+    ja: "引き下げ前の 1 秒間の最大レート",
   },
-  降速幅度: {
-    en: "Reduction",
-    ja: "引き下げ率",
+  降速方式: {
+    en: "How the limit was lowered",
+    ja: "引き下げ方法",
+  },
+  "降为原运行上限与降速前单秒峰值中较低者的 {value1}%": {
+    en: "To {value1}% of the lower of the previous running limit and the peak one-second rate before reduction",
+    ja: "以前の実行上限と引き下げ前の 1 秒間の最大レートのうち低い方の {value1}% に引き下げ",
+  },
+  "降为原运行上限的 {value1}%": {
+    en: "To {value1}% of the previous running limit",
+    ja: "以前の実行上限の {value1}% に引き下げ",
+  },
+  本次降幅: {
+    en: "This reduction",
+    ja: "今回の引き下げ",
+  },
+  "{change}（下降 {value1}%）": {
+    en: "{change} (down {value1}%)",
+    ja: "{change}（{value1}% 減）",
+  },
+  调整原因: {
+    en: "Reason",
+    ja: "調整の理由",
+  },
+  按新目标逐步提升: {
+    en: "Rising to the new target",
+    ja: "新しい目標へ段階的に引き上げ中",
+  },
+  逐步提升: {
+    en: "Rising step",
+    ja: "段階的な引き上げ",
+  },
+  已达到新目标: {
+    en: "New target reached",
+    ja: "新しい目標に到達",
+  },
+  "目标已调高（如修改 service.json 后重启），运行上限逐步提升；仍低于目标。未出现限流。":
+    {
+      en: "The target was raised (for example in service.json before a restart); the running limit rises in steps and is still below the target. No throttling occurred.",
+      ja: "目標が引き上げられたため（例: service.json を変更して再起動）、実行上限を段階的に引き上げています。まだ目標を下回っています。スロットリングは発生していません。",
+    },
+  "运行上限已达到调高后的目标。": {
+    en: "The running limit reached the raised target.",
+    ja: "実行上限が引き上げ後の目標に到達しました。",
   },
   降速下限: {
     en: "Minimum limit",
@@ -2426,6 +2481,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "{operation} {count} 个任务？": {
     en: "{operation} {count} tasks?",
     ja: "{count}件のタスクを{operation}しますか？",
+  },
+  "LIST 请求还受扫描节点的 LIST 上限约束，上表未计入。": {
+    en: "LIST requests are also bounded by the LIST limit of the node that scans, which this table does not include.",
+    ja: "LIST リクエストはスキャンするノードの LIST 上限にも制限されます。この表には含まれていません。",
+  },
+  "以下统计仅包含最近 {count} 个任务，更早的任务未计入。": {
+    en: "The statistics below cover only the {count} most recent tasks; earlier tasks are not counted.",
+    ja: "以下の統計には直近の {count} 件のタスクのみが含まれ、それより前のタスクは含まれません。",
   },
   "已加载 {count} 个任务。统计仅包含最近一页。": {
     en: "Loaded {count} tasks. Statistics cover only the most recent page.",
@@ -2921,10 +2984,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "对象存储之间迁移失败的对象。": {
     en: "Objects that failed to transfer between object storages.",
     ja: "オブジェクトストレージ間で転送に失敗したオブジェクト。",
-  },
-  "旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。": {
-    en: "Objects the legacy transfer engine moved with its fallback method. This version no longer creates such records.",
-    ja: "旧版の転送エンジンが代替方式で転送したオブジェクト。現在のバージョンではこの記録は作成されません。",
   },
   "与执行节点本地目录之间迁移失败的文件。": {
     en: "Files that failed to transfer to or from an execution node's local directory.",

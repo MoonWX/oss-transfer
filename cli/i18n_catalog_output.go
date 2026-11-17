@@ -95,6 +95,8 @@ var cliOutputMessages = map[string][2]string{
 	"仅导出了部分记录：每个节点最多导出 10000 条":                                           {"Only some records were exported: at most 10000 per node", "一部の記録のみエクスポートしました。ノードごとに最大 10000 件です"},
 	"本地迁移报告已保存到 %s":                                                       {"Local transfer report saved to %s", "ローカル転送レポートを %s に保存しました"},
 
+	// Exceptions of a task converted from v4.0.x.
+	"该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出；请用 task report 导出任务报告，在 file-results.csv 和 exception-details.csv 中查看": {"This task was converted from v4.0.x; its failed objects are not listed here. Export its report with task report and see file-results.csv and exception-details.csv", "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。task report でタスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください"},
 	// Error summaries of failed objects.
 	"无法解析存储服务地址，请检查 Endpoint；自建存储可改用 path-style 寻址": {"Cannot resolve the storage address; check the endpoint, or use path-style addressing for self-hosted storage", "ストレージのアドレスを解決できません。エンドポイントを確認するか、自前のストレージではパススタイルを使用してください"},
 	"存储服务拒绝连接，请检查 Endpoint 地址和端口":                   {"The storage service refused the connection; check the endpoint address and port", "ストレージサービスが接続を拒否しました。エンドポイントのアドレスとポートを確認してください"},

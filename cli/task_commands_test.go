@@ -487,14 +487,14 @@ func TestAdminTablesAndEnvelopeMetadataRemainVisible(t *testing.T) {
 	for name, result := range map[string]map[string]interface{}{
 		"node":     {"data": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"address": "10.0.0.2", "label": "迁移节点", "master": true}}}, "workers": map[string]interface{}{"10.0.0.2": map[string]interface{}{"success": true, "taskStats": map[string]interface{}{"runningTasks": 3}}}},
 		"storage":  {"configs": []interface{}{map[string]interface{}{"alias": "source", "endpoint": "https://oss.example", "secretKey": "MUST_NOT_PRINT", "accessKey": "MUST_NOT_PRINT"}}},
-		"limit":    {"rateLimits": []interface{}{map[string]interface{}{"workerIp": "10.0.0.2", "bandwidth": map[string]interface{}{"manualLimitBps": float64(200e6), "limitBps": float64(100e6), "currentBps": float64(0), "state": "REDUCED"}}}},
+		"limit":    {"rateLimits": []interface{}{map[string]interface{}{"workerIp": "10.0.0.2", "bandwidth": map[string]interface{}{"manualLimitBps": float64(200e6), "limitBps": float64(100e6), "currentBps": float64(0), "state": "REDUCED"}, "put": map[string]interface{}{"manualLimitQps": float64(3000), "limitQps": float64(1680), "currentQps": float64(0), "state": "RAISING"}}}},
 		"envelope": {"data": map[string]interface{}{"valid": true, "nodeBindings": []interface{}{}}, "submissionStatus": "validated", "requestedCount": 1, "message": "尚未创建任务"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
 			renderCLIResult(&out, result)
 			text := out.String()
-			wants := map[string][]string{"node": {"10.0.0.2", "迁移节点", "在线", "主节点 / 执行节点", "连接状态"}, "storage": {"source", "已配置", "https://oss.example"}, "limit": {"200 Mbps", "100 Mbps", "0 Mbps", "已降速"}, "envelope": {"validated", "尚未创建任务", "请求数量"}}[name]
+			wants := map[string][]string{"node": {"10.0.0.2", "迁移节点", "在线", "主节点 / 执行节点", "连接状态"}, "storage": {"source", "已配置", "https://oss.example"}, "limit": {"200 Mbps", "100 Mbps", "0 Mbps", "已降速", "按新目标逐步提升"}, "envelope": {"validated", "尚未创建任务", "请求数量"}}[name]
 			for _, want := range wants {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %q: %s", want, text)

@@ -276,7 +276,7 @@ test("warns about missing workers and confirms scoped resolved-record cleanup", 
   ).toBe(true);
   expect(
     requests.find((item) => item.path === "/api/master/failed/clear")?.body,
-  ).toEqual({ type: "failed", taskIndex: 123 });
+  ).toEqual({ type: "failed", taskIndex: 123, direction: "OSS_TO_OSS" });
 });
 
 test("deletes only selected recycle task IDs", async ({ page }) => {

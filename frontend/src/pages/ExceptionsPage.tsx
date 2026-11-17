@@ -139,6 +139,11 @@ type Result = {
   workerErrors?: Record<string, string>;
   respondingNodes?: string[];
   nodeDisplays?: Record<string, NodeDisplay>;
+  // The task filter names a task converted from v4.0.x: its failed objects
+  // are in its task report, not in these records.
+  legacyHistorical?: boolean;
+  // The Master records no fallback objects.
+  fallbackUnsupported?: boolean;
 };
 const initialFilters: Filters = {
   task: "",
@@ -227,7 +232,9 @@ export default function ExceptionsPage() {
   const labels = [tr("失败对象"), tr("降级迁移记录"), tr("本地迁移失败")];
   const tabDescriptions = [
     tr("对象存储之间迁移失败的对象。"),
-    tr("旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。"),
+    tr(
+      "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。",
+    ),
     tr("与执行节点本地目录之间迁移失败的文件。"),
   ];
 
@@ -320,6 +327,9 @@ export default function ExceptionsPage() {
           search: taskSearch,
           limit: "100",
         });
+        // Failed objects lists only transfers between object storages;
+        // uploads and downloads have their own tab.
+        if (mode === "failed") params.set("direction", "OSS_TO_OSS");
         const response = await api<{
           data: { items: ExceptionTask[]; hasMore: boolean };
         }>(`/api/master/exceptions/tasks?${params}`, {
@@ -415,6 +425,7 @@ export default function ExceptionsPage() {
           } else {
             const body = {
               ...exceptionFilters(filters),
+              ...(mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
               ...(mode === "failed" && filters.resolution
                 ? { resolution: filters.resolution }
                 : {}),
@@ -472,6 +483,9 @@ export default function ExceptionsPage() {
                 Record<string, string> | undefined,
               nodeDisplays: raw.nodeDisplays as
                 Record<string, NodeDisplay> | undefined,
+              legacyHistorical: raw.legacyHistorical === true,
+              fallbackUnsupported:
+                mode === "fallback" && raw.supported === false,
             };
           }
           if (
@@ -636,6 +650,7 @@ export default function ExceptionsPage() {
         body: {
           type: clearScope.mode,
           ...exceptionFilters(clearScope.filters),
+          ...(clearScope.mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
         },
       });
       if (
@@ -1200,9 +1215,13 @@ export default function ExceptionsPage() {
       )}
       {mode === "fallback" && (
         <Alert severity="info">
-          {tr(
-            "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
-          )}
+          {result?.fallbackUnsupported
+            ? tr(
+                "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。",
+              )
+            : tr(
+                "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
+              )}
         </Alert>
       )}
       <Paper
@@ -1259,7 +1278,7 @@ export default function ExceptionsPage() {
                 onClick={() => void report()}
                 disabled={busy}
               >
-                {tr("完整迁移报告")}
+                {tr("导出全部本地任务报告")}
               </Button>
             )}
             {mode !== "fallback" && (
@@ -1721,7 +1740,13 @@ export default function ExceptionsPage() {
                     ? tr(
                         "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。",
                       )
-                    : tr("请调整筛选条件，或在任务执行后刷新。")
+                    : result.fallbackUnsupported
+                      ? undefined
+                      : result.legacyHistorical
+                        ? tr(
+                            "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                          )
+                        : tr("请调整筛选条件，或在任务执行后刷新。")
                 }
               />
             )
@@ -1744,7 +1769,7 @@ export default function ExceptionsPage() {
       {isLocal && (
         <Typography variant="caption" color="text.secondary">
           {tr(
-            "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。",
+            "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。",
           )}
         </Typography>
       )}

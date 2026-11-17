@@ -283,9 +283,17 @@ func TestResumeReportsChangedAndMissingSources(t *testing.T) {
 				t.Fatal(err)
 			}
 			if change == "replace" {
-				failed := waitStatus(t, scanner, Failed)
-				if !strings.Contains(failed.Error, ErrSourceChanged.Error()) || failed.TotalObjects != 128 || failed.LastBatch != 1 || failed.ScanComplete {
-					t.Fatal("changed source was not rejected before modifying the committed batch")
+				// The replayed page lists the rewritten object again. It stays
+				// assigned with its first identity, and the scan goes on to the
+				// keys after it; execution reports the change when it reads it.
+				completed := waitStatus(t, scanner, Completed)
+				if completed.MissingObjects != 0 || completed.Warning != "" || completed.TotalObjects != 130 || completed.Error != "" {
+					t.Fatalf("a changed object on the replayed page stopped the scan: %+v", completed)
+				}
+				assertBatches(t, scanner, 2, 130)
+				batch, found, err := scanner.Batch(context.Background(), 1, 2, 0)
+				if err != nil || !found || batch.Objects[0].Key != "0000.txt" || batch.Objects[0].Size != int64(len("test data")) {
+					t.Fatal("the committed batch lost the identity the object was assigned with", batch.Objects[0], found, err)
 				}
 			} else {
 				completed := waitStatus(t, scanner, Completed)

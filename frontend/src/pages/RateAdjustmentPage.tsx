@@ -16,11 +16,15 @@ import {
 import { api, useApi } from "../lib/api";
 import {
   eventChange,
+  raisedTargetEvent,
   type Adjustment,
   type TriggerRequest,
 } from "../lib/rateStatus";
 import { useRefreshPreference } from "../lib/refreshPreference";
-import { adjustmentPhase } from "../components/NodeRateLimits";
+import {
+  adjustmentPhase,
+  adjustmentReason,
+} from "../components/NodeRateLimits";
 import { ErrorAlert, LoadingState, PageHeader } from "../components/Common";
 import RefreshControls from "../components/RefreshControls";
 
@@ -200,6 +204,16 @@ function DetailContent({
     ([key]) => request?.[key] != null && request[key] !== "",
   );
   const manual = data?.event.manual && !trigger;
+  // A step towards a target raised in service.json: no request triggered it.
+  const raised = !!data && raisedTargetEvent(data.event) && !trigger;
+  // The new limit is the lower of the running limit and the measured peak,
+  // times the factor: show the change it made, not only the factor.
+  const reduction =
+    trigger?.previousValue != null &&
+    trigger.previousValue > 0 &&
+    trigger.value != null
+      ? Math.max(0, (1 - trigger.value / trigger.previousValue) * 100)
+      : null;
   const currentUnknown =
     !!error || refreshSeconds === 0 || !!data?.processRestarted;
   return (
@@ -256,46 +270,59 @@ function DetailContent({
                 !currentUnknown ? (
                 <Alert severity="success">{tr("本轮调节已结束。")}</Alert>
               ) : null}
-              <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
-                <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-                  {manual ? tr("手动调整") : tr("触发本次降速的请求")}
-                </Typography>
-                <Box
-                  component="dl"
-                  data-testid="rate-trigger-request"
-                  sx={{
-                    m: 0,
-                    display: "grid",
-                    gridTemplateColumns: {
-                      xs: "1fr",
-                      md: "repeat(2, minmax(0, 1fr))",
-                    },
-                    gap: 2.5,
-                  }}
+              {raised ? (
+                <Paper
+                  variant="outlined"
+                  sx={{ p: { xs: 2, sm: 3 } }}
+                  data-testid="rate-raise-reason"
                 >
-                  <Field
-                    label={manual ? tr("调整时间") : tr("触发时间")}
-                    value={dateTime((trigger ?? data.event).timestamp)}
-                  />
-                  <Field
-                    label={tr("事件 ID")}
-                    value={(trigger ?? data.event).id ?? tr("未记录")}
-                  />
-                  {requestFields.map(([key, label]) => (
-                    <Field key={key} label={label} value={request![key]!} />
-                  ))}
-                </Box>
-                {request?.contextSource === "TRANSFER_CONTEXT" && (
-                  <Typography color="text.secondary" sx={{ mt: 2 }}>
-                    {tr("仅记录到迁移处理阶段，未确定具体 HTTP 请求。")}
+                  <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
+                    {tr("调整原因")}
                   </Typography>
-                )}
-                {!manual && !requestFields.length && (
-                  <Typography color="text.secondary" sx={{ mt: 2 }}>
-                    {tr("未记录触发请求详情。")}
+                  <Typography>{adjustmentReason(data.event)}</Typography>
+                </Paper>
+              ) : (
+                <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
+                  <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
+                    {manual ? tr("手动调整") : tr("触发本次降速的请求")}
                   </Typography>
-                )}
-              </Paper>
+                  <Box
+                    component="dl"
+                    data-testid="rate-trigger-request"
+                    sx={{
+                      m: 0,
+                      display: "grid",
+                      gridTemplateColumns: {
+                        xs: "1fr",
+                        md: "repeat(2, minmax(0, 1fr))",
+                      },
+                      gap: 2.5,
+                    }}
+                  >
+                    <Field
+                      label={manual ? tr("调整时间") : tr("触发时间")}
+                      value={dateTime((trigger ?? data.event).timestamp)}
+                    />
+                    <Field
+                      label={tr("事件 ID")}
+                      value={(trigger ?? data.event).id ?? tr("未记录")}
+                    />
+                    {requestFields.map(([key, label]) => (
+                      <Field key={key} label={label} value={request![key]!} />
+                    ))}
+                  </Box>
+                  {request?.contextSource === "TRANSFER_CONTEXT" && (
+                    <Typography color="text.secondary" sx={{ mt: 2 }}>
+                      {tr("仅记录到迁移处理阶段，未确定具体 HTTP 请求。")}
+                    </Typography>
+                  )}
+                  {!manual && !requestFields.length && (
+                    <Typography color="text.secondary" sx={{ mt: 2 }}>
+                      {tr("未记录触发请求详情。")}
+                    </Typography>
+                  )}
+                </Paper>
+              )}
               {trigger && (
                 <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
                   <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
@@ -338,7 +365,7 @@ function DetailContent({
                         {trigger.measuredQps != null &&
                           trigger.measuredQps > 0 && (
                             <Field
-                              label={tr("降速前实测速率")}
+                              label={tr("降速前单秒峰值")}
                               value={tr("{value1} 次/秒", {
                                 value1: trigger.measuredQps,
                               })}
@@ -353,8 +380,32 @@ function DetailContent({
                     )}
                     {trigger.factor != null && (
                       <Field
-                        label={tr("降速幅度")}
-                        value={`${Number(((1 - trigger.factor) * 100).toFixed(2))}%`}
+                        label={tr("降速方式")}
+                        value={
+                          trigger.measuredQps != null && trigger.measuredQps > 0
+                            ? tr(
+                                "降为原运行上限与降速前单秒峰值中较低者的 {value1}%",
+                                {
+                                  value1: Number(
+                                    (trigger.factor * 100).toFixed(2),
+                                  ),
+                                },
+                              )
+                            : tr("降为原运行上限的 {value1}%", {
+                                value1: Number(
+                                  (trigger.factor * 100).toFixed(2),
+                                ),
+                              })
+                        }
+                      />
+                    )}
+                    {reduction != null && (
+                      <Field
+                        label={tr("本次降幅")}
+                        value={tr("{change}（下降 {value1}%）", {
+                          change: eventChange(trigger),
+                          value1: Number(reduction.toFixed(1)),
+                        })}
                       />
                     )}
                     {trigger.minQps != null && (
@@ -438,6 +489,15 @@ function DetailContent({
                           sx={{ mt: 0.5 }}
                         >
                           {tr("定时恢复")}
+                        </Typography>
+                      )}
+                      {raisedTargetEvent(event) && (
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{ mt: 0.5 }}
+                        >
+                          {tr("按新目标逐步提升")}
                         </Typography>
                       )}
                     </Box>

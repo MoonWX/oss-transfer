@@ -822,7 +822,9 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 					target = rate["configuredLimit"+suffix]
 				}
 				state := getString(rate, "state")
-				if translated, ok := map[string]string{"NORMAL": cliText(out, "正常"), "REDUCED": cliText(out, "已降速"), "RECOVERING": cliText(out, "恢复中"), "RECOVERED": cliText(out, "已恢复"), "UNLIMITED": cliText(out, "不限速")}[state]; ok {
+				// RAISING: a target raised in service.json is reached in steps,
+				// without throttling.
+				if translated, ok := map[string]string{"NORMAL": cliText(out, "正常"), "REDUCED": cliText(out, "已降速"), "RECOVERING": cliText(out, "恢复中"), "RECOVERED": cliText(out, "已恢复"), "RAISING": cliText(out, "按新目标逐步提升"), "UNLIMITED": cliText(out, "不限速")}[state]; ok {
 					state = translated
 				}
 				if state == "" {
@@ -891,7 +893,12 @@ func storageAddressingLabel(out io.Writer, config map[string]interface{}) string
 
 // renderStorageCheck prints a connection test or bucket listing.
 func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buckets []interface{}) {
-	fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	if data["listBucketsDenied"] == true && len(buckets) == 0 {
+		// The listing was refused; "0 buckets" would read as an empty account.
+		fmt.Fprintln(out, cliText(out, "存储桶：无权列举（ListBuckets 被拒绝）"))
+	} else {
+		fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	}
 	for _, bucket := range buckets {
 		fmt.Fprintf(out, "  %s\n", safeCLIText(bucket))
 	}
@@ -1178,7 +1185,8 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 var fieldLabels = map[string]string{"maxConcurrentChildren": "子任务并发", "objectsPerChild": "每个子任务的对象并发", "requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "mode": "重试方式", "retriedChildren": "重试子任务", "retriedObjects": "重试对象", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线", "reasonCode": "原因代码", "retryReasonCode": "重试原因", "freeBytes": "可用空间（字节）", "effectiveUid": "Agent 运行 UID", "writeProbeDirectory": "写入检查目录"}
 
 // cliExceptionReason explains the reason codes of objects whose source
-// changed or was deleted after the scan; other codes stay as they are.
+// changed or was deleted after the scan, and of objects of a recovered
+// v4.0.x task that the source does not have; other codes stay as they are.
 func cliExceptionReason(out io.Writer, value interface{}) string {
 	code, _ := value.(string)
 	switch code {
@@ -1186,6 +1194,8 @@ func cliExceptionReason(out io.Writer, value interface{}) string {
 		return cliText(out, "源对象在扫描后已变化，重试会读取其当前版本") + " (" + code + ")"
 	case "SOURCE_DELETED":
 		return cliText(out, "源对象已在源端删除，已跳过") + " (" + code + ")"
+	case "SOURCE_MISSING":
+		return cliText(out, "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端") + " (" + code + ")"
 	}
 	return ""
 }

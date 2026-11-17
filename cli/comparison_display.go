@@ -81,6 +81,7 @@ func renderComparisonResult(out io.Writer, args []string, result map[string]inte
 			return true
 		}
 		fmt.Fprintf(out, cliText(out, "比对已开始，ID：%s\n"), safeCLIText(id))
+		renderLegacyComparisonNote(out, data)
 		fmt.Fprintf(out, cliText(out, "查看进度：%s\n"), safeCLIText(comparisonCommand("status", id, "--watch", "5")))
 	case "resume", "cancel", "delete":
 		id, err := comparisonIDArgument(rest)
@@ -375,6 +376,7 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	if expires != "" {
 		fmt.Fprintln(out, cliText(out, "注：节点上的比对结果合计超过存储预算（默认 2 GiB）或超过 500 个时，最早结束的比对会在此日期之前被删除；需要的结果请及时用 object export 导出"))
 	}
+	renderLegacyComparisonNote(out, data)
 	fmt.Fprintln(out)
 	rows := objectList(data["items"])
 	if conclusion := comparisonConclusion(out, data); len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && conclusion != "" {
@@ -422,6 +424,15 @@ func comparisonConclusion(out io.Writer, data map[string]interface{}) string {
 	return ""
 }
 
+// renderLegacyComparisonNote warns about a comparison that an Agent before
+// results protocol 2 ran: it reports a fixed row limit, and its counts are
+// known to be unreliable.
+func renderLegacyComparisonNote(out io.Writer, data map[string]interface{}) {
+	if limit, ok := cliNumeric(data["resultLimit"]); ok && limit > 0 {
+		fmt.Fprintln(out, cliText(out, "注意：该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。"))
+	}
+}
+
 func renderComparisonRows(out io.Writer, rows []map[string]interface{}) {
 	if len(rows) == 0 {
 		fmt.Fprintln(out, cliText(out, "本页没有差异记录"))
@@ -432,10 +443,11 @@ func renderComparisonRows(out io.Writer, rows []map[string]interface{}) {
 	for _, row := range rows {
 		status := getString(row, "status")
 		sourceSize, destinationSize := cliTaskSize(row, "sourceSize"), cliTaskSize(row, "destinationSize")
-		if status == "EXTRA_TARGET" || status == "BOTH_MISSING" {
+		// A side that is missing, or whose size was not read, has no size.
+		if status == "EXTRA_TARGET" || status == "BOTH_MISSING" || row["sourceSizeUnknown"] == true {
 			sourceSize = "—"
 		}
-		if status == "MISSING_TARGET" || status == "BOTH_MISSING" {
+		if status == "MISSING_TARGET" || status == "BOTH_MISSING" || row["destinationSizeUnknown"] == true {
 			destinationSize = "—"
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cliTaskCount(row, "number"), comparisonStatusLabel(out, status), safeCLIText(getString(row, "sourceKey")), safeCLIText(getString(row, "destinationKey")), sourceSize, destinationSize, safeCLIText(comparisonRowDetail(out, row)))

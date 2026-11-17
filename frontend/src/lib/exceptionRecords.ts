@@ -132,13 +132,16 @@ export function exceptionCsv(
 }
 
 // Reason codes the Master reports for objects whose source changed or was
-// deleted after the scan; other codes are shown as they are.
+// deleted after the scan, and for objects of a recovered v4.0.x task that the
+// source does not have; other codes are shown as they are.
 export function exceptionReasonLabel(code: unknown): string | undefined {
   switch (code) {
     case "SOURCE_CHANGED":
       return "源对象在扫描后已变化，重试会读取其当前版本";
     case "SOURCE_DELETED":
       return "源对象已在源端删除，已跳过";
+    case "SOURCE_MISSING":
+      return "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端";
     default:
       return undefined;
   }

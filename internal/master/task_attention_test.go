@@ -1,6 +1,7 @@
 package master
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -113,5 +114,56 @@ func TestFailureSummaryBoundsTheRecordsItVisits(t *testing.T) {
 	}
 	if err := tally.add(task.Exception{Error: "connection refused"}); !errors.Is(err, errSummaryFull) || tally.groups["CONNECTION_REFUSED"].count != failureSummaryScan {
 		t.Fatalf("the sample bound was not applied: %v %+v", err, tally.groups)
+	}
+}
+
+// "All N objects failed" holds only when every discovered object was tried.
+// A stopped task, or one whose scan did not finish, has objects that were
+// never attempted, so its summary names only the failures.
+func TestFailureSummarySaysAllOnlyWhenEveryObjectWasTried(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	spec, _, _, err := normalizeTaskRequest(ossTaskRequest(), "add-buckets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.Nodes = []task.Node{{ID: "node-a", EnrollmentID: "enrolled", Address: "a.example"}}
+	p, _, err := f.master.tasks.repo.Create(spec, "all-failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := f.master.tasks.repo.Assign(p.ID, 1, 1, []transferstore.Object{{Key: "a", Size: 3, ETag: "a"}, {Key: "b", Size: 5, ETag: "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := execution.Record{Job: c.Job, Status: execution.Failed, Attempt: 2, UpdatedAt: time.Now().UTC(), Counters: execution.Counters{Total: 2, TotalBytes: 8, Failed: 2, FailedBytes: 8}}
+	for _, item := range c.Job.Items {
+		record.Results = append(record.Results, execution.ItemResult{ID: item.ID, Status: execution.ItemFailed, Error: "AccessDenied: StatusCode: 403"})
+	}
+	if err := f.master.tasks.repo.Observe(p.ID, 1, 1, record); err != nil {
+		t.Fatal(err)
+	}
+	if p, err = f.master.tasks.repo.Get(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		status       string
+		scanComplete bool
+		all          bool
+	}{
+		{"FAILED", true, true},
+		{"STOPPED", true, false},
+		{"FAILED", false, false},
+		{"PARTIAL_FAILED", false, false},
+	} {
+		parent := p
+		parent.Status, parent.ScanComplete = test.status, test.scanComplete
+		summary := f.master.failureSummary(context.Background(), parent)
+		if summary == nil {
+			t.Fatal("no summary", test)
+		}
+		message := summary["message"].(string)
+		if summary["allFailed"] != test.all || strings.Contains(message, "全部") != test.all {
+			t.Errorf("%s, scan complete %v: allFailed %v, %q", test.status, test.scanComplete, summary["allFailed"], message)
+		}
 	}
 }

@@ -361,7 +361,7 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"等待同步":        {"Awaiting sync", "等待同步", "同期待ち"},
 	"节点未返回有效路径类型": {"Node returned an invalid path type", "节点未返回有效路径类型", "ノードから無効なパスの種類が返されました"},
 	"Showing recent tasks; load an earlier page for more history":           {"Showing recent tasks; load an earlier page for more history", "当前显示最近任务，加载更早页面可查看历史", "最近のタスクを表示しています。以前の履歴は前のページを読み込んでください"},
-	"The Go transfer engine does not use the legacy SDK fallback mechanism": {"The Go transfer engine does not use the legacy SDK fallback mechanism", "Go 传输引擎不使用旧版 SDK 降级机制", "Go 転送エンジンは旧 SDK のフォールバック機構を使用しません"},
+	"The Go transfer engine does not use the legacy SDK fallback mechanism": {"This version does not switch to a fallback transfer method, so it records no fallback objects; fallback records of tasks converted from v4.0.x are not listed here", "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出", "このバージョンは代替の転送方式に切り替えないため、フォールバック記録は作成されません。v4.0.x から変換したタスクのフォールバック記録はここに表示されません"},
 	"Invalid imported task %d: %s":                                          {"Invalid imported task %d: %s", "导入的任务 %d 无效：%s", "インポートするタスク %d が無効です：%s"},
 	"Invalid task %d: %s":                                                   {"Invalid task %d: %s", "任务 %d 无效：%s", "タスク %d が無効です：%s"},
 	"Import requires an explicit replacement for %s":                        {"Import requires an explicit replacement for %s", "导入时必须明确替换 %s", "インポートには %s の明示的な置き換えが必要です"},
@@ -374,4 +374,10 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	// Bucket permission check (storage_permissions.go).
 	"The write prefix must be at most 512 bytes of text without control characters":                                   {"The write prefix must be at most 512 bytes of text without control characters", "写入位置前缀不能超过 512 字节，且不能包含控制字符", "書き込み先のプレフィックスは 512 バイト以内で、制御文字を含めないでください"},
 	"The execution node is too old to check writing below a prefix; update it first, or check without a write prefix": {"The execution node is too old to check writing below a prefix; update it first, or check without a write prefix", "执行节点版本较旧，不支持在指定前缀下检查写入；请先更新执行节点，或不填写写入位置前缀再检查", "実行ノードのバージョンが古いため、プレフィックスを指定した書き込みは確認できません。先に実行ノードを更新するか、書き込み先のプレフィックスを指定せずに確認してください"},
+
+	// A comparison of an unusable listing, a storage check while every
+	// registered Agent is offline, and the failures of a converted task.
+	"The storage returned a listing that a comparison cannot use; retrying or resuming does not help.": {"The storage returned a listing that a comparison cannot use (keys must be listed in ascending byte order within the prefix, and each page must advance); retrying or resuming does not help.", "存储返回的列举结果无法用于比对（需要在前缀内按字节升序列举 Key，并且每次翻页都要前进），重试或继续比对都无法解决。", "ストレージが返した一覧は比較に使用できません（プレフィックス内のキーをバイト順の昇順で返し、ページごとに先へ進む必要があります）。再試行や比較の再開では解決しません。"},
+	"every registered Agent is offline; bring one back online before validating storage":               {"Every registered execution node is offline. Bring one back online before testing this connection.", "已注册的执行节点均不在线，请先恢复其中一个节点的服务或网络，再测试连接。", "登録済みの実行ノードはすべてオフラインです。いずれかのノードをオンラインに戻してから接続をテストしてください。"},
+	legacyExceptionsMessage: {legacyExceptionsMessage, "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。", "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。"},
 }

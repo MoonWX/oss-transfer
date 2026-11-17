@@ -124,3 +124,60 @@ func TestLegacyReconciliationReadsBodiesAndNeverCreditsMissingOrChangedSource(t 
 		})
 	}
 }
+
+// The legacy recovery scan did not find a key, for example because the source
+// volume was not mounted. Each attempt checks the source again: while it is
+// still absent the object fails as SOURCE_MISSING, and once it is back a retry
+// reconciles it instead of failing without looking.
+func TestLegacyMissingSourceIsCheckedAgainOnEveryAttempt(t *testing.T) {
+	for _, successful := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unfinished", true: "recorded-success"}[successful], func(t *testing.T) {
+			src, dst := t.TempDir(), t.TempDir()
+			data := bytes.Repeat([]byte("legacy"), 1000)
+			if successful {
+				// The old run copied it; the target already holds the content.
+				if err := os.WriteFile(filepath.Join(dst, "file"), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			source, err := transferstore.NewLocal(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Close()
+			target, err := transferstore.NewLocal(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Close()
+			observed := &legacyObservedStore{Store: target}
+			// The recovery scan emitted the key with the size the old ledger
+			// recorded and no identity.
+			item := Item{ID: "file", Source: transferstore.Object{Key: "file", Size: int64(len(data))}, DestinationKey: "file", Legacy: &LegacyCandidate{Successful: successful, Missing: true}}
+			job := Job{ConflictPolicy: ConflictOverwrite}
+			engine := &Engine{}
+			first := engine.copyItem(bg, job, item, source, observed)
+			if first.Status != ItemFailed || first.Reconciliation != ReasonSourceMissing || !strings.Contains(first.Error, "not found") || observed.writes != 0 {
+				t.Fatalf("an absent source was not reported missing: %+v", first)
+			}
+			if err := os.WriteFile(filepath.Join(src, "file"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			retried := engine.copyItem(bg, job, item, source, observed)
+			if retried.Status != ItemSucceeded || retried.Reconciliation == ReasonSourceMissing {
+				t.Fatalf("a retry reported the restored source missing without checking it: %+v", retried)
+			}
+			if successful {
+				if retried.Reconciliation != "SHA256_VERIFIED" || observed.writes != 0 {
+					t.Fatalf("the recorded copy was not verified against the restored source: %+v writes=%d", retried, observed.writes)
+				}
+			} else if retried.Reconciliation != "LEGACY_REPROCESSED" || observed.writes != 1 {
+				t.Fatalf("the restored source was not copied: %+v writes=%d", retried, observed.writes)
+			}
+			got, err := os.ReadFile(filepath.Join(dst, "file"))
+			if err != nil || !bytes.Equal(got, data) {
+				t.Fatal("target does not hold the source content", err)
+			}
+		})
+	}
+}

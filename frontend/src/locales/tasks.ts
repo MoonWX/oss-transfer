@@ -1031,9 +1031,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Upgrade Agent {node} to run a task whose shared directory check was skipped",
     ja: "共有ディレクトリの検証を省略したタスクを実行するには Agent {node} を更新してください",
   },
-  "执行节点 {node} 看到的源目录与其他节点不一致：{reason}": {
-    en: "Agent {node} does not expose the same source directory: {reason}",
-    ja: "Agent {node} から見えるソースディレクトリが他のノードと一致しません：{reason}",
+  "无法确认执行节点 {node} 看到的源目录与其他节点相同：{reason}": {
+    en: "Cannot confirm that Agent {node} sees the same source directory as the other nodes: {reason}",
+    ja: "Agent {node} から見えるソースディレクトリが他のノードと同じであることを確認できません：{reason}",
   },
   "路径检查通过，共享目录未校验": {
     en: "Paths passed; the shared directory was not checked",

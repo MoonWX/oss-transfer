@@ -180,7 +180,8 @@ test("shared directory problems of a running task are translated", async ({
   await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
   await expect(alert(page).locator("p")).toHaveText([
     "请先升级执行节点 planned-b (10.0.1.13)，才能运行已跳过共享目录校验的任务",
-    "执行节点 planned-b (10.0.1.13) 看到的源目录与其他节点不一致：请求超时",
+    // A timeout is no evidence that the directories differ.
+    "无法确认执行节点 planned-b (10.0.1.13) 看到的源目录与其他节点相同：请求超时",
   ]);
   await expect(alert(page)).not.toContainText("错误详情");
 });
@@ -229,7 +230,7 @@ test.describe("English", () => {
     ]);
   });
 
-  test("shared directory problems keep the Master's wording", async ({
+  test("shared directory problems say what could not be confirmed", async ({
     page,
   }) => {
     await setup(page, () => ({
@@ -239,7 +240,7 @@ test.describe("English", () => {
     await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
     await expect(alert(page).locator("p")).toHaveText([
       SKIP_UPGRADE,
-      "Agent planned-b (10.0.1.13) does not expose the same source directory: The request timed out",
+      "Cannot confirm that Agent planned-b (10.0.1.13) sees the same source directory as the other nodes: The request timed out",
     ]);
   });
 });

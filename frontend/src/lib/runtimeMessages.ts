@@ -80,9 +80,11 @@ export const runtimeMessageRules: readonly {
     message: "执行节点 {node} 无法验证原共享目录：{reason}",
     values: ["node", "reason"],
   },
+  // Raised for any failed check, a timeout included: it says what could not
+  // be confirmed, not that the directories differ.
   {
     pattern: /^Agent (.+?) does not expose the same source directory: (.+)$/s,
-    message: "执行节点 {node} 看到的源目录与其他节点不一致：{reason}",
+    message: "无法确认执行节点 {node} 看到的源目录与其他节点相同：{reason}",
     values: ["node", "reason"],
   },
   {

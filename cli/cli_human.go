@@ -28,6 +28,12 @@ func setCLISummary(result map[string]interface{}, lines ...string) {
 	}
 }
 
+// cliOfflineNodesKey marks a failure list of the Master's exception index,
+// whose failedWorkers and unreachableWorkers name the offline nodes with
+// unfinished subtasks: no node is asked for the list, so none of them failed
+// or left a request unanswered. It never reaches --json output.
+const cliOfflineNodesKey = "_cliOfflineNodes"
+
 // quietCLIResult marks a result whose error line says everything: human
 // output prints nothing else.
 func quietCLIResult(result map[string]interface{}) {
@@ -38,12 +44,14 @@ func quietCLIResult(result map[string]interface{}) {
 
 // withoutHumanFields returns result without the human-only entries.
 func withoutHumanFields(result map[string]interface{}) map[string]interface{} {
-	if _, ok := result[cliSummaryKey]; !ok {
+	_, summary := result[cliSummaryKey]
+	_, offline := result[cliOfflineNodesKey]
+	if !summary && !offline {
 		return result
 	}
 	copy := make(map[string]interface{}, len(result))
 	for key, value := range result {
-		if key != cliSummaryKey {
+		if key != cliSummaryKey && key != cliOfflineNodesKey {
 			copy[key] = value
 		}
 	}

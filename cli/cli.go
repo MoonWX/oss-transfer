@@ -1299,6 +1299,12 @@ func renderFieldsWithNodes(out io.Writer, data map[string]interface{}, indent st
 func renderIncomplete(out io.Writer, result map[string]interface{}) {
 	seen := map[string]bool{}
 	displays := collectCLINodeDisplays(result)
+	failedLabel, unreachableLabel := cliText(out, "失败节点"), cliText(out, "未响应节点")
+	if result[cliOfflineNodesKey] == true {
+		// Both lists name the same nodes, printed once.
+		failedLabel = cliText(out, "离线且有未完成子任务的节点")
+		unreachableLabel = failedLabel
+	}
 	write := func(context, label string, value interface{}) {
 		line := label + ": " + safeCLIText(value)
 		if context != "" {
@@ -1317,7 +1323,7 @@ func renderIncomplete(out io.Writer, result map[string]interface{}) {
 		if id := getInt(current, "taskIndex"); id > 0 {
 			context = fmt.Sprintf(cliText(out, "任务 #%d"), id)
 		}
-		for _, entry := range [][2]string{{"failedWorkers", cliText(out, "失败节点")}, {"unreachableWorkers", cliText(out, "未响应节点")}, {"unavailableWorkers", cliText(out, "不可用节点")}, {"truncatedWorkers", cliText(out, "记录被截断的节点")}, {"missingTaskIds", cliText(out, "缺失子任务 ID")}, {"errors", cliText(out, "错误详情")}, {"workerErrors", cliText(out, "节点错误")}, {"nodeErrors", cliText(out, "节点错误")}} {
+		for _, entry := range [][2]string{{"failedWorkers", failedLabel}, {"unreachableWorkers", unreachableLabel}, {"unavailableWorkers", cliText(out, "不可用节点")}, {"truncatedWorkers", cliText(out, "记录被截断的节点")}, {"missingTaskIds", cliText(out, "缺失子任务 ID")}, {"errors", cliText(out, "错误详情")}, {"workerErrors", cliText(out, "节点错误")}, {"nodeErrors", cliText(out, "节点错误")}} {
 			if value := current[entry[0]]; nonEmptyCLICollection(value) {
 				if cliNodeCollectionField(entry[0]) {
 					value = cliNodeCollection(value, displays, localeOf(out))

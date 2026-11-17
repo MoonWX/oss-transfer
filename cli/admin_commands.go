@@ -782,6 +782,11 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	} else {
 		result, err = adminOSSExceptions(client, kind, o)
 	}
+	if _, indexed := result["queriedWorkers"].([]interface{}); indexed {
+		// The Master read its own index and named the offline nodes whose
+		// unfinished subtasks may not have reported every failure yet.
+		result[cliOfflineNodesKey] = true
+	}
 	if err == nil && action == "list" {
 		setCLISummary(result, exceptionsListSummary(client, kind, o, result)...)
 	}

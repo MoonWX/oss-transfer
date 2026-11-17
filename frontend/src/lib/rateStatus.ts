@@ -97,6 +97,8 @@ export type RateLimitSnapshot = Partial<Record<RateType, Rate>> & {
 };
 export type Worker = NodeDisplay & {
   success: boolean;
+  /** The Master did not ask this Agent because it is not connected. */
+  offline?: boolean;
   message?: string;
   queueStatus?: Record<string, number>;
   executionStatus?: {

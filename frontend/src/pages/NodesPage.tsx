@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   Chip,
@@ -123,6 +124,8 @@ export default function NodesPage() {
     initialObjects?: number;
     concurrencyEditable: boolean;
     online: boolean;
+    /** The node's current settings were read. */
+    statusRead: boolean;
   } | null>(null);
   const [nodeDelete, setNodeDelete] = useState<RegisteredNode | null>(null);
   const [nodeSaving, setNodeSaving] = useState(false);
@@ -173,7 +176,12 @@ export default function NodesPage() {
       initialObjects: execution?.objectsPerChild,
       concurrencyEditable:
         !!worker?.success && typeof execution?.objectsPerChild === "number",
-      online: !!worker?.success,
+      // An Agent's connection comes from the registry: a connected Agent can
+      // still fail to answer one status read.
+      online: node?.agent
+        ? node.online === true && !worker?.offline
+        : !!worker?.success,
+      statusRead: !!worker?.success,
     });
   };
   async function saveNodeEdit() {
@@ -601,10 +609,23 @@ export default function NodesPage() {
                     </Stack>
                   )}
                   {!worker.success ? (
-                    <Alert severity="error" sx={{ mx: 2.5, mb: 2.5 }}>
-                      {worker.message ||
-                        t("节点未返回有效状态，请检查节点服务和网络。")}
-                    </Alert>
+                    worker.offline ||
+                    (registered?.agent && registered.online !== true) ? (
+                      // The Master does not ask an Agent that is not connected.
+                      <Alert severity="info" sx={{ mx: 2.5, mb: 2.5 }}>
+                        {t("节点离线，重新连接后显示运行状态。")}
+                      </Alert>
+                    ) : (
+                      <Alert severity="error" sx={{ mx: 2.5, mb: 2.5 }}>
+                        <AlertTitle>{t("未能读取节点状态")}</AlertTitle>
+                        <Box component="span">
+                          {(worker.message &&
+                            knownRuntimeMessage(worker.message)) ||
+                            worker.message ||
+                            t("节点未返回有效状态，请检查节点服务和网络。")}
+                        </Box>
+                      </Alert>
+                    )
                   ) : (
                     <>
                       <Divider />
@@ -925,9 +946,11 @@ export default function NodesPage() {
                 </Stack>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  {nodeEdit.online
-                    ? t("升级节点后可调整并发。")
-                    : t("节点离线时无法调整并发。")}
+                  {!nodeEdit.online
+                    ? t("节点离线时无法调整并发。")
+                    : nodeEdit.statusRead
+                      ? t("升级节点后可调整并发。")
+                      : t("未能读取节点当前的并发设置，请刷新后再调整。")}
                 </Typography>
               ))}
           </Stack>

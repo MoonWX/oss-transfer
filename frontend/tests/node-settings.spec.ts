@@ -124,7 +124,7 @@ test("renaming and unavailable-node editing do not send an empty root replacemen
   });
   state.offline();
   await expect(
-    page.getByText("Agent disconnected", { exact: true }),
+    page.getByText("节点离线，重新连接后显示运行状态。", { exact: true }),
   ).toBeVisible();
   await edit.click();
   dialog = page.getByRole("dialog", { name: "编辑节点", exact: true });

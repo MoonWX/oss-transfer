@@ -1183,6 +1183,18 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Concurrency cannot be changed while the node is offline.",
     ja: "オフラインのノードでは並列数を変更できません。",
   },
+  "未能读取节点当前的并发设置，请刷新后再调整。": {
+    en: "The node's current concurrency could not be read. Refresh, then change it.",
+    ja: "ノードの現在の並列数を読み取れませんでした。更新してから変更してください。",
+  },
+  "节点离线，重新连接后显示运行状态。": {
+    en: "The node is offline. Its status appears when it reconnects.",
+    ja: "ノードはオフラインです。再接続すると状態が表示されます。",
+  },
+  未能读取节点状态: {
+    en: "Could not read the node status",
+    ja: "ノードの状態を読み取れませんでした",
+  },
   未完成子任务: {
     en: "Unfinished subtasks",
     ja: "未完了のサブタスク",

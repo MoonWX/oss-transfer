@@ -281,7 +281,31 @@ func runTaskImport(client *ApiClient, args []string) (map[string]interface{}, er
 	if kind == "local" {
 		createWarnSkippedRows(client, rows)
 	}
+	if kind == "tasks" {
+		createWarnMarkerRows(client, rows)
+	}
 	return createSubmit(client, kind, rows, opts.Has("validate-only"), requestID)
+}
+
+// createWarnMarkerRows states, before anything is submitted, that a marker in
+// an imported subtask is not used: the scan does not resume there. A v4.0
+// marker names the upload that ended last, not a point before which every
+// object is done, so resuming from it could skip objects.
+func createWarnMarkerRows(client *ApiClient, rows []map[string]interface{}) {
+	var marked []string
+	for i, row := range rows {
+		if marker, _ := row["marker"].(string); marker != "" {
+			marked = append(marked, strconv.Itoa(i+1))
+		}
+	}
+	if len(marked) == 0 {
+		return
+	}
+	warnings := client.errors
+	if warnings == nil {
+		warnings = os.Stderr
+	}
+	fmt.Fprintln(warnings, cliTextf(warnings, "警告：第 %s 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。", strings.Join(marked, ", ")))
 }
 
 // createWarnSkippedRows states, before anything is submitted, which imported

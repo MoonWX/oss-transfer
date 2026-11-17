@@ -1028,10 +1028,15 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Comma-separated text",
     ja: "カンマ区切りテキスト",
   },
-  "用于导入已有的 OSS 子任务或恢复断点。支持 startKey、endKey、marker 和 workerNode；留空 workerNode 时由集群分配。":
+  "用于按 Key 范围导入 OSS 子任务。支持 startKey、endKey 和 workerNode，留空 workerNode 时由集群分配。每个子任务从 startKey 之后完整扫描其范围，不会从断点继续；目标端已存在的对象按冲突策略处理。":
     {
-      en: "Import existing OSS subtasks or restore checkpoints. Supports startKey, endKey, marker, and workerNode. Leave workerNode empty for cluster assignment.",
-      ja: "既存の OSS 子タスクをインポートするか、チェックポイントから復元します。startKey、endKey、marker、workerNode に対応しています。workerNode を省略するとクラスターが割り当てます。",
+      en: "Imports OSS subtasks by key range. Supports startKey, endKey and workerNode; leave workerNode empty for cluster assignment. Each subtask scans its whole range after startKey and does not resume from a checkpoint; objects that already exist at the destination are handled by the conflict policy.",
+      ja: "OSS 子タスクをキー範囲でインポートします。startKey、endKey、workerNode に対応しており、workerNode を省略するとクラスターが割り当てます。各子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。",
+    },
+  "第 {rows} 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。":
+    {
+      en: "Rows {rows} set a marker, which is not used: these subtasks scan their whole range after startKey and do not resume from a checkpoint; objects that already exist at the destination are handled by the conflict policy.",
+      ja: "{rows} 件目に marker が指定されていますが、marker は使用されません。これらの子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。",
     },
   "每行一个任务：源连接/源桶,目标连接/目标桶,修改时间晚于,是否覆盖,分发模式。后三项可留空。前缀或修改时间早于筛选请使用 JSON。目标命名规则和任务带宽上限请使用 JSON 配置。":
     {
@@ -1064,10 +1069,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
       en: "sourceS3Alias / destS3Alias: connection names; sourceBucket / destBucket: buckets. prefix filters the source; objectKey selects a single source object. These are mutually exclusive. {value1}Omit keyMapping or set null to keep the full source key. Modes: PRESERVE, ADD_PREFIX (targetPrefix), REPLACE_PREFIX (sourcePrefix must equal the source filter; targetPrefix may be empty), EXACT_KEY (single object only; targetKey). ADD_PREFIX appends / when missing; REPLACE_PREFIX uses literal replacement without adding /. Keys and prefixes retain spaces and slashes. dateAfter / dateBefore: modification time range, YYYY-MM-DDTHH:mm:ss. overwrite: overwrite existing objects. distributionMode: affinity or balanced. taskBandwidthLimitMbps: task-wide limit in Mbps, 0.1–1,000,000; omit or use null to apply only agent limits.",
       ja: "sourceS3Alias / destS3Alias：接続名。sourceBucket / destBucket：バケット。prefix は転送元の絞り込み、objectKey は単一オブジェクトの選択に使用し、同時指定はできません。{value1}keyMapping を省略または null にすると、完全な転送元キーを維持します。mode：PRESERVE、ADD_PREFIX（targetPrefix）、REPLACE_PREFIX（sourcePrefix は転送元の絞り込みと一致、targetPrefix は空でも可）、EXACT_KEY（単一オブジェクトのみ、targetKey）。ADD_PREFIX は末尾に / がなければ追加します。REPLACE_PREFIX は文字列をそのまま置換し、/ は追加しません。キーとプレフィックスの空白とスラッシュは保持します。dateAfter / dateBefore：更新日時の範囲（YYYY-MM-DDTHH:mm:ss）。overwrite：上書き。distributionMode：affinity または balanced。taskBandwidthLimitMbps：タスク全体の上限（Mbps、0.1–1,000,000）。省略または null の場合はノードの制限のみ適用します。",
     },
-  "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、marker、workerNode。":
+  "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、workerNode；marker 不会被使用。":
     {
-      en: "Subtasks also support sourceEndpoint.objectKey. sourceEndpoint.prefix requires sourceEndpoint.prefixFilterEnabled:true; duplicate top-level values must match. Optional: startKey, endKey, marker, workerNode. ",
-      ja: "子タスクは sourceEndpoint.objectKey も指定できます。sourceEndpoint.prefix を使用する場合は sourceEndpoint.prefixFilterEnabled:true が必要です。トップレベルの値と重複する場合は一致させてください。任意項目：startKey、endKey、marker、workerNode。",
+      en: "Subtasks also support sourceEndpoint.objectKey. sourceEndpoint.prefix requires sourceEndpoint.prefixFilterEnabled:true; duplicate top-level values must match. Optional: startKey, endKey, workerNode; a marker is not used. ",
+      ja: "子タスクは sourceEndpoint.objectKey も指定できます。sourceEndpoint.prefix を使用する場合は sourceEndpoint.prefixFilterEnabled:true が必要です。トップレベルの値と重複する場合は一致させてください。任意項目：startKey、endKey、workerNode。marker は使用されません。",
     },
   "存储桶迁移会按源范围生成子任务。": {
     en: "Bucket transfers generate subtasks for the selected source scope. ",

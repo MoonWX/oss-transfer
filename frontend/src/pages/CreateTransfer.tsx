@@ -635,6 +635,27 @@ export default function CreateTransfer() {
   const precheckWriteUnchecked = !!precheck?.nodeBindings.some(
     (binding) => binding.valid && binding.code === WRITE_NOT_CHECKED,
   );
+  // Imported subtasks with a marker, numbered from 1. The marker is not used:
+  // a v4.0 marker names the upload that ended last, not a point before which
+  // every object is done, so the scan does not resume there.
+  const batchMarkerRows = useMemo(() => {
+    if (tab !== 1 || batchKind !== "tasks") return [];
+    try {
+      const rows: unknown = JSON.parse(batchText);
+      return Array.isArray(rows)
+        ? rows.flatMap((row, index) =>
+            row &&
+            typeof row === "object" &&
+            typeof row.marker === "string" &&
+            row.marker !== ""
+              ? [index + 1]
+              : [],
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  }, [tab, batchKind, batchText]);
   // Imported local rows that skip the shared check, numbered from 1.
   const batchSkippedRows = useMemo(() => {
     if (tab !== 1 || batchKind !== "local") return [];
@@ -2233,7 +2254,7 @@ export default function CreateTransfer() {
                   {batchKind === "tasks" && (
                     <Alert severity="info">
                       {tr(
-                        "用于导入已有的 OSS 子任务或恢复断点。支持 startKey、endKey、marker 和 workerNode；留空 workerNode 时由集群分配。",
+                        "用于按 Key 范围导入 OSS 子任务。支持 startKey、endKey 和 workerNode，留空 workerNode 时由集群分配。每个子任务从 startKey 之后完整扫描其范围，不会从断点继续；目标端已存在的对象按冲突策略处理。",
                       )}
                     </Alert>
                   )}
@@ -2300,6 +2321,17 @@ export default function CreateTransfer() {
                       {tr("填入示例")}
                     </Button>
                   </Stack>
+                  {batchMarkerRows.length > 0 && (
+                    <Alert
+                      severity="warning"
+                      data-testid="batch-marker-warning"
+                    >
+                      {tr(
+                        "第 {rows} 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。",
+                        { rows: batchMarkerRows.join(", ") },
+                      )}
+                    </Alert>
+                  )}
                   {batchSkippedRows.length > 0 && (
                     <Alert
                       severity="warning"
@@ -2351,7 +2383,7 @@ export default function CreateTransfer() {
                                 value1:
                                   batchKind === "tasks"
                                     ? tr(
-                                        "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、marker、workerNode。",
+                                        "子任务也支持 sourceEndpoint.objectKey；使用 sourceEndpoint.prefix 时须设置 sourceEndpoint.prefixFilterEnabled:true，与顶层字段重复时值必须一致。可选 startKey、endKey、workerNode；marker 不会被使用。",
                                       )
                                     : tr("存储桶迁移会按源范围生成子任务。"),
                               },

@@ -243,6 +243,8 @@ local 下载请求（OSS_TO_LOCAL）可设置 "rangedDownload":"auto" 或 "off"�
 local 请求可设置 "skipSharedCheck":true 跳过多节点共享目录校验，须同时设置
 "skipSharedCheckAcknowledged":true，表示已确认所有执行节点挂载的是同一份存储。
 后果同 task create --skip-shared-check；导入时会对每个跳过校验的行给出警告。
+tasks 请求中的 marker 不会被使用：每个子任务从 startKey 之后完整扫描其范围，不会从断点继续，
+目标端已存在的对象按冲突策略处理；导入时会对每个设置了 marker 的行给出警告。
 
 示例
   oss-transfer-cli task import buckets ./buckets.csv

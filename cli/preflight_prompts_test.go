@@ -155,3 +155,47 @@ func TestStorageHelpSaysRemovingAConnectionStopsItsTasks(t *testing.T) {
 		}
 	}
 }
+
+// The scanner never reads a marker: an imported subtask scans its range from
+// startKey again. Importing one says so before anything is sent, and the rows
+// are still sent unchanged.
+func TestImportSubtasksSaysAMarkerIsNotUsed(t *testing.T) {
+	row := `"sourceBucket":"src","destBucket":"dst","sourceS3Alias":"s","destS3Alias":"d","startKey":"photos/2024/","endKey":"photos/2025/"`
+	file := creationImportFile(t, "tasks.json", `[{`+row+`},{`+row+`,"marker":"photos/2024/06/a.jpg"},{`+row+`,"marker":""},{`+row+`,"marker":"photos/2024/09/b.jpg"}]`)
+	var warnings bytes.Buffer
+	client := creationTestClient(t, creationExchange{
+		method: "POST", path: "/import", response: `{"success":true,"importedCount":4,"taskIds":[72,73,74,75]}`,
+		inspect: func(rows []map[string]interface{}) {
+			if len(rows) != 4 || rows[1]["marker"] != "photos/2024/06/a.jpg" {
+				t.Fatal(rows)
+			}
+		},
+	})
+	client.errors = &warnings
+	if _, err := runTaskImport(client, []string{"tasks", file}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warnings.String(), "警告：第 2, 4 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续") {
+		t.Fatalf("warnings %q", warnings.String())
+	}
+	warnings.Reset()
+	file = creationImportFile(t, "plain.json", `[{`+row+`}]`)
+	client = creationTestClient(t, creationExchange{method: "POST", path: "/import", response: `{"success":true,"importedCount":1,"taskIds":[76]}`})
+	client.errors = &warnings
+	if _, err := runTaskImport(client, []string{"tasks", file}); err != nil || warnings.Len() != 0 {
+		t.Fatalf("%v %q", err, warnings.String())
+	}
+}
+
+// The import help says that a marker in subtask rows is not used.
+func TestTaskImportHelpSaysAMarkerIsNotUsed(t *testing.T) {
+	for locale, want := range map[cliLocale]string{
+		localeZH: "tasks 请求中的 marker 不会被使用",
+		localeEN: "A marker in tasks rows is not used",
+		localeJA: "tasks の行の marker は使用されません",
+	} {
+		if help := helpForLocale([]string{"task", "import"}, locale); !strings.Contains(help, want) {
+			t.Errorf("%s task import help lacks %q", locale, want)
+		}
+	}
+}

@@ -20,6 +20,9 @@ var cliPreflightMessages = map[string][2]string{
 	"--prefix 需要与 --write 一起使用":                                         {"--prefix needs --write", "--prefix は --write と一緒に指定してください"},
 	"--prefix 不能超过 512 字节，且不能包含控制字符":                                    {"--prefix must be at most 512 bytes without control characters", "--prefix は 512 バイト以内で、制御文字を含めないでください"},
 	"%w\n提示: 较旧的 Master 不支持 --prefix，请升级 Master，或去掉 --prefix 在存储桶根目录检查": {"%w\nHint: older Masters do not support --prefix; upgrade the Master, or check at the bucket root without --prefix", "%w\nヒント: 古い Master は --prefix に対応していません。Master を更新するか、--prefix を付けずにバケットのルートで確認してください"},
+
+	// Imported subtasks: a marker is not used.
+	"警告：第 %s 项设置了 marker，marker 不会被使用：这些子任务从 startKey 之后完整扫描各自的范围，不会从断点继续；目标端已存在的对象按冲突策略处理。": {"Warning: rows %s set a marker, which is not used: these subtasks scan their whole range after startKey and do not resume from a checkpoint; objects that already exist at the destination are handled by the conflict policy.", "警告: %s 件目に marker が指定されていますが、marker は使用されません。これらの子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理されます。"},
 }
 
 func init() {

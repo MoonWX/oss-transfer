@@ -557,6 +557,9 @@ Same meaning as task create --ranged-download; other directions reject off.
 local rows may set "skipSharedCheck":true to skip the multi-node shared directory check; they must
 also set "skipSharedCheckAcknowledged":true to confirm that every execution node mounts the same
 storage. The consequences are those of task create --skip-shared-check; import warns for each such row.
+A marker in tasks rows is not used: each subtask scans its whole range after startKey and does not resume
+from a checkpoint; objects that already exist at the destination are handled by the conflict policy.
+Import warns for each row that sets a marker.
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -589,6 +592,8 @@ local のダウンロード行（OSS_TO_LOCAL）では "rangedDownload":"auto" �
 local の行で "skipSharedCheck":true を指定すると複数ノードの共有ディレクトリ検証を省略します。
 すべての実行ノードが同じストレージをマウントしていることの確認として "skipSharedCheckAcknowledged":true も
 必要です。影響は task create --skip-shared-check と同じで、インポート時に該当する行ごとに警告します。
+tasks の行の marker は使用されません。各子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは
+再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。marker を指定した行ごとに警告します。
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only

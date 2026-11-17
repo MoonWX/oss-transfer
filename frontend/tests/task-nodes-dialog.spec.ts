@@ -520,6 +520,8 @@ test("a joining node that has not joined says why next to its state and how to c
   const reason = "执行节点 10.0.1.14 未通过共享目录校验：marker missing";
   const enrolled =
     "执行节点 10.0.1.17 添加到此任务后重新注册过，无法以原来的注册身份加入。请取消此次加入，再重新添加该节点";
+  const removed =
+    "执行节点 10.0.1.18 添加到此任务后已从集群中移除，无法加入。请取消此次加入";
   let editable = true;
   await setup(page, {
     view: () =>
@@ -538,6 +540,12 @@ test("a joining node that has not joined says why next to its state and how to c
             state: "JOINING",
             share: null,
             joinProblem: { code: "ENROLLMENT_CHANGED", message: enrolled },
+          }),
+          member("10.0.1.18", {
+            state: "JOINING",
+            share: null,
+            online: false,
+            joinProblem: { code: "AGENT_REMOVED", message: removed },
           }),
           member("10.0.1.16", { state: "JOINING", share: null }),
         ],
@@ -565,6 +573,10 @@ test("a joining node that has not joined says why next to its state and how to c
     enrolled,
   );
   await expect(box.getByTestId("task-node-join-hint-10.0.1.17")).toHaveCount(0);
+  await expect(box.getByTestId("task-node-join-problem-10.0.1.18")).toHaveText(
+    removed,
+  );
+  await expect(box.getByTestId("task-node-join-hint-10.0.1.18")).toHaveCount(0);
   // Without a reason (or from an older Master) the join is still in progress.
   await expect(box.getByTestId("task-node-10.0.1.16")).toContainText(
     "正在完成握手与检查，加入后开始分配任务",

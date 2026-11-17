@@ -199,7 +199,11 @@ function bindingVerdict(binding: BindingCheck) {
 }
 
 // Join problems whose message already asks the operator to cancel the join.
-const CANCEL_NAMED = new Set(["ENROLLMENT_CHANGED", "REVISIONS_EXHAUSTED"]);
+const CANCEL_NAMED = new Set([
+  "AGENT_REMOVED",
+  "ENROLLMENT_CHANGED",
+  "REVISIONS_EXHAUSTED",
+]);
 
 const leaving = (state?: string) =>
   state === "DRAINING" || state === "REMOVING";

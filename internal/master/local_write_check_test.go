@@ -72,3 +72,43 @@ func TestDownloadPrecheckProvesTheAgentCanWrite(t *testing.T) {
 		}
 	}
 }
+
+// A root Agent refused by the file system is not told to chown the directory
+// to root, which never helps: file permissions do not refuse root, and under
+// NFS root_squash the client cannot even run chown. Other users get a command
+// they can paste, path included.
+func TestWriteProbeMessageGivesAdviceThatCanWork(t *testing.T) {
+	denied := func(uid *int, directory string) agentservice.WriteProbe {
+		return agentservice.WriteProbe{Path: directory, ProbeDirectory: directory, ErrorCode: agentservice.WriteProbePermissionDenied, EffectiveUID: uid}
+	}
+	root, user := 0, 1001
+	for _, locale := range []string{"", "zh-CN", "en-US", "ja-JP"} {
+		ctx := context.WithValue(context.Background(), responseLocaleKey{}, locale)
+		message := writeProbeMessage(ctx, denied(&root, "/mnt/nas/dst"))
+		if strings.Contains(message, "chown") || !strings.Contains(message, "/mnt/nas/dst") || !strings.Contains(message, "root_squash") || !strings.Contains(message, "allow_other") || !strings.Contains(message, "65534") {
+			t.Errorf("%q: root Agent: %s", locale, message)
+		}
+		message = writeProbeMessage(ctx, denied(&user, "/mnt/nas/dst"))
+		if !strings.Contains(message, "chown 1001 /mnt/nas/dst") || strings.Contains(message, "root_squash") {
+			t.Errorf("%q: UID 1001: %s", locale, message)
+		}
+		message = writeProbeMessage(ctx, denied(&user, "/mnt/nas/it's mine"))
+		if !strings.Contains(message, `chown 1001 '/mnt/nas/it'"'"'s mine'`) {
+			t.Errorf("%q: path needing quotes: %s", locale, message)
+		}
+		message = writeProbeMessage(ctx, denied(nil, `D:\downloads`))
+		if strings.Contains(message, "chown") || strings.Contains(message, "root_squash") || !strings.Contains(message, `D:\downloads`) {
+			t.Errorf("%q: Windows Agent: %s", locale, message)
+		}
+	}
+	want := map[string]string{
+		"zh-CN": "节点无权写入 /mnt/nas/dst：Agent 以 root 运行仍被拒绝",
+		"en-US": "The node cannot write to /mnt/nas/dst: the Agent runs as root and was still refused",
+		"ja-JP": "ノードは /mnt/nas/dst に書き込めません。Agent は root で動作していますが拒否されました",
+	}
+	for locale, prefix := range want {
+		if message := writeProbeMessage(context.WithValue(context.Background(), responseLocaleKey{}, locale), denied(&root, "/mnt/nas/dst")); !strings.HasPrefix(message, prefix) {
+			t.Errorf("%s: %s", locale, message)
+		}
+	}
+}

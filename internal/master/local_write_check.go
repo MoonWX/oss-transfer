@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/cluster"
@@ -39,8 +40,15 @@ func writeProbeMessage(ctx context.Context, probe agentservice.WriteProbe) strin
 	}
 	switch probe.ErrorCode {
 	case agentservice.WriteProbePermissionDenied:
-		if probe.EffectiveUID != nil {
-			return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s）"), directory, strconv.Itoa(*probe.EffectiveUID), strconv.Itoa(*probe.EffectiveUID))
+		switch {
+		case probe.EffectiveUID != nil && *probe.EffectiveUID == 0:
+			// File permissions never refuse root, so ownership is not the
+			// cause and chown cannot help. Under NFS root_squash the client
+			// cannot even run chown.
+			return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s：Agent 以 root 运行仍被拒绝，常见原因是 NFS 的 root_squash 将 root 映射为匿名用户（通常为 UID 65534）、FUSE 挂载未启用 allow_other，或 SELinux、macOS 隐私保护等安全策略；请让该目录对映射后的用户可写，或调整导出选项、挂载选项和安全策略"), directory)
+		case probe.EffectiveUID != nil:
+			uid := strconv.Itoa(*probe.EffectiveUID)
+			return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s %s）；网络文件系统可能会把此 UID 映射为其他用户"), directory, uid, uid, shellWord(directory))
 		}
 		return fmt.Sprintf(localizeContext(ctx, "节点无权写入 %s，请为 Agent 服务账户授予写权限"), directory)
 	case agentservice.WriteProbeReadOnly:
@@ -51,6 +59,17 @@ func writeProbeMessage(ctx context.Context, probe agentservice.WriteProbe) strin
 		return fmt.Sprintf(localizeContext(ctx, "%s 不是目录，无法作为下载目标"), directory)
 	}
 	return fmt.Sprintf(localizeContext(ctx, "无法在 %s 中写入测试文件：%s"), directory, probe.Error)
+}
+
+// shellWord is value as one word of a POSIX shell command, quoted only when
+// it needs to be, so a suggested command can be pasted as it is.
+func shellWord(value string) string {
+	if value != "" && strings.IndexFunc(value, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+:@%,=", r))
+	}) < 0 {
+		return value
+	}
+	return shellQuote(value)
 }
 
 // formatBinaryBytes renders a byte count with a binary unit, such as 12.3 GiB.

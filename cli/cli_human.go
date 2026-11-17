@@ -479,6 +479,11 @@ func humanErrorResult(result map[string]interface{}, err error, locale cliLocale
 			if text, ok := value.(string); ok && (text == "" || strings.Contains(printed, text) || strings.Contains(printed, translateServerMessage(locale, text)) || problem != nil && text == problem.Message) {
 				continue
 			}
+		case "node":
+			// The node that ran a failed storage check, which the error names.
+			if text, ok := value.(string); ok && text != "" && strings.Contains(printed, safeCLIText(text)) {
+				continue
+			}
 		}
 		copy[key] = value
 	}

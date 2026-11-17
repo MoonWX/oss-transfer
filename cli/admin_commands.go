@@ -320,7 +320,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 		}
 		result, err := client.Get(path)
 		if err != nil {
-			return result, storagePathStyleAdvice(result, err, alias)
+			return result, storagePathStyleAdvice(result, storageCheckNode(result, err), alias)
 		}
 		if action == "test" {
 			_, checkSupported := result["pathStyle"]
@@ -452,13 +452,23 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			result, err = client.Put("/s3-config/"+url.PathEscape(alias), body)
 		}
 		if err != nil {
-			return result, storagePathStyleAdvice(result, err, alias)
+			return result, storagePathStyleAdvice(result, storageCheckNode(result, err), alias)
 		}
 		setCLISummary(result, storageSavedSummary(client, client.locale.format("存储连接 %s 已保存", alias), result)...)
 		return result, nil
 	default:
 		return nil, cliErrorf("未知 storage 子命令: %s", action)
 	}
+}
+
+// storageCheckNode names the node that ran a failed storage check. One node
+// runs it, so the failure is what that node saw, not every node.
+func storageCheckNode(result map[string]interface{}, err error) error {
+	node := getString(result, "node")
+	if err == nil || node == "" {
+		return err
+	}
+	return cliErrorf("%w\n执行检查的节点: %s", err, safeCLIText(node))
 }
 
 // storagePathStyleAdvice adds the command that applies the Master's advice to
@@ -1089,6 +1099,10 @@ func storageSavedSummary(client *ApiClient, done string, result map[string]inter
 		for _, detail := range cliStringList(result["details"]) {
 			lines = append(lines, "  "+detail)
 		}
+	}
+	// One node validates the connection; the others were not checked.
+	if node := getString(result, "validationNode"); node != "" {
+		lines = append(lines, client.locale.format("保存前已由执行节点 %s 验证连接", node))
 	}
 	// When the nodes that missed the change receive it, as the Master says.
 	for _, key := range []string{"syncNote", "warning", "connectionWarning"} {

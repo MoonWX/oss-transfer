@@ -106,6 +106,52 @@ test("a running task retries its failed objects in place from the task details",
   }
 });
 
+// The Master searches a bounded part of the failure index per retry: hasMore
+// says only that the search stopped early, not that more child tasks failed.
+test("a retry that stopped searching early says other child tasks may still have failures", async ({
+  page,
+}) => {
+  await mockApi(page);
+  const task = runningTask(70);
+  await page.route("**/api/master/status", (route) =>
+    route.fulfill({ json: { totalTasks: 1, tasks: [task] } }),
+  );
+  await page.route("**/api/master/tasks/1", (route) =>
+    route.fulfill({ json: { success: true, data: task } }),
+  );
+  await page.route("**/api/master/tasks/1/retry-failed", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          taskId: 1,
+          status: "RUNNING",
+          generation: 3,
+          accepted: 64,
+          ignored: 0,
+          failed: 0,
+          retriedObjects: 64,
+          hasMore: true,
+          children: [],
+        },
+      },
+    }),
+  );
+  await page.goto("/tasks?taskId=1");
+  const detail = page.locator(".MuiDrawer-paper");
+  await detail.getByRole("button", { name: "重试失败项", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "重试运行中任务的失败项？" })
+    .getByRole("button", { name: "确认重试", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      "已开始重试任务 #1 的 64 个失败对象（64 个子任务），正在进行的传输不受影响。其他子任务可能还有未重试的失败对象，可再次重试。",
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/还有更多失败的子任务/)).toHaveCount(0);
+});
+
 test("the exceptions page explains a refused running retry and permits another attempt", async ({
   page,
 }) => {

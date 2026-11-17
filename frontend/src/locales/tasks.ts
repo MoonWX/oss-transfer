@@ -25,9 +25,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "No failed objects can be retried right now.",
     ja: "今すぐ再試行できる失敗オブジェクトはありません。",
   },
-  "还有更多失败的子任务，稍后可再次重试。": {
-    en: " More child tasks have failed objects; retry again later.",
-    ja: "失敗オブジェクトのあるサブタスクがほかにもあります。後で再度再試行してください。",
+  "其他子任务可能还有未重试的失败对象，可再次重试。": {
+    en: " Other child tasks may still have failed objects that were not retried; you can retry again.",
+    ja: "ほかのサブタスクにも再試行していない失敗オブジェクトが残っている可能性があります。もう一度再試行できます。",
   },
   "重试中…": { en: "Retrying…", ja: "再試行中…" },
   确认重试: { en: "Confirm retry", ja: "再試行を確定" },

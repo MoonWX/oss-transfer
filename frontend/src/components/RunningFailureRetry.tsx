@@ -196,7 +196,10 @@ export default function RunningFailureRetry({
               children: formatNumber(data.accepted),
             },
           ) +
-          (data.hasMore ? tr("还有更多失败的子任务，稍后可再次重试。") : "");
+          // hasMore means only that the bounded search stopped early.
+          (data.hasMore
+            ? tr("其他子任务可能还有未重试的失败对象，可再次重试。")
+            : "");
         if (data.failed > 0 && data.message) {
           setError(
             tr("部分失败项未能重试：{value1}", { value1: data.message }),

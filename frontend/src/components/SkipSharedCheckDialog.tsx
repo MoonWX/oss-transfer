@@ -16,7 +16,8 @@ import { t, useI18n } from "../lib/i18n";
  * Asks for an explicit acknowledgement before the shared directory check is
  * skipped, and says what that can cost. Creating a task skips it for every
  * selected node ("create"); a node change skips it for the nodes it adds
- * ("join"). The acknowledgement is never carried over to the next opening.
+ * ("join"), and the task's other nodes stay verified. The acknowledgement is
+ * never carried over to the next opening.
  */
 export default function SkipSharedCheckDialog({
   open,
@@ -54,7 +55,9 @@ export default function SkipSharedCheckDialog({
             ),
         t("冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；"),
         t("任务报告可能显示成功，而本地目标实际不完整；"),
-        t("节点失联后的自动接管也不做校验，可能写入另一个目录。"),
+        join
+          ? t("新节点接管失联节点的工作时也不做校验，可能写入另一个目录。")
+          : t("节点失联后的自动接管也不做校验，可能写入另一个目录。"),
       ]
     : [
         join
@@ -62,7 +65,11 @@ export default function SkipSharedCheckDialog({
           : t("不同节点会从不同的数据中读取对象；"),
         t("部分文件可能漏传，或从错误的副本上传；"),
         t("任务报告可能显示成功，而目标端实际不完整或不一致；"),
-        t("节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。"),
+        join
+          ? t(
+              "新节点接管失联节点的工作时也不做校验，可能在另一个目录上继续执行。",
+            )
+          : t("节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。"),
       ];
   return (
     <Dialog
@@ -92,12 +99,13 @@ export default function SkipSharedCheckDialog({
             </Typography>
           ))}
         </Box>
-        {!join && (
-          // Skipping at creation does not reach the nodes added later.
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            {t("之后添加节点时仍会校验共享目录，除非届时再次确认跳过。")}
-          </Typography>
-        )}
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {join
+            ? // Only the added nodes skip the check.
+              t("任务的其他节点不受影响，运行期间仍会校验共享目录。")
+            : // Skipping at creation does not reach the nodes added later.
+              t("之后添加节点时仍会校验共享目录，除非届时再次确认跳过。")}
+        </Typography>
         {direction === "LOCAL_TO_OSS" && (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             {t(

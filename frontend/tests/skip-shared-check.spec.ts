@@ -168,6 +168,10 @@ test("task details keep warning about a skipped shared check", async ({
   await expect(warning).toContainText(
     "之后添加节点时仍会校验共享目录，除非届时再次确认跳过",
   );
+  // Takeover goes unchecked only where those nodes take the work over.
+  await expect(warning).toContainText(
+    "由这些节点接管失联节点的工作时也不做校验",
+  );
   await expect(warning).not.toContainText("从错误的副本上传");
   await page.goto("/tasks?taskId=1048");
   await expect(page.getByText("执行信息", { exact: true })).toBeVisible();
@@ -434,9 +438,16 @@ test("skipping the check for added nodes needs the consequences and sends both f
     "新节点会从与其他节点不同的数据中读取对象；",
     "部分文件可能漏传，或从错误的副本上传；",
     "任务报告可能显示成功，而目标端实际不完整或不一致；",
-    "节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。",
+    "新节点接管失联节点的工作时也不做校验，可能在另一个目录上继续执行。",
   ])
     await expect(joinDialog(page).getByText(consequence)).toBeVisible();
+  // Only the added nodes skip the check: the others stay verified.
+  await expect(
+    joinDialog(page).getByText(
+      "任务的其他节点不受影响，运行期间仍会校验共享目录。",
+    ),
+  ).toBeVisible();
+  await expect(joinDialog(page).getByText(/之后添加节点时/)).toHaveCount(0);
   const confirm = joinDialog(page).getByRole("button", { name: "跳过校验" });
   await expect(confirm).toBeDisabled();
   await joinDialog(page).getByRole("button", { name: "取消" }).click();
@@ -500,7 +511,7 @@ test("a download's node change states a download's consequences and drops the sk
     "新节点下载的文件会写入其他节点看不到的目录，没有一个目录包含完整的数据；",
     "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
     "任务报告可能显示成功，而本地目标实际不完整；",
-    "节点失联后的自动接管也不做校验，可能写入另一个目录。",
+    "新节点接管失联节点的工作时也不做校验，可能写入另一个目录。",
   ])
     await expect(joinDialog(page).getByText(consequence)).toBeVisible();
   await expect(joinDialog(page).getByText(/从错误的副本上传/)).toHaveCount(0);

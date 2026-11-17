@@ -910,6 +910,18 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "automatic takeover of a lost node is not checked either, so work may continue against a different directory.",
     ja: "失われたノードの自動引き継ぎも検証されないため、別のディレクトリで処理が続く可能性があります。",
   },
+  "新节点接管失联节点的工作时也不做校验，可能写入另一个目录。": {
+    en: "when a new node takes over a lost node's work, that is not checked either, so files may be written into a different directory.",
+    ja: "新しいノードが失われたノードの処理を引き継ぐ場合も検証されないため、別のディレクトリに書き込まれる可能性があります。",
+  },
+  "新节点接管失联节点的工作时也不做校验，可能在另一个目录上继续执行。": {
+    en: "when a new node takes over a lost node's work, that is not checked either, so work may continue against a different directory.",
+    ja: "新しいノードが失われたノードの処理を引き継ぐ場合も検証されないため、別のディレクトリで処理が続く可能性があります。",
+  },
+  "任务的其他节点不受影响，运行期间仍会校验共享目录。": {
+    en: "The task's other nodes are not affected: their shared directory is still checked while the task runs.",
+    ja: "タスクの他のノードには影響せず、実行中も共有ディレクトリの検証が続きます。",
+  },
   "之后添加节点时仍会校验共享目录，除非届时再次确认跳过。": {
     en: "Nodes added later are still checked, unless you confirm skipping the check again when adding them.",
     ja: "後からノードを追加するときは、その時点で改めて省略を確認しない限り、共有ディレクトリを検証します。",
@@ -997,15 +1009,15 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
       en: "Rows {rows} skip the shared directory check: nothing verifies that their execution nodes mount the same storage. If they do not, an upload can miss files or read them from the wrong copy, and a download leaves the files split across each node's own directory, while the task still shows success; automatic takeover is not checked either. Nodes added later are still checked, unless you confirm skipping the check again when adding them.",
       ja: "{rows} 件目は共有ディレクトリの検証を省略します。各実行ノードが同じストレージをマウントしているかは確認されません。同じでない場合、アップロードではファイルの漏れや誤ったコピーからの読み取りが起き、ダウンロードではファイルが各ノードのディレクトリに分散しますが、タスクは成功と表示されます。自動引き継ぎも検証されません。後からノードを追加するときは、その時点で改めて省略を確認しない限り検証します。",
     },
-  "创建任务或添加节点时，操作者确认跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；即使任务显示成功，目标端也可能不完整或不一致。节点失联后的自动接管也不做校验，可能在另一个目录上继续执行；之后添加节点时仍会校验共享目录，除非届时再次确认跳过。":
+  "创建任务或添加节点时，操作者确认跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；即使任务显示成功，目标端也可能不完整或不一致。由这些节点接管失联节点的工作时也不做校验，可能在另一个目录上继续执行；之后添加节点时仍会校验共享目录，除非届时再次确认跳过。":
     {
-      en: "When the task was created or nodes were added, the operator confirmed skipping the shared directory check, so nothing verified that those execution nodes mount the same storage. If they do not, different nodes read different data and some files can be missed or uploaded from the wrong copy; the destination can be incomplete or inconsistent even when the task shows success. Automatic takeover of a lost node is not checked either and may resume against a different directory; nodes added later are still checked, unless you confirm skipping the check again when adding them.",
-      ja: "タスクの作成時またはノードの追加時に、操作者が共有ディレクトリの検証の省略を確認したため、それらの実行ノードが同じストレージをマウントしているかは確認されていません。同じでない場合、ノードごとに異なるデータを読み取り、一部のファイルが漏れたり誤ったコピーからアップロードされたりします。タスクが成功と表示されていても、転送先が不完全または不整合になることがあります。失われたノードの自動引き継ぎも検証されず、別のディレクトリで再開されることがあります。後からノードを追加するときは、その時点で改めて省略を確認しない限り検証します。",
+      en: "When the task was created or nodes were added, the operator confirmed skipping the shared directory check, so nothing verified that those execution nodes mount the same storage. If they do not, different nodes read different data and some files can be missed or uploaded from the wrong copy; the destination can be incomplete or inconsistent even when the task shows success. Takeover of a lost node's work by those nodes is not checked either and may resume against a different directory; nodes added later are still checked, unless you confirm skipping the check again when adding them.",
+      ja: "タスクの作成時またはノードの追加時に、操作者が共有ディレクトリの検証の省略を確認したため、それらの実行ノードが同じストレージをマウントしているかは確認されていません。同じでない場合、ノードごとに異なるデータを読み取り、一部のファイルが漏れたり誤ったコピーからアップロードされたりします。タスクが成功と表示されていても、転送先が不完全または不整合になることがあります。それらのノードが失われたノードの処理を引き継ぐ場合も検証されず、別のディレクトリで再開されることがあります。後からノードを追加するときは、その時点で改めて省略を確認しない限り検証します。",
     },
-  "创建任务或添加节点时，操作者确认跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；即使任务显示成功，本地目标也可能不完整。节点失联后的自动接管也不做校验，可能写入另一个目录；之后添加节点时仍会校验共享目录，除非届时再次确认跳过。":
+  "创建任务或添加节点时，操作者确认跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；即使任务显示成功，本地目标也可能不完整。由这些节点接管失联节点的工作时也不做校验，可能写入另一个目录；之后添加节点时仍会校验共享目录，除非届时再次确认跳过。":
     {
-      en: "When the task was created or nodes were added, the operator confirmed skipping the shared directory check, so nothing verified that those execution nodes mount the same storage. If they do not, the downloaded files are split across each node's own directory, none of which holds the complete data, and the conflict policy only sees each node's own directory; the local destination can be incomplete even when the task shows success. Automatic takeover of a lost node is not checked either and may write into a different directory; nodes added later are still checked, unless you confirm skipping the check again when adding them.",
-      ja: "タスクの作成時またはノードの追加時に、操作者が共有ディレクトリの検証の省略を確認したため、それらの実行ノードが同じストレージをマウントしているかは確認されていません。同じでない場合、ダウンロードしたファイルは各ノードのディレクトリに分散し、どのディレクトリにも完全なデータがそろわず、競合の確認も各ノード自身のディレクトリしか見ません。タスクが成功と表示されていても、ローカルの転送先が不完全なことがあります。失われたノードの自動引き継ぎも検証されず、別のディレクトリに書き込む可能性があります。後からノードを追加するときは、その時点で改めて省略を確認しない限り検証します。",
+      en: "When the task was created or nodes were added, the operator confirmed skipping the shared directory check, so nothing verified that those execution nodes mount the same storage. If they do not, the downloaded files are split across each node's own directory, none of which holds the complete data, and the conflict policy only sees each node's own directory; the local destination can be incomplete even when the task shows success. Takeover of a lost node's work by those nodes is not checked either and may write into a different directory; nodes added later are still checked, unless you confirm skipping the check again when adding them.",
+      ja: "タスクの作成時またはノードの追加時に、操作者が共有ディレクトリの検証の省略を確認したため、それらの実行ノードが同じストレージをマウントしているかは確認されていません。同じでない場合、ダウンロードしたファイルは各ノードのディレクトリに分散し、どのディレクトリにも完全なデータがそろわず、競合の確認も各ノード自身のディレクトリしか見ません。タスクが成功と表示されていても、ローカルの転送先が不完全なことがあります。それらのノードが失われたノードの処理を引き継ぐ場合も検証されず、別のディレクトリに書き込む可能性があります。後からノードを追加するときは、その時点で改めて省略を確認しない限り検証します。",
     },
   "请先升级执行节点 {node}，才能运行已跳过共享目录校验的任务": {
     en: "Upgrade Agent {node} to run a task whose shared directory check was skipped",

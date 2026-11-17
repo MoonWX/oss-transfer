@@ -22,6 +22,8 @@ param(
     [switch]$WithAgent,
     [switch]$WithoutAgent,
     [switch]$Yes,
+    # Install a release older than the one that last used the data.
+    [switch]$Force,
     [ValidateRange(10,600)][int]$StartupTimeout = 120
 )
 $ErrorActionPreference = 'Stop'
@@ -54,6 +56,40 @@ function Normalize-ReleaseVersion([string]$Value) {
     if ($Value -ceq 'latest') { return $Value }
     if ($Value -cnotmatch '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\z') { throw 'Version must be latest or a release such as v4.1.5.' }
     return 'v' + ($Value -replace '^v','')
+}
+# Mirrors transfer_version_older in release-version.sh: $true when release
+# $Candidate has lower Semantic Versioning precedence than $Recorded
+# (4.1.41 < 4.2.0-rc.1 < 4.2.0). An unparsable version never compares.
+function Test-OlderRelease([string]$Candidate,[string]$Recorded) {
+    $pattern = '^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+.*)?$'
+    $left = [Regex]::Match($Candidate,$pattern)
+    $right = [Regex]::Match($Recorded,$pattern)
+    if (-not $left.Success -or -not $right.Success) { return $false }
+    for ($i = 1; $i -le 3; $i++) {
+        $x = [decimal]$left.Groups[$i].Value; $y = [decimal]$right.Groups[$i].Value
+        if ($x -ne $y) { return ($x -lt $y) }
+    }
+    $leftPre = $left.Groups[4].Value; $rightPre = $right.Groups[4].Value
+    if ($leftPre -ceq $rightPre -or -not $leftPre) { return $false }
+    if (-not $rightPre) { return $true }
+    $xs = $leftPre.Split('.'); $ys = $rightPre.Split('.')
+    for ($i = 0; $i -lt $xs.Count -and $i -lt $ys.Count; $i++) {
+        $xNumeric = $xs[$i] -match '^[0-9]+$'; $yNumeric = $ys[$i] -match '^[0-9]+$'
+        if ($xNumeric -and $yNumeric) {
+            if ([decimal]$xs[$i] -ne [decimal]$ys[$i]) { return ([decimal]$xs[$i] -lt [decimal]$ys[$i]) }
+        } elseif ($xNumeric -ne $yNumeric) {
+            return $xNumeric
+        } elseif ($xs[$i] -cne $ys[$i]) {
+            return ([string]::CompareOrdinal($xs[$i],$ys[$i]) -lt 0)
+        }
+    }
+    return ($xs.Count -lt $ys.Count)
+}
+# The release that last used an installation's data, from its install.json;
+# empty when the record does not name one.
+function Get-RecordedVersion($Record) {
+    if ($Record -and $Record.PSObject.Properties['version']) { return [string]$Record.version }
+    return ''
 }
 function Normalize-ReleaseUrl([string]$Value) {
     $url = $Value.TrimEnd('/')
@@ -400,7 +436,11 @@ if ($Upgrade) {
         }
         if ($candidates.Count -eq 0) { throw 'No managed installation found; use -InstallDir for an installation without a service definition.' }
         Write-Host (Get-InstallText 'Upgrade installations:' '将升级以下服务：')
-        foreach ($directory in @($candidates.Keys | Sort-Object)) { Write-Host "  $($candidates[$directory].serviceName): $directory" }
+        foreach ($directory in @($candidates.Keys | Sort-Object)) {
+            $listedVersion = Get-RecordedVersion $candidates[$directory]
+            if ($listedVersion) { Write-Host "  $($candidates[$directory].serviceName) $($listedVersion): $directory" }
+            else { Write-Host "  $($candidates[$directory].serviceName): $directory" }
+        }
         if (-not $Yes -and (Read-Host (Get-InstallText 'Back up and upgrade these installations? [y/N]' '备份并升级这些服务？[y/N]')) -notmatch '^[yY]$') { return }
         # Resolve latest before dispatching either role, then pass that fixed URL.
         if ($ReleaseUrl -and $ReleaseUrl.EndsWith('/latest',[StringComparison]::Ordinal)) {
@@ -1008,6 +1048,21 @@ try {
         $manifest = Fetch 'manifest.tsv'
         if ((Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash -cne $latestHash) { throw 'Latest and versioned release manifests differ; retry after publication finishes.' }
     }
+    # Data written by a newer release may not be readable by an older one.
+    # install.json names the release that last used this data.
+    $recordedVersion = if ($existing) { Get-RecordedVersion $installed } else { '' }
+    if ($recordedVersion -and (Test-OlderRelease $version $recordedVersion)) {
+        if ($Force) {
+            Write-Warning ((Get-InstallText 'Installing {0}, older than {1}, which last used this data (-Force).' '将安装 {0}，比上次使用这些数据的 {1} 更旧（已加 -Force）。') -f $version,$recordedVersion)
+        } elseif (-not $Yes) {
+            if ((Read-Host ((Get-InstallText 'The {0} data was last used by {1}; {2} is older and may not read it. Install {2} anyway? [y/N]' '{0} 的数据上次由 {1} 使用；{2} 是更旧的版本，可能无法读取这些数据。仍要安装 {2} 吗？[y/N]') -f $ServiceName,$recordedVersion,$version)) -notmatch '^[yY]$') {
+                Write-Host (Get-InstallText 'Cancelled; nothing was changed.' '已取消，未做任何更改。')
+                return
+            }
+        } else {
+            throw ((Get-InstallText 'The {0} data was last used by {1}; {2} is older and may not read it. Nothing was changed. Add -Version {1} to install that release, or -Force to install {2} anyway.' '{0} 的数据上次由 {1} 使用；{2} 是更旧的版本，可能无法读取这些数据。未做任何更改。请加 -Version {1} 安装该版本，或加 -Force 仍安装 {2}。') -f $ServiceName,$recordedVersion,$version)
+        }
+    }
     $filename = "oss-transfer-$Role-windows-$arch.exe"
     $records = @($rows | Where-Object { $_.StartsWith("file`twindows`t$arch`t$Role`t") })
     if ($records.Count -ne 1) { throw 'Missing or duplicate platform binary.' }
@@ -1085,7 +1140,8 @@ try {
         Invoke-Native $candidate @('--config',$freshConfig,'--check-config') | Out-Null
     }
     if ((Test-Path (Join-Path $DataDir 'CURRENT')) -or (Test-Path (Join-Path $DataDir 'rocksdb\CURRENT'))) { throw 'RocksDB requires an explicit migration.' }
-    if (-not $Yes -and (Read-Host ((Get-InstallText 'Install {0} {1}? [y/N]' '安装 {0} {1}？[y/N]') -f $Role,$version)) -notmatch '^[yY]$') { return }
+    $confirmation = if ($recordedVersion) { (Get-InstallText 'Install {0} {1}, replacing {2}? [y/N]' '安装 {0} {1}，替换当前的 {2}？[y/N]') -f $Role,$version,$recordedVersion } else { (Get-InstallText 'Install {0} {1}? [y/N]' '安装 {0} {1}？[y/N]') -f $Role,$version }
+    if (-not $Yes -and (Read-Host $confirmation) -notmatch '^[yY]$') { return }
     if ($existing -or $AdoptConfig -or $hadCli -or $hadCliSidecars -or $hadDataCLIConnections) {
         Prepare-BackupDirectory
         if ($existing) { Maintain-Backups 'prune' }

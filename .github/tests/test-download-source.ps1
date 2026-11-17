@@ -6,7 +6,7 @@ $installer = Join-Path $PSScriptRoot '../../deploy/native/Install.ps1'
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-$names = @('Resolve-InstallLanguage','Get-InstallText','Get-MasterAccessUrl','Show-MasterAccess','Show-InstallationSummary','Show-InitialCredentials','Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-ArchiveManifest','Add-InstallerAsset','New-GitHubPackage','Test-LocalReleaseFile','Find-LocalPackageDirectory','New-LocalPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
+$names = @('Resolve-InstallLanguage','Get-InstallText','Test-OlderRelease','Get-RecordedVersion','Get-MasterAccessUrl','Show-MasterAccess','Show-InstallationSummary','Show-InitialCredentials','Normalize-ReleaseVersion','Normalize-ReleaseUrl','Test-MasterPackageUrl','Test-ReleaseDownloadUrl','Invoke-SourceRequest','Get-PublicIPCountry','Get-SourceMetadata','Resolve-DownloadSource','Get-RegularZipEntry','Read-ZipEntryText','Get-ZipEntryHash','New-ArchiveManifest','Add-InstallerAsset','New-GitHubPackage','Test-LocalReleaseFile','Find-LocalPackageDirectory','New-LocalPackage','Fetch','Prepare-MasterPackages','Assert-BackupSpace','Maintain-Backups','Commit-Start','Write-UTF8','Assert-DirectoryPath','Assert-RegularFile','Read-PublishedMasterOrigin','Read-InstallationRoot','Resolve-LocalAgentRoot','Protect-File','Protect-Directory','Resolve-BackupDirectory','Prepare-BackupDirectory','New-TemporaryBackup','Remove-TemporaryBackup','Finish-TemporaryBackup')
 foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $names},$true)) {
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -330,6 +330,29 @@ $script:logFile=$masterLog; $script:startupLogLines=1
         Assert ($result.output.Contains('将以同一身份重试') -and -not $result.output.Contains('Master 拒绝')) "Unconfirmed join lost its retry advice: $($result.output)"
         $result=Invoke-AgentInstallFixture 'existing-ready-failure'
         Assert ($result.output.Contains('Agent 已加入集群')) "A failure after the join was blamed on the join: $($result.output)"
+    }
+    Check 'older releases are recognized by SemVer precedence, as on Linux and macOS' {
+        foreach ($case in @(@('4.1.46','4.1.47-beta.1',$true),@('4.1.47-beta.1','4.1.47',$true),@('4.1.47-beta.2','4.1.47-beta.10',$true),@('4.1.47-beta','4.1.47-beta.1',$true),@('4.1.47-1','4.1.47-alpha',$true),@('4.1.9','4.1.10',$true),
+                             @('4.1.47','4.1.47',$false),@('4.1.47','4.1.47-beta.1',$false),@('4.2.0','4.1.99',$false),@('4.1.47-rc.1','4.1.47-beta.9',$false),@('dev','4.1.47',$false),@('4.1.47',''),@('4.1.47','4.1',$false))) {
+            $expected=if($case.Count -gt 2){$case[2]}else{$false}
+            Assert ((Test-OlderRelease $case[0] $case[1]) -eq $expected) "Test-OlderRelease $($case[0]) $($case[1]) is not $expected."
+        }
+        Assert ((Get-RecordedVersion ([PSCustomObject]@{role='agent'})) -ceq '') 'A record without a version named one.'
+        Assert ((Get-RecordedVersion ([PSCustomObject]@{version='4.1.47-beta.1'})) -ceq '4.1.47-beta.1') 'The recorded version was lost.'
+    }
+    Check 'an older release is refused before anything is downloaded or changed unless confirmed or forced' {
+        $check=@($ast.FindAll({param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($recordedVersion -and (Test-OlderRelease')
+        },$true))
+        Assert ($check.Count -eq 1) 'Downgrade check is ambiguous.'
+        $guard=[ScriptBlock]::Create('param($version,$recordedVersion,$ServiceName,$Yes,$Force,$Lang) '+$check[0].Extent.Text+'; "continued"')
+        $refused=$null
+        try { & $guard '4.1.46' '4.1.47-beta.1' 'OSSTransferMaster' $true $false 'en' | Out-Null } catch { $refused=$_.Exception.Message }
+        Assert ($refused -and $refused.Contains('last used by 4.1.47-beta.1') -and $refused.Contains('-Force')) "Noninteractive downgrade was not refused: $refused"
+        Assert ((& $guard '4.1.46' '4.1.47-beta.1' 'OSSTransferMaster' $true $true 'en' 3>$null) -ceq 'continued') '-Force did not allow the downgrade.'
+        Assert ((& $guard '4.1.47' '4.1.47-beta.1' 'OSSTransferMaster' $true $false 'en') -ceq 'continued') 'An upgrade was refused.'
+        $download=$ast.Find({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$filename'},$true)
+        Assert ($check[0].Extent.StartOffset -lt $download.Extent.StartOffset) 'The downgrade check runs after the download starts.'
     }
     Check 'Agent ordinary upgrade still requires maintenance and restores its database on failure' {
         $result=Invoke-AgentInstallFixture 'ordinary-success'

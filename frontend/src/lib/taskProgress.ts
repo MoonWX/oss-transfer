@@ -19,38 +19,32 @@ export const transferredBytes = (task: Task): number =>
 export const byteProgress = (task: Task) =>
   task.progressBasis === "BYTES" && Number(task.listObjectSize) > 0;
 
-const highest = new Map<string, { percent: number; bytes: number }>();
-// Live bytes drop when a failed object attempt restarts. A bar must not move
-// backwards on that transient dip, so remember the highest sample shown while
-// the row is live. Ended rows and non-LIVE samples show the exact server value:
-// a stop, failure or failover discards in-flight bytes for good. The attempt
-// and node are in the key so a reassigned child starts fresh. The byte label
-// follows the same sample so it never contradicts the bar.
+// The bar and the byte label of a row show the Master's values, as the
+// details and the CLI do. The Master keeps live progress from dipping on a
+// sample taken before the ledger credited an object, and the Agent on a
+// retried range, so a lower value is real: a failed or cancelled object whose
+// bytes are lost, or, with liveProgress PARTIAL, a node that did not report
+// (see unreportedNodes).
 export function shownProgress(
   task: Task,
   percent = taskPercent(task),
 ): { percent: number; bytes: number } {
-  const key = [
-    task.taskIndex,
-    task.subtaskNumber ?? "",
-    task.generation,
-    task.attempt ?? "",
-    task.executionNodeName ?? "",
-  ].join(":");
-  const sample = { percent, bytes: transferredBytes(task) };
-  if (
-    !["RUNNING", "STOPPING"].includes(task.status) ||
-    task.liveProgress !== "LIVE"
-  ) {
-    highest.delete(key);
-    return sample;
-  }
-  const previous = highest.get(key);
-  const shown = previous && previous.percent > percent ? previous : sample;
-  highest.delete(key);
-  highest.set(key, shown);
-  if (highest.size > 1000) highest.delete(highest.keys().next().value!);
-  return shown;
+  return { percent, bytes: transferredBytes(task) };
+}
+
+export type UnreportedNode = {
+  displayLabel?: string;
+  executionNodeIp?: string;
+};
+
+/** Names of the nodes missing from a PARTIAL live sample, if any. */
+export function unreportedNodeNames(task: Task): string | undefined {
+  const nodes = task.unreportedNodes as UnreportedNode[] | undefined;
+  if (!Array.isArray(nodes) || nodes.length === 0) return undefined;
+  return nodes
+    .map((node) => node.displayLabel || node.executionNodeIp || "")
+    .filter(Boolean)
+    .join("、");
 }
 
 type RequestKinds = {

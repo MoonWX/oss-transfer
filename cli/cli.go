@@ -1126,6 +1126,17 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		bandwidth = safeCLIText(fmt.Sprint(value)) + " Mbps"
 	}
 	fields := [][2]string{{cliText(out, "方向"), cliDirectionLabel(out, taskDirection(task))}, {cliText(out, "状态"), cliTaskStatusLabel(out, getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), distribution}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	if nodes := cliUnreportedNodes(task); nodes != "" {
+		// A partial live sample: progress is a lower bound and the speed is
+		// unknown until these nodes report again.
+		for i, field := range fields {
+			if field[0] == cliText(out, "进度") {
+				note := [2]string{cliText(out, "实时进度"), cliTextf(out, "执行节点 %s 未上报，已迁移和进度不含其正在传输的部分，速度暂时未知", nodes)}
+				fields = append(fields[:i+1], append([][2]string{note}, fields[i+1:]...)...)
+				break
+			}
+		}
+	}
 	if taskDirection(task) == "OSS_TO_LOCAL" {
 		// Parent rows always carry the setting (older tasks report auto); a child
 		// row without it inherits the parent's, so do not guess a value there.

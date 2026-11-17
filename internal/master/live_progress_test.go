@@ -539,3 +539,91 @@ func TestLiveProgressHTTPRejectsStaleRepliesAndConcurrentOwnershipChanges(t *tes
 		})
 	}
 }
+
+// A node that does not answer task_metrics no longer voids what the others
+// said: their children keep their speeds, progress and file lists, the task's
+// progress becomes a lower bound that names the silent node, and only the
+// task's own speed is unknown.
+func TestSilentNodeLeavesOtherNodesProgressAndIsNamed(t *testing.T) {
+	f, p := progressMasterFixture(t, 2)
+	a := assignProgressChild(t, f, p, 1, []transferstore.Object{{Key: "a-large", Size: 100 << 30}})
+	b := assignProgressChild(t, f, p, 2, []transferstore.Object{{Key: "b-large", Size: 100 << 30}})
+	if a.Node.ID == b.Node.ID {
+		t.Fatal("fixture assigned both children to one node")
+	}
+	sample := childProgressSample(a, 1, 40<<30)
+	files := []execution.ObjectProgress{{ItemID: "a-large", SourceKey: "a-large", DestinationKey: "a-large", Size: 100 << 30, TransferredBytes: 40 << 30, Stage: "TRANSFERRING"}}
+	for _, node := range p.Spec.Nodes {
+		serveProgressAgent(t, f, node, func(command agenttransport.Command) (any, error) {
+			if node.ID != a.Node.ID {
+				// A reply for another generation does not count, as no
+				// reply at all would after the node's timeout.
+				reply := progressMetrics(p, childProgressSample(b, 1, 30<<30))
+				reply.Generation++
+				return reply, nil
+			}
+			switch command.Operation {
+			case "task_metrics":
+				reply := progressMetrics(p, sample)
+				reply.BytesPerSecond, reply.Children = 1234, map[string]float64{a.Job.ChildID: 1234}
+				return reply, nil
+			case "task_progress":
+				return fileProgressReply{Supported: true, Child: &sample, Items: files}, nil
+			}
+			return nil, fmt.Errorf("unexpected operation %s", command.Operation)
+		})
+	}
+	f.master.tasks.sampleRates(context.Background(), p)
+	p, err := f.master.tasks.repo.Get(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(value any) []string {
+		var labels []string
+		nodes, _ := value.([]map[string]any)
+		for _, node := range nodes {
+			labels = append(labels, fmt.Sprint(node["executionNodeIp"]))
+		}
+		return labels
+	}
+	silent := b.Node.Address
+	parent := f.master.taskView(p)
+	if parent["liveProgress"] != "PARTIAL" || parent["transferredBytes"] != int64(40<<30) || parent["currentSpeedBytesPerSecond"] != nil || fmt.Sprint(names(parent["unreportedNodes"])) != "["+silent+"]" {
+		t.Fatalf("task progress: %v %v %v %v", parent["liveProgress"], parent["transferredBytes"], parent["currentSpeedBytesPerSecond"], parent["unreportedNodes"])
+	}
+	if value, exists := parent["averageSpeedBytesPerSecond"]; exists {
+		t.Fatalf("the task's average left out a node: %v", value)
+	}
+	healthy := f.master.childView(p, a)
+	if _, average := healthy["averageSpeedBytesPerSecond"].(float64); healthy["liveProgress"] != "LIVE" || healthy["transferredBytes"] != int64(40<<30) || healthy["currentSpeedBytesPerSecond"] != float64(1234) || !average || healthy["unreportedNodes"] != nil {
+		t.Fatalf("a child on a reporting node lost its data: %+v", healthy)
+	}
+	quiet := f.master.childView(p, b)
+	if quiet["liveProgress"] != "STALE" || quiet["currentSpeedBytesPerSecond"] != nil || fmt.Sprint(names(quiet["unreportedNodes"])) != "["+silent+"]" {
+		t.Fatalf("a child on the silent node: %+v", quiet)
+	}
+	progress := func(query string) map[string]any {
+		t.Helper()
+		status, body := request(t, f.http.Client(), "GET", fmt.Sprintf("%s/api/master/tasks/%d/progress%s", f.http.URL, p.ID, query), f.admin, nil)
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		return body["data"].(map[string]any)
+	}
+	unreported := func(data map[string]any) string {
+		var labels []string
+		for _, node := range data["unreportedNodes"].([]any) {
+			labels = append(labels, fmt.Sprint(node.(map[string]any)["executionNodeIp"]))
+		}
+		return fmt.Sprint(labels)
+	}
+	if data := progress(fmt.Sprintf("?childNumber=%d", a.Job.Number)); data["partial"] != false || len(data["items"].([]any)) != 1 || data["unreportedNodes"] != nil {
+		t.Fatalf("files of a child on a reporting node: %+v", data)
+	}
+	if data := progress(fmt.Sprintf("?childNumber=%d", b.Job.Number)); data["partial"] != true || len(data["items"].([]any)) != 0 || unreported(data) != "["+silent+"]" {
+		t.Fatalf("files of a child on the silent node: %+v", data)
+	}
+	if data := progress(""); data["partial"] != true || len(data["items"].([]any)) != 1 || unreported(data) != "["+silent+"]" {
+		t.Fatalf("files of the task: %+v", data)
+	}
+}

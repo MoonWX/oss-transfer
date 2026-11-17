@@ -60,7 +60,7 @@ import {
   ReplayRounded,
 } from "@mui/icons-material";
 import { api, ApiError, download, getToken, useNotify } from "../lib/api";
-import { storageErrorSummary } from "../lib/storageErrors";
+import { objectErrorSummary } from "../lib/storageErrors";
 import FailedTaskRetryDialog from "../components/FailedTaskRetryDialog";
 import RunningFailureRetry, {
   canRetryRunningFailures,
@@ -1501,7 +1501,7 @@ export default function ExceptionsPage() {
                                 overflow: "hidden",
                               }}
                             >
-                              {storageErrorSummary(item.errorMessage) ||
+                              {objectErrorSummary(item.errorMessage) ||
                                 item.errorMessage ||
                                 item.errorCode ||
                                 tr("未提供原因")}
@@ -1596,7 +1596,7 @@ export default function ExceptionsPage() {
                                 overflow: "hidden",
                               }}
                             >
-                              {storageErrorSummary(item.errorMessage) ||
+                              {objectErrorSummary(item.errorMessage) ||
                                 item.errorMessage ||
                                 item.errorCode ||
                                 tr("未提供原因")}

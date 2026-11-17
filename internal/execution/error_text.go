@@ -13,6 +13,24 @@ import (
 // off narrow screens.
 var stagingNames = regexp.MustCompile(`\.oss-transfer-(staging-)?[0-9a-f]{64}-[0-9a-f]{32}(\.tmp)?`)
 
+// objectFailureStage matches the stage and quoted key an object failure
+// names (see Engine.copyItem). A file-system cause may precede them.
+var objectFailureStage = regexp.MustCompile(`(?:^|: )(?:open source|read source|reconcile source|reconcile legacy result|check destination|write destination|verify write) "(?:[^"\\]|\\.)*": `)
+
+// ObjectErrorCause is the text of an object failure without its stage and
+// quoted key, so that words matched in it never come from the key. Other
+// text is returned as is.
+func ObjectErrorCause(text string) string {
+	match := objectFailureStage.FindStringIndex(text)
+	if match == nil {
+		return text
+	}
+	if match[0] == 0 {
+		return text[match[1]:]
+	}
+	return text[:match[0]] + ": " + text[match[1]:]
+}
+
 // objectErrorText formats an object failure for operators: the cause of a
 // file-system error (such as "no space left on device") comes first, and
 // staging names are shortened. Other errors keep their text.

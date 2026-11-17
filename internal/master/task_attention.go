@@ -4,34 +4,60 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/task"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
-// failureCauses classify object errors for the task-level summary, in
-// order: the first whose marker appears in an error decides its cause.
-var failureCauses = []struct {
-	code, message string
-	markers       []string
+// failureMessages are the causes of the task-level failure summary. OTHER has
+// no message: the summary shows a sample error instead.
+var failureMessages = map[string]string{
+	"SOURCE_CHANGED":          "源对象在扫描后发生变化，重试会读取其当前版本",
+	"NO_SPACE":                "目标磁盘空间不足",
+	"READ_ONLY":               "目标文件系统为只读",
+	"LOCAL_PERMISSION_DENIED": "执行节点没有本地目录的读写权限",
+	"INVALID_CREDENTIALS":     "存储访问密钥无效，请检查连接配置",
+	// OSS refuses a bucket of another region with AccessDenied, and S3
+	// answers PermanentRedirect: the reply names the endpoint to use, and
+	// the credentials are not the problem.
+	"WRONG_ENDPOINT":     "存储桶需要通过其所在地域的 Endpoint 访问，请使用该 Endpoint 创建存储连接",
+	"ACCESS_DENIED":      "存储拒绝访问，请检查凭据和存储桶权限",
+	"ARCHIVED":           "源对象为归档存储，需先解冻再重试",
+	"NO_SUCH_BUCKET":     "存储桶不存在",
+	"HOST_NOT_FOUND":     "无法解析存储地址，请检查 Endpoint 或改用路径风格访问",
+	"CONNECTION_REFUSED": "无法连接存储（连接被拒绝），请确认存储服务可访问",
+	"CONNECTION_RESET":   "与存储的连接被中断",
+	"TIMEOUT":            "连接存储超时",
+	"THROTTLED":          "存储服务持续限流，请调低任务的请求上限后重试",
+	"SERVER_ERROR":       "存储服务端出错",
+}
+
+// localFailures are file-system causes, in order: the first whose marker
+// appears in an error decides.
+var localFailures = []struct {
+	code    string
+	markers []string
 }{
-	{"SOURCE_CHANGED", "源对象在扫描后发生变化，重试会读取其当前版本", []string{"source changed"}},
-	{"NO_SPACE", "目标磁盘空间不足", []string{"no space left on device", "not enough space on the disk"}},
-	{"READ_ONLY", "目标文件系统为只读", []string{"read-only file system"}},
-	{"LOCAL_PERMISSION_DENIED", "执行节点没有本地目录的读写权限", []string{"permission denied", "access is denied"}},
-	{"INVALID_CREDENTIALS", "存储访问密钥无效，请检查连接配置", []string{"InvalidAccessKeyId", "SignatureDoesNotMatch"}},
-	// OSS refuses a bucket of another region with AccessDenied: the reply
-	// names the endpoint to use, and the credentials are not the problem.
-	{"WRONG_ENDPOINT", "存储桶需要通过其所在地域的 Endpoint 访问，请使用该 Endpoint 创建存储连接", []string{"must be addressed using the specified endpoint"}},
-	{"ACCESS_DENIED", "存储拒绝访问，请检查凭据和存储桶权限", []string{"AccessDenied", "StatusCode: 403"}},
-	{"NO_SUCH_BUCKET", "存储桶不存在", []string{"NoSuchBucket"}},
-	{"HOST_NOT_FOUND", "无法解析存储地址，请检查 Endpoint 或改用路径风格访问", []string{"no such host"}},
-	{"CONNECTION_REFUSED", "无法连接存储（连接被拒绝），请确认存储服务可访问", []string{"connection refused"}},
-	{"CONNECTION_RESET", "与存储的连接被中断", []string{"connection reset", "broken pipe", "EOF"}},
-	{"TIMEOUT", "连接存储超时", []string{"timeout", "deadline exceeded"}},
-	{"SERVER_ERROR", "存储服务端出错", []string{"InternalError", "ServiceUnavailable", "SlowDown", "StatusCode: 5"}},
+	{"NO_SPACE", []string{"no space left on device", "not enough space on the disk"}},
+	{"READ_ONLY", []string{"read-only file system"}},
+	{"LOCAL_PERMISSION_DENIED", []string{"permission denied", "access is denied"}},
+}
+
+// storageCodeFailures name the cause of a storage reply by its error code.
+// Throttling codes are transferstore's (IsThrottleCode).
+var storageCodeFailures = map[string]string{
+	"InvalidAccessKeyId":    "INVALID_CREDENTIALS",
+	"SignatureDoesNotMatch": "INVALID_CREDENTIALS",
+	"AccessDenied":          "ACCESS_DENIED",
+	"AllAccessDisabled":     "ACCESS_DENIED",
+	"NoSuchBucket":          "NO_SUCH_BUCKET",
+	"InternalError":         "SERVER_ERROR",
+	"ServiceUnavailable":    "SERVER_ERROR",
+	"RequestTimeout":        "TIMEOUT",
 }
 
 const failureSummaryScan = 1000
@@ -46,18 +72,68 @@ func failureCause(e task.Exception) (string, string, string) {
 	if e.RetryStatus == task.ExceptionRetryFailed && e.RetryError != "" {
 		text = e.RetryError
 	}
-	if e.Reason == execution.ReasonSourceChanged && e.RetryStatus != task.ExceptionRetryFailed || e.RetryReason == execution.ReasonSourceChanged {
-		return failureCauses[0].code, failureCauses[0].message, text
+	code := "SOURCE_CHANGED"
+	if !(e.Reason == execution.ReasonSourceChanged && e.RetryStatus != task.ExceptionRetryFailed || e.RetryReason == execution.ReasonSourceChanged) {
+		code = objectFailureCause(text)
 	}
-	lower := strings.ToLower(text)
-	for _, cause := range failureCauses {
-		for _, marker := range cause.markers {
-			if strings.Contains(lower, strings.ToLower(marker)) {
-				return cause.code, cause.message, text
+	return code, failureMessages[code], text
+}
+
+// objectFailureCause classifies the text of an object failure without its
+// object key. A storage reply is classified by its error code; its HTTP status
+// decides only for a reply without one (a HEAD has no body). A 503 without a
+// throttling code can be an outage, so only the codes and 429 are throttling.
+// GetObject of an archived object that was not restored fails with 403
+// InvalidObjectState, which no permission change can fix. A bucket that must
+// be reached through another endpoint is refused with AccessDenied (OSS) or
+// PermanentRedirect (S3); the reply's text, not its code, says so.
+func objectFailureCause(text string) string {
+	cause := execution.ObjectErrorCause(text)
+	lower := strings.ToLower(cause)
+	for _, local := range localFailures {
+		for _, marker := range local.markers {
+			if strings.Contains(lower, marker) {
+				return local.code
 			}
 		}
 	}
-	return "OTHER", "", text
+	if mismatch, _ := transferstore.EndpointMismatch(cause); mismatch {
+		return "WRONG_ENDPOINT"
+	}
+	code, status := transferstore.StorageErrorReply(cause)
+	if failure, ok := storageCodeFailures[code]; ok {
+		return failure
+	}
+	switch {
+	case code == "InvalidObjectState" && strings.Contains(cause, "S3: GetObject"):
+		return "ARCHIVED"
+	case transferstore.IsThrottleCode(code) || status == http.StatusTooManyRequests:
+		return "THROTTLED"
+	case status >= 500:
+		return "SERVER_ERROR"
+	case status == http.StatusForbidden && code == "":
+		return "ACCESS_DENIED"
+	case status >= 400:
+		// Another refusal: its own text says more than a guess.
+		return "OTHER"
+	}
+	switch transferstore.ClassifyStorageMessage(cause) {
+	case transferstore.StorageErrorDNS:
+		return "HOST_NOT_FOUND"
+	case transferstore.StorageErrorConnectionRefused:
+		return "CONNECTION_REFUSED"
+	case transferstore.StorageErrorConnectionReset, transferstore.StorageErrorEOF:
+		return "CONNECTION_RESET"
+	case transferstore.StorageErrorTimeout:
+		return "TIMEOUT"
+	case transferstore.StorageErrorAccessDenied:
+		return "ACCESS_DENIED"
+	case transferstore.StorageErrorInvalidAccessKey, transferstore.StorageErrorSignatureMismatch:
+		return "INVALID_CREDENTIALS"
+	case transferstore.StorageErrorNoSuchBucket:
+		return "NO_SUCH_BUCKET"
+	}
+	return "OTHER"
 }
 
 // addTaskAttention adds to a task's detail view the cause an operator needs

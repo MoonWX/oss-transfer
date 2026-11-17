@@ -90,6 +90,70 @@ export function storageErrorHost(text: string) {
   );
 }
 
+// An object failure begins with its stage and quoted key (the Agent's
+// execution.ObjectErrorCause); a file-system cause may precede them.
+const objectFailureStage =
+  /(?:^|: )(?:open source|read source|reconcile source|reconcile legacy result|check destination|write destination|verify write) "(?:[^"\\]|\\.)*": /;
+
+/** An object failure's text without its stage and quoted key. */
+export function objectErrorCause(text: string) {
+  const match = objectFailureStage.exec(text);
+  if (!match) return text;
+  const rest = text.slice(match.index + match[0].length);
+  return match.index === 0 ? rest : `${text.slice(0, match.index)}: ${rest}`;
+}
+
+// Codes that ask a client to slow down (transferstore's throttleErrorCodes).
+const throttleCodes = new Set([
+  "SlowDown",
+  "Throttling",
+  "ThrottlingException",
+  "ThrottledException",
+  "RequestThrottled",
+  "RequestThrottledException",
+  "RequestLimitExceeded",
+  "TooManyRequests",
+  "TooManyRequestsException",
+]);
+
+/**
+ * A short localized cause for the error of a failed object, as the Master's
+ * task summary classifies it. The object key is left out, so none of its
+ * words is taken for the cause. Unlike a connection check, these requests
+ * belong to a running task: a host that answered the node before and then
+ * closed or reset connections had an outage, which the Agent retried ten
+ * times. Only a host that never answered fails after the ordinary three
+ * attempts, and only then is the Endpoint the likely cause.
+ */
+export function objectErrorSummary(
+  text: string | null | undefined,
+): string | undefined {
+  if (!text) return undefined;
+  const cause = objectErrorCause(text);
+  const code = (/api error (\w+)/.exec(cause) ?? modeledCode.exec(cause))?.[1];
+  const status = Number(/StatusCode: (\d{3})\b/.exec(cause)?.[1] ?? 0);
+  if (code === "InvalidObjectState" && cause.includes("S3: GetObject"))
+    return t("源对象为归档存储，需先解冻再重试。");
+  if ((code && throttleCodes.has(code)) || status === 429)
+    return t("存储服务持续限流，请调低任务的请求上限后重试。");
+  const kind = storageErrorKind(cause);
+  const host = storageErrorHost(cause) ?? "Endpoint";
+  const attempts = Number(
+    /exceeded maximum number of attempts, (\d+)/.exec(cause)?.[1] ?? 0,
+  );
+  if (kind === "eof" && !(attempts > 0 && attempts <= 3))
+    return t(
+      "{host} 在传输中关闭了连接（EOF）。可在存储恢复后重试失败对象；若反复出现，请检查存储前端代理或负载均衡的超时设置。",
+      { host },
+    );
+  if (kind === "connection_reset")
+    return t(
+      "与 {host} 的连接在传输中被重置。可在存储恢复后重试失败对象；若反复出现，请检查存储前端代理、负载均衡或防火墙的设置。",
+      { host },
+    );
+  return storageErrorSummary(cause);
+}
+
 /** A short localized cause and action for a raw storage error, if known. */
 export function storageErrorSummary(
   text: string | null | undefined,

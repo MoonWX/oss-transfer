@@ -109,9 +109,12 @@ var cliOutputMessages = map[string][2]string{
 	"存储桶需要通过其所在地域的 Endpoint 访问，请用该 Endpoint 添加存储连接": {"The bucket must be accessed through the endpoint of its region; add a storage connection with that endpoint", "バケットにはそのリージョンのエンドポイントでアクセスする必要があります。そのエンドポイントでストレージ接続を追加してください"},
 	"存储桶不存在，请检查存储桶名称":                               {"The bucket does not exist; check its name", "バケットが存在しません。名前を確認してください"},
 	"源对象已不存在": {"The source object no longer exists", "転送元オブジェクトはすでに存在しません"},
-	"源对象在迁移期间发生变化，可重试失败对象": {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},
-	"存储服务限流，可稍后重试失败对象":     {"The storage service is throttling; retry the failed objects later", "ストレージサービスがスロットリングしています。後で失敗したオブジェクトを再試行してください"},
-	"连接意外中断，可重试失败对象":       {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
+	"源对象在迁移期间发生变化，可重试失败对象":               {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},
+	"存储服务限流，可稍后重试失败对象":                   {"The storage service is throttling; retry the failed objects later", "ストレージサービスがスロットリングしています。後で失敗したオブジェクトを再試行してください"},
+	"连接意外中断，可重试失败对象":                     {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
+	"源对象为归档存储，需先解冻再重试":                   {"The source object is archived; restore it before retrying", "転送元オブジェクトはアーカイブされています。復元してから再試行してください"},
+	"存储服务端出错，可在存储恢复后重试失败对象":              {"The storage service returned a server error; retry the failed objects once it recovers", "ストレージサービスがサーバーエラーを返しました。復旧後に失敗したオブジェクトを再試行してください"},
+	"连接在存储服务应答前关闭，请检查 Endpoint 地址、端口和协议": {"The connection closed before the storage service answered; check the endpoint address, port and protocol", "ストレージサービスが応答する前に接続が閉じられました。エンドポイントのアドレス、ポート、プロトコルを確認してください"},
 
 	// Hints after an error.
 	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。": {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},
@@ -161,8 +164,9 @@ var cliOutputMessages = map[string][2]string{
 
 	// Comparisons.
 	"比对 %s 已在运行，无需继续": {"Comparison %s is already running; nothing to resume", "比較 %s はすでに実行中です。再開は不要です"},
-	"读取速率":            {"Read rate", "読み取り速度"},
-	"未发现差异":           {"No differences found", "差異は見つかりませんでした"},
+	"平均读取速率":          {"Average read rate", "平均読み取り速度"},
+	"已有 %s 没有新的比对结果，执行节点可能正在等待存储响应或重试。": {"No new comparison results for %s; the node may be waiting for the storage to respond, or retrying.", "%s の間、新しい比較結果がありません。ノードはストレージの応答を待っているか、再試行している可能性があります。"},
+	"未发现差异": {"No differences found", "差異は見つかりませんでした"},
 }
 
 func init() {

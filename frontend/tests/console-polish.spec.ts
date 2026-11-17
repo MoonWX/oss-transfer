@@ -264,7 +264,7 @@ test("a single-object content comparison shows its read rate and resumes", async
   await page.goto("/tools?comparison=single");
   const result = page.getByRole("region", { name: "比对结果" });
   await expect(
-    result.getByText("已用 1 分 0 秒，已读取 600 MiB（10 MiB/秒）"),
+    result.getByText("已用 1 分 0 秒，已读取 600 MiB（平均 10 MiB/秒）"),
   ).toBeVisible();
   await expect(result.getByText(/个\/秒/)).toHaveCount(0);
   await expect(

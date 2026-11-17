@@ -82,13 +82,19 @@ func (r *Repository) ProjectProgress(parentID int64, generation uint64, reports 
 					}
 				}
 			}
-			// A sample taken before an object's result was committed can still
-			// contain that object's live bytes. Discard it until the next sample.
-			if credited < 0 || sample.SucceededBytes < credited {
+			if credited < 0 {
 				continue
 			}
+			// A sample taken before an object's result was committed counts
+			// that object's bytes in flight, at most its size, while the ledger
+			// credits all of it. Only what the sample holds beyond the ledger
+			// is added, so no object counts twice; the child is then at least
+			// max(credited, sample), which grows from one sample to the next
+			// unless bytes were really lost (a failed or cancelled object).
+			// Dropping the sample instead would lower the task's progress
+			// until the next one.
 			bytes := sample.SucceededBytes + sample.InFlightBytes
-			delta := bytes - credited
+			delta := max(0, bytes-credited)
 			if delta > math.MaxInt64-out.TotalBytes {
 				continue
 			}

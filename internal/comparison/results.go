@@ -459,6 +459,9 @@ func (w *resultWriter) flushLocked() error {
 	next.BytesRead = w.bytesRead.Load()
 	next.ElapsedMillis = w.elapsedMillis()
 	next.UpdatedAt = now
+	if next.Compared > w.committed.Compared || next.BytesRead > w.committed.BytesRead || next.ProgressAt.IsZero() {
+		next.ProgressAt = now
+	}
 	blocks := w.blocksFor(offset)
 	err := w.m.db.Update(func(tx *state.Tx) error {
 		if w.hook != nil {
@@ -487,7 +490,7 @@ func (w *resultWriter) flushLocked() error {
 	}
 	w.pending, w.pendingRows = w.pending[:0], w.pendingRows[:0]
 	w.committed = next
-	w.live.Committed, w.live.StoredBytes, w.live.BytesRead, w.live.ElapsedMillis, w.live.UpdatedAt = next.Committed, next.StoredBytes, next.BytesRead, next.ElapsedMillis, next.UpdatedAt
+	w.live.Committed, w.live.StoredBytes, w.live.BytesRead, w.live.ElapsedMillis, w.live.UpdatedAt, w.live.ProgressAt = next.Committed, next.StoredBytes, next.BytesRead, next.ElapsedMillis, next.UpdatedAt, next.ProgressAt
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -95,6 +96,38 @@ func ClassifyStorageError(err error) StorageErrorKind {
 // which it reports as "<code>: <message>" after the response's request IDs,
 // without the "api error" prefix of other codes.
 var modeledErrorCode = regexp.MustCompile(`HostID: [^,]*, (\w+): `)
+
+var (
+	apiErrorCode       = regexp.MustCompile(`api error (\w+)`)
+	xmlErrorCode       = regexp.MustCompile(`<Code>(\w+)</Code>`)
+	responseStatusCode = regexp.MustCompile(`StatusCode: (\d{3})\b`)
+)
+
+// StorageErrorReply returns the error code and HTTP status of the storage
+// reply that an error's text reports, as the SDK formats it. A reply without
+// a body (HEAD, or an error page) has only its status text as code, such as
+// "Forbidden"; that code is returned empty, so the status decides. The code is
+// empty and the status 0 when the text reports no reply, as for a connection
+// that failed.
+func StorageErrorReply(message string) (code string, status int) {
+	if match := responseStatusCode.FindStringSubmatch(message); match != nil {
+		status, _ = strconv.Atoi(match[1])
+	}
+	for _, pattern := range []*regexp.Regexp{apiErrorCode, modeledErrorCode, xmlErrorCode} {
+		if match := pattern.FindStringSubmatch(message); match != nil {
+			code = match[1]
+			break
+		}
+	}
+	if status > 0 && code == strings.ReplaceAll(http.StatusText(status), " ", "") {
+		code = ""
+	}
+	return code, status
+}
+
+// IsThrottleCode reports whether a storage error code asks the client to
+// lower its request rate (see IsThrottleResponse).
+func IsThrottleCode(code string) bool { return throttleErrorCodes[code] }
 
 // ClassifyStorageMessage classifies the text of a storage error. The order
 // matters: a storage error code in the reply wins over the transport words

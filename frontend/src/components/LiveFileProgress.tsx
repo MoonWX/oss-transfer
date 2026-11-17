@@ -11,6 +11,7 @@ import {
 import { RefreshRounded } from "@mui/icons-material";
 import { useApi } from "../lib/api";
 import { t, useI18n } from "../lib/i18n";
+import { unreportedNodeNames, type UnreportedNode } from "../lib/taskProgress";
 import { formatBytes } from "./Common";
 
 type FileProgress = {
@@ -27,6 +28,8 @@ type Progress = {
   childNumber: number;
   supported: boolean;
   partial: boolean;
+  // Nodes that did not answer: their files are missing from a partial reply.
+  unreportedNodes?: UnreportedNode[];
   observedAt: number;
   items: FileProgress[];
 };
@@ -120,7 +123,11 @@ export default function LiveFileProgress({
         <>
           {stale && (
             <Alert severity="warning" sx={{ mb: 1, py: 0 }}>
-              {t("进度暂未更新")}
+              {data && unreportedNodeNames(data)
+                ? t("执行节点 {nodes} 未响应，其文件进度暂未更新", {
+                    nodes: unreportedNodeNames(data)!,
+                  })
+                : t("进度暂未更新")}
             </Alert>
           )}
           {!data && !stale && (

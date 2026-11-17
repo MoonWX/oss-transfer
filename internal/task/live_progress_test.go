@@ -101,7 +101,6 @@ func TestProjectProgressUsesOnlyUncreditedBytesAndFencesOldSamples(t *testing.T)
 		{"assignment", func(r *ProgressReport) { r.Child.Assignment++ }},
 		{"attempt", func(r *ProgressReport) { r.Child.Attempt-- }},
 		{"unstarted", func(r *ProgressReport) { r.Child.Attempt = 0 }},
-		{"old counters", func(r *ProgressReport) { r.Child.SucceededBytes = 0 }},
 		{"negative bytes", func(r *ProgressReport) { r.Child.InFlightBytes = -1 }},
 		{"negative success", func(r *ProgressReport) { r.Child.SucceededBytes = -1 }},
 		{"object bound", func(r *ProgressReport) { r.Child.ActiveObjects = 129 }},
@@ -115,6 +114,17 @@ func TestProjectProgressUsesOnlyUncreditedBytesAndFencesOldSamples(t *testing.T)
 				t.Fatal("accepted stale or invalid sample", view, err)
 			}
 		})
+	}
+	// A sample taken before the ledger credited "one": its 4096 bytes are
+	// still in flight there. Only the bytes beyond the ledger count, so the
+	// task neither counts "one" twice nor drops "two" until the next sample.
+	for _, test := range []struct{ inFlight, total int64 }{{4096 + 2048, 4096 + 2048}, {4096, 4096}, {1024, 4096}} {
+		older := report
+		older.Child.SucceededBytes, older.Child.InFlightBytes = 0, test.inFlight
+		view, err := repo.ProjectProgress(p.ID, p.Generation, []ProgressReport{older})
+		if err != nil || view.TotalBytes != test.total || len(view.Children) != 1 {
+			t.Fatalf("a sample older than the ledger with %d bytes in flight: %+v %v", test.inFlight, view, err)
+		}
 	}
 	if _, err := repo.ProjectProgress(p.ID, p.Generation+1, []ProgressReport{report}); !errors.Is(err, ErrGeneration) {
 		t.Fatal("old parent generation accepted", err)

@@ -171,14 +171,19 @@ func ClassifyStorageMessage(message string) StorageErrorKind {
 // reached through another endpoint, usually the one of its region.
 const endpointMismatch = "must be addressed using the specified endpoint"
 
-var diagnosticEndpoint = regexp.MustCompile(`\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)`)
+var (
+	diagnosticEndpoint = regexp.MustCompile(`\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)`)
+	// An OSS reply without a body, such as that to HEAD, says it by its EC
+	// header alone (see the storage response diagnostic).
+	diagnosticEndpointCode = regexp.MustCompile(`\[storage response: [^\]]*\bec=0003-00001403\b`)
+)
 
 // EndpointMismatch reports whether a storage error says that the bucket must
 // be addressed through another endpoint, and that endpoint when the reply
 // named it (see the storage response diagnostic). OSS answers such a request
 // with AccessDenied although the credentials are not the problem.
 func EndpointMismatch(message string) (bool, string) {
-	if !strings.Contains(strings.ToLower(message), endpointMismatch) {
+	if !strings.Contains(strings.ToLower(message), endpointMismatch) && !diagnosticEndpointCode.MatchString(message) {
 		return false, ""
 	}
 	if match := diagnosticEndpoint.FindStringSubmatch(message); match != nil {

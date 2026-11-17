@@ -123,6 +123,17 @@ func TestStorageChecksNameTheEndpointOfABucketInAnotherRegion(t *testing.T) {
 	if code, message, _ := failureCause(exception); code != "WRONG_ENDPOINT" || !strings.Contains(message, "Endpoint") {
 		t.Fatalf("failure cause: %s %s", code, message)
 	}
+	// Each object first HEADs the destination. OSS answers that HEAD with
+	// 403 and no body; only its EC header, kept in the storage response
+	// diagnostic, says why.
+	head := task.Exception{Error: `check destination "a.bin": operation error S3: HeadObject, https response error StatusCode: 403, RequestID: 5F1A, HostID: , api error Forbidden: Forbidden [storage response: http=403, server=AliyunOSS, request-id=5F1A, ec=0003-00001403, protocol=HTTP/1.1, connection=new, request-length=0, body=empty]`}
+	if code, message, _ := failureCause(head); code != "WRONG_ENDPOINT" || !strings.Contains(message, "Endpoint") {
+		t.Fatalf("HEAD failure cause: %s %s", code, message)
+	}
+	head.Error = strings.Replace(head.Error, "ec=0003-00001403", "ec=0003-00000201", 1)
+	if code, _, _ := failureCause(head); code != "ACCESS_DENIED" {
+		t.Fatalf("another refused HEAD: %s", code)
+	}
 }
 
 // The first listed bucket was not chosen by anyone: whatever it answers, the

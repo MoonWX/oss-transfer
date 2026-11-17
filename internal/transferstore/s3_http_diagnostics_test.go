@@ -123,3 +123,41 @@ func TestS3HTTPDiagnosticsPreserveNotFoundClassification(t *testing.T) {
 		t.Fatalf("lost source not found classification: %v", err)
 	}
 }
+
+// A HEAD of a bucket in another OSS region is refused with 403 and no body:
+// only the EC header says that the bucket needs another endpoint. The
+// diagnostic keeps that code, so the refusal is not taken for a permission
+// problem. Another refused HEAD stays a refusal.
+func TestS3HTTPDiagnosticsKeepTheOSSErrorCodeOfAReplyWithoutBody(t *testing.T) {
+	var ec atomic.Value
+	ec.Store("0003-00001403")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			t.Errorf("unexpected %s", r.Method)
+		}
+		w.Header().Set("Server", "AliyunOSS")
+		w.Header().Set("X-Oss-Request-Id", "5F1A")
+		w.Header().Set("X-Oss-Ec", ec.Load().(string))
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	s, err := NewS3(S3Config{Endpoint: server.URL, Bucket: "bucket", AccessKey: "test-access", SecretKey: "test-secret", PathStyle: true, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Stat(context.Background(), "key")
+	if err == nil || !strings.Contains(err.Error(), "ec=0003-00001403") || !strings.Contains(err.Error(), "request-id=5F1A") {
+		t.Fatalf("diagnostic lost the error code: %v", err)
+	}
+	if mismatch, endpoint := EndpointMismatch(err.Error()); !mismatch || endpoint != "" {
+		t.Fatalf("not recognised as an endpoint mismatch: %v %q (%v)", mismatch, endpoint, err)
+	}
+	ec.Store("0003-00000201")
+	_, err = s.Stat(context.Background(), "key")
+	if err == nil || !strings.Contains(err.Error(), "ec=0003-00000201") {
+		t.Fatalf("diagnostic lost the error code: %v", err)
+	}
+	if mismatch, _ := EndpointMismatch(err.Error()); mismatch {
+		t.Fatalf("another refusal taken for an endpoint mismatch: %v", err)
+	}
+}

@@ -62,6 +62,11 @@ func (c *s3DiagnosticClient) Do(request *http.Request) (*http.Response, error) {
 			break
 		}
 	}
+	// Alibaba Cloud OSS also names its error code (EC) in a header, the only
+	// account of the error in a reply without a body, such as that to HEAD.
+	if value := diagnosticToken(response.Header.Get("X-Oss-Ec"), 64, c.credentials); value != "" {
+		fields = append(fields, "ec="+value)
+	}
 	switch response.Proto {
 	case "HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0":
 		fields = append(fields, "protocol="+response.Proto)

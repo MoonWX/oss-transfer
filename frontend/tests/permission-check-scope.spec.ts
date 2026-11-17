@@ -109,6 +109,13 @@ test("a denied abort is optional and a write prefix is checked where the task wr
   // The prefix is offered only with the write check.
   await expect(dialog.getByTestId("permission-prefix")).toHaveCount(0);
   await dialog.getByLabel(/同时检查写入/).check();
+  // The check adds a missing "/" as a migration adds its target prefix.
+  await expect(
+    dialog.getByText(
+      "前缀末尾没有“/”时自动补上，与迁移的“添加目标前缀”相同。",
+      { exact: false },
+    ),
+  ).toBeVisible();
   await dialog.getByRole("button", { name: "检查", exact: true }).click();
   const summary = dialog.getByTestId("permission-summary");
   await expect(summary).toContainText("存储桶 dst：2 项检查未通过");

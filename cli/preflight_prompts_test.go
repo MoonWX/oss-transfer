@@ -148,6 +148,20 @@ func TestStorageTestNamesTheAbortOfAnOlderAgentsMultipartRow(t *testing.T) {
 	}
 }
 
+// The write check writes below the prefix as a migration's target prefix
+// does, with "/" added when it is missing; the storage help says so.
+func TestStorageHelpSaysTheWritePrefixGetsASlash(t *testing.T) {
+	for locale, want := range map[cliLocale]string{
+		localeZH: "末尾没有“/”时自动补上，\n                                    与 --mapping add-prefix 添加目标前缀相同",
+		localeEN: "a missing trailing \"/\" is added, as\n                                    --mapping add-prefix adds a target prefix",
+		localeJA: "末尾に「/」がなければ、\n                                    --mapping add-prefix で転送先プレフィックスを付けるときと同じく補います",
+	} {
+		if help := helpForLocale([]string{"storage"}, locale); !strings.Contains(help, want) {
+			t.Errorf("%s storage help lacks %q", locale, want)
+		}
+	}
+}
+
 // Tasks keep only the connection name, so removing a connection stops the
 // tasks that use it; the storage help says so in every language.
 func TestStorageHelpSaysRemovingAConnectionStopsItsTasks(t *testing.T) {

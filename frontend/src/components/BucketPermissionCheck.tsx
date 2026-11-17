@@ -193,7 +193,7 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
           fullWidth
           label={t("写入位置前缀（可选）")}
           helperText={t(
-            "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。",
+            "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中；前缀末尾没有“/”时自动补上，与迁移的“添加目标前缀”相同。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。",
           )}
           value={prefix}
           onChange={(e) => setPrefix(e.target.value)}

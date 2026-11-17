@@ -748,10 +748,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Write prefix (optional)",
     ja: "書き込み先のプレフィックス（任意）",
   },
-  "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。":
+  "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中；前缀末尾没有“/”时自动补上，与迁移的“添加目标前缀”相同。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。":
     {
-      en: "The test objects are written under .oss-transfer-permission-check/ below this prefix. If the key may only write below a prefix, enter the migration's target prefix, for example backup/.",
-      ja: "テストオブジェクトは、このプレフィックスの下の .oss-transfer-permission-check/ に書き込みます。キーが特定のプレフィックスにしか書き込めない場合は、移行先のプレフィックス（例: backup/）を入力してください。",
+      en: 'The test objects are written under .oss-transfer-permission-check/ below this prefix. A missing trailing "/" is added, as "Add destination prefix" does for a migration. If the key may only write below a prefix, enter the migration\'s target prefix, for example backup/.',
+      ja: "テストオブジェクトは、このプレフィックスの下の .oss-transfer-permission-check/ に書き込みます。末尾に「/」がなければ、移行の「転送先プレフィックスを追加」と同じく補います。キーが特定のプレフィックスにしか書き込めない場合は、移行先のプレフィックス（例: backup/）を入力してください。",
     },
   "删除测试对象（DeleteObject，迁移不需要）": {
     en: "Delete the test object (DeleteObject, not needed for migrations)",

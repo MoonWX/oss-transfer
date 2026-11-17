@@ -289,6 +289,17 @@ func TestBucketPermissionCheckWritesBelowTheRequestedPrefix(t *testing.T) {
 	if check.Prefix != "backup/" || len(store.objects) != 1 || len(store.uploads) != 0 {
 		t.Fatalf("prefix %q, objects %v, uploads %v", check.Prefix, store.objects, store.uploads)
 	}
+	// A migration adds the target prefix backup as backup/ in front of each
+	// key; the check writes there too, and says so.
+	check = checkPermissions(t, store, true, "backup")
+	for operation, status := range permissionStatuses(check) {
+		if status != PermissionPassed {
+			t.Errorf("prefix without a slash: %s: %s", operation, status)
+		}
+	}
+	if put := check.Results[3]; check.Prefix != "backup/" || put.Operation != PermissionPut || !strings.HasPrefix(put.Key, "backup/"+PermissionProbePrefix) {
+		t.Fatalf("prefix without a slash: prefix %q, results %+v", check.Prefix, check.Results)
+	}
 	// A read-only check does not claim a write prefix.
 	if check := checkPermissions(t, store, false, "backup/"); check.Prefix != "" {
 		t.Fatalf("read-only check names prefix %q", check.Prefix)

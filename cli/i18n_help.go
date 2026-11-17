@@ -730,7 +730,8 @@ Usage: oss-transfer-cli storage <subcommand> [arguments]
       With --bucket, checks each request a migration makes (list, HEAD, GET); exits 1 if a required one fails
       --write                       Also check writing: conditional PUT, read back, multipart upload; writes and deletes a test object.
                                     Aborting the multipart upload and deleting the test object are not needed to write; a failure only warns
-      --prefix <prefix>             Prefix the write check writes below; for a key that may only write below a prefix,
+      --prefix <prefix>             Prefix the write check writes below; a missing trailing "/" is added, as
+                                    --mapping add-prefix adds a target prefix. For a key that may only write below a prefix,
                                     enter the migration's target prefix, for example backup/. Needs --write
 
   --endpoint <http[s]://host>      For example https://s3.example.com or http://10.0.0.5:9000
@@ -779,7 +780,8 @@ Actual operations validate read and write permissions. Failures show the cause a
       --bucket を指定すると、移行で使う操作（一覧、HEAD、GET）を 1 つずつ確認し、必須の項目が失敗すれば終了コード 1
       --write                       書き込みも確認: 条件付き PUT、読み戻し、マルチパートアップロード。テストオブジェクトを書き込んで削除します。
                                     マルチパートアップロードの中止とテストオブジェクトの削除は書き込みに不要で、失敗しても注意を表示するだけです
-      --prefix <プレフィックス>      書き込みの確認に使うプレフィックス。テストオブジェクトをこの下に書き込みます。キーが特定のプレフィックスにしか
+      --prefix <プレフィックス>      書き込みの確認に使うプレフィックス。テストオブジェクトをこの下に書き込みます。末尾に「/」がなければ、
+                                    --mapping add-prefix で転送先プレフィックスを付けるときと同じく補います。キーが特定のプレフィックスにしか
                                     書き込めない場合は、移行先のプレフィックス（例: backup/）を指定します。--write と一緒に指定してください
 
   --endpoint <http[s]://ホスト>    例: https://s3.example.com、http://10.0.0.5:9000

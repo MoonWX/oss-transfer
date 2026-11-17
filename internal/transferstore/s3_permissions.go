@@ -97,19 +97,31 @@ func ValidPermissionPrefix(prefix string) bool {
 	return len(prefix) <= MaxPermissionPrefix && utf8.ValidString(prefix) && !strings.ContainsFunc(prefix, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
+// PermissionWritePrefix is the prefix a write check writes below: prefix as
+// a migration's target prefix adds it in front of each key, with "/"
+// appended when it does not end with one. A key allowed to write backup/*
+// can then be checked with the target prefix backup.
+func PermissionWritePrefix(prefix string) string {
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		return prefix + "/"
+	}
+	return prefix
+}
+
 // CheckBucketPermissions runs, on config.Bucket, the requests a migration
 // makes: listing objects, reading an object's metadata and content (a one-byte
 // range of the first listed object, or all of it when it is empty) and, when
 // write is set, a conditional PUT of a small probe object, reading it back, a
 // multipart upload and its abort, and deleting the probe. The probes are
-// written below prefix, under PermissionProbePrefix, so a key that may only
-// write below a prefix can be checked there. Aborting and DeleteObject are
-// not needed to write; they are reported so the operator can remove what the
-// check could not.
+// written below prefix (see PermissionWritePrefix), under
+// PermissionProbePrefix, so a key that may only write below a prefix can be
+// checked there. Aborting and DeleteObject are not needed to write; they are
+// reported so the operator can remove what the check could not.
 func CheckBucketPermissions(ctx context.Context, config S3Config, write bool, prefix string) (PermissionCheck, error) {
 	if !ValidPermissionPrefix(prefix) {
 		return PermissionCheck{}, errors.New("invalid write prefix")
 	}
+	prefix = PermissionWritePrefix(prefix)
 	ctx, cancel := context.WithTimeout(ctx, permissionCheckTimeout)
 	defer cancel()
 	// The operator waits for the answer: use the short budget of checks.

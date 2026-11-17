@@ -574,9 +574,9 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 		if err != nil {
 			return nil, err
 		}
-		kind := o.Positionals[0]
-		if kind != "list" && kind != "put" && kind != "head" && kind != "bandwidth" {
-			return nil, cliErrorf("限速类型必须是 list、put、head 或 bandwidth")
+		kind, ok := limitKinds[o.Positionals[0]]
+		if !ok {
+			return nil, cliErrorf("限速类型必须是 list、put、head、bandwidth、local-ops 或 local-bandwidth")
 		}
 		if o.Has("worker") == o.Has("all") {
 			return nil, cliErrorf("请指定 --worker <IPv4> 或 --all，且不能同时使用")
@@ -600,20 +600,27 @@ func runLimitAdmin(client *ApiClient, action string, args []string) (map[string]
 	}
 }
 
+// limitKinds maps the CLI's limit names to the API's. local-ops and
+// local-bandwidth limit the node's access to local storage.
+var limitKinds = map[string]string{"list": "list", "put": "put", "head": "head", "bandwidth": "bandwidth", "local-ops": "localOps", "local-bandwidth": "localBandwidth"}
+
+func bandwidthKind(kind string) bool { return kind == "bandwidth" || kind == "localBandwidth" }
+
 func adminRate(kind, raw, unit string) (float64, error) {
-	if kind != "bandwidth" && unit != "" {
-		return 0, cliErrorf("--unit 只用于 bandwidth，其他类型单位为次/秒")
+	if !bandwidthKind(kind) && unit != "" {
+		return 0, cliErrorf("--unit 只用于 bandwidth 和 local-bandwidth，其他类型单位为次/秒")
 	}
 	multiplier := float64(1)
-	if kind == "bandwidth" {
+	if bandwidthKind(kind) {
 		if unit == "" {
 			unit = "Mbps"
 		}
-		units := map[string]float64{"bps": 1, "Kbps": 1e3, "Mbps": 1e6, "Gbps": 1e9}
+		// MB/s and GB/s are bytes, the unit disks are usually rated in.
+		units := map[string]float64{"bps": 1, "Kbps": 1e3, "Mbps": 1e6, "Gbps": 1e9, "MB/s": 8e6, "GB/s": 8e9}
 		var ok bool
 		multiplier, ok = units[unit]
 		if !ok {
-			return 0, cliErrorf("带宽单位必须为 bps、Kbps、Mbps 或 Gbps；默认 Mbps")
+			return 0, cliErrorf("带宽单位必须为 bps、Kbps、Mbps、Gbps、MB/s 或 GB/s；默认 Mbps")
 		}
 	}
 	if raw == "unlimited" {

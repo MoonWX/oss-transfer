@@ -32,6 +32,7 @@ func configureNodeFactory(factory *storageconfig.Factory, nodes *nodecontrol.Con
 	}
 	// Share both protocol pools across children; keep request admission above
 	// protocol selection so the JDCloud compatibility path spends its budget.
+	factory.LocalIO = nodes
 	storageTransport := transferstore.S3CompatibleTransport(factory.HTTPClient.Transport)
 	factory.HTTPClientForEndpoint = func(ctx context.Context, endpoint execution.Endpoint, config storageconfig.Config) *http.Client {
 		info := nodecontrol.RequestContextFrom(ctx)

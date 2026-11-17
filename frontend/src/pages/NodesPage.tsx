@@ -42,6 +42,7 @@ import {
 import { api, ApiError, useApi, useNotify } from "../lib/api";
 import { useNodeLabels, useWorkerStatus } from "../lib/workerStatus";
 import type { Worker } from "../lib/rateStatus";
+import { isBandwidthRate } from "../lib/rateStatus";
 import NodeRateLimits, {
   adjustmentDetailsPath,
   adjustmentPhase,
@@ -244,7 +245,7 @@ export default function NodesPage() {
     );
     return target === undefined
       ? ""
-      : String(Math.max(0, target) / (type === "bandwidth" ? 1000000 : 1));
+      : String(Math.max(0, target) / (isBandwidthRate(type) ? 1000000 : 1));
   };
   const openEditor = (worker = "", type: RateType = "put", value?: number) => {
     setSaveError(null);
@@ -255,13 +256,13 @@ export default function NodesPage() {
         value === undefined
           ? ""
           : String(
-              value > 0 ? (type === "bandwidth" ? value / 1000000 : value) : 0,
+              value > 0 ? (isBandwidthRate(type) ? value / 1000000 : value) : 0,
             ),
     });
   };
   async function saveRate() {
     const qps = edit
-      ? Number(edit.value) * (edit.type === "bandwidth" ? 1000000 : 1)
+      ? Number(edit.value) * (isBandwidthRate(edit.type) ? 1000000 : 1)
       : NaN;
     if (!edit || edit.value.trim() === "" || !Number.isFinite(qps) || qps < 0) {
       setSaveError({ message: t("请输入大于或等于 0 的数值。") });
@@ -736,9 +737,9 @@ export default function NodesPage() {
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
                           {rateText(
                             item.previousValue,
-                            item.type === "bandwidth",
+                            isBandwidthRate(item.type),
                           )}{" "}
-                          → {rateText(item.value, item.type === "bandwidth")}
+                          → {rateText(item.value, isBandwidthRate(item.type))}
                         </TableCell>
                         <TableCell>
                           <Chip
@@ -765,7 +766,7 @@ export default function NodesPage() {
                               {t("当时目标：{limit}", {
                                 limit: rateText(
                                   item.manualTarget,
-                                  item.type === "bandwidth",
+                                  isBandwidthRate(item.type),
                                 ),
                               })}
                             </Typography>
@@ -1077,9 +1078,11 @@ export default function NodesPage() {
               required
               fullWidth
               label={
-                edit?.type === "bandwidth"
+                isBandwidthRate(edit?.type ?? "")
                   ? t("带宽上限（Mbps）")
-                  : t("请求上限（次/秒）")
+                  : edit?.type === "localOps"
+                    ? t("文件操作上限（次/秒）")
+                    : t("请求上限（次/秒）")
               }
               type="number"
               value={edit?.value ?? ""}
@@ -1089,9 +1092,15 @@ export default function NodesPage() {
                 )
               }
               slotProps={{ htmlInput: { min: 0, step: "any" } }}
-              helperText={t(
-                "修改目标上限，0 表示不限速。保存后立即应用，节点重启后仍生效；临时降速不覆盖该目标。",
-              )}
+              helperText={
+                edit?.type === "localOps" || edit?.type === "localBandwidth"
+                  ? t(
+                      "限制该节点访问本地目录（包括挂载的 NAS）：文件操作按每秒打开、创建、查询的文件数和读取的目录数计算，带宽按读写本地文件的数据量计算。0 表示不限速，保存后立即应用，节点重启后仍生效。",
+                    )
+                  : t(
+                      "修改目标上限，0 表示不限速。保存后立即应用，节点重启后仍生效；临时降速不覆盖该目标。",
+                    )
+              }
             />
             {!edit?.worker && (
               <Alert severity="info">

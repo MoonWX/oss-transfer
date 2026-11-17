@@ -733,10 +733,17 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		w := newCLITable(out)
 		fmt.Fprintln(w, cliText(out, "节点\t类型\t目标上限\t目标来源\t运行上限\t实测速率\t状态"))
 		for _, node := range objectList(raw) {
-			for _, kind := range []string{"list", "put", "head", "bandwidth"} {
+			for _, kind := range []string{"list", "put", "head", "bandwidth", "localOps", "localBandwidth"} {
 				rate, _ := node[kind].(map[string]interface{})
+				if rate == nil && (kind == "localOps" || kind == "localBandwidth") {
+					continue // An Agent before local storage limits has no such row.
+				}
+				name := map[string]string{"localOps": "local-ops", "localBandwidth": "local-bandwidth"}[kind]
+				if name == "" {
+					name = kind
+				}
 				unit, suffix := cliText(out, " 次/秒"), "Qps"
-				if kind == "bandwidth" {
+				if kind == "bandwidth" || kind == "localBandwidth" {
 					unit, suffix = " Mbps", "Bps"
 				}
 				format := func(value interface{}, limit bool) string {
@@ -750,7 +757,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 					if limit && number <= 0 {
 						return cliText(out, "不限速")
 					}
-					if kind == "bandwidth" {
+					if kind == "bandwidth" || kind == "localBandwidth" {
 						number /= 1e6
 					}
 					return strconv.FormatFloat(number, 'f', -1, 64) + unit
@@ -773,7 +780,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 				if target == nil {
 					source = "—"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, getString(node, "workerIp"), localeOf(out))), kind, format(target, true), source, format(rate["limit"+suffix], true), format(rate["current"+suffix], false), safeCLIText(state))
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, getString(node, "workerIp"), localeOf(out))), name, format(target, true), source, format(rate["limit"+suffix], true), format(rate["current"+suffix], false), safeCLIText(state))
 			}
 		}
 		w.Flush()

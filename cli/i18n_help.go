@@ -763,8 +763,8 @@ Actual operations validate read and write permissions. Failures show the cause a
 Usage: oss-transfer-cli limit <subcommand> [arguments]
 
   list                            Target/running limits and automatic adjustment status
-  set <list|put|head|bandwidth> <value|unlimited> (--worker NODE|--all)
-       [--unit bps|Kbps|Mbps|Gbps]
+  set <list|put|head|bandwidth|local-ops|local-bandwidth> <value|unlimited> (--worker NODE|--all)
+       [--unit bps|Kbps|Mbps|Gbps|MB/s|GB/s]
   history [--limit 50]             Recent changes across all nodes, newest first; --limit is 1–200 in total
   adjustment --worker NODE --event-id ID [--cursor CURSOR]
 
@@ -772,10 +772,15 @@ Usage: oss-transfer-cli limit <subcommand> [arguments]
   oss-transfer-cli limit set bandwidth 1 --unit Gbps --all
   oss-transfer-cli limit set put 500 --all
   oss-transfer-cli limit set bandwidth unlimited --worker 10.0.0.2
+  oss-transfer-cli limit set local-bandwidth 200 --unit MB/s --all
+  oss-transfer-cli limit set local-ops 500 --worker 10.0.0.2
   oss-transfer-cli limit list --watch 5
   oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
 
 bandwidth defaults to Mbps; other limits use requests/second and reject --unit.
+local-ops and local-bandwidth limit the node's access to local storage: local-ops counts files opened,
+created or looked up plus directories read per second; local-bandwidth is the data read from and written
+to local files (Mbps by default, or MB/s). Both are unlimited by default.
 Values must be greater than zero; use unlimited to remove a limit.
 Select one node or --all. Use task bandwidth for an additional task limit.
 Adjustment details retain nextCursor, done, historyComplete and process restart information.
@@ -783,8 +788,8 @@ Adjustment details retain nextCursor, done, historyComplete and process restart 
 使い方: oss-transfer-cli limit <サブコマンド> [引数]
 
   list                            目標上限、動作上限、自動調整の状態を表示
-  set <list|put|head|bandwidth> <値|unlimited> (--worker ノード|--all)
-       [--unit bps|Kbps|Mbps|Gbps]
+  set <list|put|head|bandwidth|local-ops|local-bandwidth> <値|unlimited> (--worker ノード|--all)
+       [--unit bps|Kbps|Mbps|Gbps|MB/s|GB/s]
   history [--limit 50]             全ノードの最近の調整（新しい順）。--limit は合計 1～200 件
   adjustment --worker ノード --event-id ID [--cursor カーソル]
 
@@ -792,10 +797,15 @@ Adjustment details retain nextCursor, done, historyComplete and process restart 
   oss-transfer-cli limit set bandwidth 1 --unit Gbps --all
   oss-transfer-cli limit set put 500 --all
   oss-transfer-cli limit set bandwidth unlimited --worker 10.0.0.2
+  oss-transfer-cli limit set local-bandwidth 200 --unit MB/s --all
+  oss-transfer-cli limit set local-ops 500 --worker 10.0.0.2
   oss-transfer-cli limit list --watch 5
   oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
 
 bandwidth の既定単位は Mbps、他の制限は回/秒で、--unit は使えません。
+local-ops と local-bandwidth はノードのローカルストレージへのアクセスを制限します。local-ops は 1 秒あたりに
+開く・作成する・照会するファイル数と読み取るディレクトリ数、local-bandwidth はローカルファイルの読み書き量
+（既定 Mbps、MB/s も可）です。どちらも既定では無制限です。
 値は 0 より大きくしてください。解除には unlimited を使用します。
 対象ノードまたは --all を明示します。タスクの追加上限には task bandwidth を使用します。
 詳細には nextCursor、done、historyComplete、プロセスの再起動情報が保持されます。

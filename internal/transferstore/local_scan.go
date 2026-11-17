@@ -68,7 +68,10 @@ func (s *Local) scanFrames(options ListOptions) ([]localScanFrame, error) {
 	return frames, nil
 }
 
-func (s *Local) loadScanFrame(frame *localScanFrame) error {
+func (s *Local) loadScanFrame(ctx context.Context, frame *localScanFrame) error {
+	if err := s.localOperation(ctx); err != nil {
+		return err
+	}
 	before, err := s.root.Lstat(frame.key)
 	if err != nil {
 		if frame.Identity != "" && errors.Is(err, fs.ErrNotExist) {
@@ -150,7 +153,7 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.loadScanFrame(&frames[index]); err != nil {
+		if err := s.loadScanFrame(ctx, &frames[index]); err != nil {
 			return err
 		}
 	}
@@ -194,7 +197,7 @@ func (s *Local) ScanPages(ctx context.Context, options ListOptions, emit func(Pa
 				if !scanEntryName(child.Name) {
 					return ErrInvalidKey
 				}
-				if err := s.loadScanFrame(&child); err != nil {
+				if err := s.loadScanFrame(ctx, &child); err != nil {
 					return err
 				}
 				frame.After, frame.next = entry.Name(), frame.next+1

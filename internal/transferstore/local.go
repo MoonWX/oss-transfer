@@ -22,6 +22,7 @@ type Local struct {
 	rootPath     string
 	tempRegistry LocalTempRegistry
 	ranged       LocalRangedOptions
+	localIO      LocalIOLimiter
 }
 
 // NewLocal opens an existing directory. It never creates the storage root.
@@ -120,6 +121,9 @@ func (s *Local) Stat(ctx context.Context, key string) (Object, error) {
 	if err != nil {
 		return Object{}, err
 	}
+	if err := s.localOperation(ctx); err != nil {
+		return Object{}, err
+	}
 	info, err := s.root.Lstat(name)
 	if err != nil {
 		return Object{}, localError(err)
@@ -178,6 +182,12 @@ func (s *Local) List(ctx context.Context, options ListOptions) (Page, error) {
 		if key != "." && entry.IsDir() && isLocalTempNamespace(s.root, key) {
 			return fs.SkipDir
 		}
+		if entry.IsDir() {
+			// WalkDir reads the directory after this call returns.
+			if err := s.localOperation(ctx); err != nil {
+				return err
+			}
+		}
 		if entry.IsDir() || !entry.Type().IsRegular() || !strings.HasPrefix(key, options.Prefix) ||
 			(options.StartAfter != "" && key <= options.StartAfter) ||
 			(after != "" && walkCompare(key, after) <= 0) {
@@ -233,6 +243,12 @@ func (s *Local) Scan(ctx context.Context, options ListOptions, emit func(Object)
 		if key != "." && entry.IsDir() && isLocalTempNamespace(s.root, key) {
 			return fs.SkipDir
 		}
+		if entry.IsDir() {
+			// WalkDir reads the directory after this call returns.
+			if err := s.localOperation(ctx); err != nil {
+				return err
+			}
+		}
 		if entry.IsDir() || !entry.Type().IsRegular() || !strings.HasPrefix(key, options.Prefix) ||
 			(options.StartAfter != "" && key <= options.StartAfter) || (after != "" && walkCompare(key, after) <= 0) {
 			return nil
@@ -258,7 +274,7 @@ func (s *Local) Open(ctx context.Context, key string, options OpenOptions) (io.R
 	if err != nil {
 		return nil, Object{}, err
 	}
-	reader := cancellable(ctx, file, func() error { return verifyPinned(key, file, info, object) })
+	reader := cancellable(ctx, s.pacedReader(ctx, file), func() error { return verifyPinned(key, file, info, object) })
 	return reader, object, nil
 }
 
@@ -270,7 +286,7 @@ func (s *Local) OpenRanges(ctx context.Context, key string, options OpenOptions)
 	if err != nil {
 		return nil, Object{}, err
 	}
-	return &localRanges{key: key, file: file, info: info, object: object}, object, nil
+	return &localRanges{store: s, key: key, file: file, info: info, object: object}, object, nil
 }
 
 func (s *Local) openPinned(ctx context.Context, key string, options OpenOptions) (*os.File, os.FileInfo, Object, error) {
@@ -279,6 +295,9 @@ func (s *Local) openPinned(ctx context.Context, key string, options OpenOptions)
 	}
 	name, err := localKey(key, false)
 	if err != nil {
+		return nil, nil, Object{}, err
+	}
+	if err := s.localOperation(ctx); err != nil {
 		return nil, nil, Object{}, err
 	}
 	info, err := s.root.Lstat(name)
@@ -333,6 +352,7 @@ func verifyPinned(key string, file *os.File, info os.FileInfo, object Object) er
 }
 
 type localRanges struct {
+	store  *Local
 	key    string
 	file   *os.File
 	info   os.FileInfo
@@ -349,7 +369,7 @@ func (r *localRanges) OpenRange(ctx context.Context, offset, length int64) (io.R
 		return nil, err
 	}
 	// Closing a range must not close the shared handle.
-	section := io.NopCloser(io.NewSectionReader(r.file, offset, length))
+	section := r.store.pacedReader(ctx, io.NopCloser(io.NewSectionReader(r.file, offset, length)))
 	return cancellable(ctx, section, func() error { return verifyPinned(r.key, r.file, r.info, r.object) }), nil
 }
 
@@ -426,6 +446,9 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		}
 		temporary = trackedTempName(s.tempRegistry.OwnerID(), hex.EncodeToString(nonce[:]))
 	}
+	if err := s.localOperation(ctx); err != nil {
+		return result, err
+	}
 	file, err := temporaryDirectory.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return result, err
@@ -478,11 +501,11 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 	if options.Ranges != nil && s.RangedWrite(options.Size) && s.windowSlots(options.RangeBudget) >= 2 {
 		// Ranges are fetched concurrently but appended in order, exactly as a
 		// stream would be; the file is published only after every byte.
-		if err := s.writeRanges(ctx, file, options.Ranges, options.Size, options.RangeBudget); err != nil {
+		if err := s.writeRanges(ctx, s.pacedWriter(ctx, file), options.Ranges, options.Size, options.RangeBudget); err != nil {
 			return result, err
 		}
 	} else {
-		written, err := io.CopyBuffer(file, io.LimitReader(reader, options.Size), make([]byte, localCopyBuffer))
+		written, err := io.CopyBuffer(s.pacedWriter(ctx, file), io.LimitReader(reader, options.Size), make([]byte, localCopyBuffer))
 		if err != nil {
 			return result, err
 		}

@@ -22,7 +22,7 @@ import (
 
 type sample struct {
 	second int64
-	values [4]int64
+	values [6]int64
 }
 
 type Controller struct {
@@ -102,7 +102,7 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 	}
 	// The window is counted in whole one-second buckets.
 	options.ThrottleWindow = (options.ThrottleWindow + time.Second - 1).Truncate(time.Second)
-	configured := map[string]float64{"list": options.ListQPS, "put": options.PutQPS, "head": options.HeadQPS, "bandwidth": options.BandwidthBitsPerSecond}
+	configured := map[string]float64{"list": options.ListQPS, "put": options.PutQPS, "head": options.HeadQPS, "bandwidth": options.BandwidthBitsPerSecond, "localOps": options.LocalOpsPerSecond, "localBandwidth": options.LocalBandwidthBitsPerSecond}
 	for kind, value := range configured {
 		if !validRate(kind, value) {
 			return nil, ErrInvalid
@@ -112,6 +112,7 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 	// configured target is rounded down the same way, so it equals the value
 	// enforced and is shown as configured.
 	configured["bandwidth"] = float64(int64(configured["bandwidth"]/8)) * 8
+	configured["localBandwidth"] = float64(int64(configured["localBandwidth"]/8)) * 8
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
@@ -129,7 +130,12 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 			return errors.New("invalid saved node configuration")
 		}
 		for kind, value := range c.data.Overrides {
-			if !validRate(kind, value) {
+			if !validRate(kind, value) || localKind(kind) {
+				return errors.New("invalid saved node rate")
+			}
+		}
+		for kind, value := range c.data.LocalOverrides {
+			if !validRate(kind, value) || !localKind(kind) {
 				return errors.New("invalid saved node rate")
 			}
 		}
@@ -151,7 +157,7 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 		// lowered automatically.
 		for kind := range configured {
 			target := c.target(c.data, kind)
-			if actual, ok := c.data.Effective[kind]; ok && kind != "bandwidth" && validRate(kind, actual) && actual > 0 && actual < target {
+			if actual, ok := c.data.Effective[kind]; ok && kind != "bandwidth" && !localKind(kind) && validRate(kind, actual) && actual > 0 && actual < target {
 				continue
 			}
 			c.data.Effective[kind] = target
@@ -185,15 +191,24 @@ func validRate(kind string, value float64) bool {
 		return false
 	}
 	switch kind {
-	case "list", "put", "head":
+	case "list", "put", "head", "localOps":
 		return value <= 1_000_000 && (value == 0 || value >= 0.01)
-	case "bandwidth":
+	case "bandwidth", "localBandwidth":
 		return value <= 1_000_000_000_000 && (value == 0 || value >= 8)
 	}
 	return false
 }
+
+// localKind reports the limits on local storage. They are never lowered
+// automatically: a file system does not answer with throttling responses.
+func localKind(kind string) bool { return kind == "localOps" || kind == "localBandwidth" }
+
 func (c *Controller) target(data persisted, kind string) float64 {
-	if value, ok := data.Overrides[kind]; ok {
+	overrides := data.Overrides
+	if localKind(kind) {
+		overrides = data.LocalOverrides
+	}
+	if value, ok := overrides[kind]; ok {
 		return value
 	}
 	return c.configured[kind]
@@ -268,6 +283,10 @@ func (c *Controller) SetRate(ctx context.Context, kind string, value float64) er
 	if kind == "bandwidth" {
 		previous = float64(c.bytes.Node().BandwidthBytesPerSecond) * 8
 	}
+	if kind == "localBandwidth" {
+		// Enforced in whole bytes per second, like node bandwidth.
+		value = float64(int64(value/8)) * 8
+	}
 	if previous == value && target == value {
 		return nil
 	}
@@ -281,7 +300,14 @@ func (c *Controller) SetRate(ctx context.Context, kind string, value float64) er
 		}
 		value = float64(c.bytes.Node().BandwidthBytesPerSecond) * 8
 	}
-	next.Overrides[kind] = value
+	if localKind(kind) {
+		if next.LocalOverrides == nil {
+			next.LocalOverrides = map[string]float64{}
+		}
+		next.LocalOverrides[kind] = value
+	} else {
+		next.Overrides[kind] = value
+	}
 	next.Effective[kind] = value
 	delete(next.Incidents, kind)
 	event := c.event(&next, kind, previous, value, target, value, "MANUAL_SET", "", nil, nil)
@@ -353,6 +379,10 @@ func kindIndex(kind string) int {
 		return 2
 	case "bandwidth":
 		return 3
+	case "localOps":
+		return 4
+	case "localBandwidth":
+		return 5
 	}
 	return -1
 }
@@ -377,7 +407,7 @@ func (c *Controller) ObserveBytes(amount int) {
 // made for a sleeping caller, so cancelling it cannot leave future token debt.
 func (c *Controller) Wait(ctx context.Context, kind string) error {
 	index := kindIndex(kind)
-	if index < 0 || index == 3 {
+	if index < 0 || index == 3 || index == 5 {
 		return ErrInvalid
 	}
 	for {
@@ -602,7 +632,7 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 	}
 	now := c.now()
 	result := map[string]any{}
-	var totals [4]int64
+	var totals [6]int64
 	// Completed one-second buckets form a sliding 5-second measurement. Reading
 	// the snapshot does not reset it, so multiple browser clients see one sample.
 	for _, entry := range c.samples {
@@ -620,6 +650,10 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 			unit = "Bps"
 			current = float64(c.bytes.Node().BandwidthBytesPerSecond) * 8
 			target = current
+			actual *= 8
+		}
+		if kind == "localBandwidth" {
+			unit = "Bps"
 			actual *= 8
 		}
 		source := "PERSISTED_MANUAL"

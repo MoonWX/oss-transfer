@@ -16,6 +16,38 @@ const failure = {
   direction: "OSS_TO_LOCAL",
 };
 
+test("sets the local storage limits in bytes and operations per second", async ({
+  page,
+}) => {
+  const requests = await mockApi(page);
+  await page.goto("/nodes");
+  await expect(page.getByRole("heading", { name: "执行节点" })).toBeVisible();
+  await page.getByRole("button", { name: "调整限速", exact: true }).click();
+  await page.getByRole("combobox", { name: "限制类型" }).click();
+  await page.getByRole("option", { name: "本地读写带宽" }).click();
+  await expect(page.getByText(/限制该节点访问本地目录/)).toBeVisible();
+  await page.getByRole("spinbutton", { name: "带宽上限（Mbps）" }).fill("800");
+  await page.getByRole("button", { name: "应用设置" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  expect(
+    requests.find(
+      (item) => item.path === "/api/master/rate-limit/localBandwidth",
+    )?.body,
+  ).toEqual({ qps: 800_000_000 });
+  await page.getByRole("button", { name: "调整限速", exact: true }).click();
+  await page.getByRole("combobox", { name: "限制类型" }).click();
+  await page.getByRole("option", { name: "本地文件操作" }).click();
+  await page
+    .getByRole("spinbutton", { name: "文件操作上限（次/秒）" })
+    .fill("300");
+  await page.getByRole("button", { name: "应用设置" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  expect(
+    requests.find((item) => item.path === "/api/master/rate-limit/localOps")
+      ?.body,
+  ).toEqual({ qps: 300 });
+});
+
 test("converts bandwidth units and can scope rate changes to one node", async ({
   page,
 }) => {

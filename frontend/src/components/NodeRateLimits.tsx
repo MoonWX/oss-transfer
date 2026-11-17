@@ -17,8 +17,18 @@ import type {
   Adjustment,
   RateLimitSnapshot,
 } from "../lib/rateStatus";
+import { autoAdjustedRate, isBandwidthRate } from "../lib/rateStatus";
 export type { RateType, Rate, Adjustment } from "../lib/rateStatus";
-export const rateTypes: RateType[] = ["list", "put", "head", "bandwidth"];
+export const rateTypes: RateType[] = [
+  "list",
+  "put",
+  "head",
+  "bandwidth",
+  "localOps",
+  "localBandwidth",
+];
+/** Agents before local storage limits report no row for them. */
+export const localRateTypes: RateType[] = ["localOps", "localBandwidth"];
 export const rateNames: Record<RateType, string> = {
   get list() {
     return t("LIST 请求");
@@ -31,6 +41,12 @@ export const rateNames: Record<RateType, string> = {
   },
   get bandwidth() {
     return t("传输带宽");
+  },
+  get localOps() {
+    return t("本地文件操作");
+  },
+  get localBandwidth() {
+    return t("本地读写带宽");
   },
 };
 export const rateText = (
@@ -51,7 +67,7 @@ const currentText = (value: number | null | undefined, bandwidth: boolean) =>
       ? `${formatNumber(value / 1_000_000, { maximumFractionDigits: 2 })} Mbps`
       : t("{value1} 次/秒", { value1: formatNumber(value) });
 export const rateTarget = (rate: Rate | undefined, type: RateType) =>
-  type === "bandwidth" ? rate?.manualLimitBps : rate?.manualLimitQps;
+  isBandwidthRate(type) ? rate?.manualLimitBps : rate?.manualLimitQps;
 export const adjustmentPhase = (event: Adjustment) => {
   if (event.manual || event.reasonCode === "MANUAL_SET") return t("手动设置");
   switch (event.reasonCode) {
@@ -170,7 +186,8 @@ export default function NodeRateLimits({
       <Stack spacing={0.5}>
         {rateTypes.map((type, index) => {
           const rate = rateLimit?.[type];
-          const bandwidth = type === "bandwidth";
+          if (!rate && localRateTypes.includes(type)) return null;
+          const bandwidth = isBandwidthRate(type);
           const current = bandwidth ? rate?.currentBps : rate?.currentQps;
           const limit = bandwidth ? rate?.limitBps : rate?.limitQps;
           const target = rateTarget(rate, type);
@@ -184,7 +201,7 @@ export default function NodeRateLimits({
             (target != null &&
               configuredTarget != null &&
               target === configuredTarget);
-          const hasRecoveryStatus = type !== "bandwidth";
+          const hasRecoveryStatus = autoAdjustedRate(type);
           const recovered = !uncertain && rate?.state === "RECOVERED";
           const recovering = !uncertain && rate?.state === "RECOVERING";
           const stateLabel = uncertain

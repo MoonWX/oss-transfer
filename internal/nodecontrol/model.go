@@ -30,6 +30,9 @@ type ByteLimiter interface {
 // least ThrottleRatio of that limit's responses, then not again for one window.
 type Options struct {
 	ListQPS, PutQPS, HeadQPS, BandwidthBitsPerSecond float64
+	// Local storage limits: file operations per second and bits per second
+	// read from or written to local files. Zero, the default, is unlimited.
+	LocalOpsPerSecond, LocalBandwidthBitsPerSecond float64
 	UseZeroDefaults                                  bool
 	Threshold                                        int
 	ThrottleRatio                                    float64
@@ -91,6 +94,10 @@ type Adjustment struct {
 
 type persisted struct {
 	Overrides   map[string]float64    `json:"overrides"`
+	// Saved local storage limits live apart from Overrides: an older Agent
+	// rejects a saved rate it does not know, which would stop it starting
+	// after a downgrade, but it ignores this field.
+	LocalOverrides map[string]float64 `json:"localOverrides,omitempty"`
 	Effective   map[string]float64    `json:"effective"`
 	Last        map[string]Adjustment `json:"last"`
 	Incidents   map[string]string     `json:"incidents"`

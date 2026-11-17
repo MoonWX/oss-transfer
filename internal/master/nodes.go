@@ -219,12 +219,12 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value := *request.QPS
-	if kind == "bandwidth" {
+	if kind == "bandwidth" || kind == "localBandwidth" {
 		if value > 1e12 || value > 0 && value < 8 {
 			fail(w, 400, "Invalid bandwidth")
 			return
 		}
-	} else if kind != "list" && kind != "put" && kind != "head" || value > 1e6 || value > 0 && value < .01 {
+	} else if kind != "list" && kind != "put" && kind != "head" && kind != "localOps" || value > 1e6 || value > 0 && value < .01 {
 		fail(w, 400, "Invalid request rate")
 		return
 	}

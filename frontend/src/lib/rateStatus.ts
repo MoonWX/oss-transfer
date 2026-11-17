@@ -1,6 +1,13 @@
 import { t as tr, getLocale } from "./i18n";
 import type { NodeDisplay } from "./nodeRegistry";
-export type RateType = "list" | "put" | "head" | "bandwidth";
+export type RateType =
+  "list" | "put" | "head" | "bandwidth" | "localOps" | "localBandwidth";
+/** Bandwidth limits are in bits per second; the others count per second. */
+export const isBandwidthRate = (type: string) =>
+  type === "bandwidth" || type === "localBandwidth";
+/** Only storage request limits are lowered automatically on throttling. */
+export const autoAdjustedRate = (type: string) =>
+  type === "list" || type === "put" || type === "head";
 export type TriggerRequest = {
   operation?: string | null;
   direction?: string | null;
@@ -134,11 +141,19 @@ export function activeRates(worker: Worker): [RateType, Rate][] {
 const numeric = (value: number) =>
   value.toLocaleString(getLocale(), { maximumFractionDigits: 2 });
 export function eventChange(event: Adjustment) {
-  const unit = event.type === "bandwidth" ? "Mbps" : "QPS";
-  const factor = event.type === "bandwidth" ? 1_000_000 : 1;
+  const unit = isBandwidthRate(event.type) ? "Mbps" : "QPS";
+  const factor = isBandwidthRate(event.type) ? 1_000_000 : 1;
   const value = (n: number) =>
     n <= 0 ? tr("不限速") : `${numeric(n / factor)} ${unit}`;
-  return `${event.type === "bandwidth" ? tr("带宽") : event.type.toUpperCase()} ${event.previousValue == null ? "—" : value(event.previousValue)} → ${value(event.value)}`;
+  const name =
+    event.type === "bandwidth"
+      ? tr("带宽")
+      : event.type === "localBandwidth"
+        ? tr("本地读写带宽")
+        : event.type === "localOps"
+          ? tr("本地文件操作")
+          : event.type.toUpperCase();
+  return `${name} ${event.previousValue == null ? "—" : value(event.previousValue)} → ${value(event.value)}`;
 }
 
 export function describeRateEvents(

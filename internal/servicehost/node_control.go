@@ -11,11 +11,14 @@ import (
 // Pointer fields distinguish omitted defaults from explicit zero (unlimited).
 // This wire type deliberately excludes timers, functions and controller state.
 type NodeControlConfig struct {
-	ListQPS                *float64          `json:"listQps,omitempty"`
-	PutQPS                 *float64          `json:"putQps,omitempty"`
-	HeadQPS                *float64          `json:"headQps,omitempty"`
-	BandwidthBitsPerSecond *float64          `json:"bandwidthBitsPerSecond,omitempty"`
-	AutoAdjust             *AutoAdjustConfig `json:"autoAdjust,omitempty"`
+	ListQPS                *float64 `json:"listQps,omitempty"`
+	PutQPS                 *float64 `json:"putQps,omitempty"`
+	HeadQPS                *float64 `json:"headQps,omitempty"`
+	BandwidthBitsPerSecond *float64 `json:"bandwidthBitsPerSecond,omitempty"`
+	// Local storage limits; omitted or zero is unlimited.
+	LocalOpsPerSecond           *float64          `json:"localOpsPerSecond,omitempty"`
+	LocalBandwidthBitsPerSecond *float64          `json:"localBandwidthBitsPerSecond,omitempty"`
+	AutoAdjust                  *AutoAdjustConfig `json:"autoAdjust,omitempty"`
 }
 
 // A limit is lowered when ThrottleThreshold throttling responses (HTTP
@@ -46,6 +49,7 @@ func (c *NodeControlConfig) Options() (nodecontrol.Options, error) {
 		bandwidth bool
 	}{
 		{c.ListQPS, &out.ListQPS, false}, {c.PutQPS, &out.PutQPS, false}, {c.HeadQPS, &out.HeadQPS, false}, {c.BandwidthBitsPerSecond, &out.BandwidthBitsPerSecond, true},
+		{c.LocalOpsPerSecond, &out.LocalOpsPerSecond, false}, {c.LocalBandwidthBitsPerSecond, &out.LocalBandwidthBitsPerSecond, true},
 	} {
 		if setting.value == nil {
 			continue

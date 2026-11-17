@@ -658,6 +658,21 @@ Changes from the console or CLI need no restart. Agents installed with Docker ha
 
 Both node and task request limits space requests at even intervals, one every 1/rate seconds, with no bursts, so fractions are valid: 0.5 means one request every 2 seconds. Node limits go down to 0.01 requests/s, and task limits down to 0.000001. A task limit is divided among its nodes, and each node spaces requests by its own share: at 0.5/s on two busy nodes, each sends one request every 4 seconds. Under a task limit, a node's first request of each type also waits one interval. Measured rates are averaged over 5 seconds and so change in steps of 0.2 requests/s per node: a node sending 0.5 requests/s shows 0.4 or 0.6.
 
+### Local storage limits
+
+The bandwidth among the node limits counts the data read from the source, without telling a local disk from the network, and nothing limits the number of file operations. The local directories an Agent reads or writes often serve production workloads at the same time, a mounted NAS for example, and a migration of many small files usually exhausts the storage's IOPS first. Each Agent therefore has two more limits that apply only to its access to local directories:
+
+| Limit | Default | What it counts |
+| --- | --- | --- |
+| Local file operations | Unlimited | Files opened, created or looked up per second, plus directories read |
+| Local read/write bandwidth | Unlimited | Data read from and written to local files per second, uploads and downloads together |
+
+Both limits are shared by every task on the node that uses a local directory, and they apply together with the node and task limits: an operation proceeds only when all of them allow it. They are never lowered automatically on throttling, so their status is only *At target limit* or *Unlimited*. When several Agents share one NAS, each counts on its own, and the NAS carries the sum of their limits; divide the capacity you want to protect by the number of nodes.
+
+Set them like the other node limits: on the **Execution nodes** page click **Adjust limits** and choose **Local file operations** or **Local read/write bandwidth** as the **Limit type**, or use `limit set local-ops` and `limit set local-bandwidth` (see [CLI](cli.md#set-node-limits)). The console shows local bandwidth in Mbps, where 800 Mbps equals 100 MB/s; the CLI also accepts `--unit MB/s`. In `service.json`, set `localOpsPerSecond` and `localBandwidthBitsPerSecond` (bits per second) in `nodeControl`.
+
+These limits are available since 4.1.47. Older Agents show no rows for them, and setting them there reports the node as unconfirmed. Values saved in the console or the CLI stop applying after a downgrade but do not prevent an older Agent from starting; an older Agent cannot start with these keys in `service.json`, so remove them before downgrading.
+
 ### Task limits across nodes
 
 Task limits are set in **Create transfer** under **Transfer options → Task limits** and can be changed in the task details with **Adjust** (shown as **Set limit** when the task has no bandwidth limit), or with `task limits` (see [CLI](cli.md#create-tasks-and-set-rate-limits)). **Task bandwidth limit** accepts 0.1 to 1,000,000 Mbps; left blank, only node limits apply. **LIST / GET QPS** caps listings and every object GET, range reads included; **HEAD QPS** caps metadata requests; **PUT QPS** caps uploads, multipart requests included. A blank or 0 QPS sets no limit for that type. The limits of a stopped or finished task cannot be changed; a stopped task resumes with the limits it had.

@@ -26,6 +26,9 @@ type Factory struct {
 	RetryMaxAttempts      int
 	HTTPClient            *http.Client
 	HTTPClientForEndpoint func(context.Context, execution.Endpoint, Config) *http.Client
+	// LocalIO paces every local store this factory opens (the Agent's node
+	// limits on local storage). Nil leaves local access unlimited.
+	LocalIO transferstore.LocalIOLimiter
 	// interactive limits every kind of retry to
 	// transferstore.InteractiveRetryAttempts (see OpenInteractive).
 	interactive bool
@@ -138,6 +141,7 @@ func (f *Factory) open(ctx context.Context, snapshot Snapshot, endpoint executio
 		if err != nil {
 			return nil, err
 		}
+		local.SetLocalIOLimiter(f.LocalIO)
 		// Large writes fetch concurrent source ranges, appended in order, and
 		// share the idle node capacity and memory budget of ranged uploads.
 		if err := local.SetRangedWrites(transferstore.LocalRangedOptions{PartConcurrency: f.PartConcurrency, PartLender: f.PartLender, Memory: f.UploadMemory}); err != nil {

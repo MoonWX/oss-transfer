@@ -350,11 +350,15 @@ oss-transfer-cli limit list
 oss-transfer-cli limit set put 500 --all
 oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
 oss-transfer-cli limit set head unlimited --worker 10.0.0.2
+oss-transfer-cli limit set local-bandwidth 100 --unit MB/s --all
+oss-transfer-cli limit set local-ops 500 --worker 10.0.0.2
 ```
 
-`limit list` 为每个节点的每种类型（`list`、`put`、`head`、`bandwidth`）显示一行：目标上限及其来源（等于执行节点 `service.json` 中 `nodeControl` 的值或内置默认值时为 *配置目标*，否则为 *已保存目标*）、运行上限、实测速率和状态。状态为 *正常*、*已降速*、*恢复中*、*已恢复* 或 *不限速*（见[限速状态](operations.zh-CN.md#限速状态)）。数值按精确值输出。没有响应的节点不列出，命令以退出码 3 结束。加 `--watch 5` 可以跟踪自动降速的过程。
+`local-ops` 和 `local-bandwidth` 是本地存储限速，只约束执行节点对本地目录的访问，默认不限速（见[本地存储限速](operations.zh-CN.md#本地存储限速)）。
 
-`limit set 类型 数值` 需要指定 `--worker 节点` 或 `--all` 之一。`--all` 为每个节点设置相同的值。请求上限的单位为次/秒，可以是小数，范围 0.01–1,000,000。带宽默认以 Mbps 为单位，可用 `--unit bps|Kbps|Mbps|Gbps` 指定其他单位。数值必须大于 0；解除限制使用 `unlimited`。
+`limit list` 为每个节点的每种类型（`list`、`put`、`head`、`bandwidth`，以及支持本地存储限速的节点上的 `local-ops`、`local-bandwidth`）显示一行：目标上限及其来源（等于执行节点 `service.json` 中 `nodeControl` 的值或内置默认值时为 *配置目标*，否则为 *已保存目标*）、运行上限、实测速率和状态。状态为 *正常*、*已降速*、*恢复中*、*已恢复* 或 *不限速*（见[限速状态](operations.zh-CN.md#限速状态)）。数值按精确值输出。没有响应的节点不列出，命令以退出码 3 结束。加 `--watch 5` 可以跟踪自动降速的过程。
+
+`limit set 类型 数值` 需要指定 `--worker 节点` 或 `--all` 之一。`--all` 为每个节点设置相同的值。请求上限的单位为次/秒，可以是小数，范围 0.01–1,000,000。带宽（`bandwidth` 和 `local-bandwidth`）默认以 Mbps 为单位，可用 `--unit bps|Kbps|Mbps|Gbps|MB/s|GB/s` 指定其他单位，其中 MB/s 和 GB/s 按字节计算。数值必须大于 0；解除限制使用 `unlimited`。
 
 该值成为节点的已保存目标：立即生效，停止当前的自动降速，重启后仍然保留。如果该上限从未保存过且正按配置值运行，设置同一个值不会被记录，之后修改 `service.json` 仍会对它生效。有执行节点未确认时，输出会列出该节点，命令以退出码 1 结束。
 

@@ -350,11 +350,15 @@ oss-transfer-cli limit list
 oss-transfer-cli limit set put 500 --all
 oss-transfer-cli limit set bandwidth 200 --worker 10.0.0.2
 oss-transfer-cli limit set head unlimited --worker 10.0.0.2
+oss-transfer-cli limit set local-bandwidth 100 --unit MB/s --all
+oss-transfer-cli limit set local-ops 500 --worker 10.0.0.2
 ```
 
-`limit list` shows one row per node and type (`list`, `put`, `head`, `bandwidth`): the target limit and its source (*Configured target* when it equals the value in `nodeControl` of the Agent's `service.json` or the built-in default, otherwise *Saved target*), the running limit, the measured rate and the status. The status is *Normal*, *Reduced*, *Recovering*, *Recovered* or *Unlimited* (see [limit status](operations.md#limit-status)). Values are printed exactly. A node that does not respond is omitted, and the command exits with code 3. Add `--watch 5` to follow an automatic reduction.
+`local-ops` and `local-bandwidth` are the local storage limits. They apply only to the Agent's access to local directories and are unlimited by default (see [local storage limits](operations.md#local-storage-limits)).
 
-`limit set TYPE VALUE` requires either `--worker NODE` or `--all`. `--all` sets the same value on every node. Request limits are in requests per second and may be fractional, ranging from 0.01 to 1,000,000. Bandwidth defaults to Mbps; use `--unit bps|Kbps|Mbps|Gbps` to specify another unit. The value must be greater than 0; `unlimited` removes the limit.
+`limit list` shows one row per node and type (`list`, `put`, `head`, `bandwidth`, and `local-ops` and `local-bandwidth` on nodes that support local storage limits): the target limit and its source (*Configured target* when it equals the value in `nodeControl` of the Agent's `service.json` or the built-in default, otherwise *Saved target*), the running limit, the measured rate and the status. The status is *Normal*, *Reduced*, *Recovering*, *Recovered* or *Unlimited* (see [limit status](operations.md#limit-status)). Values are printed exactly. A node that does not respond is omitted, and the command exits with code 3. Add `--watch 5` to follow an automatic reduction.
+
+`limit set TYPE VALUE` requires either `--worker NODE` or `--all`. `--all` sets the same value on every node. Request limits are in requests per second and may be fractional, ranging from 0.01 to 1,000,000. Bandwidth (`bandwidth` and `local-bandwidth`) defaults to Mbps; use `--unit bps|Kbps|Mbps|Gbps|MB/s|GB/s` to specify another unit, where MB/s and GB/s count bytes. The value must be greater than 0; `unlimited` removes the limit.
 
 The value becomes the node's saved target: it takes effect immediately, ends any automatic reduction and survives restarts. If a limit has never been saved and is running at its configured value, setting that same value stores nothing, so later edits to `service.json` still apply to it. When an Agent does not confirm the change, the output lists that node and the command exits with code 1.
 

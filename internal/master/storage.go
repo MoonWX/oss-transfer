@@ -76,12 +76,10 @@ func (s *Server) onlineAgents() ([]cluster.Member, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.agents.mu.Lock()
-	defer s.agents.mu.Unlock()
+	connected := s.connectedAgents(members)
 	var result []cluster.Member
 	for _, member := range members {
-		seen, ok := s.agents.lastSeen[member.ID]
-		if ok && s.options.Now().Sub(seen) < 75*time.Second {
+		if connected[member.ID] {
 			result = append(result, member)
 		}
 	}

@@ -31,6 +31,29 @@ type agentControl struct {
 	packageSlot   chan struct{}
 }
 
+// agentOnlineWindow is how recently an Agent must have connected to count as
+// online. A connected Agent polls again at least every 25 seconds.
+const agentOnlineWindow = 75 * time.Second
+
+// errAgentOffline answers for an Agent that has not connected within
+// agentOnlineWindow. Such an Agent is not sent the command: it would wait for
+// the whole deadline and hold a slot that a connected Agent needs.
+var errAgentOffline = errors.New("Agent is offline")
+
+// connectedAgents reports which of members connected within the online window.
+func (s *Server) connectedAgents(members []cluster.Member) map[string]bool {
+	now := s.options.Now()
+	s.agents.mu.Lock()
+	defer s.agents.mu.Unlock()
+	connected := make(map[string]bool, len(members))
+	for _, member := range members {
+		if seen, ok := s.agents.lastSeen[member.ID]; ok && now.Sub(seen) < agentOnlineWindow {
+			connected[member.ID] = true
+		}
+	}
+	return connected
+}
+
 // Close releases long polls and pending commands before HTTP shutdown. The
 // caller owns the database and closes it after all HTTP handlers have exited.
 func (s *Server) Close() error {

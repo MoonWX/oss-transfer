@@ -219,13 +219,14 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 		return err
 	}
 	// The attempt ends with its lease, for the lease's reason.
-	ioCtx, cancel := context.WithCancelCause(e.ctx)
-	stopLease := context.AfterFunc(parentCtx, func() { cancel(context.Cause(parentCtx)) })
+	// The lease's callback uses cancelIO, never cancel, which is assigned
+	// after the callback may already run.
+	ioCtx, cancelIO := context.WithCancelCause(e.ctx)
+	stopLease := context.AfterFunc(parentCtx, func() { cancelIO(context.Cause(parentCtx)) })
 	if parentCtx.Err() != nil {
-		cancel(context.Cause(parentCtx))
+		cancelIO(context.Cause(parentCtx))
 	}
-	baseCancel := cancel
-	cancel = func(cause error) { stopLease(); baseCancel(cause) }
+	cancel := func(cause error) { stopLease(); cancelIO(cause) }
 	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{}), objectsChanged: make(chan struct{})}
 	var rate func(int64)
 	if count := e.opts.CountTransferred; count != nil {

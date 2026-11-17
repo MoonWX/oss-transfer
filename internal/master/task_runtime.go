@@ -325,9 +325,40 @@ func (s *Server) changeTaskLimits(ctx context.Context, id int64, mbps *float64, 
 		if updateErr != nil {
 			return updateErr
 		}
-		return s.tasks.policies(ctx, p)
+		// The limits are saved. The connected nodes receive them now, each
+		// within five seconds; a node that is not connected, or does not
+		// answer in time, receives them from the step that prepares it. The
+		// caller reports each node, so a missed delivery is not an error:
+		// waiting thirty seconds for each offline node held this task's
+		// runtime slot and failed a change that had been saved.
+		available, err := s.connectedTaskNodes(p)
+		if err != nil {
+			return nil
+		}
+		s.tasks.deliverShares(ctx, p, available)
+		return nil
 	})
 	return
+}
+
+// connectedTaskNodes reports which of p's active nodes are connected in the
+// enrollment the task uses.
+func (s *Server) connectedTaskNodes(p task.Parent) (map[string]bool, error) {
+	members, err := s.onlineAgents()
+	if err != nil {
+		return nil, err
+	}
+	enrollments := make(map[string]string, len(members))
+	for _, member := range members {
+		enrollments[member.ID] = member.EnrollmentID
+	}
+	available := map[string]bool{}
+	for _, node := range p.ActiveNodes() {
+		if enrollment, ok := enrollments[node.ID]; ok && enrollment == node.EnrollmentID {
+			available[node.ID] = true
+		}
+	}
+	return available, nil
 }
 
 // parentPolicy is the policy every sender delivers to the index-th active

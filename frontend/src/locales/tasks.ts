@@ -170,9 +170,13 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "{node} last connected at {time}",
     ja: "{node} の最終接続: {time}",
   },
-  "{node} 尚未连接": {
-    en: "{node} has not connected yet",
-    ja: "{node} はまだ接続していません",
+  "{node} 自 Master 启动（{time}）以来未连接": {
+    en: "{node} has not connected since the Master started at {time}",
+    ja: "{node} は Master の起動（{time}）以降接続していません",
+  },
+  "{node} 的最后连接时间未知": {
+    en: "The last connection of {node} is unknown",
+    ja: "{node} の最終接続日時は不明です",
   },
   "另有 {count} 个：{message}": {
     en: "{count} more: {message}",

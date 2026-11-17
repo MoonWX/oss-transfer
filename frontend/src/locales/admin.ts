@@ -839,6 +839,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Checked by execution node {node}.",
     ja: "実行ノード {node} で確認しました。",
   },
+  "保存前已由执行节点 {node} 验证连接。": {
+    en: "Execution node {node} validated the connection before it was saved.",
+    ja: "保存前に実行ノード {node} で接続を検証しました。",
+  },
   "要确认某个存储桶的读写权限，请在下方检查。": {
     en: "To confirm read and write access to a bucket, check it below.",
     ja: "バケットの読み書きの権限は、下で確認してください。",
@@ -1236,6 +1240,18 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   "节点离线时无法调整并发。": {
     en: "Concurrency cannot be changed while the node is offline.",
     ja: "オフラインのノードでは並列数を変更できません。",
+  },
+  "未能读取节点当前的并发设置，请刷新后再调整。": {
+    en: "The node's current concurrency could not be read. Refresh, then change it.",
+    ja: "ノードの現在の並列数を読み取れませんでした。更新してから変更してください。",
+  },
+  "节点离线，重新连接后显示运行状态。": {
+    en: "The node is offline. Its status appears when it reconnects.",
+    ja: "ノードはオフラインです。再接続すると状態が表示されます。",
+  },
+  未能读取节点状态: {
+    en: "Could not read the node status",
+    ja: "ノードの状態を読み取れませんでした",
   },
   未完成子任务: {
     en: "Unfinished subtasks",
@@ -1954,18 +1970,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
   降级记录: {
     en: "Fallback records",
     ja: "フォールバックレコード",
-  },
-  部分节点删除失败: {
-    en: "Deletion failed on some nodes",
-    ja: "一部のノードで削除に失敗しました",
-  },
-  部分节点更新失败: {
-    en: "Update failed on some nodes",
-    ja: "一部のノードで更新に失敗しました",
-  },
-  部分节点添加失败: {
-    en: "Addition failed on some nodes",
-    ja: "一部のノードで追加に失敗しました",
   },
   连接删除完成: { en: "Connection deleted", ja: "接続を削除しました" },
   连接更新完成: { en: "Connection updated", ja: "接続を更新しました" },

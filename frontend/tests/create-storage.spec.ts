@@ -523,7 +523,7 @@ test("storage CRUD never reloads saved credentials and reports partial worker sy
     dialog.getByRole("button", { name: "显示访问凭据" }),
   ).toHaveCount(0);
   await dialog.getByRole("button", { name: "保存连接" }).click();
-  await expect(page.getByText("部分节点添加失败")).toBeVisible();
+  await expect(page.getByText("连接添加完成")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "new-archive", exact: true }),
   ).toBeVisible();

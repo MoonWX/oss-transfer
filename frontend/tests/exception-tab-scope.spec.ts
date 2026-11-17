@@ -51,3 +51,25 @@ test("the failed-objects tab lists only transfers between object storages", asyn
       false,
     );
 });
+
+// The local report covers every ended or stopped local task, whether or not
+// it is complete. Its button names that scope instead of a "full report",
+// and the caption says where completeness is recorded.
+test("the local report button names its scope, not completeness", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/exceptions?type=local");
+  await expect(
+    page.getByRole("button", { name: "导出全部本地任务报告", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /完整迁移报告/ })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByText(
+      "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+});

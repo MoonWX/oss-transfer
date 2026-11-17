@@ -1259,7 +1259,7 @@ export default function ExceptionsPage() {
                 onClick={() => void report()}
                 disabled={busy}
               >
-                {tr("完整迁移报告")}
+                {tr("导出全部本地任务报告")}
               </Button>
             )}
             {mode !== "fallback" && (
@@ -1742,7 +1742,7 @@ export default function ExceptionsPage() {
       {isLocal && (
         <Typography variant="caption" color="text.secondary">
           {tr(
-            "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。",
+            "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。",
           )}
         </Typography>
       )}

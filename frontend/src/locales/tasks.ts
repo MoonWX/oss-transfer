@@ -1899,9 +1899,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Export loaded records",
     ja: "読み込み済みの記録をエクスポート",
   },
-  完整迁移报告: {
-    en: "Full transfer report",
-    ja: "完全な転送レポート",
+  导出全部本地任务报告: {
+    en: "Export report of all local tasks",
+    ja: "すべてのローカルタスクのレポートをエクスポート",
   },
   清除全部记录: {
     en: "Clear all records",
@@ -1971,10 +1971,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Last page",
     ja: "最後のページ",
   },
-  "完整迁移报告包含所有本地迁移任务与失败记录，ZIP 中包含不可达节点信息；报告不受当前筛选条件影响。":
+  "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。":
     {
-      en: "The full report includes all local transfer tasks and failures, with unreachable agents listed in the ZIP. Current filters do not apply.",
-      ja: "完全なレポートには全ローカル転送タスクと失敗記録が含まれます。接続できないノードの情報も ZIP に含まれます。現在のフィルターは適用されません。",
+      en: "The report covers every ended or stopped local transfer task; current filters do not apply. Whether it is complete is recorded as complete in report-metadata.json, which also lists the reasons when it is not (for example an unreachable node or unprocessed objects).",
+      ja: "レポートには終了または停止したすべてのローカル転送タスクが含まれ、現在のフィルターは適用されません。レポートが完全かどうかは report-metadata.json の complete に記録され、不完全な場合（接続できないノードや未処理のオブジェクトがある場合など）は理由も記載されます。",
     },
   清除全部: {
     en: "Clear all",

@@ -1913,18 +1913,6 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Fallback records",
     ja: "フォールバックレコード",
   },
-  部分节点删除失败: {
-    en: "Deletion failed on some nodes",
-    ja: "一部のノードで削除に失敗しました",
-  },
-  部分节点更新失败: {
-    en: "Update failed on some nodes",
-    ja: "一部のノードで更新に失敗しました",
-  },
-  部分节点添加失败: {
-    en: "Addition failed on some nodes",
-    ja: "一部のノードで追加に失敗しました",
-  },
   连接删除完成: { en: "Connection deleted", ja: "接続を削除しました" },
   连接更新完成: { en: "Connection updated", ja: "接続を更新しました" },
   连接添加完成: { en: "Connection added", ja: "接続を追加しました" },

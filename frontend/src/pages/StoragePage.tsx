@@ -61,6 +61,8 @@ type SaveResult = {
   partial?: boolean;
   successCount?: number;
   failedCount?: number;
+  /** When nodes that missed the change will receive it. */
+  syncNote?: string;
 };
 type StorageAction = "ADD" | "UPDATE" | "DELETE";
 const partialResult = (result?: SaveResult | null) => {
@@ -275,7 +277,11 @@ export default function StoragePage() {
         response.warning ||
           response.message ||
           (editing ? t("存储连接已更新") : t("存储连接已添加")),
-        partialResult(response) || response.warning ? "warning" : "success",
+        response.warning
+          ? "warning"
+          : partialResult(response)
+            ? "info"
+            : "success",
       );
       await refresh();
     } catch (e) {
@@ -296,7 +302,7 @@ export default function StoragePage() {
       setDeleting(null);
       notify(
         response.message || t("存储连接已删除"),
-        partialResult(response) ? "warning" : "success",
+        partialResult(response) ? "info" : "success",
       );
       await refresh();
     } catch (e) {
@@ -374,24 +380,25 @@ export default function StoragePage() {
         }
       />
       {result && (
+        // The Master has saved the change; a node that missed it is synced
+        // before it next works, so a partial result is not a failure.
         <Alert
-          severity={partial || result.warning ? "warning" : "success"}
+          severity={result.warning ? "warning" : partial ? "info" : "success"}
           onClose={() => setResult(null)}
         >
           <AlertTitle>
-            {partial
-              ? result.action === "DELETE"
-                ? t("部分节点删除失败")
-                : result.action === "UPDATE"
-                  ? t("部分节点更新失败")
-                  : t("部分节点添加失败")
-              : result.action === "DELETE"
-                ? t("连接删除完成")
-                : result.action === "UPDATE"
-                  ? t("连接更新完成")
-                  : t("连接添加完成")}
+            {result.action === "DELETE"
+              ? t("连接删除完成")
+              : result.action === "UPDATE"
+                ? t("连接更新完成")
+                : t("连接添加完成")}
           </AlertTitle>
           {result.message}
+          {partial && result.syncNote && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {result.syncNote}
+            </Typography>
+          )}
           {result.warning && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               {result.warning}

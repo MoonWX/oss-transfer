@@ -1,13 +1,17 @@
 import { expect, test } from "@playwright/test";
 import { mockApi } from "./fixtures";
 
+// The Master saves the change first; a node that did not take it within the
+// request is synced before it next works, as the Master's note says. That is
+// not a failure, and a deletion is announced as a deletion.
+const syncNote = "未同步的节点会在下次执行任务或对象比对前自动同步。";
 for (const operation of [
-  { action: "添加", method: "POST" },
-  { action: "更新", method: "PUT" },
-  { action: "删除", method: "DELETE" },
+  { action: "添加", method: "POST", message: "存储连接已保存" },
+  { action: "更新", method: "PUT", message: "存储连接已保存" },
+  { action: "删除", method: "DELETE", message: "存储连接已删除" },
 ]) {
   for (const partial of [false, true]) {
-    test(`${operation.method} names its action consistently for ${partial ? "partial failure" : "both successful nodes"}`, async ({
+    test(`${operation.method} names its action ${partial ? "and says when a node awaiting sync receives it" : "with both nodes synced"}`, async ({
       page,
     }) => {
       await mockApi(page);
@@ -20,13 +24,15 @@ for (const operation of [
           json: {
             success: true,
             partial,
+            revision: 4,
             successCount: partial ? 1 : 2,
             failedCount: partial ? 1 : 0,
-            message: `${operation.action}结果：成功 ${partial ? 1 : 2} 个节点，失败 ${partial ? 1 : 0} 个节点`,
+            message: operation.message,
             details: [
-              `10.0.1.12: ${operation.action}成功`,
-              `10.0.1.13: ${operation.action}${partial ? "失败" : "成功"}`,
+              "10.0.1.12: 同步成功",
+              `10.0.1.13: ${partial ? "等待同步" : "同步成功"}`,
             ],
+            ...(partial ? { syncNote } : {}),
           },
         });
       });
@@ -59,22 +65,25 @@ for (const operation of [
       const result = page
         .getByRole("alert")
         .filter({ has: page.getByRole("list") });
-      await expect(result).toContainText(
-        partial
-          ? `部分节点${operation.action}失败`
-          : `连接${operation.action}完成`,
-      );
-      await expect(result).toContainText(
-        `${operation.action}结果：成功 ${partial ? 1 : 2} 个节点，失败 ${partial ? 1 : 0} 个节点`,
-      );
+      await expect(result).toContainText(`连接${operation.action}完成`);
+      await expect(result).toContainText(operation.message);
+      await expect(result).not.toContainText("失败");
       await expect(result.getByRole("listitem")).toHaveText([
-        `10.0.1.12: ${operation.action}成功`,
-        `10.0.1.13: ${operation.action}${partial ? "失败" : "成功"}`,
+        "10.0.1.12: 同步成功",
+        `10.0.1.13: ${partial ? "等待同步" : "同步成功"}`,
       ]);
+      if (partial) await expect(result).toContainText(syncNote);
+      else await expect(result).not.toContainText("下次执行任务");
       await expect(result).toHaveClass(
-        partial ? /MuiAlert-standardWarning/ : /MuiAlert-standardSuccess/,
+        partial ? /MuiAlert-standardInfo/ : /MuiAlert-standardSuccess/,
       );
-      await expect(result).not.toContainText("同步");
+      // The notification repeats the Master's message, not a failure.
+      await expect(
+        page
+          .getByRole("alert")
+          .filter({ hasNot: page.getByRole("list") })
+          .filter({ hasText: operation.message }),
+      ).toBeVisible();
       expect(mutations).toBe(1);
     });
   }
@@ -116,7 +125,7 @@ test.describe("storage result status does not depend on its language", () => {
         .getByRole("alert")
         .filter({ has: page.getByRole("list") });
       await expect(result).toHaveClass(
-        partial ? /MuiAlert-standardWarning/ : /MuiAlert-standardSuccess/,
+        partial ? /MuiAlert-standardInfo/ : /MuiAlert-standardSuccess/,
       );
       await expect(result).toContainText(
         partial

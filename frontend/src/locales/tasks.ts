@@ -2867,6 +2867,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Times use the server time zone ({zone}).",
     ja: "時刻はサーバーのタイムゾーン（{zone}）で解釈します。",
   },
+  // A time filter at the offset the Master read it in (src/lib/filterTime.ts).
+  "{time}（{zone}）": {
+    en: "{time} ({zone})",
+    ja: "{time}（{zone}）",
+  },
   "对象存储之间迁移失败的对象。": {
     en: "Objects that failed to transfer between object storages.",
     ja: "オブジェクトストレージ間で転送に失敗したオブジェクト。",

@@ -114,6 +114,7 @@ import {
 } from "../lib/conflictPolicy";
 import TaskRequestRates from "../components/TaskRequestRates";
 import { runtimeMessageLines } from "../lib/runtimeMessages";
+import { formatFilterTime } from "../lib/filterTime";
 import RuntimeMessageLine from "../components/RuntimeMessageLine";
 import { useStableMessages } from "../lib/stableMessages";
 import ScrollJumpButtons from "../components/ScrollJumpButtons";
@@ -1416,13 +1417,15 @@ function TaskDetail({
                 tr("修改时间晚于"),
                 current.dateAfter == null || current.dateAfter === ""
                   ? null
-                  : formatDate(current.dateAfter),
+                  : (formatFilterTime(current.dateAfter) ??
+                    formatDate(current.dateAfter)),
               ],
               [
                 tr("修改时间早于"),
                 current.dateBefore == null || current.dateBefore === ""
                   ? null
-                  : formatDate(current.dateBefore),
+                  : (formatFilterTime(current.dateBefore) ??
+                    formatDate(current.dateBefore)),
               ],
               [
                 tr("冲突策略"),

@@ -72,7 +72,9 @@ func (t *taskRuntime) forgetScans(active map[int64]bool) {
 // scanActivityView is what the scanner of a running task with an incomplete
 // scan last reported, or nil when there is nothing to show: no reply yet, or
 // a scanner whose source reports no activity. A scanner that predates the
-// scan protocol is UNSUPPORTED, never a scan that has done nothing.
+// scan protocol is UNSUPPORTED for a scan that a current Agent reports on,
+// never a scan that has done nothing; for any other scan an upgrade would
+// show nothing more, so nothing is shown.
 func (s *Server) scanActivityView(p task.Parent) map[string]any {
 	if p.Status != "RUNNING" || p.ScanComplete {
 		return nil
@@ -82,6 +84,9 @@ func (s *Server) scanActivityView(p task.Parent) map[string]any {
 		return nil
 	}
 	if sample.protocol < 1 {
+		if !scanReportsActivity(p) {
+			return nil
+		}
 		return map[string]any{"state": scanActivityUnsupported}
 	}
 	activity := sample.activity
@@ -104,6 +109,13 @@ func (s *Server) scanActivityView(p task.Parent) map[string]any {
 		view["directory"] = map[string]any{"key": d.Key, "reading": d.Reading, "names": d.Names, "position": d.Position, "examined": d.Examined, "elapsedMillis": d.ElapsedMillis}
 	}
 	return view
+}
+
+// scanReportsActivity reports whether a current Agent reports live progress
+// for p's scan: that of a local directory, not of object storage, an
+// inventory or a single key.
+func scanReportsActivity(p task.Parent) bool {
+	return p.Spec.Source.Kind == "LOCAL" && p.Spec.InventoryID == "" && p.Spec.ObjectKey == ""
 }
 
 // scanProtocol asks a node which scan protocol its Agent speaks; zero for an

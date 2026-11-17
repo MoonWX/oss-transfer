@@ -9,6 +9,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/discovery"
+	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/task"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
@@ -56,8 +57,20 @@ func TestScanActivityFollowsTheScannerReplies(t *testing.T) {
 		t.Fatal("activity shown before any reply")
 	}
 	runtime.recordScan(p, agentservice.ScanReply{State: discovery.State{Status: discovery.Scanning, Attempt: "old"}}, nil)
-	if got := activity(p); len(got) != 1 || got["state"] != scanActivityUnsupported {
-		t.Fatalf("scanner without the protocol: %v", got)
+	// An older scanner of a local directory has nothing to report that a
+	// current one would; one of object storage, an inventory or a single key
+	// would report nothing either.
+	local := p
+	local.Spec.Source = execution.Endpoint{Kind: "LOCAL", Root: "/data"}
+	if got := f.master.scanActivityView(local); len(got) != 1 || got["state"] != scanActivityUnsupported {
+		t.Fatalf("local scanner without the protocol: %v", got)
+	}
+	single, inventory := local, local
+	single.Spec.ObjectKey, inventory.Spec.InventoryID = "one.bin", "inventory-1"
+	for name, other := range map[string]task.Parent{"object storage": p, "a single key": single, "an inventory": inventory} {
+		if got := f.master.scanActivityView(other); got != nil {
+			t.Fatalf("older scanner of %s: %v", name, got)
+		}
 	}
 	runtime.recordScan(p, scanningReply(p, "run-1"), nil)
 	got := activity(p)

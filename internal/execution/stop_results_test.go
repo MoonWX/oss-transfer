@@ -291,3 +291,116 @@ func (s *heldStore) Write(ctx context.Context, key string, reader io.Reader, opt
 	}
 	return s.Store.Write(ctx, key, reader, opts)
 }
+
+// gatedStore holds each write until its key's gate opens and reports every
+// write that reached its gate.
+type gatedStore struct {
+	transferstore.Store
+	gates   map[string]chan struct{}
+	arrived chan struct{}
+}
+
+func (s *gatedStore) Write(ctx context.Context, key string, reader io.Reader, opts transferstore.WriteOptions) (transferstore.WriteResult, error) {
+	s.arrived <- struct{}{}
+	select {
+	case <-s.gates[key]:
+	case <-ctx.Done():
+		return transferstore.WriteResult{}, ctx.Err()
+	}
+	return s.Store.Write(ctx, key, reader, opts)
+}
+
+// startGated runs the fixture's job on a gatedStore whose writes wait for
+// gates, with commits through a hookDB.
+func startGated(t *testing.T, f *fixture, gates map[string]chan struct{}, opts Options) (*hookDB, *gatedStore) {
+	t.Helper()
+	db := &hookDB{Database: f.db, updated: make(chan struct{})}
+	f.repo, _ = NewRepository(db, RepositoryOptions{})
+	store := &gatedStore{gates: gates, arrived: make(chan struct{}, len(f.job.Items))}
+	base := f.factory()
+	f.startEngine(StoreFactoryFunc(func(ctx context.Context, job Job) (transferstore.Store, transferstore.Store, error) {
+		src, dst, err := base.Open(ctx, job)
+		store.Store = dst
+		return src, store, err
+	}), opts)
+	f.acceptStart()
+	awaitSignals(t, store.arrived, len(f.job.Items), "the writes")
+	return db, store
+}
+
+// beforeNextUpdate runs fence just before db's next update and returns once
+// that update has ended.
+func beforeNextUpdate(t *testing.T, db *hookDB, fence func() error, release func()) {
+	t.Helper()
+	db.mu.Lock()
+	db.hook = func() {
+		if err := fence(); err != nil {
+			t.Error(err)
+		}
+	}
+	db.mu.Unlock()
+	release()
+	select {
+	case <-db.updated:
+	case <-time.After(time.Minute): // hang guard only
+		t.Fatal("the update never ran")
+	}
+}
+
+// An attempt can complete every object on its own while a stop fences it
+// out: the stop's fence commits before the attempt's last transaction, which
+// then fails, and the stop's cancel finds the attempt already ended. The
+// objects are at the destination, and the attempt records them.
+func TestStopFencingAnAttemptThatEndedOnItsOwnKeepsItsResults(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fence func(f *fixture) error
+		stop  func(f *fixture) error
+	}{
+		{"stop task", func(f *fixture) error { return f.repo.fenceParent(bg, f.job.ParentID, 1, false) },
+			func(f *fixture) error { return f.engine.StopParent(bg, f.job.ParentID, 1) }},
+		{"stop child", func(f *fixture) error { _, err := f.repo.stop(bg, f.job.ChildID, 1); return err },
+			func(f *fixture) error { return f.engine.Stop(bg, f.job.ChildID, 1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 2)
+			gate := make(chan struct{})
+			gates := map[string]chan struct{}{}
+			for _, item := range f.job.Items {
+				gates[item.DestinationKey] = gate
+			}
+			// No periodic commit: the attempt's last transaction is next.
+			db, _ := startGated(t, f, gates, Options{WorkersPerJob: 4, CommitInterval: time.Hour})
+			beforeNextUpdate(t, db, func() error { return tc.fence(f) }, func() { close(gate) })
+			if err := tc.stop(f); err != nil {
+				t.Fatal(err)
+			}
+			record, err := f.repo.Get(bg, f.job.ChildID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.Status != Stopped || record.Attempt != 2 || record.Counters.Succeeded != 2 || record.Counters.Failed != 0 {
+				t.Fatalf("record %s attempt %d %+v", record.Status, record.Attempt, record.Counters)
+			}
+			f.assertFiles()
+		})
+	}
+}
+
+// A periodic commit a stop fenced out keeps its batch. When the attempt then
+// completes its other objects before the stop's cancel reaches it, it records
+// every object it completed.
+func TestFencedCommitThenNaturalEndKeepsEveryResult(t *testing.T) {
+	f := newFixture(t, 3)
+	first, rest := make(chan struct{}), make(chan struct{})
+	gates := map[string]chan struct{}{f.job.Items[0].DestinationKey: first, f.job.Items[1].DestinationKey: rest, f.job.Items[2].DestinationKey: rest}
+	db, _ := startGated(t, f, gates, Options{WorkersPerJob: 4, CommitBatchSize: 1, CommitInterval: time.Hour})
+	// The stop's fence lands just before the first result's commit.
+	beforeNextUpdate(t, db, func() error { _, err := f.repo.stop(bg, f.job.ChildID, 1); return err }, func() { close(first) })
+	close(rest)
+	record := f.wait()
+	if record.Status != Stopped || record.Attempt != 2 || record.Counters.Succeeded != 3 || record.Counters.Failed != 0 {
+		t.Fatalf("record %s attempt %d %+v", record.Status, record.Attempt, record.Counters)
+	}
+	f.assertFiles()
+}

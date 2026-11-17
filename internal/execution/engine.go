@@ -264,13 +264,15 @@ func (e *Engine) runAttempt(ctx context.Context, record Record, attempt *activeA
 		// This uses an independent context so graceful process shutdown records a
 		// recoverable attempt. An explicit stop fence will reject the old attempt.
 		ended, finishErr := e.repo.finish(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, runErr, finalResults...)
-		if (errors.Is(finishErr, ErrStopped) || errors.Is(finishErr, ErrAttempt)) && runErr != nil && len(finalResults) > 0 {
+		completed := completedOnly(finalResults)
+		if (errors.Is(finishErr, ErrStopped) || errors.Is(finishErr, ErrAttempt)) && len(completed) > 0 {
 			// A stop fenced the attempt out after it completed these
-			// objects. They are at the destination: record them before
-			// done closes, which the stop waits for.
-			if stopped, err := e.repo.commitAfterStop(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, finalResults); err == nil {
+			// objects, whether its cancel ended the attempt or the attempt
+			// ended on its own first. They are at the destination: record
+			// them before done closes, which the stop waits for.
+			if stopped, err := e.repo.commitAfterStop(context.Background(), record.Job.ChildID, record.Job.Generation, record.Attempt, completed); err == nil {
 				c := stopped.Counters
-				e.logf("%s: attempt %d stopped; recorded %d objects it completed before the stop: %d succeeded, %d skipped, %d failed of %d objects", childName(record.Job), record.Attempt, len(finalResults), c.Succeeded, c.Skipped, c.Failed, c.Total)
+				e.logf("%s: attempt %d stopped; recorded %d objects it completed before the stop: %d succeeded, %d skipped, %d failed of %d objects", childName(record.Job), record.Attempt, len(completed), c.Succeeded, c.Skipped, c.Failed, c.Total)
 				finishErr = nil
 			}
 		} else if finishErr == nil {

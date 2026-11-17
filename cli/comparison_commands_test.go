@@ -159,9 +159,9 @@ func TestComparisonStatusRendersDedicatedSummaryAndRows(t *testing.T) {
 			}
 		}
 	}
-	// Content mode shows bytes read; a finished comparison without stored
-	// differences says that none were found.
-	content := comparisonTestPage(map[string]interface{}{"mode": "content", "bytesRead": 3 << 20, "rows": 0, "elapsedMillis": 0})
+	// Content mode shows bytes read; a finished comparison whose checked
+	// objects all matched says that no differences were found.
+	content := comparisonTestPage(map[string]interface{}{"mode": "content", "bytesRead": 3 << 20, "rows": 0, "elapsedMillis": 0, "matched": 1200, "different": 0, "etagMismatch": 0, "missing": 0, "extra": 0, "changed": 0, "errors": 0, "bothMissing": 0})
 	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, content) })
 	if code != 0 || !strings.Contains(out, "内容 SHA-256") || !strings.Contains(out, "已读取") || !strings.Contains(out, "3 MiB") || !strings.Contains(out, "未发现差异") || strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "下一页") || strings.Contains(out, "个对象/秒") {
 		t.Fatalf("%d %s", code, out)
@@ -175,7 +175,7 @@ func TestComparisonStatusRendersDedicatedSummaryAndRows(t *testing.T) {
 		{[]string{"--status", "DIFFERENT"}, comparisonTestPage(map[string]interface{}{"rows": 0})},
 		{[]string{"--after", "10"}, comparisonTestPage(map[string]interface{}{"rows": 0})},
 		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "RUNNING"})},
-		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "CANCELED"})},
+		{nil, comparisonTestPage(map[string]interface{}{"rows": 0, "status": "CANCELED", "matched": 1200})},
 	} {
 		code, out, _ := runMockCLI(t, append([]string{"object", "status", "job-1"}, test.args...), func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, test.page) })
 		if code != 0 || !strings.Contains(out, "本页没有差异记录") || strings.Contains(out, "未发现差异") {
@@ -191,7 +191,7 @@ func TestComparisonStatusOfOneObjectShowsReadRateWithoutCheckpoint(t *testing.T)
 		wants, avoid []string
 	}{
 		// Content mode over one object: how fast it was read, not objects/s.
-		{"content", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "checkpoint": "a.jpg", "rows": 0}),
+		{"content", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "matched": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "checkpoint": "a.jpg", "rows": 0}),
 			[]string{"读取速率", "2 MiB/s", "已读取", "4 MiB", "未发现差异"}, []string{"个对象/秒", "检查点", "a.jpg\n"}},
 		// Metadata mode over one object: no rate at all.
 		{"metadata", comparisonTestPage(map[string]interface{}{"scope": "object", "compared": 1, "elapsedMillis": 6, "checkpoint": "a.jpg", "rows": 0}),

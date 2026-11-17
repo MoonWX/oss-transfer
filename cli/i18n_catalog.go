@@ -772,6 +772,11 @@ var cliMessages = map[string][2]string{
 	"已结束": {"Finished", "終了"},
 	// A finished comparison without differences.
 	"未发现差异": {"No differences found", "差分は見つかりませんでした"},
+	// A finished comparison that checked nothing, and differences counted
+	// without stored rows.
+	"没有找到任何对象，请检查两端的存储桶和前缀（Key 区分大小写，通常不以 / 开头）": {"No object was found. Check the bucket and prefix on both sides (keys are case-sensitive and usually do not start with /)", "オブジェクトが見つかりませんでした。両側のバケットとプレフィックスを確認してください（Key は大文字と小文字を区別し、通常 / で始まりません）"},
+	"发现 %d 条差异，但节点未保存明细，原因见上方“截断原因”":             {"Found %d differences, but the node did not store their details; see the truncation reason above", "%d 件の差分が見つかりましたが、ノードは詳細を保存していません。理由は上の「保存停止の理由」を参照してください"},
+	"发现 %d 条差异，但没有保存明细":                          {"Found %d differences, but their details were not stored", "%d 件の差分が見つかりましたが、詳細は保存されていません"},
 
 	// Retrying the failed objects of a running task.
 	"重试方式":  {"Retry mode", "再試行方式"},

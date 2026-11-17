@@ -28,7 +28,7 @@ func TestSoftwareUpdateCapabilityIsLocalized(t *testing.T) {
 	}
 	data := body["data"].(map[string]any)
 	master := data["master"].(map[string]any)["info"].(map[string]any)
-	if master["detail"] != "此节点运行在容器中，请拉取新镜像并重建容器来更新（例如先运行 docker compose pull，再运行 docker compose up -d）" || master["reason"] != "CONTAINER" {
+	if master["detail"] != "此节点运行在容器中，请用新版本的镜像重建容器来更新。如果镜像标签固定为某个版本（例如安装脚本生成的 Compose 文件），请先改为新版本，再运行 docker compose pull 和 docker compose up -d（安装脚本部署的节点需带上安装时显示的 -p 和 -f 参数）" || master["reason"] != "CONTAINER" {
 		t.Fatal("container detail was not localized", master)
 	}
 	nodes := data["agents"].([]any)
@@ -42,7 +42,7 @@ func TestSoftwareUpdateCapabilityIsLocalized(t *testing.T) {
 	u.err = errors.New(softwareupdate.ContainerUpdateMessage)
 	u.mu.Unlock()
 	status, body = call("POST", "/api/master/software-updates/master", map[string]string{"version": "4.1.41"})
-	if status != 409 || body["message"] != "此节点运行在容器中，请拉取新镜像并重建容器来更新（例如先运行 docker compose pull，再运行 docker compose up -d）" {
+	if status != 409 || body["message"] != "此节点运行在容器中，请用新版本的镜像重建容器来更新。如果镜像标签固定为某个版本（例如安装脚本生成的 Compose 文件），请先改为新版本，再运行 docker compose pull 和 docker compose up -d（安装脚本部署的节点需带上安装时显示的 -p 和 -f 参数）" {
 		t.Fatal("update refusal was not localized", status, body)
 	}
 }
@@ -53,7 +53,7 @@ func TestOlderContainerAgentDetailIsLocalized(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	agent := &fakeSoftwareUpdater{info: softwareupdate.Info{Role: "agent", Version: "4.1.41", Reason: "CONTAINER", Detail: "Container installations must be updated with Docker Compose"}}
 	nodeTestAgentWithUpdater(t, f, "container-node", agent)
-	for locale, want := range map[string]string{"zh-CN": "此节点运行在容器中，请拉取新镜像并重建容器来更新（例如先运行 docker compose pull，再运行 docker compose up -d）", "en-US": softwareupdate.ContainerUpdateMessage} {
+	for locale, want := range map[string]string{"zh-CN": "此节点运行在容器中，请用新版本的镜像重建容器来更新。如果镜像标签固定为某个版本（例如安装脚本生成的 Compose 文件），请先改为新版本，再运行 docker compose pull 和 docker compose up -d（安装脚本部署的节点需带上安装时显示的 -p 和 -f 参数）", "en-US": softwareupdate.ContainerUpdateMessage} {
 		status, _, body, err := localizedRequest(f.http.Client(), "GET", f.http.URL+"/api/master/software-updates", f.admin, locale, nil)
 		if err != nil || status != 200 {
 			t.Fatal(status, body, err)

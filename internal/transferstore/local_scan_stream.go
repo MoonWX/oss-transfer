@@ -45,13 +45,14 @@ type nameStream struct {
 	stop    context.CancelFunc
 	exited  chan struct{}
 	file    *os.File
+	reads   listingReads // the reader's, continuing the scan's reads
 }
 
 // startStream hands the rest of the frame's listing to a reader goroutine.
 // The names already read come first; the frame's indexes count from them.
-func (scan *localScan) startStream(frame *localScanFrame, file *os.File, names []string) {
+func (scan *localScan) startStream(frame *localScanFrame, file *os.File, names []string, reads listingReads) {
 	stream := &nameStream{names: names, limit: scan.streamBuffer, arrived: make(chan struct{}, 1), room: make(chan struct{}, 1),
-		exited: make(chan struct{}), file: file}
+		exited: make(chan struct{}), file: file, reads: reads}
 	for _, name := range names {
 		stream.bytes += nameBytes(name)
 	}
@@ -70,13 +71,18 @@ func (scan *localScan) readAhead(ctx context.Context, key string, stream *nameSt
 			stream.end(err)
 			return
 		}
-		if err := scan.s.localOperation(ctx); err != nil {
+		charge := func() error { return scan.s.localOperation(ctx) }
+		if err := stream.reads.before(charge); err != nil {
 			stream.end(err)
 			return
 		}
 		end := scan.activity.call()
 		batch, err := scan.fs.ReadNames(stream.file, localScanNames)
 		end()
+		if err := stream.reads.after(len(batch), charge); err != nil {
+			stream.end(err)
+			return
+		}
 		scan.activity.read(len(batch))
 		stream.add(batch)
 		if err == io.EOF {

@@ -745,3 +745,28 @@ func TestLocalScanDefersSubdirectoriesCompactly(t *testing.T) {
 		t.Fatalf("the deferred subdirectories took %d bytes, %d each", during-before, (during-before)/subdirectories)
 	}
 }
+
+// A streamed listing's reader charges its reads as the scan does: the read
+// that only confirms the end of the listing is free.
+func TestLocalScanChargesTheStreamedReadsThatReturnNames(t *testing.T) {
+	local, root := localFixture(t)
+	writeFiles(t, root, numbered("big/f", 30)...)
+	spy := spyOnScan(local, root)
+	local.scanTuning.streamAfter = 8
+	// Ten names a read: the scan's read streams, and its reader's three
+	// further reads return 10, 10 and the end.
+	listing := &inBatches{dir: "big", n: 10}
+	listing.install(spy)
+	limiter := &countingLocalIO{}
+	local.SetLocalIOLimiter(limiter)
+	pages, err := scanAll(local, context.Background(), ListOptions{})
+	if err != nil || len(objectKeys(pages)) != 30 {
+		t.Fatalf("scan: %d objects, %v", len(objectKeys(pages)), err)
+	}
+	// The root: its open and one read. big: its lookup, root and open, and
+	// the three reads that return names, but not the one that ends the
+	// listing. 30 lookups, and big's link as it is left.
+	if operations, _ := limiter.take(); operations != 2+(3+3)+30+1 || listing.reads.Load() != 4 {
+		t.Fatalf("scan charged %d operations for %d reads of big", operations, listing.reads.Load())
+	}
+}

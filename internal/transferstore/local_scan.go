@@ -482,9 +482,9 @@ func (scan *localScan) load(frame *localScanFrame, early bool) error {
 			return fmt.Errorf("%w: scan directory %q was replaced", ErrSourceChanged, frame.key)
 		}
 	}
-	names, streaming, err := scan.readNames(frame, file, early)
+	names, reads, streaming, err := scan.readNames(frame, file, early)
 	if streaming {
-		scan.startStream(frame, file, names)
+		scan.startStream(frame, file, names, reads)
 		return nil
 	}
 	_ = file.Close()
@@ -500,51 +500,67 @@ func (scan *localScan) load(frame *localScanFrame, early bool) error {
 }
 
 // readNames reads a directory listing to its end, or until it passes
-// streamAfter names, which it reports as streaming.
-func (scan *localScan) readNames(frame *localScanFrame, file *os.File, early bool) ([]string, bool, error) {
+// streamAfter names, which it reports as streaming; the reads of the rest
+// then continue from reads.
+func (scan *localScan) readNames(frame *localScanFrame, file *os.File, early bool) (names []string, reads listingReads, streaming bool, err error) {
 	frame.loading = true
 	defer func() { frame.loading = false }()
 	scan.activity.enter(frame.key, true, 0, 0)
-	var names []string
 	flushed := !early
-	// Each read is one local operation, charged before it is made, except
-	// the read after a short one: a read returns fewer names than it asks
-	// for only at the end of the listing, and the read after it just
-	// confirms that end. Should it return names after all, it is charged.
-	short := false
 	for {
-		if !short {
-			if err := scan.operation(); err != nil {
-				return nil, false, err
-			}
+		if err := reads.before(scan.operation); err != nil {
+			return nil, reads, false, err
 		}
 		end := scan.activity.call()
 		batch, err := scan.fs.ReadNames(file, localScanNames)
 		end()
-		if short && len(batch) > 0 {
-			if err := scan.operation(); err != nil {
-				return nil, false, err
-			}
+		if err := reads.after(len(batch), scan.operation); err != nil {
+			return nil, reads, false, err
 		}
-		short = len(batch) < localScanNames
 		names = append(names, batch...)
 		scan.activity.read(len(batch))
 		if err == io.EOF {
-			return names, false, nil
+			return names, reads, false, nil
 		}
 		if err != nil {
-			return nil, false, scanPathError(err, frame.key)
+			return nil, reads, false, scanPathError(err, frame.key)
 		}
 		if !flushed && len(names) > scan.earlyFlush && len(scan.objects) > 0 {
 			flushed = true
 			if err := scan.flush(); err != nil {
-				return nil, false, err
+				return nil, reads, false, err
 			}
 		}
 		if len(names) > scan.streamAfter {
-			return names, true, nil
+			return names, reads, true, nil
 		}
 	}
+}
+
+// listingReads charges the reads of one directory listing to the local
+// operation limit: each read before it is made, except the read after a
+// short one. A read returns fewer names than it asks for only at the end of
+// the listing, and the read after it just confirms that end; should it return
+// names after all, it is charged then.
+type listingReads struct{ short bool }
+
+// before charges a read about to be made, unless it follows a short one.
+func (r *listingReads) before(charge func() error) error {
+	if r.short {
+		return nil
+	}
+	return charge()
+}
+
+// after records how many names a read returned, and charges it if it
+// followed a short one and returned names after all.
+func (r *listingReads) after(names int, charge func() error) error {
+	confirming := r.short
+	r.short = names < localScanNames
+	if confirming && names > 0 {
+		return charge()
+	}
+	return nil
 }
 
 // step consumes the frame's next name.

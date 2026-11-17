@@ -198,7 +198,13 @@ func taskControl(client *ApiClient, action string, args []string) (map[string]in
 	for _, id := range ids {
 		row := tasks[id]
 		status := getString(row, "status")
-		exploring := row["ossTaskGroup"] == true && (row["creationStatus"] == "QUEUED" || row["creationStatus"] == "RUNNING")
+		// The Master reports an OSS→OSS task whose scan has not finished with
+		// its own status as creationStatus: a running task that is still
+		// listing objects is RUNNING twice, and retry and stop act on it like
+		// on any running task. Only a creation phase that differs from the
+		// task status (the 4.0 Master's subtask exploration) blocks actions.
+		creation := getString(row, "creationStatus")
+		exploring := row["ossTaskGroup"] == true && (creation == "QUEUED" || creation == "RUNNING") && creation != status
 		path, allowed := "/"+action, false
 		switch action {
 		case "stop":

@@ -57,3 +57,32 @@ func TestTaskRetryOnRunningTaskRetriesFailedObjectsInPlace(t *testing.T) {
 		t.Fatal(result, err)
 	}
 }
+
+// While a large OSS→OSS task is still listing objects, the Master reports it
+// as RUNNING with creationStatus RUNNING. Retry still retries the failed
+// objects of its finished subtasks in place, and resume says it is already
+// running instead of refusing the task.
+func TestTaskRetryAndResumeWhileTheScanIsStillListing(t *testing.T) {
+	scanning := func() map[string]interface{} {
+		return map[string]interface{}{"taskIndex": 107, "direction": "OSS_TO_OSS", "status": "RUNNING", "generation": 3, "ossTaskGroup": true, "creationStatus": "RUNNING", "scanComplete": false}
+	}
+	posts := []string{}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			adminTestJSON(t, w, map[string]interface{}{"data": scanning()})
+			return
+		}
+		posts = append(posts, r.URL.Path)
+		detail := map[string]interface{}{"taskId": 107, "status": "RUNNING", "generation": 3, "success": true, "accepted": true, "ignored": false, "mode": "FAILED_OBJECTS", "retriedChildren": 2, "retriedObjects": 5}
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "accepted": 1, "ignored": 0, "failed": 0, "details": []interface{}{detail}})
+	}
+	code, out, errout := runMockCLI(t, []string{"--lang", "en", "task", "retry", "107"}, handler)
+	if code != 0 || !reflect.DeepEqual(posts, []string{"/api/master/retry"}) || !strings.Contains(out, "#107") || strings.Contains(errout, "not allowed") {
+		t.Fatalf("retry of a listing task was refused: %d %v\n%s%s", code, posts, out, errout)
+	}
+	posts = nil
+	code, out, errout = runMockCLI(t, []string{"--lang", "en", "task", "resume", "107"}, handler)
+	if code != 0 || len(posts) != 0 || !strings.Contains(out, "No action needed (current state: Running)") {
+		t.Fatalf("resume of a listing task: %d %v\n%s%s", code, posts, out, errout)
+	}
+}

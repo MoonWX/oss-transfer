@@ -17,8 +17,14 @@ import (
 	"testing"
 )
 
+// taskTestRow is shaped like the Master's task DTO. An OSS→OSS row is a task
+// group whose scan has not finished, so creationStatus repeats its status.
 func taskTestRow(id int, direction, status string) map[string]interface{} {
-	return map[string]interface{}{"taskIndex": id, "direction": direction, "status": status, "generation": 1}
+	row := map[string]interface{}{"taskIndex": id, "direction": direction, "status": status, "generation": 1}
+	if direction == "OSS_TO_OSS" {
+		row["ossTaskGroup"], row["creationStatus"], row["scanComplete"] = true, status, false
+	}
+	return row
 }
 
 func TestTaskStopRoutesMixedDirectionsAfterDirectPrechecks(t *testing.T) {
@@ -91,7 +97,7 @@ func TestTaskControlPrevalidatesAllTargetsBeforeAnyMutation(t *testing.T) {
 				if id == 225 {
 					switch invalid {
 					case "completed":
-						row["status"] = "COMPLETED"
+						row["status"], row["creationStatus"], row["scanComplete"] = "COMPLETED", "COMPLETED", true
 					case "missing":
 						w.WriteHeader(404)
 						adminTestJSON(t, w, map[string]interface{}{"error": "Task not found"})

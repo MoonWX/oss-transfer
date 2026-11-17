@@ -71,7 +71,6 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Cannot read source metadata":                                                                                       {"Cannot read source metadata", "无法读取源元数据", "転送元のメタデータを読み取れません"},
 	"Cannot read complete object content":                                                                               {"Cannot read complete object content", "无法完整读取对象内容", "オブジェクトの内容を最後まで読み取れません"},
 	"Comparison could not finish; check storage access and retry.":                                                      {"Comparison could not finish; check storage access and retry.", "比对未能完成，请检查存储访问后重试。", "比較を完了できませんでした。ストレージ接続を確認して再実行してください。"},
-	"The storage returned a listing that a comparison cannot use; retrying or resuming does not help.":                  {"The storage returned a listing that a comparison cannot use (keys must be listed in ascending byte order within the prefix, and each page must advance); retrying or resuming does not help.", "存储返回的列举结果无法用于比对（需要在前缀内按字节升序列举 Key，并且每次翻页都要前进），重试或继续比对都无法解决。", "ストレージが返した一覧は比較に使用できません（プレフィックス内のキーをバイト順の昇順で返し、ページごとに先へ進む必要があります）。再試行や比較の再開では解決しません。"},
 	"Cannot save comparison results":                                                                                    {"Cannot save comparison results", "无法保存比对结果", "比較結果を保存できません"},
 	"Child concurrency must be 1–256 and objects per child must be 1–64":                                                {"Child concurrency must be 1–256 and objects per child must be 1–64", "子任务并发为 1–256，每个子任务的对象并发为 1–64", "サブタスク並列数は 1–256、オブジェクト並列数は 1–64 で指定してください"},
 	"Child concurrency × objects per child must not exceed 1024":                                                        {"Child concurrency × objects per child must not exceed 1024", "子任务并发与对象并发的乘积不能超过 1024", "サブタスク並列数とオブジェクト並列数の積は 1024 以下にしてください"},
@@ -287,7 +286,6 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Enter the bucket to check":                                                            {"Enter the bucket to check", "请填写要检查的存储桶", "確認するバケットを入力してください"},
 	"The execution node is too old to check bucket permissions; update it first":           {"The execution node is too old to check bucket permissions; update it first", "执行节点版本较旧，不支持检查存储桶权限，请先更新执行节点", "実行ノードのバージョンが古いため、バケットの権限を確認できません。先に実行ノードを更新してください"},
 	"no Agent is online; join an Agent before validating storage":                          {"No Agent is online. Add an execution node before testing this connection.", "没有在线执行节点，请先添加执行节点再测试连接。", "オンラインの実行ノードがありません。実行ノードを追加してから接続をテストしてください。"},
-	"every registered Agent is offline; bring one back online before validating storage":   {"Every registered execution node is offline. Bring one back online before testing this connection.", "已注册的执行节点均不在线，请先恢复其中一个节点的服务或网络，再测试连接。", "登録済みの実行ノードはすべてオフラインです。いずれかのノードをオンラインに戻してから接続をテストしてください。"},
 	"no online execution Agent":                                                            {"no online execution Agent", "没有在线执行节点", "オンラインの実行ノードがありません"},
 	"objectKey conflicts with local source path":                                           {"objectKey conflicts with local source path", "objectKey 与本地源路径冲突", "objectKey がローカルの転送元パスと競合しています"},
 	"Agent %s does not support overwriting changed objects; upgrade it first":              {"Agent %s does not support overwriting changed objects; upgrade it first", "执行节点 %s 版本过旧，不支持“覆盖有变化的对象”，请先升级", "Agent %s は古いため「変更されたオブジェクトを上書き」に対応していません。先に更新してください"},
@@ -352,8 +350,13 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"节点未返回有效路径类型": {"Node returned an invalid path type", "节点未返回有效路径类型", "ノードから無効なパスの種類が返されました"},
 	"Showing recent tasks; load an earlier page for more history":           {"Showing recent tasks; load an earlier page for more history", "当前显示最近任务，加载更早页面可查看历史", "最近のタスクを表示しています。以前の履歴は前のページを読み込んでください"},
 	"The Go transfer engine does not use the legacy SDK fallback mechanism": {"This version does not switch to a fallback transfer method, so it records no fallback objects; fallback records of tasks converted from v4.0.x are not listed here", "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出", "このバージョンは代替の転送方式に切り替えないため、フォールバック記録は作成されません。v4.0.x から変換したタスクのフォールバック記録はここに表示されません"},
-	legacyExceptionsMessage:                          {legacyExceptionsMessage, "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。", "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。"},
-	"Invalid imported task %d: %s":                   {"Invalid imported task %d: %s", "导入的任务 %d 无效：%s", "インポートするタスク %d が無効です：%s"},
-	"Invalid task %d: %s":                            {"Invalid task %d: %s", "任务 %d 无效：%s", "タスク %d が無効です：%s"},
-	"Import requires an explicit replacement for %s": {"Import requires an explicit replacement for %s", "导入时必须明确替换 %s", "インポートには %s の明示的な置き換えが必要です"},
+	"Invalid imported task %d: %s":                                          {"Invalid imported task %d: %s", "导入的任务 %d 无效：%s", "インポートするタスク %d が無効です：%s"},
+	"Invalid task %d: %s":                                                   {"Invalid task %d: %s", "任务 %d 无效：%s", "タスク %d が無効です：%s"},
+	"Import requires an explicit replacement for %s":                        {"Import requires an explicit replacement for %s", "导入时必须明确替换 %s", "インポートには %s の明示的な置き換えが必要です"},
+
+	// A comparison of an unusable listing, a storage check while every
+	// registered Agent is offline, and the failures of a converted task.
+	"The storage returned a listing that a comparison cannot use; retrying or resuming does not help.": {"The storage returned a listing that a comparison cannot use (keys must be listed in ascending byte order within the prefix, and each page must advance); retrying or resuming does not help.", "存储返回的列举结果无法用于比对（需要在前缀内按字节升序列举 Key，并且每次翻页都要前进），重试或继续比对都无法解决。", "ストレージが返した一覧は比較に使用できません（プレフィックス内のキーをバイト順の昇順で返し、ページごとに先へ進む必要があります）。再試行や比較の再開では解決しません。"},
+	"every registered Agent is offline; bring one back online before validating storage":               {"Every registered execution node is offline. Bring one back online before testing this connection.", "已注册的执行节点均不在线，请先恢复其中一个节点的服务或网络，再测试连接。", "登録済みの実行ノードはすべてオフラインです。いずれかのノードをオンラインに戻してから接続をテストしてください。"},
+	legacyExceptionsMessage: {legacyExceptionsMessage, "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。", "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。"},
 }

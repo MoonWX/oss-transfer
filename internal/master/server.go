@@ -72,6 +72,10 @@ type Server struct {
 	taskControlSlots chan struct{}
 	// addressing remembers Agents that understand automatic addressing.
 	addressing addressingSupport
+	// nodeChangeCommitting, when set by a test, is called while a node change
+	// is committed under topologyMu, after its recheck of the added Agents
+	// and before the change is recorded.
+	nodeChangeCommitting func()
 }
 
 // New creates the first administrator in an empty database and returns its

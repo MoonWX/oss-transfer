@@ -378,6 +378,9 @@ func (s *Server) commitNodeChange(ctx context.Context, id int64, change task.Nod
 			}
 		}
 	}
+	if s.nodeChangeCommitting != nil {
+		s.nodeChangeCommitting()
+	}
 	p, replayed, err := s.tasks.repo.ChangeNodes(id, change)
 	if errors.Is(err, task.ErrConflict) {
 		return task.Parent{}, false, membershipReject(ctx, "CONFLICT", "This request ID was already used for a different node change")

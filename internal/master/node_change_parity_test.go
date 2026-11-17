@@ -439,9 +439,22 @@ func TestNodeChangeCommitRechecksAddedAgentsUnderTheTopologyLock(t *testing.T) {
 	if current, err := f.master.tasks.repo.Get(p.ID); err != nil || len(current.Spec.Nodes) != 2 || current.MembershipPending() {
 		t.Fatal("the refused change was recorded", err)
 	}
+	// The change is recorded under the lock that removing an Agent takes, so
+	// that no removal can come between the recheck and the record.
+	var commits, unlocked atomic.Int64
+	f.master.nodeChangeCommitting = func() {
+		commits.Add(1)
+		if f.master.topologyMu.TryLock() {
+			f.master.topologyMu.Unlock()
+			unlocked.Add(1)
+		}
+	}
 	// A committed join makes the Agent a member that cannot be removed.
 	if status, body := nodeChange(t, f, p.ID, "", map[string]any{"add": []string{spare.Address}}); status != 200 || body["data"].(map[string]any)["accepted"] != true {
 		t.Fatal(status, body)
+	}
+	if commits.Load() != 1 || unlocked.Load() != 0 {
+		t.Fatal("the change was not recorded under the topology lock", commits.Load(), unlocked.Load())
 	}
 	if status, _ := request(t, f.http.Client(), "DELETE", f.http.URL+"/api/master/nodes/"+spare.Address, f.admin, nil); status != http.StatusConflict {
 		t.Fatal("a joining Agent was removed", status)

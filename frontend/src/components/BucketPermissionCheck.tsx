@@ -30,19 +30,31 @@ type PermissionResult = {
   bucket: string;
   write: boolean;
   node?: string;
+  // The write prefix the probes were written below.
+  prefix?: string;
   leftoverKey?: string;
+  // The multipart upload the check could not abort.
+  leftoverUploadKey?: string;
+  leftoverUploadId?: string;
   results: PermissionRow[];
 };
 
-// The requests a migration makes, in the order the check runs them.
-const operationLabel = (operation: string) =>
+// The requests a migration makes, in the order the check runs them. Older
+// Agents abort the multipart upload within the MULTIPART row; newer ones
+// report the abort as its own row.
+const operationLabel = (operation: string, abortIncluded: boolean) =>
   ({
     LIST: t("列举对象（ListObjectsV2）"),
     HEAD: t("读取对象元数据（HeadObject）"),
     GET: t("读取对象内容（GetObject）"),
     PUT: t("写入对象（PutObject，条件写入）"),
     HEAD_WRITTEN: t("读回写入的对象（HeadObject）"),
-    MULTIPART: t("分片上传（创建、上传分片、中止）"),
+    MULTIPART: abortIncluded
+      ? t("分片上传（创建、上传分片、中止）")
+      : t("分片上传（创建、上传分片）"),
+    MULTIPART_ABORT: t(
+      "中止分片上传（AbortMultipartUpload，用于清理残留分片）",
+    ),
     DELETE_PROBE: t("删除测试对象（DeleteObject，迁移不需要）"),
   })[operation] ?? operation;
 
@@ -53,16 +65,27 @@ const skipReason = (reason?: string) =>
     PUT_FAILED: t("写入失败，跳过"),
     NOT_REQUESTED: t("未勾选写入检查"),
     NO_SUCH_BUCKET: t("存储桶不存在，不尝试写入"),
+    MULTIPART_FAILED: t("没有创建分片上传，无需中止"),
   })[reason ?? ""] ??
   reason ??
   "";
 
-const writeOperations = new Set(["PUT", "HEAD_WRITTEN", "MULTIPART"]);
+const writeOperations = new Set([
+  "PUT",
+  "HEAD_WRITTEN",
+  "MULTIPART",
+  "MULTIPART_ABORT",
+  "DELETE_PROBE",
+]);
+// Writing does not need these: a migration aborts only an upload that already
+// failed, and never deletes.
+const optionalOperations = new Set(["MULTIPART_ABORT", "DELETE_PROBE"]);
 
 /** Checks, on one bucket, each storage request a migration makes. */
 export default function BucketPermissionCheck({ alias }: { alias: string }) {
   const [bucket, setBucket] = useState("");
   const [write, setWrite] = useState(false);
+  const [prefix, setPrefix] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PermissionResult>();
   const [error, setError] = useState("");
@@ -79,7 +102,14 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
     try {
       const response = await api<PermissionResult>(
         `/api/master/s3-config/${encodeURIComponent(alias)}/permissions`,
-        { method: "POST", body: { bucket: name, write } },
+        {
+          method: "POST",
+          // Keys and prefixes are sent exactly as entered.
+          body:
+            write && prefix
+              ? { bucket: name, write, prefix }
+              : { bucket: name, write },
+        },
       );
       if (current === request.current)
         setResult({ ...response, results: response.results ?? [] });
@@ -93,14 +123,23 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
     }
   };
 
-  const required = (row: PermissionRow) => row.operation !== "DELETE_PROBE";
+  const required = (row: PermissionRow) =>
+    !optionalOperations.has(row.operation);
   const failed =
     result?.results.filter((r) => r.status === "FAILED" && required(r)) ?? [];
   const readFailed = failed.filter((r) => !writeOperations.has(r.operation));
-  const writeFailed = failed.filter((r) => writeOperations.has(r.operation));
+  // Only a failed PUT means the bucket cannot be written at the probed place.
+  const putFailed = failed.some((r) => r.operation === "PUT");
   const readSkipped = result?.results.some(
     (r) => r.status === "SKIPPED" && !writeOperations.has(r.operation),
   );
+  // An older Agent aborted within the multipart row and reports no abort.
+  const abortIncluded =
+    !!result &&
+    !result.results.some((r) => r.operation === "MULTIPART_ABORT") &&
+    result.results.some(
+      (r) => r.operation === "MULTIPART" && r.status !== "SKIPPED",
+    );
 
   return (
     <Stack spacing={1.5} sx={{ pt: 1 }}>
@@ -148,6 +187,19 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
           </Typography>
         }
       />
+      {write && (
+        <TextField
+          size="small"
+          fullWidth
+          label={t("写入位置前缀（可选）")}
+          helperText={t(
+            "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。",
+          )}
+          value={prefix}
+          onChange={(e) => setPrefix(e.target.value)}
+          inputProps={{ "data-testid": "permission-prefix" }}
+        />
+      )}
       {error && <Alert severity="error">{error}</Alert>}
       {result && (
         <Stack spacing={1} data-testid="permission-result">
@@ -167,20 +219,34 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
                     "存储桶 {bucket}：可以列举对象，但存储桶为空，未能检查读取对象；写入的检查结果见下方。",
                     { bucket: result.bucket },
                   )
-                : result.write
+                : result.write && result.prefix
                   ? t(
-                      "存储桶 {bucket}：读取和写入权限都正常，可以作为迁移的源或目标。",
-                      {
-                        bucket: result.bucket,
-                      },
+                      "存储桶 {bucket}：读取正常，也可以在前缀 {prefix} 下写入，可以作为迁移的源或写入此前缀的目标。",
+                      { bucket: result.bucket, prefix: result.prefix },
+                    )
+                  : result.write
+                    ? t(
+                        "存储桶 {bucket}：读取和写入权限都正常，可以作为迁移的源或目标。",
+                        {
+                          bucket: result.bucket,
+                        },
+                      )
+                    : t(
+                        "存储桶 {bucket}：读取权限正常，可以作为迁移的源。作为目标时请勾选写入检查。",
+                        { bucket: result.bucket },
+                      )}
+            {readFailed.length === 0 &&
+              !readSkipped &&
+              putFailed &&
+              " " +
+                (result.prefix
+                  ? t(
+                      "读取正常，但在前缀 {prefix} 下写入失败：可以作为迁移的源，不能作为写入此前缀的目标。",
+                      { prefix: result.prefix },
                     )
                   : t(
-                      "存储桶 {bucket}：读取权限正常，可以作为迁移的源。作为目标时请勾选写入检查。",
-                      { bucket: result.bucket },
-                    )}
-            {readFailed.length === 0 &&
-              writeFailed.length > 0 &&
-              " " + t("读取正常，只是不能写入：只能作为迁移的源。")}
+                      "读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请填写写入位置前缀后重新检查。",
+                    ))}
           </Alert>
           <Box>
             {result.results.map((row) => (
@@ -207,7 +273,7 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
                 )}
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="body2">
-                    {operationLabel(row.operation)}
+                    {operationLabel(row.operation, abortIncluded)}
                     {" · "}
                     {row.status === "PASSED"
                       ? t("通过")
@@ -215,6 +281,15 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
                         ? t("未通过")
                         : t("跳过")}
                   </Typography>
+                  {row.key && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ display: "block", overflowWrap: "anywhere" }}
+                    >
+                      {t("对象：{key}", { key: row.key })}
+                    </Typography>
+                  )}
                   {row.status === "SKIPPED" && (
                     <Typography variant="caption" color="text.secondary">
                       {skipReason(row.reason)}
@@ -245,6 +320,17 @@ export default function BucketPermissionCheck({ alias }: { alias: string }) {
               {t(
                 "测试对象 {key} 未能删除（删除不是迁移所需的权限），请手动删除。",
                 { key: result.leftoverKey },
+              )}
+            </Alert>
+          )}
+          {result.leftoverUploadKey && (
+            <Alert severity="warning" data-testid="permission-leftover-upload">
+              {t(
+                "分片上传 {key}（上传 ID：{uploadId}）未能中止，存储桶中留下一个未完成的分片上传，其分片会占用存储并计费。写入不需要中止权限，但缺少它时，迁移中失败的大对象上传也会留下这样的分片。请用有权限的密钥中止此上传，或配置生命周期规则清理未完成的分片上传。",
+                {
+                  key: result.leftoverUploadKey,
+                  uploadId: result.leftoverUploadId ?? "",
+                },
               )}
             </Alert>
           )}

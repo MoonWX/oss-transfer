@@ -253,8 +253,13 @@ test("cards and the connection test show the resolved addressing and the bucket-
   await expect(dialog.getByTestId("permission-summary")).toContainText(
     "存储桶 only-bucket：1 项检查未通过",
   );
+  // The probe was written at the bucket root; a key limited to a prefix can
+  // still write there, so the check does not call the bucket source-only.
   await expect(dialog.getByTestId("permission-summary")).toContainText(
-    "读取正常，只是不能写入：只能作为迁移的源。",
+    "读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请填写写入位置前缀后重新检查。",
+  );
+  await expect(dialog.getByTestId("permission-summary")).not.toContainText(
+    "只能作为迁移的源",
   );
   await expect(dialog.getByTestId("permission-PUT")).toContainText(
     "访问被拒绝：凭据有效，但没有执行此请求的权限。",

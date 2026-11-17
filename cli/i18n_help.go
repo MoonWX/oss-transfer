@@ -565,6 +565,9 @@ Same meaning as task create --ranged-download; other directions reject off.
 local rows may set "skipSharedCheck":true to skip the multi-node shared directory check; they must
 also set "skipSharedCheckAcknowledged":true to confirm that every execution node mounts the same
 storage. The consequences are those of task create --skip-shared-check; import warns for each such row.
+A marker in tasks rows is not used: each subtask scans its whole range after startKey and does not resume
+from a checkpoint; objects that already exist at the destination are handled by the conflict policy.
+Import warns for each row that sets a marker.
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -597,6 +600,8 @@ local のダウンロード行（OSS_TO_LOCAL）では "rangedDownload":"auto" �
 local の行で "skipSharedCheck":true を指定すると複数ノードの共有ディレクトリ検証を省略します。
 すべての実行ノードが同じストレージをマウントしていることの確認として "skipSharedCheckAcknowledged":true も
 必要です。影響は task create --skip-shared-check と同じで、インポート時に該当する行ごとに警告します。
+tasks の行の marker は使用されません。各子タスクは startKey より後の範囲全体をスキャンし、チェックポイントからは
+再開しません。転送先に既にあるオブジェクトは競合ポリシーに従って処理します。marker を指定した行ごとに警告します。
 
   oss-transfer-cli task import buckets ./buckets.csv
   oss-transfer-cli task import local ./local-requests.json --validate-only
@@ -719,8 +724,11 @@ Usage: oss-transfer-cli storage <subcommand> [arguments]
   remove <alias> --yes             Remove and sync to execution nodes
   buckets <alias> [--bucket NAME]  List buckets and check the connection
   test <alias> [--bucket NAME]     Check the connection: list buckets, then list objects in one bucket with the effective addressing
-      With --bucket, checks each request a migration makes (list, HEAD, GET); exits 1 if one fails
-      --write                       Also check writing: conditional PUT, read back, multipart upload; writes and deletes a test object
+      With --bucket, checks each request a migration makes (list, HEAD, GET); exits 1 if a required one fails
+      --write                       Also check writing: conditional PUT, read back, multipart upload; writes and deletes a test object.
+                                    Aborting the multipart upload and deleting the test object are not needed to write; a failure only warns
+      --prefix <prefix>             Prefix the write check writes below; for a key that may only write below a prefix,
+                                    enter the migration's target prefix, for example backup/. Needs --write
 
   --endpoint <http[s]://host>      For example https://s3.example.com or http://10.0.0.5:9000
   --region <region>               S3 signing region
@@ -747,10 +755,12 @@ Addressing
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage test target --bucket backup --write
+  oss-transfer-cli storage test team --bucket shared --write --prefix team-a/
   oss-transfer-cli storage remove source --yes
 
 Credentials come from environment variables or files, not command-line values.
 Check each node's sync result; partial success is reported as incomplete.
+After a connection is removed, every task that uses it, running or stopped, cannot continue until a connection with the same name is added again.
 A connection check lists buckets (ListBuckets), then lists at most one object in one bucket (ListObjectsV2).
 Keys limited to one bucket cannot list buckets: saving only warns, and test --bucket checks that bucket.
 Actual operations validate read and write permissions. Failures show the cause and advice first; add --verbose for the original error.
@@ -763,8 +773,11 @@ Actual operations validate read and write permissions. Failures show the cause a
   remove <接続名> --yes            削除して実行ノードに同期
   buckets <接続名> [--bucket 名前] バケット一覧を表示して接続を確認
   test <接続名> [--bucket 名前]    接続を確認: バケットを一覧し、実際のアドレス指定で 1 つのバケットのオブジェクトを一覧
-      --bucket を指定すると、移行で使う操作（一覧、HEAD、GET）を 1 つずつ確認し、失敗があれば終了コード 1
-      --write                       書き込みも確認: 条件付き PUT、読み戻し、マルチパートアップロード。テストオブジェクトを書き込んで削除します
+      --bucket を指定すると、移行で使う操作（一覧、HEAD、GET）を 1 つずつ確認し、必須の項目が失敗すれば終了コード 1
+      --write                       書き込みも確認: 条件付き PUT、読み戻し、マルチパートアップロード。テストオブジェクトを書き込んで削除します。
+                                    マルチパートアップロードの中止とテストオブジェクトの削除は書き込みに不要で、失敗しても注意を表示するだけです
+      --prefix <プレフィックス>      書き込みの確認に使うプレフィックス。テストオブジェクトをこの下に書き込みます。キーが特定のプレフィックスにしか
+                                    書き込めない場合は、移行先のプレフィックス（例: backup/）を指定します。--write と一緒に指定してください
 
   --endpoint <http[s]://ホスト>    例: https://s3.example.com、http://10.0.0.5:9000
   --region <リージョン>            S3 署名リージョン
@@ -790,10 +803,12 @@ Actual operations validate read and write permissions. Failures show the cause a
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage test target --bucket backup --write
+  oss-transfer-cli storage test team --bucket shared --write --prefix team-a/
   oss-transfer-cli storage remove source --yes
 
 認証情報は環境変数またはファイルから読み取ります。コマンドラインには直接指定しません。
 ノードごとの同期結果を確認してください。一部成功は不完全と表示します。
+接続を削除すると、その接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。
 接続確認ではバケットを一覧し（ListBuckets）、1 つのバケットのオブジェクトを最大 1 件一覧します（ListObjectsV2）。
 1 つのバケットに限定したキーはバケットを一覧できません。保存時は警告のみで、test --bucket でそのバケットを確認できます。
 読み取り・書き込み権限は実際の操作で検証します。失敗時は原因と対処を先に表示し、元のエラーは --verbose で確認できます。

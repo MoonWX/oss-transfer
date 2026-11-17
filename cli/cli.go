@@ -922,22 +922,35 @@ func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buck
 }
 
 // Storage requests of a bucket permission check, as the console names them.
+// Older Agents abort the multipart upload within the MULTIPART row; newer ones
+// report the abort as MULTIPART_ABORT.
 var cliPermissionLabels = map[string]string{
-	"LIST":         "列举对象（ListObjectsV2）",
-	"HEAD":         "读取对象元数据（HeadObject）",
-	"GET":          "读取对象内容（GetObject）",
-	"PUT":          "写入对象（PutObject，条件写入）",
-	"HEAD_WRITTEN": "读回写入的对象（HeadObject）",
-	"MULTIPART":    "分片上传（创建、上传分片、中止）",
-	"DELETE_PROBE": "删除测试对象（DeleteObject，迁移不需要）",
+	"LIST":            "列举对象（ListObjectsV2）",
+	"HEAD":            "读取对象元数据（HeadObject）",
+	"GET":             "读取对象内容（GetObject）",
+	"PUT":             "写入对象（PutObject，条件写入）",
+	"HEAD_WRITTEN":    "读回写入的对象（HeadObject）",
+	"MULTIPART":       "分片上传（创建、上传分片）",
+	"MULTIPART_ABORT": "中止分片上传（AbortMultipartUpload，用于清理残留分片）",
+	"DELETE_PROBE":    "删除测试对象（DeleteObject，迁移不需要）",
 }
 
+const cliPermissionMultipartWithAbort = "分片上传（创建、上传分片、中止）"
+
+// cliOptionalPermissions are not needed to write: a migration aborts only an
+// upload that already failed, and never deletes.
+var cliOptionalPermissions = map[string]bool{"MULTIPART_ABORT": true, "DELETE_PROBE": true}
+
+// cliWritePermissions are the write check's requests.
+var cliWritePermissions = map[string]bool{"PUT": true, "HEAD_WRITTEN": true, "MULTIPART": true, "MULTIPART_ABORT": true, "DELETE_PROBE": true}
+
 var cliPermissionSkips = map[string]string{
-	"EMPTY_BUCKET":   "存储桶为空，没有可读取的对象",
-	"LIST_FAILED":    "列举失败，无法选取要读取的对象",
-	"PUT_FAILED":     "写入失败，跳过",
-	"NOT_REQUESTED":  "未检查写入，加 --write 检查",
-	"NO_SUCH_BUCKET": "存储桶不存在，不尝试写入",
+	"EMPTY_BUCKET":     "存储桶为空，没有可读取的对象",
+	"LIST_FAILED":      "列举失败，无法选取要读取的对象",
+	"PUT_FAILED":       "写入失败，跳过",
+	"NOT_REQUESTED":    "未检查写入，加 --write 检查",
+	"NO_SUCH_BUCKET":   "存储桶不存在，不尝试写入",
+	"MULTIPART_FAILED": "没有创建分片上传，无需中止",
 }
 
 // renderPermissionCheck lists each storage request of a permission check and
@@ -950,14 +963,29 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 	} else {
 		fmt.Fprint(out, cliTextf(out, "存储桶 %s 的权限检查：\n", safeCLIText(bucket)))
 	}
-	failed, readFailed, readSkipped := 0, 0, false
-	for _, row := range objectList(check["results"]) {
+	rows := objectList(check["results"])
+	// An older Agent reports no abort row: its multipart row includes it.
+	abortReported, multipartRan := false, false
+	for _, row := range rows {
+		switch getString(row, "operation") {
+		case "MULTIPART_ABORT":
+			abortReported = true
+		case "MULTIPART":
+			multipartRan = getString(row, "status") != "SKIPPED"
+		}
+	}
+	abortIncluded := multipartRan && !abortReported
+	failed, readFailed, readSkipped, putFailed := 0, 0, false, false
+	for _, row := range rows {
 		operation, status := getString(row, "operation"), getString(row, "status")
 		label := operation
 		if key, ok := cliPermissionLabels[operation]; ok {
 			label = cliText(out, key)
 		}
-		write := operation == "PUT" || operation == "HEAD_WRITTEN" || operation == "MULTIPART"
+		if operation == "MULTIPART" && abortIncluded {
+			label = cliText(out, cliPermissionMultipartWithAbort)
+		}
+		write := cliWritePermissions[operation]
 		switch status {
 		case "PASSED":
 			fmt.Fprintf(out, "  [%s] %s\n", cliText(out, "通过"), label)
@@ -968,11 +996,12 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 				message = getString(row, "detail")
 			}
 			fmt.Fprintf(out, "         %s\n", safeCLIText(message))
-			if operation != "DELETE_PROBE" {
+			if !cliOptionalPermissions[operation] {
 				failed++
 				if !write {
 					readFailed++
 				}
+				putFailed = putFailed || operation == "PUT"
 			}
 		default:
 			reason := getString(row, "reason")
@@ -984,14 +1013,24 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 				readSkipped = true
 			}
 		}
+		if key := getString(row, "key"); key != "" {
+			fmt.Fprintf(out, "         %s\n", cliTextf(out, "对象：%s", safeCLIText(key)))
+		}
 	}
+	prefix := getString(check, "prefix")
 	switch {
-	case failed > 0 && readFailed == 0:
-		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常但不能写入，只能作为迁移的源。\n", safeCLIText(bucket)))
+	// Only a failed PUT means the bucket cannot be written where the check
+	// wrote; a key limited to another prefix may still write there.
+	case failed > 0 && readFailed == 0 && !readSkipped && putFailed && prefix != "":
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常，但在前缀 %s 下写入失败：可以作为迁移的源，不能作为写入此前缀的目标。\n", safeCLIText(bucket), safeCLIText(prefix)))
+	case failed > 0 && readFailed == 0 && !readSkipped && putFailed:
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请加 --prefix 重新检查。\n", safeCLIText(bucket)))
 	case failed > 0:
 		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 有 %d 项检查未通过。\n", safeCLIText(bucket), failed))
 	case readSkipped:
 		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 可以列举对象，但存储桶为空，未能检查读取对象。\n", safeCLIText(bucket)))
+	case check["write"] == true && prefix != "":
+		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取正常，也可以在前缀 %s 下写入，可以作为迁移的源或写入此前缀的目标。\n", safeCLIText(bucket), safeCLIText(prefix)))
 	case check["write"] == true:
 		fmt.Fprint(out, cliTextf(out, "结论：存储桶 %s 读取和写入权限都正常，可以作为迁移的源或目标。\n", safeCLIText(bucket)))
 	default:
@@ -999,6 +1038,9 @@ func renderPermissionCheck(out io.Writer, check map[string]interface{}) {
 	}
 	if key := getString(check, "leftoverKey"); key != "" {
 		fmt.Fprint(out, cliTextf(out, "注意：测试对象 %s 未能删除（删除不是迁移所需的权限），请手动删除。\n", safeCLIText(key)))
+	}
+	if key := getString(check, "leftoverUploadKey"); key != "" {
+		fmt.Fprint(out, cliTextf(out, "注意：分片上传 %s（上传 ID：%s）未能中止，存储桶中留下一个未完成的分片上传，其分片会占用存储并计费。写入不需要中止权限，但缺少它时，迁移中失败的大对象上传也会留下这样的分片。请用有权限的密钥中止此上传，或配置生命周期规则清理未完成的分片上传。\n", safeCLIText(key), safeCLIText(getString(check, "leftoverUploadId"))))
 	}
 }
 

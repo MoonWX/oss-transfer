@@ -715,6 +715,31 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Multipart upload (create, upload a part, abort)",
     ja: "マルチパートアップロード（作成、パートのアップロード、中止）",
   },
+  "分片上传（创建、上传分片）": {
+    en: "Multipart upload (create, upload a part)",
+    ja: "マルチパートアップロード（作成、パートのアップロード）",
+  },
+  "中止分片上传（AbortMultipartUpload，用于清理残留分片）": {
+    en: "Abort the multipart upload (AbortMultipartUpload, used to clean up leftover parts)",
+    ja: "マルチパートアップロードを中止（AbortMultipartUpload、残ったパートの削除に使用）",
+  },
+  "没有创建分片上传，无需中止": {
+    en: "No multipart upload was created, so there is nothing to abort",
+    ja: "マルチパートアップロードが作成されなかったため、中止は不要です",
+  },
+  "对象：{key}": {
+    en: "Object: {key}",
+    ja: "オブジェクト：{key}",
+  },
+  "写入位置前缀（可选）": {
+    en: "Write prefix (optional)",
+    ja: "書き込み先のプレフィックス（任意）",
+  },
+  "测试对象写在此前缀下的 .oss-transfer-permission-check/ 中。密钥只能写入某个前缀时，请填写迁移的目标前缀，例如 backup/。":
+    {
+      en: "The test objects are written under .oss-transfer-permission-check/ below this prefix. If the key may only write below a prefix, enter the migration's target prefix, for example backup/.",
+      ja: "テストオブジェクトは、このプレフィックスの下の .oss-transfer-permission-check/ に書き込みます。キーが特定のプレフィックスにしか書き込めない場合は、移行先のプレフィックス（例: backup/）を入力してください。",
+    },
   "删除测试对象（DeleteObject，迁移不需要）": {
     en: "Delete the test object (DeleteObject, not needed for migrations)",
     ja: "テストオブジェクトを削除（DeleteObject、移行には不要）",
@@ -770,10 +795,21 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
       en: "Bucket {bucket}: reading works; it can be a migration source. To use it as a target, also check writing.",
       ja: "バケット {bucket}：読み取りの権限は正常で、移行元として使えます。移行先にする場合は書き込みも確認してください。",
     },
-  "读取正常，只是不能写入：只能作为迁移的源。": {
-    en: "Reading works but writing does not: it can only be a migration source.",
-    ja: "読み取りはできますが書き込みはできません。移行元としてのみ使えます。",
-  },
+  "存储桶 {bucket}：读取正常，也可以在前缀 {prefix} 下写入，可以作为迁移的源或写入此前缀的目标。":
+    {
+      en: "Bucket {bucket}: reading works and writing below the prefix {prefix} works; it can be a migration source or a target that writes below this prefix.",
+      ja: "バケット {bucket}：読み取りも、プレフィックス {prefix} への書き込みもできます。移行元にも、このプレフィックスに書き込む移行先にも使えます。",
+    },
+  "读取正常，但在前缀 {prefix} 下写入失败：可以作为迁移的源，不能作为写入此前缀的目标。":
+    {
+      en: "Reading works, but writing below the prefix {prefix} failed: it can be a migration source, but not a target that writes below this prefix.",
+      ja: "読み取りはできますが、プレフィックス {prefix} への書き込みに失敗しました。移行元としては使えますが、このプレフィックスに書き込む移行先にはできません。",
+    },
+  "读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请填写写入位置前缀后重新检查。":
+    {
+      en: "Reading works, but writing at the bucket root failed: it can be a migration source. If the key may only write below a prefix, enter that write prefix and check again.",
+      ja: "読み取りはできますが、バケットのルートへの書き込みに失敗しました。移行元としては使えます。キーが特定のプレフィックスにしか書き込めない場合は、書き込み先のプレフィックスを入力して再確認してください。",
+    },
   通过: {
     en: "passed",
     ja: "成功",
@@ -794,6 +830,11 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "The test object {key} could not be deleted (deleting is not needed for migrations); delete it manually.",
     ja: "テストオブジェクト {key} を削除できませんでした（削除は移行に必要な権限ではありません）。手動で削除してください。",
   },
+  "分片上传 {key}（上传 ID：{uploadId}）未能中止，存储桶中留下一个未完成的分片上传，其分片会占用存储并计费。写入不需要中止权限，但缺少它时，迁移中失败的大对象上传也会留下这样的分片。请用有权限的密钥中止此上传，或配置生命周期规则清理未完成的分片上传。":
+    {
+      en: "The multipart upload {key} (upload ID {uploadId}) could not be aborted, so an incomplete multipart upload is left in the bucket; its parts take up storage and are billed. Writing does not need permission to abort, but without it a large-object upload that fails during a migration also leaves parts behind. Abort this upload with a key that may, or add a lifecycle rule that removes incomplete multipart uploads.",
+      ja: "マルチパートアップロード {key}（アップロード ID：{uploadId}）を中止できなかったため、未完了のマルチパートアップロードがバケットに残っています。残ったパートはストレージを占有し、課金されます。書き込みに中止の権限は不要ですが、この権限がないと、移行中に失敗した大きなオブジェクトのアップロードでも同じようにパートが残ります。権限のあるキーでこのアップロードを中止するか、未完了のマルチパートアップロードを削除するライフサイクルルールを設定してください。",
+    },
   "由执行节点 {node} 检查。": {
     en: "Checked by execution node {node}.",
     ja: "実行ノード {node} で確認しました。",
@@ -902,10 +943,11 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Delete storage connection",
     ja: "ストレージ接続を削除",
   },
-  "删除连接 {alias} 后，后续迁移将无法使用此连接。此操作会同步到执行节点。": {
-    en: "After deleting {alias}, future transfers cannot use this connection. The change is synced to workers.",
-    ja: "{alias} を削除すると、以後の転送でこの接続を使用できなくなります。変更は実行ノードに同期されます。",
-  },
+  "删除连接 {alias} 后，所有使用此连接的任务都将无法继续执行（包括执行中和已停止的任务），直到重新添加同名连接；后续迁移也无法使用此连接。此操作会同步到执行节点。":
+    {
+      en: "After you delete {alias}, every task that uses this connection, running or stopped, cannot continue until a connection with the same name is added again, and future transfers cannot use it. The change is synced to execution nodes.",
+      ja: "{alias} を削除すると、この接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。今後の転送でもこの接続は使えなくなります。変更は実行ノードに同期されます。",
+    },
   "连接测试 · {alias}": {
     en: "Connection test · {alias}",
     ja: "接続テスト · {alias}",

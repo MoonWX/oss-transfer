@@ -244,6 +244,8 @@ local 下载请求（OSS_TO_LOCAL）可设置 "rangedDownload":"auto" 或 "off"�
 local 请求可设置 "skipSharedCheck":true 跳过多节点共享目录校验，须同时设置
 "skipSharedCheckAcknowledged":true，表示已确认所有执行节点挂载的是同一份存储。
 后果同 task create --skip-shared-check；导入时会对每个跳过校验的行给出警告。
+tasks 请求中的 marker 不会被使用：每个子任务从 startKey 之后完整扫描其范围，不会从断点继续，
+目标端已存在的对象按冲突策略处理；导入时会对每个设置了 marker 的行给出警告。
 
 示例
   oss-transfer-cli task import buckets ./buckets.csv
@@ -326,8 +328,11 @@ const cliStorageHelp = `存储连接
   remove <连接名> --yes            删除连接并同步到执行节点
   buckets <连接名> [--bucket 名称] 列出 Bucket 并检查连接
   test <连接名> [--bucket 名称]    检查连接：列举 Bucket，再用实际寻址方式列举一个 Bucket 中的对象
-      指定 --bucket 时逐项检查迁移用到的操作（列举、HEAD、GET），任一项未通过则退出码为 1
-      --write                       同时检查写入：条件 PUT、读回、分片上传，会写入并删除一个测试对象
+      指定 --bucket 时逐项检查迁移用到的操作（列举、HEAD、GET），任一必需项未通过则退出码为 1
+      --write                       同时检查写入：条件 PUT、读回、分片上传，会写入并删除一个测试对象；
+                                    中止分片上传和删除测试对象不是写入所必需的，未通过时只给出提示
+      --prefix <前缀>                写入检查使用的前缀，测试对象写在此前缀下；密钥只能写入某个前缀时，
+                                    填写迁移的目标前缀，例如 backup/；需与 --write 一起使用
 
 添加/更新选项
   --endpoint <http[s]://地址>      例如 https://s3.example.com 或 http://10.0.0.5:9000
@@ -355,10 +360,12 @@ const cliStorageHelp = `存储连接
   oss-transfer-cli storage test source
   oss-transfer-cli storage test scoped --bucket only-bucket
   oss-transfer-cli storage test target --bucket backup --write
+  oss-transfer-cli storage test team --bucket shared --write --prefix team-a/
   oss-transfer-cli storage remove source --yes
 
 密钥仅从环境变量或文件读取，避免出现在命令历史中。
 更新后请关注逐节点同步结果；部分成功时结果不会显示为完整同步。
+删除连接后，所有使用此连接的任务（包括执行中和已停止的任务）都将无法继续执行，直到重新添加同名连接。
 连接检查先列举 Bucket（ListBuckets），再对一个 Bucket 列举最多 1 个对象（ListObjectsV2）。
 只授权到单个 Bucket 的密钥无法列举 Bucket：保存时只给出警告，可用 test --bucket 检查该 Bucket。
 读取和写入权限由迁移时的实际操作验证。失败时先显示原因和建议，加 --verbose 查看原始错误。

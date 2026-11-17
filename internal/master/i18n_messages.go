@@ -340,12 +340,11 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"可用空间 %s":          {"%s free", "可用空间 %s", "空き容量 %s"},
 	"目标目录可写，%s":        {"Destination directory is writable; %s", "目标目录可写，%s", "転送先ディレクトリに書き込めます。%s"},
 	"%s；%s":            {"%s; %s", "%s；%s", "%s。%s"},
-	"节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s）": {"The node cannot write to %s: the Agent runs as UID %s; grant that user write access (for example chown %s)", "节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s）", "ノードは %s に書き込めません。Agent は UID %s で動作しています。このユーザーに書き込み権限を付与してください（例: chown %s）"},
-	"节点无权写入 %s，请为 Agent 服务账户授予写权限":                         {"The node cannot write to %s; grant the Agent service account write access", "节点无权写入 %s，请为 Agent 服务账户授予写权限", "ノードは %s に書き込めません。Agent のサービスアカウントに書き込み権限を付与してください"},
-	"%s 所在文件系统为只读，无法下载到此目录":                                {"%s is on a read-only file system; downloads cannot be written there", "%s 所在文件系统为只读，无法下载到此目录", "%s は読み取り専用のファイルシステム上にあるため、ダウンロードできません"},
-	"%s 所在磁盘已无剩余空间":                                        {"The disk holding %s has no free space", "%s 所在磁盘已无剩余空间", "%s のディスクに空き容量がありません"},
-	"%s 不是目录，无法作为下载目标":                                     {"%s is not a directory and cannot be a download destination", "%s 不是目录，无法作为下载目标", "%s はディレクトリではないため、ダウンロード先にできません"},
-	"无法在 %s 中写入测试文件：%s":                                    {"Cannot write a test file in %s: %s", "无法在 %s 中写入测试文件：%s", "%s にテストファイルを書き込めません: %s"},
+	"节点无权写入 %s，请为 Agent 服务账户授予写权限": {"The node cannot write to %s; grant the Agent service account write access", "节点无权写入 %s，请为 Agent 服务账户授予写权限", "ノードは %s に書き込めません。Agent のサービスアカウントに書き込み権限を付与してください"},
+	"%s 所在文件系统为只读，无法下载到此目录":        {"%s is on a read-only file system; downloads cannot be written there", "%s 所在文件系统为只读，无法下载到此目录", "%s は読み取り専用のファイルシステム上にあるため、ダウンロードできません"},
+	"%s 所在磁盘已无剩余空间":                {"The disk holding %s has no free space", "%s 所在磁盘已无剩余空间", "%s のディスクに空き容量がありません"},
+	"%s 不是目录，无法作为下载目标":             {"%s is not a directory and cannot be a download destination", "%s 不是目录，无法作为下载目标", "%s はディレクトリではないため、ダウンロード先にできません"},
+	"无法在 %s 中写入测试文件：%s":            {"Cannot write a test file in %s: %s", "无法在 %s 中写入测试文件：%s", "%s にテストファイルを書き込めません: %s"},
 	"等待同步":        {"Awaiting sync", "等待同步", "同期待ち"},
 	"节点未返回有效路径类型": {"Node returned an invalid path type", "节点未返回有效路径类型", "ノードから無効なパスの種類が返されました"},
 	"Showing recent tasks; load an earlier page for more history":           {"Showing recent tasks; load an earlier page for more history", "当前显示最近任务，加载更早页面可查看历史", "最近のタスクを表示しています。以前の履歴は前のページを読み込んでください"},
@@ -353,4 +352,13 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Invalid imported task %d: %s":                                          {"Invalid imported task %d: %s", "导入的任务 %d 无效：%s", "インポートするタスク %d が無効です：%s"},
 	"Invalid task %d: %s":                                                   {"Invalid task %d: %s", "任务 %d 无效：%s", "タスク %d が無効です：%s"},
 	"Import requires an explicit replacement for %s":                        {"Import requires an explicit replacement for %s", "导入时必须明确替换 %s", "インポートには %s の明示的な置き換えが必要です"},
+
+	// Download destination write precheck (local_write_check.go).
+	"节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s %s）；网络文件系统可能会把此 UID 映射为其他用户":                                                                                       {"The node cannot write to %s: the Agent runs as UID %s; grant that user write access (for example chown %s %s); a network file system may map this UID to another user", "节点无权写入 %s：Agent 以 UID %s 运行，请将该目录授权给此用户（例如 chown %s %s）；网络文件系统可能会把此 UID 映射为其他用户", "ノードは %s に書き込めません。Agent は UID %s で動作しています。このユーザーに書き込み権限を付与してください（例: chown %s %s）。ネットワークファイルシステムでは、この UID が別のユーザーにマッピングされることがあります"},
+	"节点无权写入 %s：Agent 以 root 运行仍被拒绝，常见原因是 NFS 的 root_squash 将 root 映射为匿名用户（通常为 UID 65534）、FUSE 挂载未启用 allow_other，或 SELinux、macOS 隐私保护等安全策略；请让该目录对映射后的用户可写，或调整导出选项、挂载选项和安全策略": {"The node cannot write to %s: the Agent runs as root and was still refused, which usually means NFS root_squash maps root to an anonymous user (usually UID 65534), a FUSE mount lacks allow_other, or a security policy such as SELinux or macOS privacy protection applies; make the directory writable for the mapped user, or adjust the export options, mount options or security policy", "节点无权写入 %s：Agent 以 root 运行仍被拒绝，常见原因是 NFS 的 root_squash 将 root 映射为匿名用户（通常为 UID 65534）、FUSE 挂载未启用 allow_other，或 SELinux、macOS 隐私保护等安全策略；请让该目录对映射后的用户可写，或调整导出选项、挂载选项和安全策略", "ノードは %s に書き込めません。Agent は root で動作していますが拒否されました。主な原因は、NFS の root_squash による root の匿名ユーザー（通常 UID 65534）へのマッピング、allow_other を指定していない FUSE マウント、SELinux や macOS のプライバシー保護などのセキュリティポリシーです。マッピング先のユーザーがこのディレクトリに書き込めるようにするか、エクスポートオプション、マウントオプション、セキュリティポリシーを見直してください"},
+	"执行节点版本较旧，未检查目录是否可写；升级该节点后重新预检即可检查":                                                                                                                                     {"The execution node is too old to check whether it can write to this directory; upgrade the node and run the precheck again to check it", "执行节点版本较旧，未检查目录是否可写；升级该节点后重新预检即可检查", "実行ノードのバージョンが古いため、このディレクトリに書き込めるかは確認していません。ノードを更新してから事前チェックをやり直すと確認できます"},
+
+	// Bucket permission check (storage_permissions.go).
+	"The write prefix must be at most 512 bytes of text without control characters":                                   {"The write prefix must be at most 512 bytes of text without control characters", "写入位置前缀不能超过 512 字节，且不能包含控制字符", "書き込み先のプレフィックスは 512 バイト以内で、制御文字を含めないでください"},
+	"The execution node is too old to check writing below a prefix; update it first, or check without a write prefix": {"The execution node is too old to check writing below a prefix; update it first, or check without a write prefix", "执行节点版本较旧，不支持在指定前缀下检查写入；请先更新执行节点，或不填写写入位置前缀再检查", "実行ノードのバージョンが古いため、プレフィックスを指定した書き込みは確認できません。先に実行ノードを更新するか、書き込み先のプレフィックスを指定せずに確認してください"},
 }

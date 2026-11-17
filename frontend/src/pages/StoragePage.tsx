@@ -846,8 +846,10 @@ export default function StoragePage() {
         <DialogTitle>{t("删除存储连接")}</DialogTitle>
         <DialogContent>
           <Typography>
+            {/* Tasks keep only the connection name and open storage from
+                it for every subtask, so a deleted connection stops them. */}
             {t(
-              "删除连接 {alias} 后，后续迁移将无法使用此连接。此操作会同步到执行节点。",
+              "删除连接 {alias} 后，所有使用此连接的任务都将无法继续执行（包括执行中和已停止的任务），直到重新添加同名连接；后续迁移也无法使用此连接。此操作会同步到执行节点。",
               { alias: deleting?.alias || "" },
             )}
           </Typography>

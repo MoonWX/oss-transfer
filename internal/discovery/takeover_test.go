@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,7 +153,7 @@ func TestTakeoverReplaysNonMonotonicLocalHistoryAcrossRestart(t *testing.T) {
 }
 
 func TestTakeoverSingleKeyFiltersAndMissingAssignedSource(t *testing.T) {
-	for _, mode := range []string{"single", "range", "date", "missing", "changed"} {
+	for _, mode := range []string{"single", "range", "date", "date-changed", "missing", "changed"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			root := sourceFiles(t, 3)
@@ -166,13 +165,24 @@ func TestTakeoverSingleKeyFiltersAndMissingAssignedSource(t *testing.T) {
 			case "range":
 				spec.StartKey, spec.EndKey = "0000.txt", "0001.txt"
 				first = takeoverObject(t, root, "0001.txt")
-			case "date":
+			case "date", "date-changed":
 				now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
 				if err := os.Chtimes(filepath.Join(root, "0000.txt"), now, now); err != nil {
 					t.Fatal(err)
 				}
 				first = takeoverObject(t, root, "0000.txt")
 				spec.ModifiedFrom, spec.ModifiedUntil = now.Add(-time.Hour), now.Add(time.Hour)
+				if mode == "date-changed" {
+					// Rewritten after it was assigned: its new time is outside
+					// the range, but its assignment stands.
+					later := now.Add(2 * time.Hour)
+					if err := os.WriteFile(filepath.Join(root, "0000.txt"), []byte("changed bytes"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chtimes(filepath.Join(root, "0000.txt"), later, later); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "missing":
 				if err := os.Remove(filepath.Join(root, first.Key)); err != nil {
 					t.Fatal(err)
@@ -188,15 +198,16 @@ func TestTakeoverSingleKeyFiltersAndMissingAssignedSource(t *testing.T) {
 			if _, err := scanner.FinalizeTakeover(ctx, 1, 1, 1); err != nil {
 				t.Fatal(err)
 			}
+			got := waitStatus(t, scanner, Completed)
+			keys := takeoverNewKeys(t, scanner, request)
 			if mode == "changed" {
-				got := waitStatus(t, scanner, Failed)
-				if !strings.Contains(got.Error, ErrSourceChanged.Error()) {
-					t.Fatal(got)
+				// The assigned object changed after it was dispatched. It keeps
+				// that assignment, and the takeover scan lists the rest.
+				if got.TotalObjects != 3 || got.MissingObjects != 0 || len(keys) != 2 || got.Error != "" {
+					t.Fatal("a changed assigned object stopped the takeover scan", got, keys)
 				}
 				return
 			}
-			got := waitStatus(t, scanner, Completed)
-			keys := takeoverNewKeys(t, scanner, request)
 			if mode == "missing" {
 				if got.TotalObjects != 3 || got.MissingObjects != 1 || len(keys) != 2 {
 					t.Fatal(got, keys)

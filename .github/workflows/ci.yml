@@ -755,12 +755,14 @@ jobs:
           envs: QA_ARCH QA_SCOPE GITHUB_SHA
           prepare: |
             set -e
-            # The packaged Python's ensurepip can fail in a new virtual
-            # environment, so the pinned requirements are installed into it
-            # with the packaged pip.
-            pkg install -y bash curl python311 py311-pip ca_root_nss
-            python3.11 -m venv --without-pip /opt/oss-transfer-ci-venv
-            python3.11 -m pip --python /opt/oss-transfer-ci-venv/bin/python install -r .github/acceptance/requirements.txt
+            # Packages such as pip are built only for the repository's default
+            # Python, and ensurepip can fail in a new virtual environment. Use
+            # that Python and install the pinned requirements with its pip.
+            pkg install -y bash curl python3 ca_root_nss
+            flavour=$(python3 -c 'import sys; print("py%d%d" % sys.version_info[:2])')
+            pkg install -y "$flavour-pip"
+            python3 -m venv --without-pip /opt/oss-transfer-ci-venv
+            python3 -m pip --python /opt/oss-transfer-ci-venv/bin/python install -r .github/acceptance/requirements.txt
             /opt/oss-transfer-ci-venv/bin/python -c 'import boto3, botocore; print("boto3", boto3.__version__, "botocore", botocore.__version__)'
           run: |
             status=0

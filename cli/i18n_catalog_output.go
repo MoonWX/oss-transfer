@@ -178,6 +178,9 @@ var cliOutputMessages = map[string][2]string{
 
 	// Separates the names of a list within a sentence.
 	"、": {", ", "、"},
+
+	// The local report covers every local task and needs them all ended.
+	"本地迁移报告包含全部本地迁移任务，只能在所有本地迁移都已结束或停止时导出，不支持 --%s 筛选；单任务报告请使用 task report": {"The local report covers every local transfer task and can be exported only when all local transfers have ended or stopped; it does not support --%s. Use task report for one task", "ローカルレポートにはすべてのローカル転送タスクが含まれ、すべてのローカル転送が終了または停止している場合にのみエクスポートできます。--%s での絞り込みには対応しません。単一タスクには task report を使用してください"},
 }
 
 func init() {

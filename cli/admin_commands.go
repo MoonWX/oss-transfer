@@ -761,7 +761,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	if kind == "local" && action == "export" {
 		for key := range o.Values {
 			if key != "output" {
-				return nil, cliErrorf("本地迁移报告 API 导出所有已结束或停止任务的 ZIP，不支持 --%s 筛选；单任务报告请使用 task report", key)
+				return nil, cliErrorf("本地迁移报告包含全部本地迁移任务，只能在所有本地迁移都已结束或停止时导出，不支持 --%s 筛选；单任务报告请使用 task report", key)
 			}
 		}
 		if err := client.Download("GET", "/api/master/local-transfers/report", nil, o.Value("output")); err != nil {

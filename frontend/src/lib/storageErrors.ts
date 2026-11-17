@@ -48,8 +48,11 @@ const transport: [RegExp, StorageErrorKind][] = [
 // S3 (PermanentRedirect) and Alibaba Cloud OSS (AccessDenied, EC
 // 0003-00001403) say this when a bucket must be reached through another
 // endpoint, usually the one of its region. OSS lists the buckets of every
-// region, so this is not a permission problem.
-const endpointMismatch = /must be addressed using the specified endpoint/i;
+// region, so this is not a permission problem. An OSS reply without a body,
+// such as that to HEAD, says it by its EC alone, kept in the storage response
+// diagnostic.
+const endpointMismatch =
+  /must be addressed using the specified endpoint|\[storage response: [^\]]*\bec=0003-00001403\b/i;
 // The endpoint the reply named, kept in the storage response diagnostic.
 const diagnosticEndpoint =
   /\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)/;

@@ -43,6 +43,18 @@ test("a failed object's cause comes from the storage reply, not from its key", (
   setLocale("zh-CN");
 });
 
+// OSS refuses a HEAD of a bucket in another region with 403 and no body: the
+// EC that the storage response diagnostic keeps is the only account of why.
+test("a HEAD refused for a bucket of another region names the endpoint, not the permissions", () => {
+  setLocale("zh-CN");
+  const head = (ec: string) =>
+    `check destination "logs/403.gz": operation error S3: HeadObject, https response error StatusCode: 403, RequestID: , HostID: , api error Forbidden: Forbidden [storage response: http=403, server=AliyunOSS, request-id=5F1A, ec=${ec}, body=empty]`;
+  expect(objectErrorSummary(head("0003-00001403"))).toBe(
+    "存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该地域的 Endpoint 创建存储连接。",
+  );
+  expect(objectErrorSummary(head("0003-00000201"))).toBeUndefined();
+});
+
 test("the exceptions page names what happened to each object", async ({
   page,
 }) => {

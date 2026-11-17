@@ -119,6 +119,24 @@ func addProgressPercent(row map[string]any) {
 	row["progressPercent"] = math.Floor(percent*100) / 100
 }
 
+// validFileProgress drops an optional field an Agent reported out of range
+// and keeps the row: an unknown phase or basis, or source reads outside
+// [0, size]. A row without a basis reads as one counted from source reads.
+func validFileProgress(file execution.ObjectProgress) execution.ObjectProgress {
+	switch file.Phase {
+	case "", execution.PhaseRetryWait, execution.PhaseRequestLimit, execution.PhaseUploadBuffer:
+	default:
+		file.Phase = ""
+	}
+	if file.ReadBytes < 0 || file.ReadBytes > file.Size {
+		file.ReadBytes = 0
+	}
+	if file.Basis != execution.BasisTarget && file.Basis != execution.BasisSource {
+		file.Basis = ""
+	}
+	return file
+}
+
 type fileProgressReply struct {
 	Supported bool                       `json:"supported"`
 	Child     *execution.ChildProgress   `json:"child"`
@@ -292,7 +310,7 @@ func (s *Server) taskProgressHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[file.ItemID] = true
 			if len(items) < limit {
-				items = append(items, fileProgressView{file, child.Progress.ChildID, child.Progress.Number, displays.lookup(child.Node.ID, child.Node.Address).DisplayLabel})
+				items = append(items, fileProgressView{validFileProgress(file), child.Progress.ChildID, child.Progress.Number, displays.lookup(child.Node.ID, child.Node.Address).DisplayLabel})
 			}
 		}
 	}

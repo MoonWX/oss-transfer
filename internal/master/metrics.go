@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
+	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
@@ -28,6 +29,12 @@ type taskRateCache struct {
 	// slower task rather than an unknown one.
 	requests   *nodecontrol.TaskRequestRates
 	nodeLimits map[string]nodecontrol.NodeRequestLimits
+	// basis is what the speed and live progress count: TARGET when every
+	// node counts bytes sent to the destination, SOURCE when none does
+	// (older Agents count source reads), MIXED otherwise. nodeBasis holds
+	// each node's, by node ID.
+	basis     string
+	nodeBasis map[string]string
 }
 
 // Missing Agent responses invalidate the aggregate. Showing a partial sum as
@@ -94,10 +101,15 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	var progressReports []task.ProgressReport
 	progressTruncated := false
 	requests, nodeLimits := &nodecontrol.TaskRequestRates{}, map[string]nodecontrol.NodeRequestLimits{}
+	nodeBasis := map[string]string{}
 	for index, result := range results {
 		if !result.valid {
 			entry.valid = false
 			break
+		}
+		nodeBasis[nodes[index].ID] = execution.BasisSource
+		if result.rate.Basis == execution.BasisTarget {
+			nodeBasis[nodes[index].ID] = execution.BasisTarget
 		}
 		entry.progressSupported = entry.progressSupported && result.rate.ProgressSupported
 		for _, child := range result.rate.Progress {
@@ -124,6 +136,9 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	if entry.valid && requests != nil {
 		entry.requests, entry.nodeLimits = requests, nodeLimits
 	}
+	if entry.valid {
+		entry.basis, entry.nodeBasis = combinedBasis(nodeBasis), nodeBasis
+	}
 	if !entry.valid && last.generation == p.Generation && last.progressSupported {
 		// A failed collection cannot establish that an Agent lacks progress
 		// support. Keep known capability so an incomplete sample never falls
@@ -143,6 +158,20 @@ func (t *taskRuntime) sampleRates(ctx context.Context, p task.Parent) {
 	t.mu.Unlock()
 }
 func validTaskRate(rate float64) bool { return rate >= 0 && !math.IsNaN(rate) && !math.IsInf(rate, 0) }
+
+// combinedBasis is TARGET or SOURCE when every node's basis is that one,
+// MIXED when they differ, and empty without nodes.
+func combinedBasis(nodes map[string]string) string {
+	combined := ""
+	for _, basis := range nodes {
+		if combined == "" {
+			combined = basis
+		} else if combined != basis {
+			return "MIXED"
+		}
+	}
+	return combined
+}
 func validRequestRates(r nodecontrol.TaskRequests) bool {
 	for _, value := range []float64{r.Rates.List, r.Rates.Get, r.Rates.Head, r.Rates.Put, r.NodeLimits.List, r.NodeLimits.Head, r.NodeLimits.Put} {
 		if !validTaskRate(value) {
@@ -180,7 +209,7 @@ func (s *Server) taskView(p task.Parent, sets ...nodeDisplaySet) map[string]any 
 	}
 	displays.task(row, p.CurrentNodes())
 	row["executionMembership"] = s.membershipSummary(p, displays)
-	s.addTaskRate(row, p, "")
+	s.addTaskRate(row, p, nil)
 	s.addLiveProgress(row, p, nil)
 	s.addRequestRates(row, p)
 	if activity := s.scanActivityView(p); activity != nil {
@@ -197,18 +226,33 @@ func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) 
 		displays = s.nodeDisplaySnapshot()
 	}
 	displays.task(row, []task.Node{c.Node})
-	s.addTaskRate(row, p, c.Job.ChildID)
+	s.addTaskRate(row, p, &c)
 	s.addLiveProgress(row, p, &c)
 	return row
 }
-func (s *Server) addTaskRate(row map[string]any, p task.Parent, child string) {
+
+// addTaskRate writes the current speed and, with it, transferBasis: what the
+// speed and live bytes count (see taskRateCache.basis). A child's basis is
+// its node's.
+func (s *Server) addTaskRate(row map[string]any, p task.Parent, child *task.Child) {
 	row["currentSpeedBytesPerSecond"] = nil
 	if task.Ended(p.Status) || task.Ended(stringValue(row["status"])) {
 		row["currentSpeedBytesPerSecond"] = float64(0)
 		return
 	}
-	if rate, ok := s.tasks.rate(p, child); ok {
-		row["currentSpeedBytesPerSecond"] = rate
+	entry, fresh := s.tasks.rateSnapshot(p)
+	if !fresh {
+		return
+	}
+	basis := entry.basis
+	if child == nil {
+		row["currentSpeedBytesPerSecond"] = entry.total
+	} else {
+		row["currentSpeedBytesPerSecond"] = entry.children[child.Job.ChildID]
+		basis = entry.nodeBasis[child.Node.ID]
+	}
+	if basis != "" {
+		row["transferBasis"] = basis
 	}
 }
 func stringValue(value any) string { text, _ := value.(string); return text }

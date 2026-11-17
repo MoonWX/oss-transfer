@@ -337,29 +337,32 @@ type comparisonExportNode struct {
 
 // comparisonExportSummary is summary.json in an export ZIP.
 type comparisonExportSummary struct {
-	ComparisonID       string                   `json:"comparisonId"`
-	Node               comparisonExportNode     `json:"node"`
-	Status             string                   `json:"status"`
-	Mode               string                   `json:"mode"`
-	Scope              string                   `json:"scope"`
-	Source             comparisonExportEndpoint `json:"source"`
-	Destination        comparisonExportEndpoint `json:"destination"`
-	Counts             comparisonExportCounts   `json:"counts"`
-	StoredRows         int64                    `json:"storedRows"`
-	ExportedRows       int64                    `json:"exportedRows"`
-	StatusFilter       []string                 `json:"statusFilter"`
-	Complete           bool                     `json:"complete"`
-	IncompleteReasons  []string                 `json:"incompleteReasons"`
-	TruncatedReason    string                   `json:"truncatedReason"`
-	LastStoredKey      string                   `json:"lastStoredKey"`
-	RetryStatuses      []string                 `json:"retryStatuses"`
-	RetryKeys          int64                    `json:"retryKeys"`
-	RetryKeysOmitted   int64                    `json:"retryKeysOmitted"`
-	RetryPrefixesMatch bool                     `json:"retryPrefixesMatch"`
-	CSVEscaping        string                   `json:"csvEscaping"`
-	StartedAt          time.Time                `json:"startedAt"`
-	EndedAt            *time.Time               `json:"endedAt"`
-	GeneratedAt        time.Time                `json:"generatedAt"`
+	ComparisonID      string                   `json:"comparisonId"`
+	Node              comparisonExportNode     `json:"node"`
+	Status            string                   `json:"status"`
+	Mode              string                   `json:"mode"`
+	Scope             string                   `json:"scope"`
+	Source            comparisonExportEndpoint `json:"source"`
+	Destination       comparisonExportEndpoint `json:"destination"`
+	Counts            comparisonExportCounts   `json:"counts"`
+	StoredRows        int64                    `json:"storedRows"`
+	ExportedRows      int64                    `json:"exportedRows"`
+	StatusFilter      []string                 `json:"statusFilter"`
+	Complete          bool                     `json:"complete"`
+	IncompleteReasons []string                 `json:"incompleteReasons"`
+	// Warnings qualify a complete result: NO_OBJECTS_FOUND is a prefix
+	// comparison that found no object on either side, so it compared nothing.
+	Warnings           []string   `json:"warnings"`
+	TruncatedReason    string     `json:"truncatedReason"`
+	LastStoredKey      string     `json:"lastStoredKey"`
+	RetryStatuses      []string   `json:"retryStatuses"`
+	RetryKeys          int64      `json:"retryKeys"`
+	RetryKeysOmitted   int64      `json:"retryKeysOmitted"`
+	RetryPrefixesMatch bool       `json:"retryPrefixesMatch"`
+	CSVEscaping        string     `json:"csvEscaping"`
+	StartedAt          time.Time  `json:"startedAt"`
+	EndedAt            *time.Time `json:"endedAt"`
+	GeneratedAt        time.Time  `json:"generatedAt"`
 }
 
 // comparisonStatusCount is the number of compared objects whose result is
@@ -455,6 +458,7 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		ExportedRows:       exported,
 		StatusFilter:       append([]string{}, statuses...),
 		IncompleteReasons:  []string{},
+		Warnings:           []string{},
 		TruncatedReason:    p.TruncatedReason,
 		LastStoredKey:      p.LastStoredKey,
 		RetryStatuses:      append([]string{}, comparison.RetryStatuses...),
@@ -488,6 +492,9 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		summary.IncompleteReasons = append(summary.IncompleteReasons, "RETRY_KEYS_MISMATCH")
 	}
 	summary.Complete = len(summary.IncompleteReasons) == 0
+	if p.Status == comparison.StateCompleted && p.Scope != "object" && p.Compared == 0 {
+		summary.Warnings = append(summary.Warnings, "NO_OBJECTS_FOUND")
+	}
 	entry, err = create("summary.json")
 	if err != nil {
 		return err

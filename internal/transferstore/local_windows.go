@@ -97,3 +97,15 @@ func syncPublished(directory *os.Root, name string) error {
 	defer file.Close()
 	return file.Sync()
 }
+
+// lookupIdentity is what os.SameFile compares of a file a lookup found. A
+// Windows FileInfo does not export its volume and file index, so the lookup's
+// FileInfo is kept.
+type lookupIdentity struct{ info fs.FileInfo }
+
+func identityOf(info fs.FileInfo) lookupIdentity { return lookupIdentity{info: info} }
+
+// same reports whether info is the file the identity was taken from.
+func (id lookupIdentity) same(info fs.FileInfo) bool {
+	return id.info != nil && os.SameFile(id.info, info)
+}

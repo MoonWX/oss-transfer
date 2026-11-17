@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -625,5 +626,122 @@ func TestLocalScanShowsAStreamedListingAsReadOnceItEnds(t *testing.T) {
 	}
 	if d := listed.Directory; d.Key != "big" || d.Names != 20 || d.Position != 1 {
 		t.Fatalf("activity once the listing ended: %+v", d)
+	}
+}
+
+// A subdirectory deferred while its parent streamed is entered with the
+// identity its lookup found: if it cannot be opened as that directory, one
+// fresh lookup decides, as for any other subdirectory.
+func TestLocalScanChildRuleForDeferredSubdirectories(t *testing.T) {
+	injected := errors.New("open refused")
+	for _, test := range []struct {
+		name   string
+		change func(t *testing.T, root string, call func() (*os.Root, error)) (*os.Root, error)
+		want   []string
+		err    error
+	}{
+		{"replaced by a directory before the open", func(t *testing.T, root string, call func() (*os.Root, error)) (*os.Root, error) {
+			if err := os.Rename(filepath.Join(root, "big", "sub"), filepath.Join(root, "moved")); err != nil {
+				t.Fatal(err)
+			}
+			writeFiles(t, root, "big/sub/new")
+			return call()
+		}, []string{"big/sub/new"}, nil},
+		{"vanished", func(t *testing.T, root string, call func() (*os.Root, error)) (*os.Root, error) {
+			if err := os.RemoveAll(filepath.Join(root, "big", "sub")); err != nil {
+				t.Fatal(err)
+			}
+			return call()
+		}, nil, nil},
+		{"the same directory refuses the open", func(*testing.T, string, func() (*os.Root, error)) (*os.Root, error) {
+			return nil, injected
+		}, nil, injected},
+		{"another directory opened, the entry unchanged", func(t *testing.T, root string, _ func() (*os.Root, error)) (*os.Root, error) {
+			return os.OpenRoot(filepath.Join(root, "other"))
+		}, nil, ErrSourceChanged},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			local, root := localFixture(t)
+			writeFiles(t, root, numbered("big/f", 10)...)
+			writeFiles(t, root, "big/sub/old", "other/o")
+			spy := spyOnScan(local, root)
+			local.scanTuning.streamAfter = 8
+			spy.openRoot = func(key string, call func() (*os.Root, error)) (*os.Root, error) {
+				if key == "big/sub" {
+					return test.change(t, root, call)
+				}
+				return call()
+			}
+			pages, err := scanAll(local, context.Background(), ListOptions{})
+			if test.err != nil {
+				if !errors.Is(err, test.err) {
+					t.Fatalf("got %v, want %v", err, test.err)
+				}
+				return
+			}
+			var got []string
+			for _, key := range objectKeys(pages) {
+				if strings.HasPrefix(key, "big/sub/") {
+					got = append(got, key)
+				}
+			}
+			if err != nil || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("got %v %v, want %v", got, err, test.want)
+			}
+		})
+	}
+}
+
+// openRootHook is the scan's access to the source, calling hook before each
+// directory it opens as a root, and keeping no record of its own.
+type openRootHook struct {
+	rootScanFS
+	hook func(name string)
+}
+
+func (h openRootHook) OpenRoot(dir *os.Root, name string) (*os.Root, error) {
+	h.hook(name)
+	return dir.OpenRoot(name)
+}
+
+// While a streamed directory's subdirectories wait for the end of its
+// listing and then for their turn, each costs its name and its identity, not
+// the whole FileInfo of its lookup.
+func TestLocalScanDefersSubdirectoriesCompactly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a Windows FileInfo does not export its file index, so a deferred subdirectory keeps it")
+	}
+	local, root := localFixture(t)
+	const subdirectories = 8000
+	for i := range subdirectories {
+		if err := os.MkdirAll(filepath.Join(root, "big", fmt.Sprintf("d%05d", i)), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	heap := func() uint64 {
+		runtime.GC()
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		return stats.HeapAlloc
+	}
+	var during uint64
+	local.scanTuning = &localScanTuning{streamAfter: 8, fs: openRootHook{hook: func(name string) {
+		if name == "d00000" {
+			// The first deferred subdirectory: every other one still waits.
+			during = heap()
+		}
+	}}}
+	before := heap()
+	if _, err := scanAll(local, context.Background(), ListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if during == 0 {
+		t.Fatal("big/d00000 was never entered")
+	}
+	// A lookup's FileInfo alone takes more than 200 bytes on a 64-bit Unix,
+	// and with it each subdirectory took about 400; a name and an identity
+	// take about 50.
+	if during > before && during-before > subdirectories*250 {
+		t.Fatalf("the deferred subdirectories took %d bytes, %d each", during-before, (during-before)/subdirectories)
 	}
 }

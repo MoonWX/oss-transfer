@@ -86,11 +86,13 @@ type localScanFrame struct {
 	// name order: a resumed scan reads the directory again and finds them
 	// done. Its subdirectories are deferred, then entered in sorted order once
 	// the listing has ended, each with the identity its lookup found.
-	stream       *nameStream
-	listed       int // names its listing returned
-	deferred     []deferredDirectory
-	deferredDirs map[string]fs.FileInfo // after the listing: names holds these
-	pageKeys     map[string]struct{}    // files emitted in the open page
+	stream   *nameStream
+	listed   int // names its listing returned
+	deferred []deferredDirectory
+	// After the listing, names holds the deferred subdirectories and
+	// deferredIDs the identity of each, at the same index.
+	deferredIDs []lookupIdentity
+	pageKeys    map[string]struct{} // files emitted in the open page
 }
 
 // name is the frame's name at index: from its sorted names, or from the
@@ -115,7 +117,7 @@ func (frame *localScanFrame) length() int {
 // them. After a streamed listing, the deferred subdirectories are its last
 // entries.
 func (frame *localScanFrame) progress() (names, next int) {
-	if frame.deferredDirs != nil {
+	if frame.deferredIDs != nil {
 		return frame.listed, frame.listed - (len(frame.names) - frame.next)
 	}
 	return len(frame.names), frame.next
@@ -555,10 +557,11 @@ func (scan *localScan) step(frame *localScanFrame) error {
 		return nil
 	}
 	key := path.Join(frame.key, name)
-	if info, deferred := frame.deferredDirs[name]; deferred {
+	if frame.deferredIDs != nil {
 		// Examined while its parent streamed.
+		looked := frame.deferredIDs[frame.next]
 		scan.consume(frame, entryUnexamined)
-		return scan.descend(frame, name, key, info)
+		return scan.descend(frame, name, key, looked)
 	}
 	if !scanEntryName(name) {
 		return ErrInvalidKey
@@ -603,13 +606,13 @@ func (scan *localScan) step(frame *localScanFrame) error {
 		}
 		scan.consume(frame, entryExamined)
 	case directory && info.IsDir() && !lookup.staging && frame.stream != nil:
-		frame.deferred = append(frame.deferred, deferredDirectory{name: name, info: info})
+		frame.deferred = append(frame.deferred, deferredDirectory{name: name, id: identityOf(info)})
 		scan.consume(frame, entryExamined)
 	case directory && info.IsDir() && !lookup.staging:
 		// Advance only once the child is open; on failure the caller keeps
 		// the preceding durable cursor anyway.
 		scan.consume(frame, entryExamined)
-		return scan.descend(frame, name, key, info)
+		return scan.descend(frame, name, key, identityOf(info))
 	default:
 		// Links, special files, directories off the prefix path, staging
 		// namespaces and files out of scope are not migration objects.
@@ -741,7 +744,7 @@ func (scan *localScan) head(frame *localScanFrame) (*localLookup, error) {
 // and the slots of those that finish go to the next names. The head's own
 // lookup waits for a free slot; the others are issued only while one is free.
 func (scan *localScan) fill(frame *localScanFrame, behind bool) {
-	if frame.deferredDirs != nil {
+	if frame.deferredIDs != nil {
 		return // Deferred directories were looked up as their parent streamed.
 	}
 	// Names consumed without a lookup leave issue behind; a stream has
@@ -997,7 +1000,7 @@ func (scan *localScan) staging(ctx context.Context, lookup *localLookup, dir *os
 
 // descend opens the directory an entry lookup found and makes it the top
 // frame. If it cannot be opened as that directory, childRule decides.
-func (scan *localScan) descend(parent *localScanFrame, name, key string, looked fs.FileInfo) error {
+func (scan *localScan) descend(parent *localScanFrame, name, key string, looked lookupIdentity) error {
 	dir, openErr := scan.openRoot(parent.dir, name)
 	var file *os.File
 	var info fs.FileInfo
@@ -1007,7 +1010,7 @@ func (scan *localScan) descend(parent *localScanFrame, name, key string, looked 
 			dir = nil
 		}
 	}
-	if openErr != nil || !info.IsDir() || !os.SameFile(looked, info) {
+	if openErr != nil || !info.IsDir() || !looked.same(info) {
 		proceed, err := scan.childRule(parent, name, key, looked, info, openErr)
 		if !proceed {
 			if file != nil {
@@ -1034,7 +1037,7 @@ func (scan *localScan) descend(parent *localScanFrame, name, key string, looked 
 //     scan enters the replacement;
 //   - the directory the lookup found: the open's own error, as before;
 //   - anything else: the source changed.
-func (scan *localScan) childRule(parent *localScanFrame, name, key string, looked, opened fs.FileInfo, openErr error) (bool, error) {
+func (scan *localScan) childRule(parent *localScanFrame, name, key string, looked lookupIdentity, opened fs.FileInfo, openErr error) (bool, error) {
 	current, err := scan.lstat(parent.dir, name)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -1044,7 +1047,7 @@ func (scan *localScan) childRule(parent *localScanFrame, name, key string, looke
 	case !current.IsDir():
 	case openErr == nil && opened.IsDir() && os.SameFile(current, opened):
 		return true, nil
-	case openErr != nil && os.SameFile(current, looked):
+	case openErr != nil && looked.same(current):
 		return false, scanPathError(openErr, key)
 	}
 	return false, fmt.Errorf("%w: scan directory %q was replaced", ErrSourceChanged, key)

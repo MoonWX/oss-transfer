@@ -3,7 +3,6 @@ package transferstore
 import (
 	"context"
 	"io"
-	"io/fs"
 	"os"
 	"slices"
 	"sync"
@@ -215,9 +214,9 @@ func (scan *localScan) finishStream(frame *localScanFrame) {
 	})
 	frame.deferred = slices.CompactFunc(frame.deferred, func(a, b deferredDirectory) bool { return a.name == b.name })
 	frame.names = make([]string, len(frame.deferred))
-	frame.deferredDirs = make(map[string]fs.FileInfo, len(frame.deferred))
+	frame.deferredIDs = make([]lookupIdentity, len(frame.deferred))
 	for i, d := range frame.deferred {
-		frame.names[i], frame.deferredDirs[d.name] = d.name, d.info
+		frame.names[i], frame.deferredIDs[i] = d.name, d.id
 	}
 	frame.deferred, frame.pageKeys = nil, nil
 	frame.next, frame.issue, frame.read = 0, 0, true
@@ -228,8 +227,10 @@ func (scan *localScan) finishStream(frame *localScanFrame) {
 }
 
 // deferredDirectory is a subdirectory found while its parent streams, entered
-// once the parent's listing has ended.
+// once the parent's listing has ended. It keeps only its lookup's identity,
+// so a directory of millions of subdirectories holds their names and little
+// more.
 type deferredDirectory struct {
 	name string
-	info fs.FileInfo
+	id   lookupIdentity
 }

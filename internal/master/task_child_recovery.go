@@ -69,13 +69,14 @@ func (s *Server) recoverChildHTTP(w http.ResponseWriter, r *http.Request) {
 // child, changes its generation, or resumes a stopped parent as a side effect.
 // recoveryDestinationCheck says how recovering a child proves a shared
 // download destination that automatic takeover does not already verify:
-// "probe" writes and reads the test file through every node, "skipped" means
-// the operator skipped the check when creating the task, "" needs nothing.
+// "probe" writes and reads the test file through every node whose check was
+// not skipped, "skipped" means the operator skipped the check of every node
+// when creating the task, "" needs nothing.
 func recoveryDestinationCheck(parent task.Parent) string {
 	if parent.Spec.Destination.Kind != "LOCAL" || len(parent.ActiveNodes()) < 2 || parent.Failover != nil && parent.Failover.Enabled {
 		return ""
 	}
-	if parent.Spec.SharedCheckSkipped {
+	if parent.SharedCheckSkippedForEveryNode() {
 		return "skipped"
 	}
 	return "probe"
@@ -160,8 +161,11 @@ func (s *Server) recoverChild(ctx context.Context, id int64, number int) (parent
 	}
 	switch recoveryDestinationCheck(parent) {
 	case "probe":
-		for writer := range parent.Spec.Nodes {
-			if _, _, err = s.proveSharedDirectory(ctx, parent.Spec.Nodes, writer); err != nil {
+		// A node added with the check skipped does not take part: nothing
+		// says that it sees the same directory.
+		_, nodes := skippedSharedNodes(parent, parent.Spec.Nodes)
+		for writer := range nodes {
+			if _, _, err = s.proveSharedDirectory(ctx, nodes, writer); err != nil {
 				return
 			}
 		}

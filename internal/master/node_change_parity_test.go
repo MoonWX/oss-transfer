@@ -1,6 +1,7 @@
 package master
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
@@ -151,10 +153,11 @@ func TestAddedNodesAreVerifiedUnlessTheChangeSkipsTheCheck(t *testing.T) {
 }
 
 // A change that adds nodes with the check skipped to a task that verified its
-// directory records the skip, and the runtime then grants it to every member:
-// each current member must be reachable and able to record it. A change that
-// adds no local path ignores the choice.
-func TestAChangeThatSkipsTheCheckRecordsItForTheTask(t *testing.T) {
+// directory records the skip for the nodes it adds only: the current members
+// are neither asked to record a skipped check nor required to be reachable,
+// since the runtime keeps verifying them. Each added node must be able to
+// record it. A change that adds no local path ignores the choice.
+func TestAChangeThatSkipsTheCheckCoversOnlyTheNodesItAdds(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	var calls atomic.Int64
 	agents := sharedTestAgents(t, f, &calls, "writable", "writable", "writable", "legacy")
@@ -164,38 +167,38 @@ func TestAChangeThatSkipsTheCheckRecordsItForTheTask(t *testing.T) {
 
 	mixed := localTask(t, f, "mixed", "LOCAL_TO_OSS", shared, false, a, legacy)
 	status, body := nodeChange(t, f, mixed.ID, "en-US", joinBody(joiner, other, acknowledgedSkip, dryRunChange))
-	if status != 409 || body["code"] != "AGENT_UPGRADE_REQUIRED" || body["message"] != "Upgrade Agent Legacy worker (127.0.0.1) to run a task whose shared directory check was skipped" {
-		t.Fatal("a member that cannot record the skip did not block it", status, body)
-	}
-	status, body = nodeChange(t, f, mixed.ID, "", joinBody(joiner, shared, dryRunChange))
-	if data, check := addedNode(t, body); status != 200 || data["valid"] != true || check["code"] != "SHARED_STORAGE_VERIFIED" {
-		t.Fatal("a verified join asked the members to record a skip", status, body)
+	if data, check := addedNode(t, body); status != 200 || data["valid"] != true || check["code"] != "SHARED_STORAGE_CHECK_SKIPPED" {
+		t.Fatal("a member that keeps its verification blocked the skip", status, body)
 	}
 
-	// Takeover would fence an offline member, but it could not show that it
-	// can run the task without the check.
+	// Takeover fences an offline member, which keeps its verification when
+	// it returns: the skip does not need it.
 	ghost := task.Node{ID: "ghost", EnrollmentID: "ghost-enrollment", Address: "ghost.example"}
 	fenced := localTask(t, f, "fenced", "LOCAL_TO_OSS", shared, false, a, ghost)
 	if _, err := f.master.tasks.repo.EnableFailover(fenced.ID, fenced.Generation, false); err != nil {
 		t.Fatal(err)
 	}
 	status, body = nodeChange(t, f, fenced.ID, "", joinBody(joiner, other, acknowledgedSkip, dryRunChange))
-	if status != 409 || body["code"] != "AGENT_OFFLINE" || !strings.Contains(fmt.Sprint(body["message"]), "ghost.example") {
-		t.Fatal("an offline member did not block the skip", status, body)
-	}
-	status, body = nodeChange(t, f, fenced.ID, "", joinBody(joiner, shared, dryRunChange))
-	if data, check := addedNode(t, body); status != 200 || data["valid"] != true || check["code"] != "SHARED_STORAGE_VERIFIED" {
-		t.Fatal("an offline member blocked a verified join of a task with takeover", status, body)
+	if data, check := addedNode(t, body); status != 200 || data["valid"] != true || check["code"] != "SHARED_STORAGE_CHECK_SKIPPED" {
+		t.Fatal("an offline member blocked the skip of a task with takeover", status, body)
 	}
 
 	verified := localTask(t, f, "verified", "LOCAL_TO_OSS", shared, false, a, b)
+	status, body = nodeChange(t, f, verified.ID, "en-US", joinBody(legacy, other, acknowledgedSkip, dryRunChange))
+	if status != 409 || body["code"] != "AGENT_UPGRADE_REQUIRED" || body["message"] != "Upgrade Agent Legacy worker (127.0.0.1) to run a task whose shared directory check was skipped" {
+		t.Fatal("an added node that cannot record the skip was accepted", status, body)
+	}
 	status, body = nodeChange(t, f, verified.ID, "", joinBody(joiner, other, acknowledgedSkip))
 	data, check := addedNode(t, body)
 	if status != 200 || data["accepted"] != true || check["code"] != "SHARED_STORAGE_CHECK_SKIPPED" || data["view"].(map[string]any)["sharedCheckSkipped"] != true {
 		t.Fatal("the skip was not accepted and shown", status, body)
 	}
-	if current, err := f.master.tasks.repo.Get(verified.ID); err != nil || !current.Spec.SharedCheckSkipped || !current.NodeJoining(joiner.ID) {
+	current, err := f.master.tasks.repo.Get(verified.ID)
+	if err != nil || !current.Spec.SharedCheckSkipped || !current.NodeJoining(joiner.ID) {
 		t.Fatal("the skip was not recorded on the task", err)
+	}
+	if !current.SharedCheckSkippedFor(joiner.ID) || current.SharedCheckSkippedFor(a.ID) || current.SharedCheckSkippedFor(b.ID) {
+		t.Fatal("the skip does not cover exactly the added node", current.Spec.Nodes)
 	}
 	if schema := databaseSchema(t, f); schema < state.SchemaSharedCheckSkipped {
 		t.Fatal("the record does not raise the database format", schema)
@@ -219,6 +222,56 @@ func TestAChangeThatSkipsTheCheckRecordsItForTheTask(t *testing.T) {
 		if current, err := f.master.tasks.repo.Get(change.id); err != nil || current.Spec.SharedCheckSkipped {
 			t.Fatal("a change without an added local path recorded the skip", err)
 		}
+	}
+}
+
+// A node added with the check skipped joins without a check, while the
+// runtime keeps verifying the task's other nodes against the original shared
+// directory: a member that loses its mount is refused, not granted the skip.
+func TestASkippedJoinKeepsVerifyingTheOtherNodes(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	var calls atomic.Int64
+	agents := sharedTestAgents(t, f, &calls, "writable", "writable")
+	a, joiner := agents[0].node, agents[1].node
+	var lost atomic.Bool
+	b := overrideTestAgent(t, f, 3, func(command agenttransport.Command) (agenttransport.Response, bool) {
+		if lost.Load() && command.Operation == "shared_probe_verify" {
+			return agentReply(404, map[string]string{"code": "operation_failed", "message": "the shared directory is not mounted"})
+		}
+		return agenttransport.Response{}, false
+	})
+	labelAgent(t, f, b, "Member B")
+	shared, other := t.TempDir(), t.TempDir()
+	p := localTask(t, f, "skipped-join", "LOCAL_TO_OSS", shared, false, a, b)
+	if status, body := nodeChange(t, f, p.ID, "", joinBody(joiner, other, acknowledgedSkip)); status != 200 {
+		t.Fatal(status, body)
+	}
+	runtime := f.master.tasks
+	runtime.leases.ttl = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	everyNode := map[string]bool{a.ID: true, b.ID: true, joiner.ID: true}
+	p, err := runtime.reconcileFailover(ctx, p, everyNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err = runtime.repo.Get(p.ID); err != nil || !p.Failover.Enabled || p.NodeJoining(joiner.ID) || p.NodeRetired(joiner.ID) {
+		t.Fatal("the node added without a check did not join", err, p.Membership)
+	}
+	if !agents[1].service.Shared.Verified(p.ID, p.Generation, other) || !agents[0].service.Shared.Verified(p.ID, p.Generation, shared) {
+		t.Fatal("a node did not get its proof")
+	}
+	if proof := storedProof(t, f, p.ID); !proof.Ready || proof.ReadOnly {
+		t.Fatal("the members did not set up the marker of the shared directory", proof)
+	}
+	if entries, err := os.ReadDir(other); err != nil || len(entries) != 0 {
+		t.Fatal("the node added without a check was asked to read the marker", entries, err)
+	}
+
+	lost.Store(true)
+	_, err = runtime.reconcileFailover(ctx, p, everyNode)
+	if err == nil || !strings.Contains(err.Error(), "Agent Member B (127.0.0.1) cannot verify the original shared directory") {
+		t.Fatal("a member that lost its mount was not refused", err)
 	}
 }
 

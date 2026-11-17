@@ -144,9 +144,37 @@ type NodeChange struct {
 	// SkipSharedCheck records that the operator explicitly chose not to
 	// verify that the local paths this change adds see the task's shared
 	// storage. The task keeps the record (Spec.SharedCheckSkipped), as when
-	// it is created that way. A change that adds no node to a local task
-	// ignores it.
+	// it is created that way, but the skip covers only the nodes this change
+	// adds (Node.SharedCheckSkipped): the runtime keeps verifying the others.
+	// A change that adds no node to a local task ignores it.
 	SkipSharedCheck bool
+}
+
+// SharedCheckSkippedForEveryNode reports a task created with the shared
+// directory check skipped: the runtime grants every node, also one added
+// later, its shared proof without a check.
+func (p Parent) SharedCheckSkippedForEveryNode() bool {
+	return p.Spec.SharedCheckSkipped && !p.Spec.SharedCheckSkippedNodesOnly
+}
+
+// SharedCheckSkippedFor reports whether the runtime grants the node its
+// shared proof without a check (shared_proof_skip): every node of a task
+// created with the check skipped, otherwise only a node that a node change
+// added with the check skipped. Every other node is verified against the
+// task's shared directory.
+func (p Parent) SharedCheckSkippedFor(nodeID string) bool {
+	if !p.Spec.SharedCheckSkipped {
+		return false
+	}
+	if !p.Spec.SharedCheckSkippedNodesOnly {
+		return true
+	}
+	for _, node := range p.Spec.Nodes {
+		if node.ID == nodeID {
+			return node.SharedCheckSkipped
+		}
+	}
+	return false
 }
 
 type nodeRequestRecord struct {
@@ -299,6 +327,8 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 		_, ok := p.Failover.Retired[id]
 		return ok
 	}
+	local := p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL"
+	skip := change.SkipSharedCheck && local
 	joined := false
 	for _, node := range change.Add {
 		index := -1
@@ -311,6 +341,9 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			delete(m.Draining, node.ID)
 			continue
 		}
+		// Each join records its own choice: a node added again without the
+		// skip is verified, whatever an earlier change chose for it.
+		node.SharedCheckSkipped = skip
 		if index >= 0 {
 			// A removed node is fenced and all of its unfinished work has moved.
 			// Re-adding it rejoins under a newer ownership epoch.
@@ -357,8 +390,13 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			m.Draining[id] = NodeDrain{Mode: change.Mode, RequestedAt: now}
 		}
 	}
-	if change.SkipSharedCheck && joined && (p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL") {
-		// From now on the runtime grants every member the skipped check.
+	if skip && joined {
+		// The task shows the skip from now on, but only the nodes this change
+		// adds go unverified; the runtime keeps verifying the others. A task
+		// created with the check skipped already covers every node.
+		if !p.Spec.SharedCheckSkipped {
+			p.Spec.SharedCheckSkippedNodesOnly = true
+		}
 		p.Spec.SharedCheckSkipped = true
 	}
 	m.Revision++

@@ -29,8 +29,10 @@ type taskNodesRequest struct {
 	// SkipSharedCheck skips proving that the added nodes' local paths see
 	// the task's shared directory, as at creation: it is refused unless
 	// SkipSharedCheckAcknowledged is also true, and ignored unless the change
-	// adds nodes to a local transfer. Without it the added nodes are
-	// verified, even if the task was created with the check skipped.
+	// adds nodes to a local transfer. Only the added nodes go unverified;
+	// the runtime keeps verifying the other nodes. Without it the added
+	// nodes are verified, even if the task was created with the check
+	// skipped.
 	SkipSharedCheck             bool `json:"skipSharedCheck,omitempty"`
 	SkipSharedCheckAcknowledged bool `json:"skipSharedCheckAcknowledged,omitempty"`
 }
@@ -256,12 +258,11 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	if err := p.CheckNodeChange(change); err != nil {
 		return nil, s.membershipError(ctx, err)
 	}
-	// The runtime grants every member of a task whose check was skipped a
-	// proof without a check (shared_proof_skip), so each must support it: the
-	// added nodes of such a task, and every current member as well when this
-	// change is the one that records the skip.
-	joinSkipped := local && len(joining) > 0 && (skip || p.Spec.SharedCheckSkipped)
-	skipStarts := skip && !p.Spec.SharedCheckSkipped
+	// The runtime grants a proof without a check (shared_proof_skip) to the
+	// nodes this change adds with the check skipped, and to every node of a
+	// task created with the check skipped, so each of these must support it.
+	// The current members keep their verification.
+	joinSkipped := local && len(joining) > 0 && (skip || p.SharedCheckSkippedForEveryNode())
 	// Mixed versions: every joining node and every reachable current member
 	// must support fencing and queue handoff, as for automatic takeover.
 	for _, node := range joining {
@@ -284,28 +285,22 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		member, reachable := online[node.ID]
 		// Without lease fencing (never enabled, including stopped tasks) an
 		// offline member could still hold unfenced work, and a join could not
-		// be admitted: every current member must be reachable. So must every
-		// member when this change starts skipping the check, to show that
-		// it can run the task that way.
-		strict := !failoverReady || skipStarts
+		// be admitted: every current member must be reachable.
 		if !reachable || member.EnrollmentID != node.EnrollmentID {
-			if !strict {
+			if failoverReady {
 				continue // Offline members are fenced by lease expiry.
 			}
 			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is offline; reconnect it before changing this task's nodes", label(node))
 		}
 		caps, err := s.tasks.capabilities(ctx, node)
 		if err != nil {
-			if !strict {
+			if failoverReady {
 				continue
 			}
 			return nil, membershipReject(ctx, "AGENT_VERSION_UNAVAILABLE", capabilitiesUnreadableMessage, label(node), err.Error())
 		}
 		if caps.LeaseProtocol < 1 || caps.QueuedHandoffProtocol < 1 {
 			return nil, membershipReject(ctx, "AGENT_TOO_OLD", "Agent %s is too old for node changes; upgrade it first", label(node))
-		}
-		if skipStarts && !sharedSkipCapable(caps) {
-			return nil, membershipReject(ctx, "AGENT_UPGRADE_REQUIRED", sharedSkipUpgradeMessage, label(node))
 		}
 	}
 	var checks []bindingCheck
@@ -428,14 +423,16 @@ func (s *Server) membershipResult(ctx context.Context, id int64, accepted, repla
 // reachable current member and every added node (or, for an upload source no
 // node can write, sampled files must match on all of them). Only a change
 // that skips the check itself (skip) leaves the added nodes unverified; a
-// skip recorded on the task by an earlier operator does not carry over.
+// skip recorded on the task by an earlier operator does not carry over, and
+// the current members are never concerned by the skip.
 func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining []task.Node, online map[string]cluster.Member, displays nodeDisplaySet, skip bool) ([]bindingCheck, *membershipFailure) {
 	spec := p.Spec
 	spec.Nodes = nil
-	spec.SharedCheckSkipped = skip
+	spec.SharedCheckSkipped, spec.SharedCheckSkippedNodesOnly = skip, skip
 	var checks []bindingCheck
 	for _, node := range p.ActiveNodes() {
 		if member, ok := online[node.ID]; ok && member.EnrollmentID == node.EnrollmentID {
+			node.SharedCheckSkipped = false
 			spec.Nodes = append(spec.Nodes, node)
 			checks = append(checks, bindingCheck{taskBinding: taskBinding{node.Address, node.LocalRoot}, NodeDisplay: displays.lookup(node.ID, node.Address), Valid: true, PathType: "DIRECTORY"})
 		}
@@ -452,6 +449,7 @@ func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining
 			firstErr = check.DisplayLabel + ": " + check.Message
 		}
 		checks = append(checks, check)
+		node.SharedCheckSkipped = skip
 		spec.Nodes = append(spec.Nodes, node)
 	}
 	if firstErr == "" {

@@ -803,6 +803,13 @@ func TestChildRecoveryHonoursASkippedSharedCheck(t *testing.T) {
 	if got := recoveryDestinationCheck(download); got != "skipped" {
 		t.Fatal("recovery repeated a check the operator skipped", got)
 	}
+	// A node change that skipped the check of the nodes it added leaves the
+	// other nodes verified.
+	download.Spec.SharedCheckSkippedNodesOnly = true
+	if got := recoveryDestinationCheck(download); got != "probe" {
+		t.Fatal("recovery skipped the check of nodes that were verified", got)
+	}
+	download.Spec.SharedCheckSkippedNodesOnly = false
 	download.Spec.Nodes = nodes[:1]
 	if got := recoveryDestinationCheck(download); got != "" {
 		t.Fatal("one node has nothing to compare", got)

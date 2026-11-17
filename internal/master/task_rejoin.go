@@ -105,7 +105,8 @@ func (t *taskRuntime) rejoinNode(ctx context.Context, p task.Parent, node task.N
 		return wait(joinAgentTooOld)
 	}
 	local := p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL"
-	if local && p.Spec.SharedCheckSkipped && !sharedSkipCapable(caps) {
+	unchecked := local && p.SharedCheckSkippedFor(node.ID)
+	if unchecked && !sharedSkipCapable(caps) {
 		// verifyTaskStorage would grant it a proof without a check, which
 		// such an Agent cannot record.
 		return wait(joinUpgradeRequired)
@@ -139,7 +140,7 @@ func (t *taskRuntime) rejoinNode(ctx context.Context, p task.Parent, node task.N
 	}
 	p = next
 	t.joinedNode(p, label, node.ID)
-	if p.Spec.SharedCheckSkipped {
+	if unchecked {
 		log.Printf("task %d generation %d: node %s rejoins without a shared directory check, which the operator chose to skip", p.ID, p.Generation, label)
 	}
 	return p, nil, nil

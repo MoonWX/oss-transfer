@@ -104,10 +104,14 @@ func TestNodeChangeRecordsASkippedSharedCheckForAddedPaths(t *testing.T) {
 	if !p.Spec.SharedCheckSkipped || !p.NodeJoining("c") || schema() < state.SchemaSharedCheckSkipped {
 		t.Fatal("an added path did not record the skipped check", p.Spec.SharedCheckSkipped, schema())
 	}
+	// Only the added node goes unverified; the members stay verified.
+	if !p.Spec.SharedCheckSkippedNodesOnly || p.SharedCheckSkippedForEveryNode() || !p.SharedCheckSkippedFor("c") || p.SharedCheckSkippedFor("a") || p.SharedCheckSkippedFor("b") {
+		t.Fatal("the skip does not cover exactly the added node", p.Spec.Nodes)
+	}
 	db.Close()
 	db, repo = openTest(t, path)
 	defer db.Close()
-	if p, err = repo.Get(p.ID); err != nil || !p.Spec.SharedCheckSkipped {
+	if p, err = repo.Get(p.ID); err != nil || !p.Spec.SharedCheckSkipped || !p.SharedCheckSkippedFor("c") || p.SharedCheckSkippedFor("a") {
 		t.Fatal("the skipped check is not durable", err)
 	}
 	buckets, _, err := repo.Create(testSpec(), "buckets")
@@ -116,5 +120,56 @@ func TestNodeChangeRecordsASkippedSharedCheckForAddedPaths(t *testing.T) {
 	}
 	if buckets = skip(buckets, "buckets-join", []Node{{ID: "c", EnrollmentID: "ec"}}, nil); buckets.Spec.SharedCheckSkipped {
 		t.Fatal("a task without a local endpoint recorded a skipped check")
+	}
+}
+
+// A skip made at creation covers every node, also those that node changes
+// add later, verified or not. A skip made by a node change covers the nodes
+// it adds: a node added again without the skip is verified again, and the
+// task keeps showing that the check was skipped.
+func TestSkippedSharedCheckCoversTheNodesItWasMadeFor(t *testing.T) {
+	db, repo := openTest(t, filepath.Join(t.TempDir(), "master.db"))
+	defer db.Close()
+	spec := testSpec()
+	spec.Direction, spec.Source, spec.TargetPrefix, spec.SharedLocalSource = "LOCAL_TO_OSS", execution.Endpoint{Kind: "LOCAL", Root: "/data"}, "", true
+	for i := range spec.Nodes {
+		spec.Nodes[i].LocalRoot = "/data"
+	}
+	change := func(p Parent, key string, skip bool, add []Node, remove []string) Parent {
+		t.Helper()
+		p, _, err := repo.ChangeNodes(p.ID, NodeChange{Add: add, Remove: remove, Mode: DrainModeDrain, RequestKey: key, Fingerprint: key, SkipSharedCheck: skip})
+		if err != nil {
+			t.Fatal(key, err)
+		}
+		return p
+	}
+	created := spec
+	created.SharedCheckSkipped = true
+	everyNode, _, err := repo.Create(created, "created-skipped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	everyNode = change(everyNode, "verified-join", false, []Node{{ID: "c", EnrollmentID: "ec", LocalRoot: "/data"}}, nil)
+	for _, id := range []string{"a", "b", "c"} {
+		if !everyNode.SharedCheckSkippedForEveryNode() || !everyNode.SharedCheckSkippedFor(id) {
+			t.Fatal("a skip made at creation does not cover every node", id, everyNode.Spec)
+		}
+	}
+	everyNode = change(everyNode, "cancel-c", false, nil, []string{"c"})
+	everyNode = change(everyNode, "unchecked-join", true, []Node{{ID: "d", EnrollmentID: "ed", LocalRoot: "/mnt/d"}}, nil)
+	if !everyNode.SharedCheckSkippedForEveryNode() || !everyNode.SharedCheckSkippedFor("a") || !everyNode.SharedCheckSkippedFor("d") {
+		t.Fatal("a skipping node change limited a skip made at creation", everyNode.Spec)
+	}
+
+	verified, _, err := repo.Create(spec, "verified")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Node{ID: "c", EnrollmentID: "ec", LocalRoot: "/mnt/c"}
+	verified = change(verified, "add-c", true, []Node{c}, nil)
+	verified = change(verified, "cancel-c", false, nil, []string{"c"})
+	verified = change(verified, "add-c-again", false, []Node{c}, nil)
+	if verified.SharedCheckSkippedFor("c") || !verified.NodeJoining("c") || !verified.Spec.SharedCheckSkipped {
+		t.Fatal("a node added again without the skip is not verified, or the task forgot the skip", verified.Spec)
 	}
 }

@@ -46,13 +46,18 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 	}
 	if p.Spec.SharedCheckSkipped {
 		// grantSkippedSharedCheck logs each node that starts unverified.
-		if err := t.server.grantSkippedSharedCheck(ctx, p, p.Spec.Nodes); err != nil {
+		skipped, verified := skippedSharedNodes(p, p.Spec.Nodes)
+		if err := t.server.grantSkippedSharedCheck(ctx, p, skipped); err != nil {
 			return err
 		}
-		t.mu.Lock()
-		t.sharedProofs[p.ID] = stamp
-		t.mu.Unlock()
-		return nil
+		if len(verified) == 0 {
+			t.mu.Lock()
+			t.sharedProofs[p.ID] = stamp
+			t.mu.Unlock()
+			return nil
+		}
+		// The marker below verifies the nodes whose check was not skipped.
+		p.Spec.Nodes = verified
 	}
 	var probe transferstore.SharedProbe
 	if err := t.server.store.Update(func(tx *state.Tx) error {

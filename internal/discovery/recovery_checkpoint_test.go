@@ -76,8 +76,14 @@ func TestTakeoverCheckpointLocalRetainsOnlyAssignedPageBoundary(t *testing.T) {
 			if done.TotalObjects != 260 || done.SeenObjects != 260 || done.TotalBytes != 260*9 || done.MissingObjects != 0 || done.Warning != "" {
 				t.Fatalf("takeover skipped unassigned objects or duplicated assigned objects: %+v", done)
 			}
+			// Files seeded from Master's manifest are done: the resumed scan
+			// does not look them up again, only the four never assigned.
 			cursors, inspected := factory.observed()
-			if len(cursors) != 1 || cursors[0] == "" || cursors[0] == checkpoint.Cursor || len(inspected) != 132 {
+			wantInspected := 132
+			if assigned == 2 {
+				wantInspected = 4
+			}
+			if len(cursors) != 1 || cursors[0] == "" || cursors[0] == checkpoint.Cursor || len(inspected) != wantInspected {
 				t.Fatalf("shared cursor was not rebound/resumed: cursors=%v inspected=%d", cursors, len(inspected))
 			}
 			for _, key := range inspected {

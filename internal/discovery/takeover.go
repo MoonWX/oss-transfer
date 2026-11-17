@@ -128,7 +128,8 @@ func validateTakeover(request TakeoverRequest) error {
 		return ErrInvalid
 	}
 	if checkpoint := request.Checkpoint; checkpoint != nil {
-		if !checkpoint.Valid() || checkpoint.ThroughBatch > request.ThroughBatch || checkpoint.Objects > request.Objects || checkpoint.Bytes > request.Bytes {
+		if !checkpoint.Valid() || checkpoint.ThroughBatch > request.ThroughBatch || checkpoint.Objects > request.Objects || checkpoint.Bytes > request.Bytes ||
+			checkpoint.RequiresScanProtocol > ScanProtocol {
 			return ErrInvalid
 		}
 	}

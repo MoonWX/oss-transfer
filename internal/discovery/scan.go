@@ -191,7 +191,34 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 	})
 }
 
-func (s *Scanner) scan(ctx context.Context, attempt State) {
+// committedThisPass answers ListOptions.Done: a key is done when its row
+// already carries this pass, a row commitBatches skips without counting it.
+// In a takeover from the Master's checkpoint, the rows seeded from Master's
+// manifest are counted as seen already and are done as well. Rows of an
+// earlier pass, or seeded by a takeover without a checkpoint, are not: they
+// are looked up again, counted as seen and stamped with this pass.
+func (s *Scanner) committedThisPass(attempt State) func([]string) ([]bool, error) {
+	pass, seeded := scanIdentity(attempt), ""
+	if attempt.Takeover != nil && attempt.Takeover.Checkpoint != nil {
+		seeded = seedAttempt(attempt.Epoch)
+	}
+	return func(keys []string) ([]bool, error) {
+		answers := make([]bool, len(keys))
+		err := s.store.View(func(tx *state.Tx) error {
+			for i, key := range keys {
+				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, key)
+				if err != nil {
+					return err
+				}
+				answers[i] = found && (prior.SeenAttempt == pass || seeded != "" && prior.SeenAttempt == seeded)
+			}
+			return nil
+		})
+		return answers, err
+	}
+}
+
+func (s *Scanner) scan(ctx context.Context, attempt State, activity *transferstore.ScanActivity) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	ctx = nodecontrol.WithRequestContext(ctx, nodecontrol.RequestContext{TaskID: attempt.Spec.ParentID, Generation: attempt.Generation})
@@ -232,11 +259,17 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 	committer := newScanCommitter(ctx, cancel, func(batches []pendingBatch) error {
 		return s.commitBatches(ctx, attempt, batches)
 	})
+	// The committer pushes back on the source while the disk is behind; the
+	// activity shows that wait as saving scan results.
+	commit := func(batch pendingBatch) error {
+		defer activity.Wait(transferstore.ScanWaitCommit)()
+		return committer.add(batch)
+	}
 	flush := func() error {
 		if len(pending) == 0 {
 			return nil
 		}
-		if err := committer.add(pendingBatch{objects: pending, missing: missing}); err != nil {
+		if err := commit(pendingBatch{objects: pending, missing: missing}); err != nil {
 			return err
 		}
 		pending, bytes = make([]transferstore.Object, 0, s.options.MaxBatchObjects), 0
@@ -304,7 +337,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 		}
 		progress := *attempt.Checkpoint
 		progress.Cursor, progress.SourceDone = cursor, done
-		return committer.add(pendingBatch{checkpoint: &progress})
+		return commit(pendingBatch{checkpoint: &progress})
 	}
 	if attempt.Checkpoint != nil && attempt.Checkpoint.SourceDone {
 		// A crash after the last page does not reopen the source enumeration.
@@ -326,7 +359,12 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 			err = checkpoint("", true)
 		}
 	} else if resumable {
-		err = pageSource.ScanPages(ctx, transferstore.ListOptions{Prefix: attempt.Spec.Prefix, StartAfter: attempt.Spec.StartKey, Cursor: attempt.Checkpoint.Cursor}, func(page transferstore.Page) error {
+		// Keys this pass committed before a restart are not looked up again: a
+		// replayed page neither repeats that work nor fails on such a file
+		// having changed since.
+		options := transferstore.ListOptions{Prefix: attempt.Spec.Prefix, StartAfter: attempt.Spec.StartKey, Cursor: attempt.Checkpoint.Cursor,
+			Done: s.committedThisPass(attempt), Activity: activity}
+		err = pageSource.ScanPages(ctx, options, func(page transferstore.Page) error {
 			for _, object := range page.Objects {
 				if err := emit(object); err != nil {
 					return err
@@ -358,7 +396,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State) {
 				progress := *attempt.Checkpoint
 				progress.Cursor, progress.SourceDone = "", true
 				progress.LegacyAfter, progress.LegacyDone = after, done
-				return committer.add(pendingBatch{checkpoint: &progress})
+				return commit(pendingBatch{checkpoint: &progress})
 			})
 		}
 	}

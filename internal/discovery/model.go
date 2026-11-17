@@ -116,7 +116,19 @@ type RecoveryCheckpoint struct {
 	Cursor       string `json:"cursor,omitempty"`
 	SourceDone   bool   `json:"sourceDone,omitempty"`
 	SourceRoot   string `json:"sourceRoot,omitempty"`
+	// RequiresScanProtocol is the ScanProtocol an Agent must speak to resume
+	// from this checkpoint. It is omitted when zero, so that the strict
+	// decoders of older Agents never see it; Master hands such a checkpoint
+	// only to an Agent that reports the protocol.
+	RequiresScanProtocol int `json:"requiresScanProtocol,omitempty"`
 }
+
+// ScanProtocol is what this Agent's scans understand, reported in its scan
+// replies and capabilities:
+//   - 1: a local scan skips keys this pass has already committed, so a
+//     resumed or taken-over scan does not look them up or compare them again,
+//     and the scan reports its live activity.
+const ScanProtocol = 1
 
 type Batch struct {
 	Checkpoint *RecoveryCheckpoint                  `json:"checkpoint,omitempty"`

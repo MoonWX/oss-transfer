@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
+	"github.com/MoonWX/oss-transfer/internal/discovery"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 	"github.com/MoonWX/oss-transfer/internal/storageconfig"
@@ -104,7 +105,8 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 		execution := map[string]any{"activeScans": scans, "maxConcurrentScans": maxScans, "activeChildren": children, "maxConcurrentChildren": maxChildren, "unfinishedChildren": unfinished, "maxUnfinishedChildren": maxUnfinished}
 		execution["objectsPerChild"] = s.Engine.ObjectConcurrency()
 		identity := hostIdentity()
-		result := map[string]any{"success": true, "hostname": identity["hostname"], "localIps": identity["localIps"], "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution}
+		result := map[string]any{"success": true, "hostname": identity["hostname"], "localIps": identity["localIps"], "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution,
+			"scanProtocol": discovery.ScanProtocol}
 		if s.Updater != nil {
 			result["software"] = s.Updater.Info()
 		}

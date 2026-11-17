@@ -16,6 +16,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/inventory"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 const states = "discovery-states"
@@ -25,6 +26,10 @@ const objects = "discovery-objects"
 type running struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	// The attempt's live progress. It never enters State: it is neither
+	// persisted nor carried to another run.
+	attempt  string
+	activity *transferstore.ScanActivity
 }
 
 type Scanner struct {
@@ -273,7 +278,7 @@ func (s *Scanner) launchLocked(current State) (State, error) {
 		return State{}, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	run := &running{cancel: cancel, done: make(chan struct{})}
+	run := &running{cancel: cancel, done: make(chan struct{}), attempt: current.Attempt, activity: transferstore.NewScanActivity()}
 	s.active[current.Spec.ParentID] = run
 	go func() {
 		defer func() {
@@ -285,9 +290,27 @@ func (s *Scanner) launchLocked(current State) (State, error) {
 			}
 			s.mu.Unlock()
 		}()
-		s.scan(ctx, current)
+		s.scan(ctx, current, run.activity)
 	}()
 	return current, nil
+}
+
+// Activity is what a parent's running scan attempt is doing now: nil unless
+// that attempt is still running and its source reports activity. Its totals
+// count from zero in each run.
+func (s *Scanner) Activity(parentID int64, attempt string) *transferstore.ScanActivitySnapshot {
+	s.mu.Lock()
+	run := s.active[parentID]
+	s.mu.Unlock()
+	if run == nil || attempt == "" || run.attempt != attempt {
+		return nil
+	}
+	select {
+	case <-run.done:
+		return nil
+	default:
+		return run.activity.Snapshot()
+	}
 }
 
 func (s *Scanner) Stop(ctx context.Context, parentID int64, generation uint64, epochs ...uint64) (State, error) {

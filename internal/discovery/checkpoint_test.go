@@ -192,64 +192,137 @@ func TestCheckpointLocalStopReopenAndReleasedBatchResume(t *testing.T) {
 	assertBatchesFrom(t, resumed, 2, 1, 132)
 }
 
+// A page whose first output batch committed before its cursor is replayed from
+// the last durable cursor. The files this pass already committed are not
+// looked up again, so the replay neither counts them twice nor fails on one
+// that changed since: the counters equal those of an uninterrupted run.
 func TestCheckpointReplaysPageAfterBatchCommitBeforeCursorCommit(t *testing.T) {
-	root := checkpointSource(t)
-	path := filepath.Join(t.TempDir(), "agent.db")
-	ctx := context.Background()
-	source, err := transferstore.NewLocal(root)
-	if err != nil {
-		t.Fatal(err)
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed file changed=%v", changed), func(t *testing.T) {
+			root := checkpointSource(t)
+			path := filepath.Join(t.TempDir(), "agent.db")
+			ctx := context.Background()
+			source, err := transferstore.NewLocal(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var listed []transferstore.Object
+			if err := source.ScanPages(ctx, transferstore.ListOptions{Limit: 1000}, func(page transferstore.Page) error {
+				listed = append(listed, page.Objects...)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := source.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if len(listed) != 260 {
+				t.Fatalf("real source returned %d objects", len(listed))
+			}
+			scanner, db := newScanner(t, path, &checkpointLocalFactory{}, Options{})
+			attempt := State{Spec: localSpec(root), Generation: 1, Status: Scanning, Attempt: "interrupted-run",
+				Checkpoint: &Checkpoint{Version: 1, Pass: "stable-scan-pass"}}
+			if err := db.Update(func(tx *state.Tx) error { return tx.Put(states, parentKey(1), attempt) }); err != nil {
+				t.Fatal(err)
+			}
+			// An output batch became durable while its source page was still being
+			// processed. The page marker has not arrived, so its cursor stays empty.
+			if err := scanner.commitBatches(ctx, attempt, []pendingBatch{{objects: listed[:128]}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := scanner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				// Comparing this file again would fail the pass for good.
+				if err := os.WriteFile(filepath.Join(root, "a-done", "0000.bin"), []byte("changed after it was committed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			factory := &checkpointLocalFactory{}
+			resumed, _ := newScanner(t, path, factory, Options{})
+			before, err := resumed.Status(ctx, 1)
+			if err != nil || before.Status != Recoverable || before.TotalObjects != 128 || before.SeenObjects != 128 || before.LastBatch != 1 ||
+				before.Checkpoint == nil || before.Checkpoint.Cursor != "" || before.Checkpoint.Pass != attempt.Checkpoint.Pass {
+				t.Fatalf("batch-before-cursor restart lost durable scan state: %+v %v", before, err)
+			}
+			if _, err := resumed.Start(ctx, localSpec(root)); err != nil {
+				t.Fatal(err)
+			}
+			done := waitStatus(t, resumed, Completed)
+			if done.TotalObjects != 260 || done.SeenObjects != 260 || done.TotalBytes != 260*9 || done.MissingObjects != 0 || done.Warning != "" ||
+				done.LastBatch != 3 || done.Checkpoint == nil || done.Checkpoint.Pass != attempt.Checkpoint.Pass || done.Attempt == attempt.Attempt {
+				t.Fatalf("replayed source page duplicated work or lost scan identity: %+v", done)
+			}
+			cursors, keys := factory.observed()
+			if len(cursors) != 1 || cursors[0] != "" || len(keys) != 132 {
+				t.Fatalf("test did not replay the uncheckpointed page: cursors=%q objects=%d", cursors, len(keys))
+			}
+			for _, key := range keys {
+				if !strings.HasPrefix(key, "z-rest/") {
+					t.Fatalf("replay looked up a file this pass had committed: %s", key)
+				}
+			}
+			assertBatches(t, resumed, 1, 260)
+		})
 	}
-	var listed []transferstore.Object
-	if err := source.ScanPages(ctx, transferstore.ListOptions{Limit: 1000}, func(page transferstore.Page) error {
-		listed = append(listed, page.Objects...)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+}
+
+// Done answers exactly the keys commitBatches would skip without counting:
+// rows of this pass, and in a takeover from Master's checkpoint the rows
+// seeded from its manifest. Rows of an earlier pass, or seeded without a
+// checkpoint, are counted and stamped again.
+func TestCheckpointDoneMatchesCommitBatches(t *testing.T) {
+	for _, takeover := range []*TakeoverState{nil, {Checkpoint: &RecoveryCheckpoint{Version: 1, Sequence: 1, Cursor: "c"}}, {}} {
+		scanner, db, attempt := commitFixture(t)
+		attempt.Epoch, attempt.Takeover = 7, takeover
+		attempt.Checkpoint = &Checkpoint{Version: 1, Pass: "this-pass"}
+		rows := map[string]string{"current": "this-pass", "earlier": "earlier-pass", "seeded": seedAttempt(7), "foreign-seed": seedAttempt(6)}
+		object := func(key string) transferstore.Object { return transferstore.Object{Key: key, Size: 9} }
+		if err := db.Update(func(tx *state.Tx) error {
+			current, err := get(tx, 1)
+			if err != nil {
+				return err
+			}
+			current.Epoch, current.Takeover, current.Checkpoint = attempt.Epoch, takeover, attempt.Checkpoint
+			if err := tx.Put(states, parentKey(1), current); err != nil {
+				return err
+			}
+			for key, seen := range rows {
+				if err := tx.Put(objects, objectKey(1, key), discoveredObject{Object: object(key), SeenAttempt: seen}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		keys := []string{"current", "earlier", "seeded", "foreign-seed", "new"}
+		answers, err := scanner.committedThisPass(attempt)(keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, key := range keys {
+			before, err := scanner.Status(context.Background(), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := scanner.commitBatches(context.Background(), attempt, []pendingBatch{{objects: []transferstore.Object{object(key)}}}); err != nil {
+				t.Fatal(err)
+			}
+			after, err := scanner.Status(context.Background(), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			skipped := after.SeenObjects == before.SeenObjects && after.TotalObjects == before.TotalObjects && after.LastBatch == before.LastBatch
+			if answers[i] != skipped {
+				t.Fatalf("takeover %+v: %s done=%v but commitBatches skipped=%v", takeover, key, answers[i], skipped)
+			}
+		}
 	}
-	if err := source.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed) != 260 {
-		t.Fatalf("real source returned %d objects", len(listed))
-	}
-	scanner, db := newScanner(t, path, &checkpointLocalFactory{}, Options{})
-	attempt := State{Spec: localSpec(root), Generation: 1, Status: Scanning, Attempt: "interrupted-run",
-		Checkpoint: &Checkpoint{Version: 1, Pass: "stable-scan-pass"}}
-	if err := db.Update(func(tx *state.Tx) error { return tx.Put(states, parentKey(1), attempt) }); err != nil {
-		t.Fatal(err)
-	}
-	// An output batch became durable while its source page was still being
-	// processed. The page marker has not arrived, so its cursor stays empty.
-	if err := scanner.commitBatches(ctx, attempt, []pendingBatch{{objects: listed[:128]}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := scanner.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	factory := &checkpointLocalFactory{}
-	resumed, _ := newScanner(t, path, factory, Options{})
-	before, err := resumed.Status(ctx, 1)
-	if err != nil || before.Status != Recoverable || before.TotalObjects != 128 || before.SeenObjects != 128 || before.LastBatch != 1 ||
-		before.Checkpoint == nil || before.Checkpoint.Cursor != "" || before.Checkpoint.Pass != attempt.Checkpoint.Pass {
-		t.Fatalf("batch-before-cursor restart lost durable scan state: %+v %v", before, err)
-	}
-	if _, err := resumed.Start(ctx, localSpec(root)); err != nil {
-		t.Fatal(err)
-	}
-	done := waitStatus(t, resumed, Completed)
-	if done.TotalObjects != 260 || done.SeenObjects != 260 || done.TotalBytes != 260*9 || done.MissingObjects != 0 || done.Warning != "" ||
-		done.LastBatch != 3 || done.Checkpoint == nil || done.Checkpoint.Pass != attempt.Checkpoint.Pass || done.Attempt == attempt.Attempt {
-		t.Fatalf("replayed source page duplicated work or lost scan identity: %+v", done)
-	}
-	cursors, keys := factory.observed()
-	if len(cursors) != 1 || cursors[0] != "" || len(keys) != 260 {
-		t.Fatalf("test did not replay the uncheckpointed page: cursors=%q objects=%d", cursors, len(keys))
-	}
-	assertBatches(t, resumed, 1, 260)
 }
 
 func TestCheckpointCrashProcess(t *testing.T) {

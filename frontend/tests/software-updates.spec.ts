@@ -148,7 +148,20 @@ test("container installation shows Compose commands and never offers in-containe
   await expect(
     page.getByText("Docker 部署请更新镜像后重新创建容器。", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText(/docker compose pull/)).toBeVisible();
+  // The installer pins the image tag and names the project and file: a bare
+  // "docker compose pull / up -d" would not update it, so the tag change and
+  // the full commands are given.
+  await expect(page.getByText(/仅拉取镜像不会更新/)).toBeVisible();
+  const commands = page.getByText(
+    "docker compose -p oss-transfer-master -f /opt/oss-transfer-compose/master/docker-compose.yml pull",
+  );
+  await expect(commands).toBeVisible();
+  await expect(commands).toContainText(
+    "docker compose -p oss-transfer-master -f /opt/oss-transfer-compose/master/docker-compose.yml up -d",
+  );
+  await expect(
+    page.getByText(/^docker compose pull\s+docker compose up -d$/),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "更新 Master", exact: true }),
   ).toBeDisabled();
@@ -240,4 +253,52 @@ test("legacy Agent instructions differ from an offline Agent", async ({
   await expect(
     page.getByRole("button", { name: "更新全部节点", exact: true }),
   ).toBeDisabled();
+});
+
+test("a stopped node update stops being reported once each node runs its version", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  // The queue to 4.1.14 stopped on agent-a and held agent-b back; agent-a was
+  // then upgraded with the installer, as its failure advised.
+  f.state.queue = {
+    phase: "FAILED",
+    version: "4.1.14",
+    items: [
+      {
+        address: "agent-a",
+        phase: "FAILED",
+        reason: "TIMEOUT",
+        error: "节点更新未完成，请检查节点服务后重试",
+      },
+      { address: "agent-b", phase: "SKIPPED", reason: "PREVIOUS_FAILED" },
+    ],
+  };
+  Object.assign(f.state.agents[0], {
+    info: { role: "agent", version: "4.1.14", supported: true },
+  });
+  Object.assign(f.state.agents[1], {
+    info: { role: "agent", version: "4.1.13", supported: true },
+    unavailable: false,
+  });
+  await page.goto("/tools?tab=updates");
+  const rows = page
+    .getByRole("table", { name: "节点版本", exact: true })
+    .getByRole("row");
+  const banner = page.getByText("节点更新已停止，请处理失败原因后重试。", {
+    exact: true,
+  });
+  await expect(rows.nth(1)).toContainText("版本一致");
+  await expect(rows.nth(1)).not.toContainText("节点更新未完成");
+  // agent-b still runs the old version, so the stop and its reason remain.
+  await expect(banner).toBeVisible();
+  await expect(rows.nth(2)).toContainText("前一节点更新失败，尚未更新");
+  Object.assign(f.state.agents[1], {
+    info: { role: "agent", version: "4.1.14", supported: true },
+  });
+  await page.reload();
+  await expect(rows.nth(2)).toContainText("版本一致");
+  await expect(rows.nth(1)).toContainText("版本一致");
+  await expect(banner).toHaveCount(0);
+  await expect(page.getByText("前一节点更新失败，尚未更新")).toHaveCount(0);
 });

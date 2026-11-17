@@ -2406,6 +2406,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "{operation} {count} tasks?",
     ja: "{count}件のタスクを{operation}しますか？",
   },
+  "以下统计仅包含最近 {count} 个任务，更早的任务未计入。": {
+    en: "The statistics below cover only the {count} most recent tasks; earlier tasks are not counted.",
+    ja: "以下の統計には直近の {count} 件のタスクのみが含まれ、それより前のタスクは含まれません。",
+  },
   "已加载 {count} 个任务。统计仅包含最近一页。": {
     en: "Loaded {count} tasks. Statistics cover only the most recent page.",
     ja: "{count}件のタスクを読み込みました。統計には直近のページのみ含まれます。",

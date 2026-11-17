@@ -2310,6 +2310,24 @@ export default function TasksPage({
           })}
         </Alert>
       )}
+      {overview && data?.truncated && (
+        // The Master totals one page of the most recent tasks; older tasks
+        // are not counted in the cards below.
+        <Alert
+          severity="info"
+          data-testid="overview-truncated"
+          sx={{ mb: 2 }}
+          action={
+            <Button component={RouterLink} to="/tasks" size="small">
+              {tr("查看全部")}
+            </Button>
+          }
+        >
+          {tr("以下统计仅包含最近 {count} 个任务，更早的任务未计入。", {
+            count: formatNumber(data.tasks?.length ?? 0),
+          })}
+        </Alert>
+      )}
       <ErrorAlert
         error={historyError}
         onRetry={() => void loadEarlierTasks()}

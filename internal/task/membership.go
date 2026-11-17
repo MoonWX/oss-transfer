@@ -3,7 +3,6 @@ package task
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -240,11 +239,10 @@ func (p Parent) CheckNodeChange(change NodeChange) error {
 	if len(after.Spec.Nodes) > 1024 {
 		return errors.New("select between 1 and 1024 Agents")
 	}
-	consumers := len(after.ActiveNodes()) + len(after.Membership.Joining)
-	if p.Spec.BandwidthMbps > 0 && math.Floor(p.Spec.BandwidthMbps*125000) < float64(consumers) {
-		return rejectMembership("BANDWIDTH", "The task bandwidth limit is too small for the selected Agents")
-	}
-	if limits := p.Spec.RequestLimits; limits != nil && limits.Scope != "PER_NODE" && limits.BandwidthBitsPerSecond > 0 && limits.BandwidthBitsPerSecond/8/float64(consumers) < 1 {
+	// The nodes that share the limits, counted as the commit's validation
+	// counts them (validateShared), so that a dry run and the change agree.
+	sharing := len(after.CurrentNodes())
+	if BandwidthTooSmall(p.Spec, sharing) || requestBandwidthTooSmall(p.Spec, sharing) {
 		return rejectMembership("BANDWIDTH", "The task bandwidth limit is too small for the selected Agents")
 	}
 	return nil
@@ -385,7 +383,7 @@ func (r *Repository) ChangeNodes(id int64, change NodeChange) (p Parent, replaye
 			return err
 		}
 		p = p.applyNodeChange(change, r.now().UTC())
-		if err := validate(p.Spec); err != nil {
+		if err := validateShared(p.Spec, len(p.CurrentNodes())); err != nil {
 			return err
 		}
 		if err := r.save(tx, p); err != nil {

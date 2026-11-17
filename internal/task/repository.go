@@ -71,7 +71,28 @@ func sameWork(job execution.Job) execution.Job {
 	return job
 }
 
-func validate(spec Spec) error {
+// BandwidthTooSmall reports whether the task bandwidth limit cannot give each
+// of the n nodes that share it at least one byte per second.
+func BandwidthTooSmall(spec Spec, n int) bool {
+	return spec.BandwidthMbps > 0 && math.Floor(spec.BandwidthMbps*125000) < float64(n)
+}
+
+// requestBandwidthTooSmall is BandwidthTooSmall for a CLUSTER request limit;
+// a PER_NODE limit is not divided.
+func requestBandwidthTooSmall(spec Spec, n int) bool {
+	limits := spec.RequestLimits
+	return limits != nil && limits.Scope != "PER_NODE" && limits.BandwidthBitsPerSecond > 0 && limits.BandwidthBitsPerSecond/8/float64(n) < 1
+}
+
+// validate checks a new task, whose limits every selected node shares.
+func validate(spec Spec) error { return validateShared(spec, len(spec.Nodes)) }
+
+// validateShared checks a task definition whose bandwidth limits are divided
+// among sharing nodes. After node changes these are the members that have not
+// been removed (Parent.CurrentNodes): a removed node is fenced for good, but a
+// node lost to takeover rejoins when it reconnects and a joining node is about
+// to receive its share.
+func validateShared(spec Spec, sharing int) error {
 	if spec.InventoryID != "" && (!inventory.ValidID(spec.InventoryID) || spec.Direction != "OSS_TO_OSS" || spec.Prefix != "" || spec.ObjectKey != "" || spec.StartKey != "" || spec.EndKey != "" || spec.ModifiedFrom != nil || spec.ModifiedUntil != nil) {
 		return inventory.ErrInvalid
 	}
@@ -81,7 +102,7 @@ func validate(spec Spec) error {
 	if len(spec.Nodes) < 1 || len(spec.Nodes) > 1024 {
 		return errors.New("select between 1 and 1024 Agents")
 	}
-	if limits := spec.RequestLimits; limits != nil && limits.Scope != "PER_NODE" && limits.BandwidthBitsPerSecond > 0 && limits.BandwidthBitsPerSecond/8/float64(len(spec.Nodes)) < 1 {
+	if requestBandwidthTooSmall(spec, sharing) {
 		return errors.New("bandwidth limit must provide at least one byte per second per selected Agent")
 	}
 	seen := map[string]bool{}
@@ -549,10 +570,10 @@ func (r *Repository) UpdateLimits(id int64, mbps *float64, limits *execution.Req
 			}
 			p.Spec.RequestLimits = &value
 		}
-		if err := validate(p.Spec); err != nil {
+		if err := validateShared(p.Spec, len(p.CurrentNodes())); err != nil {
 			return err
 		}
-		if p.Spec.BandwidthMbps > 0 && math.Floor(p.Spec.BandwidthMbps*125000) < float64(len(p.CurrentNodes())) {
+		if BandwidthTooSmall(p.Spec, len(p.CurrentNodes())) {
 			return errors.New("bandwidth budget is too small for the selected Agents")
 		}
 		if !reflect.DeepEqual(before, p.Spec) {

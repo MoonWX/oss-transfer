@@ -882,10 +882,28 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			checked["submissionStatus"] = "validation_failed"
 			return checked, cliErrorf("节点预检未通过，请检查节点和本地路径；尚未提交创建请求")
 		}
+		// An Agent from before the write probe passes a download destination
+		// without checking that it can write there; the Master says so.
+		var writeUnchecked []string
+		for _, item := range bindings {
+			if binding, ok := item.(map[string]interface{}); ok && getString(binding, "code") == "LOCAL_PATH_WRITE_NOT_CHECKED" {
+				writeUnchecked = append(writeUnchecked, cliNodeLabel(binding, getString(binding, "executionNodeIp"), client.locale))
+			}
+		}
 		if validateOnly {
 			checked["submissionStatus"] = "validated"
 			checked["message"] = client.text("节点预检通过，尚未创建迁移任务")
+			if len(writeUnchecked) > 0 {
+				checked["message"] = client.locale.format("路径预检通过，但执行节点 %s 版本较旧，未检查目录是否可写；尚未创建迁移任务", strings.Join(writeUnchecked, ", "))
+			}
 			return checked, nil
+		}
+		if len(writeUnchecked) > 0 {
+			warnings := client.errors
+			if warnings == nil {
+				warnings = os.Stderr
+			}
+			fmt.Fprintln(warnings, cliTextf(warnings, "警告：执行节点 %s 版本较旧，未检查下载目录是否可写；目录不可写时，对象会在迁移中逐个失败。", safeCLIText(strings.Join(writeUnchecked, ", "))))
 		}
 		path, countField = "/local-transfers", "acceptedCount"
 	}

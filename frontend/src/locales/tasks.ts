@@ -897,6 +897,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Not checked",
     ja: "未検証",
   },
+  "路径预检通过，未检查目录是否可写": {
+    en: "Paths passed the precheck; writing to the directory was not checked",
+    ja: "パスの事前チェックに成功しました。ディレクトリへの書き込みは確認していません",
+  },
+  未检查写入: {
+    en: "Write not checked",
+    ja: "書き込み未確認",
+  },
   "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管和之后添加的节点也不做校验。":
     {
       en: "Rows {rows} skip the shared directory check: nothing verifies that their execution nodes mount the same storage. If they do not, an upload can miss files or read them from the wrong copy, and a download leaves the files split across each node's own directory, while the task still shows success; automatic takeover and nodes added later are not checked either.",

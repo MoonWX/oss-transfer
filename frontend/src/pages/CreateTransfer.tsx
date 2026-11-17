@@ -163,6 +163,13 @@ type Draft = {
 const DRAFT_KEY = "oss-transfer-create-draft";
 // The Master's binding code when the shared directory check was skipped.
 const SHARED_CHECK_SKIPPED = "SHARED_STORAGE_CHECK_SKIPPED";
+// The Master's binding code for a download destination on an Agent too old
+// to check whether it can write there.
+const WRITE_NOT_CHECKED = "LOCAL_PATH_WRITE_NOT_CHECKED";
+// A binding that passed without everything having been checked.
+const uncheckedBinding = (binding: { valid: boolean; code?: string }) =>
+  binding.valid &&
+  (binding.code === SHARED_CHECK_SKIPPED || binding.code === WRITE_NOT_CHECKED);
 const localUploadMode = (nodeCount: number) =>
   nodeCount > 1 ? "balanced" : "affinity";
 const distributionLabel = (mode: string | undefined, direction?: string) =>
@@ -625,6 +632,9 @@ export default function CreateTransfer() {
   const precheckUnchecked = !!precheck?.nodeBindings.some(
     (binding) => binding.code === SHARED_CHECK_SKIPPED,
   );
+  const precheckWriteUnchecked = !!precheck?.nodeBindings.some(
+    (binding) => binding.valid && binding.code === WRITE_NOT_CHECKED,
+  );
   // Imported local rows that skip the shared check, numbered from 1.
   const batchSkippedRows = useMemo(() => {
     if (tab !== 1 || batchKind !== "local") return [];
@@ -1033,17 +1043,25 @@ export default function CreateTransfer() {
         const checked = applyUploadPrecheck(response.data);
         setPrecheck(checked);
         precheckRequest.current = checked.valid ? checkedRequest : null;
-        // A skipped check passes the paths, not the shared directory.
+        // A skipped check passes the paths, not the shared directory; an
+        // older Agent passes the path without checking that it can write.
         const unchecked = checked.nodeBindings.some(
           (binding) => binding.code === SHARED_CHECK_SKIPPED,
+        );
+        const writeUnchecked = checked.nodeBindings.some(
+          (binding) => binding.valid && binding.code === WRITE_NOT_CHECKED,
         );
         notify(
           checked.valid
             ? unchecked
               ? tr("路径预检通过，共享目录未校验")
-              : tr("所有节点预检通过")
+              : writeUnchecked
+                ? tr("路径预检通过，未检查目录是否可写")
+                : tr("所有节点预检通过")
             : tr("预检完成，存在未通过的节点。"),
-          checked.valid && !unchecked ? "success" : "warning",
+          checked.valid && !unchecked && !writeUnchecked
+            ? "success"
+            : "warning",
         );
         return;
       }
@@ -2349,7 +2367,11 @@ export default function CreateTransfer() {
               <Paper variant="outlined" sx={{ overflow: "hidden" }}>
                 <Alert
                   severity={
-                    precheck.valid && !precheckUnchecked ? "success" : "warning"
+                    precheck.valid &&
+                    !precheckUnchecked &&
+                    !precheckWriteUnchecked
+                      ? "success"
+                      : "warning"
                   }
                   sx={{ borderRadius: 0 }}
                 >
@@ -2357,7 +2379,9 @@ export default function CreateTransfer() {
                     {precheck.valid
                       ? precheckUnchecked
                         ? tr("路径预检通过，共享目录未校验")
-                        : tr("节点预检通过")
+                        : precheckWriteUnchecked
+                          ? tr("路径预检通过，未检查目录是否可写")
+                          : tr("节点预检通过")
                       : tr("节点预检未通过")}
                   </AlertTitle>
                   {tr(
@@ -2401,7 +2425,7 @@ export default function CreateTransfer() {
                             color={
                               !binding.valid
                                 ? "error.main"
-                                : binding.code === SHARED_CHECK_SKIPPED
+                                : uncheckedBinding(binding)
                                   ? "warning.main"
                                   : "text.secondary"
                             }
@@ -2417,25 +2441,28 @@ export default function CreateTransfer() {
                         color={
                           !binding.valid
                             ? "error"
-                            : binding.code === SHARED_CHECK_SKIPPED
+                            : uncheckedBinding(binding)
                               ? "warning"
                               : "success"
                         }
                         label={
                           binding.valid && binding.code === SHARED_CHECK_SKIPPED
                             ? tr("未校验")
-                            : binding.valid
-                              ? tr("通过{value1}", {
-                                  value1:
-                                    binding.pathType === "FILE"
-                                      ? ` · ${tr("文件")}`
-                                      : binding.pathType === "DIRECTORY"
-                                        ? ` · ${tr("目录")}`
-                                        : binding.pathType === "MISSING"
-                                          ? ` · ${tr("将创建目录")}`
-                                          : "",
-                                })
-                              : tr("未通过")
+                            : binding.valid &&
+                                binding.code === WRITE_NOT_CHECKED
+                              ? tr("未检查写入")
+                              : binding.valid
+                                ? tr("通过{value1}", {
+                                    value1:
+                                      binding.pathType === "FILE"
+                                        ? ` · ${tr("文件")}`
+                                        : binding.pathType === "DIRECTORY"
+                                          ? ` · ${tr("目录")}`
+                                          : binding.pathType === "MISSING"
+                                            ? ` · ${tr("将创建目录")}`
+                                            : "",
+                                  })
+                                : tr("未通过")
                         }
                         sx={{ alignSelf: "flex-start" }}
                       />

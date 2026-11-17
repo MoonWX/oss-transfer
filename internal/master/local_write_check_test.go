@@ -53,8 +53,13 @@ func TestDownloadPrecheckProvesTheAgentCanWrite(t *testing.T) {
 	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
 		t.Fatalf("precheck left files or created directories: %v %v", entries, err)
 	}
-	if check := validate(older.Address, root); check["valid"] != true || check["freeBytes"] != nil {
-		t.Fatalf("an Agent without the probe must keep the previous precheck: %+v", check)
+	// An Agent without the probe still passes, but the result says that
+	// nothing proved the directory writable, instead of a plain pass.
+	for path, prefix := range map[string]string{root: "", filepath.Join(root, "new"): "目标目录将在任务开始时创建；"} {
+		check := validate(older.Address, path)
+		if check["valid"] != true || check["freeBytes"] != nil || check["code"] != "LOCAL_PATH_WRITE_NOT_CHECKED" || check["message"] != prefix+"执行节点版本较旧，未检查目录是否可写；升级该节点后重新预检即可检查" {
+			t.Fatalf("an Agent without the probe must pass without claiming the directory is writable: %+v", check)
+		}
 	}
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		return

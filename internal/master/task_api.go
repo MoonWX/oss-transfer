@@ -752,6 +752,14 @@ func (s *Server) resolveTaskNodes(ctx context.Context, row taskCreateRequest, ki
 				if probe.PathType == "MISSING" {
 					check.Message = localizeContext(ctx, "目标目录将在任务开始时创建")
 				}
+				if check.Code == localPathWriteNotChecked {
+					note := localizeContext(ctx, "执行节点版本较旧，未检查目录是否可写；升级该节点后重新预检即可检查")
+					if check.Message == "" {
+						check.Message = note
+					} else {
+						check.Message = fmt.Sprintf(localizeContext(ctx, "%s；%s"), check.Message, note)
+					}
+				}
 				if check.FreeBytes != nil {
 					free := fmt.Sprintf(localizeContext(ctx, "可用空间 %s"), formatBinaryBytes(*check.FreeBytes))
 					if check.Message == "" {

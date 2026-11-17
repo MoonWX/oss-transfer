@@ -10,11 +10,17 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/cluster"
 )
 
+// localPathWriteNotChecked marks a download destination on an Agent from
+// before the write probe: its path was checked, but not whether the Agent can
+// write there or how much space is left.
+const localPathWriteNotChecked = "LOCAL_PATH_WRITE_NOT_CHECKED"
+
 // checkDownloadWritable asks the Agent to create and remove a file in a
 // download destination, or the nearest existing directory above it, and
-// records where it wrote, as which user and the free space there. Uploads and
-// Agents from before the probe pass unchecked; the task then reports any
-// write failure per object, as before.
+// records where it wrote, as which user and the free space there. Uploads
+// pass unchecked. Agents from before the probe pass with the code
+// localPathWriteNotChecked; the task then reports any write failure per
+// object, as before.
 func (s *Server) checkDownloadWritable(ctx context.Context, member cluster.Member, direction, path string, check *bindingCheck) (string, bool) {
 	if direction != "OSS_TO_LOCAL" {
 		return "", true
@@ -22,6 +28,7 @@ func (s *Server) checkDownloadWritable(ctx context.Context, member cluster.Membe
 	var probe agentservice.WriteProbe
 	if err := s.agentCall(ctx, member.Session(), "local_write_probe", false, agentservice.PathRequest{Path: path}, &probe); err != nil {
 		if comparisonUnsupported(err) {
+			check.Code = localPathWriteNotChecked
 			return "", true
 		}
 		return err.Error(), false

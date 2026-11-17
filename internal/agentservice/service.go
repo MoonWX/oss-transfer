@@ -337,7 +337,11 @@ func decode(data json.RawMessage, into any) error {
 }
 func response(value any, err error) (agenttransport.Response, error) {
 	if err == nil {
-		if scan, ok := value.(discovery.State); ok {
+		switch scan := value.(type) {
+		case discovery.State:
+			scan.ReleaseProtocol = 1
+			value = scan
+		case ScanReply:
 			scan.ReleaseProtocol = 1
 			value = scan
 		}
@@ -414,6 +418,28 @@ type ScanRequest struct {
 	Generation uint64 `json:"generation"`
 	Number     int64  `json:"number,omitempty"`
 	Epoch      uint64 `json:"epoch,omitempty"`
+}
+
+// ScanReply answers scan_start and scan_status: the scan's State, the scan
+// protocol this Agent speaks (discovery.ScanProtocol) and what the running
+// attempt is doing now. Activity is never part of State: it is not persisted
+// and counts from zero in each run. Masters that predate these fields ignore
+// them, as they decode replies leniently.
+type ScanReply struct {
+	discovery.State
+	ScanProtocol int                                 `json:"scanProtocol"`
+	Activity     *transferstore.ScanActivitySnapshot `json:"activity,omitempty"`
+}
+
+// scanReply attaches the activity of the attempt the State describes, and
+// only while that State is scanning: a finished attempt's goroutine can still
+// be winding down after its final State was saved.
+func (s *Service) scanReply(current discovery.State) ScanReply {
+	reply := ScanReply{State: current, ScanProtocol: discovery.ScanProtocol}
+	if current.Status == discovery.Scanning {
+		reply.Activity = s.Scanner.Activity(current.Spec.ParentID, current.Attempt)
+	}
+	return reply
 }
 
 func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agenttransport.Response, error) {
@@ -653,7 +679,10 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(err)
 		}
 		value, err := s.Scanner.Start(ctx, spec)
-		return response(value, err)
+		if err != nil {
+			return response(nil, err)
+		}
+		return response(s.scanReply(value), nil)
 	case "scan_status", "scan_batch", "scan_ack", "scan_release", "scan_stop", "scan_resume":
 		var request ScanRequest
 		if err := decode(c.Payload, &request); err != nil {
@@ -676,6 +705,9 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			value, err = s.Scanner.Stop(ctx, request.ParentID, request.Generation, request.Epoch)
 		case "scan_resume":
 			value, err = s.Scanner.Resume(ctx, request.ParentID, request.Generation, request.Epoch)
+		}
+		if c.Operation == "scan_status" && err == nil {
+			return response(s.scanReply(value), nil)
 		}
 		return response(value, err)
 	case "storage_apply":

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
@@ -14,8 +13,16 @@ func (c RecoveryCheckpoint) Valid() bool {
 		len(c.Cursor) <= 32768 && (c.SourceDone && c.Cursor == "" || !c.SourceDone && c.Cursor != "")
 }
 
+// sameRecoveryCheckpoint reports whether two takeover requests name the same
+// checkpoint. The scan protocol it requires is not part of its identity: a
+// Master that predates the field drops it, and the stricter one is kept.
 func sameRecoveryCheckpoint(left, right *RecoveryCheckpoint) bool {
-	return reflect.DeepEqual(left, right)
+	if left == nil || right == nil {
+		return left == right
+	}
+	same := *right
+	same.RequiresScanProtocol = left.RequiresScanProtocol
+	return same == *left
 }
 
 func (s *Scanner) importTakeoverCheckpoint(ctx context.Context, current *State) error {

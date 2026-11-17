@@ -181,6 +181,7 @@ func (t *taskRuntime) policyAttempted(parentID int64, nodeID string, generation,
 
 // pruneDeliveries keeps only the deliveries of the given (active) tasks.
 func (t *taskRuntime) pruneDeliveries(active map[int64]bool) {
+	t.forgetScans(active)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for id := range t.deliveries {

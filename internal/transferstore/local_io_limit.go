@@ -26,6 +26,13 @@ func (s *Local) localOperation(ctx context.Context) error {
 	return ctx.Err()
 }
 
+func (s *Local) localBytes(ctx context.Context, n int) error {
+	if s.localIO != nil {
+		return s.localIO.WaitLocalBytes(ctx, n)
+	}
+	return ctx.Err()
+}
+
 // localIOChunk bounds one paced read or write, so a large buffer does not
 // wait for a whole second's budget before moving any data.
 const localIOChunk = 256 << 10

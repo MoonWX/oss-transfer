@@ -38,6 +38,8 @@ import type { NodeDisplay, NodeLabels } from "../lib/nodeRegistry";
 import { useMenuPlacement } from "../lib/menuPlacement";
 import { groupedCardRadius, popupGap, radii } from "../theme";
 import { formatBytes, formatNumber } from "./Common";
+import ScanProgress from "./ScanProgress";
+import type { ScanActivity } from "../lib/scanActivity";
 
 export type NodeShare = {
   bandwidthBytesPerSecond?: number;
@@ -92,8 +94,17 @@ type NodesView = {
   nodes: MemberNode[];
   removedNodes?: (NodeDisplay & { id?: string; address: string })[];
   candidates: Candidate[];
-  /** SCANNING, HANDOFF, WAITING or COMPLETE; older Masters omit it. */
-  scan?: { phase?: string; complete?: boolean };
+  /**
+   * SCANNING, HANDOFF, WAITING or COMPLETE; older Masters omit it. While
+   * SCANNING, activity is what the scanner last reported; upgradeRequired
+   * means the scan waits for a member that can continue its checkpoint.
+   */
+  scan?: {
+    phase?: string;
+    complete?: boolean;
+    activity?: ScanActivity;
+    upgradeRequired?: boolean;
+  };
   /**
    * The task was created with the shared directory check skipped: added
    * nodes are not checked either and need their own acknowledgement.
@@ -872,6 +883,7 @@ export default function TaskNodesDialog({
 
   // Where the scan stands. Members carry the scanner tag only while one scans
   // (including a new scanner taking over); afterwards the dialog says so here.
+  // While a node scans, its report shows below as the scan progress.
   const scanPhase = view?.scan?.phase;
   const scanNote =
     scanPhase === "COMPLETE"
@@ -879,8 +891,12 @@ export default function TaskNodesDialog({
       : scanPhase === "HANDOFF"
         ? t("正在移交扫描，从 Master 保存的断点继续")
         : scanPhase === "WAITING"
-          ? t("原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描")
+          ? view?.scan?.upgradeRequired
+            ? t("其余节点版本较旧，无法接续此扫描；任一节点升级后自动继续")
+            : t("原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描")
           : "";
+  const scanActivity =
+    scanPhase === "SCANNING" ? view?.scan?.activity : undefined;
 
   const bindingField = (node: { address: string } & NodeDisplay) => {
     const value = paths[node.address] ?? "";
@@ -1422,6 +1438,7 @@ export default function TaskNodesDialog({
                   {scanNote}
                 </Typography>
               )}
+              <ScanProgress activity={scanActivity} compact />
               <Stack
                 component="ul"
                 gap={0.5}

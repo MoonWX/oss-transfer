@@ -50,4 +50,13 @@ func TestTaskNodesShowsScanPhaseAndLeaseExpiry(t *testing.T) {
 			t.Fatalf("%s: %q", phase, got)
 		}
 	}
+	// A task row whose scan waits for an upgraded node says so, as the node
+	// view does, and not that another node takes over.
+	for upgrade, want := range map[bool]string{true: "其余节点版本较旧，无法接续此扫描；任一节点升级后自动继续。", false: "原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描。"} {
+		var buffer bytes.Buffer
+		renderTaskNodeNotes(&cliLocaleWriter{Writer: &buffer, locale: localeZH}, map[string]interface{}{"scanPhase": "WAITING", "scanUpgradeRequired": upgrade})
+		if got := strings.TrimSpace(buffer.String()); got != want {
+			t.Fatalf("upgrade=%v: %q", upgrade, got)
+		}
+	}
 }

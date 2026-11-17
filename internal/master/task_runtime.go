@@ -36,6 +36,12 @@ type taskRuntime struct {
 	closed       bool
 	sharedProofs map[int64]string
 	rates        map[int64]taskRateCache
+	// The latest scan_start reply per task, and tasks whose scan checkpoint
+	// waits for a member that speaks its scan protocol (see scan_activity.go).
+	scans        map[int64]scanSample
+	upgradeWaits map[int64]uint64
+	// scanQuery replaces the scan protocol query in tests.
+	scanQuery    func(context.Context, task.Node) (int, error)
 	observeAfter map[int64]int
 	stopProgress map[int64]*stopObservation
 	stopWaits    map[int64]stopWait
@@ -622,13 +628,12 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		if removedScannerDone(p) {
 			return nil
 		}
-		if plannedScannerHandoff(p) {
+		if plannedScannerHandoff(p) && !t.waitsForScanUpgrade(p) {
 			// The scan moves once the leaving scanner is fenced; the node view
 			// shows this as a scan handoff, not as a reconnect wait.
 			return nil
 		}
-		scanning := p.ScannerNode()
-		return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel)
+		return t.scannerWait(p)
 	}
 	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {
 		return errors.New("Waiting for all task nodes to acknowledge recovery")
@@ -681,10 +686,13 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 			memberErr = errors.Join(memberErr, err)
 		}
 	}
-	var scan discovery.State
-	if err := s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &scan); err != nil {
+	var reply agentservice.ScanReply
+	err = s.agentCall(ctx, scanner, "scan_start", true, t.scanSpec(p), &reply)
+	t.recordScan(p, reply, err)
+	if err != nil {
 		return err
 	}
+	scan := reply.State
 	if err := t.repo.ScanProgressForScanner(p.ID, p.Generation, p.ScannerEpoch(), scan.TotalObjects, scan.TotalBytes, int(scan.LastBatch), scan.ScanComplete, scan.Error, scan.TransferCheckpoint); err != nil {
 		return err
 	}

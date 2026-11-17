@@ -162,7 +162,7 @@ oss-transfer-cli task children "$TRANSFER_TASK" --active
 oss-transfer-cli task progress "$TRANSFER_TASK" --watch 5
 ```
 
-`task show` displays the status, direction, conflict policy, counts, rate limits and nodes. When something needs attention, it adds an *Attention* line with the reason (see [task details](operations.md#task-details-attention-and-failure-summary)). For common storage errors, a translated explanation appears above the raw failure reason. A task under *Skip existing objects or files* that skipped objects notes that those objects were matched by name only.
+`task show` displays the status, direction, conflict policy, counts, rate limits and nodes, and the scan progress while the scan runs; in `task list`, the progress of such a task shows the names read and the entries examined. When something needs attention, it adds an *Attention* line with the reason (see [task details](operations.md#task-details-attention-and-failure-summary)). For common storage errors, a translated explanation appears above the raw failure reason. A task under *Skip existing objects or files* that skipped objects notes that those objects were matched by name only.
 
 Child tasks are sorted by the console's status priority. When there is a next page, the command prints the command to fetch it. `--order id` lists them by number. `task progress` shows the bytes of files being transferred; add `--child ID-N` to inspect a specific child task.
 

@@ -128,7 +128,8 @@ func validateTakeover(request TakeoverRequest) error {
 		return ErrInvalid
 	}
 	if checkpoint := request.Checkpoint; checkpoint != nil {
-		if !checkpoint.Valid() || checkpoint.ThroughBatch > request.ThroughBatch || checkpoint.Objects > request.Objects || checkpoint.Bytes > request.Bytes {
+		if !checkpoint.Valid() || checkpoint.ThroughBatch > request.ThroughBatch || checkpoint.Objects > request.Objects || checkpoint.Bytes > request.Bytes ||
+			checkpoint.RequiresScanProtocol > ScanProtocol {
 			return ErrInvalid
 		}
 	}
@@ -204,6 +205,9 @@ func (s *Scanner) SeedTakeover(ctx context.Context, request TakeoverRequest) (St
 			}
 			if current.Status == Stopped {
 				return State{}, ErrStopped
+			}
+			if saved := current.Takeover.Checkpoint; saved != nil && request.Checkpoint.RequiresScanProtocol > saved.RequiresScanProtocol {
+				saved.RequiresScanProtocol = request.Checkpoint.RequiresScanProtocol
 			}
 		}
 	}

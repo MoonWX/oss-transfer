@@ -132,7 +132,7 @@ When uploading local files, the Agent needs read permission on the source direct
 
 ### 6. Follow progress
 
-On the **Transfer tasks** page, choose a task to expand its details on the right. From there, stop or resume the task. **Adjust** (shown as **Set limit** when no bandwidth limit has been set) lets you change the bandwidth and request limits while the task runs. **Transfer statistics** updates in real time with the number and size of scanned, transferred, skipped and failed objects. **Request rate** shows the actual LIST, GET, HEAD and PUT requests per second, along with the task limits and the limits in effect.
+On the **Transfer tasks** page, choose a task to expand its details on the right. From there, stop or resume the task. **Adjust** (shown as **Set limit** when no bandwidth limit has been set) lets you change the bandwidth and request limits while the task runs. **Transfer statistics** updates in real time with the number and size of found, transferred, skipped and failed objects. **Request rate** shows the actual LIST, GET, HEAD and PUT requests per second, along with the task limits and the limits in effect.
 
 <p align="center"><img src="docs/images/task-detail.en.png" width="440" alt="Task details with stop and limit controls, transfer statistics and request rates outlined in red"></p>
 

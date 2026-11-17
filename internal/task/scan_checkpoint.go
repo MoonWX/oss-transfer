@@ -16,8 +16,18 @@ func retainScanCheckpoint(p *Parent, checkpoint *discovery.RecoveryCheckpoint) e
 		if checkpoint.ThroughBatch < prior.ThroughBatch || checkpoint.Epoch < prior.Epoch || checkpoint.Epoch == prior.Epoch && checkpoint.Sequence < prior.Sequence {
 			return nil
 		}
-		if checkpoint.Epoch == prior.Epoch && checkpoint.Sequence == prior.Sequence && *checkpoint != *prior {
-			return ErrConflict
+		if checkpoint.Epoch == prior.Epoch && checkpoint.Sequence == prior.Sequence {
+			// The same page. Its scan protocol requirement is not part of its
+			// identity: an Agent or Master that predates the field drops it.
+			// The stricter requirement is kept.
+			same := *checkpoint
+			same.RequiresScanProtocol = prior.RequiresScanProtocol
+			if same != *prior {
+				return ErrConflict
+			}
+			if checkpoint.RequiresScanProtocol <= prior.RequiresScanProtocol {
+				return nil
+			}
 		}
 		if checkpoint.Objects < prior.Objects || checkpoint.Bytes < prior.Bytes {
 			return ErrConflict

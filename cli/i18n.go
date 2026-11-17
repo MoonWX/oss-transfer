@@ -151,6 +151,11 @@ func singularEnglish(template string, args []interface{}) string {
 		if index >= len(args) || fmt.Sprint(args[index]) != "1" {
 			continue
 		}
+		if noun := template[m[4]:m[5]]; strings.HasSuffix(noun, "ie") {
+			// "entries" and "retries" take a y: "1 entry".
+			template = template[:m[5]-2] + "y" + template[m[5]+1:]
+			continue
+		}
 		template = template[:m[5]] + template[m[5]+1:]
 	}
 	return template

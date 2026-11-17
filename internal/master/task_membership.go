@@ -187,7 +187,7 @@ func (t *taskRuntime) leaveTask(ctx context.Context, p task.Parent, node task.No
 	if p, err = t.repo.Get(p.ID); err != nil {
 		return p, err
 	}
-	return t.moveRetiredScanner(p, targets)
+	return t.moveRetiredScanner(ctx, p, targets)
 }
 
 // membershipNodes describes current members for task rows and the node view.
@@ -269,7 +269,13 @@ func (s *Server) membershipSummary(p task.Parent, displays nodeDisplaySet) map[s
 			draining = append(draining, node.Address)
 		}
 	}
-	return map[string]any{"nodeRevision": p.NodeRevision(), "pending": p.MembershipPending(), "nodes": s.membershipNodes(p, displays, nil), "joining": joining, "draining": draining, "scanPhase": scanPhase(p)}
+	summary := map[string]any{"nodeRevision": p.NodeRevision(), "pending": p.MembershipPending(), "nodes": s.membershipNodes(p, displays, nil), "joining": joining, "draining": draining, "scanPhase": scanPhase(p)}
+	if s.tasks.waitsForScanUpgrade(p) {
+		// As in the node view: no remaining member speaks the protocol the
+		// scan checkpoint needs.
+		summary["scanUpgradeRequired"] = true
+	}
+	return summary
 }
 
 func membershipReason(ctx context.Context, err error) string {
@@ -313,7 +319,15 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 	}
 	view["allocation"] = shareAllocation(p)
 	view["nodes"] = s.membershipNodes(p, displays, online)
-	view["scan"] = map[string]any{"phase": scanPhase(p), "complete": scanFinished(p)}
+	scan := map[string]any{"phase": scanPhase(p), "complete": scanFinished(p)}
+	if activity := s.scanActivityView(p); activity != nil && scanPhase(p) == scanPhaseScanning {
+		scan["activity"] = activity
+	}
+	if s.tasks.waitsForScanUpgrade(p) {
+		// No remaining member speaks the protocol the scan checkpoint needs.
+		scan["upgradeRequired"] = true
+	}
+	view["scan"] = scan
 	removed := []map[string]any{}
 	current := map[string]bool{}
 	for _, node := range p.CurrentNodes() {

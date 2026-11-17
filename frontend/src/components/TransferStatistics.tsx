@@ -5,6 +5,8 @@ import { formatBytes, formatNumber } from "./Common";
 
 // Shared by parent and child details. "已迁移" bytes are the data actually
 // moved, including partly copied objects; the count is completed objects.
+// "已发现" counts the distinct objects in scope that the scan committed for
+// transfer, not the entries it has looked at (see ScanProgress).
 export default function TransferStatistics({
   task,
 }: {
@@ -21,7 +23,7 @@ export default function TransferStatistics({
       }}
     >
       {[
-        [t("已扫描"), task.listObjectCount, task.listObjectSize],
+        [t("已发现"), task.listObjectCount, task.listObjectSize],
         [
           t("已迁移"),
           task.putObjectCount,

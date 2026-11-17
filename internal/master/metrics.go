@@ -183,6 +183,9 @@ func (s *Server) taskView(p task.Parent, sets ...nodeDisplaySet) map[string]any 
 	s.addTaskRate(row, p, "")
 	s.addLiveProgress(row, p, nil)
 	s.addRequestRates(row, p)
+	if activity := s.scanActivityView(p); activity != nil {
+		row["scanActivity"] = activity
+	}
 	return row
 }
 func (s *Server) childView(p task.Parent, c task.Child, sets ...nodeDisplaySet) map[string]any {

@@ -964,7 +964,7 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 		return
 	}
 	w := newCLITable(out)
-	fmt.Fprintln(w, cliText(out, "ID\t方向\t状态\t来源\t目标\t已迁移/已扫描\t进度\t跳过\t失败\t执行节点"))
+	fmt.Fprintln(w, cliText(out, "ID\t方向\t状态\t来源\t目标\t已迁移/已发现\t进度\t跳过\t失败\t执行节点"))
 	for _, task := range tasks {
 		id := fmt.Sprintf("#%d", getInt(task, "taskIndex"))
 		if children {
@@ -974,7 +974,13 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 		if cleanup := taskCleanup(task); cleanup != nil {
 			status = taskCleanupLabel(out, cleanup)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\n", id, cliDirectionLabel(out, taskDirection(task)), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), cliTaskProgress(task), cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkersDisplay(task, localeOf(out))))
+		// Until the scan completes, a running scan's own progress moves even
+		// while one large directory is read and no object is found yet.
+		progress := cliTaskProgress(task)
+		if label := cliScanListLabel(out, task); progress == "—" && label != "" {
+			progress = label
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\n", id, cliDirectionLabel(out, taskDirection(task)), safeCLIText(status), safeCLIText(taskEndpoint(task, true, localeOf(out))), safeCLIText(taskEndpoint(task, false, localeOf(out))), cliTaskCount(task, "putObjectCount"), cliTaskCount(task, "listObjectCount"), progress, cliTaskCount(task, "skippedObjectCount"), cliTaskCount(task, "failedObjectCount"), safeCLIText(taskWorkersDisplay(task, localeOf(out))))
 	}
 	w.Flush()
 	for _, task := range tasks {
@@ -1017,7 +1023,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	} else if value, ok := task["taskBandwidthLimitMbps"]; ok && value != nil {
 		bandwidth = safeCLIText(fmt.Sprint(value)) + " Mbps"
 	}
-	fields := [][2]string{{cliText(out, "方向"), cliDirectionLabel(out, taskDirection(task))}, {cliText(out, "状态"), cliTaskStatusLabel(out, getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), distribution}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已扫描"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
+	fields := [][2]string{{cliText(out, "方向"), cliDirectionLabel(out, taskDirection(task))}, {cliText(out, "状态"), cliTaskStatusLabel(out, getString(task, "status"))}, {cliText(out, "来源"), taskEndpoint(task, true, localeOf(out))}, {cliText(out, "目标"), taskEndpoint(task, false, localeOf(out))}, {cliText(out, "执行节点"), taskWorkersDisplay(task, localeOf(out))}, {cliText(out, "冲突策略"), policy}, {cliText(out, "分发方式"), distribution}, {cliText(out, "任务带宽"), bandwidth}, {cliText(out, "已发现"), cliTaskMetric(task, "listObject")}, {cliText(out, "已迁移"), cliTaskTransferred(out, task)}, {cliText(out, "进度"), cliTaskProgress(task)}, {cliText(out, "已跳过"), cliTaskMetric(task, "skippedObject")}, {cliText(out, "失败"), cliTaskMetric(task, "failedObject")}, {cliText(out, "当前速度"), cliTaskSpeed(task, "currentSpeedBytesPerSecond")}, {cliText(out, "平均速度"), cliTaskSpeed(task, "averageSpeedBytesPerSecond")}, {cliText(out, "耗时"), getString(task, "duration")}, {cliText(out, "创建时间"), cliTaskTimestamp(task["createTime"])}, {cliText(out, "开始时间"), cliTaskTimestamp(task["startTime"])}, {cliText(out, "结束时间"), cliTaskTimestamp(task["endTime"])}, {cliText(out, "起始 Key"), getString(task, "startKey")}, {cliText(out, "结束 Key"), getString(task, "endKey")}}
 	if taskDirection(task) == "OSS_TO_LOCAL" {
 		// Parent rows always carry the setting (older tasks report auto); a child
 		// row without it inherits the parent's, so do not guess a value there.
@@ -1068,6 +1074,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		}
 		fmt.Fprintln(out, cliText(out, notice))
 	}
+	renderScanActivity(out, cliScanActivity(task["scanActivity"]))
 	if policyCode == "SKIP" && getInt(task, "skippedObjectCount") > 0 {
 		fmt.Fprintln(out, cliText(out, "提示：跳过的对象有两种。目标端已存在的对象只按名称判断，未比较内容，可用 object compare 核对，或用 --conflict changed 重新创建任务以覆盖有变化的对象；扫描后在源端被删除的对象也计为跳过，它们在任务报告（task report）中的原因为 SOURCE_DELETED。"))
 	}

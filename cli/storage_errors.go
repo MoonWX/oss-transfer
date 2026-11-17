@@ -32,8 +32,10 @@ var (
 	storageErrorContext = regexp.MustCompile(`operation error S3|api error |dial tcp|lookup \S|https?://|request send failed`)
 	// S3 (PermanentRedirect) and Alibaba Cloud OSS (AccessDenied, EC
 	// 0003-00001403) say this when a bucket must be reached through another
-	// endpoint, usually the one of its region: not a permission problem.
-	storageEndpointMismatch = regexp.MustCompile(`(?i)must be addressed using the specified endpoint`)
+	// endpoint, usually the one of its region: not a permission problem. An
+	// OSS reply without a body, such as that to HEAD, says it by its EC alone,
+	// kept in the storage response diagnostic.
+	storageEndpointMismatch = regexp.MustCompile(`(?i)must be addressed using the specified endpoint|\[storage response: [^\]]*\bec=0003-00001403\b`)
 	// The endpoint the reply named, kept in the storage response diagnostic.
 	storageDiagnosticEndpoint = regexp.MustCompile(`\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)`)
 	storageLookupHost         = regexp.MustCompile(`lookup (\S+?)(?: on |: |$)`)

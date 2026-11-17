@@ -25,6 +25,10 @@ func TestExceptionSummariesClassifyRepliesByCodeNotByKey(t *testing.T) {
 		{get("videofiles/Geoffrey.mp4", 403, "InvalidObjectState: The operation is not valid for the object's storage class"), "源对象为归档存储，需先解冻再重试"},
 		{get("videofiles/Geoffrey.mp4", 403, "api error AccessDenied: Access Denied"), "存储服务拒绝访问，请检查凭据对该存储桶的权限"},
 		{`check destination "k": operation error S3: HeadObject, https response error StatusCode: 403, RequestID: , HostID: , api error Forbidden: Forbidden`, "存储服务拒绝访问，请检查凭据对该存储桶的权限"},
+		// OSS refuses a HEAD of a bucket in another region with 403 and no
+		// body; only its EC, kept in the diagnostic, names the cause.
+		{`check destination "k": operation error S3: HeadObject, https response error StatusCode: 403, RequestID: , HostID: , api error Forbidden: Forbidden [storage response: http=403, server=AliyunOSS, request-id=5F1A, ec=0003-00001403, body=empty]`, "存储桶需要通过其所在地域的 Endpoint 访问，请用该 Endpoint 添加存储连接"},
+		{`check destination "k": operation error S3: HeadObject, https response error StatusCode: 403, RequestID: , HostID: , api error Forbidden: Forbidden [storage response: http=403, server=AliyunOSS, request-id=5F1A, ec=0003-00000201, body=empty]`, "存储服务拒绝访问，请检查凭据对该存储桶的权限"},
 		{put("photos/403.jpg", 503, "api error SlowDown: Please reduce your request rate."), "存储服务限流，可稍后重试失败对象"},
 		{put("photos/403.jpg", 429, "api error TooManyRequests: Too many requests"), "存储服务限流，可稍后重试失败对象"},
 		{put("photos/403.jpg", 503, "api error ServiceUnavailable: Service Unavailable"), "存储服务端出错，可在存储恢复后重试失败对象"},

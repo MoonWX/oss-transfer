@@ -1143,9 +1143,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Transfer statistics",
     ja: "転送統計",
   },
-  已扫描: {
-    en: "Scanned",
-    ja: "スキャン済み",
+  已发现: {
+    en: "Found",
+    ja: "発見済み",
   },
   已迁移: {
     en: "Transferred",
@@ -1507,9 +1507,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Source / Destination",
     ja: "転送元 / 転送先",
   },
-  "已迁移 / 已扫描": {
-    en: "Transferred / Scanned",
-    ja: "転送済み / スキャン済み",
+  "已迁移 / 已发现": {
+    en: "Transferred / Found",
+    ja: "転送済み / 発見済み",
   },
   状态: {
     en: "Status",
@@ -2570,6 +2570,77 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "节点离线，执行租约到期后离开，其任务由其他节点继续": {
     en: "Offline; it leaves when its execution lease expires and its work continues on the other nodes",
     ja: "オフラインです。実行リースの期限切れ後に離脱し、作業は他のノードで続行されます",
+  },
+  "其余节点版本较旧，无法接续此扫描；任一节点升级后自动继续": {
+    en: "The remaining nodes are too old to continue this scan; it continues once one is upgraded",
+    ja: "残りのノードはバージョンが古いため、このスキャンを引き継げません。いずれかのノードをアップグレードすると自動的に続行します",
+  },
+  扫描进度: { en: "Scan progress", ja: "スキャンの進捗" },
+  "扫描中 · 已读取 {names} · 已检查 {examined}": {
+    en: "Scanning · {names} read · {examined} examined",
+    ja: "スキャン中 · 読み取り {names} · 確認 {examined}",
+  },
+  "扫描中 · 已读取 {names} · 已检查 {examined} · {age}前": {
+    en: "Scanning · {names} read · {examined} examined · {age} ago",
+    ja: "スキャン中 · 読み取り {names} · 確認 {examined} · {age}前",
+  },
+  "本轮扫描已读取 {names} 个名称，已检查 {examined} 项（扫描重启后从零计）": {
+    en: "This scan run has read {names} names and examined {examined} entries (counted from zero after a restart)",
+    ja: "今回のスキャンで名前を {names} 件読み取り、{examined} 件を確認しました（スキャンの再開後は 0 から数えます）",
+  },
+  源目录: { en: "the source directory", ja: "転送元ディレクトリ" },
+  "目录“{path}”": {
+    en: 'directory "{path}"',
+    ja: "ディレクトリ「{path}」",
+  },
+  "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。读完全部名称后才会开始检查和迁移其中的文件。":
+    {
+      en: "Reading the names in {dir}: {n} read in {d}. Its files are examined and transferred only after all names have been read.",
+      ja: "{dir}の名前を読み取っています：{n} 件、{d} 経過。すべての名前を読み終えてから、その中のファイルの確認と転送を始めます。",
+    },
+  "正在读取并检查{dir}：已读取 {n} 个名称，已检查 {x} 项，用时 {d}": {
+    en: "Reading and examining {dir}: {n} names read, {x} examined, {d} elapsed",
+    ja: "{dir}を読み取りながら確認しています：名前 {n} 件を読み取り、{x} 件を確認、{d} 経過",
+  },
+  "正在检查{dir}：第 {x} 项，共 {y} 项": {
+    en: "Examining {dir}: entry {x} of {y}",
+    ja: "{dir}を確認しています：{y} 件中 {x} 件目",
+  },
+  "其中 {n} 项此前已发现，未再次检查": {
+    en: "{n} of them were already found and not examined again",
+    ja: "うち {n} 件は発見済みのため、再確認していません",
+  },
+  "{n} 项在检查前已被删除，已跳过": {
+    en: "{n} entries were deleted before examination and skipped",
+    ja: "{n} 件は確認前に削除されていたため、スキップしました",
+  },
+  "条目查询平均耗时 {ms} 毫秒": {
+    en: "Entry lookups take {ms} ms on average",
+    ja: "エントリの照会には平均 {ms} ミリ秒かかっています",
+  },
+  "源存储已有 {d} 未响应": {
+    en: "The source storage has not responded for {d}",
+    ja: "転送元ストレージから {d} 応答がありません",
+  },
+  正在等待本节点的本地文件操作限制: {
+    en: "Waiting for this node's local file operation limit",
+    ja: "このノードのローカルファイル操作の上限を待っています",
+  },
+  正在保存扫描结果: {
+    en: "Saving scan results",
+    ja: "スキャン結果を保存しています",
+  },
+  "已有 {d} 没有新进展": {
+    en: "No progress for {d}",
+    ja: "{d} 進捗がありません",
+  },
+  "扫描进度截至 {time}": {
+    en: "Scan progress as of {time}",
+    ja: "{time} 時点のスキャンの進捗",
+  },
+  "扫描节点版本较旧，不提供实时扫描进度": {
+    en: "The scanning node is too old to report live scan progress",
+    ja: "スキャンノードのバージョンが古いため、リアルタイムのスキャンの進捗を表示できません",
   },
   "原始错误：{detail}": {
     en: "Original error: {detail}",

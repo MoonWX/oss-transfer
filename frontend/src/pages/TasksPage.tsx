@@ -107,6 +107,8 @@ import RunningFailureRetry, {
   canRetryRunningFailures,
 } from "../components/RunningFailureRetry";
 import TransferStatistics from "../components/TransferStatistics";
+import ScanProgress from "../components/ScanProgress";
+import { scanListLabel } from "../lib/scanActivity";
 import {
   conflictPolicyLabel,
   taskComparisonLink,
@@ -1184,6 +1186,7 @@ function TaskDetail({
             {tr("传输统计")}
           </Typography>
           <TransferStatistics task={current} />
+          <ScanProgress activity={current.scanActivity} />
           {reportAvailable(current) &&
             taskConflictPolicy(current) === "SKIP" &&
             Number(current.skippedObjectCount) > 0 && (
@@ -2192,7 +2195,7 @@ export default function TasksPage({
                   : counts}
             </Typography>
           </Tooltip>
-          <Typography variant="caption">
+          <Typography variant="caption" data-testid="task-scan-label">
             {complete
               ? `${Math.floor(percent)}%`
               : !countsCurrent
@@ -2200,7 +2203,7 @@ export default function TasksPage({
                 : task.status === "PENDING"
                   ? tr("待扫描")
                   : scanning
-                    ? tr("扫描中")
+                    ? scanListLabel(task.scanActivity) || tr("扫描中")
                     : tr("扫描未完成")}
           </Typography>
         </Stack>
@@ -2660,7 +2663,7 @@ export default function TasksPage({
                       {tr("来源 / 目标")}
                     </TableCell>
                     <TableCell sx={{ width: "21%" }}>
-                      {tr("已迁移 / 已扫描")}
+                      {tr("已迁移 / 已发现")}
                     </TableCell>
                     <TableCell sx={{ width: 112 }}>{tr("状态")}</TableCell>
                     <TableCell sx={{ width: 150 }}>{tr("执行节点")}</TableCell>

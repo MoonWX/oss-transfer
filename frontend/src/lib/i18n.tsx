@@ -143,11 +143,11 @@ const subscribe = (listener: () => void) => {
 // English catalogs write counts in the plural ("{count} tasks"). A count of
 // exactly one takes the singular noun; other languages need no change.
 const PLURAL_NOUNS =
-  /\{([A-Za-z][A-Za-z0-9_]*)\} (seconds|minutes|hours|days|objects|files|tasks|nodes|agents|records|requests|bytes|retries)\b/g;
+  /\{([A-Za-z][A-Za-z0-9_]*)\} (seconds|minutes|hours|days|objects|files|tasks|nodes|agents|records|requests|bytes|names|retries|entries)\b/g;
 function singularize(template: string, values: MessageValues) {
   return template.replace(PLURAL_NOUNS, (match, key: string, noun: string) =>
     Object.hasOwn(values, key) && String(values[key]) === "1"
-      ? `{${key}} ${noun === "retries" ? "retry" : noun.slice(0, -1)}`
+      ? `{${key}} ${noun.endsWith("ies") ? noun.slice(0, -3) + "y" : noun.slice(0, -1)}`
       : match,
   );
 }

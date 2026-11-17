@@ -1737,9 +1737,9 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Transfer statistics",
     ja: "転送統計",
   },
-  已扫描: {
-    en: "Scanned",
-    ja: "スキャン済み",
+  已发现: {
+    en: "Found",
+    ja: "発見済み",
   },
   已迁移: {
     en: "Transferred",

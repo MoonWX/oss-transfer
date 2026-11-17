@@ -387,11 +387,12 @@ func TestFailedMetricsRefreshRetainsKnownProgressCapability(t *testing.T) {
 }
 
 type progressHTTPData struct {
-	Supported bool               `json:"supported"`
-	Partial   bool               `json:"partial"`
-	Items     []fileProgressView `json:"items"`
-	Total     int                `json:"total"`
-	HasMore   bool               `json:"hasMore"`
+	Supported     bool               `json:"supported"`
+	Partial       bool               `json:"partial"`
+	Items         []fileProgressView `json:"items"`
+	Total         int                `json:"total"`
+	HasMore       bool               `json:"hasMore"`
+	BasisReported bool               `json:"basisReported"`
 }
 
 func getProgressHTTP(t *testing.T, f *agentHTTPFixture, p task.Parent, query string) (int, progressHTTPData) {
@@ -567,6 +568,11 @@ func TestFileProgressValidatesPhaseAndBytes(t *testing.T) {
 	status, data := getProgressHTTP(t, f, p, "?childNumber=1&generation=1")
 	if status != 200 || data.Partial || len(data.Items) != 4 {
 		t.Fatalf("rows dropped: %d %+v", status, data)
+	}
+	// Files keep the basis their Agent reported, so a client can tell an
+	// older Agent's file (none) from one an older Master passed on.
+	if !data.BasisReported {
+		t.Fatal("the reply does not say it reports each file's basis")
 	}
 	want := []struct {
 		read         int64

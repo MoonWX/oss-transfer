@@ -23,13 +23,22 @@ export const byteProgress = (task: Task) =>
 
 // What the current speed and live bytes count (transferBasis): TARGET is
 // bytes sent to the destination; SOURCE (every node an older Agent) and
-// MIXED (some) count source reads on those nodes.
+// MIXED (some) count source reads on those nodes. With an Agent that has no
+// live progress at all (liveProgress UNSUPPORTED), progress counts completed
+// objects only.
 export function speedBasisNote(task: Task): string | null {
+  const completedOnly = task.liveProgress === "UNSUPPORTED";
   switch (task.transferBasis) {
     case "SOURCE":
-      return t("执行节点版本较旧，速度和进度按读取源端计算");
+      return completedOnly
+        ? t("执行节点版本较旧，速度按读取源端计算，进度只计已完成的对象")
+        : t("执行节点版本较旧，速度和进度按读取源端计算");
     case "MIXED":
-      return t("部分执行节点版本较旧，速度和进度按读取源端计算");
+      return completedOnly
+        ? t(
+            "部分执行节点版本较旧，这些节点的速度按读取源端计算；进度只计已完成的对象",
+          )
+        : t("部分执行节点版本较旧，这些节点的速度和进度按读取源端计算");
   }
   return null;
 }

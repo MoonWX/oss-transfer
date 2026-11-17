@@ -186,7 +186,9 @@ func (s *Server) taskProgressHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	items := []fileProgressView{}
-	data := map[string]any{"parentTaskId": id, "generation": p.Generation, "supported": true, "partial": false, "items": items, "total": 0, "hasMore": false, "observedAt": time.Now().UnixMilli()}
+	// basisReported: each file carries the basis its Agent reported, so a
+	// file without one is an older Agent's. Older Masters drop every basis.
+	data := map[string]any{"parentTaskId": id, "generation": p.Generation, "supported": true, "partial": false, "items": items, "total": 0, "hasMore": false, "observedAt": time.Now().UnixMilli(), "basisReported": true}
 	if number > 0 {
 		data["childNumber"] = number
 	}

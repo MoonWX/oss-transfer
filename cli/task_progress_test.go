@@ -76,7 +76,8 @@ func TestTaskShowIncludesInFlightBytesAndRequestRates(t *testing.T) {
 
 // File progress floors its percentage, never shows 100% before the
 // destination confirmed every byte, names each stage and wait in the chosen
-// language, says what "transferred" counts, and marks older Agents' rows.
+// language, says what "transferred" counts, and marks older Agents' rows
+// when the Master reports each file's basis.
 func TestTaskProgressFloorsAndLocalizesStages(t *testing.T) {
 	file := func(stage, basis, phase string, transferred float64) map[string]interface{} {
 		row := map[string]interface{}{"childTaskId": "7-1", "executionNodeLabel": "worker", "sourceKey": "big.bin", "size": float64(10000), "transferredBytes": transferred, "stage": stage}
@@ -93,7 +94,7 @@ func TestTaskProgressFloorsAndLocalizesStages(t *testing.T) {
 		for _, row := range rows {
 			items = append(items, row)
 		}
-		return map[string]interface{}{"data": map[string]interface{}{"parentTaskId": 7, "observedAt": "now", "items": items}}
+		return map[string]interface{}{"data": map[string]interface{}{"parentTaskId": 7, "observedAt": "now", "items": items, "basisReported": true}}
 	}
 	for _, test := range []struct {
 		locale cliLocale
@@ -129,9 +130,9 @@ func TestTaskProgressFloorsAndLocalizesStages(t *testing.T) {
 		output.Reset()
 		renderTaskRuntimeResult(out, result(file("FINALIZING", "", "", 10000)))
 		for _, want := range map[cliLocale][]string{
-			localeZH: {"源端已读完（旧版节点）", "旧版节点的进度按读取源端计算"},
-			localeEN: {"Source read (older Agent)", "Older Agents count progress from source reads"},
-			localeJA: {"転送元の読み取り完了（旧バージョン）", "転送元の読み取り量で計算されます"},
+			localeZH: {"源端已读完（旧版节点）", "旧版节点的进度按读取源端计算", "写入目标端可能仍在进行"},
+			localeEN: {"Source read (older Agent)", "Older Agents count progress from source reads", "writing to the destination may still be in progress"},
+			localeJA: {"転送元の読み取り完了（旧バージョン）", "転送元の読み取り量で計算されます", "転送先への書き込みが継続中"},
 		}[test.locale] {
 			if !strings.Contains(output.String(), want) {
 				t.Errorf("%s older Agent missing %q: %s", test.locale, want, output.String())
@@ -143,13 +144,42 @@ func TestTaskProgressFloorsAndLocalizesStages(t *testing.T) {
 	}
 }
 
+// An older Master drops each file's basis, whichever Agent reported it, so a
+// file without one is not marked as an older Agent's: a finalizing file reads
+// as read from the source, which is true for every Agent, and no note claims
+// what its bytes count.
+func TestTaskProgressFromAnOlderMasterClaimsNoBasis(t *testing.T) {
+	for _, test := range []struct {
+		locale cliLocale
+		want   string
+		wrong  []string
+	}{
+		{localeZH, "源端已读完", []string{"旧版", "确认中", "目标端已确认"}},
+		{localeEN, "Source read", []string{"older", "Finalizing", "destination has confirmed"}},
+		{localeJA, "転送元の読み取り完了", []string{"旧バージョン", "確定中", "転送先が確認"}},
+	} {
+		var output bytes.Buffer
+		out := &cliLocaleWriter{Writer: &output, locale: test.locale}
+		row := map[string]interface{}{"childTaskId": "7-1", "executionNodeLabel": "worker", "sourceKey": "big.bin", "size": float64(10000), "transferredBytes": float64(10000), "stage": "FINALIZING"}
+		renderTaskRuntimeResult(out, map[string]interface{}{"data": map[string]interface{}{"parentTaskId": 7, "observedAt": "now", "items": []interface{}{row}}})
+		if !strings.Contains(output.String(), test.want) {
+			t.Errorf("%s missing %q: %s", test.locale, test.want, output.String())
+		}
+		for _, wrong := range test.wrong {
+			if strings.Contains(output.String(), wrong) {
+				t.Errorf("%s shows %q: %s", test.locale, wrong, output.String())
+			}
+		}
+	}
+}
+
 // The current speed says what it counts once the Master reports it.
 func TestTaskShowSpeedSaysWhatItCounts(t *testing.T) {
 	task := map[string]interface{}{"taskIndex": 61, "status": "RUNNING", "currentSpeedBytesPerSecond": float64(2 << 20)}
 	for basis, want := range map[string]string{
 		"TARGET": "2 MiB/s（发往目标端，含失败后重新发送的字节）",
 		"SOURCE": "2 MiB/s（执行节点版本较旧，按读取源端计算）",
-		"MIXED":  "2 MiB/s（部分执行节点版本较旧，按读取源端计算）",
+		"MIXED":  "2 MiB/s（部分执行节点版本较旧，这些节点按读取源端计算）",
 		"":       "2 MiB/s",
 	} {
 		task["transferBasis"] = basis
@@ -164,5 +194,10 @@ func TestTaskShowSpeedSaysWhatItCounts(t *testing.T) {
 	renderTaskDetail(&cliLocaleWriter{Writer: &output, locale: localeEN}, task)
 	if !strings.Contains(output.String(), "2 MiB/s (some Agents are older and count source reads)") {
 		t.Errorf("English speed basis: %s", output.String())
+	}
+	output.Reset()
+	renderTaskDetail(&cliLocaleWriter{Writer: &output, locale: localeJA}, task)
+	if !strings.Contains(output.String(), "それらのノードは転送元の読み取り量で計算") {
+		t.Errorf("Japanese speed basis: %s", output.String())
 	}
 }

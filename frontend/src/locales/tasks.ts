@@ -88,9 +88,9 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The destination has received all data; the multipart upload is being completed, or the file is being synced and published",
     ja: "転送先がすべてのデータを受信しました。マルチパートアップロードを完了しているか、ファイルをディスクに同期して公開しています",
   },
-  "该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行": {
-    en: "This Agent is an older version; progress counts source reads, and the upload may still be in progress",
-    ja: "この実行ノードは旧バージョンのため、進捗は転送元の読み取り量で計算されており、アップロードは継続中の可能性があります",
+  "该执行节点版本较旧，进度按读取源端计算，写入目标端可能仍在进行": {
+    en: "This Agent is an older version; progress counts source reads, and writing to the destination may still be in progress",
+    ja: "この実行ノードは旧バージョンのため、進捗は転送元の読み取り量で計算されており、転送先への書き込みは継続中の可能性があります",
   },
   "已传输为目标端已确认的字节，加上各请求本次尝试已交给网络的字节；请求失败时，该次尝试的字节会撤回。":
     {
@@ -105,9 +105,17 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The Agents are older versions; speed and progress count source reads",
     ja: "実行ノードが旧バージョンのため、速度と進捗は転送元の読み取り量で計算されています",
   },
-  "部分执行节点版本较旧，速度和进度按读取源端计算": {
+  "部分执行节点版本较旧，这些节点的速度和进度按读取源端计算": {
     en: "Some Agents are older versions; their speed and progress count source reads",
-    ja: "一部の実行ノードは旧バージョンのため、速度と進捗は転送元の読み取り量で計算されています",
+    ja: "一部の実行ノードは旧バージョンのため、それらのノードの速度と進捗は転送元の読み取り量で計算されています",
+  },
+  "执行节点版本较旧，速度按读取源端计算，进度只计已完成的对象": {
+    en: "The Agents are older versions; speed counts source reads, and progress counts completed objects only",
+    ja: "実行ノードが旧バージョンのため、速度は転送元の読み取り量で計算され、進捗は完了したオブジェクトのみを数えています",
+  },
+  "部分执行节点版本较旧，这些节点的速度按读取源端计算；进度只计已完成的对象": {
+    en: "Some Agents are older versions; their speed counts source reads, and progress counts completed objects only",
+    ja: "一部の実行ノードは旧バージョンのため、それらのノードの速度は転送元の読み取り量で計算されています。進捗は完了したオブジェクトのみを数えています",
   },
   "文件进度：{key}": {
     en: "File progress: {key}",

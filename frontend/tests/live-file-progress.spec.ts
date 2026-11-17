@@ -22,6 +22,7 @@ async function arrange(page: Page, openChild = true) {
       averageSpeedBytesPerSecond: 0 as number | null | undefined,
       currentSpeedBytesPerSecond: (181.4 * 1024 ** 2) as number | null,
       transferBasis: "TARGET" as string | undefined,
+      liveProgress: undefined as string | undefined,
     },
     progress: {
       supported: true,
@@ -369,7 +370,7 @@ test("files of older agents say that their progress counts source reads", async 
   });
   const stage = section.locator("[data-file-stage]");
   await expect(section.locator("[data-file-progress-basis]")).toHaveText(
-    "该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行",
+    "该执行节点版本较旧，进度按读取源端计算，写入目标端可能仍在进行",
   );
   await expect(progress).not.toHaveAttribute("title", /.+/);
   state.progress.transferredBytes = 100 * 1024 ** 3;
@@ -378,7 +379,7 @@ test("files of older agents say that their progress counts source reads", async 
   await expect(progress).toHaveAttribute("aria-valuetext", "源端已读完");
   await expect(stage).toHaveAttribute(
     "title",
-    "该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行",
+    "该执行节点版本较旧，进度按读取源端计算，写入目标端可能仍在进行",
   );
   await expect(section).not.toContainText("确认中");
 });
@@ -401,7 +402,7 @@ for (const openChild of [false, true]) {
     await expect(current).not.toContainText("按读取源端计算");
     state.parent.transferBasis = "MIXED";
     await expect(current).toContainText(
-      "部分执行节点版本较旧，速度和进度按读取源端计算",
+      "部分执行节点版本较旧，这些节点的速度和进度按读取源端计算",
     );
     await expect(label).not.toHaveAttribute("title", /.+/);
     state.parent.transferBasis = "SOURCE";
@@ -413,6 +414,32 @@ for (const openChild of [false, true]) {
     state.parent.transferBasis = undefined;
     await expect(current).not.toContainText("按读取源端计算");
     await expect(current).toContainText("181.4 MiB/s");
+  });
+}
+
+for (const openChild of [false, true]) {
+  test(`${openChild ? "subtask" : "task"} speed of agents without live progress says progress counts completed objects`, async ({
+    page,
+  }) => {
+    const state = await arrange(page, openChild);
+    const details = openChild
+      ? page.locator("[data-subtask-heading]").locator("..")
+      : page;
+    const current = details
+      .getByText("当前速度", { exact: true })
+      .locator("..");
+    await expect(current).toContainText("181.4 MiB/s");
+    // Agents before live progress: progress counts completed objects only.
+    state.parent.liveProgress = "UNSUPPORTED";
+    state.parent.transferBasis = "SOURCE";
+    await expect(current).toContainText(
+      "执行节点版本较旧，速度按读取源端计算，进度只计已完成的对象",
+    );
+    state.parent.transferBasis = "MIXED";
+    await expect(current).toContainText(
+      "部分执行节点版本较旧，这些节点的速度按读取源端计算；进度只计已完成的对象",
+    );
+    await expect(current).not.toContainText("速度和进度");
   });
 }
 

@@ -157,7 +157,9 @@ export default function LiveFileProgress({
                 ? t(
                     "已传输为目标端已确认的字节，加上各请求本次尝试已交给网络的字节；请求失败时，该次尝试的字节会撤回。",
                   )
-                : t("该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行")}
+                : t(
+                    "该执行节点版本较旧，进度按读取源端计算，写入目标端可能仍在进行",
+                  )}
             </Typography>
           )}
           {!data && !stale && (
@@ -208,7 +210,7 @@ export default function LiveFileProgress({
                     )
                   : !item.basis
                     ? t(
-                        "该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行",
+                        "该执行节点版本较旧，进度按读取源端计算，写入目标端可能仍在进行",
                       )
                     : undefined
                 : undefined;

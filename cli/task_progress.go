@@ -67,7 +67,7 @@ func cliTaskCurrentSpeed(out io.Writer, task map[string]interface{}) string {
 	case "SOURCE":
 		return speed + cliText(out, "（执行节点版本较旧，按读取源端计算）")
 	case "MIXED":
-		return speed + cliText(out, "（部分执行节点版本较旧，按读取源端计算）")
+		return speed + cliText(out, "（部分执行节点版本较旧，这些节点按读取源端计算）")
 	}
 	return speed
 }

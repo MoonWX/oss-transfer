@@ -767,7 +767,9 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 					target = rate["configuredLimit"+suffix]
 				}
 				state := getString(rate, "state")
-				if translated, ok := map[string]string{"NORMAL": cliText(out, "正常"), "REDUCED": cliText(out, "已降速"), "RECOVERING": cliText(out, "恢复中"), "RECOVERED": cliText(out, "已恢复"), "UNLIMITED": cliText(out, "不限速")}[state]; ok {
+				// RAISING: a target raised in service.json is reached in steps,
+				// without throttling.
+				if translated, ok := map[string]string{"NORMAL": cliText(out, "正常"), "REDUCED": cliText(out, "已降速"), "RECOVERING": cliText(out, "恢复中"), "RECOVERED": cliText(out, "已恢复"), "RAISING": cliText(out, "按新目标逐步提升"), "UNLIMITED": cliText(out, "不限速")}[state]; ok {
 					state = translated
 				}
 				if state == "" {

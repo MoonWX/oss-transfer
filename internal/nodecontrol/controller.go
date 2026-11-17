@@ -577,6 +577,14 @@ func (c *Controller) Tick(now time.Time) error {
 		if value == target {
 			reason = "RECOVERED"
 		}
+		if next.Incidents[kind] == "" {
+			// No throttling lowered this limit: its target was raised, in
+			// service.json, and the running limit climbs to it.
+			reason = "RAISE_STEP"
+			if value == target {
+				reason = "RAISED"
+			}
+		}
 		events = append(events, c.event(&next, kind, old, value, target, target, reason, next.Incidents[kind], nil, nil))
 		next.Effective[kind] = value
 		if value == target {
@@ -662,8 +670,13 @@ func (c *Controller) Snapshot() (map[string]any, error) {
 		}
 		status := "NORMAL"
 		last, hasLast := c.data.Last[kind]
+		_, throttled := c.data.Incidents[kind]
 		if target == 0 {
 			status = "UNLIMITED"
+		} else if current < target && !throttled {
+			// Below its target without throttling: the target was raised in
+			// service.json and the running limit climbs to it in steps.
+			status = "RAISING"
 		} else if current < target {
 			status = "REDUCED"
 			if last.ReasonCode == "RECOVERY_STEP" {

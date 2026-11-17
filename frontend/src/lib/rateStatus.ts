@@ -70,7 +70,10 @@ export type Rate = {
   configuredLimitQps?: number;
   configuredLimitBps?: number;
   limitSource?: "CONFIG" | "PERSISTED_MANUAL";
-  state?: "NORMAL" | "REDUCED" | "RECOVERING" | "RECOVERED" | "UNLIMITED";
+  // RAISING: below a target raised in service.json, climbing to it in
+  // steps without any throttling.
+  state?:
+    "NORMAL" | "REDUCED" | "RECOVERING" | "RECOVERED" | "RAISING" | "UNLIMITED";
   lastAdjustment?: Adjustment | null;
 };
 export type AutoAdjust = {
@@ -128,6 +131,10 @@ export type Worker = NodeDisplay & {
   } | null;
 };
 export type WorkerStatusResponse = { workers: Record<string, Worker> };
+
+/** A step towards a target raised in service.json: not a throttling event. */
+export const raisedTargetEvent = (event: Adjustment) =>
+  event.reasonCode === "RAISE_STEP" || event.reasonCode === "RAISED";
 
 export function activeRates(worker: Worker): [RateType, Rate][] {
   if (!worker.success) return [];

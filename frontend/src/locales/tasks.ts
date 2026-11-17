@@ -2221,13 +2221,54 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "At least {value1}, and at least {value2}% of requests of this type",
     ja: "{value1} 件以上、かつこの種類のリクエストの {value2}% 以上",
   },
-  降速前实测速率: {
-    en: "Measured rate before reduction",
-    ja: "引き下げ前の実測レート",
+  降速前单秒峰值: {
+    en: "Peak one-second rate before reduction",
+    ja: "引き下げ前の 1 秒間の最大レート",
   },
-  降速幅度: {
-    en: "Reduction",
-    ja: "引き下げ率",
+  降速方式: {
+    en: "How the limit was lowered",
+    ja: "引き下げ方法",
+  },
+  "降为原运行上限与降速前单秒峰值中较低者的 {value1}%": {
+    en: "To {value1}% of the lower of the previous running limit and the peak one-second rate before reduction",
+    ja: "以前の実行上限と引き下げ前の 1 秒間の最大レートのうち低い方の {value1}% に引き下げ",
+  },
+  "降为原运行上限的 {value1}%": {
+    en: "To {value1}% of the previous running limit",
+    ja: "以前の実行上限の {value1}% に引き下げ",
+  },
+  本次降幅: {
+    en: "This reduction",
+    ja: "今回の引き下げ",
+  },
+  "{change}（下降 {value1}%）": {
+    en: "{change} (down {value1}%)",
+    ja: "{change}（{value1}% 減）",
+  },
+  调整原因: {
+    en: "Reason",
+    ja: "調整の理由",
+  },
+  按新目标逐步提升: {
+    en: "Rising to the new target",
+    ja: "新しい目標へ段階的に引き上げ中",
+  },
+  逐步提升: {
+    en: "Rising step",
+    ja: "段階的な引き上げ",
+  },
+  已达到新目标: {
+    en: "New target reached",
+    ja: "新しい目標に到達",
+  },
+  "目标已调高（如修改 service.json 后重启），运行上限逐步提升；仍低于目标。未出现限流。":
+    {
+      en: "The target was raised (for example in service.json before a restart); the running limit rises in steps and is still below the target. No throttling occurred.",
+      ja: "目標が引き上げられたため（例: service.json を変更して再起動）、実行上限を段階的に引き上げています。まだ目標を下回っています。スロットリングは発生していません。",
+    },
+  "运行上限已达到调高后的目标。": {
+    en: "The running limit reached the raised target.",
+    ja: "実行上限が引き上げ後の目標に到達しました。",
   },
   降速下限: {
     en: "Minimum limit",

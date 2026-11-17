@@ -3167,8 +3167,17 @@ service_name=${service_name:-oss-transfer-$role}
 [[ "$service_name" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || fail 'Invalid Compose project name'
 install_dir=${install_dir:-/opt/oss-transfer-compose/$role}
 data_dir=${data_dir:-/var/lib/oss-transfer-compose/$role}
+# The image a Compose file of this installer names, and the one that runs
+# $version: the same repository with the release's tag. The installer pins
+# the tag, so pulling the file's own image again never upgrades.
+compose_image() { [[ ! -f "$1" ]] || sed -n "s/^    image: '\([^']*\)'\$/\1/p" "$1" | head -n 1; }
+compose_upgrade_image() {
+  local name=${1%@*}
+  [[ "${name##*/}" != *:* ]] || name=${name%:*}
+  printf '%s\n' "${image:-${name:-moonwx/osstransfer}:$version}"
+}
 if ((upgrade)); then
-  # Compose upgrades by pulling the image and recreating the container. The
+  # Compose upgrades by recreating the container from the new image. The
   # project name must be the installation's own: without -p, Compose would use
   # the directory name and start a second container on the same data.
   existing_file="$install_dir/docker-compose.yml"
@@ -3177,7 +3186,13 @@ if ((upgrade)); then
     recorded=$(sed -n 's/^# oss-transfer-project: \([a-z0-9][a-z0-9_-]*\)$/\1/p' "$existing_file" | head -n 1)
     [[ -z "$recorded" ]] || existing_project=$recorded
   fi
-  fail "$(say "Upgrade a Compose installation with Docker Compose: docker compose -p $existing_project -f $existing_file pull, then docker compose -p $existing_project -f $existing_file up -d" "请用 Docker Compose 升级 Compose 安装：先运行 docker compose -p $existing_project -f $existing_file pull，再运行 docker compose -p $existing_project -f $existing_file up -d")"
+  current_image=$(compose_image "$existing_file")
+  upgrade_image=$(compose_upgrade_image "$current_image")
+  if [[ -n "$current_image" && "$current_image" == "$upgrade_image" ]]; then
+    say "$existing_file already uses $upgrade_image; nothing was changed. To recreate its container, run: docker compose -p $existing_project -f $existing_file up -d" "${existing_file} 已使用 ${upgrade_image}，未做任何更改。如需重建容器，请运行：docker compose -p $existing_project -f $existing_file up -d"
+    exit 0
+  fi
+  fail "$(say "This installer does not upgrade Compose installations. To upgrade to $version, change the image in $existing_file to $upgrade_image, then run docker compose -p $existing_project -f $existing_file pull, and then docker compose -p $existing_project -f $existing_file up -d" "安装脚本不升级 Compose 安装。如需升级到 ${version}，请先把 ${existing_file} 中的 image 改为 ${upgrade_image}，再运行 docker compose -p $existing_project -f $existing_file pull，然后运行 docker compose -p $existing_project -f $existing_file up -d")"
 fi
 for path in "$install_dir" "$data_dir" "$files_dir"; do
   [[ -z "$path" ]] && continue
@@ -3195,7 +3210,12 @@ fi
 compose_command="docker compose -p $service_name -f $install_dir/docker-compose.yml"
 if [[ -f "$install_dir/docker-compose.yml" ]] && command -v docker >/dev/null 2>&1 &&
   [[ -n $(docker ps -aq --filter "label=com.docker.compose.project=$service_name" 2>/dev/null || true) ]]; then
-  fail "$(say "An installation already exists in $install_dir. To upgrade it, run: $compose_command pull && $compose_command up -d" "$install_dir 中已有安装。如需升级，请运行：$compose_command pull && $compose_command up -d")"
+  current_image=$(compose_image "$install_dir/docker-compose.yml")
+  upgrade_image=$(compose_upgrade_image "$current_image")
+  if [[ -n "$current_image" && "$current_image" == "$upgrade_image" ]]; then
+    fail "$(say "An installation of $upgrade_image already exists in $install_dir. To recreate its container, run: $compose_command up -d" "${install_dir} 中已有安装，使用 ${upgrade_image}。如需重建容器，请运行：$compose_command up -d")"
+  fi
+  fail "$(say "An installation already exists in $install_dir. To upgrade it to $version, change the image in $install_dir/docker-compose.yml to $upgrade_image, then run: $compose_command pull && $compose_command up -d" "${install_dir} 中已有安装。如需升级到 ${version}，请先把 ${install_dir}/docker-compose.yml 中的 image 改为 ${upgrade_image}，再运行：$compose_command pull && $compose_command up -d")"
 fi
 # Data kept by --uninstall --keep-data, by docker compose down or by an
 # unfinished join is reused as it is; it is never offered for deletion.

@@ -138,7 +138,9 @@ class ComposeJoin(unittest.TestCase):
         result = self.join()
         self.assertIn("An installation already exists", result.stderr)
         compose = f"docker compose -p oss-transfer-agent -f {self.service}/docker-compose.yml"
-        self.assertIn(f"{compose} pull && {compose} up -d", result.stderr)
+        # The file pins its image tag, so pulling alone would not upgrade.
+        self.assertIn(f"change the image in {self.service}/docker-compose.yml to moonwx/osstransfer:4.1.5, then run: "
+                      f"{compose} pull && {compose} up -d", result.stderr)
 
     def test_unconfirmed_join_keeps_the_identity_and_the_same_command_finishes_it(self):
         result = self.join(enroll="unavailable")
@@ -220,6 +222,24 @@ class ComposeJoin(unittest.TestCase):
         compose = f"docker compose -p edge-agent -f {self.service}/docker-compose.yml"
         self.assertIn(f"{compose} pull", result.stderr)
         self.assertIn(f"{compose} up -d", result.stderr)
+
+    def test_upgrade_says_to_change_the_pinned_image_first(self):
+        # The installer writes a pinned tag: pull and up -d alone would keep
+        # running the same version without any error.
+        self.service.mkdir()
+        (self.service / "docker-compose.yml").write_text(
+            "# oss-transfer-project: oss-transfer-agent\nservices:\n  agent:\n    image: 'registry.example/osstransfer:4.1.4'\n")
+        result = self.join(args=("--upgrade",))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not upgrade Compose installations", result.stderr)
+        self.assertIn(f"change the image in {self.service}/docker-compose.yml to registry.example/osstransfer:4.1.5", result.stderr)
+        (self.service / "docker-compose.yml").write_text(
+            "# oss-transfer-project: oss-transfer-agent\nservices:\n  agent:\n    image: 'registry.example/osstransfer:4.1.5'\n")
+        result = self.join(args=("--upgrade",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already uses registry.example/osstransfer:4.1.5; nothing was changed", result.stdout)
+        result = self.join(args=("--upgrade",), OSS_TRANSFER_INSTALL_LANG="zh")
+        self.assertIn("已使用 registry.example/osstransfer:4.1.5，未做任何更改", result.stdout)
 
     def test_registered_node_is_not_told_to_check_its_connection(self):
         result = self.join(enroll="conflict")

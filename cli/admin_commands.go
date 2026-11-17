@@ -170,7 +170,7 @@ func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]i
 			}
 			result, err := client.Delete("/nodes/" + url.PathEscape(original))
 			if err == nil {
-				setCLISummary(result, strings.TrimSuffix(client.locale.format("已移除执行节点 %s。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent\n", original), "\n"))
+				setCLISummary(result, strings.TrimSuffix(client.locale.format("已移除执行节点 %s，它不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的程序和数据不会被删除；需要时请按其部署方式删除：用安装脚本安装的，在该主机运行安装脚本并加 --uninstall --role agent；容器请删除容器和数据卷；Windows 服务和手动运行的程序请手动删除（见安装文档的“卸载”一节）\n", original), "\n"))
 			}
 			return result, err
 		}

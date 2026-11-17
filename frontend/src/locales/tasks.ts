@@ -178,6 +178,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "{count} more: {message}",
     ja: "ほかに {count} 件: {message}",
   },
+  "{count} 条：{message}": {
+    en: "{count} records: {message}",
+    ja: "{count} 件: {message}",
+  },
   "可在“异常记录”中查看失败对象并重试。": {
     en: "Open Exceptions to see the failed objects and retry them.",
     ja: "「エラー記録」で失敗したオブジェクトを確認して再試行できます。",

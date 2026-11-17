@@ -675,12 +675,14 @@ function TaskDetail({
   const offlineNodes =
     (attentionTask?.offlineNodes as
       { displayLabel?: string; lastSeen?: number }[] | undefined) || [];
-  const attentionCauses =
-    (
-      attentionTask?.failureSummary as
-        | { causes?: { code: string; count: number; message: string }[] }
-        | undefined
-    )?.causes || [];
+  const failureSummary = attentionTask?.failureSummary as
+    | {
+        causes?: { code: string; count: number; message: string }[];
+        // The causes were counted in the first records only (a sample).
+        truncated?: boolean;
+      }
+    | undefined;
+  const attentionCauses = failureSummary?.causes || [];
   const pageData = children.data;
   const childData =
     taskId != null &&
@@ -1189,10 +1191,16 @@ function TaskDetail({
                       variant="caption"
                       display="block"
                     >
-                      {tr("另有 {count} 个：{message}", {
-                        count: formatNumber(cause.count),
-                        message: cause.message,
-                      })}
+                      {failureSummary?.truncated
+                        ? // Counts of the sampled records, not of all objects.
+                          tr("{count} 条：{message}", {
+                            count: formatNumber(cause.count),
+                            message: cause.message,
+                          })
+                        : tr("另有 {count} 个：{message}", {
+                            count: formatNumber(cause.count),
+                            message: cause.message,
+                          })}
                     </Typography>
                   ))}
                   <Typography variant="caption" display="block">

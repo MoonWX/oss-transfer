@@ -56,8 +56,10 @@ func TestCreateSkipSharedCheckIsIgnoredForOneNodeAndRejectedElsewhere(t *testing
 	if _, err := runTaskCreate(client, []string{"oss-to-local", "source/src", "--binding", "10.0.0.1=/mnt/data", "--skip-shared-check", "--validate-only"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(warnings.String(), "已忽略 --skip-shared-check") {
-		t.Fatal("ignored flag was not explained", warnings.String())
+	// Nothing is skipped or recorded: nodes added later are checked, and the
+	// hint says how to skip their check then.
+	if text := warnings.String(); !strings.Contains(text, "已忽略 --skip-shared-check") || !strings.Contains(text, "之后用 task nodes 加入节点时会校验共享目录") || !strings.Contains(text, "--skip-shared-check 和 --yes") {
+		t.Fatal("ignored flag was not explained", text)
 	}
 	for _, args := range [][]string{
 		{"oss-to-oss", "source/src", "target/dst", "--skip-shared-check", "--yes"},
@@ -95,9 +97,11 @@ func TestTaskDetailAndReportWarnAboutSkippedSharedCheck(t *testing.T) {
 			renderTaskDetail(out, map[string]interface{}{"taskIndex": float64(1), "direction": direction, "status": "COMPLETED", "sharedCheckSkipped": true})
 			renderTaskReportResult(out, map[string]interface{}{"reportKind": "task", "complete": true, "resultCounts": map[string]int64{}, "sharedCheckSkipped": true})
 			text := buffer.String()
-			want := []string{"共享目录校验", "此任务创建时跳过了共享目录校验", "此报告中的任务创建时跳过了共享目录校验"}
+			// A node change can record the skip as well as creation, and the
+			// nodes added later are still checked.
+			want := []string{"共享目录校验", "此任务在创建或加入节点时跳过了共享目录校验", "之后加入的节点仍会校验", "此报告中的任务在创建或加入节点时跳过了共享目录校验"}
 			if locale == localeEN {
-				want = []string{"Shared directory check", "Warning: this task was created with the shared directory check skipped", "Warning: a task in this report was created with the shared directory check skipped"}
+				want = []string{"Shared directory check", "Warning: this task skipped the shared directory check when it was created or when nodes were added", "Nodes added later are still checked", "Warning: a task in this report skipped the shared directory check"}
 			}
 			if direction == "OSS_TO_LOCAL" {
 				// A download's consequence is a split destination.
@@ -134,30 +138,132 @@ func TestImportWarnsAboutEveryRowThatSkipsTheCheck(t *testing.T) {
 	}
 }
 
-func TestTaskNodesNeedsItsOwnAcknowledgementForASkippedTask(t *testing.T) {
+// Nodes added to a task that skipped the check earlier are checked: nothing
+// is skipped unless the change asks for it, and no warning is printed.
+func TestTaskNodesChecksNodesAddedToASkippedTask(t *testing.T) {
 	master := &taskNodesFakeMaster{view: taskNodesTestView(true)}
 	master.view["sharedCheckSkipped"] = true
 	var warnings bytes.Buffer
 	client := adminTestClient(t, master.handler(t))
 	client.errors = &warnings
-	args := []string{"nodes", "12", "--add", "10.0.0.3", "--binding", "10.0.0.3=/mnt/share", "--yes"}
-	if _, err := runTaskCommand(client, args); err == nil || !isCLIUsageError(err) || len(master.posts) != 0 || !strings.Contains(warnings.String(), "新加入的节点同样不会校验") {
-		t.Fatal("a node joined a skipped task without its own acknowledgement", err, master.posts, warnings.String())
+	result, err := runTaskCommand(client, []string{"nodes", "12", "--add", "10.0.0.3", "--binding", "10.0.0.3=/mnt/share"})
+	if err == nil || isCLIUsageError(err) || len(master.posts) != 1 || master.posts[0]["dryRun"] != true {
+		t.Fatal("an unconfirmed change must preflight and stop", err, master.posts)
 	}
-	if _, err := runTaskCommand(client, append(args, "--skip-shared-check")); err != nil {
+	if _, present := master.posts[0]["skipSharedCheck"]; present || warnings.Len() != 0 {
+		t.Fatal("a change that skips nothing asked to skip or warned", master.posts[0], warnings.String())
+	}
+	if text := renderTaskNodesForTest(result, localeZH); !strings.Contains(text, "校验新节点（此任务此前跳过了校验）") {
+		t.Fatal("the plan does not say that the new node is checked", text)
+	}
+	if text := renderTaskNodesForTest(result, localeEN); !strings.Contains(text, "The new nodes are checked (this task skipped the check earlier)") {
+		t.Fatal("English plan", text)
+	}
+	if _, err := runTaskCommand(client, []string{"nodes", "12", "--add", "10.0.0.3", "--binding", "10.0.0.3=/mnt/share", "--yes"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(master.posts) != 2 || master.posts[0]["dryRun"] != true || master.posts[1]["skipSharedCheckAcknowledged"] != true {
-		t.Fatal("the acknowledgement was not sent", master.posts)
+	for _, body := range master.posts[1:] {
+		if _, present := body["skipSharedCheck"]; present {
+			t.Fatal("a change that skips nothing asked to skip", body)
+		}
+		if _, present := body["skipSharedCheckAcknowledged"]; present {
+			t.Fatal("a change that skips nothing acknowledged a skip", body)
+		}
 	}
-	// The flag means nothing for a task that checks its directories.
-	plain := &taskNodesFakeMaster{view: taskNodesTestView(true)}
-	if _, err := runTaskCommand(adminTestClient(t, plain.handler(t)), append(args, "--skip-shared-check")); err == nil || !isCLIUsageError(err) || len(plain.posts) != 0 {
-		t.Fatal("--skip-shared-check was accepted for a checked task", err, plain.posts)
+	// The membership view says what the earlier skip means for later nodes.
+	view, err := runTaskCommand(client, []string{"nodes", "12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := renderTaskNodesForTest(view, localeZH); !strings.Contains(text, "此任务跳过了共享目录校验；之后加入的节点仍会校验") {
+		t.Fatal("membership output", text)
+	}
+}
+
+// --skip-shared-check on a node change prints creation's consequences to
+// standard error, needs --yes before anything is sent, and then sends the
+// skip with its acknowledgement in the dry run and in the change.
+func TestTaskNodesSkipSharedCheckWarnsNeedsYesAndSendsBothFields(t *testing.T) {
+	for _, direction := range []string{"LOCAL_TO_OSS", "OSS_TO_LOCAL"} {
+		master := &taskNodesFakeMaster{view: taskNodesTestView(true)}
+		master.view["direction"] = direction
+		var warnings bytes.Buffer
+		client := adminTestClient(t, master.handler(t))
+		client.errors = &warnings
+		args := []string{"nodes", "12", "--add", "10.0.0.3", "--binding", "10.0.0.3=/mnt/share", "--skip-shared-check"}
+		_, err := runTaskCommand(client, args)
+		if err == nil || !isCLIUsageError(err) || !strings.Contains(err.Error(), "--yes") || len(master.posts) != 0 {
+			t.Fatalf("%s: a skip without --yes was sent: %v %v", direction, err, master.posts)
+		}
+		want, other := "它会从与其他节点不同的数据中读取对象", "它下载的文件会写入其他节点看不到的目录"
+		if direction == "OSS_TO_LOCAL" {
+			want, other = other, want
+		}
+		if text := warnings.String(); !strings.Contains(text, "警告：--skip-shared-check 会跳过新加入节点的共享目录校验") || !strings.Contains(text, want) || strings.Contains(text, other) || !strings.Contains(text, "新节点接管失联节点的工作时也不做校验") || !strings.Contains(text, "任务的其他节点不受影响，运行期间仍会校验共享目录") {
+			t.Fatalf("%s: consequences:\n%s", direction, text)
+		}
+		result, err := runTaskCommand(client, append(args, "--yes"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(master.posts) != 2 || master.posts[0]["dryRun"] != true || master.posts[1]["dryRun"] != nil {
+			t.Fatalf("%s: requests %v", direction, master.posts)
+		}
+		for _, body := range master.posts {
+			if body["skipSharedCheck"] != true || body["skipSharedCheckAcknowledged"] != true {
+				t.Fatalf("%s: the skip was not sent with its acknowledgement: %v", direction, body)
+			}
+		}
+		if text := renderTaskNodesForTest(map[string]interface{}{"taskNodesPlan": map[string]interface{}{"taskId": 12, "add": []interface{}{"10.0.0.3"}, "skipSharedCheck": true}}, localeZH); !strings.Contains(text, "跳过，不验证新节点挂载的是同一份存储") {
+			t.Fatalf("%s: plan %s", direction, text)
+		}
+		if result["requestId"] == nil {
+			t.Fatal("the accepted change lost its request ID")
+		}
+	}
+	// A task that skipped the check before (at creation, every node) is not
+	// said to verify its other nodes.
+	skipped := &taskNodesFakeMaster{view: taskNodesTestView(true)}
+	skipped.view["sharedCheckSkipped"] = true
+	var earlier bytes.Buffer
+	client := adminTestClient(t, skipped.handler(t))
+	client.errors = &earlier
+	if _, err := runTaskCommand(client, []string{"nodes", "12", "--add", "10.0.0.3", "--binding", "10.0.0.3=/mnt/share", "--skip-shared-check", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if text := earlier.String(); !strings.Contains(text, "新节点接管失联节点的工作时也不做校验") || strings.Contains(text, "任务的其他节点不受影响") {
+		t.Fatalf("a task that skipped the check before: %s", text)
 	}
 	var buffer bytes.Buffer
-	renderTaskNodeBindingChecks(&cliLocaleWriter{Writer: &buffer, locale: localeZH}, []map[string]interface{}{{"executionNodeIp": "10.0.0.3", "localPath": "/mnt/share", "valid": true, "code": "SHARED_STORAGE_CHECK_SKIPPED", "message": "未校验：此任务创建时跳过了共享目录校验"}})
+	renderTaskNodeBindingChecks(&cliLocaleWriter{Writer: &buffer, locale: localeZH}, []map[string]interface{}{{"executionNodeIp": "10.0.0.3", "localPath": "/mnt/share", "valid": true, "code": "SHARED_STORAGE_CHECK_SKIPPED", "message": "已按要求跳过共享目录校验；未验证各节点是否挂载同一份存储"}})
 	if text := buffer.String(); !strings.Contains(text, "未校验") || strings.Contains(text, "通过") {
 		t.Fatal("an unchecked node is shown as passed", text)
+	}
+}
+
+// --skip-shared-check needs nodes to add to a local transfer. A change whose
+// additions only keep draining nodes adds no local path: the flag has no
+// effect, says so, and is still sent so that a retry sends the same request.
+func TestTaskNodesSkipSharedCheckNeedsLocalNodesToAdd(t *testing.T) {
+	code, _, stderr := runMockCLI(t, []string{"task", "nodes", "12", "--remove", "10.0.0.2", "--skip-shared-check", "--yes"}, func(http.ResponseWriter, *http.Request) { t.Fatal("unexpected request") })
+	if code != 2 || !strings.Contains(stderr, "--skip-shared-check") {
+		t.Fatalf("%d %s", code, stderr)
+	}
+	plain := &taskNodesFakeMaster{view: taskNodesTestView(false)}
+	if _, err := runTaskCommand(adminTestClient(t, plain.handler(t)), []string{"nodes", "12", "--add", "10.0.0.3", "--skip-shared-check", "--yes"}); err == nil || !isCLIUsageError(err) || len(plain.posts) != 0 {
+		t.Fatal("--skip-shared-check was accepted for an OSS transfer", err, plain.posts)
+	}
+	master := &taskNodesFakeMaster{view: taskNodesTestView(true)}
+	var warnings bytes.Buffer
+	client := adminTestClient(t, master.handler(t))
+	client.errors = &warnings
+	if _, err := runTaskCommand(client, []string{"nodes", "12", "--add", "10.0.0.2", "--skip-shared-check", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if text := warnings.String(); !strings.Contains(text, "本次没有新加入的节点") || strings.Contains(text, "警告") {
+		t.Fatal("a change without new nodes", text)
+	}
+	if len(master.posts) != 1 || master.posts[0]["skipSharedCheck"] != true || master.posts[0]["dryRun"] != nil {
+		t.Fatal("requests", master.posts)
 	}
 }

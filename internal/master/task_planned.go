@@ -91,8 +91,10 @@ func (t *taskRuntime) recordStep(ctx context.Context, id int64, generation uint6
 	current, readErr := t.repo.Get(id)
 	if readErr != nil || current.Deleted || current.Purged || task.Ended(current.Status) {
 		// The task usually ends inside a step and then leaves the active list,
-		// so this is the place to forget its policy deliveries.
+		// so this is the place to forget its policy deliveries and the
+		// problems of its joining nodes.
 		t.forgetPolicyDeliveries(id)
+		t.joins.forget(id)
 	}
 	if ctx.Err() != nil {
 		return err

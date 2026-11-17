@@ -383,9 +383,9 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 // What skipping the shared-directory check can cost, printed to standard error
 // whenever it is requested. Uploads and downloads fail differently.
 const (
-	sharedCheckSkipUploadWarning   = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。"
-	sharedCheckSkipDownloadWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；节点失联后的自动接管和之后添加的节点也不做校验，可能写入另一个目录。"
-	sharedCheckSkipImportWarning   = "警告：第 %s 项跳过了共享目录校验，不会验证这些任务的各执行节点挂载的是同一份存储。如果不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务报告仍可能显示成功；自动接管和之后添加的节点也不做校验。"
+	sharedCheckSkipUploadWarning   = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。之后用 task nodes 加入节点时仍会校验共享目录，除非届时再次确认跳过。"
+	sharedCheckSkipDownloadWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；节点失联后的自动接管也不做校验，可能写入另一个目录。之后用 task nodes 加入节点时仍会校验共享目录，除非届时再次确认跳过。"
+	sharedCheckSkipImportWarning   = "警告：第 %s 项跳过了共享目录校验，不会验证这些任务的各执行节点挂载的是同一份存储。如果不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务报告仍可能显示成功；自动接管也不做校验。之后加入的节点仍会校验共享目录，除非加入时再次确认跳过。"
 )
 
 func sharedCheckSkipWarning(direction string) string {
@@ -410,7 +410,8 @@ func createSkipSharedCheckOption(client *ApiClient, opts commandOptions, binding
 		warnings = os.Stderr
 	}
 	if bindings < 2 {
-		fmt.Fprintln(warnings, cliText(warnings, "提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check"))
+		// Nothing is skipped now, and nothing is recorded for later.
+		fmt.Fprintln(warnings, cliText(warnings, "提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check。之后用 task nodes 加入节点时会校验共享目录；如需跳过，届时添加 --skip-shared-check 和 --yes 确认。"))
 		return nil
 	}
 	fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipWarning(direction)))
@@ -833,8 +834,11 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			return nil, cliErrorf("服务端未返回节点预检结果，尚未提交创建请求")
 		}
 		data, _ := checked["data"].(map[string]interface{})
-		valid := data["valid"] == true
 		bindings, _ := data["nodeBindings"].([]interface{})
+		// A node that failed, or a reply that does not match the bindings,
+		// points at nodes and paths; the Master may also refuse a row for a
+		// reason of its own (validationErrors).
+		nodeFailed := false
 		// The response is flattened in request/binding order by MasterLocalTransferService.
 		index := 0
 		for _, row := range rows {
@@ -845,17 +849,17 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			requested := endpoint["nodeBindings"].([]interface{})
 			for range requested {
 				if index >= len(bindings) {
-					valid = false
+					nodeFailed = true
 					continue
 				}
 				binding, ok := bindings[index].(map[string]interface{})
 				index++
 				if !ok || binding == nil {
-					valid = false
+					nodeFailed = true
 					continue
 				}
 				if binding["valid"] != true {
-					valid = false
+					nodeFailed = true
 				}
 				if row["direction"] != "LOCAL_TO_OSS" {
 					continue
@@ -864,22 +868,28 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 				key, _ := destination["objectKey"].(string)
 				if len(requested) > 1 && binding["pathType"] == "FILE" {
 					binding["valid"], binding["message"] = false, client.text("单文件上传请只保留一个执行节点")
-					valid = false
+					nodeFailed = true
 				}
 				if key != "" && binding["pathType"] != "FILE" {
 					binding["valid"], binding["message"] = false, client.text("指定目标 Key 仅适用于单文件；目录上传请使用目标前缀")
-					valid = false
+					nodeFailed = true
 				}
 			}
 		}
 		if index != len(bindings) {
-			valid = false
+			nodeFailed = true
 		}
+		valid := data["valid"] == true && !nodeFailed
 		if data != nil {
 			data["valid"] = valid
 		}
 		if !valid {
 			checked["submissionStatus"] = "validation_failed"
+			// A row refused for a reason that is not a node's, such as a
+			// storage connection, a bucket name or a bandwidth share, names it.
+			if problems := createValidationErrors(client.locale, data["validationErrors"], len(rows)); !nodeFailed && len(problems) > 0 {
+				return checked, cliErrorf("预检未通过：%s；尚未提交创建请求", strings.Join(problems, "；"))
+			}
 			return checked, cliErrorf("节点预检未通过，请检查节点和本地路径；尚未提交创建请求")
 		}
 		if validateOnly {

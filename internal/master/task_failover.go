@@ -31,10 +31,28 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 	if p.Spec.Source.Kind != "LOCAL" && p.Spec.Destination.Kind != "LOCAL" {
 		return nil
 	}
-	if p.Spec.SharedCheckSkipped {
-		// Takeover resumes on whatever directory each node has mounted.
-		return t.server.grantSkippedSharedCheck(ctx, p, nodes)
+	// Nodes whose check the operator skipped get their proof without one:
+	// takeover resumes on whatever directory each of them has mounted. Every
+	// other node is verified against the original shared directory.
+	skipped, verified := skippedSharedNodes(p, nodes)
+	if len(skipped) == 0 {
+		if p.SharedCheckSkippedForEveryNode() {
+			return nil
+		}
+		return t.verifyNodeStorage(ctx, p, nodes, initialize)
 	}
+	if len(verified) > 0 {
+		if err := t.verifyNodeStorage(ctx, p, verified, initialize); err != nil {
+			return err
+		}
+	}
+	return t.server.grantSkippedSharedCheck(ctx, p, skipped)
+}
+
+// verifyNodeStorage verifies nodes whose check was not skipped against the
+// task's storage proof. initialize sets the proof up when nodes are every
+// such active node.
+func (t *taskRuntime) verifyNodeStorage(ctx context.Context, p task.Parent, nodes []task.Node, initialize bool) error {
 	key := fmt.Sprint(p.ID)
 	var proof taskStorageProof
 	if err := t.server.store.Update(func(tx *state.Tx) error {
@@ -66,7 +84,7 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 		return map[string]any{"parentId": p.ID, "generation": p.Generation, "root": node.LocalRoot, "probe": proof.Probe}
 	}
 	if !proof.Ready {
-		if !initialize || len(nodes) != len(p.ActiveNodes()) {
+		if _, active := skippedSharedNodes(p, p.ActiveNodes()); !initialize || len(nodes) != len(active) {
 			return errors.New("waiting for every task node to verify the shared directory")
 		}
 		// This is the only creation site. Once sealed, a missing marker is a failed
@@ -105,8 +123,7 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 	}
 	for _, node := range nodes {
 		if err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_verify", true, request(node), nil); err != nil {
-			name := t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
-			return fmt.Errorf("Agent %s cannot verify the original shared directory: %w", name, err)
+			return &nodeStorageError{node: t.server.nodeLabel(node), err: err}
 		}
 	}
 	if proof.Ready {
@@ -120,6 +137,20 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 		return tx.Put("master-task-storage-proofs", key, proof)
 	})
 }
+
+// nodeStorageError is a node that cannot verify the task's original shared
+// directory marker. Its text names the node, for the task's runtime problem;
+// a join problem names the node itself and shows only the cause.
+type nodeStorageError struct {
+	node string
+	err  error
+}
+
+func (e *nodeStorageError) Error() string {
+	return fmt.Sprintf("Agent %s cannot verify the original shared directory: %v", e.node, e.err)
+}
+
+func (e *nodeStorageError) Unwrap() error { return e.err }
 
 // sampleView is what one node sees at one sampled path, in a form that is
 // equal exactly when two nodes see the same thing: "" for the sampled
@@ -301,8 +332,15 @@ func (t *taskRuntime) enableFailover(ctx context.Context, p task.Parent, availab
 	return t.repo.EnableFailover(p.ID, p.Generation, p.Spec.Destination.Kind == "LOCAL")
 }
 
-func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, available map[string]bool) (task.Parent, error) {
-	var err error
+func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, available map[string]bool) (_ task.Parent, err error) {
+	// Joining nodes are admitted only by rejoinAvailableNodes at the end. A
+	// step that returns before it says what holds the joins up.
+	rejoining := false
+	defer func() {
+		if !rejoining {
+			t.noteJoinsBlocked(ctx, p, available, err)
+		}
+	}()
 	p, err = t.enableFailover(ctx, p, available)
 	if err != nil {
 		return p, err
@@ -361,12 +399,14 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 		if err = t.verifyTaskStorage(ctx, p, candidates, false); err != nil {
 			return p, err
 		}
-		if p.Spec.SharedCheckSkipped {
-			log.Printf("task %d generation %d: node %s is lost; its work moves to %s without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(node), t.server.nodeLabels(candidates))
-		}
 		p, err = t.retireUnavailableNode(p, node)
 		if err != nil {
 			return p, err
+		}
+		// Logged once, when the node is retired (not while maintenance
+		// protects it), rather than on every retried step.
+		if p.NodeRetired(node.ID) {
+			t.logUncheckedTakeover(p, node, candidates)
 		}
 	}
 	// A lease can have been retired immediately before a Master crash, before
@@ -383,9 +423,23 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 	}
 	p, err = t.moveRetiredScanner(ctx, p, available)
 	if err == nil {
+		rejoining = true
 		p, err = t.rejoinAvailableNodes(ctx, p)
 	}
 	return p, err
+}
+
+// logUncheckedTakeover logs that the work of a lost node may move to nodes
+// whose shared directory check the operator skipped.
+func (t *taskRuntime) logUncheckedTakeover(p task.Parent, lost task.Node, candidates []task.Node) {
+	skipped, verified := skippedSharedNodes(p, candidates)
+	switch {
+	case len(skipped) == 0:
+	case len(verified) == 0:
+		log.Printf("task %d generation %d: node %s is lost; its work moves to %s without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(lost), t.server.nodeLabels(skipped))
+	default:
+		log.Printf("task %d generation %d: node %s is lost; its work moves to %s, and to %s without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(lost), t.server.nodeLabels(verified), t.server.nodeLabels(skipped))
+	}
 }
 
 // moveRetiredScanner hands scanning to a verified available member through the

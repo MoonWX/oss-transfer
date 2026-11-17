@@ -3,7 +3,6 @@ package task
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -142,6 +141,40 @@ type NodeChange struct {
 	Fingerprint        string
 	ExpectedGeneration *uint64
 	ExpectedRevision   *uint64
+	// SkipSharedCheck records that the operator explicitly chose not to
+	// verify that the local paths this change adds see the task's shared
+	// storage. The task keeps the record (Spec.SharedCheckSkipped), as when
+	// it is created that way, but the skip covers only the nodes this change
+	// adds (Node.SharedCheckSkipped): the runtime keeps verifying the others.
+	// A change that adds no node to a local task ignores it.
+	SkipSharedCheck bool
+}
+
+// SharedCheckSkippedForEveryNode reports a task created with the shared
+// directory check skipped: the runtime grants every node, also one added
+// later, its shared proof without a check.
+func (p Parent) SharedCheckSkippedForEveryNode() bool {
+	return p.Spec.SharedCheckSkipped && !p.Spec.SharedCheckSkippedNodesOnly
+}
+
+// SharedCheckSkippedFor reports whether the runtime grants the node its
+// shared proof without a check (shared_proof_skip): every node of a task
+// created with the check skipped, otherwise only a node that a node change
+// added with the check skipped. Every other node is verified against the
+// task's shared directory.
+func (p Parent) SharedCheckSkippedFor(nodeID string) bool {
+	if !p.Spec.SharedCheckSkipped {
+		return false
+	}
+	if !p.Spec.SharedCheckSkippedNodesOnly {
+		return true
+	}
+	for _, node := range p.Spec.Nodes {
+		if node.ID == nodeID {
+			return node.SharedCheckSkipped
+		}
+	}
+	return false
 }
 
 type nodeRequestRecord struct {
@@ -240,11 +273,10 @@ func (p Parent) CheckNodeChange(change NodeChange) error {
 	if len(after.Spec.Nodes) > 1024 {
 		return errors.New("select between 1 and 1024 Agents")
 	}
-	consumers := len(after.ActiveNodes()) + len(after.Membership.Joining)
-	if p.Spec.BandwidthMbps > 0 && math.Floor(p.Spec.BandwidthMbps*125000) < float64(consumers) {
-		return rejectMembership("BANDWIDTH", "The task bandwidth limit is too small for the selected Agents")
-	}
-	if limits := p.Spec.RequestLimits; limits != nil && limits.Scope != "PER_NODE" && limits.BandwidthBitsPerSecond > 0 && limits.BandwidthBitsPerSecond/8/float64(consumers) < 1 {
+	// The nodes that share the limits, counted as the commit's validation
+	// counts them (validateShared), so that a dry run and the change agree.
+	sharing := len(after.CurrentNodes())
+	if BandwidthTooSmall(p.Spec, sharing) || requestBandwidthTooSmall(p.Spec, sharing) {
 		return rejectMembership("BANDWIDTH", "The task bandwidth limit is too small for the selected Agents")
 	}
 	return nil
@@ -295,6 +327,9 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 		_, ok := p.Failover.Retired[id]
 		return ok
 	}
+	local := p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL"
+	skip := change.SkipSharedCheck && local
+	joined := false
 	for _, node := range change.Add {
 		index := -1
 		for i, member := range p.Spec.Nodes {
@@ -306,6 +341,9 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			delete(m.Draining, node.ID)
 			continue
 		}
+		// Each join records its own choice: a node added again without the
+		// skip is verified, whatever an earlier change chose for it.
+		node.SharedCheckSkipped = skip
 		if index >= 0 {
 			// A removed node is fenced and all of its unfinished work has moved.
 			// Re-adding it rejoins under a newer ownership epoch.
@@ -315,6 +353,7 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			p.Spec.Nodes = append(p.Spec.Nodes, node)
 		}
 		m.Joining[node.ID] = now
+		joined = true
 		// An added node must be able to receive work, otherwise it would only
 		// dilute the working node's bandwidth/QPS share: affinity placement
 		// switches to balanced placement when a node joins.
@@ -351,6 +390,15 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			m.Draining[id] = NodeDrain{Mode: change.Mode, RequestedAt: now}
 		}
 	}
+	if skip && joined {
+		// The task shows the skip from now on, but only the nodes this change
+		// adds go unverified; the runtime keeps verifying the others. A task
+		// created with the check skipped already covers every node.
+		if !p.Spec.SharedCheckSkipped {
+			p.Spec.SharedCheckSkippedNodesOnly = true
+		}
+		p.Spec.SharedCheckSkipped = true
+	}
 	m.Revision++
 	return p
 }
@@ -385,7 +433,13 @@ func (r *Repository) ChangeNodes(id int64, change NodeChange) (p Parent, replaye
 			return err
 		}
 		p = p.applyNodeChange(change, r.now().UTC())
-		if err := validate(p.Spec); err != nil {
+		if p.Spec.SharedCheckSkipped {
+			// As at creation: an older Master would drop the record.
+			if err := state.RequireSchema(tx, "master", state.SchemaSharedCheckSkipped); err != nil {
+				return err
+			}
+		}
+		if err := validateShared(p.Spec, len(p.CurrentNodes())); err != nil {
 			return err
 		}
 		if err := r.save(tx, p); err != nil {

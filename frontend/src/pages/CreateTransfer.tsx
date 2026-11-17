@@ -14,10 +14,6 @@ import {
   Chip,
   Checkbox,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   Divider,
   FormControlLabel,
   IconButton,
@@ -71,6 +67,7 @@ import {
   type OssKeyMappingMode,
 } from "../lib/ossKeyMapping";
 import SelectField from "../components/SelectField";
+import SkipSharedCheckDialog from "../components/SkipSharedCheckDialog";
 import {
   conflictPolicies,
   conflictPolicyHelp,
@@ -138,6 +135,14 @@ type Precheck = {
       pathType?: string;
     }
   >;
+  /**
+   * The Master's reasons for refusing rows, numbered by row ("1: …"): a node
+   * that failed, or the row itself (a storage connection, a bucket name, a
+   * bandwidth share). Older Masters omit them.
+   */
+  validationErrors?: string[];
+  /** The number of rows checked, set here, to name rows in a batch. */
+  rows?: number;
 };
 type Submission = {
   severity: "success" | "warning" | "error";
@@ -200,6 +205,19 @@ const freshForm = (): TransferForm => ({
 });
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/**
+ * The Master's reasons for refused rows. Creation and its preflight number
+ * them from 1 ("2: …"): a batch names the row, a single row needs no number.
+ */
+const rowProblems = (problems: unknown, rows: number) =>
+  (Array.isArray(problems) ? problems : []).map((item) => {
+    const text = typeof item === "string" ? item : JSON.stringify(item);
+    const numbered = /^(\d+): ([\s\S]*)$/.exec(text);
+    if (!numbered) return text;
+    return rows > 1
+      ? tr("第 {value1} 项：", { value1: numbered[1] }) + numbered[2]
+      : numbered[2];
+  });
 const dateValue = (value: string) =>
   value.length === 16 ? `${value}:00` : value;
 const optional = (value: string) => value.trim() || undefined;
@@ -542,7 +560,6 @@ export default function CreateTransfer() {
   );
   const [busy, setBusy] = useState<"create" | "validate" | null>(null);
   const [skipDialogOpen, setSkipDialogOpen] = useState(false);
-  const [skipConfirmed, setSkipConfirmed] = useState(false);
   const [precheck, setPrecheck] = useState<Precheck | null>(null);
   const precheckRequest = useRef<string | null>(null);
   const [submission, setSubmission] = useState<Submission | null>(null);
@@ -625,6 +642,13 @@ export default function CreateTransfer() {
   const precheckUnchecked = !!precheck?.nodeBindings.some(
     (binding) => binding.code === SHARED_CHECK_SKIPPED,
   );
+  // A refused preflight in which every node passed refused a row itself.
+  const precheckNodeFailed = !!precheck?.nodeBindings.some(
+    (binding) => !binding.valid,
+  );
+  const precheckProblems = precheck
+    ? rowProblems(precheck.validationErrors, precheck.rows ?? 1)
+    : [];
   // Imported local rows that skip the shared check, numbered from 1.
   const batchSkippedRows = useMemo(() => {
     if (tab !== 1 || batchKind !== "local") return [];
@@ -1030,19 +1054,25 @@ export default function CreateTransfer() {
           "/api/master/local-transfers/validate",
           { method: "POST", body: payload },
         );
-        const checked = applyUploadPrecheck(response.data);
+        const checked = {
+          ...applyUploadPrecheck(response.data),
+          rows: payload.length,
+        };
         setPrecheck(checked);
         precheckRequest.current = checked.valid ? checkedRequest : null;
         // A skipped check passes the paths, not the shared directory.
         const unchecked = checked.nodeBindings.some(
           (binding) => binding.code === SHARED_CHECK_SKIPPED,
         );
+        const [reason] = rowProblems(checked.validationErrors, payload.length);
         notify(
           checked.valid
             ? unchecked
               ? tr("路径预检通过，共享目录未校验")
               : tr("所有节点预检通过")
-            : tr("预检完成，存在未通过的节点。"),
+            : checked.nodeBindings.some((binding) => !binding.valid) || !reason
+              ? tr("预检完成，存在未通过的节点。")
+              : tr("预检未通过：{reason}", { reason }),
           checked.valid && !unchecked ? "success" : "warning",
         );
         return;
@@ -1143,12 +1173,7 @@ export default function CreateTransfer() {
           value3: item.nodeBindings?.length ?? 0,
         }),
       );
-      if (Array.isArray(result.validationErrors))
-        details.push(
-          ...result.validationErrors.map((item) =>
-            typeof item === "string" ? item : JSON.stringify(item),
-          ),
-        );
+      details.push(...rowProblems(result.validationErrors, payload.length));
       if (partial)
         details.push(
           tr("部分任务可能已受理。重试前请核对任务列表，避免重复提交。"),
@@ -1386,7 +1411,6 @@ export default function CreateTransfer() {
                     update({ skipSharedCheck: false });
                     return;
                   }
-                  setSkipConfirmed(false);
                   setSkipDialogOpen(true);
                 }}
               />
@@ -1415,82 +1439,16 @@ export default function CreateTransfer() {
               )}
         </Alert>
       )}
-      <Dialog
+      <SkipSharedCheckDialog
         open={skipDialogOpen}
-        onClose={() => setSkipDialogOpen(false)}
-        aria-labelledby="skip-shared-check-title"
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle id="skip-shared-check-title">
-          {tr("跳过共享目录校验？")}
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            {tr(
-              "跳过后，系统不再验证各执行节点看到的是同一份存储。如果它们实际挂载的不是同一份存储：",
-            )}
-          </Typography>
-          <Box component="ul" sx={{ mt: 0, pl: 3 }}>
-            {(form.direction === "OSS_TO_LOCAL"
-              ? [
-                  tr(
-                    "下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据；",
-                  ),
-                  tr(
-                    "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
-                  ),
-                  tr("任务报告可能显示成功，而本地目标实际不完整；"),
-                  tr(
-                    "节点失联后的自动接管和之后添加的节点也不做校验，可能写入另一个目录。",
-                  ),
-                ]
-              : [
-                  tr("不同节点会从不同的数据中读取对象；"),
-                  tr("部分文件可能漏传，或从错误的副本上传；"),
-                  tr("任务报告可能显示成功，而目标端实际不完整或不一致；"),
-                  tr(
-                    "节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。",
-                  ),
-                ]
-            ).map((line) => (
-              <Typography component="li" variant="body2" key={line}>
-                {line}
-              </Typography>
-            ))}
-          </Box>
-          {form.direction === "LOCAL_TO_OSS" && (
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              {tr(
-                "所有节点都无法写入测试文件的上传源通常无需跳过：预检会自动改为抽样比对文件的大小及首尾各 64 KiB。",
-              )}
-            </Typography>
-          )}
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={skipConfirmed}
-                onChange={(event) => setSkipConfirmed(event.target.checked)}
-              />
-            }
-            label={tr("我已确认所有执行节点挂载的是同一份存储")}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSkipDialogOpen(false)}>{tr("取消")}</Button>
-          <Button
-            color="error"
-            variant="contained"
-            disabled={!skipConfirmed}
-            onClick={() => {
-              setSkipDialogOpen(false);
-              update({ skipSharedCheck: true });
-            }}
-          >
-            {tr("跳过校验")}
-          </Button>
-        </DialogActions>
-      </Dialog>
+        direction={form.direction}
+        scope="create"
+        onCancel={() => setSkipDialogOpen(false)}
+        onConfirm={() => {
+          setSkipDialogOpen(false);
+          update({ skipSharedCheck: true });
+        }}
+      />
       {form.direction === "OSS_TO_LOCAL" && form.sourceMode === "object" && (
         <TextField
           label={tr("目标相对路径（可选）")}
@@ -2288,7 +2246,7 @@ export default function CreateTransfer() {
                       data-testid="batch-skip-shared-check-warning"
                     >
                       {tr(
-                        "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管和之后添加的节点也不做校验。",
+                        "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管也不做校验。之后添加节点时仍会校验共享目录，除非届时再次确认跳过。",
                         { rows: batchSkippedRows.join(", ") },
                       )}
                     </Alert>
@@ -2358,8 +2316,20 @@ export default function CreateTransfer() {
                       ? precheckUnchecked
                         ? tr("路径预检通过，共享目录未校验")
                         : tr("节点预检通过")
-                      : tr("节点预检未通过")}
+                      : precheckNodeFailed || precheckProblems.length === 0
+                        ? tr("节点预检未通过")
+                        : tr("预检未通过")}
                   </AlertTitle>
+                  {/* The reasons for refused rows, also those of no node. */}
+                  {precheckProblems.map((problem, index) => (
+                    <Typography
+                      key={index}
+                      variant="body2"
+                      sx={{ overflowWrap: "anywhere", mb: 0.5 }}
+                    >
+                      {problem}
+                    </Typography>
+                  ))}
                   {tr(
                     "通过 {passed} / {total} 个节点配置。修改配置后需重新预检。",
                     {

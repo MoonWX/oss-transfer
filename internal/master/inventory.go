@@ -263,7 +263,7 @@ func (s *Server) inventoryHTTP(w http.ResponseWriter, r *http.Request) {
 		inventoryResult(w, h)
 		return
 	}
-	_, err = s.createTransfer(r.Context(), binding.Spec, "inventory:"+id, s.inventoryFinalizeCheck(r, binding))
+	_, _, err = s.createTransfer(r.Context(), binding.Spec, "inventory:"+id, s.inventoryFinalizeCheck(r, binding))
 	if err != nil {
 		inventoryError(w, err)
 		return

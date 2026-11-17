@@ -514,6 +514,207 @@ test("pending changes show progress, refresh it and allow escalating a draining 
   expect(posts[0]).toMatchObject({ remove: ["10.0.1.13"], mode: "now" });
 });
 
+test("a joining node that has not joined says why next to its state and how to cancel", async ({
+  page,
+}) => {
+  const reason = "执行节点 10.0.1.14 未通过共享目录校验：marker missing";
+  const enrolled =
+    "执行节点 10.0.1.17 添加到此任务后重新注册过，无法以原来的注册身份加入。请取消此次加入，再重新添加该节点";
+  const removed =
+    "执行节点 10.0.1.18 添加到此任务后已从集群中移除，无法加入。请取消此次加入";
+  let editable = true;
+  await setup(page, {
+    view: () =>
+      nodesView({
+        pending: true,
+        editable,
+        reason: editable ? "" : "任务正在停止",
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.14", {
+            state: "JOINING",
+            share: null,
+            joinProblem: { code: "SHARED_STORAGE_UNVERIFIED", message: reason },
+          }),
+          member("10.0.1.17", {
+            state: "JOINING",
+            share: null,
+            joinProblem: { code: "ENROLLMENT_CHANGED", message: enrolled },
+          }),
+          member("10.0.1.18", {
+            state: "JOINING",
+            share: null,
+            online: false,
+            joinProblem: { code: "AGENT_REMOVED", message: removed },
+          }),
+          member("10.0.1.16", { state: "JOINING", share: null }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const box = dialog(page);
+  await expect(box.getByTestId("task-node-join-problem-10.0.1.14")).toHaveText(
+    reason,
+  );
+  await expect(box.getByTestId("task-node-join-hint-10.0.1.14")).toHaveText(
+    "如需放弃此次加入，可点击“取消加入”。",
+  );
+  await expect(box.getByTestId("task-node-10.0.1.14")).not.toContainText(
+    "正在完成握手与检查",
+  );
+  // The reason sits with the node's state, before its statistics.
+  const row = await box
+    .getByTestId("task-node-10.0.1.14")
+    .evaluate((element) => element.textContent || "");
+  expect(row.indexOf(reason)).toBeLessThan(row.indexOf("带宽份额"));
+  expect(row.indexOf("加入中")).toBeLessThan(row.indexOf(reason));
+  // A reason that already asks for the cancellation needs no second hint.
+  await expect(box.getByTestId("task-node-join-problem-10.0.1.17")).toHaveText(
+    enrolled,
+  );
+  await expect(box.getByTestId("task-node-join-hint-10.0.1.17")).toHaveCount(0);
+  await expect(box.getByTestId("task-node-join-problem-10.0.1.18")).toHaveText(
+    removed,
+  );
+  await expect(box.getByTestId("task-node-join-hint-10.0.1.18")).toHaveCount(0);
+  // Without a reason (or from an older Master) the join is still in progress.
+  await expect(box.getByTestId("task-node-10.0.1.16")).toContainText(
+    "正在完成握手与检查，加入后开始分配任务",
+  );
+  await expect(box.getByTestId("task-node-join-hint-10.0.1.16")).toHaveCount(0);
+  await expect(
+    box.getByRole("button", { name: /^取消加入 .*10\.0\.1\.14/ }),
+  ).toBeEnabled();
+
+  // A task that cannot be changed now still says why, but offers no action.
+  editable = false;
+  await box.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "编辑节点", exact: true }).click();
+  await expect(box.getByTestId("task-node-join-problem-10.0.1.14")).toHaveText(
+    reason,
+  );
+  await expect(box.getByTestId("task-node-join-hint-10.0.1.14")).toHaveCount(0);
+});
+
+test("the preflight lists each node's note and write check, and the reasons of a refused change", async ({
+  page,
+}) => {
+  let answer = 0;
+  await setup(page, {
+    view: () => nodesView({ localTransfer: true, direction: "OSS_TO_LOCAL" }),
+    post: (body, route) => {
+      answer++;
+      // No answer from the Master at all.
+      if (answer === 4) return route.abort("failed");
+      if (answer === 2)
+        return route.fulfill({
+          status: 409,
+          json: {
+            success: false,
+            code: "AGENT_TOO_OLD",
+            message:
+              "执行节点 10.0.1.14 版本过旧，无法加入运行中的任务，请先升级",
+          },
+        });
+      const passed = answer === 1;
+      return route.fulfill({
+        json: {
+          success: true,
+          data: {
+            accepted: false,
+            dryRun: true,
+            valid: passed,
+            nodeBindings: [
+              {
+                executionNodeIp: "10.0.1.14",
+                localPath: body.bindings?.[0]?.localPath,
+                valid: passed,
+                pathType: "DIRECTORY",
+                code: passed
+                  ? "SHARED_STORAGE_VERIFIED"
+                  : "SHARED_STORAGE_PROBE_FAILED",
+                message: passed
+                  ? "已写入测试文件，所有节点读取校验通过并已清理"
+                  : "共享存储验证未通过",
+                writeProbeDirectory: "/mnt/share",
+                effectiveUid: 1001,
+                freeBytes: 1073741824,
+              },
+              // A current member that failed for its own reason is listed too.
+              ...(passed
+                ? []
+                : [
+                    {
+                      executionNodeIp: "10.0.1.12",
+                      localPath: "/mnt/share",
+                      valid: false,
+                      pathType: "DIRECTORY",
+                      code: "SHARED_STORAGE_PROBE_FAILED",
+                      message:
+                        "节点 10.0.1.12 无法读取同一测试文件：permission denied",
+                    },
+                  ]),
+            ],
+            validationErrors: passed
+              ? []
+              : ["节点 10.0.1.12 无法读取同一测试文件：permission denied"],
+            view: nodesView({ localTransfer: true }),
+          },
+        },
+      });
+    },
+  });
+  await openDialog(page);
+  const box = dialog(page);
+  await pickAgent(page, /10\.0\.1\.14/);
+  await box
+    .getByRole("textbox", { name: /10\.0\.1\.14 的本地绝对路径/ })
+    .fill("/mnt/share");
+  const run = box.getByRole("button", { name: "预检", exact: true });
+  const result = box.getByTestId("task-nodes-preflight");
+  const added = box.getByTestId("task-nodes-preflight-10.0.1.14");
+
+  await run.click();
+  await expect(result.getByRole("alert")).toHaveText("预检通过");
+  await expect(added).toContainText("/mnt/share");
+  await expect(added).toContainText(
+    "已写入测试文件，所有节点读取校验通过并已清理",
+  );
+  await expect(added).toContainText(
+    "写入检查目录：/mnt/share · Agent 运行 UID：1001 · 可用空间：1 GiB",
+  );
+  await expect(added).toContainText("通过 · 目录");
+
+  // A refused change is a preflight result too, with the Master's reason.
+  await run.click();
+  await expect(result.getByRole("alert")).toContainText("预检未通过");
+  await expect(result.getByRole("alert")).toContainText(
+    "执行节点 10.0.1.14 版本过旧，无法加入运行中的任务，请先升级",
+  );
+  await expect(added).toHaveCount(0);
+
+  await run.click();
+  await expect(result.getByRole("alert")).toContainText(
+    "节点 10.0.1.12 无法读取同一测试文件：permission denied",
+  );
+  await expect(added).toContainText("共享存储验证未通过");
+  await expect(added).toContainText("未通过");
+  await expect(box.getByTestId("task-nodes-preflight-10.0.1.12")).toContainText(
+    "permission denied",
+  );
+  await expect(preview(page)).toBeDisabled();
+
+  // A dry run without an answer checked nothing: it did not finish, which is
+  // not a failed check.
+  await run.click();
+  await expect(result.getByRole("alert")).toContainText("预检未完成");
+  await expect(result.getByRole("alert")).toContainText(
+    "无法连接服务，请检查网络或主节点状态。",
+  );
+  await expect(result.getByRole("alert")).not.toContainText("预检未通过");
+  await expect(preview(page)).toBeDisabled();
+});
+
 test("cancelling a joining node submits its removal", async ({ page }) => {
   const { posts } = await setup(page, {
     view: () =>

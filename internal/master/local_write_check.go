@@ -6,20 +6,21 @@ import (
 	"strconv"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
-	"github.com/MoonWX/oss-transfer/internal/cluster"
+	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 )
 
 // checkDownloadWritable asks the Agent to create and remove a file in a
 // download destination, or the nearest existing directory above it, and
 // records where it wrote, as which user and the free space there. Uploads and
 // Agents from before the probe pass unchecked; the task then reports any
-// write failure per object, as before.
-func (s *Server) checkDownloadWritable(ctx context.Context, member cluster.Member, direction, path string, check *bindingCheck) (string, bool) {
+// write failure per object, as before. Creating a task runs it for every
+// selected node, adding nodes for every added node.
+func (s *Server) checkDownloadWritable(ctx context.Context, session agenttransport.Session, direction, path string, check *bindingCheck) (string, bool) {
 	if direction != "OSS_TO_LOCAL" {
 		return "", true
 	}
 	var probe agentservice.WriteProbe
-	if err := s.agentCall(ctx, member.Session(), "local_write_probe", false, agentservice.PathRequest{Path: path}, &probe); err != nil {
+	if err := s.agentCall(ctx, session, "local_write_probe", false, agentservice.PathRequest{Path: path}, &probe); err != nil {
 		if comparisonUnsupported(err) {
 			return "", true
 		}

@@ -209,3 +209,74 @@ test("creation rejection invalidates earlier preflight without changing the retr
   expect(keys[0]).toBeTruthy();
   expect(keys[1]).toBe(keys[0]);
 });
+
+test("a row refused for a reason of its own shows the reason and keeps creation blocked", async ({
+  page,
+}) => {
+  const requests = await mockApi(page);
+  await page.route("**/api/master/local-transfers/validate", async (route) => {
+    const rows = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        success: true,
+        data: {
+          // Every node passed; the Master refused the row itself.
+          valid: false,
+          nodeBindings: rows.flatMap((row: any) =>
+            row.destinationEndpoint.nodeBindings.map((node: object) => ({
+              ...node,
+              valid: true,
+              pathType: "DIRECTORY",
+            })),
+          ),
+          validationErrors: [`${rows.length}: 存储连接 production 不存在`],
+        },
+      },
+    });
+  });
+  await configureDownload(page);
+  await page.getByRole("button", { name: "运行预检", exact: true }).click();
+  // One row needs no number; the verdict does not blame the nodes.
+  await expect(page.getByText("预检未通过", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("存储连接 production 不存在", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("预检未通过：存储连接 production 不存在", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("节点预检未通过", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText("预检完成，存在未通过的节点。")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "创建迁移任务", exact: true }),
+  ).toBeDisabled();
+
+  // A batch names the row that was refused.
+  await page.getByRole("tab", { name: "批量导入", exact: true }).click();
+  await page.getByRole("combobox", { name: "导入类型" }).click();
+  await page.getByRole("option", { name: "本地迁移请求", exact: true }).click();
+  const row = (path: string) => ({
+    direction: "OSS_TO_LOCAL",
+    sourceEndpoint: { type: "OSS", s3Alias: "production", bucket: "media" },
+    destinationEndpoint: {
+      type: "LOCAL",
+      nodeBindings: [{ executionNodeIp: "10.0.1.12", localPath: path }],
+    },
+  });
+  await page
+    .getByLabel("任务数据", { exact: true })
+    .fill(JSON.stringify([row("/mnt/data/a"), row("/mnt/data/b")]));
+  await page.getByRole("button", { name: "运行预检", exact: true }).click();
+  await expect(
+    page.getByText("第 2 项：存储连接 production 不存在", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "导入任务", exact: true }),
+  ).toBeDisabled();
+  expect(
+    requests.filter(
+      (request) => request.path === "/api/master/local-transfers",
+    ),
+  ).toHaveLength(0);
+});

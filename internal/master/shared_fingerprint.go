@@ -229,32 +229,54 @@ func (s *Server) validateSharedSourceByFingerprints(ctx context.Context, spec *t
 	return nil
 }
 
-// sharedSkipUnsupported finds the first node whose Agent cannot record a
-// skipped shared check: a task created with the check skipped could never
-// start there.
-func (s *Server) sharedSkipUnsupported(ctx context.Context, nodes []task.Node) (int, error) {
-	for i, node := range nodes {
+// sharedSkipUnsupported finds the first node whose check spec skips and whose
+// Agent cannot record a skipped shared check: a task whose check was skipped
+// could never start there. It returns the node's index in spec.Nodes.
+func (s *Server) sharedSkipUnsupported(ctx context.Context, spec task.Spec) (int, error) {
+	for i, node := range spec.Nodes {
+		if spec.SharedCheckSkippedNodesOnly && !node.SharedCheckSkipped {
+			continue
+		}
 		caps, err := s.tasks.capabilities(ctx, node)
 		if err != nil {
-			return i, fmt.Errorf(localizeContext(ctx, "execution Agent %q is unavailable"), s.nodeLabel(node))
+			return i, capabilitiesUnreadable(ctx, s.nodeLabel(node), err)
 		}
-		if caps.SharedProofProtocol < agentservice.SharedProofProtocol {
-			return i, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s to run a task whose shared directory check was skipped"), s.nodeLabel(node))
+		if !sharedSkipCapable(caps) {
+			return i, fmt.Errorf(localizeContext(ctx, sharedSkipUpgradeMessage), s.nodeLabel(node))
 		}
 	}
 	return -1, nil
 }
 
+// sharedSkipUpgradeMessage names an Agent that cannot run a task whose shared
+// directory check was skipped.
+const sharedSkipUpgradeMessage = "Upgrade Agent %s to run a task whose shared directory check was skipped"
+
+// skippedSharedNodes splits nodes into those whose shared directory check the
+// operator skipped (Parent.SharedCheckSkippedFor), which get their proof
+// without a check, and the others, which are verified.
+func skippedSharedNodes(p task.Parent, nodes []task.Node) (skipped, verified []task.Node) {
+	for _, node := range nodes {
+		if p.SharedCheckSkippedFor(node.ID) {
+			skipped = append(skipped, node)
+		} else {
+			verified = append(verified, node)
+		}
+	}
+	return skipped, verified
+}
+
 // grantSkippedSharedCheck gives each Agent the shared-storage proof that its
-// scheduler requires, without any check, for a task created with the check
-// explicitly skipped. Each grant to an Agent process that held no proof is
-// logged, so the log records every node that starts work unverified.
+// scheduler requires, without any check, for nodes whose check an operator
+// explicitly skipped, at creation or in a node change. Each grant to an Agent
+// process that held no proof is logged, so the log records every node that
+// starts work unverified, once per Agent process rather than on every step.
 func (s *Server) grantSkippedSharedCheck(ctx context.Context, p task.Parent, nodes []task.Node) error {
 	for _, node := range nodes {
 		var result agentservice.SharedProofSkipResponse
 		err := s.agentCall(ctx, nodeSession(node), "shared_proof_skip", true, agentservice.SharedProofSkipRequest{ParentID: p.ID, Generation: p.Generation, Root: node.LocalRoot}, &result)
 		if agentLacksOperation(err) {
-			return fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s to run a task whose shared directory check was skipped"), s.nodeLabel(node))
+			return fmt.Errorf(localizeContext(ctx, sharedSkipUpgradeMessage), s.nodeLabel(node))
 		}
 		if err != nil {
 			return err

@@ -22,6 +22,10 @@ type Node struct {
 	EnrollmentID string `json:"enrollmentId"`
 	Address      string `json:"address"`
 	LocalRoot    string `json:"localRoot,omitempty"`
+	// SharedCheckSkipped marks a node that a node change added with the
+	// shared directory check skipped. It decides only in a task whose skip is
+	// limited to such nodes (Spec.SharedCheckSkippedNodesOnly).
+	SharedCheckSkipped bool `json:"sharedCheckSkipped,omitempty"`
 }
 
 type Spec struct {
@@ -43,9 +47,17 @@ type Spec struct {
 	SharedLocalSource      bool                     `json:"sharedLocalSource,omitempty"`
 	SharedLocalDestination bool                     `json:"sharedLocalDestination,omitempty"`
 	// SharedCheckSkipped records that the operator explicitly acknowledged
-	// skipping the shared-directory verification of a multi-node local task.
-	// Agents are then granted their shared proof without any check.
+	// skipping the shared-directory verification of a multi-node local task,
+	// when creating it or when adding nodes to it; the task shows it for its
+	// whole life. Agents whose check was skipped are granted their shared
+	// proof without any check (Parent.SharedCheckSkippedFor).
 	SharedCheckSkipped bool `json:"sharedCheckSkipped,omitempty"`
+	// SharedCheckSkippedNodesOnly limits the skip to the nodes marked
+	// Node.SharedCheckSkipped: node changes skipped the check of the nodes
+	// they added to a task whose directory was verified, and the runtime keeps
+	// verifying every other node. Without it the skip, made at creation,
+	// covers every node of the task.
+	SharedCheckSkippedNodesOnly bool `json:"sharedCheckSkippedNodesOnly,omitempty"`
 	// RangedDownload is empty (automatic) or execution.RangedDownloadOff. It
 	// only applies to LOCAL destinations and never changes after creation.
 	RangedDownload   string     `json:"rangedDownload,omitempty"`

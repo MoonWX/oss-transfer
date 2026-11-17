@@ -39,6 +39,21 @@ func (t *taskRuntime) capabilities(ctx context.Context, node task.Node) (memberC
 	return caps, err
 }
 
+// capabilitiesUnreadableMessage reports a capabilities query that failed. An
+// online Agent that did not say what it supports is not called offline.
+const capabilitiesUnreadableMessage = "Cannot read the version information of Agent %s: %s"
+
+func capabilitiesUnreadable(ctx context.Context, label string, err error) error {
+	return fmt.Errorf(localizeContext(ctx, capabilitiesUnreadableMessage), label, err.Error())
+}
+
+// sharedSkipCapable reports whether an Agent can record a skipped shared
+// directory check (shared_proof_skip). An Agent that does not report the
+// protocol cannot.
+func sharedSkipCapable(caps memberCapabilities) bool {
+	return caps.SharedProofProtocol >= agentservice.SharedProofProtocol
+}
+
 // A joining member must support recovery fencing (rejoin epochs) and queued
 // handoff, the same capabilities required to restore a returning node.
 func joinCapable(caps memberCapabilities) bool {
@@ -313,12 +328,15 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 		view["bandwidthLimitMbps"] = p.Spec.BandwidthMbps
 	}
 	if p.Spec.SharedCheckSkipped {
-		// Added nodes are not checked either; adding one needs its own
-		// acknowledgement (skipSharedCheckAcknowledged).
+		// A node change checks the nodes it adds unless it skips the check
+		// itself (skipSharedCheck with skipSharedCheckAcknowledged).
 		view["sharedCheckSkipped"] = true
 	}
 	view["allocation"] = shareAllocation(p)
-	view["nodes"] = s.membershipNodes(p, displays, online)
+	nodes := s.membershipNodes(p, displays, online)
+	// joinProblem: why a joining node has not joined yet, if known.
+	s.addJoinProblems(ctx, p, displays, nodes)
+	view["nodes"] = nodes
 	scan := map[string]any{"phase": scanPhase(p), "complete": scanFinished(p)}
 	if activity := s.scanActivityView(p); activity != nil && scanPhase(p) == scanPhaseScanning {
 		scan["activity"] = activity

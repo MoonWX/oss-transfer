@@ -226,6 +226,50 @@ func TestExceptionsListRendersTableAndKeepsJSON(t *testing.T) {
 	}
 }
 
+// A preflight that refuses a row for a reason of the row itself, such as a
+// storage connection that does not exist, says so in the error, while every
+// node passed; a node that failed still points at nodes and paths. Nothing
+// is submitted either way.
+func TestTaskCreatePreflightRefusalNamesItsReason(t *testing.T) {
+	var created bool
+	reply := func(validation string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/master/local-nodes":
+				io.WriteString(w, `{"success":true,"data":{"nodes":[{"executionNodeIp":"10.0.0.1","reachable":true},{"executionNodeIp":"10.0.0.2","reachable":true}]}}`)
+			case "/api/master/local-transfers/validate":
+				io.WriteString(w, validation)
+			default:
+				created = true
+				io.WriteString(w, `{"success":true,"data":{"acceptedCount":1,"parentTaskIds":[7]}}`)
+			}
+		}
+	}
+	refused := reply(`{"success":true,"data":{"valid":false,"nodeBindings":[{"executionNodeIp":"10.0.0.1","localPath":"/mnt/data","valid":true,"pathType":"DIRECTORY"},{"executionNodeIp":"10.0.0.2","localPath":"/mnt/data","valid":true,"pathType":"DIRECTORY"}],"validationErrors":["1: storage connection target does not exist"]}}`)
+	args := []string{"task", "create", "local-to-oss", "target/dst", "--binding", "10.0.0.1=/mnt/data", "--binding", "10.0.0.2=/mnt/data"}
+	for _, test := range []struct{ locale, want, node string }{
+		{"zh", "预检未通过：存储连接 target 不存在；尚未提交创建请求", "请检查节点和本地路径"},
+		{"en", "Precheck failed: Storage connection target does not exist. Creation was not submitted", "check nodes and local paths"},
+		{"ja", "事前チェックに失敗しました: ストレージ接続 target は存在しません。作成リクエストは送信していません", "ノードとローカルパスを確認"},
+	} {
+		for _, validateOnly := range []bool{false, true} {
+			run := append([]string{"--lang", test.locale}, args...)
+			if validateOnly {
+				run = append(run, "--validate-only")
+			}
+			code, out, stderr := runMockCLI(t, run, refused)
+			if code != 1 || !strings.Contains(stderr, test.want) || strings.Contains(stderr, test.node) || created {
+				t.Errorf("%s: %d %q %q", test.locale, code, out, stderr)
+			}
+		}
+	}
+	failedNode := reply(`{"success":true,"data":{"valid":false,"nodeBindings":[{"executionNodeIp":"10.0.0.1","localPath":"/mnt/data","valid":true,"pathType":"DIRECTORY"},{"executionNodeIp":"10.0.0.2","localPath":"/mnt/data","valid":false,"pathType":"MISSING","message":"源路径不存在"}],"validationErrors":["1: 10.0.0.2: 源路径不存在"]}}`)
+	code, out, stderr := runMockCLI(t, args, failedNode)
+	if code != 1 || !strings.Contains(stderr, "节点预检未通过，请检查节点和本地路径；尚未提交创建请求") || created {
+		t.Fatalf("%d %q %q", code, out, stderr)
+	}
+}
+
 // A task create whose only row is refused created nothing: a definite
 // failure with the reason, not an uncertain partial submission.
 func TestTaskCreateRejectedRowsAreDefiniteFailures(t *testing.T) {

@@ -97,9 +97,10 @@ func (s *Server) validateSharedBindings(ctx context.Context, spec *task.Spec, ch
 	}
 	if spec.SharedCheckSkipped {
 		// The operator acknowledged the risk: the directories exist, but
-		// nothing proves that they are the same storage. Every Agent must
-		// still be able to record the skipped check, or the task never starts.
-		if failed, err := s.sharedSkipUnsupported(ctx, spec.Nodes); err != nil {
+		// nothing proves that they are the same storage. Every Agent whose
+		// check is skipped (in a node change, only the added ones) must still
+		// be able to record the skipped check, or the task never starts there.
+		if failed, err := s.sharedSkipUnsupported(ctx, *spec); err != nil {
 			invalidateUnverifiedSharedBindings(ctx, checks)
 			checks[failed].Code = "AGENT_UPGRADE_REQUIRED"
 			checks[failed].Message = err.Error()

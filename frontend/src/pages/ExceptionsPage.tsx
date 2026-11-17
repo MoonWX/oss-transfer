@@ -325,6 +325,9 @@ export default function ExceptionsPage() {
           search: taskSearch,
           limit: "100",
         });
+        // Failed objects lists only transfers between object storages;
+        // uploads and downloads have their own tab.
+        if (mode === "failed") params.set("direction", "OSS_TO_OSS");
         const response = await api<{
           data: { items: ExceptionTask[]; hasMore: boolean };
         }>(`/api/master/exceptions/tasks?${params}`, {
@@ -420,6 +423,7 @@ export default function ExceptionsPage() {
           } else {
             const body = {
               ...exceptionFilters(filters),
+              ...(mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
               ...(mode === "failed" && filters.resolution
                 ? { resolution: filters.resolution }
                 : {}),
@@ -641,6 +645,7 @@ export default function ExceptionsPage() {
         body: {
           type: clearScope.mode,
           ...exceptionFilters(clearScope.filters),
+          ...(clearScope.mode === "failed" ? { direction: "OSS_TO_OSS" } : {}),
         },
       });
       if (

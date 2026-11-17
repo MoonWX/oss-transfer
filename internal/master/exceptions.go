@@ -375,7 +375,11 @@ func (s *Server) exceptionTasks(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Invalid exception query")
 		return
 	}
-	filter := task.ExceptionFilter{LocalOnly: kind == "local"}
+	filter := task.ExceptionFilter{LocalOnly: kind == "local", Direction: q.Get("direction")}
+	if filter.Direction != "" && filter.Direction != "OSS_TO_OSS" && filter.Direction != "LOCAL_TO_OSS" && filter.Direction != "OSS_TO_LOCAL" {
+		fail(w, 400, "Invalid transfer direction")
+		return
+	}
 	if search := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(q.Get("search")), "#")); search != "" {
 		id, err := strconv.ParseInt(search, 10, 64)
 		if err != nil || id < 1 {

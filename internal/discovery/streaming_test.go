@@ -160,3 +160,32 @@ func TestStreamedScanTakeoverKeepsExactCounters(t *testing.T) {
 		t.Fatalf("takeover added %d objects, want %d", len(keys), total-int(request.Objects))
 	}
 }
+
+// A key that leaves the queue while Done reads the index was committed
+// before it left: Done reports it either way.
+func TestScanDoneKeepsAKeyCommittedWhileItAsks(t *testing.T) {
+	scanner, _, attempt := commitFixture(t)
+	ctx := context.Background()
+	queued := &queuedKeys{}
+	done := scanner.committedThisPass(attempt, queued)
+	for i := range 200 {
+		key := fmt.Sprintf("key-%03d", i)
+		queued.add(key)
+		batch := pendingBatch{objects: []transferstore.Object{{Key: key, Size: 1}}}
+		committed := make(chan error, 1)
+		go func() {
+			err := scanner.commitBatches(ctx, attempt, []pendingBatch{batch})
+			if err == nil {
+				queued.committed([]pendingBatch{batch})
+			}
+			committed <- err
+		}()
+		answers, err := done([]string{key})
+		if err != nil || !answers[0] {
+			t.Fatalf("%s: answers %v, %v", key, answers, err)
+		}
+		if err := <-committed; err != nil {
+			t.Fatal(err)
+		}
+	}
+}

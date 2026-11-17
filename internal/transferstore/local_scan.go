@@ -1128,6 +1128,12 @@ func (scan *localScan) flush() error {
 		if frame.pageKeys != nil {
 			frame.pageKeys = map[string]struct{}{}
 		}
+		if frame.stream != nil {
+			// A name the listing repeats may be one of the files just handed
+			// on, which pageKeys no longer holds. Done was asked about the
+			// repeat before then and said no: ask again from the head on.
+			frame.done = localDoneAnswers{through: frame.next, err: frame.done.err, errAt: frame.done.errAt}
+		}
 	}
 	if err := scan.ctx.Err(); err != nil {
 		return err

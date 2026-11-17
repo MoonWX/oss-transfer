@@ -68,6 +68,17 @@ func (q *queuedKeys) has(key string) bool {
 	return q.keys[key] > 0
 }
 
+// hasAll reports which of keys are queued now.
+func (q *queuedKeys) hasAll(keys []string) []bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queued := make([]bool, len(keys))
+	for i, key := range keys {
+		queued[i] = q.keys[key] > 0
+	}
+	return queued
+}
+
 func scanIdentity(attempt State) string {
 	if attempt.Checkpoint != nil {
 		return attempt.Checkpoint.Pass
@@ -248,11 +259,14 @@ func (s *Scanner) committedThisPass(attempt State, queued *queuedKeys) func([]st
 		seeded = seedAttempt(attempt.Epoch)
 	}
 	return func(keys []string) ([]bool, error) {
-		answers := make([]bool, len(keys))
+		// The queue is read first: a key that leaves it from now on has been
+		// committed by then, so the read of the index, which starts later,
+		// finds its row. Read the other way round, a key whose batch commits
+		// in between would be in neither.
+		answers := queued.hasAll(keys)
 		err := s.store.View(func(tx *state.Tx) error {
 			for i, key := range keys {
-				if queued.has(key) {
-					answers[i] = true
+				if answers[i] {
 					continue
 				}
 				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, key)

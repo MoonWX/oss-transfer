@@ -531,3 +531,53 @@ func TestLocalScanKeepsTheStreamingMarkAcrossRestarts(t *testing.T) {
 		})
 	}
 }
+
+// A name the listing repeats after the page holding its first copy was
+// handed on is neither looked up nor emitted again, although Done was asked
+// about the repeat before that page left: the scan asks again after every
+// page. A second lookup could find the file changed and fail the scan.
+func TestLocalScanAsksDoneAgainAfterAStreamedPage(t *testing.T) {
+	local, root := localFixture(t)
+	writeFiles(t, root, numbered("big/f", 20)...)
+	spy := spyOnScan(local, root)
+	local.scanTuning.streamAfter = 8
+	var pending []string
+	loaded := false
+	spy.readNames = func(key string, call func() ([]string, error)) ([]string, error) {
+		if key != "big" {
+			return call()
+		}
+		for !loaded {
+			names, err := call()
+			pending = append(pending, names...)
+			if err == io.EOF {
+				loaded = true
+				// The listing repeats f0001 six names on, as an NFS listing
+				// resumed at a reused cookie does: within the first read.
+				pending = append(append(append([]string{}, pending[:6]...), "f0001"), pending[6:]...)
+			} else if err != nil {
+				return nil, err
+			}
+		}
+		if len(pending) == 0 {
+			return nil, io.EOF
+		}
+		batch := pending[:min(10, len(pending))]
+		pending = pending[len(batch):]
+		return batch, nil
+	}
+	committed := &committedKeys{keys: map[string]int{}}
+	emitted := 0
+	err := local.ScanPages(context.Background(), ListOptions{Limit: 2, Done: committed.done}, func(page Page) error {
+		committed.commit(page)
+		for _, object := range page.Objects {
+			if object.Key == "big/f0001" {
+				emitted++
+			}
+		}
+		return nil
+	})
+	if err != nil || emitted != 1 || spy.called("lstat", "big/f0001") != 1 || len(committed.keys) != 20 {
+		t.Fatalf("big/f0001 emitted %d times after %d lookups, %d objects: %v", emitted, spy.called("lstat", "big/f0001"), len(committed.keys), err)
+	}
+}

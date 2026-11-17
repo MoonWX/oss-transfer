@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 type Task = Record<string, any>;
 
 // Master computes the percent so the UI and CLI agree. Older Masters send
@@ -44,7 +46,7 @@ export function unreportedNodeNames(task: Task): string | undefined {
   return nodes
     .map((node) => node.displayLabel || node.executionNodeIp || "")
     .filter(Boolean)
-    .join("、");
+    .join(t("、"));
 }
 
 type RequestKinds = {

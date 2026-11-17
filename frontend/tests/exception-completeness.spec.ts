@@ -48,3 +48,41 @@ test("an incomplete failure list names offline nodes with unfinished subtasks", 
   await expect(page.getByText(/部分节点未返回数据/)).toHaveCount(0);
   await expect(page.getByText("failed.bin")).toBeVisible();
 });
+
+test.describe("English", () => {
+  test.use({ locale: "en-US" });
+
+  test("the offline nodes of a failure list are separated as English separates a list", async ({
+    page,
+  }) => {
+    await mockApi(page);
+    await page.route("**/api/master/failed", (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          failedKeys: {
+            "10.0.1.12": [],
+            "10.0.1.12Count": 0,
+            "10.0.1.13": [],
+            "10.0.1.13Count": 0,
+          },
+          totalCount: 0,
+          queriedWorkers: ["10.0.1.12", "10.0.1.13"],
+          failedWorkers: ["10.0.1.12", "10.0.1.13"],
+          unreachableWorkers: ["10.0.1.12", "10.0.1.13"],
+          complete: false,
+          partial: true,
+          truncated: false,
+        },
+      }),
+    );
+    await page.goto("/exceptions");
+    const banner = page
+      .getByRole("alert")
+      .filter({ hasText: "Offline agents with unfinished subtasks" });
+    await expect(banner).toContainText(
+      /\(10\.0\.1\.12\), \S.*\(10\.0\.1\.13\)/,
+    );
+    await expect(banner).not.toContainText("、");
+  });
+});

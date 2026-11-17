@@ -554,7 +554,7 @@ export default function ExceptionsPage() {
   const missingNodes = missingExceptionNodes(result, legacyNodes);
   const missingNodeLabels = missingNodes
     .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
-    .join("、");
+    .join(tr("、"));
   const visible = result?.items
     ? isLocal
       ? result.items

@@ -147,8 +147,9 @@ var cliOutputMessages = map[string][2]string{
 
 	// Comparisons.
 	"比对 %s 已在运行，无需继续": {"Comparison %s is already running; nothing to resume", "比較 %s はすでに実行中です。再開は不要です"},
-	"读取速率":            {"Read rate", "読み取り速度"},
-	"未发现差异":           {"No differences found", "差異は見つかりませんでした"},
+	"平均读取速率":          {"Average read rate", "平均読み取り速度"},
+	"已有 %s 没有新的比对结果，执行节点可能正在等待存储响应或重试。": {"No new comparison results for %s; the node may be waiting for the storage to respond, or retrying.", "%s の間、新しい比較結果がありません。ノードはストレージの応答を待っているか、再試行している可能性があります。"},
+	"未发现差异": {"No differences found", "差異は見つかりませんでした"},
 }
 
 func init() {

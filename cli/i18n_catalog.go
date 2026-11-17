@@ -805,7 +805,7 @@ var cliMessages = map[string][2]string{
 	"已检查":        {"Checked", "確認済み"},
 	"已保存差异":      {"Stored differences", "保存済みの差分"},
 	"已用时间":       {"Elapsed", "経過時間"},
-	"速率":         {"Rate", "速度"},
+	"平均速率":       {"Average rate", "平均速度"},
 	"%s 个对象/秒":   {"%s objects/s", "%s オブジェクト/秒"},
 	"已读取":        {"Read", "読み取り済み"},
 	"检查点":        {"Checkpoint", "チェックポイント"},

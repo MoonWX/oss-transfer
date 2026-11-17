@@ -1181,3 +1181,40 @@ func TestComparisonStatusOmitsUnusableCheckpointAndSaysNoDifferences(t *testing.
 		t.Fatalf("%d %s", code, out)
 	}
 }
+
+// The rate is an average over the whole comparison, which a stall lowers
+// only slowly; status labels it so and says how long a running comparison
+// has produced no new result, by the node's own clock.
+func TestComparisonStatusLabelsAverageRatesAndReportsStalls(t *testing.T) {
+	running := func(progressAt interface{}) map[string]interface{} {
+		return comparisonTestPage(map[string]interface{}{"status": "RUNNING", "endedAt": nil, "updatedAt": "2026-11-09T13:15:00Z", "progressAt": progressAt})
+	}
+	for _, test := range []struct {
+		name         string
+		locale       string
+		page         map[string]interface{}
+		wants, avoid []string
+	}{
+		{"stalled", "zh", running("2026-11-09T13:03:00Z"), []string{"平均速率", "20.0 个对象/秒", "已有 12m0s 没有新的比对结果，执行节点可能正在等待存储响应或重试。"}, nil},
+		{"stalled in English", "en", running("2026-11-09T13:03:00Z"), []string{"Average rate", "No new comparison results for 12m0s"}, nil},
+		{"progressing", "zh", running("2026-11-09T13:14:30Z"), []string{"平均速率"}, []string{"没有新的比对结果"}},
+		{"older Agent", "zh", running(nil), []string{"平均速率"}, []string{"没有新的比对结果"}},
+		{"finished", "zh", comparisonTestPage(map[string]interface{}{"progressAt": "2026-11-09T12:00:00Z"}), []string{"平均速率"}, []string{"没有新的比对结果"}},
+		{"one object", "zh", comparisonTestPage(map[string]interface{}{"scope": "object", "mode": "content", "compared": 1, "bytesRead": 4 << 20, "elapsedMillis": 2000, "rows": 0}), []string{"平均读取速率", "2 MiB/s"}, nil},
+	} {
+		code, out, stderr := runMockCLI(t, []string{"--lang", test.locale, "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, test.page) })
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s: %d %s %s", test.name, code, out, stderr)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s lacks %q:\n%s", test.name, want, out)
+			}
+		}
+		for _, avoid := range test.avoid {
+			if strings.Contains(out, avoid) {
+				t.Errorf("%s contains %q:\n%s", test.name, avoid, out)
+			}
+		}
+	}
+}

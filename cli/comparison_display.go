@@ -227,7 +227,28 @@ func comparisonElapsed(data map[string]interface{}) string {
 	return elapsed.Round(time.Second).String()
 }
 
-// comparisonRate is compared objects per second of comparison time.
+// comparisonStallNotice is how long a running comparison may produce no new
+// result before status says so, for instance while a LIST or HEAD keeps
+// timing out and is retried.
+const comparisonStallNotice = time.Minute
+
+// comparisonStalled is how long a running comparison has counted no object
+// and read no content, by the node's clock: updatedAt advances every second
+// while it runs, progressAt only with progress. Older Agents omit progressAt.
+func comparisonStalled(data map[string]interface{}) time.Duration {
+	if getString(data, "status") != "RUNNING" {
+		return 0
+	}
+	since, sinceErr := time.Parse(time.RFC3339Nano, getString(data, "progressAt"))
+	now, nowErr := time.Parse(time.RFC3339Nano, getString(data, "updatedAt"))
+	if sinceErr != nil || nowErr != nil || !now.After(since) {
+		return 0
+	}
+	return now.Sub(since)
+}
+
+// comparisonRate is compared objects per second of comparison time: an
+// average over every run, which a stall lowers only slowly.
 func comparisonRate(out io.Writer, data map[string]interface{}) string {
 	compared, comparedOK := cliNumeric(data["compared"])
 	millis, millisOK := cliNumeric(data["elapsedMillis"])
@@ -339,9 +360,9 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	// reports how fast it read the object instead.
 	switch {
 	case single && content:
-		fields = append(fields, [2]string{cliText(out, "读取速率"), comparisonReadRate(data)})
+		fields = append(fields, [2]string{cliText(out, "平均读取速率"), comparisonReadRate(data)})
 	case !single:
-		fields = append(fields, [2]string{cliText(out, "速率"), comparisonRate(out, data)})
+		fields = append(fields, [2]string{cliText(out, "平均速率"), comparisonRate(out, data)})
 	}
 	if content {
 		fields = append(fields, [2]string{cliText(out, "已读取"), cliTaskSize(data, "bytesRead")})
@@ -368,6 +389,9 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 		fmt.Fprintf(table, "%s\t%s\n", field[0], safeCLIText(field[1]))
 	}
 	table.Flush()
+	if stalled := comparisonStalled(data); stalled >= comparisonStallNotice {
+		fmt.Fprintln(out, cliTextf(out, "已有 %s 没有新的比对结果，执行节点可能正在等待存储响应或重试。", stalled.Round(time.Second)))
+	}
 	fmt.Fprintln(out)
 	rows := objectList(data["items"])
 	if len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && getString(data, "status") == "COMPLETED" && getInt64(data, "rows") == 0 {

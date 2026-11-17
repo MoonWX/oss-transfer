@@ -1769,7 +1769,7 @@ export default function ExceptionsPage() {
       {isLocal && (
         <Typography variant="caption" color="text.secondary">
           {tr(
-            "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。",
+            "报告包含全部本地迁移任务，不受当前筛选条件影响；只有在所有本地迁移都已结束或停止时才能导出，任务总数超过 1 万个时请改用单任务报告。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。",
           )}
         </Typography>
       )}

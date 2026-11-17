@@ -2006,10 +2006,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Last page",
     ja: "最後のページ",
   },
-  "报告包含所有已结束或已停止的本地迁移任务，不受当前筛选条件影响。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。":
+  "报告包含全部本地迁移任务，不受当前筛选条件影响；只有在所有本地迁移都已结束或停止时才能导出，任务总数超过 1 万个时请改用单任务报告。报告是否完整记录在 report-metadata.json 的 complete 中，不完整时（例如有节点不可达或对象未处理）同时列出原因。":
     {
-      en: "The report covers every ended or stopped local transfer task; current filters do not apply. Whether it is complete is recorded as complete in report-metadata.json, which also lists the reasons when it is not (for example an unreachable node or unprocessed objects).",
-      ja: "レポートには終了または停止したすべてのローカル転送タスクが含まれ、現在のフィルターは適用されません。レポートが完全かどうかは report-metadata.json の complete に記録され、不完全な場合（接続できないノードや未処理のオブジェクトがある場合など）は理由も記載されます。",
+      en: "The report covers every local transfer task; current filters do not apply. It can be exported only when every local transfer has ended or stopped; with more than 10,000 tasks in total, use single-task reports instead. Whether it is complete is recorded as complete in report-metadata.json, which also lists the reasons when it is not (for example an unreachable node or unprocessed objects).",
+      ja: "レポートにはすべてのローカル転送タスクが含まれ、現在のフィルターは適用されません。エクスポートできるのは、すべてのローカル転送が終了または停止している場合のみです。タスクが合計 10,000 件を超える場合は、タスクごとのレポートを使用してください。レポートが完全かどうかは report-metadata.json の complete に記録され、不完全な場合（接続できないノードや未処理のオブジェクトがある場合など）は理由も記載されます。",
     },
   清除全部: {
     en: "Clear all",

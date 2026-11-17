@@ -64,3 +64,14 @@ func TestExceptionReasonsForChangedAndDeletedSources(t *testing.T) {
 		t.Fatalf("parent counters %+v, want %+v", saved.Counters, retried.Counters)
 	}
 }
+
+// An object of a recovered V4.0.x task that the source did not have keeps its
+// reason in the exception index, so the console and the CLI can name it.
+func TestExceptionReasonNamesMissingLegacySource(t *testing.T) {
+	if got := exceptionReason(execution.ItemResult{Status: execution.ItemFailed, Reconciliation: execution.ReasonSourceMissing}); got != execution.ReasonSourceMissing {
+		t.Fatalf("missing legacy source reason = %q", got)
+	}
+	if got := exceptionReason(execution.ItemResult{Status: execution.ItemSucceeded, Reconciliation: "LEGACY_REPROCESSED"}); got != "" {
+		t.Fatalf("a reconciled object kept a failure reason %q", got)
+	}
+}

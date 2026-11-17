@@ -26,6 +26,12 @@ test("exceptions explain sources that changed or were deleted after the scan", a
       retryStatus: "SKIPPED",
       retryReasonCode: "SOURCE_DELETED",
     }),
+    // A recovered v4.0.x task whose source did not have the object.
+    row("legacy/m9.bin", {
+      reasonCode: "SOURCE_MISSING",
+      errorMessage: 'reconcile source "legacy/m9.bin": object not found',
+      retryStatus: "FAILED",
+    }),
   ];
   await page.route("**/api/master/tasks/1", (route) =>
     route.fulfill({
@@ -55,6 +61,14 @@ test("exceptions explain sources that changed or were deleted after the scan", a
     "源对象在扫描后已变化，重试会读取其当前版本",
   );
   await expect(changed.getByTestId("exception-retry-reason")).toHaveCount(0);
+  await expect(
+    region
+      .getByRole("row", { includeHidden: true })
+      .filter({ hasText: "legacy/m9.bin" })
+      .getByTestId("exception-reason"),
+  ).toHaveText(
+    "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端",
+  );
   await expect(deleted.getByTestId("exception-retry-reason")).toHaveText(
     "源对象已在源端删除，已跳过",
   );

@@ -166,6 +166,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The source object was deleted at the source and was skipped",
     ja: "ソースオブジェクトはソース側で削除されたため、スキップしました",
   },
+  "源端找不到旧版（v4.0.x）任务记录的该对象，重试时会重新检查源端": {
+    en: "The source does not have this object recorded by the v4.0.x task; a retry checks the source again",
+    ja: "v4.0.x のタスクが記録したこのオブジェクトが転送元に見つかりません。再試行すると転送元を再確認します",
+  },
   "{node} 最后连接于 {time}": {
     en: "{node} last connected at {time}",
     ja: "{node} の最終接続: {time}",

@@ -111,6 +111,9 @@ const (
 	// ReasonSourceRefreshed marks a result whose ResolvedSource is the
 	// current version read on a retry, not the version discovered.
 	ReasonSourceRefreshed = "SOURCE_REFRESHED"
+	// ReasonSourceMissing marks a failed object of a recovered V4.0.x task
+	// that the source did not have when the attempt checked it.
+	ReasonSourceMissing = "SOURCE_MISSING"
 )
 
 // refreshReason reports a reason that allows a ResolvedSource on an object

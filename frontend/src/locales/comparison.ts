@@ -94,10 +94,10 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
   暂无比对记录: { en: "No comparisons yet", ja: "比較の記録はありません" },
   "源 → 目标": { en: "Source → target", ja: "転送元 → 転送先" },
   差异: { en: "Differences", ja: "差分" },
-  "比对结果保存在执行节点上，默认保留 30 天；每个节点的比对结果默认最多占用 2 GiB，超出时先删除最早结束的比对。":
+  "比对结果保存在执行节点上，默认最多保留 30 天；每个节点的比对结果默认最多占用 2 GiB，且最多保留 500 个比对，超出任一限制时先删除最早结束的比对。":
     {
-      en: "Results are kept on the node that ran the comparison, for 30 days by default. By default each node keeps at most 2 GiB of comparison results and deletes the comparisons that ended earliest first when it exceeds that.",
-      ja: "比較結果は実行ノードに保存され、既定で 30 日間保持されます。各ノードの比較結果は既定で最大 2 GiB までで、超えた場合は終了が最も早い比較から削除します。",
+      en: "Results are kept on the node that ran the comparison, for at most 30 days by default. Each node keeps at most 2 GiB of comparison results by default and at most 500 comparisons; beyond either limit, the comparisons that ended earliest are deleted first.",
+      ja: "比較結果は実行ノードに保存され、既定で最長 30 日間保持されます。各ノードの比較結果は既定で最大 2 GiB、比較は最大 500 件までです。いずれかを超えると、終了が最も早い比較から削除します。",
     },
   比对结果: { en: "Comparison results", ja: "比較結果" },
   "执行节点暂时无法连接，节点恢复后将自动加载比对结果。": {

@@ -226,6 +226,49 @@ func TestExceptionsListRendersTableAndKeepsJSON(t *testing.T) {
 	}
 }
 
+// The Master returns at most --limit failed records per node (at most
+// 10000), and exceptions export runs the same query. A truncated list or
+// export says so and points to the task report, whose exception-details.csv
+// holds every failed object, instead of promising that export gets them all.
+func TestExceptionsTruncationPointsToTheTaskReport(t *testing.T) {
+	truncated := exceptionsFixture()
+	truncated["failedKeys"].(map[string]interface{})["10.0.0.2Count"] = float64(30000)
+	handler := func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, truncated) }
+	report := "任务停止或结束后，task report ID 导出的报告中 exception-details.csv 列出该任务的全部失败对象"
+	for _, test := range []struct {
+		args        []string
+		wants       []string
+		raiseLimits bool
+	}{
+		{[]string{"exceptions", "list", "failed", "--task-id", "1"}, []string{"仅显示部分记录：每个节点最多返回 1000 条，可用 --limit 调大到 10000；exceptions export 受同样的限制", report}, true},
+		{[]string{"exceptions", "list", "failed", "--task-id", "1", "--limit", "10000"}, []string{"仅显示部分记录：每个节点最多返回 10000 条；exceptions export 受同样的限制", report}, false},
+		{[]string{"exceptions", "export", "failed", "--task-id", "1", "--output", filepath.Join(t.TempDir(), "failed.csv")}, []string{"已导出 2 条记录到", "仅导出了部分记录：每个节点最多导出 1000 条，可用 --limit 调大到 10000 后重新导出", report}, true},
+		{[]string{"exceptions", "export", "failed", "--task-id", "1", "--limit", "10000", "--output", filepath.Join(t.TempDir(), "failed.csv")}, []string{"仅导出了部分记录：每个节点最多导出 10000 条", report}, false},
+	} {
+		code, out, stderr := runMockCLI(t, test.args, handler)
+		if code != 0 && code != 3 {
+			t.Fatalf("%v: %d %s %s", test.args, code, out, stderr)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v lacks %q:\n%s", test.args, want, out)
+			}
+		}
+		if strings.Contains(out, "导出全部") || strings.Contains(out, "调大到 10000") != test.raiseLimits {
+			t.Errorf("%v promises what export cannot do:\n%s", test.args, out)
+		}
+	}
+	for _, test := range []struct{ lang, want string }{
+		{"en", "Once the task stops or ends, exception-details.csv in the report from task report ID lists all of its failed objects"},
+		{"ja", "exception-details.csv にそのタスクのすべての失敗オブジェクトが含まれます"},
+	} {
+		_, out, _ := runMockCLI(t, []string{"--lang", test.lang, "exceptions", "list", "failed", "--task-id", "1"}, handler)
+		if !strings.Contains(out, test.want) || strings.Contains(out, "for all of them") {
+			t.Errorf("%s:\n%s", test.lang, out)
+		}
+	}
+}
+
 // A task create whose only row is refused created nothing: a definite
 // failure with the reason, not an uncertain partial submission.
 func TestTaskCreateRejectedRowsAreDefiniteFailures(t *testing.T) {
@@ -316,7 +359,10 @@ func TestWriteCommandsPrintSummaries(t *testing.T) {
 			}
 			return `{"success":true,"clearableCount":3,"failedKeys":{}}`
 		}, []string{"已清理 3 条已处理的记录"}, []string{"请求上限范围", "resolved-exceptions"}},
-		{"update agents", []string{"update", "agents", "--all", "--version", "4.1.41", "--yes"}, func(*http.Request) string {
+		{"update agents", []string{"update", "agents", "--all", "--version", "4.1.41", "--yes"}, func(r *http.Request) string {
+			if r.Method == http.MethodGet {
+				return `{"success":true,"data":{"master":{"info":{"version":"4.1.41","supported":true}},"agents":[{"address":"10.0.0.2","info":{"version":"4.1.40","supported":true},"update":{"phase":"IDLE"}}],"queue":{"phase":"IDLE","items":[]}}}`
+			}
 			return `{"success":true,"data":{"id":"q1","version":"4.1.41","phase":"RUNNING","items":[{"nodeId":"n1","address":"10.0.0.2","phase":"QUEUED","updatedAt":"2026-11-10T00:00:00Z","startedAt":"0001-01-01T00:00:00Z"}]}}`
 		}, []string{"已安排把 1 个 Agent 更新到 v4.1.41", "10.0.0.2", "排队中", "update status"}, []string{"0001-01-01", "startedAt", "QUEUED"}},
 		{"task resume", []string{"task", "resume", "7"}, func(r *http.Request) string {
@@ -324,7 +370,7 @@ func TestWriteCommandsPrintSummaries(t *testing.T) {
 				return `{"success":true,"data":{"taskIndex":7,"status":"STOPPED","generation":2}}`
 			}
 			return `{"success":true,"accepted":1,"failed":0,"ignored":0,"partial":false,"details":[{"taskId":7,"status":"RESUMING","generation":3,"success":true,"accepted":true,"ignored":false}]}`
-		}, []string{"#7", "已恢复执行"}, []string{"batches", "已受理:", "taskIds"}},
+		}, []string{"#7  已请求继续（当前状态：恢复中）", "oss-transfer-cli task show 7"}, []string{"已恢复执行", "batches", "已受理:", "taskIds"}},
 	} {
 		code, out, stderr := runMockCLI(t, test.args, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, test.reply(r)) })
 		if code != 0 && !(test.name == "storage update" && code == 3) {
@@ -410,8 +456,8 @@ func TestCLIHintsWhenTheMasterCannotBeReached(t *testing.T) {
 	host := "http://" + listener.Addr().String()
 	listener.Close()
 	for _, test := range []struct{ lang, want string }{
-		{"zh", "提示: 无法连接 Master（" + host + "）。请检查地址和端口"},
-		{"en", "Hint: could not connect to the Master (" + host + "). Check that the address and port"},
+		{"zh", "提示: 无法连接 Master（" + host + "）。Master 可能正在重启或更新，请稍后重试；如果一直无法连接，请检查地址和端口"},
+		{"en", "Hint: could not connect to the Master (" + host + "). It may be restarting or updating; try again shortly. If it stays unreachable, check that the address and port"},
 		{"ja", "ヒント: Master（" + host + "）に接続できません。"},
 	} {
 		var out, stderr bytes.Buffer

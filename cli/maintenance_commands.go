@@ -107,24 +107,33 @@ func compareReleases(left, right string) int {
 }
 
 // softwareCheck asks the Master to check for the latest stable release and
-// reports it with the Master's current version.
-func softwareCheck(client *ApiClient) (map[string]interface{}, string, string, error) {
+// reports it with the Master's own software information: its version and
+// whether it can update itself online.
+func softwareCheck(client *ApiClient) (map[string]interface{}, string, map[string]interface{}, error) {
 	result, err := client.Post("/software-updates/check", map[string]interface{}{})
 	if err != nil {
-		return result, "", "", err
+		return result, "", nil, err
 	}
 	latest, _, ok := releaseVersion(getString(adminData(result), "version"))
 	if !ok {
-		return nil, "", "", cliErrorf("Master 未返回有效的最新版本，请稍后重试 update check")
+		return nil, "", nil, cliErrorf("Master 未返回有效的最新版本，请稍后重试 update check")
 	}
 	snapshot, err := client.Get("/software-updates")
 	if err != nil {
-		return snapshot, "", "", err
+		return snapshot, "", nil, err
 	}
 	master, _ := adminData(snapshot)["master"].(map[string]interface{})
 	info, _ := master["info"].(map[string]interface{})
-	return result, latest, strings.TrimPrefix(getString(info, "version"), "v"), nil
+	return result, latest, info, nil
 }
+
+// softwareNow is the clock that judges how old a version check is.
+var softwareNow = time.Now
+
+// softwareCheckFresh is how long the Master trusts a version check: an
+// online Master update needs a check younger than this, and the console
+// checks again once its result is older.
+const softwareCheckFresh = time.Hour
 
 func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	if action == "status" || action == "check" {
@@ -134,13 +143,24 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		if action == "check" {
 			// The check result keeps its fields; currentVersion and available
 			// state the conclusion against the running Master.
-			result, latest, current, err := softwareCheck(client)
+			result, latest, info, err := softwareCheck(client)
 			if err != nil {
 				return result, err
 			}
+			current := strings.TrimPrefix(getString(info, "version"), "v")
 			data := adminData(result)
 			data["currentVersion"] = current
 			data["available"] = current != "" && compareReleases(latest, current) > 0
+			// A Master that cannot update itself (a container, a manual run,
+			// missing privileges) refuses update master; say why and how to
+			// upgrade it instead of suggesting that command.
+			if supported, known := info["supported"].(bool); known {
+				update := map[string]interface{}{"supported": supported}
+				if !supported {
+					update["reason"], update["detail"] = getString(info, "reason"), getString(info, "detail")
+				}
+				data["masterUpdate"] = update
+			}
 			return result, nil
 		}
 		return client.Get("/software-updates")
@@ -194,10 +214,11 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	if action == "master" {
 		// The Master installs the latest stable release it has just checked.
 		// Check on the user's behalf and default to that release.
-		result, latest, current, err := softwareCheck(client)
+		result, latest, info, err := softwareCheck(client)
 		if err != nil {
 			return result, err
 		}
+		current := strings.TrimPrefix(getString(info, "version"), "v")
 		if version != "" && version != latest {
 			return nil, cliErrorf("在线更新只能安装最新正式版 v%s；如需安装其他版本，请在 Master 主机运行安装脚本并指定 --version", latest)
 		}
@@ -206,56 +227,203 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		}
 		return client.Post(path, map[string]interface{}{"version": latest})
 	}
+	// The snapshot names the Master's version, which Agents follow, and what
+	// each Agent can do, which decides whom an online update reaches.
+	snapshot, err := client.Get("/software-updates")
+	if err != nil {
+		return snapshot, err
+	}
+	data := adminData(snapshot)
+	master, _ := data["master"].(map[string]interface{})
+	info, _ := master["info"].(map[string]interface{})
+	masterVersion := strings.TrimPrefix(getString(info, "version"), "v")
 	if version == "" {
-		// Agents follow the running Master's version, never a newer release or
-		// an inferred local CLI version. The server rechecks this when queuing.
-		snapshot, err := client.Get("/software-updates")
-		if err != nil {
-			return snapshot, err
-		}
-		master, _ := adminData(snapshot)["master"].(map[string]interface{})
-		info, _ := master["info"].(map[string]interface{})
-		// The Master's own version is the explicit choice, so Agents may
-		// follow a prerelease Master without --allow-prerelease.
-		version, _, err = updateVersion(getString(info, "version"))
+		// Agents follow the running Master's version, never a newer release
+		// or an inferred local CLI version; the Master's own version is the
+		// explicit choice, so Agents may follow a prerelease Master without
+		// --allow-prerelease. The server rechecks this when queuing.
+		version, _, err = updateVersion(masterVersion)
 		if err != nil {
 			return nil, cliErrorf("无法确定 Master 的发布版本，请先查看 update status")
 		}
 	}
+	queue, _ := data["queue"].(map[string]interface{})
+	agents := objectList(data["agents"])
+	var plan map[string]string
+	// The Master refuses another version, and a running queue answers for
+	// itself; otherwise predict whom the queue will update.
+	if _, listed := data["agents"].([]interface{}); listed && version == masterVersion && getString(queue, "phase") != "RUNNING" {
+		plan = agentUpdatePlan(agents, o.Value("worker"), version)
+		if len(plan) > 0 && !planUpdates(plan) {
+			return agentUpdateNotNeeded(client, version, agents, plan), nil
+		}
+	}
 	result, err := client.Post(path, map[string]interface{}{"version": version})
-	return updateStarted(client, action, version, result, err)
+	if err != nil || result == nil {
+		return result, err
+	}
+	if id := getString(queue, "id"); id != "" && getString(queue, "phase") == "RUNNING" && id == getString(responseData(result), "id") {
+		// The Master answered with the update that was already running.
+		return agentUpdateSummary(client, version, result, agents, nil, true), nil
+	}
+	return agentUpdateSummary(client, version, result, agents, plan, false), nil
 }
 
-// updateStarted summarizes an accepted update: the target version, each
-// queued Agent and how to follow the progress.
+// agentUpdateSkip mirrors the checks the Master makes when the queue reaches
+// an Agent (and the console's rule for updatable nodes): "" means the Agent
+// will be updated to target, otherwise the reason code it will be skipped.
+func agentUpdateSkip(node map[string]interface{}, target string) string {
+	info, _ := node["info"].(map[string]interface{})
+	update, _ := node["update"].(map[string]interface{})
+	current := strings.TrimPrefix(getString(info, "version"), "v")
+	busy := softwareUpdateBusy(getString(update, "phase"))
+	switch {
+	case node["unavailable"] == true || info == nil:
+		return "OFFLINE"
+	case getString(node, "upgradeReason") == "LEGACY":
+		return "LEGACY"
+	case current == target && !busy:
+		return "UP_TO_DATE"
+	case busy:
+		return "BUSY"
+	case info["supported"] != true:
+		if reason := getString(info, "reason"); reason != "" {
+			return reason
+		}
+		return "UNMANAGED"
+	case compareReleases(target, current) <= 0:
+		return "VERSION"
+	case strings.Contains(target, "-") && info["prereleaseUpdates"] != true:
+		return "PRERELEASE_UNSUPPORTED"
+	}
+	return ""
+}
+
+func softwareUpdateBusy(phase string) bool {
+	return phase == "QUEUED" || phase == "DOWNLOADING" || phase == "APPLYING"
+}
+
+// agentUpdatePlan predicts, by address, whom an update of every Agent (or of
+// worker) reaches: "" for an Agent that will be updated, else why not.
+func agentUpdatePlan(agents []map[string]interface{}, worker, target string) map[string]string {
+	plan := map[string]string{}
+	for _, node := range agents {
+		address := getString(node, "address")
+		if address == "" || worker != "" && address != worker {
+			continue
+		}
+		plan[address] = agentUpdateSkip(node, target)
+	}
+	return plan
+}
+
+func planUpdates(plan map[string]string) bool {
+	for _, reason := range plan {
+		if reason == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// agentSkipText explains why an Agent is not updated: the Master's localized
+// detail for an installation that cannot update online, else the reason.
+func agentSkipText(out io.Writer, node map[string]interface{}, reason string) string {
+	info, _ := node["info"].(map[string]interface{})
+	if detail := getString(info, "detail"); detail != "" && info["supported"] != true && reason == getString(info, "reason") {
+		return safeCLIText(detail)
+	}
+	return softwareReasonText(out, reason)
+}
+
+// agentUpdateNotNeeded reports that no selected Agent can be updated online,
+// without queuing an update that would skip every one of them.
+func agentUpdateNotNeeded(client *ApiClient, version string, agents []map[string]interface{}, plan map[string]string) map[string]interface{} {
+	var text strings.Builder
+	out := &cliLocaleWriter{Writer: &text, locale: client.locale}
+	fmt.Fprint(out, cliTextf(out, "没有可以在线更新到 %s 的 Agent，本次未安排更新\n", cliVersionText(version)))
+	table := newCLITable(out)
+	fmt.Fprintln(table, cliText(out, "节点\t原因"))
+	skipped := []interface{}{}
+	for _, node := range agents {
+		address := getString(node, "address")
+		reason, selected := plan[address]
+		if !selected {
+			continue
+		}
+		skipped = append(skipped, map[string]interface{}{"address": address, "reason": reason})
+		fmt.Fprintf(table, "%s\t%s\n", safeCLIText(cliNodeLabel(node, address, localeOf(out))), safeCLIText(agentSkipText(out, node, reason)))
+	}
+	table.Flush()
+	result := map[string]interface{}{"success": true, "data": map[string]interface{}{"version": version, "queued": false, "skipped": skipped}}
+	setCLISummary(result, cliTextLines(text.String())...)
+	return result
+}
+
+// agentUpdateSummary states whom a queued Agent update will update. The
+// Master queues every selected Agent and skips, one by one, those that are
+// offline, already on the target version or cannot update online; plan
+// predicts those skips with the same checks. running marks a queue that was
+// already in progress.
+func agentUpdateSummary(client *ApiClient, version string, result map[string]interface{}, agents []map[string]interface{}, plan map[string]string, running bool) map[string]interface{} {
+	var text strings.Builder
+	out := &cliLocaleWriter{Writer: &text, locale: client.locale}
+	items := objectList(responseData(result)["items"])
+	nodes := map[string]map[string]interface{}{}
+	for _, node := range agents {
+		nodes[getString(node, "address")] = node
+	}
+	updates, skips := 0, 0
+	for _, item := range items {
+		if reason, known := plan[getString(item, "address")]; plan != nil && known && reason != "" {
+			skips++
+		} else {
+			updates++
+		}
+	}
+	switch {
+	case running:
+		fmt.Fprint(out, cliTextf(out, "已有更新到 %s 的 Agent 更新正在进行，本次未安排新的更新\n", cliVersionText(version)))
+	case plan == nil:
+		fmt.Fprint(out, cliTextf(out, "已把 %d 个 Agent 加入更新队列，目标 %s；已是该版本、离线或不能在线更新的节点会被跳过\n", len(items), cliVersionText(version)))
+	case skips > 0:
+		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s；%d 个不会更新，原因见下表\n", updates, cliVersionText(version), skips))
+	default:
+		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s\n", updates, cliVersionText(version)))
+	}
+	if len(items) > 0 {
+		table := newCLITable(out)
+		fmt.Fprintln(table, cliText(out, "节点\t状态\t说明"))
+		for _, item := range items {
+			address := getString(item, "address")
+			phase := cliUpdatePhaseLabel(out, getString(item, "phase"))
+			detail := getString(item, "error")
+			if detail == "" {
+				detail = cliUpdateReasonLabel(out, getString(item, "reason"))
+			}
+			if reason, known := plan[address]; plan != nil && known && reason != "" && getString(item, "phase") == "QUEUED" {
+				phase, detail = cliText(out, "将跳过"), agentSkipText(out, nodes[address], reason)
+			}
+			if detail == "" {
+				detail = "—"
+			}
+			fmt.Fprintf(table, "%s\t%s\t%s\n", safeCLIText(cliNodeLabel(item, address, localeOf(out))), safeCLIText(phase), safeCLIText(detail))
+		}
+		table.Flush()
+	}
+	fmt.Fprintln(out, cliText(out, "查看进度：oss-transfer-cli update status --watch 5"))
+	setCLISummary(result, cliTextLines(text.String())...)
+	return result
+}
+
+// updateStarted summarizes an accepted Master update and how to follow it.
 func updateStarted(client *ApiClient, action, version string, result map[string]interface{}, err error) (map[string]interface{}, error) {
 	if err != nil || result == nil {
 		return result, err
 	}
 	var text strings.Builder
 	out := &cliLocaleWriter{Writer: &text, locale: client.locale}
-	data := responseData(result)
-	if action == "master" {
-		fmt.Fprint(out, cliTextf(out, "Master 正在更新到 %s；服务会短暂重启\n", cliVersionText(version)))
-	} else {
-		items := objectList(data["items"])
-		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s\n", len(items), cliVersionText(version)))
-		if len(items) > 0 {
-			table := newCLITable(out)
-			fmt.Fprintln(table, cliText(out, "节点\t状态\t说明"))
-			for _, item := range items {
-				detail := getString(item, "error")
-				if detail == "" {
-					detail = cliUpdateReasonLabel(out, getString(item, "reason"))
-				}
-				if detail == "" {
-					detail = "—"
-				}
-				fmt.Fprintf(table, "%s\t%s\t%s\n", safeCLIText(cliNodeLabel(item, getString(item, "address"), localeOf(out))), safeCLIText(cliUpdatePhaseLabel(out, getString(item, "phase"))), safeCLIText(detail))
-			}
-			table.Flush()
-		}
-	}
+	fmt.Fprint(out, cliTextf(out, "Master 正在更新到 %s；服务会短暂重启\n", cliVersionText(version)))
 	fmt.Fprintln(out, cliText(out, "查看进度：oss-transfer-cli update status --watch 5"))
 	setCLISummary(result, cliTextLines(text.String())...)
 	return result, nil
@@ -371,6 +539,20 @@ func renderSoftwareCheck(out io.Writer, data map[string]interface{}) {
 		if notes := getString(data, "url"); notes != "" {
 			fmt.Fprintf(out, cliText(out, "发布说明: %s\n"), safeCLIText(notes))
 		}
+		if update, _ := data["masterUpdate"].(map[string]interface{}); update != nil && update["supported"] == false {
+			// The Master's localized detail says how to upgrade this
+			// installation; the reason code is the fallback.
+			reason := safeCLIText(getString(update, "detail"))
+			if reason == "" {
+				reason = softwareReasonText(out, getString(update, "reason"))
+			}
+			if reason == "" {
+				reason = softwareReasonText(out, "UNMANAGED")
+			}
+			fmt.Fprintf(out, cliText(out, "Master 不能在线更新：%s\n"), reason)
+			fmt.Fprintln(out, cliText(out, "Master 升级完成后，可运行 oss-transfer-cli update agents --all --yes 更新执行节点"))
+			return
+		}
 		fmt.Fprintln(out, cliText(out, "升级 Master: oss-transfer-cli update master --yes；完成后升级执行节点: oss-transfer-cli update agents --all --yes"))
 	case current != latest && strings.Contains(current, "-"):
 		// A prerelease of the next version is newer than the latest stable one.
@@ -397,15 +579,18 @@ func softwarePhaseText(out io.Writer, phase string) string {
 
 func softwareReasonText(out io.Writer, reason string) string {
 	key := map[string]string{
-		"OFFLINE":            "节点离线，重新连接后可更新",
-		"LEGACY":             "需先用安装脚本升级一次，之后可在线更新",
-		"CONTAINER":          "容器部署：请拉取新镜像并重建容器来更新",
-		"UNMANAGED":          "此安装方式不支持在线更新，请使用安装脚本升级",
-		"PERMISSION":         "服务权限不足，无法在线更新，请使用安装脚本升级",
-		"MISSING_DEPENDENCY": "缺少在线更新所需的系统组件，请使用安装脚本升级",
-		"UNSUPPORTED":        "此平台不支持在线更新，请使用安装脚本升级",
-		"RECONNECTING":       "等待节点重新连接",
-		"UP_TO_DATE":         "已是 Master 版本",
+		"OFFLINE":                "节点离线，重新连接后可更新",
+		"LEGACY":                 "需先用安装脚本升级一次，之后可在线更新",
+		"CONTAINER":              "容器部署：请拉取新镜像并重建容器来更新",
+		"UNMANAGED":              "此安装方式不支持在线更新，请使用安装脚本升级",
+		"PERMISSION":             "服务权限不足，无法在线更新，请使用安装脚本升级",
+		"MISSING_DEPENDENCY":     "缺少在线更新所需的系统组件，请使用安装脚本升级",
+		"UNSUPPORTED":            "此平台不支持在线更新，请使用安装脚本升级",
+		"RECONNECTING":           "等待节点重新连接",
+		"UP_TO_DATE":             "已是 Master 版本",
+		"BUSY":                   "节点正在更新，请等待其完成",
+		"VERSION":                "版本不低于 Master，无需更新",
+		"PRERELEASE_UNSUPPORTED": "此节点不支持在线安装预发布版本，请使用安装脚本升级",
 	}[reason]
 	if key == "" {
 		return safeCLIText(reason)
@@ -478,7 +663,18 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 	}
 	table.Flush()
 	if latest, ok := data["latest"].(map[string]interface{}); ok {
-		fmt.Fprintf(out, cliText(out, "最新版本: v%s\n"), safeCLIText(strings.TrimPrefix(getString(latest, "version"), "v")))
+		// The Master keeps the result of the last check that someone ran;
+		// it does not check by itself. Say when that was.
+		version := safeCLIText(strings.TrimPrefix(getString(latest, "version"), "v"))
+		checked, err := time.Parse(time.RFC3339Nano, getString(data, "checkedAt"))
+		switch {
+		case err != nil || checked.IsZero():
+			fmt.Fprintf(out, cliText(out, "最新版本: v%s\n"), version)
+		case softwareNow().Sub(checked) > softwareCheckFresh:
+			fmt.Fprintf(out, cliText(out, "最新版本: v%s（检测于 %s，已超过 1 小时；可能已有更新的版本，请运行 oss-transfer-cli update check 重新检测）\n"), version, cliLocalTime(checked))
+		default:
+			fmt.Fprintf(out, cliText(out, "最新版本: v%s（检测于 %s）\n"), version, cliLocalTime(checked))
+		}
 	}
 	if data["checking"] == true {
 		fmt.Fprintln(out, cliText(out, "正在检查新版本"))

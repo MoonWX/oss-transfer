@@ -472,7 +472,8 @@ const cliObjectHelp = `对象比对
   元数据一致不代表内容一致：两端 ETag 都是普通 MD5 形式且不同时，结果为 ETAG_MISMATCH。需要确认内容时使用 content。
   content 流式读取两端对象并计算 SHA-256，不写入本地文件，会产生读取流量。
   修改时间和存储类型不作为一致依据。比对期间变化的对象单独列出。
-  比对在一个执行节点后台并发运行，所有差异保存在该节点上，默认保留 30 天；list 可找回比对 ID。
+  比对在一个执行节点后台并发运行，所有差异保存在该节点上，默认最多保留 30 天；list 可找回比对 ID。
+  节点上的比对结果合计超过存储预算（默认 2 GiB）或超过 500 个时，从最早结束的比对开始提前删除。
   ZIP 包含 differences.csv、retry-source-keys.incr 和 summary.json。两端前缀相同时，
   retry-source-keys.incr 可用于 import-inventory，重新迁移目标缺失、不一致或 ETag 不同的对象。
   Agent 重启或升级后，若存储连接未变会自动继续；否则用 resume 从检查点之后继续，已统计的结果保留。

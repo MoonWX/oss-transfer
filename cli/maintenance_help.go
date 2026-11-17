@@ -11,9 +11,12 @@ const cliUpdateHelp = `服务升级
 update check 显示“当前版本 → 可升级版本”。update master 会自动检测新版本，
 不指定 --version 时升级到最新正式版；Master 已是最新时直接提示并退出。
 Agent 默认更新到 Master 当前版本，也可用 --version 指定版本。
+已是该版本、离线、以容器部署或不能在线更新的 Agent 会被跳过，输出列出原因；
+没有可以更新的 Agent 时不安排更新。
 检测新版本只提供稳定版。预发布（beta/rc）版本仅在明确指定 --version 并加
 --allow-prerelease 时安装；Master 运行预发布版本时，Agent 可跟随到同一版本。
 请求受理后使用 update status --watch 5 查看结果；受理不代表升级完成。
+Master 更新时服务会短暂停止，--watch 在此期间自动重试，最长 30 分钟。
 `
 
 const cliBackupHelp = `升级备份

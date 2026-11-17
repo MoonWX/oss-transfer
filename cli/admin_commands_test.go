@@ -585,3 +585,31 @@ func TestAgentRemoveConfirmsWithoutChangingJSON(t *testing.T) {
 		t.Fatal("summary leaks into --json output")
 	}
 }
+
+// A removed Agent in a container keeps running idle, Install.ps1 has no
+// uninstall option and oss-transfer-run.sh has no --uninstall. The removal
+// confirmation says what happens for each deployment instead of telling
+// every host to run the installer with --uninstall.
+func TestNodeRemoveExplainsEachDeployment(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"nodes": []interface{}{}}})
+	}
+	for _, test := range []struct {
+		lang  string
+		wants []string
+	}{
+		{"zh", []string{"已移除执行节点 agent2", "以容器运行的 Agent 会保持空闲，直到容器被删除", "其他方式运行的 Agent 会自行停止且不再重启", "--uninstall --role agent", "容器请删除容器和数据卷", "Windows 服务和手动运行的程序请手动删除"}},
+		{"en", []string{"Removed node agent2", "An Agent running in a container stays idle until the container is removed", "--uninstall --role agent", "remove the container and its volume", "remove a Windows service or a manually run program by hand"}},
+		{"ja", []string{"ノード agent2 を削除しました", "コンテナで動作する Agent はコンテナを削除するまで待機状態のままになり", "--uninstall --role agent", "コンテナとボリュームを削除し", "Windows サービスや手動で実行しているプログラムは手動で削除してください"}},
+	} {
+		code, out, errout := runMockCLI(t, []string{"--lang", test.lang, "node", "remove", "agent2", "--yes"}, handler)
+		if code != 0 {
+			t.Fatalf("%s: %d %s %s", test.lang, code, out, errout)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out+errout, want) {
+				t.Errorf("%s lacks %q:\n%s%s", test.lang, want, out, errout)
+			}
+		}
+	}
+}

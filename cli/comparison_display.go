@@ -358,7 +358,11 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 			fields = append(fields, [2]string{cliText(out, "最后保存的 Key"), key})
 		}
 	}
-	for _, field := range [][2]string{{cliText(out, "开始时间"), comparisonTime(data["startedAt"])}, {cliText(out, "结束时间"), comparisonTime(data["endedAt"])}, {cliText(out, "保留至"), comparisonTime(data["expiresAt"])}, {cliText(out, "错误"), getString(data, "error")}, {cliText(out, "错误详情"), getString(data, "errorDetail")}} {
+	// expiresAt is the end time plus the retention period. The node deletes
+	// the earliest ended comparisons sooner when its results exceed the
+	// storage budget or number more than 500.
+	expires := comparisonTime(data["expiresAt"])
+	for _, field := range [][2]string{{cliText(out, "开始时间"), comparisonTime(data["startedAt"])}, {cliText(out, "结束时间"), comparisonTime(data["endedAt"])}, {cliText(out, "最晚保留至"), expires}, {cliText(out, "错误"), getString(data, "error")}, {cliText(out, "错误详情"), getString(data, "errorDetail")}} {
 		if field[1] != "" {
 			fields = append(fields, field)
 		}
@@ -368,6 +372,9 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 		fmt.Fprintf(table, "%s\t%s\n", field[0], safeCLIText(field[1]))
 	}
 	table.Flush()
+	if expires != "" {
+		fmt.Fprintln(out, cliText(out, "注：节点上的比对结果合计超过存储预算（默认 2 GiB）或超过 500 个时，最早结束的比对会在此日期之前被删除；需要的结果请及时用 object export 导出"))
+	}
 	fmt.Fprintln(out)
 	rows := objectList(data["items"])
 	if conclusion := comparisonConclusion(out, data); len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && conclusion != "" {

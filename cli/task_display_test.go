@@ -117,10 +117,17 @@ func TestSubtaskNextCursorIsQuotedAsOneShellArgument(t *testing.T) {
 
 func TestSubtaskNumberPagePreservesExplicitOrderAndActiveView(t *testing.T) {
 	var output bytes.Buffer
-	renderSubtaskPage(&output, map[string]interface{}{"children": []map[string]interface{}{{"childTaskId": "224-26"}}, "subtaskPage": map[string]interface{}{"parentTaskId": 224, "totalCount": 80, "offset": 25, "limit": 25, "order": "id", "view": "active", "hasMore": true}})
+	renderSubtaskPage(&output, map[string]interface{}{"children": []map[string]interface{}{{"childTaskId": "224-26"}}, "subtaskPage": map[string]interface{}{"parentTaskId": 224, "totalCount": 80, "offset": 25, "limit": 25, "order": "id", "view": "all", "hasMore": true, "nextOffset": 50}})
 	text := output.String()
-	if !strings.Contains(text, "子任务编号 26–50 / 80") || !strings.Contains(text, "task children 224 --offset 50 --limit 25 --order id --active") || strings.Contains(text, "--cursor") {
+	if !strings.Contains(text, "子任务编号 26–50 / 80") || !strings.Contains(text, "task children 224 --offset 50 --limit 25 --order id\n") || strings.Contains(text, "--cursor") {
 		t.Fatal("explicit numeric page changed behavior", text)
+	}
+	// The active view keeps the view and continues after the last number read.
+	output.Reset()
+	renderSubtaskPage(&output, map[string]interface{}{"children": []map[string]interface{}{{"childTaskId": "224-226", "subtaskNumber": 226}, {"childTaskId": "224-240"}}, "subtaskPage": map[string]interface{}{"parentTaskId": 224, "totalCount": 80, "offset": 25, "limit": 2, "order": "id", "view": "active", "hasMore": true, "nextOffset": 240}})
+	text = output.String()
+	if !strings.Contains(text, "本页 2 个进行中的子任务（编号 226–240），共 80 个进行中") || !strings.Contains(text, "task children 224 --offset 240 --limit 2 --order id --active") || strings.Contains(text, "子任务编号") {
+		t.Fatal("active page was numbered by position", text)
 	}
 }
 

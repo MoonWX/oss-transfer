@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -132,5 +134,87 @@ func TestCLIEmptyChildWindowUsesOrdinalUpperBound(t *testing.T) {
 		if !strings.Contains(output.String(), "此编号范围无记录，最大编号 80") || strings.Contains(output.String(), "共 80") {
 			t.Fatalf("maximum ordinal was represented as a record count: %s", output.String())
 		}
+	}
+}
+
+// In the active view the Master returns the subtasks in progress after child
+// number --offset, their count and the last number read (nextOffset). The
+// printed next-page commands must visit every subtask in progress once, and
+// each footer must name the numbers actually shown.
+func TestCLIActiveSubtaskPagesFollowTheNextChildNumber(t *testing.T) {
+	active := []int{}
+	for number := 3001; number <= 3040; number++ {
+		active = append(active, number)
+	}
+	client := adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/master/tasks/5" {
+			adminTestJSON(t, w, map[string]interface{}{"data": taskTestRow(5, "OSS_TO_OSS", "RUNNING")})
+			return
+		}
+		query := r.URL.Query()
+		if r.URL.Path != "/api/master/tasks/5/children" || query.Get("view") != "active" || query.Has("order") {
+			t.Fatalf("unexpected request %s", r.URL)
+		}
+		after, _ := strconv.Atoi(query.Get("offset"))
+		limit, _ := strconv.Atoi(query.Get("limit"))
+		items, next := []interface{}{}, after
+		for _, number := range active {
+			if number > after && len(items) < limit {
+				items = append(items, map[string]interface{}{"childTaskId": fmt.Sprintf("5-%d", number), "subtaskNumber": number, "taskIndex": 5, "status": "RUNNING"})
+				next = number
+			}
+		}
+		adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"parentTaskId": 5, "offset": after, "limit": limit, "totalCount": len(active), "items": items, "hasMore": next < active[len(active)-1], "nextOffset": next, "partial": false}})
+	})
+	seen := map[string]int{}
+	args := []string{"children", "5", "--active", "--offset", "0"}
+	footers := []string{}
+	for page := 0; page < 5; page++ {
+		result, err := runTaskCommand(client, args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, child := range objectList(result["children"]) {
+			seen[getString(child, "childTaskId")]++
+		}
+		var output bytes.Buffer
+		renderCLIResult(&output, result)
+		text := output.String()
+		if strings.Contains(text, "此编号范围无记录") || strings.Contains(text, "子任务编号") {
+			t.Fatalf("active page was numbered by position:\n%s", text)
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "本页") {
+				footers = append(footers, line)
+			}
+		}
+		_, command, found := strings.Cut(text, "下一页：task ")
+		if !found {
+			break
+		}
+		args = strings.Fields(strings.SplitN(command, "\n", 2)[0])
+	}
+	if len(seen) != len(active) {
+		t.Fatalf("next-page commands showed %d of %d subtasks in progress: %v", len(seen), len(active), seen)
+	}
+	for child, count := range seen {
+		if count != 1 {
+			t.Fatalf("subtask %s shown %d times", child, count)
+		}
+	}
+	want := []string{"本页 25 个进行中的子任务（编号 3001–3025），共 40 个进行中", "本页 15 个进行中的子任务（编号 3026–3040），共 40 个进行中"}
+	if !reflect.DeepEqual(footers, want) {
+		t.Fatalf("footers = %q", footers)
+	}
+	// Past the last subtask in progress the footer says so instead of naming
+	// a position range.
+	result, err := runTaskCommand(client, []string{"children", "5", "--active", "--offset", "3040"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	renderCLIResult(&output, result)
+	if !strings.Contains(output.String(), "编号 3040 之后没有进行中的子任务，共 40 个进行中") || strings.Contains(output.String(), "下一页") {
+		t.Fatal(output.String())
 	}
 }

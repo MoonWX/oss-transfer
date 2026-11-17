@@ -35,10 +35,3 @@ func (s *Server) scanConcurrencySupported(ctx context.Context, member cluster.Me
 	}
 	return caps.ScanConcurrencyProtocol >= agentservice.ScanConcurrencyProtocol, nil
 }
-
-// scanCapacityChanged is called once a node's Agent has accepted a new scan
-// concurrency. It is where the Master's view of free scan slots learns the new
-// capacity (the scan slot view's capacityChanged): a raised value lets queued
-// scans start at once. A lowered value needs nothing more, because the Agent
-// cancels no running scan and starts new ones only below the new value.
-func (t *taskRuntime) scanCapacityChanged(nodeID string, capacity int) {}

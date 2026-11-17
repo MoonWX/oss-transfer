@@ -205,9 +205,6 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 			nodeHTTPError(w, err)
 			return
 		}
-		if change.Scans != nil {
-			s.tasks.scanCapacityChanged(member.ID, *change.Scans)
-		}
 	}
 	if change.Label != nil {
 		if _, err := s.agents.registry.UpdateLabel(member.ID, *change.Label); err != nil {

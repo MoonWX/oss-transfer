@@ -222,10 +222,26 @@ func (r *LocalTempRegistry) commitLoop() {
 	defer close(r.done)
 	for first := range r.queue {
 		batch := []recoveryMutation{first}
-		timer := time.NewTimer(2 * time.Millisecond)
 		closed := false
+		// A mutation that is already queued always joins the batch, however
+		// slowly this loop runs. The 2 ms window, opened when the queue is
+		// first found empty, only gathers mutations that are still arriving.
+		var timer *time.Timer
 	collect:
 		for len(batch) < 128 {
+			select {
+			case next, ok := <-r.queue:
+				if !ok {
+					closed = true
+					break collect
+				}
+				batch = append(batch, next)
+				continue
+			default:
+			}
+			if timer == nil {
+				timer = time.NewTimer(2 * time.Millisecond)
+			}
 			select {
 			case next, ok := <-r.queue:
 				if !ok {
@@ -237,7 +253,9 @@ func (r *LocalTempRegistry) commitLoop() {
 				break collect
 			}
 		}
-		timer.Stop()
+		if timer != nil {
+			timer.Stop()
+		}
 		err := r.store.Update(func(tx *state.Tx) error {
 			for _, mutation := range batch {
 				if err := mutation.apply(tx); err != nil {

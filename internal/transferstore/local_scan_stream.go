@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -46,6 +47,10 @@ type nameStream struct {
 	exited  chan struct{}
 	file    *os.File
 	reads   listingReads // the reader's, continuing the scan's reads
+	// phase is lookupWaitingLimit while the reader waits for the local
+	// operation limit before a read, so a scan waiting for its names shows
+	// what they wait for.
+	phase atomic.Int32
 }
 
 // startStream hands the rest of the frame's listing to a reader goroutine.
@@ -71,7 +76,11 @@ func (scan *localScan) readAhead(ctx context.Context, key string, stream *nameSt
 			stream.end(err)
 			return
 		}
-		charge := func() error { return scan.s.localOperation(ctx) }
+		charge := func() error {
+			stream.phase.Store(lookupWaitingLimit)
+			defer stream.phase.Store(lookupPending)
+			return scan.s.localOperation(ctx)
+		}
 		if err := stream.reads.before(charge); err != nil {
 			stream.end(err)
 			return
@@ -194,9 +203,12 @@ func (scan *localScan) awaitName(frame *localScanFrame) (bool, error) {
 		case done && frame.next >= available:
 			return false, err
 		}
+		stop := scan.activity.await(&stream.phase)
 		select {
 		case <-stream.arrived:
+			stop()
 		case <-scan.ctx.Done():
+			stop()
 			return false, scan.ctx.Err()
 		}
 	}

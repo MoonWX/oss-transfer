@@ -59,7 +59,7 @@ func TestTaskShowAndNodesPrintTheScanProgress(t *testing.T) {
 	renderTaskDetail(&buffer, scanningTask(readingActivity(nil)))
 	for _, want := range []string{"已发现", "扫描进度\n",
 		"  本轮扫描已读取 86980 个名称，已检查 1200 项（扫描重启后从零计）\n",
-		"  正在读取目录“data/2026”中的名称：已读取 86980 个，用时 5 分 0 秒。读完全部名称后才会开始检查和迁移其中的文件。\n"} {
+		"  正在读取目录“data/2026”中的名称：已读取 86980 个，用时 5 分 0 秒。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。\n"} {
 		if !strings.Contains(buffer.String(), want) {
 			t.Fatalf("task show lacks %q:\n%s", want, buffer.String())
 		}

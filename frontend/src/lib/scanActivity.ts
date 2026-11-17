@@ -107,7 +107,7 @@ export function scanActivityLines(activity?: ScanActivity | null): string[] {
     else if (directory.reading)
       lines.push(
         t(
-          "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。读完全部名称后才会开始检查和迁移其中的文件。",
+          "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
           {
             dir,
             n: formatNumber(directory.names),

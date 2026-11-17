@@ -374,8 +374,8 @@ const cliLimitHelp = `节点限速
   oss-transfer-cli limit adjustment --worker 10.0.0.2 --event-id EVENT_ID
 
 bandwidth 默认单位 Mbps；其他类型单位为次/秒，不接受 --unit。
-local-ops 和 local-bandwidth 限制节点对本地存储的访问：local-ops 为每秒打开、创建、查询的文件数加读取的目录数，
-local-bandwidth 为读写本地文件的数据量（默认 Mbps，也可用 MB/s）。两者默认不限速。
+local-ops 和 local-bandwidth 限制节点对本地存储的访问：local-ops 为每秒打开、创建、查询文件和读取目录的次数
+（每读取 1,024 个名称计一次），local-bandwidth 为读写本地文件的数据量（默认 Mbps，也可用 MB/s）。两者默认不限速。
 数值须大于 0；移除上限须明确使用 unlimited，不将无效数值转成不限速。
 必须明确选择一个节点或 --all；任务额外带宽请使用 task bandwidth。
 调节详情保留 nextCursor、done、historyComplete 及进程重启信息。

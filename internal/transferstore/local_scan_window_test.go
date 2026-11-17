@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -736,6 +737,55 @@ func TestLocalScanReportsItsActivity(t *testing.T) {
 	}
 }
 
+// Each directory read is charged before it is made, except the read after a
+// short one, which only confirms the end of the listing and is charged only
+// if it returns names after all.
+func TestLocalScanChargesTheReadsThatReturnNames(t *testing.T) {
+	local, root := localFixture(t)
+	writeFiles(t, root, numbered("d/f", 5)...)
+	if err := os.Mkdir(filepath.Join(root, "e"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	spy := spyOnScan(local, root)
+	// d's names arrive two at a time: each read is short, yet the listing
+	// ends only with the read that returns none.
+	var pending []string
+	loaded := false
+	spy.readNames = func(key string, call func() ([]string, error)) ([]string, error) {
+		if key != "d" {
+			return call()
+		}
+		for !loaded {
+			names, err := call()
+			pending = append(pending, names...)
+			if err == io.EOF {
+				loaded = true
+			} else if err != nil {
+				return nil, err
+			}
+		}
+		if len(pending) == 0 {
+			return nil, io.EOF
+		}
+		batch := pending[:min(2, len(pending))]
+		pending = pending[len(batch):]
+		return batch, nil
+	}
+	limiter := &countingLocalIO{}
+	local.SetLocalIOLimiter(limiter)
+	pages, err := scanAll(local, context.Background(), ListOptions{})
+	if err != nil || !reflect.DeepEqual(objectKeys(pages), numbered("d/f", 5)) {
+		t.Fatalf("scan: %v %v", objectKeys(pages), err)
+	}
+	// The root: its open and one read. d: its lookup, root and open, the
+	// three reads that return names but not the fourth, five lookups, and its
+	// link as it is left. e: its lookup, root and open, and one read: the
+	// first read of a listing is charged even when it returns nothing.
+	if operations, _ := limiter.take(); operations != 2+(3+3+5+1)+4 || spy.called("read", "d") != 4 {
+		t.Fatalf("scan charged %d operations for %d reads of d", operations, spy.called("read", "d"))
+	}
+}
+
 // Every source operation is charged to the local limits: a resumed path's
 // links, roots and opens, each directory read, each lookup, a probe's open
 // and bytes, and a staging namespace's open and marker.
@@ -752,9 +802,10 @@ func TestLocalScanChargesEveryOperation(t *testing.T) {
 	if _, err := scanAll(local, context.Background(), ListOptions{Limit: 2, Cursor: cursor}); err != nil {
 		t.Fatal(err)
 	}
-	// The root's open; a's link, root and open; a's two reads; two lookups;
-	// a's link as it is left; the root's open and two reads.
-	if operations, _ := limiter.take(); operations != 12 {
+	// The root's open; a's link, root and open; a's read (the read that
+	// confirms the end of a short listing is free); two lookups; a's link as
+	// it is left; the root's open and read.
+	if operations, _ := limiter.take(); operations != 10 {
 		t.Fatalf("resume charged %d operations", operations)
 	}
 	if _, err := CreateSharedProbe(context.Background(), filepath.Join(root, "a")); err != nil {
@@ -772,12 +823,12 @@ func TestLocalScanChargesEveryOperation(t *testing.T) {
 	if _, err := scanAll(local, context.Background(), ListOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	// The root: open, reads, lookups of a and the namespace, the namespace's
-	// root and marker. a: root, open, reads, four lookups, the probe, and its
+	// The root: open, read, lookups of a and the namespace, the namespace's
+	// root and marker. a: root, open, read, four lookups, the probe, and its
 	// link as it is left.
 	operations, n := limiter.take()
 	marker := len(namespaceContents(namespace.Owner, namespace.ID))
-	if operations != 3+2+2+4+4+1+1 || n != 94+marker {
+	if operations != 2+2+2+3+4+1+1 || n != 94+marker {
 		t.Fatalf("scan charged %d operations and %d bytes", operations, n)
 	}
 }

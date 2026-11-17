@@ -779,8 +779,8 @@ Usage: oss-transfer-cli limit <subcommand> [arguments]
 
 bandwidth defaults to Mbps; other limits use requests/second and reject --unit.
 local-ops and local-bandwidth limit the node's access to local storage: local-ops counts files opened,
-created or looked up plus directories read per second; local-bandwidth is the data read from and written
-to local files (Mbps by default, or MB/s). Both are unlimited by default.
+created or looked up plus directory reads, one per 1,024 names, per second; local-bandwidth is the data
+read from and written to local files (Mbps by default, or MB/s). Both are unlimited by default.
 Values must be greater than zero; use unlimited to remove a limit.
 Select one node or --all. Use task bandwidth for an additional task limit.
 Adjustment details retain nextCursor, done, historyComplete and process restart information.
@@ -804,8 +804,8 @@ Adjustment details retain nextCursor, done, historyComplete and process restart 
 
 bandwidth の既定単位は Mbps、他の制限は回/秒で、--unit は使えません。
 local-ops と local-bandwidth はノードのローカルストレージへのアクセスを制限します。local-ops は 1 秒あたりに
-開く・作成する・照会するファイル数と読み取るディレクトリ数、local-bandwidth はローカルファイルの読み書き量
-（既定 Mbps、MB/s も可）です。どちらも既定では無制限です。
+ファイルを開く・作成する・照会する回数とディレクトリを読み取る回数（名前 1,024 件ごとに 1 回）、local-bandwidth
+はローカルファイルの読み書き量（既定 Mbps、MB/s も可）です。どちらも既定では無制限です。
 値は 0 より大きくしてください。解除には unlimited を使用します。
 対象ノードまたは --all を明示します。タスクの追加上限には task bandwidth を使用します。
 詳細には nextCursor、done、historyComplete、プロセスの再起動情報が保持されます。

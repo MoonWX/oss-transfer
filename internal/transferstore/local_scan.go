@@ -408,13 +408,26 @@ func (scan *localScan) load(frame *localScanFrame, early bool) error {
 	scan.activity.enter(frame.key, true, 0, 0)
 	var names []string
 	flushed := !early
+	// Each read is one local operation, charged before it is made, except
+	// the read after a short one: a read returns fewer names than it asks
+	// for only at the end of the listing, and the read after it just
+	// confirms that end. Should it return names after all, it is charged.
+	short := false
 	for {
-		if err := scan.operation(); err != nil {
-			return err
+		if !short {
+			if err := scan.operation(); err != nil {
+				return err
+			}
 		}
 		end := scan.activity.call()
 		batch, err := scan.fs.ReadNames(file, localScanNames)
 		end()
+		if short && len(batch) > 0 {
+			if err := scan.operation(); err != nil {
+				return err
+			}
+		}
+		short = len(batch) < localScanNames
 		names = append(names, batch...)
 		scan.activity.read(len(batch))
 		if err == io.EOF {

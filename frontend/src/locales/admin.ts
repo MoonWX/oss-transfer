@@ -8,10 +8,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "File operation limit (per second)",
     ja: "ファイル操作の上限（回/秒）",
   },
-  "限制该节点访问本地目录（包括挂载的 NAS）：文件操作按每秒打开、创建、查询的文件数和读取的目录数计算，带宽按读写本地文件的数据量计算。0 表示不限速，保存后立即应用，节点重启后仍生效。":
+  "限制该节点访问本地目录（包括挂载的 NAS）：文件操作按每秒打开、创建、查询文件和读取目录的次数计算，读取目录时每 1,024 个名称计一次；带宽按读写本地文件的数据量计算。0 表示不限速，保存后立即应用，节点重启后仍生效。":
     {
-      en: "Limits this node's access to local directories, mounted NAS included. File operations count the files opened, created or looked up and the directories read per second; bandwidth counts the data read from and written to local files. 0 means unlimited. The value applies immediately and survives a restart of the node.",
-      ja: "このノードのローカルディレクトリ（マウントした NAS を含む）へのアクセスを制限します。ファイル操作は 1 秒あたりに開く・作成する・照会するファイル数と読み取るディレクトリ数、帯域はローカルファイルの読み書き量で数えます。0 は無制限です。保存するとすぐに適用され、ノードを再起動しても維持されます。",
+      en: "Limits this node's access to local directories, mounted NAS included. File operations count the files opened, created or looked up and the directory reads per second, one read per 1,024 names; bandwidth counts the data read from and written to local files. 0 means unlimited. The value applies immediately and survives a restart of the node.",
+      ja: "このノードのローカルディレクトリ（マウントした NAS を含む）へのアクセスを制限します。ファイル操作は 1 秒あたりにファイルを開く・作成する・照会する回数とディレクトリを読み取る回数（名前 1,024 件ごとに 1 回）、帯域はローカルファイルの読み書き量で数えます。0 は無制限です。保存するとすぐに適用され、ノードを再起動しても維持されます。",
     },
   "从 Master 下载": {
     en: "From the Master",

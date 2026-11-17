@@ -88,14 +88,14 @@ func TestLocalAccessIsChargedToTheLocalLimits(t *testing.T) {
 	if operations, _ := limiter.take(); operations != 1 {
 		t.Fatalf("lookup charged %d operations", operations)
 	}
-	// The root: its open and two directory reads, the second one at the end of
-	// the names. dir: its lookup, its own root, its open and two reads.
-	// file.bin: its lookup. Then dir's link is checked as it is left, since
-	// the page holds a file found below it: 3 + 5 + 1 + 1.
+	// The root: its open and one directory read; the read that confirms the
+	// end of a short listing is free. dir: its lookup, its own root, its open
+	// and one read. file.bin: its lookup. Then dir's link is checked as it is
+	// left, since the page holds a file found below it: 2 + 4 + 1 + 1.
 	if err := local.ScanPages(ctx, ListOptions{Limit: 10}, func(Page) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if operations, _ := limiter.take(); operations != 10 {
+	if operations, _ := limiter.take(); operations != 8 {
 		t.Fatalf("scan charged %d operations", operations)
 	}
 }

@@ -102,7 +102,8 @@ const cliTaskHelp = `任务管理
   trash [--task-id ID] [--worker 节点] [--direction 方向] [--search 关键词]
 
 操作
-  stop <ID...>                    停止传输并保留进度
+  stop <ID...>                    停止扫描和传输；已完成的对象会保留，
+                                  正在传输的对象在任务继续后从头传输
   resume <ID...>                  继续已停止或失败的任务
   retry <ID...>                   重试未完成对象，保留已完成进度
                                   运行中的任务只重试已结束子任务的失败对象，不中断传输
@@ -425,7 +426,8 @@ const cliExceptionsHelp = `异常记录
   oss-transfer-cli exceptions export local --output local-report.zip
   oss-transfer-cli exceptions clear failed --all --yes
 
-complete/partial 表示节点返回是否完整；truncated 表示记录被数量上限截断。
+partial（complete 为 false）表示有执行节点离线，其未完成子任务的失败记录可能尚未上报；
+truncated 表示记录被数量上限截断。
 旧版服务可能限制每节点记录数，超过时显示 truncatedWorkers；更多记录用 ZIP 报告。
 报告仅可导出已结束或已停止任务，不能将下载成功视为迁移验收通过。
 `

@@ -71,6 +71,8 @@ import ListPagination, {
 } from "../components/ListPagination";
 import {
   canRetrySnapshot,
+  recoveryRunning,
+  runningRetryAllowed,
   useTaskRecovery,
   useVisibleRecoveryTasks,
   type RecoveryTaskSnapshot,
@@ -536,6 +538,9 @@ export default function ExceptionsPage() {
         )
       : [];
   const missingNodes = missingExceptionNodes(result, legacyNodes);
+  const missingNodeLabels = missingNodes
+    .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
+    .join("、");
   const visible = result?.items
     ? isLocal
       ? result.items
@@ -821,14 +826,19 @@ export default function ExceptionsPage() {
       setBusy(false);
     }
   }
+  // A pending request shows its own phase. Once the task runs in the accepted
+  // generation the request has taken effect, and the task's state decides.
   const retryPhase = (id: number) => {
-    const phase = recovery.states[id]?.phase;
-    if (phase) return phase;
+    const guard = recovery.states[id];
     const snapshot = visibleTasks.tasks[id];
+    if (guard && !recoveryRunning(guard, snapshot)) return guard.phase;
     if (snapshot === undefined) return "loading";
     if (snapshot === null) return "unavailable";
     if (snapshot.status === "COMPLETED") return "completed";
-    return canRetrySnapshot(snapshot) ? undefined : "accepted";
+    if (canRetrySnapshot(snapshot)) return undefined;
+    if (["RUNNING", "LIST_DONE"].includes(snapshot.status)) return "running";
+    if (snapshot.status === "STOPPING") return "stopping";
+    return "accepted";
   };
   const actionSnapshot =
     actionTaskId === undefined ? undefined : visibleTasks.tasks[actionTaskId];
@@ -843,13 +853,17 @@ export default function ExceptionsPage() {
           ? tr("检查状态…")
           : actionPhase === "unavailable"
             ? tr("状态暂不可用")
-            : actionPhase
-              ? tr("处理中…")
-              : actionSnapshot?.status === "STOPPED"
-                ? tr("继续传输")
-                : actionSnapshot?.status === "PARTIAL_FAILED"
-                  ? tr("重试失败项")
-                  : tr("重试任务");
+            : actionPhase === "running"
+              ? tr("暂无可重试的对象")
+              : actionPhase === "stopping"
+                ? tr("等待任务停止")
+                : actionPhase
+                  ? tr("处理中…")
+                  : actionSnapshot?.status === "STOPPED"
+                    ? tr("继续传输")
+                    : actionSnapshot?.status === "PARTIAL_FAILED"
+                      ? tr("重试失败项")
+                      : tr("重试任务");
   async function report() {
     setBusy(true);
     try {
@@ -1154,13 +1168,18 @@ export default function ExceptionsPage() {
         result?.complete === false ||
         missingNodes.length > 0) && (
         <Alert severity="warning">
-          {missingNodes.length > 0
-            ? tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
-                nodes: missingNodes
-                  .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
-                  .join("、"),
-              })
-            : tr("部分节点未返回数据，当前结果不完整。")}
+          {missingNodes.length === 0
+            ? tr("部分节点未返回数据，当前结果不完整。")
+            : hasMembershipSnapshot
+              ? // The Master reads its own failure index; it names only the
+                // offline nodes that still own unfinished subtasks.
+                tr(
+                  "执行节点 {nodes} 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。",
+                  { nodes: missingNodeLabels },
+                )
+              : tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
+                  nodes: missingNodeLabels,
+                })}
           {Object.entries(result?.workerErrors ?? {}).map(([node, message]) => (
             <Typography key={node} variant="body2">
               {nodeLabel(node, result?.nodeDisplays?.[node])}：{message}
@@ -1279,7 +1298,11 @@ export default function ExceptionsPage() {
             {actionSnapshot && <StatusChip status={actionSnapshot.status} />}
             {canRetryRunningFailures(
               actionSnapshot && { ...actionSnapshot, taskIndex: actionTaskId },
-            ) && !recovery.states[actionTaskId] ? (
+            ) &&
+            runningRetryAllowed(
+              recovery.states[actionTaskId],
+              actionSnapshot,
+            ) ? (
               <RunningFailureRetry
                 task={{ ...actionSnapshot!, taskIndex: actionTaskId }}
                 size="small"
@@ -1287,8 +1310,10 @@ export default function ExceptionsPage() {
                 onSubmitted={() => void load(true)}
                 onStale={(fresh) => {
                   visibleTasks.update(actionTaskId, fresh);
-                  // An ended task keeps the ordinary retry of a new generation.
-                  if (canRetrySnapshot(fresh)) void retry(actionTaskId, fresh);
+                  // An ended task keeps the ordinary retry of a new generation,
+                  // once an earlier recovery of it is no longer guarded.
+                  if (canRetrySnapshot(fresh) && !recovery.states[actionTaskId])
+                    void retry(actionTaskId, fresh);
                   else notify(tr("任务状态已更新，请查看任务详情。"), "info");
                 }}
               />
@@ -1299,7 +1324,9 @@ export default function ExceptionsPage() {
                 startIcon={
                   actionPhase === "completed" ? (
                     <CheckCircleOutlineRounded />
-                  ) : actionPhase && actionPhase !== "unavailable" ? (
+                  ) : actionPhase &&
+                    actionPhase !== "unavailable" &&
+                    actionPhase !== "running" ? (
                     <CircularProgress size={16} color="inherit" />
                   ) : actionSnapshot?.status === "STOPPED" ? (
                     <PlayArrowRounded />

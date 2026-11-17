@@ -187,7 +187,7 @@ func TestComparisonExportZipKeepsMoreThanTenThousandRows(t *testing.T) {
 		Source:      comparisonExportEndpoint{Connection: "qa", Bucket: "source", Prefix: "src/"},
 		Destination: comparisonExportEndpoint{Connection: "qa", Bucket: "target", Prefix: "dst/"},
 		Counts:      comparisonExportCounts{Compared: p.Compared, Matched: 5, Different: p.Different, ETagMismatch: p.ETagMismatch, Missing: p.Missing, Extra: p.Extra, Changed: p.Changed, Errors: p.Errors, BothMissing: p.BothMissing},
-		StoredRows:  10500, ExportedRows: 10500, StatusFilter: []string{}, Complete: true, IncompleteReasons: []string{},
+		StoredRows:  10500, ExportedRows: 10500, StatusFilter: []string{}, Complete: true, IncompleteReasons: []string{}, Warnings: []string{},
 		RetryStatuses: comparison.RetryStatuses, RetryKeys: 4496, RetryKeysOmitted: 4, RetryPrefixesMatch: false,
 		CSVEscaping: comparisonCSVEscaping, StartedAt: p.StartedAt, EndedAt: &ended,
 	}

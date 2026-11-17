@@ -72,7 +72,7 @@ import {
 } from "@mui/icons-material";
 import { api, ApiError, saveFile, useApi, useNotify } from "../lib/api";
 import { runTaskBatches, type BatchProgress } from "../lib/taskBatches";
-import { useTaskRecovery } from "../lib/taskRecovery";
+import { runningRetryAllowed, useTaskRecovery } from "../lib/taskRecovery";
 import {
   compareActiveSubtasks,
   compareAllSubtasks,
@@ -315,10 +315,31 @@ const recoveryVerb = (tasks: Task[]) => {
       ? "继续传输"
       : "重试";
 };
+// A stop keeps completed objects but discards the bytes of objects in
+// transfer: when the task continues, those objects start over. Running rows
+// with a live sample say how many objects that is and how much was sent.
+const inFlightAtStop = (tasks: Task[]) => {
+  let count = 0,
+    bytes = 0;
+  for (const task of tasks) {
+    if (!["RUNNING", "STOPPING"].includes(task.status)) continue;
+    if (
+      task.liveProgress !== "LIVE" ||
+      typeof task.inFlightObjectCount !== "number" ||
+      typeof task.inFlightObjectBytes !== "number"
+    )
+      return undefined;
+    count += task.inFlightObjectCount;
+    bytes += task.inFlightObjectBytes;
+  }
+  return { count, bytes };
+};
 const recoveryDescription = (tasks: Task[]) => {
   const label = recoveryLabel(tasks);
   if (label === "继续传输")
-    return tr("继续扫描和处理未完成的对象，保留已有传输进度。");
+    return tr(
+      "继续扫描和传输未完成的对象。已完成的对象不会重复传输，停止时正在传输的对象从头传输。",
+    );
   if (label === "恢复任务")
     return tr(
       "失败任务重试失败或未完成的对象；已停止任务继续扫描和传输。已完成的对象不重复传输。",
@@ -654,12 +675,14 @@ function TaskDetail({
   const offlineNodes =
     (attentionTask?.offlineNodes as
       { displayLabel?: string; lastSeen?: number }[] | undefined) || [];
-  const attentionCauses =
-    (
-      attentionTask?.failureSummary as
-        | { causes?: { code: string; count: number; message: string }[] }
-        | undefined
-    )?.causes || [];
+  const failureSummary = attentionTask?.failureSummary as
+    | {
+        causes?: { code: string; count: number; message: string }[];
+        // The causes were counted in the first records only (a sample).
+        truncated?: boolean;
+      }
+    | undefined;
+  const attentionCauses = failureSummary?.causes || [];
   const pageData = children.data;
   const childData =
     taskId != null &&
@@ -1032,13 +1055,14 @@ function TaskDetail({
                   {tr("停止任务")}
                 </Button>
               )}
-              {canRetryRunningFailures(current) && !recoveryState && (
-                <RunningFailureRetry
-                  task={current}
-                  disabled={busy}
-                  onSubmitted={onRefresh}
-                />
-              )}
+              {canRetryRunningFailures(current) &&
+                runningRetryAllowed(recoveryState, current) && (
+                  <RunningFailureRetry
+                    task={current}
+                    disabled={busy}
+                    onSubmitted={onRefresh}
+                  />
+                )}
               {canResumeTask(current) && (
                 <Button
                   variant="contained"
@@ -1168,10 +1192,16 @@ function TaskDetail({
                       variant="caption"
                       display="block"
                     >
-                      {tr("另有 {count} 个：{message}", {
-                        count: formatNumber(cause.count),
-                        message: cause.message,
-                      })}
+                      {failureSummary?.truncated
+                        ? // Counts of the sampled records, not of all objects.
+                          tr("{count} 条：{message}", {
+                            count: formatNumber(cause.count),
+                            message: cause.message,
+                          })
+                        : tr("另有 {count} 个：{message}", {
+                            count: formatNumber(cause.count),
+                            message: cause.message,
+                          })}
                     </Typography>
                   ))}
                   <Typography variant="caption" display="block">
@@ -1908,6 +1938,18 @@ export default function TasksPage({
     setSelected((s) =>
       s.includes(id) ? s.filter((i) => i !== id) : [...s, id],
     );
+  // The dialog stays open while rows refresh: count from their latest sample.
+  const stopInFlight =
+    operation === "停止"
+      ? inFlightAtStop(
+          confirmationTasks.map(
+            (task) =>
+              actionCandidates.find(
+                (latest) => latest.taskIndex === task.taskIndex,
+              ) ?? task,
+          ),
+        )
+      : undefined;
   async function execute() {
     if (!confirmationTasks.length || actionInFlight.current) return;
     const recovering = operation === "启动" || operation === "继续传输";
@@ -2954,11 +2996,28 @@ export default function TasksPage({
             {operation === "删除"
               ? tr("任务记录将移至回收站，不会删除源或目标存储中的对象。")
               : operation === "停止"
-                ? tr("停止扫描和传输，保留已完成的对象与进度。")
+                ? tr(
+                    "停止扫描和传输。已完成的对象会保留，正在传输的对象在任务继续后从头传输。",
+                  )
                 : operation === "继续传输"
                   ? recoveryDescription(confirmationTasks)
                   : tr("任务将开始传输，请确认来源和目标配置。")}
           </Typography>
+          {operation === "停止" && !!stopInFlight?.count && (
+            <Typography
+              variant="body2"
+              sx={{ mt: 2 }}
+              data-testid="stop-in-flight"
+            >
+              {tr(
+                "当前正在传输 {count} 个对象，已传输 {bytes}；任务继续后，这些对象需要从头重新传输。",
+                {
+                  count: formatNumber(stopInFlight.count),
+                  bytes: formatBytes(stopInFlight.bytes),
+                },
+              )}
+            </Typography>
+          )}
           <Typography variant="body2" sx={{ mt: 2 }}>
             {tr("任务：")}
             {confirmationTasks

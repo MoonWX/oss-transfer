@@ -1,7 +1,9 @@
 package master
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -116,20 +118,13 @@ func exceptionDTO(e task.Exception) map[string]any {
 	return result
 }
 
-// The index retains failed objects and their latest observed retry outcomes.
-// A disconnected Agent may have newer results, so cached evidence remains visible.
+// exceptionNodes is the node scope of a failure query: every registered
+// Agent, or every node of the filtered task. Records of other nodes, such as a
+// removed Agent, join the scope when they are read.
 func (s *Server) exceptionNodes(filter task.ExceptionFilter) (map[string]bool, error) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
 		return nil, err
-	}
-	online, err := s.onlineAgents()
-	if err != nil {
-		return nil, err
-	}
-	connected := map[string]bool{}
-	for _, member := range online {
-		connected[member.Address] = true
 	}
 	result := map[string]bool{}
 	if filter.ParentID > 0 {
@@ -140,7 +135,7 @@ func (s *Server) exceptionNodes(filter task.ExceptionFilter) (map[string]bool, e
 		if err == nil {
 			for _, node := range p.Spec.Nodes {
 				if filter.Node == "" || node.Address == filter.Node {
-					result[node.Address] = connected[node.Address]
+					result[node.Address] = true
 				}
 			}
 		}
@@ -148,27 +143,59 @@ func (s *Server) exceptionNodes(filter task.ExceptionFilter) (map[string]bool, e
 	}
 	for _, member := range members {
 		if filter.Node == "" || member.Address == filter.Node {
-			result[member.Address] = connected[member.Address]
+			result[member.Address] = true
 		}
 	}
 	if filter.Node != "" {
-		if _, found := result[filter.Node]; !found {
-			result[filter.Node] = false
-		}
+		result[filter.Node] = true
 	}
 	return result, nil
 }
-func exceptionNodeLists(nodes map[string]bool) (queried, failed []string) {
-	queried, failed = []string{}, []string{}
-	for node, online := range nodes {
-		queried = append(queried, node)
-		if !online {
-			failed = append(failed, node)
+
+// exceptionUnreported lists the offline nodes whose failures the Master may
+// not have observed yet, which makes a failure query incomplete. The Master
+// never asks Agents for failures: it reads its own index, written with each
+// observation. Only a node that owns unfinished children of an active task
+// can still report more, so idle and removed nodes, and every node of an
+// ended task, leave the result complete.
+func (s *Server) exceptionUnreported(ctx context.Context, filter task.ExceptionFilter) ([]string, error) {
+	nodes, err := s.tasks.repo.UnfinishedNodes(ctx, filter)
+	if err != nil || len(nodes) == 0 {
+		return []string{}, err
+	}
+	online, err := s.onlineAgents()
+	if err != nil {
+		return nil, err
+	}
+	enrolled := map[string]string{}
+	for _, member := range online {
+		enrolled[member.ID] = member.EnrollmentID
+	}
+	offline := map[string]bool{}
+	for _, node := range nodes {
+		if enrolled[node.ID] != node.EnrollmentID {
+			offline[node.Address] = true
 		}
 	}
-	sort.Strings(queried)
-	sort.Strings(failed)
-	return
+	return sortedExceptionNodes(offline), nil
+}
+
+// exceptionUnreportedWarning says why a failure query is incomplete.
+func exceptionUnreportedWarning(ctx context.Context, unreported []string, displays nodeDisplaySet) string {
+	labels := make([]string, 0, len(unreported))
+	for _, node := range unreported {
+		labels = append(labels, displays.lookup("", node).DisplayLabel)
+	}
+	return fmt.Sprintf(localizeContext(ctx, "Offline Agents with unfinished subtasks: %s. Failures of those subtasks may not be reported yet, so the result may be incomplete."), strings.Join(labels, localizeContext(ctx, "、")))
+}
+
+func sortedExceptionNodes(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
@@ -181,6 +208,16 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 		if err != nil {
 			fail(w, 500, "Cannot read exception nodes")
 			return
+		}
+		unreported := []string{}
+		if !fallback {
+			if unreported, err = s.exceptionUnreported(r.Context(), filter); err != nil {
+				fail(w, 500, "Cannot read exception nodes")
+				return
+			}
+		}
+		for _, node := range unreported {
+			nodes[node] = true
 		}
 		displays := s.nodeDisplaySnapshot()
 		groups := map[string]any{}
@@ -201,7 +238,7 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 				rows, found := groups[e.Node].([]map[string]any)
 				if !found {
 					rows = []map[string]any{}
-					nodes[e.Node] = false
+					nodes[e.Node] = true
 				}
 				counts[e.Node]++
 				if len(rows) < limit {
@@ -227,13 +264,16 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 			total += counts[node]
 			truncated = truncated || counts[node] > int64(limit)
 		}
-		queried, failed := exceptionNodeLists(nodes)
 		name := "failedKeys"
 		if fallback {
 			name = "fallbackObjects"
-			failed = []string{}
 		}
-		result := map[string]any{"success": true, name: groups, "totalCount": total, "clearableCount": clearable, "nodeDisplays": displays.byAddress, "queriedWorkers": queried, "failedWorkers": failed, "unreachableWorkers": failed, "complete": len(failed) == 0, "partial": len(failed) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
+		// failedWorkers and unreachableWorkers name the offline nodes that may
+		// still hold unreported failures; no node is queried for this list.
+		result := map[string]any{"success": true, name: groups, "totalCount": total, "clearableCount": clearable, "nodeDisplays": displays.byAddress, "queriedWorkers": sortedExceptionNodes(nodes), "failedWorkers": unreported, "unreachableWorkers": unreported, "complete": len(unreported) == 0, "partial": len(unreported) > 0, "truncated": truncated, "workerErrors": map[string]string{}}
+		if len(unreported) > 0 {
+			result["warning"] = exceptionUnreportedWarning(r.Context(), unreported, displays)
+		}
 		if fallback {
 			result["supported"] = false
 			result["message"] = localize(w, "The Go transfer engine does not use the legacy SDK fallback mechanism")
@@ -305,6 +345,14 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot read exception nodes")
 		return
 	}
+	unreported, err := s.exceptionUnreported(r.Context(), filter)
+	if err != nil {
+		fail(w, 500, "Cannot read exception nodes")
+		return
+	}
+	for _, node := range unreported {
+		nodes[node] = true
+	}
 	items := []map[string]any{}
 	total := 0
 	clearable := 0
@@ -316,9 +364,7 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		if !exceptionResolutionMatches(resolution, e) {
 			return nil
 		}
-		if _, found := nodes[e.Node]; !found {
-			nodes[e.Node] = false
-		}
+		nodes[e.Node] = true
 		if total >= offset && len(items) < limit {
 			row := exceptionDTO(e)
 			addExecutionNodeDisplay(row, displays.lookup("", e.Node))
@@ -334,8 +380,11 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Cannot read failure ledger")
 		return
 	}
-	queried, failed := exceptionNodeLists(nodes)
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "clearableCount": clearable, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}})
+	data := map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "clearableCount": clearable, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(unreported) > 0, "complete": len(unreported) == 0, "queriedWorkers": sortedExceptionNodes(nodes), "unreachableWorkers": unreported, "failedWorkers": unreported}
+	if len(unreported) > 0 {
+		data["warning"] = exceptionUnreportedWarning(r.Context(), unreported, displays)
+	}
+	writeJSON(w, 200, map[string]any{"success": true, "data": data})
 }
 
 func (s *Server) exceptionTasks(w http.ResponseWriter, r *http.Request) {

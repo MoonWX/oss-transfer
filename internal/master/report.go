@@ -444,13 +444,9 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 		// the Agent is offline or did not answer. An Agent that answered for one
 		// child (for example, refused that child's ledger) is still asked for the
 		// others, so one bad child cannot turn a whole node's results UNKNOWN.
+		// Only a node that holds a child of this task is a node issue: an
+		// offline or removed node without children leaves no result unread.
 		unreachable := map[string]string{}
-		for _, node := range p.Spec.Nodes {
-			if online[node.ID] != node.EnrollmentID {
-				coverage.NodeIssues[node.Address] = "execution Agent is unavailable in its recorded enrollment"
-				unreachable[node.Address] = coverage.NodeIssues[node.Address]
-			}
-		}
 		// resolvedDelta is what source pins add to the dispatched sizes: the
 		// whole size of an inventory key resolved after discovery (dispatched
 		// with size 0), and the size difference of a source refreshed on a

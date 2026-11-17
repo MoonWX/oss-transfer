@@ -65,6 +65,9 @@ func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.
 		}
 	}
 	row["transferredBytes"], row["inFlightBytes"], row["liveProgress"] = bytes, bytes-durable, "LIVE"
+	if child == nil {
+		addInFlightObjects(row, entry.progress.Children)
+	}
 	if p.ResumeTiming != nil {
 		return
 	}
@@ -72,6 +75,19 @@ func (s *Server) addLiveProgress(row map[string]any, p task.Parent, child *task.
 		row["averageSpeedBytesPerSecond"] = float64(bytes) / duration.Seconds()
 		row["averageSpeedIncludesInFlight"] = true
 	}
+}
+
+// addInFlightObjects adds the objects being transferred right now and the
+// bytes they have transferred so far, from the same samples as the live bytes.
+// A stop discards those bytes: when the task continues, these objects are
+// transferred again from the start. Completed objects keep their results.
+func addInFlightObjects(row map[string]any, children []task.ProgressChild) {
+	objects, bytes := 0, int64(0)
+	for _, child := range children {
+		objects += child.Progress.ActiveObjects
+		bytes += child.Progress.InFlightBytes
+	}
+	row["inFlightObjectCount"], row["inFlightObjectBytes"] = objects, bytes
 }
 
 // addProgressPercent computes the one percentage shown by the UI and CLI.

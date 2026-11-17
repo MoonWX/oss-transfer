@@ -370,8 +370,8 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	table.Flush()
 	fmt.Fprintln(out)
 	rows := objectList(data["items"])
-	if len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && getString(data, "status") == "COMPLETED" && getInt64(data, "rows") == 0 {
-		fmt.Fprintln(out, cliText(out, "未发现差异"))
+	if conclusion := comparisonConclusion(out, data); len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && conclusion != "" {
+		fmt.Fprintln(out, conclusion)
 	} else {
 		renderComparisonRows(out, rows)
 	}
@@ -385,6 +385,34 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	if data["resumable"] == true {
 		fmt.Fprintf(out, cliText(out, "可用 %s 从检查点之后继续\n"), safeCLIText(comparisonCommand("resume", id)))
 	}
+}
+
+// comparisonConclusion is what an empty first page of a comparison means, or
+// "" when it means only that the page is empty. Differences are what was
+// compared and did not match; stored rows can be fewer (or none) when the
+// node stopped saving them, and lag behind while it runs. A completed
+// comparison that checked nothing found no objects at all, which is not a
+// finding of no differences.
+func comparisonConclusion(out io.Writer, data map[string]interface{}) string {
+	compared, matched := getInt64(data, "compared"), getInt64(data, "matched")
+	differences := compared - matched
+	status := getString(data, "status")
+	switch {
+	case status == "RUNNING" || status == "CANCELING":
+		return ""
+	case differences > 0 && getInt64(data, "rows") == 0:
+		if data["rowsTruncated"] == true {
+			return cliTextf(out, "发现 %d 条差异，但节点未保存明细，原因见上方“截断原因”", differences)
+		}
+		return cliTextf(out, "发现 %d 条差异，但没有保存明细", differences)
+	case status != "COMPLETED":
+		return ""
+	case compared == 0 && getString(data, "scope") != "object":
+		return cliText(out, "没有找到任何对象，请检查两端的存储桶和前缀（Key 区分大小写，通常不以 / 开头）")
+	case compared > 0 && differences == 0:
+		return cliText(out, "未发现差异")
+	}
+	return ""
 }
 
 func renderComparisonRows(out io.Writer, rows []map[string]interface{}) {

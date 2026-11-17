@@ -335,7 +335,9 @@ type comparisonExportNode struct {
 	Name string `json:"name"`
 }
 
-// comparisonExportSummary is summary.json in an export ZIP.
+// comparisonExportSummary is summary.json in an export ZIP. Warnings qualify a
+// complete result: NO_OBJECTS_FOUND is a prefix comparison that found no
+// object on either side, so it compared nothing.
 type comparisonExportSummary struct {
 	ComparisonID       string                   `json:"comparisonId"`
 	Node               comparisonExportNode     `json:"node"`
@@ -350,6 +352,7 @@ type comparisonExportSummary struct {
 	StatusFilter       []string                 `json:"statusFilter"`
 	Complete           bool                     `json:"complete"`
 	IncompleteReasons  []string                 `json:"incompleteReasons"`
+	Warnings           []string                 `json:"warnings"`
 	TruncatedReason    string                   `json:"truncatedReason"`
 	LastStoredKey      string                   `json:"lastStoredKey"`
 	RetryStatuses      []string                 `json:"retryStatuses"`
@@ -455,6 +458,7 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		ExportedRows:       exported,
 		StatusFilter:       append([]string{}, statuses...),
 		IncompleteReasons:  []string{},
+		Warnings:           []string{},
 		TruncatedReason:    p.TruncatedReason,
 		LastStoredKey:      p.LastStoredKey,
 		RetryStatuses:      append([]string{}, comparison.RetryStatuses...),
@@ -488,6 +492,9 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 		summary.IncompleteReasons = append(summary.IncompleteReasons, "RETRY_KEYS_MISMATCH")
 	}
 	summary.Complete = len(summary.IncompleteReasons) == 0
+	if p.Status == comparison.StateCompleted && p.Scope != "object" && p.Compared == 0 {
+		summary.Warnings = append(summary.Warnings, "NO_OBJECTS_FOUND")
+	}
 	entry, err = create("summary.json")
 	if err != nil {
 		return err

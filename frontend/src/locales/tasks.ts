@@ -178,6 +178,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "{count} more: {message}",
     ja: "ほかに {count} 件: {message}",
   },
+  "{count} 条：{message}": {
+    en: "{count} records: {message}",
+    ja: "{count} 件: {message}",
+  },
   "可在“异常记录”中查看失败对象并重试。": {
     en: "Open Exceptions to see the failed objects and retry them.",
     ja: "「エラー記録」で失敗したオブジェクトを確認して再試行できます。",
@@ -232,6 +236,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "处理中…": {
     en: "Processing…",
     ja: "処理中…",
+  },
+  暂无可重试的对象: {
+    en: "Nothing to retry yet",
+    ja: "再試行できるオブジェクトはまだありません",
+  },
+  等待任务停止: {
+    en: "Waiting for the task to stop",
+    ja: "タスクの停止を待っています",
   },
   "任务状态已更新，请查看任务详情。": {
     en: "The task status has changed. Open the task for details.",
@@ -1717,14 +1729,20 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Task records will move to the recycle bin. Source and destination objects will not be deleted.",
     ja: "タスクの記録をゴミ箱に移動します。転送元・転送先のオブジェクトは削除されません。",
   },
-  "停止扫描和传输，保留已完成的对象与进度。": {
-    en: "Stop scanning and transfer. Completed objects and progress are kept.",
-    ja: "スキャンと転送を停止します。転送済みオブジェクトと進捗は保持されます。",
+  "停止扫描和传输。已完成的对象会保留，正在传输的对象在任务继续后从头传输。": {
+    en: "Stop scanning and transfer. Completed objects are kept; objects in transfer start over from the beginning when the task continues.",
+    ja: "スキャンと転送を停止します。完了したオブジェクトは保持されますが、転送中のオブジェクトはタスクの再開後に最初から転送し直します。",
   },
-  "继续扫描和处理未完成的对象，保留已有传输进度。": {
-    en: "Resume scanning and process unfinished objects, keeping existing progress.",
-    ja: "既存の進捗を保持してスキャンを再開し、未処理のオブジェクトを転送します。",
-  },
+  "当前正在传输 {count} 个对象，已传输 {bytes}；任务继续后，这些对象需要从头重新传输。":
+    {
+      en: "In transfer now: {count} objects, {bytes} sent so far. When the task continues, these objects are transferred again from the beginning.",
+      ja: "現在 {count} 個のオブジェクトを転送中で、{bytes} を転送済みです。タスクの再開後、これらのオブジェクトは最初から転送し直します。",
+    },
+  "继续扫描和传输未完成的对象。已完成的对象不会重复传输，停止时正在传输的对象从头传输。":
+    {
+      en: "Resume scanning and transfer unfinished objects. Completed objects are not transferred again; objects that were in transfer at the stop start over from the beginning.",
+      ja: "スキャンを再開し、未完了のオブジェクトを転送します。完了したオブジェクトは再転送しません。停止時に転送中だったオブジェクトは最初から転送し直します。",
+    },
   "任务将开始传输，请确认来源和目标配置。": {
     en: "Tasks will start transferring. Confirm the source and destination settings.",
     ja: "転送を開始します。転送元と転送先の設定を確認してください。",
@@ -2438,6 +2456,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Some agents did not return data. Results are incomplete. Unreachable agents: {nodes}",
     ja: "一部のノードからデータが返されませんでした。結果は不完全です。接続できないノード：{nodes}",
   },
+  "执行节点 {nodes} 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。":
+    {
+      en: "Offline agents with unfinished subtasks: {nodes}. Failures of those subtasks may not be reported yet, so these results may be incomplete.",
+      ja: "ノード {nodes} はオフラインです。未完了のサブタスクの失敗記録がまだ報告されていない可能性があり、結果は不完全な場合があります。",
+    },
   "记录清除后无法恢复。清除范围也包括本地迁移产生的失败对象。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。":
     {
       en: "Cleared records cannot be restored. This includes failed objects from local transfers. Only exception records are deleted; tasks are not retried. Export any records you need first.",
@@ -2761,6 +2784,16 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Access denied: the credentials lack permission for this operation. Check the bucket permissions.",
     ja: "アクセスが拒否されました。認証情報にこの操作の権限がありません。バケットの権限を確認してください。",
   },
+  "存储桶需要通过 Endpoint {endpoint} 访问，这通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该 Endpoint 创建存储连接。":
+    {
+      en: "The bucket must be accessed through endpoint {endpoint}, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that endpoint.",
+      ja: "このバケットにはエンドポイント {endpoint} でアクセスする必要があります。通常はバケットのあるリージョンのエンドポイントです。このバケットを転送するには、このエンドポイントでストレージ接続を作成してください。",
+    },
+  "存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该地域的 Endpoint 创建存储连接。":
+    {
+      en: "The bucket must be accessed through another endpoint, usually the endpoint of the region the bucket is in. To migrate this bucket, create a storage connection with that region's endpoint.",
+      ja: "このバケットには別のエンドポイント（通常はバケットのあるリージョンのエンドポイント）でアクセスする必要があります。このバケットを転送するには、そのリージョンのエンドポイントでストレージ接続を作成してください。",
+    },
   "存储桶不存在，请检查存储桶名称和 Endpoint。": {
     en: "The bucket does not exist. Check the bucket name and the endpoint.",
     ja: "バケットが存在しません。バケット名とエンドポイントを確認してください。",

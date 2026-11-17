@@ -97,6 +97,7 @@ var cliOutputMessages = map[string][2]string{
 	"Access Key 无效，请检查存储连接的凭据":                      {"The access key is invalid; check the storage connection's credentials", "アクセスキーが無効です。ストレージ接続の認証情報を確認してください"},
 	"签名不匹配，请检查 Secret Key 和签名方式":                    {"Signature mismatch; check the secret key and the signature version", "署名が一致しません。シークレットキーと署名方式を確認してください"},
 	"存储服务拒绝访问，请检查凭据对该存储桶的权限":                        {"Access denied; check the credentials' permissions on the bucket", "アクセスが拒否されました。認証情報のバケットへの権限を確認してください"},
+	"存储桶需要通过其所在地域的 Endpoint 访问，请用该 Endpoint 添加存储连接": {"The bucket must be accessed through the endpoint of its region; add a storage connection with that endpoint", "バケットにはそのリージョンのエンドポイントでアクセスする必要があります。そのエンドポイントでストレージ接続を追加してください"},
 	"存储桶不存在，请检查存储桶名称":                               {"The bucket does not exist; check its name", "バケットが存在しません。名前を確認してください"},
 	"源对象已不存在": {"The source object no longer exists", "転送元オブジェクトはすでに存在しません"},
 	"源对象在迁移期间发生变化，可重试失败对象": {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},

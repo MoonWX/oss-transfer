@@ -16,7 +16,8 @@ export type StorageErrorKind =
   | "no_such_bucket"
   | "invalid_access_key"
   | "signature_mismatch"
-  | "eof";
+  | "eof"
+  | "wrong_endpoint";
 
 const errorCodes: [string, StorageErrorKind][] = [
   ["InvalidAccessKeyId", "invalid_access_key"],
@@ -44,6 +45,15 @@ const transport: [RegExp, StorageErrorKind][] = [
   [/(?:^|: )EOF\s*$|: EOF\b|unexpected EOF/, "eof"],
 ];
 
+// S3 (PermanentRedirect) and Alibaba Cloud OSS (AccessDenied, EC
+// 0003-00001403) say this when a bucket must be reached through another
+// endpoint, usually the one of its region. OSS lists the buckets of every
+// region, so this is not a permission problem.
+const endpointMismatch = /must be addressed using the specified endpoint/i;
+// The endpoint the reply named, kept in the storage response diagnostic.
+const diagnosticEndpoint =
+  /\[storage response: [^\]]*\bendpoint=([A-Za-z0-9._-]+)/;
+
 // The SDK reports an error it models (NoSuchBucket) as "<code>: <message>"
 // after the response's request IDs, without the "api error" prefix.
 const modeledCode = /HostID: [^,]*, (\w+): /;
@@ -57,6 +67,7 @@ export function storageErrorKind(
   text: string | null | undefined,
 ): StorageErrorKind | undefined {
   if (!text) return undefined;
+  if (endpointMismatch.test(text)) return "wrong_endpoint";
   const modeled = modeledCode.exec(text)?.[1];
   for (const [code, kind] of errorCodes)
     if (
@@ -116,6 +127,17 @@ export function storageErrorSummary(
         "无法验证 {host} 的 TLS 证书，请使用执行节点信任的证书，或确认 Endpoint 是否应使用 http。",
         { host },
       );
+    case "wrong_endpoint": {
+      const endpoint = diagnosticEndpoint.exec(text)?.[1];
+      return endpoint
+        ? t(
+            "存储桶需要通过 Endpoint {endpoint} 访问，这通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该 Endpoint 创建存储连接。",
+            { endpoint },
+          )
+        : t(
+            "存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请使用该地域的 Endpoint 创建存储连接。",
+          );
+    }
     case "access_denied":
       return t("访问被拒绝：凭据没有执行此操作的权限，请检查存储桶权限。");
     case "no_such_bucket":

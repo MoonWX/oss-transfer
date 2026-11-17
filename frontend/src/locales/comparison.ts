@@ -183,6 +183,28 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
     en: "No differences found.",
     ja: "差分は見つかりませんでした。",
   },
+  "没有找到任何对象。请检查两端的存储桶和前缀：Key 区分大小写，通常不以 / 开头。":
+    {
+      en: "No object was found. Check the bucket and prefix on both sides: keys are case-sensitive and usually do not start with /.",
+      ja: "オブジェクトが見つかりませんでした。両側のバケットとプレフィックスを確認してください。Key は大文字と小文字を区別し、通常 / で始まりません。",
+    },
+  "比对未完成：已检查的 {count} 个对象中暂未发现差异。": {
+    en: "The comparison did not finish: no differences so far among the {count} objects checked.",
+    ja: "比較は完了していません。確認済みの {count} 個のオブジェクトには、これまで差分はありません。",
+  },
+  "比对未完成，尚未检查任何对象。": {
+    en: "The comparison did not finish and has checked no object.",
+    ja: "比較は完了しておらず、確認したオブジェクトはありません。",
+  },
+  未找到对象: { en: "No objects found", ja: "オブジェクトなし" },
+  "首尾有空白字符。Key 按原样匹配，空白也会参与匹配。": {
+    en: "Starts or ends with a space. Keys are matched exactly, spaces included.",
+    ja: "先頭または末尾に空白があります。Key はそのまま照合され、空白も照合の対象です。",
+  },
+  "以 / 开头。对象 Key 通常不以 / 开头。": {
+    en: "Starts with /. Object keys usually do not start with /.",
+    ja: "/ で始まっています。オブジェクトの Key は通常 / で始まりません。",
+  },
   "内容 SHA-256（流式）": {
     en: "Content SHA-256 (streaming)",
     ja: "内容 SHA-256（ストリーム）",

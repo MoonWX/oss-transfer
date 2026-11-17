@@ -10,6 +10,8 @@ var cliMessages = map[string][2]string{
 	"连接 %s 超时，请检查执行节点到 Endpoint 的网络和防火墙。":                                                                               {"The connection to %s timed out. Check the network and firewall between the execution node and the endpoint.", "%s への接続がタイムアウトしました。実行ノードとエンドポイントの間のネットワークとファイアウォールを確認してください。"},
 	"无法验证 %s 的 TLS 证书，请使用执行节点信任的证书，或确认 Endpoint 是否应使用 http。":                                                            {"The TLS certificate of %s cannot be verified. Use a certificate the execution node trusts, or check whether the endpoint should use http.", "%s の TLS 証明書を検証できません。実行ノードが信頼する証明書を使用するか、エンドポイントで http を使うべきか確認してください。"},
 	"访问被拒绝：凭据没有执行此操作的权限，请检查存储桶权限。":                                                                                      {"Access denied: the credentials lack permission for this operation. Check the bucket permissions.", "アクセスが拒否されました。認証情報にこの操作の権限がありません。バケットの権限を確認してください。"},
+	"存储桶需要通过 Endpoint %s 访问，这通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请用该 Endpoint 添加存储连接（storage add）。":                          {"The bucket must be accessed through endpoint %s, usually the endpoint of the region the bucket is in. To migrate this bucket, add a storage connection with that endpoint (storage add).", "このバケットにはエンドポイント %s でアクセスする必要があります。通常はバケットのあるリージョンのエンドポイントです。このバケットを転送するには、このエンドポイントでストレージ接続を追加してください（storage add）。"},
+	"存储桶需要通过另一个 Endpoint 访问，通常是该存储桶所在地域的 Endpoint。如需迁移此存储桶，请用该地域的 Endpoint 添加存储连接（storage add）。":                        {"The bucket must be accessed through another endpoint, usually the endpoint of the region the bucket is in. To migrate this bucket, add a storage connection with that region's endpoint (storage add).", "このバケットには別のエンドポイント（通常はバケットのあるリージョンのエンドポイント）でアクセスする必要があります。このバケットを転送するには、そのリージョンのエンドポイントでストレージ接続を追加してください（storage add）。"},
 	"存储桶不存在，请检查存储桶名称和 Endpoint。":                                                                                        {"The bucket does not exist. Check the bucket name and the endpoint.", "バケットが存在しません。バケット名とエンドポイントを確認してください。"},
 	"Access Key 不存在，请检查存储连接的 Access Key。":                                                                               {"The Access Key does not exist. Check the storage connection's Access Key.", "Access Key が存在しません。ストレージ接続の Access Key を確認してください。"},
 	"签名不匹配，请检查存储连接的 Secret Key 和签名版本。":                                                                                  {"Signature mismatch. Check the storage connection's Secret Key and signature version.", "署名が一致しません。ストレージ接続の Secret Key と署名バージョンを確認してください。"},
@@ -772,6 +774,11 @@ var cliMessages = map[string][2]string{
 	"已结束": {"Finished", "終了"},
 	// A finished comparison without differences.
 	"未发现差异": {"No differences found", "差分は見つかりませんでした"},
+	// A finished comparison that checked nothing, and differences counted
+	// without stored rows.
+	"没有找到任何对象，请检查两端的存储桶和前缀（Key 区分大小写，通常不以 / 开头）": {"No object was found. Check the bucket and prefix on both sides (keys are case-sensitive and usually do not start with /)", "オブジェクトが見つかりませんでした。両側のバケットとプレフィックスを確認してください（Key は大文字と小文字を区別し、通常 / で始まりません）"},
+	"发现 %d 条差异，但节点未保存明细，原因见上方“截断原因”":             {"Found %d differences, but the node did not store their details; see the truncation reason above", "%d 件の差分が見つかりましたが、ノードは詳細を保存していません。理由は上の「保存停止の理由」を参照してください"},
+	"发现 %d 条差异，但没有保存明细":                          {"Found %d differences, but their details were not stored", "%d 件の差分が見つかりましたが、詳細は保存されていません"},
 
 	// Retrying the failed objects of a running task.
 	"重试方式":  {"Retry mode", "再試行方式"},

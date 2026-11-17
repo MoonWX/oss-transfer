@@ -23,6 +23,8 @@ export type RunningRetryTask = {
   status: string;
   generation?: number;
   failedObjectCount?: number;
+  // Child tasks of the current run that ended with failed objects.
+  failedChildCount?: number;
   legacyHistorical?: boolean;
   migrationRecoveryRequired?: boolean;
 };
@@ -72,7 +74,11 @@ export function canRetryRunningFailures(
     !task.legacyHistorical &&
     !task.migrationRecoveryRequired &&
     Number.isSafeInteger(task.generation) &&
-    Number(task.generation) > 0
+    Number(task.generation) > 0 &&
+    // Right after a retry or resume, failedObjectCount still includes the
+    // previous run's failures. Only child tasks of this run that ended with
+    // failures can be retried in place (older Masters do not say).
+    (task.failedChildCount == null || Number(task.failedChildCount) > 0)
   );
 }
 

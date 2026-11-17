@@ -23,6 +23,9 @@ var failureCauses = []struct {
 	{"READ_ONLY", "目标文件系统为只读", []string{"read-only file system"}},
 	{"LOCAL_PERMISSION_DENIED", "执行节点没有本地目录的读写权限", []string{"permission denied", "access is denied"}},
 	{"INVALID_CREDENTIALS", "存储访问密钥无效，请检查连接配置", []string{"InvalidAccessKeyId", "SignatureDoesNotMatch"}},
+	// OSS refuses a bucket of another region with AccessDenied: the reply
+	// names the endpoint to use, and the credentials are not the problem.
+	{"WRONG_ENDPOINT", "存储桶需要通过其所在地域的 Endpoint 访问，请使用该 Endpoint 创建存储连接", []string{"must be addressed using the specified endpoint"}},
 	{"ACCESS_DENIED", "存储拒绝访问，请检查凭据和存储桶权限", []string{"AccessDenied", "StatusCode: 403"}},
 	{"NO_SUCH_BUCKET", "存储桶不存在", []string{"NoSuchBucket"}},
 	{"HOST_NOT_FOUND", "无法解析存储地址，请检查 Endpoint 或改用路径风格访问", []string{"no such host"}},
@@ -185,12 +188,20 @@ func (s *Server) failureSummary(ctx context.Context, p task.Parent) map[string]a
 		causes = append(causes, map[string]any{"code": g.code, "count": g.count, "message": message, "sample": g.sample})
 	}
 	allFailed := task.Ended(p.Status) && p.Counters.Succeeded+p.Counters.Skipped == 0
+	truncated := errors.Is(err, errSummaryFull)
 	main := causes[0]["message"].(string)
 	var message string
-	if allFailed {
+	switch {
+	// A truncated summary counts only the records it read, which belong to
+	// the lowest-numbered child tasks: say so, and count records, not objects.
+	case truncated && allFailed:
+		message = fmt.Sprintf(localizeContext(ctx, "全部 %d 个对象失败。按编号最小的子任务中的 %d 条失败记录统计，最多的原因（%d 条）：%s"), p.Counters.Failed, scanned, causes[0]["count"], main)
+	case truncated:
+		message = fmt.Sprintf(localizeContext(ctx, "%d 个对象失败。按编号最小的子任务中的 %d 条失败记录统计，最多的原因（%d 条）：%s"), p.Counters.Failed, scanned, causes[0]["count"], main)
+	case allFailed:
 		message = fmt.Sprintf(localizeContext(ctx, "全部 %d 个对象失败：%s"), p.Counters.Failed, main)
-	} else {
+	default:
 		message = fmt.Sprintf(localizeContext(ctx, "%d 个对象失败，主要原因：%s"), p.Counters.Failed, main)
 	}
-	return map[string]any{"failed": p.Counters.Failed, "allFailed": allFailed, "causes": causes, "sampled": scanned, "truncated": errors.Is(err, errSummaryFull), "message": message}
+	return map[string]any{"failed": p.Counters.Failed, "allFailed": allFailed, "causes": causes, "sampled": scanned, "truncated": truncated, "message": message}
 }

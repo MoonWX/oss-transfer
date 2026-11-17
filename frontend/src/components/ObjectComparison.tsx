@@ -224,12 +224,24 @@ const stateColors: Record<
   FAILED: "error",
   COMPLETED: "success",
 };
-function StateChip({ status }: { status?: string }) {
+// A completed prefix comparison that found no object compared nothing: it is
+// not a finding that the objects match.
+const foundNothing = (progress: Progress) =>
+  progress.status === "COMPLETED" &&
+  progress.scope !== "object" &&
+  progress.compared === 0;
+function StateChip({
+  status,
+  empty = false,
+}: {
+  status?: string;
+  empty?: boolean;
+}) {
   return (
     <Chip
-      label={stateLabel(status)}
+      label={empty ? t("未找到对象") : stateLabel(status)}
       size="small"
-      color={stateColors[status || ""] || "default"}
+      color={empty ? "warning" : stateColors[status || ""] || "default"}
       variant="outlined"
       sx={{ fontWeight: 500, fontSize: 12, height: 26 }}
     />
@@ -617,6 +629,14 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
       setSubmitting(false);
     }
   }
+  // Keys are compared exactly: a stray space or a leading slash usually
+  // matches no object, and the comparison then checks nothing.
+  const keyHint = (value: string) =>
+    value !== value.trim()
+      ? t("首尾有空白字符。Key 按原样匹配，空白也会参与匹配。")
+      : value.startsWith("/")
+        ? t("以 / 开头。对象 Key 通常不以 / 开头。")
+        : undefined;
   const field = (
     key: "sourceBucket" | "destBucket" | "sourcePrefix" | "destPrefix",
     label: string,
@@ -628,6 +648,12 @@ function ComparisonForm({ onStarted }: { onStarted: (id: string) => void }) {
       value={form[key]}
       required={required}
       disabled={submitting}
+      helperText={
+        key === "sourcePrefix" || key === "destPrefix"
+          ? keyHint(form[key])
+          : undefined
+      }
+      slotProps={{ formHelperText: { sx: { color: "warning.main" } } }}
       onChange={(e) =>
         setForm((previous) => ({ ...previous, [key]: e.target.value }))
       }
@@ -866,7 +892,10 @@ function ComparisonHistory({
                           sx={{ cursor: "pointer" }}
                         >
                           <TableCell>
-                            <StateChip status={item.status} />
+                            <StateChip
+                              status={item.status}
+                              empty={foundNothing(item)}
+                            />
                           </TableCell>
                           <TableCell
                             sx={{
@@ -948,7 +977,10 @@ function ComparisonHistory({
                         gap={1}
                         sx={{ mb: 0.75 }}
                       >
-                        <StateChip status={item.status} />
+                        <StateChip
+                          status={item.status}
+                          empty={foundNothing(item)}
+                        />
                         <Typography variant="caption" color="text.secondary">
                           {modeLabel(item.mode)}
                         </Typography>
@@ -1551,17 +1583,33 @@ function ComparisonResult({
                   })}
                 </Alert>
               )}
-              {current && shownRows.length === 0 && !stalledHere && (
-                <Typography variant="body2" color="text.secondary">
-                  {filter
-                    ? t("没有符合条件的差异。")
-                    : differences(progress) > 0
-                      ? t("暂无已保存的差异明细。")
-                      : active
-                        ? t("暂未发现差异。")
-                        : t("未发现差异。")}
-                </Typography>
-              )}
+              {current &&
+                shownRows.length === 0 &&
+                !stalledHere &&
+                (!filter && !active && foundNothing(progress) ? (
+                  <Alert severity="warning" data-testid="comparison-empty">
+                    {t(
+                      "没有找到任何对象。请检查两端的存储桶和前缀：Key 区分大小写，通常不以 / 开头。",
+                    )}
+                  </Alert>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    {filter
+                      ? t("没有符合条件的差异。")
+                      : differences(progress) > 0
+                        ? t("暂无已保存的差异明细。")
+                        : active
+                          ? t("暂未发现差异。")
+                          : progress.status === "COMPLETED"
+                            ? t("未发现差异。")
+                            : progress.compared
+                              ? t(
+                                  "比对未完成：已检查的 {count} 个对象中暂未发现差异。",
+                                  { count: formatNumber(progress.compared) },
+                                )
+                              : t("比对未完成，尚未检查任何对象。")}
+                  </Typography>
+                ))}
               {shownRows.length > 0 && !stalledHere && (
                 <Box
                   sx={{

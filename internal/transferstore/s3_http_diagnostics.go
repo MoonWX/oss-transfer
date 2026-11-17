@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptrace"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -78,15 +79,16 @@ func (c *s3DiagnosticClient) Do(request *http.Request) (*http.Response, error) {
 	if strings.EqualFold(request.Header.Get("Expect"), "100-continue") {
 		fields = append(fields, "expect=100-continue")
 	}
-	response.Body = &s3ErrorBody{ReadCloser: response.Body, fields: fields}
+	response.Body = &s3ErrorBody{ReadCloser: response.Body, fields: fields, credentials: c.credentials}
 	return response, nil
 }
 
 type s3ErrorBody struct {
 	io.ReadCloser
-	mu     sync.Mutex
-	prefix []byte
-	fields []string
+	mu          sync.Mutex
+	prefix      []byte
+	fields      []string
+	credentials []string
 }
 
 func (b *s3ErrorBody) Read(p []byte) (int, error) {
@@ -104,8 +106,19 @@ func (b *s3ErrorBody) Read(p []byte) (int, error) {
 func (b *s3ErrorBody) diagnostic() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return strings.Join(b.fields, ", ") + ", body=" + s3ErrorBodyKind(b.prefix)
+	diagnostic := strings.Join(b.fields, ", ") + ", body=" + s3ErrorBodyKind(b.prefix)
+	// A bucket that must be addressed through another endpoint (S3
+	// PermanentRedirect, OSS EC 0003-00001403) names that endpoint. Only a
+	// host-like token is kept, never other response text.
+	if match := s3ErrorEndpoint.FindSubmatch(b.prefix); match != nil {
+		if endpoint := diagnosticToken(string(match[1]), 255, b.credentials); endpoint != "" && !strings.ContainsAny(endpoint, "/+=") {
+			diagnostic += ", endpoint=" + endpoint
+		}
+	}
+	return diagnostic
 }
+
+var s3ErrorEndpoint = regexp.MustCompile(`<Endpoint>\s*([^<\s]{1,255})\s*</Endpoint>`)
 
 // Never copy arbitrary response text. Gateways can echo request URLs, tokens,
 // credentials or object contents in their error pages.

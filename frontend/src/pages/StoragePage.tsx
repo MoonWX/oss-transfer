@@ -153,6 +153,39 @@ function StorageFailureAlert({
     </Alert>
   );
 }
+// The provider's own text under a non-blocking warning, on request: the
+// warning is a summary, and only the raw text has every detail the
+// provider gave (an endpoint to use, a request ID).
+function RawWarningDetail({ detail }: { detail?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!detail) return null;
+  return (
+    <Box sx={{ mt: 0.5 }}>
+      <Button
+        size="small"
+        color="inherit"
+        onClick={() => setOpen((value) => !value)}
+        sx={{ px: 0, minWidth: 0 }}
+      >
+        {open ? t("隐藏原始错误") : t("显示原始错误")}
+      </Button>
+      <Collapse in={open}>
+        <Typography
+          variant="caption"
+          component="div"
+          data-testid="storage-warning-detail"
+          sx={{
+            fontFamily: "monospace",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {detail}
+        </Typography>
+      </Collapse>
+    </Box>
+  );
+}
 const optionValue = (value: boolean | null | undefined) =>
   value == null ? "inherit" : String(value);
 const parseOption = (value: string) =>
@@ -187,6 +220,7 @@ export default function StoragePage() {
     bucketCheckFailed?: string;
     bucketCheckSupported?: boolean;
     warning?: string;
+    warningDetail?: string;
   } | null>(null);
   const [bucketOpen, setBucketOpen] = useState(false);
   const bucketRequest = useRef(0);
@@ -318,6 +352,7 @@ export default function StoragePage() {
         bucketCheckFailed?: string;
         bucketCheckSupported?: boolean;
         warning?: string;
+        warningDetail?: string;
       }>(
         `/api/master/s3-config/${encodeURIComponent(alias)}/buckets` +
           (bucket ? `?bucket=${encodeURIComponent(bucket)}` : ""),
@@ -333,6 +368,7 @@ export default function StoragePage() {
           bucketCheckFailed: response.bucketCheckFailed,
           bucketCheckSupported: response.bucketCheckSupported,
           warning: response.warning,
+          warningDetail: response.warningDetail,
         });
     } catch (e) {
       if (request === bucketRequest.current)
@@ -393,9 +429,12 @@ export default function StoragePage() {
           </AlertTitle>
           {result.message}
           {result.warning && (
-            <Typography variant="body2" sx={{ mt: 0.5 }}>
-              {result.warning}
-            </Typography>
+            <>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                {result.warning}
+              </Typography>
+              <RawWarningDetail detail={result.warningDetail} />
+            </>
           )}
           {result.details && result.details.length > 0 && (
             <Box component="ul" sx={{ mb: 0, pl: 2 }}>
@@ -849,13 +888,16 @@ export default function StoragePage() {
                 })}
               </Alert>
               {bucketState.warning && (
-                <Typography
-                  variant="body2"
-                  color="warning.main"
-                  data-testid="storage-check-warning"
-                >
-                  {bucketState.warning}
-                </Typography>
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="warning.main"
+                    data-testid="storage-check-warning"
+                  >
+                    {bucketState.warning}
+                  </Typography>
+                  <RawWarningDetail detail={bucketState.warningDetail} />
+                </Box>
               )}
               <Typography
                 variant="body2"

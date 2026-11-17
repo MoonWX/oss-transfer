@@ -209,9 +209,15 @@ func TestStorageCheckWarnsForBucketScopedKeys(t *testing.T) {
 		!strings.HasPrefix(fmt.Sprint(body["warning"]), "该凭据无权列举存储桶（ListBuckets 被拒绝）") || strings.Contains(fmt.Sprint(body["warningDetail"]), "secret-fixture-key") {
 		t.Fatalf("bucket-scoped save: HTTP %d %v %v", code, body, err)
 	}
-	// Naming the bucket checks it instead; nothing is left to warn about.
+	// The bucket list is empty because it was refused, and the reply says so.
+	code, body = request(t, f.http.Client(), "GET", url+"/selfhosted/buckets", f.admin, nil)
+	if code != 200 || body["listBucketsDenied"] != true || fmt.Sprint(body["buckets"]) != "[]" || body["warning"] == nil {
+		t.Fatalf("bucket-scoped listing: HTTP %d %v", code, body)
+	}
+	// Naming the bucket checks it instead; nothing is left to warn about,
+	// but the listing was still refused.
 	code, body = request(t, f.http.Client(), "GET", url+"/selfhosted/buckets?bucket=src", f.admin, nil)
-	if code != 200 || body["checkedBucket"] != "src" || body["warning"] != nil {
+	if code != 200 || body["checkedBucket"] != "src" || body["warning"] != nil || body["listBucketsDenied"] != true {
 		t.Fatalf("bucket-scoped test: HTTP %d %v", code, body)
 	}
 	code, body = request(t, f.http.Client(), "GET", url+"/selfhosted/buckets?bucket=a/b", f.admin, nil)

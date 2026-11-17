@@ -441,6 +441,12 @@ func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil}
+			if outcome.check.ListError != "" {
+				// ListBuckets was denied (any other listing failure fails
+				// the check): the bucket list is empty because it was
+				// refused, not because there are no buckets.
+				result["listBucketsDenied"] = true
+			}
 			// checkedBucket names a bucket whose check passed; a bucket whose
 			// check failed without blocking is named by bucketCheckFailed,
 			// and the warning says why.

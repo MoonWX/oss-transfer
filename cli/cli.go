@@ -838,7 +838,12 @@ func storageAddressingLabel(out io.Writer, config map[string]interface{}) string
 
 // renderStorageCheck prints a connection test or bucket listing.
 func renderStorageCheck(out io.Writer, result, data map[string]interface{}, buckets []interface{}) {
-	fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	if data["listBucketsDenied"] == true && len(buckets) == 0 {
+		// The listing was refused; "0 buckets" would read as an empty account.
+		fmt.Fprintln(out, cliText(out, "存储桶：无权列举（ListBuckets 被拒绝）"))
+	} else {
+		fmt.Fprint(out, cliTextf(out, "存储桶（%d 个）\n", len(buckets)))
+	}
 	for _, bucket := range buckets {
 		fmt.Fprintf(out, "  %s\n", safeCLIText(bucket))
 	}

@@ -927,6 +927,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Listing accessible buckets…",
     ja: "アクセス可能なバケットを取得中…",
   },
+  "该凭据无权列举存储桶，未获取存储桶列表。": {
+    en: "These credentials may not list buckets, so no bucket list was obtained.",
+    ja: "この認証情報にはバケットを一覧する権限がないため、バケット一覧は取得されていません。",
+  },
   "已获取 {count} 个存储桶。": {
     en: "Found {count} buckets.",
     ja: "{count} 個のバケットを取得しました。",

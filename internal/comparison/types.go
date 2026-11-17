@@ -158,6 +158,11 @@ type Progress struct {
 	UpdatedAt       time.Time `json:"updatedAt"`
 	EndedAt         time.Time `json:"endedAt,omitzero"`
 	ExpiresAt       time.Time `json:"expiresAt,omitzero"`
+	// ProgressAt is when the running comparison last counted an object or
+	// read content, or when it started or resumed. UpdatedAt advances every
+	// second while it runs, so UpdatedAt - ProgressAt is how long it has made
+	// no progress by the node's clock. Older Agents do not report it.
+	ProgressAt time.Time `json:"progressAt,omitzero"`
 	// Error is a fixed English sentence; the Master localizes it.
 	Error string `json:"error,omitempty"`
 	// ErrorDetail is the specific, credential-free cause of a failure.

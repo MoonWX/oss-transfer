@@ -301,7 +301,7 @@ func TestCheckpointDoneMatchesCommitBatches(t *testing.T) {
 			t.Fatal(err)
 		}
 		keys := []string{"current", "earlier", "seeded", "foreign-seed", "new"}
-		answers, err := scanner.committedThisPass(attempt)(keys)
+		answers, err := scanner.committedThisPass(attempt, &queuedKeys{})(keys)
 		if err != nil {
 			t.Fatal(err)
 		}

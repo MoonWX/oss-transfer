@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -103,7 +104,7 @@ func TestScanRepliesCarryTheScanProtocolAndActivity(t *testing.T) {
 		}
 		fields := call(operation, request)
 		var activity transferstore.ScanActivitySnapshot
-		if string(fields["releaseProtocol"]) != "1" || string(fields["scanProtocol"]) != "1" || json.Unmarshal(fields["activity"], &activity) != nil ||
+		if string(fields["releaseProtocol"]) != "1" || string(fields["scanProtocol"]) != strconv.Itoa(discovery.ScanProtocol) || json.Unmarshal(fields["activity"], &activity) != nil ||
 			activity.Mode != transferstore.ScanModeSorted || activity.NamesRead != 3 || activity.Examined != 3 || string(fields["status"]) != `"SCANNING"` {
 			t.Fatalf("%s reply while scanning: %s", operation, fields)
 		}
@@ -112,7 +113,7 @@ func TestScanRepliesCarryTheScanProtocolAndActivity(t *testing.T) {
 	for {
 		fields := call("scan_status", status)
 		if string(fields["status"]) == `"COMPLETED"` {
-			if _, found := fields["activity"]; found || string(fields["scanProtocol"]) != "1" || string(fields["releaseProtocol"]) != "1" {
+			if _, found := fields["activity"]; found || string(fields["scanProtocol"]) != strconv.Itoa(discovery.ScanProtocol) || string(fields["releaseProtocol"]) != "1" {
 				t.Fatalf("reply after the scan: %s", fields)
 			}
 			break

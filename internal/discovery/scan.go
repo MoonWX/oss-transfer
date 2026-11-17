@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/execution"
@@ -29,6 +30,42 @@ type pendingBatch struct {
 	// only an Agent with ListOptions.Done resumes it without failing on a
 	// changed file or replaying the whole directory.
 	streamed bool
+}
+
+// queuedKeys are the keys a scan has handed to its committer and that are
+// not committed yet. Done reports them too, so a name a long listing
+// repeats is not looked up and emitted a second time.
+type queuedKeys struct {
+	mu   sync.Mutex
+	keys map[string]int
+}
+
+func (q *queuedKeys) add(key string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.keys == nil {
+		q.keys = map[string]int{}
+	}
+	q.keys[key]++
+}
+
+// committed forgets the keys of batches that are now durable.
+func (q *queuedKeys) committed(batches []pendingBatch) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, batch := range batches {
+		for _, object := range batch.objects {
+			if q.keys[object.Key]--; q.keys[object.Key] <= 0 {
+				delete(q.keys, object.Key)
+			}
+		}
+	}
+}
+
+func (q *queuedKeys) has(key string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.keys[key] > 0
 }
 
 func scanIdentity(attempt State) string {
@@ -203,8 +240,9 @@ func (s *Scanner) commitBatches(ctx context.Context, attempt State, pending []pe
 // In a takeover from the Master's checkpoint, the rows seeded from Master's
 // manifest are counted as seen already and are done as well. Rows of an
 // earlier pass, or seeded by a takeover without a checkpoint, are not: they
-// are looked up again, counted as seen and stamped with this pass.
-func (s *Scanner) committedThisPass(attempt State) func([]string) ([]bool, error) {
+// are looked up again, counted as seen and stamped with this pass. Keys
+// queued for commit are done too: commitBatches would skip them as well.
+func (s *Scanner) committedThisPass(attempt State, queued *queuedKeys) func([]string) ([]bool, error) {
 	pass, seeded := scanIdentity(attempt), ""
 	if attempt.Takeover != nil && attempt.Takeover.Checkpoint != nil {
 		seeded = seedAttempt(attempt.Epoch)
@@ -213,6 +251,10 @@ func (s *Scanner) committedThisPass(attempt State) func([]string) ([]bool, error
 		answers := make([]bool, len(keys))
 		err := s.store.View(func(tx *state.Tx) error {
 			for i, key := range keys {
+				if queued.has(key) {
+					answers[i] = true
+					continue
+				}
 				prior, found, err := getDiscoveredObject(tx, attempt.Spec.ParentID, key)
 				if err != nil {
 					return err
@@ -263,9 +305,15 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 	missing := map[string]bool{}
 	pending := make([]transferstore.Object, 0, s.options.MaxBatchObjects)
 	var bytes int64
-	committer := newScanCommitter(ctx, cancel, func(batches []pendingBatch) error {
-		return s.commitBatches(ctx, attempt, batches)
-	})
+	queued := &queuedKeys{}
+	commitQueued := func(batches []pendingBatch) error {
+		if err := s.commitBatches(ctx, attempt, batches); err != nil {
+			return err
+		}
+		queued.committed(batches)
+		return nil
+	}
+	committer := newScanCommitter(ctx, cancel, commitQueued)
 	// The committer pushes back on the source while the disk is behind; the
 	// activity shows that wait as saving scan results.
 	commit := func(batch pendingBatch) error {
@@ -331,6 +379,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 		}
 		missing[object.Key] = absent
 		pending = append(pending, copyObject(object))
+		queued.add(object.Key)
 		bytes += object.Size
 		if len(pending) >= s.options.MaxBatchObjects || bytes >= s.options.MaxBatchBytes {
 			return flush()
@@ -371,7 +420,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 		// replayed page neither repeats that work nor fails on such a file
 		// having changed since.
 		options := transferstore.ListOptions{Prefix: attempt.Spec.Prefix, StartAfter: attempt.Spec.StartKey, Cursor: attempt.Checkpoint.Cursor,
-			Done: s.committedThisPass(attempt), Activity: activity}
+			Done: s.committedThisPass(attempt, queued), Activity: activity}
 		err = pageSource.ScanPages(ctx, options, func(page transferstore.Page) error {
 			for _, object := range page.Objects {
 				if err := emit(object); err != nil {
@@ -393,9 +442,7 @@ func (s *Scanner) scan(ctx context.Context, attempt State, activity *transfersto
 		// re-HEADing objects already emitted by LIST. Publish that phase first.
 		err = committer.close()
 		if err == nil {
-			committer = newScanCommitter(ctx, cancel, func(batches []pendingBatch) error {
-				return s.commitBatches(ctx, attempt, batches)
-			})
+			committer = newScanCommitter(ctx, cancel, commitQueued)
 			err = s.appendLegacy(ctx, attempt, store, func(object transferstore.Object, absent bool) error { return emitAll(object, true, absent) }, func(after string, done bool) error {
 				if attempt.Checkpoint == nil {
 					return nil

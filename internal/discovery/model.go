@@ -130,7 +130,8 @@ type RecoveryCheckpoint struct {
 //     and the scan reports its live activity. It keeps the mark of a streamed
 //     directory in its cursors, and a checkpoint whose cursor names one
 //     requires protocol 1.
-const ScanProtocol = 1
+//   - 2: a local scan streams long directories.
+const ScanProtocol = 2
 
 type Batch struct {
 	Checkpoint *RecoveryCheckpoint                  `json:"checkpoint,omitempty"`

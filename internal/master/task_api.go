@@ -1592,9 +1592,9 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 	// A node that is not connected receives the limits from the step that
 	// prepares it once it reconnects. Only a running task delivers them then;
 	// a stopping or ended one delivers them when it runs again.
-	notConnected := "执行节点未连接"
+	notConnected, appliesOnReconnect := "执行节点未连接", false
 	if parent.Status == "RUNNING" || parent.Status == "LIST_DONE" || parent.Status == "RESUMING" {
-		notConnected = "执行节点未连接，重新连接后自动应用"
+		notConnected, appliesOnReconnect = "执行节点未连接，重新连接后自动应用", true
 	}
 	var value any
 	if parent.Spec.BandwidthMbps > 0 {
@@ -1630,6 +1630,11 @@ func (s *Server) taskBandwidthHTTP(w http.ResponseWriter, r *http.Request) {
 				node := activeNodes[index]
 				if online[node.ID] != node.EnrollmentID {
 					nodes[index] = map[string]any{"address": node.Address, "applied": false, "pending": false, "message": localize(w, notConnected)}
+					if appliesOnReconnect {
+						// Not a failure, and nothing to retry: the node
+						// receives the limits when it reconnects.
+						nodes[index]["appliesOnReconnect"] = true
+					}
 					addNodeDisplay(nodes[index], displays.lookup(node.ID, node.Address))
 					continue
 				}

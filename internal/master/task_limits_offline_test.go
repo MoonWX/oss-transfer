@@ -51,11 +51,12 @@ func TestTaskLimitsChangeWithAnOfflineNodeIsSavedAndReportedPerNode(t *testing.T
 		node := raw.(map[string]any)
 		switch node["address"] {
 		case live.Address:
-			if node["applied"] != true {
+			if node["applied"] != true || node["appliesOnReconnect"] != nil {
 				t.Fatal("the connected node did not apply the limits", node)
 			}
 		case offline.Address:
-			if node["applied"] != false || node["pending"] != false || node["message"] != "执行节点未连接，重新连接后自动应用" {
+			// Clients tell it from a failure that a retry could fix.
+			if node["applied"] != false || node["pending"] != false || node["message"] != "执行节点未连接，重新连接后自动应用" || node["appliesOnReconnect"] != true {
 				t.Fatal("the offline node", node)
 			}
 		default:

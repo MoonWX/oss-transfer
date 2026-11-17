@@ -95,7 +95,7 @@ test("task details explain what the scan is doing", async ({ page }) => {
     "本轮扫描已读取 86,980 个名称，已检查 1,200 项（扫描重启后从零计）",
   );
   await expect(block).toContainText(
-    "正在读取目录“data/2026”中的名称：已读取 86,980 个，用时 5 分 0 秒。读完全部名称后才会开始检查和迁移其中的文件。",
+    "正在读取目录“data/2026”中的名称：已读取 86,980 个，用时 5 分 0 秒。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
   );
   await expect(block).not.toContainText("没有新进展");
   // Examining, with entries already found or gone, a slow source call and a

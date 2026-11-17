@@ -102,7 +102,7 @@ func cliScanActivityLines(out io.Writer, activity map[string]interface{}) []stri
 		case reading && getString(activity, "mode") == "STREAMING":
 			lines = append(lines, cliTextf(out, "正在读取并检查%s：已读取 %d 个名称，已检查 %d 项，用时 %s", dir, names, cliScanCount(directory, "examined"), elapsed))
 		case reading:
-			lines = append(lines, cliTextf(out, "正在读取%s中的名称：已读取 %d 个，用时 %s。读完全部名称后才会开始检查和迁移其中的文件。", dir, names, elapsed))
+			lines = append(lines, cliTextf(out, "正在读取%s中的名称：已读取 %d 个，用时 %s。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。", dir, names, elapsed))
 		case names > 0:
 			lines = append(lines, cliTextf(out, "正在检查%s：第 %d 项，共 %d 项", dir, position, names))
 		}

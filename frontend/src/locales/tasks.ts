@@ -2593,10 +2593,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: 'directory "{path}"',
     ja: "ディレクトリ「{path}」",
   },
-  "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。读完全部名称后才会开始检查和迁移其中的文件。":
+  "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。":
     {
-      en: "Reading the names in {dir}: {n} read in {d}. Its files are examined and transferred only after all names have been read.",
-      ja: "{dir}の名前を読み取っています：{n} 件、{d} 経過。すべての名前を読み終えてから、その中のファイルの確認と転送を始めます。",
+      en: "Reading the names in {dir}: {n} read in {d}. A directory of up to 4,096 names is examined and transferred once all its names are read; past that, it is examined while it is still being read.",
+      ja: "{dir}の名前を読み取っています：{n} 件、{d} 経過。名前が 4,096 件以下のディレクトリは読み終えてからファイルの確認と転送を始め、それを超えると読み取りながら確認します。",
     },
   "正在读取并检查{dir}：已读取 {n} 个名称，已检查 {x} 项，用时 {d}": {
     en: "Reading and examining {dir}: {n} names read, {x} examined, {d} elapsed",

@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 // ChildProgress is a volatile observation of one execution attempt. Ownership
@@ -30,19 +32,87 @@ type ObjectProgress struct {
 	Stage            string `json:"stage"`
 }
 
+// objectProgress counts one object of an attempt. When the target reports
+// its own progress (transferstore.ProgressReporter), the object's bytes are
+// what the destination has confirmed plus what the requests in flight have
+// handed to the network in their current attempt; otherwise they are the
+// bytes read from the source.
 type objectProgress struct {
 	item  ObjectProgress
 	order int
-	bytes atomic.Int64
-	peak  atomic.Int64
+	// targetCounted is set before the object is visible and never changes.
+	targetCounted bool
+	// read counts the bytes this attempt read from the source. A retried
+	// range withdraws its bytes until it reads them again (progressRange).
+	read atomic.Int64
+	// peak is the highest read count reported, for a target that does not
+	// report its own progress.
+	peak atomic.Int64
+	// accepted are the bytes the destination has confirmed; pending are the
+	// request-body bytes the current attempt of each request in flight has
+	// handed to the network. A failed attempt withdraws its pending bytes.
+	// One lock keeps a confirmation, which moves a request's bytes from
+	// pending to accepted, a single step for every snapshot.
+	counts            sync.Mutex
+	accepted, pending int64
+	// Requests and parts of the write in each state (transferstore.WritePhase).
+	sending, retrying, admitting, buffering atomic.Int32
 }
 
-// transferred is the highest live byte count observed for this object. A
-// retried range withdraws its bytes until it reads them again; reporting the
-// peak keeps the progress of one object attempt from moving backwards, and
-// it never exceeds the object size.
+func (o *objectProgress) Sending(delta int64) {
+	o.counts.Lock()
+	o.pending += delta
+	o.counts.Unlock()
+}
+
+// Sent feeds the task speed; see Options.CountTransferred.
+func (o *objectProgress) Sent(int64) {}
+
+func (o *objectProgress) Accepted(withdraw, confirmed int64) {
+	o.counts.Lock()
+	o.accepted += confirmed
+	o.pending -= withdraw
+	o.counts.Unlock()
+}
+
+func (o *objectProgress) Phase(phase transferstore.WritePhase, delta int) {
+	var counter *atomic.Int32
+	switch phase {
+	case transferstore.PhaseSending:
+		counter = &o.sending
+	case transferstore.PhaseRetryWait:
+		counter = &o.retrying
+	case transferstore.PhaseRequestLimit:
+		counter = &o.admitting
+	case transferstore.PhaseUploadBuffer:
+		counter = &o.buffering
+	default:
+		return
+	}
+	counter.Add(int32(delta))
+}
+
+// transferred is the object's live byte count, never more than its size.
+//
+// Counted at the destination, it reaches the size only once the destination
+// has confirmed every byte, so FINALIZING means the destination holds all
+// data. It falls back when a request fails and its bytes are withdrawn.
+//
+// Counted from source reads, it is the highest count observed: a retried
+// range withdraws its bytes until it reads them again, and reporting the
+// peak keeps the progress of one object attempt from moving backwards.
 func (o *objectProgress) transferred() int64 {
-	current := min(o.item.Size, max(int64(0), o.bytes.Load()))
+	size := o.item.Size
+	if o.targetCounted {
+		o.counts.Lock()
+		accepted, pending := o.accepted, o.pending
+		o.counts.Unlock()
+		if accepted >= size {
+			return size
+		}
+		return min(max(accepted+pending, 0), max(size-1, 0))
+	}
+	current := min(size, max(int64(0), o.read.Load()))
 	for {
 		peak := o.peak.Load()
 		if current <= peak {
@@ -55,12 +125,13 @@ func (o *objectProgress) transferred() int64 {
 }
 
 type attemptProgress struct {
-	ctx     context.Context
-	mu      sync.Mutex
-	ready   bool
-	child   ChildProgress
-	order   map[string]int
-	objects map[string]*objectProgress
+	ctx           context.Context
+	mu            sync.Mutex
+	ready         bool
+	targetCounted bool
+	child         ChildProgress
+	order         map[string]int
+	objects       map[string]*objectProgress
 }
 
 func newAttemptProgress(ctx context.Context, record Record) *attemptProgress {
@@ -76,16 +147,25 @@ func newAttemptProgress(ctx context.Context, record Record) *attemptProgress {
 	return p
 }
 
-func (p *attemptProgress) initialize(succeeded int64) {
+// initialize starts the attempt's observations. targetCounted reports
+// whether the attempt's target counts the progress of its writes.
+func (p *attemptProgress) initialize(succeeded int64, targetCounted bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.child.SucceededBytes, p.ready = succeeded, true
+	p.child.SucceededBytes, p.targetCounted, p.ready = succeeded, targetCounted, true
+}
+
+// reportsProgress reports whether target counts the progress of its writes.
+func reportsProgress(target transferstore.Store) bool {
+	reporter, ok := target.(transferstore.ProgressReporter)
+	return ok && reporter.ReportsProgress()
 }
 
 func (p *attemptProgress) begin(item Item) *objectProgress {
 	object := &objectProgress{item: ObjectProgress{ItemID: item.ID, SourceKey: item.Source.Key,
 		DestinationKey: item.DestinationKey, Size: item.Source.Size}, order: p.order[item.ID]}
 	p.mu.Lock()
+	object.targetCounted = p.targetCounted
 	p.objects[item.ID] = object
 	p.mu.Unlock()
 	return object
@@ -179,7 +259,7 @@ type progressReader struct {
 func (r *progressReader) Read(buffer []byte) (int, error) {
 	n, err := r.ReadCloser.Read(buffer)
 	if n > 0 {
-		r.progress.bytes.Add(int64(n))
+		r.progress.read.Add(int64(n))
 	}
 	return n, err
 }

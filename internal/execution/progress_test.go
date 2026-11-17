@@ -30,6 +30,10 @@ type progressGatedStore struct {
 }
 
 func (s *progressGatedStore) Write(ctx context.Context, key string, reader io.Reader, opts transferstore.WriteOptions) (transferstore.WriteResult, error) {
+	if opts.Progress != nil {
+		// Only a store that reports its own progress may receive the counter.
+		return transferstore.WriteResult{}, errors.New("progress passed to a store that does not report it")
+	}
 	close(s.gate.entered)
 	if err := wait(ctx, s.gate.read); err != nil {
 		return transferstore.WriteResult{}, err
@@ -53,6 +57,45 @@ func (s *progressGatedStore) Write(ctx context.Context, key string, reader io.Re
 		return transferstore.WriteResult{}, errors.New("injected finalization failure")
 	}
 	return s.Store.Write(ctx, key, bytes.NewReader(data.Bytes()), opts)
+}
+
+// reportingGatedStore reports its writes' progress the way a destination
+// does: it reads the whole source, hands it to the "network" (Sending), and
+// confirms it (Accepted) only when the gate allows.
+type reportingGatedStore struct {
+	transferstore.Store
+	gate *progressWriteGate
+}
+
+func (s *reportingGatedStore) ReportsProgress() bool { return true }
+
+func (s *reportingGatedStore) Write(ctx context.Context, key string, reader io.Reader, opts transferstore.WriteOptions) (transferstore.WriteResult, error) {
+	if opts.Progress == nil {
+		return transferstore.WriteResult{}, errors.New("a reporting store received no progress counter")
+	}
+	close(s.gate.entered)
+	if err := wait(ctx, s.gate.read); err != nil {
+		return transferstore.WriteResult{}, err
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return transferstore.WriteResult{}, err
+	}
+	// A failed attempt hands bytes to the network and withdraws them.
+	opts.Progress.Sending(int64(len(data)) / 2)
+	opts.Progress.Sending(-int64(len(data)) / 2)
+	opts.Progress.Sending(int64(len(data)))
+	close(s.gate.halfway)
+	if err := wait(ctx, s.gate.rest); err != nil {
+		return transferstore.WriteResult{}, err
+	}
+	opts.Progress.Accepted(int64(len(data)), int64(len(data)))
+	close(s.gate.finalizing)
+	if err := wait(ctx, s.gate.commit); err != nil {
+		return transferstore.WriteResult{}, err
+	}
+	opts.Progress = nil
+	return s.Store.Write(ctx, key, bytes.NewReader(data), opts)
 }
 
 func awaitProgressGate(t *testing.T, ready <-chan struct{}) {
@@ -129,6 +172,119 @@ func TestLiveObjectProgressReadsFinalizesAndCleansUpWithoutLedgerWrites(t *testi
 	}
 	if _, _, ok := f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID); ok {
 		t.Fatal("completed object retained progress")
+	}
+}
+
+// A destination that reports its own progress counts what it confirmed plus
+// what is in flight: a source read to the end is not a finished transfer,
+// and FINALIZING appears only once the destination confirmed every byte.
+func TestLiveObjectProgressCountsTargetConfirmation(t *testing.T) {
+	f := newFixture(t, 1)
+	setProgressSource(t, f, 2<<20)
+	gate := newProgressWriteGate()
+	base := f.factory()
+	f.startEngine(StoreFactoryFunc(func(ctx context.Context, job Job) (transferstore.Store, transferstore.Store, error) {
+		src, dst, err := base.Open(ctx, job)
+		return src, &reportingGatedStore{Store: dst, gate: gate}, err
+	}), Options{})
+	f.acceptStart()
+	awaitProgressGate(t, gate.entered)
+	child, items, ok := f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID)
+	if !ok || child.InFlightBytes != 0 || len(items) != 1 || items[0].TransferredBytes != 0 || items[0].Stage != "TRANSFERRING" {
+		t.Fatalf("before the write: %+v %+v %v", child, items, ok)
+	}
+	close(gate.read)
+	awaitProgressGate(t, gate.halfway)
+	// The whole source was read and handed on, but nothing is confirmed.
+	child, items, ok = f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID)
+	if !ok || child.InFlightBytes != 2<<20-1 || len(items) != 1 || items[0].TransferredBytes != 2<<20-1 || items[0].Stage != "TRANSFERRING" {
+		t.Fatalf("unconfirmed bytes finalized the object: %+v %+v %v", child, items, ok)
+	}
+	if rows := f.engine.Progress(f.job.ParentID, 1); len(rows) != 1 || rows[0] != child {
+		t.Fatalf("summary differs from detail: %+v %+v", rows, child)
+	}
+	close(gate.rest)
+	awaitProgressGate(t, gate.finalizing)
+	child, items, ok = f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID)
+	if !ok || child.InFlightBytes != 2<<20 || child.SucceededBytes != 0 || len(items) != 1 || items[0].TransferredBytes != 2<<20 || items[0].Stage != "FINALIZING" {
+		t.Fatalf("confirmed bytes did not finalize the object: %+v %+v %v", child, items, ok)
+	}
+	close(gate.commit)
+	if record := f.wait(); record.Status != Completed || record.Counters.SucceededBytes != 2<<20 {
+		t.Fatalf("confirmed bytes not persisted: %+v", record)
+	}
+	f.assertFiles()
+}
+
+// Counted at the destination, an object reaches its size only when every
+// byte is confirmed, and a withdrawn attempt lowers it again: no peak is kept.
+func TestObjectProgressCountsDestinationConfirmation(t *testing.T) {
+	object := &objectProgress{item: ObjectProgress{Size: 1000}, targetCounted: true}
+	var progress transferstore.WriteProgress = object
+	steps := []struct {
+		name string
+		do   func()
+		want int64
+	}{
+		{"first part sending", func() { progress.Sending(600) }, 600},
+		{"second part sent in full", func() { progress.Sending(400) }, 999},
+		{"second part confirmed", func() { progress.Accepted(400, 400) }, 999},
+		{"first attempt failed", func() { progress.Sending(-600) }, 400},
+		{"retry sending", func() { progress.Sending(250) }, 650},
+		{"retry sent", func() { progress.Sending(350) }, 999},
+		{"retry confirmed", func() { progress.Accepted(600, 600) }, 1000},
+	}
+	for _, step := range steps {
+		step.do()
+		if got := object.transferred(); got != step.want {
+			t.Fatalf("%s: transferred %d, want %d", step.name, got, step.want)
+		}
+	}
+	empty := &objectProgress{targetCounted: true}
+	if got := empty.transferred(); got != 0 {
+		t.Fatalf("empty object transferred %d", got)
+	}
+	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}, {ID: "b"}}}})
+	p.initialize(0, true)
+	live := p.begin(Item{ID: "a", Source: transferstore.Object{Size: 1000}})
+	p.begin(Item{ID: "b"})
+	live.Sending(1000)
+	if child, items, _ := p.snapshot(true); child.InFlightBytes != 999 || items[0].Stage != "TRANSFERRING" || items[1].Stage != "FINALIZING" {
+		t.Fatal("unconfirmed or empty object staged wrongly", child, items)
+	}
+	live.Sending(-1000)
+	if child, _, _ := p.snapshot(false); child.InFlightBytes != 0 {
+		t.Fatal("withdrawn bytes stayed in the summary", child)
+	}
+}
+
+// A request's confirmation moves its bytes from pending to accepted in one
+// step: a snapshot taken meanwhile neither loses them nor counts them twice.
+func TestObjectProgressConfirmationIsOneStep(t *testing.T) {
+	const size, request = int64(1 << 40), int64(4096)
+	object := &objectProgress{item: ObjectProgress{Size: size}, targetCounted: true}
+	var floor atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for counted := int64(0); counted < 20000*request; counted += request {
+			object.Sending(request)
+			floor.Store(counted + request)
+			object.Accepted(request, request)
+		}
+	}()
+	for running := true; running; {
+		select {
+		case <-done:
+			running = false
+		default:
+		}
+		least := floor.Load()
+		got := object.transferred()
+		// At most the request sent since floor was last raised.
+		if most := floor.Load() + request; got < least || got > most {
+			t.Fatalf("snapshot %d outside [%d, %d]", got, least, most)
+		}
 	}
 }
 
@@ -247,11 +403,11 @@ func TestLiveObjectProgressUses64BitSizesAndAtomicCompletionBoundary(t *testing.
 	job := Job{ChildID: "1-1", ParentID: 1, Number: 1, Generation: 2, Assignment: 3,
 		Items: []Item{{ID: "first", Source: transferstore.Object{Size: size}}, {ID: "second", Source: transferstore.Object{Size: size}}}}
 	p := newAttemptProgress(bg, Record{Job: job, Attempt: 4})
-	p.initialize(5)
+	p.initialize(5, false)
 	second := p.begin(job.Items[1])
 	first := p.begin(job.Items[0])
-	first.bytes.Store(size)
-	second.bytes.Store(size / 2)
+	first.read.Store(size)
+	second.read.Store(size / 2)
 	child, items, ok := p.snapshot(true)
 	if !ok || child.InFlightBytes != size+size/2 || child.SucceededBytes != 5 || len(items) != 2 || items[0].ItemID != "first" || items[1].ItemID != "second" {
 		t.Fatal(child, items)
@@ -294,7 +450,7 @@ func BenchmarkProgressReader(b *testing.B) {
 				}
 			}
 			b.StopTimer()
-			if tracked && progress.bytes.Load() != int64(b.N)*int64(len(data)) {
+			if tracked && progress.read.Load() != int64(b.N)*int64(len(data)) {
 				b.Fatal("progress reader lost bytes")
 			}
 		})

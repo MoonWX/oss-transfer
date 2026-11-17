@@ -135,7 +135,7 @@ func TestS3ToLocalDownloadsRangesWithLimiterProgressAndRequests(t *testing.T) {
 	if counter.ranged.Load() != parts+2 || counter.gets.Load() != parts+2 {
 		t.Fatalf("requests: %d GETs, %d ranged; want probe plus %d ranges", counter.gets.Load(), counter.ranged.Load(), parts+1)
 	}
-	if got := object.bytes.Load(); got != stat.Size {
+	if got := object.read.Load(); got != stat.Size {
 		t.Fatalf("live progress %d, want %d", got, stat.Size)
 	}
 	for i := 1; i < len(samples); i++ {
@@ -256,25 +256,26 @@ func (r *closeHook) Close() error {
 	return r.ReadCloser.Close()
 }
 
-// A withdrawn (retried) range lowers the live byte count, but reported
-// progress keeps its high-water mark and never exceeds the object size.
-func TestObjectProgressReportsMonotonicHighWaterMark(t *testing.T) {
+// Counted from source reads (a target that does not report its own
+// progress), a withdrawn (retried) range lowers the live byte count, but
+// reported progress keeps its high-water mark and never exceeds the size.
+func TestObjectProgressFallbackKeepsHighWaterMark(t *testing.T) {
 	object := &objectProgress{item: ObjectProgress{Size: 1000}}
 	steps := []struct{ add, want int64 }{{100, 100}, {300, 400}, {-300, 400}, {200, 400}, {250, 550}, {-50, 550}, {600, 1000}, {-1000, 1000}}
 	for _, step := range steps {
-		object.bytes.Add(step.add)
+		object.read.Add(step.add)
 		if got := object.transferred(); got != step.want {
 			t.Fatalf("after %+d: reported %d, want %d", step.add, got, step.want)
 		}
 	}
 	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}}}})
-	p.initialize(0)
+	p.initialize(0, false)
 	live := p.begin(Item{ID: "a", Source: transferstore.Object{Size: 1000}})
-	live.bytes.Store(700)
+	live.read.Store(700)
 	if child, items, _ := p.snapshot(true); child.InFlightBytes != 700 || items[0].TransferredBytes != 700 {
 		t.Fatal(child, items)
 	}
-	live.bytes.Store(200)
+	live.read.Store(200)
 	if child, _, _ := p.snapshot(false); child.InFlightBytes != 700 {
 		t.Fatal("summary progress moved backwards", child)
 	}
@@ -363,7 +364,7 @@ func TestEngineRangedDownloadIntegrityFuzz(t *testing.T) {
 				if readErr != nil || !bytes.Equal(got, data) {
 					t.Errorf("CRITICAL %s: item succeeded with different content (%v)", desc, readErr)
 				}
-				if counted := object.bytes.Load(); counted != size {
+				if counted := object.read.Load(); counted != size {
 					t.Errorf("%s: live progress %d of %d", desc, counted, size)
 				}
 			} else if readErr == nil || result.TargetCommitted {

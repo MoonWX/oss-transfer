@@ -186,7 +186,7 @@ func TestRangedCopyDecoratesEachRangeAndCountsRetriedProgressOnce(t *testing.T) 
 	if calls.Load() != 8 || sizes[5<<20] != 7 || sizes[int64(len(payload))%(5<<20)] != 1 {
 		t.Fatalf("decorations %d %v", calls.Load(), sizes)
 	}
-	if got := object.bytes.Load(); got != stat.Size || peak.Load() > stat.Size {
+	if got := object.read.Load(); got != stat.Size || peak.Load() > stat.Size {
 		t.Fatalf("progress %d peak %d size %d", got, peak.Load(), stat.Size)
 	}
 }
@@ -200,7 +200,7 @@ type peakReader struct {
 func (r *peakReader) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
 	// Counted after this read returns; sample the prior total plus this read.
-	total := r.object.bytes.Load() + int64(n)
+	total := r.object.read.Load() + int64(n)
 	for old := r.peak.Load(); total > old && !r.peak.CompareAndSwap(old, total); old = r.peak.Load() {
 	}
 	return n, err

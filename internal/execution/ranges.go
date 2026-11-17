@@ -63,7 +63,7 @@ func (r *progressRange) Read(buffer []byte) (int, error) {
 	err = markSource(err)
 	if n > 0 && r.progress != nil {
 		r.counted.Add(int64(n))
-		r.progress.bytes.Add(int64(n))
+		r.progress.read.Add(int64(n))
 	}
 	if errors.Is(err, io.EOF) {
 		r.eof.Store(true)
@@ -79,7 +79,7 @@ func (r *progressRange) Close() error {
 			_ = r.input.Close()
 		}
 		if counted := r.counted.Load(); (counted != r.length || !r.eof.Load()) && r.progress != nil {
-			r.progress.bytes.Add(-counted)
+			r.progress.read.Add(-counted)
 		}
 	})
 	return r.err

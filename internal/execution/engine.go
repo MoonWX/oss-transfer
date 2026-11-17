@@ -492,7 +492,7 @@ func (e *Engine) run(parentCtx context.Context, record Record, attempt *activeAt
 			return nil, fmt.Errorf("update recovery ledger: %w", err)
 		}
 	}
-	attempt.progress.initialize(record.Counters.SucceededBytes)
+	attempt.progress.initialize(record.Counters.SucceededBytes, reportsProgress(target))
 	results := make(chan ItemResult, e.opts.QueueSize)
 	var failures atomic.Int64
 	defer func() {
@@ -695,7 +695,11 @@ func (e *Engine) copyItem(ctx context.Context, job Job, item Item, source, targe
 		}
 		return fail(stage, err)
 	}
-	write, err := target.Write(ctx, item.DestinationKey, reader, transferstore.WriteOptions{Size: item.Source.Size, Overwrite: overwrite, DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, RangeBudget: budget})
+	options := transferstore.WriteOptions{Size: item.Source.Size, Overwrite: overwrite, DestinationAbsent: destinationAbsent, ContentType: metadata.ContentType, ContentEncoding: metadata.ContentEncoding, ContentDisposition: metadata.ContentDisposition, CacheControl: metadata.CacheControl, Metadata: metadata.Metadata, Ranges: ranges, RangeBudget: budget}
+	if object != nil && object.targetCounted {
+		options.Progress = object
+	}
+	write, err := target.Write(ctx, item.DestinationKey, reader, options)
 	result.TargetCommitted = write.Committed
 	result.Target = write.Object
 	if err != nil {

@@ -9,6 +9,10 @@ import (
 
 func platformKey(string) error { return nil }
 
+// localIdentityOpens reports whether a file's identity needs an open handle.
+// On Unix the device and inode come with the lookup itself.
+const localIdentityOpens = false
+
 func storageIdentity(_ *os.Root, _ string, info fs.FileInfo) (string, error) {
 	return fileIdentity(info), nil
 }

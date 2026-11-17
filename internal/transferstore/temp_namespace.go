@@ -204,12 +204,8 @@ func validNamespaceMarker(directory *os.Root, owner, id string) bool {
 }
 
 func isLocalTempNamespace(root *os.Root, key string) bool {
-	name := filepath.Base(filepath.FromSlash(key))
-	if !strings.HasPrefix(name, namespacePrefix) {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(name, namespacePrefix), "-")
-	if len(parts) != 2 || !validHex(parts[0], 32) || !validHex(parts[1], 16) {
+	owner, id, ok := localTempNamespaceName(filepath.Base(filepath.FromSlash(key)))
+	if !ok {
 		return false
 	}
 	directory, err := root.OpenRoot(key)
@@ -217,7 +213,20 @@ func isLocalTempNamespace(root *os.Root, key string) bool {
 		return false
 	}
 	defer directory.Close()
-	return validNamespaceMarker(directory, parts[0], parts[1])
+	return validNamespaceMarker(directory, owner, id)
+}
+
+// localTempNamespaceName parses a directory name that can be a staging
+// namespace. Only its marker proves that it is one.
+func localTempNamespaceName(name string) (owner, id string, ok bool) {
+	if !strings.HasPrefix(name, namespacePrefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimPrefix(name, namespacePrefix), "-")
+	if len(parts) != 2 || !validHex(parts[0], 32) || !validHex(parts[1], 16) {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 // RemoveUnregisteredNamespaceTemps visits only one database-owned namespace.

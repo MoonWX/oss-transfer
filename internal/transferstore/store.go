@@ -48,6 +48,14 @@ type ListOptions struct {
 	StartAfter string
 	Cursor     string
 	Limit      int
+	// Done, when set, reports which of keys the caller has already committed
+	// in this pass of a scan. A local scan consumes such a key without looking
+	// it up again, so a replayed page neither repeats that work nor fails on a
+	// file that changed after it was committed. A local scan asks for at most
+	// 1,024 keys at a time, in scan order; the answer has one entry per key.
+	Done func(keys []string) ([]bool, error)
+	// Activity, when set, receives a local scan's live progress.
+	Activity *ScanActivity
 }
 
 type Page struct {

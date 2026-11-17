@@ -34,6 +34,10 @@ func platformKey(key string) error {
 	return nil
 }
 
+// localIdentityOpens reports whether a file's identity needs an open handle.
+// A Windows volume and file index are read from an open handle.
+const localIdentityOpens = true
+
 func handleIdentity(file *os.File) (string, error) {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &info); err != nil {

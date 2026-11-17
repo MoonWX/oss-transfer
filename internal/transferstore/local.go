@@ -23,6 +23,7 @@ type Local struct {
 	tempRegistry LocalTempRegistry
 	ranged       LocalRangedOptions
 	localIO      LocalIOLimiter
+	scanTuning   *localScanTuning // nil outside tests
 }
 
 // NewLocal opens an existing directory. It never creates the storage root.

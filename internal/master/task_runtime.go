@@ -628,13 +628,12 @@ func (t *taskRuntime) step(ctx context.Context, id int64) (resultErr error) {
 		if removedScannerDone(p) {
 			return nil
 		}
-		if plannedScannerHandoff(p) {
+		if plannedScannerHandoff(p) && !t.waitsForScanUpgrade(p) {
 			// The scan moves once the leaving scanner is fenced; the node view
 			// shows this as a scan handoff, not as a reconnect wait.
 			return nil
 		}
-		scanning := p.ScannerNode()
-		return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel)
+		return t.scannerWait(p)
 	}
 	if p.Status == "RESUMING" && len(available) != len(p.ActiveNodes()) {
 		return errors.New("Waiting for all task nodes to acknowledge recovery")

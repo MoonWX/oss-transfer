@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,11 +151,25 @@ func TestScanCheckpointWaitsForAMemberThatSpeaksItsProtocol(t *testing.T) {
 	if scan := view["scan"].(map[string]any); scan["phase"] != scanPhaseWaiting || scan["upgradeRequired"] != true {
 		t.Fatalf("node view of the wait: %v", scan)
 	}
+	// The task row and the task's error say the same, not that another node
+	// takes over or that the fenced scanner may reconnect.
+	if membership := f.master.taskView(moved)["executionMembership"].(map[string]any); membership["scanPhase"] != scanPhaseWaiting || membership["scanUpgradeRequired"] != true {
+		t.Fatalf("task row of the wait: %v", membership)
+	}
+	if err := runtime.scannerWait(moved); err == nil || err.Error() != "Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it" {
+		t.Fatalf("task error during the wait: %v", err)
+	}
 	// An unreachable member is not known to be old.
 	delete(protocols, "node-1")
 	delete(protocols, "node-2")
 	if moved, err = runtime.moveRetiredScanner(ctx, p, available); err != nil || runtime.waitsForScanUpgrade(moved) {
 		t.Fatalf("unanswered queries reported as old Agents: %v", err)
+	}
+	if membership := f.master.taskView(moved)["executionMembership"].(map[string]any); membership["scanUpgradeRequired"] != nil {
+		t.Fatalf("task row without a wait: %v", membership)
+	}
+	if err := runtime.scannerWait(moved); err == nil || !strings.HasPrefix(err.Error(), "Waiting for scanning node ") {
+		t.Fatalf("task error without an upgrade wait: %v", err)
 	}
 	protocols["node-1"], protocols["node-2"] = 0, discovery.ScanProtocol
 	moved, err = runtime.moveRetiredScanner(ctx, p, available)

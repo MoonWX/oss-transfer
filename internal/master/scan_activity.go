@@ -2,6 +2,8 @@ package master
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
@@ -153,6 +155,18 @@ func (t *taskRuntime) waitsForScanUpgrade(p task.Parent) bool {
 	defer t.mu.Unlock()
 	generation, ok := t.upgradeWaits[p.ID]
 	return ok && generation == p.Generation && scanPhase(p) == scanPhaseWaiting
+}
+
+// scannerWait is what a running task waits for while its scanner is not
+// available: an upgraded member, when none of the others can resume the scan
+// checkpoint (the fenced scanner cannot rejoin while its scan is incomplete),
+// or else the scanner's reconnect.
+func (t *taskRuntime) scannerWait(p task.Parent) error {
+	if t.waitsForScanUpgrade(p) {
+		return errors.New("Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it")
+	}
+	scanning := p.ScannerNode()
+	return fmt.Errorf("Waiting for scanning node %s to reconnect; existing child tasks remain assigned to their original nodes", t.server.nodeDisplaySnapshot().lookup(scanning.ID, scanning.Address).DisplayLabel)
 }
 
 // requiredScanProtocol is the protocol an Agent must speak to take over from

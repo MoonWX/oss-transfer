@@ -265,7 +265,13 @@ func (s *Server) membershipSummary(p task.Parent, displays nodeDisplaySet) map[s
 			draining = append(draining, node.Address)
 		}
 	}
-	return map[string]any{"nodeRevision": p.NodeRevision(), "pending": p.MembershipPending(), "nodes": s.membershipNodes(p, displays, nil), "joining": joining, "draining": draining, "scanPhase": scanPhase(p)}
+	summary := map[string]any{"nodeRevision": p.NodeRevision(), "pending": p.MembershipPending(), "nodes": s.membershipNodes(p, displays, nil), "joining": joining, "draining": draining, "scanPhase": scanPhase(p)}
+	if s.tasks.waitsForScanUpgrade(p) {
+		// As in the node view: no remaining member speaks the protocol the
+		// scan checkpoint needs.
+		summary["scanUpgradeRequired"] = true
+	}
+	return summary
 }
 
 func membershipReason(ctx context.Context, err error) string {

@@ -256,6 +256,20 @@ test("a node-limit mismatch from a single refresh never flashes", async ({
   }
 });
 
+test("a scan that waits for an upgraded node says so", async ({ page }) => {
+  const { responses } = await setup(page, () => ({
+    errorMessage:
+      "Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it",
+  }));
+  while (!(await alert(page).isVisible())) {
+    await nextRefresh(page, responses);
+    expect(responses()).toBeLessThan(20);
+  }
+  await expect(alert(page).locator("p")).toHaveText([
+    "等待升级后的执行节点接续扫描；其余节点版本较旧，无法接续此扫描",
+  ]);
+});
+
 test("every runtime message rule has a complete catalog entry", () => {
   for (const language of ["en", "ja"] as const) {
     const catalog = buildCatalog(language);

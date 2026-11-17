@@ -381,11 +381,12 @@ func renderTaskNodeNotes(out io.Writer, membership map[string]interface{}) {
 	if membership["pending"] == true {
 		fmt.Fprintln(out, cliText(out, "有节点正在加入或移出；完成前只能取消加入、立即移出正在移出的节点或撤回移出。"))
 	}
-	// The node view reports the scan as {"scan": {"phase"}}; task rows as scanPhase.
-	phase := getString(membership, "scanPhase")
+	// The node view reports the scan as {"scan": {"phase", "upgradeRequired"}};
+	// task rows as scanPhase and scanUpgradeRequired.
+	phase, upgrade := getString(membership, "scanPhase"), membership["scanUpgradeRequired"] == true
 	scan, _ := membership["scan"].(map[string]interface{})
 	if scan != nil {
-		phase = getString(scan, "phase")
+		phase, upgrade = getString(scan, "phase"), scan["upgradeRequired"] == true
 	}
 	switch phase {
 	case "SCANNING":
@@ -396,7 +397,7 @@ func renderTaskNodeNotes(out io.Writer, membership map[string]interface{}) {
 	case "HANDOFF":
 		fmt.Fprintln(out, cliText(out, "扫描正在移交给新的扫描节点，从 Master 保存的断点继续。"))
 	case "WAITING":
-		if scan["upgradeRequired"] == true {
+		if upgrade {
 			fmt.Fprintln(out, cliText(out, "其余节点版本较旧，无法接续此扫描；任一节点升级后自动继续。"))
 		} else {
 			fmt.Fprintln(out, cliText(out, "原扫描节点已退出，其他节点将从 Master 保存的断点接管扫描。"))

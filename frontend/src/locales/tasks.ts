@@ -2704,6 +2704,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Waiting for scanning node {node} to reconnect; assigned subtasks stay on their nodes",
     ja: "スキャンノード {node} の再接続を待っています。割り当て済みのサブタスクは元のノードに残ります",
   },
+  "等待升级后的执行节点接续扫描；其余节点版本较旧，无法接续此扫描": {
+    en: "Waiting for an upgraded Agent to continue the scan; the remaining nodes are too old to resume it",
+    ja: "アップグレードされた実行ノードがスキャンを引き継ぐのを待っています。残りのノードはバージョンが古いため、このスキャンを引き継げません",
+  },
   等待不可用节点的执行租约到期: {
     en: "Waiting for an unavailable node's execution lease to expire",
     ja: "利用できないノードの実行リースの期限切れを待っています",

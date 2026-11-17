@@ -99,9 +99,12 @@ var cliOutputMessages = map[string][2]string{
 	"存储服务拒绝访问，请检查凭据对该存储桶的权限":                        {"Access denied; check the credentials' permissions on the bucket", "アクセスが拒否されました。認証情報のバケットへの権限を確認してください"},
 	"存储桶不存在，请检查存储桶名称":                               {"The bucket does not exist; check its name", "バケットが存在しません。名前を確認してください"},
 	"源对象已不存在": {"The source object no longer exists", "転送元オブジェクトはすでに存在しません"},
-	"源对象在迁移期间发生变化，可重试失败对象": {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},
-	"存储服务限流，可稍后重试失败对象":     {"The storage service is throttling; retry the failed objects later", "ストレージサービスがスロットリングしています。後で失敗したオブジェクトを再試行してください"},
-	"连接意外中断，可重试失败对象":       {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
+	"源对象在迁移期间发生变化，可重试失败对象":               {"The source object changed during the transfer; retry the failed objects", "転送中に転送元オブジェクトが変更されました。失敗したオブジェクトを再試行してください"},
+	"存储服务限流，可稍后重试失败对象":                   {"The storage service is throttling; retry the failed objects later", "ストレージサービスがスロットリングしています。後で失敗したオブジェクトを再試行してください"},
+	"连接意外中断，可重试失败对象":                     {"The connection ended unexpectedly; retry the failed objects", "接続が予期せず終了しました。失敗したオブジェクトを再試行してください"},
+	"源对象为归档存储，需先解冻再重试":                   {"The source object is archived; restore it before retrying", "転送元オブジェクトはアーカイブされています。復元してから再試行してください"},
+	"存储服务端出错，可在存储恢复后重试失败对象":              {"The storage service returned a server error; retry the failed objects once it recovers", "ストレージサービスがサーバーエラーを返しました。復旧後に失敗したオブジェクトを再試行してください"},
+	"连接在存储服务应答前关闭，请检查 Endpoint 地址、端口和协议": {"The connection closed before the storage service answered; check the endpoint address, port and protocol", "ストレージサービスが応答する前に接続が閉じられました。エンドポイントのアドレス、ポート、プロトコルを確認してください"},
 
 	// Hints after an error.
 	"提示: 请先运行 oss-transfer-cli change-password 修改初始密码。": {"Hint: run oss-transfer-cli change-password to change the initial password first.", "ヒント: 先に oss-transfer-cli change-password で初期パスワードを変更してください。"},

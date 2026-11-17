@@ -261,3 +261,39 @@ func TestTakeoverCheckpointCompletedSourceDoesNotReopenAndUsesNewEpoch(t *testin
 		t.Fatal(done, factory.opened)
 	}
 }
+
+// A takeover request repeated by a Master that predates the scan protocol
+// field names the same checkpoint: it is accepted, and the stricter
+// requirement is kept.
+func TestTakeoverRetryWithoutTheProtocolRequirementIsTheSameCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	scanner, _ := newScanner(t, filepath.Join(t.TempDir(), "agent.db"), &checkpointLocalFactory{}, Options{})
+	request := takeoverRequest(localSpec(t.TempDir()))
+	request.Checkpoint = &RecoveryCheckpoint{Version: 1, Sequence: 1, Cursor: "inside-a-streamed-directory", RequiresScanProtocol: 1}
+	seedTakeover(t, scanner, request)
+	retry := request
+	lost := *request.Checkpoint
+	lost.RequiresScanProtocol = 0
+	retry.Checkpoint = &lost
+	current, err := scanner.SeedTakeover(ctx, retry)
+	if err != nil || current.Takeover.Checkpoint == nil || current.Takeover.Checkpoint.RequiresScanProtocol != 1 {
+		t.Fatalf("retry without the requirement: %+v, %v", current.Takeover, err)
+	}
+	moved := lost
+	moved.Cursor = "elsewhere"
+	retry.Checkpoint = &moved
+	if _, err := scanner.SeedTakeover(ctx, retry); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a different checkpoint under the same epoch was accepted: %v", err)
+	}
+	// A first request without the requirement takes it from a later one.
+	other, _ := newScanner(t, filepath.Join(t.TempDir(), "other.db"), &checkpointLocalFactory{}, Options{})
+	first := request
+	first.Checkpoint = &lost
+	seedTakeover(t, other, first)
+	if current, err := other.SeedTakeover(ctx, request); err != nil || current.Takeover.Checkpoint.RequiresScanProtocol != 1 {
+		t.Fatalf("stricter retry: %+v, %v", current.Takeover, err)
+	}
+	if current, err := other.Status(ctx, 1); err != nil || current.Takeover.Checkpoint.RequiresScanProtocol != 1 {
+		t.Fatalf("stricter requirement not saved: %+v, %v", current.Takeover, err)
+	}
+}

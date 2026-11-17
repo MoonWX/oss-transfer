@@ -206,6 +206,9 @@ func (s *Scanner) SeedTakeover(ctx context.Context, request TakeoverRequest) (St
 			if current.Status == Stopped {
 				return State{}, ErrStopped
 			}
+			if saved := current.Takeover.Checkpoint; saved != nil && request.Checkpoint.RequiresScanProtocol > saved.RequiresScanProtocol {
+				saved.RequiresScanProtocol = request.Checkpoint.RequiresScanProtocol
+			}
 		}
 	}
 	if current.Epoch != request.Epoch {

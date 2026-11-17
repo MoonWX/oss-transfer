@@ -770,3 +770,78 @@ func TestLocalScanChargesTheStreamedReadsThatReturnNames(t *testing.T) {
 		t.Fatalf("scan charged %d operations for %d reads of big", operations, listing.reads.Load())
 	}
 }
+
+// gatedLocalIO admits every local operation until it is armed, then holds
+// each one until release is closed.
+type gatedLocalIO struct {
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedLocalIO) WaitLocalOperation(ctx context.Context) error {
+	if g.armed.Load() {
+		select {
+		case g.entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+		}
+	}
+	return ctx.Err()
+}
+
+func (g *gatedLocalIO) WaitLocalBytes(ctx context.Context, _ int) error { return ctx.Err() }
+
+// A scan waiting for the names of a streamed listing, while the reader waits
+// for the local operation limit, says that it waits for that limit.
+func TestLocalScanShowsAStreamedReaderWaitingForTheLocalLimit(t *testing.T) {
+	local, root := localFixture(t)
+	writeFiles(t, root, numbered("big/f", 30)...)
+	spy := spyOnScan(local, root)
+	// Lookups wait for the listing's end, so while the reader waits nothing
+	// but its read is charged.
+	local.scanTuning.streamAfter, local.scanTuning.holdLookups = 8, true
+	listing := &inBatches{dir: "big", n: 10}
+	listing.install(spy)
+	gate := &gatedLocalIO{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	local.SetLocalIOLimiter(gate)
+	read := spy.readNames
+	spy.readNames = func(key string, call func() ([]string, error)) ([]string, error) {
+		names, err := read(key, call)
+		if key == "big" && listing.reads.Load() == 1 {
+			gate.armed.Store(true) // the scan's own read streams; the reader's first read waits
+		}
+		return names, err
+	}
+	activity := NewScanActivity()
+	result := make(chan error, 1)
+	var objects int
+	go func() {
+		pages, err := scanAll(local, context.Background(), ListOptions{Activity: activity})
+		objects = len(objectKeys(pages))
+		result <- err
+	}()
+	select {
+	case <-gate.entered:
+	case err := <-result:
+		t.Fatalf("the scan ended before its reader waited: %v", err)
+	}
+	// Hang guard only: the scan reaches its wait for names soon after.
+	for deadline := time.Now().Add(30 * time.Second); activity.Snapshot().WaitingFor != ScanWaitLocalLimit; {
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting for %q while the reader waits for the local limit", activity.Snapshot().WaitingFor)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	gate.armed.Store(false)
+	close(gate.release)
+	if err := <-result; err != nil || objects != 30 {
+		t.Fatalf("scan: %d objects, %v", objects, err)
+	}
+	if got := activity.Snapshot().WaitingFor; got != "" {
+		t.Fatalf("still waiting for %q after the scan", got)
+	}
+}

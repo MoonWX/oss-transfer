@@ -335,34 +335,34 @@ type comparisonExportNode struct {
 	Name string `json:"name"`
 }
 
-// comparisonExportSummary is summary.json in an export ZIP.
+// comparisonExportSummary is summary.json in an export ZIP. Warnings qualify a
+// complete result: NO_OBJECTS_FOUND is a prefix comparison that found no
+// object on either side, so it compared nothing.
 type comparisonExportSummary struct {
-	ComparisonID      string                   `json:"comparisonId"`
-	Node              comparisonExportNode     `json:"node"`
-	Status            string                   `json:"status"`
-	Mode              string                   `json:"mode"`
-	Scope             string                   `json:"scope"`
-	Source            comparisonExportEndpoint `json:"source"`
-	Destination       comparisonExportEndpoint `json:"destination"`
-	Counts            comparisonExportCounts   `json:"counts"`
-	StoredRows        int64                    `json:"storedRows"`
-	ExportedRows      int64                    `json:"exportedRows"`
-	StatusFilter      []string                 `json:"statusFilter"`
-	Complete          bool                     `json:"complete"`
-	IncompleteReasons []string                 `json:"incompleteReasons"`
-	// Warnings qualify a complete result: NO_OBJECTS_FOUND is a prefix
-	// comparison that found no object on either side, so it compared nothing.
-	Warnings           []string   `json:"warnings"`
-	TruncatedReason    string     `json:"truncatedReason"`
-	LastStoredKey      string     `json:"lastStoredKey"`
-	RetryStatuses      []string   `json:"retryStatuses"`
-	RetryKeys          int64      `json:"retryKeys"`
-	RetryKeysOmitted   int64      `json:"retryKeysOmitted"`
-	RetryPrefixesMatch bool       `json:"retryPrefixesMatch"`
-	CSVEscaping        string     `json:"csvEscaping"`
-	StartedAt          time.Time  `json:"startedAt"`
-	EndedAt            *time.Time `json:"endedAt"`
-	GeneratedAt        time.Time  `json:"generatedAt"`
+	ComparisonID       string                   `json:"comparisonId"`
+	Node               comparisonExportNode     `json:"node"`
+	Status             string                   `json:"status"`
+	Mode               string                   `json:"mode"`
+	Scope              string                   `json:"scope"`
+	Source             comparisonExportEndpoint `json:"source"`
+	Destination        comparisonExportEndpoint `json:"destination"`
+	Counts             comparisonExportCounts   `json:"counts"`
+	StoredRows         int64                    `json:"storedRows"`
+	ExportedRows       int64                    `json:"exportedRows"`
+	StatusFilter       []string                 `json:"statusFilter"`
+	Complete           bool                     `json:"complete"`
+	IncompleteReasons  []string                 `json:"incompleteReasons"`
+	Warnings           []string                 `json:"warnings"`
+	TruncatedReason    string                   `json:"truncatedReason"`
+	LastStoredKey      string                   `json:"lastStoredKey"`
+	RetryStatuses      []string                 `json:"retryStatuses"`
+	RetryKeys          int64                    `json:"retryKeys"`
+	RetryKeysOmitted   int64                    `json:"retryKeysOmitted"`
+	RetryPrefixesMatch bool                     `json:"retryPrefixesMatch"`
+	CSVEscaping        string                   `json:"csvEscaping"`
+	StartedAt          time.Time                `json:"startedAt"`
+	EndedAt            *time.Time               `json:"endedAt"`
+	GeneratedAt        time.Time                `json:"generatedAt"`
 }
 
 // comparisonStatusCount is the number of compared objects whose result is

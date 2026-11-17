@@ -82,7 +82,12 @@ import {
 } from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
-import { byteProgress, shownProgress, taskPercent } from "../lib/taskProgress";
+import {
+  byteProgress,
+  shownProgress,
+  taskPercent,
+  unreportedNodeNames,
+} from "../lib/taskProgress";
 import {
   keyMappingLabels,
   mapDestinationKey,
@@ -2196,14 +2201,23 @@ export default function TasksPage({
     const percent = complete ? shown.percent : 0;
     const counts = `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`;
     const bytes = byteProgress(task);
+    const unreported = unreportedNodeNames(task);
+    // A PARTIAL sample is a lower bound: say which nodes it leaves out.
+    const tips = [
+      bytes && countsCurrent ? tr("{value1} 个对象", { value1: counts }) : "",
+      unreported
+        ? tr(
+            "执行节点 {nodes} 暂未上报实时进度：已迁移数据不含其正在传输的部分，速度暂时未知。",
+            { nodes: unreported },
+          )
+        : "",
+    ].filter(Boolean);
     return (
       <Box sx={{ minWidth: 120 }}>
         <Stack direction="row" justifyContent="space-between" gap={1}>
           <Tooltip
             title={
-              bytes && countsCurrent
-                ? tr("{value1} 个对象", { value1: counts })
-                : ""
+              tips.length ? tips.map((tip) => <Box key={tip}>{tip}</Box>) : ""
             }
           >
             <Typography variant="caption" color="text.secondary">

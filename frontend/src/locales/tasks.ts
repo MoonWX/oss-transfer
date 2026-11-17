@@ -2773,6 +2773,16 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Signature mismatch. Check the storage connection's Secret Key and signature version.",
     ja: "署名が一致しません。ストレージ接続の Secret Key と署名バージョンを確認してください。",
   },
+  // Live progress from some nodes only (liveProgress PARTIAL).
+  "执行节点 {nodes} 暂未上报实时进度：已迁移数据不含其正在传输的部分，速度暂时未知。":
+    {
+      en: "No live progress from {nodes}: the data transferred leaves out what is in flight there, and the speed is unknown for now.",
+      ja: "ノード {nodes} からリアルタイムの進捗が届いていません。転送済みデータには、そのノードが転送中の分は含まれず、速度は現在不明です。",
+    },
+  "执行节点 {nodes} 未响应，其文件进度暂未更新": {
+    en: "No reply from {nodes}; file progress there is not up to date",
+    ja: "ノード {nodes} が応答しないため、そのファイルの進捗は更新されていません",
+  },
   // Causes of failed objects (objectErrorSummary in src/lib/storageErrors.ts).
   "源对象为归档存储，需先解冻再重试。": {
     en: "The source object is archived. Restore it before retrying.",

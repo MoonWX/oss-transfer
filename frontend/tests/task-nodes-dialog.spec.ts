@@ -604,6 +604,8 @@ test("the preflight lists each node's note and write check, and the reasons of a
     view: () => nodesView({ localTransfer: true, direction: "OSS_TO_LOCAL" }),
     post: (body, route) => {
       answer++;
+      // No answer from the Master at all.
+      if (answer === 4) return route.abort("failed");
       if (answer === 2)
         return route.fulfill({
           status: 409,
@@ -700,6 +702,16 @@ test("the preflight lists each node's note and write check, and the reasons of a
   await expect(box.getByTestId("task-nodes-preflight-10.0.1.12")).toContainText(
     "permission denied",
   );
+  await expect(preview(page)).toBeDisabled();
+
+  // A dry run without an answer checked nothing: it did not finish, which is
+  // not a failed check.
+  await run.click();
+  await expect(result.getByRole("alert")).toContainText("预检未完成");
+  await expect(result.getByRole("alert")).toContainText(
+    "无法连接服务，请检查网络或主节点状态。",
+  );
+  await expect(result.getByRole("alert")).not.toContainText("预检未通过");
   await expect(preview(page)).toBeDisabled();
 });
 

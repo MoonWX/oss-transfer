@@ -521,6 +521,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Some tasks are unconfirmed. Check the submission results.",
     ja: "一部のタスクが未確認です。送信結果を確認してください。",
   },
+  预检未完成: {
+    en: "Preflight did not finish",
+    ja: "事前チェックが完了しませんでした",
+  },
   预检未通过: {
     en: "Preflight failed",
     ja: "事前チェックに失敗しました",

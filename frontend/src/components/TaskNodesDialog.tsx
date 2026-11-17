@@ -139,6 +139,11 @@ type Mode = "drain" | "now";
 type Preflight = {
   fingerprint: string;
   valid: boolean;
+  /**
+   * The dry run got no answer (no connection, or a timeout): nothing was
+   * checked, which is not a failed check.
+   */
+  incomplete?: boolean;
   bindings: BindingCheck[];
   errors: string[];
 };
@@ -634,11 +639,14 @@ export default function TaskNodesDialog({
       });
     } catch (failure) {
       // A refused change (an offline or outdated Agent, a stale view) is a
-      // preflight result too: its reason belongs with the other results.
+      // preflight result too: its reason belongs with the other results. A
+      // dry run without an answer from the Master (no HTTP status) checked
+      // nothing.
       const response = failure instanceof ApiError ? failure.response : null;
       setPreflight({
         fingerprint: checked,
         valid: false,
+        incomplete: !(failure instanceof ApiError && failure.status > 0),
         bindings: Array.isArray(response?.nodeBindings)
           ? response.nodeBindings
           : [],
@@ -1293,20 +1301,24 @@ export default function TaskNodesDialog({
             >
               <Alert
                 severity={
-                  !preflight.valid
-                    ? "error"
-                    : preflightUnchecked
-                      ? "warning"
-                      : "success"
+                  preflight.incomplete
+                    ? "warning"
+                    : !preflight.valid
+                      ? "error"
+                      : preflightUnchecked
+                        ? "warning"
+                        : "success"
                 }
                 sx={{ borderRadius: 0 }}
               >
                 <Typography variant="body2" fontWeight={600}>
-                  {!preflight.valid
-                    ? t("预检未通过")
-                    : preflightUnchecked
-                      ? t("路径检查通过，共享目录未校验")
-                      : t("预检通过")}
+                  {preflight.incomplete
+                    ? t("预检未完成")
+                    : !preflight.valid
+                      ? t("预检未通过")
+                      : preflightUnchecked
+                        ? t("路径检查通过，共享目录未校验")
+                        : t("预检通过")}
                 </Typography>
                 {preflight.errors.map((message) => (
                   <Typography

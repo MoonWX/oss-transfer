@@ -99,3 +99,60 @@ test("a side whose size was not read shows no size", async ({ page }) => {
   // An empty object keeps its real size.
   await expect(line(3).getByText("0 B", { exact: true })).toHaveCount(2);
 });
+
+// Once a comparison stopped storing rows, later differences are only counted.
+// The unfiltered view and the export then hold the stored differences, and a
+// filter whose differences were all counted after the cut says so.
+test("a truncated comparison names its stored differences, not all of them", async ({
+  page,
+}) => {
+  await mockApi(page);
+  const truncated = {
+    ...progress,
+    compared: 9000010,
+    matched: 10,
+    different: 4,
+    etagMismatch: 0,
+    missing: 120000,
+    extra: 0,
+    changed: 0,
+    errors: 0,
+    rows: 4,
+    rowsTruncated: true,
+    truncatedReason: "STORAGE_BUDGET",
+    lastStoredKey: "file-0004.bin",
+  };
+  let current: typeof progress = truncated;
+  const stored = [1, 2, 3, 4].map((number) => row(number, "DIFFERENT"));
+  await routeComparisons(page, {
+    list: () => ({ items: [historyItem(current)], complete: true }),
+    page: (_, query) => pageOf(current, stored, query),
+  });
+  await page.goto("/tools?comparison=comparison-1");
+  const result = page.getByRole("region", { name: "比对结果" });
+  await expect(
+    result.getByRole("button", { name: "已保存差异 4", exact: true }),
+  ).toBeVisible();
+  await expect(result.getByRole("button", { name: /^全部差异/ })).toHaveCount(
+    0,
+  );
+  await expect(
+    result.getByRole("button", { name: "导出已保存的差异（ZIP）" }),
+  ).toBeVisible();
+  await result.getByRole("button", { name: "目标缺失 120,000" }).click();
+  await expect(
+    result.getByText(
+      "已保存的差异中没有符合条件的记录；截断之后的差异只计数，未保存明细。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+
+  current = progress;
+  await page.reload();
+  await expect(
+    result.getByRole("button", { name: "全部差异 4", exact: true }),
+  ).toBeVisible();
+  await expect(
+    result.getByRole("button", { name: "导出全部差异（ZIP）" }),
+  ).toBeVisible();
+});

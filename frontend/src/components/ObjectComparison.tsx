@@ -296,10 +296,16 @@ function reasonsText(reasons?: string[]) {
 /** Status filters in display order; "" lists every stored difference. */
 const filters: {
   status: string;
-  label: () => string;
+  label: (progress: Progress) => string;
   count: (progress: Progress) => number | undefined;
 }[] = [
-  { status: "", label: () => t("全部差异"), count: (p) => p.rows },
+  {
+    status: "",
+    // Once rows are truncated, later differences are only counted: this
+    // filter then holds the stored ones, not all of them.
+    label: (p) => (p.rowsTruncated ? t("已保存差异") : t("全部差异")),
+    count: (p) => p.rows,
+  },
   { status: "DIFFERENT", label: () => t("不一致"), count: (p) => p.different },
   {
     status: "ETAG_MISMATCH",
@@ -1410,7 +1416,7 @@ function ComparisonResult({
                 return (
                   <Chip
                     key={option.status || "all"}
-                    label={`${option.label()} ${formatNumber(option.count(progress))}`}
+                    label={`${option.label(progress)} ${formatNumber(option.count(progress))}`}
                     clickable
                     color={selected ? "primary" : "default"}
                     variant={selected ? "filled" : "outlined"}
@@ -1492,7 +1498,11 @@ function ComparisonResult({
                   disabled={exporting}
                   onClick={() => void exportResults()}
                 >
-                  {exporting ? t("正在准备下载") : t("导出全部差异（ZIP）")}
+                  {exporting
+                    ? t("正在准备下载")
+                    : progress.rowsTruncated || active
+                      ? t("导出已保存的差异（ZIP）")
+                      : t("导出全部差异（ZIP）")}
                 </Button>
                 {!active && (
                   <Button
@@ -1571,7 +1581,14 @@ function ComparisonResult({
               {current && shownRows.length === 0 && !stalledHere && (
                 <Typography variant="body2" color="text.secondary">
                   {filter
-                    ? t("没有符合条件的差异。")
+                    ? progress.rowsTruncated &&
+                      (filters
+                        .find((option) => option.status === filter)
+                        ?.count(progress) ?? 0) > 0
+                      ? t(
+                          "已保存的差异中没有符合条件的记录；截断之后的差异只计数，未保存明细。",
+                        )
+                      : t("没有符合条件的差异。")
                     : differences(progress) > 0
                       ? t("暂无已保存的差异明细。")
                       : active

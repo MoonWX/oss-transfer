@@ -38,6 +38,15 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
   大小: { en: "Size", ja: "サイズ" },
   "不同：{reasons}": { en: "Differs: {reasons}", ja: "相違：{reasons}" },
   全部差异: { en: "All differences", ja: "すべての差分" },
+  已保存差异: { en: "Stored differences", ja: "保存済みの差分" },
+  "导出已保存的差异（ZIP）": {
+    en: "Export stored differences (ZIP)",
+    ja: "保存済みの差分をエクスポート（ZIP）",
+  },
+  "已保存的差异中没有符合条件的记录；截断之后的差异只计数，未保存明细。": {
+    en: "No stored difference matches. Differences after the truncation are counted but not stored.",
+    ja: "保存済みの差分に該当する記録はありません。切り捨て以降の差分は件数のみで、詳細は保存されていません。",
+  },
   "该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。":
     {
       en: "This result comes from an execution node of version 4.1.40 or earlier, and its counts may be wrong: on storage whose LIST times have millisecond precision, “Changed during comparison” can be a false alarm and can also include objects that are really missing; a single-object comparison counts “Missing on both sides” as “Read failed”; at most 10,000 differences are kept. Upgrade the node and compare again.",

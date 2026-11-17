@@ -158,6 +158,22 @@ func (s *Server) exceptionNodes(filter task.ExceptionFilter) (map[string]bool, e
 	}
 	return result, nil
 }
+
+// legacyExceptionsMessage explains an empty failure list of a task converted
+// from V4.0.x that has not been recovered: its failed objects were imported
+// as history, which only its task report includes.
+const legacyExceptionsMessage = "This task was converted from v4.0.x; its failed objects are not listed here. Export its task report and see file-results.csv and exception-details.csv"
+
+// legacyExceptionTask reports a task filter that names a task converted from
+// V4.0.x and not recovered. The exception index never holds its objects.
+func (s *Server) legacyExceptionTask(filter task.ExceptionFilter) bool {
+	if filter.ParentID < 1 {
+		return false
+	}
+	p, err := s.tasks.repo.Get(filter.ParentID)
+	return err == nil && task.Historical(p)
+}
+
 func exceptionNodeLists(nodes map[string]bool) (queried, failed []string) {
 	queried, failed = []string{}, []string{}
 	for node, online := range nodes {
@@ -237,6 +253,12 @@ func (s *Server) listExceptions(fallback bool) http.HandlerFunc {
 		if fallback {
 			result["supported"] = false
 			result["message"] = localize(w, "The Go transfer engine does not use the legacy SDK fallback mechanism")
+		}
+		if s.legacyExceptionTask(filter) {
+			result["legacyHistorical"] = true
+			if !fallback {
+				result["message"] = localize(w, legacyExceptionsMessage)
+			}
 		}
 		writeJSON(w, 200, result)
 	}
@@ -335,7 +357,12 @@ func (s *Server) localExceptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	queried, failed := exceptionNodeLists(nodes)
-	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "clearableCount": clearable, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}})
+	data := map[string]any{"items": items, "nodeDisplays": displays.byAddress, "total": total, "clearableCount": clearable, "offset": offset, "limit": limit, "hasMore": offset+len(items) < total, "partial": len(failed) > 0, "complete": len(failed) == 0, "queriedWorkers": queried, "unreachableWorkers": failed, "failedWorkers": failed}
+	if s.legacyExceptionTask(filter) {
+		data["legacyHistorical"] = true
+		data["message"] = localize(w, legacyExceptionsMessage)
+	}
+	writeJSON(w, 200, map[string]any{"success": true, "data": data})
 }
 
 func (s *Server) exceptionTasks(w http.ResponseWriter, r *http.Request) {

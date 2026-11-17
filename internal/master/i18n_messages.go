@@ -349,8 +349,9 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"等待同步":        {"Awaiting sync", "等待同步", "同期待ち"},
 	"节点未返回有效路径类型": {"Node returned an invalid path type", "节点未返回有效路径类型", "ノードから無効なパスの種類が返されました"},
 	"Showing recent tasks; load an earlier page for more history":           {"Showing recent tasks; load an earlier page for more history", "当前显示最近任务，加载更早页面可查看历史", "最近のタスクを表示しています。以前の履歴は前のページを読み込んでください"},
-	"The Go transfer engine does not use the legacy SDK fallback mechanism": {"The Go transfer engine does not use the legacy SDK fallback mechanism", "Go 传输引擎不使用旧版 SDK 降级机制", "Go 転送エンジンは旧 SDK のフォールバック機構を使用しません"},
-	"Invalid imported task %d: %s":                                          {"Invalid imported task %d: %s", "导入的任务 %d 无效：%s", "インポートするタスク %d が無効です：%s"},
-	"Invalid task %d: %s":                                                   {"Invalid task %d: %s", "任务 %d 无效：%s", "タスク %d が無効です：%s"},
-	"Import requires an explicit replacement for %s":                        {"Import requires an explicit replacement for %s", "导入时必须明确替换 %s", "インポートには %s の明示的な置き換えが必要です"},
+	"The Go transfer engine does not use the legacy SDK fallback mechanism": {"This version does not switch to a fallback transfer method, so it records no fallback objects; fallback records of tasks converted from v4.0.x are not listed here", "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出", "このバージョンは代替の転送方式に切り替えないため、フォールバック記録は作成されません。v4.0.x から変換したタスクのフォールバック記録はここに表示されません"},
+	legacyExceptionsMessage:                          {legacyExceptionsMessage, "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。", "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。"},
+	"Invalid imported task %d: %s":                   {"Invalid imported task %d: %s", "导入的任务 %d 无效：%s", "インポートするタスク %d が無効です：%s"},
+	"Invalid task %d: %s":                            {"Invalid task %d: %s", "任务 %d 无效：%s", "タスク %d が無効です：%s"},
+	"Import requires an explicit replacement for %s": {"Import requires an explicit replacement for %s", "导入时必须明确替换 %s", "インポートには %s の明示的な置き換えが必要です"},
 }

@@ -224,6 +224,21 @@ func TestExceptionsListRendersTableAndKeepsJSON(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "没有失败对象") || strings.Contains(out, "exceptions export") {
 		t.Fatal(code, out)
 	}
+	// A task converted from v4.0.x: its failed objects are only in the task
+	// report, and "no failed objects" would contradict its failed count.
+	legacy := exceptionsFixture()
+	legacy["failedKeys"] = map[string]interface{}{"10.0.0.2": []interface{}{}, "10.0.0.2Count": float64(0)}
+	legacy["legacyHistorical"] = true
+	legacy["message"] = "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。"
+	code, out, _ = runMockCLI(t, []string{"exceptions", "list", "failed", "--task-id", "224"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || strings.Contains(out, "没有失败对象") || !strings.Contains(out, "file-results.csv") {
+		t.Fatal(code, out)
+	}
+	delete(legacy, "message")
+	code, out, _ = runMockCLI(t, []string{"exceptions", "list", "failed", "--task-id", "224"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || strings.Contains(out, "没有失败对象") || !strings.Contains(out, "task report") {
+		t.Fatal(code, out)
+	}
 }
 
 // A task create whose only row is refused created nothing: a definite

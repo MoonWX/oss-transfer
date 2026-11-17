@@ -137,6 +137,11 @@ type Result = {
   workerErrors?: Record<string, string>;
   respondingNodes?: string[];
   nodeDisplays?: Record<string, NodeDisplay>;
+  // The task filter names a task converted from v4.0.x: its failed objects
+  // are in its task report, not in these records.
+  legacyHistorical?: boolean;
+  // The Master records no fallback objects.
+  fallbackUnsupported?: boolean;
 };
 const initialFilters: Filters = {
   task: "",
@@ -225,7 +230,9 @@ export default function ExceptionsPage() {
   const labels = [tr("失败对象"), tr("降级迁移记录"), tr("本地迁移失败")];
   const tabDescriptions = [
     tr("对象存储之间迁移失败的对象。"),
-    tr("旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。"),
+    tr(
+      "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。",
+    ),
     tr("与执行节点本地目录之间迁移失败的文件。"),
   ];
 
@@ -470,6 +477,9 @@ export default function ExceptionsPage() {
                 Record<string, string> | undefined,
               nodeDisplays: raw.nodeDisplays as
                 Record<string, NodeDisplay> | undefined,
+              legacyHistorical: raw.legacyHistorical === true,
+              fallbackUnsupported:
+                mode === "fallback" && raw.supported === false,
             };
           }
           if (
@@ -1181,9 +1191,13 @@ export default function ExceptionsPage() {
       )}
       {mode === "fallback" && (
         <Alert severity="info">
-          {tr(
-            "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
-          )}
+          {result?.fallbackUnsupported
+            ? tr(
+                "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。",
+              )
+            : tr(
+                "降级记录表示对象曾切换到备用传输方式。请查看对应任务状态确认结果。",
+              )}
         </Alert>
       )}
       <Paper
@@ -1694,7 +1708,13 @@ export default function ExceptionsPage() {
                     ? tr(
                         "每个节点最多返回 1,000 条本地失败记录。请按任务或节点缩小筛选范围。",
                       )
-                    : tr("请调整筛选条件，或在任务执行后刷新。")
+                    : result.fallbackUnsupported
+                      ? undefined
+                      : result.legacyHistorical
+                        ? tr(
+                            "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                          )
+                        : tr("请调整筛选条件，或在任务执行后刷新。")
                 }
               />
             )

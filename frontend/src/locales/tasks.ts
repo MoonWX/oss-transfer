@@ -162,6 +162,16 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "The source object changed after the scan; a retry copies its current version",
     ja: "スキャン後にソースオブジェクトが変更されました。再試行すると現在のバージョンをコピーします",
   },
+  "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。":
+    {
+      en: "This task was converted from v4.0.x; its failed objects are not listed in the exception records. Export its task report and see file-results.csv and exception-details.csv.",
+      ja: "このタスクは v4.0.x から変換されたため、失敗したオブジェクトは例外記録に表示されません。タスクレポートをエクスポートし、file-results.csv と exception-details.csv で確認してください。",
+    },
+  "当前版本不会改用备用传输方式，因此不产生降级记录；从 v4.0.x 转换的任务的降级记录不在此列出。":
+    {
+      en: "This version does not switch to a fallback transfer method, so it records no fallback objects; fallback records of tasks converted from v4.0.x are not listed here.",
+      ja: "このバージョンは代替の転送方式に切り替えないため、フォールバック記録は作成されません。v4.0.x から変換したタスクのフォールバック記録はここに表示されません。",
+    },
   "源对象已在源端删除，已跳过": {
     en: "The source object was deleted at the source and was skipped",
     ja: "ソースオブジェクトはソース側で削除されたため、スキップしました",
@@ -2866,10 +2876,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "对象存储之间迁移失败的对象。": {
     en: "Objects that failed to transfer between object storages.",
     ja: "オブジェクトストレージ間で転送に失敗したオブジェクト。",
-  },
-  "旧版传输引擎改用备用传输方式的对象。当前版本不再产生这类记录。": {
-    en: "Objects the legacy transfer engine moved with its fallback method. This version no longer creates such records.",
-    ja: "旧版の転送エンジンが代替方式で転送したオブジェクト。現在のバージョンではこの記録は作成されません。",
   },
   "与执行节点本地目录之间迁移失败的文件。": {
     en: "Files that failed to transfer to or from an execution node's local directory.",

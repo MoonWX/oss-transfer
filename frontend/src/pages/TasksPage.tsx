@@ -1256,21 +1256,34 @@ function TaskDetail({
             )}
           </Box>
           {(current.failedObjectCount > 0 ||
-            ["FAILED", "PARTIAL_FAILED"].includes(current.status)) && (
-            <Button
-              component={RouterLink}
-              to={`/exceptions?taskId=${current.taskIndex}&type=${local ? "local" : "oss"}`}
-              onClick={onClose}
-              color="warning"
-              variant="outlined"
-              endIcon={<ArrowForwardRounded />}
-              sx={{ mb: 3 }}
-            >
-              {current.failedObjectCount > 0
-                ? tr("查看失败对象")
-                : tr("查看异常记录")}
-            </Button>
-          )}
+            ["FAILED", "PARTIAL_FAILED"].includes(current.status)) &&
+            (current.legacyHistorical ? (
+              // A task converted from v4.0.x: its failed objects are only in
+              // its task report, so the exception records would be empty.
+              <Alert
+                severity="info"
+                data-testid="legacy-failures-note"
+                sx={{ mb: 3 }}
+              >
+                {tr(
+                  "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                )}
+              </Alert>
+            ) : (
+              <Button
+                component={RouterLink}
+                to={`/exceptions?taskId=${current.taskIndex}&type=${local ? "local" : "oss"}`}
+                onClick={onClose}
+                color="warning"
+                variant="outlined"
+                endIcon={<ArrowForwardRounded />}
+                sx={{ mb: 3 }}
+              >
+                {current.failedObjectCount > 0
+                  ? tr("查看失败对象")
+                  : tr("查看异常记录")}
+              </Button>
+            ))}
           <Divider sx={{ mb: 3 }} />
           <Typography variant="h6" sx={{ mb: 2 }}>
             {tr("执行信息")}
@@ -2765,7 +2778,22 @@ export default function TasksPage({
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        {task.failedObjectCount > 0 ? (
+                        {task.failedObjectCount > 0 && task.legacyHistorical ? (
+                          <Tooltip
+                            title={tr(
+                              "该任务从 v4.0.x 转换而来，其失败对象不在异常记录中列出。请导出该任务的任务报告，在 file-results.csv 和 exception-details.csv 中查看。",
+                            )}
+                          >
+                            <Typography
+                              variant="body2"
+                              color="warning.main"
+                              tabIndex={0}
+                              data-testid="legacy-failed-count"
+                            >
+                              {formatNumber(task.failedObjectCount)}
+                            </Typography>
+                          </Tooltip>
+                        ) : task.failedObjectCount > 0 ? (
                           <Button
                             size="small"
                             color="warning"

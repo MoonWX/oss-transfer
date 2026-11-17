@@ -1183,6 +1183,28 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Concurrency cannot be changed while the node is offline.",
     ja: "オフラインのノードでは並列数を変更できません。",
   },
+  "同时运行的扫描数，1–16，默认 2。每个对象存储扫描同一时间有一个 LIST 请求在途，所有扫描共用节点的 LIST 上限；每个清单扫描最多同时发出 16 个 HEAD，受节点的 HEAD 上限约束；每个本地目录扫描最多同时查询 32 个条目，源端为 NFS 时调高会挤占传输所需的连接。":
+    {
+      en: "Scans that can run at once, 1–16, default 2. Each object storage scan keeps one LIST request in flight, and all scans share the node's LIST limit; each file-list scan keeps up to 16 HEAD requests in flight within the node's HEAD limit; each local directory scan keeps up to 32 entry lookups in flight, so on an NFS source a higher value takes connections that transfers need.",
+      ja: "同時に実行できるスキャンの数です（1–16、既定値 2）。オブジェクトストレージのスキャンは LIST リクエストを 1 件ずつ送り、すべてのスキャンがノードの LIST 上限を共有します。マニフェストのスキャンは最大 16 件の HEAD を同時に送り、ノードの HEAD 上限に従います。ローカルディレクトリのスキャンは最大 32 件のエントリ照会を同時に行うため、転送元が NFS の場合、値を上げると転送に必要な接続が不足することがあります。",
+    },
+  "调低后，正在运行的扫描不会中断；运行中的扫描数少于新上限后，才会开始新的扫描。":
+    {
+      en: "Lowering it does not interrupt running scans; new scans start only once fewer scans than the new limit are running.",
+      ja: "値を下げても実行中のスキャンは中断されません。実行中のスキャンが新しい上限を下回ってから、新しいスキャンを開始します。",
+    },
+  "扫描并发必须是 1–16 的整数。": {
+    en: "Scan concurrency must be a whole number from 1 to 16.",
+    ja: "スキャン並列数は 1–16 の整数で指定してください。",
+  },
+  "此节点的 Agent 版本较旧，扫描并发固定为 2；升级后才能修改。": {
+    en: "This node's Agent runs an older version with scan concurrency fixed at 2; update it to change the value.",
+    ja: "このノードの Agent はバージョンが古く、スキャン並列数は 2 に固定されています。変更するにはアップグレードしてください。",
+  },
+  "正在运行的扫描多于新上限；它们陆续结束后，按新上限开始新的扫描。": {
+    en: "More scans are running than the new limit allows; new scans start under the new limit as these finish.",
+    ja: "新しい上限を超える数のスキャンが実行中です。これらが終わるにつれ、新しい上限に従ってスキャンを開始します。",
+  },
   未完成子任务: {
     en: "Unfinished subtasks",
     ja: "未完了のサブタスク",

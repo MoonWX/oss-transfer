@@ -96,8 +96,10 @@ func adminData(value map[string]interface{}) map[string]interface{} {
 func runNodeAdmin(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	if action == "update" {
 		for _, arg := range args {
-			if arg == "--child-concurrency" || strings.HasPrefix(arg, "--child-concurrency=") || arg == "--object-concurrency" || strings.HasPrefix(arg, "--object-concurrency=") {
-				return agentUpdate(client, args)
+			for _, flag := range []string{"--child-concurrency", "--object-concurrency", "--scan-concurrency"} {
+				if arg == flag || strings.HasPrefix(arg, flag+"=") {
+					return agentUpdate(client, args)
+				}
 			}
 		}
 	}

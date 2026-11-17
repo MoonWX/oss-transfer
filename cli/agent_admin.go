@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -43,12 +46,12 @@ func agentShow(client *ApiClient, args []string) (map[string]interface{}, error)
 }
 
 func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, error) {
-	o, err := parseCommandOptions(args, []string{"label", "local-root", "child-concurrency", "object-concurrency"}, []string{"clear-local-roots"})
+	o, err := parseCommandOptions(args, []string{"label", "local-root", "child-concurrency", "object-concurrency", "scan-concurrency"}, []string{"clear-local-roots"})
 	if err != nil {
 		return nil, err
 	}
-	if len(o.Positionals) != 1 || len(o.Values["label"]) > 1 || !o.Has("label") && !o.Has("local-root") && !o.Has("clear-local-roots") && !o.Has("child-concurrency") && !o.Has("object-concurrency") {
-		return nil, cliErrorf("用法: agent update <节点> [--label 名称] [--child-concurrency 数量] [--object-concurrency 数量] [--local-root 目录 ... | --clear-local-roots]")
+	if len(o.Positionals) != 1 || len(o.Values["label"]) > 1 || !o.Has("label") && !o.Has("local-root") && !o.Has("clear-local-roots") && !o.Has("child-concurrency") && !o.Has("object-concurrency") && !o.Has("scan-concurrency") {
+		return nil, cliErrorf("用法: agent update <节点> [--label 名称] [--child-concurrency 数量] [--object-concurrency 数量] [--scan-concurrency 数量] [--local-root 目录 ... | --clear-local-roots]")
 	}
 	if err := adminNodeAddress(o.Positionals[0]); err != nil {
 		return nil, err
@@ -80,7 +83,7 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 		flag, key string
 		max       int
 	}{
-		{"child-concurrency", "maxConcurrentChildren", 256}, {"object-concurrency", "objectsPerChild", 64},
+		{"child-concurrency", "maxConcurrentChildren", 256}, {"object-concurrency", "objectsPerChild", 64}, {"scan-concurrency", "maxConcurrentScans", 16},
 	} {
 		if !o.Has(field.flag) {
 			continue
@@ -99,14 +102,37 @@ func agentUpdate(client *ApiClient, args []string) (map[string]interface{}, erro
 	result, err := client.Put("/nodes/"+url.PathEscape(o.Positionals[0]), body)
 	if err == nil {
 		setCLISummary(result, nodeUpdatedSummary(client, o.Positionals[0], body))
+	} else if masterRejectedScanConcurrency(body, err) {
+		return result, cliErrorf("Master 版本较旧，不支持设置扫描并发；请先升级 Master。")
 	}
 	return result, err
+}
+
+// masterRejectedScanConcurrency reports a Master that predates scan
+// concurrency. It decodes a node change strictly and answers a field it does
+// not know with its malformed-request message, in the language the CLI asked
+// for. A current Master gives that answer only to a body that is not valid
+// JSON of the expected types or exceeds its 16 KiB limit, which this command
+// never sends otherwise.
+func masterRejectedScanConcurrency(body map[string]interface{}, err error) bool {
+	var problem *apiHTTPError
+	if _, sent := body["maxConcurrentScans"]; !sent || !errors.As(err, &problem) || problem.Status != http.StatusBadRequest {
+		return false
+	}
+	if encoded, encodeErr := json.Marshal(body); encodeErr != nil || len(encoded) > 16*1024 {
+		return false
+	}
+	switch problem.Message {
+	case "Invalid JSON request", "JSON 请求格式无效", "JSON 要求の形式が無効です":
+		return true
+	}
+	return false
 }
 
 // nodeUpdatedSummary confirms the fields a node update changed.
 func nodeUpdatedSummary(client *ApiClient, node string, body map[string]interface{}) string {
 	changes := []string{}
-	for _, field := range []struct{ key, label string }{{"address", "节点标识"}, {"label", "名称"}, {"maxConcurrentChildren", "子任务并发"}, {"objectsPerChild", "每个子任务的对象并发"}, {"advertisedLocalRoots", "登记目录"}} {
+	for _, field := range []struct{ key, label string }{{"address", "节点标识"}, {"label", "名称"}, {"maxConcurrentChildren", "子任务并发"}, {"objectsPerChild", "每个子任务的对象并发"}, {"maxConcurrentScans", "扫描并发"}, {"advertisedLocalRoots", "登记目录"}} {
 		value, ok := body[field.key]
 		if !ok || field.key == "address" && value == node {
 			continue

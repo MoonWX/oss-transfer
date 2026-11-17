@@ -627,16 +627,19 @@ Usage: oss-transfer-cli node <subcommand> [arguments]
   invite [--address node] [--label name] [--master-url URL]
   update <node> [--address new-address] [--label name]
   update <node> --child-concurrency 32 --object-concurrency 4
+  update <node> --scan-concurrency 4
   remove <node> --yes              Remove the registration
 
   oss-transfer-cli node list --watch 5
   oss-transfer-cli node add 10.0.0.2 --label data-node
+  oss-transfer-cli node update 10.0.0.2 --scan-concurrency 4
   oss-transfer-cli node remove 10.0.0.2 --yes
 
 Use the Node ID column from node list to select a node in commands. Add nodes with agent invite; --address accepts a name, IPv4 or IPv6 and is generated when omitted.
 Agent addresses cannot be edited after registration; join again when replacing a node.
 node network retains legacy address settings. New invitations use the current CLI connection address; --master-url sets an address the Agent can reach.
 The server checks identity, active tasks and Master restrictions. Unresponsive nodes are listed.
+--scan-concurrency sets how many scans can run at once (1–16, default 2); in the Scans column of node list, 1/2 means that 1 scan is running under a limit of 2. Lowering it does not interrupt running scans; new scans start only once fewer scans than the new limit are running. Agents running an older version keep a fixed scan concurrency of 2 until they are updated.
 Removing a node makes the task reports (per-object results) and object comparison results stored on it unavailable; export them first with task report and object export if you need them.
 Use --json for queue/raw rate data; use limit list for limits.
 `, `実行ノード
@@ -650,16 +653,19 @@ Use --json for queue/raw rate data; use limit list for limits.
   invite [--address ノード] [--label 名前] [--master-url URL]
   update <ノード> [--address 新アドレス] [--label 名前]
   update <ノード> --child-concurrency 32 --object-concurrency 4
+  update <ノード> --scan-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli node list --watch 5
   oss-transfer-cli node add 10.0.0.2 --label data-node
+  oss-transfer-cli node update 10.0.0.2 --scan-concurrency 4
   oss-transfer-cli node remove 10.0.0.2 --yes
 
 コマンドのノード指定には node list の「ノード ID」列を使います。追加は agent invite を使い、--address は名前、IPv4、IPv6 に対応します。省略時は自動生成されます。
 登録済み Agent のアドレスは直接変更できません。置き換え時は再参加してください。
 node network は旧版のアドレス設定を保持します。新しい招待は CLI の接続先を使用します。Agent が接続できるアドレスは --master-url で指定できます。
 サーバーが ID、実行中タスク、Master の制約を確認します。応答しないノードも表示します。
+--scan-concurrency は同時に実行できるスキャンの数です（1–16、既定値 2）。node list の「スキャン」列の 1/2 は、上限 2 のうち 1 件のスキャンが実行中であることを示します。値を下げても実行中のスキャンは中断されません。実行中のスキャンが新しい上限を下回ってから、新しいスキャンを開始します。古いバージョンの Agent はスキャン並列数が 2 に固定されており、アップグレードするまで変更できません。
 ノードを削除すると、そのノードに保存されているタスクレポート（オブジェクトごとの結果）とオブジェクト比較の結果は取得できなくなります。必要な場合は先に task report と object export でエクスポートしてください。
 キューや速度の生データは --json、上限は limit list で確認できます。
 `},
@@ -674,6 +680,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
   update <node> [--label name] [--local-root path ...]
   update <node> --clear-local-roots
   update <node> --child-concurrency 32 --object-concurrency 4
+  update <node> --scan-concurrency 4
   remove <node> --yes              Revoke registration
 
   oss-transfer-cli agent invite --address storage-node --label transfer-node
@@ -684,6 +691,7 @@ Usage: oss-transfer-cli agent <subcommand> [arguments]
 --master-url sets the address Agents use to reach Master; it defaults to the current CLI connection address.
 Invitations expire after 30 minutes and can be used once. On the host to add, run one of the commands: the native installer for Linux, macOS or FreeBSD, the Windows PowerShell command, or the Docker command (also for Docker Desktop).
 --local-root uses absolute paths on the Agent OS and replaces the existing root list.
+--scan-concurrency sets how many scans can run at once (1–16, default 2). Lowering it does not interrupt running scans; new scans start only once fewer scans than the new limit are running. Agents running an older version keep a fixed scan concurrency of 2 until they are updated.
 Removing a node makes the task reports (per-object results) and object comparison results stored on it unavailable; export them first with task report and object export if you need them.
 `, `Agent 管理
 使い方: oss-transfer-cli agent <サブコマンド> [引数]
@@ -696,6 +704,7 @@ Removing a node makes the task reports (per-object results) and object compariso
   update <ノード> [--label 名前] [--local-root パス ...]
   update <ノード> --clear-local-roots
   update <ノード> --child-concurrency 32 --object-concurrency 4
+  update <ノード> --scan-concurrency 4
   remove <ノード> --yes            登録を解除
 
   oss-transfer-cli agent invite --address storage-node --label transfer-node
@@ -706,6 +715,7 @@ Removing a node makes the task reports (per-object results) and object compariso
 --master-url は Agent が接続する Master の URL です。省略時は CLI の接続先を使用します。
 招待の有効期限は 30 分で、1 回のみ使用できます。追加するホストで、Linux / macOS / FreeBSD のネイティブインストールコマンド、Windows PowerShell コマンド、Docker コマンド（Docker Desktop でも可）のいずれかを実行してください。
 --local-root は Agent の OS 上の絶対パスです。既存のルート一覧を置き換えます。
+--scan-concurrency は同時に実行できるスキャンの数です（1–16、既定値 2）。値を下げても実行中のスキャンは中断されません。実行中のスキャンが新しい上限を下回ってから、新しいスキャンを開始します。古いバージョンの Agent はスキャン並列数が 2 に固定されており、アップグレードするまで変更できません。
 ノードを削除すると、そのノードに保存されているタスクレポート（オブジェクトごとの結果）とオブジェクト比較の結果は取得できなくなります。必要な場合は先に task report と object export でエクスポートしてください。
 `},
 	cliSetupHelp: {`First login

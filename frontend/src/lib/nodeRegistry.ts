@@ -212,6 +212,7 @@ export type NodeChange = {
   advertisedLocalRoots?: string[];
   maxConcurrentChildren?: number;
   objectsPerChild?: number;
+  maxConcurrentScans?: number;
 };
 export type AgentDownloadSource =
   | { kind: "master" }

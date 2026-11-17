@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // scanSpy is a localScanFS that counts calls by the key they reach and lets a
@@ -225,6 +226,168 @@ func TestLocalScanKeepsNameOrderWhateverOrderLookupsFinish(t *testing.T) {
 	}
 	if most.Load() != localScanWindow {
 		t.Fatalf("%d lookups were in flight at once, want %d", most.Load(), localScanWindow)
+	}
+}
+
+// within returns the next value on signal. The timeout is a hang guard only:
+// it fails a scan that never sends it.
+func within[T any](t *testing.T, signal <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-signal:
+		return value
+	case <-time.After(time.Minute):
+		t.Fatalf("hang guard: %s", what)
+		var zero T
+		return zero
+	}
+}
+
+// While the head's lookup waits, each lookup that finishes behind it frees
+// its slot for the next name: the window stays full instead of draining.
+func TestLocalScanRefillsTheWindowWhileTheHeadWaits(t *testing.T) {
+	local, root := localFixture(t)
+	names := numbered("f", 100)
+	writeFiles(t, root, names...)
+	spy := spyOnScan(local, root)
+	gates := map[string]chan struct{}{}
+	for _, name := range names {
+		gates[name] = make(chan struct{})
+	}
+	arrived := make(chan string, len(names))
+	var blocked, most atomic.Int32
+	spy.lstat = func(key string, call func() (fs.FileInfo, error)) (fs.FileInfo, error) {
+		now := blocked.Add(1)
+		for {
+			if old := most.Load(); now <= old || most.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		arrived <- key
+		<-gates[key]
+		blocked.Add(-1)
+		return call()
+	}
+	result := make(chan []Page, 1)
+	go func() {
+		pages, err := scanAll(local, context.Background(), ListOptions{})
+		if err != nil {
+			t.Error(err)
+		}
+		result <- pages
+	}()
+	first := map[string]bool{}
+	for range localScanWindow {
+		first[within(t, arrived, "the window was not filled")] = true
+	}
+	// The head, f0000, still waits; one lookup behind it finishes.
+	opened := map[string]bool{"f0001": true}
+	close(gates["f0001"])
+	next := within(t, arrived, "no lookup was issued while the head waited")
+	if first[next] || next != "f0032" {
+		t.Fatalf("issued %s while the head waited, want f0032", next)
+	}
+	opened[next] = true
+	close(gates[next])
+	for _, name := range names {
+		if !opened[name] {
+			close(gates[name])
+		}
+	}
+	pages := within(t, result, "the scan did not end")
+	if got := objectKeys(pages); !reflect.DeepEqual(got, names) {
+		t.Fatalf("objects out of name order: %v", got)
+	}
+	if most.Load() != localScanWindow {
+		t.Fatalf("%d lookups were in flight at once, want %d", most.Load(), localScanWindow)
+	}
+}
+
+// Behind a head that waits, results park up to the last name the open page
+// can reach, and no further: each entry is still looked up exactly once.
+func TestLocalScanParksResultsUpToThePageBehindASlowHead(t *testing.T) {
+	local, root := localFixture(t)
+	names := numbered("f", 300)
+	writeFiles(t, root, names...)
+	spy := spyOnScan(local, root)
+	release, reached := make(chan struct{}), make(chan struct{})
+	var lookups atomic.Int32
+	spy.lstat = func(key string, call func() (fs.FileInfo, error)) (fs.FileInfo, error) {
+		if lookups.Add(1) == 100 {
+			close(reached)
+		}
+		if key == "f0000" {
+			<-release
+		}
+		return call()
+	}
+	var atFirstPage int
+	result := make(chan error, 1)
+	var pages []Page
+	go func() {
+		result <- local.ScanPages(context.Background(), ListOptions{Limit: 100}, func(page Page) error {
+			if len(pages) == 0 {
+				atFirstPage = spy.total("lstat")
+			}
+			pages = append(pages, page)
+			return nil
+		})
+	}()
+	within(t, reached, "results did not park up to the page while the head waited")
+	close(release)
+	if err := within(t, result, "the scan did not end"); err != nil {
+		t.Fatal(err)
+	}
+	if atFirstPage != 100 || !reflect.DeepEqual(objectKeys(pages[:1]), names[:100]) {
+		t.Fatalf("first page after %d lookups: %v", atFirstPage, objectKeys(pages[:1]))
+	}
+	if !reflect.DeepEqual(objectKeys(pages), names) {
+		t.Fatal("objects out of name order")
+	}
+	for _, name := range names {
+		if n := spy.called("lstat", name); n != 1 {
+			t.Fatalf("%s was looked up %d times", name, n)
+		}
+	}
+}
+
+// Results a directory holds as the scan enters a subdirectory wait for the
+// scan's return, and are not looked up again.
+func TestLocalScanKeepsParkedResultsAcrossASubdirectory(t *testing.T) {
+	local, root := localFixture(t)
+	files := numbered("b", 60)
+	writeFiles(t, root, files...)
+	writeFiles(t, root, "a/x")
+	spy := spyOnScan(local, root)
+	release, reached := make(chan struct{}), make(chan struct{})
+	var behind atomic.Int32
+	spy.lstat = func(key string, call func() (fs.FileInfo, error)) (fs.FileInfo, error) {
+		switch {
+		case key == "a" && spy.called("lstat", "a") == 1:
+			<-release
+		case strings.HasPrefix(key, "b") && behind.Add(1) == int32(len(files)):
+			close(reached)
+		}
+		return call()
+	}
+	result := make(chan []Page, 1)
+	go func() {
+		pages, err := scanAll(local, context.Background(), ListOptions{})
+		if err != nil {
+			t.Error(err)
+		}
+		result <- pages
+	}()
+	within(t, reached, "the files behind a slow directory were not looked up")
+	close(release)
+	pages := within(t, result, "the scan did not end")
+	if got := objectKeys(pages); !reflect.DeepEqual(got, append([]string{"a/x"}, files...)) {
+		t.Fatalf("objects: %v", got)
+	}
+	for _, name := range append([]string{"a/x"}, files...) {
+		if n := spy.called("lstat", name); n != 1 {
+			t.Fatalf("%s was looked up %d times", name, n)
+		}
 	}
 }
 

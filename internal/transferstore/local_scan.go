@@ -20,9 +20,8 @@ import (
 const localScanCursorKind = "local-scan-v1"
 
 const (
-	// localScanWindow is the most entry lookups one scan has in flight, and
-	// the most results one directory keeps parked while the scan is below it.
-	// An entry lookup is one metadata round trip on the source: on NFS a
+	// localScanWindow is the most entry lookups one scan has in flight. An
+	// entry lookup is one metadata round trip on the source: on NFS a
 	// LOOKUP or GETATTR, often tens of milliseconds. 32 of them in flight
 	// make 1,600 lookups a second at 20 ms; strand at most 32 threads on a
 	// hung mount; use half of Linux's default 64 NFSv4.1 session slots,
@@ -30,6 +29,10 @@ const (
 	// cannot stall another task's scan. It is not derived from the local
 	// operation limit: that is a rate without burst which every lookup waits
 	// in, so lookups in flight settle at min(32, rate x round trip) anyway.
+	// It bounds the lookups in flight only: results that finish ahead of a
+	// slower one wait in their directory's ring (see fill), and the slots
+	// they free go to the next names, so one slow lookup delays its own
+	// entry and not the 31 behind it.
 	localScanWindow = 32
 	// localScanNames is how many names one directory read asks for: about
 	// one 64 KiB NFS READDIR reply, and one step of reported progress.
@@ -225,6 +228,7 @@ type localScan struct {
 	objects    []Object
 	visited    int
 	slots      chan struct{} // one per lookup in flight
+	released   chan struct{} // signalled whenever a lookup returns its slot
 	workers    sync.WaitGroup
 	// page is cancelled when the open page ends, releasing the lookups that
 	// still wait for the local operation limit.
@@ -246,7 +250,7 @@ func (s *Local) newScan(ctx context.Context, options ListOptions, limit int, emi
 			scan.earlyFlush = tuning.earlyFlush
 		}
 	}
-	scan.slots = make(chan struct{}, scan.window)
+	scan.slots, scan.released = make(chan struct{}, scan.window), make(chan struct{}, 1)
 	scan.page, scan.endPage = context.WithCancel(ctx)
 	return scan
 }
@@ -562,7 +566,7 @@ func (scan *localScan) askDone(frame *localScanFrame, from int) error {
 
 // head returns the finished lookup of the frame's next name.
 func (scan *localScan) head(frame *localScanFrame) (*localLookup, error) {
-	scan.fill(frame)
+	scan.fill(frame, false)
 	if len(frame.ring) == 0 || frame.ring[0].index != frame.next {
 		// fill issues the head unless the scan stopped while it waited for
 		// a free slot.
@@ -572,7 +576,7 @@ func (scan *localScan) head(frame *localScanFrame) (*localLookup, error) {
 		return nil, errors.New("scan lookup was not issued")
 	}
 	lookup := frame.ring[0]
-	if err := scan.await(lookup); err != nil {
+	if err := scan.await(frame, lookup); err != nil {
 		return nil, err
 	}
 	frame.ring[0] = nil
@@ -581,13 +585,19 @@ func (scan *localScan) head(frame *localScanFrame) (*localLookup, error) {
 }
 
 // fill issues lookups for the frame's names from its head on, in order. It
-// stops at window lookups in flight in the scan or parked in the frame, and
-// at the last name the open page can reach, so no lookup outlives its page
-// in a flat directory. The head's own lookup waits for a free slot; the
-// others are issued only while one is free.
-func (scan *localScan) fill(frame *localScanFrame) {
+// stops at the last name the open page can reach, so no lookup outlives its
+// page in a flat directory, and at window lookups in the frame's ring, in
+// flight or parked. Behind a head that is still being looked up, the ring
+// grows on up to parked: the window then bounds only the lookups in flight,
+// and the slots of those that finish go to the next names. The head's own
+// lookup waits for a free slot; the others are issued only while one is free.
+func (scan *localScan) fill(frame *localScanFrame, behind bool) {
 	end := min(len(frame.names), frame.next+scan.limit-scan.visited)
-	for frame.issue < end && len(frame.ring) < scan.window {
+	held := scan.window
+	if behind {
+		held = scan.parked(frame)
+	}
+	for frame.issue < end && len(frame.ring) < held {
 		index := frame.issue
 		name := frame.names[index]
 		if !scanEntryName(name) {
@@ -617,6 +627,33 @@ func (scan *localScan) fill(frame *localScanFrame) {
 	}
 }
 
+// parked is how many lookups, finished or not, frame may hold in its ring
+// behind a head that is still being looked up: a page's worth, less what its
+// ancestors still hold from before the scan entered it, and never less than
+// the window. Results a directory holds as the scan enters a subdirectory
+// wait for the scan's return; if the page ends first, they are dropped like
+// any other result the page did not reach. A chain of directories, each
+// entered while it held a page's worth, holds at most a page and a window
+// per directory.
+func (scan *localScan) parked(frame *localScanFrame) int {
+	ancestors := 0
+	for _, other := range scan.frames {
+		if other != frame {
+			ancestors += len(other.ring)
+		}
+	}
+	return max(scan.window, scan.limit-ancestors)
+}
+
+// notify signals a channel of capacity one without waiting: a signal sent
+// while another is pending merges with it.
+func notify(signal chan struct{}) {
+	select {
+	case signal <- struct{}{}:
+	default:
+	}
+}
+
 func (scan *localScan) acquire(wait bool) bool {
 	select {
 	case scan.slots <- struct{}{}:
@@ -634,18 +671,26 @@ func (scan *localScan) acquire(wait bool) bool {
 	}
 }
 
-func (scan *localScan) await(lookup *localLookup) error {
+// await waits for the lookup at the head of frame. Each lookup that returns
+// its slot meanwhile lets fill issue the next name, so the lookups behind a
+// slow head keep the window busy instead of finishing one by one and leaving
+// it empty.
+func (scan *localScan) await(frame *localScanFrame, lookup *localLookup) error {
 	select {
 	case <-lookup.done:
 		return nil
 	default:
 	}
 	defer scan.activity.await(&lookup.phase)()
-	select {
-	case <-lookup.done:
-		return nil
-	case <-scan.ctx.Done():
-		return scan.ctx.Err()
+	for {
+		select {
+		case <-lookup.done:
+			return nil
+		case <-scan.released:
+			scan.fill(frame, true)
+		case <-scan.ctx.Done():
+			return scan.ctx.Err()
+		}
 	}
 }
 
@@ -655,7 +700,10 @@ func (scan *localScan) lookup(frame *localScanFrame, index int, name, key string
 	scan.workers.Add(1)
 	go func() {
 		defer scan.workers.Done()
-		defer func() { <-scan.slots }()
+		defer func() {
+			<-scan.slots
+			notify(scan.released)
+		}()
 		defer close(lookup.done)
 		scan.examine(ctx, lookup, dir, name, key, file, directory)
 		lookup.phase.Store(lookupFinished)

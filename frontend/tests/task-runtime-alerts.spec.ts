@@ -12,6 +12,11 @@ const LEASE =
 const SCANNER =
   "Waiting for scanning node scanner (10.0.1.12) to reconnect; existing child tasks remain assigned to their original nodes";
 const OLD_LEASE = "Waiting for an unavailable node's execution lease to expire";
+// What the runtime records when a task's shared directory is not what it was.
+const SKIP_UPGRADE =
+  "Upgrade Agent planned-b (10.0.1.13) to run a task whose shared directory check was skipped";
+const NOT_SAME_SOURCE =
+  "Agent planned-b (10.0.1.13) does not expose the same source directory: context deadline exceeded";
 
 /**
  * The task detail polls /api/master/status every second on a paused clock.
@@ -165,6 +170,21 @@ test("a missing bucket, which the SDK reports without 'api error', is explained"
   );
 });
 
+test("shared directory problems of a running task are translated", async ({
+  page,
+}) => {
+  await setup(page, () => ({
+    status: "FAILED",
+    errorMessage: `${SKIP_UPGRADE}\n${NOT_SAME_SOURCE}`,
+  }));
+  await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
+  await expect(alert(page).locator("p")).toHaveText([
+    "请先升级执行节点 planned-b (10.0.1.13)，才能运行已跳过共享目录校验的任务",
+    "执行节点 planned-b (10.0.1.13) 看到的源目录与其他节点不一致：请求超时",
+  ]);
+  await expect(alert(page)).not.toContainText("错误详情");
+});
+
 test("storage error text is classified only in storage context", async ({
   page,
 }) => {
@@ -206,6 +226,20 @@ test.describe("English", () => {
       "Agent planned-b (10.0.1.13) is unavailable; its assigned work stays on it: The request timed out",
       OLD_LEASE,
       "Details: unexpected EOF",
+    ]);
+  });
+
+  test("shared directory problems keep the Master's wording", async ({
+    page,
+  }) => {
+    await setup(page, () => ({
+      status: "FAILED",
+      errorMessage: `${SKIP_UPGRADE}\n${NOT_SAME_SOURCE}`,
+    }));
+    await advanceUntilVisible(page, page.getByText(/^snapshot-\d+$/));
+    await expect(alert(page).locator("p")).toHaveText([
+      SKIP_UPGRADE,
+      "Agent planned-b (10.0.1.13) does not expose the same source directory: The request timed out",
     ]);
   });
 });

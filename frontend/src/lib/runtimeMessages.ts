@@ -81,6 +81,17 @@ export const runtimeMessageRules: readonly {
     values: ["node", "reason"],
   },
   {
+    pattern: /^Agent (.+?) does not expose the same source directory: (.+)$/s,
+    message: "执行节点 {node} 看到的源目录与其他节点不一致：{reason}",
+    values: ["node", "reason"],
+  },
+  {
+    pattern:
+      /^Upgrade Agent (.+) to run a task whose shared directory check was skipped$/,
+    message: "请先升级执行节点 {node}，才能运行已跳过共享目录校验的任务",
+    values: ["node"],
+  },
+  {
     pattern: /^waiting for every task node to verify the shared directory$/,
     message: "等待所有任务节点验证共享目录",
   },

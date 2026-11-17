@@ -936,6 +936,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "I have confirmed that the new nodes mount the same storage",
     ja: "新しいノードが同じストレージをマウントしていることを確認しました",
   },
+  "请先升级执行节点 {node}，才能运行已跳过共享目录校验的任务": {
+    en: "Upgrade Agent {node} to run a task whose shared directory check was skipped",
+    ja: "共有ディレクトリの検証を省略したタスクを実行するには Agent {node} を更新してください",
+  },
+  "执行节点 {node} 看到的源目录与其他节点不一致：{reason}": {
+    en: "Agent {node} does not expose the same source directory: {reason}",
+    ja: "Agent {node} から見えるソースディレクトリが他のノードと一致しません：{reason}",
+  },
   确认新节点挂载同一份存储后才能继续: {
     en: "Confirm that the new nodes mount the same storage to continue",
     ja: "新しいノードが同じストレージをマウントしていることを確認すると続行できます",

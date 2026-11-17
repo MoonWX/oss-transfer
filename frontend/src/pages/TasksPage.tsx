@@ -653,7 +653,13 @@ function TaskDetail({
     { code: string; severity?: string; message?: string } | undefined;
   const offlineNodes =
     (attentionTask?.offlineNodes as
-      { displayLabel?: string; lastSeen?: number }[] | undefined) || [];
+      | {
+          displayLabel?: string;
+          lastSeen?: number;
+          /** No connection recorded since the Master started at this time. */
+          notConnectedSince?: number;
+        }[]
+      | undefined) || [];
   const attentionCauses =
     (
       attentionTask?.failureSummary as
@@ -1155,9 +1161,14 @@ function TaskDetail({
                           node: node.displayLabel || "",
                           time: formatDate(node.lastSeen),
                         })
-                      : tr("{node} 尚未连接", {
-                          node: node.displayLabel || "",
-                        })}
+                      : node.notConnectedSince
+                        ? tr("{node} 自 Master 启动（{time}）以来未连接", {
+                            node: node.displayLabel || "",
+                            time: formatDate(node.notConnectedSince),
+                          })
+                        : tr("{node} 的最后连接时间未知", {
+                            node: node.displayLabel || "",
+                          })}
                   </Typography>
                 ))}
               {attention.code === "OBJECTS_FAILED" && (

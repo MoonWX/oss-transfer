@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 )
 
 func renderTaskRuntimeResult(out io.Writer, result map[string]interface{}) bool {
@@ -30,12 +31,20 @@ func renderTaskRuntimeResult(out io.Writer, result map[string]interface{}) bool 
 		fmt.Fprintln(out, cliText(out, "当前节点不支持文件进度，请升级 Agent。"))
 		return true
 	}
-	if data["partial"] == true {
-		fmt.Fprintln(out, cliText(out, "部分文件进度暂不可用，请稍后刷新。"))
-	}
 	rows := objectList(data["items"])
-	if len(rows) == 0 {
+	if data["partial"] == true {
+		// Name the nodes that did not answer: their files are missing, and
+		// waiting for a refresh does not help while they stay silent.
+		if nodes := cliUnreportedNodes(data); nodes != "" {
+			fmt.Fprintln(out, cliTextf(out, "执行节点 %s 未响应，其文件进度暂不可用。", nodes))
+		} else {
+			fmt.Fprintln(out, cliText(out, "部分文件进度暂不可用，请稍后刷新。"))
+		}
+	} else if len(rows) == 0 {
 		fmt.Fprintln(out, cliText(out, "当前没有可显示的文件传输进度。"))
+		return true
+	}
+	if len(rows) == 0 {
 		return true
 	}
 	table := newCLITable(out)
@@ -54,4 +63,16 @@ func renderTaskRuntimeResult(out io.Writer, result map[string]interface{}) bool 
 		fmt.Fprintln(out, cliText(out, "更多文件请使用 --child 查看指定子任务。"))
 	}
 	return true
+}
+
+// cliUnreportedNodes lists the nodes a reply names as not reporting live
+// progress (unreportedNodes), or "".
+func cliUnreportedNodes(data map[string]interface{}) string {
+	var names []string
+	for _, node := range objectList(data["unreportedNodes"]) {
+		if name := firstNodeString(node, "displayLabel", "executionNodeIp"); name != "" {
+			names = append(names, safeCLIText(name))
+		}
+	}
+	return strings.Join(names, ", ")
 }

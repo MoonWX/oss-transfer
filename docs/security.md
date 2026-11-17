@@ -62,7 +62,7 @@ Here is how credentials flow through the system:
 3. The Master syncs every storage connection to every Agent. Each Agent stores it in `agent.db`, encrypted the same way with `agent.db.key`. This means every Agent holds every storage connection in the cluster.
 4. The console shows the access key but never the secret key. Leaving the key fields empty when editing keeps the saved values. In storage error details, keys appear as `[redacted]`.
 
-Create keys specifically for the migration, grant only the [minimum permissions](planning.md#storage-permissions), and revoke them when the migration is done. `storage remove` deletes a connection from the Master and every Agent. Only join Agents on hosts you trust as much as the Master.
+Create keys specifically for the migration, grant only the [minimum permissions](planning.md#storage-permissions), and revoke them when the migration is done. `storage remove` deletes a connection from the Master and every connected Agent at once. An offline Agent is not waited for: it keeps the deleted connection and its credentials until it next runs a task or an object comparison (or a later storage change reaches it while it is connected). The command and the console say so. Tasks only save the connection name: removing a connection prevents all tasks that use it from continuing until a connection with the same name is added again. Only join Agents on hosts you trust as much as the Master.
 
 Backups of a data directory that include the `.key` file contain usable credentials; protect them accordingly. If the database is copied without the key file, the credentials cannot be read. See [database maintenance](database-maintenance.md) for details.
 

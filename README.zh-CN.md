@@ -196,14 +196,14 @@ docker compose logs master
    ./oss-transfer-run.sh agent start --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<令牌>'
    ```
 
-   控制台的 **手动运行** 页签直接给出这条命令和直接运行程序的命令，**复制邀请链接** 只复制链接本身。加入成功后，再次启动时不需要 `--join-url`。
+   控制台的 **手动运行** 页签直接给出这条命令和直接运行程序的命令，**复制邀请链接** 只复制链接本身。加入成功后，再次启动时不需要 `--join-url`。再次传入 `--join-url` 会执行新的加入，这也可以用于重新加入已在 Master 上移除的节点。已注册的节点会被拒绝（HTTP 409），应不带 `--join-url` 启动。运行中的 Agent 不使用该链接，请用 `restart --join-url`。
 
 用法：`./oss-transfer-run.sh <master|agent> <start|stop|restart|status|logs> [选项]`
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--data 目录` | `<脚本目录>/data/<角色>` | 数据目录，日志在其中的 `logs/service.log`。每次都要使用同一个目录 |
-| `--listen 地址:端口` | `0.0.0.0:1685` | 仅 Master：监听地址 |
+| `--listen 地址:端口` | 首次启动为 `0.0.0.0:1685`，之后复用上一次成功的地址 | 仅 Master：监听地址。脚本会输出完整的监听地址。运行中的 Master 不接受新的 `--listen`，请用 `restart --listen` |
 | `--join-url 链接` | 无 | 仅 Agent，首次启动时必填：邀请链接，末尾的 `?lang=…` 会自动去掉 |
 
 `status` 只有在程序本身运行时才显示“正在运行”。程序反复退出时显示“正在重启”。被 Master 移除的 Agent 以状态码 78 退出，脚本不再重启它。
@@ -218,11 +218,11 @@ docker compose logs master
 
 | 程序 | 参数 | 说明 |
 | --- | --- | --- |
-| `oss-transfer-master` | `--listen` | 监听地址，默认 `:1685` |
+| `oss-transfer-master` | `--listen` | 监听地址；首次启动默认 `:1685`，之后复用上一次成功的地址 |
 | | `--data-dir` | 数据目录，默认 `./data/master` |
 | | `--config` | 用 `service.json` 指定以上设置和日志文件，代替命令行参数 |
 | | `--reset-admin-password [--username 名称]` | Master 停止时重置管理员密码 |
-| `oss-transfer-agent` | `--join-url` | 首次加入用的邀请链接，只能使用一次，30 分钟内有效；复制时带上的 `?lang=…` 等安装参数会被忽略 |
+| `oss-transfer-agent` | `--join-url` | 邀请链接，只能使用一次，30 分钟内有效。每次传入 `--join-url` 都会执行加入，也可以重新加入已在 Master 上移除的节点。已注册的节点会被拒绝（HTTP 409）。复制时带上的 `?lang=…` 等安装参数会被忽略 |
 | | `--master-url` 和 `--join-token` | 代替 `--join-url`：分别给出 Master 地址和邀请令牌（也可用环境变量 `OSS_TRANSFER_JOIN_TOKEN`） |
 | | `--data-dir` | 数据目录，默认 `./data/agent`，保存节点身份；之后启动只需要它 |
 | | `--label`、`--address` | 节点显示名称；节点地址或名称 |
@@ -264,7 +264,7 @@ Docker 部署时，在 Master 容器中运行：`docker compose exec master oss-
 
 迁移只复制对象，不删除对象。在源端删除的对象仍然保留在目标端，对象比对时列在“目标多余”中。清理方法见[源端删除的对象](docs/planning.zh-CN.md#源端删除的对象)。
 
-涉及本地文件时，路径指的是执行节点主机上的路径。多个节点处理同一个本地目录时，这个目录必须是共享目录。各节点的挂载路径可以不同，预检时写入一个小文件来确认它们指向同一个目录。
+涉及本地文件时，路径指的是执行节点主机上的路径。多个节点处理同一个本地目录时，这个目录必须是共享目录。各节点的挂载路径可以不同。预检会确认它们指向同一个目录：由一个节点写入测试文件，再由所有节点读取。所有节点都无法写入上传源时，预检改为抽样比对文件名、大小和修改时间。向任务添加节点时，无论创建任务时是否跳过了校验，新节点都按同样的方式校验；只有本次节点调整选择跳过，新节点才不校验（见[共享目录校验](docs/operations.zh-CN.md#共享目录校验)）。
 
 一个任务只反映扫描那一刻的数据。已扫描的部分之后发生的变化，本轮无法捕获。数据持续变化时，应分轮复制，在最后一轮前停写（见[切换](docs/planning.zh-CN.md#增量迁移与切换)）。
 
@@ -291,13 +291,13 @@ Linux 原生服务需要 systemd 219、Bash 4.2、curl 7.29 及以上版本。
 | [离线安装](docs/offline-install.zh-CN.md) | 在无法联网的环境中安装 |
 | [Docker Compose](docs/docker-compose.zh-CN.md) | 在 Linux 和 Docker Desktop 上用容器部署、容器中的执行节点、目录挂载、日志、CLI、更新和删除 |
 | [CLI](docs/cli.zh-CN.md) | 命令行的全部用法 |
-| [运维说明](docs/operations.zh-CN.md) | 并发、节点限速、任务限速分配、存储限流、大对象、对象比对、升级、预发布版本、故障转移、调整执行节点、断点续扫、重置密码 |
+| [运维说明](docs/operations.zh-CN.md) | 并发、扫描并发、节点限速、任务限速分配、存储限流、大对象、对象比对、升级、预发布版本、故障转移、调整执行节点、断点续扫、重置密码 |
 | [数据库维护](docs/database-maintenance.zh-CN.md) | 回收数据库文件空间 |
 | [从 V4.0.x 升级](docs/migration.zh-CN.md) | 旧版本数据的离线转换 |
 
 ## 从源码构建
 
-需要 Go 1.26、Node.js 22.12 或更高版本，以及 Python 3。
+需要 Go 1.26.11 或更高的 1.26 版本（`go.mod` 要求 1.26.11，用于修复 CVE-2026-27139），Node.js 22.12 或更高版本，以及 Python 3。
 
 ```sh
 ./build.sh          # 构建当前系统和架构

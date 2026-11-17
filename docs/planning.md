@@ -48,7 +48,7 @@ The download source for native execution nodes during the join is shown in the *
 
 The Master listens on `0.0.0.0:1685` by default. To use a different port, pass `--port` to `install.sh`; to bind a specific address, pass `--listen HOST:PORT` (effective only on the first installation; see [installation options](install.md#paths-and-ports)).
 
-The Master never contacts storage endpoints. Connection checks, bucket lists and object comparisons all run on execution nodes; the check when you save a connection is also run on an online execution node chosen by the Master. Add at least one execution node before you add storage connections, and make sure every execution node can reach every storage endpoint.
+The Master never contacts storage endpoints. Connection checks, bucket lists and object comparisons all run on execution nodes; the check when you save a connection is also run on an online execution node chosen by the Master, and the result names which node ran it. Only that one node is checked, so a task running on other nodes can still fail to reach the endpoint. Add at least one execution node before you add storage connections, and make sure every execution node can reach every storage endpoint.
 
 Hosts without internet access can use all features except online updates and public downloads. Install and upgrade them with [offline installation](offline-install.md). Execution nodes can also connect to the Master through an HTTPS reverse proxy; see [security](security.md#https-with-a-reverse-proxy) for the proxy settings.
 
@@ -89,7 +89,7 @@ With only **Overwrite existing objects or files** and without object comparison,
 
 For object comparison alone, grant `s3:ListBucket` and `s3:GetObject` on both buckets.
 
-If you are not sure whether the permissions are sufficient, use the [per-permission check](#check-each-permission-of-a-bucket) in the connection test on the target bucket with the write check selected to verify.
+If you are not sure whether the permissions are sufficient, use the [per-permission check](#check-each-permission-of-a-bucket) in the connection test on the target bucket with the write check selected to verify. When the key is only authorized to write under a specific prefix, also fill in the write prefix (CLI: `--prefix`).
 
 `s3:ListAllMyBuckets` is optional. With this permission, connection checks and the console can list your buckets. Without it, you can still use the system; see [bucket-scoped keys](#bucket-scoped-keys-and-the-connection-check).
 
@@ -171,13 +171,14 @@ In **Test connection**, enter a bucket name under **Check a bucket** and choose 
 | --- | --- | --- |
 | List objects | ListObjectsV2 | Scan the source, compare |
 | Read object metadata | HeadObject (first listed object) | Determine whether the target exists, verify results |
-| Read object content | GetObject, only 1 byte | Read source objects |
+| Read object content | GetObject, only 1 byte (the entire object when the first listed object is empty) | Read source objects |
 | Write an object (with the write check selected, CLI `--write`) | PutObject with `If-None-Match: *` | Write to the target; "Skip existing objects" uses this conditional write |
 | Read back the written object | HeadObject | Verify after writing |
-| Multipart upload | CreateMultipartUpload, UploadPart, AbortMultipartUpload | Upload and clean up large objects |
+| Multipart upload | CreateMultipartUpload, UploadPart | Upload large objects |
+| Abort multipart upload | AbortMultipartUpload | Clean up failed multipart uploads; not required for writing, and a failure only produces a warning without affecting the conclusion or the exit code |
 | Delete the test object | DeleteObject | Not needed for migrations; only removes the test object |
 
-The write check writes a very small test object under `.oss-transfer-permission-check/` and deletes it afterwards. The multipart upload is aborted after the check and leaves no data. Without delete permission, the result shows the key of the leftover test object so you can delete it manually. When the bucket is empty, reading objects cannot be checked and shows as skipped. In the CLI, the command exits with code 1 when any required check fails. This check requires a Master and Agents on v4.1.43 or later.
+The write check writes a very small test object under `.oss-transfer-permission-check/` at the root of the bucket by default. When a write prefix is specified (CLI: `--prefix`), the test object is written under that prefix instead. Keys that are only authorized to write under a specific prefix should use the migration's target prefix, because writing to the root would be denied. Without the abort permission, the result shows the key and upload ID of the unaborted multipart upload; leftover parts occupy storage and are billed until they are aborted with an authorized key or cleaned up by a lifecycle rule. Without delete permission, the result shows the key of the leftover test object so you can delete it manually. The abort and delete checks are not required; they do not affect the conclusion or the exit code. When the bucket is empty, reading objects cannot be checked and shows as skipped. Only when the conditional PUT itself fails does the conclusion state that this location cannot be written to. In the CLI, the command exits with code 1 when any required check fails. The write prefix requires Agents that support it; older Agents are asked to upgrade first. This check requires a Master and Agents on v4.1.43 or later.
 
 ## Speed and what limits it
 
@@ -241,7 +242,7 @@ Do not run comparisons at the same time as migration tasks, because they share t
 
 One comparison stores at most the execution node's budget (2 GiB by default) of differences; beyond that it continues counting but stops saving difference details. If this happens, narrow the prefix range or raise the budget.
 
-When exporting results, confirm that `summary.json` in the ZIP has `complete: true`. When the export is incomplete, `object export` exits with status code 3.
+When exporting results, confirm that `summary.json` in the ZIP has `complete: true` and that `warnings` is empty (or `counts.compared` is greater than 0). A prefix comparison that checked zero objects has `warnings: ["NO_OBJECTS_FOUND"]` with `complete` still `true`. Accepting such a result without checking the warning would miss an empty prefix. When the export is incomplete, `object export` exits with status code 3.
 
 If there are inconsistent objects, the export's `retry-source-keys.incr` lists the missing or inconsistent keys. Import it with `import-inventory ... --overwrite` to transfer these objects again (see [export results](operations.md#export-results)).
 
@@ -287,7 +288,7 @@ This policy requires Agents on v4.1.42. The Master refuses the policy when a sel
 2. Run incremental rounds. Create the same task again with **Overwrite changed objects** (`--conflict changed`). Each round lists the entire source again and checks each existing object, copying only new and changed objects. Repeat until a round is short enough to fit in your maintenance window. To reduce the listing scope, you can add **Modified after** (`--date-after`), which filters by the source's Last-Modified time interpreted in the server's time zone. Choose a time well before the previous round started, to allow for clock differences.
 3. Freeze writes at the source. Stop the applications from writing, or switch them to read-only.
 4. Run the final round. Run one more round with **Overwrite changed objects** and wait until it reaches **Completed** with no failed objects.
-5. Verify. Run a metadata comparison for each prefix and content comparisons for samples (see [verification](#verify-a-large-migration)). A result of **No differences found** means all objects match. If objects are missing or inconsistent, export the comparison results, transfer `retry-source-keys.incr` again with `import-inventory ... --overwrite`, and compare again.
+5. Verify. Run a metadata comparison for each prefix and content comparisons for samples (see [verification](#verify-a-large-migration)). A result of **No differences found** means all objects match; confirm that the number of checked objects is greater than zero, because a comparison that found no objects does not display this result. If objects are missing or inconsistent, export the comparison results, transfer `retry-source-keys.incr` again with `import-inventory ... --overwrite`, and compare again.
 6. Switch the applications to the target endpoint, bucket and keys.
 7. Keep the source read-only until you are sure you no longer need it.
 

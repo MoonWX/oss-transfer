@@ -89,7 +89,7 @@ The following example copies the objects under the prefix `2026/` in bucket `pho
    oss-transfer-cli object export COMPARISON_ID --output comparison.zip
    ```
 
-   A completed comparison without differences prints *No differences found*.
+   A completed comparison that checked objects and found no differences prints *No differences found*. A completed comparison that checked zero objects prints a warning that no objects were found, and suggests checking the buckets and prefixes (keys are case-sensitive and usually do not start with `/`).
 
 ## Output, language and exit codes
 
@@ -99,7 +99,7 @@ With `--json`, the output is the structured JSON returned by the Master. Field n
 
 `--verbose` writes request paths and HTTP status codes to standard error, and when a storage error has been translated, also shows the original error (`Details: …`). Without this option, the CLI prints `Hint: use --verbose to see the original error.` when there is one.
 
-`--watch N` refreshes a read-only command every N seconds (1 to 3600), for example `task list`, `task show`, `node list`, `limit list` or `update status`.
+`--watch N` refreshes a read-only command every N seconds (1 to 3600), for example `task list`, `task show`, `node list`, `limit list` or `update status`. Once a `--watch` has received an answer from the Master, a poll that cannot connect is retried at the same interval for up to 30 minutes, with a note on standard error. With `--json`, such a poll prints `{"success":false,"error":…,"retrying":true}`. An error response, or a Master that was never reached, still ends the watch immediately.
 
 `--version` prints `OSS Transfer CLI v<version>` followed by a line containing the commit, branch and build time. `--version --json` outputs the same information as fields, for use in scripts.
 
@@ -121,7 +121,7 @@ The CLI follows the system language and falls back to English when it cannot be 
 oss-transfer-cli storage list
 oss-transfer-cli storage add NAME --endpoint URL --access-key-env VAR --secret-key-env VAR [options]
 oss-transfer-cli storage update NAME [options]
-oss-transfer-cli storage test NAME [--bucket BUCKET [--write]]
+oss-transfer-cli storage test NAME [--bucket BUCKET [--write [--prefix PREFIX]]]
 oss-transfer-cli storage buckets NAME [--bucket BUCKET]
 oss-transfer-cli storage remove NAME --yes
 ```
@@ -138,11 +138,11 @@ oss-transfer-cli storage remove NAME --yes
 
 `storage list` shows each connection (credentials are masked), its signature version and its addressing mode, for example *Automatic (Path-style)*.
 
-`storage test` first lists the buckets, then lists one object in the bucket specified with `--bucket` (or the first bucket). When it passes, the output reads *Connection test passed: buckets listed and one bucket reached with the current addressing*, the addressing mode, the bucket-level result and any warnings. Keys that are only authorized for a single bucket cannot list buckets: saving only warns, and you can use `storage test NAME --bucket BUCKET` to check that bucket separately.
+`storage test` first lists the buckets, then lists one object in the bucket specified with `--bucket` (or the first bucket). When it passes, the output reads *Connection test passed: buckets listed and one bucket reached with the current addressing*, the addressing mode, the bucket-level result, any warnings, and the name of the node that ran the check (*Checked on node: ...*). A failed test, or a failed validation on `storage add` or `storage update`, also names the node after the error. A validated save prints *Execution node ... validated the connection before it was saved*. Keys that are only authorized for a single bucket cannot list buckets: saving only warns, and you can use `storage test NAME --bucket BUCKET` to check that bucket separately. When `--bucket` is used with such a key, the output reads *Connection test passed: ListBuckets was denied; the bucket was reached directly with the current addressing*.
 
-When `--bucket` is specified, the command also checks each request type used by a migration (list, HEAD, GET); adding `--write` also checks write operations. If any required check fails, the exit code is 1; see [check each permission of a bucket](planning.md#check-each-permission-of-a-bucket). Failures show the cause and what to do about them; see [connection check failures](operations.md#a-storage-connection-check-fails).
+When `--bucket` is specified, the command also checks each request type used by a migration (list, HEAD, GET); adding `--write` also checks write operations. `--prefix` specifies the prefix under which the write check writes its test object; use the migration's target prefix when the key is only authorized to write under a specific prefix. Aborting the multipart upload and deleting the test object are not required checks and do not affect the exit code. If any required check fails, the exit code is 1; see [check each permission of a bucket](planning.md#check-each-permission-of-a-bucket). Failures show the cause and what to do about them; see [connection check failures](operations.md#a-storage-connection-check-fails).
 
-Changes to a connection are synchronized to every node. The command lists nodes that are still waiting for the synchronization.
+Changes to a connection are synchronized to every connected node at once. The command lists nodes that are still waiting for the synchronization and notes that they sync automatically before they next run a task or an object comparison. After `storage remove`, those nodes keep the connection and its credentials until then. Such a result exits with code 3. Tasks only save the connection name: removing a connection prevents all tasks that use it (running and stopped) from continuing until a connection with the same name is added again.
 
 ## Inspect and control tasks
 
@@ -164,7 +164,7 @@ oss-transfer-cli task progress "$TRANSFER_TASK" --watch 5
 
 `task show` displays the status, direction, conflict policy, counts, rate limits and nodes, and the scan progress while the scan runs; in `task list`, the progress of such a task shows the names read and the entries examined. When something needs attention, it adds an *Attention* line with the reason (see [task details](operations.md#task-details-attention-and-failure-summary)). For common storage errors, a translated explanation appears above the raw failure reason. A task under *Skip existing objects or files* that skipped objects notes that those objects were matched by name only.
 
-Child tasks are sorted by the console's status priority. When there is a next page, the command prints the command to fetch it. `--order id` lists them by number. `task progress` shows the bytes of files being transferred; add `--child ID-N` to inspect a specific child task.
+Child tasks are sorted by the console's status priority. When there is a next page, the command prints the command to fetch it. `--order id` lists them by number. `task progress` shows the bytes of files being transferred, measured as bytes confirmed by the target plus bytes handed to the network in the current attempt; a failed request's bytes are withdrawn, and the final count is the target's confirmation. The progress percentage is floored to 0.1%; it shows at most 99.9% until the target confirms all bytes. After all data is received, the phase changes to *Confirming* (completing a multipart upload, or syncing the file to disk). An older execution node measures progress at the source; the table adds a note when this applies. When a node does not answer, `task progress` names it and `task show` adds a *Live progress* row noting that the progress omits that node's in-flight bytes. Add `--child ID-N` to inspect a specific child task.
 
 Stop and resume:
 
@@ -173,13 +173,13 @@ oss-transfer-cli task stop "$TRANSFER_TASK"
 oss-transfer-cli task resume "$TRANSFER_TASK"
 ```
 
-Each command prints one line per task, such as `#12  Stop requested` or `No action needed (current state: …)`. Resuming continues unfinished work; completed progress is not lost.
+Each command prints one line per task with the state the Master returned, such as `#12  Stop requested (current state: Stopping)` or `#12  Resume requested (current state: Resuming)`. When nothing needs to be done, it prints `No action needed (current state: …)`. After a resume, a follow-up line notes that the task resumes once every execution node is ready, and suggests `task show ID` (or `task list` for several tasks) to monitor the progress and what it waits for. A task stays in the Resuming state while a node is offline, updating or fails its preparation.
 
 To retry failed tasks, pass their IDs to `task retry`, or use `task retry --all --yes` to retry all failed and partially failed tasks. If a request times out, the CLI reports the task IDs whose result is unknown and stops sending further batches. Check those tasks before retrying. See [retry, resume and continue](operations.md#retry-resume-and-recover) for the differences between these operations.
 
-For a running task, `task retry <ID>` retries only the failed objects in finished child tasks without stopping the task. Those child tasks are re-executed on their original nodes within the node's concurrency limit; objects that already succeeded or were skipped are not transferred again. The output shows the number of retried child tasks and objects. Child tasks that are still running keep their failed objects until they finish. `task retry --all --yes` still selects only failed and partially failed tasks. See [retry failed objects of a running task](operations.md#retry-failed-objects-of-a-running-task).
+For a running task, `task retry <ID>` retries only the failed objects in finished child tasks without stopping the task. Those child tasks are re-executed on their original nodes within the node's concurrency limit; objects that already succeeded or were skipped are not transferred again. The output reads `#12  Started retrying N failed objects (M child tasks); the task continues running`. One request reopens at most 64 child tasks. When the Master reports more, the line adds a note that other child tasks may still have unretried failed objects, and suggests running the command again. `task retry --all --yes` still selects only failed and partially failed tasks. See [retry failed objects of a running task](operations.md#retry-failed-objects-of-a-running-task).
 
-`task delete` moves records to the recycle bin. `task restore` restores them. `task purge ID --yes` starts permanent cleanup of records; use `task cleanup-status ID --watch 5` to follow the progress. These operations do not delete migrated files.
+`task delete` moves records to the recycle bin. `task restore` restores them. The console's **Tools**, then **Task recycle bin** page also allows selecting tasks and clicking **Restore** to return them to the task list, with the same effect as `task restore`. `task purge ID --yes` starts permanent cleanup of records; use `task cleanup-status ID --watch 5` to follow the progress. A task being permanently cleaned cannot be restored. These operations do not delete migrated files.
 
 ## Create tasks and set rate limits
 
@@ -203,7 +203,7 @@ On success the output reads `Created N tasks: #ID` with the command to follow pr
 
 When the connection drops before the result is returned, the CLI prints a request ID. Check `task list` first, then retry with the same arguments and `--request-id ID` to avoid creating duplicate tasks.
 
-Local transfers run the same preflight checks as the console, including the [download write probe](operations.md#a-download-precheck-fails). `--validate-only` checks the configuration without creating a task. `--bandwidth-mbps` (0.1 to 1,000,000 Mbps) and `--list-qps`, `--head-qps`, `--put-qps` set rate limits when the task is created; they are totals across all of the task's nodes.
+Local transfers run the same preflight checks as the console, including the [download write probe](operations.md#a-download-precheck-fails) and [shared directory verification](operations.md#shared-directory-verification). `--skip-shared-check` skips the shared directory check and requires `--yes`. An upload source that no node can write usually does not need it, because the precheck then compares sampled files instead. `--validate-only` checks the configuration without creating a task. `--bandwidth-mbps` (0.1 to 1,000,000 Mbps) and `--list-qps`, `--head-qps`, `--put-qps` set rate limits when the task is created; they are totals across all of the task's nodes.
 
 ### Ranged download
 
@@ -228,11 +228,11 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-Fields not specified keep their current values. `unlimited` removes the corresponding limit (for QPS options, 0 also works). Running `task limits ID` or `task bandwidth ID` without specifying new values shows the task's current limits: the bandwidth limit, the request limit scope, the LIST / GET, HEAD and PUT limits, whether all nodes have applied them, and the reason for each node that has not. `task bandwidth ID MBPS|unlimited` changes only the bandwidth limit.
+Fields not specified keep their current values. `unlimited` removes the corresponding limit (for QPS options, 0 also works). Running `task limits ID` or `task bandwidth ID` without specifying new values shows the task's current limits: the bandwidth limit, the request limit scope, the LIST / GET, HEAD and PUT limits, whether all nodes have applied them, and the reason for each node that has not. `task bandwidth ID MBPS|unlimited` changes only the bandwidth limit. The change is saved even when some of the task's nodes are offline. Connected nodes apply it at once. Each node that has not applied it is listed with its reason; an unconnected node reads *The execution node is not connected; it applies the limits when it reconnects*. The output ends with *Task limits saved* and the command exits with 0.
 
 QPS values are average rates and may be fractional, ranging from 0.000001 to 1,000,000,000. `--list-qps 0.5` means the entire task issues one list or GET request every 2 seconds. The LIST limit also applies to GET reads (including range reads); PUT includes multipart upload requests. The limits of a stopped or finished task cannot be changed.
 
-`task show ID` displays the current limits and their scope, and shows the live request rates alongside the task limit and the effective limit. The *Request rate*, *Task request limit* and *Effective request limit* lines are rounded to one decimal place, so a limit below 0.05 shows as 0; the *LIST / GET QPS*, *HEAD QPS* and *PUT QPS* lines show exact values. `task nodes ID` shows each node's share.
+`task show ID` displays the current limits and their scope, and shows the live request rates alongside the task limit and the effective limit. The *Request rate*, *Task request limit* and *Effective request limit* lines are rounded to one decimal place, so a limit below 0.05 shows as 0; the *LIST / GET QPS*, *HEAD QPS* and *PUT QPS* lines show exact values. The current speed is the rate of bytes sent to the target (including bytes re-sent after a failure), averaged over the last few seconds. When some execution nodes run an older version, the speed line notes that speed and progress are measured at the source for those nodes. The node page's bandwidth is the source-side read rate and may differ from the task's current speed. `task nodes ID` shows each node's share.
 
 Task limits are totals: the Master distributes them among the active Agents by demand. Nodes that have work share almost all of the limit evenly, while idle nodes keep a small floor (see [task limits across nodes](operations.md#task-limits-across-nodes)). Node limits (see [set node limits](#set-node-limits)) still apply; a request must satisfy both.
 
@@ -246,11 +246,11 @@ oss-transfer-cli exceptions export failed --task-id "$TRANSFER_TASK" --output fa
 oss-transfer-cli exceptions clear failed --task-id "$TRANSFER_TASK" --yes
 ```
 
-`exceptions list` displays a table: task, key, size, node, a short reason (for example access denied, DNS / path-style, connection refused, timeout, TLS, bucket missing, signature, throttling, source deleted or changed), the retry result (*Not retried*, *Retrying*, *Retry incomplete*, *Recovered*, *Failed again*, *Skipped*) and the local time. The footer shows the record count; for `local`, it also gives the command for the next page.
+`exceptions list` displays a table: task, key, size, node, a short reason (for example access denied, DNS / path-style, connection refused, timeout, TLS, bucket missing, signature, throttling, source deleted or changed, archived source object needs a restore, storage server error, connection closed before the storage answered), the retry result (*Not retried*, *Retrying*, *Retry incomplete*, *Recovered*, *Failed again*, *Skipped*) and the local time. Reasons are classified by the storage reply's error code; the HTTP status decides only for replies without a code, and the object key never changes the reason. The footer shows the record count; for `local`, it also gives the command for the next page. `exceptions list` and `exceptions export` return at most `--limit` records per node (default 1,000, maximum 10,000). A truncated result says so and points to `exception-details.csv` from `task report ID` (available once the task stops or ends), which lists every failed object.
 
 Full error messages are available in `--json` output and in the CSV exported by `exceptions export`. The CSV also has `reasonCode` and `retryReasonCode` columns (for example `SOURCE_CHANGED`, `SOURCE_DELETED`). The CLI lists resolved records as well; the console shows only unresolved records by default.
 
-Retry failed objects with `task retry`. Clearing removes only records that have been resolved by a successful retry or skip (`Cleared N handled records`); unresolved failures remain. Use `local` for upload and download failures. `fallback` lists records of the legacy engine's fallback migrations, which the current version no longer produces.
+Retry failed objects with `task retry`. Clearing removes only records that have been resolved by a successful retry or skip (`Cleared N handled records`); unresolved failures remain. `exceptions list failed` lists failures of all directions, including uploads and downloads; the console's **Exceptions** tab lists only object-storage failures. Use `local` for local transfer exceptions specifically. `fallback` lists the legacy engine's fallback records; the current version does not produce them, and fallback records from tasks converted from v4.0.x are not listed here either; the CLI prints this explanation.
 
 ## Task reports
 
@@ -296,11 +296,13 @@ A node being added shows as *Joining* until it passes the handshake and shared-d
 
 After the change is accepted, the CLI prints the resulting membership. While nodes are still joining or draining, the change completes in the background; follow it with `task nodes "$TRANSFER_TASK" --watch 5`. The stages of a change (for example a leaving node waiting for its lease to expire, or the scan moving to another node) appear in this view and are not reported as task errors.
 
-Upload and download tasks require a shared directory for each added node. The CLI runs the Master's shared-directory preflight before submitting, and stops if any binding fails:
+Upload and download tasks require a shared directory for each added node. The CLI runs the Master's shared-directory preflight (see [shared directory verification](operations.md#shared-directory-verification)) before submitting, and stops if any binding fails:
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --binding 10.0.0.3=/mnt/share --yes
 ```
+
+When adding nodes to a task, the new nodes are checked in the same way as at creation, regardless of whether the original task creation skipped the check. Only this node change itself can skip the check for the new nodes: add `--skip-shared-check` together with `--yes`. Without `--skip-shared-check`, the CLI runs the preflight as usual.
 
 Only one change can be in progress at a time. While nodes are joining or draining, the Master accepts only these changes: removing a joining node (cancels the join), adding back a draining or immediately removed node before it has left (cancels the removal; local transfers keep the existing path, so do not specify `--binding`), removing a draining node with `--now`, or removing a disconnected node whose work has been taken over. Other changes are rejected with a reason.
 
@@ -333,13 +335,14 @@ Run the corresponding command on the new host. The Agent connects to the Master 
 
 ```sh
 oss-transfer-cli agent update storage-01 --child-concurrency 32 --object-concurrency 4
+oss-transfer-cli agent update storage-01 --scan-concurrency 4
 oss-transfer-cli agent update storage-01 --local-root /mnt/data --local-root /mnt/archive
 oss-transfer-cli agent remove storage-01 --yes
 ```
 
-`--child-concurrency` (1 to 256, default 32) and `--object-concurrency` (objects per child task, 1 to 64, default 4) take effect immediately; their product may not exceed 1024 (see [node concurrency](operations.md#node-concurrency)). `--local-root` replaces the list of directories the node may use for local transfers.
+`--child-concurrency` (1 to 256, default 32) and `--object-concurrency` (objects per child task, 1 to 64, default 4) take effect immediately; their product may not exceed 1024 (see [node concurrency](operations.md#node-concurrency)). `--scan-concurrency` (1 to 16, default 2) sets how many scans the node can run at once. Lowering it does not interrupt running scans; new scans start only after the number of running scans drops below the new limit. Agents running an older version keep a fixed scan concurrency of 2 until they are updated. `node list` shows a **Scans** column, for example `1/2` meaning 1 scan running under a limit of 2. `--local-root` replaces the list of directories the node may use for local transfers. The node rejects a directory that is not an absolute path on its own operating system, or more than 100 directories.
 
-When the node still has active tasks, `agent remove` is refused. After removal, the command prints on standard error: *Removed node NODE. Its Agent service stops by itself and does not restart; to delete its program and data, run the installer on that host with --uninstall --role agent* (see [remove a node](operations.md#remove-a-node)).
+When the node still has active tasks, `agent remove` is refused. After removal, the command prints on standard error: *Removed node NODE; it can no longer connect to the cluster. An Agent running in a container stays idle until the container is removed; any other Agent stops by itself and does not restart. Its program and data are not deleted. To delete them, use the way it was deployed: for an installer installation, run the installer on that host with --uninstall --role agent; for a container, remove the container and its volume; remove a Windows service or a manually run program by hand (see the uninstall section of the installation guide)* (see [remove a node](operations.md#remove-a-node)).
 
 ## Set node limits
 
@@ -397,7 +400,7 @@ oss-transfer-cli object export --output "comparison-$TRANSFER_COMPARISON.zip" "$
 
 Options go before the ID. New comparison IDs never begin with `-`; IDs generated by older versions may. When such an ID is a complete ID (43 characters consisting of letters, digits, `-` and `_`), the CLI accepts it directly. Placing `--` before the ID always works, for example `object status --limit 100 -- "$TRANSFER_COMPARISON"`.
 
-`object status` shows the comparison's status, mode, scope, source and destination, every count, the stored differences, the elapsed time and rate, the bytes read and the read rate in bytes per second (content mode; a single object shows only the read rate), the checkpoint (not shown for single-object or completed comparisons), whether the comparison can be resumed, why it stopped storing differences and the last stored key, and any error with its detail. Below that is a page of stored result rows: number, result, source key, destination key, both sizes and an explanation (the differing properties, or the error and its detail). A completed comparison without differences prints *No differences found*.
+`object status` shows the comparison's status, mode, scope, source and destination, every count, the stored differences, the elapsed time and the average rate (labelled *Average rate*, an average over the whole comparison including earlier runs of a resumed comparison), the bytes read and the average read rate in bytes per second (content mode; a single object shows only the read rate), the checkpoint (not shown for single-object or completed comparisons), whether the comparison can be resumed, why it stopped storing differences and the last stored key, and any error with its detail. When a running comparison has produced no new result for one minute or more, a line after the table warns that the execution node may be waiting for the storage to respond or retrying. Below that is a page of stored result rows: number, result, source key, destination key, both sizes and an explanation (the differing properties, or the error and its detail). A completed comparison that checked objects and found no differences prints *No differences found*. A comparison that checked zero objects warns that no objects were found. When differences were found but the node did not save the details, the output reads *Found N differences, but the node did not save the details; see the truncation reason above*.
 
 `--status` keeps only the specified results, separated by commas: `DIFFERENT`, `ETAG_MISMATCH`, `MISSING_TARGET`, `EXTRA_TARGET`, `CHANGED_DURING_COMPARE`, `ERROR` and `BOTH_MISSING`. `--limit` sets the page size, from 1 to 1,000 (default 50), and `--after N` starts after row N. When more result rows follow, the command prints the `--after` value for the next page. If the comparison stopped storing differences, the command exits with code 3.
 
@@ -424,7 +427,9 @@ oss-transfer-cli update agents --all --yes
 oss-transfer-cli update status --watch 5
 ```
 
-`update check` prints *Current version v… → update available: v…*, the release notes link and the two commands to run next, or states that the current version is already the latest stable release. `update master --yes` checks and installs the latest stable release on its own; if the Master is already current, it says so and exits with 0. `update agents --all --yes` updates all eligible Agents to the Master's version one at a time; `update agent --worker NODE --yes` updates a single one.
+`update check` prints *Current version v... → update available: v...*, the release notes link and the two commands to run next, or states that the current version is already the latest stable release. When the Master cannot update itself online (Docker, `oss-transfer-run.sh`, missing privileges), the output reads *Master cannot update online: (reason and how to upgrade)* followed by the command to update the Agents after the Master has been upgraded. A failed check outputs the Master's explanation (HTTP 502); adding `--verbose` shows the reason from each release source. `update master --yes` checks and installs the latest stable release on its own; if the Master is already current, it says so and exits with 0. `update agents --all --yes` updates all Agents that can be updated online to the Master's version one at a time. When some Agents cannot be updated, the output reads *Scheduled N Agents for update to v...; M will not be updated, reasons listed below*, and the skipped Agents are listed with a reason (already at the Master's version, container, offline and so on). When no selected Agent can be updated, nothing is queued: the output reads *No Agent can be updated online to v...; no updates scheduled* and the command exits with 0. `update agent --worker NODE --yes` updates a single one.
+
+`update status` shows the latest-version line with the check time, *Latest version: v... (checked at ...)*. After one hour without a successful check, the line notes that a newer release may exist and suggests running `update check`. Before a successful check, `update status` shows the last failure's explanation and the time of the failed check. `update status --watch 5` keeps polling while the Master restarts during its update, for up to 30 minutes.
 
 Accepting the request does not mean the upgrade has finished. Use `update status --watch 5` to follow the progress: it shows versions, translated phases, whether each node matches the Master, and the reason for any node that cannot be updated online (see [software updates](operations.md#software-updates)).
 

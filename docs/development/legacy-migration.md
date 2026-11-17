@@ -128,7 +128,7 @@ Sign in with the existing account password and confirm the Agents are online. Su
 
 Resuming an imported unfinished task creates a new attempt while retaining its original parent, children, report rows and checkpoints in history. Recovery checks the selected Agent identities, saved stop and deletion state, and any inventory required by the task.
 
-The scan uses the original range, inventory, local source, filters and target naming. Retained keys are merged with newly discovered keys through a durable unique index. Historical `TIME_FILTER` exclusions remain excluded; `dateAfter` includes its boundary and `dateBefore` excludes it. Missing retained sources produce failed rows with `SOURCE_MISSING`.
+The scan uses the original range, inventory, local source, filters and target naming. Retained keys are merged with newly discovered keys through a durable unique index. Historical `TIME_FILTER` exclusions remain excluded; `dateAfter` includes its boundary and `dateBefore` excludes it. Missing retained sources produce failed rows with `SOURCE_MISSING`. Each attempt (including retries) re-checks the source with a Stat call; an object that reappears is verified against the old-version key from the scan ledger. The exception index retains the `SOURCE_MISSING` reason code.
 
 Before reusing an old `SUCCESS`, the Agent reads the complete current source and destination and compares SHA-256 hashes. It checks both identities before and after the reads. An unequal existing target follows the saved conflict policy: `SKIP` records a skip and `OVERWRITE` permits a new write. Previous skips, dry-run results and failures keep their original meaning in history.
 

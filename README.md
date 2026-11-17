@@ -197,14 +197,14 @@ When a host has no systemd and Docker is not an option (for example containerize
    ./oss-transfer-run.sh agent start --join-url 'http://<Master IP>:1685/api/agents/bootstrap/<token>'
    ```
 
-   The **Run manually** tab in the web console provides this command and the command for running the program directly. **Copy invitation link** copies the link alone. After the initial join, subsequent starts do not need `--join-url`.
+   The **Run manually** tab in the web console provides this command and the command for running the program directly. **Copy invitation link** copies the link alone. After the initial join, subsequent starts do not need `--join-url`. Passing `--join-url` again performs a new join, which also rejoins a node that was removed on the Master. A node that is still registered is refused (HTTP 409) and should be started without `--join-url`. A running Agent does not use the link; use `restart --join-url`.
 
 Usage: `./oss-transfer-run.sh <master|agent> <start|stop|restart|status|logs> [options]`
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--data DIR` | `<script directory>/data/<role>` | Data directory; the log is at `logs/service.log` inside it. Use the same directory every time |
-| `--listen ADDRESS:PORT` | `0.0.0.0:1685` | Master only: listen address |
+| `--listen ADDRESS:PORT` | `0.0.0.0:1685` on the first start; subsequent starts reuse the last successful address | Master only: listen address. The script prints the full listen address. A running Master refuses a different `--listen`; use `restart --listen` |
 | `--join-url LINK` | none | Agent only, required on the first start: the invitation link. A trailing `?lang=…` is removed automatically |
 
 `status` reports "running" only while the program itself is running. When the program keeps exiting, it reports "restarting". An Agent removed on the Master exits with status code 78, and the script does not restart it.
@@ -219,11 +219,11 @@ You can also run the programs directly without the script:
 
 | Program | Parameter | Description |
 | --- | --- | --- |
-| `oss-transfer-master` | `--listen` | Listen address, default `:1685` |
+| `oss-transfer-master` | `--listen` | Listen address; the first start defaults to `:1685`, subsequent starts reuse the last successful address |
 | | `--data-dir` | Data directory, default `./data/master` |
 | | `--config` | Read these settings and the log file path from a `service.json` instead of command-line parameters |
 | | `--reset-admin-password [--username NAME]` | Reset an administrator password while the Master is stopped |
-| `oss-transfer-agent` | `--join-url` | Invitation link for the first join; works once and expires after 30 minutes. Installer parameters such as `?lang=…` copied with it are ignored |
+| `oss-transfer-agent` | `--join-url` | Invitation link; works once and expires after 30 minutes. Whenever `--join-url` is given, the Agent joins with it, which also rejoins a node removed on the Master. A still-registered node is refused (HTTP 409). Installer parameters such as `?lang=…` copied with it are ignored |
 | | `--master-url` and `--join-token` | Instead of `--join-url`: the Master address and the invitation token separately (the token can also be given as the `OSS_TRANSFER_JOIN_TOKEN` environment variable) |
 | | `--data-dir` | Data directory, default `./data/agent`. It stores the node identity, so subsequent starts need only this |
 | | `--label`, `--address` | Node display name; node address or name |
@@ -265,7 +265,7 @@ The default conflict policy, Skip existing objects or files, compares names only
 
 Migration copies objects but does not delete them. Objects deleted at the source remain at the destination and appear as **Only on target** in a comparison. For cleanup methods, see [Deletions at the source](docs/planning.md#deletions-at-the-source).
 
-When local files are involved, paths refer to paths on the Agent hosts. When multiple Agents work on the same local directory, it must be a shared directory. The mount paths on each Agent may differ; the precheck writes a small file to confirm that they point to the same directory.
+When local files are involved, paths refer to paths on the Agent hosts. When multiple Agents work on the same local directory, it must be a shared directory. The mount paths on each Agent may differ. The precheck confirms that they point to the same directory: one node writes a test file and every node reads it. An upload source that no node can write is verified by comparing sampled file names, sizes and modification times instead. When adding nodes to a task, the new nodes are checked in the same way, regardless of whether the original task creation skipped the check; only the node change itself can choose to skip the check for those nodes (see [Shared directory verification](docs/operations.md#shared-directory-verification)).
 
 A task reflects the data as it was at the time of the scan. Changes behind the scan's progress are not captured in the current round. When the data keeps changing, copy it in rounds and stop writes before the final round (see [Cut-over](docs/planning.md#incremental-migration-and-cut-over)).
 
@@ -292,13 +292,13 @@ Each release is published to [GitHub Releases](https://github.com/MoonWX/oss-tra
 | [Offline installation](docs/offline-install.md) | Installing in environments without internet access |
 | [Docker Compose](docs/docker-compose.md) | Container deployment on Linux and Docker Desktop, Agents in containers, directory mounts, logs, CLI, updates and removal |
 | [CLI](docs/cli.md) | Full command-line usage |
-| [Operations](docs/operations.md) | Concurrency, node limits, task limit distribution, storage throttling, large objects, object comparison, updates, prereleases, failover, execution node changes, scan resume and password reset |
+| [Operations](docs/operations.md) | Concurrency, scan concurrency, node limits, task limit distribution, storage throttling, large objects, object comparison, updates, prereleases, failover, execution node changes, scan resume and password reset |
 | [Database maintenance](docs/database-maintenance.md) | Reclaiming database file space |
 | [Upgrading from V4.0.x](docs/migration.md) | Offline conversion of older data |
 
 ## Building from source
 
-Requires Go 1.26, Node.js 22.12 or later, and Python 3.
+Requires Go 1.26.11 or a later 1.26 patch (the `go.mod` requires 1.26.11 for the fix of CVE-2026-27139), Node.js 22.12 or later, and Python 3.
 
 ```sh
 ./build.sh          # build for the current system and architecture

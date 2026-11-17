@@ -342,7 +342,7 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot, warning)
+	s.storageSaved(w, r, snapshot, warning, false)
 }
 func storageError(w http.ResponseWriter, err error) {
 	status := 500
@@ -364,12 +364,15 @@ func (s *Server) deleteStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot, nil)
+	s.storageSaved(w, r, snapshot, nil, true)
 }
 
-// storageSaved reports the synchronization of a saved snapshot; warning is a
-// non-blocking finding of the connection check.
-func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem) {
+// storageSaved reports the synchronization of a saved or deleted snapshot;
+// warning is a non-blocking finding of the connection check. Nothing pushes
+// the snapshot later: a node that misses it is synced before it next works
+// on a task or a comparison (prepareMembers, retries, recoveries and
+// comparisons sync first), or by the next storage change.
+func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem, deleted bool) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
 		fail(w, 500, "Connection saved; cannot read Agent synchronization status")
@@ -378,11 +381,18 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	displays := s.nodeDisplaySnapshot()
+	connected := s.connectedAgents(members)
 	details := make([]string, len(members))
 	success := make([]bool, len(members))
 	slots := make(chan struct{}, 8)
 	var group sync.WaitGroup
 	for i, member := range members {
+		pending := displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
+		if !connected[member.ID] {
+			// Not asked: waiting for an offline node would hold a slot.
+			details[i] = pending
+			continue
+		}
 		group.Add(1)
 		go func() {
 			defer group.Done()
@@ -390,11 +400,11 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
 			case <-ctx.Done():
-				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
+				details[i] = pending
 				return
 			}
 			if err := s.syncStorage(ctx, member, snapshot); err != nil {
-				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "等待同步")
+				details[i] = pending
 			} else {
 				success[i] = true
 				details[i] = displays.lookup(member.ID, member.Address).DisplayLabel + ": " + localize(w, "同步成功")
@@ -408,7 +418,14 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 			count++
 		}
 	}
-	result := map[string]any{"success": true, "message": localize(w, "存储连接已保存"), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details}
+	message, note := "存储连接已保存", "未同步的节点会在下次执行任务或对象比对前自动同步。"
+	if deleted {
+		message, note = "存储连接已删除", "未同步的节点会在下次执行任务或对象比对前自动同步；在此之前，这些节点上仍保留该连接及其凭据。"
+	}
+	result := map[string]any{"success": true, "message": localize(w, message), "revision": snapshot.Revision, "successCount": count, "failedCount": len(members) - count, "partial": count < len(members), "details": details}
+	if count < len(members) {
+		result["syncNote"] = localize(w, note)
+	}
 	storageWarningFields(w, result, warning)
 	writeJSON(w, 200, result)
 }

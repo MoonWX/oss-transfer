@@ -17,6 +17,13 @@ func (p Parent) NodeEpoch(nodeID string) uint64 {
 	return p.Failover.NodeEpochs[nodeID]
 }
 
+// RejoinExhausted reports a node that can never join p again: its ownership
+// epoch or the task's limit budget revision, both of which a join advances,
+// has reached its maximum. BeginNodeRejoin and FinishNodeRejoin then refuse.
+func (p Parent) RejoinExhausted(nodeID string) bool {
+	return p.NodeEpoch(nodeID) == math.MaxUint64 || budgetExhausted(p)
+}
+
 func (r *Repository) BeginNodeRejoin(id int64, generation uint64, nodeID string) (p Parent, epoch uint64, err error) {
 	err = unchangedOK(r.store.Update(func(tx *state.Tx) error {
 		p, err = failoverParent(tx, id, generation)

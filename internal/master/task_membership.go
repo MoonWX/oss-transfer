@@ -327,7 +327,10 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 		view["sharedCheckSkipped"] = true
 	}
 	view["allocation"] = shareAllocation(p)
-	view["nodes"] = s.membershipNodes(p, displays, online)
+	nodes := s.membershipNodes(p, displays, online)
+	// joinProblem: why a joining node has not joined yet, if known.
+	s.addJoinProblems(ctx, p, displays, nodes)
+	view["nodes"] = nodes
 	view["scan"] = map[string]any{"phase": scanPhase(p), "complete": scanFinished(p)}
 	removed := []map[string]any{}
 	current := map[string]bool{}

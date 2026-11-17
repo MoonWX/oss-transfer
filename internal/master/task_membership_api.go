@@ -332,6 +332,8 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	if failure != nil {
 		return nil, failure
 	}
+	// A cancelled join keeps no problem, even if the node is added again.
+	s.tasks.joins.retain(committed)
 	if skip && !replayed {
 		added := make([]string, len(joining))
 		for i, node := range joining {

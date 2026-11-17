@@ -50,6 +50,8 @@ type taskRuntime struct {
 	deliveries map[int64]map[string]policyDelivery
 	// Acknowledged share revisions and idle counts (see task_shares.go).
 	shares shareRuntime
+	// Why each joining node has not joined yet (see task_join_problems.go).
+	joins joinProblems
 }
 
 func newTaskRuntime(s *Server) *taskRuntime {
@@ -111,6 +113,7 @@ func (t *taskRuntime) loop() {
 			// A task that ended or was deleted outside a step leaves the
 			// active list; drop what the runtime remembered about it.
 			t.pruneDeliveries(cycle)
+			t.joins.prune(cycle)
 			cycle = map[int64]bool{}
 		} else {
 			after = parents[len(parents)-1].ID

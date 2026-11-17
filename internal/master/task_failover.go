@@ -301,8 +301,15 @@ func (t *taskRuntime) enableFailover(ctx context.Context, p task.Parent, availab
 	return t.repo.EnableFailover(p.ID, p.Generation, p.Spec.Destination.Kind == "LOCAL")
 }
 
-func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, available map[string]bool) (task.Parent, error) {
-	var err error
+func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, available map[string]bool) (_ task.Parent, err error) {
+	// Joining nodes are admitted only by rejoinAvailableNodes at the end. A
+	// step that returns before it says what holds the joins up.
+	rejoining := false
+	defer func() {
+		if !rejoining {
+			t.noteJoinsBlocked(ctx, p, available, err)
+		}
+	}()
 	p, err = t.enableFailover(ctx, p, available)
 	if err != nil {
 		return p, err
@@ -385,6 +392,7 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 	}
 	p, err = t.moveRetiredScanner(p, available)
 	if err == nil {
+		rejoining = true
 		p, err = t.rejoinAvailableNodes(ctx, p)
 	}
 	return p, err

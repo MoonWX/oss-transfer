@@ -26,6 +26,8 @@ type permissionStore struct {
 	uploads map[string]bool
 	// ranged counts GET requests with a Range header.
 	ranged int
+	// unsized lists objects without their size, as some stores do.
+	unsized bool
 }
 
 func (p *permissionStore) handler(t *testing.T) http.HandlerFunc {
@@ -72,7 +74,11 @@ func (p *permissionStore) handler(t *testing.T) http.HandlerFunc {
 				io.WriteString(w, `<?xml version="1.0"?><ListBucketResult><Name>bucket</Name><KeyCount>0</KeyCount></ListBucketResult>`)
 				return
 			}
-			io.WriteString(w, `<?xml version="1.0"?><ListBucketResult><Name>bucket</Name><KeyCount>1</KeyCount><Contents><Key>`+names[0]+`</Key><Size>`+strconv.Itoa(len(p.objects[names[0]]))+`</Size></Contents></ListBucketResult>`)
+			size := `<Size>` + strconv.Itoa(len(p.objects[names[0]])) + `</Size>`
+			if p.unsized {
+				size = ""
+			}
+			io.WriteString(w, `<?xml version="1.0"?><ListBucketResult><Name>bucket</Name><KeyCount>1</KeyCount><Contents><Key>`+names[0]+`</Key>`+size+`</Contents></ListBucketResult>`)
 		case operation == "HEAD" || operation == "GET":
 			body, ok := p.objects[key]
 			if !ok {
@@ -233,6 +239,11 @@ func TestBucketPermissionCheckReadsAnEmptyFirstObject(t *testing.T) {
 	store = &permissionStore{objects: map[string][]byte{"logs/part-0000": []byte("abc")}}
 	if got := permissionStatuses(checkPermissions(t, store, false)); got[PermissionGet] != PermissionPassed || store.ranged != 1 {
 		t.Fatalf("statuses %v, ranged GETs %d", got, store.ranged)
+	}
+	// Without a listed size, the refused range shows the object is empty.
+	store = &permissionStore{objects: map[string][]byte{"logs/": {}}, unsized: true}
+	if got := permissionStatuses(checkPermissions(t, store, false)); got[PermissionGet] != PermissionPassed || store.ranged != 1 {
+		t.Fatalf("unsized: statuses %v, ranged GETs %d", got, store.ranged)
 	}
 }
 

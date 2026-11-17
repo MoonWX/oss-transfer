@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 // Permission check operations, in the order they run.
@@ -82,6 +83,13 @@ type PermissionCheck struct {
 	// check created but could not abort; its part stays until removed.
 	LeftoverUploadKey string `json:"leftoverUploadKey,omitempty"`
 	LeftoverUploadID  string `json:"leftoverUploadId,omitempty"`
+}
+
+// rangeNotSatisfiable reports the 416 InvalidRange answer to a range of an
+// empty object.
+func rangeNotSatisfiable(err error) bool {
+	var apiError smithy.APIError
+	return errors.As(err, &apiError) && apiError.ErrorCode() == "InvalidRange"
 }
 
 // ValidPermissionPrefix reports whether prefix can hold the probe objects.
@@ -162,6 +170,12 @@ func CheckBucketPermissions(ctx context.Context, config S3Config, write bool, pr
 		}
 		var out *s3.GetObjectOutput
 		out, err = store.client.GetObject(ctx, input)
+		if input.Range != nil && rangeNotSatisfiable(err) {
+			// Empty after all: the listing gave no size, or the object
+			// changed since it was listed.
+			input.Range = nil
+			out, err = store.client.GetObject(ctx, input)
+		}
 		if err == nil {
 			out.Body.Close()
 		}

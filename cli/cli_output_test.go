@@ -226,6 +226,49 @@ func TestExceptionsListRendersTableAndKeepsJSON(t *testing.T) {
 	}
 }
 
+// The Master returns at most --limit failed records per node (at most
+// 10000), and exceptions export runs the same query. A truncated list or
+// export says so and points to the task report, whose exception-details.csv
+// holds every failed object, instead of promising that export gets them all.
+func TestExceptionsTruncationPointsToTheTaskReport(t *testing.T) {
+	truncated := exceptionsFixture()
+	truncated["failedKeys"].(map[string]interface{})["10.0.0.2Count"] = float64(30000)
+	handler := func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, truncated) }
+	report := "任务停止或结束后，task report ID 导出的报告中 exception-details.csv 列出该任务的全部失败对象"
+	for _, test := range []struct {
+		args        []string
+		wants       []string
+		raiseLimits bool
+	}{
+		{[]string{"exceptions", "list", "failed", "--task-id", "1"}, []string{"仅显示部分记录：每个节点最多返回 1000 条，可用 --limit 调大到 10000；exceptions export 受同样的限制", report}, true},
+		{[]string{"exceptions", "list", "failed", "--task-id", "1", "--limit", "10000"}, []string{"仅显示部分记录：每个节点最多返回 10000 条；exceptions export 受同样的限制", report}, false},
+		{[]string{"exceptions", "export", "failed", "--task-id", "1", "--output", filepath.Join(t.TempDir(), "failed.csv")}, []string{"已导出 2 条记录到", "仅导出了部分记录：每个节点最多导出 1000 条，可用 --limit 调大到 10000 后重新导出", report}, true},
+		{[]string{"exceptions", "export", "failed", "--task-id", "1", "--limit", "10000", "--output", filepath.Join(t.TempDir(), "failed.csv")}, []string{"仅导出了部分记录：每个节点最多导出 10000 条", report}, false},
+	} {
+		code, out, stderr := runMockCLI(t, test.args, handler)
+		if code != 0 && code != 3 {
+			t.Fatalf("%v: %d %s %s", test.args, code, out, stderr)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v lacks %q:\n%s", test.args, want, out)
+			}
+		}
+		if strings.Contains(out, "导出全部") || strings.Contains(out, "调大到 10000") != test.raiseLimits {
+			t.Errorf("%v promises what export cannot do:\n%s", test.args, out)
+		}
+	}
+	for _, test := range []struct{ lang, want string }{
+		{"en", "Once the task stops or ends, exception-details.csv in the report from task report ID lists all of its failed objects"},
+		{"ja", "exception-details.csv にそのタスクのすべての失敗オブジェクトが含まれます"},
+	} {
+		_, out, _ := runMockCLI(t, []string{"--lang", test.lang, "exceptions", "list", "failed", "--task-id", "1"}, handler)
+		if !strings.Contains(out, test.want) || strings.Contains(out, "for all of them") {
+			t.Errorf("%s:\n%s", test.lang, out)
+		}
+	}
+}
+
 // A task create whose only row is refused created nothing: a definite
 // failure with the reason, not an uncertain partial submission.
 func TestTaskCreateRejectedRowsAreDefiniteFailures(t *testing.T) {

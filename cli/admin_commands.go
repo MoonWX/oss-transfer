@@ -775,7 +775,7 @@ func runExceptionsAdmin(client *ApiClient, action string, args []string) (map[st
 	delete(result, "items")
 	summary := []string{client.locale.format("已导出 %d 条记录到 %s", result["exported"], o.Value("output"))}
 	if result["truncated"] == true {
-		summary = append(summary, client.text("仅导出了部分记录；可调大 --limit 后重新导出"))
+		summary = append(summary, exceptionsTruncatedLines(client, kind, o, true)...)
 	}
 	setCLISummary(result, summary...)
 	return result, nil

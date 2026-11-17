@@ -38,7 +38,9 @@ func exceptionsListSummary(client *ApiClient, kind string, o commandOptions, res
 		limit, _ := adminInteger(o, "limit", 25, 1, 1000)
 		fmt.Fprintf(out, cliText(out, "下一页：%s\n"), fmt.Sprintf("exceptions list local --offset %d --limit %d", offset+len(items), limit))
 	} else if kind != "local" && result["truncated"] == true {
-		fmt.Fprintln(out, cliText(out, "仅显示部分记录；可调大 --limit，或用 exceptions export 导出全部"))
+		for _, line := range exceptionsTruncatedLines(client, kind, o, false) {
+			fmt.Fprintln(out, line)
+		}
 	}
 	if len(items) > 0 {
 		fmt.Fprintln(out, cliText(out, "完整错误信息：加 --json，或用 exceptions export 导出 CSV"))
@@ -48,6 +50,36 @@ func exceptionsListSummary(client *ApiClient, kind string, o commandOptions, res
 	}
 	return cliTextLines(text.String())
 }
+
+// exceptionsTruncatedLines explains a truncated list or export of failed or
+// fallback records. The Master returns at most --limit records per node
+// (at most 10000), and export runs the same query, so neither reaches the
+// rest; the task report lists every failed object of a stopped or ended task.
+func exceptionsTruncatedLines(client *ApiClient, kind string, o commandOptions, exported bool) []string {
+	limit, err := adminInteger(o, "limit", 1000, 1, exceptionsLimitMax)
+	if err != nil {
+		limit = exceptionsLimitMax
+	}
+	var lines []string
+	switch {
+	case exported && limit < exceptionsLimitMax:
+		lines = append(lines, client.locale.format("仅导出了部分记录：每个节点最多导出 %d 条，可用 --limit 调大到 10000 后重新导出", limit))
+	case exported:
+		lines = append(lines, client.text("仅导出了部分记录：每个节点最多导出 10000 条"))
+	case limit < exceptionsLimitMax:
+		lines = append(lines, client.locale.format("仅显示部分记录：每个节点最多返回 %d 条，可用 --limit 调大到 10000；exceptions export 受同样的限制", limit))
+	default:
+		lines = append(lines, client.text("仅显示部分记录：每个节点最多返回 10000 条；exceptions export 受同样的限制"))
+	}
+	if kind == "failed" {
+		lines = append(lines, client.text("任务停止或结束后，task report ID 导出的报告中 exception-details.csv 列出该任务的全部失败对象"))
+	}
+	return lines
+}
+
+// exceptionsLimitMax is the largest --limit the Master accepts for failed
+// and fallback records; it applies to each node.
+const exceptionsLimitMax = 10000
 
 // renderExceptionRows prints failed objects: task, key, size, node, a short
 // reason, the retry result and when the failure was recorded.

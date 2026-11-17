@@ -181,7 +181,7 @@ func (r *comparisonRefusals) refused(label string, err error) {
 // unsynced records an Agent that could not apply the storage connections,
 // which a comparison needs first.
 func (r *comparisonRefusals) unsynced(label string, err error) {
-	if comparisonNodeSilent(err) {
+	if agentSilent(err) {
 		r.silent = append(r.silent, label)
 		return
 	}
@@ -417,7 +417,7 @@ func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error)
 		fail(w, 404, "Comparison not found")
 		return
 	}
-	if comparisonNodeSilent(err) {
+	if agentSilent(err) {
 		// Not a gateway failure the operator can act on: the node went away
 		// after its last poll. Its results stay there until it reconnects.
 		fail(w, 503, "The node holding this comparison did not respond; its results stay on that node and load again when it reconnects")
@@ -426,9 +426,9 @@ func (c *comparisonAPI) agentFailed(w http.ResponseWriter, id string, err error)
 	fail(w, 502, err.Error())
 }
 
-// comparisonNodeSilent reports an Agent call that got no answer: the node
-// stopped polling, lost its enrollment session, or never took the command.
-func comparisonNodeSilent(err error) bool {
+// agentSilent reports an Agent call that got no answer: the node stopped
+// polling, lost its enrollment session, or never took the command.
+func agentSilent(err error) bool {
 	var problem *AgentError
 	if errors.As(err, &problem) {
 		return false

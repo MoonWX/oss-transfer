@@ -19,6 +19,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
 	"github.com/MoonWX/oss-transfer/internal/execution"
+	"github.com/MoonWX/oss-transfer/internal/storageconfig"
 	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
@@ -522,6 +523,92 @@ func TestPlannedChangeRemovingOfflineScannerReportsProgress(t *testing.T) {
 	if p.Counters.Succeeded != 256 || h.storage.listed("b", "") {
 		t.Fatal("scan restarted or objects missing", p.Counters)
 	}
+}
+
+// A connected node that cannot prepare a task with lease fencing keeps
+// renewing its lease, so nothing expires and no other node takes over its
+// work. The task names the node's own cause instead of waiting for a lease
+// expiry that never comes, and a node being updated is named as updating.
+func TestFencedTaskReportsWhyAConnectedNodeCannotWork(t *testing.T) {
+	h := newPlannedHarness(t, 8)
+	h.storage.block("") // no transfer finishes while the steps below run
+	t.Cleanup(func() { h.storage.open("") })
+	p := takeoverParent(t, h.f, h.a.node, h.b.node)
+	p = h.settle(p.ID, "lease fencing enabled", func(p task.Parent) bool { return p.Failover != nil && p.Failover.Enabled })
+	scanner, other := h.a.node, h.b.node
+	if p.ScannerNode().ID != scanner.ID {
+		scanner, other = other, scanner
+	}
+	agents := map[string]*takeoverAgent{h.a.node.ID: h.a, h.b.node.ID: h.b}
+	for _, node := range []task.Node{scanner, other} {
+		// However slow this runner is, no lease may expire during the test.
+		h.setLeaseFence(p, node, time.Now().Add(time.Hour))
+	}
+	label := func(node task.Node) string {
+		return h.f.master.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
+	}
+	// The node holds a newer storage revision than the Master, as after the
+	// Master's database was restored from a backup: it rejects every snapshot.
+	refuseStorage := func(node task.Node) {
+		snapshot, err := storageconfig.NewMaster(h.f.master.store).Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot.Revision++
+		if _, err := agents[node.ID].service.Configs.ApplySnapshot(snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// reported runs steps until the task's problem has every wanted line. A
+	// loaded runner can make a node miss a step's deadline, and a node that
+	// does not answer is rightly waited for; a node that answered is not, so
+	// in that step no line may wait for it as if it were disconnected.
+	reported := func(what string, answered []task.Node, want ...string) {
+		t.Helper()
+		var last string
+		for attempt := 0; attempt < 20; attempt++ {
+			if err := h.runtime.recordStep(h.ctx, p.ID, p.Generation); err == nil {
+				t.Fatalf("%s: no problem reported", what)
+			}
+			current, err := h.runtime.repo.Get(p.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			last = current.RuntimeError
+			complete := true
+			for _, line := range want {
+				complete = complete && strings.Contains(last, line)
+			}
+			if !complete {
+				continue
+			}
+			for _, line := range strings.Split(last, "\n") {
+				for _, node := range answered {
+					if strings.Contains(line, label(node)) && (strings.Contains(line, "execution lease") || strings.Contains(line, "to reconnect")) {
+						t.Fatalf("%s: connected node %s is waited for: %q", what, label(node), last)
+					}
+				}
+			}
+			return
+		}
+		t.Fatalf("%s: last problem %q lacks %q", what, last, want)
+	}
+	unavailable := func(node task.Node) string {
+		return "Agent " + label(node) + " is unavailable; its assigned work remains on that node: storage snapshot is older than the applied revision"
+	}
+	refuseStorage(other)
+	reported("node refuses storage", []task.Node{other}, unavailable(other))
+	// The scanner too: dispatch waits for it, and it is not disconnected.
+	refuseStorage(scanner)
+	reported("scanner refuses storage", []task.Node{scanner, other}, unavailable(scanner), unavailable(other),
+		"Waiting for scanning node "+label(scanner)+" to become available; existing child tasks remain assigned to their original nodes")
+	// An update holds the node's work on it; it is not taken over meanwhile.
+	if err := h.f.master.saveSoftwareQueue(agentUpdateQueue{Version: "4.1.47", Phase: "RUNNING", Items: []agentUpdateItem{{
+		NodeID: other.ID, EnrollmentID: other.EnrollmentID, Address: other.Address, Phase: "UPDATING", StartedAt: time.Now(), UpdateID: "update",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	reported("node updating", []task.Node{scanner, other}, "Agent "+label(other)+" is updating; its assigned work remains on that node")
 }
 
 // Replies from a node the task removed on purpose are filtered; the same reply

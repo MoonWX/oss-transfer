@@ -439,12 +439,19 @@ const SourceRefreshProtocol = 1
 // resolved value instead.
 const StorageAddressingProtocol = 1
 
+// ScanConcurrencyProtocol is advertised by Agents whose scan concurrency is a
+// node setting: node_config_set accepts maxConcurrentScans and node_config
+// returns it. Older Agents run nodecontrol.DefaultScanConcurrency scans and
+// reject the field, so the Master sends it only to Agents that advertise this.
+const ScanConcurrencyProtocol = 1
+
 func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
 	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol, "sourceRefreshProtocol": SourceRefreshProtocol, "storageAddressingProtocol": StorageAddressingProtocol, "sharedProofProtocol": SharedProofProtocol,
 		"scanProtocol": discovery.ScanProtocol}
+	capabilities["scanConcurrencyProtocol"] = ScanConcurrencyProtocol
 	if s.Comparisons != nil {
 		capabilities["comparisonProtocol"] = comparison.Protocol
 	}

@@ -87,6 +87,9 @@ func New(store *state.Store, options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if options.NodeControl.Logf == nil {
+		options.NodeControl.Logf = options.Logf
+	}
 	nodes, err := nodecontrol.New(store, limits, options.NodeControl)
 	if err != nil {
 		limits.Close()
@@ -154,7 +157,9 @@ func New(store *state.Store, options Options) (*Service, error) {
 		return nil, err
 	}
 	partLender.SetIdle(engine.IdleObjectSlots)
-	scanner, err := discovery.New(store, factory, discovery.Options{ParentContext: leases.ParentContext, SpecContext: leases.SpecContext})
+	// The node setting decides the scan concurrency: its saved value, else
+	// the default, which is what node_config reports.
+	scanner, err := discovery.New(store, factory, discovery.Options{ParentContext: leases.ParentContext, SpecContext: leases.SpecContext, MaxConcurrentScans: nodes.Config().MaxConcurrentScans})
 	if err != nil {
 		_ = engine.Close(context.Background())
 		temporary.Close()

@@ -15,6 +15,23 @@ func ValidateConcurrency(children, objects int) error {
 	return nil
 }
 
+// Scan concurrency is how many scans a node runs at once. Every Agent before
+// it was configurable ran DefaultScanConcurrency.
+const (
+	DefaultScanConcurrency = 2
+	MaxScanConcurrency     = 16
+)
+
+// ValidateScanConcurrency bounds the scans a node runs at once. Each scan
+// keeps source requests in flight for as long as it lists, so the bound is
+// kept low.
+func ValidateScanConcurrency(scans int) error {
+	if scans < 1 || scans > MaxScanConcurrency {
+		return ErrInvalid
+	}
+	return nil
+}
+
 func (c *Controller) SavedConcurrency() (ConcurrencyConfig, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -22,6 +39,17 @@ func (c *Controller) SavedConcurrency() (ConcurrencyConfig, bool) {
 		return ConcurrencyConfig{}, false
 	}
 	return *c.data.Concurrency, true
+}
+
+// SavedScanConcurrency returns the scan concurrency saved on this node, if
+// any. New has already dropped a saved value that is not valid.
+func (c *Controller) SavedScanConcurrency() (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.data.ScanConcurrency == nil {
+		return 0, false
+	}
+	return *c.data.ScanConcurrency, true
 }
 
 func (c *Controller) UpdateConfig(ctx context.Context, change ConfigChange) (Config, error) {
@@ -54,6 +82,13 @@ func (c *Controller) UpdateConfig(ctx context.Context, change ConfigChange) (Con
 		}
 		next.Concurrency = &value
 	}
+	if change.MaxConcurrentScans != nil {
+		scans := *change.MaxConcurrentScans
+		if err := ValidateScanConcurrency(scans); err != nil {
+			return Config{}, err
+		}
+		next.ScanConcurrency = &scans
+	}
 	if err := c.commit(next, nil); err != nil {
 		return Config{}, err
 	}
@@ -65,5 +100,9 @@ func (c *Controller) config() Config {
 	if c.data.Concurrency != nil {
 		value = *c.data.Concurrency
 	}
-	return Config{AdvertisedLocalRoots: append([]string{}, c.data.Roots...), ConcurrencyConfig: value}
+	scans := DefaultScanConcurrency
+	if c.data.ScanConcurrency != nil {
+		scans = *c.data.ScanConcurrency
+	}
+	return Config{AdvertisedLocalRoots: append([]string{}, c.data.Roots...), ConcurrencyConfig: value, MaxConcurrentScans: scans}
 }

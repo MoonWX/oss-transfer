@@ -118,7 +118,9 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 		return nil, err
 	}
 	c := &Controller{db: db, bytes: bytes, options: options, configured: configured, processID: hex.EncodeToString(nonce[:]), now: time.Now, next: map[string]time.Time{}, requests: newTaskRequestCounter(), changed: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
+	var ignoredScans *int
 	err := db.Update(func(tx *state.Tx) error {
+		ignoredScans = nil
 		found, err := tx.Get("node-control", "settings", &c.data)
 		if err != nil {
 			return err
@@ -147,6 +149,13 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 				return errors.New("invalid saved node concurrency")
 			}
 		}
+		// A scan concurrency outside today's bounds, for example one a later
+		// version allowed before a downgrade, must not stop the Agent from
+		// starting. It is dropped, and the default applies.
+		if value := c.data.ScanConcurrency; value != nil && ValidateScanConcurrency(*value) != nil {
+			ignoredScans = value
+			c.data.ScanConcurrency = nil
+		}
 		// A limit's target is its saved value, else the configured one, so a
 		// configuration change applies to every limit that was never saved.
 		// The saved effective rate is kept only while it is usable and below a
@@ -167,6 +176,9 @@ func New(db *state.Store, bytes ByteLimiter, options Options) (*Controller, erro
 	})
 	if err != nil {
 		return nil, err
+	}
+	if ignoredScans != nil && options.Logf != nil {
+		options.Logf("ignoring invalid saved scan concurrency %d; using %d", *ignoredScans, DefaultScanConcurrency)
 	}
 	// The byte limiter enforces node bandwidth and persists it separately. On
 	// every start it is set to the target, as the request limits are: the saved

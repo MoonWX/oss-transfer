@@ -104,6 +104,8 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 		scans, maxScans := s.Scanner.Concurrency()
 		execution := map[string]any{"activeScans": scans, "maxConcurrentScans": maxScans, "activeChildren": children, "maxConcurrentChildren": maxChildren, "unfinishedChildren": unfinished, "maxUnfinishedChildren": maxUnfinished}
 		execution["objectsPerChild"] = s.Engine.ObjectConcurrency()
+		// The console offers the scan concurrency setting by this field.
+		execution["scanConcurrencyProtocol"] = ScanConcurrencyProtocol
 		identity := hostIdentity()
 		result := map[string]any{"success": true, "hostname": identity["hostname"], "localIps": identity["localIps"], "rateLimit": rates, "rateLimitHistory": history, "localStorage": s.Nodes.Config(), "executionStatus": execution,
 			"scanProtocol": discovery.ScanProtocol}
@@ -139,6 +141,12 @@ func (s *Service) nodeCommand(ctx context.Context, command agenttransport.Comman
 				return respond(nil, err)
 			}
 			s.signal()
+		}
+		if request.MaxConcurrentScans != nil {
+			// Running scans continue; see discovery.Scanner.SetConcurrency.
+			if err := s.Scanner.SetConcurrency(config.MaxConcurrentScans); err != nil {
+				return respond(nil, err)
+			}
 		}
 		return respond(config, nil)
 	case "node_rate_set":

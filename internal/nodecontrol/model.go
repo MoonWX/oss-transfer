@@ -33,12 +33,15 @@ type Options struct {
 	// Local storage limits: file operations per second and bits per second
 	// read from or written to local files. Zero, the default, is unlimited.
 	LocalOpsPerSecond, LocalBandwidthBitsPerSecond float64
-	UseZeroDefaults                                  bool
-	Threshold                                        int
-	ThrottleRatio                                    float64
-	ThrottleWindow                                   time.Duration
-	ReduceFactor, IncreaseFactor, MinQPS             float64
-	RecoveryInterval                                 time.Duration
+	UseZeroDefaults                                bool
+	Threshold                                      int
+	ThrottleRatio                                  float64
+	ThrottleWindow                                 time.Duration
+	ReduceFactor, IncreaseFactor, MinQPS           float64
+	RecoveryInterval                               time.Duration
+	// Logf writes service log lines, such as a saved setting that New
+	// ignored. Nil discards them.
+	Logf func(format string, args ...any)
 }
 
 type RequestContext struct {
@@ -93,22 +96,31 @@ type Adjustment struct {
 }
 
 type persisted struct {
-	Overrides   map[string]float64    `json:"overrides"`
+	Overrides map[string]float64 `json:"overrides"`
 	// Saved local storage limits live apart from Overrides: an older Agent
 	// rejects a saved rate it does not know, which would stop it starting
 	// after a downgrade, but it ignores this field.
-	LocalOverrides map[string]float64 `json:"localOverrides,omitempty"`
-	Effective   map[string]float64    `json:"effective"`
-	Last        map[string]Adjustment `json:"last"`
-	Incidents   map[string]string     `json:"incidents"`
-	Roots       []string              `json:"advertisedLocalRoots"`
-	Sequence    uint64                `json:"sequence"`
-	Concurrency *ConcurrencyConfig    `json:"concurrency,omitempty"`
+	LocalOverrides map[string]float64    `json:"localOverrides,omitempty"`
+	Effective      map[string]float64    `json:"effective"`
+	Last           map[string]Adjustment `json:"last"`
+	Incidents      map[string]string     `json:"incidents"`
+	Roots          []string              `json:"advertisedLocalRoots"`
+	Sequence       uint64                `json:"sequence"`
+	Concurrency    *ConcurrencyConfig    `json:"concurrency,omitempty"`
+	// The saved number of concurrent scans lives apart from Concurrency:
+	// UpdateConfig saves that structure whole, so a scan change kept there
+	// would also save the default child concurrency as a choice. An older
+	// Agent ignores this field and drops it when it saves its settings on
+	// start, so its scan concurrency is the default again.
+	ScanConcurrency *int `json:"scanConcurrency,omitempty"`
 }
 
 type Config struct {
 	AdvertisedLocalRoots []string `json:"advertisedLocalRoots"`
 	ConcurrencyConfig
+	// MaxConcurrentScans is how many scans the node runs at once: the saved
+	// value, else DefaultScanConcurrency.
+	MaxConcurrentScans int `json:"maxConcurrentScans"`
 }
 
 type ConcurrencyConfig struct {
@@ -121,6 +133,9 @@ type ConfigChange struct {
 	AdvertisedLocalRoots  *[]string `json:"advertisedLocalRoots,omitempty"`
 	MaxConcurrentChildren *int      `json:"maxConcurrentChildren,omitempty"`
 	ObjectsPerChild       *int      `json:"objectsPerChild,omitempty"`
+	// An Agent older than scan concurrency rejects this field, so the Master
+	// sends it only to Agents that advertise scanConcurrencyProtocol.
+	MaxConcurrentScans *int `json:"maxConcurrentScans,omitempty"`
 }
 
 type Detail struct {

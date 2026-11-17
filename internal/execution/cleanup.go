@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 // DeletionProgress reports only committed cleanup, not an estimate of work in
@@ -32,7 +33,7 @@ func (e *Engine) RequestDeleteParent(ctx context.Context, id int64, generation u
 	}
 	for _, attempt := range e.active {
 		if attempt.parentID == id {
-			attempt.cancel()
+			attempt.cancel(transferstore.ErrTaskDeleted)
 		}
 	}
 	e.mu.Unlock()

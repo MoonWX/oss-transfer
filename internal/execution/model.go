@@ -232,6 +232,11 @@ type Options struct {
 	// again before each further range; any other target streams a throttled
 	// task's objects, and the share still bounds their speed.
 	TaskLimits func(Job) (transferstore.RangeBudget, bool)
+	// CountTransferred, when set, receives the bytes each child task sends to
+	// its destination, resent bytes included, as they are sent. A target that
+	// does not report its own progress (transferstore.ProgressReporter)
+	// reports the bytes read from the source instead.
+	CountTransferred func(Job, int64)
 	// Logf writes one line to the service log: each child task attempt's
 	// start and end with its counts, and its first failed objects (at most
 	// LoggedObjectFailures per attempt, then a count). Nil discards them.

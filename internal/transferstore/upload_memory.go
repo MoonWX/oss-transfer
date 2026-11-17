@@ -35,6 +35,12 @@ func NewUploadMemoryBudget(bytes int64) (*UploadMemoryBudget, error) {
 // part releases independently, so callers never wait for all parts to be in
 // memory. FIFO admission prevents small objects starving a larger waiting part.
 func (b *UploadMemoryBudget) acquire(ctx context.Context, bytes int64) (func(), error) {
+	return b.acquireWaiting(ctx, bytes, nil)
+}
+
+// acquireWaiting is acquire. waiting, when set, is called with +1 if the part
+// has to wait for memory, and with -1 when that wait ends.
+func (b *UploadMemoryBudget) acquireWaiting(ctx context.Context, bytes int64, waiting func(int)) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -48,7 +54,12 @@ func (b *UploadMemoryBudget) acquire(ctx context.Context, bytes int64) (func(), 
 	b.mu.Lock()
 	element := b.waiting.PushBack(r)
 	b.admit()
+	granted := r.granted
 	b.mu.Unlock()
+	if !granted && waiting != nil {
+		waiting(1)
+		defer waiting(-1)
+	}
 	select {
 	case <-r.ready:
 		if err := ctx.Err(); err != nil {
@@ -68,6 +79,15 @@ func (b *UploadMemoryBudget) acquire(ctx context.Context, bytes int64) (func(), 
 		b.mu.Unlock()
 		return nil, ctx.Err()
 	}
+}
+
+// acquireUploadMemory is acquire for a part of a write: while the part waits
+// for memory, the write's progress shows it waiting for the upload buffer.
+func acquireUploadMemory(ctx context.Context, budget *UploadMemoryBudget, bytes int64, progress WriteProgress) (func(), error) {
+	if progress == nil {
+		return budget.acquire(ctx, bytes)
+	}
+	return budget.acquireWaiting(ctx, bytes, func(delta int) { progress.Phase(PhaseUploadBuffer, delta) })
 }
 
 func (b *UploadMemoryBudget) admit() {

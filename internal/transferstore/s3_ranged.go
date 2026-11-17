@@ -57,12 +57,13 @@ func (s *S3) RangedWrite(size int64) bool {
 // sequential read limits the object. PartConcurrency slots are guaranteed and
 // wait for memory in FIFO order; extra slots are borrowed only while the node
 // is idle and memory is immediately free, and return when their part ends.
-func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc, size, partSize int64, uploadID *string) ([]types.CompletedPart, error) {
+func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc, size, partSize int64, uploadID *string, progress WriteProgress) ([]types.CompletedPart, error) {
 	uploadContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	count := int((size + partSize - 1) / partSize)
 	parts := make([]types.CompletedPart, count)
 	slots := newRangedSlots(s.partLender, s.partConcurrency, count, s.uploadMemory)
+	slots.progress = progress
 	var group sync.WaitGroup
 	var failure sync.Once
 	var firstError error
@@ -84,7 +85,7 @@ func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc
 			defer group.Done()
 			defer slots.done()
 			defer release()
-			etag, err := s.uploadRange(uploadContext, key, ranges, uploadID, number, offset, length)
+			etag, err := s.uploadRange(uploadContext, key, ranges, uploadID, number, offset, length, progress)
 			if err != nil {
 				fail(err)
 				return
@@ -105,12 +106,14 @@ func (s *S3) uploadRangedParts(ctx context.Context, key string, ranges RangeFunc
 // uploadRange buffers the range before sending it, so SDK retries replay the
 // same bytes. Interrupted body reads are retried with a fresh conditional
 // range; a changed source, a length mismatch and cancellation are not.
-func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uploadID *string, number int32, offset, length int64) (*string, error) {
+func (s *S3) uploadRange(ctx context.Context, key string, ranges RangeFunc, uploadID *string, number int32, offset, length int64, progress WriteProgress) (*string, error) {
 	data := make([]byte, int(length))
 	if err := readRangeRetrying(ctx, ranges, offset, data); err != nil {
 		return nil, err
 	}
-	output, err := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: uploadID, PartNumber: aws.Int32(number), Body: bytes.NewReader(data), ContentLength: aws.Int64(length)})
+	callContext, meter := meterRequest(ctx, progress)
+	output, err := s.client.UploadPart(callContext, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: uploadID, PartNumber: aws.Int32(number), Body: bytes.NewReader(data), ContentLength: aws.Int64(length)})
+	meter.finish(err == nil && aws.ToString(output.ETag) != "", length)
 	if err != nil {
 		return nil, s3Error(err)
 	}

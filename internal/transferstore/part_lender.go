@@ -76,6 +76,9 @@ type rangedSlots struct {
 	// are kept when it drops.
 	limit  int
 	window func() int
+	// progress, when set, shows a base slot's wait for memory as the
+	// write waiting for the upload buffer.
+	progress WriteProgress
 }
 
 // room reports whether the window admits another slot now.
@@ -135,7 +138,7 @@ func (r *rangedSlots) baseMemory(ctx context.Context, length int64) (func(), err
 		}
 		return func() { <-r.base }, nil
 	}
-	release, err := r.memory.acquire(ctx, length)
+	release, err := acquireUploadMemory(ctx, r.memory, length, r.progress)
 	if err != nil {
 		<-r.base
 		return nil, err

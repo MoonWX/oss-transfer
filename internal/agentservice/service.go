@@ -97,7 +97,8 @@ func New(store *state.Store, options Options) (*Service, error) {
 	}
 	configureNodeFactory(factory, nodes)
 	rates := NewTaskRates()
-	options.Execution.DecorateReader = rates.Decorator(nodes.Decorator(limits.Decorator))
+	options.Execution.DecorateReader = nodes.Decorator(limits.Decorator)
+	options.Execution.CountTransferred = rates.Add
 	options.Execution.TaskLimits = taskLimits(limits)
 	jobs, err := execution.NewRepository(store, execution.RepositoryOptions{})
 	if err != nil {
@@ -170,8 +171,8 @@ func New(store *state.Store, options Options) (*Service, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{store: store, Inventory: inventory.New(store), Rates: rates, Nodes: nodes, Configs: configs, Factory: factory, Jobs: jobs, Engine: engine, Scanner: scanner, Limits: limits, Shared: shared, Temporary: temporary, TempRecovery: recovery, MPURecovery: mpuRecovery, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), sweep: make(chan struct{}, 1)}
 	s.Leases = leases
-	leases.quiesce = func(ctx context.Context, parentID int64) error {
-		return errors.Join(engine.QuiesceParent(ctx, parentID), scanner.QuiesceParent(ctx, parentID))
+	leases.quiesce = func(ctx context.Context, parentID int64, cause error) error {
+		return errors.Join(engine.QuiesceParent(ctx, parentID, cause), scanner.QuiesceParent(ctx, parentID))
 	}
 	leases.rejoinCleanup = jobs.RetireOwnership
 	leases.rejoinScanner = func(ctx context.Context, req LeaseRejoinRequest) error {

@@ -2,8 +2,6 @@ package master
 
 import (
 	"context"
-	"io"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,14 +13,7 @@ func TestTaskRateAPIUsesAllAgentsAndRejectsStaleCache(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	service, node := taskAPIAgent(t, f)
 	parent := task.Parent{ID: 9, Generation: 1, Status: "RUNNING", Spec: task.Spec{Nodes: []task.Node{node}}}
-	reader, err := service.Rates.Decorator(func(_ context.Context, _ execution.Job, _ execution.Item, r io.ReadCloser) (io.ReadCloser, error) {
-		return r, nil
-	})(context.Background(), execution.Job{ParentID: 9, Generation: 1, ChildID: "9-1"}, execution.Item{}, io.NopCloser(strings.NewReader(strings.Repeat("x", 1000))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.Copy(io.Discard, reader)
-	reader.Close()
+	service.Rates.Add(execution.Job{ParentID: 9, Generation: 1, ChildID: "9-1"}, 1000)
 	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)) + 10*time.Millisecond)
 	f.master.tasks.sampleRates(context.Background(), parent)
 	row := f.master.taskView(parent)

@@ -97,6 +97,10 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		}
 		t.controller.requests.add(info)
 	}
+	if request.Method == http.MethodPut {
+		// The upload's progress stops showing a wait for the request limit.
+		transferstore.RequestAdmitted(request.Context())
+	}
 	response, err := t.base.RoundTrip(request)
 	if err != nil {
 		return nil, err

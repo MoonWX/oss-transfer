@@ -171,7 +171,7 @@ func TestRangedCopyHonoursTaskBandwidthAndRequestLimits(t *testing.T) {
 				t.Fatal(err)
 			}
 			rates := NewTaskRates()
-			engine, err := execution.NewEngine(repo, factory, execution.Options{DecorateReader: rates.Decorator(nodes.Decorator(limits.Decorator))})
+			engine, err := execution.NewEngine(repo, factory, execution.Options{DecorateReader: nodes.Decorator(limits.Decorator), CountTransferred: rates.Add})
 			if err != nil {
 				t.Fatal(err)
 			}

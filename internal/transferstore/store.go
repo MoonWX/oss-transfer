@@ -109,6 +109,9 @@ type WriteOptions struct {
 	// second covers fewer than two chunks as the write starts. Nil means the
 	// fetches wait on no limit.
 	RangeBudget func() RangeBudget
+	// Progress, when set, receives the write's destination-side progress
+	// from a store that implements ProgressReporter. Nil counts nothing.
+	Progress WriteProgress
 }
 
 // RangeBudget is what the source reads of one object may take on this node:

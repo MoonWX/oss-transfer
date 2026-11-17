@@ -127,7 +127,7 @@ func TestEngineRangedCopyIntegrityFuzz(t *testing.T) {
 				if completed != 1 || !targetOK {
 					t.Errorf("CRITICAL %s: item succeeded but completed=%d targetOK=%v", desc, completed, targetOK)
 				}
-				if got := object.bytes.Load(); got != size {
+				if got := object.read.Load(); got != size {
 					t.Logf("progress %s: counted %d of %d", desc, got, size)
 				}
 			} else if completed != 0 && ctx.Err() == nil {

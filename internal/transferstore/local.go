@@ -499,14 +499,18 @@ func (s *Local) Write(ctx context.Context, key string, input io.Reader, options 
 		}
 		registered = true
 	}
+	var sink io.Writer = file
+	if options.Progress != nil {
+		sink = &progressFile{file: file, progress: options.Progress}
+	}
 	if options.Ranges != nil && s.RangedWrite(options.Size) && s.windowSlots(options.RangeBudget) >= 2 {
 		// Ranges are fetched concurrently but appended in order, exactly as a
 		// stream would be; the file is published only after every byte.
-		if err := s.writeRanges(ctx, s.pacedWriter(ctx, file), options.Ranges, options.Size, options.RangeBudget); err != nil {
+		if err := s.writeRanges(ctx, s.pacedWriter(ctx, sink), options.Ranges, options.Size, options.RangeBudget); err != nil {
 			return result, err
 		}
 	} else {
-		written, err := io.CopyBuffer(s.pacedWriter(ctx, file), io.LimitReader(reader, options.Size), make([]byte, localCopyBuffer))
+		written, err := io.CopyBuffer(s.pacedWriter(ctx, sink), io.LimitReader(reader, options.Size), make([]byte, localCopyBuffer))
 		if err != nil {
 			return result, err
 		}

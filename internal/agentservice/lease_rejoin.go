@@ -5,6 +5,7 @@ import (
 
 	"github.com/MoonWX/oss-transfer/internal/discovery"
 	"github.com/MoonWX/oss-transfer/internal/execution"
+	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
 type LeaseRejoinRequest struct {
@@ -55,7 +56,7 @@ func (m *Leases) Rejoin(ctx context.Context, req LeaseRejoinRequest) error {
 		return nil
 	}
 	if req.OwnerEpoch > p.record.OwnerEpoch {
-		m.closeLocked(p)
+		m.closeLocked(p, transferstore.ErrMoved)
 		p.pending = nil
 		p.record = leaseRecord{ParentID: req.ParentID, Generation: req.Generation, Required: true, Retired: true, Rejoining: true, OwnerEpoch: req.OwnerEpoch}
 	}
@@ -65,7 +66,7 @@ func (m *Leases) Rejoin(ctx context.Context, req LeaseRejoinRequest) error {
 		return err
 	}
 	if m.quiesce != nil {
-		if err := m.quiesce(ctx, req.ParentID); err != nil {
+		if err := m.quiesce(ctx, req.ParentID, transferstore.ErrMoved); err != nil {
 			return err
 		}
 	}

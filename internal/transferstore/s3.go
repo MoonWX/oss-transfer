@@ -184,6 +184,12 @@ func NewS3(config S3Config) (*S3, error) {
 
 func (s *S3) Close() error { return nil }
 
+// ReportsProgress: Write counts the bodies of its PutObject and UploadPart
+// requests per HTTP attempt (requestMeter) into WriteOptions.Progress.
+func (s *S3) ReportsProgress() bool { return true }
+
+var _ ProgressReporter = (*S3)(nil)
+
 func (s *S3) Scan(ctx context.Context, options ListOptions, emit func(Object) error) error {
 	if emit == nil {
 		return errors.New("scan callback is required")
@@ -471,7 +477,7 @@ func (s *S3) Write(ctx context.Context, key string, input io.Reader, options Wri
 	reader := contextReader{ctx, input}
 	// Even an unusually large configured part must not cause a whole-file buffer.
 	if options.Size <= s.partSize && options.Size <= min(maxMemoryPart, s.maxBufferedBytes) {
-		body, err := s.readPart(ctx, reader, options.Size, min(maxMemoryPart, s.maxBufferedBytes))
+		body, err := s.readPart(ctx, reader, options.Size, min(maxMemoryPart, s.maxBufferedBytes), options.Progress)
 		if err != nil {
 			return WriteResult{}, err
 		}
@@ -488,7 +494,9 @@ func (s *S3) Write(ctx context.Context, key string, input io.Reader, options Wri
 		if !options.Overwrite {
 			request.IfNoneMatch = aws.String("*")
 		}
-		out, err := s.client.PutObject(ctx, request)
+		callContext, meter := meterRequest(ctx, options.Progress)
+		out, err := s.client.PutObject(callContext, request)
+		meter.finish(err == nil, options.Size)
 		if isPrecondition(err) && !options.Overwrite {
 			return s.concurrentTarget(ctx, key)
 		}
@@ -644,9 +652,9 @@ func (s *S3) multipart(ctx context.Context, key string, reader io.Reader, option
 	var parts []types.CompletedPart
 	var uploadErr error
 	if ranged {
-		parts, uploadErr = s.uploadRangedParts(ctx, key, options.Ranges, options.Size, partSize, upload.UploadId)
+		parts, uploadErr = s.uploadRangedParts(ctx, key, options.Ranges, options.Size, partSize, upload.UploadId, options.Progress)
 	} else {
-		parts, uploadErr = s.uploadParts(ctx, key, reader, options.Size, partSize, upload.UploadId)
+		parts, uploadErr = s.uploadParts(ctx, key, reader, options.Size, partSize, upload.UploadId, options.Progress)
 	}
 	if uploadErr != nil {
 		return result, uploadErr
@@ -676,7 +684,7 @@ func (s *S3) multipart(ctx context.Context, key string, reader io.Reader, option
 
 // uploadParts reads the source once in order. A slot is acquired before allocating
 // or spooling a part, so a slow server cannot accumulate unbounded queued bodies.
-func (s *S3) uploadParts(ctx context.Context, key string, input io.Reader, size, partSize int64, uploadID *string) ([]types.CompletedPart, error) {
+func (s *S3) uploadParts(ctx context.Context, key string, input io.Reader, size, partSize int64, uploadID *string, progress WriteProgress) ([]types.CompletedPart, error) {
 	uploadContext, cancel := context.WithCancel(ctx)
 	stop := interruptInput(uploadContext, input)
 	defer func() { stop(); cancel() }()
@@ -713,7 +721,7 @@ func (s *S3) uploadParts(ctx context.Context, key string, input io.Reader, size,
 			break
 		}
 		partLength := min(remaining, partSize)
-		body, err := s.readPart(uploadContext, reader, partLength, memoryLimit)
+		body, err := s.readPart(uploadContext, reader, partLength, memoryLimit, progress)
 		if err != nil {
 			<-slots
 			fail(err)
@@ -723,7 +731,9 @@ func (s *S3) uploadParts(ctx context.Context, key string, input io.Reader, size,
 		go func(number int32, body *partBody, length int64) {
 			defer group.Done()
 			defer func() { <-slots }()
-			output, err := s.client.UploadPart(uploadContext, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: uploadID, PartNumber: aws.Int32(number), Body: body.reader, ContentLength: aws.Int64(length)})
+			callContext, meter := meterRequest(uploadContext, progress)
+			output, err := s.client.UploadPart(callContext, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: uploadID, PartNumber: aws.Int32(number), Body: body.reader, ContentLength: aws.Int64(length)})
+			meter.finish(err == nil && aws.ToString(output.ETag) != "", length)
 			cleanupErr := body.close()
 			if err != nil || cleanupErr != nil {
 				fail(errors.Join(s3Error(err), cleanupErr))

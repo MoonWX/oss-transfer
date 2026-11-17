@@ -36,7 +36,12 @@ func (c *s3DiagnosticClient) Do(request *http.Request) (*http.Response, error) {
 		connection.known, connection.reused, connection.idle = true, info.Reused, info.IdleTime
 		connection.Unlock()
 	}}
-	response, err := c.next.Do(request.WithContext(httptrace.WithClientTrace(request.Context(), trace)))
+	attempt := request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
+	meter := meterBody(attempt)
+	response, err := c.next.Do(attempt)
+	if err != nil || response == nil || response.StatusCode >= 300 {
+		meter.failed()
+	}
 	if err == nil && response != nil {
 		// The name resolved: if it stops resolving later, that is an outage
 		// (see isTransientError).

@@ -3,12 +3,14 @@ package execution
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,7 +137,7 @@ func TestS3ToLocalDownloadsRangesWithLimiterProgressAndRequests(t *testing.T) {
 	if counter.ranged.Load() != parts+2 || counter.gets.Load() != parts+2 {
 		t.Fatalf("requests: %d GETs, %d ranged; want probe plus %d ranges", counter.gets.Load(), counter.ranged.Load(), parts+1)
 	}
-	if got := object.bytes.Load(); got != stat.Size {
+	if got := object.read.Load(); got != stat.Size {
 		t.Fatalf("live progress %d, want %d", got, stat.Size)
 	}
 	for i := 1; i < len(samples); i++ {
@@ -245,6 +247,112 @@ func TestLoneLocalDownloadBorrowsIdleSlots(t *testing.T) {
 	}
 }
 
+// gatedRangeTransport holds the GET of the range starting at offset 0 until
+// release closes; the one-byte probe passes.
+type gatedRangeTransport struct {
+	base    http.RoundTripper
+	held    chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedRangeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if value := request.Header.Get("Range"); strings.HasPrefix(value, "bytes=0-") && value != "bytes=0-0" {
+		g.once.Do(func() { close(g.held) })
+		select {
+		case <-g.release:
+		case <-request.Context().Done():
+			return nil, request.Context().Err()
+		}
+	}
+	return g.base.RoundTrip(request)
+}
+
+// A ranged download writes chunks in order. Chunks fetched while an earlier
+// one is still on its way wait in the reorder buffer: they have been read
+// from the source, but the destination does not hold them yet.
+func TestRangedDownloadReorderBufferNotCounted(t *testing.T) {
+	const parts = 8
+	payload := downloadPayload(parts * localTestPart)
+	server := newFaultS3(payload, localTestPart, faultConfig{MutateAt: -1}, 1)
+	defer server.Close()
+	gate := &gatedRangeTransport{base: server.server.Client().Transport, held: make(chan struct{}), release: make(chan struct{})}
+	source, err := transferstore.NewS3(transferstore.S3Config{Endpoint: server.server.URL, Bucket: "bucket", AccessKey: "test-access", SecretKey: "fake-test-secret", PathStyle: true, RetryMaxAttempts: 1, HTTPClient: &http.Client{Transport: gate}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	target, err := transferstore.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	memory, _ := transferstore.NewUploadMemoryBudget(64 << 20)
+	if err := target.SetRangedWrites(transferstore.LocalRangedOptions{MinSize: 1, ChunkSize: localTestPart, PartConcurrency: 4, Memory: memory}); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := source.Stat(bg, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Three later chunks are fetched in full while the first is held.
+	fetched := make(chan struct{}, parts)
+	engine := &Engine{opts: Options{DecorateReader: func(_ context.Context, _ Job, _ Item, input io.ReadCloser) (io.ReadCloser, error) {
+		return &fetchSignal{ReadCloser: input, fetched: fetched}, nil
+	}}}
+	object := &objectProgress{item: ObjectProgress{Size: stat.Size}, targetCounted: true}
+	done := make(chan ItemResult, 1)
+	go func() {
+		done <- engine.copyItem(bg, s3ToLocalJob(1), Item{ID: "1", Source: stat, DestinationKey: "large.bin"}, source, target, object)
+	}()
+	<-gate.held
+	for range 3 {
+		select {
+		case <-fetched:
+		case <-time.After(time.Minute): // hang guard only
+			t.Fatal("later chunks were not fetched")
+		}
+	}
+	if read, transferred := object.read.Load(), object.transferred(); read != 3*localTestPart || transferred != 0 {
+		t.Fatalf("reorder buffer: read %d, transferred %d", read, transferred)
+	}
+	close(gate.release)
+	if result := <-done; result.Status != ItemSucceeded {
+		t.Fatalf("download failed: %+v", result)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "large.bin")); !bytes.Equal(got, payload) {
+		t.Fatal("target differs from source")
+	}
+	if read, transferred := object.read.Load(), object.transferred(); read != stat.Size || transferred != stat.Size {
+		t.Fatalf("finished download: read %d, transferred %d of %d", read, transferred, stat.Size)
+	}
+}
+
+// fetchSignal signals when a range read to its end is closed, after the
+// fetch has counted every byte it read.
+type fetchSignal struct {
+	io.ReadCloser
+	fetched chan<- struct{}
+	eof     atomic.Bool
+	once    sync.Once
+}
+
+func (r *fetchSignal) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.eof.Store(true)
+	}
+	return n, err
+}
+
+func (r *fetchSignal) Close() error {
+	err := r.ReadCloser.Close()
+	if r.eof.Load() {
+		r.once.Do(func() { r.fetched <- struct{}{} })
+	}
+	return err
+}
+
 type closeHook struct {
 	io.ReadCloser
 	once   sync.Once
@@ -256,25 +364,26 @@ func (r *closeHook) Close() error {
 	return r.ReadCloser.Close()
 }
 
-// A withdrawn (retried) range lowers the live byte count, but reported
-// progress keeps its high-water mark and never exceeds the object size.
-func TestObjectProgressReportsMonotonicHighWaterMark(t *testing.T) {
+// Counted from source reads (a target that does not report its own
+// progress), a withdrawn (retried) range lowers the live byte count, but
+// reported progress keeps its high-water mark and never exceeds the size.
+func TestObjectProgressFallbackKeepsHighWaterMark(t *testing.T) {
 	object := &objectProgress{item: ObjectProgress{Size: 1000}}
 	steps := []struct{ add, want int64 }{{100, 100}, {300, 400}, {-300, 400}, {200, 400}, {250, 550}, {-50, 550}, {600, 1000}, {-1000, 1000}}
 	for _, step := range steps {
-		object.bytes.Add(step.add)
+		object.read.Add(step.add)
 		if got := object.transferred(); got != step.want {
 			t.Fatalf("after %+d: reported %d, want %d", step.add, got, step.want)
 		}
 	}
-	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}}}})
-	p.initialize(0)
+	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}}}}, nil)
+	p.initialize(0, false)
 	live := p.begin(Item{ID: "a", Source: transferstore.Object{Size: 1000}})
-	live.bytes.Store(700)
+	live.read.Store(700)
 	if child, items, _ := p.snapshot(true); child.InFlightBytes != 700 || items[0].TransferredBytes != 700 {
 		t.Fatal(child, items)
 	}
-	live.bytes.Store(200)
+	live.read.Store(200)
 	if child, _, _ := p.snapshot(false); child.InFlightBytes != 700 {
 		t.Fatal("summary progress moved backwards", child)
 	}
@@ -363,7 +472,7 @@ func TestEngineRangedDownloadIntegrityFuzz(t *testing.T) {
 				if readErr != nil || !bytes.Equal(got, data) {
 					t.Errorf("CRITICAL %s: item succeeded with different content (%v)", desc, readErr)
 				}
-				if counted := object.bytes.Load(); counted != size {
+				if counted := object.read.Load(); counted != size {
 					t.Errorf("%s: live progress %d of %d", desc, counted, size)
 				}
 			} else if readErr == nil || result.TargetCommitted {

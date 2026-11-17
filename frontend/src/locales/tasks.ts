@@ -69,6 +69,54 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "ファイルの進捗を取得中",
   },
   确认中: { en: "Finalizing", ja: "確定中" },
+  传输中: { en: "Transferring", ja: "転送中" },
+  源端已读完: { en: "Source read", ja: "転送元の読み取り完了" },
+  等待重试: { en: "Waiting to retry", ja: "再試行待ち" },
+  等待写入请求限速: {
+    en: "Waiting for the request limit",
+    ja: "リクエスト制限の待機中",
+  },
+  等待上传缓冲: {
+    en: "Waiting for the upload buffer",
+    ja: "アップロードバッファーの待機中",
+  },
+  "已从源端读取 {bytes}": {
+    en: "{bytes} read from the source",
+    ja: "転送元から {bytes} を読み取り済み",
+  },
+  "数据已全部被目标端接收，正在完成分片上传，或把文件同步到磁盘并发布": {
+    en: "The destination has received all data; the multipart upload is being completed, or the file is being synced and published",
+    ja: "転送先がすべてのデータを受信しました。マルチパートアップロードを完了しているか、ファイルをディスクに同期して公開しています",
+  },
+  "该执行节点版本较旧，进度按读取源端计算，写入目标端可能仍在进行": {
+    en: "This Agent is an older version; progress counts source reads, and writing to the destination may still be in progress",
+    ja: "この実行ノードは旧バージョンのため、進捗は転送元の読み取り量で計算されており、転送先への書き込みは継続中の可能性があります",
+  },
+  "已传输为目标端已确认的字节，加上各请求本次尝试已交给网络的字节；请求失败时，该次尝试的字节会撤回。":
+    {
+      en: "Transferred bytes are those the destination has confirmed, plus the bytes the current attempt of each request has handed to the network; a failed attempt's bytes are withdrawn.",
+      ja: "転送済みのバイト数は、転送先が確認したバイト数に、各リクエストの現在の試行がネットワークに渡したバイト数を加えた値です。失敗した試行のバイト数は差し引かれます。",
+    },
+  "发往目标端的速率（最近几秒的平均值），包含请求失败后重新发送的字节。": {
+    en: "Rate of data sent to the destination, averaged over the last few seconds, including bytes sent again after a failed request.",
+    ja: "転送先へ送信している速度（直近数秒の平均）です。失敗したリクエストの再送分を含みます。",
+  },
+  "执行节点版本较旧，速度和进度按读取源端计算": {
+    en: "The Agents are older versions; speed and progress count source reads",
+    ja: "実行ノードが旧バージョンのため、速度と進捗は転送元の読み取り量で計算されています",
+  },
+  "部分执行节点版本较旧，这些节点的速度和进度按读取源端计算": {
+    en: "Some Agents are older versions; their speed and progress count source reads",
+    ja: "一部の実行ノードは旧バージョンのため、それらのノードの速度と進捗は転送元の読み取り量で計算されています",
+  },
+  "执行节点版本较旧，速度按读取源端计算，进度只计已完成的对象": {
+    en: "The Agents are older versions; speed counts source reads, and progress counts completed objects only",
+    ja: "実行ノードが旧バージョンのため、速度は転送元の読み取り量で計算され、進捗は完了したオブジェクトのみを数えています",
+  },
+  "部分执行节点版本较旧，这些节点的速度按读取源端计算；进度只计已完成的对象": {
+    en: "Some Agents are older versions; their speed counts source reads, and progress counts completed objects only",
+    ja: "一部の実行ノードは旧バージョンのため、それらのノードの速度は転送元の読み取り量で計算されています。進捗は完了したオブジェクトのみを数えています",
+  },
   "文件进度：{key}": {
     en: "File progress: {key}",
     ja: "ファイルの進捗：{key}",

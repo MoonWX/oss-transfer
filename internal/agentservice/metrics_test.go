@@ -1,9 +1,6 @@
 package agentservice
 
 import (
-	"context"
-	"io"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,44 +8,38 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/execution"
 )
 
-func TestTaskRateCountsActualReadsAcrossStreamsAndGenerations(t *testing.T) {
+// The task speed counts the bytes child tasks report as sent to their
+// destinations, from any number of concurrent writes, per task generation
+// and over the last five complete seconds of an injected clock.
+func TestTaskRateCountsBytesSentToTarget(t *testing.T) {
 	m := NewTaskRates()
 	now := time.Unix(1000, 0)
 	m.now = func() time.Time { return now }
-	wrap := m.Decorator(func(_ context.Context, _ execution.Job, _ execution.Item, in io.ReadCloser) (io.ReadCloser, error) {
-		return in, nil
-	})
 	job := execution.Job{ParentID: 1, Generation: 1, ChildID: "1-1"}
 	var wg sync.WaitGroup
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r, err := wrap(context.Background(), job, execution.Item{}, io.NopCloser(strings.NewReader(strings.Repeat("x", 500))))
-			if err != nil {
-				t.Error(err)
-				return
+		wg.Go(func() {
+			for range 5 {
+				m.Add(job, 100)
 			}
-			defer r.Close()
-			if n, err := io.Copy(io.Discard, r); err != nil || n != 500 {
-				t.Error(n, err)
-			}
-		}()
+		})
 	}
 	wg.Wait()
+	m.Add(job, 0)
+	m.Add(job, -50)
 	if rate := m.Snapshot(1, 1).BytesPerSecond; rate != 0 {
 		t.Fatal("incomplete second counted", rate)
 	}
 	now = now.Add(time.Second)
 	for range 3 { // Reading the API cannot reset or inflate the rate.
 		s := m.Snapshot(1, 1)
-		if s.BytesPerSecond != 1000 || s.Children["1-1"] != 1000 {
+		if s.BytesPerSecond != 1000 || s.Children["1-1"] != 1000 || s.Basis != execution.BasisTarget {
 			t.Fatal(s)
 		}
 	}
 	job.Generation = 2
 	job.ChildID = "1-2"
-	m.add(job, 2500)
+	m.Add(job, 2500)
 	now = now.Add(time.Second)
 	if m.Snapshot(1, 1).BytesPerSecond != 1000 || m.Snapshot(1, 2).BytesPerSecond != 500 || m.Snapshot(2, 1).BytesPerSecond != 0 {
 		t.Fatal("generations or tasks were mixed")

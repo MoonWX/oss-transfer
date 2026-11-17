@@ -96,8 +96,10 @@ func TestTaskRequestDecodingDoesNotImportProgressOrSilentlyDropOptions(t *testin
 	exported["taskIndex"], exported["putObjectCount"], exported["status"] = 900, 100000, "COMPLETED"
 	exported["startKey"], exported["endKey"], exported["marker"] = "a", "z", "middle"
 	exported["localPath"], exported["nodeBindings"] = nil, []any{}
-	// Exported by a Master that showed a running scan's activity.
+	// Exported by a Master that showed a running scan's activity, and what
+	// the running task's speed counted.
 	exported["scanActivity"] = map[string]any{"state": "UNSUPPORTED"}
+	exported["currentSpeedBytesPerSecond"], exported["transferBasis"] = 1024.0, "TARGET"
 	encoded, _ := json.Marshal([]any{exported})
 	response := httptest.NewRecorder()
 	rows, ok := readTaskRows(response, httptest.NewRequest("POST", "/api/master/import", bytes.NewReader(encoded)))

@@ -351,16 +351,19 @@ func TestStopFencePrecedesCancelAndResumeWaitsOldAttempt(t *testing.T) {
 		t.Fatalf("new attempt overtook blocked previous I/O: %v", err)
 	}
 	releaseOnce.Do(func() { close(release) })
+	// The blocked write completed after all: its object is at the
+	// destination. The stopped attempt records it before it exits, which
+	// the stop and the next attempt wait for; the record stays stopped.
 	r := f.wait()
-	if r.Status != Stopped || r.Counters.Succeeded != 0 {
-		t.Fatalf("old result crossed stop fence: %+v", r)
+	if r.Status != Stopped || r.Attempt != stopped.Attempt || r.Counters.Succeeded != 1 || r.Counters.Failed != 0 {
+		t.Fatalf("stopped attempt's completed object not recorded: %+v", r)
 	}
 	if err := f.engine.Resume(bg, f.job.ChildID, 1, false); err != nil {
 		t.Fatal(err)
 	}
 	r = f.wait()
-	if r.Status != Completed || r.Counters.Skipped != 1 || r.Counters.Succeeded != 0 {
-		t.Fatalf("at-least-once recovery did not honor SKIP: %+v", r)
+	if r.Status != Completed || r.Counters.Succeeded != 1 || r.Counters.Skipped != 0 {
+		t.Fatalf("resume did not keep the recorded object: %+v", r)
 	}
 	f.assertFiles()
 }

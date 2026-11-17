@@ -21,6 +21,45 @@ export const transferredBytes = (task: Task): number =>
 export const byteProgress = (task: Task) =>
   task.progressBasis === "BYTES" && Number(task.listObjectSize) > 0;
 
+// What the current speed and live bytes count (transferBasis): TARGET is
+// bytes sent to the destination; SOURCE (every node an older Agent) and
+// MIXED (some) count source reads on those nodes. With an Agent that has no
+// live progress at all (liveProgress UNSUPPORTED), progress counts completed
+// objects only.
+export function speedBasisNote(task: Task): string | null {
+  const completedOnly = task.liveProgress === "UNSUPPORTED";
+  switch (task.transferBasis) {
+    case "SOURCE":
+      return completedOnly
+        ? t("执行节点版本较旧，速度按读取源端计算，进度只计已完成的对象")
+        : t("执行节点版本较旧，速度和进度按读取源端计算");
+    case "MIXED":
+      return completedOnly
+        ? t(
+            "部分执行节点版本较旧，这些节点的速度按读取源端计算；进度只计已完成的对象",
+          )
+        : t("部分执行节点版本较旧，这些节点的速度和进度按读取源端计算");
+  }
+  return null;
+}
+
+export function speedHint(task: Task): string | undefined {
+  return task.transferBasis === "TARGET"
+    ? t("发往目标端的速率（最近几秒的平均值），包含请求失败后重新发送的字节。")
+    : undefined;
+}
+
+// The current speed, with a second line when it counts source reads.
+export function currentSpeedText(
+  task: Task,
+  format: (bytes: number) => string,
+): string {
+  const speed = task.currentSpeedBytesPerSecond;
+  if (speed == null) return "—";
+  const note = speedBasisNote(task);
+  return note ? `${format(speed)}/s\n${note}` : `${format(speed)}/s`;
+}
+
 // The bar and the byte label of a row show the Master's values, as the
 // details and the CLI do. The Master keeps live progress from dipping on a
 // sample taken before the ledger credited an object, and the Agent on a

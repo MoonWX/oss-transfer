@@ -1,8 +1,6 @@
 package agentservice
 
 import (
-	"context"
-	"io"
 	"sync"
 	"time"
 
@@ -10,9 +8,12 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/nodecontrol"
 )
 
-// TaskRates counts bytes read from source streams, including repeated reads.
-// SDK retries of an already buffered upload body do not reread the source.
-// Completed object sizes are not used: large objects commit in bursts.
+// TaskRates counts the bytes child tasks send to their destinations
+// (execution.Options.CountTransferred): request bodies an S3 upload's HTTP
+// attempts hand to the network, bytes sent again after a failed attempt
+// included, and bytes written to local temporary files. Completed object
+// sizes are not used: large objects commit in bursts. The node's bandwidth
+// counts source reads.
 type TaskRates struct {
 	mu        sync.Mutex
 	now       func() time.Time
@@ -39,6 +40,10 @@ type TaskRateSnapshot struct {
 	Children          map[string]float64        `json:"children"`
 	ProgressSupported bool                      `json:"progressSupported"`
 	Progress          []execution.ChildProgress `json:"progress,omitempty"`
+	// Basis is TARGET: the speed and live progress count bytes sent to the
+	// destination. Older Agents omit it; they count bytes read from the
+	// source.
+	Basis string `json:"basis,omitempty"`
 	// Absent from older Agents; Master then reports observed requests as unknown.
 	Requests *nodecontrol.TaskRequests `json:"requests,omitempty"`
 }
@@ -57,7 +62,9 @@ func (m *TaskRates) prune(second int64) {
 		}
 	}
 }
-func (m *TaskRates) add(job execution.Job, amount int) {
+
+// Add counts amount bytes job's child task sent to its destination.
+func (m *TaskRates) Add(job execution.Job, amount int64) {
 	if amount <= 0 {
 		return
 	}
@@ -75,7 +82,7 @@ func (m *TaskRates) add(job execution.Job, amount int) {
 	if bucket.second != second {
 		*bucket = rateBucket{second: second}
 	}
-	bucket.bytes += int64(amount)
+	bucket.bytes += amount
 	sample.last = second
 }
 func (m *TaskRates) Snapshot(parent int64, generation uint64) TaskRateSnapshot {
@@ -83,7 +90,7 @@ func (m *TaskRates) Snapshot(parent int64, generation uint64) TaskRateSnapshot {
 	defer m.mu.Unlock()
 	second := m.now().Unix()
 	m.prune(second)
-	out := TaskRateSnapshot{ParentID: parent, Generation: generation, Children: map[string]float64{}}
+	out := TaskRateSnapshot{ParentID: parent, Generation: generation, Children: map[string]float64{}, Basis: execution.BasisTarget}
 	for key, sample := range m.samples {
 		if key.parent != parent || key.generation != generation {
 			continue
@@ -99,26 +106,4 @@ func (m *TaskRates) Snapshot(parent int64, generation uint64) TaskRateSnapshot {
 		out.BytesPerSecond += rate
 	}
 	return out
-}
-
-type taskRateReader struct {
-	io.ReadCloser
-	metrics *TaskRates
-	job     execution.Job
-}
-
-func (r *taskRateReader) Read(p []byte) (int, error) {
-	n, err := r.ReadCloser.Read(p)
-	r.metrics.add(r.job, n)
-	return n, err
-}
-func (m *TaskRates) Decorator(next execution.ReaderDecorator) execution.ReaderDecorator {
-	return func(ctx context.Context, job execution.Job, item execution.Item, input io.ReadCloser) (io.ReadCloser, error) {
-		reader, err := next(ctx, job, item, input)
-		if err != nil {
-			return nil, err
-		}
-		// Retain identifiers only, not the full manifest, in every reader.
-		return &taskRateReader{reader, m, execution.Job{ParentID: job.ParentID, Generation: job.Generation, ChildID: job.ChildID}}, nil
-	}
 }

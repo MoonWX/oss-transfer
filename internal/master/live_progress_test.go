@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -386,11 +387,12 @@ func TestFailedMetricsRefreshRetainsKnownProgressCapability(t *testing.T) {
 }
 
 type progressHTTPData struct {
-	Supported bool               `json:"supported"`
-	Partial   bool               `json:"partial"`
-	Items     []fileProgressView `json:"items"`
-	Total     int                `json:"total"`
-	HasMore   bool               `json:"hasMore"`
+	Supported     bool               `json:"supported"`
+	Partial       bool               `json:"partial"`
+	Items         []fileProgressView `json:"items"`
+	Total         int                `json:"total"`
+	HasMore       bool               `json:"hasMore"`
+	BasisReported bool               `json:"basisReported"`
 }
 
 func getProgressHTTP(t *testing.T, f *agentHTTPFixture, p task.Parent, query string) (int, progressHTTPData) {
@@ -625,5 +627,127 @@ func TestSilentNodeLeavesOtherNodesProgressAndIsNamed(t *testing.T) {
 	}
 	if data := progress(""); data["partial"] != true || len(data["items"].([]any)) != 1 || unreported(data) != "["+silent+"]" {
 		t.Fatalf("files of the task: %+v", data)
+	}
+}
+
+// An Agent's optional file fields are checked one by one: an unknown phase or
+// basis is dropped, and source reads outside the object are not shown, while
+// the row itself stays.
+func TestFileProgressValidatesPhaseAndBytes(t *testing.T) {
+	f, p := progressMasterFixture(t, 1)
+	objects := []transferstore.Object{{Key: "a", Size: 100}, {Key: "b", Size: 100}, {Key: "c", Size: 100}, {Key: "d", Size: 100}}
+	c := assignProgressChild(t, f, p, 1, objects)
+	sample := childProgressSample(c, 4, 200)
+	items := []execution.ObjectProgress{
+		{ItemID: "a", SourceKey: "a", Size: 100, TransferredBytes: 50, Stage: "TRANSFERRING", ReadBytes: 80, Phase: execution.PhaseRetryWait, Basis: execution.BasisTarget},
+		{ItemID: "b", SourceKey: "b", Size: 100, TransferredBytes: 50, Stage: "TRANSFERRING", ReadBytes: 101, Phase: "VERIFYING", Basis: "NETWORK"},
+		{ItemID: "c", SourceKey: "c", Size: 100, TransferredBytes: 100, Stage: "FINALIZING", ReadBytes: -1},
+		{ItemID: "d", SourceKey: "d", Size: 100, Stage: "TRANSFERRING", Phase: execution.PhaseUploadBuffer, Basis: execution.BasisSource},
+	}
+	serveProgressAgent(t, f, c.Node, func(command agenttransport.Command) (any, error) {
+		switch command.Operation {
+		case "task_metrics":
+			return progressMetrics(p, sample), nil
+		case "task_progress":
+			return fileProgressReply{Supported: true, Child: &sample, Items: items}, nil
+		}
+		return nil, fmt.Errorf("unexpected operation %s", command.Operation)
+	})
+	status, data := getProgressHTTP(t, f, p, "?childNumber=1&generation=1")
+	if status != 200 || data.Partial || len(data.Items) != 4 {
+		t.Fatalf("rows dropped: %d %+v", status, data)
+	}
+	// Files keep the basis their Agent reported, so a client can tell an
+	// older Agent's file (none) from one an older Master passed on.
+	if !data.BasisReported {
+		t.Fatal("the reply does not say it reports each file's basis")
+	}
+	want := []struct {
+		read         int64
+		phase, basis string
+	}{
+		{80, execution.PhaseRetryWait, execution.BasisTarget},
+		{0, "", ""},
+		{0, "", ""},
+		{0, execution.PhaseUploadBuffer, execution.BasisSource},
+	}
+	for i, item := range data.Items {
+		if item.ReadBytes != want[i].read || item.Phase != want[i].phase || item.Basis != want[i].basis || item.TransferredBytes != items[i].TransferredBytes || item.Stage != items[i].Stage {
+			t.Fatalf("row %d: %+v, want %+v", i, item.ObjectProgress, want[i])
+		}
+	}
+}
+
+// transferBasis says what the current speed and live bytes count: TARGET
+// when every node counts bytes sent to the destination, SOURCE when every
+// node is an older Agent counting source reads, MIXED otherwise. A child's
+// basis is its node's; without a fresh sample there is none.
+func TestTransferBasisMixed(t *testing.T) {
+	f, p := progressMasterFixture(t, 2)
+	children := []task.Child{
+		assignProgressChild(t, f, p, 1, []transferstore.Object{{Key: "a", Size: 100}}),
+		assignProgressChild(t, f, p, 2, []transferstore.Object{{Key: "b", Size: 100}}),
+	}
+	var bases [2]atomic.Value
+	for i, node := range p.Spec.Nodes {
+		bases[i].Store("")
+		serveProgressAgent(t, f, node, func(command agenttransport.Command) (any, error) {
+			if command.Operation != "task_metrics" {
+				return nil, fmt.Errorf("unexpected operation %s", command.Operation)
+			}
+			metrics := progressMetrics(p)
+			metrics.Basis = bases[i].Load().(string)
+			return metrics, nil
+		})
+	}
+	nodeBasis := func(node task.Node) string {
+		if node.ID == p.Spec.Nodes[0].ID {
+			return bases[0].Load().(string)
+		}
+		return bases[1].Load().(string)
+	}
+	for _, tc := range []struct{ first, second, want string }{
+		{execution.BasisTarget, "", "MIXED"},
+		{execution.BasisTarget, execution.BasisTarget, execution.BasisTarget},
+		{"", "", execution.BasisSource},
+	} {
+		bases[0].Store(tc.first)
+		bases[1].Store(tc.second)
+		f.master.tasks.mu.Lock()
+		delete(f.master.tasks.rates, p.ID)
+		f.master.tasks.mu.Unlock()
+		f.master.tasks.sampleRates(context.Background(), p)
+		exported := f.master.taskView(p)
+		if got := exported["transferBasis"]; got != tc.want {
+			t.Fatalf("%+v: task basis %v", tc, got)
+		}
+		// Export JSON saves the row as it is; importing it starts afresh.
+		encoded, _ := json.Marshal([]any{exported})
+		response := httptest.NewRecorder()
+		if _, ok := readTaskRows(response, httptest.NewRequest("POST", "/api/master/import", bytes.NewReader(encoded))); !ok {
+			t.Fatalf("%+v: exported running task not importable: %s", tc, response.Body.String())
+		}
+		for _, c := range children {
+			want := execution.BasisSource
+			if nodeBasis(c.Node) == execution.BasisTarget {
+				want = execution.BasisTarget
+			}
+			if got := f.master.childView(p, c)["transferBasis"]; got != want {
+				t.Fatalf("%+v: child %s on %s basis %v, want %s", tc, c.Job.ChildID, c.Node.ID, got, want)
+			}
+		}
+	}
+	// A stale sample and an ended task show no basis, as they show no speed.
+	f.master.tasks.mu.Lock()
+	entry := f.master.tasks.rates[p.ID]
+	entry.observed = time.Now().Add(-taskRateMaxAge - time.Second)
+	f.master.tasks.rates[p.ID] = entry
+	f.master.tasks.mu.Unlock()
+	if row := f.master.taskView(p); row["transferBasis"] != nil || row["currentSpeedBytesPerSecond"] != nil {
+		t.Fatalf("stale sample: %v %v", row["transferBasis"], row["currentSpeedBytesPerSecond"])
+	}
+	p.Status = "STOPPED"
+	if row := f.master.taskView(p); row["transferBasis"] != nil {
+		t.Fatalf("ended task kept a basis: %v", row["transferBasis"])
 	}
 }

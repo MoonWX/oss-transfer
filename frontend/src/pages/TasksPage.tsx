@@ -84,7 +84,9 @@ import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
 import {
   byteProgress,
+  currentSpeedText,
   shownProgress,
+  speedHint,
   taskPercent,
   unreportedNodeNames,
 } from "../lib/taskProgress";
@@ -1400,9 +1402,8 @@ function TaskDetail({
               [tr("共享存储 ID"), current.storageId],
               [
                 tr("当前速度"),
-                current.currentSpeedBytesPerSecond == null
-                  ? "—"
-                  : `${formatBytes(current.currentSpeedBytesPerSecond)}/s`,
+                currentSpeedText(current, formatBytes),
+                speedHint(current),
               ],
               [
                 tr("平均速度"),
@@ -1495,7 +1496,7 @@ function TaskDetail({
               ],
             ]
               .filter(([, value]) => value != null && value !== "")
-              .map(([label, value]) => (
+              .map(([label, value, hint]) => (
                 <Box
                   key={label}
                   sx={{
@@ -1508,7 +1509,11 @@ function TaskDetail({
                     gap: isValidElement(value) ? { xs: 0.75, sm: 2 } : 2,
                   }}
                 >
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    title={typeof hint === "string" ? hint : undefined}
+                  >
                     {label}
                   </Typography>
                   {isValidElement(value) ? (
@@ -2683,12 +2688,14 @@ export default function TasksPage({
                   startIcon={<DownloadRounded />}
                   onClick={() =>
                     saveFile(
-                      // A running scan's activity is live state, not part of
-                      // the task; Masters before it reject the field on import.
+                      // A running scan's activity and what the speed counts
+                      // are live state, not part of the task; Masters before
+                      // them reject the fields on import.
                       JSON.stringify(
                         chosen.map((task) => ({
                           ...task,
                           scanActivity: undefined,
+                          transferBasis: undefined,
                         })),
                         null,
                         2,

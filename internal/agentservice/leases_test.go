@@ -180,7 +180,7 @@ func TestLeaseSlowParentDoesNotBlockOtherRenewal(t *testing.T) {
 	_, leases, _ := leaseFixture(t)
 	grantPrepared(t, leases, leaseRequest(2, "healthy", 1))
 	blocked, release := make(chan struct{}), make(chan struct{})
-	leases.quiesce = func(ctx context.Context, parent int64) error {
+	leases.quiesce = func(ctx context.Context, parent int64, _ error) error {
 		if parent == 1 {
 			close(blocked)
 			select {
@@ -263,4 +263,79 @@ func TestLeaseDeadlineCancelsEngineIOBeforeLedgerWriterReturns(t *testing.T) {
 	if err := engine.TryRecover(ctx, job.ChildID, 1); !errors.Is(err, ErrLeaseExpired) {
 		t.Fatalf("expired queued work resumed: %v", err)
 	}
+}
+
+// A lease's I/O ends with its reason: an expired or re-armed lease and a
+// shutdown interrupt work this Agent may continue; a retirement and a rejoin
+// move it to another Agent. The quiesce hook gets the same reason.
+func TestLeaseContextsEndWithTheirCause(t *testing.T) {
+	_, leases, elapsed := leaseFixture(t)
+	var quiesced []error
+	leases.quiesce = func(_ context.Context, _ int64, cause error) error {
+		quiesced = append(quiesced, cause)
+		return nil
+	}
+	expect := func(name string, ctx context.Context, want error) {
+		t.Helper()
+		if ctx.Err() == nil || !errors.Is(context.Cause(ctx), want) {
+			t.Fatalf("%s: cause %v, want %v", name, context.Cause(ctx), want)
+		}
+	}
+	grantPrepared(t, leases, leaseRequest(1, "expiring", 1))
+	expiring, err := leases.ParentContext(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed.Store(int64(1001 * time.Millisecond))
+	if err := leases.Admission(1, 1); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatal(err)
+	}
+	expect("expiry", expiring, transferstore.ErrInterrupted)
+
+	grantPrepared(t, leases, leaseRequest(2, "first", 1))
+	rearmed, err := leases.ParentContext(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quiesced = nil
+	grantPrepared(t, leases, leaseRequest(2, "second", 1))
+	expect("rearm", rearmed, transferstore.ErrInterrupted)
+	if len(quiesced) != 1 || !errors.Is(quiesced[0], transferstore.ErrInterrupted) {
+		t.Fatalf("rearm quiesced %v", quiesced)
+	}
+
+	retired, err := leases.ParentContext(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quiesced = nil
+	if err := leases.Retire(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	expect("retire", retired, transferstore.ErrMoved)
+	if len(quiesced) != 1 || !errors.Is(quiesced[0], transferstore.ErrMoved) {
+		t.Fatalf("retire quiesced %v", quiesced)
+	}
+
+	grantPrepared(t, leases, leaseRequest(3, "rejoining", 1))
+	rejoined, err := leases.ParentContext(3, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quiesced = nil
+	if err := leases.Rejoin(context.Background(), LeaseRejoinRequest{ParentID: 3, Generation: 1, OwnerEpoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	expect("rejoin", rejoined, transferstore.ErrMoved)
+	if len(quiesced) != 1 || !errors.Is(quiesced[0], transferstore.ErrMoved) {
+		t.Fatalf("rejoin quiesced %v", quiesced)
+	}
+
+	grantPrepared(t, leases, leaseRequest(4, "open", 1))
+	open, err := leases.ParentContext(4, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leases.Close()
+	expect("close", open, transferstore.ErrInterrupted)
 }

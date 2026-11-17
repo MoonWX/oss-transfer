@@ -327,7 +327,8 @@ Usage: oss-transfer-cli task <subcommand> [arguments]
   trash [--task-id ID] [--worker NODE] [--direction DIRECTION] [--search TEXT]
         [--limit 100] [--before-id ID] [--all]
 
-  stop <ID...>                     Stop and retain progress
+  stop <ID...>                     Stop scanning and transfer; completed objects are kept,
+                                   objects in transfer start over when the task continues
   resume|retry <ID...>             Resume stopped/failed tasks, retaining completed work
   retry <ID...>                    On a running task, retry only failed objects of finished
                                    subtasks, without interrupting the transfer
@@ -377,7 +378,8 @@ Deleting records does not delete source or target objects.
   trash [--task-id ID] [--worker ノード] [--direction 方向] [--search 文字列]
         [--limit 100] [--before-id ID] [--all]
 
-  stop <ID...>                     進捗を保持して停止
+  stop <ID...>                     スキャンと転送を停止。完了したオブジェクトは保持し、
+                                   転送中のオブジェクトは再開後に最初から転送し直します
   resume|retry <ID...>             完了済みの処理を保持して停止・失敗タスクを再開
   retry <ID...>                    実行中のタスクでは、終了した子タスクの失敗オブジェクトのみを
                                    転送を中断せずに再試行

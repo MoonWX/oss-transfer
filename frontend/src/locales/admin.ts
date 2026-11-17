@@ -798,6 +798,10 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Checked by execution node {node}.",
     ja: "実行ノード {node} で確認しました。",
   },
+  "保存前已由执行节点 {node} 验证连接。": {
+    en: "Execution node {node} validated the connection before it was saved.",
+    ja: "保存前に実行ノード {node} で接続を検証しました。",
+  },
   "要确认某个存储桶的读写权限，请在下方检查。": {
     en: "To confirm read and write access to a bucket, check it below.",
     ja: "バケットの読み書きの権限は、下で確認してください。",

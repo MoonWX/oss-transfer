@@ -63,6 +63,8 @@ type SaveResult = {
   failedCount?: number;
   /** When nodes that missed the change will receive it. */
   syncNote?: string;
+  /** The one node that validated the connection before it was saved. */
+  validationNode?: string;
 };
 type StorageAction = "ADD" | "UPDATE" | "DELETE";
 const partialResult = (result?: SaveResult | null) => {
@@ -93,6 +95,8 @@ type StorageFailure = {
   message: string;
   detail?: string;
   pathStyleHint?: boolean;
+  /** The node that ran the check; other nodes were not checked. */
+  node?: string;
 };
 const storageFailure = (e: unknown): StorageFailure => {
   const response = e instanceof ApiError ? e.response : undefined;
@@ -103,6 +107,10 @@ const storageFailure = (e: unknown): StorageFailure => {
         ? response.detail
         : undefined,
     pathStyleHint: response?.pathStyleHint === true,
+    node:
+      typeof response?.node === "string" && response.node
+        ? response.node
+        : undefined,
   };
 };
 const styleName = (pathStyle: boolean) =>
@@ -130,6 +138,11 @@ function StorageFailureAlert({
   return (
     <Alert severity="error" action={action} sx={{ overflowWrap: "anywhere" }}>
       {failure.message}
+      {failure.node && (
+        <Typography variant="body2" data-testid="storage-check-node">
+          {t("由执行节点 {node} 检查。", { node: failure.node })}
+        </Typography>
+      )}
       {failure.detail && (
         <Box sx={{ mt: 0.5 }}>
           <Button
@@ -189,6 +202,7 @@ export default function StoragePage() {
     bucketCheckFailed?: string;
     bucketCheckSupported?: boolean;
     warning?: string;
+    node?: string;
   } | null>(null);
   const [bucketOpen, setBucketOpen] = useState(false);
   const bucketRequest = useRef(0);
@@ -324,6 +338,7 @@ export default function StoragePage() {
         bucketCheckFailed?: string;
         bucketCheckSupported?: boolean;
         warning?: string;
+        node?: string;
       }>(
         `/api/master/s3-config/${encodeURIComponent(alias)}/buckets` +
           (bucket ? `?bucket=${encodeURIComponent(bucket)}` : ""),
@@ -339,6 +354,7 @@ export default function StoragePage() {
           bucketCheckFailed: response.bucketCheckFailed,
           bucketCheckSupported: response.bucketCheckSupported,
           warning: response.warning,
+          node: response.node,
         });
     } catch (e) {
       if (request === bucketRequest.current)
@@ -394,6 +410,13 @@ export default function StoragePage() {
                 : t("连接添加完成")}
           </AlertTitle>
           {result.message}
+          {result.validationNode && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {t("保存前已由执行节点 {node} 验证连接。", {
+                node: result.validationNode,
+              })}
+            </Typography>
+          )}
           {partial && result.syncNote && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               {result.syncNote}
@@ -855,6 +878,16 @@ export default function StoragePage() {
                   count: bucketState.buckets.length,
                 })}
               </Alert>
+              {bucketState.node && (
+                // One node runs the test; the others were not checked.
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  data-testid="storage-check-node"
+                >
+                  {t("由执行节点 {node} 检查。", { node: bucketState.node })}
+                </Typography>
+              )}
               {bucketState.warning && (
                 <Typography
                   variant="body2"

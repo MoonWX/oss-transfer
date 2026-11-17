@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -174,6 +173,9 @@ func agentStatus(err error, status int) bool {
 	return errors.As(err, &e) && e.Status == status
 }
 
+// createTransfer holds topologyMu, so no selected Agent can be removed or
+// enrolled anew in between, and refuses an Agent that is no longer online
+// under the enrollment its preflight used.
 func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey string, checks ...func(*state.Tx) error) (task.Parent, error) {
 	s.topologyMu.Lock()
 	defer s.topologyMu.Unlock()
@@ -189,37 +191,12 @@ func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey 
 		member, ok := members[node.ID]
 		if !ok || member.EnrollmentID != node.EnrollmentID {
 			name := s.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
-			return task.Parent{}, fmt.Errorf("Agent %s is not online in this enrollment", name)
+			return task.Parent{}, fmt.Errorf(localizeContext(ctx, "Agent %s is not online in this enrollment"), name)
 		}
 		spec.Nodes[i].Address = member.Address
 	}
-	if spec.Direction == "LOCAL_TO_OSS" && len(spec.Nodes) > 1 {
-		spec.DistributionMode = "BALANCED"
-		spec.SharedLocalSource = true
-	}
-	if spec.BandwidthMbps > 0 && math.Floor(spec.BandwidthMbps*125000) < float64(len(spec.Nodes)) {
-		return task.Parent{}, errors.New("bandwidth budget is too small for the selected Agents")
-	}
-	snapshot, err := storageconfig.NewMaster(s.store).Snapshot()
-	if err != nil {
+	if spec, err = s.checkTaskDefinition(ctx, spec); err != nil {
 		return task.Parent{}, err
-	}
-	for _, endpoint := range []execution.Endpoint{spec.Source, spec.Destination} {
-		if endpoint.Kind == "S3" {
-			found := false
-			for _, config := range snapshot.Connections {
-				if config.Alias == endpoint.Ref {
-					if _, err := config.S3Config(endpoint.Bucket); err != nil {
-						return task.Parent{}, err
-					}
-					found = true
-					break
-				}
-			}
-			if !found {
-				return task.Parent{}, fmt.Errorf("storage connection %s does not exist", endpoint.Ref)
-			}
-		}
 	}
 	p, _, err := s.tasks.repo.CreateChecked(spec, requestKey, func(tx *state.Tx) error {
 		for _, check := range checks {
@@ -230,6 +207,43 @@ func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey 
 		return nil
 	})
 	return p, err
+}
+
+// checkTaskDefinition completes a resolved definition as creation stores it
+// and runs creation's checks that write nothing: each Agent's share of the
+// bandwidth limits, the storage connections and their buckets, and the
+// repository's validation. The preflight runs it too, so that a passed
+// preflight means what creating the task requires.
+func (s *Server) checkTaskDefinition(ctx context.Context, spec task.Spec) (task.Spec, error) {
+	if spec.Direction == "LOCAL_TO_OSS" && len(spec.Nodes) > 1 {
+		spec.DistributionMode = "BALANCED"
+		spec.SharedLocalSource = true
+	}
+	if task.BandwidthTooSmall(spec, len(spec.Nodes)) {
+		return spec, errors.New("bandwidth budget is too small for the selected Agents")
+	}
+	snapshot, err := storageconfig.NewMaster(s.store).Snapshot()
+	if err != nil {
+		return spec, err
+	}
+	for _, endpoint := range []execution.Endpoint{spec.Source, spec.Destination} {
+		if endpoint.Kind == "S3" {
+			found := false
+			for _, config := range snapshot.Connections {
+				if config.Alias == endpoint.Ref {
+					if _, err := config.S3Config(endpoint.Bucket); err != nil {
+						return spec, err
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return spec, fmt.Errorf(localizeContext(ctx, "storage connection %s does not exist"), endpoint.Ref)
+			}
+		}
+	}
+	return spec, task.Validate(spec)
 }
 func (s *Server) controlTask(ctx context.Context, id int64, action string) (task.Parent, error) {
 	var p task.Parent

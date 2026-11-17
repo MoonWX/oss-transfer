@@ -110,6 +110,7 @@ func TestSharedPreflightRequiresUpgradeOfOlderAgent(t *testing.T) {
 
 func TestSharedPreflightUsesRealCrossAgentReadWriteAndAlwaysCleansUp(t *testing.T) {
 	f := newAgentHTTPFixture(t)
+	createComparisonStorage(t, f) // the preflight requires the rows' storage connection
 	a, b := preflightTestAgent(t, f, 1), preflightTestAgent(t, f, 2)
 	shared, separate := t.TempDir(), t.TempDir()
 	// Identical ordinary files cannot establish that two roots are shared.
@@ -199,6 +200,7 @@ func TestSharedPreflightUsesRealCrossAgentReadWriteAndAlwaysCleansUp(t *testing.
 
 func TestSharedPreflightMissingDestinationsNeverAppearValid(t *testing.T) {
 	f := newAgentHTTPFixture(t)
+	createComparisonStorage(t, f) // the preflight requires the rows' storage connection
 	a, b := preflightTestAgent(t, f, 1), preflightTestAgent(t, f, 2)
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing-target")
@@ -284,6 +286,7 @@ func TestSharedPreflightMissingDestinationsNeverAppearValid(t *testing.T) {
 
 func TestSharedPreflightCreationRechecksChangedDestination(t *testing.T) {
 	f := newAgentHTTPFixture(t)
+	createComparisonStorage(t, f) // the preflight requires the rows' storage connection
 	a, b := preflightTestAgent(t, f, 1), preflightTestAgent(t, f, 2)
 	for _, replacement := range []string{"missing", "file"} {
 		t.Run(replacement, func(t *testing.T) {

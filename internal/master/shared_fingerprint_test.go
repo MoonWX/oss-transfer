@@ -18,6 +18,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/agenttransport"
 	"github.com/MoonWX/oss-transfer/internal/execution"
 	"github.com/MoonWX/oss-transfer/internal/state"
+	"github.com/MoonWX/oss-transfer/internal/storageconfig"
 	"github.com/MoonWX/oss-transfer/internal/task"
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
@@ -132,8 +133,28 @@ func treeEntries(t *testing.T, root string) []string {
 	return names
 }
 
+// ensureStorage creates the storage connection that test rows name ("qa"),
+// unless the test did: the preflight, like creation, refuses a row whose
+// connection does not exist.
+func ensureStorage(t *testing.T, f *agentHTTPFixture) {
+	t.Helper()
+	snapshot, err := storageconfig.NewMaster(f.db).Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, config := range snapshot.Connections {
+		if config.Alias == "qa" {
+			return
+		}
+	}
+	createComparisonStorage(t, f)
+}
+
+// validateRows runs the preflight of one row whose storage connection exists,
+// so that its node bindings decide.
 func validateRows(t *testing.T, f *agentHTTPFixture, row taskCreateRequest) map[string]any {
 	t.Helper()
+	ensureStorage(t, f)
 	code, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, []taskCreateRequest{row})
 	if code != 200 {
 		t.Fatal(code, response)
@@ -711,7 +732,7 @@ func TestSkipSharedCheckRequiresAcknowledgement(t *testing.T) {
 	}
 
 	// The record is fenced from older Masters, which would drop it.
-	createComparisonStorage(t, f)
+	ensureStorage(t, f)
 	code, response = request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers", f.admin, []taskCreateRequest{row})
 	if created := response["data"].(map[string]any); code != 200 || created["acceptedCount"] != float64(1) {
 		t.Fatal("an acknowledged skip was not created", code, response)

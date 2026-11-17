@@ -71,6 +71,10 @@ func sameWork(job execution.Job) execution.Job {
 	return job
 }
 
+// Validate checks a task definition as creating it does, without writing
+// anything, so that the Master's preflight can run the same checks.
+func Validate(spec Spec) error { return validate(spec) }
+
 // BandwidthTooSmall reports whether the task bandwidth limit cannot give each
 // of the n nodes that share it at least one byte per second.
 func BandwidthTooSmall(spec Spec, n int) bool {

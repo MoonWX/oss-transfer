@@ -850,7 +850,12 @@ func (s *Server) validateTaskHTTP(w http.ResponseWriter, r *http.Request) {
 	valid := true
 	problems := []string{}
 	for _, row := range rows {
-		_, items, err := s.resolveTaskSpec(r.Context(), row, "local-transfers", displays)
+		spec, items, err := s.resolveTaskSpec(r.Context(), row, "local-transfers", displays)
+		if err == nil {
+			// Creation's checks that write nothing, so that a passed preflight
+			// is not refused by creating the task.
+			_, err = s.checkTaskDefinition(r.Context(), spec)
+		}
 		checks = append(checks, items...)
 		if err != nil {
 			valid = false

@@ -159,6 +159,11 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		} else {
 			plan["skipSharedCheck"] = true
 			fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipJoinWarning(getString(view, "direction"))))
+			// A task that skipped the check before, at creation in particular,
+			// may not verify its other nodes either.
+			if view["sharedCheckSkipped"] != true {
+				fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipJoinOthersNote))
+			}
 			if !opts.Has("yes") {
 				return nil, asUsageError(cliErrorf("确认新节点挂载的是同一份存储后，添加 --yes 才能跳过共享目录校验；本次未提交"))
 			}
@@ -220,9 +225,13 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 // as task create prints its consequences. Uploads and downloads fail
 // differently.
 const (
-	sharedCheckSkipJoinUploadWarning   = "警告：--skip-shared-check 会跳过新加入节点的共享目录校验。如果新节点挂载的不是同一份存储，它会从与其他节点不同的数据中读取对象，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；此任务随后记录为已跳过校验；新节点接管失联节点的工作时也不做校验，可能在另一个目录上继续执行。任务的其他节点不受影响，运行期间仍会校验共享目录。"
-	sharedCheckSkipJoinDownloadWarning = "警告：--skip-shared-check 会跳过新加入节点的共享目录校验。如果新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；此任务随后记录为已跳过校验；新节点接管失联节点的工作时也不做校验，可能写入另一个目录。任务的其他节点不受影响，运行期间仍会校验共享目录。"
+	sharedCheckSkipJoinUploadWarning   = "警告：--skip-shared-check 会跳过新加入节点的共享目录校验。如果新节点挂载的不是同一份存储，它会从与其他节点不同的数据中读取对象，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；此任务随后记录为已跳过校验；新节点接管失联节点的工作时也不做校验，可能在另一个目录上继续执行。"
+	sharedCheckSkipJoinDownloadWarning = "警告：--skip-shared-check 会跳过新加入节点的共享目录校验。如果新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；此任务随后记录为已跳过校验；新节点接管失联节点的工作时也不做校验，可能写入另一个目录。"
 )
+
+// sharedCheckSkipJoinOthersNote follows the warning for a task that verifies
+// its nodes: the skip of a node change covers only the nodes it adds.
+const sharedCheckSkipJoinOthersNote = "任务的其他节点不受影响，运行期间仍会校验共享目录。"
 
 func sharedCheckSkipJoinWarning(direction string) string {
 	if direction == "OSS_TO_LOCAL" {

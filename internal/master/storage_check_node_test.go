@@ -43,12 +43,13 @@ func TestStorageChecksNameTheNodeThatRanThem(t *testing.T) {
 	if code != http.StatusBadRequest || body["reasonCode"] != "STORAGE_INVALID_ACCESS_KEY" || body["node"] != label {
 		t.Fatalf("failed validation: HTTP %d %v", code, body)
 	}
-	// Without an online node no node ran the check, and none is named.
+	// Without an online node no node ran the check, and none is named. The
+	// only registered node is offline, so the message asks to bring it back.
 	f.master.agents.mu.Lock()
 	delete(f.master.agents.lastSeen, node.ID)
 	f.master.agents.mu.Unlock()
 	code, body = request(t, f.http.Client(), "POST", url, f.admin, config)
-	if code != http.StatusBadRequest || body["node"] != nil || fmt.Sprint(body["message"]) != "Storage validation failed: no Agent is online; join an Agent before validating storage" {
+	if code != http.StatusBadRequest || body["node"] != nil || fmt.Sprint(body["message"]) != "Storage validation failed: every registered Agent is offline; bring one back online before validating storage" {
 		t.Fatalf("validation without a node: HTTP %d %v", code, body)
 	}
 }

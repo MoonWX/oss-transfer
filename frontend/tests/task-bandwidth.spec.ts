@@ -325,6 +325,87 @@ test("partial application shows failed nodes without success and retry applies t
   ).toBeVisible();
 });
 
+test("limits saved while a node is offline close the dialog and say that the node applies them on reconnecting", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.addInitScript(() =>
+    localStorage.setItem("oss-transfer-refresh-seconds", "1"),
+  );
+  const writes: unknown[] = [];
+  let limitMbps: number | null = null;
+  await page.route(detailPath, async (route) => {
+    const put = route.request().method() === "PUT";
+    if (put) {
+      writes.push(route.request().postDataJSON());
+      limitMbps = route.request().postDataJSON().limitMbps;
+    }
+    // The connected node applies the limits; the offline node of the running
+    // task receives them when it reconnects.
+    const nodes =
+      limitMbps === null
+        ? [{ address: "10.0.1.12", applied: true }]
+        : [
+            { address: "10.0.1.12", applied: true },
+            {
+              address: "10.0.1.13",
+              applied: false,
+              pending: false,
+              message: "执行节点未连接，重新连接后自动应用",
+              appliesOnReconnect: true,
+            },
+          ];
+    await route.fulfill({
+      json: {
+        success: true,
+        ...(put ? { message: "任务限速已保存" } : {}),
+        data: {
+          ...status(limitMbps),
+          applied: limitMbps === null,
+          pending: false,
+          nodes,
+        },
+      },
+    });
+  });
+  await page.goto("/tasks?taskId=1048");
+  await page.getByRole("button", { name: "限速", exact: true }).click();
+  await limitField(page).fill("100");
+  await page.getByRole("button", { name: "应用", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "任务 #1048 限速" });
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByText("任务限速已保存；未连接的执行节点重新连接后自动应用。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const drawer = page.locator(".MuiDrawer-paper");
+  // Outside the dialog the note waits until it persists (about four seconds).
+  await expect(
+    drawer.getByText(
+      "未连接的执行节点会在重新连接后自动应用此限速：agent (10.0.1.13)",
+      { exact: true },
+    ),
+  ).toBeVisible({ timeout: 15000 });
+  await expect(drawer.getByText("部分节点未生效")).toHaveCount(0);
+  await expect(
+    drawer.getByRole("button", { name: "重试", exact: true }),
+  ).toHaveCount(0);
+  expect(writes).toEqual([{ limitMbps: 100, requestLimits: null }]);
+  // Editing again offers to apply, not to retry.
+  await page.getByRole("button", { name: "调整", exact: true }).click();
+  await expect(dialog).toContainText(
+    "未连接的执行节点会在重新连接后自动应用此限速：agent (10.0.1.13)",
+  );
+  await expect(dialog).not.toContainText("部分节点未生效");
+  await expect(
+    dialog.getByRole("button", { name: "应用", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "重试应用", exact: true }),
+  ).toHaveCount(0);
+});
+
 test("delayed and failed settings never become an unlimited label, retry can recover into a noneditable task", async ({
   page,
 }) => {

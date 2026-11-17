@@ -3046,4 +3046,13 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Getting started",
     ja: "はじめに",
   },
+  // Task limits saved while some of the task's nodes are not connected.
+  "任务限速已保存；未连接的执行节点重新连接后自动应用。": {
+    en: "Task limits saved; nodes that are not connected apply them when they reconnect.",
+    ja: "タスクの速度制限を保存しました。接続されていない実行ノードは、再接続すると自動で適用します。",
+  },
+  "未连接的执行节点会在重新连接后自动应用此限速：{nodes}": {
+    en: "Nodes that are not connected apply these limits when they reconnect: {nodes}",
+    ja: "接続されていない実行ノードは、再接続すると自動でこの速度制限を適用します: {nodes}",
+  },
 };

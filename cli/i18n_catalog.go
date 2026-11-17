@@ -742,6 +742,7 @@ var cliMessages = map[string][2]string{
 	"任务 #%d 执行节点（成员版本 %d，%s）\n": {"Task #%d execution nodes (membership revision %d, %s)\n", "タスク #%d の実行ノード（メンバー版 %d、%s）\n"},
 	"当前不能调整执行节点: %s\n":          {"Execution nodes cannot be changed now: %s\n", "実行ノードは現在変更できません: %s\n"},
 	"不支持立即移出: %s\n":             {"Immediate removal unavailable: %s\n", "即時削除は利用できません: %s\n"},
+	"尚未加入: %s\n":                {"Not joined yet: %s\n", "未参加: %s\n"},
 	"已移出的节点":                    {"Removed nodes", "削除済みノード"},
 	"没有可加入的其他在线 Agent":          {"No other online Agents can be added", "追加できる他のオンライン Agent はありません"},
 	"可加入的 Agent":                {"Agents available to add", "追加可能な Agent"},

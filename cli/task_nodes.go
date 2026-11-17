@@ -356,6 +356,7 @@ func dashIfEmpty(value string) string {
 func renderTaskNodesView(out io.Writer, view map[string]interface{}) {
 	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
 	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true, getString(view, "status"))
+	renderTaskNodeJoinProblems(out, objectList(view["nodes"]))
 	renderTaskNodeNotes(out, view)
 	if view["editable"] == false {
 		fmt.Fprintf(out, cliText(out, "当前不能调整执行节点: %s\n"), safeCLIText(getString(view, "reason")))
@@ -404,8 +405,23 @@ func renderTaskNodesAccepted(out io.Writer, result, view map[string]interface{})
 	}
 	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
 	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true, getString(view, "status"))
+	renderTaskNodeJoinProblems(out, objectList(view["nodes"]))
 	if view["pending"] == true {
 		fmt.Fprintf(out, cliText(out, "变更会在后台完成；查看进度: oss-transfer-cli task nodes %d --watch 5\n"), getInt(view, "taskId"))
+	}
+}
+
+// renderTaskNodeJoinProblems says why each joining node has not joined yet,
+// in the Master's words (localized by the request language). Older Masters
+// send no reason.
+func renderTaskNodeJoinProblems(out io.Writer, nodes []map[string]interface{}) {
+	for _, node := range nodes {
+		problem, _ := node["joinProblem"].(map[string]interface{})
+		message := getString(problem, "message")
+		if getString(node, "state") != "JOINING" || message == "" {
+			continue
+		}
+		fmt.Fprintf(out, cliText(out, "尚未加入: %s\n"), safeCLIText(message))
 	}
 }
 

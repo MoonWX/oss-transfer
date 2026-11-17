@@ -216,7 +216,7 @@ func TestStorageTestPermissionFailuresAndOlderMasters(t *testing.T) {
 	}
 	code, out, stderr := runMockCLI(t, []string{"storage", "test", "src", "--bucket", "data", "--write"}, handler(false))
 	if code != 1 || !strings.Contains(out, "[未通过] 写入对象（PutObject，条件写入）") || !strings.Contains(out, "访问被拒绝") ||
-		!strings.Contains(out, "结论：存储桶 data 读取正常但不能写入，只能作为迁移的源。") || !strings.Contains(stderr, "存储桶 data：1 项权限检查未通过") {
+		!strings.Contains(out, "结论：存储桶 data 读取正常，但在存储桶根目录写入失败：可以作为迁移的源。如果密钥只能写入某个前缀，请加 --prefix 重新检查。") || !strings.Contains(stderr, "存储桶 data：1 项权限检查未通过") {
 		t.Fatalf("denied write: %d %s %s", code, out, stderr)
 	}
 	code, out, stderr = runMockCLI(t, []string{"storage", "test", "src", "--bucket", "data"}, handler(true))

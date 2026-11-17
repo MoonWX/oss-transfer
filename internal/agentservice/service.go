@@ -401,6 +401,9 @@ type StoragePermissionsRequest struct {
 	Config storageconfig.Config `json:"config"`
 	Bucket string               `json:"bucket"`
 	Write  bool                 `json:"write,omitempty"`
+	// Prefix is where the write check writes its probes. Agents before it
+	// refuse the unknown field, so a Master sends it only when it is set.
+	Prefix string `json:"prefix,omitempty"`
 }
 type StatRequest struct {
 	Endpoint execution.Endpoint `json:"endpoint"`
@@ -724,12 +727,15 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if request.Bucket == "" {
 			return badRequest(errors.New("bucket is required"))
 		}
+		if !transferstore.ValidPermissionPrefix(request.Prefix) {
+			return badRequest(errors.New("invalid write prefix"))
+		}
 		settings, err := request.Config.S3Config(request.Bucket)
 		if err != nil {
 			return response(nil, err)
 		}
 		settings.HTTPClient = s.Factory.HTTPClientForEndpoint(ctx, execution.Endpoint{Ref: request.Config.Alias, Bucket: request.Bucket}, request.Config)
-		result, err := transferstore.CheckBucketPermissions(ctx, settings, request.Write)
+		result, err := transferstore.CheckBucketPermissions(ctx, settings, request.Write, request.Prefix)
 		return response(result, err)
 	case "object_stat":
 		var request StatRequest

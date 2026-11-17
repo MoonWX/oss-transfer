@@ -287,7 +287,7 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 	case "buckets", "test", "remove":
 		switches, values := []string{}, []string{"bucket"}
 		if action == "test" {
-			switches = append(switches, "write")
+			switches, values = append(switches, "write"), append(values, "prefix")
 		}
 		if action == "remove" {
 			switches, values = append(switches, "yes"), nil
@@ -342,8 +342,14 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			if o.Has("write") && !o.Has("bucket") {
 				return nil, cliUsageErrorf("--write 需要与 --bucket 一起使用")
 			}
+			if o.Has("prefix") && !o.Has("write") {
+				return nil, cliUsageErrorf("--prefix 需要与 --write 一起使用")
+			}
+			if prefix := o.Value("prefix"); len(prefix) > 512 || strings.ContainsFunc(prefix, unicode.IsControl) || !utf8.ValidString(prefix) {
+				return nil, cliUsageErrorf("--prefix 不能超过 512 字节，且不能包含控制字符")
+			}
 			if o.Has("bucket") {
-				return storagePermissions(client, alias, o.Value("bucket"), o.Has("write"), result)
+				return storagePermissions(client, alias, o.Value("bucket"), o.Has("write"), o.Value("prefix"), result)
 			}
 		}
 		return result, nil
@@ -1099,9 +1105,15 @@ func storageSavedSummary(client *ApiClient, done string, result map[string]inter
 }
 
 // storagePermissions runs, through the Master, each request a migration makes
-// on one bucket, and fails when a required one is denied.
-func storagePermissions(client *ApiClient, alias, bucket string, write bool, result map[string]interface{}) (map[string]interface{}, error) {
-	check, err := client.Post("/s3-config/"+url.PathEscape(alias)+"/permissions", map[string]interface{}{"bucket": bucket, "write": write})
+// on one bucket, and fails when a required one is denied. The write check
+// writes below prefix when one is given.
+func storagePermissions(client *ApiClient, alias, bucket string, write bool, prefix string, result map[string]interface{}) (map[string]interface{}, error) {
+	body := map[string]interface{}{"bucket": bucket, "write": write}
+	if prefix != "" {
+		// Only sent when given: a Master before it refuses the field.
+		body["prefix"] = prefix
+	}
+	check, err := client.Post("/s3-config/"+url.PathEscape(alias)+"/permissions", body)
 	var problem *apiHTTPError
 	switch {
 	case err == nil:
@@ -1113,12 +1125,14 @@ func storagePermissions(client *ApiClient, alias, bucket string, write bool, res
 	case errors.As(err, &problem) && problem.Status == http.StatusConflict:
 		result["permissionsNote"] = problem.Message
 		return result, nil
+	case errors.As(err, &problem) && problem.Status == http.StatusBadRequest && prefix != "":
+		return result, cliErrorf("%w\n提示: 较旧的 Master 不支持 --prefix，请升级 Master，或去掉 --prefix 在存储桶根目录检查", err)
 	default:
 		return result, err
 	}
 	failed := 0
 	for _, row := range objectList(check["results"]) {
-		if getString(row, "status") == "FAILED" && getString(row, "operation") != "DELETE_PROBE" {
+		if getString(row, "status") == "FAILED" && !cliOptionalPermissions[getString(row, "operation")] {
 			failed++
 		}
 	}

@@ -110,7 +110,7 @@ func TestThrottledLocalDownloadRangesWithinTaskShare(t *testing.T) {
 		t.Fatal(err)
 	}
 	rates := NewTaskRates()
-	engine, err := execution.NewEngine(repo, factory, execution.Options{DecorateReader: rates.Decorator(nodes.Decorator(limits.Decorator)), TaskLimits: taskLimits(limits)})
+	engine, err := execution.NewEngine(repo, factory, execution.Options{DecorateReader: nodes.Decorator(limits.Decorator), CountTransferred: rates.Add, TaskLimits: taskLimits(limits)})
 	if err != nil {
 		t.Fatal(err)
 	}

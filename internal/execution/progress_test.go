@@ -85,6 +85,7 @@ func (s *reportingGatedStore) Write(ctx context.Context, key string, reader io.R
 	opts.Progress.Sending(int64(len(data)) / 2)
 	opts.Progress.Sending(-int64(len(data)) / 2)
 	opts.Progress.Sending(int64(len(data)))
+	opts.Progress.Sent(int64(len(data))/2 + int64(len(data)))
 	close(s.gate.halfway)
 	if err := wait(ctx, s.gate.rest); err != nil {
 		return transferstore.WriteResult{}, err
@@ -131,10 +132,11 @@ func TestLiveObjectProgressReadsFinalizesAndCleansUpWithoutLedgerWrites(t *testi
 	f.repo, _ = NewRepository(observed, RepositoryOptions{})
 	gate := newProgressWriteGate()
 	base := f.factory()
+	var read atomic.Int64
 	f.startEngine(StoreFactoryFunc(func(ctx context.Context, job Job) (transferstore.Store, transferstore.Store, error) {
 		src, dst, err := base.Open(ctx, job)
 		return src, &progressGatedStore{Store: dst, gate: gate}, err
-	}), Options{})
+	}), Options{CountTransferred: func(_ Job, n int64) { read.Add(n) }})
 	f.acceptStart()
 	awaitProgressGate(t, gate.entered)
 	before := observed.updates.Load()
@@ -142,7 +144,8 @@ func TestLiveObjectProgressReadsFinalizesAndCleansUpWithoutLedgerWrites(t *testi
 	awaitProgressGate(t, gate.halfway)
 	for range 50 {
 		child, items, ok := f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID)
-		if !ok || child.Assignment != 7 || child.Attempt != 1 || child.Generation != 1 || child.ActiveObjects != 1 || child.SucceededBytes != 0 || child.InFlightBytes != 1<<20 || len(items) != 1 || items[0].TransferredBytes != 1<<20 || items[0].Stage != "TRANSFERRING" {
+		if !ok || child.Assignment != 7 || child.Attempt != 1 || child.Generation != 1 || child.ActiveObjects != 1 || child.SucceededBytes != 0 || child.InFlightBytes != 1<<20 || len(items) != 1 || items[0].TransferredBytes != 1<<20 || items[0].Stage != "TRANSFERRING" ||
+			items[0].ReadBytes != 1<<20 || items[0].Basis != BasisSource || items[0].Phase != "" {
 			t.Fatalf("halfway progress: %+v %+v %v", child, items, ok)
 		}
 		rows := f.engine.Progress(f.job.ParentID, 1)
@@ -152,6 +155,10 @@ func TestLiveObjectProgressReadsFinalizesAndCleansUpWithoutLedgerWrites(t *testi
 	}
 	if observed.updates.Load() != before {
 		t.Fatal("live reads or progress snapshots wrote the ledger")
+	}
+	// A target that does not report its progress feeds the speed its reads.
+	if got := read.Load(); got != 1<<20 {
+		t.Fatalf("speed counted %d bytes of reads, want %d", got, 1<<20)
 	}
 	close(gate.rest)
 	awaitProgressGate(t, gate.finalizing)
@@ -183,10 +190,15 @@ func TestLiveObjectProgressCountsTargetConfirmation(t *testing.T) {
 	setProgressSource(t, f, 2<<20)
 	gate := newProgressWriteGate()
 	base := f.factory()
+	var sent atomic.Int64
 	f.startEngine(StoreFactoryFunc(func(ctx context.Context, job Job) (transferstore.Store, transferstore.Store, error) {
 		src, dst, err := base.Open(ctx, job)
 		return src, &reportingGatedStore{Store: dst, gate: gate}, err
-	}), Options{})
+	}), Options{CountTransferred: func(job Job, n int64) {
+		if job.ParentID == f.job.ParentID && job.Generation == 1 && job.ChildID == f.job.ChildID && len(job.Items) == 0 {
+			sent.Add(n)
+		}
+	}})
 	f.acceptStart()
 	awaitProgressGate(t, gate.entered)
 	child, items, ok := f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID)
@@ -197,8 +209,14 @@ func TestLiveObjectProgressCountsTargetConfirmation(t *testing.T) {
 	awaitProgressGate(t, gate.halfway)
 	// The whole source was read and handed on, but nothing is confirmed.
 	child, items, ok = f.engine.ProgressObjects(f.job.ParentID, 1, f.job.ChildID)
-	if !ok || child.InFlightBytes != 2<<20-1 || len(items) != 1 || items[0].TransferredBytes != 2<<20-1 || items[0].Stage != "TRANSFERRING" {
+	if !ok || child.InFlightBytes != 2<<20-1 || len(items) != 1 || items[0].TransferredBytes != 2<<20-1 || items[0].Stage != "TRANSFERRING" ||
+		items[0].ReadBytes != 2<<20 || items[0].Basis != BasisTarget || items[0].Phase != "" {
 		t.Fatalf("unconfirmed bytes finalized the object: %+v %+v %v", child, items, ok)
+	}
+	// The speed counts what the target sent, the failed attempt's bytes
+	// included, not what was read from the source.
+	if got := sent.Load(); got != 3<<20 {
+		t.Fatalf("speed counted %d bytes, want %d", got, 3<<20)
 	}
 	if rows := f.engine.Progress(f.job.ParentID, 1); len(rows) != 1 || rows[0] != child {
 		t.Fatalf("summary differs from detail: %+v %+v", rows, child)
@@ -244,7 +262,7 @@ func TestObjectProgressCountsDestinationConfirmation(t *testing.T) {
 	if got := empty.transferred(); got != 0 {
 		t.Fatalf("empty object transferred %d", got)
 	}
-	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}, {ID: "b"}}}})
+	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}, {ID: "b"}}}}, nil)
 	p.initialize(0, true)
 	live := p.begin(Item{ID: "a", Source: transferstore.Object{Size: 1000}})
 	p.begin(Item{ID: "b"})
@@ -255,6 +273,64 @@ func TestObjectProgressCountsDestinationConfirmation(t *testing.T) {
 	live.Sending(-1000)
 	if child, _, _ := p.snapshot(false); child.InFlightBytes != 0 {
 		t.Fatal("withdrawn bytes stayed in the summary", child)
+	}
+}
+
+// The phase shows what an object waits for only while none of its requests
+// is sending: a failed request outranks the request limit, which outranks
+// memory. Progress counted from source reads has no phase.
+func TestObjectProgressPhase(t *testing.T) {
+	object := &objectProgress{item: ObjectProgress{Size: 100}, targetCounted: true}
+	steps := []struct {
+		phase transferstore.WritePhase
+		delta int
+		want  string
+	}{
+		{transferstore.PhaseUploadBuffer, 1, PhaseUploadBuffer},
+		{transferstore.PhaseRequestLimit, 1, PhaseRequestLimit},
+		{transferstore.PhaseRetryWait, 1, PhaseRetryWait},
+		{transferstore.PhaseSending, 1, ""},
+		{transferstore.PhaseSending, -1, PhaseRetryWait},
+		{transferstore.PhaseRetryWait, -1, PhaseRequestLimit},
+		{transferstore.PhaseRequestLimit, -1, PhaseUploadBuffer},
+		{transferstore.PhaseUploadBuffer, -1, ""},
+		{transferstore.WritePhase(99), 1, ""},
+	}
+	for i, step := range steps {
+		object.Phase(step.phase, step.delta)
+		if got := object.phase(); got != step.want {
+			t.Fatalf("step %d: phase %q, want %q", i, got, step.want)
+		}
+	}
+	source := &objectProgress{item: ObjectProgress{Size: 100}}
+	source.Phase(transferstore.PhaseRetryWait, 1)
+	if got := source.phase(); got != "" {
+		t.Fatalf("source-counted phase %q", got)
+	}
+}
+
+// Every object's speed reaches Options.CountTransferred with the identity of
+// its child task only: a local destination reports the bytes it wrote.
+func TestCountTransferredReportsBytesWrittenToTheDestination(t *testing.T) {
+	f := newFixture(t, 4)
+	var total atomic.Int64
+	f.startEngine(nil, Options{CountTransferred: func(job Job, n int64) {
+		if job.ParentID != f.job.ParentID || job.Generation != f.job.Generation || job.ChildID != f.job.ChildID || job.Items != nil || n <= 0 {
+			t.Errorf("counted %d bytes for %+v", n, job)
+		}
+		total.Add(n)
+	}})
+	f.acceptStart()
+	if record := f.wait(); record.Status != Completed {
+		t.Fatal(record)
+	}
+	f.assertFiles()
+	var want int64
+	for _, item := range f.job.Items {
+		want += item.Source.Size
+	}
+	if total.Load() != want {
+		t.Fatalf("speed counted %d bytes, the destination received %d", total.Load(), want)
 	}
 }
 
@@ -402,7 +478,7 @@ func TestLiveObjectProgressUses64BitSizesAndAtomicCompletionBoundary(t *testing.
 	const size int64 = 3499 * (1 << 30) / 10
 	job := Job{ChildID: "1-1", ParentID: 1, Number: 1, Generation: 2, Assignment: 3,
 		Items: []Item{{ID: "first", Source: transferstore.Object{Size: size}}, {ID: "second", Source: transferstore.Object{Size: size}}}}
-	p := newAttemptProgress(bg, Record{Job: job, Attempt: 4})
+	p := newAttemptProgress(bg, Record{Job: job, Attempt: 4}, nil)
 	p.initialize(5, false)
 	second := p.begin(job.Items[1])
 	first := p.begin(job.Items[0])

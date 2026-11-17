@@ -94,7 +94,8 @@ func New(store *state.Store, options Options) (*Service, error) {
 	}
 	configureNodeFactory(factory, nodes)
 	rates := NewTaskRates()
-	options.Execution.DecorateReader = rates.Decorator(nodes.Decorator(limits.Decorator))
+	options.Execution.DecorateReader = nodes.Decorator(limits.Decorator)
+	options.Execution.CountTransferred = rates.Add
 	options.Execution.TaskLimits = taskLimits(limits)
 	jobs, err := execution.NewRepository(store, execution.RepositoryOptions{})
 	if err != nil {

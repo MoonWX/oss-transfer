@@ -376,7 +376,7 @@ func TestObjectProgressFallbackKeepsHighWaterMark(t *testing.T) {
 			t.Fatalf("after %+d: reported %d, want %d", step.add, got, step.want)
 		}
 	}
-	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}}}})
+	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}}}}, nil)
 	p.initialize(0, false)
 	live := p.begin(Item{ID: "a", Source: transferstore.Object{Size: 1000}})
 	live.read.Store(700)

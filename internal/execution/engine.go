@@ -225,7 +225,13 @@ func (e *Engine) start(ctx context.Context, child string, generation uint64, res
 	baseCancel := cancel
 	cancel = func() { stopLease(); baseCancel() }
 	attempt := &activeAttempt{parentID: record.Job.ParentID, generation: generation, cancel: cancel, done: make(chan struct{}), objectsChanged: make(chan struct{})}
-	attempt.progress = newAttemptProgress(ioCtx, record)
+	var rate func(int64)
+	if count := e.opts.CountTransferred; count != nil {
+		// Retain identifiers only, not the full manifest.
+		job := Job{ParentID: record.Job.ParentID, Generation: record.Job.Generation, ChildID: record.Job.ChildID}
+		rate = func(n int64) { count(job, n) }
+	}
+	attempt.progress = newAttemptProgress(ioCtx, record, rate)
 	e.active[child] = attempt
 	e.lifetimes.Store(child, attempt)
 	go e.runAttempt(ioCtx, record, attempt)

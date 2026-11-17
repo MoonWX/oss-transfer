@@ -46,7 +46,8 @@ func (e *Engine) rangeReader(job Job, item Item, source transferstore.RangeSourc
 
 // progressRange counts bytes as they are read, like progressReader. A range
 // closed before it delivered exactly length bytes and a clean EOF withdraws
-// its bytes, so a repeated range read is never counted twice.
+// its bytes, so a repeated range read is never counted twice; the speed
+// keeps them.
 type progressRange struct {
 	reader, input io.ReadCloser
 	stop          func() bool
@@ -63,7 +64,7 @@ func (r *progressRange) Read(buffer []byte) (int, error) {
 	err = markSource(err)
 	if n > 0 && r.progress != nil {
 		r.counted.Add(int64(n))
-		r.progress.read.Add(int64(n))
+		r.progress.readFromSource(int64(n))
 	}
 	if errors.Is(err, io.EOF) {
 		r.eof.Store(true)

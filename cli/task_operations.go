@@ -412,12 +412,14 @@ var taskControlActionLabel = map[string]string{
 	"delete": "删除",
 }
 
-// Task control outcomes. Values are catalog keys.
+// Task control outcomes. Values are catalog keys. The Master accepts a stop,
+// resume, retry or start and carries it out afterwards: a resumed or retried
+// task stays RESUMING until every execution node is ready.
 var taskControlDone = map[string]string{
 	"stop":    "已请求停止",
-	"resume":  "已恢复执行",
-	"retry":   "已开始重试",
-	"start":   "已启动",
+	"resume":  "已请求继续",
+	"retry":   "已请求重试",
+	"start":   "已请求启动",
 	"delete":  "已移入回收站",
 	"restore": "已从回收站恢复",
 	"purge":   "已永久删除",
@@ -430,6 +432,7 @@ func taskControlSummary(client *ApiClient, action string, result map[string]inte
 	accepted, ignored := getInt(result, "accepted"), getInt(result, "ignored")
 	unsubmitted, _ := result["unsubmittedIds"].([]int)
 	done := client.text(taskControlDone[action])
+	resuming := action == "resume" || action == "retry"
 	for _, raw := range details {
 		// Permanent deletion shows its background cleanup instead.
 		if row, ok := raw.(map[string]interface{}); ok && taskCleanup(row) != nil {
@@ -438,21 +441,30 @@ func taskControlSummary(client *ApiClient, action string, result map[string]inte
 	}
 	if len(details) == 0 {
 		lines := []string{}
+		// Aggregate replies carry counts only; the accepted IDs are known
+		// when every submitted task was accepted.
+		var acceptedIDs []int
 		if accepted > 0 && ignored == 0 && accepted == len(ids)-len(unsubmitted) {
-			lines = append(lines, client.locale.format("%s：%s", done, cliTaskIDList(ids[:accepted])))
+			acceptedIDs = ids[:accepted]
+			lines = append(lines, client.locale.format("%s：%s", done, cliTaskIDList(acceptedIDs)))
 		} else if accepted+ignored > 0 {
 			lines = append(lines, client.locale.format("%s %d 个任务，%d 个无需处理", done, accepted, ignored))
 		}
 		if len(unsubmitted) > 0 {
 			lines = append(lines, client.locale.format("未提交：%s", cliTaskIDList(unsubmitted)))
 		}
+		if resuming && accepted > 0 {
+			lines = append(lines, taskResumeFollowUp(client, acceptedIDs))
+		}
 		return lines
 	}
 	var table strings.Builder
+	waiting := []int{}
 	for _, raw := range details {
 		row, _ := raw.(map[string]interface{})
 		id := getInt(row, "taskId")
-		outcome := ""
+		status := getString(row, "status")
+		outcome, remaining := "", ""
 		switch {
 		case row["uncertain"] == true:
 			outcome = client.text("结果未确认，请查看任务状态")
@@ -461,17 +473,32 @@ func taskControlSummary(client *ApiClient, action string, result map[string]inte
 			outcome = client.locale.format("失败：%s", translateServerMessage(client.locale, message))
 		case row["ignored"] == true:
 			outcome = client.text("无需处理")
-			if status := getString(row, "status"); status != "" {
+			if status != "" {
 				outcome = client.locale.format("无需处理（当前状态：%s）", cliTaskStatusLabel(&cliLocaleWriter{locale: client.locale}, status))
 			}
 		case row["mode"] == "FAILED_OBJECTS":
-			outcome = client.locale.format("已重试 %d 个失败对象，任务继续运行", getInt(row, "retriedObjects"))
+			// The reopened subtasks are queued on their nodes; the transfer
+			// of the rest of the task goes on.
+			outcome = client.locale.format("已开始重试 %d 个失败对象（%d 个子任务），任务继续运行", getInt(row, "retriedObjects"), getInt(row, "retriedChildren"))
+			// One request reopens a bounded number of subtasks.
+			if row["hasMore"] == true {
+				remaining = client.locale.format("；其他子任务可能还有未重试的失败对象，请再次运行 oss-transfer-cli task retry %d", id)
+			}
 		default:
 			outcome = done
+			// An accepted request is not yet done: say what the task is
+			// doing now.
+			if requested := resuming || action == "stop" || action == "start"; requested && status != "" {
+				outcome = client.locale.format("%s（当前状态：%s）", done, cliTaskStatusLabel(&cliLocaleWriter{locale: client.locale}, status))
+			}
+			if resuming && status != "RUNNING" {
+				waiting = append(waiting, id)
+			}
 		}
 		if message := getString(row, "message"); message != "" && row["success"] != false && !strings.Contains(outcome, message) {
 			outcome += client.locale.format("（%s）", message)
 		}
+		outcome += remaining
 		fmt.Fprintf(&table, "#%d\t%s\n", id, outcome)
 	}
 	var out strings.Builder
@@ -482,7 +509,20 @@ func taskControlSummary(client *ApiClient, action string, result map[string]inte
 	if len(unsubmitted) > 0 {
 		lines = append(lines, client.locale.format("未提交：%s", cliTaskIDList(unsubmitted)))
 	}
+	if len(waiting) > 0 {
+		lines = append(lines, taskResumeFollowUp(client, waiting))
+	}
 	return lines
+}
+
+// taskResumeFollowUp says where to see whether accepted tasks resumed: a
+// task stays RESUMING, with the reason, while a node is offline, updating or
+// fails its preparation.
+func taskResumeFollowUp(client *ApiClient, ids []int) string {
+	if len(ids) == 1 {
+		return client.locale.format("任务在所有执行节点准备就绪后恢复执行；可用 oss-transfer-cli task show %d 查看进展和等待原因", ids[0])
+	}
+	return client.text("任务在所有执行节点准备就绪后恢复执行；可用 oss-transfer-cli task list 查看进展，用 task show ID 查看等待原因")
 }
 
 func taskProgress(client *ApiClient, args []string) (map[string]interface{}, error) {

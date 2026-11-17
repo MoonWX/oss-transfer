@@ -324,7 +324,7 @@ func TestWriteCommandsPrintSummaries(t *testing.T) {
 				return `{"success":true,"data":{"taskIndex":7,"status":"STOPPED","generation":2}}`
 			}
 			return `{"success":true,"accepted":1,"failed":0,"ignored":0,"partial":false,"details":[{"taskId":7,"status":"RESUMING","generation":3,"success":true,"accepted":true,"ignored":false}]}`
-		}, []string{"#7", "已恢复执行"}, []string{"batches", "已受理:", "taskIds"}},
+		}, []string{"#7  已请求继续（当前状态：恢复中）", "oss-transfer-cli task show 7"}, []string{"已恢复执行", "batches", "已受理:", "taskIds"}},
 	} {
 		code, out, stderr := runMockCLI(t, test.args, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, test.reply(r)) })
 		if code != 0 && !(test.name == "storage update" && code == 3) {

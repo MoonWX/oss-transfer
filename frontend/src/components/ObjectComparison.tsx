@@ -103,6 +103,11 @@ type Progress = {
   lastStoredKey?: string;
   bytesRead?: number;
   elapsedMillis?: number;
+  // The node's clock: updatedAt advances every second while the comparison
+  // runs, progressAt only when it counts an object or reads content. Older
+  // Agents do not report progressAt.
+  updatedAt?: string;
+  progressAt?: string;
   // How often the comparison continued from its checkpoint, e.g. after the
   // node restarted.
   resumes?: number;
@@ -357,6 +362,8 @@ function formatElapsed(milliseconds: number) {
   return t("{seconds} 秒", { seconds });
 }
 
+// Rates are averages over the whole running time, resumed runs included:
+// they hide a stall, which stalledMillis shows instead.
 function statsText(progress: Progress) {
   const count = formatNumber(progress.compared);
   const elapsedMillis = progress.elapsedMillis ?? 0;
@@ -376,7 +383,7 @@ function statsText(progress: Progress) {
     elapsed: formatElapsed(elapsedMillis),
   };
   if (progress.mode !== "content")
-    return t("已检查 {count}，{rate} 个/秒，已用 {elapsed}", values);
+    return t("已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}", values);
   // Content mode reads whole objects: the read rate shows progress while a
   // large object is still being checked, and is the only rate of one object.
   const read = {
@@ -385,11 +392,28 @@ function statsText(progress: Progress) {
     byteRate: formatBytes((progress.bytesRead ?? 0) / seconds),
   };
   return progress.scope === "object"
-    ? t("已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）", read)
+    ? t("已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）", read)
     : t(
-        "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）",
+        "已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）",
         read,
       );
+}
+
+// A running comparison with no new result for this long is shown as stalled,
+// for instance while a LIST or HEAD keeps timing out and is retried.
+const STALL_NOTICE_MS = 60_000;
+
+/**
+ * How long a running comparison has counted no object and read no content,
+ * by the node's clock; 0 when it is not running or the node does not say.
+ */
+function stalledMillis(progress: Progress) {
+  if (progress.status !== "RUNNING" || !progress.progressAt) return 0;
+  const since = Date.parse(progress.progressAt);
+  const now = Date.parse(progress.updatedAt ?? "");
+  return Number.isFinite(since) && Number.isFinite(now)
+    ? Math.max(0, now - since)
+    : 0;
 }
 
 function truncationText(progress: Progress) {
@@ -1379,6 +1403,14 @@ function ComparisonResult({
         {progress && (
           <>
             {active && <LinearProgress aria-label={t("比对进度")} />}
+            {stalledMillis(progress) >= STALL_NOTICE_MS && (
+              <Alert severity="warning" data-testid="comparison-stalled">
+                {t(
+                  "已有 {duration}没有新的比对结果，执行节点可能正在等待存储响应或重试。",
+                  { duration: formatElapsed(stalledMillis(progress)) },
+                )}
+              </Alert>
+            )}
             <Box sx={{ display: "flex", gap: 2.5, flexWrap: "wrap" }}>
               <Typography variant="body2">{statsText(progress)}</Typography>
               <Typography variant="body2">

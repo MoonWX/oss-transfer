@@ -52,9 +52,13 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
     ja: "{minutes} 分 {seconds} 秒",
   },
   "{seconds} 秒": { en: "{seconds} s", ja: "{seconds} 秒" },
-  "已检查 {count}，{rate} 个/秒，已用 {elapsed}": {
-    en: "Checked {count}, {rate} objects/s, elapsed {elapsed}",
-    ja: "確認済み {count}、{rate} 件/秒、経過 {elapsed}",
+  "已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}": {
+    en: "Checked {count}, {rate} objects/s on average, elapsed {elapsed}",
+    ja: "確認済み {count}、平均 {rate} 件/秒、経過 {elapsed}",
+  },
+  "已有 {duration}没有新的比对结果，执行节点可能正在等待存储响应或重试。": {
+    en: "No new comparison results for {duration}; the node may be waiting for the storage to respond, or retrying.",
+    ja: "{duration}の間、新しい比較結果がありません。ノードはストレージの応答を待っているか、再試行している可能性があります。",
   },
   "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}": {
     en: "Checked {count}, {rate} objects/s, elapsed {elapsed}, read {bytes}",
@@ -302,14 +306,14 @@ export const comparisonMessages: Record<string, { en: string; ja: string }> = {
     en: "Comparison results are unavailable on this node",
     ja: "このノードでは比較結果を利用できません",
   },
-  "已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）": {
-    en: "Elapsed {elapsed}, read {bytes} ({byteRate}/s)",
-    ja: "経過 {elapsed}、読み取り {bytes}（{byteRate}/秒）",
+  "已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）": {
+    en: "Elapsed {elapsed}, read {bytes} ({byteRate}/s on average)",
+    ja: "経過 {elapsed}、読み取り {bytes}（平均 {byteRate}/秒）",
   },
-  "已检查 {count}，{rate} 个/秒，已用 {elapsed}，已读取 {bytes}（{byteRate}/秒）":
+  "已检查 {count}，平均 {rate} 个/秒，已用 {elapsed}，已读取 {bytes}（平均 {byteRate}/秒）":
     {
-      en: "Checked {count}, {rate} objects/s, elapsed {elapsed}, read {bytes} ({byteRate}/s)",
-      ja: "確認済み {count}、{rate} 件/秒、経過 {elapsed}、読み取り {bytes}（{byteRate}/秒）",
+      en: "Checked {count}, {rate} objects/s on average, elapsed {elapsed}, read {bytes} ({byteRate}/s on average)",
+      ja: "確認済み {count}、平均 {rate} 件/秒、経過 {elapsed}、読み取り {bytes}（平均 {byteRate}/秒）",
     },
   "存储桶填写为“连接名称/存储桶”，如 production/photos。前缀留空比对整个存储桶，两端按去掉前缀后的 Key 对应。":
     {

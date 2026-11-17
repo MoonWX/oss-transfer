@@ -365,7 +365,7 @@ for (const theme of ["light", "dark"] as const)
     await page.goto("/tools?comparison=comparison-1");
     await expect(
       page.getByText(
-        /^已检查 10，.* 个\/秒，已用 1 小时 2 分，已读取 5 GiB（.+\/秒）$/,
+        /^已检查 10，平均 .* 个\/秒，已用 1 小时 2 分，已读取 5 GiB（平均 .+\/秒）$/,
       ),
     ).toBeVisible();
     await expect(
@@ -420,7 +420,9 @@ test("desktop layout pages a long history and keeps the result inside the viewpo
   await page.goto("/tools?comparison=comparison-1");
   await expect(page.getByRole("button", { name: "继续比对" })).toBeVisible();
   await expect(
-    page.getByText("已检查 1,000，7.4 个/秒，已用 2 分 15 秒", { exact: true }),
+    page.getByText("已检查 1,000，平均 7.4 个/秒，已用 2 分 15 秒", {
+      exact: true,
+    }),
   ).toBeVisible();
   const history = page.getByRole("table", { name: "比对历史" });
   await expect(history.getByRole("row")).toHaveCount(11);
@@ -740,7 +742,7 @@ test("a stalled filtered scan keeps refreshing the progress of a running compari
   await settle(page, calls);
   const stats = (value: number) =>
     page.getByText(
-      `已检查 ${value.toLocaleString("en-US")}，100 个/秒，已用 ${value / 100} 秒`,
+      `已检查 ${value.toLocaleString("en-US")}，平均 100 个/秒，已用 ${value / 100} 秒`,
       { exact: true },
     );
   for (const reads of [1, 2]) {

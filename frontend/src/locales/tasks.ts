@@ -2447,6 +2447,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "{operation} {count} tasks?",
     ja: "{count}件のタスクを{operation}しますか？",
   },
+  "LIST 请求还受扫描节点的 LIST 上限约束，上表未计入。": {
+    en: "LIST requests are also bounded by the LIST limit of the node that scans, which this table does not include.",
+    ja: "LIST リクエストはスキャンするノードの LIST 上限にも制限されます。この表には含まれていません。",
+  },
   "以下统计仅包含最近 {count} 个任务，更早的任务未计入。": {
     en: "The statistics below cover only the {count} most recent tasks; earlier tasks are not counted.",
     ja: "以下の統計には直近の {count} 件のタスクのみが含まれ、それより前のタスクは含まれません。",

@@ -706,7 +706,8 @@ var cliMessages = map[string][2]string{
 	"请求速率":   {"Request rate", "リクエストレート"},
 	"任务请求上限": {"Task request limit", "タスクのリクエスト上限"},
 	"生效请求上限": {"Effective request limit", "実効リクエスト上限"},
-	"不限":     {"unlimited", "無制限"},
+	"（LIST 还受扫描节点的 LIST 上限约束，未计入）": {" (LIST is also bounded by the LIST limit of the node that scans, not included)", "（LIST はスキャンするノードの LIST 上限にも制限されます。含まれていません）"},
+	"不限": {"unlimited", "無制限"},
 	// task nodes: execution membership changes.
 	"用法: task nodes <ID> [--add 节点] [--remove 节点] [--binding 节点=/绝对路径] [--now] [--skip-shared-check] [--yes]": {"Usage: task nodes <ID> [--add NODE] [--remove NODE] [--binding NODE=/absolute/path] [--now] [--skip-shared-check] [--yes]", "使い方: task nodes <ID> [--add ノード] [--remove ノード] [--binding ノード=/絶対パス] [--now] [--skip-shared-check] [--yes]"},
 	"同一节点不能同时加入和移出: %s":                      {"A node cannot be both added and removed: %s", "同じノードを追加と削除の両方に指定できません: %s"},

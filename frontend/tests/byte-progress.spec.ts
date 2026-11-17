@@ -145,6 +145,10 @@ test("task details show in-flight bytes and observed request rates", async ({
   // LIST and GET share one task limit, so that cell spans both columns.
   expect(await cells("任务上限")).toEqual(["100", "不限", "不限"]);
   expect(await cells("生效上限")).toEqual(["100", "不限", "1,400"]);
+  // The node that scans also bounds ListObjects with its LIST limit.
+  await expect(requests.getByTestId("request-rate-list-note")).toHaveText(
+    "LIST 请求还受扫描节点的 LIST 上限约束，上表未计入。",
+  );
 
   // A stale sample or an unreachable Agent is unknown, never a smaller number.
   state.task = {

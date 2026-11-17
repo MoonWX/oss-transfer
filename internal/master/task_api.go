@@ -1406,11 +1406,7 @@ func (s *Server) controlTaskHTTP(action string) http.HandlerFunc {
 			p, admitted, err := outcome.parent, outcome.admitted, outcome.err
 			item := map[string]any{"taskId": id, "status": p.Status, "generation": p.Generation, "success": err == nil, "accepted": err == nil && admitted, "ignored": err == nil && !admitted}
 			if result, ok := inPlace[id]; ok {
-				item["mode"] = "FAILED_OBJECTS"
-				item["retriedChildren"], item["retriedObjects"] = result.Accepted, result.RetriedObjects
-				if result.Message != "" {
-					item["message"] = result.Message
-				}
+				inPlaceRetryDetail(item, result)
 			}
 			if action == "permanent-delete" && err == nil {
 				item["purged"] = p.Purged

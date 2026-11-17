@@ -467,6 +467,10 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "All agents passed preflight",
     ja: "すべてのノードが事前チェックに合格しました",
   },
+  "预检未通过：{reason}": {
+    en: "Preflight failed: {reason}",
+    ja: "事前チェックに失敗しました：{reason}",
+  },
   "预检完成，存在未通过的节点。": {
     en: "Preflight finished. Some agents failed the check.",
     ja: "事前チェックが完了しました。一部のノードで失敗しました。",

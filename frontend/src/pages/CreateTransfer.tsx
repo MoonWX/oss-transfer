@@ -135,6 +135,14 @@ type Precheck = {
       pathType?: string;
     }
   >;
+  /**
+   * The Master's reasons for refusing rows, numbered by row ("1: …"): a node
+   * that failed, or the row itself (a storage connection, a bucket name, a
+   * bandwidth share). Older Masters omit them.
+   */
+  validationErrors?: string[];
+  /** The number of rows checked, set here, to name rows in a batch. */
+  rows?: number;
 };
 type Submission = {
   severity: "success" | "warning" | "error";
@@ -197,6 +205,19 @@ const freshForm = (): TransferForm => ({
 });
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/**
+ * The Master's reasons for refused rows. Creation and its preflight number
+ * them from 1 ("2: …"): a batch names the row, a single row needs no number.
+ */
+const rowProblems = (problems: unknown, rows: number) =>
+  (Array.isArray(problems) ? problems : []).map((item) => {
+    const text = typeof item === "string" ? item : JSON.stringify(item);
+    const numbered = /^(\d+): ([\s\S]*)$/.exec(text);
+    if (!numbered) return text;
+    return rows > 1
+      ? tr("第 {value1} 项：", { value1: numbered[1] }) + numbered[2]
+      : numbered[2];
+  });
 const dateValue = (value: string) =>
   value.length === 16 ? `${value}:00` : value;
 const optional = (value: string) => value.trim() || undefined;
@@ -621,6 +642,13 @@ export default function CreateTransfer() {
   const precheckUnchecked = !!precheck?.nodeBindings.some(
     (binding) => binding.code === SHARED_CHECK_SKIPPED,
   );
+  // A refused preflight in which every node passed refused a row itself.
+  const precheckNodeFailed = !!precheck?.nodeBindings.some(
+    (binding) => !binding.valid,
+  );
+  const precheckProblems = precheck
+    ? rowProblems(precheck.validationErrors, precheck.rows ?? 1)
+    : [];
   // Imported local rows that skip the shared check, numbered from 1.
   const batchSkippedRows = useMemo(() => {
     if (tab !== 1 || batchKind !== "local") return [];
@@ -1026,19 +1054,25 @@ export default function CreateTransfer() {
           "/api/master/local-transfers/validate",
           { method: "POST", body: payload },
         );
-        const checked = applyUploadPrecheck(response.data);
+        const checked = {
+          ...applyUploadPrecheck(response.data),
+          rows: payload.length,
+        };
         setPrecheck(checked);
         precheckRequest.current = checked.valid ? checkedRequest : null;
         // A skipped check passes the paths, not the shared directory.
         const unchecked = checked.nodeBindings.some(
           (binding) => binding.code === SHARED_CHECK_SKIPPED,
         );
+        const [reason] = rowProblems(checked.validationErrors, payload.length);
         notify(
           checked.valid
             ? unchecked
               ? tr("路径预检通过，共享目录未校验")
               : tr("所有节点预检通过")
-            : tr("预检完成，存在未通过的节点。"),
+            : checked.nodeBindings.some((binding) => !binding.valid) || !reason
+              ? tr("预检完成，存在未通过的节点。")
+              : tr("预检未通过：{reason}", { reason }),
           checked.valid && !unchecked ? "success" : "warning",
         );
         return;
@@ -1139,12 +1173,7 @@ export default function CreateTransfer() {
           value3: item.nodeBindings?.length ?? 0,
         }),
       );
-      if (Array.isArray(result.validationErrors))
-        details.push(
-          ...result.validationErrors.map((item) =>
-            typeof item === "string" ? item : JSON.stringify(item),
-          ),
-        );
+      details.push(...rowProblems(result.validationErrors, payload.length));
       if (partial)
         details.push(
           tr("部分任务可能已受理。重试前请核对任务列表，避免重复提交。"),
@@ -2287,8 +2316,20 @@ export default function CreateTransfer() {
                       ? precheckUnchecked
                         ? tr("路径预检通过，共享目录未校验")
                         : tr("节点预检通过")
-                      : tr("节点预检未通过")}
+                      : precheckNodeFailed || precheckProblems.length === 0
+                        ? tr("节点预检未通过")
+                        : tr("预检未通过")}
                   </AlertTitle>
+                  {/* The reasons for refused rows, also those of no node. */}
+                  {precheckProblems.map((problem, index) => (
+                    <Typography
+                      key={index}
+                      variant="body2"
+                      sx={{ overflowWrap: "anywhere", mb: 0.5 }}
+                    >
+                      {problem}
+                    </Typography>
+                  ))}
                   {tr(
                     "通过 {passed} / {total} 个节点配置。修改配置后需重新预检。",
                     {

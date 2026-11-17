@@ -359,7 +359,10 @@ func TestWriteCommandsPrintSummaries(t *testing.T) {
 			}
 			return `{"success":true,"clearableCount":3,"failedKeys":{}}`
 		}, []string{"已清理 3 条已处理的记录"}, []string{"请求上限范围", "resolved-exceptions"}},
-		{"update agents", []string{"update", "agents", "--all", "--version", "4.1.41", "--yes"}, func(*http.Request) string {
+		{"update agents", []string{"update", "agents", "--all", "--version", "4.1.41", "--yes"}, func(r *http.Request) string {
+			if r.Method == http.MethodGet {
+				return `{"success":true,"data":{"master":{"info":{"version":"4.1.41","supported":true}},"agents":[{"address":"10.0.0.2","info":{"version":"4.1.40","supported":true},"update":{"phase":"IDLE"}}],"queue":{"phase":"IDLE","items":[]}}}`
+			}
 			return `{"success":true,"data":{"id":"q1","version":"4.1.41","phase":"RUNNING","items":[{"nodeId":"n1","address":"10.0.0.2","phase":"QUEUED","updatedAt":"2026-11-10T00:00:00Z","startedAt":"0001-01-01T00:00:00Z"}]}}`
 		}, []string{"已安排把 1 个 Agent 更新到 v4.1.41", "10.0.0.2", "排队中", "update status"}, []string{"0001-01-01", "startedAt", "QUEUED"}},
 		{"task resume", []string{"task", "resume", "7"}, func(r *http.Request) string {

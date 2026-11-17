@@ -137,10 +137,16 @@ var cliOutputMessages = map[string][2]string{
 	"已提交 %d 个清单文件：%s":         {"Submitted %d inventory files: %s", "%d 件のインベントリファイルを送信しました: %s"},
 
 	// Updates.
-	"Master 正在更新到 %s；服务会短暂重启\n":                     {"Master is updating to %s; the service restarts briefly\n", "Master を %s に更新しています。サービスは一時的に再起動します\n"},
-	"已安排把 %d 个 Agent 更新到 %s\n":                      {"Scheduled %d agent updates to %s\n", "%d 台の Agent を %s に更新するよう予定しました\n"},
-	"节点\t状态\t说明":                                    {"Node\tState\tDetails", "ノード\t状態\t詳細"},
-	"查看进度：oss-transfer-cli update status --watch 5": {"Follow progress: oss-transfer-cli update status --watch 5", "進行状況: oss-transfer-cli update status --watch 5"},
+	"Master 正在更新到 %s；服务会短暂重启\n": {"Master is updating to %s; the service restarts briefly\n", "Master を %s に更新しています。サービスは一時的に再起動します\n"},
+	"已安排把 %d 个 Agent 更新到 %s\n":  {"Scheduled %d agent updates to %s\n", "%d 台の Agent を %s に更新するよう予定しました\n"},
+	"节点\t状态\t说明":                {"Node\tState\tDetails", "ノード\t状態\t詳細"},
+	"节点\t原因":                    {"Node\tReason", "ノード\t理由"},
+	"将跳过":                       {"Will be skipped", "スキップ予定"},
+	"没有可以在线更新到 %s 的 Agent，本次未安排更新\n":                      {"No Agent can be updated online to %s; no update was scheduled\n", "%s にオンライン更新できる Agent はないため、更新を予定しませんでした\n"},
+	"已有更新到 %s 的 Agent 更新正在进行，本次未安排新的更新\n":                 {"An Agent update to %s is already in progress; no new update was scheduled\n", "%s への Agent 更新がすでに進行中のため、新しい更新は予定しませんでした\n"},
+	"已把 %d 个 Agent 加入更新队列，目标 %s；已是该版本、离线或不能在线更新的节点会被跳过\n": {"Queued %d agents for an update to %s; agents already on that version, offline or unable to update online are skipped\n", "%d 台の Agent を %s への更新キューに追加しました。すでにそのバージョンのノード、オフラインのノード、オンライン更新できないノードはスキップされます\n"},
+	"已安排把 %d 个 Agent 更新到 %s；%d 个不会更新，原因见下表\n":             {"Scheduled %d agent updates to %s; %d agents will not be updated, see the table for why\n", "%d 台の Agent を %s に更新するよう予定しました。%d 台は更新されません。理由は下表のとおりです\n"},
+	"查看进度：oss-transfer-cli update status --watch 5":       {"Follow progress: oss-transfer-cli update status --watch 5", "進行状況: oss-transfer-cli update status --watch 5"},
 
 	// Local preferences.
 	"来源：%s\n":                             {"Source: %s\n", "取得元: %s\n"},

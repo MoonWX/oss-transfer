@@ -11,6 +11,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -93,7 +94,14 @@ type NodesView = {
   candidates: Candidate[];
   /** SCANNING, HANDOFF, WAITING or COMPLETE; older Masters omit it. */
   scan?: { phase?: string; complete?: boolean };
+  /**
+   * The task was created with the shared directory check skipped: added
+   * nodes are not checked either and need their own acknowledgement.
+   */
+  sharedCheckSkipped?: boolean;
 };
+// The Master's binding code when the shared directory check was skipped.
+const SHARED_CHECK_SKIPPED = "SHARED_STORAGE_CHECK_SKIPPED";
 type BindingCheck = NodeDisplay & {
   executionNodeIp: string;
   localPath?: string;
@@ -346,6 +354,9 @@ export default function TaskNodesDialog({
   const [checking, setChecking] = useState(false);
   const [step, setStep] = useState<"edit" | "confirm">("edit");
   const [submitting, setSubmitting] = useState(false);
+  // Confirms, for a task that skips the shared check, that added nodes mount
+  // the same storage. It is not part of the selection a preflight checks.
+  const [skipAcknowledged, setSkipAcknowledged] = useState(false);
   const [error, setError] = useState("");
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   // A button has no floating label to clear, so the small gap also applies
@@ -421,6 +432,7 @@ export default function TaskNodesDialog({
     setPreflight(undefined);
     setStep("edit");
     setError("");
+    setSkipAcknowledged(false);
     setMenuAnchor(null);
     pendingRequest.current = undefined;
     backgroundFailures.current = 0;
@@ -489,10 +501,15 @@ export default function TaskNodesDialog({
     ...(local && joinAdds.length ? { bindings } : {}),
     ...(validRemoves.length ? { mode: effectiveMode } : {}),
   };
+  // Added nodes of a task that skips the shared check are not checked either.
+  const unchecked = local && joinAdds.length > 0 && !!view?.sharedCheckSkipped;
   const change = {
     ...selection,
     expectedGeneration: view?.generation,
     expectedNodeRevision: view?.nodeRevision,
+    ...(unchecked && skipAcknowledged
+      ? { skipSharedCheckAcknowledged: true }
+      : {}),
   };
   // What the user chose. Live refreshes do not change it, so a passed
   // preflight stays valid while statistics update.
@@ -512,6 +529,9 @@ export default function TaskNodesDialog({
   const preflightPassed =
     !needsPreflight ||
     (preflight?.fingerprint === fingerprint && preflight.valid);
+  const preflightUnchecked = !!preflight?.bindings.some(
+    (binding) => binding.code === SHARED_CHECK_SKIPPED,
+  );
 
   const toggle = (
     list: string[],
@@ -884,7 +904,9 @@ export default function TaskNodesDialog({
               ? t("请输入执行节点上的绝对路径。")
               : check
                 ? check.valid
-                  ? t("预检通过")
+                  ? check.code === SHARED_CHECK_SKIPPED
+                    ? t("未校验共享目录（此任务已跳过校验）")
+                    : t("预检通过")
                   : check.message || t("预检未通过")
                 : t("与任务其他节点指向同一共享目录")
           }
@@ -1078,6 +1100,36 @@ export default function TaskNodesDialog({
           {joinAdds.map(addRow)}
         </Stack>
       )}
+      {unchecked && (
+        <Alert
+          severity="warning"
+          sx={{ mt: 1.5 }}
+          data-testid="task-nodes-skip-shared-check"
+        >
+          <Typography variant="body2" fontWeight={600}>
+            {t("此任务跳过了共享目录校验")}
+          </Typography>
+          <Typography variant="body2">
+            {view?.direction === "OSS_TO_LOCAL"
+              ? t(
+                  "新节点的目录同样不会校验。若新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，本地目标不再完整，任务仍会显示成功。",
+                )
+              : t(
+                  "新节点的目录同样不会校验。若新节点挂载的不是同一份存储，它会从不同的数据读取对象，部分文件可能漏传或从错误的副本上传，任务仍会显示成功。",
+                )}
+          </Typography>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={skipAcknowledged}
+                disabled={locked}
+                onChange={(event) => setSkipAcknowledged(event.target.checked)}
+              />
+            }
+            label={t("我已确认新节点挂载的是同一份存储")}
+          />
+        </Alert>
+      )}
       {needsPreflight && (
         <Box sx={{ mt: 1.5 }}>
           <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap">
@@ -1102,11 +1154,22 @@ export default function TaskNodesDialog({
           </Stack>
           {preflight?.fingerprint === fingerprint && (
             <Alert
-              severity={preflight.valid ? "success" : "error"}
+              severity={
+                !preflight.valid
+                  ? "error"
+                  : preflightUnchecked
+                    ? "warning"
+                    : "success"
+              }
               sx={{ mt: 1 }}
+              data-testid="task-nodes-preflight"
             >
               <Typography variant="body2">
-                {preflight.valid ? t("预检通过") : t("预检未通过")}
+                {!preflight.valid
+                  ? t("预检未通过")
+                  : preflightUnchecked
+                    ? t("路径检查通过，共享目录未校验")
+                    : t("预检通过")}
               </Typography>
               {preflight.errors.map((message) => (
                 <Typography key={message} variant="body2">
@@ -1120,7 +1183,12 @@ export default function TaskNodesDialog({
                   sx={{ overflowWrap: "anywhere" }}
                 >
                   {label(binding.executionNodeIp, binding)}：
-                  {binding.valid ? t("通过") : binding.message || t("未通过")}
+                  {!binding.valid
+                    ? binding.message || t("未通过")
+                    : binding.code === SHARED_CHECK_SKIPPED
+                      ? binding.message ||
+                        t("未校验共享目录（此任务已跳过校验）")
+                      : t("通过")}
                 </Typography>
               ))}
             </Alert>
@@ -1231,7 +1299,9 @@ export default function TaskNodesDialog({
             ? t("正在预检…")
             : !preflightPassed
               ? t("预检通过后才能继续")
-              : "";
+              : unchecked && !skipAcknowledged
+                ? t("确认新节点挂载同一份存储后才能继续")
+                : "";
   const canConfirm = !blocked && !submitting;
   const footerText =
     step === "confirm"
@@ -1377,6 +1447,9 @@ export default function TaskNodesDialog({
                     ? `${summaryLabel(address)} (${(paths[address] ?? "").trim()})`
                     : summaryLabel(address),
                 ),
+                unchecked
+                  ? t("此任务跳过了共享目录校验，新节点同样不做校验")
+                  : undefined,
               )}
             {cancels > 0 &&
               summarySection(

@@ -14,7 +14,10 @@ async function configureUpload(page: Page) {
   const validations: any[] = [];
   // The shared fixture answers for one node; this page binds two.
   await page.route("**/api/master/local-transfers/validate", (route) => {
-    validations.push(route.request().postDataJSON()[0]);
+    const row = route.request().postDataJSON()[0];
+    validations.push(row);
+    // As the Master answers: a skipped check passes the paths only.
+    const skipped = row.skipSharedCheck === true;
     return route.fulfill({
       json: {
         success: true,
@@ -24,6 +27,14 @@ async function configureUpload(page: Page) {
             executionNodeIp,
             localPath: "/mnt/datasets/qa",
             valid: true,
+            pathType: "DIRECTORY",
+            ...(skipped
+              ? {
+                  code: "SHARED_STORAGE_CHECK_SKIPPED",
+                  message:
+                    "已按要求跳过共享目录校验；未验证各节点是否挂载同一份存储",
+                }
+              : { code: "SHARED_STORAGE_VERIFIED" }),
           })),
         },
       },
@@ -59,7 +70,7 @@ test("skipping the shared check needs an explicit confirmation and sends the ack
     "不同节点会从不同的数据中读取对象；",
     "部分文件可能漏传，或从错误的副本上传；",
     "任务报告可能显示成功，而目标端实际不完整或不一致；",
-    "节点失联后，自动接管可能在另一个目录上继续执行。",
+    "节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。",
   ])
     await expect(dialog(page).getByText(consequence)).toBeVisible();
   const confirm = dialog(page).getByRole("button", { name: "跳过校验" });
@@ -82,7 +93,12 @@ test("skipping the shared check needs an explicit confirmation and sends the ack
   await expect(page.getByText(/ · 已跳过共享目录校验$/)).toBeVisible();
 
   await page.getByRole("button", { name: "运行预检", exact: true }).click();
-  await expect(page.getByText("所有节点预检通过").first()).toBeVisible();
+  // The paths passed; the shared directory was not checked, and says so.
+  await expect(
+    page.getByText("路径预检通过，共享目录未校验", { exact: true }).last(),
+  ).toBeVisible();
+  await expect(page.getByText("节点预检通过", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("未校验", { exact: true })).toHaveCount(2);
   await page.getByRole("button", { name: "创建迁移任务", exact: true }).click();
   const creation = () =>
     requests.find(
@@ -138,7 +154,230 @@ test("task details keep warning about a skipped shared check", async ({
   const warning = page.getByTestId("task-shared-check-skipped");
   await expect(warning).toContainText("此任务跳过了共享目录校验");
   await expect(warning).toContainText("即使任务显示成功");
+  // Task 1046 is a download: its consequence is a split destination.
+  await expect(warning).toContainText("下载的文件会分散写入各节点各自的目录");
+  await expect(warning).toContainText("之后添加的节点也不做校验");
+  await expect(warning).not.toContainText("从错误的副本上传");
   await page.goto("/tasks?taskId=1048");
   await expect(page.getByText("执行信息", { exact: true })).toBeVisible();
   await expect(page.getByTestId("task-shared-check-skipped")).toHaveCount(0);
+});
+
+test("a download states a download's consequences and the check it keeps", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/create");
+  await page.getByRole("button", { name: /对象存储 → 本地/ }).click();
+  await select(page, "源存储连接", "production");
+  await page.getByRole("combobox", { name: "源存储桶" }).fill("media-archive");
+  await page.getByRole("combobox", { name: "执行节点", exact: true }).click();
+  await page.getByRole("option", { name: /10\.0\.1\.12/ }).click();
+  await page.getByLabel("目标目录绝对路径").fill("/mnt/datasets/media");
+  await page.getByRole("button", { name: "添加共享存储节点" }).click();
+  await expect(
+    page.getByText("下载目标必须可写", { exact: false }),
+  ).toBeVisible();
+  await skipBox(page).click();
+  for (const consequence of [
+    "下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据；",
+    "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
+    "任务报告可能显示成功，而本地目标实际不完整；",
+  ])
+    await expect(dialog(page).getByText(consequence)).toBeVisible();
+  await expect(dialog(page).getByText(/从错误的副本上传/)).toHaveCount(0);
+  await expect(dialog(page).getByText(/抽样比对/)).toHaveCount(0);
+  await dialog(page)
+    .getByRole("checkbox", { name: "我已确认所有执行节点挂载的是同一份存储" })
+    .check();
+  await dialog(page).getByRole("button", { name: "跳过校验" }).click();
+  await expect(page.getByTestId("skip-shared-check-warning")).toContainText(
+    "下载的文件会分散在各节点各自的目录中",
+  );
+});
+
+test("imported rows that skip the check are named with the consequences", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/create");
+  await page.getByRole("tab", { name: "批量导入" }).click();
+  await select(page, "导入类型", "本地迁移请求");
+  const row = (skip: boolean) => ({
+    direction: "LOCAL_TO_OSS",
+    sourceEndpoint: {
+      type: "LOCAL",
+      nodeBindings: nodes.map((executionNodeIp) => ({
+        executionNodeIp,
+        localPath: "/mnt/datasets/qa",
+      })),
+    },
+    destinationEndpoint: { type: "OSS", s3Alias: "backup", bucket: "b" },
+    ...(skip
+      ? { skipSharedCheck: true, skipSharedCheckAcknowledged: true }
+      : {}),
+  });
+  const warning = page.getByTestId("batch-skip-shared-check-warning");
+  await page
+    .getByLabel("任务数据")
+    .fill(JSON.stringify([row(false), row(false)]));
+  await expect(warning).toHaveCount(0);
+  await page
+    .getByLabel("任务数据")
+    .fill(JSON.stringify([row(false), row(true), row(true)]));
+  await expect(warning).toContainText("第 2, 3 项跳过了共享目录校验");
+  await expect(warning).toContainText("下载的文件会分散在各节点各自的目录中");
+});
+
+test("a restored draft says that a skipped submission may already be accepted", async ({
+  page,
+}) => {
+  await configureUpload(page);
+  await page.getByRole("button", { name: "添加共享存储节点" }).click();
+  await skipBox(page).click();
+  await dialog(page)
+    .getByRole("checkbox", { name: "我已确认所有执行节点挂载的是同一份存储" })
+    .check();
+  await dialog(page).getByRole("button", { name: "跳过校验" }).click();
+  // A submission was sent but its response never arrived.
+  await page.evaluate(() => {
+    const draft = JSON.parse(
+      sessionStorage.getItem("oss-transfer-create-draft")!,
+    );
+    draft.pendingRequest = { id: "a".repeat(32), fingerprint: "sent" };
+    sessionStorage.setItem("oss-transfer-create-draft", JSON.stringify(draft));
+  });
+  await page.reload();
+  await expect(page.getByTestId("draft-skipped-submission")).toContainText(
+    "该提交可能已被受理",
+  );
+  // The skip itself is never restored without a fresh confirmation.
+  await expect(skipBox(page)).not.toBeChecked();
+});
+
+const member = (address: string) => ({
+  id: `node-${address}`,
+  address,
+  state: "ACTIVE",
+  drainMode: "",
+  scanner: address === "10.0.1.12",
+  online: true,
+  pendingChildren: 0,
+  localPath: "/mnt/share",
+  share: { bandwidthBytesPerSecond: 0, listQps: 0, headQps: 0, putQps: 0 },
+});
+
+test("adding a node to a skipped task needs its own acknowledgement and shows it unchecked", async ({
+  page,
+}) => {
+  await mockApi(page);
+  const view = {
+    taskId: 1048,
+    generation: 1,
+    nodeRevision: 3,
+    status: "RUNNING",
+    direction: "LOCAL_TO_OSS",
+    localTransfer: true,
+    sharedCheckSkipped: true,
+    editable: true,
+    reason: "",
+    nowSupported: true,
+    nowReason: "",
+    pending: false,
+    bandwidthLimitMbps: null,
+    nodes: [member("10.0.1.12"), member("10.0.1.13")],
+    removedNodes: [],
+    candidates: [
+      { id: "node-14", address: "10.0.1.14", eligible: true, reason: "" },
+    ],
+  };
+  const posts: any[] = [];
+  await page.route("**/api/master/tasks/1048/nodes", async (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({ json: { success: true, data: view } });
+    const body = route.request().postDataJSON();
+    posts.push(body);
+    return route.fulfill({
+      json: {
+        success: true,
+        data: {
+          accepted: !body.dryRun,
+          dryRun: !!body.dryRun,
+          replayed: false,
+          valid: true,
+          nodeBindings: [
+            {
+              executionNodeIp: "10.0.1.14",
+              localPath: "/mnt/share",
+              valid: true,
+              pathType: "DIRECTORY",
+              code: "SHARED_STORAGE_CHECK_SKIPPED",
+              message:
+                "未校验：此任务创建时跳过了共享目录校验，未验证此节点与任务的其他节点挂载的是同一份存储",
+            },
+          ],
+          validationErrors: [],
+          view,
+        },
+      },
+    });
+  });
+  // The task list offers node changes for tasks that report their members.
+  const rows = tasks.map((task) =>
+    task.taskIndex === 1048
+      ? {
+          ...task,
+          executionMembership: {
+            nodeRevision: 3,
+            pending: false,
+            nodes: view.nodes,
+            joining: [],
+            draining: [],
+          },
+        }
+      : task,
+  );
+  await page.route("**/api/master/status", (route) =>
+    route.fulfill({
+      json: { success: true, totalTasks: rows.length, tasks: rows },
+    }),
+  );
+  await page.goto("/tasks?taskId=1048");
+  await page.getByRole("button", { name: "编辑节点", exact: true }).click();
+  const box = page.getByRole("dialog", { name: "任务 #1048 执行节点" });
+  await box.getByRole("button", { name: "添加 Agent", exact: true }).click();
+  await page.getByRole("menuitem", { name: /10\.0\.1\.14/ }).click();
+  await box
+    .getByRole("textbox", { name: /10\.0\.1\.14 的本地绝对路径/ })
+    .fill("/mnt/share");
+  const warning = box.getByTestId("task-nodes-skip-shared-check");
+  await expect(warning).toContainText("新节点的目录同样不会校验");
+  await expect(warning).toContainText("从错误的副本上传");
+  await box.getByRole("button", { name: "预检", exact: true }).click();
+  const result = box.getByTestId("task-nodes-preflight");
+  await expect(result).toContainText("路径检查通过，共享目录未校验");
+  await expect(result).toContainText("未校验：此任务创建时跳过了共享目录校验");
+  await expect(result).not.toContainText("预检通过");
+  await expect(
+    box.getByText("未校验共享目录（此任务已跳过校验）", { exact: true }),
+  ).toBeVisible();
+  const next = box.getByRole("button", { name: "预览变更", exact: true });
+  await expect(next).toBeDisabled();
+  await expect(box.getByTestId("task-nodes-footer")).toHaveText(
+    "确认新节点挂载同一份存储后才能继续",
+  );
+  await warning
+    .getByRole("checkbox", { name: "我已确认新节点挂载的是同一份存储" })
+    .check();
+  await expect(next).toBeEnabled();
+  await next.click();
+  await expect(box.getByTestId("task-nodes-summary")).toContainText(
+    "此任务跳过了共享目录校验，新节点同样不做校验",
+  );
+  await box.getByRole("button", { name: "添加 1 个节点", exact: true }).click();
+  await expect.poll(() => posts.filter((body) => !body.dryRun).length).toBe(1);
+  expect(posts.find((body) => !body.dryRun)).toMatchObject({
+    add: ["10.0.1.14"],
+    skipSharedCheckAcknowledged: true,
+  });
 });

@@ -1,7 +1,7 @@
 import { groupedCardRadius, radii } from "../theme";
 import { t as tr, useI18n, getLocale } from "../lib/i18n";
 import { Link } from "react-router-dom";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -155,9 +155,14 @@ type Draft = {
   batchFormat: "json" | "csv";
   batchText: string;
   pendingRequest?: { id: string; fingerprint: string };
+  // Set when reading: a submission that skipped the shared check may already
+  // have been accepted, and the restored form no longer skips it.
+  skippedSubmission?: boolean;
 };
 
 const DRAFT_KEY = "oss-transfer-create-draft";
+// The Master's binding code when the shared directory check was skipped.
+const SHARED_CHECK_SKIPPED = "SHARED_STORAGE_CHECK_SKIPPED";
 const localUploadMode = (nodeCount: number) =>
   nodeCount > 1 ? "balanced" : "affinity";
 const distributionLabel = (mode: string | undefined, direction?: string) =>
@@ -307,8 +312,12 @@ function readDraft(): Draft | null {
     )
       delete draft.pendingRequest;
     // Skipping the shared check needs a fresh confirmation, never a draft.
+    const skippedSubmission =
+      draft.tab === 0 &&
+      form.skipSharedCheck === true &&
+      Boolean(draft.pendingRequest);
     form.skipSharedCheck = false;
-    return { ...draft, form: cleanMappingFields(form) };
+    return { ...draft, form: cleanMappingFields(form), skippedSubmission };
   } catch {
     return null;
   }
@@ -613,6 +622,25 @@ export default function CreateTransfer() {
   );
   const local = form.direction !== "OSS_TO_OSS";
   const requiresPrecheck = tab === 0 ? local : batchKind === "local";
+  const precheckUnchecked = !!precheck?.nodeBindings.some(
+    (binding) => binding.code === SHARED_CHECK_SKIPPED,
+  );
+  // Imported local rows that skip the shared check, numbered from 1.
+  const batchSkippedRows = useMemo(() => {
+    if (tab !== 1 || batchKind !== "local") return [];
+    try {
+      const rows: unknown = JSON.parse(batchText);
+      return Array.isArray(rows)
+        ? rows.flatMap((row, index) =>
+            row && typeof row === "object" && row.skipSharedCheck === true
+              ? [index + 1]
+              : [],
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  }, [tab, batchKind, batchText]);
   const effectiveDistributionMode =
     form.direction === "LOCAL_TO_OSS"
       ? localUploadMode(form.bindings.length)
@@ -1005,11 +1033,17 @@ export default function CreateTransfer() {
         const checked = applyUploadPrecheck(response.data);
         setPrecheck(checked);
         precheckRequest.current = checked.valid ? checkedRequest : null;
+        // A skipped check passes the paths, not the shared directory.
+        const unchecked = checked.nodeBindings.some(
+          (binding) => binding.code === SHARED_CHECK_SKIPPED,
+        );
         notify(
           checked.valid
-            ? tr("所有节点预检通过")
+            ? unchecked
+              ? tr("路径预检通过，共享目录未校验")
+              : tr("所有节点预检通过")
             : tr("预检完成，存在未通过的节点。"),
-          checked.valid ? "success" : "warning",
+          checked.valid && !unchecked ? "success" : "warning",
         );
         return;
       }
@@ -1360,17 +1394,25 @@ export default function CreateTransfer() {
             label={tr("跳过共享目录校验（不推荐）")}
           />
           <Typography variant="caption" color="text.secondary" display="block">
-            {tr(
-              "仅在确定所有节点挂载同一份存储、但校验无法通过时使用。只读的上传源无需跳过：预检会改为比对抽样文件的内容。",
-            )}
+            {form.direction === "OSS_TO_LOCAL"
+              ? tr(
+                  "仅在确定所有节点挂载同一份存储、但校验无法通过时使用。下载目标必须可写，预检会通过一个节点写入测试文件、由所有节点读取来校验。",
+                )
+              : tr(
+                  "仅在确定所有节点挂载同一份存储、但校验无法通过时使用。所有节点都无法写入测试文件（无写入权限、只读或存储已满）的上传源通常无需跳过：预检会改为抽样比对最多 16 个文件的大小及首尾各 64 KiB，这弱于测试文件校验，内容相同的不同副本也能通过。",
+                )}
           </Typography>
         </Box>
       )}
       {form.bindings.length > 1 && form.skipSharedCheck && (
         <Alert severity="warning" data-testid="skip-shared-check-warning">
-          {tr(
-            "已跳过共享目录校验：系统不会验证各节点看到的是同一份存储。若实际不是，可能漏传文件或从错误的副本上传，任务仍会显示成功。",
-          )}
+          {form.direction === "OSS_TO_LOCAL"
+            ? tr(
+                "已跳过共享目录校验：系统不会验证各节点写入的是同一份存储。若实际不是，下载的文件会分散在各节点各自的目录中，没有一个目录完整，任务仍会显示成功。",
+              )
+            : tr(
+                "已跳过共享目录校验：系统不会验证各节点看到的是同一份存储。若实际不是，可能漏传文件或从错误的副本上传，任务仍会显示成功。",
+              )}
         </Alert>
       )}
       <Dialog
@@ -1390,20 +1432,40 @@ export default function CreateTransfer() {
             )}
           </Typography>
           <Box component="ul" sx={{ mt: 0, pl: 3 }}>
-            {[
-              tr("不同节点会从不同的数据中读取对象；"),
-              tr("部分文件可能漏传，或从错误的副本上传；"),
-              tr("任务报告可能显示成功，而目标端实际不完整或不一致；"),
-              tr("节点失联后，自动接管可能在另一个目录上继续执行。"),
-            ].map((line) => (
+            {(form.direction === "OSS_TO_LOCAL"
+              ? [
+                  tr(
+                    "下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据；",
+                  ),
+                  tr(
+                    "冲突检查（跳过或覆盖已存在的文件）只会检查各节点自己的目录；",
+                  ),
+                  tr("任务报告可能显示成功，而本地目标实际不完整；"),
+                  tr(
+                    "节点失联后的自动接管和之后添加的节点也不做校验，可能写入另一个目录。",
+                  ),
+                ]
+              : [
+                  tr("不同节点会从不同的数据中读取对象；"),
+                  tr("部分文件可能漏传，或从错误的副本上传；"),
+                  tr("任务报告可能显示成功，而目标端实际不完整或不一致；"),
+                  tr(
+                    "节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。",
+                  ),
+                ]
+            ).map((line) => (
               <Typography component="li" variant="body2" key={line}>
                 {line}
               </Typography>
             ))}
           </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            {tr("只读的上传源不需要跳过：预检会自动改为比对抽样文件的内容。")}
-          </Typography>
+          {form.direction === "LOCAL_TO_OSS" && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+              {tr(
+                "所有节点都无法写入测试文件的上传源通常无需跳过：预检会自动改为抽样比对文件的大小及首尾各 64 KiB。",
+              )}
+            </Typography>
+          )}
           <FormControlLabel
             control={
               <Checkbox
@@ -1750,6 +1812,13 @@ export default function CreateTransfer() {
       {draftRestored && (
         <Alert severity="info" onClose={() => setDraftRestored(false)}>
           {tr("已恢复当前标签页的草稿。预检结果未保存。")}
+        </Alert>
+      )}
+      {draftRestored && initialDraft?.skippedSubmission && (
+        <Alert severity="warning" data-testid="draft-skipped-submission">
+          {tr(
+            "上次提交时选择了跳过共享目录校验，该提交可能已被受理。重试前请先在“迁移任务”中核对；如需按原样重试，请重新勾选“跳过共享目录校验（不推荐）”，以便沿用原请求标识。",
+          )}
         </Alert>
       )}
       {connections.error && (
@@ -2213,6 +2282,17 @@ export default function CreateTransfer() {
                       {tr("填入示例")}
                     </Button>
                   </Stack>
+                  {batchSkippedRows.length > 0 && (
+                    <Alert
+                      severity="warning"
+                      data-testid="batch-skip-shared-check-warning"
+                    >
+                      {tr(
+                        "第 {rows} 项跳过了共享目录校验：系统不会验证这些任务的各执行节点挂载的是同一份存储。若实际不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务仍会显示成功；自动接管和之后添加的节点也不做校验。",
+                        { rows: batchSkippedRows.join(", ") },
+                      )}
+                    </Alert>
+                  )}
                   <Accordion
                     disableGutters
                     elevation={0}
@@ -2227,6 +2307,17 @@ export default function CreateTransfer() {
                       </Typography>
                     </AccordionSummary>
                     <AccordionDetails>
+                      {batchKind === "local" && (
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{ lineHeight: 1.9, mb: 1 }}
+                        >
+                          {tr(
+                            "skipSharedCheck：设为 true 跳过多节点共享目录校验，须同时设置 skipSharedCheckAcknowledged:true，表示已确认所有执行节点挂载的是同一份存储；后果同“配置迁移”中的“跳过共享目录校验（不推荐）”。",
+                          )}
+                        </Typography>
+                      )}
                       <Typography
                         variant="body2"
                         color="text.secondary"
@@ -2257,11 +2348,17 @@ export default function CreateTransfer() {
             {precheck && (
               <Paper variant="outlined" sx={{ overflow: "hidden" }}>
                 <Alert
-                  severity={precheck.valid ? "success" : "warning"}
+                  severity={
+                    precheck.valid && !precheckUnchecked ? "success" : "warning"
+                  }
                   sx={{ borderRadius: 0 }}
                 >
                   <AlertTitle>
-                    {precheck.valid ? tr("节点预检通过") : tr("节点预检未通过")}
+                    {precheck.valid
+                      ? precheckUnchecked
+                        ? tr("路径预检通过，共享目录未校验")
+                        : tr("节点预检通过")
+                      : tr("节点预检未通过")}
                   </AlertTitle>
                   {tr(
                     "通过 {passed} / {total} 个节点配置。修改配置后需重新预检。",
@@ -2302,7 +2399,11 @@ export default function CreateTransfer() {
                           <Typography
                             variant="body2"
                             color={
-                              binding.valid ? "text.secondary" : "error.main"
+                              !binding.valid
+                                ? "error.main"
+                                : binding.code === SHARED_CHECK_SKIPPED
+                                  ? "warning.main"
+                                  : "text.secondary"
                             }
                           >
                             {binding.message ||
@@ -2313,20 +2414,28 @@ export default function CreateTransfer() {
                       </Box>
                       <Chip
                         size="small"
-                        color={binding.valid ? "success" : "error"}
+                        color={
+                          !binding.valid
+                            ? "error"
+                            : binding.code === SHARED_CHECK_SKIPPED
+                              ? "warning"
+                              : "success"
+                        }
                         label={
-                          binding.valid
-                            ? tr("通过{value1}", {
-                                value1:
-                                  binding.pathType === "FILE"
-                                    ? ` · ${tr("文件")}`
-                                    : binding.pathType === "DIRECTORY"
-                                      ? ` · ${tr("目录")}`
-                                      : binding.pathType === "MISSING"
-                                        ? ` · ${tr("将创建目录")}`
-                                        : "",
-                              })
-                            : tr("未通过")
+                          binding.valid && binding.code === SHARED_CHECK_SKIPPED
+                            ? tr("未校验")
+                            : binding.valid
+                              ? tr("通过{value1}", {
+                                  value1:
+                                    binding.pathType === "FILE"
+                                      ? ` · ${tr("文件")}`
+                                      : binding.pathType === "DIRECTORY"
+                                        ? ` · ${tr("目录")}`
+                                        : binding.pathType === "MISSING"
+                                          ? ` · ${tr("将创建目录")}`
+                                          : "",
+                                })
+                              : tr("未通过")
                         }
                         sx={{ alignSelf: "flex-start" }}
                       />

@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -29,7 +30,7 @@ func TestJoinProblemsKeepTheLatestProblemOfEachJoin(t *testing.T) {
 	requested := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
 	p := joiningParent(7, map[string]time.Time{"b": requested})
 	offline := newJoinProblem(joinAgentOffline)
-	unverified := newJoinProblem(joinStorageUnverified, "marker missing")
+	unverified := newJoinProblem(joinStorageUnverified, plainText("marker missing"), "/mnt/share")
 	for i, step := range []struct {
 		problem joinProblem
 		log     joinLog
@@ -70,11 +71,11 @@ func TestJoinProblemsKeepTheLatestProblemOfEachJoin(t *testing.T) {
 		} else if i > maxLoggedJoinProblems {
 			want = joinLogNothing
 		}
-		if got := joins.note(p, "b", newJoinProblem(joinStorageUnverified, fmt.Sprint("detail ", i))); got != want {
+		if got := joins.note(p, "b", newJoinProblem(joinStorageUnverified, plainText(fmt.Sprint("detail ", i)), "/mnt/share")); got != want {
 			t.Fatalf("problem %d: log %v, want %v", i, got, want)
 		}
 	}
-	if latest, _ := joins.latest(p, "b"); latest.Args[0] != fmt.Sprint("detail ", maxLoggedJoinProblems+1) {
+	if latest, _ := joins.latest(p, "b"); !reflect.DeepEqual(latest.Args[0], plainText(fmt.Sprint("detail ", maxLoggedJoinProblems+1))) {
 		t.Fatal("a problem that is not logged is not the latest", latest)
 	}
 	if !joins.clear(7, "b") || joins.clear(7, "b") || len(joins.tasks) != 0 {
@@ -119,8 +120,31 @@ func TestJoinProblemMessagesAreTranslated(t *testing.T) {
 			t.Errorf("%s: %q uses an em dash or straight quotes", code, entry.zh)
 		}
 	}
+	// So do the runtime causes that join problems show in the reader's
+	// language.
+	causes := []string{causeNodeStorage, causeMarkerMissing, causeMarkerMismatch, causeTimedOut}
+	for source := range knownCauses {
+		causes = append(causes, source)
+	}
+	for _, source := range causes {
+		entry, ok := apiMessages[source]
+		want := verbs.FindAllString(source, -1)
+		if !ok || entry.en != source || entry.zh == "" || entry.ja == "" || !reflect.DeepEqual(verbs.FindAllString(entry.zh, -1), want) || !reflect.DeepEqual(verbs.FindAllString(entry.ja, -1), want) {
+			t.Errorf("cause %q is not translated with its verbs: %+v", source, entry)
+		}
+		if strings.ContainsAny(entry.zh, "—\"") {
+			t.Errorf("cause %q: %q uses an em dash or straight quotes", source, entry.zh)
+		}
+	}
 	zh := context.WithValue(context.Background(), responseLocaleKey{}, "zh-CN")
-	if got := newJoinProblem(joinStorageUnverified, "marker missing").message(zh, "B"); got != "执行节点 B 未通过共享目录校验：marker missing" {
+	if got := newJoinProblem(joinStorageUnverified, plainText("marker missing"), "/mnt/share").message(zh, "B"); got != "执行节点 B 未通过共享目录校验：marker missing。请确认该节点的 /mnt/share 是任务的共享目录，系统会自动重试" {
+		t.Fatal(got)
+	}
+	lines := stepCauses(errors.Join(&nodeStorageError{node: "A", err: &AgentError{Status: 404, Message: "lstat marker: no such file or directory"}}, errors.New("the original shared directory has not been verified"), errors.New("100% odd")))
+	if got := newJoinProblem(joinTaskProblem, lines).message(zh, "B"); got != "执行节点 B 需等此任务的当前问题解决后才能加入：执行节点 A 无法验证原共享目录：该节点找不到任务在共享目录中保存的标记文件；原共享目录尚未验证；100% odd" {
+		t.Fatal(got)
+	}
+	if got := newJoinProblem(joinTaskProblem, lines).message(context.Background(), "B"); got != "Agent B joins after the task's current problem is resolved: Agent A cannot verify the original shared directory: this node does not find the marker file that the task keeps in its shared directory; the original shared directory has not been verified; 100% odd" {
 		t.Fatal(got)
 	}
 	if got := newJoinProblem(joinTaskNotRunning).message(context.Background(), "B"); got != "The task is not running; Agent B joins after the task runs again" {
@@ -172,7 +196,7 @@ func TestJoinProblemsExplainAJoinThatKeepsFailing(t *testing.T) {
 	joiner := overrideTestAgent(t, f, 2, func(command agenttransport.Command) (agenttransport.Response, bool) {
 		switch {
 		case mode.Load() == "unverified" && command.Operation == "shared_probe_verify":
-			return agentReply(500, map[string]string{"code": "operation_failed", "message": "shared probe marker is missing"})
+			return agentReply(404, map[string]string{"code": "operation_failed", "message": "lstat .oss-transfer-shared-probe: no such file or directory"})
 		case mode.Load() == "lease" && command.Operation == "lease_rejoin":
 			return agentReply(500, map[string]string{"code": "operation_failed", "message": "lease store is unavailable"})
 		}
@@ -230,11 +254,11 @@ func TestJoinProblemsExplainAJoinThatKeepsFailing(t *testing.T) {
 	if !p.Failover.Enabled || !p.NodeJoining(joiner.ID) {
 		t.Fatal("takeover was not set up, or the node joined", p.Failover, p.Membership)
 	}
-	detail := fmt.Sprintf("Agent %s cannot verify the original shared directory: shared probe marker is missing", label(joiner))
-	unverified := fmt.Sprintf("Agent %s has not passed the shared directory check: %s", label(joiner), detail)
+	// The node is named once, with what the check found and what to do.
+	unverified := fmt.Sprintf("Agent %s has not passed the shared directory check: this node does not find the marker file that the task keeps in its shared directory. Check that %s on this node is the task's shared directory; the check is repeated automatically", label(joiner), shared)
 	expectJoinProblem(t, f, p.ID, "", joiner, joinStorageUnverified, unverified)
 	expectJoinProblem(t, f, p.ID, "en-US", joiner, joinStorageUnverified, unverified)
-	expectJoinProblem(t, f, p.ID, "zh-CN", joiner, joinStorageUnverified, fmt.Sprintf("执行节点 %s 未通过共享目录校验：%s", label(joiner), detail))
+	expectJoinProblem(t, f, p.ID, "zh-CN", joiner, joinStorageUnverified, fmt.Sprintf("执行节点 %s 未通过共享目录校验：该节点找不到任务在共享目录中保存的标记文件。请确认该节点的 %s 是任务的共享目录，系统会自动重试", label(joiner), shared))
 	if lines := joinLogLines(logs, p, unverified); lines != 1 {
 		t.Fatal("the problem was not logged once", lines, logs.matching("has not joined yet"))
 	}
@@ -267,7 +291,8 @@ func TestJoinProblemsExplainAJoinThatKeepsFailing(t *testing.T) {
 	if err := step(current); err == nil {
 		t.Fatal("a missing takeover proof did not stop the step")
 	}
-	expectJoinProblem(t, f, p.ID, "zh-CN", joiner, joinTaskProblem, fmt.Sprintf("执行节点 %s 需等此任务的当前问题解决后才能加入：the original shared directory has not been verified", label(joiner)))
+	expectJoinProblem(t, f, p.ID, "zh-CN", joiner, joinTaskProblem, fmt.Sprintf("执行节点 %s 需等此任务的当前问题解决后才能加入：原共享目录尚未验证", label(joiner)))
+	expectJoinProblem(t, f, p.ID, "en-US", joiner, joinTaskProblem, fmt.Sprintf("Agent %s joins after the task's current problem is resolved: the original shared directory has not been verified", label(joiner)))
 	if err := f.db.Update(func(tx *state.Tx) error { return tx.Put("master-task-storage-proofs", fmt.Sprint(p.ID), proof) }); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +320,8 @@ func TestJoinProblemsExplainAJoinThatKeepsFailing(t *testing.T) {
 		return agenttransport.Response{}, false
 	})
 	labelAgent(t, f, second, "Joiner C")
-	secondUnverified := fmt.Sprintf("Agent %s has not passed the shared directory check: Agent %s cannot verify the original shared directory: shared probe marker is missing", label(second), label(second))
+	// A cause that the Master does not know is shown as the Agent said it.
+	secondUnverified := fmt.Sprintf("Agent %s has not passed the shared directory check: shared probe marker is missing. Check that %s on this node is the task's shared directory; the check is repeated automatically", label(second), shared)
 	for attempt, request := range []string{"join-c", "join-c-again"} {
 		if status, body := nodeChange(t, f, p.ID, "", joinBody(second, shared, map[string]any{"requestId": request})); status != 200 {
 			t.Fatal(status, body)
@@ -338,12 +364,12 @@ func ossJoinTask(t *testing.T, f *agentHTTPFixture, key string, current task.Nod
 }
 
 // The waits that skip a node, and the refusals that no retry fixes, each name
-// their reason: an offline Agent, one enrolled again, an upgrade window, an
-// Agent too old to join, one that does not report its version, one that
-// cannot record a skipped shared check, a node change still moving work, a
-// scan moving or held by the joining node, takeover that cannot be set up,
-// and revision numbers used up. A task that is not running says so, and
-// forgets what its steps recorded.
+// their reason: an offline Agent, one removed from the cluster, one enrolled
+// again, an upgrade window, an Agent too old to join, one that does not
+// report its version, one that cannot record a skipped shared check, a node
+// change still moving work, a scan moving or held by the joining node,
+// takeover that cannot be set up, and revision numbers used up. A task that
+// is not running says so, and forgets what its steps recorded.
 func TestJoinProblemsNameWaitsAndRefusals(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	var calls atomic.Int64
@@ -360,7 +386,18 @@ func TestJoinProblemsNameWaitsAndRefusals(t *testing.T) {
 	for node, name := range map[task.Node]string{sharedAgents[0].node: "Writable", sharedAgents[1].node: "Legacy", silent: "Silent", a.node: "Member A", stale.node: "Enrolled again", paused.node: "Upgrading", ready.node: "Ready", old: "Old"} {
 		labelAgent(t, f, node, name)
 	}
+	// ghost was never enrolled, as an Agent removed from the cluster; away is
+	// enrolled but offline.
 	ghost := task.Node{ID: "ghost-node", EnrollmentID: "ghost-enrollment", Address: "ghost.example"}
+	code, session := f.join(t, f.invite(t, "waits-away.example"), "waits-away", agentCredential(t))
+	if code != 200 {
+		t.Fatal(code)
+	}
+	away := task.Node{ID: session.NodeID, EnrollmentID: session.EnrollmentID, Address: "waits-away.example"}
+	labelAgent(t, f, away, "Away")
+	f.master.agents.mu.Lock()
+	delete(f.master.agents.lastSeen, away.ID)
+	f.master.agents.mu.Unlock()
 	moved := stale.node
 	moved.EnrollmentID = "earlier-enrollment"
 	runtime := f.master.tasks
@@ -375,13 +412,14 @@ func TestJoinProblemsNameWaitsAndRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := ossJoinTask(t, f, "waits", a.node, ghost, moved, paused.node, old, silent)
+	p := ossJoinTask(t, f, "waits", a.node, ghost, away, moved, paused.node, old, silent)
 	p, err := runtime.repo.EnableFailover(p.ID, p.Generation, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]task.Node{
-		joinAgentOffline:       ghost,
+		joinAgentRemoved:       ghost,
+		joinAgentOffline:       away,
 		joinEnrollmentChanged:  moved,
 		joinMaintenance:        paused.node,
 		joinAgentTooOld:        old,
@@ -401,7 +439,8 @@ func TestJoinProblemsNameWaitsAndRefusals(t *testing.T) {
 			t.Fatal("a reason was not logged once", code, lines)
 		}
 	}
-	expectJoinProblem(t, f, p.ID, "zh-CN", ghost, joinAgentOffline, fmt.Sprintf("执行节点 %s 离线，恢复连接后继续加入", label(ghost)))
+	expectJoinProblem(t, f, p.ID, "zh-CN", ghost, joinAgentRemoved, fmt.Sprintf("执行节点 %s 添加到此任务后已从集群中移除，无法加入。请取消此次加入", label(ghost)))
+	expectJoinProblem(t, f, p.ID, "zh-CN", away, joinAgentOffline, fmt.Sprintf("执行节点 %s 离线，恢复连接后继续加入", label(away)))
 	expectJoinProblem(t, f, p.ID, "zh-CN", moved, joinEnrollmentChanged, fmt.Sprintf("执行节点 %s 添加到此任务后重新注册过，无法以原来的注册身份加入。请取消此次加入，再重新添加该节点", label(moved)))
 	expectJoinProblem(t, f, p.ID, "zh-CN", paused.node, joinMaintenance, fmt.Sprintf("执行节点 %s 正处于升级维护期，维护结束后继续加入", label(paused.node)))
 	expectJoinProblem(t, f, p.ID, "zh-CN", old, joinAgentTooOld, fmt.Sprintf("执行节点 %s 版本过旧，无法加入运行中的任务，请先升级", label(old)))
@@ -430,7 +469,8 @@ func TestJoinProblemsNameWaitsAndRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectJoinProblem(t, f, p.ID, "zh-CN", paused.node, joinScanUnfinished, fmt.Sprintf("执行节点 %s 原为此任务的扫描节点，需等其他节点接管扫描后才能加入", label(paused.node)))
-	expectJoinProblem(t, f, p.ID, "en-US", ghost, joinAgentOffline, fmt.Sprintf("Agent %s is offline; it joins after it reconnects", label(ghost)))
+	expectJoinProblem(t, f, p.ID, "en-US", away, joinAgentOffline, fmt.Sprintf("Agent %s is offline; it joins after it reconnects", label(away)))
+	expectJoinProblem(t, f, p.ID, "en-US", ghost, joinAgentRemoved, fmt.Sprintf("Agent %s was removed from the cluster after it was added to this task and cannot join. Cancel the join", label(ghost)))
 
 	// An Agent that cannot record a skipped shared check never joins a task
 	// whose check was skipped.
@@ -491,4 +531,69 @@ func TestJoinProblemsNameWaitsAndRefusals(t *testing.T) {
 	if len(runtime.joins.tasks) != 0 {
 		t.Fatal("tasks that left the active list kept their join problems", runtime.joins.tasks)
 	}
+}
+
+// A joining node's shared directory check has its own deadline, the budget
+// that the node change's preflight gives the same comparison, rather than
+// what is left of the few seconds of the capabilities query before it. A
+// node added with the check skipped that cannot record the skip says so.
+func TestJoinChecksTheSharedDirectoryWithinItsOwnDeadline(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	var calls atomic.Int64
+	current := sharedTestAgents(t, f, &calls, "writable")[0].node
+	var lastCapabilities, gap atomic.Int64
+	gap.Store(-1)
+	joiner := overrideTestAgent(t, f, 2, func(command agenttransport.Command) (agenttransport.Response, bool) {
+		switch command.Operation {
+		case "capabilities":
+			lastCapabilities.Store(command.DeadlineUnixMilli)
+		case "shared_probe_verify":
+			gap.Store(command.DeadlineUnixMilli - lastCapabilities.Load())
+		}
+		return agenttransport.Response{}, false
+	})
+	unrecorded := overrideTestAgent(t, f, 3, func(command agenttransport.Command) (agenttransport.Response, bool) {
+		if command.Operation == "shared_proof_skip" {
+			return agentReply(500, map[string]string{"code": "operation_failed", "message": "proof store is unavailable"})
+		}
+		return agenttransport.Response{}, false
+	})
+	labelAgent(t, f, unrecorded, "Unrecorded")
+	shared := t.TempDir()
+	runtime := f.master.tasks
+	runtime.leases.ttl = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	join := func(key string, node task.Node, extra ...map[string]any) task.Parent {
+		t.Helper()
+		p := localTask(t, f, key, "LOCAL_TO_OSS", shared, false, current)
+		if status, body := nodeChange(t, f, p.ID, "", joinBody(node, shared, extra...)); status != 200 {
+			t.Fatal(status, body)
+		}
+		p, err := runtime.repo.Get(p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runtime.reconcileFailover(ctx, p, map[string]bool{current.ID: true}); err != nil {
+			t.Fatal(err)
+		}
+		if p, err = runtime.repo.Get(p.ID); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	if p := join("join-deadline", joiner); p.NodeJoining(joiner.ID) {
+		t.Fatal("the node did not join", p.Membership)
+	}
+	// With the query's context, both deadlines would be the same.
+	if got := time.Duration(gap.Load()) * time.Millisecond; got <= 5*time.Second {
+		t.Fatal("the check ran within the capabilities query's deadline", got)
+	}
+
+	p := join("join-unrecorded", unrecorded, acknowledgedSkip)
+	if !p.NodeJoining(unrecorded.ID) {
+		t.Fatal("a node that could not record the skip joined")
+	}
+	expectJoinProblem(t, f, p.ID, "zh-CN", unrecorded, joinSkipNotRecorded, fmt.Sprintf("执行节点 %s 无法记录其共享目录校验已跳过：proof store is unavailable", f.master.nodeLabel(unrecorded)))
 }

@@ -123,8 +123,7 @@ func (t *taskRuntime) verifyNodeStorage(ctx context.Context, p task.Parent, node
 	}
 	for _, node := range nodes {
 		if err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_verify", true, request(node), nil); err != nil {
-			name := t.server.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
-			return fmt.Errorf("Agent %s cannot verify the original shared directory: %w", name, err)
+			return &nodeStorageError{node: t.server.nodeLabel(node), err: err}
 		}
 	}
 	if proof.Ready {
@@ -138,6 +137,20 @@ func (t *taskRuntime) verifyNodeStorage(ctx context.Context, p task.Parent, node
 		return tx.Put("master-task-storage-proofs", key, proof)
 	})
 }
+
+// nodeStorageError is a node that cannot verify the task's original shared
+// directory marker. Its text names the node, for the task's runtime problem;
+// a join problem names the node itself and shows only the cause.
+type nodeStorageError struct {
+	node string
+	err  error
+}
+
+func (e *nodeStorageError) Error() string {
+	return fmt.Sprintf("Agent %s cannot verify the original shared directory: %v", e.node, e.err)
+}
+
+func (e *nodeStorageError) Unwrap() error { return e.err }
 
 // sampleView is what one node sees at one sampled path, in a form that is
 // equal exactly when two nodes see the same thing: "" for the sampled

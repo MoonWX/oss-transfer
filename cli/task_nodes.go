@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -49,8 +50,11 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 		return nil, asUsageError(cliErrorf("--now 仅与 --remove 一起使用"))
 	}
 	changing := len(add) > 0 || len(remove) > 0
-	if opts.Has("skip-shared-check") && len(add) == 0 {
-		return nil, asUsageError(cliErrorf("--skip-shared-check 仅用于向创建时跳过了共享目录校验的任务添加节点"))
+	// As at creation, skipping the shared directory check is an explicit
+	// choice for the local paths this change adds.
+	skipCheck := opts.Has("skip-shared-check")
+	if skipCheck && len(add) == 0 {
+		return nil, asUsageError(cliErrorf("--skip-shared-check 仅用于向本地迁移任务添加节点"))
 	}
 	if !changing {
 		for _, flag := range []string{"yes", "request-id", "expected-revision"} {
@@ -121,6 +125,9 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 	if !local && len(bindings) > 0 {
 		return nil, asUsageError(cliErrorf("--binding 仅适用于本地迁移任务"))
 	}
+	if skipCheck && !local {
+		return nil, asUsageError(cliErrorf("--skip-shared-check 仅用于向本地迁移任务添加节点"))
+	}
 	if expectedRevision < 0 {
 		expectedRevision = getInt(view, "nodeRevision")
 	}
@@ -128,26 +135,34 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 	if local {
 		body["bindings"] = bindings
 	}
-	// A task created with the shared directory check skipped does not check
-	// added nodes either; that needs its own acknowledgement.
-	skipped := local && view["sharedCheckSkipped"] == true && joins > 0
-	if opts.Has("skip-shared-check") && !skipped {
-		return nil, asUsageError(cliErrorf("--skip-shared-check 仅用于向创建时跳过了共享目录校验的任务添加节点"))
+	plan := map[string]interface{}{"taskId": id, "add": add, "remove": remove, "mode": mode, "expectedNodeRevision": expectedRevision}
+	if local {
+		plan["bindings"] = bindings
 	}
-	if skipped {
+	// The nodes this change adds are checked, even when the task skipped the
+	// check earlier, unless this change skips it too.
+	if local && joins > 0 && view["sharedCheckSkipped"] == true {
+		plan["sharedCheckSkipped"] = true
+	}
+	if skipCheck {
+		// The skip and its acknowledgement go with the dry run and the change.
+		// They are sent whenever asked, so a retry with the same arguments
+		// sends the same request; the Master ignores them for a change that
+		// adds no node.
+		body["skipSharedCheck"], body["skipSharedCheckAcknowledged"] = true, true
 		warnings := client.errors
 		if warnings == nil {
 			warnings = os.Stderr
 		}
-		fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipJoinWarning(getString(view, "direction"))))
-		if !opts.Has("skip-shared-check") {
-			return nil, asUsageError(cliErrorf("确认新节点挂载的是同一份存储后，添加 --skip-shared-check 才能加入；本次未提交"))
+		if joins == 0 && !retry {
+			fmt.Fprintln(warnings, cliText(warnings, "提示：本次没有新加入的节点，不做共享目录校验，--skip-shared-check 不起作用"))
+		} else {
+			plan["skipSharedCheck"] = true
+			fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipJoinWarning(getString(view, "direction"))))
+			if !opts.Has("yes") {
+				return nil, asUsageError(cliErrorf("确认新节点挂载的是同一份存储后，添加 --yes 才能跳过共享目录校验；本次未提交"))
+			}
 		}
-		body["skipSharedCheckAcknowledged"] = true
-	}
-	plan := map[string]interface{}{"taskId": id, "add": add, "remove": remove, "mode": mode, "expectedNodeRevision": expectedRevision}
-	if local {
-		plan["bindings"] = bindings
 	}
 	preview := map[string]interface{}{"taskNodesPlan": plan, "view": view}
 	// A retry with --request-id may follow an accepted change: the Master
@@ -165,10 +180,19 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 			preview["preflight"] = responseData(checked)
 		}
 		if err != nil {
-			return preview, cliErrorf("节点共享目录预检失败，尚未提交变更: %w", err)
+			var refused *apiHTTPError
+			if !errors.As(err, &refused) {
+				// No answer: nothing was checked.
+				return preview, cliErrorf("节点调整预检未完成，尚未提交变更: %w", err)
+			}
+			// The Master refused the change itself, before any directory was
+			// checked: an offline, outdated or updating Agent, a stale view.
+			return preview, cliErrorf("节点调整预检未通过，尚未提交变更: %w", err)
 		}
 		if responseData(checked)["valid"] != true {
-			return preview, cliErrorf("节点共享目录预检未通过，尚未提交变更")
+			// A local path, a download's write check or the shared directory
+			// proof failed; the node results say which.
+			return preview, cliErrorf("共享目录预检未通过，尚未提交变更")
 		}
 	}
 	if !opts.Has("yes") {
@@ -192,12 +216,19 @@ func taskNodes(client *ApiClient, args []string) (map[string]interface{}, error)
 	return result, err
 }
 
-// sharedCheckSkipJoinWarning says what adding an unchecked node can cost.
+// What skipping the check for added nodes can cost, printed to standard error
+// as task create prints its consequences. Uploads and downloads fail
+// differently.
+const (
+	sharedCheckSkipJoinUploadWarning   = "警告：--skip-shared-check 会跳过新加入节点的共享目录校验。如果新节点挂载的不是同一份存储，它会从与其他节点不同的数据中读取对象，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；此任务随后记录为已跳过校验，节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。"
+	sharedCheckSkipJoinDownloadWarning = "警告：--skip-shared-check 会跳过新加入节点的共享目录校验。如果新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；此任务随后记录为已跳过校验，节点失联后的自动接管也不做校验，可能写入另一个目录。"
+)
+
 func sharedCheckSkipJoinWarning(direction string) string {
 	if direction == "OSS_TO_LOCAL" {
-		return "警告：此任务创建时跳过了共享目录校验，新加入的节点同样不会校验。如果新节点挂载的不是同一份存储，它下载的文件会写入其他节点看不到的目录，本地目标不再完整，任务仍可能显示成功。"
+		return sharedCheckSkipJoinDownloadWarning
 	}
-	return "警告：此任务创建时跳过了共享目录校验，新加入的节点同样不会校验。如果新节点挂载的不是同一份存储，它会从不同的数据读取对象，部分文件可能漏传或从错误的副本上传，任务仍可能显示成功。"
+	return sharedCheckSkipJoinUploadWarning
 }
 
 // Accept repeated flags and comma-separated lists, like --node in task create.
@@ -322,6 +353,11 @@ func renderTaskNodesPlan(out io.Writer, plan map[string]interface{}) {
 	for _, binding := range objectList(plan["bindings"]) {
 		fmt.Fprintf(w, "%s\t%s = %s\n", cliText(out, "目录绑定"), safeCLIText(getString(binding, "executionNodeIp")), safeCLIText(getString(binding, "localPath")))
 	}
+	if plan["skipSharedCheck"] == true {
+		fmt.Fprintf(w, "%s\t%s\n", cliText(out, "共享目录校验"), cliText(out, "跳过，不验证新节点挂载的是同一份存储"))
+	} else if plan["sharedCheckSkipped"] == true {
+		fmt.Fprintf(w, "%s\t%s\n", cliText(out, "共享目录校验"), cliText(out, "校验新节点（此任务此前跳过了校验）"))
+	}
 	w.Flush()
 }
 
@@ -341,9 +377,29 @@ func renderTaskNodeBindingChecks(out io.Writer, checks []map[string]interface{})
 			}
 		}
 		node := cliNodeLabel(check, getString(check, "executionNodeIp"), localeOf(out))
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(node), safeCLIText(getString(check, "localPath")), state, safeCLIText(dashIfEmpty(getString(check, "pathType"))), safeCLIText(dashIfEmpty(getString(check, "message"))))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(node), safeCLIText(getString(check, "localPath")), state, safeCLIText(dashIfEmpty(getString(check, "pathType"))), dashIfEmpty(taskNodeCheckNote(out, check)))
 	}
 	w.Flush()
+}
+
+// taskNodeCheckNote is the Master's note on a node's preflight, also when it
+// passed, followed by what the write check of a download destination found:
+// where it wrote, as which user, and the free space there.
+func taskNodeCheckNote(out io.Writer, check map[string]interface{}) string {
+	parts := []string{}
+	if message := getString(check, "message"); message != "" {
+		parts = append(parts, safeCLIText(message))
+	}
+	if directory := getString(check, "writeProbeDirectory"); directory != "" {
+		parts = append(parts, cliTextf(out, "写入检查目录 %s", safeCLIText(directory)))
+	}
+	if uid, ok := cliNumeric(check["effectiveUid"]); ok {
+		parts = append(parts, cliTextf(out, "Agent 运行 UID %s", strconv.FormatFloat(uid, 'f', -1, 64)))
+	}
+	if free, ok := cliNumeric(check["freeBytes"]); ok && free >= 0 {
+		parts = append(parts, cliTextf(out, "可用空间 %s", formatSize(int64(free))))
+	}
+	return strings.Join(parts, cliText(out, "；"))
 }
 
 func dashIfEmpty(value string) string {
@@ -356,8 +412,11 @@ func dashIfEmpty(value string) string {
 func renderTaskNodesView(out io.Writer, view map[string]interface{}) {
 	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
 	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true, getString(view, "status"))
-	renderTaskNodeJoinProblems(out, objectList(view["nodes"]))
+	renderTaskNodeJoinProblems(out, view)
 	renderTaskNodeNotes(out, view)
+	if view["sharedCheckSkipped"] == true {
+		fmt.Fprintln(out, cliText(out, "此任务跳过了共享目录校验；之后加入的节点仍会校验，除非加入时添加 --skip-shared-check 并确认。"))
+	}
 	if view["editable"] == false {
 		fmt.Fprintf(out, cliText(out, "当前不能调整执行节点: %s\n"), safeCLIText(getString(view, "reason")))
 	}
@@ -405,23 +464,27 @@ func renderTaskNodesAccepted(out io.Writer, result, view map[string]interface{})
 	}
 	fmt.Fprintf(out, cliText(out, "任务 #%d 执行节点（成员版本 %d，%s）\n"), getInt(view, "taskId"), getInt(view, "nodeRevision"), safeCLIText(cliTaskStatusLabel(out, getString(view, "status"))))
 	renderTaskNodeRows(out, objectList(view["nodes"]), view["localTransfer"] == true, getString(view, "status"))
-	renderTaskNodeJoinProblems(out, objectList(view["nodes"]))
+	renderTaskNodeJoinProblems(out, view)
 	if view["pending"] == true {
 		fmt.Fprintf(out, cliText(out, "变更会在后台完成；查看进度: oss-transfer-cli task nodes %d --watch 5\n"), getInt(view, "taskId"))
 	}
 }
 
 // renderTaskNodeJoinProblems says why each joining node has not joined yet,
-// in the Master's words (localized by the request language). Older Masters
-// send no reason.
-func renderTaskNodeJoinProblems(out io.Writer, nodes []map[string]interface{}) {
-	for _, node := range nodes {
+// in the Master's words (localized by the request language), and how to
+// cancel the join while the task can be changed. Older Masters send no
+// reason.
+func renderTaskNodeJoinProblems(out io.Writer, view map[string]interface{}) {
+	for _, node := range objectList(view["nodes"]) {
 		problem, _ := node["joinProblem"].(map[string]interface{})
 		message := getString(problem, "message")
 		if getString(node, "state") != "JOINING" || message == "" {
 			continue
 		}
 		fmt.Fprintf(out, cliText(out, "尚未加入: %s\n"), safeCLIText(message))
+		if view["editable"] != false {
+			fmt.Fprintf(out, cliText(out, "  取消加入: oss-transfer-cli task nodes %d --remove %s --yes\n"), getInt(view, "taskId"), safeCLIText(firstNodeString(node, "address", "id")))
+		}
 	}
 }
 

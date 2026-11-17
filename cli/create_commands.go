@@ -383,9 +383,9 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 // What skipping the shared-directory check can cost, printed to standard error
 // whenever it is requested. Uploads and downloads fail differently.
 const (
-	sharedCheckSkipUploadWarning   = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；节点失联后的自动接管和之后添加的节点也不做校验，可能在另一个目录上继续执行。"
-	sharedCheckSkipDownloadWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；节点失联后的自动接管和之后添加的节点也不做校验，可能写入另一个目录。"
-	sharedCheckSkipImportWarning   = "警告：第 %s 项跳过了共享目录校验，不会验证这些任务的各执行节点挂载的是同一份存储。如果不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务报告仍可能显示成功；自动接管和之后添加的节点也不做校验。"
+	sharedCheckSkipUploadWarning   = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；任务报告可能显示成功，而目标端实际不完整或不一致；节点失联后的自动接管也不做校验，可能在另一个目录上继续执行。之后用 task nodes 加入节点时仍会校验共享目录，除非届时再次确认跳过。"
+	sharedCheckSkipDownloadWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，下载的文件会分散写入各节点各自的目录，没有一个目录包含完整的数据，冲突检查也只检查各节点自己的目录；任务报告可能显示成功，而本地目标实际不完整；节点失联后的自动接管也不做校验，可能写入另一个目录。之后用 task nodes 加入节点时仍会校验共享目录，除非届时再次确认跳过。"
+	sharedCheckSkipImportWarning   = "警告：第 %s 项跳过了共享目录校验，不会验证这些任务的各执行节点挂载的是同一份存储。如果不是，上传可能漏传文件或从错误的副本读取，下载的文件会分散在各节点各自的目录中，任务报告仍可能显示成功；自动接管也不做校验。之后加入的节点仍会校验共享目录，除非加入时再次确认跳过。"
 )
 
 func sharedCheckSkipWarning(direction string) string {
@@ -410,7 +410,8 @@ func createSkipSharedCheckOption(client *ApiClient, opts commandOptions, binding
 		warnings = os.Stderr
 	}
 	if bindings < 2 {
-		fmt.Fprintln(warnings, cliText(warnings, "提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check"))
+		// Nothing is skipped now, and nothing is recorded for later.
+		fmt.Fprintln(warnings, cliText(warnings, "提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check。之后用 task nodes 加入节点时会校验共享目录；如需跳过，届时添加 --skip-shared-check 和 --yes 确认。"))
 		return nil
 	}
 	fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipWarning(direction)))

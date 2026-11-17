@@ -984,12 +984,13 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 	}
 }
 
-// These notices follow every view of a task created with --skip-shared-check:
-// its results are not evidence of a complete migration.
+// These notices follow every view of a task whose shared directory check was
+// skipped, when it was created or when nodes were added: its results are not
+// evidence of a complete migration.
 const (
-	sharedCheckSkippedNotice         = "警告：此任务创建时跳过了共享目录校验，未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，即使任务显示成功，目标端也可能不完整或不一致。"
-	sharedCheckSkippedDownloadNotice = "警告：此任务创建时跳过了共享目录校验，未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，即使任务显示成功，下载的文件也可能分散在各节点各自的目录中，没有一个目录是完整的。"
-	sharedCheckSkippedReportNotice   = "警告：此报告中的任务创建时跳过了共享目录校验，未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，即使报告显示成功，目标端也可能不完整或不一致。"
+	sharedCheckSkippedNotice         = "警告：此任务在创建或加入节点时跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，即使任务显示成功，目标端也可能不完整或不一致。之后加入的节点仍会校验，除非加入时再次确认跳过。"
+	sharedCheckSkippedDownloadNotice = "警告：此任务在创建或加入节点时跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，即使任务显示成功，下载的文件也可能分散在各节点各自的目录中，没有一个目录是完整的。之后加入的节点仍会校验，除非加入时再次确认跳过。"
+	sharedCheckSkippedReportNotice   = "警告：此报告中的任务在创建或加入节点时跳过了共享目录校验，未验证相关执行节点挂载的是同一份存储。若实际不是同一份存储，即使报告显示成功，目标端也可能不完整或不一致。"
 )
 
 func renderTaskDetail(out io.Writer, task map[string]interface{}) {

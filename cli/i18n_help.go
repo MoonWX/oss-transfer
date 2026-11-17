@@ -29,17 +29,24 @@ Options
   --binding NODE=PATH  Local transfers need one shared directory for each added node
   --now                Remove now: running work is revoked and continues on the remaining nodes;
                        by default a node leaves after its current work finishes
-  --skip-shared-check  For a task created with the shared directory check skipped, confirms that
-                       the added nodes mount the same storage; they are not checked either
+  --skip-shared-check  Skip the shared directory check for the nodes being added (use with care);
+                       --yes confirms. The consequences are those of task create
+                       --skip-shared-check and are printed to standard error; the task then
+                       records the skipped check
   --yes                Submit; without it the change and preflight results are only shown
   --request-id ID      Retry safely with the printed request ID when a result is unknown
   --expected-revision N  Reuse the printed membership revision when retrying
 
 Notes
   The default removal assigns no new work, hands queued work to other nodes and leaves after running work finishes.
-  Local transfers check the shared directory first; nothing is submitted when the preflight fails.
-  For a task created with the shared directory check skipped, added nodes are not checked either;
-  add --skip-shared-check together with --yes.
+  Local transfers first check the new nodes' paths and the shared directory; nothing is submitted
+  when the preflight fails. Even if the task skipped the shared directory check earlier, the nodes
+  being added are checked unless this change adds --skip-shared-check and --yes.
+  "The node change preflight did not pass" means the Master refused the change, for example an
+  offline, outdated or updating node, or a membership someone else changed first; "The shared
+  directory preflight did not pass" means a new node's path, the download directory write check or
+  the shared directory check failed, and the per-node results say why.
+  A node that stays joining shows why it has not joined yet; remove it with --remove to cancel the join.
   While nodes are joining or draining, you can only cancel a join, remove a draining node now, or add it back.
   If someone else changed the membership first, the Master rejects the change; review it again and resubmit.
   Stopped or failed tasks can be changed and apply on resume; completed and single-object/single-file tasks cannot.
@@ -63,16 +70,23 @@ Examples
   --binding ノード=パス  ローカル転送では追加する各ノードに共有ディレクトリを 1 つ指定
   --now                 即時削除: 実行中の処理を取り消し、残りのノードで継続。
                         既定では実行中の処理の完了後に削除
-  --skip-shared-check   共有ディレクトリの検証を省略して作成したタスクで、追加するノードが同じ
-                        ストレージをマウントしていることを確認します（追加するノードも検証されません）
+  --skip-shared-check   追加するノードの共有ディレクトリ検証を省略（注意して使用）。--yes で確認します。
+                        影響は task create --skip-shared-check と同じで、標準エラーに表示されます。
+                        タスクには検証の省略が記録されます
   --yes                 送信を確定。指定しない場合は変更内容と事前チェック結果のみ表示
   --request-id ID       結果が未確認のとき、表示されたリクエスト ID で安全に再試行
   --expected-revision N  再試行時に表示されたメンバー版を指定
 
 説明
   既定の削除では新しい処理を割り当てず、待機中の処理を他のノードへ渡し、実行中の処理の完了後に離脱します。
-  ローカル転送では先に共有ディレクトリを確認し、不合格の場合は送信しません。共有ディレクトリの検証を
-  省略して作成したタスクでは追加するノードも検証されないため、--skip-shared-check と --yes を指定します。
+  ローカル転送では先に新しいノードのパスと共有ディレクトリを確認し、不合格の場合は送信しません。タスクが
+  以前に共有ディレクトリの検証を省略していても、今回 --skip-shared-check と --yes を指定しない限り、
+  追加するノードは検証されます。
+  「実行ノード変更の事前チェックに合格しませんでした」は Master が変更を拒否したことを示します（ノードが
+  オフライン、古い、更新中、または他の操作が先にメンバーを変更した場合など）。「共有ディレクトリの事前
+  チェックに合格しませんでした」は新しいノードのパス、ダウンロード先の書き込み確認、または共有ディレクトリ
+  の検証に合格しなかったことを示し、ノードごとの結果に理由が表示されます。
+  参加中のままのノードには未参加の理由が表示されます。--remove でそのノードを指定すると参加を取り消せます。
   ノードの追加・削除が進行中は、追加の取り消し、削除中ノードの即時削除、または再追加による削除の取り消しのみ可能です。
   他の操作が先にメンバーを変更した場合、Master は変更を拒否します。再確認してから送信してください。
   停止・失敗したタスクも変更でき、再開時に反映されます。完了済みや単一オブジェクト/単一ファイルのタスクは変更できません。
@@ -449,7 +463,9 @@ Local transfers
             --yes confirms. If the nodes do not mount the same storage, an upload can miss
             files or read them from the wrong copy, and a download leaves the files split
             across each node's own directory, none of them complete; the task report still
-            shows success, and takeover and nodes added later are not checked either.
+            shows success, and takeover is not checked either. Nodes added later with task
+            nodes are still checked, unless you confirm skipping the check again then.
+            With a single bound node there is nothing to check, and the option is ignored.
             An upload source that no node can write (no write permission, read-only or
             full storage) usually does not need it: the precheck then compares up to 16
             sampled files by size and their first and last 64 KiB. That is weaker than the
@@ -509,7 +525,9 @@ OSS 間転送
                     各ノードが同じストレージをマウントしていない場合、アップロードではファイルの
                     漏れや誤ったコピーからの読み取りが起き、ダウンロードではファイルが各ノードの
                     ディレクトリに分散してどれも完全になりません。タスクレポートは成功と表示され、
-                    自動引き継ぎや後から追加したノードも検証されません。
+                    自動引き継ぎも検証されません。後から task nodes で追加するノードは、その時点で
+                    改めて省略を確認しない限り検証されます。ノードが 1 つだけの場合は検証する対象が
+                    ないため、このオプションは無視されます。
                     どのノードも書き込めない（書き込み権限なし、読み取り専用、容量不足）アップロード
                     元では通常は不要です。事前チェックは最大 16 個の抽出ファイルのサイズと先頭・末尾
                     64 KiB を比較します。テストファイルによる検証より弱く、同じファイルを持つ別の

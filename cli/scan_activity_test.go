@@ -114,14 +114,14 @@ func TestTaskShowAndNodesPrintTheScanProgress(t *testing.T) {
 }
 
 func TestScanProgressReadsNaturallyInEnglishAndJapanese(t *testing.T) {
-	one := readingActivity(map[string]interface{}{"namesRead": float64(1), "examined": float64(1),
+	one := readingActivity(map[string]interface{}{"namesRead": float64(1), "examined": float64(1), "alreadyFound": float64(1), "vanished": float64(1),
 		"directory": map[string]interface{}{"key": "", "reading": true, "names": float64(1), "position": float64(0), "elapsedMillis": float64(1000)}})
 	for _, test := range []struct {
 		locale cliLocale
 		want   []string
 	}{
 		{localeEN, []string{"Found", "Scan progress\n", "This scan run has read 1 name and examined 1 entry (counted from zero after a restart)",
-			"Reading the names in the source directory: 1 read in 1 s."}},
+			"Reading the names in the source directory: 1 read in 1 s.", "Already found and not examined again: 1", "Deleted before examination and skipped: 1"}},
 		{localeJA, []string{"発見済み", "スキャンの進捗\n", "今回のスキャンで名前を 1 件読み取り、1 件を確認しました", "転送元ディレクトリの名前を読み取っています"}},
 	} {
 		var buffer bytes.Buffer

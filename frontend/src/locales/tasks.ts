@@ -2607,11 +2607,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "{dir}を確認しています：{y} 件中 {x} 件目",
   },
   "其中 {n} 项此前已发现，未再次检查": {
-    en: "{n} of them were already found and not examined again",
+    en: "Already found and not examined again: {n}",
     ja: "うち {n} 件は発見済みのため、再確認していません",
   },
   "{n} 项在检查前已被删除，已跳过": {
-    en: "{n} entries were deleted before examination and skipped",
+    en: "Deleted before examination and skipped: {n}",
     ja: "{n} 件は確認前に削除されていたため、スキップしました",
   },
   "条目查询平均耗时 {ms} 毫秒": {

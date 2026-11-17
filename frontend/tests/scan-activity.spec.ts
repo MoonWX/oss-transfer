@@ -258,6 +258,8 @@ test.describe("in English", () => {
       reading({
         namesRead: 1,
         examined: 1,
+        alreadyFound: 1,
+        vanished: 1,
         directory: {
           key: "",
           reading: true,
@@ -274,6 +276,12 @@ test.describe("in English", () => {
     );
     await expect(block).toContainText(
       "Reading the names in the source directory: 1 read in 1 s.",
+    );
+    await expect(block).toContainText(
+      "Already found and not examined again: 1",
+    );
+    await expect(block).toContainText(
+      "Deleted before examination and skipped: 1",
     );
     await expect(page.getByText("Found", { exact: true })).toBeVisible();
   });

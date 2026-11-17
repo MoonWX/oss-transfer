@@ -41,9 +41,9 @@ docker compose logs master
 日志中会出现以下内容：
 
 ```text
-Master listening on [::]:1685
 Initial administrator: admin
 Initial password: <随机密码>
+Master listening on [::]:1685
 ```
 
 在浏览器打开这台主机的 `1685` 端口。如果在本机操作，地址是 `http://localhost:1685`。用 `admin` 和日志中的初始密码登录，然后设置自己的密码。密码要求至少 8 个字符，不能是常见或容易猜到的密码，也不能和用户名相同。修改密码后，日志中会记录初始密码已失效。
@@ -86,7 +86,8 @@ TRANSFER_PORT=1685
 | 提示 | 原因和处理 |
 | --- | --- |
 | 连接被拒绝，或无法访问 Master | Master 地址不对或被防火墙拦截。启动 Master、修正地址或防火墙后，重新运行同一条命令。加入失败时不会创建执行节点容器。 |
-| HTTP 403，邀请无效、已过期或已被使用 | 重新生成加入指令。 |
+| HTTP 403，邀请无效、已过期或已被使用 | 重新生成加入指令。加入错误现在包含 Master 的说明，例如 *HTTP 403: 无效或已过期的 Agent 邀请*。 |
+| HTTP 409，Agent 身份或地址已被注册 | 该节点已在 Master 上注册，不需要再次加入，直接启动即可。如需重新加入，先在 Master 上移除旧节点，或使用其他地址。 |
 | Permission denied | 数据卷或挂载的目录不允许 UID 65532 写入。 |
 
 ### Linux Compose 安装器

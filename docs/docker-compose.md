@@ -41,9 +41,9 @@ docker compose logs master
 The log contains the following:
 
 ```text
-Master listening on [::]:1685
 Initial administrator: admin
 Initial password: <random password>
+Master listening on [::]:1685
 ```
 
 Open port `1685` of this host in a browser. If you are on the same machine, the address is `http://localhost:1685`. Sign in as `admin` with the initial password from the log and set your own password. The password must be at least 8 characters, must not be a common or easily guessed password, and must not match the username. After the change, the log records that the initial password is no longer valid.
@@ -86,7 +86,8 @@ If it did not succeed, consult the following table:
 | Message | Cause and action |
 | --- | --- |
 | Connection refused, or the Master cannot be reached | The Master address is wrong or blocked by a firewall. Start the Master, correct the address or firewall rules, and run the same command again. A failed join does not create an Agent container. |
-| HTTP 403, invitation invalid, expired or already used | Generate new join commands. |
+| HTTP 403, invitation invalid, expired or already used | Generate new join commands. Join errors include the Master's message, for example *HTTP 403: Invalid or expired Agent invitation*. |
+| HTTP 409, Agent identity or address is already registered | A node with this identity is already registered on the Master. It does not need to join again; start it without the join command. To rejoin, remove the old node on the Master first, or use a different address. |
 | Permission denied | The data volume or a mounted directory does not allow writes by UID 65532. |
 
 ### The Linux Compose installer

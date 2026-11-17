@@ -8,7 +8,7 @@ The database stores object names, scan checkpoints, child-task assignments and t
 
 While a scan has not yet finished, the database retains an index used for deduplication and for detecting source-side changes during recovery. After the scan completes, the Agent (execution node) removes this index in small background transactions. Scan batches follow a separate release rule: after the Master has durably saved a batch as child tasks, acknowledged receipt and authorized its release, the Agent deletes that batch in the background, even while the scan is still in progress. Batches that have not been acknowledged remain available for delivery, and execution records used by retries and reports are retained.
 
-Permanently deleting a task removes its scan and execution records. Stopping a task or moving it to the recycle bin does not.
+Permanently deleting a task removes its scan and execution records. Stopping a task or moving it to the recycle bin does not. The console's **Tools**, then **Task recycle bin** page allows selecting tasks and clicking **Restore** to return them to the task list, with the same effect as `task restore` in the CLI. A task being permanently cleaned cannot be restored.
 
 Permanent deletion runs in the background. Closing the page or restarting the service does not cancel the operation, which will continue to completion afterwards. Until cleanup finishes, the recycle bin page shows the cleanup stage, the number of deleted records and the completed nodes. In the CLI, `oss-transfer-cli task trash` provides the same information. Nodes that are offline retry automatically when they come back online; nodes that have been removed retain their own local history. Cleanup deletes task records only and does not touch files at the source or the destination.
 
@@ -63,6 +63,7 @@ Each feature corresponds to a database schema version:
 | 9 | Credential encryption |
 | 10 | Queue handoff |
 | 11 | Change a task's execution nodes (Master database) |
+| 12 | Skip the shared directory check (Master database) |
 
 Older binaries cannot open a database whose schema version they do not support. To downgrade, restore both the database backup made before the upgrade and the old binary.
 

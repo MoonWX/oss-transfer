@@ -89,7 +89,7 @@ oss-transfer-cli whoami
    oss-transfer-cli object export 比对ID --output comparison.zip
    ```
 
-   已完成且没有差异的比对显示 *未发现差异*。
+   检查过对象且全部一致的比对显示 *未发现差异*。已完成但检查了 0 个对象的比对显示警告：没有找到任何对象，请检查两端的存储桶和前缀（Key 区分大小写，通常不以 `/` 开头）。
 
 ## 输出、语言和退出码
 
@@ -99,7 +99,7 @@ CLI 面向用户的输出翻译了状态、策略和原因，数字完整显示�
 
 `--verbose` 把请求路径和 HTTP 状态码写到标准错误，存储报错时还在翻译后的说明之外显示原始错误（`详情: …`）。不使用该选项时，遇到原始错误 CLI 会提示 `提示: 使用 --verbose 查看原始错误信息。`
 
-`--watch N` 每 N 秒（1–3600）刷新一次只读命令，例如 `task list`、`task show`、`node list`、`limit list` 或 `update status`。
+`--watch N` 每 N 秒（1–3600）刷新一次只读命令，例如 `task list`、`task show`、`node list`、`limit list` 或 `update status`。已经收到过 Master 应答后，如果某次轮询无法连接，CLI 会按相同间隔重试最多 30 分钟，并在标准错误中提示。使用 `--json` 时，这类轮询输出 `{"success":false,"error":…,"retrying":true}`。收到错误应答，或从未连接到 Master，则立即结束跟踪。
 
 `--version` 显示 `OSS Transfer CLI v<版本号>`，再加上包含提交、分支和构建时间的一行。`--version --json` 以字段形式输出同样的信息，方便脚本使用。
 
@@ -121,7 +121,7 @@ CLI 跟随系统语言，无法识别时使用英文。`config set language en`�
 oss-transfer-cli storage list
 oss-transfer-cli storage add 连接名 --endpoint URL --access-key-env 变量名 --secret-key-env 变量名 [选项]
 oss-transfer-cli storage update 连接名 [选项]
-oss-transfer-cli storage test 连接名 [--bucket 存储桶 [--write]]
+oss-transfer-cli storage test 连接名 [--bucket 存储桶 [--write [--prefix 前缀]]]
 oss-transfer-cli storage buckets 连接名 [--bucket 存储桶]
 oss-transfer-cli storage remove 连接名 --yes
 ```
@@ -138,11 +138,11 @@ oss-transfer-cli storage remove 连接名 --yes
 
 `storage list` 显示每个连接（凭据已遮盖）、签名版本和寻址方式，例如 *自动（Path-style）*。
 
-`storage test` 先列举存储桶，再在 `--bucket` 指定的存储桶（或第一个存储桶）中列举一个对象，通过时输出 *连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶*、寻址方式、存储桶级检查结果以及警告。只授权到单个存储桶的密钥无法列举存储桶：保存时只会警告，可以使用 `storage test 连接名 --bucket 存储桶` 单独检查该存储桶。
+`storage test` 先列举存储桶，再在 `--bucket` 指定的存储桶（或第一个存储桶）中列举一个对象，通过时输出 *连接测试通过：已列举存储桶，并用当前寻址方式访问了一个存储桶*、寻址方式、存储桶级检查结果、警告，以及执行检查的节点（*执行检查的节点: ...*）。测试失败或 `storage add`、`storage update` 保存时验证失败，也会在错误之后标注节点。保存前通过验证时输出 *保存前已由执行节点 ... 验证连接*。只授权到单个存储桶的密钥无法列举存储桶：保存时只会警告，可以使用 `storage test 连接名 --bucket 存储桶` 单独检查该存储桶。此时输出 *连接测试通过：ListBuckets 被拒绝，已用当前寻址方式直接访问存储桶*。
 
-指定 `--bucket` 时还会逐项检查迁移用到的请求（列举、HEAD、GET），添加 `--write` 时一并检查写入。任一必需项未通过时退出码为 1，见[逐项检查存储桶权限](planning.zh-CN.md#逐项检查存储桶权限)。失败时会显示原因和处理方法，见[存储连接检查失败](operations.zh-CN.md#存储连接检查失败)。
+指定 `--bucket` 时还会逐项检查迁移用到的请求（列举、HEAD、GET），添加 `--write` 时一并检查写入。`--prefix` 指定写入检查写入的前缀；密钥只授权写入某个前缀时，应填写迁移的目标前缀。中止分片上传和删除测试对象不是必需项，不影响退出码。任一必需项未通过时退出码为 1，见[逐项检查存储桶权限](planning.zh-CN.md#逐项检查存储桶权限)。失败时会显示原因和处理方法，见[存储连接检查失败](operations.zh-CN.md#存储连接检查失败)。
 
-连接的修改会同步到每个节点，命令会列出仍在等待同步的节点。
+连接的修改会立即同步到每个已连接的节点。命令会列出仍在等待同步的节点，并提示它们在下次运行任务或对象比对前自动同步。`storage remove` 之后，这些节点在同步之前仍保留该连接和凭证。有节点等待同步时，命令以退出码 3 退出。任务只保存连接名，删除连接后，所有使用该连接的任务（执行中和已停止的）都无法继续，直到重新添加同名连接。
 
 ## 查看和控制任务
 
@@ -164,7 +164,7 @@ oss-transfer-cli task progress "$TRANSFER_TASK" --watch 5
 
 `task show` 显示状态、方向、冲突策略、计数、限速和节点，扫描进行中时还显示扫描进度；`task list` 中这类任务的进度显示已读取的名称数和已检查的条目数。有需要关注的情况时，增加一行 *需要关注* 说明原因（见[任务详情](operations.zh-CN.md#任务详情需要关注与失败摘要)）。遇到常见的存储错误，会在原始失败原因上方显示翻译后的原因说明。使用 *跳过同名对象或文件* 且有对象被跳过的任务，会提示这些对象只按名称判断。
 
-子任务按控制台的状态优先级排序。还有下一页时，命令会打印获取下一页的命令。`--order id` 按编号列出。`task progress` 显示正在传输的文件字节数；添加 `--child ID-N` 可查看某个子任务。
+子任务按控制台的状态优先级排序。还有下一页时，命令会打印获取下一页的命令。`--order id` 按编号列出。`task progress` 显示正在传输的文件字节数，按目标端已确认的字节加上各请求本次尝试已交给网络的字节计算；请求失败时该次尝试的字节会撤回，最终以目标端的确认为准。进度百分比向下取整到 0.1%，目标端确认全部字节之前最多显示 99.9%。目标端接收全部数据后，阶段变为“确认中”（完成分片上传，或把文件同步到磁盘）。旧版执行节点按读取源端计算进度，表格下方会注明。有节点未响应时，`task progress` 标注该节点，`task show` 增加一行 *实时进度* 说明进度未包含该节点的在途字节。添加 `--child ID-N` 可查看某个子任务。
 
 停止和继续：
 
@@ -173,13 +173,13 @@ oss-transfer-cli task stop "$TRANSFER_TASK"
 oss-transfer-cli task resume "$TRANSFER_TASK"
 ```
 
-每个任务输出一行，例如 `#12  已请求停止` 或 `无需处理（当前状态：…）`。继续时会接着处理未完成的工作，已完成的进度不会丢失。
+每个任务输出一行，附带 Master 返回的状态，例如 `#12  已请求停止（当前状态：停止中）` 或 `#12  已请求继续（当前状态：恢复中）`。不需要操作时显示 `无需处理（当前状态：…）`。继续任务后，紧跟一行提示：任务在所有执行节点就绪后恢复，可用 `task show ID`（多个任务时用 `task list`）查看进度和等待原因。节点离线、正在更新或准备失败时，任务保持恢复中。
 
 重试失败的任务时，把 ID 传给 `task retry`，或使用 `task retry --all --yes` 重试所有失败和部分失败的任务。请求超时时，CLI 会报告结果未知的任务 ID，并停止发送后续批次，重试前先检查这些任务。各种操作的区别见[重试、继续与恢复](operations.zh-CN.md#重试继续与恢复)。
 
-对运行中的任务，`task retry <ID>` 只重试已结束子任务中的失败对象，不停止任务。这些子任务在原节点上按节点并发上限重新执行，已成功或已跳过的对象不会重复传输。输出会显示重试的子任务数和对象数。仍在运行的子任务在结束前保留其失败对象；`task retry --all --yes` 仍只选择失败和部分失败的任务。详见[运行中任务重试失败项](operations.zh-CN.md#运行中任务重试失败项)。
+对运行中的任务，`task retry <ID>` 只重试已结束子任务中的失败对象，不停止任务。这些子任务在原节点上按节点并发上限重新执行，已成功或已跳过的对象不会重复传输。输出格式为 `#12  已开始重试 N 个失败对象（M 个子任务），任务继续运行`。每次请求最多重开 64 个子任务。Master 报告还有更多时，输出会提示其他子任务可能还有未重试的失败对象，建议再次运行该命令。`task retry --all --yes` 仍只选择失败和部分失败的任务。详见[运行中任务重试失败项](operations.zh-CN.md#运行中任务重试失败项)。
 
-`task delete` 把记录移到回收站，`task restore` 恢复它们。`task purge ID --yes` 开始永久清理记录，使用 `task cleanup-status ID --watch 5` 跟踪进度。这些操作不会删除已迁移的文件。
+`task delete` 把记录移到回收站，`task restore` 恢复它们。控制台的 **运维工具 → 任务回收站** 也可以选中任务点击 **还原**，把任务恢复到任务列表，效果与 `task restore` 相同。`task purge ID --yes` 开始永久清理记录，使用 `task cleanup-status ID --watch 5` 跟踪进度。正在永久清理的任务不能恢复。这些操作不会删除已迁移的文件。
 
 ## 创建任务和设置限速
 
@@ -203,7 +203,7 @@ oss-transfer-cli task create local-to-oss target/archive --binding 10.0.0.2=/dat
 
 连接在结果返回前中断时，CLI 会打印请求 ID。先查看 `task list` 确认，再使用相同参数并添加 `--request-id ID` 重试，这样不会重复创建任务。
 
-本地传输会执行与控制台相同的预检，包括[下载写入探测](operations.zh-CN.md#下载预检失败)。`--validate-only` 只检查配置，不创建任务。`--bandwidth-mbps`（0.1–1,000,000 Mbps）以及 `--list-qps`、`--head-qps`、`--put-qps` 在创建时设置限速，它们是任务所有节点的合计值。
+本地传输会执行与控制台相同的预检，包括[下载写入探测](operations.zh-CN.md#下载预检失败)和[共享目录校验](operations.zh-CN.md#共享目录校验)。`--skip-shared-check` 跳过共享目录校验，需要搭配 `--yes`。所有节点都无法写入的上传源通常不需要跳过，因为预检会改为抽样比对文件。`--validate-only` 只检查配置，不创建任务。`--bandwidth-mbps`（0.1–1,000,000 Mbps）以及 `--list-qps`、`--head-qps`、`--put-qps` 在创建时设置限速，它们是任务所有节点的合计值。
 
 ### 分段下载
 
@@ -228,11 +228,11 @@ oss-transfer-cli task limits "$TRANSFER_TASK" --list-qps 100 --head-qps 500 --pu
 oss-transfer-cli task limits "$TRANSFER_TASK" --put-qps unlimited
 ```
 
-未指定的字段保持原值。`unlimited` 解除对应的限制（QPS 选项也可以写 0）。不指定新值运行 `task limits ID` 或 `task bandwidth ID` 会显示任务当前的限速：带宽上限、请求限速范围、LIST / GET、HEAD 和 PUT 上限、是否所有节点都已生效，以及未生效节点的原因。`task bandwidth ID MBPS|unlimited` 只修改带宽限制。
+未指定的字段保持原值。`unlimited` 解除对应的限制（QPS 选项也可以写 0）。不指定新值运行 `task limits ID` 或 `task bandwidth ID` 会显示任务当前的限速：带宽上限、请求限速范围、LIST / GET、HEAD 和 PUT 上限、是否所有节点都已生效，以及未生效节点的原因。`task bandwidth ID MBPS|unlimited` 只修改带宽限制。即使任务的部分节点离线，修改也会被保存。已连接的节点立即生效。每个未生效的节点会列出原因；未连接的节点显示 *执行节点未连接，重新连接后生效*。输出以 *任务限速已保存* 结尾，命令以 0 退出。
 
 QPS 是平均速率，可以是小数，范围 0.000001–1,000,000,000。`--list-qps 0.5` 表示整个任务每 2 秒发出一个列举或 GET 请求。LIST 限制也适用于 GET 读取（含区间读取）；PUT 包括分片上传请求。已停止或已结束的任务不能修改限速。
 
-`task show ID` 显示当前限速及其适用范围，并把实时请求速率与任务上限、生效上限对照列出。*请求速率*、*任务请求上限* 和 *生效请求上限* 各行保留一位小数，低于 0.05 的上限显示为 0；*LIST / GET QPS*、*HEAD QPS*、*PUT QPS* 各行显示精确值。`task nodes ID` 显示每个节点的份额。
+`task show ID` 显示当前限速及其适用范围，并把实时请求速率与任务上限、生效上限对照列出。*请求速率*、*任务请求上限* 和 *生效请求上限* 各行保留一位小数，低于 0.05 的上限显示为 0；*LIST / GET QPS*、*HEAD QPS*、*PUT QPS* 各行显示精确值。当前速度是发往目标端的速率（含请求失败后重新发送的字节），取最近几秒的平均值。部分执行节点为旧版本时，速度行注明这些节点的速度和进度按读取源端计算。节点页的带宽仍是读取源端的速率，可能与任务的当前速度不同。`task nodes ID` 显示每个节点的份额。
 
 任务限速是总量：Master 按需求把它分给活动的执行节点。有工作的节点平分绝大部分限速，空闲节点只保留很小的下限（见[任务限速在节点间的分配](operations.zh-CN.md#任务限速在节点间的分配)）。节点限速（见[设置节点限速](#设置节点限速)）仍然生效，请求需要同时满足两者。
 
@@ -246,11 +246,11 @@ oss-transfer-cli exceptions export failed --task-id "$TRANSFER_TASK" --output fa
 oss-transfer-cli exceptions clear failed --task-id "$TRANSFER_TASK" --yes
 ```
 
-`exceptions list` 以表格显示：任务、Key、大小、节点、简短原因（例如拒绝访问、DNS / Path-style、连接被拒绝、超时、TLS、存储桶不存在、签名、限流、源对象已删除或已修改）、重试结果（*未重试*、*重试中*、*重试未完成*、*已恢复*、*再次失败*、*已跳过*）和本地时间。表尾显示记录数；对 `local`，还会给出下一页的命令。
+`exceptions list` 以表格显示：任务、Key、大小、节点、简短原因（例如拒绝访问、DNS / Path-style、连接被拒绝、超时、TLS、存储桶不存在、签名、限流、源对象已删除或已修改、源对象为归档存储需先解冻、存储服务端出错、连接在存储服务应答前关闭）、重试结果（*未重试*、*重试中*、*重试未完成*、*已恢复*、*再次失败*、*已跳过*）和本地时间。原因按存储返回的错误码分类，没有错误码时按 HTTP 状态码分类，对象的 Key 不影响原因。表尾显示记录数；对 `local`，还会给出下一页的命令。`exceptions list` 和 `exceptions export` 每个节点最多返回 `--limit` 条记录（默认 1,000，最大 10,000）。结果截断时会说明，并指向 `task report ID` 中的 `exception-details.csv`（任务停止或结束后可用），其中列出每个失败的对象。
 
 完整的错误信息在 `--json` 输出和 `exceptions export` 导出的 CSV 中。CSV 另有 `reasonCode` 和 `retryReasonCode` 两列（例如 `SOURCE_CHANGED`、`SOURCE_DELETED`）。CLI 也列出已解决的记录；控制台默认只显示未解决的记录。
 
-用 `task retry` 重试失败的对象。清理只删除已通过重试成功或跳过而解决的记录（`已清理 N 条已处理的记录`），未解决的失败继续保留。上传和下载的失败使用 `local`。`fallback` 列出旧版引擎的降级迁移记录，当前版本已不再产生这类记录。
+用 `task retry` 重试失败的对象。清理只删除已通过重试成功或跳过而解决的记录（`已清理 N 条已处理的记录`），未解决的失败继续保留。`exceptions list failed` 列出所有方向的失败，包括上传和下载；控制台的“失败对象”标签页只列对象存储之间的失败。`local` 专门列出本地传输的异常记录。`fallback` 列出旧版引擎的降级记录，当前版本不再产生这类记录，从 v4.0.x 转换的任务的降级记录也不在此列出，CLI 会打印这句说明。
 
 ## 任务报告
 
@@ -296,11 +296,13 @@ oss-transfer-cli task nodes "$TRANSFER_TASK" --remove 10.0.0.2 --now --yes
 
 变更受理后，CLI 打印调整后的成员。仍有节点在加入或排空时，变更在后台继续完成，可用 `task nodes "$TRANSFER_TASK" --watch 5` 跟踪。变更过程中的各个阶段（例如离开的节点等待租约到期、扫描移交给其他节点）显示在这个视图中，不作为任务错误报告。
 
-上传和下载任务需要为每个新增节点指定一个共享目录。CLI 提交前会运行 Master 的共享目录预检，任一绑定失败都会停止：
+上传和下载任务需要为每个新增节点指定一个共享目录。CLI 提交前会运行 Master 的共享目录预检（见[共享目录校验](operations.zh-CN.md#共享目录校验)），任一绑定失败都会停止：
 
 ```sh
 oss-transfer-cli task nodes "$TRANSFER_TASK" --add 10.0.0.3 --binding 10.0.0.3=/mnt/share --yes
 ```
+
+向任务添加节点时，无论创建任务时是否跳过了校验，新节点都按同样的方式校验。只有本次节点调整选择跳过，新节点才不校验：同时添加 `--skip-shared-check` 和 `--yes`。不加 `--skip-shared-check` 时，CLI 照常运行预检。
 
 同一时间只能执行一项调整。有节点正在加入或排空时，Master 只接受以下几种调整：移除加入中的节点（取消加入）、在节点离开前重新添加排空中或正在立即移除的节点（取消移除；本地传输沿用原共享目录，不要指定 `--binding`）、用 `--now` 移除排空中的节点、移除工作已被接管的失联节点。其他调整会被拒绝并给出原因。
 
@@ -333,13 +335,14 @@ oss-transfer-cli agent invite-status 邀请ID
 
 ```sh
 oss-transfer-cli agent update storage-01 --child-concurrency 32 --object-concurrency 4
+oss-transfer-cli node update 10.0.0.2 --scan-concurrency 4
 oss-transfer-cli agent update storage-01 --local-root /mnt/data --local-root /mnt/archive
 oss-transfer-cli agent remove storage-01 --yes
 ```
 
-`--child-concurrency`（1–256，默认 32）和 `--object-concurrency`（每个子任务的对象并发，1–64，默认 4）立即生效，两者乘积不能超过 1024（见[节点并发](operations.zh-CN.md#节点并发)）。`--local-root` 替换该节点可用于本地迁移的目录列表。
+`--child-concurrency`（1–256，默认 32）和 `--object-concurrency`（每个子任务的对象并发，1–64，默认 4）立即生效，两者乘积不能超过 1024（见[节点并发](operations.zh-CN.md#节点并发)）。`--scan-concurrency`（1–16，默认 2）设置该节点同时运行的扫描数。调低时不会中断正在运行的扫描，运行中的扫描数低于新上限后才开始新的扫描。旧版 Agent 的扫描并发固定为 2，升级后才能修改。`node list` 新增“扫描”列，例如 `1/2` 表示正在运行 1 个扫描、上限为 2。`--local-root` 替换该节点可用于本地迁移的目录列表。节点会拒绝不是本机操作系统绝对路径的目录，或超过 100 个的目录。
 
-执行节点上还有活动任务时，`agent remove` 会被拒绝。移除后，命令在标准错误中显示 *已移除执行节点 节点。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent*（见[移除执行节点](operations.zh-CN.md#移除执行节点)）。
+执行节点上还有活动任务时，`agent remove` 会被拒绝。移除后，命令在标准错误中显示：*已移除执行节点 节点，它不能再连接集群。以容器运行的 Agent 会保持空闲，直到容器被删除；其他方式运行的 Agent 会自行停止且不再重启。节点上的程序和数据不会被删除；需要时请按其部署方式删除：用安装脚本安装的，在该主机运行安装脚本并加 --uninstall --role agent；容器请删除容器和数据卷；Windows 服务和手动运行的程序请手动删除（见安装文档的“卸载”一节）*（见[移除执行节点](operations.zh-CN.md#移除执行节点)）。
 
 ## 设置节点限速
 
@@ -397,7 +400,7 @@ oss-transfer-cli object export --output "comparison-$TRANSFER_COMPARISON.zip" "$
 
 选项放在 ID 之前。新比对的 ID 不会以 `-` 开头；旧版本生成的 ID 可能以 `-` 开头。这样的 ID 是完整的 ID（43 个字母、数字、`-` 或 `_`）时，CLI 可以直接接受；在 ID 前加 `--` 也总是可以，例如 `object status --limit 100 -- "$TRANSFER_COMPARISON"`。
 
-`object status` 显示比对的状态、方式、范围、源和目标、各项计数、已保存的差异、已用时间和速率、已读取的字节数和以字节/秒计的读取速率（内容模式；单个对象只显示读取速率）、检查点（单对象比对和已完成的比对不显示）、是否可继续、停止保存差异的原因和最后保存的 Key，以及错误和错误详情。之后列出一页已保存的结果行：编号、结果、源 Key、目标 Key、两端大小和说明（不同的属性，或错误及其详情）。已完成且没有差异的比对显示 *未发现差异*。
+`object status` 显示比对的状态、方式、范围、源和目标、各项计数、已保存的差异、已用时间和平均速率（标注为 *平均速率*，取整个比对包括续传前的平均值）、已读取的字节数和平均读取速率（标注为 *平均读取速率*，内容模式；单个对象只显示读取速率）、检查点（单对象比对和已完成的比对不显示）、是否可继续、停止保存差异的原因和最后保存的 Key，以及错误和错误详情。运行中的比对如果超过一分钟没有新的结果，表格下方会提示：执行节点可能正在等待存储响应或重试。之后列出一页已保存的结果行：编号、结果、源 Key、目标 Key、两端大小和说明（不同的属性，或错误及其详情）。检查过对象且全部一致的比对显示 *未发现差异*。检查了 0 个对象的比对会警告没有找到任何对象。有差异但节点没有保存明细时，显示 *发现 N 条差异，但节点未保存明细，原因见上方截断原因*。
 
 `--status` 只保留指定的结果，多个值用逗号分隔：`DIFFERENT`、`ETAG_MISMATCH`、`MISSING_TARGET`、`EXTRA_TARGET`、`CHANGED_DURING_COMPARE`、`ERROR` 和 `BOTH_MISSING`。`--limit` 设置每页行数，范围 1–1,000（默认 50），`--after N` 从第 N 行之后开始。后面还有结果行时，命令会打印下一页的 `--after` 值。比对已停止保存差异时，命令以退出码 3 结束。
 
@@ -424,7 +427,9 @@ oss-transfer-cli update agents --all --yes
 oss-transfer-cli update status --watch 5
 ```
 
-`update check` 显示 *当前版本 v… → 可升级到 v…*、发布说明链接和接下来要运行的两条命令，或说明当前已是最新正式版。`update master --yes` 自行检查并安装最新正式版；Master 已是最新时会说明并以 0 退出。`update agents --all --yes` 把所有可更新的执行节点逐台更新到 Master 的版本；`update agent --worker 节点 --yes` 只更新一个。
+`update check` 显示 *当前版本 v... → 可升级到 v...*、发布说明链接和接下来要运行的两条命令，或说明当前已是最新正式版。Master 不能在线更新时（Docker、`oss-transfer-run.sh`、权限不足），输出 *Master 不能在线更新：（原因和升级方法）*，以及升级 Master 后更新执行节点的命令。检查失败时输出 Master 的说明（HTTP 502），添加 `--verbose` 显示各发布源的原因。`update master --yes` 自行检查并安装最新正式版；Master 已是最新时会说明并以 0 退出。`update agents --all --yes` 把所有可以在线更新的执行节点逐台更新到 Master 的版本。部分节点不能更新时，输出 *已安排把 N 个 Agent 更新到 v...；M 个不会更新，原因见下表*，不更新的节点各附原因（已是 Master 版本、容器、离线等）。没有节点可以在线更新时，不安排更新，输出 *没有可以在线更新到 v... 的 Agent，本次未安排更新*，退出码为 0。`update agent --worker 节点 --yes` 只更新一个。
+
+`update status` 的最新版本行标注检测时间，*最新版本: v...（检测于 ...）*。一小时内没有成功检测时，该行提示可能已有更新的版本，建议运行 `update check`。在成功检测之前，`update status` 显示上次失败的说明和检测失败时间。`update status --watch 5` 在 Master 因更新而重启时会持续轮询，最多 30 分钟。
 
 请求被受理并不表示升级已完成。使用 `update status --watch 5` 跟踪：它显示版本、翻译后的阶段、每个节点是否与 Master 一致，以及无法在线更新的节点的原因（见[版本更新](operations.zh-CN.md#版本更新)）。
 

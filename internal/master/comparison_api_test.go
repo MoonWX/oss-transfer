@@ -14,6 +14,7 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/comparison"
 	"github.com/MoonWX/oss-transfer/internal/state"
 	"github.com/MoonWX/oss-transfer/internal/storageconfig"
+	"github.com/MoonWX/oss-transfer/internal/task"
 )
 
 func setComparisonTiming(t *testing.T, value *time.Duration, d time.Duration) {
@@ -370,6 +371,92 @@ func TestComparisonStartPrefersAgentsWithCurrentProtocol(t *testing.T) {
 	}
 }
 
+// When no online Agent starts a comparison, the reply names why each one did
+// not instead of suggesting that a comparison may be running: a node being
+// updated, a node too old for comparisons, a busy node and a node that could
+// not apply the storage connections each need something else from the user.
+func TestComparisonStartNamesWhyEveryAgentRefused(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	createComparisonStorage(t, f)
+	agent := newFakeComparisonAgent(true)
+	node := comparisonTestNode(t, f, "only-node", agent)
+	// Distinct names tell the nodes apart in the reply.
+	name := func(node task.Node, label string) string {
+		t.Helper()
+		if code, body := request(t, f.http.Client(), "PUT", f.http.URL+"/api/master/nodes/"+node.Address, f.admin, map[string]any{"label": label}); code != 200 {
+			t.Fatal("label", code, body)
+		}
+		return f.master.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
+	}
+	label := name(node, "only-node")
+	create := map[string]any{"sourceBucket": "qa/source", "destBucket": "qa/target", "sourcePrefix": "src/", "destPrefix": "dst/", "scope": "prefix", "mode": "metadata"}
+	refuse := func(operation string, status int, reply string) {
+		agent.setIntercept(func(c agenttransport.Command) (agenttransport.Response, bool) {
+			if c.Operation != operation {
+				return agenttransport.Response{}, false
+			}
+			return agenttransport.Response{Status: status, Payload: json.RawMessage(reply)}, true
+		})
+	}
+	assignments := func() int {
+		t.Helper()
+		count := 0
+		if err := f.db.View(func(tx *state.Tx) error {
+			return tx.Scan(comparisonAssignmentsBucket, "", "", 100, func(string, json.RawMessage) error { count++; return nil })
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	for _, test := range []struct {
+		name, operation string
+		status          int
+		reply, language string
+		want            string
+	}{
+		{"updating", "comparison_start", 409, `{"code":"updating","message":"Agent update is in progress"}`, "zh-CN", "没有可以开始此比对的执行节点：" + label + " 正在更新，需等待更新完成"},
+		{"too old", "comparison_start", 404, `{"code":"unknown_operation"}`, "zh-CN", "没有可以开始此比对的执行节点：" + label + " 版本过旧，不支持比对，需先升级"},
+		{"too old in English", "comparison_start", 404, `{"code":"unknown_operation"}`, "", "No Agent can start this comparison: " + label + " must be upgraded to run comparisons"},
+		{"storage rejected", "storage_apply", 409, `{"code":"operation_failed","message":"storage snapshot is older than the applied revision"}`, "ja-JP", "この比較を開始できる Agent がありません：" + label + " にストレージ接続を同期できませんでした：storage snapshot is older than the applied revision"},
+		// The credentials of the storage connections never reach the reply.
+		{"storage error redacted", "storage_apply", 500, `{"code":"operation_failed","message":"cannot save fixture-ak with fixture-sk"}`, "", "No Agent can start this comparison: the storage connections could not be applied on " + label + ": cannot save [redacted] with [redacted]"},
+	} {
+		refuse(test.operation, test.status, test.reply)
+		code, body := comparisonGet(t, f, "POST", "/api/master/comparisons", test.language, create)
+		if code != 503 || body["message"] != test.want {
+			t.Fatalf("%s: %d %v", test.name, code, body)
+		}
+	}
+	// A busy node is the only case that names a running comparison.
+	agent.setIntercept(nil)
+	running := completedComparison("cmp-running", nil)
+	running.Status = comparison.StateRunning
+	agent.put(running, nil)
+	code, body := comparisonGet(t, f, "POST", "/api/master/comparisons", "zh-CN", create)
+	if code != 503 || body["message"] != "没有可以开始此比对的执行节点："+label+" 正在执行其他比对，需等待其结束或将其取消" {
+		t.Fatal(code, body)
+	}
+	if assignments() != 0 {
+		t.Fatal("a refused comparison kept an assignment", assignments())
+	}
+	// With several nodes, every reason is named once, nodes sharing a reason
+	// together.
+	older := newFakeComparisonAgent(false)
+	olderNode := comparisonTestNode(t, f, "older-node", older)
+	older.setIntercept(func(c agenttransport.Command) (agenttransport.Response, bool) {
+		if c.Operation != "comparison_start" {
+			return agenttransport.Response{}, false
+		}
+		response, _ := fakeUnknownOperation()
+		return response, true
+	})
+	olderLabel := name(olderNode, "older-node")
+	code, body = comparisonGet(t, f, "POST", "/api/master/comparisons", "", create)
+	if code != 503 || body["message"] != "No Agent can start this comparison: another comparison is running on "+label+" and must finish or be canceled first; "+olderLabel+" must be upgraded to run comparisons" {
+		t.Fatal(code, body)
+	}
+}
+
 func TestComparisonDeleteOfRunningComparisonConflicts(t *testing.T) {
 	f := newAgentHTTPFixture(t)
 	current, legacy := newFakeComparisonAgent(true), newFakeComparisonAgent(false)
@@ -645,7 +732,10 @@ func TestComparisonListReconcilesAssignmentsWithAgents(t *testing.T) {
 func TestComparisonMessagesAreLocalized(t *testing.T) {
 	for _, message := range []string{
 		"Cannot read storage connections", "Cannot create comparison", "Cannot read Agent state", "No connected Agent is available",
-		"Cannot save comparison", "No Agent is available for comparison; a comparison may already be running", "Comparison not found",
+		"Cannot save comparison", "No Agent is available for comparison", "No Agent can start this comparison: %s",
+		"another comparison is running on %s and must finish or be canceled first", "an update is in progress on %s and must finish first",
+		"%s must be upgraded to run comparisons", "%s did not respond", "the storage connections could not be applied on %s: %s", ", ", "%s; %s",
+		"Comparison not found",
 		"The comparison node has been removed", "Cannot read comparison", "Cannot read comparisons", "Cannot read registered Agents",
 		"Invalid comparison cursor", "Comparison page size must be between 1 and 1000", "Unknown comparison result status",
 		"Comparison is running; cancel it before deleting", "Agent is offline", "Update this node to resume comparisons",

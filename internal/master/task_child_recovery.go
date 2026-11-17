@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -66,6 +67,20 @@ func (s *Server) recoverChildHTTP(w http.ResponseWriter, r *http.Request) {
 
 // recoverChild runs under the parent's coordinator lock. It never creates a
 // child, changes its generation, or resumes a stopped parent as a side effect.
+// recoveryDestinationCheck says how recovering a child proves a shared
+// download destination that automatic takeover does not already verify:
+// "probe" writes and reads the test file through every node, "skipped" means
+// the operator skipped the check when creating the task, "" needs nothing.
+func recoveryDestinationCheck(parent task.Parent) string {
+	if parent.Spec.Destination.Kind != "LOCAL" || len(parent.ActiveNodes()) < 2 || parent.Failover != nil && parent.Failover.Enabled {
+		return ""
+	}
+	if parent.Spec.SharedCheckSkipped {
+		return "skipped"
+	}
+	return "probe"
+}
+
 func (s *Server) recoverChild(ctx context.Context, id int64, number int) (parent task.Parent, child task.Child, outcome string, err error) {
 	parent, err = s.tasks.repo.Get(id)
 	if err != nil {
@@ -143,12 +158,15 @@ func (s *Server) recoverChild(ctx context.Context, id int64, number int) (parent
 	if err != nil {
 		return
 	}
-	if parent.Spec.Destination.Kind == "LOCAL" && len(parent.ActiveNodes()) > 1 && (parent.Failover == nil || !parent.Failover.Enabled) {
+	switch recoveryDestinationCheck(parent) {
+	case "probe":
 		for writer := range parent.Spec.Nodes {
 			if _, _, err = s.proveSharedDirectory(ctx, parent.Spec.Nodes, writer); err != nil {
 				return
 			}
 		}
+	case "skipped":
+		log.Printf("task %d: child task %s is recovered on %s without a shared directory check, which the operator chose to skip", id, child.Job.ChildID, s.nodeLabel(child.Node))
 	}
 	current, readErr := s.tasks.repo.Get(id)
 	if readErr != nil {

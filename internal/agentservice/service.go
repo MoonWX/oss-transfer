@@ -516,7 +516,7 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if err := request.validate(); err != nil {
 			return badRequest(err)
 		}
-		fingerprints, err := transferstore.SampleSharedFingerprints(ctx, request.Root, request.Limit)
+		fingerprints, err := transferstore.SampleSharedFingerprints(ctx, request.Root, request.Limit, request.Portable)
 		return response(SharedFingerprintSampleResponse{Fingerprints: fingerprints}, err)
 	case "shared_fingerprint_verify":
 		var request SharedFingerprintVerifyRequest
@@ -541,11 +541,11 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		if request.ParentID < 1 || request.Generation == 0 || !filepath.IsAbs(request.Root) {
 			return badRequest(errors.New("shared proof skip requires parent, generation and absolute root"))
 		}
-		err := s.Shared.Skip(request.ParentID, request.Generation, request.Root)
+		granted, err := s.Shared.Skip(request.ParentID, request.Generation, request.Root)
 		if err == nil {
 			s.signal()
 		}
-		return response(map[string]any{"verified": err == nil}, err)
+		return response(SharedProofSkipResponse{Verified: err == nil, Granted: granted}, err)
 	case "task_metrics":
 		var request struct {
 			ParentID   int64  `json:"parentId"`

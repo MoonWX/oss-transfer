@@ -177,6 +177,11 @@ func (r *Repository) CreateChecked(spec Spec, requestKey string, check func(*sta
 				return err
 			}
 		}
+		if spec.SharedCheckSkipped {
+			if err := state.RequireSchema(tx, "master", state.SchemaSharedCheckSkipped); err != nil {
+				return err
+			}
+		}
 		var id int64
 		found, err := tx.Get("master-task-requests", digest(requestKey), &id)
 		if err != nil {

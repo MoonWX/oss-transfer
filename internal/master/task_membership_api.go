@@ -25,7 +25,15 @@ type taskNodesRequest struct {
 	ExpectedGeneration   *uint64       `json:"expectedGeneration"`
 	ExpectedNodeRevision *uint64       `json:"expectedNodeRevision"`
 	DryRun               bool          `json:"dryRun"`
+	// SkipSharedCheckAcknowledged confirms, for a task created with the
+	// shared directory check skipped, that the added nodes mount the same
+	// storage: they are not checked either.
+	SkipSharedCheckAcknowledged bool `json:"skipSharedCheckAcknowledged"`
 }
+
+// skipSharedCheckJoinUnacknowledged names the consequences of adding nodes
+// without a check, so an API caller sees what the acknowledgement accepts.
+const skipSharedCheckJoinUnacknowledged = "This task was created with the shared directory check skipped, so the added nodes are not checked either. Set skipSharedCheckAcknowledged:true after confirming that they mount the same storage as the task's other nodes. If they do not, an upload can miss files or read them from a different copy, and a download leaves files in a directory the other nodes do not see, while the task still reports success"
 
 func installTaskMembershipRoutes(s *Server) {
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/nodes", s.adminOnly(s.taskNodesHTTP))
@@ -272,6 +280,9 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	}
 	var checks []bindingCheck
 	if local && len(joining) > 0 {
+		if p.Spec.SharedCheckSkipped && !request.DryRun && !request.SkipSharedCheckAcknowledged {
+			return nil, membershipReject(ctx, "SHARED_CHECK_SKIP_UNACKNOWLEDGED", skipSharedCheckJoinUnacknowledged)
+		}
 		var failure *membershipFailure
 		checks, failure = s.membershipPreflight(ctx, p, joining, online, displays)
 		if failure != nil {
@@ -335,7 +346,9 @@ func (s *Server) membershipResult(ctx context.Context, id int64, accepted, repla
 
 // membershipPreflight runs the creation preflight: each added path must be an
 // existing directory, then a marker written through one node must be read by
-// every reachable current member and every added node.
+// every reachable current member and every added node (or, for an upload
+// source no node can write, sampled files must match on all of them). A task
+// created with the check skipped checks only that the Agents can run it.
 func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining []task.Node, online map[string]cluster.Member, displays nodeDisplaySet) ([]bindingCheck, *membershipFailure) {
 	spec := p.Spec
 	spec.Nodes = nil
@@ -384,10 +397,16 @@ func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining
 		invalidateUnverifiedSharedBindings(ctx, checks)
 	}
 	added := checks[existing:]
+	if firstErr == "" && spec.SharedCheckSkipped {
+		// This operator skipped nothing: say what that means for the new node.
+		for i := range added {
+			added[i].Message = localizeContext(ctx, "Not checked: this task was created with the shared directory check skipped, so this node was not verified to see the same storage as the task's other nodes")
+		}
+	}
 	if firstErr != "" {
 		// Report a failing current member too; it explains the added nodes' state.
 		for _, check := range checks[:existing] {
-			if !check.Valid && check.Code == "SHARED_STORAGE_PROBE_FAILED" && check.Message != localizeContext(ctx, "Shared storage verification did not pass") {
+			if !check.Valid && (check.Code == "SHARED_STORAGE_PROBE_FAILED" || check.Code == "SHARED_STORAGE_FINGERPRINT_FAILED" || check.Code == "AGENT_UPGRADE_REQUIRED") && check.Message != localizeContext(ctx, "Shared storage verification did not pass") {
 				added = append(added, check)
 			}
 		}

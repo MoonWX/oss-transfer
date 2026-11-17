@@ -45,12 +45,10 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 		return nil
 	}
 	if p.Spec.SharedCheckSkipped {
+		// grantSkippedSharedCheck logs each node that starts unverified.
 		if err := t.server.grantSkippedSharedCheck(ctx, p, p.Spec.Nodes); err != nil {
 			return err
 		}
-		// Logged once per Agent process set: each grant lets these nodes
-		// start reading what may be different storage.
-		log.Printf("task %d generation %d: shared directory check skipped at the operator's request; %d nodes start without verification", p.ID, p.Generation, len(p.Spec.Nodes))
 		t.mu.Lock()
 		t.sharedProofs[p.ID] = stamp
 		t.mu.Unlock()
@@ -76,15 +74,18 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 	request := func(node task.Node) map[string]any {
 		return map[string]any{"parentId": p.ID, "generation": p.Generation, "root": node.LocalRoot, "probe": probe}
 	}
-	origin := p.Spec.Nodes[0]
+	var attempted []task.Node
 	// The marker identity is durable before creation, so retries after a lost
-	// response or Master crash can verify or remove that exact marker.
+	// response or Master crash can verify or remove that exact marker. A node
+	// that refused the write holds none; its cleanup finds nothing to remove.
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := t.server.agentCall(cleanupCtx, nodeSession(origin), "shared_probe_cleanup", true, request(origin), nil)
-		if err != nil && resultErr == nil {
-			resultErr = fmt.Errorf("shared source probe cleanup: %w", err)
+		for _, node := range attempted {
+			err := t.server.agentCall(cleanupCtx, nodeSession(node), "shared_probe_cleanup", true, request(node), nil)
+			if err != nil && resultErr == nil {
+				resultErr = fmt.Errorf("shared source probe cleanup: %w", err)
+			}
 		}
 		if resultErr == nil {
 			t.mu.Lock()
@@ -92,16 +93,26 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 			t.mu.Unlock()
 		}
 	}()
-	if err := t.server.agentCall(ctx, nodeSession(origin), "shared_probe_ensure", true, request(origin), nil); err != nil {
-		if !readOnlyWriteFailure(err) {
+	// Any node may write the marker, as in the precheck. Only when no node
+	// can write the source at all are sampled files compared instead.
+	written := false
+	for _, node := range p.Spec.Nodes {
+		attempted = append(attempted, node)
+		err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_ensure", true, request(node), nil)
+		if err == nil {
+			written = true
+			break
+		}
+		if !unwritableFailure(err) {
 			return fmt.Errorf("cannot verify shared source directory: %w", err)
 		}
-		// A read-only source cannot hold the marker; compare file contents.
+	}
+	if !written {
 		sample, _, err := t.server.proveSharedFingerprints(ctx, p.Spec.Nodes, p.ID, p.Generation)
 		if err != nil {
 			return err
 		}
-		log.Printf("task %d generation %d: shared source directory is read-only; verified %d sampled files on %d nodes", p.ID, p.Generation, len(sample), len(p.Spec.Nodes))
+		log.Printf("task %d generation %d: no node could write the test file into the shared source (%s); %d sampled files have the same size and first and last 64 KiB on every node instead", p.ID, p.Generation, t.server.nodeLabels(p.Spec.Nodes), len(sample))
 		return nil
 	}
 	for _, node := range p.Spec.Nodes {

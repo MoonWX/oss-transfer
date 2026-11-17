@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
@@ -51,6 +52,9 @@ func (t *taskRuntime) rejoinAvailableNodes(ctx context.Context, p task.Parent) (
 			}
 			if err == nil {
 				p, err = t.repo.FinishNodeRejoin(p.ID, p.Generation, node.ID, epoch)
+			}
+			if err == nil && p.Spec.SharedCheckSkipped {
+				log.Printf("task %d generation %d: node %s rejoins without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(node))
 			}
 		}
 		cancel()

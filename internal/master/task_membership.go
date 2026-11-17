@@ -25,6 +25,10 @@ type memberCapabilities struct {
 	LeaseProtocol          int `json:"leaseProtocol"`
 	QueuedHandoffProtocol  int `json:"queuedHandoffProtocol"`
 	ConflictPolicyProtocol int `json:"conflictPolicyProtocol"`
+	// SharedProofProtocol: shared_fingerprint_* and shared_proof_skip.
+	SharedProofProtocol int `json:"sharedProofProtocol"`
+	// OS is the Agent's operating system, as Go names it.
+	OS string `json:"os"`
 }
 
 func (t *taskRuntime) capabilities(ctx context.Context, node task.Node) (memberCapabilities, error) {
@@ -301,6 +305,11 @@ func (s *Server) taskNodesView(ctx context.Context, p task.Parent) (map[string]a
 	}
 	if p.Spec.BandwidthMbps > 0 {
 		view["bandwidthLimitMbps"] = p.Spec.BandwidthMbps
+	}
+	if p.Spec.SharedCheckSkipped {
+		// Added nodes are not checked either; adding one needs its own
+		// acknowledgement (skipSharedCheckAcknowledged).
+		view["sharedCheckSkipped"] = true
 	}
 	view["allocation"] = shareAllocation(p)
 	view["nodes"] = s.membershipNodes(p, displays, online)

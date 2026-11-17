@@ -27,7 +27,7 @@ type SharedVerifier struct {
 	verified map[sharedVerificationKey]bool
 	highest  map[int64]uint64
 	// fingerprints spares rereading unchanged files: the Master re-checks a
-	// read-only shared source on every task pass.
+	// shared source that no node can write on every task pass.
 	fingerprints transferstore.SharedFingerprintMemo
 }
 
@@ -36,27 +36,33 @@ func NewSharedVerifier() *SharedVerifier {
 }
 
 func (s *SharedVerifier) Verify(ctx context.Context, parentID int64, generation uint64, root string, probe transferstore.SharedProbe) error {
-	return s.prove(parentID, generation, root, func(root string) error { return transferstore.VerifySharedProbe(ctx, root, probe) })
+	_, err := s.prove(parentID, generation, root, func(root string) error { return transferstore.VerifySharedProbe(ctx, root, probe) })
+	return err
 }
 
-// VerifyFingerprints records a proof from content fingerprints, used when the
-// shared upload source is read-only and no probe file can be written.
+// VerifyFingerprints records a proof from sampled file fingerprints, used
+// when no Agent can write the probe file into a shared upload source.
 func (s *SharedVerifier) VerifyFingerprints(ctx context.Context, parentID int64, generation uint64, root string, fingerprints []transferstore.SharedFingerprint) error {
-	return s.prove(parentID, generation, root, func(root string) error {
+	_, err := s.prove(parentID, generation, root, func(root string) error {
 		return s.fingerprints.Verify(ctx, root, fingerprints)
 	})
+	return err
 }
 
 // Skip records a proof without any check. The Master sends it only for a task
 // whose operator explicitly acknowledged skipping the shared-directory check;
 // the generation fence still applies, so a stopped task cannot reuse it.
-func (s *SharedVerifier) Skip(parentID int64, generation uint64, root string) error {
-	return s.prove(parentID, generation, root, func(string) error { return nil })
+// Granted reports that this process held no such proof before.
+func (s *SharedVerifier) Skip(parentID int64, generation uint64, root string) (granted bool, err error) {
+	held, err := s.prove(parentID, generation, root, func(string) error { return nil })
+	return err == nil && !held, err
 }
 
-func (s *SharedVerifier) prove(parentID int64, generation uint64, root string, check func(root string) error) error {
+// prove replaces the proof for one task generation and root with the result
+// of check. held reports whether the proof existed before.
+func (s *SharedVerifier) prove(parentID int64, generation uint64, root string, check func(root string) error) (held bool, err error) {
 	if parentID < 1 || generation == 0 || !filepath.IsAbs(root) {
-		return errors.New("shared storage verification requires parent, generation and absolute root")
+		return false, errors.New("shared storage verification requires parent, generation and absolute root")
 	}
 	key := sharedVerificationKey{parentID, generation, filepath.Clean(root)}
 	s.mu.Lock()
@@ -66,7 +72,7 @@ func (s *SharedVerifier) prove(parentID int64, generation uint64, root string, c
 		s.highest = map[int64]uint64{}
 	}
 	if generation < s.highest[parentID] {
-		return ErrSharedVerificationStale
+		return false, ErrSharedVerificationStale
 	}
 	if generation > s.highest[parentID] {
 		for prior := range s.verified {
@@ -76,12 +82,13 @@ func (s *SharedVerifier) prove(parentID int64, generation uint64, root string, c
 		}
 		s.highest[parentID] = generation
 	}
+	held = s.verified[key]
 	delete(s.verified, key)
 	if err := check(key.root); err != nil {
-		return err
+		return held, err
 	}
 	s.verified[key] = true
-	return nil
+	return held, nil
 }
 
 func (s *SharedVerifier) Verified(parentID int64, generation uint64, root string) bool {

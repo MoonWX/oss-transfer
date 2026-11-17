@@ -53,6 +53,9 @@ func TestSharedFingerprintOperations(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if capabilities := s.LeaseCapabilities(); capabilities["sharedProofProtocol"] != SharedProofProtocol {
+		t.Fatal("the Agent does not advertise its shared proof operations", capabilities)
+	}
 	status, body := execute(t, s, "shared_fingerprint_sample", SharedFingerprintSampleRequest{Root: a})
 	if status != 200 {
 		t.Fatal(status, body)
@@ -72,8 +75,20 @@ func TestSharedFingerprintOperations(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(b, "data.txt"), []byte("edited, longer"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if status, body := execute(t, s, "shared_fingerprint_verify", SharedFingerprintVerifyRequest{ParentID: 7, Generation: 1, Root: b, Fingerprints: sample}); status != 409 || body["code"] != SharedContentChangedCode || s.Shared.Verified(7, 1, b) {
+	status, body = execute(t, s, "shared_fingerprint_verify", SharedFingerprintVerifyRequest{ParentID: 7, Generation: 1, Root: b, Fingerprints: sample})
+	differences, _ := body["differences"].([]any)
+	if status != 409 || body["code"] != SharedFingerprintMismatchCode || s.Shared.Verified(7, 1, b) || len(differences) != 1 {
 		t.Fatal("a changed file kept the proof or lost its code", status, body)
+	}
+	if difference := differences[0].(map[string]any); difference["status"] != transferstore.SharedFingerprintChanged || difference["path"] != "data.txt" || difference["size"] != float64(len("edited, longer")) || difference["sha256"] == "" {
+		t.Fatal("the difference does not carry what this Agent read", difference)
+	}
+	if err := os.Remove(filepath.Join(b, "data.txt")); err != nil {
+		t.Fatal(err)
+	}
+	status, body = execute(t, s, "shared_fingerprint_verify", SharedFingerprintVerifyRequest{Root: b, Fingerprints: sample})
+	if differences, _ := body["differences"].([]any); status != 409 || len(differences) != 1 || differences[0].(map[string]any)["status"] != transferstore.SharedFingerprintMissing {
+		t.Fatal("a missing file was not reported as missing", status, body)
 	}
 	escape := []transferstore.SharedFingerprint{{Path: "../data.txt", Size: 4, SHA256: sample[0].SHA256}}
 	for _, test := range []struct {
@@ -92,8 +107,12 @@ func TestSharedFingerprintOperations(t *testing.T) {
 			t.Fatalf("%s %+v was not rejected: %d %v", test.operation, test.payload, status, body)
 		}
 	}
-	if status, body := execute(t, s, "shared_proof_skip", SharedProofSkipRequest{ParentID: 8, Generation: 2, Root: a}); status != 200 || !s.Shared.Verified(8, 2, a) {
+	if status, body := execute(t, s, "shared_proof_skip", SharedProofSkipRequest{ParentID: 8, Generation: 2, Root: a}); status != 200 || !s.Shared.Verified(8, 2, a) || body["granted"] != true {
 		t.Fatal("skipped check did not grant the proof", status, body)
+	}
+	// The Master logs only grants to an Agent process that held no proof.
+	if status, body := execute(t, s, "shared_proof_skip", SharedProofSkipRequest{ParentID: 8, Generation: 2, Root: a}); status != 200 || body["granted"] != false {
+		t.Fatal("a repeated skip was reported as a new grant", status, body)
 	}
 	s.Shared.Forget(8, 0)
 	if status, _ := execute(t, s, "shared_proof_skip", SharedProofSkipRequest{ParentID: 8, Generation: 1, Root: a}); status != 409 {
@@ -101,13 +120,14 @@ func TestSharedFingerprintOperations(t *testing.T) {
 	}
 }
 
-func TestSharedWriteResponseMarksReadOnlyRoots(t *testing.T) {
+func TestSharedWriteResponseMarksUnwritableRoots(t *testing.T) {
 	for _, test := range []struct {
 		err  error
 		code string
 	}{
-		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EROFS}, ReadOnlyStorageCode},
-		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EACCES}, ReadOnlyStorageCode},
+		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EROFS}, UnwritableStorageCode},
+		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EACCES}, UnwritableStorageCode},
+		{&fs.PathError{Op: "write", Path: "/x", Err: syscall.ENOSPC}, UnwritableStorageCode},
 		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EIO}, "operation_failed"},
 	} {
 		response, err := sharedWriteResponse(nil, test.err)

@@ -3,6 +3,8 @@ package transferstore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -46,7 +48,7 @@ func TestSharedFingerprintsMatchIdenticalTrees(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	writeTree(t, a, sampleTree())
 	writeTree(t, b, sampleTree())
-	sample, err := SampleSharedFingerprints(ctx, a, 0)
+	sample, err := SampleSharedFingerprints(ctx, a, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,52 +65,72 @@ func TestSharedFingerprintsMatchIdenticalTrees(t *testing.T) {
 	}
 }
 
+// differences returns the per-path statuses of a mismatch, failing the test
+// for any other error.
+func differences(t *testing.T, err error) map[string]SharedFingerprintDifference {
+	t.Helper()
+	var mismatch *SharedFingerprintMismatchError
+	if !errors.As(err, &mismatch) || !errors.Is(err, ErrSharedFingerprintMismatch) {
+		t.Fatalf("want a fingerprint mismatch, got %v", err)
+	}
+	found := map[string]SharedFingerprintDifference{}
+	for _, difference := range mismatch.Differences {
+		found[difference.Path] = difference
+	}
+	return found
+}
+
 func TestSharedFingerprintsDetectDifferentFiles(t *testing.T) {
 	ctx := context.Background()
 	a := t.TempDir()
 	writeTree(t, a, sampleTree())
-	sample, err := SampleSharedFingerprints(ctx, a, 0)
+	sample, err := SampleSharedFingerprints(ctx, a, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := sample[0]
 	other := func(t *testing.T) string {
 		b := t.TempDir()
 		writeTree(t, b, sampleTree())
 		return b
 	}
-	t.Run("content", func(t *testing.T) {
+	t.Run("every difference is reported with its kind", func(t *testing.T) {
 		b := other(t)
-		path := filepath.Join(b, filepath.FromSlash(target.Path))
-		content, err := os.ReadFile(path)
-		if err != nil {
+		changed, missing, replaced := sample[0], sample[1], sample[2]
+		content := []byte("a different, longer content")
+		if err := os.WriteFile(filepath.Join(b, filepath.FromSlash(changed.Path)), content, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if len(content) == 0 {
-			content = []byte("x") // An empty file can only change by size.
-		} else {
-			content[len(content)-1] ^= 0xff
-		}
-		if err := os.WriteFile(path, content, 0600); err != nil {
+		if err := os.Remove(filepath.Join(b, filepath.FromSlash(missing.Path))); err != nil {
 			t.Fatal(err)
 		}
-		if err := VerifySharedFingerprints(ctx, b, sample); !errors.Is(err, ErrSharedFingerprintChanged) {
-			t.Fatal("changed file was not reported as changed", err)
-		}
-	})
-	t.Run("missing", func(t *testing.T) {
-		b := other(t)
-		if err := os.Remove(filepath.Join(b, filepath.FromSlash(target.Path))); err != nil {
+		if err := os.Remove(filepath.Join(b, filepath.FromSlash(replaced.Path))); err != nil {
 			t.Fatal(err)
 		}
-		err := VerifySharedFingerprints(ctx, b, sample)
-		if !errors.Is(err, ErrSharedFingerprintMismatch) || errors.Is(err, ErrSharedFingerprintChanged) {
-			t.Fatal("missing file must be a mismatch, not an edit", err)
+		if err := os.Mkdir(filepath.Join(b, filepath.FromSlash(replaced.Path)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		found := differences(t, VerifySharedFingerprints(ctx, b, sample))
+		if len(found) != 3 {
+			t.Fatal("want exactly the three differences", found)
+		}
+		got := found[changed.Path]
+		digest := sha256.Sum256(content)
+		if got.Status != SharedFingerprintChanged || got.Size != int64(len(content)) || got.SHA256 != hex.EncodeToString(digest[:]) {
+			t.Fatal("a changed file must carry what this node read", got)
+		}
+		if found[missing.Path].Status != SharedFingerprintMissing {
+			t.Fatal("a missing file must be reported as missing", found[missing.Path])
+		}
+		if found[replaced.Path].Status != SharedFingerprintUnreadable || found[replaced.Path].Message == "" {
+			t.Fatal("a directory in place of a file must be unreadable, with a reason", found[replaced.Path])
 		}
 	})
 	t.Run("empty directory", func(t *testing.T) {
-		if err := VerifySharedFingerprints(ctx, t.TempDir(), sample); !errors.Is(err, ErrSharedFingerprintMismatch) {
-			t.Fatal("an empty directory matched a populated sample", err)
+		found := differences(t, VerifySharedFingerprints(ctx, t.TempDir(), sample))
+		for _, fingerprint := range sample {
+			if found[fingerprint.Path].Status != SharedFingerprintMissing {
+				t.Fatal("an empty directory must miss every sampled file", found)
+			}
 		}
 	})
 }
@@ -118,7 +140,7 @@ func TestSharedFingerprintsHashFirstAndLastEdges(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	large := bytes.Repeat([]byte("z"), 4*sharedFingerprintEdge)
 	writeTree(t, a, map[string][]byte{"large.bin": large})
-	sample, err := SampleSharedFingerprints(ctx, a, 0)
+	sample, err := SampleSharedFingerprints(ctx, a, 0, false)
 	if err != nil || len(sample) != 1 {
 		t.Fatal(sample, err)
 	}
@@ -133,8 +155,8 @@ func TestSharedFingerprintsHashFirstAndLastEdges(t *testing.T) {
 		edge := append([]byte(nil), large...)
 		edge[offset] = 'e'
 		writeTree(t, b, map[string][]byte{"large.bin": edge})
-		if err := VerifySharedFingerprints(ctx, b, sample); !errors.Is(err, ErrSharedFingerprintChanged) {
-			t.Fatalf("change at offset %d was not detected: %v", offset, err)
+		if found := differences(t, VerifySharedFingerprints(ctx, b, sample)); found["large.bin"].Status != SharedFingerprintChanged {
+			t.Fatalf("change at offset %d was not detected: %v", offset, found)
 		}
 	}
 }
@@ -148,15 +170,15 @@ func TestSharedFingerprintsEmptyRoot(t *testing.T) {
 	}
 	writeTree(t, empty, map[string][]byte{".oss-transfer-0123.tmp": []byte("temporary")})
 	writeTree(t, populated, map[string][]byte{"data.txt": []byte("data")})
-	sample, err := SampleSharedFingerprints(ctx, empty, 0)
+	sample, err := SampleSharedFingerprints(ctx, empty, 0, false)
 	if err != nil || len(sample) != 0 {
 		t.Fatal("empty root produced a sample", sample, err)
 	}
 	if err := VerifySharedFingerprints(ctx, alsoEmpty, sample); err != nil {
 		t.Fatal("two empty roots must pass", err)
 	}
-	if err := VerifySharedFingerprints(ctx, populated, sample); !errors.Is(err, ErrSharedFingerprintMismatch) {
-		t.Fatal("a populated root matched an empty one", err)
+	if found := differences(t, VerifySharedFingerprints(ctx, populated, sample)); found["data.txt"].Status != SharedFingerprintUnexpected {
+		t.Fatal("a populated root matched an empty one", found)
 	}
 }
 
@@ -176,7 +198,7 @@ func TestSharedFingerprintsSkipToolFilesAndSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 5 {
-		sample, err := SampleSharedFingerprints(ctx, root, 0)
+		sample, err := SampleSharedFingerprints(ctx, root, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,7 +224,7 @@ func TestSharedFingerprintMemoReusesOnlyTheSameUnchangedFile(t *testing.T) {
 	root := t.TempDir()
 	name := filepath.Join(root, "data.bin")
 	writeTree(t, root, map[string][]byte{"data.bin": []byte("original")})
-	sample, err := SampleSharedFingerprints(ctx, root, 0)
+	sample, err := SampleSharedFingerprints(ctx, root, 0, false)
 	if err != nil || len(sample) != 1 {
 		t.Fatal(sample, err)
 	}
@@ -232,8 +254,8 @@ func TestSharedFingerprintMemoReusesOnlyTheSameUnchangedFile(t *testing.T) {
 	if err := memo.Verify(ctx, root, sample); err != nil {
 		t.Fatal("unchanged file metadata did not reuse the digest", err)
 	}
-	if err := VerifySharedFingerprints(ctx, root, sample); !errors.Is(err, ErrSharedFingerprintChanged) {
-		t.Fatal("a fresh read did not see the edit", err)
+	if found := differences(t, VerifySharedFingerprints(ctx, root, sample)); found["data.bin"].Status != SharedFingerprintChanged {
+		t.Fatal("a fresh read did not see the edit", found)
 	}
 	// A replacement is another file, even with the same size and time.
 	replacement := filepath.Join(root, "replacement")
@@ -256,14 +278,14 @@ func TestSharedFingerprintMemoReusesOnlyTheSameUnchangedFile(t *testing.T) {
 	if err := os.Chtimes(name, info.ModTime().Add(time.Hour), info.ModTime().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := memo.Verify(ctx, root, sample); !errors.Is(err, ErrSharedFingerprintChanged) {
-		t.Fatal("a changed file was answered from the memo", err)
+	if found := differences(t, memo.Verify(ctx, root, sample)); found["data.bin"].Status != SharedFingerprintChanged {
+		t.Fatal("a changed file was answered from the memo", found)
 	}
 	if err := os.Remove(name); err != nil {
 		t.Fatal(err)
 	}
-	if err := memo.Verify(ctx, root, sample); !errors.Is(err, ErrSharedFingerprintMismatch) || errors.Is(err, ErrSharedFingerprintChanged) {
-		t.Fatal("a missing file was answered from the memo", err)
+	if found := differences(t, memo.Verify(ctx, root, sample)); found["data.bin"].Status != SharedFingerprintMissing {
+		t.Fatal("a missing file was answered from the memo", found)
 	}
 }
 
@@ -282,7 +304,7 @@ func TestSharedFingerprintRequestsAreBounded(t *testing.T) {
 	if err := ValidateSharedFingerprints([]SharedFingerprint{valid}); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"", ".", "/etc/passwd", "../outside", "dir/../../outside", "dir/./file", "dir//file", "dir/", `dir\file`, "C:/file", ".oss-transfer-shared-probe-x", "dir/.oss-transfer-1.tmp", "nul\x00byte", strings.Repeat("a", SharedFingerprintMaxPath+1)} {
+	for _, name := range []string{"", ".", "/etc/passwd", "../outside", "dir/../../outside", "dir/./file", "dir//file", "dir/", `dir\file`, ".oss-transfer-shared-probe-x", "dir/.oss-transfer-1.tmp", "nul\x00byte", "bad-\xff-utf8", strings.Repeat("a", SharedFingerprintMaxPath+1)} {
 		bad := valid
 		bad.Path = name
 		if err := ValidateSharedFingerprints([]SharedFingerprint{bad}); !errors.Is(err, ErrSharedFingerprint) {
@@ -315,21 +337,23 @@ func TestSharedFingerprintRequestsAreBounded(t *testing.T) {
 	}
 }
 
-func TestReadOnlyStorageClassification(t *testing.T) {
+func TestUnwritableStorageClassification(t *testing.T) {
 	wrap := func(err error) error { return &fs.PathError{Op: "open", Path: "/shared/x", Err: err} }
-	for _, err := range []error{wrap(syscall.EACCES), wrap(syscall.EPERM), wrap(syscall.EROFS), fmt.Errorf("probe: %w", wrap(fs.ErrPermission))} {
-		if !IsReadOnlyStorage(err) {
-			t.Fatalf("%v is a read-only or permission error", err)
+	for _, err := range []error{wrap(syscall.EACCES), wrap(syscall.EPERM), wrap(syscall.EROFS), wrap(syscall.ENOSPC), wrap(syscall.EDQUOT), fmt.Errorf("probe: %w", wrap(fs.ErrPermission))} {
+		if !IsUnwritableStorage(err) {
+			t.Fatalf("%v means the root cannot be written", err)
 		}
 	}
-	for _, err := range []error{nil, wrap(syscall.ENOSPC), wrap(syscall.EIO), wrap(fs.ErrNotExist), errors.New("permission denied")} {
-		if IsReadOnlyStorage(err) {
-			t.Fatalf("%v is not a read-only or permission error", err)
+	for _, err := range []error{nil, wrap(syscall.EIO), wrap(fs.ErrNotExist), errors.New("permission denied")} {
+		if IsUnwritableStorage(err) {
+			t.Fatalf("%v does not mean the root cannot be written", err)
 		}
 	}
 	if runtime.GOOS == "windows" {
-		if !IsReadOnlyStorage(wrap(syscall.Errno(19))) || !IsReadOnlyStorage(wrap(syscall.Errno(5))) {
-			t.Fatal("Windows write protection and access denied are read-only errors")
+		for _, code := range []syscall.Errno{5, 19, 39, 112, 1295} {
+			if !IsUnwritableStorage(wrap(code)) {
+				t.Fatalf("Windows error %d means the root cannot be written", code)
+			}
 		}
 	}
 }

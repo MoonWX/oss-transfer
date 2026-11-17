@@ -442,7 +442,7 @@ func (s *Service) LeaseCapabilities() map[string]any {
 	if s.Leases == nil {
 		return nil
 	}
-	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol, "sourceRefreshProtocol": SourceRefreshProtocol, "storageAddressingProtocol": StorageAddressingProtocol}
+	capabilities := map[string]any{"leaseProtocol": 2, "leaseBootId": s.Leases.bootID, "queuedHandoffProtocol": 1, "rangedDownloadProtocol": RangedDownloadProtocol, "retryFailedProtocol": RetryFailedProtocol, "conflictPolicyProtocol": ConflictPolicyProtocol, "sourceRefreshProtocol": SourceRefreshProtocol, "storageAddressingProtocol": StorageAddressingProtocol, "sharedProofProtocol": SharedProofProtocol}
 	if s.Comparisons != nil {
 		capabilities["comparisonProtocol"] = comparison.Protocol
 	}

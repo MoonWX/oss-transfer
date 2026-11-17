@@ -228,7 +228,7 @@ type reportCoverage struct {
 	SharedCheckSkipped bool `json:"sharedCheckSkipped,omitempty"`
 }
 
-const sharedCheckSkippedMeaning = "The shared directory check was skipped at the operator's request. The execution nodes were not verified to see the same storage, so the destination can miss objects or hold objects read from different data even when every row reports success."
+const sharedCheckSkippedMeaning = "The shared directory check was skipped at the operator's request, so the execution nodes were not verified to see the same storage, including nodes added later. If they did not, an upload can miss files or read them from different copies, and a download leaves the files split across separate directories with none of them complete; every row can still report success."
 
 func newCoverage(p task.Parent) reportCoverage {
 	return reportCoverage{SharedCheckSkipped: p.Spec.SharedCheckSkipped, ParentTaskID: p.ID, Status: p.Status, ScanComplete: p.ScanComplete, Stable: true, ResultCounts: map[string]int64{"SUCCESS": 0, "SKIPPED": 0, "FAILED": 0, "UNPROCESSED": 0, "UNKNOWN": 0}, ResultBytes: map[string]int64{}, PartialReasons: []string{}, NodeIssues: map[string]string{}}

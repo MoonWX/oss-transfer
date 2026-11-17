@@ -65,7 +65,12 @@ const SchemaTaskHandoff = 10
 // joins, drains and removals when they rewrite a task.
 const SchemaTaskMembership = 11
 
-const latestSchema = SchemaTaskMembership
+// SchemaSharedCheckSkipped prevents older Masters from silently dropping the
+// record that a task's shared directory check was skipped when they rewrite
+// the task, and from blocking it on a check its operator chose to skip.
+const SchemaSharedCheckSkipped = 12
+
+const latestSchema = SchemaSharedCheckSkipped
 
 type databaseFormat struct {
 	Role          string `json:"role"`

@@ -79,7 +79,7 @@ type taskCreateRequest struct {
 
 // skipSharedCheckUnacknowledged names the consequences, so an API caller sees
 // what the acknowledgement accepts.
-const skipSharedCheckUnacknowledged = "skipSharedCheck requires skipSharedCheckAcknowledged:true, confirming that every selected node mounts the same storage; otherwise files can be missed or read from different data while the task still reports success"
+const skipSharedCheckUnacknowledged = "skipSharedCheck requires skipSharedCheckAcknowledged:true, confirming that every selected node mounts the same storage. If they do not, an upload can miss files or read them from different copies, and a download leaves the files split across separate directories, while the task still reports success"
 
 type bindingCheck struct {
 	taskBinding

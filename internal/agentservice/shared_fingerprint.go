@@ -9,20 +9,27 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
-// SharedContentChangedCode marks a fingerprint mismatch where the sampled file
-// exists but its size or content changed since sampling.
-const SharedContentChangedCode = "shared_content_changed"
+// SharedProofProtocol is advertised by Agents that implement
+// shared_fingerprint_sample, shared_fingerprint_verify and shared_proof_skip.
+const SharedProofProtocol = 1
 
-// ReadOnlyStorageCode tells the Master that a shared probe could not be
-// written only because the root is read-only or not writable by this Agent.
-const ReadOnlyStorageCode = "read_only_storage"
+// SharedFingerprintMismatchCode marks a verification whose sampled files this
+// Agent sees differently; the response lists every difference.
+const SharedFingerprintMismatchCode = "shared_fingerprint_mismatch"
+
+// UnwritableStorageCode tells the Master that a shared probe could not be
+// written only because this Agent cannot write the root: no permission, a
+// read-only file system, or no space left.
+const UnwritableStorageCode = "storage_not_writable"
 
 // SharedFingerprintSampleRequest asks one Agent to fingerprint up to Limit
 // existing files under Root (at most transferstore.SharedFingerprintMaxFiles;
-// zero means that maximum).
+// zero means that maximum). Portable restricts the sample to names that a
+// Windows Agent can open; the Master sets it when one takes part.
 type SharedFingerprintSampleRequest struct {
-	Root  string `json:"root"`
-	Limit int    `json:"limit,omitempty"`
+	Root     string `json:"root"`
+	Limit    int    `json:"limit,omitempty"`
+	Portable bool   `json:"portable,omitempty"`
 }
 
 type SharedFingerprintSampleResponse struct {
@@ -39,12 +46,26 @@ type SharedFingerprintVerifyRequest struct {
 	Fingerprints []transferstore.SharedFingerprint `json:"fingerprints"`
 }
 
+// SharedFingerprintMismatch is the body of a 409 shared_fingerprint_mismatch.
+type SharedFingerprintMismatch struct {
+	Code        string                                      `json:"code"`
+	Message     string                                      `json:"message"`
+	Differences []transferstore.SharedFingerprintDifference `json:"differences"`
+}
+
 // SharedProofSkipRequest records a proof for a task whose operator chose to
 // skip the shared-directory check; see SharedVerifier.Skip.
 type SharedProofSkipRequest struct {
 	ParentID   int64  `json:"parentId"`
 	Generation uint64 `json:"generation"`
 	Root       string `json:"root"`
+}
+
+// SharedProofSkipResponse says whether this Agent process held no proof for
+// the task generation and root before, so the Master logs each new grant.
+type SharedProofSkipResponse struct {
+	Verified bool `json:"verified"`
+	Granted  bool `json:"granted"`
 }
 
 func (r SharedFingerprintSampleRequest) validate() error {
@@ -67,20 +88,21 @@ func (r SharedFingerprintVerifyRequest) validate() error {
 	return transferstore.ValidateSharedFingerprints(r.Fingerprints)
 }
 
-// sharedWriteResponse marks a probe write refused by permissions or a
-// read-only file system, so the Master can verify a read-only upload source
-// by content fingerprints instead of failing.
+// sharedWriteResponse marks a probe write refused because this Agent cannot
+// write the root, so the Master can compare sampled files of an upload source
+// instead of failing.
 func sharedWriteResponse(value any, err error) (agenttransport.Response, error) {
-	if err != nil && transferstore.IsReadOnlyStorage(err) {
-		data, _ := json.Marshal(map[string]string{"code": ReadOnlyStorageCode, "message": err.Error()})
+	if err != nil && transferstore.IsUnwritableStorage(err) {
+		data, _ := json.Marshal(map[string]string{"code": UnwritableStorageCode, "message": err.Error()})
 		return agenttransport.Response{Status: 403, Payload: data}, nil
 	}
 	return response(value, err)
 }
 
 func sharedFingerprintResponse(value any, err error) (agenttransport.Response, error) {
-	if errors.Is(err, transferstore.ErrSharedFingerprintChanged) {
-		data, _ := json.Marshal(map[string]string{"code": SharedContentChangedCode, "message": err.Error()})
+	var mismatch *transferstore.SharedFingerprintMismatchError
+	if errors.As(err, &mismatch) {
+		data, _ := json.Marshal(SharedFingerprintMismatch{Code: SharedFingerprintMismatchCode, Message: err.Error(), Differences: mismatch.Differences})
 		return agenttransport.Response{Status: 409, Payload: data}, nil
 	}
 	return response(value, err)

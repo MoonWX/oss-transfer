@@ -17,8 +17,9 @@ import (
 )
 
 // taskStorageProof is how takeover recognizes the original shared directory:
-// a marker written at failover setup or, for a read-only upload source, the
-// fingerprints of files sampled then (ReadOnly; possibly none for an empty one).
+// a marker written at failover setup or, for an upload source that no node
+// could write to, the fingerprints of sampled files (ReadOnly; none for a
+// source in which a complete listing found no file).
 type taskStorageProof struct {
 	Probe        transferstore.SharedProbe         `json:"probe"`
 	Ready        bool                              `json:"ready"`
@@ -70,17 +71,27 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 		}
 		// This is the only creation site. Once sealed, a missing marker is a failed
 		// mount check; it must never be recreated on an isolated replacement volume.
-		if err := t.server.agentCall(ctx, nodeSession(nodes[0]), "shared_probe_ensure", true, request(nodes[0]), nil); err != nil {
-			if p.Spec.Source.Kind != "LOCAL" || !readOnlyWriteFailure(err) {
+		// Any node may write an upload source's marker, as in the precheck.
+		written := false
+		for _, node := range nodes {
+			err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_ensure", true, request(node), nil)
+			if err == nil {
+				written = true
+				break
+			}
+			if p.Spec.Source.Kind != "LOCAL" || !unwritableFailure(err) {
 				return err
 			}
-			// A read-only upload source keeps the sampled fingerprints instead;
-			// later checks compare against them, not a fresh sample.
+		}
+		if !written {
+			// No node can write the upload source: keep sampled fingerprints
+			// instead; later checks compare against them, not a fresh sample.
 			sample, _, err := t.server.proveSharedFingerprints(ctx, nodes, p.ID, p.Generation)
 			if err != nil {
 				return err
 			}
 			proof.ReadOnly, proof.Fingerprints, proof.Ready = true, sample, true
+			log.Printf("task %d generation %d: no node could write the takeover marker into the shared source (%s); takeover compares %d sampled files instead", p.ID, p.Generation, t.server.nodeLabels(nodes), len(sample))
 			return t.server.store.Update(func(tx *state.Tx) error {
 				if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
 					return err
@@ -110,35 +121,107 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 	})
 }
 
-// verifyReadOnlyTaskStorage compares every node with the fingerprints sampled
-// when failover was set up. Source files can be edited during a task, so a
-// sample whose files merely changed is replaced, but only when at least two
-// nodes agree on a fresh sample: one node alone could be looking at another
-// directory. A missing sampled file is never accepted, as an unmounted share
-// typically shows an empty directory.
-func (t *taskRuntime) verifyReadOnlyTaskStorage(ctx context.Context, p task.Parent, nodes []task.Node, key string, proof taskStorageProof) error {
-	var stale error
-	for _, node := range nodes {
-		err := t.server.verifySharedFingerprints(ctx, node, p.ID, p.Generation, proof.Fingerprints)
-		if err == nil {
-			continue
-		}
-		if !sharedContentChanged(err) {
-			return fmt.Errorf("cannot verify the original shared directory: %w", err)
-		}
-		stale = errors.Join(stale, err)
+// sampleView is what one node sees at one sampled path, in a form that is
+// equal exactly when two nodes see the same thing: "" for the sampled
+// content, otherwise the difference, with the new size and digest of an edit.
+func sampleView(difference transferstore.SharedFingerprintDifference, found bool) string {
+	switch {
+	case !found:
+		return ""
+	case difference.Status == transferstore.SharedFingerprintChanged:
+		return fmt.Sprintf("%s %d %s", difference.Status, difference.Size, difference.SHA256)
 	}
-	if stale == nil {
+	return difference.Status
+}
+
+// verifyReadOnlyTaskStorage compares nodes with the fingerprints sampled when
+// takeover was set up. Nodes that see different data at a sampled path do not
+// see the same storage and are refused. When every node sees the same change
+// at the source (a file edited, removed or made unreadable, or files added to
+// a source that had none) and at least two nodes agree, the sample follows the
+// source: removed files are dropped, edited ones keep their new fingerprints
+// and fresh files top it up, all compared on every node again. One node alone
+// cannot tell such a change from another directory, and a source with no file
+// left looks like an unmounted share, so both keep waiting.
+func (t *taskRuntime) verifyReadOnlyTaskStorage(ctx context.Context, p task.Parent, nodes []task.Node, key string, proof taskStorageProof) error {
+	ctx, cancel := context.WithTimeout(ctx, sharedFingerprintBudget)
+	defer cancel()
+	server := t.server
+	checks := server.compareSharedFingerprints(ctx, nodes, p.ID, p.Generation, proof.Fingerprints)
+	changed := false
+	for _, check := range checks {
+		if check.err != nil {
+			return fmt.Errorf("cannot verify the original shared directory: %w", check.err)
+		}
+		changed = changed || len(check.differences) > 0
+	}
+	if !changed {
 		return nil
 	}
-	if len(nodes) < 2 {
-		return fmt.Errorf("cannot verify the original shared directory: %w", stale)
+	// An empty sample has one pseudo path: whether a node finds any file.
+	expected := proof.Fingerprints
+	if len(expected) == 0 {
+		expected = []transferstore.SharedFingerprint{{}}
 	}
-	sample, _, err := t.server.proveSharedFingerprints(ctx, nodes, p.ID, p.Generation)
-	if err != nil {
-		return fmt.Errorf("cannot verify the original shared directory: %w", errors.Join(stale, err))
+	views := make([]map[string]transferstore.SharedFingerprintDifference, len(checks))
+	for i, check := range checks {
+		views[i] = map[string]transferstore.SharedFingerprintDifference{}
+		for _, difference := range check.differences {
+			path := difference.Path
+			if len(proof.Fingerprints) == 0 {
+				path = ""
+			}
+			views[i][path] = difference
+		}
 	}
-	log.Printf("task %d generation %d: sampled files of the read-only shared source changed; %d nodes agree on a new sample of %d files", p.ID, p.Generation, len(nodes), len(sample))
+	var kept []transferstore.SharedFingerprint
+	edited, removed := 0, 0
+	for _, want := range expected {
+		first, firstFound := views[0][want.Path]
+		for i := 1; i < len(checks); i++ {
+			other, otherFound := views[i][want.Path]
+			if sampleView(first, firstFound) != sampleView(other, otherFound) {
+				return t.sampleDisagreement(want.Path, len(proof.Fingerprints) == 0, nodes[0], first, firstFound, nodes[i], other, otherFound)
+			}
+		}
+		if len(nodes) < 2 && firstFound {
+			return singleNodeSampleChange(server.nodeLabel(nodes[0]), first, len(proof.Fingerprints) == 0)
+		}
+		switch {
+		case !firstFound:
+			kept = append(kept, want)
+		case first.Status == transferstore.SharedFingerprintChanged:
+			kept = append(kept, transferstore.SharedFingerprint{Path: want.Path, Size: first.Size, SHA256: first.SHA256})
+			edited++
+		case first.Status != transferstore.SharedFingerprintUnexpected:
+			removed++
+		}
+	}
+	sample := kept
+	if len(sample) < transferstore.SharedFingerprintMaxFiles {
+		fresh, err := server.sampleSharedFingerprints(ctx, nodes[0], server.fingerprintPortable(ctx, nodes))
+		if err != nil {
+			return fmt.Errorf("cannot verify the original shared directory: %w", fingerprintTimeout(ctx, err))
+		}
+		known := map[string]bool{}
+		for _, fingerprint := range kept {
+			known[fingerprint.Path] = true
+		}
+		for _, fingerprint := range fresh {
+			if len(sample) < transferstore.SharedFingerprintMaxFiles && !known[fingerprint.Path] {
+				sample = append(sample, fingerprint)
+			}
+		}
+	}
+	if len(sample) == 0 {
+		return fmt.Errorf("cannot verify the original shared directory: none of the %d files sampled when takeover was set up is left, and no node finds a file to sample now; check that the shared directory is still mounted on %s", len(proof.Fingerprints), server.nodeLabels(nodes))
+	}
+	for _, check := range server.compareSharedFingerprints(ctx, nodes, p.ID, p.Generation, sample) {
+		if !check.matched() {
+			return fmt.Errorf("cannot verify the original shared directory: %w", fingerprintTimeout(ctx, server.fingerprintFailure(ctx, nodes[0], check)))
+		}
+	}
+	log.Printf("task %d generation %d: sampled files of the shared source changed at the source (%d edited, %d removed or unreadable, of %d sampled); nodes %s all see the same change, and the sample now has %d files that match on every one of them", p.ID, p.Generation, edited, removed, len(proof.Fingerprints), server.nodeLabels(nodes), len(sample))
 	proof.Fingerprints = sample
 	return t.server.store.Update(func(tx *state.Tx) error {
 		if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
@@ -146,6 +229,47 @@ func (t *taskRuntime) verifyReadOnlyTaskStorage(ctx context.Context, p task.Pare
 		}
 		return tx.Put("master-task-storage-proofs", key, proof)
 	})
+}
+
+// sampleDisagreement explains two nodes that see different things at one
+// sampled path: direct evidence that they do not see the same storage.
+func (t *taskRuntime) sampleDisagreement(path string, emptySample bool, a task.Node, aDiff transferstore.SharedFingerprintDifference, aFound bool, b task.Node, bDiff transferstore.SharedFingerprintDifference, bFound bool) error {
+	first, second := t.server.nodeLabel(a), t.server.nodeLabel(b)
+	if emptySample {
+		// One node finds a file, the other finds none.
+		finder, found, other := first, aDiff.Path, second
+		if !aFound {
+			finder, found, other = second, bDiff.Path, first
+		}
+		return fmt.Errorf("Node %s finds file %q in the shared directory, which had no file when takeover was set up, but node %s finds none, so they do not see the same storage", finder, found, other)
+	}
+	describe := func(difference transferstore.SharedFingerprintDifference, found bool) string {
+		switch {
+		case !found:
+			return "matches the sample"
+		case difference.Status == transferstore.SharedFingerprintChanged:
+			return "has another size or another first or last 64 KiB"
+		case difference.Status == transferstore.SharedFingerprintMissing:
+			return "is missing"
+		}
+		return "cannot be read: " + difference.Message
+	}
+	return fmt.Errorf("Nodes %s and %s see different data at sampled file %q (on %s it %s, on %s it %s), so they do not see the same storage", first, second, path, first, describe(aDiff, aFound), second, describe(bDiff, bFound))
+}
+
+// singleNodeSampleChange explains why one node alone cannot accept a change
+// to the sampled files.
+func singleNodeSampleChange(node string, difference transferstore.SharedFingerprintDifference, emptySample bool) error {
+	const wait = "with one node online, a change at the source cannot be told apart from a different directory, so the check is repeated until another task node is online and sees the same change"
+	switch {
+	case emptySample:
+		return fmt.Errorf("cannot verify the original shared directory: it had no file when takeover was set up, but node %s now finds %q; %s", node, difference.Path, wait)
+	case difference.Status == transferstore.SharedFingerprintChanged:
+		return fmt.Errorf("cannot verify the original shared directory: sampled file %q has changed on node %s since takeover was set up; %s", difference.Path, node, wait)
+	case difference.Status == transferstore.SharedFingerprintMissing:
+		return fmt.Errorf("cannot verify the original shared directory: sampled file %q is missing on node %s; %s", difference.Path, node, wait)
+	}
+	return fmt.Errorf("cannot verify the original shared directory: node %s cannot read sampled file %q (%s); %s", node, difference.Path, difference.Message, wait)
 }
 
 func (t *taskRuntime) enableFailover(ctx context.Context, p task.Parent, available map[string]bool) (task.Parent, error) {
@@ -236,6 +360,9 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 		}
 		if err = t.verifyTaskStorage(ctx, p, candidates, false); err != nil {
 			return p, err
+		}
+		if p.Spec.SharedCheckSkipped {
+			log.Printf("task %d generation %d: node %s is lost; its work moves to %s without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(node), t.server.nodeLabels(candidates))
 		}
 		p, err = t.retireUnavailableNode(p, node)
 		if err != nil {

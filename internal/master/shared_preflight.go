@@ -97,7 +97,14 @@ func (s *Server) validateSharedBindings(ctx context.Context, spec *task.Spec, ch
 	}
 	if spec.SharedCheckSkipped {
 		// The operator acknowledged the risk: the directories exist, but
-		// nothing proves that they are the same storage.
+		// nothing proves that they are the same storage. Every Agent must
+		// still be able to record the skipped check, or the task never starts.
+		if failed, err := s.sharedSkipUnsupported(ctx, spec.Nodes); err != nil {
+			invalidateUnverifiedSharedBindings(ctx, checks)
+			checks[failed].Code = "AGENT_UPGRADE_REQUIRED"
+			checks[failed].Message = err.Error()
+			return err
+		}
 		for i := range checks {
 			checks[i].Code = "SHARED_STORAGE_CHECK_SKIPPED"
 			checks[i].Message = localizeContext(ctx, "Shared directory check skipped as requested; the nodes were not verified to see the same storage")
@@ -106,23 +113,33 @@ func (s *Server) validateSharedBindings(ctx context.Context, spec *task.Spec, ch
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	// An upload source that no node may write to is still a valid source.
-	// Only then, and only for permission or read-only errors, compare file
-	// contents instead; a download destination must always be writable.
-	readOnly := spec.Direction == "LOCAL_TO_OSS"
+	// An upload source that no node can write to is still a valid source.
+	// Only then, and only when every write failed because the root cannot be
+	// written (no permission, read-only or full), compare sampled files
+	// instead; a download destination must always be writable.
+	unwritable := spec.Direction == "LOCAL_TO_OSS"
+	var otherWriteErr error
+	otherWriter := -1
 	for writer := range spec.Nodes {
 		writeFailed, failedNode, err := s.proveSharedDirectory(ctx, spec.Nodes, writer)
 		if err != nil {
-			readOnly = readOnly && writeFailed && readOnlyWriteFailure(err)
+			if writeFailed && !unwritableFailure(err) && otherWriteErr == nil {
+				otherWriteErr, otherWriter = err, failedNode
+			}
+			unwritable = unwritable && writeFailed && unwritableFailure(err)
 			if spec.Direction == "LOCAL_TO_OSS" && writeFailed && ctx.Err() == nil && writer+1 < len(spec.Nodes) {
 				continue // A source may be mounted read-only on some readers.
 			}
-			if readOnly && ctx.Err() == nil {
-				return s.validateReadOnlySharedSource(ctx, spec, checks)
+			if unwritable && ctx.Err() == nil {
+				return s.validateSharedSourceByFingerprints(ctx, spec, checks)
 			}
 			message := err.Error()
 			if writeFailed && spec.Direction == "LOCAL_TO_OSS" {
-				message = localizeContext(ctx, "Shared source verification needs one writable node; use one node for a read-only source") + ": " + message
+				// Show the failure that rules out comparing sampled files.
+				if otherWriteErr != nil {
+					message, failedNode = otherWriteErr.Error(), otherWriter
+				}
+				message = localizeContext(ctx, "No node could write the shared test file, and not every failure was a missing write permission, a read-only file system or full storage, so sampled files cannot be compared instead") + ": " + message
 			}
 			for i := range checks {
 				checks[i].Valid = false

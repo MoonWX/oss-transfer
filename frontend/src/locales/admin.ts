@@ -392,11 +392,24 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "The returned metadata fields match.",
     ja: "取得したメタデータのフィールドは一致しています。",
   },
-  "回收站保留已标记删除的任务。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。":
+  "回收站保留已标记删除的任务，选择后可还原到任务列表。永久删除仅清理任务记录，无法恢复；不删除源端或目标端的数据对象。":
     {
-      en: "The recycle bin holds deleted tasks. Permanent deletion removes task records only and cannot be undone. Source and destination objects are kept.",
-      ja: "ごみ箱には削除済みタスクが保存されます。完全削除で消去されるのはタスクレコードのみで、復元はできません。転送元と転送先のオブジェクトは残ります。",
+      en: "The recycle bin holds deleted tasks; select tasks to restore them to the task list. Permanent deletion removes task records only and cannot be undone. Source and destination objects are kept.",
+      ja: "ごみ箱には削除済みタスクが保存されます。選択するとタスク一覧に復元できます。完全削除で消去されるのはタスクレコードのみで、復元はできません。転送元と転送先のオブジェクトは残ります。",
     },
+  还原: { en: "Restore", ja: "復元" },
+  "已还原 {count} 个任务，可在任务列表中查看。": {
+    en: "Restored {count} tasks; they are in the task list again.",
+    ja: "{count} 件のタスクを復元しました。タスク一覧で確認できます。",
+  },
+  "部分任务未还原：{value1}": {
+    en: "Some tasks were not restored: {value1}",
+    ja: "一部のタスクは復元されませんでした: {value1}",
+  },
+  "请刷新后重试。": {
+    en: "Refresh and try again.",
+    ja: "更新してから再試行してください。",
+  },
   "节点清单读取失败，无法确认回收站是否覆盖全部节点。": {
     en: "The node list could not be read. Recycle bin coverage is unknown.",
     ja: "ノード一覧を取得できないため、全ノードのごみ箱データが揃っているか確認できません。",

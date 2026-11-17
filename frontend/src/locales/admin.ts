@@ -1094,6 +1094,18 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "{count} nodes did not confirm the new limit. Check node status and try again.",
     ja: "{count} 台の実行ノードで新しい制限値を確認できませんでした。ノードの状態を確認してから再試行してください。",
   },
+  "{count} 个执行节点的版本不支持“{type}”限速，请先升级。": {
+    en: "{count} nodes rejected the {type} limit because their version does not support it. Upgrade them first.",
+    ja: "{count} 台の実行ノードはバージョンが「{type}」の制限に対応していません。先に更新してください。",
+  },
+  "此节点版本不支持“{type}”限速，请先升级。": {
+    en: "This node's version does not support the {type} limit. Upgrade it first.",
+    ja: "このノードのバージョンは「{type}」の制限に対応していません。先に更新してください。",
+  },
+  "{count} 个执行节点的版本不支持“{type}”限速，不会应用此设置。": {
+    en: "The {type} limit will not take effect on {count} nodes, whose version does not support it.",
+    ja: "{count} 台の実行ノードはバージョンが「{type}」の制限に対応していないため、この設定は適用されません。",
+  },
   执行节点: {
     en: "Workers",
     ja: "実行ノード",

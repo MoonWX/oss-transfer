@@ -47,6 +47,7 @@ import NodeRateLimits, {
   adjustmentDetailsPath,
   adjustmentPhase,
   adjustmentReason,
+  localRateTypes,
   rateNames,
   rateText,
   rateTypes,
@@ -77,7 +78,11 @@ type RateResult = NodeDisplay & {
   workerIp: string;
   success?: boolean;
   message?: string;
+  /** RATE_TYPE_UNSUPPORTED: the node's version does not have this limit. */
+  code?: string;
 };
+const unsupportedRate = (result: RateResult) =>
+  result.code === "RATE_TYPE_UNSUPPORTED";
 const queues = [
   { key: "list", label: "对象扫描" },
   { key: "put", label: "对象传输" },
@@ -110,6 +115,8 @@ export default function NodesPage() {
     message: string;
     /** Nodes that did not confirm the change, as the Master reports them. */
     unconfirmed?: RateResult[];
+    /** The limit that was set, which nodes too old for it are named with. */
+    type?: RateType;
   } | null>(null);
   const [nodeEdit, setNodeEdit] = useState<{
     original: string | null;
@@ -157,6 +164,20 @@ export default function NodesPage() {
   }).length;
   const refresh = () =>
     Promise.all([workers.refresh(), history.refresh(), registry.refresh()]);
+  // Agents before local storage limits report no row for them. An offline
+  // node reports nothing, so whether it has them is unknown.
+  const lacksLocalLimits = (ip: string) => {
+    const rateLimit = workers.data?.workers?.[ip]?.rateLimit;
+    return !!rateLimit && localRateTypes.every((type) => !rateLimit[type]);
+  };
+  // The nodes a local storage limit being edited cannot take effect on.
+  const withoutLocalLimits =
+    edit && localRateTypes.includes(edit.type)
+      ? (edit.worker
+          ? [edit.worker]
+          : Object.keys(workers.data?.workers ?? {})
+        ).filter(lacksLocalLimits)
+      : [];
   const openNodeEditor = (node?: RegisteredNode) => {
     setNodeError(null);
     const worker = workers.data?.workers?.[node?.address ?? ""];
@@ -286,14 +307,26 @@ export default function NodesPage() {
         const unconfirmed = (
           Array.isArray(response.results) ? response.results : []
         ).filter((result: RateResult) => result.success !== true);
+        // A node too old for the limit rejected it; retrying cannot help
+        // until it is upgraded, so it is not counted as unconfirmed.
+        const tooOld = unconfirmed.filter(unsupportedRate).length;
+        const pending = (response.failedCount ?? unconfirmed.length) - tooOld;
         setSaveError({
-          message: t(
-            "{count} 个执行节点未确认限速设置，请核对节点状态后重试。",
-            {
-              count: formatNumber(response.failedCount ?? unconfirmed.length),
-            },
-          ),
+          message: [
+            pending > 0 &&
+              t("{count} 个执行节点未确认限速设置，请核对节点状态后重试。", {
+                count: formatNumber(pending),
+              }),
+            tooOld > 0 &&
+              t("{count} 个执行节点的版本不支持“{type}”限速，请先升级。", {
+                count: formatNumber(tooOld),
+                type: rateNames[edit.type],
+              }),
+          ]
+            .filter(Boolean)
+            .join("\n"),
           unconfirmed,
+          type: edit.type,
         });
       } else
         setSaveError({
@@ -1001,7 +1034,10 @@ export default function NodesPage() {
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             {saveError && (
               <Alert severity="error">
-                {saveError.message}
+                {/* One line per outcome: unconfirmed, and too old for the limit. */}
+                <Box component="span" sx={{ whiteSpace: "pre-line" }}>
+                  {saveError.message}
+                </Box>
                 {!!saveError.unconfirmed?.length && (
                   <Stack spacing={0.5} sx={{ mt: 0.75 }}>
                     {saveError.unconfirmed.map((result) => (
@@ -1013,10 +1049,14 @@ export default function NodesPage() {
                         {nodeLabel(result.workerIp, result)}：
                         {/* Known timeouts and cancellations are translated;
                             other Agent reasons are shown as reported. */}
-                        {(result.message &&
-                          knownRuntimeMessage(result.message)) ||
-                          result.message ||
-                          t("状态待确认")}
+                        {unsupportedRate(result) && saveError.type
+                          ? t("此节点版本不支持“{type}”限速，请先升级。", {
+                              type: rateNames[saveError.type],
+                            })
+                          : (result.message &&
+                              knownRuntimeMessage(result.message)) ||
+                            result.message ||
+                            t("状态待确认")}
                       </Typography>
                     ))}
                   </Stack>
@@ -1068,7 +1108,16 @@ export default function NodesPage() {
               }
             >
               {rateTypes.map((type) => (
-                <MenuItem key={type} value={type}>
+                <MenuItem
+                  key={type}
+                  value={type}
+                  // A node too old for local storage limits is not offered them.
+                  disabled={
+                    localRateTypes.includes(type) &&
+                    !!edit?.worker &&
+                    lacksLocalLimits(edit.worker)
+                  }
+                >
                   {rateNames[type]}
                 </MenuItem>
               ))}
@@ -1107,6 +1156,21 @@ export default function NodesPage() {
                 {t("设置逐一应用于全部执行节点，各节点使用相同上限。")}
               </Alert>
             )}
+            {edit && withoutLocalLimits.length > 0 && (
+              <Alert severity="warning">
+                {edit.worker
+                  ? t("此节点版本不支持“{type}”限速，请先升级。", {
+                      type: rateNames[edit.type],
+                    })
+                  : t(
+                      "{count} 个执行节点的版本不支持“{type}”限速，不会应用此设置。",
+                      {
+                        count: formatNumber(withoutLocalLimits.length),
+                        type: rateNames[edit.type],
+                      },
+                    )}
+              </Alert>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -1115,7 +1179,9 @@ export default function NodesPage() {
           </Button>
           <Button
             variant="contained"
-            disabled={saving}
+            disabled={
+              saving || (!!edit?.worker && withoutLocalLimits.length > 0)
+            }
             onClick={() => void saveRate()}
             startIcon={
               saving ? (

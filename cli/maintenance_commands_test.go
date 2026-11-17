@@ -394,3 +394,93 @@ func TestAgentInviteStatusIsReadOnlyAndRejectsJoinLinks(t *testing.T) {
 		t.Fatal("unknown invitation reported success")
 	}
 }
+
+// update check reads whether the Master can update itself online. A Docker,
+// manually run or unprivileged Master refuses update master, so the check
+// says why and how to upgrade it instead of suggesting that command.
+func TestUpdateCheckDoesNotSuggestAnUpdateTheMasterRefuses(t *testing.T) {
+	server := func(t *testing.T, info map[string]interface{}) *ApiClient {
+		return adminTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "POST" && r.URL.Path == "/api/master/software-updates/check":
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"version": "4.1.47", "tag": "v4.1.47"}})
+			case r.Method == "GET" && r.URL.Path == "/api/master/software-updates":
+				adminTestJSON(t, w, map[string]interface{}{"success": true, "data": map[string]interface{}{"master": map[string]interface{}{"info": info}, "agents": []interface{}{}}})
+			default:
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL)
+			}
+		})
+	}
+	container := map[string]interface{}{"version": "4.1.46", "supported": false, "reason": "CONTAINER", "detail": "此节点运行在容器中，请拉取新镜像并重建容器来更新（例如先运行 docker compose pull，再运行 docker compose up -d）"}
+	for _, test := range []struct {
+		name         string
+		info         map[string]interface{}
+		locale       cliLocale
+		wants, avoid []string
+	}{
+		{"container", container, localeZH, []string{"当前版本 v4.1.46 → 可升级到 v4.1.47", "Master 不能在线更新：此节点运行在容器中，请拉取新镜像并重建容器来更新", "Master 升级完成后，可运行 oss-transfer-cli update agents --all --yes 更新执行节点"}, []string{"update master --yes"}},
+		{"container en", container, localeEN, []string{"The Master cannot update itself online:", "After upgrading the Master, update the Agents with oss-transfer-cli update agents --all --yes"}, []string{"update master --yes"}},
+		{"container ja", container, localeJA, []string{"Master はオンラインで更新できません:", "oss-transfer-cli update agents --all --yes で Agent を更新できます"}, []string{"update master --yes"}},
+		{"unmanaged without detail", map[string]interface{}{"version": "4.1.46", "supported": false, "reason": "UNMANAGED"}, localeZH, []string{"Master 不能在线更新：此安装方式不支持在线更新，请使用安装脚本升级"}, []string{"update master --yes"}},
+		{"supported", map[string]interface{}{"version": "4.1.46", "supported": true}, localeZH, []string{"升级 Master: oss-transfer-cli update master --yes；完成后升级执行节点: oss-transfer-cli update agents --all --yes"}, []string{"不能在线更新"}},
+	} {
+		result, err := runMaintenanceCommand(server(t, test.info), "update", []string{"check"})
+		if err != nil || adminData(result)["available"] != true {
+			t.Fatalf("%s: %#v %v", test.name, result, err)
+		}
+		var out bytes.Buffer
+		renderCLIResult(&cliLocaleWriter{Writer: &out, locale: test.locale}, result)
+		for _, want := range test.wants {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s lacks %q:\n%s", test.name, want, out.String())
+			}
+		}
+		for _, avoid := range test.avoid {
+			if strings.Contains(out.String(), avoid) {
+				t.Errorf("%s contains %q:\n%s", test.name, avoid, out.String())
+			}
+		}
+	}
+}
+
+// The Master keeps the result of the last version check that someone ran and
+// never checks by itself. update status says when that check ran and, once it
+// is older than the hour the Master trusts for updates, to check again.
+func TestUpdateStatusSaysWhenTheLatestVersionWasChecked(t *testing.T) {
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	original := softwareNow
+	softwareNow = func() time.Time { return now }
+	t.Cleanup(func() { softwareNow = original })
+	status := func(checked time.Time) map[string]interface{} {
+		return map[string]interface{}{"success": true, "data": map[string]interface{}{
+			"master": map[string]interface{}{"info": map[string]interface{}{"version": "4.1.45", "supported": true}},
+			"agents": []interface{}{}, "latest": map[string]interface{}{"version": "4.1.45"}, "checkedAt": checked.Format(time.RFC3339Nano),
+		}}
+	}
+	fresh, stale := now.Add(-30*time.Minute), now.Add(-72*time.Hour)
+	for _, test := range []struct {
+		locale       cliLocale
+		checked      time.Time
+		wants, avoid []string
+	}{
+		{localeZH, fresh, []string{"最新版本: v4.1.45（检测于 " + cliLocalTime(fresh) + "）"}, []string{"update check"}},
+		{localeZH, stale, []string{"最新版本: v4.1.45（检测于 " + cliLocalTime(stale) + "，已超过 1 小时；可能已有更新的版本，请运行 oss-transfer-cli update check 重新检测）"}, nil},
+		{localeEN, stale, []string{"Latest version: v4.1.45 (checked " + cliLocalTime(stale) + ", more than an hour ago; a newer release may exist, run oss-transfer-cli update check to check again)"}, nil},
+		{localeJA, stale, []string{"最新バージョン: v4.1.45（" + cliLocalTime(stale) + " に確認。1 時間以上前の結果のため", "oss-transfer-cli update check で再確認してください"}, nil},
+	} {
+		var out bytes.Buffer
+		if !renderMaintenanceResult(&cliLocaleWriter{Writer: &out, locale: test.locale}, status(test.checked)) {
+			t.Fatal("status not rendered")
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s lacks %q:\n%s", test.locale, want, out.String())
+			}
+		}
+		for _, avoid := range test.avoid {
+			if strings.Contains(out.String(), avoid) {
+				t.Errorf("%s contains %q:\n%s", test.locale, avoid, out.String())
+			}
+		}
+	}
+}

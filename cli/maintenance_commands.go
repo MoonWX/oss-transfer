@@ -107,24 +107,33 @@ func compareReleases(left, right string) int {
 }
 
 // softwareCheck asks the Master to check for the latest stable release and
-// reports it with the Master's current version.
-func softwareCheck(client *ApiClient) (map[string]interface{}, string, string, error) {
+// reports it with the Master's own software information: its version and
+// whether it can update itself online.
+func softwareCheck(client *ApiClient) (map[string]interface{}, string, map[string]interface{}, error) {
 	result, err := client.Post("/software-updates/check", map[string]interface{}{})
 	if err != nil {
-		return result, "", "", err
+		return result, "", nil, err
 	}
 	latest, _, ok := releaseVersion(getString(adminData(result), "version"))
 	if !ok {
-		return nil, "", "", cliErrorf("Master 未返回有效的最新版本，请稍后重试 update check")
+		return nil, "", nil, cliErrorf("Master 未返回有效的最新版本，请稍后重试 update check")
 	}
 	snapshot, err := client.Get("/software-updates")
 	if err != nil {
-		return snapshot, "", "", err
+		return snapshot, "", nil, err
 	}
 	master, _ := adminData(snapshot)["master"].(map[string]interface{})
 	info, _ := master["info"].(map[string]interface{})
-	return result, latest, strings.TrimPrefix(getString(info, "version"), "v"), nil
+	return result, latest, info, nil
 }
+
+// softwareNow is the clock that judges how old a version check is.
+var softwareNow = time.Now
+
+// softwareCheckFresh is how long the Master trusts a version check: an
+// online Master update needs a check younger than this, and the console
+// checks again once its result is older.
+const softwareCheckFresh = time.Hour
 
 func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[string]interface{}, error) {
 	if action == "status" || action == "check" {
@@ -134,13 +143,24 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 		if action == "check" {
 			// The check result keeps its fields; currentVersion and available
 			// state the conclusion against the running Master.
-			result, latest, current, err := softwareCheck(client)
+			result, latest, info, err := softwareCheck(client)
 			if err != nil {
 				return result, err
 			}
+			current := strings.TrimPrefix(getString(info, "version"), "v")
 			data := adminData(result)
 			data["currentVersion"] = current
 			data["available"] = current != "" && compareReleases(latest, current) > 0
+			// A Master that cannot update itself (a container, a manual run,
+			// missing privileges) refuses update master; say why and how to
+			// upgrade it instead of suggesting that command.
+			if supported, known := info["supported"].(bool); known {
+				update := map[string]interface{}{"supported": supported}
+				if !supported {
+					update["reason"], update["detail"] = getString(info, "reason"), getString(info, "detail")
+				}
+				data["masterUpdate"] = update
+			}
 			return result, nil
 		}
 		return client.Get("/software-updates")
@@ -194,10 +214,11 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	if action == "master" {
 		// The Master installs the latest stable release it has just checked.
 		// Check on the user's behalf and default to that release.
-		result, latest, current, err := softwareCheck(client)
+		result, latest, info, err := softwareCheck(client)
 		if err != nil {
 			return result, err
 		}
+		current := strings.TrimPrefix(getString(info, "version"), "v")
 		if version != "" && version != latest {
 			return nil, cliErrorf("在线更新只能安装最新正式版 v%s；如需安装其他版本，请在 Master 主机运行安装脚本并指定 --version", latest)
 		}
@@ -371,6 +392,20 @@ func renderSoftwareCheck(out io.Writer, data map[string]interface{}) {
 		if notes := getString(data, "url"); notes != "" {
 			fmt.Fprintf(out, cliText(out, "发布说明: %s\n"), safeCLIText(notes))
 		}
+		if update, _ := data["masterUpdate"].(map[string]interface{}); update != nil && update["supported"] == false {
+			// The Master's localized detail says how to upgrade this
+			// installation; the reason code is the fallback.
+			reason := safeCLIText(getString(update, "detail"))
+			if reason == "" {
+				reason = softwareReasonText(out, getString(update, "reason"))
+			}
+			if reason == "" {
+				reason = softwareReasonText(out, "UNMANAGED")
+			}
+			fmt.Fprintf(out, cliText(out, "Master 不能在线更新：%s\n"), reason)
+			fmt.Fprintln(out, cliText(out, "Master 升级完成后，可运行 oss-transfer-cli update agents --all --yes 更新执行节点"))
+			return
+		}
 		fmt.Fprintln(out, cliText(out, "升级 Master: oss-transfer-cli update master --yes；完成后升级执行节点: oss-transfer-cli update agents --all --yes"))
 	case current != latest && strings.Contains(current, "-"):
 		// A prerelease of the next version is newer than the latest stable one.
@@ -478,7 +513,18 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 	}
 	table.Flush()
 	if latest, ok := data["latest"].(map[string]interface{}); ok {
-		fmt.Fprintf(out, cliText(out, "最新版本: v%s\n"), safeCLIText(strings.TrimPrefix(getString(latest, "version"), "v")))
+		// The Master keeps the result of the last check that someone ran;
+		// it does not check by itself. Say when that was.
+		version := safeCLIText(strings.TrimPrefix(getString(latest, "version"), "v"))
+		checked, err := time.Parse(time.RFC3339Nano, getString(data, "checkedAt"))
+		switch {
+		case err != nil || checked.IsZero():
+			fmt.Fprintf(out, cliText(out, "最新版本: v%s\n"), version)
+		case softwareNow().Sub(checked) > softwareCheckFresh:
+			fmt.Fprintf(out, cliText(out, "最新版本: v%s（检测于 %s，已超过 1 小时；可能已有更新的版本，请运行 oss-transfer-cli update check 重新检测）\n"), version, cliLocalTime(checked))
+		default:
+			fmt.Fprintf(out, cliText(out, "最新版本: v%s（检测于 %s）\n"), version, cliLocalTime(checked))
+		}
 	}
 	if data["checking"] == true {
 		fmt.Fprintln(out, cliText(out, "正在检查新版本"))

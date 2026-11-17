@@ -1409,6 +1409,7 @@ export default function TaskNodesDialog({
         open={skipDialogOpen}
         direction={view?.direction}
         scope="join"
+        othersVerified={!view?.sharedCheckSkipped}
         onCancel={() => setSkipDialogOpen(false)}
         onConfirm={() => {
           setSkipDialogOpen(false);

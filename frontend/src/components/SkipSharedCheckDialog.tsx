@@ -23,12 +23,19 @@ export default function SkipSharedCheckDialog({
   open,
   direction,
   scope,
+  othersVerified = false,
   onCancel,
   onConfirm,
 }: {
   open: boolean;
   direction?: string;
   scope: "create" | "join";
+  /**
+   * For a node change: the task's other nodes are verified while it runs,
+   * which a task that skipped the check before (at creation, for every
+   * node) may not do.
+   */
+  othersVerified?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -99,13 +106,15 @@ export default function SkipSharedCheckDialog({
             </Typography>
           ))}
         </Box>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          {join
-            ? // Only the added nodes skip the check.
-              t("任务的其他节点不受影响，运行期间仍会校验共享目录。")
-            : // Skipping at creation does not reach the nodes added later.
-              t("之后添加节点时仍会校验共享目录，除非届时再次确认跳过。")}
-        </Typography>
+        {(!join || othersVerified) && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            {join
+              ? // Only the added nodes skip the check.
+                t("任务的其他节点不受影响，运行期间仍会校验共享目录。")
+              : // Skipping at creation does not reach the nodes added later.
+                t("之后添加节点时仍会校验共享目录，除非届时再次确认跳过。")}
+          </Typography>
+        )}
         {direction === "LOCAL_TO_OSS" && (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             {t(

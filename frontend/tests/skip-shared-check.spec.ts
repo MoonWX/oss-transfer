@@ -516,6 +516,10 @@ test("a download's node change states a download's consequences and drops the sk
     await expect(joinDialog(page).getByText(consequence)).toBeVisible();
   await expect(joinDialog(page).getByText(/从错误的副本上传/)).toHaveCount(0);
   await expect(joinDialog(page).getByText(/抽样比对/)).toHaveCount(0);
+  // This task skipped the check before: its other nodes may not be verified.
+  await expect(
+    joinDialog(page).getByText(/任务的其他节点不受影响/),
+  ).toHaveCount(0);
   await joinDialog(page)
     .getByRole("checkbox", { name: "我已确认新节点挂载的是同一份存储" })
     .check();

@@ -26,10 +26,6 @@ func (s *Server) proveSharedDirectory(ctx context.Context, nodes []task.Node, wr
 			Root: node.LocalRoot, Action: action, Probe: probe,
 		}, nil)
 	}
-	unsupported := func(err error) bool {
-		var agentErr *AgentError
-		return errors.As(err, &agentErr) && (agentErr.Message == "unknown_operation" || agentErr.Message == "unsupported_operation")
-	}
 	needsCleanup := true
 	// A disconnected browser must not prevent cleanup. The strict marker name
 	// and nonce mean this can never be used to remove a user-supplied filename.
@@ -45,7 +41,7 @@ func (s *Server) proveSharedDirectory(ctx context.Context, nodes []task.Node, wr
 		}
 	}()
 	if err := call(ctx, nodes[writer], "write"); err != nil {
-		if unsupported(err) {
+		if agentLacksOperation(err) {
 			needsCleanup = false
 			return false, writer, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s before verifying shared storage"), nodeLabel(nodes[writer]))
 		}
@@ -53,7 +49,7 @@ func (s *Server) proveSharedDirectory(ctx context.Context, nodes []task.Node, wr
 	}
 	for i, node := range nodes {
 		if err := call(ctx, node, "read"); err != nil {
-			if unsupported(err) {
+			if agentLacksOperation(err) {
 				return false, i, fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s before verifying shared storage"), nodeLabel(node))
 			}
 			return false, i, fmt.Errorf(localizeContext(ctx, "Node %s could not read the shared test file: %s"), nodeLabel(node), err.Error())
@@ -101,11 +97,19 @@ func (s *Server) validateSharedBindings(ctx context.Context, spec *task.Spec, ch
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+	// An upload source that no node may write to is still a valid source.
+	// Only then, and only for permission or read-only errors, compare file
+	// contents instead; a download destination must always be writable.
+	readOnly := spec.Direction == "LOCAL_TO_OSS"
 	for writer := range spec.Nodes {
 		writeFailed, failedNode, err := s.proveSharedDirectory(ctx, spec.Nodes, writer)
 		if err != nil {
+			readOnly = readOnly && writeFailed && readOnlyWriteFailure(err)
 			if spec.Direction == "LOCAL_TO_OSS" && writeFailed && ctx.Err() == nil && writer+1 < len(spec.Nodes) {
 				continue // A source may be mounted read-only on some readers.
+			}
+			if readOnly && ctx.Err() == nil {
+				return s.validateReadOnlySharedSource(ctx, spec, checks)
 			}
 			message := err.Error()
 			if writeFailed && spec.Direction == "LOCAL_TO_OSS" {

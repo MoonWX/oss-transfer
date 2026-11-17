@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/state"
@@ -80,7 +81,16 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 		}
 	}()
 	if err := t.server.agentCall(ctx, nodeSession(origin), "shared_probe_ensure", true, request(origin), nil); err != nil {
-		return fmt.Errorf("cannot verify shared source directory: %w", err)
+		if !readOnlyWriteFailure(err) {
+			return fmt.Errorf("cannot verify shared source directory: %w", err)
+		}
+		// A read-only source cannot hold the marker; compare file contents.
+		sample, _, err := t.server.proveSharedFingerprints(ctx, p.Spec.Nodes, p.ID, p.Generation)
+		if err != nil {
+			return err
+		}
+		log.Printf("task %d generation %d: shared source directory is read-only; verified %d sampled files on %d nodes", p.ID, p.Generation, len(sample), len(p.Spec.Nodes))
+		return nil
 	}
 	for _, node := range p.Spec.Nodes {
 		if err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_verify", true, request(node), nil); err != nil {

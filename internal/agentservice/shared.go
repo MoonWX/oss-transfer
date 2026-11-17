@@ -26,6 +26,9 @@ type SharedVerifier struct {
 	mu       sync.RWMutex
 	verified map[sharedVerificationKey]bool
 	highest  map[int64]uint64
+	// fingerprints spares rereading unchanged files: the Master re-checks a
+	// read-only shared source on every task pass.
+	fingerprints transferstore.SharedFingerprintMemo
 }
 
 func NewSharedVerifier() *SharedVerifier {
@@ -33,6 +36,18 @@ func NewSharedVerifier() *SharedVerifier {
 }
 
 func (s *SharedVerifier) Verify(ctx context.Context, parentID int64, generation uint64, root string, probe transferstore.SharedProbe) error {
+	return s.prove(parentID, generation, root, func(root string) error { return transferstore.VerifySharedProbe(ctx, root, probe) })
+}
+
+// VerifyFingerprints records a proof from content fingerprints, used when the
+// shared upload source is read-only and no probe file can be written.
+func (s *SharedVerifier) VerifyFingerprints(ctx context.Context, parentID int64, generation uint64, root string, fingerprints []transferstore.SharedFingerprint) error {
+	return s.prove(parentID, generation, root, func(root string) error {
+		return s.fingerprints.Verify(ctx, root, fingerprints)
+	})
+}
+
+func (s *SharedVerifier) prove(parentID int64, generation uint64, root string, check func(root string) error) error {
 	if parentID < 1 || generation == 0 || !filepath.IsAbs(root) {
 		return errors.New("shared storage verification requires parent, generation and absolute root")
 	}
@@ -55,7 +70,7 @@ func (s *SharedVerifier) Verify(ctx context.Context, parentID int64, generation 
 		s.highest[parentID] = generation
 	}
 	delete(s.verified, key)
-	if err := transferstore.VerifySharedProbe(ctx, key.root, probe); err != nil {
+	if err := check(key.root); err != nil {
 		return err
 	}
 	s.verified[key] = true

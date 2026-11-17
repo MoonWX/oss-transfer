@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/agentservice"
@@ -15,9 +16,14 @@ import (
 	"github.com/MoonWX/oss-transfer/internal/transferstore"
 )
 
+// taskStorageProof is how takeover recognizes the original shared directory:
+// a marker written at failover setup or, for a read-only upload source, the
+// fingerprints of files sampled then (ReadOnly; possibly none for an empty one).
 type taskStorageProof struct {
-	Probe transferstore.SharedProbe `json:"probe"`
-	Ready bool                      `json:"ready"`
+	Probe        transferstore.SharedProbe         `json:"probe"`
+	Ready        bool                              `json:"ready"`
+	ReadOnly     bool                              `json:"readOnly,omitempty"`
+	Fingerprints []transferstore.SharedFingerprint `json:"fingerprints,omitempty"`
 }
 
 func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, nodes []task.Node, initialize bool) error {
@@ -61,8 +67,26 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 		// This is the only creation site. Once sealed, a missing marker is a failed
 		// mount check; it must never be recreated on an isolated replacement volume.
 		if err := t.server.agentCall(ctx, nodeSession(nodes[0]), "shared_probe_ensure", true, request(nodes[0]), nil); err != nil {
-			return err
+			if p.Spec.Source.Kind != "LOCAL" || !readOnlyWriteFailure(err) {
+				return err
+			}
+			// A read-only upload source keeps the sampled fingerprints instead;
+			// later checks compare against them, not a fresh sample.
+			sample, _, err := t.server.proveSharedFingerprints(ctx, nodes, p.ID, p.Generation)
+			if err != nil {
+				return err
+			}
+			proof.ReadOnly, proof.Fingerprints, proof.Ready = true, sample, true
+			return t.server.store.Update(func(tx *state.Tx) error {
+				if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
+					return err
+				}
+				return tx.Put("master-task-storage-proofs", key, proof)
+			})
 		}
+	}
+	if proof.ReadOnly {
+		return t.verifyReadOnlyTaskStorage(ctx, p, nodes, key, proof)
 	}
 	for _, node := range nodes {
 		if err := t.server.agentCall(ctx, nodeSession(node), "shared_probe_verify", true, request(node), nil); err != nil {
@@ -74,6 +98,44 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 		return nil
 	}
 	proof.Ready = true
+	return t.server.store.Update(func(tx *state.Tx) error {
+		if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
+			return err
+		}
+		return tx.Put("master-task-storage-proofs", key, proof)
+	})
+}
+
+// verifyReadOnlyTaskStorage compares every node with the fingerprints sampled
+// when failover was set up. Source files can be edited during a task, so a
+// sample whose files merely changed is replaced, but only when at least two
+// nodes agree on a fresh sample: one node alone could be looking at another
+// directory. A missing sampled file is never accepted, as an unmounted share
+// typically shows an empty directory.
+func (t *taskRuntime) verifyReadOnlyTaskStorage(ctx context.Context, p task.Parent, nodes []task.Node, key string, proof taskStorageProof) error {
+	var stale error
+	for _, node := range nodes {
+		err := t.server.verifySharedFingerprints(ctx, node, p.ID, p.Generation, proof.Fingerprints)
+		if err == nil {
+			continue
+		}
+		if !sharedContentChanged(err) {
+			return fmt.Errorf("cannot verify the original shared directory: %w", err)
+		}
+		stale = errors.Join(stale, err)
+	}
+	if stale == nil {
+		return nil
+	}
+	if len(nodes) < 2 {
+		return fmt.Errorf("cannot verify the original shared directory: %w", stale)
+	}
+	sample, _, err := t.server.proveSharedFingerprints(ctx, nodes, p.ID, p.Generation)
+	if err != nil {
+		return fmt.Errorf("cannot verify the original shared directory: %w", errors.Join(stale, err))
+	}
+	log.Printf("task %d generation %d: sampled files of the read-only shared source changed; %d nodes agree on a new sample of %d files", p.ID, p.Generation, len(nodes), len(sample))
+	proof.Fingerprints = sample
 	return t.server.store.Update(func(tx *state.Tx) error {
 		if err := allowTaskMetadataWrite(tx, p.ID); err != nil {
 			return err

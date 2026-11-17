@@ -317,7 +317,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete", "comparison_resume":
 		return true
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "child_retry_failed", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "child_retry_failed", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe", "shared_fingerprint_verify":
 		return true
 	}
 	return false
@@ -507,7 +507,32 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			return badRequest(err)
 		}
 		err := s.preflight.execute(ctx, request)
-		return response(map[string]any{"verified": err == nil}, err)
+		return sharedWriteResponse(map[string]any{"verified": err == nil}, err)
+	case "shared_fingerprint_sample":
+		var request SharedFingerprintSampleRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		if err := request.validate(); err != nil {
+			return badRequest(err)
+		}
+		fingerprints, err := transferstore.SampleSharedFingerprints(ctx, request.Root, request.Limit)
+		return response(SharedFingerprintSampleResponse{Fingerprints: fingerprints}, err)
+	case "shared_fingerprint_verify":
+		var request SharedFingerprintVerifyRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		if err := request.validate(); err != nil {
+			return badRequest(err)
+		}
+		var err error
+		if request.ParentID == 0 {
+			err = transferstore.VerifySharedFingerprints(ctx, request.Root, request.Fingerprints)
+		} else if err = s.Shared.VerifyFingerprints(ctx, request.ParentID, request.Generation, request.Root, request.Fingerprints); err == nil {
+			s.signal()
+		}
+		return sharedFingerprintResponse(map[string]any{"verified": err == nil}, err)
 	case "task_metrics":
 		var request struct {
 			ParentID   int64  `json:"parentId"`
@@ -565,6 +590,9 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 		switch c.Operation {
 		case "shared_probe_ensure":
 			err = transferstore.EnsureSharedProbe(ctx, request.Root, request.Probe)
+			if err != nil {
+				return sharedWriteResponse(nil, err)
+			}
 		case "shared_probe_verify":
 			err = s.Shared.Verify(ctx, request.ParentID, request.Generation, request.Root, request.Probe)
 			if err == nil {

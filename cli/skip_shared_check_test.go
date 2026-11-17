@@ -199,7 +199,7 @@ func TestTaskNodesSkipSharedCheckWarnsNeedsYesAndSendsBothFields(t *testing.T) {
 		if direction == "OSS_TO_LOCAL" {
 			want, other = other, want
 		}
-		if text := warnings.String(); !strings.Contains(text, "警告：--skip-shared-check 会跳过新加入节点的共享目录校验") || !strings.Contains(text, want) || strings.Contains(text, other) || !strings.Contains(text, "节点失联后的自动接管也不做校验") {
+		if text := warnings.String(); !strings.Contains(text, "警告：--skip-shared-check 会跳过新加入节点的共享目录校验") || !strings.Contains(text, want) || strings.Contains(text, other) || !strings.Contains(text, "新节点接管失联节点的工作时也不做校验") || !strings.Contains(text, "任务的其他节点不受影响") {
 			t.Fatalf("%s: consequences:\n%s", direction, text)
 		}
 		result, err := runTaskCommand(client, append(args, "--yes"))

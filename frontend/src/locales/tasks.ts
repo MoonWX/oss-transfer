@@ -2438,6 +2438,11 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Some agents did not return data. Results are incomplete. Unreachable agents: {nodes}",
     ja: "一部のノードからデータが返されませんでした。結果は不完全です。接続できないノード：{nodes}",
   },
+  "执行节点 {nodes} 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。":
+    {
+      en: "Offline agents with unfinished subtasks: {nodes}. Failures of those subtasks may not be reported yet, so these results may be incomplete.",
+      ja: "ノード {nodes} はオフラインです。未完了のサブタスクの失敗記録がまだ報告されていない可能性があり、結果は不完全な場合があります。",
+    },
   "记录清除后无法恢复。清除范围也包括本地迁移产生的失败对象。仅删除异常记录，不会重试迁移任务。请先导出需保留的记录。":
     {
       en: "Cleared records cannot be restored. This includes failed objects from local transfers. Only exception records are deleted; tasks are not retried. Export any records you need first.",

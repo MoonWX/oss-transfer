@@ -536,6 +536,9 @@ export default function ExceptionsPage() {
         )
       : [];
   const missingNodes = missingExceptionNodes(result, legacyNodes);
+  const missingNodeLabels = missingNodes
+    .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
+    .join("、");
   const visible = result?.items
     ? isLocal
       ? result.items
@@ -1154,13 +1157,18 @@ export default function ExceptionsPage() {
         result?.complete === false ||
         missingNodes.length > 0) && (
         <Alert severity="warning">
-          {missingNodes.length > 0
-            ? tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
-                nodes: missingNodes
-                  .map((id) => nodeLabel(id, result?.nodeDisplays?.[id]))
-                  .join("、"),
-              })
-            : tr("部分节点未返回数据，当前结果不完整。")}
+          {missingNodes.length === 0
+            ? tr("部分节点未返回数据，当前结果不完整。")
+            : hasMembershipSnapshot
+              ? // The Master reads its own failure index; it names only the
+                // offline nodes that still own unfinished subtasks.
+                tr(
+                  "执行节点 {nodes} 离线，其未完成子任务的失败记录可能尚未上报，当前结果可能不完整。",
+                  { nodes: missingNodeLabels },
+                )
+              : tr("部分节点未返回数据，当前结果不完整。不可达节点：{nodes}", {
+                  nodes: missingNodeLabels,
+                })}
           {Object.entries(result?.workerErrors ?? {}).map(([node, message]) => (
             <Typography key={node} variant="body2">
               {nodeLabel(node, result?.nodeDisplays?.[node])}：{message}

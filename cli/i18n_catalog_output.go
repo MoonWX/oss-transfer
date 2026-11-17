@@ -167,6 +167,11 @@ var cliOutputMessages = map[string][2]string{
 	"平均读取速率":          {"Average read rate", "平均読み取り速度"},
 	"已有 %s 没有新的比对结果，执行节点可能正在等待存储响应或重试。": {"No new comparison results for %s; the node may be waiting for the storage to respond, or retrying.", "%s の間、新しい比較結果がありません。ノードはストレージの応答を待っているか、再試行している可能性があります。"},
 	"未发现差异": {"No differences found", "差異は見つかりませんでした"},
+
+	// Agent updates that reach Agents offline when they are queued.
+	"已安排把 %d 个 Agent 更新到 %s；其中 %d 个当前离线，只有在队列轮到时已重新连接才会更新\n":                {"Scheduled %d agent updates to %s, including %d offline agents: each is updated only if it has reconnected when the queue reaches it\n", "%d 台の Agent を %s に更新するよう予定しました。うち %d 台は現在オフラインで、キューの順番が来たときに再接続していれば更新されます\n"},
+	"已安排把 %d 个 Agent 更新到 %s；其中 %d 个当前离线，只有在队列轮到时已重新连接才会更新；%d 个不会更新，原因见下表\n": {"Scheduled %d agent updates to %s, including %d offline agents: each is updated only if it has reconnected when the queue reaches it; %d agents will not be updated, see the table for why\n", "%d 台の Agent を %s に更新するよう予定しました。うち %d 台は現在オフラインで、キューの順番が来たときに再接続していれば更新されます。%d 台は更新されません。理由は下表のとおりです\n"},
+	"节点当前离线：队列轮到它时会等待它重新连接，最多 30 秒；连接后更新，否则跳过":                              {"The node is offline: when the queue reaches it, the Master waits up to 30 seconds for it to reconnect and then updates it; otherwise it is skipped", "ノードは現在オフラインです。キューの順番が来ると Master は最大 30 秒再接続を待ち、再接続すれば更新し、しなければスキップします"},
 }
 
 func init() {

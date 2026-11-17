@@ -254,7 +254,7 @@ func runSoftwareUpdate(client *ApiClient, action string, args []string) (map[str
 	// itself; otherwise predict whom the queue will update.
 	if _, listed := data["agents"].([]interface{}); listed && version == masterVersion && getString(queue, "phase") != "RUNNING" {
 		plan = agentUpdatePlan(agents, o.Value("worker"), version)
-		if len(plan) > 0 && !planUpdates(plan) {
+		if len(plan) > 0 && !planMayUpdate(plan) {
 			return agentUpdateNotNeeded(client, version, agents, plan), nil
 		}
 	}
@@ -317,9 +317,12 @@ func agentUpdatePlan(agents []map[string]interface{}, worker, target string) map
 	return plan
 }
 
-func planUpdates(plan map[string]string) bool {
+// planMayUpdate reports whether the queue may update an Agent of plan. An
+// Agent offline now is updated if it has reconnected when the queue reaches
+// it: the Master then waits for it to reconnect before skipping it.
+func planMayUpdate(plan map[string]string) bool {
 	for _, reason := range plan {
-		if reason == "" {
+		if reason == "" || reason == "OFFLINE" {
 			return true
 		}
 	}
@@ -362,9 +365,9 @@ func agentUpdateNotNeeded(client *ApiClient, version string, agents []map[string
 
 // agentUpdateSummary states whom a queued Agent update will update. The
 // Master queues every selected Agent and skips, one by one, those that are
-// offline, already on the target version or cannot update online; plan
-// predicts those skips with the same checks. running marks a queue that was
-// already in progress.
+// already on the target version or cannot update online, and those still
+// offline 30 seconds after the queue reached them; plan predicts those skips
+// with the same checks. running marks a queue that was already in progress.
 func agentUpdateSummary(client *ApiClient, version string, result map[string]interface{}, agents []map[string]interface{}, plan map[string]string, running bool) map[string]interface{} {
 	var text strings.Builder
 	out := &cliLocaleWriter{Writer: &text, locale: client.locale}
@@ -373,11 +376,15 @@ func agentUpdateSummary(client *ApiClient, version string, result map[string]int
 	for _, node := range agents {
 		nodes[getString(node, "address")] = node
 	}
-	updates, skips := 0, 0
+	updates, offline, skips := 0, 0, 0
 	for _, item := range items {
-		if reason, known := plan[getString(item, "address")]; plan != nil && known && reason != "" {
+		reason, known := plan[getString(item, "address")]
+		switch {
+		case plan != nil && known && reason == "OFFLINE":
+			offline++
+		case plan != nil && known && reason != "":
 			skips++
-		} else {
+		default:
 			updates++
 		}
 	}
@@ -386,6 +393,10 @@ func agentUpdateSummary(client *ApiClient, version string, result map[string]int
 		fmt.Fprint(out, cliTextf(out, "已有更新到 %s 的 Agent 更新正在进行，本次未安排新的更新\n", cliVersionText(version)))
 	case plan == nil:
 		fmt.Fprint(out, cliTextf(out, "已把 %d 个 Agent 加入更新队列，目标 %s；已是该版本、离线或不能在线更新的节点会被跳过\n", len(items), cliVersionText(version)))
+	case offline > 0 && skips > 0:
+		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s；其中 %d 个当前离线，只有在队列轮到时已重新连接才会更新；%d 个不会更新，原因见下表\n", updates+offline, cliVersionText(version), offline, skips))
+	case offline > 0:
+		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s；其中 %d 个当前离线，只有在队列轮到时已重新连接才会更新\n", updates+offline, cliVersionText(version), offline))
 	case skips > 0:
 		fmt.Fprint(out, cliTextf(out, "已安排把 %d 个 Agent 更新到 %s；%d 个不会更新，原因见下表\n", updates, cliVersionText(version), skips))
 	default:
@@ -401,7 +412,9 @@ func agentUpdateSummary(client *ApiClient, version string, result map[string]int
 			if detail == "" {
 				detail = cliUpdateReasonLabel(out, getString(item, "reason"))
 			}
-			if reason, known := plan[address]; plan != nil && known && reason != "" && getString(item, "phase") == "QUEUED" {
+			if reason, known := plan[address]; plan != nil && known && reason == "OFFLINE" && getString(item, "phase") == "QUEUED" {
+				detail = cliText(out, "节点当前离线：队列轮到它时会等待它重新连接，最多 30 秒；连接后更新，否则跳过")
+			} else if plan != nil && known && reason != "" && getString(item, "phase") == "QUEUED" {
 				phase, detail = cliText(out, "将跳过"), agentSkipText(out, nodes[address], reason)
 			}
 			if detail == "" {

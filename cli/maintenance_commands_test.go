@@ -491,9 +491,11 @@ func TestUpdateStatusSaysWhenTheLatestVersionWasChecked(t *testing.T) {
 }
 
 // The Master queues every selected Agent and then skips, one by one, those
-// already on its version, in a container, offline or otherwise unable to
-// update online. update agent(s) counts only the Agents it will update, marks
-// the others with the reason, and queues nothing when no Agent can be updated.
+// already on its version, in a container or otherwise unable to update
+// online, and those still offline 30 seconds after the queue reached them.
+// update agent(s) counts only the Agents it can update, says that an offline
+// one is updated only if it has reconnected by then, marks the others with
+// the reason, and queues nothing when no Agent can be updated.
 func TestUpdateAgentsCountsOnlyTheAgentsItWillUpdate(t *testing.T) {
 	agent := func(address, version string, extra map[string]interface{}) map[string]interface{} {
 		info := map[string]interface{}{"version": version, "supported": true}
@@ -552,15 +554,15 @@ func TestUpdateAgentsCountsOnlyTheAgentsItWillUpdate(t *testing.T) {
 	if len(posts) != 1 {
 		t.Fatal(posts)
 	}
-	for _, want := range []string{"已安排把 1 个 Agent 更新到 v4.1.47；5 个不会更新，原因见下表", "将跳过", "已是 Master 版本", "此节点运行在容器中，请拉取新镜像并重建容器来更新", "节点离线，重新连接后可更新", "update status --watch 5"} {
+	for _, want := range []string{"已安排把 2 个 Agent 更新到 v4.1.47；其中 1 个当前离线，只有在队列轮到时已重新连接才会更新；4 个不会更新，原因见下表", "将跳过", "已是 Master 版本", "此节点运行在容器中，请拉取新镜像并重建容器来更新", "节点当前离线：队列轮到它时会等待它重新连接，最多 30 秒；连接后更新，否则跳过", "update status --watch 5"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("mixed cluster lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "已安排把 6 个") || strings.Count(out, "排队中") != 1 {
-		t.Errorf("counted Agents that will be skipped:\n%s", out)
+	if strings.Contains(out, "已安排把 6 个") || strings.Count(out, "排队中") != 2 || strings.Contains(out, "节点离线，重新连接后可更新") {
+		t.Errorf("counted Agents that will be skipped, or skips an offline one at once:\n%s", out)
 	}
-	for locale, want := range map[cliLocale]string{localeEN: "Scheduled 1 agent update to v4.1.47; 5 agents will not be updated, see the table for why", localeJA: "1 台の Agent を v4.1.47 に更新するよう予定しました。5 台は更新されません"} {
+	for locale, want := range map[cliLocale]string{localeEN: "Scheduled 2 agent updates to v4.1.47, including 1 offline agent: each is updated only if it has reconnected when the queue reaches it; 4 agents will not be updated, see the table for why", localeJA: "2 台の Agent を v4.1.47 に更新するよう予定しました。うち 1 台は現在オフラインで、キューの順番が来たときに再接続していれば更新されます。4 台は更新されません"} {
 		posts = nil
 		if _, out := run(server(t, cluster, idle, &posts), locale, "agents", "--all", "--yes"); !strings.Contains(out, want) {
 			t.Errorf("%s:\n%s", locale, out)
@@ -586,6 +588,28 @@ func TestUpdateAgentsCountsOnlyTheAgentsItWillUpdate(t *testing.T) {
 		}
 		if strings.Contains(out, "已安排") || strings.Contains(out, "update status") {
 			t.Errorf("%v claims a scheduled update:\n%s", test.args, out)
+		}
+	}
+	// An Agent offline now, for example restarting or not yet reconnected to
+	// a Master that has just restarted, may be back when the queue reaches
+	// it: the update is queued for it.
+	for _, test := range []struct {
+		agents []interface{}
+		args   []string
+		want   string
+	}{
+		{cluster, []string{"agent", "--worker", "gone", "--yes"}, "已安排把 1 个 Agent 更新到 v4.1.47；其中 1 个当前离线，只有在队列轮到时已重新连接才会更新\n"},
+		{append(append([]interface{}{}, cluster[:4]...), cluster[5]), []string{"agents", "--all", "--yes"}, "已安排把 1 个 Agent 更新到 v4.1.47；其中 1 个当前离线，只有在队列轮到时已重新连接才会更新；4 个不会更新，原因见下表"},
+	} {
+		posts = nil
+		result, out := run(server(t, test.agents, idle, &posts), localeZH, test.args...)
+		if len(posts) != 1 || adminData(result)["queued"] == false || !strings.Contains(out, test.want) || !strings.Contains(out, "节点当前离线：队列轮到它时会等待它重新连接") || strings.Contains(out, "本次未安排更新") {
+			t.Fatalf("%v did not queue the offline Agent: %v\n%s", test.args, posts, out)
+		}
+	}
+	for locale, want := range map[cliLocale]string{localeZH: "队列轮到离线的 Agent 时，最多等待它重新连接 30 秒，仍未连接则跳过", localeEN: "When the queue reaches an offline Agent, it waits up to\n30 seconds for the Agent to reconnect", localeJA: "最大 30 秒再接続を待ち、再接続しなければスキップします"} {
+		if help := helpForLocale([]string{"update"}, locale); !strings.Contains(help, want) {
+			t.Errorf("%s update help lacks %q", locale, want)
 		}
 	}
 	// A queue already running answers with itself: nothing new was scheduled.

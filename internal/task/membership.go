@@ -141,6 +141,12 @@ type NodeChange struct {
 	Fingerprint        string
 	ExpectedGeneration *uint64
 	ExpectedRevision   *uint64
+	// SkipSharedCheck records that the operator explicitly chose not to
+	// verify that the local paths this change adds see the task's shared
+	// storage. The task keeps the record (Spec.SharedCheckSkipped), as when
+	// it is created that way. A change that adds no node to a local task
+	// ignores it.
+	SkipSharedCheck bool
 }
 
 type nodeRequestRecord struct {
@@ -293,6 +299,7 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 		_, ok := p.Failover.Retired[id]
 		return ok
 	}
+	joined := false
 	for _, node := range change.Add {
 		index := -1
 		for i, member := range p.Spec.Nodes {
@@ -313,6 +320,7 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			p.Spec.Nodes = append(p.Spec.Nodes, node)
 		}
 		m.Joining[node.ID] = now
+		joined = true
 		// An added node must be able to receive work, otherwise it would only
 		// dilute the working node's bandwidth/QPS share: affinity placement
 		// switches to balanced placement when a node joins.
@@ -349,6 +357,10 @@ func (p Parent) applyNodeChange(change NodeChange, now time.Time) Parent {
 			m.Draining[id] = NodeDrain{Mode: change.Mode, RequestedAt: now}
 		}
 	}
+	if change.SkipSharedCheck && joined && (p.Spec.Source.Kind == "LOCAL" || p.Spec.Destination.Kind == "LOCAL") {
+		// From now on the runtime grants every member the skipped check.
+		p.Spec.SharedCheckSkipped = true
+	}
 	m.Revision++
 	return p
 }
@@ -383,6 +395,12 @@ func (r *Repository) ChangeNodes(id int64, change NodeChange) (p Parent, replaye
 			return err
 		}
 		p = p.applyNodeChange(change, r.now().UTC())
+		if p.Spec.SharedCheckSkipped {
+			// As at creation: an older Master would drop the record.
+			if err := state.RequireSchema(tx, "master", state.SchemaSharedCheckSkipped); err != nil {
+				return err
+			}
+		}
 		if err := validateShared(p.Spec, len(p.CurrentNodes())); err != nil {
 			return err
 		}

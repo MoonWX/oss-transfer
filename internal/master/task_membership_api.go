@@ -25,15 +25,14 @@ type taskNodesRequest struct {
 	ExpectedGeneration   *uint64       `json:"expectedGeneration"`
 	ExpectedNodeRevision *uint64       `json:"expectedNodeRevision"`
 	DryRun               bool          `json:"dryRun"`
-	// SkipSharedCheckAcknowledged confirms, for a task created with the
-	// shared directory check skipped, that the added nodes mount the same
-	// storage: they are not checked either.
-	SkipSharedCheckAcknowledged bool `json:"skipSharedCheckAcknowledged"`
+	// SkipSharedCheck skips proving that the added nodes' local paths see
+	// the task's shared directory, as at creation: it is refused unless
+	// SkipSharedCheckAcknowledged is also true, and ignored unless the change
+	// adds nodes to a local transfer. Without it the added nodes are
+	// verified, even if the task was created with the check skipped.
+	SkipSharedCheck             bool `json:"skipSharedCheck,omitempty"`
+	SkipSharedCheckAcknowledged bool `json:"skipSharedCheckAcknowledged,omitempty"`
 }
-
-// skipSharedCheckJoinUnacknowledged names the consequences of adding nodes
-// without a check, so an API caller sees what the acknowledgement accepts.
-const skipSharedCheckJoinUnacknowledged = "This task was created with the shared directory check skipped, so the added nodes are not checked either. Set skipSharedCheckAcknowledged:true after confirming that they mount the same storage as the task's other nodes. If they do not, an upload can miss files or read them from a different copy, and a download leaves files in a directory the other nodes do not see, while the task still reports success"
 
 func installTaskMembershipRoutes(s *Server) {
 	s.mux.HandleFunc("GET /api/master/tasks/{id}/nodes", s.adminOnly(s.taskNodesHTTP))
@@ -132,6 +131,11 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	if len(add)+len(remove) == 0 {
 		return nil, bad("Select execution nodes to add or remove")
 	}
+	// As at creation, skipping the check needs the acknowledgement of its
+	// consequences, which the refusal names.
+	if request.SkipSharedCheck && !request.SkipSharedCheckAcknowledged {
+		return nil, membershipReject(ctx, "SHARED_CHECK_SKIP_UNACKNOWLEDGED", skipSharedCheckUnacknowledged)
+	}
 	bindings := map[string]string{}
 	bindingKeys := []string{}
 	for _, binding := range request.Bindings {
@@ -143,7 +147,12 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		bindingKeys = append(bindingKeys, address+"="+binding.LocalPath)
 	}
 	sort.Strings(bindingKeys)
-	fingerprint := digestValue(map[string]any{"add": normalizedMembers(add), "remove": normalizedMembers(remove), "bindings": bindingKeys, "mode": mode, "generation": request.ExpectedGeneration, "revision": request.ExpectedNodeRevision})
+	identity := map[string]any{"add": normalizedMembers(add), "remove": normalizedMembers(remove), "bindings": bindingKeys, "mode": mode, "generation": request.ExpectedGeneration, "revision": request.ExpectedNodeRevision}
+	if request.SkipSharedCheck {
+		// Only when set, so that other requests keep their fingerprint.
+		identity["skipSharedCheck"] = true
+	}
+	fingerprint := digestValue(identity)
 	p, err := s.tasks.repo.Get(id)
 	if errors.Is(err, task.ErrNotFound) || err == nil && p.Purged {
 		return nil, &membershipFailure{status: 404, message: localizeContext(ctx, "Task not found")}
@@ -238,9 +247,20 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 	if local && len(bindings) != len(joining)+kept {
 		return nil, bad("Provide exactly one local path for each added node")
 	}
+	// The operator's choice covers the local paths this change adds. A
+	// change that adds none ignores it and records nothing, as creation
+	// ignores it for a single node.
+	skip := request.SkipSharedCheck && local && len(joining) > 0
+	change.SkipSharedCheck = skip
 	if err := p.CheckNodeChange(change); err != nil {
 		return nil, s.membershipError(ctx, err)
 	}
+	// The runtime grants every member of a task whose check was skipped a
+	// proof without a check (shared_proof_skip), so each must support it: the
+	// added nodes of such a task, and every current member as well when this
+	// change is the one that records the skip.
+	joinSkipped := local && len(joining) > 0 && (skip || p.Spec.SharedCheckSkipped)
+	skipStarts := skip && !p.Spec.SharedCheckSkipped
 	// Mixed versions: every joining node and every reachable current member
 	// must support fencing and queue handoff, as for automatic takeover.
 	for _, node := range joining {
@@ -249,10 +269,13 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		}
 		caps, err := s.tasks.capabilities(ctx, node)
 		if err != nil {
-			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is not online in this enrollment", label(node))
+			return nil, membershipReject(ctx, "AGENT_VERSION_UNAVAILABLE", capabilitiesUnreadableMessage, label(node), err.Error())
 		}
 		if !joinCapable(caps) || !conflictPolicyCapable(p.Spec.ConflictPolicy, caps) {
 			return nil, membershipReject(ctx, "AGENT_TOO_OLD", "Agent %s is too old to join running tasks; upgrade it first", label(node))
+		}
+		if joinSkipped && !sharedSkipCapable(caps) {
+			return nil, membershipReject(ctx, "AGENT_UPGRADE_REQUIRED", sharedSkipUpgradeMessage, label(node))
 		}
 	}
 	failoverReady := p.Failover != nil && p.Failover.Enabled
@@ -260,31 +283,34 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		member, reachable := online[node.ID]
 		// Without lease fencing (never enabled, including stopped tasks) an
 		// offline member could still hold unfenced work, and a join could not
-		// be admitted: every current member must be reachable.
+		// be admitted: every current member must be reachable. So must every
+		// member when this change starts skipping the check, to show that
+		// it can run the task that way.
+		strict := !failoverReady || skipStarts
 		if !reachable || member.EnrollmentID != node.EnrollmentID {
-			if failoverReady {
+			if !strict {
 				continue // Offline members are fenced by lease expiry.
 			}
 			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is offline; reconnect it before changing this task's nodes", label(node))
 		}
 		caps, err := s.tasks.capabilities(ctx, node)
 		if err != nil {
-			if failoverReady {
+			if !strict {
 				continue
 			}
-			return nil, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is offline; reconnect it before changing this task's nodes", label(node))
+			return nil, membershipReject(ctx, "AGENT_VERSION_UNAVAILABLE", capabilitiesUnreadableMessage, label(node), err.Error())
 		}
 		if caps.LeaseProtocol < 1 || caps.QueuedHandoffProtocol < 1 {
 			return nil, membershipReject(ctx, "AGENT_TOO_OLD", "Agent %s is too old for node changes; upgrade it first", label(node))
 		}
+		if skipStarts && !sharedSkipCapable(caps) {
+			return nil, membershipReject(ctx, "AGENT_UPGRADE_REQUIRED", sharedSkipUpgradeMessage, label(node))
+		}
 	}
 	var checks []bindingCheck
 	if local && len(joining) > 0 {
-		if p.Spec.SharedCheckSkipped && !request.DryRun && !request.SkipSharedCheckAcknowledged {
-			return nil, membershipReject(ctx, "SHARED_CHECK_SKIP_UNACKNOWLEDGED", skipSharedCheckJoinUnacknowledged)
-		}
 		var failure *membershipFailure
-		checks, failure = s.membershipPreflight(ctx, p, joining, online, displays)
+		checks, failure = s.membershipPreflight(ctx, p, joining, online, displays, skip)
 		if failure != nil {
 			if request.DryRun {
 				return s.membershipResult(ctx, p.ID, false, false, true, false, checks, []string{failure.message})
@@ -301,18 +327,60 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		}
 	}
 	change.RequestKey = requestKey
-	_, replayed, err := s.tasks.repo.ChangeNodes(id, change)
-	if errors.Is(err, task.ErrConflict) {
-		return nil, membershipReject(ctx, "CONFLICT", "This request ID was already used for a different node change")
-	}
-	if err != nil {
-		return nil, s.membershipError(ctx, err)
+	_, replayed, failure := s.commitNodeChange(ctx, id, change, joining, label)
+	if failure != nil {
+		return nil, failure
 	}
 	select {
 	case s.tasks.wake <- struct{}{}:
 	default:
 	}
 	return s.membershipResult(ctx, id, true, replayed, false, true, checks, nil)
+}
+
+// commitNodeChange records a change while holding topologyMu, as
+// createTransfer does: no Agent can be removed or enrolled anew in between,
+// and each added Agent must still be online under the enrollment that the
+// preflight used. removeAgentNode takes the same lock and then refuses to
+// remove a member of an active task, which the added Agent now is. Under the
+// lock this reads the online Agents (agentControl.mu) and writes the task
+// (the store), the order removeAgentNode uses as well; the task runtime never
+// takes topologyMu, so no cycle can form.
+func (s *Server) commitNodeChange(ctx context.Context, id int64, change task.NodeChange, joining []task.Node, label func(task.Node) string) (task.Parent, bool, *membershipFailure) {
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
+	// A request accepted meanwhile replays: a retry is never refused because
+	// an Agent it added went offline after joining.
+	seen, err := s.tasks.repo.NodeRequestSeen(id, change.RequestKey, change.Fingerprint)
+	if errors.Is(err, task.ErrConflict) {
+		return task.Parent{}, false, membershipReject(ctx, "CONFLICT", "This request ID was already used for a different node change")
+	}
+	if err != nil {
+		return task.Parent{}, false, &membershipFailure{status: 500, message: localizeContext(ctx, "Cannot read task")}
+	}
+	if !seen && len(joining) > 0 {
+		members, err := s.onlineAgents()
+		if err != nil {
+			return task.Parent{}, false, &membershipFailure{status: 500, message: localizeContext(ctx, "Cannot read execution Agents")}
+		}
+		enrollments := make(map[string]string, len(members))
+		for _, member := range members {
+			enrollments[member.ID] = member.EnrollmentID
+		}
+		for _, node := range joining {
+			if enrollment, ok := enrollments[node.ID]; !ok || enrollment != node.EnrollmentID {
+				return task.Parent{}, false, membershipReject(ctx, "AGENT_OFFLINE", "Agent %s is not online in this enrollment", label(node))
+			}
+		}
+	}
+	p, replayed, err := s.tasks.repo.ChangeNodes(id, change)
+	if errors.Is(err, task.ErrConflict) {
+		return task.Parent{}, false, membershipReject(ctx, "CONFLICT", "This request ID was already used for a different node change")
+	}
+	if err != nil {
+		return task.Parent{}, false, s.membershipError(ctx, err)
+	}
+	return p, replayed, nil
 }
 
 func (s *Server) membershipError(ctx context.Context, err error) *membershipFailure {
@@ -344,14 +412,17 @@ func (s *Server) membershipResult(ctx context.Context, id int64, accepted, repla
 	return map[string]any{"accepted": accepted, "dryRun": dryRun, "replayed": replayed, "valid": valid, "nodeBindings": checks, "validationErrors": problems, "view": view}, nil
 }
 
-// membershipPreflight runs the creation preflight: each added path must be an
-// existing directory, then a marker written through one node must be read by
-// every reachable current member and every added node (or, for an upload
-// source no node can write, sampled files must match on all of them). A task
-// created with the check skipped checks only that the Agents can run it.
-func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining []task.Node, online map[string]cluster.Member, displays nodeDisplaySet) ([]bindingCheck, *membershipFailure) {
+// membershipPreflight runs the creation preflight for the added nodes: each
+// added path must be an existing directory (and a download destination
+// writable), then a marker written through one node must be read by every
+// reachable current member and every added node (or, for an upload source no
+// node can write, sampled files must match on all of them). Only a change
+// that skips the check itself (skip) leaves the added nodes unverified; a
+// skip recorded on the task by an earlier operator does not carry over.
+func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining []task.Node, online map[string]cluster.Member, displays nodeDisplaySet, skip bool) ([]bindingCheck, *membershipFailure) {
 	spec := p.Spec
 	spec.Nodes = nil
+	spec.SharedCheckSkipped = skip
 	var checks []bindingCheck
 	for _, node := range p.ActiveNodes() {
 		if member, ok := online[node.ID]; ok && member.EnrollmentID == node.EnrollmentID {
@@ -366,23 +437,7 @@ func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining
 	var firstErr string
 	for _, node := range joining {
 		check := bindingCheck{taskBinding: taskBinding{node.Address, node.LocalRoot}, NodeDisplay: displays.lookup(node.ID, node.Address)}
-		if !absoluteAgentPath(node.LocalRoot) || strings.ContainsRune(node.LocalRoot, 0) {
-			check.Message = localizeContext(ctx, "本地路径必须为绝对路径")
-		} else {
-			var probe struct {
-				PathType string `json:"pathType"`
-			}
-			err := s.agentCall(ctx, nodeSession(node), "local_path", false, agentservice.PathRequest{Path: node.LocalRoot}, &probe)
-			check.PathType = probe.PathType
-			if err != nil {
-				check.Message = err.Error()
-			} else if probe.PathType != "DIRECTORY" {
-				check.Code = "SHARED_DIRECTORY_REQUIRED"
-				check.Message = localizeContext(ctx, "Create the shared directory on all selected nodes before preflight")
-			} else {
-				check.Valid = true
-			}
-		}
+		s.checkJoiningPath(ctx, spec.Direction, node, &check)
 		if !check.Valid && firstErr == "" {
 			firstErr = check.DisplayLabel + ": " + check.Message
 		}
@@ -397,12 +452,6 @@ func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining
 		invalidateUnverifiedSharedBindings(ctx, checks)
 	}
 	added := checks[existing:]
-	if firstErr == "" && spec.SharedCheckSkipped {
-		// This operator skipped nothing: say what that means for the new node.
-		for i := range added {
-			added[i].Message = localizeContext(ctx, "Not checked: this task was created with the shared directory check skipped, so this node was not verified to see the same storage as the task's other nodes")
-		}
-	}
 	if firstErr != "" {
 		// Report a failing current member too; it explains the added nodes' state.
 		for _, check := range checks[:existing] {
@@ -413,6 +462,39 @@ func (s *Server) membershipPreflight(ctx context.Context, p task.Parent, joining
 		return added, &membershipFailure{status: 409, code: "PREFLIGHT_FAILED", message: firstErr, bindings: added}
 	}
 	return added, nil
+}
+
+// checkJoiningPath checks an added node's local path as the creation preflight
+// checks a binding, with its messages and its write probe of a download
+// destination (also when the shared check is skipped). The task's shared
+// directory exists already and a join never creates it: validateSharedBindings
+// then refuses any path that is not a directory, a missing download
+// destination as missing.
+func (s *Server) checkJoiningPath(ctx context.Context, direction string, node task.Node, check *bindingCheck) {
+	if !absoluteAgentPath(node.LocalRoot) || strings.ContainsRune(node.LocalRoot, 0) {
+		check.Message = localizeContext(ctx, "本地路径必须为绝对路径")
+		return
+	}
+	var probe struct {
+		PathType string `json:"pathType"`
+	}
+	err := s.agentCall(ctx, nodeSession(node), "local_path", false, agentservice.PathRequest{Path: node.LocalRoot}, &probe)
+	check.PathType = probe.PathType
+	if err != nil {
+		check.Message = err.Error()
+		return
+	}
+	if message := localPathProblem(ctx, direction, probe.PathType); message != "" {
+		check.Message = message
+		return
+	}
+	if message, writable := s.checkDownloadWritable(ctx, nodeSession(node), direction, node.LocalRoot, check); !writable {
+		check.Code = "LOCAL_PATH_NOT_WRITABLE"
+		check.Message = message
+		return
+	}
+	check.Valid = true
+	addFreeSpaceNote(ctx, check)
 }
 
 func digestValue(value any) string {

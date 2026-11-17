@@ -791,59 +791,6 @@ func TestSkippedSharedCheckGrantsProofsWithoutChecking(t *testing.T) {
 	}
 }
 
-// Adding nodes to a task created with the check skipped leaves the new nodes
-// unchecked too: that needs its own acknowledgement, the Agents must support
-// it, and the precheck must say that nothing was checked.
-func TestAddingNodesToASkippedTaskNeedsItsOwnAcknowledgement(t *testing.T) {
-	f := newAgentHTTPFixture(t)
-	var calls atomic.Int64
-	agents := sharedTestAgents(t, f, &calls, "io", "io", "io", "legacy")
-	members := []task.Node{agents[0].node, agents[1].node}
-	roots := []string{t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()}
-	for i := range members {
-		members[i].LocalRoot = roots[i]
-	}
-	p, _, err := f.master.tasks.repo.Create(task.Spec{Direction: "LOCAL_TO_OSS", Source: execution.Endpoint{Kind: "LOCAL", Root: roots[0]}, Destination: execution.Endpoint{Kind: "S3", Ref: "qa", Bucket: "target"}, Nodes: members, ConflictPolicy: "SKIP", DistributionMode: "BALANCED", SharedLocalSource: true, SharedCheckSkipped: true}, "skipped-membership")
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitOnline(t, f, agents[2].node, agents[3].node)
-	status, view := request(t, f.http.Client(), "GET", fmt.Sprintf("%s/api/master/tasks/%d/nodes", f.http.URL, p.ID), f.admin, nil)
-	if status != 200 || view["data"].(map[string]any)["sharedCheckSkipped"] != true {
-		t.Fatal("the node view does not say that the check is skipped", status, view)
-	}
-	add := func(agent int, extra map[string]any) (int, map[string]any) {
-		body := map[string]any{"add": []string{agents[agent].node.Address}, "bindings": []map[string]string{{"executionNodeIp": agents[agent].node.Address, "localPath": roots[agent]}}}
-		for key, value := range extra {
-			body[key] = value
-		}
-		return postNodes(t, f, p.ID, body)
-	}
-	status, body := add(2, map[string]any{"dryRun": true})
-	data, _ := body["data"].(map[string]any)
-	if status != 200 || data["valid"] != true || calls.Load() != 0 {
-		t.Fatal("the dry run did not pass without a check", status, body, calls.Load())
-	}
-	checks := data["nodeBindings"].([]any)
-	if check := checks[0].(map[string]any); len(checks) != 1 || check["code"] != "SHARED_STORAGE_CHECK_SKIPPED" || !strings.HasPrefix(fmt.Sprint(check["message"]), "Not checked") {
-		t.Fatal("the added node is not reported as unchecked", checks)
-	}
-	if status, body := add(2, nil); status != 409 || body["code"] != "SHARED_CHECK_SKIP_UNACKNOWLEDGED" || !strings.Contains(fmt.Sprint(body["message"]), "skipSharedCheckAcknowledged:true") {
-		t.Fatal("a node joined unchecked without an acknowledgement", status, body)
-	}
-	if status, body := add(3, map[string]any{"skipSharedCheckAcknowledged": true}); status != 409 || !strings.Contains(fmt.Sprint(body["message"]), "to run a task whose shared directory check was skipped") {
-		t.Fatal("an Agent that cannot record the skipped check joined", status, body)
-	}
-	if status, body := add(2, map[string]any{"skipSharedCheckAcknowledged": true}); status != 200 || body["data"].(map[string]any)["accepted"] != true {
-		t.Fatal("an acknowledged node addition was refused", status, body)
-	}
-	for _, key := range []string{skipSharedCheckJoinUnacknowledged, "Not checked: this task was created with the shared directory check skipped, so this node was not verified to see the same storage as the task's other nodes"} {
-		if localizeMessage("zh-CN", key) == key || localizeMessage("ja-JP", key) == key {
-			t.Fatal("not translated:", key)
-		}
-	}
-}
-
 // Manual recovery of a download without takeover repeats the write probe,
 // unless the operator skipped the shared check when creating the task.
 func TestChildRecoveryHonoursASkippedSharedCheck(t *testing.T) {

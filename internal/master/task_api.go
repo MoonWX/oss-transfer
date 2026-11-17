@@ -659,13 +659,42 @@ func (s *Server) checkConflictPolicySupport(ctx context.Context, spec task.Spec,
 		caps, err := s.tasks.capabilities(ctx, node)
 		label := displays.lookup(node.ID, node.Address).DisplayLabel
 		if err != nil {
-			return fmt.Errorf(localizeContext(ctx, "execution Agent %q is unavailable"), label)
+			return capabilitiesUnreadable(ctx, label, err)
 		}
 		if !conflictPolicyCapable(spec.ConflictPolicy, caps) {
 			return fmt.Errorf(localizeContext(ctx, "Agent %s does not support overwriting changed objects; upgrade it first"), label)
 		}
 	}
 	return nil
+}
+
+// localPathProblem is the preflight's message for a probed local path that
+// cannot serve the transfer in this direction, or "" when later checks decide.
+// Creating a task and adding nodes to one say the same.
+func localPathProblem(ctx context.Context, direction, pathType string) string {
+	switch {
+	case direction == "LOCAL_TO_OSS" && pathType == "MISSING":
+		return localizeContext(ctx, "源路径不存在")
+	case direction == "OSS_TO_LOCAL" && pathType == "FILE":
+		return localizeContext(ctx, "下载目标必须是目录")
+	case pathType != "FILE" && pathType != "DIRECTORY" && pathType != "MISSING":
+		return localizeContext(ctx, "节点未返回有效路径类型")
+	}
+	return ""
+}
+
+// addFreeSpaceNote adds the free space that the write probe found to a passed
+// download destination's note.
+func addFreeSpaceNote(ctx context.Context, check *bindingCheck) {
+	if check.FreeBytes == nil {
+		return
+	}
+	free := fmt.Sprintf(localizeContext(ctx, "可用空间 %s"), formatBinaryBytes(*check.FreeBytes))
+	if check.Message == "" {
+		check.Message = fmt.Sprintf(localizeContext(ctx, "目标目录可写，%s"), free)
+	} else {
+		check.Message = fmt.Sprintf(localizeContext(ctx, "%s；%s"), check.Message, free)
+	}
 }
 
 func (s *Server) resolveTaskNodes(ctx context.Context, row taskCreateRequest, kind string, displays nodeDisplaySet) (task.Spec, []bindingCheck, error) {
@@ -729,18 +758,14 @@ func (s *Server) resolveTaskNodes(ctx context.Context, row taskCreateRequest, ki
 			check.PathType = probe.PathType
 			if probeErr != nil {
 				check.Message = probeErr.Error()
-			} else if spec.Direction == "LOCAL_TO_OSS" && probe.PathType == "MISSING" {
-				check.Message = localizeContext(ctx, "源路径不存在")
+			} else if message := localPathProblem(ctx, spec.Direction, probe.PathType); message != "" {
+				check.Message = message
 			} else if spec.Direction == "LOCAL_TO_OSS" && probe.PathType == "FILE" && len(bindings) > 1 {
 				check.Code = "SINGLE_FILE_REQUIRES_ONE_NODE"
 				check.Message = localizeContext(ctx, "单文件上传只能选择一个节点")
 			} else if spec.Direction == "LOCAL_TO_OSS" && probe.PathType == "DIRECTORY" && spec.TargetKey != "" {
 				check.Message = localizeContext(ctx, "目录上传不能指定单个目标 Key")
-			} else if spec.Direction == "OSS_TO_LOCAL" && probe.PathType == "FILE" {
-				check.Message = localizeContext(ctx, "下载目标必须是目录")
-			} else if probe.PathType != "FILE" && probe.PathType != "DIRECTORY" && probe.PathType != "MISSING" {
-				check.Message = localizeContext(ctx, "节点未返回有效路径类型")
-			} else if message, writable := s.checkDownloadWritable(ctx, member, spec.Direction, binding.LocalPath, &check); !writable {
+			} else if message, writable := s.checkDownloadWritable(ctx, member.Session(), spec.Direction, binding.LocalPath, &check); !writable {
 				check.Code = "LOCAL_PATH_NOT_WRITABLE"
 				check.Message = message
 			} else {
@@ -752,14 +777,7 @@ func (s *Server) resolveTaskNodes(ctx context.Context, row taskCreateRequest, ki
 				if probe.PathType == "MISSING" {
 					check.Message = localizeContext(ctx, "目标目录将在任务开始时创建")
 				}
-				if check.FreeBytes != nil {
-					free := fmt.Sprintf(localizeContext(ctx, "可用空间 %s"), formatBinaryBytes(*check.FreeBytes))
-					if check.Message == "" {
-						check.Message = fmt.Sprintf(localizeContext(ctx, "目标目录可写，%s"), free)
-					} else {
-						check.Message = fmt.Sprintf(localizeContext(ctx, "%s；%s"), check.Message, free)
-					}
-				}
+				addFreeSpaceNote(ctx, &check)
 				spec.Nodes = append(spec.Nodes, task.Node{ID: member.ID, EnrollmentID: member.EnrollmentID, Address: member.Address, LocalRoot: root})
 			}
 		}

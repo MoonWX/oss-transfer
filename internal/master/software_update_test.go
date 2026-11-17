@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -328,5 +329,66 @@ func TestSoftwareUpdatesRequireAuthenticationAndCheckedVersion(t *testing.T) {
 	defer agent.mu.Unlock()
 	if len(u.started) != 1 || len(agent.started) != 1 || agent.started[0] != "4.1.14" {
 		t.Fatal("unexpected update command", u.started, agent.started)
+	}
+}
+
+// A failed version check keeps the reason each release source gave, says
+// whether checking again can help, and records when it failed: the console
+// does not check again on its own soon after.
+func TestVersionCheckFailureKeepsEachSourceReason(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	u := &fakeSoftwareUpdater{info: softwareupdate.Info{Role: "master", Version: "4.1.14", Supported: true}}
+	f.master.options.Updater = u
+	unanswered := func(source, address string) error {
+		return fmt.Errorf("%s: %w", source, &url.Error{Op: "Get", URL: address, Err: errors.New("dial tcp: lookup host: no such host")})
+	}
+	offline := errors.Join(unanswered("github", "https://api.github.com/repos/MoonWX/oss-transfer/releases/latest"), unanswered("jdoss", "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/release.json"))
+	refused := errors.Join(errors.New("github: Update download returned HTTP 403"), unanswered("jdoss", "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/release.json"))
+	call := func(method, path, language string) (int, map[string]any) {
+		t.Helper()
+		var body any
+		if method == "POST" {
+			body = map[string]any{}
+		}
+		code, _, result, err := localizedRequest(f.http.Client(), method, f.http.URL+path, f.admin, language, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return code, result
+	}
+	for _, test := range []struct {
+		err            error
+		language, want string
+	}{
+		{offline, "zh-CN", "Master 无法连接 GitHub 和京东云 OSS，因此无法检测新版本。在能够访问其中之一之前，重新检测不会成功；也可以使用离线安装包升级（见文档“离线安装”）"},
+		{offline, "", versionSourcesUnreachable},
+		{refused, "zh-CN", "版本检测失败：发布源未返回有效的版本信息"},
+		{refused, "ja-JP", "バージョンの確認に失敗しました。リリース元から有効なバージョン情報を取得できませんでした"},
+	} {
+		u.mu.Lock()
+		u.err = test.err
+		u.mu.Unlock()
+		code, body := call("POST", "/api/master/software-updates/check", test.language)
+		if code != 502 || body["message"] != test.want || body["detail"] != test.err.Error() {
+			t.Fatalf("%v in %q: %d %v", test.err, test.language, code, body)
+		}
+		code, body = call("GET", "/api/master/software-updates", test.language)
+		data, _ := body["data"].(map[string]any)
+		failed, err := time.Parse(time.RFC3339Nano, fmt.Sprint(data["checkFailedAt"]))
+		if code != 200 || data["checkError"] != test.want || data["checkErrorDetail"] != test.err.Error() || err != nil || failed.IsZero() {
+			t.Fatalf("stored failure of %v in %q: %d %v", test.err, test.language, code, data)
+		}
+	}
+	// A successful check clears the failure.
+	u.mu.Lock()
+	u.err, u.release = nil, softwareupdate.Release{Version: "4.1.15"}
+	u.mu.Unlock()
+	if code, body := call("POST", "/api/master/software-updates/check", ""); code != 200 {
+		t.Fatal(code, body)
+	}
+	_, body := call("GET", "/api/master/software-updates", "")
+	data := body["data"].(map[string]any)
+	if data["checkError"] != "" || data["checkErrorDetail"] != nil || data["checkFailedAt"] != nil {
+		t.Fatal("a successful check kept the failure", data)
 	}
 }

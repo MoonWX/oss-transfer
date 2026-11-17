@@ -17,7 +17,6 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"Only older stable Agent releases can be updated":                                 {"Only older stable Agent releases can be updated", "仅支持将较旧的稳定版节点更新到 Master 版本", "Master より古い安定版の Agent のみ更新できます"},
 	"Version checking is unavailable":                                                 {"Version checking is unavailable", "当前不支持版本检测", "バージョンの確認は利用できません"},
 	"A version check is already running":                                              {"A version check is already running", "正在检测版本，请稍候", "バージョンを確認中です"},
-	"Version check failed; try again":                                                 {"Version check failed; try again", "版本检测失败，请重试", "バージョンの確認に失敗しました。再試行してください"},
 	"Check the latest version before updating":                                        {"Check the latest version before updating", "请先检测新版本，再开始更新", "更新前に最新バージョンを確認してください"},
 	"Update Agents to the current Master version after the Master update finishes":    {"Update Agents to the current Master version after the Master update finishes", "请等待 Master 更新完成，再将执行节点更新到 Master 的版本", "Master の更新完了後、Agent を同じバージョンに更新してください"},
 	"Cannot start the Agent update; check its connection and update support":          {"Cannot start the Agent update; check its connection and update support", "无法启动节点更新，请检查节点连接及版本是否支持在线升级", "ノードの更新を開始できません。接続とオンライン更新への対応を確認してください"},

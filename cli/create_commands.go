@@ -834,8 +834,11 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			return nil, cliErrorf("服务端未返回节点预检结果，尚未提交创建请求")
 		}
 		data, _ := checked["data"].(map[string]interface{})
-		valid := data["valid"] == true
 		bindings, _ := data["nodeBindings"].([]interface{})
+		// A node that failed, or a reply that does not match the bindings,
+		// points at nodes and paths; the Master may also refuse a row for a
+		// reason of its own (validationErrors).
+		nodeFailed := false
 		// The response is flattened in request/binding order by MasterLocalTransferService.
 		index := 0
 		for _, row := range rows {
@@ -846,17 +849,17 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 			requested := endpoint["nodeBindings"].([]interface{})
 			for range requested {
 				if index >= len(bindings) {
-					valid = false
+					nodeFailed = true
 					continue
 				}
 				binding, ok := bindings[index].(map[string]interface{})
 				index++
 				if !ok || binding == nil {
-					valid = false
+					nodeFailed = true
 					continue
 				}
 				if binding["valid"] != true {
-					valid = false
+					nodeFailed = true
 				}
 				if row["direction"] != "LOCAL_TO_OSS" {
 					continue
@@ -865,22 +868,28 @@ func createSubmit(client *ApiClient, kind string, rows []map[string]interface{},
 				key, _ := destination["objectKey"].(string)
 				if len(requested) > 1 && binding["pathType"] == "FILE" {
 					binding["valid"], binding["message"] = false, client.text("单文件上传请只保留一个执行节点")
-					valid = false
+					nodeFailed = true
 				}
 				if key != "" && binding["pathType"] != "FILE" {
 					binding["valid"], binding["message"] = false, client.text("指定目标 Key 仅适用于单文件；目录上传请使用目标前缀")
-					valid = false
+					nodeFailed = true
 				}
 			}
 		}
 		if index != len(bindings) {
-			valid = false
+			nodeFailed = true
 		}
+		valid := data["valid"] == true && !nodeFailed
 		if data != nil {
 			data["valid"] = valid
 		}
 		if !valid {
 			checked["submissionStatus"] = "validation_failed"
+			// A row refused for a reason that is not a node's, such as a
+			// storage connection, a bucket name or a bandwidth share, names it.
+			if problems := createValidationErrors(client.locale, data["validationErrors"], len(rows)); !nodeFailed && len(problems) > 0 {
+				return checked, cliErrorf("预检未通过：%s；尚未提交创建请求", strings.Join(problems, "；"))
+			}
 			return checked, cliErrorf("节点预检未通过，请检查节点和本地路径；尚未提交创建请求")
 		}
 		if validateOnly {

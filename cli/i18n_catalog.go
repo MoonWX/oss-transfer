@@ -532,6 +532,7 @@ var cliMessages = map[string][2]string{
 	"节点未注册: %s": {"Node is not registered: %s", "ノードが登録されていません: %s"},
 	"节点路径绑定格式错误: %q，应为节点=绝对路径": {"Invalid node path binding %q; use node=/absolute/path", "ノードとパスの指定 %q が無効です。ノード=/絶対パスで指定してください"},
 	"节点错误": {"Node errors", "ノードのエラー"},
+	"预检未通过：%s；尚未提交创建请求":           {"Precheck failed: %s. Creation was not submitted", "事前チェックに失敗しました: %s。作成リクエストは送信していません"},
 	"节点预检未通过，请检查节点和本地路径；尚未提交创建请求": {"Node precheck failed; check nodes and local paths. Creation was not submitted", "ノードの事前チェックに失敗しました。ノードとローカルパスを確認してください。作成リクエストは送信していません"},
 	"获取执行节点: %w":               {"Get execution nodes: %w", "実行ノードの取得: %w"},
 	"记录被截断的节点":                 {"Nodes with truncated records", "記録が省略されたノード"},

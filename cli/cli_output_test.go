@@ -456,8 +456,8 @@ func TestCLIHintsWhenTheMasterCannotBeReached(t *testing.T) {
 	host := "http://" + listener.Addr().String()
 	listener.Close()
 	for _, test := range []struct{ lang, want string }{
-		{"zh", "提示: 无法连接 Master（" + host + "）。请检查地址和端口"},
-		{"en", "Hint: could not connect to the Master (" + host + "). Check that the address and port"},
+		{"zh", "提示: 无法连接 Master（" + host + "）。Master 可能正在重启或更新，请稍后重试；如果一直无法连接，请检查地址和端口"},
+		{"en", "Hint: could not connect to the Master (" + host + "). It may be restarting or updating; try again shortly. If it stays unreachable, check that the address and port"},
 		{"ja", "ヒント: Master（" + host + "）に接続できません。"},
 	} {
 		var out, stderr bytes.Buffer

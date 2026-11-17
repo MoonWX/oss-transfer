@@ -100,6 +100,7 @@ are skipped and listed with the reason; when no Agent can be updated, nothing is
 Update checks offer stable releases only. A prerelease (beta/rc) is installed only
 with an exact --version plus --allow-prerelease; Agents may follow a prerelease Master.
 Follow queued updates with update status --watch 5. Acceptance is not completion.
+The Master stops briefly while it updates; --watch keeps retrying meanwhile, for up to 30 minutes.
 `, `サービス更新
   oss-transfer-cli update status
   oss-transfer-cli update check
@@ -118,6 +119,7 @@ Agent はスキップされ、理由とともに表示されます。更新で�
 指定し --allow-prerelease を付けた場合のみインストールします。Master がプレリリースの
 場合、Agent は同じバージョンに追従できます。
 update status --watch 5 で結果を確認します。受付は更新完了を意味しません。
+Master の更新中はサービスが一時的に停止しますが、--watch はその間、最長 30 分間再試行を続けます。
 `},
 	cliBackupHelp: {`Upgrade backups
   oss-transfer-cli backup list

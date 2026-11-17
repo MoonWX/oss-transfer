@@ -16,6 +16,7 @@ Agent 默认更新到 Master 当前版本，也可用 --version 指定版本。
 检测新版本只提供稳定版。预发布（beta/rc）版本仅在明确指定 --version 并加
 --allow-prerelease 时安装；Master 运行预发布版本时，Agent 可跟随到同一版本。
 请求受理后使用 update status --watch 5 查看结果；受理不代表升级完成。
+Master 更新时服务会短暂停止，--watch 在此期间自动重试，最长 30 分钟。
 `
 
 const cliBackupHelp = `升级备份

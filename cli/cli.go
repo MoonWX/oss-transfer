@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -210,8 +211,32 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			client.SetAuthToken(token)
 		}
 	}
+	// reached marks a watch that has had an answer from the Master; from then
+	// on a Master that stops answering is most likely restarting, not
+	// misconfigured, and the watch keeps polling for a while.
+	reached := false
+	var unreachableSince time.Time
 	for {
 		result, callErr := dispatchCLI(client, normalized, input, options.host)
+		if options.watch > 0 && reached && callErr != nil && ctx.Err() == nil && masterUnreachable(callErr) {
+			now := watchNow()
+			if unreachableSince.IsZero() {
+				unreachableSince = now
+			}
+			if now.Sub(unreachableSince) < watchReconnectLimit {
+				if options.json {
+					json.NewEncoder(output).Encode(map[string]interface{}{"success": false, "error": localizedCLIError(language, callErr), "retrying": true})
+				}
+				fmt.Fprintf(errors, cliText(errors, "提示: 暂时无法连接 Master（%s）：%s。Master 可能正在重启或更新；%s 后重试，按 Ctrl+C 停止。\n"), safeCLIText(options.host), localizedCLIError(language, callErr), options.watch)
+				if !watchWait(ctx, options.watch) {
+					return 130
+				}
+				continue
+			}
+		}
+		if callErr == nil {
+			reached, unreachableSince = true, time.Time{}
+		}
 		if options.json {
 			if result == nil {
 				result = map[string]interface{}{}
@@ -278,14 +303,44 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			}
 			return 0
 		}
-		timer := time.NewTimer(options.watch)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !watchWait(ctx, options.watch) {
 			return 130
-		case <-timer.C:
 		}
 	}
+}
+
+// watchReconnectLimit bounds how long a watch keeps polling a Master that
+// stopped answering after the watch had reached it. An online update stops
+// the Master to back up its database, replaces it and starts it again; the
+// installer may take 15 minutes, and 5 more to roll back.
+const watchReconnectLimit = 30 * time.Minute
+
+var (
+	watchNow = time.Now
+	// watchWait waits for the next poll; it reports false when the user
+	// interrupts the watch.
+	watchWait = func(ctx context.Context, interval time.Duration) bool {
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+)
+
+// masterUnreachable reports a request that got no answer from the Master:
+// the connection was refused, reset, closed or timed out, or the name did not
+// resolve. An answer, even an error status, is not such a failure.
+func masterUnreachable(err error) bool {
+	var answered *apiHTTPError
+	if errors.As(err, &answered) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var network net.Error
+	return errors.As(err, &network) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // errorEnvelopeOnly reports whether a failed response carries nothing but its

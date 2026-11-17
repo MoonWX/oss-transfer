@@ -27,6 +27,7 @@ func (a *ossRegionAgent) Execute(ctx context.Context, c agenttransport.Command) 
 		Config storageconfig.Config `json:"config"`
 		Bucket string               `json:"bucket"`
 		Write  bool                 `json:"write"`
+		Prefix string               `json:"prefix"`
 	}
 	switch c.Operation {
 	case "storage_apply":
@@ -55,7 +56,7 @@ func (a *ossRegionAgent) Execute(ctx context.Context, c agenttransport.Command) 
 			}
 			return fakeReply(200, check)
 		}
-		check, err := transferstore.CheckBucketPermissions(ctx, settings, request.Write)
+		check, err := transferstore.CheckBucketPermissions(ctx, settings, request.Write, request.Prefix)
 		if err != nil {
 			return fakeReply(500, map[string]string{"message": err.Error()})
 		}

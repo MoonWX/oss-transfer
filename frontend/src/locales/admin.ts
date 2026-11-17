@@ -943,10 +943,11 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
     en: "Delete storage connection",
     ja: "ストレージ接続を削除",
   },
-  "删除连接 {alias} 后，后续迁移将无法使用此连接。此操作会同步到执行节点。": {
-    en: "After deleting {alias}, future transfers cannot use this connection. The change is synced to workers.",
-    ja: "{alias} を削除すると、以後の転送でこの接続を使用できなくなります。変更は実行ノードに同期されます。",
-  },
+  "删除连接 {alias} 后，所有使用此连接的任务都将无法继续执行（包括执行中和已停止的任务），直到重新添加同名连接；后续迁移也无法使用此连接。此操作会同步到执行节点。":
+    {
+      en: "After you delete {alias}, every task that uses this connection, running or stopped, cannot continue until a connection with the same name is added again, and future transfers cannot use it. The change is synced to execution nodes.",
+      ja: "{alias} を削除すると、この接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。今後の転送でもこの接続は使えなくなります。変更は実行ノードに同期されます。",
+    },
   "连接测试 · {alias}": {
     en: "Connection test · {alias}",
     ja: "接続テスト · {alias}",

@@ -747,6 +747,7 @@ Addressing
 
 Credentials come from environment variables or files, not command-line values.
 Check each node's sync result; partial success is reported as incomplete.
+After a connection is removed, every task that uses it, running or stopped, cannot continue until a connection with the same name is added again.
 A connection check lists buckets (ListBuckets), then lists at most one object in one bucket (ListObjectsV2).
 Keys limited to one bucket cannot list buckets: saving only warns, and test --bucket checks that bucket.
 Actual operations validate read and write permissions. Failures show the cause and advice first; add --verbose for the original error.
@@ -794,6 +795,7 @@ Actual operations validate read and write permissions. Failures show the cause a
 
 認証情報は環境変数またはファイルから読み取ります。コマンドラインには直接指定しません。
 ノードごとの同期結果を確認してください。一部成功は不完全と表示します。
+接続を削除すると、その接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。
 接続確認ではバケットを一覧し（ListBuckets）、1 つのバケットのオブジェクトを最大 1 件一覧します（ListObjectsV2）。
 1 つのバケットに限定したキーはバケットを一覧できません。保存時は警告のみで、test --bucket でそのバケットを確認できます。
 読み取り・書き込み権限は実際の操作で検証します。失敗時は原因と対処を先に表示し、元のエラーは --verbose で確認できます。

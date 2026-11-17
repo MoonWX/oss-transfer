@@ -141,3 +141,17 @@ func TestStorageTestNamesTheAbortOfAnOlderAgentsMultipartRow(t *testing.T) {
 		t.Fatalf("%d %s %s", code, out, stderr)
 	}
 }
+
+// Tasks keep only the connection name, so removing a connection stops the
+// tasks that use it; the storage help says so in every language.
+func TestStorageHelpSaysRemovingAConnectionStopsItsTasks(t *testing.T) {
+	for locale, want := range map[cliLocale]string{
+		localeZH: "删除连接后，所有使用此连接的任务（包括执行中和已停止的任务）都将无法继续执行，直到重新添加同名连接。",
+		localeEN: "After a connection is removed, every task that uses it, running or stopped, cannot continue until a connection with the same name is added again.",
+		localeJA: "接続を削除すると、その接続を使うタスクは実行中か停止中かを問わず、同じ名前の接続を追加し直すまで続行できません。",
+	} {
+		if help := helpForLocale([]string{"storage"}, locale); !strings.Contains(help, want) {
+			t.Errorf("%s storage help lacks %q", locale, want)
+		}
+	}
+}

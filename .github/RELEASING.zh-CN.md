@@ -90,7 +90,7 @@ GitHub Release 附带 [platforms.json](../deploy/native/platforms.json) 列出�
 
 OSS 的每个版本目录保存同样的文件，外加 `release.json`。安装器下载一个平台安装包，解压出服务和 CLI，例如 Linux amd64 使用 `oss-transfer-linux-amd64.tar.gz`。Docker 镜像使用经过测试的 Linux 程序。
 
-安装器在中国大陆公网 IP 下选择 OSS，其他地区选择 GitHub。GitHub 下载使用 Release API 提供的安装包摘要，以及该安装包记录的提交中的安装脚本；OSS 使用版本目录中的清单。显式指定下载源或本地安装包时，不再检测位置。从文件运行（而不是通过管道运行）的安装器，如果在脚本所在目录或当前目录中找到发布文件，会直接使用这些文件，不会联网，除非用 `--source github|jdoss` 或 `--release-url`（PowerShell 为 `-Source`、`-ReleaseUrl`）要求下载；见[离线安装](../docs/offline-install.zh-CN.md)。
+安装器、在线更新程序和加入指令首先尝试京东云的内网地址（`moonwx.s3-internal.cn-north-1.jdcloud-oss.com`，与公网地址是同一个存储桶），能够访问时使用它。否则在中国大陆公网 IP 下选择 OSS，其他地区选择 GitHub。GitHub 下载使用 Release API 提供的安装包摘要，以及该安装包记录的提交中的安装脚本；OSS 使用版本目录中的清单。显式指定下载源或本地安装包时，不再尝试内网地址，也不再检测位置；因此在能够访问内网地址的主机上验证发布时，需要用 `--source github` 或 `--source jdoss` 指定公网来源。从文件运行（而不是通过管道运行）的安装器，如果在脚本所在目录或当前目录中找到发布文件，会直接使用这些文件，不会联网，除非用 `--source github|jdoss` 或 `--release-url`（PowerShell 为 `-Source`、`-ReleaseUrl`）要求下载；见[离线安装](../docs/offline-install.zh-CN.md)。
 
 | 版本 | OSS 位置 | GitHub | Docker Hub 标签 |
 | --- | --- | --- | --- |

@@ -145,11 +145,22 @@ function Get-SourceMetadata([string]$Selected,[string]$RequestedVersion,[string]
 }
 function Resolve-DownloadSource([string]$Preference,[string]$RequestedVersion,[string]$Architecture) {
     $selected = $Preference
-    if ($selected -eq 'auto') { $selected = if ((Get-PublicIPCountry) -ceq 'CN') { 'jdoss' } else { 'github' } }
+    if ($selected -eq 'auto') {
+        # A host that reaches JD Cloud's internal endpoint downloads through it:
+        # no public bandwidth is used and no location lookup is needed. The
+        # endpoint answers at once where it is routed and not at all elsewhere.
+        try {
+            Invoke-SourceRequest "https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/$RequestedVersion/manifest.tsv" 2 | Out-Null
+            $selected = 'jdoss-internal'
+        } catch {
+            $selected = if ((Get-PublicIPCountry) -ceq 'CN') { 'jdoss' } else { 'github' }
+        }
+    }
     try { return Get-SourceMetadata $selected $RequestedVersion $Architecture }
     catch [Net.WebException] {
         if ($Preference -ne 'auto') { throw }
-        $alternate = if ($selected -eq 'github') { 'jdoss' } else { 'github' }
+        # The internal endpoint and the public mirror serve the same bucket.
+        $alternate = if ($selected -eq 'jdoss') { 'github' } else { 'jdoss' }
         Write-Warning ((Get-InstallText 'Could not reach {0}; trying {1}.' '无法连接 {0}，正在尝试 {1}。') -f $selected,$alternate)
         return Get-SourceMetadata $alternate $RequestedVersion $Architecture
     }

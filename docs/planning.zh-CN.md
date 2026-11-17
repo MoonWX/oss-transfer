@@ -42,9 +42,9 @@ Master 不支持集群部署，应当备份它的数据目录（见[数据库维
 | 执行节点 | 源端和目标端的存储端点 | 通常为 443（HTTPS）或 80；自建 S3 常用自己的端口，例如 9000 | 传输、连接检查、对象比对 | 必需 |
 | 新加入的原生执行节点 | Master，或 GitHub / 京东云 OSS（公网或内网地址） | 443 | 下载执行节点安装包 | 加入时 |
 | 新加入的 Docker 执行节点 | Docker Hub（或你的镜像仓库） | 443 | 拉取 `moonwx/osstransfer` 镜像 | 加入和更新时 |
-| Master 和原生执行节点 | GitHub（`api.github.com`、`github.com`、`raw.githubusercontent.com`）或 `moonwx.s3.cn-north-1.jdcloud-oss.com`，以及 `www.cloudflare.com` | 443 | 检测更新和在线更新 | 仅在线更新时 |
+| Master 和原生执行节点 | 京东云内网地址 `moonwx.s3-internal.cn-north-1.jdcloud-oss.com`；无法访问它时，GitHub（`api.github.com`、`github.com`、`raw.githubusercontent.com`）或 `moonwx.s3.cn-north-1.jdcloud-oss.com`，以及 `www.cloudflare.com` | 443 | 检测更新和在线更新 | 仅在线更新时 |
 
-原生执行节点加入时的下载来源显示在 **添加节点** 窗口中。从公网下载时，安装器还访问 `cloudflare.com` 和 `ipinfo.io` 判断主机所在地区，除非用 `--source github`、`--source jdoss` 或 `--source jdoss-internal` 指定下载源（见[下载源](install.zh-CN.md#下载源)）。位于京东云华北-北京地域的执行节点可以在窗口中选择 **京东云内网（华北-北京）**，只访问内网地址 `moonwx.s3-internal.cn-north-1.jdcloud-oss.com`。
+原生执行节点加入时的下载来源显示在 **添加节点** 窗口中。从公网下载时，安装器先尝试内网地址 `moonwx.s3-internal.cn-north-1.jdcloud-oss.com`，无法访问时再访问 `cloudflare.com` 和 `ipinfo.io` 判断主机所在地区，除非用 `--source github`、`--source jdoss` 或 `--source jdoss-internal` 指定下载源（见[下载源](install.zh-CN.md#下载源)）。位于京东云华北-北京地域的执行节点可以在窗口中选择 **京东云内网（华北-北京）**，只访问这个内网地址。
 
 Master 默认监听 `0.0.0.0:1685`。要换端口，给 `install.sh` 加 `--port`；要只监听某个地址，加 `--listen HOST:PORT`（仅首次安装时有效，见[安装选项](install.zh-CN.md#路径和端口)）。
 

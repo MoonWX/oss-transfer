@@ -34,15 +34,18 @@ transfer_country() {
 }
 
 transfer_source_probe() {
-  local source=$1 version=${2#v} url
+  local source=$1 version=${2#v} url connect=2 total=5
   if [[ "$source" == github ]]; then
     url=https://api.github.com/repos/MoonWX/oss-transfer/releases/latest
     [[ "$version" == latest ]] || url=https://api.github.com/repos/MoonWX/oss-transfer/releases/tags/v$version
   else
     url=$(transfer_oss_base "$source")/latest/manifest.tsv
     [[ "$version" == latest ]] || url=$(transfer_oss_base "$source")/v$version/manifest.tsv
+    # The internal endpoint answers within milliseconds where it is routed and
+    # not at all elsewhere, so hosts outside JD Cloud give up on it quickly.
+    [[ "$source" != jdoss-internal ]] || { connect=1; total=3; }
   fi
-  curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 5 \
+  curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout "$connect" --max-time "$total" \
     -A OSS-Transfer-Installer "$url" -o /dev/null 2>/dev/null
 }
 
@@ -53,11 +56,14 @@ transfer_select_source() {
     auto) ;;
     *) printf 'Invalid download source: %s\n' "$requested" >&2; return 1;;
   esac
+  # A host that reaches JD Cloud's internal endpoint downloads through it: no
+  # public bandwidth is used and no location lookup is needed.
+  if transfer_source_probe jdoss-internal "$version"; then printf '%s\n' jdoss-internal; return; fi
   country=$(transfer_country) || country=''
   selected=github; [[ "$country" != CN ]] || selected=jdoss
   if ! transfer_source_probe "$selected" "$version"; then
     other=jdoss; [[ "$selected" != jdoss ]] || other=github
-    transfer_source_probe "$other" "$version" || { printf 'Neither download source is reachable for %s.\n' "$version" >&2; return 1; }
+    transfer_source_probe "$other" "$version" || { printf 'No download source is reachable for %s.\n' "$version" >&2; return 1; }
     printf '%s is unavailable; using %s.\n' "$selected" "$other" >&2
     selected=$other
   fi
@@ -434,7 +440,7 @@ usage() {
 Usage: bash install.sh [--role master|agent] [--upgrade] [options]
   --lang en|zh         Output language (default: system locale)
   --release-url URL    Release directory (default: public latest)
-  --source auto|github|jdoss|jdoss-internal  Download source (default: public IP location; jdoss-internal: JD Cloud Beijing internal network)
+  --source auto|github|jdoss|jdoss-internal  Download source (default: jdoss-internal where JD Cloud's Beijing internal network is reachable, otherwise by public IP location)
   --version VERSION   Release version (default: latest)
   --package-dir DIR    Install verified files from a local release directory
   --upgrade            Back up and upgrade an existing installation

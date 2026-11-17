@@ -124,19 +124,21 @@ bash install.sh --role master
 
 ## 下载源
 
-安装脚本默认从 GitHub 下载。主机的公网 IP 在中国大陆时，它自动改用京东云 OSS 镜像。首选来源无法访问时，自动尝试另一个。判断所在地时，依次访问 `https://www.cloudflare.com/cdn-cgi/trace` 和 `https://ipinfo.io/country`。
+安装脚本首先尝试京东云的内网地址，能够访问时通过内网下载，不再判断主机所在地（见[京东云内网](#京东云内网)）。无法访问内网地址时，脚本默认从 GitHub 下载；主机的公网 IP 在中国大陆时，它改用京东云 OSS 镜像。首选来源无法访问时，自动尝试另一个。判断所在地时，依次访问 `https://www.cloudflare.com/cdn-cgi/trace` 和 `https://ipinfo.io/country`。
 
-如果不需要脚本自动判断，用 `--source github` 或 `--source jdoss`（`Install.ps1` 用 `-Source`）直接指定，跳过地区检测。
+如果不需要脚本自动判断，用 `--source github`、`--source jdoss` 或 `--source jdoss-internal`（`Install.ps1` 用 `-Source`）直接指定。脚本直接使用指定的下载源，不再探测内网地址，也不再检测地区。
 
 镜像地址 `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` 始终包含最新正式版的全部文件，其中也有 `install.sh` 和 `Install.ps1`。每个版本（包括预发布版本）有自己的目录，目录名为 `v<版本号>/`。
 
 将安装脚本保存为文件再运行（而不是通过管道交给 shell），脚本会先在自身所在文件夹和当前目录查找 `manifest.tsv` 或本机平台的压缩包。找到后直接使用本地文件安装，不下载任何内容；如果指定了 `--version`，它必须和这些文件的版本一致。加 `--source github` 或 `--source jdoss`（`Install.ps1` 用 `-Source`）则改为在线下载。详见[离线安装](offline-install.zh-CN.md)。
 
-从控制台添加的执行节点默认从 Master 下载安装脚本和安装包，不需要访问公网。**添加节点** 窗口在原生部署的指令上方提供 **下载来源** 选项，可以改为从公网下载；Master 使用官方发布包时，还可以选择 **京东云内网（华北-北京）**，生成的加入指令只访问内网地址。
+从控制台添加的执行节点默认从 Master 下载安装脚本和安装包，不需要访问公网。**添加节点** 窗口在原生部署的指令上方提供 **下载来源** 选项，可以改为从公网下载。从 4.1.46 起，这种加入指令和它运行的安装脚本各尝试一次京东云的内网地址，能够访问时全程通过内网下载；在无法访问内网地址的主机上，加入过程因此多等待 2 至 4 秒。Master 使用官方发布包时，还可以选择 **京东云内网（华北-北京）**，生成的加入指令只访问内网地址。
 
 ### 京东云内网
 
-位于京东云华北-北京地域的主机，建议使用 `--source jdoss-internal`（`Install.ps1` 用 `-Source jdoss-internal`）。脚本改为通过内网地址 `https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/` 下载同一套文件，不占用公网带宽，主机无法访问公网时也能安装。自动选择下载源时不会使用这个地址，因此需要显式指定。`install.sh` 从 4.1.44 起支持这个选项，`Install.ps1` 从 4.1.45 起支持。
+位于京东云华北-北京地域的主机可以通过内网地址 `https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/` 下载同一套文件，不占用公网带宽，主机无法访问公网时也能安装。从 4.1.46 起，安装脚本自动选择下载源时先尝试这个地址，能够访问就使用它，这些主机不需要额外的参数。在其他主机上，这次尝试通常只需等待 1 至 3 秒，随后脚本按所在地选择公网来源。
+
+更早的版本不会自动使用内网地址，需要用 `--source jdoss-internal`（`Install.ps1` 用 `-Source jdoss-internal`）显式指定。`install.sh` 从 4.1.44 起支持这个选项，`Install.ps1` 从 4.1.45 起支持。显式指定后，脚本只访问内网地址。
 
 安装脚本本身也可以从内网地址获取。通过管道运行时，参数写在 `bash -s --` 之后：
 

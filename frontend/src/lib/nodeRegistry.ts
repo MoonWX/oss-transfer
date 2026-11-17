@@ -215,7 +215,7 @@ export type NodeChange = {
 };
 export type AgentDownloadSource =
   | { kind: "master" }
-  | { kind: "auto" }
+  | { kind: "auto"; internalFirst?: boolean }
   | { kind: "release"; url: string }
   | { kind: "internal"; url: string };
 export type AgentInvitation = {

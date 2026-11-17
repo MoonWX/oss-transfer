@@ -150,13 +150,54 @@ func TestVerifiedArchivesRejectTamperingAndUnsafeMembers(t *testing.T) {
 	}
 }
 
+// internalHost is JD Cloud's internal endpoint. A fixture client reaches it
+// only when asked to, as only hosts on JD Cloud's internal network do.
+const internalHost = "moonwx.s3-internal.cn-north-1.jdcloud-oss.com"
+
+// requestLog records the host, path and remaining time of every request a
+// fixture client makes, including those that never reach the fixture server.
+type requestLog struct {
+	mu       sync.Mutex
+	hosts    []string
+	paths    []string
+	deadline []time.Duration
+}
+
+func (l *requestLog) add(request *http.Request) {
+	if l == nil {
+		return
+	}
+	remaining := time.Duration(-1)
+	if deadline, ok := request.Context().Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hosts = append(l.hosts, request.URL.Host)
+	l.paths = append(l.paths, request.URL.Path)
+	l.deadline = append(l.deadline, remaining)
+}
+
+func (l *requestLog) snapshot() (hosts, paths []string, deadlines []time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.hosts...), append([]string(nil), l.paths...), append([]time.Duration(nil), l.deadline...)
+}
+
 type redirectTransport struct {
 	base      *url.URL
 	transport http.RoundTripper
+	internal  bool
+	log       *requestLog
 }
 
 func (r redirectTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	r.log.add(request)
+	if request.URL.Host == internalHost && !r.internal {
+		return nil, errors.New("fixture: the internal endpoint is not routed from this host")
+	}
 	copy := request.Clone(request.Context())
+	copy.Header.Set("X-Fixture-Host", request.URL.Host)
 	address := *request.URL
 	copy.URL = &address
 	copy.URL.Scheme = r.base.Scheme
@@ -195,7 +236,7 @@ func releaseServer(t *testing.T, archive []byte, tamper bool) (*client, *[]strin
 	}))
 	t.Cleanup(server.Close)
 	base, _ := url.Parse(server.URL)
-	return &client{http: &http.Client{Transport: redirectTransport{base, server.Client().Transport}, Timeout: time.Second}}, &paths
+	return &client{http: &http.Client{Transport: redirectTransport{base: base, transport: server.Client().Transport}, Timeout: time.Second}}, &paths
 }
 
 func managedFixture(t *testing.T) (Options, string) {

@@ -48,6 +48,14 @@ func (s *Server) internalAgentArtifacts() bool {
 	return s.regionalAgentArtifacts() && s.agentArtifactsAtLeast(4, 1, 45)
 }
 
+// internalFirstAgentArtifacts reports whether the pinned installers try JD
+// Cloud's internal endpoint themselves when they choose a download source
+// (since 4.1.46). Earlier installers choose by public IP location only, so
+// neither the bootstrap nor the console promises more for them.
+func (s *Server) internalFirstAgentArtifacts() bool {
+	return s.regionalAgentArtifacts() && s.agentArtifactsAtLeast(4, 1, 46)
+}
+
 func (s *Server) agentArtifactsAtLeast(minimums ...int) bool {
 	version := strings.SplitN(strings.TrimPrefix(s.options.AgentArtifactVersion, "v"), "-", 2)[0]
 	parts := strings.Split(version, ".")
@@ -190,8 +198,10 @@ func (s *Server) agentReleaseURL() string {
 }
 
 // agentDownloadSource tells the console where a native installer downloads
-// its packages: from this Master, from GitHub or JD Cloud OSS chosen by the
-// installing host's public IP location, or from a configured release URL.
+// its packages: from this Master, from a source the installer chooses itself
+// (JD Cloud's internal endpoint where the host reaches it, otherwise GitHub or
+// JD Cloud OSS by the host's public IP location), or from a configured
+// release URL.
 func (s *Server) agentDownloadSource(upstream bool) map[string]any {
 	if !upstream && s.cachedAgentPackages() {
 		return map[string]any{"kind": "master"}
@@ -200,7 +210,11 @@ func (s *Server) agentDownloadSource(upstream bool) map[string]any {
 		return nil
 	}
 	if s.regionalAgentArtifacts() {
-		return map[string]any{"kind": "auto"}
+		source := map[string]any{"kind": "auto"}
+		if s.internalFirstAgentArtifacts() {
+			source["internalFirst"] = true
+		}
+		return source
 	}
 	return map[string]any{"kind": "release", "url": s.agentReleaseURL()}
 }
@@ -316,8 +330,12 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.internalAgentBootstrap(w, windows, token, masterURL, installerOptions, lang)
 		return
 	}
-	if s.regionalAgentArtifacts() {
+	if s.internalFirstAgentArtifacts() {
 		s.officialAgentBootstrap(w, windows, token, masterURL, installerOptions, lang)
+		return
+	}
+	if s.regionalAgentArtifacts() {
+		s.locationAgentBootstrap(w, windows, token, masterURL, installerOptions, lang)
 		return
 	}
 	if windows {
@@ -407,7 +425,87 @@ printf '%%s' %s | bash "$installer" --role agent %s --source jdoss-internal --ve
 `, languageEnv(lang, false), shellQuote(release+"/install.sh"), shellQuote(token), installerOptions, shellQuote(version), shellQuote(masterURL))
 }
 
+// officialAgentBootstrap fetches a pinned installer of 4.1.46 or later on the
+// installing host. It tries JD Cloud's internal endpoint first: a host that reaches it needs no
+// route to the public sources, and elsewhere nothing answers, so the attempt
+// is short. Otherwise the host's public IP location chooses GitHub or the
+// public mirror. The installer then selects its package source the same way.
 func (s *Server) officialAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions, lang string) {
+	version := "v" + strings.TrimPrefix(s.options.AgentArtifactVersion, "v")
+	github := "https://raw.githubusercontent.com/MoonWX/oss-transfer/" + version
+	jdoss := officialAgentArtifactBase + "/" + version
+	internal := internalAgentArtifactBase + "/" + version
+	if windows {
+		fmt.Fprintf(w, `$ErrorActionPreference = 'Stop'
+%s$installer = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
+$urls = @{ internal = @(%s); github = @(%s, %s); jdoss = @(%s) }
+function Download-Installer($sourceName, $timeout = 60) {
+  foreach ($url in $urls[$sourceName]) {
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer -TimeoutSec $timeout -ErrorAction Stop
+      return
+    } catch { $lastError = $_ }
+  }
+  throw $lastError
+}
+try {
+  try {
+    Download-Installer 'internal' 2
+  } catch {
+    $source = 'github'
+    $country = ''
+    try {
+      $trace = [string](Invoke-RestMethod -Uri 'https://www.cloudflare.com/cdn-cgi/trace' -TimeoutSec 3)
+      if ($trace -match '(?m)^loc=([A-Z]{2})\r?$') { $country = $Matches[1] }
+    } catch {}
+    if ($country -notmatch '^[A-Z]{2}$' -or $country -eq 'XX') {
+      try { $country = ([string](Invoke-RestMethod -Uri 'https://ipinfo.io/country' -TimeoutSec 3)).Trim().ToUpperInvariant() } catch {}
+    }
+    if ($country -eq 'CN') { $source = 'jdoss' }
+    try {
+      Download-Installer $source
+    } catch {
+      $source = if ($source -eq 'github') { 'jdoss' } else { 'github' }
+      Download-Installer $source
+    }
+  }
+  $env:TRANSFER_JOIN_TOKEN = %s
+  & ([scriptblock]::Create((Get-Content -LiteralPath $installer -Raw))) -Role agent -Source auto -Version %s -MasterUrl %s -Yes
+} finally {
+  Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item $installer -ErrorAction SilentlyContinue
+}
+`, languageEnv(lang, true), psQuote(internal+"/Install.ps1"), psQuote(github+"/deploy/native/Install.ps1"), psQuote(github+"/deploy/go/Install.ps1"), psQuote(jdoss+"/Install.ps1"), psQuote(token), psQuote(version), psQuote(masterURL))
+		return
+	}
+	fmt.Fprintf(w, `#!/usr/bin/env bash
+set -euo pipefail
+%sinstaller=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+internal_url=%s
+github_url=%s
+jdoss_url=%s
+if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 1 --max-time 20 "$internal_url" -o "$installer" 2>/dev/null; then
+  source=github
+  country=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | awk -F= '$1 == "loc" {sub(/\r$/, "", $2); print $2; exit}') || country=
+  if [[ ! "$country" =~ ^[A-Z]{2}$ || "$country" == XX ]]; then
+    country=$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 2 --max-time 3 --max-filesize 4096 https://ipinfo.io/country 2>/dev/null | tr -d '\r\n') || country=
+  fi
+  [[ "$country" != CN ]] || source=jdoss
+  if [[ "$source" == jdoss ]]; then url=$jdoss_url; else url=$github_url; fi
+  if ! curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 "$url" -o "$installer"; then
+    if [[ "$source" == jdoss ]]; then source=github; url=$github_url; else source=jdoss; url=$jdoss_url; fi
+    curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 60 "$url" -o "$installer"
+  fi
+fi
+printf '%%s' %s | bash "$installer" --role agent %s --source auto --version %s --master-url %s --token-stdin --yes "$@"
+`, languageEnv(lang, false), shellQuote(internal+"/install.sh"), shellQuote(github+"/install.sh"), shellQuote(jdoss+"/install.sh"), shellQuote(token), installerOptions, shellQuote(version), shellQuote(masterURL))
+}
+
+// locationAgentBootstrap serves installers released before 4.1.46, which do
+// not try the internal endpoint themselves: the host's public IP location
+// chooses GitHub or the public mirror for the installer, as it always did.
+func (s *Server) locationAgentBootstrap(w http.ResponseWriter, windows bool, token, masterURL, installerOptions, lang string) {
 	version := "v" + strings.TrimPrefix(s.options.AgentArtifactVersion, "v")
 	github := "https://raw.githubusercontent.com/MoonWX/oss-transfer/" + version
 	jdoss := officialAgentArtifactBase + "/" + version

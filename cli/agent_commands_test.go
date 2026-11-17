@@ -288,6 +288,13 @@ func TestAgentInvitationShowsLocalExpiryDockerVariantsAndDownloadSource(t *testi
 			if strings.Contains(text, locale.text("\nDocker（可选）")) || strings.Contains(text, "回环") || strings.Contains(text, "loopback") {
 				t.Fatalf("unexpected legacy label or loopback warning: %s", text)
 			}
+			// Installers that try the internal endpoint first are described as such.
+			data["downloadSource"] = map[string]interface{}{"kind": "auto", "internalFirst": true}
+			output.Reset()
+			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)
+			if text := output.String(); !strings.Contains(text, locale.text("下载来源：新节点能访问京东云内网地址时通过内网下载，否则按其公网 IP 所在地选择 GitHub 或京东云 OSS（会访问 cloudflare.com 和 ipinfo.io）")) || strings.Contains(text, locale.text("下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）")) {
+				t.Fatalf("internal-first download source: %s", text)
+			}
 			data["joinUrl"] = "http://localhost:1685/api/agents/bootstrap/once"
 			output.Reset()
 			renderCLIResult(&cliLocaleWriter{Writer: &output, locale: locale}, data)

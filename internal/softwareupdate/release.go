@@ -18,7 +18,11 @@ import (
 )
 
 const (
-	ossBase            = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer"
+	ossBase = "https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer"
+	// internalBase is the same bucket through JD Cloud's internal endpoint. It
+	// answers only on JD Cloud's internal network, where a download uses no
+	// public bandwidth and needs no route to the internet.
+	internalBase       = "https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer"
 	githubAPI          = "https://api.github.com/repos/MoonWX/oss-transfer/releases"
 	releaseBase        = "https://github.com/MoonWX/oss-transfer/releases"
 	archiveLimit int64 = 1 << 30
@@ -127,7 +131,34 @@ func (c *client) metadata(ctx context.Context, address string, out any) error {
 	}
 	return json.Unmarshal([]byte(body.String()), out)
 }
+
+// ossSourceBase returns the bucket address of a JD Cloud OSS source.
+func ossSourceBase(source string) (string, bool) {
+	switch source {
+	case "jdoss":
+		return ossBase, true
+	case "jdoss-internal":
+		return internalBase, true
+	}
+	return "", false
+}
+
+// internalReachable reports whether this host can download through JD Cloud's
+// internal endpoint. Where the endpoint is routed it answers within
+// milliseconds; elsewhere nothing answers, so the attempt is kept short.
+func (c *client) internalReachable(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := c.fetch(ctx, internalBase+"/latest/release.json", 2<<20, io.Discard)
+	return err == nil
+}
+
+// sourceOrder prefers the internal endpoint on a host that reaches it, and
+// otherwise orders the public sources by the host's public IP location.
 func (c *client) sourceOrder(ctx context.Context) []string {
+	if c.internalReachable(ctx) {
+		return []string{"jdoss-internal", "jdoss", "github"}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var body strings.Builder
@@ -159,7 +190,7 @@ func (c *client) releaseFrom(ctx context.Context, source, version string, allowP
 	var release Release
 	// "latest" never selects a prerelease, even if the flag is set.
 	prereleaseAllowed := allowPrerelease && version != "latest"
-	if source == "jdoss" {
+	if base, oss := ossSourceBase(source); oss {
 		path := "latest"
 		if version != "latest" {
 			path = "v" + version
@@ -171,7 +202,7 @@ func (c *client) releaseFrom(ctx context.Context, source, version string, allowP
 			Commit  string  `json:"commit"`
 			Assets  []asset `json:"assets"`
 		}
-		if err := c.metadata(ctx, ossBase+"/"+path+"/release.json", &document); err != nil {
+		if err := c.metadata(ctx, base+"/"+path+"/release.json", &document); err != nil {
 			return release, err
 		}
 		if document.Format != "oss-transfer-release-v1" || !commitPattern.MatchString(document.Commit) {
@@ -179,7 +210,7 @@ func (c *client) releaseFrom(ctx context.Context, source, version string, allowP
 		}
 		release = Release{Version: document.Version, Tag: document.Tag, Commit: document.Commit, assets: document.Assets, source: source}
 		for i := range release.assets {
-			release.assets[i].URL = ossBase + "/" + release.Tag + "/" + release.assets[i].Name
+			release.assets[i].URL = base + "/" + release.Tag + "/" + release.assets[i].Name
 		}
 	} else if source == "github" {
 		path := "/latest"

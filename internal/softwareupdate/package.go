@@ -212,7 +212,7 @@ func (c *client) prepareFrom(ctx context.Context, stage, version string, allowPr
 	for _, installer := range []string{"native-install.sh", "install.sh", "Install.ps1"} {
 		installerPath := filepath.Join(stage, installer)
 		var installerAsset asset
-		if source == "jdoss" {
+		if _, oss := ossSourceBase(source); oss {
 			installerAsset, err = release.asset(installer)
 			if err != nil {
 				return "", err

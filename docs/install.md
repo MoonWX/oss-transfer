@@ -124,19 +124,21 @@ On every system, sign in with the `admin` password printed by the installer. The
 
 ## Download sources
 
-The installer downloads from GitHub by default. When the host's public IP is in mainland China, it switches automatically to the JD Cloud OSS mirror. If the preferred source is unreachable, it tries the other one. To determine the location, it queries `https://www.cloudflare.com/cdn-cgi/trace` and then `https://ipinfo.io/country`.
+The installer first tries JD Cloud's internal endpoint and, when it is reachable, downloads through it without determining the host's location (see [JD Cloud internal network](#jd-cloud-internal-network)). When the internal endpoint is not reachable, the installer downloads from GitHub by default, and switches to the JD Cloud OSS mirror when the host's public IP is in mainland China. If the preferred source is unreachable, it tries the other one. To determine the location, it queries `https://www.cloudflare.com/cdn-cgi/trace` and then `https://ipinfo.io/country`.
 
-To skip the automatic detection, pass `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) to specify the source directly.
+To skip the automatic detection, pass `--source github`, `--source jdoss` or `--source jdoss-internal` (`-Source` for `Install.ps1`) to specify the source directly. The installer then uses that source without probing the internal endpoint or detecting the location.
 
 The mirror address `https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/` always contains every file of the latest stable release, including `install.sh` and `Install.ps1`. Each version (prereleases included) has its own directory named `v<version>/`.
 
 When the installer is saved as a file and run directly (rather than piped into the shell), it first looks for `manifest.tsv` or the platform archive for the current host in its own directory and the current directory. If found, it installs from those local files without downloading anything; if `--version` is specified, it must match the version of those files. Adding `--source github` or `--source jdoss` (`-Source` for `Install.ps1`) forces a download instead. See [offline installation](offline-install.md) for details.
 
-Agents added from the console download the installer and packages from the Master by default and do not need internet access. The **Add node** dialog provides a **Download source** option above the native deployment commands, which can be changed to download from the public internet. When the Master uses the official release packages, the option **JD Cloud internal (Beijing)** is also available, and the resulting join command accesses only the internal endpoint.
+Agents added from the console download the installer and packages from the Master by default and do not need internet access. The **Add node** dialog provides a **Download source** option above the native deployment commands, which can be changed to download from the public internet. From v4.1.46, that join command and the installer it runs each try JD Cloud's internal endpoint once and, when it is reachable, download everything through it; on a host that cannot reach the internal endpoint, the join takes two to four seconds longer. When the Master uses the official release packages, the option **JD Cloud internal (Beijing)** is also available, and the resulting join command accesses only the internal endpoint.
 
 ### JD Cloud internal network
 
-Hosts in the JD Cloud cn-north-1 (Beijing) region should use `--source jdoss-internal` (`-Source jdoss-internal` for `Install.ps1`). The installer then downloads the same files through the internal endpoint `https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/`, which uses no public bandwidth and works even when the host cannot reach the public internet. Automatic source selection never uses this address, so it must be specified explicitly. `install.sh` supports this option from v4.1.44; `Install.ps1` supports it from v4.1.45.
+Hosts in the JD Cloud cn-north-1 (Beijing) region can download the same files through the internal endpoint `https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer/`, which uses no public bandwidth and works even when the host cannot reach the public internet. From v4.1.46, automatic source selection tries this endpoint first and uses it when it is reachable, so these hosts need no extra option. On other hosts the attempt usually takes one to three seconds, after which the installer chooses a public source by location.
+
+Earlier versions never use the internal endpoint automatically and need `--source jdoss-internal` (`-Source jdoss-internal` for `Install.ps1`). `install.sh` supports this option from v4.1.44; `Install.ps1` supports it from v4.1.45. With the option specified, the installer accesses only the internal endpoint.
 
 The installer itself can also be fetched from the internal endpoint. When running through a pipe, place the options after `bash -s --`:
 

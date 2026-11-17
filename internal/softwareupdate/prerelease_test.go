@@ -40,8 +40,11 @@ type fakeRelease struct {
 	version           string // published version served by every metadata path
 	prerelease, draft bool   // GitHub flags
 	githubFirst       bool
-	mu                sync.Mutex
-	paths             []string
+	// internalMissing makes the internal endpoint lack every versioned
+	// directory while it still serves latest.
+	internalMissing bool
+	mu              sync.Mutex
+	paths           []string
 }
 
 func (f *fakeRelease) requested() []string {
@@ -72,6 +75,8 @@ func fakeReleaseClient(t *testing.T, f *fakeRelease) *client {
 			} else {
 				_, _ = io.WriteString(w, "loc=CN\n")
 			}
+		case f.internalMissing && r.Header.Get("X-Fixture-Host") == internalHost && !strings.Contains(r.URL.Path, "/latest/"):
+			http.NotFound(w, r)
 		case strings.HasSuffix(r.URL.Path, "/release.json"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"format": "oss-transfer-release-v1", "version": f.version, "tag": tag, "commit": testCommit, "assets": []asset{{Name: archiveName, Size: int64(len(archive)), SHA256: digest(archive)}, {Name: "native-install.sh", Size: int64(len(installer)), SHA256: digest(installer)}, {Name: "install.sh", Size: int64(len(installer)), SHA256: digest(installer)}, {Name: "Install.ps1", Size: int64(len(installer)), SHA256: digest(installer)}}})
 		case strings.HasPrefix(r.URL.Path, "/repos/MoonWX/oss-transfer/releases/"):
@@ -86,7 +91,7 @@ func fakeReleaseClient(t *testing.T, f *fakeRelease) *client {
 	}))
 	t.Cleanup(server.Close)
 	base, _ := url.Parse(server.URL)
-	return &client{http: &http.Client{Transport: redirectTransport{base, server.Client().Transport}, Timeout: 5 * time.Second}}
+	return &client{http: &http.Client{Transport: redirectTransport{base: base, transport: server.Client().Transport}, Timeout: 5 * time.Second}}
 }
 
 func TestReleaseMetadataRequiresExplicitPrereleaseOptIn(t *testing.T) {

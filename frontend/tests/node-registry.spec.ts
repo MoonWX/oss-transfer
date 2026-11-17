@@ -779,10 +779,10 @@ test("the JD Cloud internal source is offered beside the public sources", async 
     nativeAgent: { available: true },
     windowsCommand,
     nativeCommand,
-    downloadSource: { kind: "auto" },
+    downloadSource: { kind: "auto", internalFirst: true },
     upstreamTraditionalCommand,
     upstreamWindowsCommand,
-    upstreamDownloadSource: { kind: "auto" },
+    upstreamDownloadSource: { kind: "auto", internalFirst: true },
     internalTraditionalCommand: internal,
     internalWindowsCommand: `irm '${joinUrl}?platform=windows&source=jdoss-internal' | iex`,
     internalDownloadSource: {
@@ -802,6 +802,12 @@ test("the JD Cloud internal source is offered beside the public sources", async 
     exact: true,
   });
   await expect(field).toHaveValue(traditionalCommand);
+  // Installers that try the internal endpoint themselves are described so.
+  await expect(
+    dialog.getByText(
+      /下载来源：新节点能访问京东云内网地址时通过内网下载.*GitHub 或京东云 OSS.*ipinfo\.io/,
+    ),
+  ).toBeVisible();
   // The default is already the public sources, so only two choices remain.
   await expect(
     dialog.getByTestId("download-source").getByRole("button"),

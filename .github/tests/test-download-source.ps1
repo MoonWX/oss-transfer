@@ -152,6 +152,7 @@ function Hash-Bytes([byte[]]$Bytes) {
 $utf8 = [Text.UTF8Encoding]::new($false)
 $githubAPI = 'https://api.github.com/repos/MoonWX/oss-transfer/releases/latest'
 $jdoss = 'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer'
+$internal = 'https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer'
 $githubURL = 'https://github.com/MoonWX/oss-transfer/releases/download/v4.1.5/oss-transfer-windows-amd64.zip'
 $traceURL = 'https://www.cloudflare.com/cdn-cgi/trace'
 $countryURL = 'https://ipinfo.io/country'
@@ -635,10 +636,39 @@ if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was chan
         $script:responses[$traceURL]="ip=203.0.113.1`nloc=CN`n"; Add-JDOSS
         $result=Resolve-DownloadSource 'auto' 'latest' 'amd64'
         Assert ($result.Source -ceq 'jdoss' -and $result.ReleaseUrl -ceq "$jdoss/v4.1.5") 'China source was not pinned.'
-        Assert ($script:requests[0].Timeout -eq 3) 'Geolocation timeout differs.'
+        Assert ($script:requests[0].Url -ceq "$internal/latest/manifest.tsv" -and $script:requests[0].Timeout -eq 2) 'Internal endpoint was not tried first and briefly.'
+        Assert ($script:requests[1].Url -ceq $traceURL -and $script:requests[1].Timeout -eq 3) 'Geolocation timeout differs.'
+    }
+    Check 'auto prefers a reachable internal endpoint without a location lookup' {
+        $script:responses["$internal/latest/manifest.tsv"]=$jdManifest
+        $script:responses["$internal/v4.1.5/manifest.tsv"]=$jdManifest
+        $script:responses[$traceURL]="loc=US`n"; $script:responses[$githubAPI]=GitHub-JSON; Add-JDOSS
+        $result=Resolve-DownloadSource 'auto' 'latest' 'amd64'
+        Assert ($result.Source -ceq 'jdoss-internal' -and $result.ReleaseUrl -ceq "$internal/v4.1.5") 'Reachable internal endpoint was not selected.'
+        Assert (@($script:requests | Where-Object { -not $_.Url.StartsWith($internal) }).Count -eq 0) 'Internal selection contacted another host.'
+        Assert ($script:requests[0].Timeout -eq 2) 'Internal probe was not brief.'
+    }
+    Check 'auto needs the requested version on the internal endpoint' {
+        $script:responses["$internal/latest/manifest.tsv"]=$jdManifest
+        $script:responses[$traceURL]="loc=CN`n"
+        $script:responses["$jdoss/v4.1.5/manifest.tsv"]=$jdManifest
+        $result=Resolve-DownloadSource 'auto' 'v4.1.5' 'amd64'
+        Assert ($result.Source -ceq 'jdoss' -and $result.ReleaseUrl -ceq "$jdoss/v4.1.5") 'A missing internal version was not skipped.'
+        Assert ($script:requests[0].Url -ceq "$internal/v4.1.5/manifest.tsv") 'Internal probe ignored the requested version.'
+    }
+    Check 'a failing internal endpoint falls back to the public mirror' {
+        $script:internalCalls = 0
+        $script:responses["$internal/latest/manifest.tsv"]={
+            $script:internalCalls++
+            if ($script:internalCalls -gt 1) { throw [Net.WebException]::new('Fixture connection failure.') }
+            [PSCustomObject]@{Content=$jdManifest;BaseResponse=[PSCustomObject]@{ResponseUri=[Uri]"$internal/latest/manifest.tsv"}}
+        }
+        Add-JDOSS
+        $result=Resolve-DownloadSource 'auto' 'latest' 'amd64'
+        Assert ($result.Source -ceq 'jdoss' -and $result.ReleaseUrl -ceq "$jdoss/v4.1.5") 'Internal failure did not fall back to the public mirror.'
+        Assert (@($script:requests | Where-Object { $_.Url -ceq $githubAPI -or $_.Url -ceq $traceURL }).Count -eq 0) 'Internal fallback looked elsewhere.'
     }
     Check 'internal source uses only the internal endpoint' {
-        $internal = 'https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer'
         $script:responses["$internal/latest/manifest.tsv"]=$jdManifest
         $script:responses["$internal/v4.1.5/manifest.tsv"]=$jdManifest
         $result=Resolve-DownloadSource 'jdoss-internal' 'latest' 'amd64'
@@ -652,7 +682,7 @@ if ($ErrorActionPreference -ne 'Stop') { throw 'Caller error preference was chan
     Check 'country lookup fallback is bounded and strict' {
         $script:responses[$traceURL]="loc=cn`n"; $script:responses[$countryURL]="CN`n"; Add-JDOSS
         Assert ((Resolve-DownloadSource 'auto' 'latest' 'amd64').Source -ceq 'jdoss') 'Country fallback failed.'
-        Assert ($script:requests[0].Timeout -eq 3 -and $script:requests[1].Timeout -eq 3) 'Geolocation lookup exceeded timeout.'
+        Assert ($script:requests[1].Url -ceq $traceURL -and $script:requests[1].Timeout -eq 3 -and $script:requests[2].Url -ceq $countryURL -and $script:requests[2].Timeout -eq 3) 'Geolocation lookup exceeded timeout.'
     }
     Check 'unknown public-IP location defaults to GitHub' {
         $script:responses[$countryURL]='CN extra'; $script:responses[$githubAPI]=GitHub-JSON

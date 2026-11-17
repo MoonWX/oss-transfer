@@ -145,6 +145,11 @@ export const adminMessages: Record<string, { en: string; ja: string }> = {
       en: "Download source: GitHub or JD Cloud OSS, chosen by the new node's public IP location (queries cloudflare.com and ipinfo.io).",
       ja: "ダウンロード元: 新しいノードのパブリック IP の所在地に応じて GitHub または JD Cloud OSS を自動選択します（cloudflare.com と ipinfo.io に問い合わせます）。",
     },
+  "下载来源：新节点能访问京东云内网地址时通过内网下载，否则按其公网 IP 所在地选择 GitHub 或京东云 OSS（会访问 cloudflare.com 和 ipinfo.io）。":
+    {
+      en: "Download source: JD Cloud's internal endpoint when the new node can reach it, otherwise GitHub or JD Cloud OSS chosen by the node's public IP location (queries cloudflare.com and ipinfo.io).",
+      ja: "ダウンロード元: 新しいノードが JD Cloud の内部エンドポイントに到達できる場合は内部ネットワーク経由、それ以外はノードのパブリック IP の所在地に応じて GitHub または JD Cloud OSS を自動選択します（cloudflare.com と ipinfo.io に問い合わせます）。",
+    },
   "下载来源：{url}": {
     en: "Download source: {url}",
     ja: "ダウンロード元: {url}",

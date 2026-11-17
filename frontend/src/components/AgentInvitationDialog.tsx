@@ -73,9 +73,14 @@ function downloadSourceText(source?: AgentDownloadSource) {
     case "master":
       return t("下载来源：本 Master，新节点无需访问公网。");
     case "auto":
-      return t(
-        "下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）。",
-      );
+      // Installers since 4.1.46 try JD Cloud's internal endpoint first.
+      return source.internalFirst
+        ? t(
+            "下载来源：新节点能访问京东云内网地址时通过内网下载，否则按其公网 IP 所在地选择 GitHub 或京东云 OSS（会访问 cloudflare.com 和 ipinfo.io）。",
+          )
+        : t(
+            "下载来源：GitHub 或京东云 OSS，按新节点公网 IP 所在地自动选择（会访问 cloudflare.com 和 ipinfo.io）。",
+          );
     case "release":
       return t("下载来源：{url}", { url: source.url });
     case "internal":

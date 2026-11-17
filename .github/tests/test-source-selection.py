@@ -22,6 +22,7 @@ import json, os, sys
 from pathlib import Path
 url=next(arg for arg in sys.argv[1:] if arg.startswith('https://'))
 with open(os.environ['CALLS'],'a') as log: log.write(url+'\\n')
+with open(os.environ['CALLS']+'.args','a') as log: log.write(json.dumps(sys.argv[1:])+'\\n')
 responses=json.loads(os.environ['RESPONSES'])
 status,body=responses.get(url,[22,''])
 if status: sys.exit(status)
@@ -34,6 +35,8 @@ else: print(body,end='')
 
     def select(self, responses, source='auto', version='latest', success=True):
         calls = self.root / 'calls'
+        for stale in (calls, Path(str(calls)+'.args')):
+            if stale.exists(): stale.unlink()
         environment = dict(os.environ, PATH=str(self.root)+os.pathsep+os.environ['PATH'],
                            RESPONSES=json.dumps(responses), CALLS=str(calls))
         result = subprocess.run(['bash','-c','source "$1"; transfer_select_source "$2" "$3"',
@@ -49,11 +52,49 @@ else: print(body,end='')
             'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv': [0,'manifest'],
         }
 
+    INTERNAL = 'https://moonwx.s3-internal.cn-north-1.jdcloud-oss.com/oss-transfer'
+
+    def arguments(self):
+        return [json.loads(line) for line in (self.root / 'calls.args').read_text().splitlines()]
+
     def test_cn_uses_oss(self):
         source,calls=self.select(self.responses('CN'))
         self.assertEqual(source,'jdoss')
-        self.assertEqual(len(calls),2)
-        self.assertFalse(any('github' in url for url in calls))
+        # The unreachable internal endpoint is tried first, then location, then the mirror.
+        self.assertEqual(calls,[self.INTERNAL+'/latest/manifest.tsv',
+                                'https://www.cloudflare.com/cdn-cgi/trace',
+                                'https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/latest/manifest.tsv'])
+
+    def test_reachable_internal_endpoint_is_preferred_without_location_lookup(self):
+        for country in ('CN','US'):
+            with self.subTest(country=country):
+                data=self.responses(country)
+                data[self.INTERNAL+'/latest/manifest.tsv']=[0,'manifest']
+                source,calls=self.select(data)
+                self.assertEqual(source,'jdoss-internal')
+                self.assertEqual(calls,[self.INTERNAL+'/latest/manifest.tsv'])
+
+    def test_internal_endpoint_must_hold_the_requested_version(self):
+        data=self.responses('CN')
+        data[self.INTERNAL+'/latest/manifest.tsv']=[0,'manifest']
+        data['https://moonwx.s3.cn-north-1.jdcloud-oss.com/oss-transfer/v4.1.6/manifest.tsv']=[0,'manifest']
+        source,calls=self.select(data,version='4.1.6')
+        self.assertEqual(source,'jdoss')
+        self.assertEqual(calls[0],self.INTERNAL+'/v4.1.6/manifest.tsv')
+        data[self.INTERNAL+'/v4.1.6/manifest.tsv']=[0,'manifest']
+        source,calls=self.select(data,version='v4.1.6')
+        self.assertEqual(source,'jdoss-internal')
+        self.assertEqual(calls,[self.INTERNAL+'/v4.1.6/manifest.tsv'])
+
+    def test_internal_probe_gives_up_sooner_than_the_public_probes(self):
+        self.select(self.responses('CN'))
+        internal,_,public=self.arguments()
+        self.assertEqual(internal[internal.index('--connect-timeout')+1],'1')
+        self.assertEqual(internal[internal.index('--max-time')+1],'3')
+        self.assertEqual(public[public.index('--connect-timeout')+1],'2')
+        self.assertEqual(public[public.index('--max-time')+1],'5')
+        for call in (internal,public):
+            self.assertEqual(call[call.index('--proto')+1],'=https')
 
     def test_non_cn_uses_github(self):
         for country in ('US','SG','HK','JP'):
@@ -86,7 +127,7 @@ else: print(body,end='')
         self.select({},success=False)
 
     def test_explicit_sources_make_no_lookup_or_probe(self):
-        for value in ('github','jdoss'):
+        for value in ('github','jdoss','jdoss-internal'):
             with self.subTest(source=value):
                 selected,calls=self.select({},source=value)
                 self.assertEqual(selected,value)

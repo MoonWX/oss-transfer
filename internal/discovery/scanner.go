@@ -277,11 +277,17 @@ func (s *Scanner) launchLocked(current State) (State, error) {
 	if err := s.store.Update(func(tx *state.Tx) error { return tx.Put(states, parentKey(current.Spec.ParentID), current) }); err != nil {
 		return State{}, err
 	}
-	ctx, cancel := context.WithCancel(parent)
+	// The scan ends with its parent's lease, but not with the lease's cause
+	// (transferstore.ErrInterrupted or ErrMoved): net/http returns that cause
+	// in place of context.Canceled from a response it cuts off, and finish
+	// keeps only a cancelled scan RECOVERABLE.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	stopLease := context.AfterFunc(parent, cancel)
 	run := &running{cancel: cancel, done: make(chan struct{}), attempt: current.Attempt, activity: transferstore.NewScanActivity()}
 	s.active[current.Spec.ParentID] = run
 	go func() {
 		defer func() {
+			stopLease()
 			cancel()
 			close(run.done)
 			s.mu.Lock()

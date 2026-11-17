@@ -173,15 +173,16 @@ func agentStatus(err error, status int) bool {
 	return errors.As(err, &e) && e.Status == status
 }
 
-// createTransfer holds topologyMu, so no selected Agent can be removed or
-// enrolled anew in between, and refuses an Agent that is no longer online
-// under the enrollment its preflight used.
-func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey string, checks ...func(*state.Tx) error) (task.Parent, error) {
+// createTransfer creates a task, or returns the one created before under the
+// same request key; created reports which. It holds topologyMu, so no selected
+// Agent can be removed or enrolled anew in between, and refuses an Agent that
+// is no longer online under the enrollment its preflight used.
+func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey string, checks ...func(*state.Tx) error) (p task.Parent, created bool, err error) {
 	s.topologyMu.Lock()
 	defer s.topologyMu.Unlock()
 	online, err := s.onlineAgents()
 	if err != nil {
-		return task.Parent{}, err
+		return task.Parent{}, false, err
 	}
 	members := map[string]cluster.Member{}
 	for _, member := range online {
@@ -191,14 +192,14 @@ func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey 
 		member, ok := members[node.ID]
 		if !ok || member.EnrollmentID != node.EnrollmentID {
 			name := s.nodeDisplaySnapshot().lookup(node.ID, node.Address).DisplayLabel
-			return task.Parent{}, fmt.Errorf(localizeContext(ctx, "Agent %s is not online in this enrollment"), name)
+			return task.Parent{}, false, fmt.Errorf(localizeContext(ctx, "Agent %s is not online in this enrollment"), name)
 		}
 		spec.Nodes[i].Address = member.Address
 	}
 	if spec, err = s.checkTaskDefinition(ctx, spec); err != nil {
-		return task.Parent{}, err
+		return task.Parent{}, false, err
 	}
-	p, _, err := s.tasks.repo.CreateChecked(spec, requestKey, func(tx *state.Tx) error {
+	return s.tasks.repo.CreateChecked(spec, requestKey, func(tx *state.Tx) error {
 		for _, check := range checks {
 			if err := check(tx); err != nil {
 				return err
@@ -206,7 +207,6 @@ func (s *Server) createTransfer(ctx context.Context, spec task.Spec, requestKey 
 		}
 		return nil
 	})
-	return p, err
 }
 
 // checkTaskDefinition completes a resolved definition as creation stores it

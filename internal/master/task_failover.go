@@ -361,12 +361,14 @@ func (t *taskRuntime) reconcileFailover(ctx context.Context, p task.Parent, avai
 		if err = t.verifyTaskStorage(ctx, p, candidates, false); err != nil {
 			return p, err
 		}
-		if p.Spec.SharedCheckSkipped {
-			log.Printf("task %d generation %d: node %s is lost; its work moves to %s without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(node), t.server.nodeLabels(candidates))
-		}
 		p, err = t.retireUnavailableNode(p, node)
 		if err != nil {
 			return p, err
+		}
+		// Logged once, when the node is retired (not while maintenance
+		// protects it), rather than on every retried step.
+		if p.Spec.SharedCheckSkipped && p.NodeRetired(node.ID) {
+			log.Printf("task %d generation %d: node %s is lost; its work moves to %s without a shared directory check, which the operator chose to skip", p.ID, p.Generation, t.server.nodeLabel(node), t.server.nodeLabels(candidates))
 		}
 	}
 	// A lease can have been retired immediately before a Master crash, before

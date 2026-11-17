@@ -830,8 +830,10 @@ func (s *Server) createTaskHTTP(kind string) http.HandlerFunc {
 				problems = append(problems, fmt.Sprintf("%d: %s", i+1, localize(w, err.Error())))
 				continue
 			}
-			created, err := s.createTransfer(r.Context(), spec, fmt.Sprintf("%s:%d", requestKey, i))
-			if created.ID > 0 && created.Spec.SharedCheckSkipped {
+			created, isNew, err := s.createTransfer(r.Context(), spec, fmt.Sprintf("%s:%d", requestKey, i))
+			// A repeated Idempotency-Key returns the task created before; only
+			// its creation is logged.
+			if isNew && created.Spec.SharedCheckSkipped {
 				log.Printf("task %d: created with the shared directory check skipped at the operator's explicit request; %d nodes were not verified to see the same storage", created.ID, len(created.Spec.Nodes))
 			}
 			if created.ID > 0 && !errors.Is(err, task.ErrConflict) {

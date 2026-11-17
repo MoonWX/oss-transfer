@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -327,9 +328,16 @@ func (s *Server) changeTaskNodes(ctx context.Context, id int64, request taskNode
 		}
 	}
 	change.RequestKey = requestKey
-	_, replayed, failure := s.commitNodeChange(ctx, id, change, joining, label)
+	committed, replayed, failure := s.commitNodeChange(ctx, id, change, joining, label)
 	if failure != nil {
 		return nil, failure
+	}
+	if skip && !replayed {
+		added := make([]string, len(joining))
+		for i, node := range joining {
+			added[i] = fmt.Sprintf("%s at %q", label(node), node.LocalRoot)
+		}
+		log.Printf("task %d: node change %q (membership revision %d) adds %s without a shared directory check, at the operator's explicit request; these nodes were not verified to see the same storage as the task's other nodes", id, requestKey, committed.NodeRevision(), strings.Join(added, ", "))
 	}
 	select {
 	case s.tasks.wake <- struct{}{}:

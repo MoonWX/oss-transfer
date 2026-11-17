@@ -160,7 +160,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes inFlightObjectCount inFlightObjectBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete sharedCheckSkipped childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes inFlightObjectCount inFlightObjectBytes failedChildCount liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete sharedCheckSkipped childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -942,6 +942,11 @@ func taskDTO(p task.Parent) map[string]any {
 			row["creationStatus"] = p.Status
 		}
 	}
+	// failedChildCount counts the child tasks of the current run that ended
+	// with failed objects. Right after a retry or resume failedObjectCount
+	// still includes the previous run's failures; only these children can be
+	// retried in place while the task runs.
+	row["failedChildCount"] = p.FailedChildren
 	if task.Historical(p) {
 		row["legacyHistorical"] = true
 		if p.CreatedAt.IsZero() {
@@ -974,6 +979,7 @@ func childTaskDTO(p task.Parent, c task.Child) map[string]any {
 	row["workerNode"] = c.Node.Address
 	row["ossTaskGroup"] = false
 	delete(row, "creationStatus")
+	delete(row, "failedChildCount")
 	row["scanComplete"] = c.Job.DiscoveryComplete
 	row["status"] = "PENDING"
 	row["listObjectCount"] = len(c.Job.Items)

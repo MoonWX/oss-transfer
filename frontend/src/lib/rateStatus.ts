@@ -112,6 +112,8 @@ export type Worker = NodeDisplay & {
     objectsPerChild?: number;
     unfinishedChildren: number;
     maxUnfinishedChildren: number;
+    /** Set by Agents whose scan concurrency can be changed. */
+    scanConcurrencyProtocol?: number;
   };
   localStorage?: {
     advertisedLocalRoots?: string[];

@@ -750,7 +750,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		}
 		workers, _ := result["workers"].(map[string]interface{})
 		w := newCLITable(out)
-		fmt.Fprintln(w, cliText(out, "节点\t节点标识\t角色\t连接状态"))
+		fmt.Fprintln(w, cliText(out, "节点\t节点标识\t角色\t连接状态\t扫描"))
 		for _, node := range nodes {
 			address := getString(node, "address")
 			worker, _ := workers[address].(map[string]interface{})
@@ -772,7 +772,7 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 			if node["master"] == true {
 				role = cliText(out, "主节点 / 执行节点")
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, address, localeOf(out))), safeCLIText(address), role, state)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", safeCLIText(cliNodeLabel(node, address, localeOf(out))), safeCLIText(address), role, state, cliNodeScans(worker))
 		}
 		w.Flush()
 		fmt.Fprint(out, cliTextf(out, "共 %d 个执行节点\n", len(nodes)))
@@ -852,6 +852,18 @@ func renderAdminTable(out io.Writer, result, data map[string]interface{}) bool {
 		return true
 	}
 	return false
+}
+
+// cliNodeScans is the scans a node runs over its scan concurrency, "1/2",
+// or "—" when the node reported no execution status.
+func cliNodeScans(worker map[string]interface{}) string {
+	status, _ := worker["executionStatus"].(map[string]interface{})
+	active, activeKnown := cliNumeric(status["activeScans"])
+	capacity, capacityKnown := cliNumeric(status["maxConcurrentScans"])
+	if !activeKnown || !capacityKnown || active < 0 || capacity < 1 {
+		return "—"
+	}
+	return fmt.Sprintf("%d/%d", int64(active), int64(capacity))
 }
 
 func cliNumeric(value interface{}) (float64, bool) {
@@ -1205,7 +1217,7 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	renderTaskMembership(out, task)
 }
 
-var fieldLabels = map[string]string{"maxConcurrentChildren": "子任务并发", "objectsPerChild": "每个子任务的对象并发", "requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "mode": "重试方式", "retriedChildren": "重试子任务", "retriedObjects": "重试对象", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线", "reasonCode": "原因代码", "retryReasonCode": "重试原因", "freeBytes": "可用空间（字节）", "effectiveUid": "Agent 运行 UID", "writeProbeDirectory": "写入检查目录"}
+var fieldLabels = map[string]string{"maxConcurrentChildren": "子任务并发", "objectsPerChild": "每个子任务的对象并发", "maxConcurrentScans": "扫描并发", "requestLimits": "请求上限", "scope": "请求上限范围", "listQps": "LIST / GET QPS", "headQps": "HEAD QPS", "putQps": "PUT QPS", "success": "成功", "message": "说明", "error": "错误", "data": "结果", "nodes": "节点", "workers": "执行节点", "taskIds": "任务 ID", "parentTaskIds": "主任务 ID", "creationIds": "创建记录 ID", "creationId": "创建记录 ID", "submissionStatus": "受理状态", "requestedCount": "请求数量", "requestId": "请求标识", "accepted": "已受理", "ignored": "已忽略", "mode": "重试方式", "retriedChildren": "重试子任务", "retriedObjects": "重试对象", "failed": "失败", "complete": "返回完整", "partial": "部分结果", "unreachableWorkers": "未响应节点", "failedWorkers": "失败节点", "details": "详情", "output": "保存位置", "address": "节点标识", "label": "名称", "executionNodeIp": "执行节点", "workerNode": "执行节点", "workerIp": "执行节点", "recycleNode": "回收节点", "displayName": "节点名称", "displayAddress": "节点 IP", "displayLabel": "节点", "executionNodeName": "节点名称", "executionNodeAddress": "节点 IP", "executionNodeLabel": "执行节点", "workerNodeLabel": "执行节点", "identityOnly": "仅有节点标识", "reachable": "可达", "status": "状态", "limitMbps": "任务带宽 Mbps", "publicUrl": "旧版默认地址", "agentUrl": "Agent 连接地址", "hostname": "主机名", "os": "操作系统", "arch": "架构", "localIps": "网卡 IP", "connectionAddress": "连接来源 IP", "advertisedLocalRoots": "登记目录", "mounts": "挂载目录", "fileSystem": "文件系统", "readOnly": "只读", "lastSeen": "最后连接", "online": "在线", "reasonCode": "原因代码", "retryReasonCode": "重试原因", "freeBytes": "可用空间（字节）", "effectiveUid": "Agent 运行 UID", "writeProbeDirectory": "写入检查目录"}
 
 // cliExceptionReason explains the reason codes of objects whose source
 // changed or was deleted after the scan, and of objects of a recovered

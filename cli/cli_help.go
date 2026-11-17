@@ -270,18 +270,21 @@ const cliNodeHelp = `执行节点
   invite [--address 节点] [--label 名称] [--master-url URL]
   update <节点> [--address 新地址] [--label 名称]
   update <节点> --child-concurrency 32 --object-concurrency 4
+  update <节点> --scan-concurrency 4
   remove <节点> --yes              移除指定节点注册
 
 示例
   oss-transfer-cli node list --watch 5
   oss-transfer-cli node add 10.0.0.2 --label 数据节点
   oss-transfer-cli node update 10.0.0.2 --label 备用节点
+  oss-transfer-cli node update 10.0.0.2 --scan-concurrency 4
   oss-transfer-cli node remove 10.0.0.2 --yes
 
 命令中的节点使用 node list 的“节点标识”列。新增节点使用 agent invite，--address 支持名称、IPv4 和 IPv6；省略时自动生成。
 Agent 地址注册后不能直接修改，替换节点需重新加入。
 node network 保留旧版地址配置；新邀请默认使用 CLI 当前连接地址，可用 --master-url 指定 Agent 可访问的地址。
 服务端会检查节点身份、运行任务及主节点限制；未响应节点会明确列出。
+--scan-concurrency 设置同时运行的扫描数（1–16，默认 2）；node list 的“扫描”列中，1/2 表示正在运行 1 个扫描、上限为 2。调低后，正在运行的扫描不会中断；运行中的扫描数少于新上限后，才会开始新的扫描。版本较旧的 Agent 扫描并发固定为 2，升级后才能修改。
 移除节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取；需要保留时请先用 task report 和 object export 导出。
 队列与速率原始状态可使用 --json 查看，节点限速请使用 limit list。
 `
@@ -297,6 +300,7 @@ const cliAgentHelp = `Agent 管理
   update <节点> [--label 名称] [--local-root 目录 ...]
   update <节点> --clear-local-roots
   update <节点> --child-concurrency 32 --object-concurrency 4
+  update <节点> --scan-concurrency 4
   remove <节点> --yes              撤销该 Agent 的注册
 
 示例
@@ -309,6 +313,7 @@ const cliAgentHelp = `Agent 管理
 --master-url 指定 Agent 可访问的 Master 地址；省略时使用 CLI 当前连接地址。
 邀请有效期为 30 分钟，仅可加入一次。在要加入的主机上运行其中一条命令：Linux / macOS / FreeBSD 原生安装命令、Windows PowerShell 命令，或 Docker 命令（也适用于 Docker Desktop）。
 --local-root 使用 Agent 所在系统的绝对路径；配置会替换该节点已有的根目录列表。
+--scan-concurrency 设置同时运行的扫描数（1–16，默认 2）。调低后，正在运行的扫描不会中断；运行中的扫描数少于新上限后，才会开始新的扫描。版本较旧的 Agent 扫描并发固定为 2，升级后才能修改。
 移除节点后，保存在该节点上的任务报告（逐个对象的结果）和对象比对结果将无法再获取；需要保留时请先用 task report 和 object export 导出。
 `
 

@@ -130,6 +130,10 @@ export default function NodesPage() {
     initialChildren?: number;
     initialObjects?: number;
     concurrencyEditable: boolean;
+    scans: string;
+    initialScans?: number;
+    /** The node's Agent accepts a scan concurrency. */
+    scansEditable: boolean;
     online: boolean;
     /** The node's current settings were read. */
     statusRead: boolean;
@@ -185,6 +189,8 @@ export default function NodesPage() {
     setNodeError(null);
     const worker = workers.data?.workers?.[node?.address ?? ""];
     const execution = worker?.executionStatus;
+    const concurrencyEditable =
+      !!worker?.success && typeof execution?.objectsPerChild === "number";
     setNodeEdit({
       original: node?.address ?? null,
       address: node?.address ?? "",
@@ -195,8 +201,13 @@ export default function NodesPage() {
       objects: String(execution?.objectsPerChild ?? ""),
       initialChildren: execution?.maxConcurrentChildren,
       initialObjects: execution?.objectsPerChild,
-      concurrencyEditable:
-        !!worker?.success && typeof execution?.objectsPerChild === "number",
+      concurrencyEditable,
+      scans: String(execution?.maxConcurrentScans ?? ""),
+      initialScans: execution?.maxConcurrentScans,
+      scansEditable:
+        concurrencyEditable &&
+        (execution?.scanConcurrencyProtocol ?? 0) >= 1 &&
+        typeof execution?.maxConcurrentScans === "number",
       // An Agent's connection comes from the registry: a connected Agent can
       // still fail to answer one status read.
       online: node?.agent
@@ -228,6 +239,15 @@ export default function NodesPage() {
       );
       return;
     }
+    // Checked on its own: it takes no part in the subtask product limit.
+    const scans = Number(nodeEdit.scans);
+    if (
+      nodeEdit.scansEditable &&
+      (!Number.isInteger(scans) || scans < 1 || scans > 16)
+    ) {
+      setNodeError(t("扫描并发必须是 1–16 的整数。"));
+      return;
+    }
     setNodeSaving(true);
     setNodeError(null);
     try {
@@ -238,6 +258,10 @@ export default function NodesPage() {
         (children !== nodeEdit.initialChildren ||
           objects !== nodeEdit.initialObjects)
           ? { maxConcurrentChildren: children, objectsPerChild: objects }
+          : {}),
+        // Sent only when changed, and only to Agents that accept it.
+        ...(nodeEdit.scansEditable && scans !== nodeEdit.initialScans
+          ? { maxConcurrentScans: scans }
           : {}),
       });
       notify(
@@ -721,6 +745,19 @@ export default function NodesPage() {
                                             })
                                       }
                                     />
+                                    {/* Only a lowered scan concurrency leaves more scans running than it allows. */}
+                                    {queue.key === "scans" &&
+                                      size > capacity && (
+                                        <Typography
+                                          variant="caption"
+                                          color="text.secondary"
+                                          sx={{ display: "block", mt: 0.75 }}
+                                        >
+                                          {t(
+                                            "正在运行的扫描多于新上限；它们陆续结束后，按新上限开始新的扫描。",
+                                          )}
+                                        </Typography>
+                                      )}
                                   </Box>
                                 );
                               })}
@@ -976,6 +1013,53 @@ export default function NodesPage() {
                   <Typography variant="body2" color="text.secondary">
                     {t("保存后立即生效；调低并发不会中断正在传输的对象。")}
                   </Typography>
+                  {nodeEdit.scansEditable ? (
+                    <>
+                      <TextField
+                        label={t("扫描并发")}
+                        type="number"
+                        fullWidth
+                        value={nodeEdit.scans}
+                        disabled={nodeSaving}
+                        slotProps={{ htmlInput: { min: 1, max: 16, step: 1 } }}
+                        onChange={(event) =>
+                          setNodeEdit(
+                            (value) =>
+                              value && { ...value, scans: event.target.value },
+                          )
+                        }
+                      />
+                      <Typography variant="body2" color="text.secondary">
+                        {t(
+                          "同时运行的扫描数，1–16，默认 2。每个对象存储扫描同一时间有一个 LIST 请求在途，所有扫描共用节点的 LIST 上限；每个清单扫描最多同时发出 16 个 HEAD，受节点的 HEAD 上限约束；每个本地目录扫描最多同时查询 32 个条目，源端为 NFS 时调高会挤占传输所需的连接。",
+                        )}
+                      </Typography>
+                      {nodeEdit.initialScans !== undefined &&
+                        nodeEdit.scans.trim() !== "" &&
+                        Number(nodeEdit.scans) < nodeEdit.initialScans && (
+                          <Typography variant="body2" color="text.secondary">
+                            {t(
+                              "调低后，正在运行的扫描不会中断；运行中的扫描数少于新上限后，才会开始新的扫描。",
+                            )}
+                          </Typography>
+                        )}
+                    </>
+                  ) : (
+                    <>
+                      <TextField
+                        label={t("扫描并发")}
+                        type="number"
+                        fullWidth
+                        value={nodeEdit.scans}
+                        slotProps={{ htmlInput: { readOnly: true } }}
+                      />
+                      <Typography variant="body2" color="text.secondary">
+                        {t(
+                          "此节点的 Agent 版本较旧，扫描并发固定为 2；升级后才能修改。",
+                        )}
+                      </Typography>
+                    </>
+                  )}
                 </Stack>
               ) : (
                 <Typography variant="body2" color="text.secondary">

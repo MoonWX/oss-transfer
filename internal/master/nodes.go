@@ -195,6 +195,7 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 		Roots    *[]string `json:"advertisedLocalRoots"`
 		Children *int      `json:"maxConcurrentChildren"`
 		Objects  *int      `json:"objectsPerChild"`
+		Scans    *int      `json:"maxConcurrentScans"`
 	}
 	if !readJSON(w, r, &change) {
 		return
@@ -220,12 +221,29 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "Child concurrency × objects per child must not exceed 1024")
 		return
 	}
-	settingsChanged := change.Roots != nil || change.Children != nil || change.Objects != nil
+	if change.Scans != nil && nodecontrol.ValidateScanConcurrency(*change.Scans) != nil {
+		fail(w, 400, scanConcurrencyRangeMessage)
+		return
+	}
+	settingsChanged := change.Roots != nil || change.Children != nil || change.Objects != nil || change.Scans != nil
+	if change.Scans != nil {
+		// An older Agent rejects the whole change for this one field, so it
+		// is refused here, before anything is sent to the node.
+		supported, err := s.scanConcurrencySupported(r.Context(), member)
+		if err != nil {
+			nodeHTTPError(w, err)
+			return
+		}
+		if !supported {
+			fail(w, 409, scanConcurrencyUnsupportedMessage)
+			return
+		}
+	}
 	if settingsChanged {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		if err := s.agentCall(ctx, member.Session(), "node_config_set", true, nodecontrol.ConfigChange{AdvertisedLocalRoots: change.Roots, MaxConcurrentChildren: change.Children, ObjectsPerChild: change.Objects}, nil); err != nil {
-			if change.Children == nil && change.Objects == nil && genericNodeRejection(err) {
+		if err := s.agentCall(ctx, member.Session(), "node_config_set", true, nodecontrol.ConfigChange{AdvertisedLocalRoots: change.Roots, MaxConcurrentChildren: change.Children, ObjectsPerChild: change.Objects, MaxConcurrentScans: change.Scans}, nil); err != nil {
+			if change.Children == nil && change.Objects == nil && change.Scans == nil && genericNodeRejection(err) {
 				// An Agent up to 4.1.46 names no setting, but only the
 				// recorded directories were sent.
 				err = &AgentError{Status: http.StatusBadRequest, Message: nodecontrol.ErrInvalidRoots.Error(), NodeID: member.ID}

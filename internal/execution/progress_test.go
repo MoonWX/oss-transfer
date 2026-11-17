@@ -265,14 +265,20 @@ func TestObjectProgressCountsDestinationConfirmation(t *testing.T) {
 	p := newAttemptProgress(bg, Record{Job: Job{Items: []Item{{ID: "a", Source: transferstore.Object{Size: 1000}}, {ID: "b"}}}}, nil)
 	p.initialize(0, true)
 	live := p.begin(Item{ID: "a", Source: transferstore.Object{Size: 1000}})
-	p.begin(Item{ID: "b"})
+	// An empty object has nothing to send: it is FINALIZING only once the
+	// destination confirmed its write, not while the write waits or runs.
+	empty = p.begin(Item{ID: "b"})
 	live.Sending(1000)
-	if child, items, _ := p.snapshot(true); child.InFlightBytes != 999 || items[0].Stage != "TRANSFERRING" || items[1].Stage != "FINALIZING" {
+	if child, items, _ := p.snapshot(true); child.InFlightBytes != 999 || items[0].Stage != "TRANSFERRING" || items[1].Stage != "TRANSFERRING" || items[1].TransferredBytes != 0 {
 		t.Fatal("unconfirmed or empty object staged wrongly", child, items)
 	}
 	live.Sending(-1000)
 	if child, _, _ := p.snapshot(false); child.InFlightBytes != 0 {
 		t.Fatal("withdrawn bytes stayed in the summary", child)
+	}
+	empty.Accepted(0, 0)
+	if _, items, _ := p.snapshot(true); items[0].Stage != "TRANSFERRING" || items[1].Stage != "FINALIZING" || items[1].TransferredBytes != 0 {
+		t.Fatal("confirmed empty object staged wrongly", items)
 	}
 }
 

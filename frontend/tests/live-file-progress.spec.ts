@@ -33,6 +33,7 @@ async function arrange(page: Page, openChild = true) {
       readBytes: undefined as number | undefined,
       phase: undefined as string | undefined,
       basis: "TARGET" as string | undefined,
+      size: undefined as number | undefined,
       hasMore: false,
     },
     error: false,
@@ -83,7 +84,7 @@ async function arrange(page: Page, openChild = true) {
                     ? "training/big.bin"
                     : `tiny/0002/735/2735${index}.bin`,
                 destinationKey: "training/big.bin",
-                size: state.parent.listObjectSize,
+                size: state.progress.size ?? state.parent.listObjectSize,
                 transferredBytes: state.progress.transferredBytes,
                 stage: state.progress.stage,
                 readBytes: state.progress.readBytes,
@@ -414,3 +415,22 @@ for (const openChild of [false, true]) {
     await expect(current).toContainText("181.4 MiB/s");
   });
 }
+
+test("an empty file reads as transferring until its write is confirmed", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  state.progress.size = 0;
+  state.progress.transferredBytes = 0;
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
+  const progress = section.getByRole("progressbar", {
+    name: "文件进度：training/big.bin",
+  });
+  const stage = section.locator("[data-file-stage]");
+  await expect(stage).toHaveText("传输中");
+  await expect(progress).toHaveAttribute("aria-valuenow", "0");
+  await expect(section).not.toContainText("99.9%");
+  state.progress.stage = "FINALIZING";
+  await expect(stage).toHaveText("确认中");
+  await expect(progress).toHaveAttribute("aria-valuenow", "100");
+});

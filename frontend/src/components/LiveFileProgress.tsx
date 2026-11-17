@@ -173,8 +173,14 @@ export default function LiveFileProgress({
             {items.map((item) => {
               const transferred = Math.min(item.size, item.transferredBytes);
               const finalizing = item.stage === "FINALIZING";
+              // An empty file has no bytes to count, so it shows no
+              // percentage until its write is confirmed.
               const percent =
-                item.size > 0 ? (transferred / item.size) * 100 : 100;
+                item.size > 0
+                  ? (transferred / item.size) * 100
+                  : finalizing
+                    ? 100
+                    : 0;
               const displayPercent = Math.min(
                 finalizing ? 100 : 99.9,
                 Math.floor(percent * 10) / 10,
@@ -193,7 +199,8 @@ export default function LiveFileProgress({
                 ? item.basis === "TARGET"
                   ? t("确认中")
                   : t("源端已读完")
-                : (phaseLabel(item.phase) ?? `${displayPercent}%`);
+                : (phaseLabel(item.phase) ??
+                  (item.size > 0 ? `${displayPercent}%` : t("传输中")));
               const hint = finalizing
                 ? item.basis === "TARGET"
                   ? t(

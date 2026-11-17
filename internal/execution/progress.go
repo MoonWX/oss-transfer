@@ -79,10 +79,13 @@ type objectProgress struct {
 	// accepted are the bytes the destination has confirmed; pending are the
 	// request-body bytes the current attempt of each request in flight has
 	// handed to the network. A failed attempt withdraws its pending bytes.
-	// One lock keeps a confirmation, which moves a request's bytes from
-	// pending to accepted, a single step for every snapshot.
+	// confirmed is set once the destination has confirmed the whole object,
+	// which for an empty object takes a confirmation of its own. One lock
+	// keeps a confirmation, which moves a request's bytes from pending to
+	// accepted, a single step for every snapshot.
 	counts            sync.Mutex
 	accepted, pending int64
+	confirmed         bool
 	// Requests and parts of the write in each state (transferstore.WritePhase).
 	sending, retrying, admitting, buffering atomic.Int32
 }
@@ -114,6 +117,7 @@ func (o *objectProgress) Accepted(withdraw, confirmed int64) {
 	o.counts.Lock()
 	o.accepted += confirmed
 	o.pending -= withdraw
+	o.confirmed = o.confirmed || o.accepted >= o.item.Size
 	o.counts.Unlock()
 }
 
@@ -134,34 +138,43 @@ func (o *objectProgress) Phase(phase transferstore.WritePhase, delta int) {
 	counter.Add(int32(delta))
 }
 
-// transferred is the object's live byte count, never more than its size.
+// transferred is the object's live byte count (see observe).
+func (o *objectProgress) transferred() int64 {
+	bytes, _ := o.observe()
+	return bytes
+}
+
+// observe is the object's live byte count, never more than its size, and
+// whether all of its data has arrived, which is the FINALIZING stage.
 //
-// Counted at the destination, it reaches the size only once the destination
-// has confirmed every byte, so FINALIZING means the destination holds all
-// data. It falls back when a request fails and its bytes are withdrawn.
+// Counted at the destination, the count reaches the size, and the object
+// FINALIZING, only once the destination has confirmed the whole object: an
+// empty one, with nothing to send, only once its write was confirmed. The
+// count falls back when a request fails and its bytes are withdrawn.
 //
 // Counted from source reads, it is the highest count observed: a retried
 // range withdraws its bytes until it reads them again, and reporting the
-// peak keeps the progress of one object attempt from moving backwards.
-func (o *objectProgress) transferred() int64 {
+// peak keeps the progress of one object attempt from moving backwards. The
+// object is FINALIZING once the source was read to its end.
+func (o *objectProgress) observe() (int64, bool) {
 	size := o.item.Size
 	if o.targetCounted {
 		o.counts.Lock()
-		accepted, pending := o.accepted, o.pending
+		accepted, pending, confirmed := o.accepted, o.pending, o.confirmed
 		o.counts.Unlock()
-		if accepted >= size {
-			return size
+		if confirmed {
+			return size, true
 		}
-		return min(max(accepted+pending, 0), max(size-1, 0))
+		return min(max(accepted+pending, 0), max(size-1, 0)), false
 	}
 	current := min(size, max(int64(0), o.read.Load()))
 	for {
 		peak := o.peak.Load()
 		if current <= peak {
-			return peak
+			return peak, peak == size
 		}
 		if o.peak.CompareAndSwap(peak, current) {
-			return current
+			return current, current == size
 		}
 	}
 }
@@ -272,9 +285,10 @@ func (p *attemptProgress) snapshot(details bool) (ChildProgress, []ObjectProgres
 		items = make([]ObjectProgress, 0, len(objects))
 		for _, object := range objects {
 			item := object.item
-			item.TransferredBytes = object.transferred()
+			var finalizing bool
+			item.TransferredBytes, finalizing = object.observe()
 			item.Stage = "TRANSFERRING"
-			if item.TransferredBytes == item.Size {
+			if finalizing {
 				item.Stage = "FINALIZING"
 			}
 			item.ReadBytes = min(item.Size, max(0, object.read.Load()))

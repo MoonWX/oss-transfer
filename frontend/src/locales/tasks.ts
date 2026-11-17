@@ -69,6 +69,7 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "ファイルの進捗を取得中",
   },
   确认中: { en: "Finalizing", ja: "確定中" },
+  传输中: { en: "Transferring", ja: "転送中" },
   源端已读完: { en: "Source read", ja: "転送元の読み取り完了" },
   等待重试: { en: "Waiting to retry", ja: "再試行待ち" },
   等待写入请求限速: {

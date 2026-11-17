@@ -185,12 +185,20 @@ func (s *Server) failureSummary(ctx context.Context, p task.Parent) map[string]a
 		causes = append(causes, map[string]any{"code": g.code, "count": g.count, "message": message, "sample": g.sample})
 	}
 	allFailed := task.Ended(p.Status) && p.Counters.Succeeded+p.Counters.Skipped == 0
+	truncated := errors.Is(err, errSummaryFull)
 	main := causes[0]["message"].(string)
 	var message string
-	if allFailed {
+	switch {
+	// A truncated summary counts only the records it read, which belong to
+	// the lowest-numbered child tasks: say so, and count records, not objects.
+	case truncated && allFailed:
+		message = fmt.Sprintf(localizeContext(ctx, "全部 %d 个对象失败。按编号最小的子任务中的 %d 条失败记录统计，最多的原因（%d 条）：%s"), p.Counters.Failed, scanned, causes[0]["count"], main)
+	case truncated:
+		message = fmt.Sprintf(localizeContext(ctx, "%d 个对象失败。按编号最小的子任务中的 %d 条失败记录统计，最多的原因（%d 条）：%s"), p.Counters.Failed, scanned, causes[0]["count"], main)
+	case allFailed:
 		message = fmt.Sprintf(localizeContext(ctx, "全部 %d 个对象失败：%s"), p.Counters.Failed, main)
-	} else {
+	default:
 		message = fmt.Sprintf(localizeContext(ctx, "%d 个对象失败，主要原因：%s"), p.Counters.Failed, main)
 	}
-	return map[string]any{"failed": p.Counters.Failed, "allFailed": allFailed, "causes": causes, "sampled": scanned, "truncated": errors.Is(err, errSummaryFull), "message": message}
+	return map[string]any{"failed": p.Counters.Failed, "allFailed": allFailed, "causes": causes, "sampled": scanned, "truncated": truncated, "message": message}
 }

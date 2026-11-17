@@ -115,10 +115,16 @@ func TestStorageTestPermissionScopeAndOptionalAbort(t *testing.T) {
 	if code == 0 || !strings.Contains(stderr, "较旧的 Master 不支持 --prefix") {
 		t.Fatalf("older Master: %d %s %s", code, out, stderr)
 	}
-	for _, args := range [][]string{{"--bucket", "shared", "--prefix", "team-a/"}, {"--bucket", "shared", "--write", "--prefix", "bad\nprefix"}} {
+	for _, args := range [][]string{{"--bucket", "shared", "--prefix", "team-a/"}, {"--bucket", "shared", "--write", "--prefix", "bad\nprefix"}, {"--bucket", "shared", "--write", "--prefix", "bad\x7fprefix"}} {
 		if code, _, stderr := runMockCLI(t, append([]string{"storage", "test", "team"}, args...), handler(false)); code != 2 || !strings.Contains(stderr, "--prefix") {
 			t.Fatalf("%v: %d %s", args, code, stderr)
 		}
+	}
+	// The Master accepts C1 control characters (U+0080–U+009F) in a key
+	// prefix; the CLI sends such a prefix as given.
+	bodies = nil
+	if code, out, stderr := runMockCLI(t, []string{"storage", "test", "team", "--bucket", "shared", "--write", "--prefix", "team-\u0085/"}, handler(false)); code != 0 || len(bodies) != 1 || bodies[0]["prefix"] != "team-\u0085/" {
+		t.Fatalf("C1 prefix: %d %v %s %s", code, bodies, out, stderr)
 	}
 }
 

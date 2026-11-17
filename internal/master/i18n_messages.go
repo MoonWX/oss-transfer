@@ -333,6 +333,8 @@ var apiMessages = map[string]struct{ en, zh, ja string }{
 	"与存储的连接被中断":                       {"The connection to the storage was interrupted", "与存储的连接被中断", "ストレージとの接続が中断されました"},
 	"连接存储超时":                          {"Connecting to the storage timed out", "连接存储超时", "ストレージへの接続がタイムアウトしました"},
 	"存储服务端出错":                         {"The storage service returned an error", "存储服务端出错", "ストレージサービスがエラーを返しました"},
+	"源对象为归档存储，需先解冻再重试":                {"The source objects are archived; restore them before retrying", "源对象为归档存储，需先解冻再重试", "転送元オブジェクトはアーカイブされています。復元してから再試行してください"},
+	"存储服务持续限流，请调低任务的请求上限后重试":          {"The storage service kept throttling requests; lower the task's request limits, then retry", "存储服务持续限流，请调低任务的请求上限后重试", "ストレージサービスがリクエストを制限し続けました。タスクのリクエスト上限を下げてから再試行してください"},
 	"执行节点 %s 离线，任务等待其恢复连接":            {"Node %s is offline; the task waits for it to reconnect", "执行节点 %s 离线，任务等待其恢复连接", "ノード %s がオフラインです。タスクは再接続を待っています"},
 	"、":                {", ", "、", "、"},
 	"全部 %d 个对象失败：%s":   {"All %d objects failed: %s", "全部 %d 个对象失败：%s", "%d 個のオブジェクトがすべて失敗しました: %s"},

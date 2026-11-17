@@ -2773,6 +2773,25 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Signature mismatch. Check the storage connection's Secret Key and signature version.",
     ja: "署名が一致しません。ストレージ接続の Secret Key と署名バージョンを確認してください。",
   },
+  // Causes of failed objects (objectErrorSummary in src/lib/storageErrors.ts).
+  "源对象为归档存储，需先解冻再重试。": {
+    en: "The source object is archived. Restore it before retrying.",
+    ja: "転送元オブジェクトはアーカイブされています。復元してから再試行してください。",
+  },
+  "存储服务持续限流，请调低任务的请求上限后重试。": {
+    en: "The storage service kept throttling requests. Lower the task's request limits, then retry.",
+    ja: "ストレージサービスがリクエストを制限し続けました。タスクのリクエスト上限を下げてから再試行してください。",
+  },
+  "{host} 在传输中关闭了连接（EOF）。可在存储恢复后重试失败对象；若反复出现，请检查存储前端代理或负载均衡的超时设置。":
+    {
+      en: "{host} closed the connection during the transfer (EOF). Retry the failed objects once the storage is available; if this keeps happening, check the timeouts of any proxy or load balancer in front of the storage.",
+      ja: "{host} が転送中に接続を閉じました（EOF）。ストレージの復旧後に失敗したオブジェクトを再試行してください。繰り返し発生する場合は、ストレージの前段にあるプロキシやロードバランサーのタイムアウト設定を確認してください。",
+    },
+  "与 {host} 的连接在传输中被重置。可在存储恢复后重试失败对象；若反复出现，请检查存储前端代理、负载均衡或防火墙的设置。":
+    {
+      en: "The connection to {host} was reset during the transfer. Retry the failed objects once the storage is available; if this keeps happening, check any proxy, load balancer or firewall in front of the storage.",
+      ja: "{host} との接続が転送中にリセットされました。ストレージの復旧後に失敗したオブジェクトを再試行してください。繰り返し発生する場合は、ストレージの前段にあるプロキシ、ロードバランサー、ファイアウォールの設定を確認してください。",
+    },
   // Runtime messages from the Master (src/lib/runtimeMessages.ts).
   "错误详情：{detail}": { en: "Details: {detail}", ja: "詳細：{detail}" },
   "节点离线，重新连接并完成或移交其任务后离开": {

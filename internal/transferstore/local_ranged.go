@@ -102,6 +102,11 @@ func (s *Local) slotsWithin(budget RangeBudget) int {
 // dispatched in order, so the chunk the writer needs next always already
 // holds its slot and memory: the window can never fill with later chunks only.
 //
+// Every chunk is allocated for its own length and dropped once written, as
+// S3 parts are, so the budget counts the chunk memory that exists. A buffer
+// kept for reuse would stay allocated after the budget had counted it free,
+// once per object in flight.
+//
 // The first failure cancels every fetch and the writer. writeRanges returns
 // only after all of its goroutines have stopped and every reservation has
 // been released, so nothing touches w after it returns.
@@ -137,13 +142,12 @@ func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFun
 			failure.Do(func() { firstError = err; cancel() })
 		}
 	}
-	buffers := sync.Pool{New: func() any { buffer := make([]byte, chunkSize); return &buffer }}
 	turns := readorder.NewQueue()
 	order := newChunkOrder(count)
 	writer := make(chan struct{})
 	go func() {
 		defer close(writer)
-		fail(order.write(ctx, w, &buffers))
+		fail(order.write(ctx, w))
 	}()
 	var fetchers sync.WaitGroup
 	for index := range count {
@@ -161,20 +165,18 @@ func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFun
 		fetchers.Add(1)
 		go func() {
 			defer fetchers.Done()
-			buffer := buffers.Get().(*[]byte)
-			data := (*buffer)[:length]
+			data := make([]byte, length)
 			if err := readRangeRetrying(readorder.With(ctx, turns, index), ranges, offset, data); err != nil {
-				buffers.Put(buffer)
 				release()
 				fail(err)
 				return
 			}
-			order.deliver(index, &fetchedChunk{data: data, buffer: buffer, release: release})
+			order.deliver(index, &fetchedChunk{data: data, release: release})
 		}()
 	}
 	fetchers.Wait()
 	<-writer
-	order.close(&buffers)
+	order.close()
 	if firstError != nil {
 		return firstError
 	}
@@ -183,7 +185,6 @@ func (s *Local) writeRanges(parent context.Context, w io.Writer, ranges RangeFun
 
 type fetchedChunk struct {
 	data    []byte
-	buffer  *[]byte
 	release func()
 }
 
@@ -221,7 +222,7 @@ func (o *chunkOrder) deliver(index int64, chunk *fetchedChunk) {
 
 // write appends chunks in index order as each next one arrives, releasing
 // its slot and memory once it is written.
-func (o *chunkOrder) write(ctx context.Context, w io.Writer, buffers *sync.Pool) error {
+func (o *chunkOrder) write(ctx context.Context, w io.Writer) error {
 	for {
 		o.mu.Lock()
 		if o.next == o.count {
@@ -247,7 +248,8 @@ func (o *chunkOrder) write(ctx context.Context, w io.Writer, buffers *sync.Pool)
 			return err
 		}
 		_, err := w.Write(chunk.data)
-		buffers.Put(chunk.buffer)
+		// The chunk is unreachable from here on, before its memory is released.
+		chunk.data = nil
 		chunk.release()
 		if err != nil {
 			return err
@@ -256,13 +258,13 @@ func (o *chunkOrder) write(ctx context.Context, w io.Writer, buffers *sync.Pool)
 }
 
 // close releases chunks that were fetched but never written.
-func (o *chunkOrder) close(buffers *sync.Pool) {
+func (o *chunkOrder) close() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.closed = true
 	for index, chunk := range o.ready {
 		delete(o.ready, index)
-		buffers.Put(chunk.buffer)
+		chunk.data = nil
 		chunk.release()
 	}
 }

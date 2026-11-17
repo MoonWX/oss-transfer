@@ -293,7 +293,7 @@ func runCLI(args []string, input io.Reader, output, errors io.Writer) int {
 			return 1
 		}
 		partial := incompleteResult(result)
-		if partial {
+		if partial && !storageSyncPending(result) {
 			fmt.Fprintln(errors, cliText(errors, "提示: 返回不完整，当前结果不代表全量。"))
 			renderIncomplete(errors, result)
 		}

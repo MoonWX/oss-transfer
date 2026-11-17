@@ -365,7 +365,8 @@ const cliStorageHelp = `存储连接
   oss-transfer-cli storage remove source --yes
 
 密钥仅从环境变量或文件读取，避免出现在命令历史中。
-更新后请关注逐节点同步结果；部分成功时结果不会显示为完整同步。
+保存或删除连接后，如有执行节点尚未同步，结果会列出这些节点，并以退出码 3 结束；
+这些节点会在下次执行任务或对象比对前自动同步。
 删除连接后，所有使用此连接的任务（包括执行中和已停止的任务）都将无法继续执行，直到重新添加同名连接。
 连接检查先列举 Bucket（ListBuckets），再对一个 Bucket 列举最多 1 个对象（ListObjectsV2）。
 只授权到单个 Bucket 的密钥无法列举 Bucket：保存时只给出警告，可用 test --bucket 检查该 Bucket。

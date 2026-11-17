@@ -1095,6 +1095,14 @@ func adminExportExceptions(path string, items []interface{}) (err error) {
 	return writer.Error()
 }
 
+// storageSyncPending reports a saved or removed storage connection that some
+// nodes have not received yet. The change itself is complete and nothing was
+// left out of the result: the summary names those nodes and says when they
+// synchronize, and the exit status 3 only marks them.
+func storageSyncPending(result map[string]interface{}) bool {
+	return getString(result, "syncNote") != ""
+}
+
 // storageSavedSummary reports a saved or deleted connection and its
 // synchronization to the execution nodes.
 func storageSavedSummary(client *ApiClient, done string, result map[string]interface{}) []string {

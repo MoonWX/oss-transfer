@@ -95,6 +95,15 @@ func (s *Server) validateSharedBindings(ctx context.Context, spec *task.Spec, ch
 		invalidateUnverifiedSharedBindings(ctx, checks)
 		return pathErr
 	}
+	if spec.SharedCheckSkipped {
+		// The operator acknowledged the risk: the directories exist, but
+		// nothing proves that they are the same storage.
+		for i := range checks {
+			checks[i].Code = "SHARED_STORAGE_CHECK_SKIPPED"
+			checks[i].Message = localizeContext(ctx, "Shared directory check skipped as requested; the nodes were not verified to see the same storage")
+		}
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	// An upload source that no node may write to is still a valid source.

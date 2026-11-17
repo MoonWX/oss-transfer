@@ -983,6 +983,11 @@ func renderTaskRows(out io.Writer, tasks []map[string]interface{}, children bool
 		}
 	}
 }
+
+// sharedCheckSkippedNotice follows every view of a task created with
+// --skip-shared-check: its results are not evidence of a complete migration.
+const sharedCheckSkippedNotice = "警告：此任务创建时跳过了共享目录校验，未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，即使任务显示成功，目标端也可能不完整或不一致。"
+
 func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 	if cleanup := taskCleanup(task); cleanup != nil {
 		renderTaskCleanup(out, getInt(task, "taskIndex"), cleanup)
@@ -1018,6 +1023,9 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		}
 		fields = append(fields, [2]string{cliText(out, "分段下载"), ranged})
 	}
+	if task["sharedCheckSkipped"] == true {
+		fields = append(fields, [2]string{cliText(out, "共享目录校验"), cliText(out, "已跳过（未验证各节点挂载同一份存储）")})
+	}
 	fields = append(fields, cliTaskRequestRates(out, task)...)
 	if limits, ok := task["requestLimits"].(map[string]interface{}); ok {
 		fields = append(fields, cliTaskRequestLimitFields(out, limits)...)
@@ -1049,6 +1057,9 @@ func renderTaskDetail(out io.Writer, task map[string]interface{}) {
 		}
 	}
 	w.Flush()
+	if task["sharedCheckSkipped"] == true {
+		fmt.Fprintln(out, cliText(out, sharedCheckSkippedNotice))
+	}
 	if policyCode == "SKIP" && getInt(task, "skippedObjectCount") > 0 {
 		fmt.Fprintln(out, cliText(out, "提示：跳过的对象有两种。目标端已存在的对象只按名称判断，未比较内容，可用 object compare 核对，或用 --conflict changed 重新创建任务以覆盖有变化的对象；扫描后在源端被删除的对象也计为跳过，它们在任务报告（task report）中的原因为 SOURCE_DELETED。"))
 	}

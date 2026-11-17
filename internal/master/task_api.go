@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"path"
@@ -69,7 +70,17 @@ type taskCreateRequest struct {
 	Marker                 string                   `json:"marker"`
 	// RangedDownload is "auto" (default) or "off" for LOCAL destinations.
 	RangedDownload string `json:"rangedDownload,omitempty"`
+	// SkipSharedCheck skips proving that several Agents see the same local
+	// directory. It is refused unless SkipSharedCheckAcknowledged is also
+	// true, and ignored when only one Agent is bound.
+	SkipSharedCheck             bool `json:"skipSharedCheck,omitempty"`
+	SkipSharedCheckAcknowledged bool `json:"skipSharedCheckAcknowledged,omitempty"`
 }
+
+// skipSharedCheckUnacknowledged names the consequences, so an API caller sees
+// what the acknowledgement accepts.
+const skipSharedCheckUnacknowledged = "skipSharedCheck requires skipSharedCheckAcknowledged:true, confirming that every selected node mounts the same storage; otherwise files can be missed or read from different data while the task still reports success"
+
 type bindingCheck struct {
 	taskBinding
 	NodeDisplay
@@ -149,7 +160,7 @@ func readTaskRows(w http.ResponseWriter, r *http.Request) ([]taskCreateRequest, 
 					return nil, false
 				}
 			}
-			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership") {
+			for _, name := range strings.Fields("taskIndex status listObjectCount listObjectSize putObjectCount putObjectSize failedObjectCount failedObjectSize skippedObjectCount skippedObjectSize createTime startTime endTime scanComplete currentSpeedBytesPerSecond averageSpeedBytesPerSecond averageSpeedIncludesInFlight transferredBytes inFlightBytes liveProgress progressPercent progressBasis requestRates parentTaskId shardId shardIndex attempt autoStart storageId participatingWorkerNodes taskBandwidthScopeId errorCode errorMessage duration activeDurationMillis activeStartedAt durationEstimated durationIncomplete sharedCheckSkipped childTaskId subtaskNumber ossTaskGroup creationStatus childCount partial generation observedAt executionNodes executionNodeName executionNodeAddress executionNodeLabel workerNodeLabel executionNodeIdentityOnly executionMembership") {
 				delete(fields, name)
 			}
 			for _, name := range []string{"inventoryManifestId", "localFileEntries", "localPath", "nodeBindings", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond"} {
@@ -329,6 +340,9 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 	default:
 		return spec, nil, nil, errors.New("rangedDownload must be auto or off")
 	}
+	if row.SkipSharedCheck && !row.SkipSharedCheckAcknowledged {
+		return spec, nil, nil, errors.New(skipSharedCheckUnacknowledged)
+	}
 	if err := execution.ValidateRequestLimits(row.RequestLimits); err != nil {
 		return spec, nil, nil, err
 	}
@@ -369,6 +383,9 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 	if spec.Direction == "OSS_TO_OSS" {
 		if kind == "local-transfers" {
 			return spec, nil, nil, errors.New("local-transfers requires a local endpoint")
+		}
+		if row.SkipSharedCheck {
+			return spec, nil, nil, errors.New("skipSharedCheck only applies to local transfers")
 		}
 		srcAlias, srcBucket, dstAlias, dstBucket := row.SourceS3Alias, row.SourceBucket, row.DestS3Alias, row.DestBucket
 		if ep := row.SourceEndpoint; ep != nil {
@@ -526,6 +543,8 @@ func normalizeTaskRequest(row taskCreateRequest, kind string) (task.Spec, []task
 		if spec.TargetPrefix != "" && spec.TargetKey != "" {
 			return spec, nil, nil, errors.New("target prefix and key are mutually exclusive")
 		}
+		// One Agent has nothing to compare its directory with.
+		spec.SharedCheckSkipped = row.SkipSharedCheck && len(bindings) > 1
 		return spec, bindings, nil, nil
 	}
 	if spec.Prefix != "" && spec.ObjectKey != "" {
@@ -794,6 +813,9 @@ func (s *Server) createTaskHTTP(kind string) http.HandlerFunc {
 				continue
 			}
 			created, err := s.createTransfer(r.Context(), spec, fmt.Sprintf("%s:%d", requestKey, i))
+			if created.ID > 0 && created.Spec.SharedCheckSkipped {
+				log.Printf("task %d: created with the shared directory check skipped at the operator's explicit request; %d nodes were not verified to see the same storage", created.ID, len(created.Spec.Nodes))
+			}
 			if created.ID > 0 && !errors.Is(err, task.ErrConflict) {
 				ids = append(ids, created.ID)
 				acceptedBindings = append(acceptedBindings, map[string]any{"parentTaskId": created.ID, "distributionMode": strings.ToLower(spec.DistributionMode), "nodeBindings": checks})
@@ -874,6 +896,9 @@ func taskDTO(p task.Parent) map[string]any {
 	row := map[string]any{"taskIndex": p.ID, "parentTaskId": p.ID, "generation": p.Generation, "direction": spec.Direction, "status": p.Status, "autoStart": true, "sourceS3Alias": spec.Source.Ref, "sourceBucket": spec.Source.Bucket, "destS3Alias": spec.Destination.Ref, "destBucket": spec.Destination.Bucket, "sourceEndpoint": endpoint(spec.Source, true), "destinationEndpoint": endpoint(spec.Destination, false), "eligibleWorkerNodes": nodes, "participatingWorkerNodes": nodes, "nodeBindings": bindings, "conflictPolicy": spec.ConflictPolicy, "overwrite": spec.ConflictPolicy == "OVERWRITE", "rangedDownload": rangedDownloadView(spec.RangedDownload), "distributionMode": strings.ToLower(spec.DistributionMode), "prefix": spec.Prefix, "objectKey": spec.ObjectKey, "startKey": spec.StartKey, "endKey": spec.EndKey, "scanComplete": p.ScanComplete, "listObjectCount": max(p.ScannedObjects, p.Counters.Total), "listObjectSize": max(p.ScannedBytes, p.Counters.TotalBytes), "putObjectCount": p.Counters.Succeeded, "putObjectSize": p.Counters.SucceededBytes, "skippedObjectCount": p.Counters.Skipped, "skippedObjectSize": p.Counters.SkippedBytes, "failedObjectCount": p.Counters.Failed, "failedObjectSize": p.Counters.FailedBytes, "createTime": p.CreatedAt.UnixMilli(), "errorMessage": p.Error, "childCount": p.ChildCount, "partial": false}
 	if spec.InventoryID != "" {
 		row["inventoryManifestId"] = spec.InventoryID
+	}
+	if spec.SharedCheckSkipped {
+		row["sharedCheckSkipped"] = true
 	}
 	if p.Cleanup != nil {
 		row["cleanup"] = cleanupDTO(p.Cleanup)

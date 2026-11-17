@@ -85,11 +85,19 @@ func TestSharedFingerprintOperations(t *testing.T) {
 		{"shared_fingerprint_verify", SharedFingerprintVerifyRequest{Root: b, Fingerprints: escape}},
 		{"shared_fingerprint_verify", SharedFingerprintVerifyRequest{Root: "relative", Fingerprints: sample}},
 		{"shared_fingerprint_verify", SharedFingerprintVerifyRequest{ParentID: 7, Root: b, Fingerprints: sample}},
+		{"shared_proof_skip", SharedProofSkipRequest{ParentID: 7, Root: b}},
 		{"shared_fingerprint_verify", map[string]any{"root": b, "fingerprints": sample, "unexpected": true}},
 	} {
 		if status, body := execute(t, s, test.operation, test.payload); status != 400 {
 			t.Fatalf("%s %+v was not rejected: %d %v", test.operation, test.payload, status, body)
 		}
+	}
+	if status, body := execute(t, s, "shared_proof_skip", SharedProofSkipRequest{ParentID: 8, Generation: 2, Root: a}); status != 200 || !s.Shared.Verified(8, 2, a) {
+		t.Fatal("skipped check did not grant the proof", status, body)
+	}
+	s.Shared.Forget(8, 0)
+	if status, _ := execute(t, s, "shared_proof_skip", SharedProofSkipRequest{ParentID: 8, Generation: 1, Root: a}); status != 409 {
+		t.Fatal("a skip for an older generation passed the fence")
 	}
 }
 

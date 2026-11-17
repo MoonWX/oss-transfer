@@ -42,6 +42,10 @@ type Spec struct {
 	Marker                 string                   `json:"marker,omitempty"`
 	SharedLocalSource      bool                     `json:"sharedLocalSource,omitempty"`
 	SharedLocalDestination bool                     `json:"sharedLocalDestination,omitempty"`
+	// SharedCheckSkipped records that the operator explicitly acknowledged
+	// skipping the shared-directory verification of a multi-node local task.
+	// Agents are then granted their shared proof without any check.
+	SharedCheckSkipped bool `json:"sharedCheckSkipped,omitempty"`
 	// RangedDownload is empty (automatic) or execution.RangedDownloadOff. It
 	// only applies to LOCAL destinations and never changes after creation.
 	RangedDownload   string     `json:"rangedDownload,omitempty"`

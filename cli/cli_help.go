@@ -187,6 +187,9 @@ OSS 间迁移
 本地迁移
   --binding <节点=绝对路径>         按节点绑定本地路径，可重复
   --validate-only                  只执行节点和路径预检，不创建任务
+  --skip-shared-check --yes        跳过多节点共享目录校验（慎用）。若各节点挂载的不是同一份
+        存储，可能漏传文件或从错误的副本上传，任务报告仍显示成功，自动接管也可能在另一个
+        目录上继续；须同时添加 --yes 确认。只读上传源无需此项，会自动改为比对文件内容。
   下载：--prefix <前缀> 或 --object-key <Key>
         --target-relative-path <相对路径> 仅用于单对象下载
         --ranged-download auto|off 默认 auto：单个 Agent 内 128 MiB 及以上的对象按字节范围

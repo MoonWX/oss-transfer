@@ -114,7 +114,7 @@ func legacySummaryCSV(writer *csv.Writer, p task.Parent, child task.LegacyChild,
 	}
 	values := []any{"CHILD_TASK", p.ID, row["childTaskId"], row["direction"], reportNodeLabel("", child.Node, sets...), row["legacyOriginalStatus"], reportEndpoint(p.Spec.Source), reportEndpoint(p.Spec.Destination), p.Spec.Prefix, row["startKey"], row["endKey"], row["objectKey"], row["targetRelativePath"], row["dateAfter"], row["dateBefore"], row["overwrite"], row["conflictPolicy"], row["distributionMode"], row["listObjectCount"], row["listObjectSize"], row["putObjectCount"], row["putObjectSize"], row["skippedObjectCount"], row["skippedObjectSize"], row["failedObjectCount"], row["failedObjectSize"], row["createTime"], row["startTime"], row["endTime"], p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
 	values = append(values, reportRequestLimits(p.Spec.RequestLimits)...)
-	return reportCSV(writer, append(values, child.Node, row["activeDurationMillis"], row["durationEstimated"], row["durationIncomplete"])...)
+	return reportCSV(writer, append(values, child.Node, row["activeDurationMillis"], row["durationEstimated"], row["durationIncomplete"], p.Spec.SharedCheckSkipped)...)
 }
 func (s *Server) walkLegacyHistory(ctx context.Context, p task.Parent, kind string, visit func(task.LegacyHistory) error) error {
 	after := ""

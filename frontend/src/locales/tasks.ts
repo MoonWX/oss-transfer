@@ -798,6 +798,74 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
       en: "Auto is right for almost everyone: objects of 128 MiB or more are downloaded as concurrent byte ranges and written in order. Choose Off only for memory-constrained agents, storage that throttles many concurrent GET requests, or when support asks. This cannot be changed after creation.",
       ja: "ほとんどの場合は「自動」が適しています。128 MiB 以上のオブジェクトはバイト範囲ごとに並行ダウンロードし、順番に書き込みます。実行ノードのメモリが少ない場合、多数の同時 GET リクエストを制限するストレージの場合、またはサポートから指示があった場合のみ「オフ」を選択してください。作成後は変更できません。",
     },
+  "跳过共享目录校验（不推荐）": {
+    en: "Skip the shared directory check (not recommended)",
+    ja: "共有ディレクトリの検証を省略（非推奨）",
+  },
+  "仅在确定所有节点挂载同一份存储、但校验无法通过时使用。只读的上传源无需跳过：预检会改为比对抽样文件的内容。":
+    {
+      en: "Use this only when you are certain that every node mounts the same storage but the check cannot pass. A read-only upload source does not need it: the precheck compares the contents of sampled files instead.",
+      ja: "すべてのノードが同じストレージをマウントしていると確実で、検証が通らない場合にのみ使用してください。読み取り専用のアップロード元では不要です。事前チェックは抽出したファイルの内容を比較します。",
+    },
+  "已跳过共享目录校验：系统不会验证各节点看到的是同一份存储。若实际不是，可能漏传文件或从错误的副本上传，任务仍会显示成功。":
+    {
+      en: "Shared directory check skipped: nothing verifies that the nodes see the same storage. If they do not, files can be missed or uploaded from the wrong copy while the task still shows success.",
+      ja: "共有ディレクトリの検証を省略しました。各ノードが同じストレージを参照しているかは確認されません。同じでない場合、ファイルの漏れや誤ったコピーからのアップロードが起きても、タスクは成功と表示されます。",
+    },
+  "跳过共享目录校验？": {
+    en: "Skip the shared directory check?",
+    ja: "共有ディレクトリの検証を省略しますか？",
+  },
+  "跳过后，系统不再验证各执行节点看到的是同一份存储。如果它们实际挂载的不是同一份存储：":
+    {
+      en: "If you skip it, nothing verifies that the execution nodes see the same storage. If they do not actually mount the same storage:",
+      ja: "省略すると、各実行ノードが同じストレージを参照しているかは確認されません。実際に同じストレージをマウントしていない場合：",
+    },
+  "不同节点会从不同的数据中读取对象；": {
+    en: "different nodes read objects from different data;",
+    ja: "ノードごとに異なるデータからオブジェクトを読み取ります。",
+  },
+  "部分文件可能漏传，或从错误的副本上传；": {
+    en: "some files can be missed or uploaded from the wrong copy;",
+    ja: "一部のファイルが漏れたり、誤ったコピーからアップロードされたりします。",
+  },
+  "任务报告可能显示成功，而目标端实际不完整或不一致；": {
+    en: "the task report can show success while the destination is incomplete or inconsistent;",
+    ja: "タスクレポートが成功を示していても、転送先が不完全または不整合になることがあります。",
+  },
+  "节点失联后，自动接管可能在另一个目录上继续执行。": {
+    en: "after a node is lost, automatic takeover may resume against a different directory.",
+    ja: "ノードが失われた後、自動引き継ぎが別のディレクトリで再開されることがあります。",
+  },
+  "只读的上传源不需要跳过：预检会自动改为比对抽样文件的内容。": {
+    en: "A read-only upload source does not need this: the precheck automatically compares the contents of sampled files instead.",
+    ja: "読み取り専用のアップロード元では省略は不要です。事前チェックが自動的に、抽出したファイルの内容を比較します。",
+  },
+  我已确认所有执行节点挂载的是同一份存储: {
+    en: "I have confirmed that every execution node mounts the same storage",
+    ja: "すべての実行ノードが同じストレージをマウントしていることを確認しました",
+  },
+  跳过校验: {
+    en: "Skip the check",
+    ja: "検証を省略",
+  },
+  " · 已跳过共享目录校验": {
+    en: " · Shared directory check skipped",
+    ja: " · 共有ディレクトリの検証を省略",
+  },
+  此任务跳过了共享目录校验: {
+    en: "This task skipped the shared directory check",
+    ja: "このタスクは共有ディレクトリの検証を省略しました",
+  },
+  "创建时未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；即使任务显示成功，目标端也可能不完整或不一致，节点失联后的自动接管也可能在另一个目录上继续执行。":
+    {
+      en: "When it was created, nothing verified that the execution nodes mount the same storage. If they do not, different nodes read different data and some files can be missed or uploaded from the wrong copy; the destination can be incomplete or inconsistent even when the task shows success, and automatic takeover of a lost node may resume against a different directory.",
+      ja: "作成時に、各実行ノードが同じストレージをマウントしているかは確認されていません。同じでない場合、ノードごとに異なるデータを読み取り、一部のファイルが漏れたり誤ったコピーからアップロードされたりします。タスクが成功と表示されていても転送先が不完全または不整合になることがあり、失われたノードの自動引き継ぎも別のディレクトリで再開されることがあります。",
+    },
+  共享目录校验: {
+    en: "Shared directory check",
+    ja: "共有ディレクトリの検証",
+  },
   " · 分段下载已停用": {
     en: " · Ranged download off",
     ja: " · 範囲分割ダウンロード：オフ",

@@ -39,6 +39,14 @@ type SharedFingerprintVerifyRequest struct {
 	Fingerprints []transferstore.SharedFingerprint `json:"fingerprints"`
 }
 
+// SharedProofSkipRequest records a proof for a task whose operator chose to
+// skip the shared-directory check; see SharedVerifier.Skip.
+type SharedProofSkipRequest struct {
+	ParentID   int64  `json:"parentId"`
+	Generation uint64 `json:"generation"`
+	Root       string `json:"root"`
+}
+
 func (r SharedFingerprintSampleRequest) validate() error {
 	if !filepath.IsAbs(r.Root) {
 		return errors.New("shared fingerprint sampling requires an absolute directory")

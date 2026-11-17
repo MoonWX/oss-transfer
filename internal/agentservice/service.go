@@ -317,7 +317,7 @@ func (s *Service) ReplaySafe(operation string) bool {
 		return true
 	case "comparison_start", "comparison_cancel", "comparison_delete", "comparison_resume":
 		return true
-	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "child_retry_failed", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe", "shared_fingerprint_verify":
+	case "inventory_begin", "inventory_batch", "inventory_seal", "storage_apply", "child_accept", "child_recover", "child_retry_failed", "parent_stop", "parent_resume", "parent_delete", "parent_cleanup", "scan_start", "scan_ack", "scan_release", "scan_stop", "scan_resume", "bandwidth_parent", "bandwidth_node", "local_prepare", "shared_probe_ensure", "shared_probe_verify", "shared_probe_cleanup", "preflight_probe", "shared_fingerprint_verify", "shared_proof_skip":
 		return true
 	}
 	return false
@@ -533,6 +533,19 @@ func (s *Service) Execute(ctx context.Context, c agenttransport.Command) (agentt
 			s.signal()
 		}
 		return sharedFingerprintResponse(map[string]any{"verified": err == nil}, err)
+	case "shared_proof_skip":
+		var request SharedProofSkipRequest
+		if err := decode(c.Payload, &request); err != nil {
+			return badRequest(err)
+		}
+		if request.ParentID < 1 || request.Generation == 0 || !filepath.IsAbs(request.Root) {
+			return badRequest(errors.New("shared proof skip requires parent, generation and absolute root"))
+		}
+		err := s.Shared.Skip(request.ParentID, request.Generation, request.Root)
+		if err == nil {
+			s.signal()
+		}
+		return response(map[string]any{"verified": err == nil}, err)
 	case "task_metrics":
 		var request struct {
 			ParentID   int64  `json:"parentId"`

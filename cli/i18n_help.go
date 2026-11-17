@@ -438,6 +438,11 @@ OSS-to-OSS
 Local transfers
   --binding <node=absolute-path>     Bind paths per node; repeatable
   --validate-only                   Precheck nodes and paths without creating tasks
+  --skip-shared-check --yes         Skip the multi-node shared directory check (use with care).
+            If the nodes do not mount the same storage, files can be missed or uploaded
+            from the wrong copy while the task report still shows success, and automatic
+            takeover may resume against another directory; --yes confirms. A read-only
+            upload source does not need it: its file contents are compared instead.
   Download: --prefix <prefix> or --object-key <key>
             --target-relative-path <path> for a single-object download
             --ranged-download auto|off Default auto: inside one Agent, objects of 128 MiB or
@@ -489,6 +494,11 @@ OSS 間転送
 ローカル転送
   --binding <ノード=絶対パス>        ノードごとのパス。複数回指定可能
   --validate-only                   作成せずにノードとパスを事前チェック
+  --skip-shared-check --yes         複数ノードの共有ディレクトリ検証を省略（注意して使用）。
+                    各ノードが同じストレージをマウントしていない場合、ファイルの漏れや誤った
+                    コピーからのアップロードが起きてもタスクレポートは成功と表示され、自動
+                    引き継ぎも別のディレクトリで再開されることがあります。--yes で確認します。
+                    読み取り専用のアップロード元には不要です（ファイル内容を比較します）。
   ダウンロード: --prefix <プレフィックス> または --object-key <Key>
                 --target-relative-path <パス> は単一オブジェクトのみ
                 --ranged-download auto|off 既定: auto。1 つの Agent 内で 128 MiB 以上の

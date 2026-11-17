@@ -132,3 +132,19 @@ func (s *Server) validateReadOnlySharedSource(ctx context.Context, spec *task.Sp
 	}
 	return nil
 }
+
+// grantSkippedSharedCheck gives each Agent the shared-storage proof that its
+// scheduler requires, without any check, for a task created with the check
+// explicitly skipped.
+func (s *Server) grantSkippedSharedCheck(ctx context.Context, p task.Parent, nodes []task.Node) error {
+	for _, node := range nodes {
+		err := s.agentCall(ctx, nodeSession(node), "shared_proof_skip", true, agentservice.SharedProofSkipRequest{ParentID: p.ID, Generation: p.Generation, Root: node.LocalRoot}, nil)
+		if agentLacksOperation(err) {
+			return fmt.Errorf(localizeContext(ctx, "Upgrade Agent %s to run a task whose shared directory check was skipped"), s.nodeLabel(node))
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

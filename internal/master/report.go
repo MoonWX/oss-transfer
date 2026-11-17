@@ -186,7 +186,7 @@ func (a *reportAPI) stream(w http.ResponseWriter, r *http.Request, parents []tas
 
 var reportFileHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "sourceS3Alias", "sourceBucket", "sourceKey", "sourcePath", "destinationS3Alias", "destinationBucket", "destinationKey", "destinationPath", "size", "node", "result", "reasonCode", "errorMessage", "discoveredAt", "completedAt", "ledgerObservedAt", "targetCommitted", "nodeId"}
 var reportErrorHeader = []string{"parentTaskId", "childTaskId", "direction", "logicalKey", "size", "node", "reasonCode", "errorMessage", "timestamp", "nodeId"}
-var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond", "nodeId", "executionDurationMillis", "executionDurationEstimated", "executionDurationIncomplete"}
+var reportSummaryHeader = []string{"rowType", "parentTaskId", "childTaskId", "direction", "node", "status", "sourceEndpoint", "destinationEndpoint", "sourcePrefix", "startKey", "endKey", "objectKey", "targetRelativePath", "dateAfter", "dateBefore", "overwrite", "conflictPolicy", "distributionMode", "scannedCount", "scannedBytes", "successCount", "successBytes", "skippedCount", "skippedBytes", "failedCount", "failedBytes", "createTime", "startTime", "endTime", "keyMappingMode", "keyMappingSourcePrefix", "keyMappingTargetPrefix", "keyMappingTargetKey", "requestLimitScope", "listQpsLimit", "headQpsLimit", "putQpsLimit", "bandwidthBitsPerSecond", "nodeId", "executionDurationMillis", "executionDurationEstimated", "executionDurationIncomplete", "sharedCheckSkipped"}
 
 // reportReasonMeanings explains, in words, the codes the report files use:
 // partialReasons in report-metadata.json and reasonCode in the CSV files.
@@ -223,10 +223,15 @@ type reportCoverage struct {
 	ResultBytes          map[string]int64  `json:"resultBytes"`
 	PartialReasons       []string          `json:"partialReasons"`
 	NodeIssues           map[string]string `json:"nodeIssues"`
+	// SharedCheckSkipped does not make a report incomplete: the report is
+	// complete about what the nodes did, but not about which storage they saw.
+	SharedCheckSkipped bool `json:"sharedCheckSkipped,omitempty"`
 }
 
+const sharedCheckSkippedMeaning = "The shared directory check was skipped at the operator's request. The execution nodes were not verified to see the same storage, so the destination can miss objects or hold objects read from different data even when every row reports success."
+
 func newCoverage(p task.Parent) reportCoverage {
-	return reportCoverage{ParentTaskID: p.ID, Status: p.Status, ScanComplete: p.ScanComplete, Stable: true, ResultCounts: map[string]int64{"SUCCESS": 0, "SKIPPED": 0, "FAILED": 0, "UNPROCESSED": 0, "UNKNOWN": 0}, ResultBytes: map[string]int64{}, PartialReasons: []string{}, NodeIssues: map[string]string{}}
+	return reportCoverage{SharedCheckSkipped: p.Spec.SharedCheckSkipped, ParentTaskID: p.ID, Status: p.Status, ScanComplete: p.ScanComplete, Stable: true, ResultCounts: map[string]int64{"SUCCESS": 0, "SKIPPED": 0, "FAILED": 0, "UNPROCESSED": 0, "UNKNOWN": 0}, ResultBytes: map[string]int64{}, PartialReasons: []string{}, NodeIssues: map[string]string{}}
 }
 func csvValue(value any) string {
 	if value == nil {
@@ -339,7 +344,7 @@ func summaryCSV(writer *csv.Writer, p task.Parent, c *task.Child, sets ...nodeDi
 	}
 	values := []any{rowType, p.ID, childID, p.Spec.Direction, node, status, reportEndpoint(src), reportEndpoint(dst), p.Spec.Prefix, p.Spec.StartKey, p.Spec.EndKey, p.Spec.ObjectKey, targetRelative, p.Spec.ModifiedFrom, p.Spec.ModifiedUntil, p.Spec.ConflictPolicy == "OVERWRITE", p.Spec.ConflictPolicy, p.Spec.DistributionMode, scanned, scannedBytes, counters.Succeeded, counters.SucceededBytes, counters.Skipped, counters.SkippedBytes, counters.Failed, counters.FailedBytes, created, started, finished, p.Spec.MappingMode, p.Spec.ReplaceSourcePrefix, p.Spec.TargetPrefix, p.Spec.TargetKey}
 	values = append(values, reportRequestLimits(p.Spec.RequestLimits)...)
-	return reportCSV(writer, append(values, nodeID, timing.Duration(time.Now()).Milliseconds(), timing.Estimated, timing.Incomplete)...)
+	return reportCSV(writer, append(values, nodeID, timing.Duration(time.Now()).Milliseconds(), timing.Estimated, timing.Incomplete, p.Spec.SharedCheckSkipped)...)
 }
 
 func (s *Server) walkReportChildren(ctx context.Context, p task.Parent, visit func(task.Child) error) error {
@@ -598,6 +603,13 @@ func (s *Server) writeTaskReport(ctx context.Context, output io.Writer, exceptio
 			metadata["containsLegacyHistory"] = true
 			metadata["timestampMeaning"] = "Legacy rows retain recorded discovery/completion timestamps when available. Native Go rows use ledgerObservedAt. Empty fields were not recorded."
 			metadata["legacyContentMeaning"] = "V4.0.x object results are retained historical records. Their source and destination contents have not been reverified by this export."
+			break
+		}
+	}
+	for _, coverage := range coverages {
+		if coverage.SharedCheckSkipped {
+			metadata["sharedCheckSkipped"] = true
+			metadata["sharedCheckSkippedMeaning"] = sharedCheckSkippedMeaning
 			break
 		}
 	}

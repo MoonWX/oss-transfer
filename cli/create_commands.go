@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -17,7 +18,7 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		"node", "binding", "prefix", "object-key", "mapping", "target-prefix", "target-key",
 		"target-relative-path", "conflict", "distribution", "date-after", "date-before", "bandwidth-mbps", "request-id", "list-qps", "head-qps", "put-qps",
 		"ranged-download",
-	}, []string{"overwrite", "balanced", "validate-only"})
+	}, []string{"overwrite", "balanced", "validate-only", "skip-shared-check", "yes"})
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +111,9 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 		if opts.Has("binding") || opts.Has("target-relative-path") || opts.Has("validate-only") {
 			return nil, cliErrorf("--binding、--target-relative-path 和 --validate-only 仅适用于本地迁移")
 		}
+		if opts.Has("skip-shared-check") || opts.Has("yes") {
+			return nil, asUsageError(cliErrorf("--skip-shared-check 和 --yes 仅适用于多个节点绑定同一目录的本地迁移"))
+		}
 		destAlias, destBucket, err := createParseOssEndpoint(opts.Positionals[2])
 		if err != nil {
 			return nil, err
@@ -154,6 +158,9 @@ func runTaskCreate(client *ApiClient, args []string) (map[string]interface{}, er
 	}
 	bindings, err := createParseBindings(opts.Values["binding"])
 	if err != nil {
+		return nil, err
+	}
+	if err := createSkipSharedCheckOption(client, opts, len(bindings), row); err != nil {
 		return nil, err
 	}
 	local := map[string]interface{}{"type": "LOCAL", "nodeBindings": bindings}
@@ -351,6 +358,52 @@ func runLegacyTaskImport(client *ApiClient, args []string) (map[string]interface
 	return createSubmit(client, "buckets", rows, false, requestID)
 }
 
+// sharedCheckSkipWarning states what skipping the shared-directory check can
+// cost. It is printed to standard error whenever the flag is used.
+const sharedCheckSkipWarning = "警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传，任务报告可能显示成功而目标端实际不完整或不一致，节点失联后的自动接管也可能在另一个目录上继续执行。"
+
+// createSkipSharedCheckOption adds the skip request and its acknowledgement
+// to a local transfer row. --yes is the acknowledgement; without it nothing
+// is sent. One bound node has nothing to compare, so the flag is ignored.
+func createSkipSharedCheckOption(client *ApiClient, opts commandOptions, bindings int, row map[string]interface{}) error {
+	if !opts.Has("skip-shared-check") {
+		if opts.Has("yes") {
+			return asUsageError(cliErrorf("--yes 仅用于确认 --skip-shared-check"))
+		}
+		return nil
+	}
+	warnings := client.errors
+	if warnings == nil {
+		warnings = os.Stderr
+	}
+	if bindings < 2 {
+		fmt.Fprintln(warnings, cliText(warnings, "提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check"))
+		return nil
+	}
+	fmt.Fprintln(warnings, cliText(warnings, sharedCheckSkipWarning))
+	if !opts.Has("yes") {
+		return asUsageError(cliErrorf("确认所有执行节点挂载的是同一份存储后，添加 --yes 才能跳过共享目录校验；本次未提交"))
+	}
+	row["skipSharedCheck"], row["skipSharedCheckAcknowledged"] = true, true
+	return nil
+}
+
+// createValidateSkipSharedCheck applies the Master's rule to imported rows,
+// so a file cannot skip the check without its explicit acknowledgement.
+func createValidateSkipSharedCheck(row map[string]interface{}) error {
+	value, present := row["skipSharedCheck"]
+	if !present || value == nil || value == false {
+		return nil
+	}
+	if value != true {
+		return asUsageError(cliErrorf("skipSharedCheck 须为 true 或 false"))
+	}
+	if row["skipSharedCheckAcknowledged"] != true {
+		return asUsageError(cliErrorf("skipSharedCheck 须同时设置 skipSharedCheckAcknowledged: true，表示已确认所有执行节点挂载的是同一份存储"))
+	}
+	return nil
+}
+
 // Ranged download only changes how an Agent reads objects it writes to a local
 // directory, so the option exists only for oss-to-local tasks.
 func createRangedDownloadOption(opts commandOptions, direction string) (string, error) {
@@ -508,6 +561,9 @@ func createValidateRow(row map[string]interface{}, kind string) error {
 		}
 	}
 	if err := createValidateRangedDownload(row); err != nil {
+		return err
+	}
+	if err := createValidateSkipSharedCheck(row); err != nil {
 		return err
 	}
 	if value := row["taskBandwidthLimitMbps"]; value != nil {

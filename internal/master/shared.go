@@ -44,6 +44,18 @@ func (t *taskRuntime) ensureSharedSource(ctx context.Context, p task.Parent) (re
 	if cached {
 		return nil
 	}
+	if p.Spec.SharedCheckSkipped {
+		if err := t.server.grantSkippedSharedCheck(ctx, p, p.Spec.Nodes); err != nil {
+			return err
+		}
+		// Logged once per Agent process set: each grant lets these nodes
+		// start reading what may be different storage.
+		log.Printf("task %d generation %d: shared directory check skipped at the operator's request; %d nodes start without verification", p.ID, p.Generation, len(p.Spec.Nodes))
+		t.mu.Lock()
+		t.sharedProofs[p.ID] = stamp
+		t.mu.Unlock()
+		return nil
+	}
 	var probe transferstore.SharedProbe
 	if err := t.server.store.Update(func(tx *state.Tx) error {
 		found, err := tx.Get("master-shared-probes", proofKey, &probe)

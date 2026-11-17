@@ -120,6 +120,17 @@ var cliMessages = map[string][2]string{
 	"rangedDownload 为 off 仅适用于目标为本地目录的任务（OSS_TO_LOCAL）": {"rangedDownload off applies only to tasks whose destination is a local directory (OSS_TO_LOCAL)", "rangedDownload の off は転送先がローカルディレクトリのタスク（OSS_TO_LOCAL）専用です"},
 	"分段下载": {"Ranged download", "範囲分割ダウンロード"},
 
+	"警告：--skip-shared-check 会跳过共享目录校验。如果各执行节点挂载的不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传，任务报告可能显示成功而目标端实际不完整或不一致，节点失联后的自动接管也可能在另一个目录上继续执行。": {"Warning: --skip-shared-check skips the shared directory check. If the execution nodes do not mount the same storage, different nodes read different data, some files can be missed or uploaded from the wrong copy, the task report can show success while the destination is incomplete or inconsistent, and automatic takeover of a lost node may resume against a different directory.", "警告: --skip-shared-check は共有ディレクトリの検証を省略します。各実行ノードが同じストレージをマウントしていない場合、ノードごとに異なるデータを読み取り、一部のファイルが漏れたり誤ったコピーからアップロードされたりします。タスクレポートが成功を示していても転送先が不完全または不整合になることがあり、失われたノードの自動引き継ぎも別のディレクトリで再開される可能性があります。"},
+	"确认所有执行节点挂载的是同一份存储后，添加 --yes 才能跳过共享目录校验；本次未提交":                                 {"Add --yes to skip the shared directory check only after confirming that every execution node mounts the same storage; nothing was submitted", "すべての実行ノードが同じストレージをマウントしていることを確認したうえで --yes を付けると、共有ディレクトリの検証を省略できます。今回は送信していません"},
+	"提示：只绑定一个节点时不做共享目录校验，已忽略 --skip-shared-check":                                  {"Note: a single bound node has no shared directory check; --skip-shared-check was ignored", "注: ノードが 1 つだけの場合は共有ディレクトリの検証を行わないため、--skip-shared-check を無視しました"},
+	"--yes 仅用于确认 --skip-shared-check":                                              {"--yes only confirms --skip-shared-check", "--yes は --skip-shared-check の確認にのみ使用します"},
+	"--skip-shared-check 和 --yes 仅适用于多个节点绑定同一目录的本地迁移":                              {"--skip-shared-check and --yes apply only to local transfers that bind several nodes to one directory", "--skip-shared-check と --yes は、複数のノードを同じディレクトリに割り当てたローカル転送専用です"},
+	"skipSharedCheck 须为 true 或 false":                                              {"skipSharedCheck must be true or false", "skipSharedCheck は true または false を指定してください"},
+	"skipSharedCheck 须同时设置 skipSharedCheckAcknowledged: true，表示已确认所有执行节点挂载的是同一份存储": {"skipSharedCheck also requires skipSharedCheckAcknowledged: true, confirming that every execution node mounts the same storage", "skipSharedCheck には skipSharedCheckAcknowledged: true も必要です。すべての実行ノードが同じストレージをマウントしていることの確認を表します"},
+	"共享目录校验": {"Shared directory check", "共有ディレクトリの検証"},
+	"已跳过（未验证各节点挂载同一份存储）": {"Skipped (nodes not verified to mount the same storage)", "省略（各ノードが同じストレージをマウントしているかは未確認）"},
+	"警告：此任务创建时跳过了共享目录校验，未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，即使任务显示成功，目标端也可能不完整或不一致。": {"Warning: this task was created with the shared directory check skipped; the execution nodes were not verified to mount the same storage. If they do not, the destination can be incomplete or inconsistent even when the task shows success.", "警告: このタスクは共有ディレクトリの検証を省略して作成されました。各実行ノードが同じストレージをマウントしているかは確認されていません。同じでない場合、タスクが成功と表示されていても転送先が不完全または不整合になることがあります。"},
+
 	"请指定清理筛选条件或 --all，不能同时使用":         {"Specify cleanup filters or --all, not both", "絞り込み条件または --all を指定してください。併用はできません"},
 	"Master 不支持安全清理已处理记录，请先升级 Master": {"Upgrade Master before clearing resolved records", "処理済み記録を削除するには、Master を更新してください"},
 

@@ -14,7 +14,12 @@ import {
   Chip,
   Checkbox,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
+  FormControlLabel,
   IconButton,
   LinearProgress,
   MenuItem,
@@ -112,6 +117,8 @@ type TransferForm = {
   conflictPolicy: ConflictPolicy;
   distributionMode: "affinity" | "balanced";
   rangedDownload: RangedDownload;
+  // Only for several bound nodes, and only after the confirmation dialog.
+  skipSharedCheck: boolean;
   dateAfter: string;
   dateBefore: string;
   taskBandwidthLimitMbps: string;
@@ -178,6 +185,7 @@ const freshForm = (): TransferForm => ({
   conflictPolicy: "SKIP",
   distributionMode: "balanced",
   rangedDownload: "auto",
+  skipSharedCheck: false,
   dateAfter: "",
   dateBefore: "",
   taskBandwidthLimitMbps: "",
@@ -204,6 +212,9 @@ function cleanMappingFields(form: TransferForm): TransferForm {
   if (next.sourceMode === "all") next.sourceSelection = "";
   // A hidden choice must not come back when the user returns to a download.
   if (next.direction !== "OSS_TO_LOCAL") next.rangedDownload = "auto";
+  // A skipped check must not silently return when nodes are added again.
+  if (next.direction === "OSS_TO_OSS" || next.bindings.length < 2)
+    next.skipSharedCheck = false;
   return next;
 }
 
@@ -284,6 +295,7 @@ function readDraft(): Draft | null {
         (key) =>
           key !== "bindings" &&
           key !== "eligibleWorkerNodes" &&
+          key !== "skipSharedCheck" &&
           typeof form[key as keyof TransferForm] !== "string",
       )
     )
@@ -294,6 +306,8 @@ function readDraft(): Draft | null {
         typeof draft.pendingRequest.fingerprint !== "string")
     )
       delete draft.pendingRequest;
+    // Skipping the shared check needs a fresh confirmation, never a draft.
+    form.skipSharedCheck = false;
     return { ...draft, form: cleanMappingFields(form) };
   } catch {
     return null;
@@ -518,6 +532,8 @@ export default function CreateTransfer() {
     () => initialDraft?.form ?? freshForm(),
   );
   const [busy, setBusy] = useState<"create" | "validate" | null>(null);
+  const [skipDialogOpen, setSkipDialogOpen] = useState(false);
+  const [skipConfirmed, setSkipConfirmed] = useState(false);
   const [precheck, setPrecheck] = useState<Precheck | null>(null);
   const precheckRequest = useRef<string | null>(null);
   const [submission, setSubmission] = useState<Submission | null>(null);
@@ -735,6 +751,7 @@ export default function CreateTransfer() {
       !form.destinationKey
     )
       throw new Error(tr("请填写目标对象 Key 或目标前缀。"));
+    const skipSharedCheck = form.skipSharedCheck && form.bindings.length > 1;
     const localEndpoint = {
       type: "LOCAL",
       nodeBindings: form.bindings.map((binding) => ({
@@ -776,6 +793,9 @@ export default function CreateTransfer() {
         form.direction === "OSS_TO_LOCAL" && form.rangedDownload === "off"
           ? "off"
           : undefined,
+      // The Master refuses the skip without the explicit acknowledgement.
+      skipSharedCheck: skipSharedCheck || undefined,
+      skipSharedCheckAcknowledged: skipSharedCheck || undefined,
     };
   };
 
@@ -1321,6 +1341,94 @@ export default function CreateTransfer() {
           {tr("多个节点必须访问同一共享存储中的同一份数据，挂载路径可以不同。")}
         </Alert>
       )}
+      {form.bindings.length > 1 && (
+        <Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={form.skipSharedCheck}
+                onChange={(event) => {
+                  if (!event.target.checked) {
+                    update({ skipSharedCheck: false });
+                    return;
+                  }
+                  setSkipConfirmed(false);
+                  setSkipDialogOpen(true);
+                }}
+              />
+            }
+            label={tr("跳过共享目录校验（不推荐）")}
+          />
+          <Typography variant="caption" color="text.secondary" display="block">
+            {tr(
+              "仅在确定所有节点挂载同一份存储、但校验无法通过时使用。只读的上传源无需跳过：预检会改为比对抽样文件的内容。",
+            )}
+          </Typography>
+        </Box>
+      )}
+      {form.bindings.length > 1 && form.skipSharedCheck && (
+        <Alert severity="warning" data-testid="skip-shared-check-warning">
+          {tr(
+            "已跳过共享目录校验：系统不会验证各节点看到的是同一份存储。若实际不是，可能漏传文件或从错误的副本上传，任务仍会显示成功。",
+          )}
+        </Alert>
+      )}
+      <Dialog
+        open={skipDialogOpen}
+        onClose={() => setSkipDialogOpen(false)}
+        aria-labelledby="skip-shared-check-title"
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle id="skip-shared-check-title">
+          {tr("跳过共享目录校验？")}
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {tr(
+              "跳过后，系统不再验证各执行节点看到的是同一份存储。如果它们实际挂载的不是同一份存储：",
+            )}
+          </Typography>
+          <Box component="ul" sx={{ mt: 0, pl: 3 }}>
+            {[
+              tr("不同节点会从不同的数据中读取对象；"),
+              tr("部分文件可能漏传，或从错误的副本上传；"),
+              tr("任务报告可能显示成功，而目标端实际不完整或不一致；"),
+              tr("节点失联后，自动接管可能在另一个目录上继续执行。"),
+            ].map((line) => (
+              <Typography component="li" variant="body2" key={line}>
+                {line}
+              </Typography>
+            ))}
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            {tr("只读的上传源不需要跳过：预检会自动改为比对抽样文件的内容。")}
+          </Typography>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={skipConfirmed}
+                onChange={(event) => setSkipConfirmed(event.target.checked)}
+              />
+            }
+            label={tr("我已确认所有执行节点挂载的是同一份存储")}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSkipDialogOpen(false)}>{tr("取消")}</Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={!skipConfirmed}
+            onClick={() => {
+              setSkipDialogOpen(false);
+              update({ skipSharedCheck: true });
+            }}
+          >
+            {tr("跳过校验")}
+          </Button>
+        </DialogActions>
+      </Dialog>
       {form.direction === "OSS_TO_LOCAL" && form.sourceMode === "object" && (
         <TextField
           label={tr("目标相对路径（可选）")}
@@ -2298,6 +2406,11 @@ export default function CreateTransfer() {
                     form.direction === "OSS_TO_LOCAL" &&
                     form.rangedDownload === "off"
                       ? tr(" · 分段下载已停用")
+                      : ""}
+                    {tab === 0 &&
+                    form.skipSharedCheck &&
+                    form.bindings.length > 1
+                      ? tr(" · 已跳过共享目录校验")
                       : ""}
                     {tab === 0 &&
                     form.taskBandwidthLimitMbps.trim() &&

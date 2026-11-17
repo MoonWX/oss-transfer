@@ -97,6 +97,10 @@ func validate(spec Spec) error {
 	if spec.RangedDownload != "" && (spec.RangedDownload != execution.RangedDownloadOff || spec.Destination.Kind != "LOCAL") {
 		return errors.New("ranged download can only be turned off for a LOCAL destination")
 	}
+	// Node changes may later leave one Agent; the recorded choice stays.
+	if spec.SharedCheckSkipped && spec.Source.Kind != "LOCAL" && spec.Destination.Kind != "LOCAL" {
+		return errors.New("the shared directory check can only be skipped for a local transfer")
+	}
 	if spec.DistributionMode != "BALANCED" && spec.DistributionMode != "AFFINITY" {
 		return errors.New("distribution mode must be BALANCED or AFFINITY")
 	}

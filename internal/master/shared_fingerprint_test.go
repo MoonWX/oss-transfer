@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -328,5 +329,106 @@ func TestReadOnlyTakeoverComparesTheOriginalSample(t *testing.T) {
 	}
 	if err := f.master.tasks.verifyTaskStorage(ctx, p, []task.Node{a, b}, false); err == nil {
 		t.Fatal("missing sampled files were accepted")
+	}
+}
+
+func TestSkipSharedCheckRequiresAcknowledgement(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	var calls atomic.Int64
+	// Any probe write would fail: a passing preflight proves it was skipped.
+	agents := readOnlyTestAgents(t, f, "io", &calls)
+	a, b := agents[0].node, agents[1].node
+	first, second := t.TempDir(), t.TempDir()
+	row := uploadRow(taskBinding{a.Address, first}, taskBinding{b.Address, second})
+	row.SkipSharedCheck = true
+	data := validateRows(t, f, row)
+	if data["valid"] != false || !strings.Contains(fmt.Sprint(data["validationErrors"]), "skipSharedCheckAcknowledged:true") {
+		t.Fatal("skip without acknowledgement was accepted", data)
+	}
+	code, response := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers", f.admin, []taskCreateRequest{row})
+	created := response["data"].(map[string]any)
+	if code != 200 || created["acceptedCount"] != float64(0) || !strings.Contains(fmt.Sprint(created["validationErrors"]), "skipSharedCheckAcknowledged:true") {
+		t.Fatal("creation accepted a skip without acknowledgement", code, response)
+	}
+	if parents, _, err := f.master.allTaskParents(); err != nil || len(parents) != 0 {
+		t.Fatal("an unacknowledged skip created a task", parents, err)
+	}
+
+	row.SkipSharedCheckAcknowledged = true
+	data = validateRows(t, f, row)
+	if data["valid"] != true || calls.Load() != 0 {
+		t.Fatal("acknowledged skip still verified the directory", data, calls.Load())
+	}
+	for _, code := range bindingCodes(data) {
+		if code != "SHARED_STORAGE_CHECK_SKIPPED" {
+			t.Fatal("skipped check is not reported on every binding", data)
+		}
+	}
+	for _, root := range []string{first, second} {
+		if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+			t.Fatal("skipped check wrote to the directory", entries, err)
+		}
+	}
+	ctx := context.Background()
+	spec, _, err := f.master.resolveTaskSpec(ctx, row, "local-transfers")
+	if err != nil || !spec.SharedCheckSkipped {
+		t.Fatal("acknowledged skip was not recorded in the task", spec, err)
+	}
+	// One node has no shared check; the option is ignored, not recorded.
+	single := uploadRow(taskBinding{a.Address, first})
+	single.SkipSharedCheck, single.SkipSharedCheckAcknowledged = true, true
+	spec, _, err = f.master.resolveTaskSpec(ctx, single, "local-transfers")
+	if err != nil || spec.SharedCheckSkipped {
+		t.Fatal("single-node skip was recorded", spec, err)
+	}
+	buckets := taskCreateRequest{SourceS3Alias: "qa", SourceBucket: "a", DestS3Alias: "qa", DestBucket: "b", SkipSharedCheck: true, SkipSharedCheckAcknowledged: true}
+	if _, _, _, err := normalizeTaskRequest(buckets, "add-buckets"); err == nil {
+		t.Fatal("a bucket migration accepted skipSharedCheck")
+	}
+	if localizeMessage("zh-CN", skipSharedCheckUnacknowledged) == skipSharedCheckUnacknowledged {
+		t.Fatal("acknowledgement error is not translated")
+	}
+}
+
+func TestSkippedSharedCheckGrantsProofsWithoutChecking(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	first, second := t.TempDir(), t.TempDir()
+	sharedTree(t, first, "v1")
+	sharedTree(t, second, "v2")
+	p, agents := sharedSourceParent(t, f, first, second)
+	p.Spec.SharedCheckSkipped = true
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := f.master.tasks.ensureSharedSource(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.master.tasks.verifyTaskStorage(ctx, p, p.Spec.Nodes, true); err != nil {
+		t.Fatal(err)
+	}
+	for i, root := range []string{first, second} {
+		if !agents[i].service.Shared.Verified(p.ID, p.Generation, root) {
+			t.Fatal("a skipped check did not grant the Agent's proof")
+		}
+	}
+	if row := taskDTO(p); row["sharedCheckSkipped"] != true {
+		t.Fatal("task details do not show the skipped check", row)
+	}
+	if row := resolvedCSVRow(t, reportSummaryHeader, func(w *csv.Writer) error { return summaryCSV(w, p, nil) }); row["sharedCheckSkipped"] != "true" {
+		t.Fatal("task report does not show the skipped check", row)
+	}
+	if coverage := newCoverage(p); !coverage.SharedCheckSkipped {
+		t.Fatal("report metadata does not show the skipped check")
+	}
+
+	old := newAgentHTTPFixture(t)
+	var calls atomic.Int64
+	legacy := readOnlyTestAgents(t, old, "legacy", &calls)
+	for i := range legacy {
+		legacy[i].node.LocalRoot = first
+	}
+	q := takeoverParent(t, old, legacy[0].node, legacy[1].node)
+	q.Spec.Direction, q.Spec.Source, q.Spec.SharedLocalSource, q.Spec.SharedCheckSkipped = "LOCAL_TO_OSS", execution.Endpoint{Kind: "LOCAL", Root: first}, true, true
+	if err := old.master.tasks.ensureSharedSource(ctx, q); err == nil || !strings.Contains(err.Error(), "whose shared directory check was skipped") {
+		t.Fatal("an old Agent did not ask for an upgrade", err)
 	}
 }

@@ -1080,6 +1080,22 @@ function TaskDetail({
               {view.operationError}
             </Alert>
           )}
+          {current.sharedCheckSkipped && (
+            // Shown for the task's whole life: its success is no evidence
+            // that every node read the same storage.
+            <Alert
+              severity="warning"
+              sx={{ mb: 2 }}
+              data-testid="task-shared-check-skipped"
+            >
+              <Typography variant="body2" fontWeight={600}>
+                {tr("此任务跳过了共享目录校验")}
+              </Typography>
+              {tr(
+                "创建时未验证各执行节点挂载的是同一份存储。若实际不是同一份存储，不同节点会读取到不同的数据，部分文件可能漏传或从错误的副本上传；即使任务显示成功，目标端也可能不完整或不一致，节点失联后的自动接管也可能在另一个目录上继续执行。",
+              )}
+            </Alert>
+          )}
           {nodesOpen === current.taskIndex && (
             <TaskNodesDialog
               taskId={current.taskIndex}
@@ -1309,6 +1325,10 @@ function TaskDetail({
                     ? tr("停用")
                     : tr("自动")
                   : null,
+              ],
+              [
+                tr("共享目录校验"),
+                current.sharedCheckSkipped ? tr("已跳过") : null,
               ],
               [tr("共享存储 ID"), current.storageId],
               [

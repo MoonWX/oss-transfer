@@ -47,6 +47,13 @@ func (s *SharedVerifier) VerifyFingerprints(ctx context.Context, parentID int64,
 	})
 }
 
+// Skip records a proof without any check. The Master sends it only for a task
+// whose operator explicitly acknowledged skipping the shared-directory check;
+// the generation fence still applies, so a stopped task cannot reuse it.
+func (s *SharedVerifier) Skip(parentID int64, generation uint64, root string) error {
+	return s.prove(parentID, generation, root, func(string) error { return nil })
+}
+
 func (s *SharedVerifier) prove(parentID int64, generation uint64, root string, check func(root string) error) error {
 	if parentID < 1 || generation == 0 || !filepath.IsAbs(root) {
 		return errors.New("shared storage verification requires parent, generation and absolute root")

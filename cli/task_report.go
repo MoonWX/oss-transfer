@@ -65,6 +65,9 @@ func taskReportCompleteness(path string, result map[string]interface{}) error {
 		}
 		nodes = append(nodes, label)
 	}
+	if meta["sharedCheckSkipped"] == true {
+		result["sharedCheckSkipped"] = true
+	}
 	result["reportKind"] = "task"
 	result["complete"] = complete
 	result["incompleteReasons"] = reasons
@@ -162,6 +165,9 @@ func renderTaskReportResult(out io.Writer, result map[string]interface{}) bool {
 		fmt.Fprintf(table, "%s\t%s\n", field[0], safeCLIText(field[1]))
 	}
 	table.Flush()
+	if result["sharedCheckSkipped"] == true {
+		fmt.Fprintln(out, cliText(out, sharedCheckSkippedNotice))
+	}
 	if !complete && counts["UNKNOWN"] > 0 {
 		fmt.Fprintln(out, cliText(out, "结果未知的对象未能确认迁移结果；exception-details.csv 列出了每个对象和原因。"))
 	}

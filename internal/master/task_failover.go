@@ -30,6 +30,10 @@ func (t *taskRuntime) verifyTaskStorage(ctx context.Context, p task.Parent, node
 	if p.Spec.Source.Kind != "LOCAL" && p.Spec.Destination.Kind != "LOCAL" {
 		return nil
 	}
+	if p.Spec.SharedCheckSkipped {
+		// Takeover resumes on whatever directory each node has mounted.
+		return t.server.grantSkippedSharedCheck(ctx, p, nodes)
+	}
 	key := fmt.Sprint(p.ID)
 	var proof taskStorageProof
 	if err := t.server.store.Update(func(tx *state.Tx) error {

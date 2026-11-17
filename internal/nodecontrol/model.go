@@ -5,6 +5,7 @@ package nodecontrol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/MoonWX/oss-transfer/internal/ratelimit"
@@ -14,6 +15,11 @@ var (
 	ErrInvalid  = errors.New("invalid node setting")
 	ErrClosed   = errors.New("node controller is closed")
 	ErrNotFound = errors.New("adjustment not found")
+	// Rejections of one setting wrap ErrInvalid and name the setting. Agents
+	// up to 4.1.46 reply with ErrInvalid alone.
+	ErrInvalidRoots       = fmt.Errorf("%w: recorded directories must be absolute paths on this node, at most 100", ErrInvalid)
+	ErrInvalidConcurrency = fmt.Errorf("%w: child concurrency must be 1–256, objects per child 1–64, and their product at most 1024", ErrInvalid)
+	ErrUnknownRate        = fmt.Errorf("%w: unknown limit type", ErrInvalid)
 )
 
 type ByteLimiter interface {

@@ -147,6 +147,26 @@ func nodeHTTPError(w http.ResponseWriter, err error) {
 	}
 	fail(w, status, err.Error())
 }
+
+// genericNodeRejection reports an Agent up to 4.1.46 rejecting a node setting
+// without naming it; later Agents name the setting (see nodecontrol).
+func genericNodeRejection(err error) bool {
+	var remote *AgentError
+	return errors.As(err, &remote) && remote.Status == http.StatusBadRequest && remote.Message == nodecontrol.ErrInvalid.Error()
+}
+
+// unknownNodeRate reports an Agent that rejects a limit type it does not have.
+// The value was validated above with the Agent's own bounds, so an Agent up
+// to 4.1.46, which names no setting, rejects a local storage limit only
+// because it predates them.
+func unknownNodeRate(kind string, err error) bool {
+	var remote *AgentError
+	if errors.As(err, &remote) && remote.Status == http.StatusBadRequest && remote.Message == nodecontrol.ErrUnknownRate.Error() {
+		return true
+	}
+	return (kind == "localOps" || kind == "localBandwidth") && genericNodeRejection(err)
+}
+
 func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 	var change struct {
 		Address  string    `json:"address"`
@@ -184,6 +204,11 @@ func (s *Server) updateAgentNode(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if err := s.agentCall(ctx, member.Session(), "node_config_set", true, nodecontrol.ConfigChange{AdvertisedLocalRoots: change.Roots, MaxConcurrentChildren: change.Children, ObjectsPerChild: change.Objects}, nil); err != nil {
+			if change.Children == nil && change.Objects == nil && genericNodeRejection(err) {
+				// An Agent up to 4.1.46 names no setting, but only the
+				// recorded directories were sent.
+				err = &AgentError{Status: http.StatusBadRequest, Message: nodecontrol.ErrInvalidRoots.Error(), NodeID: member.ID}
+			}
 			nodeHTTPError(w, err)
 			return
 		}
@@ -268,6 +293,11 @@ func (s *Server) setNodeRate(w http.ResponseWriter, r *http.Request) {
 			}
 			var rates map[string]any
 			if err := s.agentCall(ctx, member.Session(), "node_rate_set", true, map[string]any{"type": kind, "qps": value}, &rates); err != nil {
+				if unknownNodeRate(kind, err) {
+					// Retrying cannot help until the node is upgraded.
+					result["code"], result["message"] = "RATE_TYPE_UNSUPPORTED", localize(w, "This node's version does not support this limit; upgrade it first")
+					return
+				}
 				result["message"] = err.Error()
 				return
 			}

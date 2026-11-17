@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,93 @@ func TestNodeHTTPSettingsReachEachAgentAndSurviveRestart(t *testing.T) {
 	status, body = call("GET", "/api/master/worker-status", nil)
 	if status != 200 || body["workers"].(map[string]any)[b.address].(map[string]any)["rateLimit"].(map[string]any)["put"].(map[string]any)["state"] != "NORMAL" {
 		t.Fatal("displayed warning without automatic reduction", body)
+	}
+}
+
+// An Agent up to 4.1.46 rejects every node setting with the bare "invalid node
+// setting", including a local storage limit it does not have and a recorded
+// directory it cannot use. The Master names the node as too old for the limit
+// and names the rejected directories; a current Agent names the setting
+// itself. No reply sends the user to the concurrency settings or to retry.
+func TestNodeSettingRejectionsNameTheSetting(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	current := nodeTestAgent(t, f, "current")
+	old := "old.example"
+	code, session := f.join(t, f.invite(t, old), "old", agentCredential(t))
+	if code != 200 {
+		t.Fatal("join failed", code)
+	}
+	serveScanReleaseAgent(t, f, task.Node{ID: session.NodeID, EnrollmentID: session.EnrollmentID}, func(command agenttransport.Command) (any, int) {
+		switch command.Operation {
+		case "node_rate_set", "node_config_set":
+			return map[string]string{"code": "invalid_request", "message": "invalid node setting"}, 400
+		}
+		return map[string]string{"code": "unknown_operation"}, 404
+	})
+	results := func(body map[string]any) map[string]map[string]any {
+		t.Helper()
+		byNode := map[string]map[string]any{}
+		for _, raw := range body["results"].([]any) {
+			result := raw.(map[string]any)
+			byNode[result["workerIp"].(string)] = result
+		}
+		return byNode
+	}
+	for _, test := range []struct{ language, want string }{
+		{"", "This node's version does not support this limit; upgrade it first"},
+		{"zh-CN", "此节点版本不支持该限速，请先升级"},
+		{"ja-JP", "このノードのバージョンはこの制限に対応していません。先に更新してください"},
+	} {
+		status, _, body, err := localizedRequest(f.http.Client(), "POST", f.http.URL+"/api/master/rate-limit/localOps", f.admin, test.language, map[string]any{"qps": 300})
+		if err != nil || status != 200 || body["code"] != "RATE_UPDATE_UNCONFIRMED" || body["failedCount"] != float64(1) {
+			t.Fatalf("language %q: %d %v %v", test.language, status, body, err)
+		}
+		byNode := results(body)
+		if byNode[old]["success"] != false || byNode[old]["code"] != "RATE_TYPE_UNSUPPORTED" || byNode[old]["message"] != test.want {
+			t.Fatalf("language %q: the older node is not named as too old: %v", test.language, byNode[old])
+		}
+		if byNode[current.address]["success"] != true {
+			t.Fatalf("language %q: the current node did not apply the limit: %v", test.language, byNode[current.address])
+		}
+	}
+	// Every Agent has the request limits, so the same reply to one of them is
+	// not a version problem.
+	status, body := request(t, f.http.Client(), "POST", f.http.URL+"/api/master/rate-limit/put/"+old, f.admin, map[string]any{"qps": 100})
+	if byNode := results(body); status != 200 || byNode[old]["code"] != nil || byNode[old]["message"] != "invalid node setting" {
+		t.Fatal("a request limit rejection was called a version problem", status, body)
+	}
+	directories := "节点设置无效：登记目录必须是该节点上的绝对路径，且最多 100 个"
+	for _, test := range []struct {
+		node   string
+		change map[string]any
+		want   string
+	}{
+		// The older node names no setting, but only the directories were sent.
+		{old, map[string]any{"advertisedLocalRoots": []string{"relative/data"}}, directories},
+		{current.address, map[string]any{"advertisedLocalRoots": []string{"relative/data"}}, directories},
+		// 64 objects per child with the default 32 child tasks exceed 1024.
+		{current.address, map[string]any{"objectsPerChild": 64}, "节点设置无效：子任务并发须为 1–256，每个子任务的对象并发须为 1–64，两者乘积不能超过 1024"},
+		// With more than the directories sent, the older node's reply stays general.
+		{old, map[string]any{"advertisedLocalRoots": []string{"relative/data"}, "objectsPerChild": 2}, "节点设置无效"},
+	} {
+		status, _, body, err := localizedRequest(f.http.Client(), "PUT", f.http.URL+"/api/master/nodes/"+test.node, f.admin, "zh-CN", test.change)
+		if err != nil || status != 400 || body["message"] != test.want {
+			t.Fatalf("%s %v: %d %v %v", test.node, test.change, status, body, err)
+		}
+	}
+}
+
+// Every rejection an Agent can name is translated, and the general one does not
+// point at the concurrency settings, which it may have nothing to do with.
+func TestNodeSettingRejectionsAreLocalized(t *testing.T) {
+	for _, err := range []error{nodecontrol.ErrInvalid, nodecontrol.ErrInvalidRoots, nodecontrol.ErrInvalidConcurrency, nodecontrol.ErrUnknownRate} {
+		entry, ok := apiMessages[err.Error()]
+		if !ok || entry.en == "" || entry.zh == "" || entry.ja == "" || entry.zh == entry.en || entry.ja == entry.en {
+			t.Fatalf("%q is not localized: %+v", err, entry)
+		}
+	}
+	if entry := apiMessages[nodecontrol.ErrInvalid.Error()]; strings.Contains(entry.zh, "并发") || strings.Contains(entry.ja, "並列") {
+		t.Fatal("the general rejection names the concurrency settings", entry)
 	}
 }
 

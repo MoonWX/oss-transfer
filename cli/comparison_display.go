@@ -408,10 +408,11 @@ func renderComparisonRows(out io.Writer, rows []map[string]interface{}) {
 	for _, row := range rows {
 		status := getString(row, "status")
 		sourceSize, destinationSize := cliTaskSize(row, "sourceSize"), cliTaskSize(row, "destinationSize")
-		if status == "EXTRA_TARGET" || status == "BOTH_MISSING" {
+		// A side that is missing, or whose size was not read, has no size.
+		if status == "EXTRA_TARGET" || status == "BOTH_MISSING" || row["sourceSizeUnknown"] == true {
 			sourceSize = "—"
 		}
-		if status == "MISSING_TARGET" || status == "BOTH_MISSING" {
+		if status == "MISSING_TARGET" || status == "BOTH_MISSING" || row["destinationSizeUnknown"] == true {
 			destinationSize = "—"
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cliTaskCount(row, "number"), comparisonStatusLabel(out, status), safeCLIText(getString(row, "sourceKey")), safeCLIText(getString(row, "destinationKey")), sourceSize, destinationSize, safeCLIText(comparisonRowDetail(out, row)))

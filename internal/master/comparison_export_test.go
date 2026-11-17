@@ -685,6 +685,9 @@ func TestComparisonExportDatesEntriesAndLeavesMissingSizesEmpty(t *testing.T) {
 		{Key: "gone", SourceKey: "src/gone", DestinationKey: "dst/gone", Status: comparison.StatusBothMissing},
 		// An empty object on both sides keeps its real size, 0.
 		{Key: "empty", SourceKey: "src/empty", DestinationKey: "dst/empty", Status: comparison.StatusDifferent, Reasons: []string{comparison.ReasonContentType}},
+		// A side whose size was not read, or that does not exist, is empty too.
+		{Key: "denied", SourceKey: "src/denied", DestinationKey: "dst/denied", Status: comparison.StatusError, SourceSize: 5, DestinationSizeUnknown: true, Error: "Cannot read target metadata"},
+		{Key: "vanished", SourceKey: "src/vanished", DestinationKey: "dst/vanished", Status: comparison.StatusChanged, DestinationSize: 6, SourceSizeUnknown: true},
 	}
 	agent.put(completedComparison("cmp-dates", rows), rows)
 	putComparisonAssignment(t, f, node, comparisonTestRequest("cmp-dates"), time.Now())
@@ -707,7 +710,7 @@ func TestComparisonExportDatesEntriesAndLeavesMissingSizesEmpty(t *testing.T) {
 			t.Errorf("%s dated %s, want the export time %s", entry.Name, entry.Modified, generated)
 		}
 	}
-	want := map[string][2]string{"missing": {"7", ""}, "extra": {"", "9"}, "gone": {"", ""}, "empty": {"0", "0"}}
+	want := map[string][2]string{"missing": {"7", ""}, "extra": {"", "9"}, "gone": {"", ""}, "empty": {"0", "0"}, "denied": {"5", ""}, "vanished": {"", "6"}}
 	for _, row := range differenceRows(t, files["differences.csv"]) {
 		if sizes := want[row["key"]]; row["sourceSize"] != sizes[0] || row["destinationSize"] != sizes[1] {
 			t.Errorf("%s sizes %q/%q, want %q/%q", row["key"], row["sourceSize"], row["destinationSize"], sizes[0], sizes[1])

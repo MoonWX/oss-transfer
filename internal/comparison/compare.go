@@ -283,6 +283,8 @@ func (c *comparer) missingTarget(ctx context.Context, listed transferstore.Objec
 	if err == nil {
 		return c.compare(ctx, listed, actual, key)
 	}
+	// The target was not read, or it does not exist: it has no size.
+	row.DestinationSizeUnknown = true
 	if !objectNotFound(err) {
 		return comparisonErrorRow(row, "Cannot read target metadata", comparisonSideDetail("HEAD", nil, err))
 	}
@@ -292,6 +294,8 @@ func (c *comparer) missingTarget(ctx context.Context, listed transferstore.Objec
 		row.Status = StatusChanged
 	case err != nil:
 		return comparisonErrorRow(row, "Cannot read source metadata", comparisonSideDetail("HEAD", err, nil))
+	default:
+		row.DestinationSizeUnknown = false // MISSING_TARGET says so itself
 	}
 	return row
 }
@@ -303,6 +307,8 @@ func (c *comparer) extraTarget(ctx context.Context, listed transferstore.Object,
 	if err == nil {
 		return c.compare(ctx, actual, listed, key)
 	}
+	// The source was not read, or it does not exist: it has no size.
+	row.SourceSizeUnknown = true
 	if !objectNotFound(err) {
 		return comparisonErrorRow(row, "Cannot read source metadata", comparisonSideDetail("HEAD", err, nil))
 	}
@@ -312,6 +318,8 @@ func (c *comparer) extraTarget(ctx context.Context, listed transferstore.Object,
 		row.Status = StatusChanged
 	case err != nil:
 		return comparisonErrorRow(row, "Cannot read target metadata", comparisonSideDetail("HEAD", nil, err))
+	default:
+		row.SourceSizeUnknown = false // EXTRA_TARGET says so itself
 	}
 	return row
 }
@@ -323,6 +331,10 @@ func (c *comparer) object(ctx context.Context) Row {
 	a, ae := c.stat(ctx, c.source, r.SourcePrefix)
 	b, be := c.stat(ctx, c.target, r.DestinationPrefix)
 	if sourceErr, targetErr := headFailure(ae), headFailure(be); sourceErr != nil || targetErr != nil {
+		// A side whose HEAD answered keeps its size; one that failed or
+		// does not exist has none.
+		row.SourceSize, row.SourceSizeUnknown = a.Size, ae != nil
+		row.DestinationSize, row.DestinationSizeUnknown = b.Size, be != nil
 		return comparisonErrorRow(row, "Cannot read object metadata", comparisonSideDetail("HEAD", sourceErr, targetErr))
 	}
 	switch {

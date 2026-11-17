@@ -72,6 +72,10 @@ type Row = {
   status: string;
   sourceSize: number;
   destinationSize: number;
+  // A side that was not read, or that does not exist, on an ERROR or
+  // CHANGED_DURING_COMPARE row: its size field is 0, not an object size.
+  sourceSizeUnknown?: boolean;
+  destinationSizeUnknown?: boolean;
   sourceSha256?: string;
   destinationSha256?: string;
   error?: string;
@@ -418,11 +422,15 @@ function truncationText(progress: Progress) {
 }
 
 const sourceSize = (row: Row) =>
-  row.status === "EXTRA_TARGET" || row.status === "BOTH_MISSING"
+  row.sourceSizeUnknown ||
+  row.status === "EXTRA_TARGET" ||
+  row.status === "BOTH_MISSING"
     ? "—"
     : formatBytes(row.sourceSize);
 const destinationSize = (row: Row) =>
-  row.status === "MISSING_TARGET" || row.status === "BOTH_MISSING"
+  row.destinationSizeUnknown ||
+  row.status === "MISSING_TARGET" ||
+  row.status === "BOTH_MISSING"
     ? "—"
     : formatBytes(row.destinationSize);
 

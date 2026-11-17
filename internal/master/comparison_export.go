@@ -506,8 +506,8 @@ func (c *comparisonAPI) writeComparisonZIP(ctx context.Context, output io.Writer
 	return buffered.Flush()
 }
 
-// comparisonExportSizes leaves the size of a missing side empty, so that it
-// differs from an empty (0-byte) object.
+// comparisonExportSizes leaves the size of a missing side, or of a side whose
+// size was not read, empty, so that it differs from an empty (0-byte) object.
 func comparisonExportSizes(row comparison.Row) (source, destination any) {
 	source, destination = row.SourceSize, row.DestinationSize
 	switch row.Status {
@@ -517,6 +517,12 @@ func comparisonExportSizes(row comparison.Row) (source, destination any) {
 		source = ""
 	case comparison.StatusBothMissing:
 		source, destination = "", ""
+	}
+	if row.SourceSizeUnknown {
+		source = ""
+	}
+	if row.DestinationSizeUnknown {
+		destination = ""
 	}
 	return source, destination
 }

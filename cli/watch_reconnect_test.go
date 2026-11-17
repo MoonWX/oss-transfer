@@ -157,3 +157,31 @@ func TestWatchStopsWhenTheMasterWasNeverReachedOrStaysDown(t *testing.T) {
 		t.Fatalf("unreachable Master: exit %d after %d polls\n%s", code, *polls, errout)
 	}
 }
+
+// Behind a proxy, as for HTTPS through NGINX, the proxy answers for a Master
+// that is restarting: 502, 503 or 504 with a page of its own. The watch keeps
+// polling through that as through a refused connection. The Master's own
+// error answer, even 503, still ends it.
+func TestWatchKeepsPollingWhileAProxyAnswersForTheMaster(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		polls, _ := watchScript(t, func(poll int) (int, string) {
+			if poll == 2 {
+				return status, "<html><head><title>" + http.StatusText(status) + "</title></head><body><center>nginx</center></body></html>"
+			}
+			return http.StatusOK, watchStatusReply
+		}, 3, time.Minute)
+		code, out, errout := runWatch("update", "status", "--watch", "5")
+		if code != 130 || *polls != 3 || strings.Count(out, "v4.1.46") != 2 || !strings.Contains(errout, "提示: 暂时无法连接 Master（http://cli-test.invalid）：") || strings.Contains(errout, "错误:") {
+			t.Fatalf("HTTP %d: exit %d after %d polls\n%s%s", status, code, *polls, out, errout)
+		}
+	}
+	polls, _ := watchScript(t, func(poll int) (int, string) {
+		if poll == 1 {
+			return http.StatusOK, watchStatusReply
+		}
+		return http.StatusServiceUnavailable, `{"success":false,"message":"Master Agent packages are unavailable"}`
+	}, 100, time.Minute)
+	if code, _, errout := runWatch("update", "status", "--watch", "5"); code != 1 || *polls != 2 || strings.Contains(errout, "暂时无法连接") {
+		t.Fatalf("the Master's own 503 was retried: exit %d after %d polls\n%s", code, *polls, errout)
+	}
+}

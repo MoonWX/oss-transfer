@@ -228,6 +228,10 @@ func (c *ApiClient) do(req *http.Request, timeout time.Duration) (*http.Response
 type apiHTTPError struct {
 	Status  int
 	Message string
+	// gateway marks a 502, 503 or 504 reply without the Master's message:
+	// a proxy in front of the Master (HTTPS through NGINX, for example)
+	// answered for a Master that did not.
+	gateway bool
 }
 
 func (e *apiHTTPError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
@@ -240,9 +244,10 @@ func decodeAPIResponse(status int, body []byte) (map[string]interface{}, error) 
 	}
 	if status < 200 || status >= 300 {
 		if message := apiResponseMessage(result); message != "" {
-			return result, &apiHTTPError{status, message}
+			return result, &apiHTTPError{Status: status, Message: message}
 		}
-		return result, &apiHTTPError{status, http.StatusText(status)}
+		gateway := status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+		return result, &apiHTTPError{Status: status, Message: http.StatusText(status), gateway: gateway}
 	}
 	if decodeErr != nil {
 		return nil, cliErrorf("响应不是有效的 JSON 对象: %w", decodeErr)

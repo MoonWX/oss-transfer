@@ -332,12 +332,16 @@ var (
 )
 
 // masterUnreachable reports a request that got no answer from the Master:
-// the connection was refused, reset, closed or timed out, or the name did not
-// resolve. An answer, even an error status, is not such a failure.
+// the connection was refused, reset, closed or timed out, the name did not
+// resolve, or a proxy in front of the Master answered 502, 503 or 504 for it.
+// The Master's own answer, even an error status, is not such a failure.
 func masterUnreachable(err error) bool {
-	var answered *apiHTTPError
-	if errors.As(err, &answered) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	var answered *apiHTTPError
+	if errors.As(err, &answered) {
+		return answered.gateway
 	}
 	var network net.Error
 	return errors.As(err, &network) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)

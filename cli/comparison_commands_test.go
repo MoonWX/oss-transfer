@@ -1181,3 +1181,31 @@ func TestComparisonStatusOmitsUnusableCheckpointAndSaysNoDifferences(t *testing.
 		t.Fatalf("%d %s", code, out)
 	}
 }
+
+// The retention date is the end time plus the retention period, but a node
+// deletes the earliest ended comparisons sooner when its results exceed the
+// storage budget or number more than 500. object status and help object say
+// so instead of presenting the date as a promise.
+func TestComparisonRetentionDateIsALatestDate(t *testing.T) {
+	page := comparisonTestPage(map[string]interface{}{"expiresAt": "2026-12-09T12:01:00Z"})
+	for _, test := range []struct{ lang, label, note, avoid string }{
+		{"zh", "最晚保留至", "最早结束的比对会在此日期之前被删除", "\n保留至"},
+		{"en", "Kept until at the latest", "the comparisons that ended earliest are deleted before this date", "Retained until"},
+		{"ja", "最長の保持期限", "この日付より前に削除されます", "\n保持期限"},
+	} {
+		code, out, stderr := runMockCLI(t, []string{"--lang", test.lang, "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, page) })
+		if code != 0 || stderr != "" || !strings.Contains(out, "\n"+test.label) || !strings.Contains(out, test.note) || !strings.Contains(out, "500") || strings.Contains(out, test.avoid) {
+			t.Fatalf("%s: %d\n%s%s", test.lang, code, out, stderr)
+		}
+	}
+	// No retention date, no note.
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, comparisonTestPage(nil)) })
+	if code != 0 || strings.Contains(out, "保留至") || strings.Contains(out, "500") {
+		t.Fatalf("%d\n%s", code, out)
+	}
+	for _, locale := range []cliLocale{localeZH, localeEN, localeJA} {
+		if help := helpForLocale([]string{"object"}, locale); !strings.Contains(help, "500") || !strings.Contains(help, "2 GiB") {
+			t.Fatalf("%s help object does not mention early deletion:\n%s", locale, help)
+		}
+	}
+}

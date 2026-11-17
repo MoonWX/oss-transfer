@@ -930,7 +930,8 @@ Notes
   Matching metadata does not prove matching content: when both ETags are plain MD5 values and differ, the result is ETAG_MISMATCH. Use content to confirm content.
   content streams both objects into SHA-256 without writing local files. Read traffic is charged by your provider.
   Modification time and storage class do not determine equality. Objects changed during comparison are reported separately.
-  A comparison runs concurrently in the background on one node, which keeps every difference for 30 days by default; list finds comparison IDs again.
+  A comparison runs concurrently in the background on one node, which keeps its differences for at most 30 days by default; list finds comparison IDs again.
+  When the comparison results on a node exceed its storage budget (2 GiB by default) or number more than 500, the comparisons that ended earliest are deleted first.
   The ZIP holds differences.csv, retry-source-keys.incr and summary.json. When both prefixes are equal,
   import-inventory can use retry-source-keys.incr to transfer missing, different or ETag-mismatched objects again.
   After an Agent restart or update, a comparison continues automatically when storage connections did not change;
@@ -980,7 +981,8 @@ Notes
   メタデータが一致しても内容の一致は保証されません。両側の ETag が通常の MD5 形式で異なる場合、結果は ETAG_MISMATCH です。内容を確認するには content を使用してください。
   content は両側の内容をストリームで読み、SHA-256 を計算します。ローカルファイルは作成しません。読み取り通信が発生します。
   更新日時とストレージクラスは一致判定に使用しません。比較中に変更されたオブジェクトは別途表示します。
-  比較は 1 つの実行ノードのバックグラウンドで並列に実行され、差分はすべてそのノードに既定で 30 日間保存されます。list で比較 ID を再確認できます。
+  比較は 1 つの実行ノードのバックグラウンドで並列に実行され、差分はすべてそのノードに既定で最長 30 日間保存されます。list で比較 ID を再確認できます。
+  ノード上の比較結果の合計が保存容量の上限（既定 2 GiB）を超えるか、比較が 500 件を超えると、終了が最も早い比較から先に削除されます。
   ZIP には differences.csv、retry-source-keys.incr、summary.json が含まれます。両側のプレフィックスが同じ場合、
   retry-source-keys.incr を import-inventory に使用し、転送先に存在しない、不一致、ETag が異なるオブジェクトを再転送できます。
   Agent の再起動や更新の後、ストレージ接続が変わっていなければ比較は自動的に再開します。

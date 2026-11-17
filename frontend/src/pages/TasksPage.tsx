@@ -72,7 +72,7 @@ import {
 } from "@mui/icons-material";
 import { api, ApiError, saveFile, useApi, useNotify } from "../lib/api";
 import { runTaskBatches, type BatchProgress } from "../lib/taskBatches";
-import { useTaskRecovery } from "../lib/taskRecovery";
+import { runningRetryAllowed, useTaskRecovery } from "../lib/taskRecovery";
 import {
   compareActiveSubtasks,
   compareAllSubtasks,
@@ -1055,13 +1055,14 @@ function TaskDetail({
                   {tr("停止任务")}
                 </Button>
               )}
-              {canRetryRunningFailures(current) && !recoveryState && (
-                <RunningFailureRetry
-                  task={current}
-                  disabled={busy}
-                  onSubmitted={onRefresh}
-                />
-              )}
+              {canRetryRunningFailures(current) &&
+                runningRetryAllowed(recoveryState, current) && (
+                  <RunningFailureRetry
+                    task={current}
+                    disabled={busy}
+                    onSubmitted={onRefresh}
+                  />
+                )}
               {canResumeTask(current) && (
                 <Button
                   variant="contained"

@@ -266,8 +266,9 @@ for (const retryStatus of ["INTERRUPTED", "PENDING"]) {
     await actions
       .getByRole("button", { name: "继续传输", exact: true })
       .dblclick();
+    // The task already runs again: nothing is left to retry for now.
     await expect(
-      actions.getByRole("button", { name: "处理中…", exact: true }),
+      actions.getByRole("button", { name: "暂无可重试的对象", exact: true }),
     ).toBeDisabled();
     expect(sent).toBe(1);
   });

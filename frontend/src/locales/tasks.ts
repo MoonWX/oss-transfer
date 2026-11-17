@@ -237,6 +237,14 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     en: "Processing…",
     ja: "処理中…",
   },
+  暂无可重试的对象: {
+    en: "Nothing to retry yet",
+    ja: "再試行できるオブジェクトはまだありません",
+  },
+  等待任务停止: {
+    en: "Waiting for the task to stop",
+    ja: "タスクの停止を待っています",
+  },
   "任务状态已更新，请查看任务详情。": {
     en: "The task status has changed. Open the task for details.",
     ja: "タスクの状態が変わりました。詳細を確認してください。",

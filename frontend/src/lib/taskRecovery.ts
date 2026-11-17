@@ -224,10 +224,49 @@ export function useTaskRecovery() {
   };
 }
 
+// An accepted recovery stays guarded until the task ends, so a stale view
+// cannot submit it twice. Once a fresh snapshot runs in the accepted
+// generation or a later one, the request has taken effect and is no longer
+// pending: failures of that run are retried in place, a separate operation
+// with its own lock.
+export function recoveryRunning(
+  entry: { phase: string; generation?: number } | undefined,
+  snapshot?: { status?: string; generation?: number } | null,
+) {
+  return (
+    !!entry &&
+    entry.phase !== "submitting" &&
+    entry.generation !== undefined &&
+    !!snapshot &&
+    Number.isSafeInteger(snapshot.generation) &&
+    Number(snapshot.generation) >= entry.generation &&
+    ["RUNNING", "LIST_DONE"].includes(snapshot.status ?? "")
+  );
+}
+
+// In-place retry of a running task's failures is offered unless a recovery
+// of the task is still pending. After a recovery takes effect the previous
+// run's failures remain in failedObjectCount; failedChildCount (child tasks
+// of this run that ended with failures) shows whether this run has any.
+export function runningRetryAllowed(
+  entry: { phase: string; generation?: number } | undefined,
+  snapshot?: {
+    status?: string;
+    generation?: number;
+    failedChildCount?: number;
+  } | null,
+) {
+  return (
+    !entry ||
+    (recoveryRunning(entry, snapshot) && snapshot?.failedChildCount != null)
+  );
+}
+
 export type RecoveryTaskSnapshot = {
   status: string;
   generation?: number;
   failedObjectCount?: number;
+  failedChildCount?: number;
   legacyHistorical?: boolean;
   migrationRecoveryRequired?: boolean;
 };

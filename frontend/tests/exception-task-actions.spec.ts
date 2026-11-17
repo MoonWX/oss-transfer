@@ -127,8 +127,9 @@ test("OSS exception actions deduplicate parents, keep task scope, and stay outsi
     path: "/api/master/retry",
     body: { taskIds: [41], expectedGenerations: { "41": 3 } },
   });
+  // The accepted retry already runs: nothing is left to retry for now.
   await expect(
-    actions.getByRole("button", { name: "处理中…", exact: true }),
+    actions.getByRole("button", { name: "暂无可重试的对象", exact: true }),
   ).toBeDisabled();
   await expect(
     page.getByText("重试已受理 1，忽略 0，失败 0", { exact: true }),

@@ -402,7 +402,7 @@ func TestFailedCapabilityQueriesAreNotReportedAsOffline(t *testing.T) {
 		SourceEndpoint:      &taskEndpoint{Type: "OSS", S3Alias: "qa", Bucket: "source"},
 		DestinationEndpoint: &taskEndpoint{Type: "LOCAL", NodeBindings: []taskBinding{{agents[0].node.Address, shared}, {busy.Address, shared}}}}
 	status, _, response, err := localizedRequest(f.http.Client(), "POST", f.http.URL+"/api/master/local-transfers/validate", f.admin, "zh-CN", []taskCreateRequest{row})
-	if err != nil || status != 200 || fmt.Sprint(response["data"].(map[string]any)["validationErrors"]) != "[无法读取执行节点 Busy worker (127.0.0.1) 的版本信息：the Agent is busy]" {
+	if err != nil || status != 200 || fmt.Sprint(response["data"].(map[string]any)["validationErrors"]) != "[1: 无法读取执行节点 Busy worker (127.0.0.1) 的版本信息：the Agent is busy]" {
 		t.Fatal("creation did not report the failed capabilities query", status, response, err)
 	}
 }

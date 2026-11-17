@@ -87,7 +87,12 @@ func TestCreationPreflightRunsTheChecksOfCreation(t *testing.T) {
 		if err != nil || status != 200 || len(problems) != 1 || path == "/api/master/local-transfers/validate" && data["valid"] != false || path == "/api/master/local-transfers" && data["acceptedCount"] != float64(0) {
 			t.Fatal("the row was not refused", path, status, response, err)
 		}
-		return strings.TrimPrefix(fmt.Sprint(problems[0]), "1: ")
+		// The preflight numbers a refused row as creation does.
+		problem, numbered := strings.CutPrefix(fmt.Sprint(problems[0]), "1: ")
+		if !numbered {
+			t.Fatal("the refusal does not name its row", path, problems)
+		}
+		return problem
 	}
 	narrow := row
 	narrow.RequestLimits = &execution.RequestLimits{Scope: "CLUSTER", BandwidthBitsPerSecond: 8}

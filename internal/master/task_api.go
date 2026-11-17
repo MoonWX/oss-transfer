@@ -869,7 +869,7 @@ func (s *Server) validateTaskHTTP(w http.ResponseWriter, r *http.Request) {
 	displays := s.nodeDisplaySnapshot()
 	valid := true
 	problems := []string{}
-	for _, row := range rows {
+	for i, row := range rows {
 		spec, items, err := s.resolveTaskSpec(r.Context(), row, "local-transfers", displays)
 		if err == nil {
 			// Creation's checks that write nothing, so that a passed preflight
@@ -878,8 +878,9 @@ func (s *Server) validateTaskHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		checks = append(checks, items...)
 		if err != nil {
+			// Numbered by row from 1, as creation reports its refusals.
 			valid = false
-			problems = append(problems, localize(w, err.Error()))
+			problems = append(problems, fmt.Sprintf("%d: %s", i+1, localize(w, err.Error())))
 		}
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "data": map[string]any{"valid": valid, "nodeBindings": checks, "validationErrors": problems}})

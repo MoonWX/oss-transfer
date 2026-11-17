@@ -459,3 +459,75 @@ func TestNameStreamBoundsItsBuffer(t *testing.T) {
 		t.Fatalf("available %d %v %v", available, done, err)
 	}
 }
+
+// A streamed directory keeps its mark across restarts: while the scan is in
+// one of its deferred subdirectories, the scan has not read it again, and
+// once it has, it may no longer be long enough to stream. Every page whose
+// cursor names it says Streamed, and every object is committed once.
+func TestLocalScanKeepsTheStreamingMarkAcrossRestarts(t *testing.T) {
+	for _, shrink := range []bool{false, true} {
+		t.Run(fmt.Sprint("shrink=", shrink), func(t *testing.T) {
+			root := t.TempDir()
+			writeFiles(t, root, numbered("big/f", 20)...)
+			writeFiles(t, root, numbered("big/dir/g", 6)...)
+			writeFiles(t, root, "z")
+			ctx, stop := context.Background(), errors.New("saved")
+			committed := &committedKeys{keys: map[string]int{}}
+			options := ListOptions{Limit: 2, Done: committed.done}
+			page := func() (Page, []localScanFrame) {
+				t.Helper()
+				local := streamingLocal(t, root, localScanTuning{streamAfter: 8, earlyFlush: 8})
+				defer local.Close()
+				var saved Page
+				if err := local.ScanPages(ctx, options, func(p Page) error { saved = p; return stop }); !errors.Is(err, stop) {
+					t.Fatal(err)
+				}
+				committed.commit(saved)
+				options.Cursor = saved.NextCursor
+				return saved, decodeFrames(t, local, saved.NextCursor)
+			}
+			for {
+				saved, frames := page()
+				if saved.NextCursor == "" {
+					t.Fatal("the scan never saved a position inside big/dir")
+				}
+				if len(frames) == 3 && frames[2].Name == "dir" {
+					if !saved.Streamed || !frames[1].Streamed {
+						t.Fatalf("page inside big/dir: %+v under %+v", saved, frames)
+					}
+					break
+				}
+			}
+			if shrink {
+				// big now lists 7 names, too few to stream when the scan
+				// returns to it.
+				for _, name := range numbered("f", 14) {
+					if err := os.Remove(filepath.Join(root, "big", name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			inside, after := 0, 0
+			for options.Cursor != "" {
+				saved, frames := page()
+				onPath := len(frames) > 1 && frames[1].Name == "big"
+				if saved.Streamed != onPath || onPath && !frames[1].Streamed {
+					t.Fatalf("resumed page %+v under %+v", saved, frames)
+				}
+				if onPath {
+					inside++
+				} else {
+					after++
+				}
+			}
+			if inside == 0 || after == 0 {
+				t.Fatalf("%d resumed pages named big, %d did not", inside, after)
+			}
+			for key, n := range committed.keys {
+				if n != 1 {
+					t.Fatalf("%s committed %d times", key, n)
+				}
+			}
+		})
+	}
+}

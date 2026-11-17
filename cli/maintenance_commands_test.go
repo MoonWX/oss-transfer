@@ -634,3 +634,48 @@ func TestUpdateCheckFailureShowsTheMastersReason(t *testing.T) {
 		}
 	}
 }
+
+// A stopped Agent update queue is kept until the next node update. Once a
+// node runs the queue's version (for example after an upgrade with the
+// installer), its old failure and "held back" note no longer describe it.
+func TestMaintenanceStatusDropsQueueFailuresTheNodesHavePassed(t *testing.T) {
+	status := func(versionB string) string {
+		result := map[string]interface{}{"success": true, "data": map[string]interface{}{
+			"master": map[string]interface{}{"info": map[string]interface{}{"version": "4.1.22"}},
+			"agents": []interface{}{
+				map[string]interface{}{"address": "agent-a", "info": map[string]interface{}{"version": "4.1.22", "supported": true}},
+				map[string]interface{}{"address": "agent-b", "info": map[string]interface{}{"version": versionB, "supported": true}},
+				map[string]interface{}{"address": "agent-c", "info": map[string]interface{}{"version": "4.1.21", "supported": true}},
+			},
+			"queue": map[string]interface{}{"phase": "FAILED", "version": "4.1.22", "items": []interface{}{
+				map[string]interface{}{"address": "agent-a", "phase": "FAILED", "reason": "TIMEOUT", "error": "Agent update did not finish; inspect its service before retrying"},
+				map[string]interface{}{"address": "agent-b", "phase": "SKIPPED", "reason": "PREVIOUS_FAILED"},
+				map[string]interface{}{"address": "agent-c", "phase": "SKIPPED", "reason": "CONTAINER", "error": "This node runs in a container"},
+				map[string]interface{}{"address": "removed", "phase": "SKIPPED", "reason": "PREVIOUS_FAILED"},
+			}},
+		}}
+		var out bytes.Buffer
+		if !renderMaintenanceResult(&out, result) {
+			t.Fatal("maintenance status not rendered")
+		}
+		return out.String()
+	}
+	partial := status("4.1.21")
+	for _, want := range []string{"前一个节点更新失败", "Agent 更新队列: 失败", "This node runs in a container"} {
+		if !strings.Contains(partial, want) {
+			t.Fatalf("missing %q while agent-b still lags: %s", want, partial)
+		}
+	}
+	if strings.Contains(partial, "Agent update did not finish") {
+		t.Fatalf("the failure of an Agent now on the queue's version is still shown: %s", partial)
+	}
+	done := status("4.1.22")
+	for _, stale := range []string{"Agent update did not finish", "前一个节点更新失败", "Agent 更新队列", "失败"} {
+		if strings.Contains(done, stale) {
+			t.Fatalf("stale %q after every held-back node reached the queue version: %s", stale, done)
+		}
+	}
+	if !strings.Contains(done, "This node runs in a container") {
+		t.Fatalf("a skip unrelated to the failure was dropped: %s", done)
+	}
+}

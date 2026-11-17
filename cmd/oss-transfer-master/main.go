@@ -177,7 +177,6 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32 * 1024}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
-	fmt.Printf("Master listening on %s\n", listener.Addr())
 	if origin, err := servicehost.LocalMasterOrigin(listener.Addr().String()); err == nil {
 		if err := servicehost.PublishCLIConnection("master", origin, config); err != nil {
 			fmt.Fprintf(os.Stderr, "CLI connection discovery: %v\n", err)
@@ -189,6 +188,9 @@ func serve(ctx context.Context, config servicehost.Config, updater softwareupdat
 	if initialPassword != "" {
 		printInitialPassword("admin", initialPassword)
 	}
+	// Printed last: once it is in the log, so is any initial password of this
+	// start. oss-transfer-run.sh waits for this line before reading the log.
+	fmt.Printf("Master listening on %s\n", listener.Addr())
 	if err := ready(); err != nil {
 		_ = server.Close()
 		return err

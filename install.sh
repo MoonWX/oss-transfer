@@ -1630,6 +1630,7 @@ was_active=0
 agent_maintenance_started=0
 enrollment_requested=0
 enrollment_attempted=0
+enrollment_failed=0
 was_enabled=0
 had_unit=0
 [[ ! -f "$unit" ]] || had_unit=1
@@ -2196,6 +2197,23 @@ finish_agent_maintenance() {
     printf 'Warning: could not end Agent upgrade maintenance; it expires automatically within 30 minutes.\n' >&2
   fi
 }
+# What to do after this run's join failed, from the Agent's explanation: the
+# Master refuses an unusable invitation with 403 and a registered node or
+# address with 409. Only a request that never reached the Master is a
+# connection problem.
+enrollment_advice() {
+  local reason
+  reason=$(cat "$work/enroll.log" 2>/dev/null) || reason=
+  if grep -q 'HTTP 403' <<< "$reason"; then
+    say 'The Master rejected the invitation: it is invalid, has expired (invitations are valid for 30 minutes) or was already used by another node. Generate a new join command for this host in Nodes > Add node and run it.' 'Master 拒绝了加入凭证：凭证无效、已过期（有效期 30 分钟）或已被其他节点使用。请在“执行节点 → 添加节点”中为这台主机重新生成加入命令后运行。'
+  elif grep -q 'HTTP 409' <<< "$reason"; then
+    say 'The Master rejected the join: this node, or another node with the same address, is already registered. A node that is still registered does not need to join again; to rejoin, remove the old node in Nodes first, then generate a new join command.' 'Master 拒绝了加入：此节点或同一地址的其他节点已注册。仍在册的节点无需重新加入；如需重新加入，请先在“执行节点”中移除旧节点，再重新生成加入命令。'
+  elif grep -qiE 'dial tcp|no such host|connection refused|network is unreachable|i/o timeout|deadline exceeded|x509|certificate' <<< "$reason"; then
+    say 'Agent data and enrollment state were retained. Check the connection to the Master, then run the same command again.' '已保留 Agent 数据和注册状态。请检查与 Master 的连接，然后重新运行同一条命令。'
+  else
+    say 'Agent data and enrollment state were retained. Fix the problem above, then run the same command again; it retries with the same identity.' '已保留 Agent 数据和注册状态。请解决上述问题后重新运行同一条命令，将以同一身份重试。'
+  fi
+}
 rollback() {
   local result=$?
   trap - ERR INT TERM
@@ -2241,14 +2259,18 @@ rollback() {
       printf 'Restored the adopted database. Backup: %s\n' "$backup" >&2
     fi
     printf 'Installation failed. Files retained for diagnosis; log: %s\n' "$log_file" >&2
-    if [[ -s "$database" ]]; then
+    # A failed join is not a startup error; enrollment_advice explains it.
+    if ((enrollment_failed)); then :
+    elif [[ -s "$database" ]]; then
       printf 'After correcting the startup error, retry with --upgrade.\n' >&2
     else
       printf 'No database was initialized. Inspect the startup error before retrying.\n' >&2
     fi
   fi
-  if ((enrollment_attempted)); then
-    say 'Agent data and enrollment state were retained. Check the Master connection and retry enrollment.' '已保留 Agent 数据和注册状态，请检查 Master 连接后重试注册。' >&2
+  if ((enrollment_failed)); then
+    enrollment_advice >&2
+  elif ((enrollment_attempted)); then
+    say 'The Agent joined the cluster; its data and identity were retained. Fix the problem above, then run the same command again.' 'Agent 已加入集群，数据和身份信息已保留。请解决上述问题后重新运行同一条命令。' >&2
   fi
   [[ $result != 0 ]] || result=1
   exit "$result"
@@ -2325,7 +2347,13 @@ if ((enrollment_requested)); then
   # A join may commit on the Master even when its response is lost. Keep the
   # durable pending/new identity on failure so the next attempt is idempotent.
   enrollment_attempted=1
-  OSS_TRANSFER_JOIN_TOKEN="$TRANSFER_JOIN_TOKEN" "$binary" --config "$config" --master-url "$master_url" --enroll-only
+  # The Agent's explanation decides the advice if the join fails.
+  if ! OSS_TRANSFER_JOIN_TOKEN="$TRANSFER_JOIN_TOKEN" "$binary" --config "$config" --master-url "$master_url" --enroll-only 2> "$work/enroll.log"; then
+    cat "$work/enroll.log" >&2
+    enrollment_failed=1
+    false
+  fi
+  cat "$work/enroll.log" >&2
 fi
 unset TRANSFER_JOIN_TOKEN
 if [[ "$platform" == linux ]]; then
@@ -3139,8 +3167,17 @@ service_name=${service_name:-oss-transfer-$role}
 [[ "$service_name" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || fail 'Invalid Compose project name'
 install_dir=${install_dir:-/opt/oss-transfer-compose/$role}
 data_dir=${data_dir:-/var/lib/oss-transfer-compose/$role}
+# The image a Compose file of this installer names, and the one that runs
+# $version: the same repository with the release's tag. The installer pins
+# the tag, so pulling the file's own image again never upgrades.
+compose_image() { [[ ! -f "$1" ]] || sed -n "s/^    image: '\([^']*\)'\$/\1/p" "$1" | head -n 1; }
+compose_upgrade_image() {
+  local name=${1%@*}
+  [[ "${name##*/}" != *:* ]] || name=${name%:*}
+  printf '%s\n' "${image:-${name:-moonwx/osstransfer}:$version}"
+}
 if ((upgrade)); then
-  # Compose upgrades by pulling the image and recreating the container. The
+  # Compose upgrades by recreating the container from the new image. The
   # project name must be the installation's own: without -p, Compose would use
   # the directory name and start a second container on the same data.
   existing_file="$install_dir/docker-compose.yml"
@@ -3149,7 +3186,13 @@ if ((upgrade)); then
     recorded=$(sed -n 's/^# oss-transfer-project: \([a-z0-9][a-z0-9_-]*\)$/\1/p' "$existing_file" | head -n 1)
     [[ -z "$recorded" ]] || existing_project=$recorded
   fi
-  fail "$(say "Upgrade a Compose installation with Docker Compose: docker compose -p $existing_project -f $existing_file pull, then docker compose -p $existing_project -f $existing_file up -d" "请用 Docker Compose 升级 Compose 安装：先运行 docker compose -p $existing_project -f $existing_file pull，再运行 docker compose -p $existing_project -f $existing_file up -d")"
+  current_image=$(compose_image "$existing_file")
+  upgrade_image=$(compose_upgrade_image "$current_image")
+  if [[ -n "$current_image" && "$current_image" == "$upgrade_image" ]]; then
+    say "$existing_file already uses $upgrade_image; nothing was changed. To recreate its container, run: docker compose -p $existing_project -f $existing_file up -d" "${existing_file} 已使用 ${upgrade_image}，未做任何更改。如需重建容器，请运行：docker compose -p $existing_project -f $existing_file up -d"
+    exit 0
+  fi
+  fail "$(say "This installer does not upgrade Compose installations. To upgrade to $version, change the image in $existing_file to $upgrade_image, then run docker compose -p $existing_project -f $existing_file pull, and then docker compose -p $existing_project -f $existing_file up -d" "安装脚本不升级 Compose 安装。如需升级到 ${version}，请先把 ${existing_file} 中的 image 改为 ${upgrade_image}，再运行 docker compose -p $existing_project -f $existing_file pull，然后运行 docker compose -p $existing_project -f $existing_file up -d")"
 fi
 for path in "$install_dir" "$data_dir" "$files_dir"; do
   [[ -z "$path" ]] && continue
@@ -3167,7 +3210,12 @@ fi
 compose_command="docker compose -p $service_name -f $install_dir/docker-compose.yml"
 if [[ -f "$install_dir/docker-compose.yml" ]] && command -v docker >/dev/null 2>&1 &&
   [[ -n $(docker ps -aq --filter "label=com.docker.compose.project=$service_name" 2>/dev/null || true) ]]; then
-  fail "$(say "An installation already exists in $install_dir. To upgrade it, run: $compose_command pull && $compose_command up -d" "$install_dir 中已有安装。如需升级，请运行：$compose_command pull && $compose_command up -d")"
+  current_image=$(compose_image "$install_dir/docker-compose.yml")
+  upgrade_image=$(compose_upgrade_image "$current_image")
+  if [[ -n "$current_image" && "$current_image" == "$upgrade_image" ]]; then
+    fail "$(say "An installation of $upgrade_image already exists in $install_dir. To recreate its container, run: $compose_command up -d" "${install_dir} 中已有安装，使用 ${upgrade_image}。如需重建容器，请运行：$compose_command up -d")"
+  fi
+  fail "$(say "An installation already exists in $install_dir. To upgrade it to $version, change the image in $install_dir/docker-compose.yml to $upgrade_image, then run: $compose_command pull && $compose_command up -d" "${install_dir} 中已有安装。如需升级到 ${version}，请先把 ${install_dir}/docker-compose.yml 中的 image 改为 ${upgrade_image}，再运行：$compose_command pull && $compose_command up -d")"
 fi
 # Data kept by --uninstall --keep-data, by docker compose down or by an
 # unfinished join is reused as it is; it is never offered for deletion.
@@ -3276,6 +3324,8 @@ if [[ "$role" == agent ]]; then
       say "The container user (UID 65532) cannot write $data_dir. Run this installer directly on the Docker host, not inside another container, so the directory it prepares is the one Docker mounts." "容器用户（UID 65532）无法写入 ${data_dir}。请直接在 Docker 主机上运行安装脚本，不要在其他容器内运行，确保脚本准备的目录就是 Docker 挂载的目录。" >&2
     elif grep -q 'HTTP 403' "$stage/enroll.log"; then
       say 'The invitation is invalid, expired or already used. Generate a new one in Nodes > Add node.' '加入凭证无效、已过期或已被使用。请在“执行节点 → 添加节点”中重新生成。' >&2
+    elif grep -q 'HTTP 409' "$stage/enroll.log"; then
+      say 'This node, or another node with the same address, is already registered on the Master. A node that is still registered does not need to join again; to rejoin, remove the old node in Nodes first, then generate a new join command.' '此节点或同一地址的其他节点已在 Master 上注册。仍在册的节点无需重新加入；如需重新加入，请先在“执行节点”中移除旧节点，再重新生成加入命令。' >&2
     elif grep -qiE 'connection refused|no such host|timeout|deadline exceeded|network is unreachable' "$stage/enroll.log"; then
       say "The Agent container cannot reach the Master at $master_url. Inside a container, localhost is the container itself; use an address of the Master that this host can reach." "Agent 容器无法连接 Master（${master_url}）。容器内的 localhost 指容器自身，请使用本机可以访问的 Master 地址。" >&2
     fi

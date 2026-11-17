@@ -582,6 +582,7 @@ func softwareReasonText(out io.Writer, reason string) string {
 		"OFFLINE":                "节点离线，重新连接后可更新",
 		"LEGACY":                 "需先用安装脚本升级一次，之后可在线更新",
 		"CONTAINER":              "容器部署：请拉取新镜像并重建容器来更新",
+		"MANUAL":                 "手动运行（oss-transfer-run.sh）：请先停止，替换程序后再启动",
 		"UNMANAGED":              "此安装方式不支持在线更新，请使用安装脚本升级",
 		"PERMISSION":             "服务权限不足，无法在线更新，请使用安装脚本升级",
 		"MISSING_DEPENDENCY":     "缺少在线更新所需的系统组件，请使用安装脚本升级",
@@ -593,18 +594,56 @@ func softwareReasonText(out io.Writer, reason string) string {
 		"PRERELEASE_UNSUPPORTED": "此节点不支持在线安装预发布版本，请使用安装脚本升级",
 	}[reason]
 	if key == "" {
-		return safeCLIText(reason)
+		// Queue codes such as PREVIOUS_FAILED have their own labels.
+		return safeCLIText(cliUpdateReasonLabel(out, reason))
 	}
 	return cliText(out, key)
+}
+
+// reachedRelease reports whether a node running version has reached target.
+// Unknown or unparseable versions (an offline node) have not.
+func reachedRelease(version, target string) bool {
+	_, _, okVersion := releaseVersion(version)
+	_, _, okTarget := releaseVersion(target)
+	return okVersion && okTarget && compareReleases(version, target) >= 0
+}
+
+// heldBackItem is a queue entry that stopped the Agent update queue, or was
+// skipped because of that stop.
+func heldBackItem(item map[string]interface{}) bool {
+	return getString(item, "phase") == "FAILED" || getString(item, "reason") == "PREVIOUS_FAILED"
 }
 
 func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 	masterInfo, _ := master["info"].(map[string]interface{})
 	masterVersion := getString(masterInfo, "version")
 	queue, _ := data["queue"].(map[string]interface{})
+	queueVersion := getString(queue, "version")
+	// Versions of the registered nodes; an offline node's is unknown.
+	running := map[string]string{}
+	for _, row := range objectList(data["agents"]) {
+		version := ""
+		if info, _ := row["info"].(map[string]interface{}); info != nil && row["unavailable"] != true {
+			version = getString(info, "version")
+		}
+		running[getString(row, "address")] = version
+	}
+	// The Master keeps a stopped queue until the next node update. Its failure,
+	// and the nodes it held back, no longer apply to a node that has since
+	// reached the queue's version (for example with the installer), and a
+	// node no longer registered cannot lag behind.
 	queued := map[string]map[string]interface{}{}
+	stopped := false
 	for _, item := range objectList(queue["items"]) {
-		queued[getString(item, "address")] = item
+		address := getString(item, "address")
+		if heldBackItem(item) {
+			version, registered := running[address]
+			if reachedRelease(version, queueVersion) {
+				continue
+			}
+			stopped = stopped || registered
+		}
+		queued[address] = item
 	}
 	table := newCLITable(out)
 	fmt.Fprintln(table, cliText(out, "节点\t当前版本\t更新状态\t与 Master 版本\t说明"))
@@ -686,7 +725,7 @@ func renderSoftwareStatus(out io.Writer, data, master map[string]interface{}) {
 			fmt.Fprintf(out, cliText(out, "检测失败时间: %s\n"), failed)
 		}
 	}
-	if phase := getString(queue, "phase"); phase != "" && phase != "IDLE" {
+	if phase := getString(queue, "phase"); phase != "" && phase != "IDLE" && (phase != "FAILED" || stopped) {
 		fmt.Fprintf(out, cliText(out, "Agent 更新队列: %s\n"), softwarePhaseText(out, phase))
 	}
 }

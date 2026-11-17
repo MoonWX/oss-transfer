@@ -29,10 +29,14 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { api, ApiError, useNotify } from "../lib/api";
 import { copyText } from "../lib/clipboard";
-import { containerAgentCommands } from "../lib/containerAgent";
+import {
+  containerAgentCommands,
+  containerMasterCommands,
+} from "../lib/containerAgent";
 import { formatDate, t, useI18n } from "../lib/i18n";
 import { displayNode, type NodeDisplay } from "../lib/nodeRegistry";
 import {
+  compareVersions,
   displayVersion,
   isPrerelease,
   newerVersion,
@@ -112,6 +116,14 @@ const busyUpdate = (update?: Update) =>
 /** Whether a time from the Master lies within the last hour. */
 const withinHour = (value?: string) =>
   !!value && Date.now() - Date.parse(value) <= 3600_000;
+// A node has reached an update's target once it runs that version or a newer
+// one, for example after an operator upgraded it with the installer. Unknown
+// versions (an offline node) have not.
+const reached = (version?: string | null, target?: string) =>
+  (compareVersions(version ?? "", target ?? "") ?? -1) >= 0;
+// A queue entry that stopped the queue, or was skipped because of that stop.
+const heldBack = (item?: QueueItem) =>
+  item?.phase === "FAILED" || item?.reason === "PREVIOUS_FAILED";
 function phaseText(update?: Update) {
   switch (update?.phase) {
     case "QUEUED":
@@ -354,8 +366,25 @@ export default function SoftwareUpdates({
     isPrerelease(requested) &&
     newerVersion(requested, version);
   const eligibleCount = snapshot?.agents.filter(eligible).length ?? 0;
-  const queuedItem = (node: AgentSoftware) =>
-    queue?.items.find((item) => item.address === node.address);
+  // The queue is kept until the next node update, so its failure, and the
+  // nodes it held back, apply only while the node still runs an older
+  // version. A node upgraded since (with the installer, say) is up to date.
+  const queuedItem = (node: AgentSoftware) => {
+    const item = queue?.items.find((entry) => entry.address === node.address);
+    return heldBack(item) && reached(node.info?.version, queue?.version)
+      ? undefined
+      : item;
+  };
+  // A node no longer registered cannot lag behind.
+  const queueStopped =
+    queue?.phase === "FAILED" &&
+    queue.items.some((item) => {
+      if (!heldBack(item)) return false;
+      const node = snapshot?.agents.find(
+        (entry) => entry.address === item.address,
+      );
+      return !!node && !reached(node.info?.version, queue.version);
+    });
   const nodeStatus = (node: AgentSoftware) => {
     const item = queuedItem(node);
     if (item?.phase === "UPDATING")
@@ -513,11 +542,23 @@ export default function SoftwareUpdates({
               {reason(master.info)}
             </Typography>
           )}
-          {(master.info?.reason === "CONTAINER" ||
-            master.info?.reason === "container") && (
-            <Box component="pre" sx={{ whiteSpace: "pre-wrap", fontSize: 13 }}>
-              docker compose pull{`\n`}docker compose up -d
-            </Box>
+          {isContainer(master.info) && (
+            <Stack gap={1.5} sx={{ mt: 2 }}>
+              <Typography variant="body2" color="text.secondary">
+                {t(
+                  "镜像标签固定为某个版本时（安装脚本生成的 compose 文件即是如此），仅拉取镜像不会更新。请先把 image 改为新版本的标签，再拉取镜像并重新创建容器。",
+                )}
+              </Typography>
+              <CommandBlock
+                label={t("用安装脚本以 Docker Compose 部署的 Master")}
+                value={containerMasterCommands()}
+              />
+              <Typography variant="body2" color="text.secondary">
+                {t(
+                  "安装时指定了其他目录时，请替换 compose 文件路径。用仓库中的 docker-compose.yml 部署时，请在其所在目录运行 docker compose pull master 和 docker compose up -d master；如果 .env 固定了版本，请先修改其中的 OSS_TRANSFER_IMAGE。",
+                )}
+              </Typography>
+            </Stack>
           )}
           {phaseText(master.update) && (
             <Stack gap={1} sx={{ mt: 2 }}>
@@ -615,7 +656,7 @@ export default function SoftwareUpdates({
               {t("节点正在逐台更新，关闭页面不影响进度。")}
             </Alert>
           )}
-          {queue?.phase === "FAILED" && (
+          {queueStopped && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {t("节点更新已停止，请处理失败原因后重试。")}
             </Alert>

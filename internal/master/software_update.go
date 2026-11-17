@@ -49,8 +49,29 @@ func (s *Server) localSoftware() (softwareupdate.Info, softwareupdate.Status) {
 	return s.options.Updater.Info(), s.options.Updater.Status()
 }
 
+// reachedTarget reports whether a node running version has reached target,
+// the version an update attempt was meant to install. Unparseable versions,
+// such as development builds, never have.
+func reachedTarget(version, target string) bool {
+	result, ok := softwareupdate.CompareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(target, "v"))
+	return ok && result >= 0
+}
+
+// currentUpdate hides a failed attempt whose target the node already runs, or
+// has passed, for example after an operator upgraded it with the installer as
+// the failure advised. The status file keeps the old failure until the next
+// online update, and nothing in the console could clear it. The persisted
+// status, which the update queue reconciles against, is unchanged.
+func currentUpdate(status softwareupdate.Status, version string) softwareupdate.Status {
+	if status.Phase == "FAILED" && reachedTarget(version, status.Version) {
+		return softwareupdate.Status{Phase: "IDLE"}
+	}
+	return status
+}
+
 func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 	info, status := s.localSoftware()
+	status = currentUpdate(status, info.Version)
 	// Capability details explain why online updates are unavailable and what
 	// to do instead; show them in the requested language.
 	info.Detail = localize(w, info.Detail)
@@ -103,6 +124,14 @@ func (s *Server) softwareUpdatesHTTP(w http.ResponseWriter, r *http.Request) {
 					agent["detail"] = localize(w, detail)
 				}
 				version, _ := agent["version"].(string)
+				if update, ok := reply.Value["update"].(map[string]any); ok {
+					// The Agent's own status file follows the same rule.
+					phase, _ := update["phase"].(string)
+					target, _ := update["version"].(string)
+					if phase == "FAILED" && reachedTarget(version, target) {
+						row["update"] = softwareupdate.Status{Phase: "IDLE"}
+					}
+				}
 				row["updateAvailable"] = newerSoftware(info.Version, version)
 				row["upgradeReason"] = agent["reason"]
 			}

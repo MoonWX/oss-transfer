@@ -348,3 +348,47 @@ func TestAgentReenrollmentDoesNotRetargetAnotherMaster(t *testing.T) {
 		t.Fatal("cross-Master rejection consumed the other invitation", err)
 	}
 }
+
+// A rejected join names the Master's reason, so an installer can tell an
+// unusable invitation from an already registered node, and a later start
+// without an invitation says why it cannot run instead of blaming the data.
+func TestAgentEnrollmentRejectionNamesTheMasterReason(t *testing.T) {
+	f := newReenrollFixture(t)
+	first, err := New(f.db, Options{MasterURL: f.server.URL, JoinToken: "invalid-invitation-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Enroll(context.Background()); err == nil || err.Error() != "enroll Agent: HTTP 403: Invalid or expired Agent invitation" {
+		t.Fatal("rejected invitation did not name the Master's reason", err)
+	}
+	if _, err := New(f.db, Options{}); err == nil || !strings.Contains(err.Error(), "last invitation was rejected") || !strings.Contains(err.Error(), "--join-url") {
+		t.Fatal("start after a rejected invitation did not explain what to do", err)
+	}
+	enrolled, err := New(f.db, Options{MasterURL: f.server.URL, JoinToken: f.invite(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := enrolled.Enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	conflict, err := New(f.db, Options{MasterURL: f.server.URL, JoinToken: f.invite(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conflict.Enroll(context.Background()); err == nil || err.Error() != "enroll Agent: HTTP 409: Agent identity or address is already registered" {
+		t.Fatal("conflicting join did not name the Master's reason", err)
+	}
+}
+
+func TestRejectionMessageKeepsOneShortLine(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"success":false,"message":"Invalid or expired Agent invitation"}`: "Invalid or expired Agent invitation",
+		"<html>Bad gateway</html>":                       "",
+		`{"message":"line\nbreak\u001b[31m"}`:            "line break [31m",
+		`{"message":"` + strings.Repeat("x", 300) + `"}`: strings.Repeat("x", 200) + "…",
+	} {
+		if got := rejectionMessage(strings.NewReader(body)); got != want {
+			t.Fatalf("rejectionMessage(%q) = %q, want %q", body, got, want)
+		}
+	}
+}

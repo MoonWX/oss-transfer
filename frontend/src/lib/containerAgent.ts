@@ -17,6 +17,17 @@ const hostAlias = " --add-host host.docker.internal:host-gateway";
 const hardening =
   " --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges --stop-timeout 45";
 
+/**
+ * Commands that recreate the Master installed with the installer's Docker
+ * Compose method at its default paths. Without -p and -f, Compose either
+ * finds no file or starts a second project on the same port and data.
+ */
+export function containerMasterCommands() {
+  const compose =
+    "docker compose -p oss-transfer-master -f /opt/oss-transfer-compose/master/docker-compose.yml";
+  return [`${compose} pull`, `${compose} up -d`].join("\n");
+}
+
 /** Commands that recreate a container Agent from the Master's image. */
 export function containerAgentCommands(image: string, hostname?: string) {
   const joined = !!hostname && joinedContainer.test(hostname);

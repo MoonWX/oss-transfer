@@ -392,3 +392,50 @@ func TestVersionCheckFailureKeepsEachSourceReason(t *testing.T) {
 		t.Fatal("a successful check kept the failure", data)
 	}
 }
+
+// A failed online update stops describing a node once the node runs the
+// version that update targeted, for example after an upgrade with the
+// installer. A failure for a version the node has not reached stays visible.
+func TestSoftwareUpdatesHideFailuresTheNodeHasSincePassed(t *testing.T) {
+	f := newAgentHTTPFixture(t)
+	master := &fakeSoftwareUpdater{info: softwareupdate.Info{Role: "master", Version: "4.1.16", Supported: true}, status: softwareupdate.Status{ID: "m1", Version: "4.1.16", Phase: "FAILED", Error: "Native upgrade failed"}}
+	f.master.options.Updater = master
+	upgraded := &fakeSoftwareUpdater{info: softwareupdate.Info{Role: "agent", Version: "4.1.16", Supported: true}, status: softwareupdate.Status{ID: "a1", Version: "4.1.15", Phase: "FAILED", Error: "Agent update did not finish"}}
+	behind := &fakeSoftwareUpdater{info: softwareupdate.Info{Role: "agent", Version: "4.1.14", Supported: true}, status: softwareupdate.Status{ID: "b1", Version: "4.1.15", Phase: "FAILED", Error: "installer rolled back"}}
+	upgradedNode := nodeTestAgentWithUpdater(t, f, "upgraded", upgraded)
+	behindNode := nodeTestAgentWithUpdater(t, f, "behind", behind)
+	read := func() (map[string]any, map[string]map[string]any) {
+		t.Helper()
+		status, body := request(t, f.http.Client(), "GET", f.http.URL+"/api/master/software-updates", f.admin, nil)
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		data := body["data"].(map[string]any)
+		rows := map[string]map[string]any{}
+		for _, raw := range data["agents"].([]any) {
+			row := raw.(map[string]any)
+			rows[row["address"].(string)] = row
+		}
+		return data["master"].(map[string]any)["update"].(map[string]any), rows
+	}
+	update, rows := read()
+	if update["phase"] != "IDLE" || update["error"] != nil {
+		t.Fatal("the Master's superseded failure is still reported", update)
+	}
+	if got := rows[upgradedNode.address]["update"].(map[string]any); got["phase"] != "IDLE" || got["error"] != nil {
+		t.Fatal("an Agent's superseded failure is still reported", got)
+	}
+	if got := rows[behindNode.address]["update"].(map[string]any); got["phase"] != "FAILED" || got["error"] != "installer rolled back" {
+		t.Fatal("a failure the Agent has not recovered from was hidden", got)
+	}
+	master.mu.Lock()
+	master.status.Version = "4.1.17"
+	master.mu.Unlock()
+	if update, _ = read(); update["phase"] != "FAILED" || update["error"] != "Native upgrade failed" {
+		t.Fatal("a failed update to a newer Master version was hidden", update)
+	}
+	// The persisted status stays as written; only its presentation changes.
+	if status := master.Status(); status.Phase != "FAILED" {
+		t.Fatal("reading the update page changed the stored status", status)
+	}
+}

@@ -89,6 +89,13 @@ func TestTaskShowAndNodesPrintTheScanProgress(t *testing.T) {
 		t.Fatalf("idle and stale lines:\n%s", buffer.String())
 	}
 	buffer.Reset()
+	streaming := readingActivity(map[string]interface{}{"mode": "STREAMING",
+		"directory": map[string]interface{}{"key": "data", "reading": true, "names": float64(5000), "position": float64(4001), "examined": float64(3998), "elapsedMillis": float64(61000)}})
+	renderTaskNodeNotes(&buffer, map[string]interface{}{"scan": map[string]interface{}{"phase": "SCANNING", "activity": streaming}})
+	if !strings.Contains(buffer.String(), "  正在读取并检查目录“data”：已读取 5000 个名称，已检查 3998 项，用时 1 分 1 秒\n") {
+		t.Fatalf("streamed directory:\n%s", buffer.String())
+	}
+	buffer.Reset()
 	renderTaskNodeNotes(&buffer, map[string]interface{}{"scan": map[string]interface{}{"phase": "SCANNING", "activity": map[string]interface{}{"state": "UNSUPPORTED"}}})
 	if buffer.String() != "扫描进度\n  扫描节点版本较旧，不提供实时扫描进度\n" {
 		t.Fatalf("older scanner:\n%s", buffer.String())

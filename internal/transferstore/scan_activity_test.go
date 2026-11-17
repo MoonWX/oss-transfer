@@ -52,12 +52,21 @@ func TestScanActivityMeasuresDurationsAtTheSnapshot(t *testing.T) {
 	activity.consumed(entryExamined, 1)
 	clock.advance(time.Second)
 	snapshot = activity.Snapshot()
-	if d := snapshot.Directory; d.Reading || d.Names != 1000 || d.Position != 2 || snapshot.OldestCallMillis != 0 || snapshot.IdleMillis != 1000 || snapshot.Examined != 1 {
+	if d := snapshot.Directory; d.Reading || d.Names != 1000 || d.Position != 2 || d.Examined != 1 || snapshot.OldestCallMillis != 0 || snapshot.IdleMillis != 1000 || snapshot.Examined != 1 {
 		t.Fatalf("after reading: %+v %+v", snapshot, d)
 	}
 	activity.enter(".", false, 3, 3)
-	if d := activity.Snapshot().Directory; d.Key != "" || d.Position != 3 {
+	if d := activity.Snapshot().Directory; d.Key != "" || d.Position != 3 || d.Examined != 0 {
 		t.Fatalf("source directory: %+v", d)
+	}
+	// Entries already found or gone are done but were not examined.
+	activity.enter("streamed", true, 0, 0)
+	activity.read(5)
+	activity.consumed(entryExamined, 1)
+	activity.consumed(entryAlreadyFound, 2)
+	activity.consumed(entryVanished, 3)
+	if d := activity.Snapshot().Directory; !d.Reading || d.Names != 5 || d.Examined != 1 || d.Position != 4 {
+		t.Fatalf("directory examined while read: %+v", d)
 	}
 }
 

@@ -61,7 +61,8 @@ type scanDirectory struct {
 	key      string
 	reading  bool
 	names    int64
-	position int64
+	done     int64 // entries consumed, those before a resumed position included
+	examined int64 // entries examined since the scan entered it
 	started  time.Time
 }
 
@@ -91,12 +92,15 @@ type ScanActivitySnapshot struct {
 // ScanDirectorySnapshot describes the directory a scan is in. Key is empty
 // for the source directory itself. While Reading, Names counts the names read
 // so far; afterwards it is the number of distinct names, and Position is the
-// 1-based number of the entry being examined.
+// 1-based number of the entry being examined. Examined counts the entries
+// examined since the scan entered the directory, which a streamed directory
+// does while it is still being read.
 type ScanDirectorySnapshot struct {
 	Key           string `json:"key"`
 	Reading       bool   `json:"reading"`
 	Names         int64  `json:"names"`
 	Position      int64  `json:"position"`
+	Examined      int64  `json:"examined"`
 	ElapsedMillis int64  `json:"elapsedMillis"`
 }
 
@@ -123,7 +127,8 @@ func (a *ScanActivity) Snapshot() *ScanActivitySnapshot {
 		Vanished: a.vanished, IdleMillis: millis(now.Sub(a.progress))}
 	if a.directory.set {
 		d := a.directory
-		snapshot.Directory = &ScanDirectorySnapshot{Key: d.key, Reading: d.reading, Names: d.names, Position: d.position, ElapsedMillis: millis(now.Sub(d.started))}
+		snapshot.Directory = &ScanDirectorySnapshot{Key: d.key, Reading: d.reading, Names: d.names, Position: min(d.done+1, d.names),
+			Examined: d.examined, ElapsedMillis: millis(now.Sub(d.started))}
 	}
 	if a.lookupCount > 0 {
 		mean := float64(a.lookupSum) / float64(a.lookupCount) / float64(time.Millisecond)
@@ -188,7 +193,7 @@ func (a *ScanActivity) start(mode string) {
 
 // enter makes key the directory the scan is in. A directory that is still to
 // be read starts with no names and reports them as they arrive; one already
-// read reports its distinct names and the entry it continues at.
+// read reports its distinct names and the entry at index next it continues at.
 func (a *ScanActivity) enter(key string, reading bool, names, next int) {
 	if a == nil {
 		return
@@ -198,12 +203,8 @@ func (a *ScanActivity) enter(key string, reading bool, names, next int) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.directory = scanDirectory{set: true, key: key, reading: reading, names: int64(names), position: entryNumber(next, names), started: a.now()}
+	a.directory = scanDirectory{set: true, key: key, reading: reading, names: int64(names), done: int64(next), started: a.now()}
 }
-
-// entryNumber is the 1-based number of the entry at index next, the last one
-// once all are done.
-func entryNumber(next, names int) int64 { return int64(min(next+1, names)) }
 
 func (a *ScanActivity) read(n int) {
 	if a == nil || n == 0 {
@@ -225,7 +226,7 @@ func (a *ScanActivity) listed(names, next int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.directory.reading = false
-	a.directory.names, a.directory.position = int64(names), entryNumber(next, names)
+	a.directory.names, a.directory.done = int64(names), int64(next)
 }
 
 // Outcomes of one consumed directory entry.
@@ -247,12 +248,13 @@ func (a *ScanActivity) consumed(outcome int, next int) {
 	switch outcome {
 	case entryExamined:
 		a.examined++
+		a.directory.examined++
 	case entryAlreadyFound:
 		a.alreadyFound++
 	case entryVanished:
 		a.vanished++
 	}
-	a.directory.position = entryNumber(next, int(a.directory.names))
+	a.directory.done = int64(next)
 	a.progress = a.now()
 }
 

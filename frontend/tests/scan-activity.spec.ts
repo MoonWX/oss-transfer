@@ -135,6 +135,25 @@ test("task details explain what the scan is doing", async ({ page }) => {
   };
   await expect(block).toContainText("已有 40 秒 没有新进展");
   await expect(block).toContainText("扫描进度截至");
+  // A large directory is examined while it is still being read.
+  state.task = {
+    ...state.task,
+    scanActivity: reading({
+      mode: "STREAMING",
+      directory: {
+        key: "data",
+        reading: true,
+        names: 5000,
+        position: 4001,
+        examined: 3998,
+        elapsedMillis: 61000,
+      },
+    }),
+  };
+  await expect(block).toContainText(
+    "正在读取并检查目录“data”：已读取 5,000 个名称，已检查 3,998 项，用时 1 分 1 秒",
+  );
+  await expect(block).not.toContainText("读完全部名称后");
   state.task = { ...state.task, scanActivity: { state: "UNSUPPORTED" } };
   await expect(block).toHaveText(
     "扫描进度扫描节点版本较旧，不提供实时扫描进度",

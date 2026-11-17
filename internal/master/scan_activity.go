@@ -101,7 +101,7 @@ func (s *Server) scanActivityView(p task.Parent) map[string]any {
 		view["lookupMeanMillis"] = *activity.LookupMeanMillis
 	}
 	if d := activity.Directory; d != nil {
-		view["directory"] = map[string]any{"key": d.Key, "reading": d.Reading, "names": d.Names, "position": d.Position, "elapsedMillis": d.ElapsedMillis}
+		view["directory"] = map[string]any{"key": d.Key, "reading": d.Reading, "names": d.Names, "position": d.Position, "examined": d.Examined, "elapsedMillis": d.ElapsedMillis}
 	}
 	return view
 }

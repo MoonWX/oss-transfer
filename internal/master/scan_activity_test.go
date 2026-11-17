@@ -33,7 +33,7 @@ func scanningReply(p task.Parent, attempt string) agentservice.ScanReply {
 	return agentservice.ScanReply{State: discovery.State{Status: discovery.Scanning, Attempt: attempt, Generation: p.Generation},
 		ScanProtocol: discovery.ScanProtocol, Activity: &transferstore.ScanActivitySnapshot{Mode: transferstore.ScanModeSorted,
 			NamesRead: 86980, Examined: 1200, AlreadyFound: 3, Vanished: 1, LookupMeanMillis: &mean, OldestCallMillis: 6000, IdleMillis: 2000,
-			Directory: &transferstore.ScanDirectorySnapshot{Key: "data/2026", Reading: false, Names: 86980, Position: 1201, ElapsedMillis: 300000}}}
+			Directory: &transferstore.ScanDirectorySnapshot{Key: "data/2026", Reading: false, Names: 86980, Position: 1201, Examined: 1200, ElapsedMillis: 300000}}}
 }
 
 // A running task with an incomplete scan shows what its scanner last
@@ -66,7 +66,7 @@ func TestScanActivityFollowsTheScannerReplies(t *testing.T) {
 		got["observedAt"] != clock.UnixMilli() || got["mode"] != transferstore.ScanModeSorted {
 		t.Fatalf("live activity: %v", got)
 	}
-	if d, _ := got["directory"].(map[string]any); d["key"] != "data/2026" || d["position"] != int64(1201) || d["names"] != int64(86980) {
+	if d, _ := got["directory"].(map[string]any); d["key"] != "data/2026" || d["position"] != int64(1201) || d["names"] != int64(86980) || d["examined"] != int64(1200) {
 		t.Fatalf("directory: %v", got["directory"])
 	}
 	clock = clock.Add(scanActivityMaxAge + time.Second)

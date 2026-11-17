@@ -41,7 +41,7 @@ type taskRuntime struct {
 	scans        map[int64]scanSample
 	upgradeWaits map[int64]uint64
 	// scanQuery replaces the scan protocol query in tests.
-	scanQuery func(context.Context, task.Node) (int, error)
+	scanQuery    func(context.Context, task.Node) (int, error)
 	observeAfter map[int64]int
 	stopProgress map[int64]*stopObservation
 	stopWaits    map[int64]stopWait

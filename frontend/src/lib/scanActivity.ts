@@ -18,6 +18,8 @@ export type ScanActivity = {
     reading: boolean;
     names: number;
     position: number;
+    /** Entries examined in it; Masters before the field omit it. */
+    examined?: number;
     elapsedMillis: number;
   } | null;
   lookupMeanMillis?: number | null;
@@ -98,7 +100,7 @@ export function scanActivityLines(activity?: ScanActivity | null): string[] {
         t("正在读取并检查{dir}：已读取 {n} 个名称，已检查 {x} 项，用时 {d}", {
           dir,
           n: formatNumber(directory.names),
-          x: formatNumber(Math.max(0, directory.position - 1)),
+          x: formatNumber(directory.examined),
           d: formatElapsed(directory.elapsedMillis),
         }),
       );

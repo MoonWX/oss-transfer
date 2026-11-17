@@ -24,6 +24,14 @@ export const runtimeMessageRules: readonly {
     message: "等待扫描节点 {node} 重新连接；已分配的子任务仍保留在原节点",
     values: ["node"],
   },
+  // A scanner that answers but cannot prepare the task, or is being updated;
+  // its own line says why.
+  {
+    pattern:
+      /^Waiting for scanning node (.+) to become available; existing child tasks remain assigned to their original nodes$/s,
+    message: "等待扫描节点 {node} 恢复可用；已分配的子任务仍保留在原节点",
+    values: ["node"],
+  },
   // Wording of Masters before v4.1.31, without the node name.
   {
     pattern: /^Waiting for an unavailable node's execution lease to expire$/,

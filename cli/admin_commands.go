@@ -1090,7 +1090,8 @@ func storageSavedSummary(client *ApiClient, done string, result map[string]inter
 			lines = append(lines, "  "+detail)
 		}
 	}
-	for _, key := range []string{"warning", "connectionWarning"} {
+	// When the nodes that missed the change receive it, as the Master says.
+	for _, key := range []string{"syncNote", "warning", "connectionWarning"} {
 		if warning := getString(result, key); warning != "" {
 			lines = append(lines, warning)
 		}

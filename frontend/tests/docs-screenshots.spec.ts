@@ -244,7 +244,7 @@ for (const { locale, suffix } of locales) {
     await page.waitForTimeout(300);
     await annotate(page, [
       dialog.locator(".MuiTextField-root", {
-        has: dialog.getByTestId("permission-bucket"),
+        has: page.getByTestId("permission-bucket"),
       }),
       dialog.locator(".MuiFormControlLabel-root"),
       dialog.getByTestId("permission-summary"),

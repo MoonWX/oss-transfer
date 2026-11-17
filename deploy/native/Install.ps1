@@ -631,6 +631,8 @@ $changed = $false
 $installationSucceeded = $false
 $agentMaintenanceStarted = $false
 $enrollmentAttempted = $false
+$enrollmentJoined = $false
+$script:enrollmentOutput = ''
 $backup = $null
 $script:ownedBackup = $null
 $script:startupCommitted = $false
@@ -662,6 +664,22 @@ function Invoke-Native([string]$Executable,[string[]]$Arguments) {
     } finally { $ErrorActionPreference = $savedPreference }
     if ($null -eq $exitCode -or $exitCode -ne 0) { throw "Native command failed (exit $exitCode)." }
     return $output
+}
+# Runs the Agent's join and keeps its explanation (stderr) for the failure
+# advice: the Master refuses an unusable invitation with HTTP 403 and a
+# registered node or address with HTTP 409.
+function Invoke-Enrollment([string]$Executable,[string[]]$Arguments) {
+    $savedPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $global:LASTEXITCODE = $null
+        $streams = @(& $Executable @Arguments 2>&1)
+        $exitCode = $global:LASTEXITCODE
+    } finally { $ErrorActionPreference = $savedPreference }
+    $messages = @($streams | Where-Object { $_ -is [Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() })
+    $script:enrollmentOutput = $messages -join "`n"
+    foreach ($message in $messages) { Write-Host $message }
+    if ($null -eq $exitCode -or $exitCode -ne 0) { throw "Native command failed (exit $exitCode)." }
 }
 function Prepare-MasterPackages {
     if ($Role -ne 'master') { return }
@@ -1137,7 +1155,8 @@ try {
         # Join may have reached the Master even if its response is lost. Keep the
         # new or pending identity if any later installation step needs rollback.
         $enrollmentAttempted = $true
-        Invoke-Native $binary @('--config',$config,'--master-url',$MasterUrl,'--enroll-only') | Out-Null
+        Invoke-Enrollment $binary @('--config',$config,'--master-url',$MasterUrl,'--enroll-only')
+        $enrollmentJoined = $true
     }
     Remove-Item Env:TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:OSS_TRANSFER_JOIN_TOKEN -ErrorAction SilentlyContinue
@@ -1169,7 +1188,7 @@ try {
         while ($cause) {
             $native = $cause.PSObject.Properties['NativeErrorCode']
             $code = if ($native) { $native.Value } else { $cause.HResult }
-            Write-Warning ("Startup error: {0}; code: {1}; {2}" -f $cause.GetType().FullName,$code,$cause.Message)
+            Write-Warning ("Installation error: {0}; code: {1}; {2}" -f $cause.GetType().FullName,$code,$cause.Message)
             $cause = $cause.InnerException
         }
     } catch { Write-Warning 'Could not inspect the original exception.' }
@@ -1228,7 +1247,22 @@ try {
             }
         } catch { Write-Warning ('Rollback needs attention: '+$_.Exception.Message) }
     }
-    if ($enrollmentAttempted) { Write-Warning (Get-InstallText 'Agent data and enrollment state were retained. Check the Master connection and retry enrollment; do not delete the Agent data.' '已保留 Agent 数据和注册状态。请检查 Master 连接后重试注册，不要删除 Agent 数据。') }
+    # Only a join that never reached the Master is a connection problem.
+    $joined = [bool](Get-Variable enrollmentJoined -ValueOnly -ErrorAction SilentlyContinue)
+    if ($enrollmentAttempted -and -not $joined) {
+        $joinReason = [string](Get-Variable enrollmentOutput -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+        if ($joinReason -match 'HTTP 403') {
+            Write-Warning (Get-InstallText 'The Master rejected the invitation: it is invalid, has expired (invitations are valid for 30 minutes) or was already used by another node. Generate a new join command for this host in Nodes > Add node and run it.' 'Master 拒绝了加入凭证：凭证无效、已过期（有效期 30 分钟）或已被其他节点使用。请在“执行节点 → 添加节点”中为这台主机重新生成加入命令后运行。')
+        } elseif ($joinReason -match 'HTTP 409') {
+            Write-Warning (Get-InstallText 'The Master rejected the join: this node, or another node with the same address, is already registered. A node that is still registered does not need to join again; to rejoin, remove the old node in Nodes first, then generate a new join command.' 'Master 拒绝了加入：此节点或同一地址的其他节点已注册。仍在册的节点无需重新加入；如需重新加入，请先在“执行节点”中移除旧节点，再重新生成加入命令。')
+        } elseif ($joinReason -match 'dial tcp|no such host|connection refused|network is unreachable|i/o timeout|deadline exceeded|x509|certificate') {
+            Write-Warning (Get-InstallText 'Agent data and enrollment state were retained; do not delete the Agent data. Check the connection to the Master, then run the same command again.' '已保留 Agent 数据和注册状态，不要删除 Agent 数据。请检查与 Master 的连接，然后重新运行同一条命令。')
+        } else {
+            Write-Warning (Get-InstallText 'Agent data and enrollment state were retained; do not delete the Agent data. Fix the problem above, then run the same command again; it retries with the same identity.' '已保留 Agent 数据和注册状态，不要删除 Agent 数据。请解决上述问题后重新运行同一条命令，将以同一身份重试。')
+        }
+    } elseif ($enrollmentAttempted) {
+        Write-Warning (Get-InstallText 'The Agent joined the cluster; its data and identity were retained, do not delete them. Fix the problem above, then run the same command again.' 'Agent 已加入集群，数据和身份信息已保留，请勿删除。请解决上述问题后重新运行同一条命令。')
+    }
     if ($backup) { Write-Warning "Temporary backup retained at $backup" -WarningAction Continue }
     throw $failure
 } finally {

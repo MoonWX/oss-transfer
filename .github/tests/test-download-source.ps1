@@ -71,6 +71,7 @@ $existing=-not $Scenario.StartsWith('adopt-'); $AdoptConfig=if($existing){''}els
 $freshConfig=Join-Path $work 'fresh.json'; Copy-Item $config $freshConfig
 $ServiceName='FixtureAgent'; $service=$true; $hadBinary=$true; $hadCli=$true; $hadCliSidecars=$false; $hadDataCLIConnections=$false
 $cliChanged=$false; $changed=$false; $installationSucceeded=$false; $agentMaintenanceStarted=$false; $enrollmentAttempted=$false
+$enrollmentJoined=$false; $script:enrollmentOutput=''
 $backup=$null; $hadDatabaseBackup=$false; $wasRunning=$false; $oldService=$null; $script:logFile=Join-Path $DataDir 'service.log'
 $script:events=[Collections.Generic.List[string]]::new(); $script:readyCalls=0
 $MasterUrl=if($Scenario -eq 'missing-master'){''}else{'http://master.invalid:1688'}
@@ -112,8 +113,14 @@ function Invoke-Native($Executable,[string[]]$Arguments) {
         if($env:OSS_TRANSFER_JOIN_TOKEN -cne 'fixture-invitation'){throw 'Join credential was not forwarded.'}
         [IO.File]::WriteAllText($database,'pending-identity|retained-task')
         if($Scenario -like '*enroll-failure'){throw 'fixture enrollment response lost'}
+        if($Scenario -like '*enroll-rejected'){throw 'fixture enrollment rejected'}
         [IO.File]::WriteAllText($database,'new-identity|retained-task')
     } else { throw ('Unexpected binary call: '+($Arguments -join ' ')) }
+}
+# The installer keeps the Agent's explanation of a failed join.
+function Invoke-Enrollment($Executable,[string[]]$Arguments) {
+    $script:enrollmentOutput=if($Scenario -like '*enroll-rejected'){'enroll Agent: HTTP 403: Invalid or expired Agent invitation'}else{''}
+    Invoke-Native $Executable $Arguments
 }
 $failure=''
 try {
@@ -133,6 +140,9 @@ Write-Output ([PSCustomObject]@{
     # Only Windows service calls and native binary behavior are substituted.
     $lines=@(& $fixtureScript $fixtureRoot $Scenario 3>&1 6>&1)
     $result=($lines[-1] | ConvertFrom-Json)
+    # Warnings and host output before the summary, for the advice shown.
+    $shown=@($lines | Select-Object -First ($lines.Count-1) | ForEach-Object { [string]$_ })
+    $result | Add-Member -NotePropertyName output -NotePropertyValue ($shown -join "`n")
     Assert (-not $result.tokenPresent) 'Join token survived installer cleanup.'
     return $result
 }
@@ -310,6 +320,16 @@ $script:logFile=$masterLog; $script:startupLogLines=1
             Assert ($result.binary -ceq 'old-binary' -and $result.cli -ceq 'old-cli' -and $result.config -ceq '{"dataDirectory":"retained"}') 'Original binary/configuration/CLI were not restored.'
             Assert ($result.backupPresent -and -not ($result.events -contains 'success')) 'Failed enrollment was marked successful or lost its backup.'
         }
+    }
+    Check 'Agent join refused by the Master is explained by its reason, not as a connection or startup error' {
+        $result=Invoke-AgentInstallFixture 'existing-enroll-rejected'
+        Assert ($result.failure -ceq 'fixture enrollment rejected') 'Rejected join was hidden.'
+        Assert ($result.output.Contains('Master 拒绝了加入凭证') -and $result.output.Contains('重新生成加入命令')) "Rejected join was not explained: $($result.output)"
+        Assert (-not $result.output.Contains('请检查 Master 连接') -and -not $result.output.Contains('Startup error')) "Rejected join was blamed on the connection or startup: $($result.output)"
+        $result=Invoke-AgentInstallFixture 'existing-enroll-failure'
+        Assert ($result.output.Contains('将以同一身份重试') -and -not $result.output.Contains('Master 拒绝')) "Unconfirmed join lost its retry advice: $($result.output)"
+        $result=Invoke-AgentInstallFixture 'existing-ready-failure'
+        Assert ($result.output.Contains('Agent 已加入集群')) "A failure after the join was blamed on the join: $($result.output)"
     }
     Check 'Agent ordinary upgrade still requires maintenance and restores its database on failure' {
         $result=Invoke-AgentInstallFixture 'ordinary-success'

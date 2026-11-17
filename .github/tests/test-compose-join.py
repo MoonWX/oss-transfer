@@ -34,6 +34,7 @@ case "$1" in
           rejected) echo pending >> "$AGENT_DATA/agent.db"; echo 'enroll Agent: HTTP 403' >&2; exit 1;;
           denied) echo 'open /data/agent.db: permission denied' >&2; exit 1;;
           refused) echo 'enroll Agent: dial tcp 127.0.0.1:1685: connect: connection refused' >&2; exit 1;;
+          conflict) echo pending >> "$AGENT_DATA/agent.db"; echo 'enroll Agent: HTTP 409: Agent identity or address is already registered' >&2; exit 1;;
         esac;;
       *' up -d'*) [[ "$UP" == fail ]] && { echo 'port is already allocated' >&2; exit 1; }; touch "$state/project"; exit 0;;
       *' ps -q '*) echo agent-container; exit 0;;
@@ -219,6 +220,14 @@ class ComposeJoin(unittest.TestCase):
         compose = f"docker compose -p edge-agent -f {self.service}/docker-compose.yml"
         self.assertIn(f"{compose} pull", result.stderr)
         self.assertIn(f"{compose} up -d", result.stderr)
+
+    def test_registered_node_is_not_told_to_check_its_connection(self):
+        result = self.join(enroll="conflict")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HTTP 409", result.stderr)
+        self.assertIn("already registered on the Master", result.stderr)
+        self.assertIn("remove the old node in Nodes first", result.stderr)
+        self.assertNotIn("cannot reach the Master", result.stderr)
 
     def test_docker_desktop_is_pointed_to_the_docker_command_before_sudo(self):
         result = self.join(FAKE_OS="Darwin", FAKE_UID="501")

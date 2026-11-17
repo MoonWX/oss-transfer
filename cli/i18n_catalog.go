@@ -84,6 +84,7 @@ var cliMessages = map[string][2]string{
 	"最新版本: v%s\n":      {"Latest version: v%s\n", "最新バージョン: v%s\n"},
 	"正在检查新版本":          {"Checking for updates", "更新を確認中"},
 	"Agent 更新队列: %s\n": {"Agent update queue: %s\n", "Agent 更新キュー: %s\n"},
+	"检测失败时间: %s\n":     {"Check failed at: %s\n", "確認に失敗した日時: %s\n"},
 	"已移除执行节点 %s。该主机上的 Agent 服务会自行停止且不再重启；如需删除其程序和数据，请在该主机运行安装脚本并加 --uninstall --role agent\n": {"Removed node %s. Its Agent service stops by itself and does not restart; to delete its program and data, run the installer on that host with --uninstall --role agent\n", "ノード %s を削除しました。そのホストの Agent サービスは自動的に停止し、再起動しません。プログラムとデータを削除するには、そのホストでインストーラーに --uninstall --role agent を付けて実行してください\n"},
 
 	"Master 未返回有效的最新版本，请稍后重试 update check":                       {"The Master did not return a valid latest version; run update check again later", "Master から有効な最新バージョンが返されませんでした。しばらくしてから update check を再実行してください"},

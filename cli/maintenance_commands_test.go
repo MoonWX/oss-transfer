@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -212,14 +214,16 @@ func TestMaintenanceStatusShowsVersionSkewQueueAndOfflineHonestly(t *testing.T) 
 			map[string]interface{}{"address": "agent-c", "displayName": "ready", "info": map[string]interface{}{"version": "4.1.22", "supported": true}},
 		},
 		"queue":    map[string]interface{}{"phase": "RUNNING", "items": []interface{}{map[string]interface{}{"address": "agent-a", "phase": "QUEUED"}}},
-		"checking": true, "checkError": "Previous check failed",
+		"checking": true, "checkError": "Previous check failed", "checkFailedAt": "2026-11-17T08:00:00Z",
 	}}
 	var out bytes.Buffer
 	if !renderMaintenanceResult(&out, result) {
 		t.Fatal("maintenance status not rendered")
 	}
 	// Human output translates the status codes and shows versions as vX.
-	for _, want := range []string{"storage (10.0.0.2)", "v4.1.21", "v4.1.22", "已排队", "不一致", "一致", "未知", "节点离线", "Agent 更新队列: 进行中", "Previous check failed"} {
+	// A failed check is kept until one succeeds, so it says when it failed.
+	failedAt := cliLocalTime(time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC))
+	for _, want := range []string{"storage (10.0.0.2)", "v4.1.21", "v4.1.22", "已排队", "不一致", "一致", "未知", "节点离线", "Agent 更新队列: 进行中", "Previous check failed\n检测失败时间: " + failedAt} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())
 		}
@@ -231,7 +235,7 @@ func TestMaintenanceStatusShowsVersionSkewQueueAndOfflineHonestly(t *testing.T) 
 	}
 	var english bytes.Buffer
 	renderMaintenanceResult(&cliLocaleWriter{Writer: &english, locale: localeEN}, result)
-	for _, want := range []string{"Queued", "Different", "Match", "Unknown", "Node is offline", "Agent update queue: Running", "Idle"} {
+	for _, want := range []string{"Queued", "Different", "Match", "Unknown", "Node is offline", "Agent update queue: Running", "Idle", "Check failed at: " + failedAt} {
 		if !strings.Contains(english.String(), want) {
 			t.Fatalf("missing %q: %s", want, english.String())
 		}
@@ -392,5 +396,43 @@ func TestAgentInviteStatusIsReadOnlyAndRejectsJoinLinks(t *testing.T) {
 	})
 	if _, err := agentInviteStatus(client, []string{"unknown"}); err == nil {
 		t.Fatal("unknown invitation reported success")
+	}
+}
+
+// A failed version check names what the Master found: its message says
+// whether checking again can help, and --verbose shows each source's reason.
+func TestUpdateCheckFailureShowsTheMastersReason(t *testing.T) {
+	clearLocaleEnvironment(t)
+	t.Setenv("OSS_TRANSFER_AUTH_TOKEN", "test-token")
+	message := "Master 无法连接 GitHub 和京东云 OSS，因此无法检测新版本。在能够访问其中之一之前，重新检测不会成功；也可以使用离线安装包升级（见文档“离线安装”）"
+	reasons := "github: dial tcp: lookup api.github.com: no such host\njdoss: dial tcp: lookup moonwx.s3.cn-north-1.jdcloud-oss.com: no such host"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/master/software-updates/check" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": message, "detail": reasons})
+	}))
+	defer server.Close()
+	for _, test := range []struct {
+		verbose bool
+		want    string
+	}{
+		{false, "提示: 使用 --verbose 查看原始错误信息。"},
+		// Terminal output keeps each reason on the detail line.
+		{true, "详情: " + strings.ReplaceAll(reasons, "\n", " ")},
+	} {
+		args := []string{"--host", server.URL, "--lang", "zh", "update", "check"}
+		if test.verbose {
+			args = append(args, "--verbose")
+		}
+		var out, stderr bytes.Buffer
+		if code := runCLI(args, strings.NewReader(""), &out, &stderr); code != 1 {
+			t.Fatalf("exit %d: %s %s", code, out.String(), stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "错误: "+message+"（HTTP 502）") || !strings.Contains(stderr.String(), test.want) || strings.Contains(stderr.String(), "请重试") {
+			t.Fatalf("verbose=%v: %s", test.verbose, stderr.String())
+		}
 	}
 }

@@ -52,6 +52,26 @@ func cliRate(value interface{}) string {
 	return strconv.FormatFloat(math.Round(number*10)/10, 'f', -1, 64)
 }
 
+// cliTaskCurrentSpeed says what the current speed counts, as transferBasis
+// reports it: bytes sent to the destination (TARGET), or source reads on
+// older Agents (SOURCE, or MIXED when only some are older). Older Masters
+// omit it, and the speed stands alone.
+func cliTaskCurrentSpeed(out io.Writer, task map[string]interface{}) string {
+	speed := cliTaskSpeed(task, "currentSpeedBytesPerSecond")
+	if speed == "—" {
+		return speed
+	}
+	switch getString(task, "transferBasis") {
+	case "TARGET":
+		return speed + cliText(out, "（发往目标端，含失败后重新发送的字节）")
+	case "SOURCE":
+		return speed + cliText(out, "（执行节点版本较旧，按读取源端计算）")
+	case "MIXED":
+		return speed + cliText(out, "（部分执行节点版本较旧，按读取源端计算）")
+	}
+	return speed
+}
+
 // Limits use the task-limit convention that zero means unlimited.
 func cliRequestLimits(out io.Writer, limits map[string]interface{}) string {
 	parts := []string{}

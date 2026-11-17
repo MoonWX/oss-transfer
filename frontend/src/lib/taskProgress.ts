@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 type Task = Record<string, any>;
 
 // Master computes the percent so the UI and CLI agree. Older Masters send
@@ -19,13 +21,45 @@ export const transferredBytes = (task: Task): number =>
 export const byteProgress = (task: Task) =>
   task.progressBasis === "BYTES" && Number(task.listObjectSize) > 0;
 
+// What the current speed and live bytes count (transferBasis): TARGET is
+// bytes sent to the destination; SOURCE (every node an older Agent) and
+// MIXED (some) count source reads on those nodes.
+export function speedBasisNote(task: Task): string | null {
+  switch (task.transferBasis) {
+    case "SOURCE":
+      return t("执行节点版本较旧，速度和进度按读取源端计算");
+    case "MIXED":
+      return t("部分执行节点版本较旧，速度和进度按读取源端计算");
+  }
+  return null;
+}
+
+export function speedHint(task: Task): string | undefined {
+  return task.transferBasis === "TARGET"
+    ? t("发往目标端的速率（最近几秒的平均值），包含请求失败后重新发送的字节。")
+    : undefined;
+}
+
+// The current speed, with a second line when it counts source reads.
+export function currentSpeedText(
+  task: Task,
+  format: (bytes: number) => string,
+): string {
+  const speed = task.currentSpeedBytesPerSecond;
+  if (speed == null) return "—";
+  const note = speedBasisNote(task);
+  return note ? `${format(speed)}/s\n${note}` : `${format(speed)}/s`;
+}
+
 const highest = new Map<string, { percent: number; bytes: number }>();
-// Live bytes drop when a failed object attempt restarts. A bar must not move
+// Live bytes drop when a request fails and its attempt's bytes are
+// withdrawn, or when a failed object attempt restarts. A bar must not move
 // backwards on that transient dip, so remember the highest sample shown while
 // the row is live. Ended rows and non-LIVE samples show the exact server value:
-// a stop, failure or failover discards in-flight bytes for good. The attempt
-// and node are in the key so a reassigned child starts fresh. The byte label
-// follows the same sample so it never contradicts the bar.
+// a stop, failure or failover discards in-flight bytes for good, and objects
+// in flight then start over from zero. The attempt and node are in the key so
+// a reassigned child starts fresh. The byte label follows the same sample so
+// it never contradicts the bar.
 export function shownProgress(
   task: Task,
   percent = taskPercent(task),

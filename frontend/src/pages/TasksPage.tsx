@@ -82,7 +82,13 @@ import {
 } from "../lib/subtasks";
 import { useTaskChildren, type ChildView } from "../lib/useTaskChildren";
 import { downloadTaskReport } from "../lib/taskReport";
-import { byteProgress, shownProgress, taskPercent } from "../lib/taskProgress";
+import {
+  byteProgress,
+  currentSpeedText,
+  shownProgress,
+  speedHint,
+  taskPercent,
+} from "../lib/taskProgress";
 import {
   keyMappingLabels,
   mapDestinationKey,
@@ -1340,9 +1346,8 @@ function TaskDetail({
               [tr("共享存储 ID"), current.storageId],
               [
                 tr("当前速度"),
-                current.currentSpeedBytesPerSecond == null
-                  ? "—"
-                  : `${formatBytes(current.currentSpeedBytesPerSecond)}/s`,
+                currentSpeedText(current, formatBytes),
+                speedHint(current),
               ],
               [
                 tr("平均速度"),
@@ -1433,7 +1438,7 @@ function TaskDetail({
               ],
             ]
               .filter(([, value]) => value != null && value !== "")
-              .map(([label, value]) => (
+              .map(([label, value, hint]) => (
                 <Box
                   key={label}
                   sx={{
@@ -1446,7 +1451,11 @@ function TaskDetail({
                     gap: isValidElement(value) ? { xs: 0.75, sm: 2 } : 2,
                   }}
                 >
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    title={typeof hint === "string" ? hint : undefined}
+                  >
                     {label}
                   </Typography>
                   {isValidElement(value) ? (

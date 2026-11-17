@@ -21,6 +21,7 @@ import { keyMappingLabels, type OssKeyMappingMode } from "../lib/ossKeyMapping";
 import { conflictPolicyLabel, taskConflictPolicy } from "../lib/conflictPolicy";
 import ChildRecovery from "./ChildRecovery";
 import LiveFileProgress from "./LiveFileProgress";
+import { currentSpeedText, speedHint } from "../lib/taskProgress";
 import TransferStatistics from "./TransferStatistics";
 import { useNodeLabels } from "../lib/workerStatus";
 import { taskNodeLabels } from "../lib/nodeRegistry";
@@ -76,7 +77,7 @@ export default function SubtaskDetails({
     ? [
         [t("执行节点"), taskNodeLabels(task, nodeLabel)],
         ...taskRequestLimitRows(task.requestLimits),
-        [t("当前速度"), speed(task.currentSpeedBytesPerSecond)],
+        [t("当前速度"), currentSpeedText(task, formatBytes), speedHint(task)],
         [t("平均速度"), speed(task.averageSpeedBytesPerSecond)],
         [t("创建时间"), timestamp(task.createTime)],
         [t("开始时间"), timestamp(task.startTime)],
@@ -229,7 +230,7 @@ export default function SubtaskDetails({
             {t("执行信息")}
           </Typography>
           <Stack gap={2}>
-            {rows.map(([label, value]) => (
+            {rows.map(([label, value, hint]) => (
               <Box
                 key={label}
                 sx={{
@@ -238,7 +239,11 @@ export default function SubtaskDetails({
                   gap: 2,
                 }}
               >
-                <Typography variant="body2" color="text.secondary">
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  title={typeof hint === "string" ? hint : undefined}
+                >
                   {label}
                 </Typography>
                 <Typography

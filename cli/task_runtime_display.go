@@ -40,18 +40,68 @@ func renderTaskRuntimeResult(out io.Writer, result map[string]interface{}) bool 
 	}
 	table := newCLITable(out)
 	fmt.Fprintln(table, cliText(out, "子任务\t执行节点\t文件\t进度\t已传输 / 大小\t阶段"))
+	target, older := false, false
 	for _, row := range rows {
+		finalizing := getString(row, "stage") == "FINALIZING"
 		percent := "—"
 		size, sizeOK := cliNumeric(row["size"])
 		transferred, transferredOK := cliNumeric(row["transferredBytes"])
 		if sizeOK && transferredOK && size > 0 && transferred >= 0 && !math.IsInf(size, 0) && !math.IsInf(transferred, 0) && !math.IsNaN(size) && !math.IsNaN(transferred) {
-			percent = fmt.Sprintf("%.1f%%", math.Min(100, 100*transferred/size))
+			// Floored, so 99.96% never reads as 100% before the file is done.
+			value := math.Min(100, math.Floor(1000*transferred/size)/10)
+			if !finalizing {
+				value = math.Min(value, 99.9)
+			}
+			percent = fmt.Sprintf("%.1f%%", value)
 		}
-		fmt.Fprintf(table, "#%s\t%s\t%s\t%s\t%s / %s\t%s\n", safeCLIText(getString(row, "childTaskId")), safeCLIText(getString(row, "executionNodeLabel")), safeCLIText(getString(row, "sourceKey")), percent, cliTaskSize(row, "transferredBytes"), cliTaskSize(row, "size"), safeCLIText(getString(row, "stage")))
+		switch getString(row, "basis") {
+		case "TARGET":
+			target = true
+		case "":
+			older = true
+		}
+		fmt.Fprintf(table, "#%s\t%s\t%s\t%s\t%s / %s\t%s\n", safeCLIText(getString(row, "childTaskId")), safeCLIText(getString(row, "executionNodeLabel")), safeCLIText(getString(row, "sourceKey")), percent, cliTaskSize(row, "transferredBytes"), cliTaskSize(row, "size"), cliFileStage(out, row))
 	}
 	table.Flush()
+	if target {
+		fmt.Fprintln(out, cliText(out, "已传输：目标端已确认的字节，加上各请求本次尝试已交给网络的字节；请求失败时，该次尝试的字节会撤回。"))
+	}
+	if older {
+		fmt.Fprintln(out, cliText(out, "旧版节点的进度按读取源端计算；显示“源端已读完（旧版节点）”时，上传可能仍在进行。"))
+	}
 	if data["hasMore"] == true {
 		fmt.Fprintln(out, cliText(out, "更多文件请使用 --child 查看指定子任务。"))
 	}
 	return true
+}
+
+// cliFileStage names a file's stage and what it waits for. FINALIZING from
+// an Agent that counts at the destination means every byte is confirmed;
+// from an older Agent (no basis) it only means the source was read.
+func cliFileStage(out io.Writer, row map[string]interface{}) string {
+	stage := getString(row, "stage")
+	label := safeCLIText(stage)
+	switch {
+	case stage == "TRANSFERRING":
+		label = cliText(out, "传输中")
+	case stage == "FINALIZING" && getString(row, "basis") == "TARGET":
+		label = cliText(out, "确认中")
+	case stage == "FINALIZING" && getString(row, "basis") == "SOURCE":
+		label = cliText(out, "源端已读完")
+	case stage == "FINALIZING":
+		label = cliText(out, "源端已读完（旧版节点）")
+	}
+	phase := ""
+	switch getString(row, "phase") {
+	case "RETRY_WAIT":
+		phase = cliText(out, "等待重试")
+	case "WAITING_REQUEST_LIMIT":
+		phase = cliText(out, "等待写入请求限速")
+	case "WAITING_UPLOAD_BUFFER":
+		phase = cliText(out, "等待上传缓冲")
+	}
+	if phase == "" {
+		return label
+	}
+	return cliTextf(out, "%s（%s）", label, phase)
 }

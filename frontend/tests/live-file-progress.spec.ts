@@ -21,6 +21,7 @@ async function arrange(page: Page, openChild = true) {
       putObjectSize: 0,
       averageSpeedBytesPerSecond: 0 as number | null | undefined,
       currentSpeedBytesPerSecond: (181.4 * 1024 ** 2) as number | null,
+      transferBasis: "TARGET" as string | undefined,
     },
     progress: {
       supported: true,
@@ -29,6 +30,9 @@ async function arrange(page: Page, openChild = true) {
       observedAt: 0,
       transferredBytes: 25 * 1024 ** 3,
       stage: "TRANSFERRING",
+      readBytes: undefined as number | undefined,
+      phase: undefined as string | undefined,
+      basis: "TARGET" as string | undefined,
       hasMore: false,
     },
     error: false,
@@ -82,6 +86,9 @@ async function arrange(page: Page, openChild = true) {
                 size: state.parent.listObjectSize,
                 transferredBytes: state.progress.transferredBytes,
                 stage: state.progress.stage,
+                readBytes: state.progress.readBytes,
+                phase: state.progress.phase,
+                basis: state.progress.basis,
               })),
             },
           },
@@ -306,3 +313,104 @@ test("switching children never carries over file progress while the next respons
   ).toBeHidden();
   expect(state.reads.every((url) => url.includes("childNumber=1"))).toBe(true);
 });
+
+test("file progress counts what the destination confirmed and says what a file waits for", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
+  const progress = section.getByRole("progressbar", {
+    name: "文件进度：training/big.bin",
+  });
+  const stage = section.locator("[data-file-stage]");
+  await expect(progress).toHaveAttribute("aria-valuenow", "25");
+  await expect(section.locator("[data-file-progress-basis]")).toHaveText(
+    "已传输为目标端已确认的字节，加上各请求本次尝试已交给网络的字节；请求失败时，该次尝试的字节会撤回。",
+  );
+  // Bytes read from the source ahead of the destination: the buffer segment.
+  state.progress.readBytes = 40 * 1024 ** 3;
+  await expect(progress).toHaveAttribute("title", "已从源端读取 40 GiB");
+  await expect(progress.locator(".MuiLinearProgress-bar2")).toHaveAttribute(
+    "style",
+    /translateX\(-60%\)/,
+  );
+  await expect(section).toContainText("25 GiB / 100 GiB");
+  for (const [phase, label] of [
+    ["RETRY_WAIT", "等待重试"],
+    ["WAITING_REQUEST_LIMIT", "等待写入请求限速"],
+    ["WAITING_UPLOAD_BUFFER", "等待上传缓冲"],
+  ]) {
+    state.progress.phase = phase;
+    await expect(stage).toHaveText(label);
+    await expect(progress).toHaveAttribute("aria-valuetext", label);
+  }
+  state.progress.phase = undefined;
+  // A file the destination has not confirmed in full never reads as done.
+  state.progress.transferredBytes = 100 * 1024 ** 3 - 1;
+  await expect(stage).toHaveText("99.9%");
+  state.progress.transferredBytes = 100 * 1024 ** 3;
+  state.progress.stage = "FINALIZING";
+  await expect(stage).toHaveText("确认中");
+  await expect(stage).toHaveAttribute(
+    "title",
+    "数据已全部被目标端接收，正在完成分片上传，或把文件同步到磁盘并发布",
+  );
+});
+
+test("files of older agents say that their progress counts source reads", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  state.progress.basis = undefined;
+  const section = page.getByRole("region", { name: "文件进度", exact: true });
+  const progress = section.getByRole("progressbar", {
+    name: "文件进度：training/big.bin",
+  });
+  const stage = section.locator("[data-file-stage]");
+  await expect(section.locator("[data-file-progress-basis]")).toHaveText(
+    "该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行",
+  );
+  await expect(progress).not.toHaveAttribute("title", /.+/);
+  state.progress.transferredBytes = 100 * 1024 ** 3;
+  state.progress.stage = "FINALIZING";
+  await expect(stage).toHaveText("源端已读完");
+  await expect(progress).toHaveAttribute("aria-valuetext", "源端已读完");
+  await expect(stage).toHaveAttribute(
+    "title",
+    "该执行节点版本较旧，进度按读取源端计算，上传可能仍在进行",
+  );
+  await expect(section).not.toContainText("确认中");
+});
+
+for (const openChild of [false, true]) {
+  test(`${openChild ? "subtask" : "task"} speed says what it counts`, async ({
+    page,
+  }) => {
+    const state = await arrange(page, openChild);
+    const details = openChild
+      ? page.locator("[data-subtask-heading]").locator("..")
+      : page;
+    const label = details.getByText("当前速度", { exact: true });
+    const current = label.locator("..");
+    await expect(current).toContainText("181.4 MiB/s");
+    await expect(label).toHaveAttribute(
+      "title",
+      "发往目标端的速率（最近几秒的平均值），包含请求失败后重新发送的字节。",
+    );
+    await expect(current).not.toContainText("按读取源端计算");
+    state.parent.transferBasis = "MIXED";
+    await expect(current).toContainText(
+      "部分执行节点版本较旧，速度和进度按读取源端计算",
+    );
+    await expect(label).not.toHaveAttribute("title", /.+/);
+    state.parent.transferBasis = "SOURCE";
+    await expect(current).toContainText(
+      "执行节点版本较旧，速度和进度按读取源端计算",
+    );
+    await expect(current).not.toContainText("部分执行节点");
+    // An older Master reports no basis: the speed stands alone.
+    state.parent.transferBasis = undefined;
+    await expect(current).not.toContainText("按读取源端计算");
+    await expect(current).toContainText("181.4 MiB/s");
+  });
+}

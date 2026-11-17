@@ -86,7 +86,7 @@ Open the task details (or run `oss-transfer-cli task show ID`) and check in this
 2. Compare **Current** with **Effective limit** in the **Request rate** table. A rate that constantly sits at its limit means the limit is holding the task back: raise the task limit with **Adjust**, or raise the node limits on the **Execution nodes** page. Each node defaults to 2,000 Mbps bandwidth and 100 LIST requests per second (see [Node limits](#node-limits)); raise them on fast networks.
 3. A node card that shows *Automatically reduced* means the storage service is throttling and the Agent is slowing down on purpose (see [Storage throttling](#storage-throttling)).
 4. Many small objects are limited by request latency, not bandwidth. Raise [node concurrency](#node-concurrency) or add Agents (see [Change a task's execution nodes](#change-a-tasks-execution-nodes)).
-5. A task lists the source first. No transfers begin until the scan has found objects; after a restart the scan continues from its checkpoint (see [Resume a scan](#resume-a-scan)).
+5. A task lists the source first. No transfers begin until the scan has found objects; after a restart the scan continues from its checkpoint (see [Resume a scan](#resume-a-scan)). While the scan runs, **Scan progress** in the task details shows the names read and the entries examined in this run, the directory being read or examined, and the mean time of an entry lookup. A count of names that keeps growing means that the source is still returning a large directory. The block also says when the source storage has not answered for some time, when the scan is waiting for the node's local file operation limit, and when it has made no progress.
 
 `oss-transfer-cli task nodes ID` shows each node's share of the task limits and whether it is busy.
 
@@ -664,10 +664,12 @@ The bandwidth among the node limits counts the data read from the source, withou
 
 | Limit | Default | What it counts |
 | --- | --- | --- |
-| Local file operations | Unlimited | Files opened, created or looked up per second, plus directories read |
+| Local file operations | Unlimited | Files opened, created or looked up per second, plus directory reads, one per 1,024 names |
 | Local read/write bandwidth | Unlimited | Data read from and written to local files per second, uploads and downloads together |
 
 Both limits are shared by every task on the node that uses a local directory, and they apply together with the node and task limits: an operation proceeds only when all of them allow it. They are never lowered automatically on throttling, so their status is only *At target limit* or *Unlimited*. When several Agents share one NAS, each counts on its own, and the NAS carries the sum of their limits; divide the capacity you want to protect by the number of nodes.
+
+A scan of a local directory looks up each entry once. It opens each subdirectory twice, once to look up its entries and once to read their names, and reads the names up to 1,024 at a time, one operation per read. As it leaves a subdirectory while the open page holds objects found below it, the scan looks the subdirectory up again to confirm that it is still in place, and it checks the directories on its path the same way whenever it saves a page. A tree of many small directories therefore costs about five operations per directory, its own lookup included, plus one per file.
 
 Set them like the other node limits: on the **Execution nodes** page click **Adjust limits** and choose **Local file operations** or **Local read/write bandwidth** as the **Limit type**, or use `limit set local-ops` and `limit set local-bandwidth` (see [CLI](cli.md#set-node-limits)). The console shows local bandwidth in Mbps, where 800 Mbps equals 100 MB/s; the CLI also accepts `--unit MB/s`. In `service.json`, set `localOpsPerSecond` and `localBandwidthBitsPerSecond` (bits per second) in `nodeControl`.
 
@@ -856,7 +858,7 @@ This continues the same traversal; changes behind the saved position may not be 
 
 When the scanning node leaves the task or loses contact, a remaining node takes the scan over once the original scanner has been fenced. The Master retains the checkpoints covered by the assignments it has saved. The new scanner rebuilds its scan index from those assignments and continues from the last source-page checkpoint they cover, which can be behind the original Agent's private scan position; scan-ahead results that never reached the Master are listed again, without downloading object contents. Tasks without a transferable checkpoint still need a compatibility rescan. Shared local paths may differ between nodes, but the original volume and active directory identities must match. Once the scan has finished and every batch has been assigned, no scanner is needed and nothing moves.
 
-The execution nodes dialog marks only a node that is scanning, or taking the scan over, as the **Scanner node**, with a note showing where the scan stands: *Handing over the scan; it continues from the Master's checkpoint* while the new scanner rebuilds, *The scanning node has left; another node takes over the scan from the Master's checkpoint* between the old scanner being fenced and the new one starting, and *The scan is complete; no scanning node is needed* with a *Scan complete* tag once every batch has been assigned. `task nodes` and `task show` print matching notes.
+The execution nodes dialog marks only a node that is scanning, or taking the scan over, as the **Scanner node**, with a note showing where the scan stands: *Handing over the scan; it continues from the Master's checkpoint* while the new scanner rebuilds, *The scanning node has left; another node takes over the scan from the Master's checkpoint* between the old scanner being fenced and the new one starting, and *The scan is complete; no scanning node is needed* with a *Scan complete* tag once every batch has been assigned. When the saved checkpoint can be resumed only by a newer Agent and every remaining node runs an older version, the note reads *The remaining nodes are too old to continue this scan; it continues once one is upgraded*, and the task's error says that it is waiting for an upgraded Agent. `task nodes` and `task show` print matching notes.
 
 ### Database space
 

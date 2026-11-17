@@ -2591,12 +2591,14 @@ export default function TasksPage({
                   startIcon={<DownloadRounded />}
                   onClick={() =>
                     saveFile(
-                      // A running scan's activity is live state, not part of
-                      // the task; Masters before it reject the field on import.
+                      // A running scan's activity and what the speed counts
+                      // are live state, not part of the task; Masters before
+                      // them reject the fields on import.
                       JSON.stringify(
                         chosen.map((task) => ({
                           ...task,
                           scanActivity: undefined,
+                          transferBasis: undefined,
                         })),
                         null,
                         2,

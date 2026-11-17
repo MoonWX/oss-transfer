@@ -249,6 +249,30 @@ test("an exported running task leaves the scan activity out", async ({
   expect(exported[0]).not.toHaveProperty("scanActivity");
 });
 
+test("an exported running task leaves out what its speed counts", async ({
+  page,
+}) => {
+  const state = await arrange(page);
+  state.task = {
+    ...state.task,
+    currentSpeedBytesPerSecond: 1024,
+    transferBasis: "TARGET",
+  };
+  await page.goto("/tasks");
+  await row(page)
+    .getByRole("checkbox", { name: "选择任务 61", exact: true })
+    .check();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出 JSON", exact: true }).click();
+  const exported = JSON.parse(
+    await readFile((await (await download).path()) as string, "utf8"),
+  );
+  expect(exported).toHaveLength(1);
+  expect(exported[0].taskIndex).toBe(61);
+  // Masters before the field reject it on import.
+  expect(exported[0]).not.toHaveProperty("transferBasis");
+});
+
 test.describe("in English", () => {
   test.use({ locale: "en-US" });
 

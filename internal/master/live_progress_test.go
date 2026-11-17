@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -622,8 +623,15 @@ func TestTransferBasisMixed(t *testing.T) {
 		delete(f.master.tasks.rates, p.ID)
 		f.master.tasks.mu.Unlock()
 		f.master.tasks.sampleRates(context.Background(), p)
-		if got := f.master.taskView(p)["transferBasis"]; got != tc.want {
+		exported := f.master.taskView(p)
+		if got := exported["transferBasis"]; got != tc.want {
 			t.Fatalf("%+v: task basis %v", tc, got)
+		}
+		// Export JSON saves the row as it is; importing it starts afresh.
+		encoded, _ := json.Marshal([]any{exported})
+		response := httptest.NewRecorder()
+		if _, ok := readTaskRows(response, httptest.NewRequest("POST", "/api/master/import", bytes.NewReader(encoded))); !ok {
+			t.Fatalf("%+v: exported running task not importable: %s", tc, response.Body.String())
 		}
 		for _, c := range children {
 			want := execution.BasisSource

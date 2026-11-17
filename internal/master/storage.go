@@ -316,20 +316,21 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var warning *storageProblem
+	var validationNode string
 	if request.Validate {
 		outcome, err := s.checkStorage(r.Context(), request.Config, "")
 		if err != nil {
-			fail(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()))
+			storageCheckFailed(w, 400, localize(w, "Storage validation failed: ")+localize(w, err.Error()), outcome.node)
 			return
 		}
 		if outcome.failure == nil {
 			outcome.failure = outcome.saveFailure
 		}
 		if outcome.failure != nil {
-			storageFailureResponse(w, 400, "Storage validation failed: ", outcome.failure)
+			storageFailureResponse(w, 400, "Storage validation failed: ", outcome.failure, outcome.node)
 			return
 		}
-		warning = outcome.warning
+		warning, validationNode = outcome.warning, outcome.node
 	}
 	var snapshot storageconfig.Snapshot
 	var err error
@@ -342,7 +343,7 @@ func (s *Server) saveStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot, warning, false)
+	s.storageSaved(w, r, snapshot, warning, validationNode, false)
 }
 func storageError(w http.ResponseWriter, err error) {
 	status := 500
@@ -364,15 +365,16 @@ func (s *Server) deleteStorage(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	s.storageSaved(w, r, snapshot, nil, true)
+	s.storageSaved(w, r, snapshot, nil, "", true)
 }
 
 // storageSaved reports the synchronization of a saved or deleted snapshot;
-// warning is a non-blocking finding of the connection check. Nothing pushes
+// warning is a non-blocking finding of the connection check, which
+// validationNode ran. Nothing pushes
 // the snapshot later: a node that misses it is synced before it next works
 // on a task or a comparison (prepareMembers, retries, recoveries and
 // comparisons sync first), or by the next storage change.
-func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem, deleted bool) {
+func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot storageconfig.Snapshot, warning *storageProblem, validationNode string, deleted bool) {
 	members, err := s.agents.registry.Members()
 	if err != nil {
 		fail(w, 500, "Connection saved; cannot read Agent synchronization status")
@@ -426,6 +428,9 @@ func (s *Server) storageSaved(w http.ResponseWriter, r *http.Request, snapshot s
 	if count < len(members) {
 		result["syncNote"] = localize(w, note)
 	}
+	if validationNode != "" {
+		result["validationNode"] = validationNode
+	}
 	storageWarningFields(w, result, warning)
 	writeJSON(w, 200, result)
 }
@@ -448,14 +453,15 @@ func (s *Server) listStorageBuckets(w http.ResponseWriter, r *http.Request) {
 			}
 			outcome, err := s.checkStorage(r.Context(), config, bucket)
 			if err != nil {
-				fail(w, 502, err.Error())
+				storageCheckFailed(w, 502, localize(w, err.Error()), outcome.node)
 				return
 			}
 			if outcome.failure != nil {
-				storageFailureResponse(w, 502, "", outcome.failure)
+				storageFailureResponse(w, 502, "", outcome.failure, outcome.node)
 				return
 			}
-			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil}
+			// node names the one Agent that ran the check.
+			result := map[string]any{"success": true, "buckets": outcome.check.Buckets, "pathStyle": outcome.pathStyle, "pathStyleAuto": config.PathStyleEnable == nil, "node": outcome.node}
 			// checkedBucket names a bucket whose check passed; a bucket whose
 			// check failed without blocking is named by bucketCheckFailed,
 			// and the warning says why.

@@ -1181,3 +1181,31 @@ func TestComparisonStatusOmitsUnusableCheckpointAndSaysNoDifferences(t *testing.
 		t.Fatalf("%d %s", code, out)
 	}
 }
+
+// A comparison that an Agent before results protocol 2 ran reports a fixed
+// row limit. Its counts are known to be unreliable, so the start and the
+// status say where the result came from and what to do.
+func TestComparisonFromAnOlderNodeIsMarked(t *testing.T) {
+	useComparisonClock(t)
+	note := "注意：该结果来自 4.1.40 及更早版本的执行节点"
+	legacy := comparisonTestPage(map[string]interface{}{"resultLimit": 10000, "changed": 999988})
+	code, out, _ := runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, note) || !strings.Contains(out, "请升级该节点后重新比对") {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out, _ = runMockCLI(t, []string{"--lang", "en", "object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, legacy) })
+	if code != 0 || !strings.Contains(out, "Note: this result comes from an execution node of version 4.1.40 or earlier") {
+		t.Fatalf("%d %s", code, out)
+	}
+	current := comparisonTestPage(nil)
+	code, out, _ = runMockCLI(t, []string{"object", "status", "job-1"}, func(w http.ResponseWriter, r *http.Request) { adminTestJSON(t, w, current) })
+	if code != 0 || strings.Contains(out, note) {
+		t.Fatalf("a current node's result was marked as older: %d %s", code, out)
+	}
+	running := comparisonTestPage(map[string]interface{}{"id": "cmp-1", "status": "RUNNING", "items": nil, "resultLimit": 10000})
+	handler, _, _ := comparisonCompareServer(t, running, func(int) map[string]interface{} { return running })
+	code, out, _ = runMockCLI(t, []string{"object", "compare", "--source-bucket", "src/photos", "--dest-bucket", "dst/archive"}, handler)
+	if code != 0 || !strings.Contains(out, "比对已开始，ID：cmp-1\n") || !strings.Contains(out, note) {
+		t.Fatalf("the start did not say an older node runs the comparison: %d %s", code, out)
+	}
+}

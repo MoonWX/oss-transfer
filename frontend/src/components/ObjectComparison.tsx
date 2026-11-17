@@ -1415,6 +1415,15 @@ function ComparisonResult({
             {progress.rowsTruncated && (
               <Alert severity="warning">{truncationText(progress)}</Alert>
             )}
+            {!!progress.resultLimit && (
+              // Agents before results protocol 2 report a fixed row limit.
+              // Their results are known to be unreliable; say so.
+              <Alert severity="warning" data-testid="legacy-comparison-node">
+                {t(
+                  "该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。",
+                )}
+              </Alert>
+            )}
             {(progress.error || progress.errorDetail) && (
               <Alert
                 severity={progress.status === "FAILED" ? "error" : "warning"}

@@ -81,6 +81,7 @@ func renderComparisonResult(out io.Writer, args []string, result map[string]inte
 			return true
 		}
 		fmt.Fprintf(out, cliText(out, "比对已开始，ID：%s\n"), safeCLIText(id))
+		renderLegacyComparisonNote(out, data)
 		fmt.Fprintf(out, cliText(out, "查看进度：%s\n"), safeCLIText(comparisonCommand("status", id, "--watch", "5")))
 	case "resume", "cancel", "delete":
 		id, err := comparisonIDArgument(rest)
@@ -368,6 +369,7 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 		fmt.Fprintf(table, "%s\t%s\n", field[0], safeCLIText(field[1]))
 	}
 	table.Flush()
+	renderLegacyComparisonNote(out, data)
 	fmt.Fprintln(out)
 	rows := objectList(data["items"])
 	if len(rows) == 0 && options.after == 0 && len(options.statuses) == 0 && getString(data, "status") == "COMPLETED" && getInt64(data, "rows") == 0 {
@@ -384,6 +386,15 @@ func renderComparisonStatus(out io.Writer, options comparisonPageOptions, data m
 	}
 	if data["resumable"] == true {
 		fmt.Fprintf(out, cliText(out, "可用 %s 从检查点之后继续\n"), safeCLIText(comparisonCommand("resume", id)))
+	}
+}
+
+// renderLegacyComparisonNote warns about a comparison that an Agent before
+// results protocol 2 ran: it reports a fixed row limit, and its counts are
+// known to be unreliable.
+func renderLegacyComparisonNote(out io.Writer, data map[string]interface{}) {
+	if limit, ok := cliNumeric(data["resultLimit"]); ok && limit > 0 {
+		fmt.Fprintln(out, cliText(out, "注意：该结果来自 4.1.40 及更早版本的执行节点，统计可能不准确：在 LIST 时间精确到毫秒的存储上，“比对期间已变化”可能是误报，也可能包含真正缺失的对象；单个对象的比对中，“两端均不存在”计为“读取失败”；最多保存 1 万条差异。请升级该节点后重新比对。"))
 	}
 }
 

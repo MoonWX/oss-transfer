@@ -345,7 +345,8 @@ func runStorageAdmin(client *ApiClient, action string, args []string) (map[strin
 			if o.Has("prefix") && !o.Has("write") {
 				return nil, cliUsageErrorf("--prefix 需要与 --write 一起使用")
 			}
-			if prefix := o.Value("prefix"); len(prefix) > 512 || strings.ContainsFunc(prefix, unicode.IsControl) || !utf8.ValidString(prefix) {
+			// The Master's rule (transferstore.ValidPermissionPrefix).
+			if prefix := o.Value("prefix"); len(prefix) > 512 || !utf8.ValidString(prefix) || strings.ContainsFunc(prefix, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 				return nil, cliUsageErrorf("--prefix 不能超过 512 字节，且不能包含控制字符")
 			}
 			if o.Has("bucket") {

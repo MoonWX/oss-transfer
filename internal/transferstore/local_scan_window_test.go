@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -538,6 +539,9 @@ func TestLocalScanCancellationWaitsForItsLookups(t *testing.T) {
 // Objects found through a directory's handle leave the scan only while the
 // directory and all its ancestors are still linked where the cursor says.
 func TestLocalScanChecksTheLinksOfEveryDirectoryOnThePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows refuses to rename a directory that a scan holds open, so its path cannot change under the scan")
+	}
 	replace := func(t *testing.T, root string) {
 		t.Helper()
 		if err := os.Rename(filepath.Join(root, "a"), filepath.Join(root, "moved")); err != nil {
@@ -781,7 +785,7 @@ func TestLocalScanChargesTheReadsThatReturnNames(t *testing.T) {
 	// three reads that return names but not the fourth, five lookups, and its
 	// link as it is left. e: its lookup, root and open, and one read: the
 	// first read of a listing is charged even when it returns nothing.
-	if operations, _ := limiter.take(); operations != 2+(3+3+5+1)+4 || spy.called("read", "d") != 4 {
+	if operations, _ := limiter.take(); operations != 2+(3+3+5+1)+4+identityOpens(5) || spy.called("read", "d") != 4 {
 		t.Fatalf("scan charged %d operations for %d reads of d", operations, spy.called("read", "d"))
 	}
 }
@@ -805,7 +809,7 @@ func TestLocalScanChargesEveryOperation(t *testing.T) {
 	// The root's open; a's link, root and open; a's read (the read that
 	// confirms the end of a short listing is free); two lookups; a's link as
 	// it is left; the root's open and read.
-	if operations, _ := limiter.take(); operations != 10 {
+	if operations, _ := limiter.take(); operations != 10+identityOpens(2) {
 		t.Fatalf("resume charged %d operations", operations)
 	}
 	if _, err := CreateSharedProbe(context.Background(), filepath.Join(root, "a")); err != nil {
@@ -828,7 +832,7 @@ func TestLocalScanChargesEveryOperation(t *testing.T) {
 	// link as it is left.
 	operations, n := limiter.take()
 	marker := len(namespaceContents(namespace.Owner, namespace.ID))
-	if operations != 2+2+2+3+4+1+1 || n != 94+marker {
+	if operations != 2+2+2+3+4+1+1+identityOpens(3) || n != 94+marker {
 		t.Fatalf("scan charged %d operations and %d bytes", operations, n)
 	}
 }

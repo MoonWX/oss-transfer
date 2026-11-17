@@ -766,7 +766,7 @@ func TestLocalScanChargesTheStreamedReadsThatReturnNames(t *testing.T) {
 	// The root: its open and one read. big: its lookup, root and open, and
 	// the three reads that return names, but not the one that ends the
 	// listing. 30 lookups, and big's link as it is left.
-	if operations, _ := limiter.take(); operations != 2+(3+3)+30+1 || listing.reads.Load() != 4 {
+	if operations, _ := limiter.take(); operations != 2+(3+3)+30+1+identityOpens(30) || listing.reads.Load() != 4 {
 		t.Fatalf("scan charged %d operations for %d reads of big", operations, listing.reads.Load())
 	}
 }

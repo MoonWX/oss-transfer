@@ -4,9 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 )
+
+// identityOpens is what Windows adds to a scan's local operations: it opens
+// every regular file the scan looks up once more, to read its file index.
+func identityOpens(files int) int {
+	if runtime.GOOS == "windows" {
+		return files
+	}
+	return 0
+}
 
 type countingLocalIO struct {
 	mu         sync.Mutex
@@ -95,7 +105,7 @@ func TestLocalAccessIsChargedToTheLocalLimits(t *testing.T) {
 	if err := local.ScanPages(ctx, ListOptions{Limit: 10}, func(Page) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if operations, _ := limiter.take(); operations != 8 {
+	if operations, _ := limiter.take(); operations != 8+identityOpens(1) {
 		t.Fatalf("scan charged %d operations", operations)
 	}
 }

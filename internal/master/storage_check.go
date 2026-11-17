@@ -108,6 +108,16 @@ func newStorageProblem(kind transferstore.StorageErrorKind, detail string, confi
 	return problem
 }
 
+// noOnlineAgentError says why no Agent can run a storage check: none has been
+// added yet, or every registered one is offline, which adding another one
+// does not fix.
+func (s *Server) noOnlineAgentError() error {
+	if members, err := s.agents.registry.Members(); err == nil && len(members) > 0 {
+		return errors.New("every registered Agent is offline; bring one back online before validating storage")
+	}
+	return errors.New("no Agent is online; join an Agent before validating storage")
+}
+
 // checkStorage runs the connection check on one online Agent. An error means
 // the check could not run (no Agent, Agent unavailable, invalid settings);
 // storage failures are in the outcome.
@@ -118,7 +128,7 @@ func (s *Server) checkStorage(ctx context.Context, config storageconfig.Config, 
 		return outcome, err
 	}
 	if len(members) == 0 {
-		return outcome, errors.New("no Agent is online; join an Agent before validating storage")
+		return outcome, s.noOnlineAgentError()
 	}
 	redact := func(message string) string {
 		return redactStorageError(errors.New(message), []storageconfig.Config{config}).Error()

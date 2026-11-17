@@ -425,7 +425,8 @@ const cliExceptionsHelp = `异常记录
   oss-transfer-cli exceptions export local --output local-report.zip
   oss-transfer-cli exceptions clear failed --all --yes
 
-complete/partial 表示节点返回是否完整；truncated 表示记录被数量上限截断。
+partial（complete 为 false）表示有执行节点离线，其未完成子任务的失败记录可能尚未上报；
+truncated 表示记录被数量上限截断。
 旧版服务可能限制每节点记录数，超过时显示 truncatedWorkers；更多记录用 ZIP 报告。
 报告仅可导出已结束或已停止任务，不能将下载成功视为迁移验收通过。
 `

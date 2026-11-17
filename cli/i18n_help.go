@@ -859,8 +859,9 @@ Local ZIP exports all local task reports without filters; use task report for on
 Only ended or stopped tasks can be exported. Clear removes recovered or skipped exception records;
 unresolved failures and tasks remain. Use filters or --all, not both.
 Filters: --task-id, --worker, --direction, --source-bucket, --dest-bucket, --endpoint.
-complete/partial describe node coverage; truncated describes the size cap. Legacy caps may return
-truncatedWorkers; use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
+partial (complete false) means an offline Agent has unfinished subtasks whose failures may not be
+reported yet; truncated describes the size cap. Legacy caps may return truncatedWorkers;
+use ZIP reports for more records. A downloaded report does not confirm transfer correctness.
 
   oss-transfer-cli exceptions export failed --task-id 224 --output task-224-failures.csv
   oss-transfer-cli exceptions list local --direction OSS_TO_LOCAL --offset 25 --limit 25
@@ -882,7 +883,8 @@ CSV は今回の記録と完全性・件数省略の情報を出力します。�
 出力できるのは終了・停止したタスクのみです。削除するのは回復済み・スキップ済みの例外記録です。
 未解決の失敗とタスクは残ります。絞り込み条件と --all は併用できません。
 絞り込み: --task-id、--worker、--direction、--source-bucket、--dest-bucket、--endpoint。
-complete/partial は応答の完全性、truncated は件数上限による省略を示します。
+partial（complete が false）は、未完了のサブタスクを持つノードがオフラインで、失敗記録がまだ報告されていない可能性を示します。
+truncated は件数上限による省略を示します。
 truncatedWorkers が返された場合、詳細には ZIP レポートを使用してください。
 ダウンロード成功は転送データの検証完了を示しません。
 

@@ -69,6 +69,11 @@ export type MemberNode = NodeDisplay & {
    * RECONNECT (no lease fencing) leaves after it reconnects.
    */
   progress?: string;
+  /**
+   * Why a joining node has not joined yet, in the request's language. The
+   * Master records it on each scheduler step; older Masters omit it.
+   */
+  joinProblem?: { code: string; message: string };
 };
 type Candidate = NodeDisplay & {
   id?: string;
@@ -836,16 +841,29 @@ export default function TaskNodesDialog({
             </Field>
           )}
         </Stack>
-        {node.state === "JOINING" && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            component="div"
-            sx={{ mt: 0.5 }}
-          >
-            {t("正在完成握手与检查，加入后开始分配任务")}
-          </Typography>
-        )}
+        {node.state === "JOINING" &&
+          (node.joinProblem?.message ? (
+            // The join keeps failing or waiting; say why, so the operator can
+            // fix the node or cancel the join.
+            <Typography
+              variant="caption"
+              color="warning.main"
+              component="div"
+              sx={{ mt: 0.5, overflowWrap: "anywhere" }}
+              data-testid={`task-node-join-problem-${node.address}`}
+            >
+              {node.joinProblem.message}
+            </Typography>
+          ) : (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={{ mt: 0.5 }}
+            >
+              {t("正在完成握手与检查，加入后开始分配任务")}
+            </Typography>
+          ))}
         {node.progress === "LEASE_EXPIRY" && (
           <Typography
             variant="caption"

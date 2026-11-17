@@ -514,6 +514,40 @@ test("pending changes show progress, refresh it and allow escalating a draining 
   expect(posts[0]).toMatchObject({ remove: ["10.0.1.13"], mode: "now" });
 });
 
+test("a joining node that has not joined says why", async ({ page }) => {
+  const reason = "执行节点 10.0.1.14 未通过共享目录校验：marker missing";
+  await setup(page, {
+    view: () =>
+      nodesView({
+        pending: true,
+        nodes: [
+          member("10.0.1.12", { scanner: true }),
+          member("10.0.1.14", {
+            state: "JOINING",
+            share: null,
+            joinProblem: { code: "SHARED_STORAGE_UNVERIFIED", message: reason },
+          }),
+          member("10.0.1.16", { state: "JOINING", share: null }),
+        ],
+      }),
+  });
+  await openDialog(page);
+  const box = dialog(page);
+  await expect(box.getByTestId("task-node-join-problem-10.0.1.14")).toHaveText(
+    reason,
+  );
+  await expect(box.getByTestId("task-node-10.0.1.14")).not.toContainText(
+    "正在完成握手与检查",
+  );
+  // Without a reason (or from an older Master) the join is still in progress.
+  await expect(box.getByTestId("task-node-10.0.1.16")).toContainText(
+    "正在完成握手与检查，加入后开始分配任务",
+  );
+  await expect(
+    box.getByRole("button", { name: /^取消加入 .*10\.0\.1\.14/ }),
+  ).toBeVisible();
+});
+
 test("cancelling a joining node submits its removal", async ({ page }) => {
   const { posts } = await setup(page, {
     view: () =>

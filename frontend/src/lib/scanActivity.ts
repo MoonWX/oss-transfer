@@ -49,29 +49,32 @@ export function formatElapsed(milliseconds: number) {
 const hasCounts = (activity?: ScanActivity | null): activity is ScanActivity =>
   !!activity && activity.state !== "UNSUPPORTED";
 
-/**
- * The task list's label for a running scan, or "" when the scanning node
- * reports nothing. Both totals only grow during a run, so the label moves
- * while a large directory is still being read.
- */
-export function scanListLabel(activity?: ScanActivity | null): string {
-  if (!activity) return "";
-  if (!hasCounts(activity)) return t("扫描中");
-  const values = {
-    names: formatNumber(activity.namesRead),
-    examined: formatNumber(activity.examined),
-  };
-  return activity.state === "STALE"
-    ? t("扫描中 · 已读取 {names} · 已检查 {examined} · {age}前", {
-        ...values,
-        age: formatElapsed(activity.ageMillis ?? 0),
-      })
-    : t("扫描中 · 已读取 {names} · 已检查 {examined}", values);
-}
+// The directory part of a running scan: what the scanner does in it, where
+// it is, and, while it examines entries whose number is known, how far it
+// got. percent is null while the directory is still being read.
+export type ScanDirectoryView = {
+  label: string;
+  path: string;
+  detail: string;
+  percent: number | null;
+  note?: string;
+};
 
-function directoryName(key: string) {
-  return key ? t("目录“{path}”", { path: key }) : t("源目录");
-}
+export type ScanAlert = { text: string; warning: boolean };
+
+export type ScanActivityView =
+  | { supported: false; message: string }
+  | {
+      supported: true;
+      stale: boolean;
+      asOf?: string;
+      namesRead: string;
+      examined: string;
+      directory?: ScanDirectoryView;
+      notes: string[];
+      footnote: string;
+      alerts: ScanAlert[];
+    };
 
 function formatMillis(milliseconds: number) {
   return formatDecimal(milliseconds, {
@@ -79,92 +82,150 @@ function formatMillis(milliseconds: number) {
   });
 }
 
-/** The lines of the scan progress block, in display order. */
-export function scanActivityLines(activity?: ScanActivity | null): string[] {
-  if (!activity) return [];
-  if (!hasCounts(activity)) return [t("扫描节点版本较旧，不提供实时扫描进度")];
-  const lines = [
-    t(
-      "本轮扫描已读取 {names} 个名称，已检查 {examined} 项（扫描重启后从零计）",
-      {
-        names: formatNumber(activity.namesRead),
-        examined: formatNumber(activity.examined),
-      },
-    ),
-  ];
+function directoryView(activity: ScanActivity): ScanDirectoryView | undefined {
   const directory = activity.directory;
-  if (directory) {
-    const dir = directoryName(directory.key);
-    if (directory.reading && activity.mode === "STREAMING")
-      lines.push(
-        t("正在读取并检查{dir}：已读取 {n} 个名称，已检查 {x} 项，用时 {d}", {
-          dir,
-          n: formatNumber(directory.names),
-          x: formatNumber(directory.examined),
-          d: formatElapsed(directory.elapsedMillis),
-        }),
-      );
-    else if (directory.reading)
-      lines.push(
-        t(
-          "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
-          {
-            dir,
-            n: formatNumber(directory.names),
-            d: formatElapsed(directory.elapsedMillis),
-          },
-        ),
-      );
-    else if (directory.names > 0)
-      lines.push(
-        t("正在检查{dir}：第 {x} 项，共 {y} 项", {
-          dir,
-          x: formatNumber(directory.position),
-          y: formatNumber(directory.names),
-        }),
-      );
-  }
-  if (Number(activity.alreadyFound) > 0)
-    lines.push(
-      t("其中 {n} 项此前已发现，未再次检查", {
-        n: formatNumber(activity.alreadyFound),
+  if (!directory) return undefined;
+  const path = directory.key || t("源目录");
+  const elapsed = t("用时 {d}", { d: formatElapsed(directory.elapsedMillis) });
+  if (directory.reading && activity.mode === "STREAMING")
+    return {
+      label: t("正在边读边检查的目录"),
+      path,
+      detail: elapsed,
+      percent: null,
+      note: t("本目录已读取 {n} 个名称，已检查 {x} 项。", {
+        n: formatNumber(directory.names),
+        x: formatNumber(directory.examined),
       }),
-    );
-  if (Number(activity.vanished) > 0)
-    lines.push(
-      t("{n} 项在检查前已被删除，已跳过", {
-        n: formatNumber(activity.vanished),
-      }),
-    );
-  if (activity.lookupMeanMillis != null)
-    lines.push(
-      t("条目查询平均耗时 {ms} 毫秒", {
-        ms: formatMillis(activity.lookupMeanMillis),
-      }),
-    );
+    };
+  if (directory.reading)
+    return {
+      label: t("正在读取名称的目录"),
+      path,
+      detail: elapsed,
+      percent: null,
+      note: t(
+        "本目录已读取 {n} 个名称。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
+        { n: formatNumber(directory.names) },
+      ),
+    };
+  if (directory.names <= 0) return undefined;
+  const position = Math.min(Math.max(directory.position, 0), directory.names);
+  return {
+    label: t("正在检查的目录"),
+    path,
+    detail: t("第 {x} 项，共 {y} 项", {
+      x: formatNumber(position),
+      y: formatNumber(directory.names),
+    }),
+    percent: (position / directory.names) * 100,
+  };
+}
+
+function scanAlerts(activity: ScanActivity): ScanAlert[] {
+  const alerts: ScanAlert[] = [];
   const unanswered = Number(activity.oldestCallMillis) >= UNANSWERED_AFTER;
   if (unanswered)
-    lines.push(
-      t("源存储已有 {d} 未响应", {
+    alerts.push({
+      text: t("源存储已有 {d} 未响应", {
         d: formatElapsed(Number(activity.oldestCallMillis)),
       }),
-    );
+      warning: true,
+    });
   if (activity.waitingFor === "LOCAL_OPERATION_LIMIT")
-    lines.push(t("正在等待本节点的本地文件操作限制"));
-  if (activity.waitingFor === "COMMIT") lines.push(t("正在保存扫描结果"));
+    alerts.push({ text: t("正在等待本节点的本地文件操作限制"), warning: true });
+  if (activity.waitingFor === "COMMIT")
+    alerts.push({ text: t("正在保存扫描结果"), warning: false });
   if (
     !unanswered &&
     !activity.waitingFor &&
     Number(activity.idleMillis) >= IDLE_AFTER
   )
-    lines.push(
-      t("已有 {d} 没有新进展", {
+    alerts.push({
+      text: t("已有 {d} 没有新进展", {
         d: formatElapsed(Number(activity.idleMillis)),
       }),
+      warning: true,
+    });
+  return alerts;
+}
+
+/**
+ * What the scan progress block shows, or null without a report: an absent
+ * report must not read as a scan that has done nothing.
+ */
+export function scanActivityView(
+  activity?: ScanActivity | null,
+): ScanActivityView | null {
+  if (!activity) return null;
+  if (!hasCounts(activity))
+    return {
+      supported: false,
+      message: t("扫描节点版本较旧，不提供实时扫描进度"),
+    };
+  const notes: string[] = [];
+  if (Number(activity.alreadyFound) > 0)
+    notes.push(
+      t("其中 {n} 项此前已发现，未再次检查", {
+        n: formatNumber(activity.alreadyFound),
+      }),
     );
-  if (activity.state === "STALE" && activity.observedAt)
-    lines.push(
-      t("扫描进度截至 {time}", { time: formatDate(activity.observedAt) }),
+  if (Number(activity.vanished) > 0)
+    notes.push(
+      t("{n} 项在检查前已被删除，已跳过", {
+        n: formatNumber(activity.vanished),
+      }),
     );
-  return lines;
+  const stale = activity.state === "STALE";
+  return {
+    supported: true,
+    stale,
+    asOf:
+      stale && activity.observedAt
+        ? t("截至 {time}（{age}前）", {
+            time: formatDate(activity.observedAt),
+            age: formatElapsed(activity.ageMillis ?? 0),
+          })
+        : undefined,
+    namesRead: formatNumber(activity.namesRead),
+    examined: formatNumber(activity.examined),
+    directory: directoryView(activity),
+    notes,
+    footnote:
+      activity.lookupMeanMillis != null
+        ? t(
+            "条目查询平均耗时 {ms} 毫秒。计数从本轮扫描开始，扫描重启后从零计。",
+            { ms: formatMillis(activity.lookupMeanMillis) },
+          )
+        : t("计数从本轮扫描开始，扫描重启后从零计。"),
+    alerts: scanAlerts(activity),
+  };
+}
+
+/**
+ * The task list's tooltip for a running scan, one line each; empty when the
+ * scanning node reports nothing. The list itself only says that it scans:
+ * its found count grows as the scan commits objects.
+ */
+export function scanListTips(activity?: ScanActivity | null): string[] {
+  const view = scanActivityView(activity);
+  if (!view) return [];
+  if (!view.supported) return [view.message];
+  const tips = [
+    t("已读取 {names} 个名称，已检查 {examined} 项", {
+      names: view.namesRead,
+      examined: view.examined,
+    }),
+  ];
+  if (view.directory)
+    tips.push(
+      t("{label}：{path}，{detail}", {
+        label: view.directory.label,
+        path: view.directory.path,
+        detail: view.directory.detail,
+      }),
+    );
+  tips.push(...view.alerts.map((alert) => alert.text));
+  if (view.asOf) tips.push(view.asOf);
+  return tips;
 }

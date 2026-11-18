@@ -2973,36 +2973,52 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "残りのノードはバージョンが古いため、このスキャンを引き継げません。いずれかのノードをアップグレードすると自動的に続行します",
   },
   扫描进度: { en: "Scan progress", ja: "スキャンの進捗" },
-  "扫描中 · 已读取 {names} · 已检查 {examined}": {
-    en: "Scanning · {names} read · {examined} examined",
-    ja: "スキャン中 · 読み取り {names} · 確認 {examined}",
+  已读取名称: { en: "Names read", ja: "読み取った名前" },
+  已检查条目: { en: "Entries examined", ja: "確認したエントリ" },
+  正在检查的目录: {
+    en: "Directory being examined",
+    ja: "確認中のディレクトリ",
   },
-  "扫描中 · 已读取 {names} · 已检查 {examined} · {age}前": {
-    en: "Scanning · {names} read · {examined} examined · {age} ago",
-    ja: "スキャン中 · 読み取り {names} · 確認 {examined} · {age}前",
+  正在读取名称的目录: {
+    en: "Directory whose names are being read",
+    ja: "名前を読み取り中のディレクトリ",
   },
-  "本轮扫描已读取 {names} 个名称，已检查 {examined} 项（扫描重启后从零计）": {
-    en: "This scan run has read {names} names and examined {examined} entries (counted from zero after a restart)",
-    ja: "今回のスキャンで名前を {names} 件読み取り、{examined} 件を確認しました（スキャンの再開後は 0 から数えます）",
+  正在边读边检查的目录: {
+    en: "Directory being read and examined",
+    ja: "読み取りながら確認中のディレクトリ",
   },
-  源目录: { en: "the source directory", ja: "転送元ディレクトリ" },
-  "目录“{path}”": {
-    en: 'directory "{path}"',
-    ja: "ディレクトリ「{path}」",
+  "用时 {d}": { en: "{d} elapsed", ja: "{d} 経過" },
+  "第 {x} 项，共 {y} 项": { en: "Entry {x} of {y}", ja: "{y} 件中 {x} 件目" },
+  "本目录已读取 {n} 个名称，已检查 {x} 项。": {
+    en: "{n} names read and {x} entries examined in this directory.",
+    ja: "このディレクトリでは名前を {n} 件読み取り、{x} 件を確認しました。",
   },
-  "正在读取{dir}中的名称：已读取 {n} 个，用时 {d}。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。":
+  "本目录已读取 {n} 个名称。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。":
     {
-      en: "Reading the names in {dir}: {n} read in {d}. A directory of up to 4,096 names is examined and transferred once all its names are read; past that, it is examined while it is still being read.",
-      ja: "{dir}の名前を読み取っています：{n} 件、{d} 経過。名前が 4,096 件以下のディレクトリは読み終えてからファイルの確認と転送を始め、それを超えると読み取りながら確認します。",
+      en: "{n} names read in this directory so far. A directory of up to 4,096 names is examined and transferred once all its names are read; past that, it is examined while it is still being read.",
+      ja: "このディレクトリでは名前を {n} 件読み取りました。名前が 4,096 件以下のディレクトリは読み終えてからファイルの確認と転送を始め、それを超えると読み取りながら確認します。",
     },
-  "正在读取并检查{dir}：已读取 {n} 个名称，已检查 {x} 项，用时 {d}": {
-    en: "Reading and examining {dir}: {n} names read, {x} examined, {d} elapsed",
-    ja: "{dir}を読み取りながら確認しています：名前 {n} 件を読み取り、{x} 件を確認、{d} 経過",
+  "条目查询平均耗时 {ms} 毫秒。计数从本轮扫描开始，扫描重启后从零计。": {
+    en: "Entry lookups take {ms} ms on average. Counts start with this scan run and restart from zero when the scan restarts.",
+    ja: "エントリの照会には平均 {ms} ミリ秒かかっています。件数は今回のスキャンから数え、スキャンが再開されると 0 から数え直します。",
   },
-  "正在检查{dir}：第 {x} 项，共 {y} 项": {
-    en: "Examining {dir}: entry {x} of {y}",
-    ja: "{dir}を確認しています：{y} 件中 {x} 件目",
+  "计数从本轮扫描开始，扫描重启后从零计。": {
+    en: "Counts start with this scan run and restart from zero when the scan restarts.",
+    ja: "件数は今回のスキャンから数え、スキャンが再開されると 0 から数え直します。",
   },
+  "截至 {time}（{age}前）": {
+    en: "As of {time} ({age} ago)",
+    ja: "{time} 時点（{age}前）",
+  },
+  "已读取 {names} 个名称，已检查 {examined} 项": {
+    en: "{names} names read, {examined} entries examined",
+    ja: "名前を {names} 件読み取り、{examined} 件を確認",
+  },
+  "{label}：{path}，{detail}": {
+    en: "{label}: {path}, {detail}",
+    ja: "{label}：{path}、{detail}",
+  },
+  源目录: { en: "Source directory", ja: "転送元ディレクトリ" },
   "其中 {n} 项此前已发现，未再次检查": {
     en: "Already found and not examined again: {n}",
     ja: "うち {n} 件は発見済みのため、再確認していません",
@@ -3010,10 +3026,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "{n} 项在检查前已被删除，已跳过": {
     en: "Deleted before examination and skipped: {n}",
     ja: "{n} 件は確認前に削除されていたため、スキップしました",
-  },
-  "条目查询平均耗时 {ms} 毫秒": {
-    en: "Entry lookups take {ms} ms on average",
-    ja: "エントリの照会には平均 {ms} ミリ秒かかっています",
   },
   "源存储已有 {d} 未响应": {
     en: "The source storage has not responded for {d}",
@@ -3030,10 +3042,6 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
   "已有 {d} 没有新进展": {
     en: "No progress for {d}",
     ja: "{d} 進捗がありません",
-  },
-  "扫描进度截至 {time}": {
-    en: "Scan progress as of {time}",
-    ja: "{time} 時点のスキャンの進捗",
   },
   "扫描节点版本较旧，不提供实时扫描进度": {
     en: "The scanning node is too old to report live scan progress",

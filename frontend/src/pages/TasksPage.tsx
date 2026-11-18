@@ -115,7 +115,7 @@ import RunningFailureRetry, {
 } from "../components/RunningFailureRetry";
 import TransferStatistics from "../components/TransferStatistics";
 import ScanProgress from "../components/ScanProgress";
-import { scanListLabel } from "../lib/scanActivity";
+import { scanListTips } from "../lib/scanActivity";
 import {
   conflictPolicyLabel,
   taskComparisonLink,
@@ -2279,6 +2279,11 @@ export default function TasksPage({
     const counts = `${formatNumber(task.putObjectCount)} / ${formatNumber(task.listObjectCount)}`;
     const bytes = byteProgress(task);
     const unreported = unreportedNodeNames(task);
+    // What a running scan reports, behind its "扫描中" label.
+    const scanTips =
+      !complete && countsCurrent && scanning && task.status !== "PENDING"
+        ? scanListTips(task.scanActivity)
+        : [];
     // A PARTIAL sample is a lower bound: say which nodes it leaves out.
     const tips = [
       bytes && countsCurrent ? tr("{value1} 个对象", { value1: counts }) : "",
@@ -2307,17 +2312,29 @@ export default function TasksPage({
                   : counts}
             </Typography>
           </Tooltip>
-          <Typography variant="caption" data-testid="task-scan-label">
-            {complete
-              ? `${Math.floor(percent)}%`
-              : !countsCurrent
-                ? tr("统计更新中")
-                : task.status === "PENDING"
-                  ? tr("待扫描")
-                  : scanning
-                    ? scanListLabel(task.scanActivity) || tr("扫描中")
-                    : tr("扫描未完成")}
-          </Typography>
+          <Tooltip
+            title={
+              scanTips.length
+                ? scanTips.map((tip) => <Box key={tip}>{tip}</Box>)
+                : ""
+            }
+          >
+            <Typography
+              variant="caption"
+              data-testid="task-scan-label"
+              sx={{ whiteSpace: "nowrap" }}
+            >
+              {complete
+                ? `${Math.floor(percent)}%`
+                : !countsCurrent
+                  ? tr("统计更新中")
+                  : task.status === "PENDING"
+                    ? tr("待扫描")
+                    : scanning
+                      ? tr("扫描中")
+                      : tr("扫描未完成")}
+            </Typography>
+          </Tooltip>
         </Stack>
         <LinearProgress
           variant={!complete && scanning ? "indeterminate" : "determinate"}

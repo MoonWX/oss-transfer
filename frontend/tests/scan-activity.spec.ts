@@ -57,45 +57,70 @@ const row = (page: Page) =>
     .getByRole("row")
     .filter({ has: page.getByRole("button", { name: "#61", exact: true }) });
 
-test("the task list shows names read and entries examined while a directory is read", async ({
+test("the task list says that it scans and shows what the scanner reports on hover", async ({
   page,
 }) => {
   const state = await arrange(page, reading());
   await page.goto("/tasks");
   const label = row(page).getByTestId("task-scan-label");
-  await expect(label).toHaveText("扫描中 · 已读取 86,980 · 已检查 1,200");
+  const tip = page.getByRole("tooltip").last();
+  // The label stays one short word; the found count beside it grows.
+  await expect(label).toHaveText("扫描中");
   await expect(
     page.getByRole("columnheader", { name: "已迁移 / 已发现" }),
   ).toBeVisible();
-  // A report older than the rates keeps its numbers and says how old they are.
+  await label.hover();
+  await expect(tip).toContainText("已读取 86,980 个名称，已检查 1,200 项");
+  await expect(tip).toContainText(
+    "正在读取名称的目录：data/2026，用时 5 分 0 秒",
+  );
+  await page.mouse.move(0, 0);
+  // A report older than the rates keeps its numbers and says how old it is.
   state.task = {
     ...state.task,
     scanActivity: reading({ state: "STALE", ageMillis: 65000 }),
   };
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
-  await expect(label).toHaveText(
-    "扫描中 · 已读取 86,980 · 已检查 1,200 · 1 分 5 秒前",
-  );
-  // An older scanner, or a Master without the field, shows no numbers.
+  await expect(label).toHaveText("扫描中");
+  await label.hover();
+  await expect(tip).toContainText("（1 分 5 秒前）");
+  await page.mouse.move(0, 0);
+  // An older scanner says why it reports nothing.
   state.task = { ...state.task, scanActivity: { state: "UNSUPPORTED" } };
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
   await expect(label).toHaveText("扫描中");
+  await label.hover();
+  await expect(tip).toHaveText("扫描节点版本较旧，不提供实时扫描进度");
+  await page.mouse.move(0, 0);
+  // A Master without the field shows the label alone.
   delete state.task.scanActivity;
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
   await expect(label).toHaveText("扫描中");
+  await label.hover();
+  await expect(
+    page.getByRole("tooltip").filter({ hasText: /已读取|扫描节点/ }),
+  ).toHaveCount(0);
 });
 
 test("task details explain what the scan is doing", async ({ page }) => {
   const state = await arrange(page, reading());
   await page.goto("/tasks?taskId=61");
   const block = page.getByTestId("scan-progress");
+  const directory = block.getByTestId("scan-progress-directory");
   await expect(page.getByText("已发现", { exact: true })).toBeVisible();
   await expect(block).toContainText("扫描进度");
-  await expect(block).toContainText(
-    "本轮扫描已读取 86,980 个名称，已检查 1,200 项（扫描重启后从零计）",
+  await expect(block).toContainText("已读取名称86,980");
+  await expect(block).toContainText("已检查条目1,200");
+  await expect(block).toContainText("计数从本轮扫描开始，扫描重启后从零计。");
+  await expect(directory).toContainText("正在读取名称的目录");
+  await expect(directory).toContainText("用时 5 分 0 秒");
+  await expect(directory).toContainText("data/2026");
+  await expect(directory).toContainText(
+    "本目录已读取 86,980 个名称。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
   );
-  await expect(block).toContainText(
-    "正在读取目录“data/2026”中的名称：已读取 86,980 个，用时 5 分 0 秒。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
+  // The directory's names are still being read: no position to show.
+  await expect(directory.getByRole("progressbar")).not.toHaveAttribute(
+    "aria-valuenow",
   );
   await expect(block).not.toContainText("没有新进展");
   // Examining, with entries already found or gone, a slow source call and a
@@ -118,13 +143,17 @@ test("task details explain what the scan is doing", async ({ page }) => {
       },
     }),
   };
-  await expect(block).toContainText(
-    "正在检查源目录：第 1,201 项，共 86,980 项",
+  await expect(directory).toContainText("正在检查的目录");
+  await expect(directory).toContainText("第 1,201 项，共 86,980 项");
+  await expect(directory).toContainText("源目录");
+  await expect(directory.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "1",
   );
   for (const line of [
     "其中 3 项此前已发现，未再次检查",
     "1 项在检查前已被删除，已跳过",
-    "条目查询平均耗时 23 毫秒",
+    "条目查询平均耗时 23 毫秒。计数从本轮扫描开始，扫描重启后从零计。",
     "源存储已有 6 秒 未响应",
     "正在等待本节点的本地文件操作限制",
   ])
@@ -135,7 +164,7 @@ test("task details explain what the scan is doing", async ({ page }) => {
     scanActivity: reading({ idleMillis: 40000, state: "STALE" }),
   };
   await expect(block).toContainText("已有 40 秒 没有新进展");
-  await expect(block).toContainText("扫描进度截至");
+  await expect(block.getByTestId("scan-progress-as-of")).toContainText("截至");
   // A large directory is examined while it is still being read.
   state.task = {
     ...state.task,
@@ -151,10 +180,12 @@ test("task details explain what the scan is doing", async ({ page }) => {
       },
     }),
   };
-  await expect(block).toContainText(
-    "正在读取并检查目录“data”：已读取 5,000 个名称，已检查 3,998 项，用时 1 分 1 秒",
+  await expect(directory).toContainText("正在边读边检查的目录");
+  await expect(directory).toContainText("用时 1 分 1 秒");
+  await expect(directory).toContainText(
+    "本目录已读取 5,000 个名称，已检查 3,998 项。",
   );
-  await expect(block).not.toContainText("读完全部名称后");
+  await expect(block).not.toContainText("读完后才开始检查");
   state.task = { ...state.task, scanActivity: { state: "UNSUPPORTED" } };
   await expect(block).toHaveText(
     "扫描进度扫描节点版本较旧，不提供实时扫描进度",
@@ -220,7 +251,7 @@ test("the nodes dialog shows the scan progress and why a takeover waits", async 
   await page.getByRole("button", { name: "编辑节点", exact: true }).click();
   const box = page.getByRole("dialog", { name: "任务 #1048 执行节点" });
   await expect(box.getByTestId("scan-progress")).toContainText(
-    "正在读取目录“data/2026”中的名称：已读取 86,980 个",
+    "本目录已读取 86,980 个名称。",
   );
   await box.getByRole("button", { name: "关闭", exact: true }).click();
   scan = { phase: "WAITING", complete: false, upgradeRequired: true };
@@ -295,11 +326,18 @@ test.describe("in English", () => {
     );
     await page.goto("/tasks?taskId=61");
     const block = page.getByTestId("scan-progress");
-    await expect(block).toContainText(
-      "This scan run has read 1 name and examined 1 entry (counted from zero after a restart)",
+    const directory = block.getByTestId("scan-progress-directory");
+    await expect(block).toContainText("Names read1");
+    await expect(block).toContainText("Entries examined1");
+    await expect(directory).toContainText(
+      "Directory whose names are being read",
+    );
+    await expect(directory).toContainText("Source directory");
+    await expect(directory).toContainText(
+      "1 name read in this directory so far.",
     );
     await expect(block).toContainText(
-      "Reading the names in the source directory: 1 read in 1 s.",
+      "Counts start with this scan run and restart from zero when the scan restarts.",
     );
     await expect(block).toContainText(
       "Already found and not examined again: 1",

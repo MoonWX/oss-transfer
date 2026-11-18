@@ -49,15 +49,13 @@ export function formatElapsed(milliseconds: number) {
 const hasCounts = (activity?: ScanActivity | null): activity is ScanActivity =>
   !!activity && activity.state !== "UNSUPPORTED";
 
-// The directory part of a running scan: what the scanner does in it, where
-// it is, and, while it examines entries whose number is known, how far it
-// got. percent is null while the directory is still being read.
+// The directory the scanner is in: what it does there, in a few words, and,
+// while it examines entries whose number is known, how far it got. percent
+// is null while the directory is still being read.
 export type ScanDirectoryView = {
-  label: string;
   path: string;
   detail: string;
   percent: number | null;
-  note?: string;
 };
 
 export type ScanAlert = { text: string; warning: boolean };
@@ -68,13 +66,16 @@ export type ScanActivityView =
       supported: true;
       stale: boolean;
       asOf?: string;
-      namesRead: string;
       examined: string;
+      /** The mean entry lookup time, "—" before the first lookup. */
+      lookupMean: string;
       directory?: ScanDirectoryView;
       notes: string[];
-      footnote: string;
       alerts: ScanAlert[];
     };
+
+// A directory's elapsed time is shown only once it is long enough to matter.
+const SHOW_ELAPSED_AFTER = 10_000;
 
 function formatMillis(milliseconds: number) {
   return formatDecimal(milliseconds, {
@@ -86,37 +87,34 @@ function directoryView(activity: ScanActivity): ScanDirectoryView | undefined {
   const directory = activity.directory;
   if (!directory) return undefined;
   const path = directory.key || t("源目录");
-  const elapsed = t("用时 {d}", { d: formatElapsed(directory.elapsedMillis) });
-  if (directory.reading && activity.mode === "STREAMING")
+  const long = directory.elapsedMillis >= SHOW_ELAPSED_AFTER;
+  const d = formatElapsed(directory.elapsedMillis);
+  const n = formatNumber(directory.names);
+  if (directory.reading && activity.mode === "STREAMING") {
+    const x = formatNumber(directory.examined);
     return {
-      label: t("正在边读边检查的目录"),
       path,
-      detail: elapsed,
+      detail: long
+        ? t("边读边检查：已读取 {n}，已检查 {x}，用时 {d}", { n, x, d })
+        : t("边读边检查：已读取 {n}，已检查 {x}", { n, x }),
       percent: null,
-      note: t("本目录已读取 {n} 个名称，已检查 {x} 项。", {
-        n: formatNumber(directory.names),
-        x: formatNumber(directory.examined),
-      }),
     };
+  }
   if (directory.reading)
     return {
-      label: t("正在读取名称的目录"),
       path,
-      detail: elapsed,
+      detail: long
+        ? t("正在读取名称，已读取 {n} 个，用时 {d}", { n, d })
+        : t("正在读取名称，已读取 {n} 个", { n }),
       percent: null,
-      note: t(
-        "本目录已读取 {n} 个名称。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
-        { n: formatNumber(directory.names) },
-      ),
     };
   if (directory.names <= 0) return undefined;
   const position = Math.min(Math.max(directory.position, 0), directory.names);
   return {
-    label: t("正在检查的目录"),
     path,
     detail: t("第 {x} 项，共 {y} 项", {
       x: formatNumber(position),
-      y: formatNumber(directory.names),
+      y: n,
     }),
     percent: (position / directory.names) * 100,
   };
@@ -187,17 +185,13 @@ export function scanActivityView(
             age: formatElapsed(activity.ageMillis ?? 0),
           })
         : undefined,
-    namesRead: formatNumber(activity.namesRead),
     examined: formatNumber(activity.examined),
+    lookupMean:
+      activity.lookupMeanMillis != null
+        ? t("{ms} 毫秒", { ms: formatMillis(activity.lookupMeanMillis) })
+        : "—",
     directory: directoryView(activity),
     notes,
-    footnote:
-      activity.lookupMeanMillis != null
-        ? t(
-            "条目查询平均耗时 {ms} 毫秒。计数从本轮扫描开始，扫描重启后从零计。",
-            { ms: formatMillis(activity.lookupMeanMillis) },
-          )
-        : t("计数从本轮扫描开始，扫描重启后从零计。"),
     alerts: scanAlerts(activity),
   };
 }
@@ -211,16 +205,10 @@ export function scanListTips(activity?: ScanActivity | null): string[] {
   const view = scanActivityView(activity);
   if (!view) return [];
   if (!view.supported) return [view.message];
-  const tips = [
-    t("已读取 {names} 个名称，已检查 {examined} 项", {
-      names: view.namesRead,
-      examined: view.examined,
-    }),
-  ];
+  const tips = [t("已检查 {examined} 项", { examined: view.examined })];
   if (view.directory)
     tips.push(
-      t("{label}：{path}，{detail}", {
-        label: view.directory.label,
+      t("当前目录：{path}，{detail}", {
         path: view.directory.path,
         detail: view.directory.detail,
       }),

@@ -70,9 +70,9 @@ test("the task list says that it scans and shows what the scanner reports on hov
     page.getByRole("columnheader", { name: "已迁移 / 已发现" }),
   ).toBeVisible();
   await label.hover();
-  await expect(tip).toContainText("已读取 86,980 个名称，已检查 1,200 项");
+  await expect(tip).toContainText("已检查 1,200 项");
   await expect(tip).toContainText(
-    "正在读取名称的目录：data/2026，用时 5 分 0 秒",
+    "当前目录：data/2026，正在读取名称，已读取 86,980 个，用时 5 分 0 秒",
   );
   await page.mouse.move(0, 0);
   // A report older than the rates keeps its numbers and says how old it is.
@@ -98,7 +98,7 @@ test("the task list says that it scans and shows what the scanner reports on hov
   await expect(label).toHaveText("扫描中");
   await label.hover();
   await expect(
-    page.getByRole("tooltip").filter({ hasText: /已读取|扫描节点/ }),
+    page.getByRole("tooltip").filter({ hasText: /已检查|扫描节点/ }),
   ).toHaveCount(0);
 });
 
@@ -109,15 +109,16 @@ test("task details explain what the scan is doing", async ({ page }) => {
   const directory = block.getByTestId("scan-progress-directory");
   await expect(page.getByText("已发现", { exact: true })).toBeVisible();
   await expect(block).toContainText("扫描进度");
-  await expect(block).toContainText("已读取名称86,980");
+  // One total and the mean lookup time, which is unknown before a lookup.
   await expect(block).toContainText("已检查条目1,200");
-  await expect(block).toContainText("计数从本轮扫描开始，扫描重启后从零计。");
-  await expect(directory).toContainText("正在读取名称的目录");
-  await expect(directory).toContainText("用时 5 分 0 秒");
+  await expect(block).toContainText("平均查询耗时—");
+  await expect(block).not.toContainText("已读取名称");
+  await expect(directory).toContainText("当前目录");
   await expect(directory).toContainText("data/2026");
   await expect(directory).toContainText(
-    "本目录已读取 86,980 个名称。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。",
+    "正在读取名称，已读取 86,980 个，用时 5 分 0 秒",
   );
+  await expect(block).not.toContainText("4,096");
   // The directory's names are still being read: no position to show.
   await expect(directory.getByRole("progressbar")).not.toHaveAttribute(
     "aria-valuenow",
@@ -143,7 +144,7 @@ test("task details explain what the scan is doing", async ({ page }) => {
       },
     }),
   };
-  await expect(directory).toContainText("正在检查的目录");
+  await expect(directory).toContainText("当前目录");
   await expect(directory).toContainText("第 1,201 项，共 86,980 项");
   await expect(directory).toContainText("源目录");
   await expect(directory.getByRole("progressbar")).toHaveAttribute(
@@ -153,7 +154,7 @@ test("task details explain what the scan is doing", async ({ page }) => {
   for (const line of [
     "其中 3 项此前已发现，未再次检查",
     "1 项在检查前已被删除，已跳过",
-    "条目查询平均耗时 23 毫秒。计数从本轮扫描开始，扫描重启后从零计。",
+    "平均查询耗时23 毫秒",
     "源存储已有 6 秒 未响应",
     "正在等待本节点的本地文件操作限制",
   ])
@@ -180,12 +181,9 @@ test("task details explain what the scan is doing", async ({ page }) => {
       },
     }),
   };
-  await expect(directory).toContainText("正在边读边检查的目录");
-  await expect(directory).toContainText("用时 1 分 1 秒");
   await expect(directory).toContainText(
-    "本目录已读取 5,000 个名称，已检查 3,998 项。",
+    "边读边检查：已读取 5,000，已检查 3,998，用时 1 分 1 秒",
   );
-  await expect(block).not.toContainText("读完后才开始检查");
   state.task = { ...state.task, scanActivity: { state: "UNSUPPORTED" } };
   await expect(block).toHaveText(
     "扫描进度扫描节点版本较旧，不提供实时扫描进度",
@@ -251,7 +249,7 @@ test("the nodes dialog shows the scan progress and why a takeover waits", async 
   await page.getByRole("button", { name: "编辑节点", exact: true }).click();
   const box = page.getByRole("dialog", { name: "任务 #1048 执行节点" });
   await expect(box.getByTestId("scan-progress")).toContainText(
-    "本目录已读取 86,980 个名称。",
+    "正在读取名称，已读取 86,980 个",
   );
   await box.getByRole("button", { name: "关闭", exact: true }).click();
   scan = { phase: "WAITING", complete: false, upgradeRequired: true };
@@ -327,18 +325,11 @@ test.describe("in English", () => {
     await page.goto("/tasks?taskId=61");
     const block = page.getByTestId("scan-progress");
     const directory = block.getByTestId("scan-progress-directory");
-    await expect(block).toContainText("Names read1");
     await expect(block).toContainText("Entries examined1");
-    await expect(directory).toContainText(
-      "Directory whose names are being read",
-    );
+    await expect(block).toContainText("Mean lookup time—");
+    await expect(directory).toContainText("Current directory");
     await expect(directory).toContainText("Source directory");
-    await expect(directory).toContainText(
-      "1 name read in this directory so far.",
-    );
-    await expect(block).toContainText(
-      "Counts start with this scan run and restart from zero when the scan restarts.",
-    );
+    await expect(directory).toContainText("Reading names: 1 read");
     await expect(block).toContainText(
       "Already found and not examined again: 1",
     );

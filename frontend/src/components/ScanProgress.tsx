@@ -73,17 +73,32 @@ export default function ScanProgress({
         }}
       >
         {[
-          [t("已读取名称"), view.namesRead],
-          [t("已检查条目"), view.examined],
-        ].map(([label, value]) => (
+          {
+            label: t("已检查条目"),
+            hint: t("扫描重启后从零计"),
+            value: view.examined,
+          },
+          { label: t("平均查询耗时"), hint: "", value: view.lookupMean },
+        ].map(({ label, hint, value }) => (
           <Box key={label}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
-            >
-              {label}
-            </Typography>
+            <Tooltip title={hint}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="span"
+                sx={
+                  hint
+                    ? {
+                        borderBottom: "1px dotted",
+                        borderColor: "text.secondary",
+                        cursor: "help",
+                      }
+                    : undefined
+                }
+              >
+                {label}
+              </Typography>
+            </Tooltip>
             <Typography
               variant={compact ? "body2" : "body1"}
               color={valueColor}
@@ -103,7 +118,7 @@ export default function ScanProgress({
             gap={2}
           >
             <Typography variant="caption" color="text.secondary">
-              {directory.label}
+              {t("当前目录")}
             </Typography>
             <Typography
               variant="caption"
@@ -137,16 +152,6 @@ export default function ScanProgress({
               color: view.stale ? "text.disabled" : undefined,
             }}
           />
-          {directory.note && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
-              sx={{ mt: 1 }}
-            >
-              {directory.note}
-            </Typography>
-          )}
         </Box>
       )}
       {view.alerts.map((alert) => (
@@ -174,7 +179,7 @@ export default function ScanProgress({
           </Typography>
         </Stack>
       ))}
-      {[...view.notes, view.footnote].map((note) => (
+      {view.notes.map((note) => (
         <Typography
           key={note}
           variant="caption"

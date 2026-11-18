@@ -2973,50 +2973,42 @@ export const tasksMessages: Record<string, { en: string; ja: string }> = {
     ja: "残りのノードはバージョンが古いため、このスキャンを引き継げません。いずれかのノードをアップグレードすると自動的に続行します",
   },
   扫描进度: { en: "Scan progress", ja: "スキャンの進捗" },
-  已读取名称: { en: "Names read", ja: "読み取った名前" },
+  平均查询耗时: { en: "Mean lookup time", ja: "平均照会時間" },
+  "{ms} 毫秒": { en: "{ms} ms", ja: "{ms} ミリ秒" },
+  扫描重启后从零计: {
+    en: "Counted from zero after a scan restart",
+    ja: "スキャンが再開されると 0 から数え直します",
+  },
+  "正在读取名称，已读取 {n} 个": {
+    en: "Reading names: {n} read",
+    ja: "名前を読み取り中：{n} 件",
+  },
+  "正在读取名称，已读取 {n} 个，用时 {d}": {
+    en: "Reading names: {n} read in {d}",
+    ja: "名前を読み取り中：{n} 件、{d} 経過",
+  },
+  "边读边检查：已读取 {n}，已检查 {x}": {
+    en: "Reading and examining: {n} read, {x} examined",
+    ja: "読み取りながら確認中：読み取り {n} 件、確認 {x} 件",
+  },
+  "边读边检查：已读取 {n}，已检查 {x}，用时 {d}": {
+    en: "Reading and examining: {n} read, {x} examined, {d} elapsed",
+    ja: "読み取りながら確認中：読み取り {n} 件、確認 {x} 件、{d} 経過",
+  },
+  "已检查 {examined} 项": {
+    en: "{examined} entries examined",
+    ja: "{examined} 件を確認",
+  },
+  "当前目录：{path}，{detail}": {
+    en: "Current directory: {path}, {detail}",
+    ja: "現在のディレクトリ：{path}、{detail}",
+  },
+  当前目录: { en: "Current directory", ja: "現在のディレクトリ" },
   已检查条目: { en: "Entries examined", ja: "確認したエントリ" },
-  正在检查的目录: {
-    en: "Directory being examined",
-    ja: "確認中のディレクトリ",
-  },
-  正在读取名称的目录: {
-    en: "Directory whose names are being read",
-    ja: "名前を読み取り中のディレクトリ",
-  },
-  正在边读边检查的目录: {
-    en: "Directory being read and examined",
-    ja: "読み取りながら確認中のディレクトリ",
-  },
-  "用时 {d}": { en: "{d} elapsed", ja: "{d} 経過" },
   "第 {x} 项，共 {y} 项": { en: "Entry {x} of {y}", ja: "{y} 件中 {x} 件目" },
-  "本目录已读取 {n} 个名称，已检查 {x} 项。": {
-    en: "{n} names read and {x} entries examined in this directory.",
-    ja: "このディレクトリでは名前を {n} 件読み取り、{x} 件を確認しました。",
-  },
-  "本目录已读取 {n} 个名称。名称不超过 4,096 个的目录读完后才开始检查和迁移其中的文件，超过后改为边读边检查。":
-    {
-      en: "{n} names read in this directory so far. A directory of up to 4,096 names is examined and transferred once all its names are read; past that, it is examined while it is still being read.",
-      ja: "このディレクトリでは名前を {n} 件読み取りました。名前が 4,096 件以下のディレクトリは読み終えてからファイルの確認と転送を始め、それを超えると読み取りながら確認します。",
-    },
-  "条目查询平均耗时 {ms} 毫秒。计数从本轮扫描开始，扫描重启后从零计。": {
-    en: "Entry lookups take {ms} ms on average. Counts start with this scan run and restart from zero when the scan restarts.",
-    ja: "エントリの照会には平均 {ms} ミリ秒かかっています。件数は今回のスキャンから数え、スキャンが再開されると 0 から数え直します。",
-  },
-  "计数从本轮扫描开始，扫描重启后从零计。": {
-    en: "Counts start with this scan run and restart from zero when the scan restarts.",
-    ja: "件数は今回のスキャンから数え、スキャンが再開されると 0 から数え直します。",
-  },
   "截至 {time}（{age}前）": {
     en: "As of {time} ({age} ago)",
     ja: "{time} 時点（{age}前）",
-  },
-  "已读取 {names} 个名称，已检查 {examined} 项": {
-    en: "{names} names read, {examined} entries examined",
-    ja: "名前を {names} 件読み取り、{examined} 件を確認",
-  },
-  "{label}：{path}，{detail}": {
-    en: "{label}: {path}, {detail}",
-    ja: "{label}：{path}、{detail}",
   },
   源目录: { en: "Source directory", ja: "転送元ディレクトリ" },
   "其中 {n} 项此前已发现，未再次检查": {
